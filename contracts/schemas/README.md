@@ -10,6 +10,7 @@ between files in this folder.
 | [`event-envelope.json`](event-envelope.json) | Every event (`contracts/events.md`) |
 | [`policy-rule.json`](policy-rule.json) | Tool/resource policy rule (FR-084, FR-099) |
 | [`command-rule.json`](command-rule.json) | Command prefix rule with match / not-match examples (FR-191) |
+| [`agent-rule.json`](agent-rule.json) | An always-on agent's custom rule: act, act on request, ask, hand off (FR-084, M6) |
 | [`permission-profile.json`](permission-profile.json) | Sandbox filesystem + network profile (FR-190, ADR-059) |
 | [`approval-decision.json`](approval-decision.json) | A decision on an approval (FR-100, ADR-060) |
 | [`auto-review-verdict.json`](auto-review-verdict.json) | Strict auto-reviewer output (FR-085, ADR-061) |

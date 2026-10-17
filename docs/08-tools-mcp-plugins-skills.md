@@ -27,6 +27,7 @@ interface ToolDefinition {
     costClass?: 'free' | 'metered';
     action?: 'read' | 'write' | 'send' | 'delete' | 'execute'; // per-action permission class (FR-045)
   };
+  userReadOnly?: boolean;            // MCP only: the owner declared it read-only (below)
   loading?: 'always' | 'deferrable'; // §1.4; built-ins are always 'always'
   deferred?: boolean;                // in a turn's listing: held behind tool.search (§1.4)
   ui?: { resourceUri: string };      // MCP Apps resource that renders this tool (§3.1, FR-198)
@@ -50,6 +51,16 @@ interface ToolContext {
 MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) map
 onto Nova's annotations but are **untrusted hints**: they can make a tool's default stricter,
 never looser. An MCP or plugin tool with no explicit default is `ask` (§6).
+
+**Owner-declared read-only tools.** Server annotations stay untrusted hints. The owner may mark
+individual tools of an MCP server they added as **Reads only** (Settings → Tools & MCP → a
+server's tools; `readOnlyTools` in `mcp-config.json`, matched like `enabledTools`). Nova then sets
+`userReadOnly` on those descriptors. The declaration is only ever the owner's: it is never derived
+from `readOnlyHint`, and a plugin's server never carries one. The policy engine honours it only
+when nothing else it knows contradicts it: no write, send, delete or execute action class, no
+destructive hint, and declared plus inferred effects of at most `network`. A tool named
+`send_invite` or `delete_event` stays consequential whatever is ticked. Changes are audited with
+the names added and removed. How the engine treats a read-only action is in `docs/12` §2.3.
 
 ### 1.1 Built-in tools (v1)
 
@@ -336,6 +347,7 @@ The fields below are those of `contracts/schemas/mcp-config.json` (one entry per
 | `startupTimeoutMs` | Time allowed for `initialize` and the first `tools/list` (1,000 to 120,000 ms) | 30,000 |
 | `toolTimeoutMs` | Per-call timeout (1,000 to 600,000 ms; overrides the central default, §9) | 60,000 |
 | `enabledTools` / `disabledTools` | Allow list / deny list of tool names (`disabledTools` applies after `enabledTools`); a disabled tool is never listed to the model or found by `tool.search` | all enabled |
+| `readOnlyTools` | Tools the owner declared read-only (at most 500, matched like `enabledTools`; §1); ignored for a plugin's server | none |
 | `defaultApproval` | `allow` \| `ask` \| `deny`, the per-tool default for this server's tools (FR-048); never overrides built-in safety | `ask` |
 | `deferred` | `true` keeps the server's tools behind `tool.search`, `false` always loads them (FR-196) | automatic (§1.4) |
 | `policy` | `network` (hosts) and `fs` (`none` \| `read` \| `project`) granted to the server | none |

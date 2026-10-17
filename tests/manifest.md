@@ -19,7 +19,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-009 | todo | todo | — | multi-window |
 | FR-010 | ui themes.test | web settings.test | J1 | theming tokens |
 | FR-011 | web theme-share.test | web theme-share.test | — | theme import/export |
-| FR-012 | todo | todo | — | pets |
+| FR-012 | web pets-state.test | web pets-overlay.test | — | pets (off by default; still under reduced motion and "keep still") |
 | FR-013 | core notifications.test | hub ops.test; web notifications.test | — | notifications |
 | FR-014 | web onboarding.test | web onboarding.test | J1 | onboarding |
 | FR-015 | ui primitives.test | web app.test (keyboard) | J1/J2 (axe) | accessibility |
@@ -43,8 +43,8 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-033 | core conversation.test | web chat-panels.test | — | branch tree |
 | FR-034 | core projects.test | hub conversation.test; web projects.test | — | projects |
 | FR-035 | core workspace-folders.test; core sources-folders.test | hub workspace.test; web project-folders.test | — | local projects |
-| FR-036 | todo | todo | — | space/pages |
-| FR-037 | todo | todo | — | sites |
+| FR-036 | core spaces-service.test; core spaces-tools.test; web spaces-diff.test | hub spaces.test; web spaces-pages.test | — | space/pages: versions, 409 on a stale base, comments, proposals |
+| FR-037 | core spaces-sites.test; core spaces-markdown.test | hub spaces-sites.test; web spaces-sites.test | — | sites: build, preview CSP, zip, publish and unpublish |
 | FR-038 | core tools artifacts tests | hub tools.test; web chat-artifacts.test | — | artifacts |
 | FR-039 | core workspace-files.test | hub workspace.test; web files.test | J4 | file editor |
 | FR-040 | core projects.test | hub conversation.test; web projects.test | — | sources |
@@ -63,58 +63,58 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-053 | core runs-subagents.test | hub runs.test | J5 | sub-agents |
 | FR-054 | core runs-subagents.test | web work-run.test | J5 | child threads |
 | FR-055 | core scheduler-recurrence.test; core scheduler-service.test | hub schedules.test; hub m5-integration.test; web work-scheduled.test | J5 | schedules |
-| FR-056 | todo | todo | J7 | event triggers |
+| FR-056 | core triggers-service.test | hub channels.test | J7 | event triggers: webhook signature (event id signed when sent), dedupe, rate cap, no authority |
 | FR-057 | core runs-lifecycle.test (activity) | hub runs.test; web work-run.test | J5 | activity |
 | FR-058 | core runs-budgets.test (approval timeout) | core gate-m5-policy.test | J5 | approvals |
-| FR-059 | core runs-lifecycle.test (RunStarter) | — | — | work→code (stub: RunStarter) |
-| FR-060 | todo | todo | J7 | notification routing |
+| FR-059 | core runs-lifecycle.test (RunStarter); core agents-turns.test (agent.delegate) | hub agents.test | — | delegation to a Work run; delegating to a Code session is not built |
+| FR-060 | core channels-notify.test; core notifications.test; core channels-service.test (`mayNotify`) | hub channels.test | J7 | notification routing, quiet hours, `os` flag, shared copies withheld unless `channels.privateToShared` is `allow` |
 | FR-061 | core code-sessions.test | hub code.test; hub m5-integration.test; web code-sessions.test | J6 | code session |
-| FR-062 | todo | todo | — | environments |
-| FR-063 | core code-sessions.test (policy); core gate-m5-policy.test | hub policy-m5.test; web code-sessions.test | J6 | permission modes |
+| FR-062 | core code-m6-environments.test; core sandbox-router.test; core devices-files.test (device environment) | hub code-m6.test | — | environments: container, SSH, WSL, device |
+| FR-063 | core code-sessions.test (policy); core gate-m5-policy.test; core code-m6-environments.test (no Bypass on another machine) | hub policy-m5.test; web code-sessions.test | J6 | permission modes |
 | FR-064 | core code-changes.test | hub m5-integration.test; web code-diff.test | J6 | file edits |
 | FR-065 | core code-changes.test | web code-diff.test | J6 | diff review |
 | FR-066 | core code-sessions.test (terminal) | web code-terminal.test | J6 | terminal |
-| FR-067 | todo | todo | J6 | browser pane |
-| FR-068 | todo | todo | J6 | auto-verify |
+| FR-067 | core code-m6-devservers.test; core browser-devserver.test (grant and opener through bubblewrap, the bridge and the real proxy) | hub code-m6.test | J6 | browser pane opens the dev server once it answers |
+| FR-068 | core code-m6-verify.test | hub code-m6.test | J6 | auto-verify, feedback turns |
 | FR-069 | core code-tools.test (review) | web code-review.test | J6 | code review |
-| FR-070 | todo | todo | J6 | PR flow |
+| FR-070 | core code-m6-pr.test (mock Git host) | hub code-m6.test | J6 | PR flow: push guards (`http://` remote refused), secrets scan, CI polling and feedback |
 | FR-071 | todo | todo | J9 | cloud envs |
-| FR-072 | todo | todo | — | cross-session |
-| FR-073 | todo | todo | — | parallel worktrees |
+| FR-072 | core code-m6-sessions.test; core agents-turns.test (sessions.*) | hub code-m6.test | — | cross-session list, message, archive, ask |
+| FR-073 | core code-m6-worktrees.test; core code-m6-sessions.test (task.spawn) | hub code-m6.test | — | worktree registry, leases, `.worktreeinclude`, cap |
 | FR-074 | core code-tools.test (symbols) | web code-units.test | J6 | repo index (pattern-based) |
-| FR-075 | todo | todo | — | appshots |
-| FR-076 | todo | todo | — | visualizations |
+| FR-075 | core screen-service.test; core screen-tools.test | hub screen.test | — | appshots |
+| FR-076 | core spaces-viz.test; core spaces-tools.test (visualize.create) | web spaces-viz.test; web spaces-markdown.test | — | visualizations (chart, diagram, notebook) |
 | FR-077 | todo | todo | J9 | mobile dispatch |
-| FR-078 | todo | todo | — | SSH persistence |
-| FR-079 | todo | todo | J7 | agent creation |
-| FR-080 | todo | todo | J7 | cloud computer |
-| FR-081 | todo | todo | J7 | connect computer |
-| FR-082 | todo | todo | J7 | proactive research |
-| FR-083 | todo | todo | J7 | background threads |
-| FR-084 | todo | todo | J7 | custom rules |
+| FR-078 | core code-m6-environments.test; core devices-files.test | hub devices-novad.test (real novad); hub code-m6.test | — | SSH/remote persistence: novad buffers process output |
+| FR-079 | core agents-service.test | hub agents.test | J7 | agent creation |
+| FR-080 | core computers-service.test; core agents-service.test | hub computers.test | J7 | agent computer (folder; mock cloud runner) |
+| FR-081 | core devices-files.test | hub devices.test | J7 | connect computer (one active connection, version check) |
+| FR-082 | core agents-proactive.test; policy user-read-only.test | core agents-loop.test (real ChatService and gate); hub agents.test; hub mcp.test (`readOnlyTools`) | J7 | proactive research (read-only; owner-declared read-only MCP tools) |
+| FR-083 | core agents-turns.test | hub agents.test | J7 | background threads (delegated runs) |
+| FR-084 | core agents-rules.test; core gate-m6-agents.test | core agents-loop.test; hub agents.test | J7 | custom rules, preview |
 | FR-085 | core reviewer-model.test; core reviewer-breaker.test; core gate-m5-review.test | hub policy-m5.test | — | auto-review (model reviewer, fails closed) |
-| FR-086 | todo | todo | J8 | sign-in flow |
-| FR-087 | todo | todo | J7 | takeover |
-| FR-088 | todo | todo | J7 | channels |
-| FR-089 | todo | todo | J7 | agent memory |
-| FR-090 | todo | todo | J7 | agent activity/stop |
+| FR-086 | core browser-signin.test | hub browser.test; core browser-chromium.test (Playwright container) | J8 | sign-in flow |
+| FR-087 | core screen-service.test; core browser-session.test | hub screen.test | J7 | takeover |
+| FR-088 | core channels-adapters.test (mock Slack and Teams); core channels-service.test | hub channels.test | J7 | channels |
+| FR-089 | core agents-service.test | hub agents.test | J7 | agent memory |
+| FR-090 | core agents-service.test; core agents-turns.test | hub agents.test | J7 | agent activity/pause/stop/delete |
 | FR-091 | todo | todo | — | specialist agents |
-| FR-092 | todo | todo | J8 | browser tool |
-| FR-093 | todo | todo | J8 | computer use |
-| FR-094 | todo | todo | J8 | allow/block lists |
-| FR-095 | todo | todo | J8 | write-action classifier |
-| FR-096 | todo | todo | — | browser profiles/extension |
-| FR-097 | todo | todo | J6 | dev servers |
-| FR-098 | todo | todo | J8 | action screenshots |
+| FR-092 | core browser-session.test | core browser-chromium.test (Playwright container); hub browser.test | J8 | browser tool |
+| FR-093 | core screen-desktop.test; core screen-tools.test | hub screen.test | J8 | computer use (mock desktop) |
+| FR-094 | core browser-policy.test | core browser-chromium.test; hub browser.test | J8 | allow/block lists, site levels |
+| FR-095 | core browser-classifier.test | core browser-policy.test; core browser-chromium.test | J8 | write-action classifier |
+| FR-096 | core browser-session.test (profiles, cookies) | hub browser.test | — | browser profiles; the extension bridge is not built |
+| FR-097 | core code-m6-devservers.test; core sandbox-publish.test (bridge, Docker and bubblewrap) | hub code-m6.test | J6 | dev servers |
+| FR-098 | core browser-recording.test; core screen-service.test | hub browser.test; hub screen.test | J8 | action screenshots |
 | FR-099 | policy engine tests | core gate.test, loop.test | J3 | policy engine |
 | FR-100 | core gate.test | hub policy.test; web chat-approvals.test | J3 | approvals |
 | FR-101 | secrets keychain.test; security scan.test | hub ops.test (vault, keychain select) | — | secrets |
-| FR-102 | todo | todo | J8 | egress control |
-| FR-103 | todo | todo | J8 | injection defense |
+| FR-102 | core egress-proxy.test; core egress-store.test | hub computers.test | J8 | egress control |
+| FR-103 | core browser-injection.test; core browser-classifier.test | core browser-chromium.test | J8 | injection defense (browser) |
 | FR-104 | core audit.test | hub ops.test; hub diagnostics-m5.test (export) | J3 | audit log |
 | FR-105 | todo | todo | J10 | data controls |
 | FR-106 | todo | todo | J10 | managed policy |
-| FR-107 | todo | todo | J7 | sandboxing |
+| FR-107 | core sandbox-bwrap.test; core sandbox-container.test; core sandbox-process.test | hub devices-novad.test (novad sandbox) | J7 | sandboxing: bubblewrap, container |
 | FR-108 | todo | todo | J9 | cloud runner |
 | FR-109 | todo | todo | J9 | sync |
 | FR-110 | todo | todo | J9 | channel bridge |
@@ -148,16 +148,16 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-138 | todo | todo | J7 | wake helper |
 | FR-139 | todo | todo | J9 | network diagnostics |
 | FR-140 | todo | todo | J9 | device management UI |
-| FR-141 | todo | todo | J7 | novad supervisor + modules |
-| FR-142 | todo | todo | J7 | capability declaration |
+| FR-141 | novad supervisor, module and hardening tests (`node scripts/cargo.mjs test`); core devices-service.test | hub devices-novad.test (real binary); hub devices.test | J7 | novad supervisor + modules |
+| FR-142 | novad capabilities and crypto tests; core devices-service.test | hub devices-novad.test (Rust signs, Node verifies); hub devices.test | J7 | capability declaration |
 | FR-143 | todo | todo | — | low-level boot |
-| FR-144 | todo | todo | J7 | power & WoL |
-| FR-145 | todo | todo | J7 | service management |
+| FR-144 | core devices-wol.test; novad power tests | hub devices-area.test | J7 | power & WoL |
+| FR-145 | core devices-service.test; novad agent tests | hub devices-novad.test | J7 | service management |
 | FR-146 | todo | todo | J10 | BIOS/firmware management |
 | FR-147 | todo | todo | — | out-of-band management |
-| FR-148 | todo | todo | J7 | novad updates |
+| FR-148 | core devices-versions.test; novad update tests | hub devices-area.test; hub devices.test | J7 | novad updates, minimum versions |
 | FR-149 | core attachments.test (sealing) | hub ops.test (TLS) | — | hub trusted, edges E2E |
-| FR-150 | todo | todo | J7 | per-device overrides |
+| FR-150 | core devices-service.test | hub devices-area.test; hub devices.test | J7 | per-device overrides and policy |
 | FR-151 | todo | todo | — | ambient capture |
 | FR-152 | todo | todo | — | OCR/STT pipeline |
 | FR-153 | todo | todo | — | ambient timeline/search |
@@ -188,7 +188,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-178 | todo | todo | — | skill authoring/generation |
 | FR-179 | todo | todo | — | HomeKit bridge |
 | FR-180 | todo | todo | — | Matter bridge |
-| FR-181 | core runs-goals.test | hub runs.test; web work-run.test | J5 | goals: statuses, blocked-after-3, idle continuation |
+| FR-181 | core runs-goals.test; core agents-turns.test (agent goals) | hub runs.test; hub agents.test; web work-run.test | J5 | goals: statuses, blocked-after-3, idle continuation |
 | FR-182 | core runs-budgets.test; core loop-m5-extensions.test | hub runs.test; web work-run.test | J5 | budgets pause; per-turn backstop |
 | FR-183 | core context-compaction.test | web chat-followup.test | — | three compaction triggers |
 | FR-184 | core exec-sessions.test | hub exec-sessions.test; web code-terminal.test | J6 | interactive exec sessions |
@@ -197,27 +197,27 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-187 | core runs-lifecycle.test; core scheduler-delivery.test | hub m5-integration.test | J5 | verified outcomes |
 | FR-188 | core requests-broker.test; core requests-ask-tool.test | hub requests.test; web work-chat.test | J3 | server-to-client requests |
 | FR-189 | policy engine tests (tiers, provenance) | core gate.test | J3 | confirmation tiers + intent provenance |
-| FR-190 | policy paths/profiles tests | core tools-fs.test | J3 | permission profiles + protected paths |
+| FR-190 | policy paths/profiles tests; core sandbox-protect.test | core tools-fs.test | J3 | permission profiles + protected paths (also mounted in sandboxes) |
 | FR-191 | policy command tests | hub policy.test; web permissions-settings.test | J3 | command prefix rules + load-time examples |
 | FR-192 | security tokens tests | hub listeners.test, hub.test | — | listener tokens, Origin checks, no auto-registration |
-| FR-193 | todo | todo | J8 | proxy modes + credential injection |
-| FR-194 | todo | todo | J8 | external-agent rule |
-| FR-195 | todo | todo | — | micro-VM substrate (flagged) |
+| FR-193 | core egress-policy.test; core egress-proxy.test; core gate-m6-agents.test (`egressDeny`); core browser-session.test (`egressMode`); shared settings.test (host patterns) | core computers-egress.test; core sandbox-container.test; hub computers.test (decision log paging) | J8 | proxy modes + credential injection |
+| FR-194 | core agents-external.test; core browser-injection.test | core channels-service.test; hub agents.test | J8 | external-agent rule |
+| FR-195 | core sandbox-container.test (micro-VM stub) | — | — | micro-VM substrate (flagged; stub) |
 | FR-196 | core tools-registry/search tests | core loop.test | J3 | deferred tools + tool search |
 | FR-197 | core hooks.test; core hooks-config.test; core gate-hooks.test; policy plugins-hooks.test | core loop-hooks.test; hub hooks.test; web plugins-settings.test | J4 | lifecycle hooks (tighten-only) |
 | FR-198 | web apps-bridge.test; mcp apps.test | hub mcp-apps.test; web apps-frame.test; web apps-views.test; web workspace-apps.test | J4 | MCP Apps UI |
 | FR-199 | mcp bundle.test | hub bundles.test | J4 | MCP bundles |
 | FR-200 | core import.test; core import-formats.test | hub import.test; web import-settings.test | — | import from other assistants |
-| FR-201 | todo | todo | J7 | MCP event subscriptions |
+| FR-201 | mcp events.test; core triggers-service.test | hub channels.test | J7 | MCP event subscriptions |
 | FR-202 | todo | todo | — | scripted tool calls (flagged) |
 | FR-203 | todo | todo | — | external agent adapters (flagged) |
 | FR-204 | core consolidation.test | hub consolidation.test; web memory-consolidation.test | — | memory consolidation |
 | FR-205 | core history.test | hub consolidation.test | — | memory scopes + history reference |
-| FR-206 | todo | todo | J7 | agent self-scheduling |
-| FR-207 | todo | todo | J8 | computer-use control tiers |
-| FR-208 | todo | todo | — | page-registered tools |
-| FR-209 | todo | todo | — | local browser fallback |
-| FR-210 | todo | todo | J7 | novad staged writes + local MCP |
+| FR-206 | core agents-proactive.test (wakes); core scheduler-service.test (`agentId` on schedule events) | hub agents.test | J7 | agent self-scheduling |
+| FR-207 | core screen-tools.test; core screen-service.test | hub screen.test | J8 | computer-use control tiers |
+| FR-208 | core browser-session.test | core browser-chromium.test | — | page-registered tools |
+| FR-209 | core browser-session.test (refuses) | — | — | local browser fallback (refuses until a device serves it) |
+| FR-210 | core devices-files.test; novad fsops and grants tests | hub devices-novad.test; hub devices.test | J7 | novad staged writes + local MCP |
 | FR-211 | core code-git.test | core code-git.test (marker hook) | J6 | hook-free app git ops |
 | FR-212 | todo | todo | — | best-of-N attempts |
 | FR-213 | todo | todo | J9 | session handoff |

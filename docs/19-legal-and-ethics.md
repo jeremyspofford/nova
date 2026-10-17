@@ -61,6 +61,26 @@ lawful and ethical, and that the build agent must follow.
 CI generates `THIRD_PARTY_NOTICES.md` and fails on unapproved licenses. The build must remain
 distributable by a single party under permissive terms.
 
+### 3.1 Dependencies added in M6 (ADR-093)
+
+| Dependency | Version (pinned) | License | Where and why |
+| --- | --- | --- | --- |
+| `playwright-core` | 1.64.1 | Apache-2.0 | `@nova/core`, the agent browser (FR-092). Loaded lazily, so core works without it. It has no dependencies of its own and bundles no browser: Nova drives the Chromium installed for Playwright or the one `browser.executablePath` names |
+| `ed25519-dalek` | =2.2.0 | BSD-3-Clause | `novad`, Ed25519 signing and verification of capability documents and update bundles. Default features off, `zeroize` on (the signing key is wiped when dropped); strict verification |
+| `sha2` | =0.10.9 | MIT OR Apache-2.0 | `novad`, SHA-256 and SHA-512. Default features off |
+
+These two crates replaced hand-written SHA-2 and Ed25519 code; the release binary grew by about
+62 KB (5 %). They pull in these crates, all permissive: `curve25519-dalek` 4.1.3 (BSD-3-Clause,
+with the 2024 timing fix), `subtle` 2.6.1 (BSD-3-Clause), `curve25519-dalek-derive` 0.1.1,
+`version_check` 0.9.5 (MIT/Apache-2.0), `ed25519` 2.2.3, `signature` 2.2.0, `zeroize` 1.9.1,
+`digest` 0.10.7, `block-buffer` 0.10.4, `crypto-common` 0.1.7, `typenum` 1.20.1, `cfg-if` 1.0.5,
+`cpufeatures` 0.2.17, `syn` 2.0.119, `rustc_version` 0.4.1, `semver` 1.0.28, `libc` 0.2.191 (MIT
+OR Apache-2.0), `generic-array` 0.14.7 (MIT) and `fiat-crypto` 0.2.9 (MIT OR Apache-2.0 OR
+BSD-1-Clause). `fiat-crypto` and `libc` are in the lockfile but are not compiled on x86-64 Linux.
+`novad`'s other crates (`serde`, `serde_json` and their dependencies) are MIT or Apache-2.0
+(`memchr` Unlicense OR MIT, `zmij` MIT, `unicode-ident` also Unicode-3.0). No GPL or AGPL
+dependency was added.
+
 ## 4. Privacy & data protection
 
 - **No training on user data**, ever. The product states this plainly.

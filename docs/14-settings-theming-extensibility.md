@@ -69,6 +69,54 @@ the worktree include file, the worktree limit (fixed at 15) and the Work rows "m
 shipped, so a project value can set it, although §1 lists permission mode defaults among the keys
 a project cannot change.
 
+*Added in M6* (ADR-093). The keys are in `packages/shared/src/settings.ts` (the `// ---- M6`
+blocks); the pages that show them arrive with the M6 web UI. "Security" marks a security-relevant
+key (defaults, user global settings and managed policy only).
+
+| Key | Default | Security | Notes |
+| --- | --- | --- | --- |
+| `agents.defaultBudgets` | `{timeSeconds: 1800, tokens: 500000, costUsd: null}` | no | Budgets of a new agent's turn chains (a turn plus its hook continuations); time 60 s to 7 days, tokens 1,000 to 100M, `null` cost = the provider spend cap (FR-182) |
+| `agents.autonomy` | `standard` | no | Autonomy of a new agent: `ask_first`, `standard` or `autonomous` |
+| `agents.proactive` | `{enabledByDefault: true, intervalMinutes: 60}` | no | Proactive research on for new agents, at most once per interval (15 min to 7 days) while idle (FR-082) |
+| `agents.wakes` | `{minMinutes: 5, horizonDays: 30, perDay: 24}` | yes | `schedule.wake`: the soonest (5 to 1,440 min), the furthest ahead (1 to 30 days) and how many per agent per day (0 to 24) (FR-206) |
+| `channels.privateToShared` | `ask` | yes | A shared-channel reply that uses private content: `ask` the owner, `allow` or `deny` (FR-088, §4 of `docs/13`); notification copies go to a shared binding only under `allow` |
+| `channels.publicUrl` | `null` | yes | The address Slack, Teams and MCP event servers reach the Hub at; unset uses the Hub address. The Hub answers to its host |
+| `triggers.ratePerHour` | `30` | yes | Most runs or wakes one event trigger may start per hour (1 to 10,000); further events are skipped (FR-056) |
+| `network.egressMode` | `allowlist` | yes | `off`, `allowlist` or `limited` (allowed hosts, read-only methods) for every sandbox's egress proxy and the agent browser's (FR-193) |
+| `network.egressDeny` | `[]` | yes | Hosts no sandbox, agent browser or tool network call may reach (at most 500); deny always wins over allow (FR-193). `network.egressAllow` (M3) is the global allow list; both take the proxy's host patterns, and a stored list that fails them resolves to `[]` |
+| `computers.agentComputer` | `local_container` | yes | Where a new agent's computer runs: a sandbox on this Hub, or `cloud` (a mock runner on the Hub in M6) (FR-080) |
+| `computers.limits` | `{cpus: 2, memoryMb: 2048, wallClockSeconds: 300}` | yes | Limits of every command on a computer (CPU 0.25 to 64, memory 256 MB to 256 GB, wall clock 10 s to 1 day; `docs/11` §8) |
+| `computers.microVm` | `{enabled: false, runner: null}` | yes | Micro-VM sandboxes (FR-195): off; they need a KVM runner on the Hub. M6 ships a stub |
+| `browser.persistCookies` | `false` | yes | Keep the agent browser's cookies (its sign-ins) between sessions (FR-096) |
+| `browser.allowLocalSites` | `false` | yes | Let the agent browser open local and private-network addresses (`docs/12` §8); a Code session's granted dev server opens without it |
+| `browser.devProtocol` | `true` | yes | Allow developer-protocol mode to be turned on per site; off means no site can use it (FR-094) |
+| `browser.maxConcurrent` | `2` | no | Agent browsers open at once (1 to 8; `docs/11` §8) |
+| `browser.screenshotRetentionDays` | `30` | no | How long browser before/after screenshots are kept (swept every 6 hours) |
+| `browser.executablePath` | `null` | yes | An absolute path to a Chromium executable; `null` uses the one installed for Playwright (FR-092) |
+| `screen.grantMinutes` | `30` | yes | How long a computer-use app grant lasts (1 to 1,440), renewable (FR-207) |
+| `screen.killKey` | `Escape` | no | The kill key; a key or a combination like `ctrl+alt+k`; it can be remapped, never unbound (FR-207) |
+| `screen.tierOverrides` | `{}` | yes | Per app name: `none`, `view`, `click` or `full`; an override can only lower an app's tier (FR-207) |
+| `screen.screenshotRetentionDays` | `30` | no | How long computer-use screenshots are kept (pruned daily) |
+| `devices.minNovadVersions` | `{}` | yes | Raise the minimum `novad` version for a capability (`files`, `staged_writes`, `exec`, `mcp`, `power`, `services`, `updates`, `computer_use`, `browser`, `capture`); the built-in minimums are 0.6.0, 0.7.0 for computer use and browser, 0.8.0 for capture (FR-148) |
+| `devices.wakesPerHour` | `6` | no | Wake-on-LAN requests per device per hour (1 to 60, FR-144) |
+| `code.autoVerify` | `{enabled: true, commands: [], timeoutSeconds: 600, feedbackTurns: 1}` | yes | Auto-verify after a turn edits files (FR-068); it names commands Nova runs on its own, so a project cannot set it: commands (empty detects the build script and test suite, at most 10), timeout 30 s to 1 h, failed checks sent back 0 to 3 times in a row |
+| `code.worktreeCleanup` | `remove_clean` | no | When a session is archived: remove a clean worktree, or `keep` it; dirty ones are always kept (FR-073) |
+| `code.ciPollSeconds` | `60` | no | How often open pull requests are polled for CI (15 s to 1 h, FR-070) |
+| `code.ciFeedback` | `true` | no | Send failed CI checks of a session's pull request back to its agent (FR-070) |
+| `code.budgets` | `{timeSeconds: null, tokens: null, costUsd: null}` | no | Default bounds of a new Code session; none by default (`docs/09` §2) |
+| `spaces.agentEdits` | `propose` | no | How agent edits land in a new space: proposals the user accepts, or `direct` versions (FR-036) |
+| `sites.publishRoot` | `null` | yes | An absolute folder on the Hub that site folders are published into; `null` uses `<data>/sites` (FR-037) |
+| `appearance.pet` | `off` | no | The optional companion: `off`, `sprout` or `spark` (FR-012) |
+| `appearance.petPosition` | `bottom-right` | no | `bottom-right` or `bottom-left` |
+| `appearance.petMuted` | `false` | no | "Keep still": no reactions and no animation |
+
+The **Pets** row above is realized as the three `appearance.pet*` keys; the pets are Nova's own
+drawings, not sprite manifests, and reduced motion gives a static pose. Quiet hours and the
+per-category notification routing are not settings: they are stored in the `quiet_hours` and
+`notification_rule` tables (`docs/06`) and edited through `/api/v1/quiet-hours` and
+`/api/v1/notification-rules`, because Hub areas cannot write settings. SOCKS5, per-scope site
+levels and a dev-server port grant have no setting yet.
+
 ### 1.2 Settings UI
 
 - Grouped left nav; search across all settings; each control has a label, description, and

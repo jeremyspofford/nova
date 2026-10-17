@@ -107,6 +107,46 @@ Design rules:
   No user's personal memory or private connectors are injected into it; each action runs under
   the acting user's permissions.
 
+*As shipped in M6 (ADR-093).* Bindings are `channel_binding` rows (`/api/v1/channels`); the
+adapters are in-app, Slack, Teams (Bot Framework) and webhook. Email bindings are refused until a
+mailbox connector exists, and Telegram, voice and SMS are not built.
+
+- **Credentials and inbound.** Bot tokens, signing secrets, app passwords and webhook tokens go to
+  the vault (`secret://channel/<id>/…`) and are never returned; the client supplies a webhook's
+  token and secret. Bindings of one Slack or Teams app share its credentials
+  (`shareCredentialsWith`), and an inbound event reaches the binding of its conversation.
+  Deliveries arrive at `POST /api/v1/channels/:id/inbound` and are authenticated before anything
+  is read: Slack's signing-secret HMAC, a Bot Framework JWT for Teams, or the webhook binding's
+  bearer token plus HMAC, each with a 5-minute window. `channels.publicUrl` is the address
+  external services use; the Hub answers to its host (it follows the setting).
+- **What starts a turn.** A redelivered message id starts nothing; the bot's own messages are
+  ignored (loop prevention); a disconnected binding drops everything; an unmapped sender is
+  ignored unless the binding has `allowUnknown` (then a guest); a private binding takes only the
+  owner's mapped identity; in a shared conversation only a DM or a mention counts; the
+  external-agent rule (`docs/12` §6.2) and the binding's rate caps (default 10 per minute and 120
+  per hour, turns and sent messages counted separately) may drop it. Drops are audited.
+- **Authority.** A channel turn is labelled with who wrote it and where, and carries **no**
+  authority, even from the owner in a private DM (this amends ADR-083's owner-DM rule): the agent
+  may act on it only within its rules and the confirmation tiers.
+- **Threads.** Each binding gets its own `binding` thread of the agent on its first message; an
+  in-app or private binding with `sharePrimaryThread` uses the agent's main thread.
+- **Approvals.** When a channel turn waits for a `pre_approvable` approval, the conversation gets a
+  prompt with a 6-character code; the owner answers `allow`, `allow session`, `deny` or `deny and
+  stop` (the code may be left out when one approval is pending). "Always allow" and hand-off stay
+  in Nova; a shared conversation sees only the code, not the action. Slack buttons are not built.
+- **Private to shared.** Before a reply or `channel.send` goes to a shared binding, the check
+  (`channels.privateToShared`, default `ask`) looks for private content: until exact provenance is
+  wired it compares word sequences and numbers with private memory items, the agent's private
+  notes, private and in-app binding threads and the owner's 20 most recent chats, ignoring text the
+  channel already said. Asking the owner is a server request ("Share" / "Do not share"); a failed
+  check counts as private, and a withheld reply becomes "I can't share that here." A notification
+  copy cannot ask first, so a shared binding gets one only when `channels.privateToShared` is
+  `allow`; otherwise the copy is recorded failed with the reason "withheld: …".
+- **Tools.** `channel.list` and `channel.send` (effect `external_communication`; the gate resource
+  is `<kind>:<externalRef>`, so a rule can name the channel).
+- **Watching.** Watching a Slack conversation is a `connector_event` trigger (`docs/09` §7); a
+  binding alone never starts work it was not addressed in.
+
 ## 5. Remote control, mobile dispatch & notifications (FR-111, FR-137)
 
 - **Every client drives every session through the Hub.** A phone or a second computer never
@@ -164,6 +204,21 @@ Run/approval event → local policy (no secrets) → queue
 
 Notification content is redacted by default (e.g., "Approval needed in Code session"). The
 user can choose more or less detail; secrets and file contents are never included.
+
+*As shipped in M6 (ADR-093).* Notification routing (FR-060) is per category (`approval`,
+`completion`, `error`, `attention`, `system`) in `notification_rule`, edited through
+`/api/v1/notification-rules`: in-app on or off, OS on or off, a list of Slack, Teams or webhook
+bindings that get a copy (a shared one only under `channels.privateToShared: allow`, §4), and
+whether the category passes quiet hours (by default only approvals do). A category whose in-app rule
+is off is recorded read: it stays in the history and still goes to its channels, without a badge.
+Quiet hours (`/api/v1/quiet-hours`, the `quiet_hours` table) are a daily window in a time zone on
+chosen weekdays, crossing midnight when the end comes first. While they are in force
+`notification.created` carries `os: false`, so clients do not raise the OS notification (it is
+suppressed, not deferred), and channel copies wait in `notification_delivery` until the window ends
+(a restart keeps them; a failed copy is not retried). Agents move self-set wakes and goal
+continuations to the end of the window; trigger runs and schedules are not held. Slack and Teams are
+also schedule delivery targets: the target's `ref` is a binding id and the receipt is the posted
+message's id. Push through the Relay is not built.
 
 ## 7. Identity & accounts (FR-113/115)
 

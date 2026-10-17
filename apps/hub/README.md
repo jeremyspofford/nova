@@ -73,6 +73,41 @@ image and plugin-draft tools; `ops.ts` adds `POST /diagnostics/test`
 user's answer is left out of a turn's active time, and a run's exec sessions are killed when it
 ends.
 
+M6 adds seven areas and their wiring (decisions in ADR-093). `app.ts` sets up ops → policy →
+mcp → plugins → hooks → requests → schedules → code → runs → computers → channels → agents →
+browser → screen → devices → spaces → tools → consolidation → mcpServer → mcpApps → workspace →
+profile, then the `ChatService` with the runs, Code and agents extensions. The tools' sandbox is
+`threadSandboxRouter(computers.router(computers.sandbox))`: a Code session's commands go to its
+environment, an agent's to its computer, and every sandbox reaches the network only through the
+egress proxy. Agents, channels and schedules start turns through `chat.turnStarter`.
+
+| File | Area | Routes |
+| --- | --- | --- |
+| `agents.ts` | Always-on agents, external agents (FR-079..FR-090, FR-181, FR-194, FR-206); the agent tools join the tool sources; the agents' thread policy (autonomy plus the computer's folder as the only root) and `agentPolicy` (their rules, through `policy.useAgentPolicy`); the `agents` diagnostics probe | `GET`/`POST /agents`, `GET`/`PATCH`/`DELETE /agents/:id` (`{confirm: true}`), `GET /agents/:id/avatar`, `POST /agents/:id/{pause,resume,stop}`, `POST /agents/:id/research` (202), `GET /agents/:id/{activity,threads,background}`, responsibilities, rules (with `…/preview`), memory, suggestions, `GET`/`PUT`/`DELETE /agents/:id/goal`, `GET`/`POST /agents/:id/schedules`, `GET`/`POST /external-agents`, `DELETE /external-agents/:id` |
+| `channels.ts` | Channel bindings and identities, triggers, MCP event subscriptions, notification routing and quiet hours (FR-088, FR-056, FR-201, FR-060); `channel.list` and `channel.send`; Slack and Teams schedule delivery; the `channels` probe | `GET`/`POST /channels`, `GET`/`PATCH`/`DELETE /channels/:id`, `POST /channels/:id/{connect,disconnect,test}`, `GET`/`POST /channel-identities`, `DELETE /channel-identities/:id`, `GET`/`POST /triggers`, `GET`/`PATCH`/`DELETE /triggers/:id`, `GET /triggers/:id/events`, `GET`/`POST /mcp/subscriptions`, `GET`/`DELETE /mcp/subscriptions/:id`, `GET /mcp/event-sources`, `GET /notification-rules`, `PUT`/`DELETE /notification-rules/:category`, `GET`/`PUT /quiet-hours`, and the public `POST /channels/:id/inbound`, `POST /triggers/:id/webhook`, `POST /mcp/events/:subscriptionId` |
+| `computers.ts` | Computers, the egress proxy and its inspection CA (`<dataDir>/egress/`), the sandbox (`NOVA_SANDBOX`, `NOVA_SANDBOX_IMAGE`), the computers' thread policy; the `egress` probe (FR-080, FR-102, FR-107, FR-193) | `GET /computers`, `GET /computers/:id`, `GET`/`POST /computers/:id/snapshots`, `DELETE /computers/:id/snapshots/:snapshotId`, `POST /computers/:id/{restore,stop}`, `GET /egress`, `GET /egress/ca.pem`, `PUT`/`DELETE /egress/scopes/:kind/:id`, `GET`/`POST /egress/credentials`, `PATCH`/`DELETE /egress/credentials/:id`, `GET /egress/decisions` |
+| `browser.ts` | The agent browser on `playwright-core`, site permissions, sign-ins and saved logins, the screenshot sweep every 6 hours; the `browser` probe (FR-086, FR-092..FR-098, FR-208) | `GET /browser/status`, `GET`/`PUT /browser/sites`, `PATCH`/`DELETE /browser/sites/:pattern`, `GET`/`PUT /browser/domains`, `GET /browser/sessions`, `DELETE /browser/sessions/:computerId`, `GET /browser/actions`, `GET /browser/actions/:id/screenshots/:which`, `GET /browser/signins`, `POST /browser/signins/:id/{submit,cancel}` (410 when no longer waiting), `GET /browser/logins`, `DELETE /browser/logins/:id` |
+| `screen.ts` | Computer use, grants, the kill key, takeover, appshots and the live view; closes takeovers a restart left open; prunes screenshots daily (FR-093, FR-207, FR-087, FR-075, FR-098) | under `/computers/:id`: `GET …/screen`, `PUT …/screen/control`, `POST …/screen/{kill,resume}`, `GET …/screen/observation`, `GET …/screen/frame`, grants, `GET …/screen/actions` and their images, `GET`/`POST …/takeover`, `POST …/takeover/{input,end}`, WebSocket `…/screen/live`, `POST …/appshots`; `GET /appshots`, `GET /appshots/:id` |
+| `devices.ts` | `novad` devices (FR-141..FR-150, FR-210, FR-081): the session routes and, through `node-routes.ts`, Add Device for `client` and `wake-helper` and the `/agent/v1` routes; devices as `local_host` computers and Code environments; folder-access cards; the `devices` probe | `GET /devices/novad`, `POST /devices/novad/enroll`, `GET /devices/:id`, `GET /devices/:id/capabilities`, modules, services, power, updates, files, grants, access requests, staged writes, local MCP, `GET`/`POST /devices/connections`, `DELETE /devices/connections/:id`; and the public `POST /agent/v1/{register,heartbeat,capabilities}` |
+| `spaces.ts` | Spaces and pages, sites, the page and visualization tools, the sandboxed preview CSPs; the `spaces` probe (FR-036, FR-037, FR-076) | `GET`/`POST /spaces`, `GET`/`PATCH`/`DELETE /spaces/:id`, pages, versions, restore, comments, proposals, `GET /sites/data-sources`, `GET`/`POST /sites`, `GET`/`PATCH`/`DELETE /sites/:id`, `POST /sites/:id/build`, versions, `…/preview`, `…/zip`, `GET /sites/:id/publishes`, `POST /sites/:id/{publish,unpublish}` (`confirm: true`) |
+
+`code.ts` adds the M6 Code routes (environments, Git hosts, the worktree registry and, under
+`/code/sessions/:id`, `extras`, `budget/extend`, `branch`, `push`, `pr`, `pr/refresh`, `devservers`,
+`verify` and `ask`), polls pull requests every `code.ciPollSeconds` and checks in-use environments
+every 5 minutes. `mcp.ts` adds `onServerRemoving`, so deleting a server unsubscribes its MCP events
+first; `ops.ts` adds notification routing (`useNotificationRouting`, the `os` flag on
+`notification.created`); `tools.ts` lets the Inspector frame artifact content (`X-Frame-Options:
+SAMEORIGIN`, `frame-ancestors 'self'`). The wiring connects agents to the scheduler, runs,
+computers, quiet hours and channels; deleting an agent removes its bindings, computer, browser
+session, screen records and desktop first; the kill key and a takeover pause the agent using the
+computer and its browser, and returning control resumes what they paused; cloud computers get mock
+desktops; devices serve as local-host computers and Code device environments; Code dev servers get
+the browser's grant and opener (`browserDevServerGrant`, `browserDevServerOpener`), and container
+environments the egress proxy (late-bound). The Hub answers to the host of `channels.publicUrl` and
+follows the setting. Not wired in M6: an SSH transport, the Hub's update key and the local browser
+fallback.
+
 More options: `NOVA_SECRETS=keychain|vault`, `NOVA_TLS_CERT` / `NOVA_TLS_KEY` (HTTPS),
-`NOVA_SANDBOX=auto|docker|podman|off`, `NOVA_SANDBOX_IMAGE` (terminals and command hooks run in
+`NOVA_SANDBOX=auto|docker|podman|bwrap|microvm|off` (M6 adds bubblewrap and the micro-VM stub; `auto`
+tries a container engine, then bubblewrap), `NOVA_SANDBOX_IMAGE` (terminals and command hooks run in
 this image; the sample plugin's hook needs Node in it), `NOVA_DETECT_URLS`.

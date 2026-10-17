@@ -148,3 +148,82 @@ M5 (decisions in `docs/20` ADR-092):
   never installs.
 - Memory consolidation (`src/consolidation.ts`) reads only the messages the user typed into a
   conversation, plus Nova's replies.
+
+M6 (decisions in `docs/20` ADR-093):
+
+- Agents (`src/agents/`) — `AgentService`, always-on agents (FR-079, FR-080, FR-082..FR-084,
+  FR-089, FR-090, FR-181, FR-194, FR-206): each agent is a set of `agent` threads (main, proactive
+  research, one per channel binding, one per delegated run) with instructions, responsibilities,
+  rules, one goal and notes. Its turns run in the one chat loop through the `TurnStarter`, shaped
+  by its `TurnExtension` (budgets per turn chain, notes as untrusted context). `rules.ts` turns
+  agent rules into user-layer policy rules scoped to the agent's threads (`agentPolicy`, read by
+  the gate's `useAgentPolicy`); `external.ts` is the `ExternalAgentGuard` (FR-194) the channels
+  and browser areas call; `tools.ts` offers `schedule.wake`, `schedule.create`, `schedule.list`,
+  `schedule.cancel`, `agent.note`, `agent.notes`, `agent.progress`, `agent.delegate`,
+  `agent.background`, `sessions.*` and the agent `goal.*` tools. The scheduler gains
+  `createForAgent`, `listForAgent` and `useAgents`: an agent's schedule fires a turn on its main
+  thread, not a run.
+- Channels (`src/channels/`) — `ChannelService` (FR-088, ADR-070): adapters for Slack, Teams
+  (with a JWT verifier), webhook, email (refused: no connector yet) and in-app (`adapters/`);
+  bindings, identities, loop prevention, dedupe and rate caps; channel turns carry no authority.
+  `answers.ts` answers pre-approvable approvals from a channel; `privacy.ts` is the
+  private-to-shared check; `delivery.ts` makes Slack and Teams schedule delivery targets;
+  `TriggerService` (`triggers.ts`, FR-056); `McpEventService` (`mcp-events.ts`, FR-201, over
+  `@nova/mcp`'s `McpEventsClient`); `NotificationRouter` (`notify.ts`, FR-060): per-category
+  routing, quiet hours and deferred channel copies, a shared binding's only when
+  `ChannelService.mayNotify` allows it; `channel.list` and `channel.send`.
+- Computers (`src/computers/`) — `ComputerService` (FR-080): an agent's computer created on first
+  use, a folder on the Hub (`computer.ts`) or the mock cloud runner (`cloud.ts`), snapshots,
+  restore and stop, devices as `local_host` computers, and the browser and screen controllers
+  late-bound. The egress proxy (FR-102, FR-193, ADR-063): `egress-policy.ts` (modes, host
+  patterns, the effective policy of global, profile and scopes), `egress-proxy.ts` (one session per
+  sandbox; DNS pinning, private-address block, redirects re-checked, 403 with
+  `X-Nova-Block-Cause`, credential injection, stripping hooks, every decision audited),
+  `egress-ca.ts` (the per-Hub inspection CA) and `egress-store.ts` (scopes and credentials).
+- Sandboxes (`src/tools/sandbox*.ts`) — `detectSandbox` picks a container engine, then bubblewrap
+  with seccomp on Linux (`sandbox-bwrap.ts`), or the flagged micro-VM stub (`sandbox-microvm.ts`),
+  over one session engine (`sandbox-process.ts`). The network is the egress proxy's socket only
+  (`sandbox-egress.ts`). `sandbox-publish.ts` is the dev-server bridge: a request with
+  `publish: {port}` gets a forwarder on a Unix socket in the sandbox and a listener on the Hub's
+  127.0.0.1 (`published.hostPort`). `sandbox-protect.ts` mounts the protected paths read-only or
+  hidden in every substrate (FR-190); `sandbox-router.ts` routes a thread's commands to its Code
+  session's environment (`threadSandboxRouter`).
+- Browser (`src/browser/`) — `BrowserService` on `playwright-core` (FR-086, FR-092, FR-094,
+  FR-095, FR-096, FR-098, FR-103, FR-208): one browser per computer behind its own egress session,
+  site permissions and levels (`sites.ts`), the page-action classifier (`classifier.ts`) checked
+  through the gate for every page write, injection defense (`injection.ts`), the action recorder
+  with sealed before/after screenshots (`recorder.ts`), private sign-in (`signin.ts`), the
+  `browser.*` tools and page tools (`tools.ts`), and `grantDevServer` / `openDevServer` for Code
+  dev servers. Chromium is loaded lazily; without it every tool refuses with the reason.
+- Screen (`src/screen/`) — `ScreenService` (FR-093, FR-207, FR-098, FR-087, FR-075): computer use
+  with control tiers (`tiers.ts`), per-app grants, the kill key, takeover, recorded actions with
+  encrypted screenshots, appshots, and the `screen.*` and `appshot.capture` tools; `MockDesktops`
+  (`mock-desktop.ts`) serve cloud computers' screens; `png.ts` writes, reads and crops PNGs.
+- Devices (`src/devices/`) — `DeviceService` for computers running `novad` (FR-081, FR-141,
+  FR-142, FR-144, FR-145, FR-148, FR-150, FR-210): enrollment, signed capability documents,
+  overrides and policy, modules, services, power and Wake-on-LAN (`wol.ts`), signed updates and
+  the minimum version per capability (`versions.ts`), grants, access requests and staged writes,
+  local MCP, and the agent's one connection. `protocol.ts` and `client.ts` are the Hub's side of
+  `/agent/v1`; `computer.ts` serves devices as `local_host` computers and `environment.ts` as Code
+  environments; `fake-device.ts` is a test double.
+- Code M6 (`src/code/`) — `EnvironmentService` (`environments.ts`: container, SSH, WSL and device
+  environments, FR-062, FR-078), Git hosts and pull requests (`githost.ts`, `pr.ts`: push guards,
+  secret scan, CI polling and feedback, FR-070), the worktree registry with leases (`worktrees.ts`,
+  FR-073), dev servers (`devservers.ts`, FR-097) with the browser's grant and opener factories
+  (`preview.ts`: `browserDevServerGrant`, `browserDevServerOpener`), auto-verify (`verify.ts`,
+  FR-068), cross-session operations and `task.spawn` workers (`sessions.ts`, FR-072), session
+  budgets, and the tools `git.branch`, `git.commit`, `pr.create`, `pr.status`, `devserver.*`,
+  `task.spawn`, `task.wait` and `sessions.*` (`tools-m6.ts`).
+- Spaces (`src/spaces/`) — `SpaceService` (FR-036): versioned Markdown pages, comments anchored
+  with `anchors.ts`, proposals; `SiteService` (`sites.ts`, `site-render.ts`, FR-037): static sites
+  with no script, previews, deterministic zips and reversible publishes; `markdown.ts` (safe
+  Markdown, no raw HTML), `data.ts` (JSON and CSV, 2 MB, 5,000 rows, 50 columns), and the tools
+  `page.read`, `page.edit`, `page.comment` and `visualize.create` (FR-076). The visualization
+  layout and SVG export live in `@nova/shared`.
+- Elsewhere — the gate's `useAgentPolicy` (an agent's rules join the user layer of its threads'
+  policy; a rule claiming the managed layer is coerced to user; a source that throws denies); the
+  tool runtime lets `builtin`, `browser` and `computer` tools end the turn (`approval_timeout`,
+  `deny_stop`); `NotificationService.useRouting` and the `os` flag on `notification.created`;
+  `BLOB_REFERENCES` (`purge.ts`) lists every column naming a content-addressed blob;
+  `writeSealedFile` / `readSealedFile` (`attachments.ts`) seal files that are not
+  content-addressed; the activity trace adds `computer` items with screenshot links.

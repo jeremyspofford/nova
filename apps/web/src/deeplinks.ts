@@ -4,7 +4,9 @@
 //   nova://settings[/<section>]   → /settings/<section> (unknown or missing section: general)
 //   nova://chat[/<id>][?m=<msg>]  → /chat, /chat/<id>
 //   nova://code[/<id>]            → /code, /code/<id>
-//   nova://agent[/<id>]           → /agents (agents arrive in M6)
+//   nova://agent[/<id>]           → /agents, /agents/<id>
+//   nova://computer[/<id>]        → /computers, /computers/<id> (M6)
+//   nova://device[/<id>]          → /devices, /devices/<id> (M6)
 //   nova://projects[/<id>]        → /projects, /projects/<id>
 //   nova://theme?data=<base64url> → /settings/appearance?theme=<data> (import prefilled, FR-011)
 //
@@ -69,7 +71,13 @@ export function deepLinkPath(url: string): string | null {
       return arg ? `/code/${encodeURIComponent(arg)}` : '/code';
     case 'agent':
     case 'agents':
-      return '/agents';
+      return arg ? `/agents/${encodeURIComponent(arg)}` : '/agents';
+    case 'computer':
+    case 'computers':
+      return arg ? `/computers/${encodeURIComponent(arg)}` : '/computers';
+    case 'device':
+    case 'devices':
+      return arg ? `/devices/${encodeURIComponent(arg)}` : '/devices';
     case 'project':
     case 'projects':
       return projectPath(arg);

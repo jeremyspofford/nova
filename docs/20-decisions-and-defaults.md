@@ -101,6 +101,7 @@ silently.
 | ADR-090 | M3 implementation choices | Tool loop and gate seams, container sandbox until M6, MCP SDK, audit chain, at-rest baseline, consolidation |
 | ADR-091 | M4 implementation choices | Plugins and skills on disk, every plugin a sideload, hooks fail closed (supersedes part of ADR-083), direct user actions, MCP Apps, Nova's MCP server, bundles, OAuth, workspace, profile, import |
 | ADR-092 | M5 implementation choices | One runtime through turn seams, per-thread policy and tool scope, runs, goals, sub-agents, schedules, Code sessions, auto-review denies without a reviewer model (supersedes part of ADR-090), requests, compaction, documents in-process |
+| ADR-093 | M6 implementation choices | Agents in the one loop with rules in the user layer, channel text never authority (amends ADR-083), egress proxy with HTTPS inspection (amends ADR-063), bubblewrap and container substrates (supersedes ADR-090 "Sandbox until M6"), protected paths mounted in sandboxes, computers as folders, Playwright browser with per-action checks, screen tiers and kill key, `novad` over bearer tokens (extends ADR-089), Code environments, PRs and worktrees, spaces and sites |
 
 ## Details & rationale
 
@@ -1176,6 +1177,271 @@ component sources. Revisit if UI velocity suffers.
   delivery (M6 channels); environments other than the local Hub; budgets for Code sessions (each
   turn keeps the 200-step backstop); and the full handshake of
   `contracts/hub-api.md` (protocol negotiation, limits, `suppressEvents`).
+
+**ADR-093 — M6 implementation choices** (supersedes the "Sandbox until M6" bullet of ADR-090;
+amends ADR-063 and two bullets of ADR-083; extends ADR-089's transport to `novad`; see
+`docs/adr/0093-m6-implementation-choices.md`).
+- *Agents (FR-079..FR-090, FR-181, FR-206).* An agent is a set of `agent` threads (`agent_thread`:
+  main, proactive research, one per channel binding, one per delegated run) plus its
+  instructions, responsibilities, rules, one goal and notes. Its turns run in the one chat loop
+  through the `TurnStarter` and its `TurnExtension` (ADR-076). Budgets apply per turn chain (a turn
+  plus its hook continuations) and a goal's budgets cap its goal turns together; no run row is made
+  per wake, because a run is exactly one thread. Autonomy maps as for runs (`ask_first` →
+  `ask_always`, `standard` → `defaults`, `autonomous` → `review`), and an autonomous agent needs
+  `review.model`. An agent's threads work in its computer's folder as their only root.
+- *Agent rules (FR-084).* Rules live in `agent_rule` (`policy_rule` cannot store
+  `act_on_request`) and reach the gate through `PolicyGate.useAgentPolicy`: for a thread an agent
+  owns, its rules and command prefix rules join the **user** layer of the policy set; a rule that
+  claims the managed layer is coerced to user, and a source that throws denies ("the agent's rules
+  could not be read"). `act_on_request` allows only the user's own untainted instruction and
+  otherwise asks. The rule preview is best effort (recent calls matched by tool, host, channel or
+  command word). Schema: `contracts/schemas/agent-rule.json`.
+- *Proactive research (FR-082).* A turn in the agent's research thread with trigger `schedule`
+  (`triggerRef` `proactive:<agentId>`), no authority, the `read-only` profile, a priority-0 deny
+  for anything not read-only and only the reading agent tools; an approval request cancels it. The
+  loop checks every 60 s for idle agents outside quiet hours, at most once per
+  `agents.proactive.intervalMinutes`. A reply becomes an observation note (when memory is on), a
+  suggestion and an `attention` notification; accepting a suggestion only records it. An MCP tool
+  counts as read-only only when the owner declared it (`readOnlyTools`, `userReadOnly`) and its
+  action class, destructive hint and effects agree, so research can read those connectors (J7
+  step 2); the declaration is ignored on plugin, page and device tools, and a server's own
+  `readOnlyHint` never grants it. A server whose `defaultApproval` is `ask` still asks, which
+  stops research.
+- *Pause, stop, delete (FR-090).* Pause disables the agent's schedules and wakes and pauses its
+  runs, remembering them in `agent.metadata`; resume restores exactly those, and a wake whose
+  time passed fires a minute later. Stop cancels current turns and background runs; `stopped`
+  lasts until the next turn or a resume, and meanwhile research and goal continuation do not start.
+  Typing to a paused agent resumes it; a safety pause refuses every turn until the user resumes
+  (nothing calls `autoPause` in M6). Delete needs `{confirm: true}`; turns and runs are cancelled
+  first, then the revoke hooks run (channel bindings; the computer with its browser session,
+  screen records and desktop), and only then the rows go. Delegated runs stay as Work history.
+- *Agent memory (FR-089).* Notes are `agent_memory`; conversation memory is `memory_item` rows
+  with scope `agent` (up to 20 facts per typed turn). Agent-written notes join only the turns the
+  agent starts itself, as untrusted memory, because in a typed turn they would taint the user's
+  instruction and block "when you say so" rules; a shared thread sees only shared-origin memory.
+  Turning memory off purges what the agent derived; the user's notes stay.
+- *Wakes and agent schedules (FR-206, FR-059).* `schedule.wake` creates a one-shot UTC schedule
+  (`origin: agent_self`); limits come from `agents.wakes` and the per-day limit counts every wake
+  set in the last 24 h, cancelled ones included (`agent_wake`). A wake in quiet hours moves to
+  their end. An agent's schedule fires a turn on its main thread, not a run (`runNow` returns
+  `{runId: null, threadId}`); only a schedule the user made carries the user's authority. Agent-made
+  schedules deliver only in-app or OS, and the agent cannot edit or cancel the user's. The tool
+  text still says 5 minutes to 30 days whatever the settings say.
+- *Agent goals (FR-181).* One open goal per agent (the M5 unique index). `PUT /agents/:id/goal`
+  replaces budgets (omitted ones are cleared) and may attach the goal to one responsibility.
+  Continuation waits 5 s of idle time and the end of quiet hours (this closes ADR-092's "quiet
+  hours for goal continuations" for agents; run goals still ignore quiet hours). A provider usage
+  limit makes the goal `usage_limited` with no automatic retry.
+- *Delegation and sessions (FR-083, FR-072).* `agent.delegate` starts a Work run with origin
+  `delegation`, the agent's autonomy and budgets, no authority and `run.agent_id`; its result
+  comes back as a turn in the main thread. `sessions.message` never carries the user's authority
+  and passes the gate as a write. Delegating to a Code session is not built.
+- *External agents (FR-194).* Detection is deterministic: a bot identity, a marked identity
+  (`external_agent`), a signature in the last three lines or self-identification. Content from an
+  external agent is never accepted as a task. Delegating or sending data is allowed only when the
+  user named the agent in the current turn's typed message or `namedAgents`; every other attempt is
+  denied and audited with cause `external_agent`. The channels and browser areas call the same
+  guard.
+- *Channels (FR-088, ADR-070).* One thread per binding; bindings of one Slack or Teams app share
+  credentials (`shareCredentialsWith`) and inbound events route by conversation. Identities are
+  per account and kind with roles owner and member; a private binding takes only the owner.
+  **Channel text never carries the user's authority, even the owner's in a private DM**: turns use
+  author `user` with authority `none` (origin `channel`), and the text is framed with who wrote it
+  (the owner, a known member or a guest) and where. This
+  amends ADR-083 "Owner messages in channels", which counted the owner's private DM as user
+  instruction. Webhook credentials are written by the client; the Hub never generates and returns
+  them. Email bindings are refused (`capability_missing`) until a mailbox connector exists.
+- *Approvals from a channel (FR-100).* The owner answers pre-approvable approvals by text
+  (`allow`, `allow session`, `deny`, `deny and stop` with a 6-character code, or no code when one
+  approval is pending); "Always allow" and hand-off stay in Nova; a shared conversation sees only
+  the code, not the action. Slack interactive buttons are not built.
+- *Private to shared (docs/13 §4).* Until exact provenance is wired (`originOf` is not), the check
+  compares word sequences and numbers in the reply against private memory items, the agent's
+  private notes, private and in-app binding threads and the owner's 20 most recent chats; text the
+  shared channel already said does not count. It fails closed: a check error counts as private, no
+  question channel denies, and a withheld reply becomes "I can't share that here." A notification
+  copy cannot ask, so it goes to a shared channel only when `channels.privateToShared` is `allow`;
+  otherwise it is recorded failed with the reason "withheld: …".
+- *Triggers and MCP events (FR-056, FR-201).* Trigger runs and wakes carry no authority: the
+  user's instructions plus the event, fenced as data and cut at 16,000 characters. Each trigger may
+  start `triggers.ratePerHour` runs or wakes (default 30). MCP events use the experimental
+  capability `nova/events` with `nova/events/subscribe`, `refresh` and `unsubscribe`; deliveries
+  are signed with HMAC over `id.timestamp.body` (5-minute window), subscriptions ask for 24 h and
+  refresh from three quarters of it, upkeep runs every 60 s and delivery ids are kept 7 days. The
+  Hub reaches the server through the MCP SDK client (`sdkClient`), not a patched connection; the
+  MCP area's `onServerRemoving` unsubscribes before a server is deleted. `fs_change` and `email`
+  triggers are stored but do not fire. A webhook trigger's `x-nova-event-id`, its dedupe key, is
+  signed with the body (`<timestamp>.<event id>.<body>`) when sent, so a replay cannot pass as a
+  new event. The Hub answers to the host of `channels.publicUrl`, following the setting.
+- *Notification routing and quiet hours (FR-060).* Per-category rules and quiet hours are tables,
+  not settings, because Hub areas cannot write settings. A category whose in-app rule is off is
+  recorded read (history and channel copies, no badge). `notification.created` gains `os`: false
+  when the category's in-app or OS rule is off or quiet hours are in force; clients then skip the
+  OS notification, which is suppressed, not deferred. Channel copies wait for the window to end.
+  Approvals pass quiet hours by default.
+- *Egress proxy (FR-102, FR-193, ADR-063).* Every sandbox reaches the network only through the
+  proxy, one session per command with its policy fixed at open. The mode is the narrowest of the
+  global mode, the profile's network mode and each scope's; allow is the global list plus the
+  scopes'; deny is all of them and always wins; effective `off` opens no session. Names are
+  resolved and pinned by the proxy; any non-public answer is blocked (rebinding), redirects are
+  never followed, and the allowlist is by host (any port). A refusal is 403 with
+  `X-Nova-Block-Cause`. **HTTPS inspection is implemented** with a per-Hub CA (ECDSA P-256 in
+  `<dataDir>/egress/`, key 0600, only the public certificate served): HTTPS is decrypted when the
+  mode is `limited`, a credential is bound to the host or a hook matches, else CONNECT is an opaque
+  tunnel. This amends ADR-063: without the CA, `limited` blocks HTTPS and credentials go over plain
+  HTTP only. Credentials are read from the vault per request and masked in responses; the proxy asks
+  for uncompressed bodies. Every decision is an audit entry (kind `network`). Session sockets are
+  owner-only (0600 in a 0700 folder; 0666/0711 when the Hub runs as root) and the loopback listener
+  needs the session token. `network.egressAllow` and `network.egressDeny` take the proxy's own
+  host patterns, so a stored list that fails them resolves to the default (none) instead of
+  breaking every session; the gate reads both, so a tool's network call to a deny-listed host is
+  denied.
+- *Sandbox substrates (FR-107, FR-195; supersedes ADR-090's "Sandbox until M6").* `detectSandbox`
+  `auto` tries a container engine, then bubblewrap with seccomp on Linux; `NOVA_SANDBOX` also takes
+  `bwrap` and `microvm`. Containers always run `--network none`; the proxy socket is mounted at
+  `/run/nova/egress` and a Perl forwarder on 127.0.0.1:3128 is the only route, for Docker and
+  Podman, rootful or rootless; an image without Perl refuses the command (exit 125) rather than
+  opening the network. Bubblewrap uses the same socket with a Node forwarder, a seccomp filter
+  generated in JavaScript and `RLIMIT_DATA` and `RLIMIT_CPU` (the CPU-count limit is not applied).
+  The micro-VM substrate is a stub behind `computers.microVm` (ADR-065): the Hub passes no runner,
+  so it is unavailable in M6. Container environments of Code sessions get the proxy too
+  (late-bound from the computers area), so `NOVA_SANDBOX_NETWORK=open` no longer applies to them;
+  only a tools area set up without the computers' sandbox (not the wired Hub) still reads it.
+- *Protected paths in sandboxes (FR-190, docs/12 §7.2).* Both substrates mount `.git`, `.nova`,
+  `.agents` and shell startup files read-only inside each writable root and in every folder from
+  the root down to the working directory, and hide credential locations and the data directory
+  (an empty tmpfs or `/dev/null`); a `.git` file is followed to its Git and common directories.
+  Locations that do not exist when the command starts are not covered. Only Nova's own commit with
+  hooks gets `gitWrite`: `.git` writable except `config`, `config.worktree`, `hooks` and `info`,
+  because the Hub's own Git reads `.git/config` outside any sandbox. This amends ADR-083 "Git and
+  protected `.git`" (which kept only `.git/hooks` and `.git/config` read-only) and replaces the
+  computers area's first design that left `.git` writable. Consequence: `git commit` or `checkout`
+  typed in a terminal or run with `exec` fails read-only; commits go through the Code commit flow
+  and the `git.*` tools.
+- *Computers (FR-080, FR-081).* A computer is a folder, not a long-lived container:
+  `<dataDir>/computers/<id>/{home,browser}`, with each command in a fresh sandbox over `home`;
+  software persists only when installed under home. Snapshots are folder copies under
+  `blobs/snapshots/<computer>/<snapshot>/`, not the `.tar.zst` `docs/06` described. A new agent's
+  computer is `local_container` by default; `cloud` uses a mock runner on the Hub (substrate
+  `cloud_stub`) that stops when the Hub stops. There are no new tool names: an agent's computer
+  becomes its threads' sandbox through `computers.router` and the thread policy. The wall clock
+  (`computers.limits`, 300 s) applies only to commands through the `Computer` seam; terminals and
+  dev servers live as long as their turn, which differs from `docs/11` §8. `threadSandboxRouter`
+  sends a Code session's commands to its environment's sandbox; polls, writes and kills follow the
+  session.
+- *Browser (FR-086, FR-092..FR-098, FR-103, FR-208).* Built on `playwright-core` 1.64.1, loaded
+  lazily (ADR-006: Playwright primary; the developer protocol is a per-site `browser.evaluate`).
+  The runtime's gate sees the `browser.*` tools as read-only; the service then makes one gate
+  check per action: `browser.site` (the new-site prompt: Allow once, Allow for this chat, Always
+  allow, Deny) and `browser.act` (every page write, carrying the classifier's effect classes and
+  the page as the source, so it never counts as the user's instruction). Site levels are one user
+  rule per site on `browser.act` (ADR-083 per-site levels): Always ask is a rule-level ask, Always
+  allow an allow rule, Auto approve an allow rule plus the auto-reviewer, which can only tighten
+  (`browser.act.review`); confirmation tiers apply at every level. "Allow once" lasts for the
+  visit; "Always allow" on the new-site prompt adds the site at Always ask. Each browser has its
+  own proxy session in the Hub's `network.egressMode` (the allowed sites, `network.egressAllow`
+  and the allowed-once host; a new site relaunches it with its cookies; scope policies do not
+  apply); without the proxy the browser
+  stays closed, and without the gate every new site and write is denied. Passwords are never typed
+  by the agent (`browser.sign_in` instead); verification codes and CAPTCHAs hand off. Sign-ins
+  wait in Hub memory, not the request broker, because the broker stores answers. Each launch
+  starts from a fresh profile; cookies persist only with `browser.persistCookies`. Site levels are
+  per account in M6. A `browser` or `computer` tool that times out on an approval or gets "Deny
+  and stop" ends the turn, like a built-in tool; MCP, plugin and page tools cannot.
+- *Screen (FR-093, FR-207, FR-087, FR-075, FR-098).* Computer use is off until the user enables it
+  per computer. The tier is the lowest of the controller's, a name check (password managers,
+  system settings, banking: none; browsers: view; terminals and editors: click) and the user's
+  override, which can only lower. Grants are per app, made only by the user, 30 minutes by
+  default, and needed only for the apps that receive input. Actions need an observation at most
+  120 s old and points inside the screen (and inside a window when geometry is known); the agent
+  observes at most once per 2 s. The kill key aborts the input in flight, kills and drops the
+  controller handle and stores a stop that survives a restart; the Hub enforces tiers and grants,
+  the mock desktop does not. Screenshots are content-addressed attachment blobs, not
+  `blobs/screenshots/<day>`. No event when a grant expires. The kill key and a takeover pause the
+  agent that uses the computer (its turns are cancelled) and its browser; returning control resumes
+  what the screen paused, a memory that does not survive a restart. Only `cloud` computers have a
+  desktop in M6, and it is a mock.
+- *Devices and `novad` (FR-141..FR-150, FR-210, FR-081, FR-062).* Transport until M6.5 is bearer
+  tokens over LAN HTTP, as ADR-089 does for compute nodes, extended to `novad`: an enrollment token
+  `nvd_`, a device credential `nvc_` (hashed in its own domain) and a management token `nvm_` the
+  device generated, kept in the vault. A `novad` device is a `device` row of kind `client`, `hub` or
+  `wake-helper`, never `compute`; its roles come from its signed document. Every enrollment rotates
+  the device key, so a revoked device can be added again. The supervisor runs each module as a
+  separate process speaking JSON lines; a crash restarts it with backoff from 1 s to 60 s and five
+  in ten minutes disable it (`crash_loop`). Only `management` and `storage` do real work;
+  `compute`, `browser`, `screen` and `capture` answer only `ping` and `status`. Updates are signed
+  bundles checked against a key pinned at enrollment, strictly newer, health-checked with automatic
+  rollback, `novad` last with a fallback binary and a watchdog. Writes are staged with a diff and
+  committed by atomic rename; the Hub's own protected-path check is stricter (`.git` and the like
+  read-only anywhere in the path). Commands run only under bubblewrap and only with network `off`
+  until devices get an egress proxy. Code device environments report `verified` as "active and not
+  update-required" until signed builds arrive. Crypto uses `ed25519-dalek` =2.2.0 and `sha2`
+  =0.10.9 with strict verification (rejecting small-order keys); HTTP and diff stay hand-written.
+  The device routes do not consult the policy engine: the device enforces its grants. Device list
+  routes live at `/api/v1/devices/novad` because `/api/v1/devices` belongs to the node routes.
+- *Code M6 (FR-062, FR-067, FR-068, FR-070, FR-072, FR-073, FR-078, FR-097).* Commands in SSH, WSL
+  and device environments run on that machine under its user, not in a container, so Bypass is never
+  available for them (the mode conditions read the session environment's sandbox: a container
+  environment's own, a local session the Hub's). A push's token goes only into that one Git call's
+  environment, never into config or a remote URL, and never to an `http://` remote (`policy_denied`,
+  reason `insecure_remote`, before anything is sent). A protected or default branch needs
+  `confirmBranch` typed by the user (the agent can never confirm) and is never force-pushed; pushed
+  commits are scanned for secrets first; the pre-push hook runs only in the sandbox. CI is followed
+  by polling (no webhook) and a failure goes back to the agent once per pushed head, without the
+  user's authority. Dev servers, container setup scripts and checks start with the network off. A
+  dev server's port is published through the dev-server bridge (a Unix socket bind-mounted into the
+  sandbox, forwarded by Perl in a container or the Hub's Node under bubblewrap, to a listener on the
+  Hub's 127.0.0.1): its URL is the bridge's port, and the session thread's agent browser gets the
+  proxy's grant for exactly that host and port and opens it once it answers. The bridge port has no
+  token, like a natively run dev server. A manual worktree release is refused while a session works
+  in it; `DELETE` refuses leased worktrees and needs `force` for dirty ones; the cap of 15 removes
+  the oldest only with `removeOldest`. `task.spawn` and `task.wait` keep the runs' names, are listed
+  only in Code threads and count as read-only (each worker's actions pass the gate);
+  `sessions.message` and `sessions.archive` are writes and `pr.create` a send. Budgets of Code
+  sessions (time, tokens, cost) come from `code.budgets` or the session and are checked before each
+  model step. `code.autoVerify` is security-relevant, so a project cannot set the commands Nova runs
+  after edited turns; they run sandboxed with no network.
+- *Spaces, sites, visualizations, pets (FR-036, FR-037, FR-076, FR-012).* Every page save is a
+  version; a stale base is 409 and a save that changes nothing makes no version. Comment ranges
+  follow their quoted text, else are detached for good; replies go one level deep. Agent edits
+  follow the space: proposals the user accepts (default) or direct versions; an accepted proposal
+  is a version authored by the agent. `page.*` tools are offered once the account has a space;
+  `page.read` results are untrusted. Sites are built from a space or an HTML or Markdown artifact
+  with JSON or CSV data, as static pages without script (an HTML artifact keeps its own scripts);
+  the preview is one sandboxed document (never same-origin), zips are deterministic, and
+  publishing needs `confirm: true` and writes only into folders that carry Nova's `.nova-site`
+  marker under `sites.publishRoot`; publishes form a stack that unpublish reverts. Visualizations
+  reuse the `chart` artifact kind with a `nova.visualization` document (chart, diagram, notebook),
+  laid out in `@nova/shared` and drawn as React elements, static SVG in sites; an 8-slot palette,
+  a data table for every chart, and a small diagram text subset. Pets are off by default; "keep
+  still" also stops animation. The spaces services use raw SQL because their Drizzle tables could
+  not land before the migration.
+- *Security fixes made while integrating.* `BLOB_REFERENCES` lists every column naming a
+  content-addressed blob (agent avatars, screen screenshots, site versions included), so a purge
+  never deletes a blob something still names. `writeSealedFile` / `readSealedFile` seal files that
+  are not content-addressed (browser screenshots, the browser cookie state) with the data key,
+  bound to a label. The artifact content route sends `X-Frame-Options: SAMEORIGIN` and
+  `frame-ancestors 'self'`, so the Inspector can frame HTML and PDF artifacts while every other
+  response keeps `DENY`. Browser downloads without a computer stay inside the browser's files
+  folder. The public receivers (channel inbound, trigger webhook, MCP events, `/agent/v1/*`)
+  authenticate by signature or token and are listed in `contracts/hub-api.md` §1.
+- *Not in M6 (known gaps).* Page writes on a dev-server page still pass `browser.act` (auto-verify
+  does not drive the browser); proactive research cannot use plugin tools; background-run threads of
+  an agent run commands on the agent's computer while their file roots come from the run;
+  `web.fetch` runs in the Hub process, outside the proxy; scope policies do not apply to the agent
+  browser's proxy session; `plugin` and `mcp_server` scope policies are stored but applied to
+  nothing; no SSH transport is bound (SSH environments are down) and the device connection has no
+  WSL operations; the local browser fallback (FR-209) has no caller and refuses with the reason
+  until a device offers a browser module; MCP servers still run unsandboxed and outside the proxy;
+  SOCKS5, the cap of 4 concurrent sandboxes, a real micro-VM runner, a real cloud runner, real
+  desktops (`novad`'s screen module), the extension bridge, per-scope site levels, console and
+  network capture in the browser, Slack interactive buttons, email channels, `fs_change` and `email`
+  triggers, delegation to a Code session, session handoff, best-of-N and cloud environments,
+  three-way merge, the Hub's update key and Hub-hosted bundles, `novad install`, `uninstall`, the
+  local socket (`contracts/hub-api.md` §4), unprivileged module users, sandboxes on macOS and
+  Windows, firmware, out-of-band and low-level boot, the Wake Helper, a watchdog rollback report,
+  Windows enrollment, `thread.status.changed` for agents, remote hosting targets for sites, and the
+  web UI for these areas (it lands with the M6 web wave).
 
 ## Defaults for common ambiguities
 

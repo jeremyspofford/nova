@@ -94,6 +94,23 @@ environment, and not offered on minimum Hub hardware. The OS sandbox stays the d
 - The user's personal computer is only connected by explicit consent, one at a time per agent,
   and can be disconnected at any moment.
 
+*As shipped in M6 (ADR-093).* `ComputerService` serves the computers by id
+(`/api/v1/computers`). An agent's computer is made on first use, as `computers.agentComputer`
+says: `local_container` (the default) is a folder on the Hub,
+`<dataDir>/computers/<id>/{home,browser}`, and each command runs in a fresh sandbox over `home`
+(its only writable root and `HOME`); the browser profile is never mounted into the sandbox.
+Software persists only when installed under home (`pip --user`, npm prefixes, `~/.local/bin`).
+`cloud` is a mock runner on the Hub (substrate `cloud_stub`) that keeps its files in a folder and
+uses the local sandbox; it does not keep working while the Hub is off. A connected device is a
+`local_host` computer served by the devices area: files through staged writes, commands
+sandboxed on the device (`docs/23`). Snapshots copy the whole folder (home and browser profile)
+to `blobs/snapshots/<computer>/<snapshot>/` and restore swaps it by rename; one snapshot,
+restore or stop of a computer runs at a time. The browser and the screen of a computer come from
+their areas. Startup marks every computer `stopped` and removes the folders of computers that no
+longer exist. Deleting an agent removes its computer, browser session, screen records, desktop and
+files. `<dataDir>/computers` is the one part of the data folder besides the workspace that the
+gate and the tools' path policy let through; a thread still reaches only its roots.
+
 ### 2.4 Windows sandbox detail (FR-107, ADR-064)
 
 Windows support stays behind a flag until the security suite passes on it.
@@ -173,6 +190,24 @@ harden themselves at start:
 - Windows: crash dumps off, DLL search restricted to the install directory, only explicitly
   passed handles inherited by children.
 
+*As shipped in M6 (ADR-093).* `detectSandbox` (`NOVA_SANDBOX`: `auto`, `docker`, `podman`,
+`bwrap`, `microvm`, `off`) picks a container engine first, then bubblewrap on Linux; a forced
+substrate that is missing fails closed. **Containers** always run `--network none`, as a non-root
+user with every capability dropped, no new privileges, 512 pids and `computers.limits` memory and
+CPUs; with network allowed the proxy socket's folder is mounted at `/run/nova/egress` and a Perl
+forwarder on 127.0.0.1:3128 is the only route, for Docker and Podman, rootful or rootless; an image
+without Perl refuses the command (exit 125). **Bubblewrap** creates every namespace, uses
+`--disable-userns` where supported, clears the environment, mounts system folders read-only and
+installs a seccomp filter generated in JavaScript (x86-64 and AArch64): io_uring, module loading,
+`kexec`, `bpf`, perf events and `userfaultfd` are denied, and without a proxy session only
+`AF_UNIX` sockets can be created; memory and CPU time are limited with `RLIMIT_DATA` and
+`RLIMIT_CPU` (the CPU-count limit is not applied); a Node forwarder bridges the proxy socket. Both
+substrates mount the protected paths (`docs/12` §7.2). Sandboxes trust the system roots plus the
+Hub's inspection CA through `SSL_CERT_FILE` and the usual CA-bundle variables. The micro-VM
+substrate is a stub: the Hub passes no runner, so it is unavailable. macOS seatbelt and the Windows
+token sandbox are not built; on those hosts only a container engine serves. 8 sessions per turn
+and 4 MiB of output (head and tail) per session.
+
 ## 3. Sandbox broker (`services/sandboxd`)
 
 ```
@@ -193,6 +228,11 @@ Guarantees: no host environment leakage, no credentials inside the sandbox (ADR-
 out-of-scope or protected-path writes, no unapproved egress, resource limits enforced, a
 deterministic, logged profile, and no retry outside the sandbox after a sandbox denial
 (ADR-059).
+
+*As shipped in M6 (ADR-093).* There is no separate `sandboxd` service: the substrates run in the
+Hub process (`packages/core/src/tools/sandbox*.ts`), the egress proxy too
+(`packages/core/src/computers/egress-proxy.ts`), and `threadSandboxRouter` sends each command to
+its thread's sandbox (a Code session's environment, an agent's computer, else the Hub sandbox).
 
 ## 4. Browser controller (`services/browserv`)
 
@@ -281,6 +321,38 @@ results are untrusted. Levels are per site and per scope, listed and revocable i
 - The session is marked "local fallback" in the trace and audited; the per-site consent is a
   revocable grant. Egress from the clean profile goes through that device's egress proxy.
 
+*As shipped in M6 (ADR-093).* The browser controller runs in the Hub on `playwright-core` (loaded
+lazily), with headless Chromium from `browser.executablePath` or Playwright's install; there is no
+`browserv` service and no bundled browser. One browser per computer (a thread without an agent
+computer uses `thread-<threadId>`), at most `browser.maxConcurrent` open. Each launch starts from a
+fresh temporary profile; cookies are kept (sealed `state.json`) only with `browser.persistCookies`.
+Each browser has its own egress proxy session in the Hub's `network.egressMode`, whose allowlist is
+the allowed sites (each also as `*.site`), `network.egressAllow` and the allowed-once host; a newly
+allowed site relaunches it with its cookies; resources from other hosts are blocked and
+`browser.read` says which; service workers are blocked. Without the proxy the browser stays closed.
+A Code session's dev server (`docs/10` §7) is the one loopback address a browser may load: its grant
+covers exactly the bridge's host and port (`browser.devserver.granted`, `.revoked`;
+`browser.allowLocalSites` stays off), and the browser pane opens it as the user's action (tool
+`devserver.open` in the action trace). Tools: `browser.navigate`, `read`, `click`, `type`, `select`,
+`press`, `scroll`, `wait`, `back`, `screenshot`, `download`, `upload`, `sign_in`, the
+developer-protocol `browser.evaluate` (listed only while a site has the mode on and
+`browser.devProtocol` allows it) and page tools `page:<host>.<name>`. The runtime's gate sees the
+browser tools as read-only; the service checks each action itself with `browser.site` (the new-site
+prompt: Allow once for the visit, Allow for this chat, Always allow, which adds the site at Always
+ask, Deny) and `browser.act` (every page write with the classifier's effect classes and the page as
+its source, so purchases, sign-ups and deletions are confirmed when they happen; CAPTCHAs, security
+changes and verification codes hand off). Site levels (§4.4) are one user rule per site on
+`browser.act`; on `auto_review` sites an action the gate allowed without a card goes to the
+auto-reviewer, which can only tighten (`browser.act.review`); levels are per account, not per scope,
+in M6. The agent never types a password (it uses `browser.sign_in`; the private form waits 15
+minutes in Hub memory and fills the page; **Save** stores the login in the vault, and reuse needs
+the user to pick it). Data sent to a page signed by an external agent is denied unless the user
+named it (FR-194). Every action is recorded with sealed before and after screenshots (§9). Page
+tools: only the top frame, the current origin, at most 20, annotations ignored. Not built: console
+and network capture, hover, element screenshots, restart after a crash, the extension bridge (§4.3)
+and the local browser fallback (§4.6: no tool calls it in M6, and it refuses with the reason until a
+device offers a browser module).
+
 ## 5. Screen / computer use (FR-093, FR-207)
 
 - `screen.observe` returns a screenshot + accessibility tree (UI Automation on Windows, the
@@ -332,11 +404,39 @@ results are untrusted. Levels are per site and per scope, listed and revocable i
   `confirm_at_action`; the final step of a credential change is handed off.
 - Screen content is untrusted input (FR-103) and never counts as user intent.
 
+*As shipped in M6 (ADR-093).* Computer use runs on the Hub, which enforces tiers and grants
+(`/api/v1/computers/:id/screen`, `takeover`, the live WebSocket). Only `cloud` computers have a
+controlled desktop, a mock desktop on the Hub; real desktops wait for `novad`'s `screen` module, so
+hiding Nova's window, the clipboard guard and masking (§5.2) are not built (a failed mask is
+refused, tested against the mock). Computer use is off until enabled per computer. The tier is the
+lowest of the controller's, a name check and `screen.tierOverrides` (overrides only lower); each
+receiver window and the focused window are checked before every input; click tier allows left
+click and scroll; a refusal is a tool error (`screen_tier`, `screen_handoff`) naming what to use
+instead. Grants are per app, made only by the user (`screen.request_access` asks and grants only
+on the user's answer), `screen.grantMinutes` long, and needed only for apps that receive input.
+Actions need an observation at most 120 s old and points inside the screen and inside a window
+when geometry is known; `screen.observe` is limited to one per 2 s. The kill key (in the web app,
+`screen.killKey`) aborts the input in flight, kills and drops the controller handle, refuses queued
+input and stores a stop that survives a restart until the user resumes; it pauses the agent using
+the computer and its browser. A takeover aborts the agent's input in flight, pauses the agent (its
+running turn is cancelled) and its browser, and needs the agent to observe again after control
+returns; takeovers a restart left open are closed. Every agent action, refusals included, is
+recorded (`screen_action`) with encrypted before and after screenshots when it reached the
+capture step; typed text is stored as its length only. Tools: `screen.observe`, `click`, `type`,
+`key`, `scroll`, `drag`, `request_access` and `appshot.capture`, source `computer`, listed last.
+Purchases and other confirm-at-action steps on screen actions are not classified yet: the policy
+engine treats them as plain writes.
+
 ## 6. Appshots (FR-075)
 
 `appshot.capture` records a window/screen region plus metadata (app name, window title,
 timestamp) as an artifact for debugging. Captures are local, redact known-sensitive regions
 when possible, and are subject to retention policy.
+
+*As shipped in M6 (ADR-093).* An appshot crops a window out of the screen (or keeps the screen,
+or screenshots the agent browser's page) and saves it as an `image` artifact plus a
+`screen_appshot` row with the app, window title, URL and size. Appshots are artifacts and are not
+pruned with action screenshots; nothing redacts regions yet.
 
 ## 7. Network policy
 
@@ -363,6 +463,19 @@ substrate connects to it.
   event (method, host, status, cause; bodies not stored by default). Tracking headers are
   stripped.
 
+*As shipped in M6 (ADR-093).* The proxy runs in the Hub, one session per command with its policy
+fixed when it opens (`docs/12` §8). Routing: containers and bubblewrap reach it only through the
+session's Unix socket (owner-only); host-side clients use a loopback port that needs the
+session's token. Scopes `run`, `session` and `agent` are applied (an agent's commands use the
+agent's scope); `plugin` and `mcp_server` policies are stored but nothing runs under them yet. The
+agent browser's session follows `network.egressMode` (`off`: no network, `limited`: reads only)
+but no scope policy. Container environments' sandboxes (`docs/10` §2) use the proxy too. A dev
+server's port leaves its sandbox only through the dev-server bridge to the Hub's loopback, which
+only the granted browser's proxy session may reach. SOCKS5 is not built. `network.egressAllow`
+and `network.egressDeny` take the proxy's own host patterns (at most 500 each); a stored list
+that fails them resolves to the default (none). `web.fetch` and MCP servers still run outside the
+proxy, in the Hub process and unsandboxed.
+
 ## 8. Resource governance
 
 | Resource | Default cap |
@@ -379,6 +492,11 @@ substrate connects to it.
 Exceeding a cap returns a structured error and is logged; runs can request an increased cap
 with user approval.
 
+*As shipped in M6 (ADR-093).* `computers.limits` sets CPU and memory for every command (read when
+the Hub starts) and a wall clock of 300 s for commands through the `Computer` seam only; exec
+tools, terminals and dev servers live as long as their turn. `browser.maxConcurrent` (2) caps
+browsers. The cap of 4 concurrent sandboxes and the cloud disk cap are not enforced.
+
 ## 9. Data hygiene
 
 - Browser profiles, downloads, screenshots, and snapshots are stored locally under
@@ -387,6 +505,13 @@ with user approval.
   `docs/12` §7.2 are never mounted or shared into any substrate.
 - Snapshot contents are encrypted at rest when sync is enabled.
 - Deleting an Agent/computer purges its snapshots and profiles after a confirmation.
+
+*As shipped in M6 (ADR-093).* Browser screenshots are written to
+`blobs/screenshots/<yyyymmdd>/<id>-<before|after>.png`, sealed with the data key when one is
+loaded, and swept every 6 hours after `browser.screenshotRetentionDays`; computer-use screenshots
+are content-addressed attachment blobs pruned daily after `screen.screenshotRetentionDays`. The
+browser cookie state is sealed too. Snapshots are not encrypted beyond the data directory and are
+not expired.
 
 ## 10. Failure & safety
 

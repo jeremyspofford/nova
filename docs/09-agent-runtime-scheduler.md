@@ -153,6 +153,13 @@ deletes it. Quiet hours do not yet defer goal continuations. Routes: `GET`, `PUT
 `DELETE /runs/:id/goal`, `GET /goals`, `GET`/`PATCH /goals/:id` and
 `POST /goals/:id/{pause,resume,complete}`.
 
+*As shipped in M6 (ADR-093).* Agents hold goals too (`GET`, `PUT` and `DELETE /agents/:id/goal`),
+one open goal per agent, optionally attached to one responsibility; `PUT` replaces the budgets, so
+omitted ones are cleared. An agent's goal runs on its main thread; continuation waits 5 s of idle
+time and the end of quiet hours, without the user's authority. A provider usage limit makes it
+`usage_limited` with no automatic retry. `GET /goals` lists runs' and agents' goals, and the
+status routes work on both. Run goals still ignore quiet hours.
+
 ## 3. Planning
 
 - The orchestrator produces a **plan** (ordered steps with rationale) for non-trivial tasks.
@@ -334,6 +341,19 @@ user's own schedules; agent-made schedules and self-set wakes (`schedule.create`
 - **Delete.** Deleting a schedule removes its history and webhook secret; a run in progress
   continues.
 
+*As shipped in M6 (ADR-093).* A schedule can target an agent (`agent_id`): its fire starts a turn on
+the agent's main thread instead of a run, and Run now answers `{runId: null, threadId}`. Only a
+schedule the user made carries the user's authority; the agent's autonomy applies, not the
+schedule's. The agent's tools `schedule.create` (origin `agent`), `schedule.list`, `schedule.cancel`
+and `schedule.wake` (origin `agent_self`, a one-shot UTC schedule with its `wakeReason`) manage only
+its own schedules, deliver only in-app or OS, and can neither edit nor cancel the user's. Wakes
+follow `agents.wakes` (at least 5 minutes ahead, at most 30 days, 24 per agent in any 24 hours,
+cancelled ones counted, `agent_wake`) and move to the end of quiet hours; `schedule.wake.set` is
+emitted. `schedule.created`, `.changed` and `.cancelled` of an agent's schedule carry its `agentId`
+in the payload and the correlation. Pausing an agent disables its schedules and wakes and resuming
+restores them. Slack and Teams delivery targets take a channel binding id as `ref`; the receipt is
+the posted message's id. Email targets are still refused.
+
 ## 7. Event triggers (FR-056)
 
 - **Sources**: only sources that declare events can trigger work:
@@ -355,6 +375,28 @@ user's own schedules; agent-made schedules and self-set wakes (`schedule.create`
 - **Untrusted**: payloads are wrapped as untrusted input (FR-103), never count as user intent
   (FR-189), and cannot widen policy. An agent's own outbound actions never re-fire its
   triggers.
+
+*As shipped in M6 (ADR-093).* Triggers are in `trigger` with `trigger_event` as their history;
+routes are `/api/v1/triggers` (`contracts/hub-api.md` "Channels, triggers & notification
+routing"). Each has an `action`: `run` starts a Work run (origin `trigger`, autonomy `ask_first`
+or `standard`), `wake` a turn on an agent's thread (trigger `event`). Neither carries the user's
+authority: the turn is the user's instructions plus the event fenced as data, cut at 16,000
+characters. Each trigger may start `triggers.ratePerHour` runs or wakes (default 30); further
+events are skipped. Sources:
+
+- `webhook`: `POST /api/v1/triggers/:id/webhook` with the trigger's bearer token and an HMAC
+  signature over `<timestamp>.<body>`, or `<timestamp>.<event id>.<body>` when the sender adds
+  `x-nova-event-id` (5-minute window). The dedupe key is that signed event id, else the trigger's
+  `dedupeKey` field of the body, else the body's hash, so a replay cannot pass as a new event.
+- `connector_event`: every verified message in a watched Slack conversation the bot did not
+  write, through a channel binding; `contains` filters it.
+- `mcp_event` (FR-201): the Hub subscribes through the experimental capability `nova/events`
+  (`nova/events/subscribe`, `refresh`, `unsubscribe`) with its webhook URL
+  (`channels.publicUrl`, else the Hub address) and a fresh signing secret. A subscription asks for
+  24 h, is refreshed from three quarters of its lifetime, is checked every 60 s and is subscribed
+  again when it lapses; deliveries are signed over `<id>.<timestamp>.<body>`, at most 256 KiB, and
+  delivery ids are kept 7 days. Deleting an MCP server unsubscribes first.
+- `fs_change` and `email` triggers are stored with `available: false` and do not fire yet.
 
 ## 8. Agents (always-on agents)
 
@@ -405,6 +447,55 @@ Content produced by other AI agents (email, chat, channels, pages, plugins, capt
 untrusted data. A Nova agent does not accept tasks from, delegate to, or send data to an
 external agent unless the user named that agent for the current task; other attempts are denied
 and audited.
+
+*As shipped in M6 (ADR-093).* Routes are under `/api/v1/agents` (`contracts/hub-api.md`
+"Agents"); the tables are `agent`, `agent_thread`, `agent_responsibility`, `agent_rule`,
+`agent_memory`, `agent_suggestion`, `agent_wake` and `external_agent` (`docs/06`).
+
+- **Threads and turns.** An agent is a set of `agent` threads: its main thread (kept out of chat
+  memory), a proactive research thread, one per channel binding and one per delegated run. Its
+  turns run in the one chat loop through the `TurnStarter`, shaped by the agents area's
+  `TurnExtension`. Budgets apply per turn chain (a turn plus its hook continuations), from
+  `agents.defaultBudgets`; a used-up budget emits `agent.budget.reached` and an `attention`
+  notification. No run row is made per wake. Autonomy maps as for runs; `autonomous` needs
+  `review.model`. The agent's threads work in its computer's folder as their only root.
+- **Authority.** Only turns the user typed in Nova and fires of schedules the user made carry the
+  user's authority. Goal continuations, research, wakes, agent-made schedules, channel messages
+  (even the owner's), trigger events, background results and `sessions.message` carry none.
+- **Rules (FR-084).** `agent_rule` rows reach the gate through `useAgentPolicy` as user-layer rules
+  scoped to each of the agent's threads; `act_on_request` allows only the user's own untainted
+  instruction. See `docs/12` §3.
+- **Proactive research.** Every 60 s the loop looks for active agents with research on that are
+  idle, outside quiet hours and past `agents.proactive.intervalMinutes`. The turn has trigger
+  `schedule` (`triggerRef` `proactive:<agentId>`), the `read-only` profile, a deny for anything
+  not read-only and only the reading agent tools; an approval request cancels it. "Nothing new"
+  ends quietly; anything else becomes an observation note (when memory is on), a suggestion and an
+  `attention` notification. `POST /agents/:id/research` runs it now. MCP tools the owner
+  declared read-only (`docs/08` §1) count as read-only, so research can read those connectors;
+  plugin tools never do, and the owner's `ask` default for a server still stops research.
+- **Background threads.** `agent.delegate` starts a Work run (origin `delegation`, the agent's
+  autonomy and budgets, no authority, `run.agent_id`); its result comes back as a turn in the main
+  thread unless the agent is paused. `agent.background` lists them. Delegating to a Code session is
+  not built.
+- **Memory (FR-089).** Notes the agent writes are untrusted and join only turns it starts itself;
+  conversation memory is `memory_item` rows with scope `agent`; a shared thread sees only
+  shared-origin items; turning memory off purges what the agent derived.
+- **Pause, stop and delete.** As above, with these details: pause remembers which schedules and
+  runs it disabled and resume restores only those; `stopped` lasts until the next turn or a resume;
+  typing to a paused agent resumes it; delete needs `{confirm: true}`, cancels turns and runs, then
+  removes bindings and the computer (with its browser session, screen records and desktop) before
+  the rows. Safety monitoring does not auto-pause yet; the
+  kill key and a takeover pause the agent with reason `user`.
+- **Connected computer.** One active `agent_device_connection` per agent through the devices area
+  (`docs/23`); commands on it are refused in the device's quiet hours.
+- **External agents.** See `docs/12` §6.2.
+- **Tools.** `agent.note`, `agent.notes`, `agent.progress`, `agent.delegate`, `agent.background`,
+  `schedule.*`, `sessions.*` and the agent `goal.*` tools are offered only in an agent's threads;
+  the research thread gets only the reading ones. Tools that change only the agent's own state
+  count as read-only for the gate.
+- **Not in M6.** `thread.status.changed` with `ref.kind: agent` (an agent's status is derived when
+  read), automatic retry of a goal after a usage limit, delegation to Code, and a read-only
+  declaration for plugin tools.
 
 ## 9. Activity & audit
 

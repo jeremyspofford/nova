@@ -105,7 +105,7 @@ the settings' roots and project folders. The gate and the tool runtime read the 
 the roots a tool runs with are the roots the gate checked. A source that throws denies every
 call. The permission mode and the run id are recorded in the policy context and the audit
 detail. Bypass needs `code.allowBypass` (security-relevant) and a container or micro-VM
-substrate. When an Auto or Bypass condition lapses mid-session, the session runs with Manual's
+substrate where the session's commands run (M6: never on another machine). When an Auto or Bypass condition lapses mid-session, the session runs with Manual's
 axes. A sub-agent whose tool list holds only reading tools runs under `read-only`.
 
 ### 2.2 Built-in safety, confirmation tiers and intent provenance (FR-189, ADR-062)
@@ -191,7 +191,7 @@ always win over `allow`.
    At this step the user's own defaults come first, then the plugin's per-tool and per-action
    defaults; a tool the plugin did not declare asks, and permissions that cannot be read deny.
 5. **Approval policy** (§2.1).
-6. **Fallback**: `deny` for unknown destructive tools; `allow` for read-only built-ins.
+6. **Fallback**: `deny` for unknown destructive tools; `allow` for read-only actions (below).
 
 After the deterministic result:
 
@@ -213,6 +213,15 @@ After the deterministic result:
      decision is still `allow` under the `review` approval policy, and write actions on sites
      set to "Auto approve with review" (`docs/11` §4.4).
 9. A remaining `ask` becomes an approval (§4).
+
+**Read-only actions.** An action is read-only when a built-in tool's own annotation says so, or
+when the owner declared an MCP tool read-only in Settings (`userReadOnly`, `docs/08` §1) and its
+action class, destructive hint and effects (declared and inferred) say nothing changes. Read-only
+actions skip the intent-provenance and network-allowlist floors, are not sent for review, and
+match `readOnly: true` rules, so an agent's proactive research (whose thread denies
+`readOnly: false`, `docs/09` §8) may use them. At steps 4–6 the owner's per-tool and per-server
+defaults still come first; only without one does the fallback allow. Hard denies (deny-listed
+hosts, protected paths, secret access) apply as always.
 
 Nova rejects an ordering in which a model reviewer runs before the user's custom rules or
 stands in for the deterministic engine: the deterministic engine stays authoritative and
@@ -261,6 +270,19 @@ app access or override built-in safety, they cannot pre-approve `confirm_at_acti
 `handoff_required` actions (§2.2), and they cannot bypass required confirmations (e.g., using a
 saved login). Rules are editable, deletable and previewable: the preview lists recent actions
 the rule would have matched.
+
+*As shipped in M6 (ADR-093).* An always-on agent's rules are stored in `agent_rule`
+([`agent-rule.json`](../contracts/schemas/agent-rule.json)), not `policy_rule`, because
+`policy_rule` has no "when you say so" effect. The match names tools (names or globs), hosts,
+action classes (`read`, `write`, `send`, `delete`, `execute`), effect classes and channels
+(`<kind>:<conversation>`), hosts or channels but not both; a rule may carry a command prefix rule,
+which may only act or ask and whose examples must pass. The gate's `useAgentPolicy` adds the
+agent's rules and command rules to the **user** layer of the policy set for every thread the
+agent owns: a rule that claims the managed layer is coerced to user, and a source that fails denies
+the call ("the agent's rules could not be read"). `act_on_request` allows only when the call
+carries the user's own instruction with no taint, so agent notes join only turns the agent starts
+itself. The preview (`GET /agents/:id/rules/:ruleId/preview`) is best effort: it matches the
+latest 500 calls by tool, host, channel or command word.
 
 ### 3.1 Command prefix rules (FR-191)
 
@@ -434,6 +456,26 @@ every grant.
   private-key headers and token prefixes, fails the build on a finding; fixtures mark fake
   values with `secret-scan: fake` (ADR-090).
 
+- **As shipped in M6** (ADR-093). The egress proxy injects credentials from
+  `egress_credential` rows (`/api/v1/egress/credentials`; the value is a vault entry
+  `secret://egress/<id>`, never returned): `bearer`, `basic` or a named header (never `Host`,
+  `Cookie` or a hop-by-hop header), account-wide or bound to one run, session or agent. It
+  terminates TLS with a per-Hub ECDSA P-256 CA in `<dataDir>/egress/` (key 0600; only the public
+  certificate is served, `GET /egress/ca.pem`). HTTPS is decrypted only in `limited` mode, for a
+  host with a bound credential or when a hook matches; without the CA, credentials go over plain
+  HTTP only. Credential values are read per request, a vault failure sends the request without
+  one, and values (and the basic-auth base64) are masked in response headers and bodies; the proxy
+  asks for uncompressed bodies, and a body an upstream compresses anyway is not scanned. Git host
+  tokens (`secret://code/githost/<id>/token`), SSH credentials of Code environments
+  (`secret://code/environment/<id>/credential`), channel bot tokens and signing secrets
+  (`secret://channel/…`), trigger webhook secrets (`secret://trigger/<id>`), MCP event signing
+  secrets (`secret://mcp/<server>/events/<id>`), saved browser logins
+  (`secret://browser/login/<id>`) and the `novad` management token
+  (`secret://devices/<id>/management-token`) are vault entries; rows hold only references.
+  Files that are not content-addressed, such as browser screenshots and the browser cookie state,
+  are sealed with the data key and bound to a label (`writeSealedFile`), so one cannot be swapped
+  for another.
+
 ## 6. Prompt-injection defense (FR-103)
 
 - **Instruction separation**: user/system instructions are a privileged channel; tool output,
@@ -449,6 +491,13 @@ every grant.
 - **Injection canary tests** and the persistence evals (FR-123, FR-224) must fail safely.
 - Tool output that appears to contain instructions is surfaced to the user as a suspicious
   finding, not executed.
+
+**As shipped in M6** (ADR-093): page content is a `page` source and every browser gate request
+carries its taint, so nothing a page says authorizes an action. `browser.read` labels the page as
+untrusted, and a page that looks like it carries instructions is audited once per URL
+(`browser.injection_suspected`) and flagged to the model. Channel messages, trigger and MCP event
+payloads, screen observations (origin `capture`), page tools' results, check summaries from a Git
+host and `page.read` results are untrusted too.
 
 ### 6.1 Auto-reviewer (FR-085, ADR-061)
 
@@ -486,7 +535,7 @@ The reviewer's policy prompt is Nova's own and is versioned with the eval set th
 - `review.started` and `review.completed` are emitted. The verdict is stored on the approval row;
   **Allow once** on a reviewer card is recorded as an override. The audit actions
   `review.verdict` (model, attempts, latency, fail-closed), `review.override` and
-  `review.breaker` use kind `policy` until a `review` kind exists.
+  `review.breaker` use kind `review` (the M5 integration fixes added it).
 - The breaker counts per run (per thread without a run) and only in memory. When it trips the call
   is denied, the turn stops, `review.breaker.tripped` is emitted and the user is notified; the run
   pauses with `review_breaker` and shows **Blocked** "Stopped by auto-review" rather than Needs
@@ -504,6 +553,15 @@ The reviewer's policy prompt is Nova's own and is versioned with the eval set th
   one is allowed only when the user's instruction for the current task named that agent
   (`provenance.namedAgents`). Every other attempt is denied by built-in safety and audited
   with cause `external_agent`.
+
+**As shipped in M6** (ADR-093): detection is deterministic: a channel identity flagged as a bot,
+an address the user marked (`/api/v1/external-agents`), a sign-off in the last three lines ("—
+the billing agent") or self-identification. Inbound content from an external agent is never
+accepted as a task (audited `external_agent.denied`, action `accept_task`, with its source and
+evidence). Delegating or sending data is allowed when the counterpart is not an agent, or when the
+user named it in the typed message of the thread's latest turn or `namedAgents`; otherwise it is
+denied with cause `external_agent`. The browser applies it to form submits, uploads, Enter and
+page tools on an agent-signed page; channels drop a message from one.
 
 ## 7. Sandboxing (FR-107)
 
@@ -527,6 +585,14 @@ The reviewer's policy prompt is Nova's own and is versioned with the eval set th
   (`document.create`, `document.read`) run in the Hub process, not the sandbox: they only turn
   validated data into a file or a file into text, run no code and import nothing that reaches the
   network (a test enforces it). Nova's own Git calls never run repository hooks (FR-211).
+
+- *In M6* (ADR-093) the substrates are a container and bubblewrap with seccomp on Linux
+  (`docs/11` §2.5); `auto` picks a container engine first. Every sandbox's network is the egress
+  proxy's socket only (§8). An agent's commands run on its computer's folder. A Code session in
+  an SSH, WSL or device environment runs its commands on that machine under its user (a device's
+  `novad` sandboxes them with bubblewrap and no network). macOS seatbelt, the Windows token
+  sandbox and the micro-VM runner are not built. MCP servers, including those of plugins and
+  bundles, still run outside the sandbox and the proxy, and `web.fetch` runs in the Hub process.
 
 ### 7.1 Permission profiles (FR-190)
 
@@ -582,6 +648,25 @@ Inside writable roots, including when a whole drive is shared, these stay read-o
   session sandbox (FR-211).
 - The list is data in `packages/policy`; the security suite enumerates it (§12).
 
+*As shipped in M6* (ADR-093): the substrates enforce the list with mounts, in every root and in
+every folder from the root down to the command's working directory: `.git`, `.nova`, `.agents`
+and shell startup files are bound read-only inside writable roots, and credential locations
+(matched case-insensitively, `credentials*` prefixes included) and the Nova data directory are
+hidden (an empty tmpfs, or `/dev/null` for a file) in every root; roots inside the data directory
+(the workspace, an agent computer's home) are mounted after the hiding. Likewise the gate and the
+tools' path policy let only the workspace and `<dataDir>/computers` through the data-directory
+deny, and a thread still reaches only its roots. A `.git` file (a linked worktree or submodule) is
+followed to its Git directory and common directory. Mount points cannot be renamed or deleted from
+inside. Locations that do not exist when the command starts are not covered, because a mount point
+would have to be created on the host. Nova's own commit that runs the repository's hooks passes
+`gitWrite`: `.git` becomes writable except `config`, `config.worktree`, `hooks` and `info`, since
+the Hub's own Git reads `.git/config` outside any sandbox and a sandboxed write there could make
+it run a program (`core.sshCommand` and the like). So `git commit` or `git checkout` typed in a
+terminal or run with `exec` fails read-only; commits go through the Code commit flow and the
+`git.*` tools. On a device, `novad` refuses credential locations and its own data folder in every
+grant and keeps the read-only locations read-only inside write grants; the Hub checks staged
+device writes again, treating `.git` and the like as read-only anywhere in the path.
+
 ### 7.3 Substrates
 
 | Platform | Default sandbox | Detail |
@@ -632,6 +717,38 @@ clients; the substrate blocks every other route (`docs/11` §7).
 - A policy decider may turn an allowlist miss into an `ask`; nothing turns a deny into an
   allow.
 - The proxy strips tracking headers. VM guests have IPv6 off.
+
+**As shipped in M6** (ADR-093):
+
+- The proxy runs in the Hub, one session per sandboxed command (container environments' included)
+  with its policy fixed when it opens. Effective mode: the narrowest of `network.egressMode`, the
+  profile's network mode and each scope's (off < limited < allowlist); allow: `network.egressAllow`
+  plus the scopes' lists; deny: `network.egressDeny` plus the scopes', and deny always wins. An
+  effective `off` opens no session. Scope policies are set with
+  `PUT /api/v1/egress/scopes/:kind/:id`; `agent`, `run` and `session` scopes are applied, `plugin`
+  and `mcp_server` ones are stored only. The profile's own allow and deny lists are not passed to
+  the proxy.
+- Check order: mode `off`, then deny, then the allowlist, then `limited` methods; DNS is resolved
+  only after these pass, and a name with any non-public answer is blocked. The allowlist is by
+  host, so every port of an allowed host is reachable. Redirects are never followed. A dev-server
+  grant (one host and port for one scope) passes a private address only when the session's
+  policy sets `allowLocalBinding`. In M6 only an agent browser's session gets one: for a Code
+  session's dev server, published from its sandbox through the dev-server bridge to the Hub's
+  127.0.0.1 (`docs/10` §7), audited as `browser.devserver.granted` and `.revoked`. The bridge's
+  Hub port has no token, like any natively run dev server: local processes on the Hub machine can
+  reach it; other sandboxes, other computers' browsers and the Hub's fetch tools cannot.
+- A refusal is 403 with `X-Nova-Block-Cause` and a plain-text body naming the host and how to ask
+  for access; `policy` also covers a `block` hook and an inspected request whose `Host` differs
+  from the tunnel's. Every decision is audited (kind `network`, actions `egress.request` and
+  `egress.connect`); `GET /api/v1/egress/decisions` reads them back.
+- Session listeners: a Unix socket the substrate bridges into the sandbox (0600 in a 0700 folder;
+  0666/0711 when the Hub runs as root so a sandbox user can connect) and a loopback port that
+  needs the session token (`Proxy-Authorization`).
+- The gate reads `network.egressAllow` and `network.egressDeny`: a tool's network call to a
+  deny-listed host is denied. Both lists take the proxy's own host patterns (at most 500); a
+  stored list that fails them resolves to the default (none) instead of breaking every session.
+- Gaps: the agent browser's session follows `network.egressMode` but no scope policy; SOCKS5 is
+  not built; MCP servers and `web.fetch` bypass the proxy.
 
 ## 9. Data controls & privacy (FR-105)
 
@@ -727,7 +844,11 @@ administrator can write it, or as a signed remote policy:
   `schedule` or `policy`, with the trigger, the author and whether the text carries the user's
   authority); Code sessions with kind `code` (`code.session.created`, `code.mode.changed`,
   `code.change.rejected`, `code.commit`, `code.review`); exec session kills (`exec.session.kill`);
-  and reviewer verdicts, overrides and breaker trips (kind `policy`, above).
+  and reviewer verdicts, overrides and breaker trips (kind `review`, above).
+- M6 adds (ADR-093) the kinds `agent`, `channel`, `computer`, `browser`, `screen`, `device` and
+  `space`, every egress decision (kind `network`), egress scope and credential changes (kinds
+  `settings` and `secret`) and the Code M6 actions; the full list is in `docs/06` §2 "audit &
+  events". A denied action records its cause (`external_agent`, `password`, a tier refusal).
 - Sensitive raw inputs can be recorded only if the user opts in; defaults store hashes.
 
 ## 12. Security testing (FR-123)
@@ -835,3 +956,14 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
   what a client needs before sign-in. Server-request kinds are negotiated by an authenticated
   `POST /api/v1/hello`, whose `clientSessionId` the WebSocket names; an answer to a request
   aimed at another device is refused with 403 `policy_denied`.
+- **Public receivers as shipped** (M6, ADR-093). Channel inbound deliveries, webhook triggers,
+  MCP event deliveries and `novad`'s register, heartbeat and capability calls have no session;
+  each authenticates by its sender's signature or token before the body is read
+  (`contracts/hub-api.md` §1), with 5-minute replay windows and constant-time comparisons, and
+  still passes the Host and Origin checks. A webhook trigger's dedupe header is not part of its
+  signature. Until M6.5 `novad` uses bearer tokens over LAN HTTP (`nvd_` enrollment, `nvc_`
+  device credential, a management token the device generates, kept in the vault); the management
+  token shares the `nvm_` prefix with Nova's MCP client tokens. The artifact content route
+  answers with `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'` so the Inspector can
+  frame it; site previews are sandboxed documents without same-origin; every other response keeps
+  `X-Frame-Options: DENY`.

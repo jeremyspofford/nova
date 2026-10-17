@@ -74,6 +74,35 @@ script; rebuilds are explicit.
 terminals run in the container sandbox (ADR-090) with the session folder mounted. Device, cloud,
 SSH, WSL and container environments come later.
 
+*As shipped in M6 (ADR-093).* Environments are saved in `environment` (`/api/v1/environments`),
+health-checked on request and every 5 minutes while sessions use them; the local Hub stays the
+default. Kinds:
+
+- **container**: an image (a reference without shell syntax) and an optional setup script that
+  runs once per session in the session folder, network off, at most 30 minutes; the session works
+  on the Hub folder and its commands run in the image.
+- **ssh**: a host where Nova reaches the `novad` helper; the key or password goes to the keychain
+  (`secret://code/environment/<id>/credential`), never into a row or a response; a change of host,
+  user or auth method needs a new credential. The M6 Hub binds no SSH transport, so SSH
+  environments check `down` and answer `capability_missing` `{reason: no_ssh_transport}`.
+- **wsl**: a distro on a Windows device. The device connection has no WSL operations yet, so every
+  device answers `not_windows`.
+- **device**: a machine running `novad` (`docs/23`); the session reaches its files and processes
+  only through `novad` under the session's own grants. `verified` means the device is active and
+  needs no update, until signed builds arrive.
+
+Commands of SSH, WSL and device sessions run on that machine under its user, not in a container
+(their sandbox reports no substrate). `novad` owns their processes and buffers the newest 1 MiB of
+output, so a dropped connection is reattached from the stored offset
+(`/environments/:id/processes/:processId/output?offset=`). These sessions have no Hub-side change
+capture yet: changes list empty and review, commit, branch, push, symbols, refs and the `git.*`
+tools answer `capability_missing` `{reason: remote_environment}`; auto-verify runs only on request
+there. Mode checks read the sandbox the session's commands run in: Bypass is never available on
+another machine (SSH, WSL, device); a container environment uses its own sandbox, a local one the
+Hub's. Container environments' sandboxes reach the network only through the egress proxy (none
+without it); `NOVA_SANDBOX_NETWORK=open` does not apply to them. Cloud and VM environments are not
+offered.
+
 ## 3. Permission modes (FR-063)
 
 Each mode is a preset over two axes (ADR-059): an **approval policy** (when Nova asks) and a
@@ -225,6 +254,31 @@ The agent's exec sessions (FR-184) are listed with an "agent" chip, the tool cal
 - A separate extension bridge can use the user's logged-in browser session with explicit
   consent (FR-096).
 
+*As shipped in M6 (ADR-093).*
+
+- **Dev servers (FR-097).** Detected from `.nova/launch.json`, package.json `dev`, `start`,
+  `serve` or `preview` scripts (npm, pnpm or yarn), Django `manage.py`, Rails and Go. A server is
+  an exec session in the session's sandbox with the folder writable, the network off and `PORT`,
+  `HOST=127.0.0.1` and `BROWSER=none`; at most 4 run per session, a start that exits within 3 s is
+  reported with its output, and servers live in Hub memory. The tools are `devserver.list`,
+  `devserver.start` and `devserver.stop`. The sandbox keeps its own network namespace, so the
+  port is published through the dev-server bridge (a Unix socket in the sandbox, a listener on the
+  Hub's loopback): the URL is `http://127.0.0.1:<hostPort>/`, the bridge's port, while the view's
+  `port` stays the server's own. The session thread's agent browser gets the egress proxy's
+  loopback grant for exactly that host and port (`browser.devserver.granted`, `.revoked` when the
+  server stops) and the browser pane (FR-067) opens it once it answers HTTP: within the start if it
+  answers in 2 s, otherwise in the background for up to 2 minutes. The open is recorded in the
+  browser's action trace as tool `devserver.open`. The container image needs `perl` for the
+  bridge; without it the start fails with `dev_server_exited`. Dev servers run only for folders
+  on the Hub (`capability_missing` `{reason: remote_environment}` otherwise).
+- **Auto-verify (FR-068).** After a turn that edited files, on sessions on the Hub, the checks run
+  in the sandbox with the network off: `code.autoVerify.commands`, else the detected typecheck or
+  build script and the test command. Logs are redacted and capped at 8,000 characters. A failure
+  goes back to the agent as a turn without the user's authority (trigger `event`), at most
+  `feedbackTurns` times in a row. `POST …/verify` runs them on request. The agent does not drive the
+  browser to verify; `code.autoVerify` is security-relevant, so a project cannot set the
+  commands.
+
 ## 8. Git & PR flow (FR-070)
 
 - The agent can create a branch named `nova/<slug>` (with a short id suffix when needed for
@@ -262,6 +316,28 @@ The agent's exec sessions (FR-184) are listed with an "agent" chip, the tool cal
 - **Not in M5.** Nothing is pushed. Opening a pull request, the PR link and CI status in the
   header, and CI failures feeding back to the agent (FR-070) come later.
 
+*As shipped in M6 (ADR-093).*
+
+- **Git hosts.** GitHub (and GitHub Enterprise by API URL) is connected with a personal access
+  token kept in the keychain (`secret://code/githost/<id>/token`); a rejected token is never saved.
+- **Push** (`POST …/push`, the `pr.create` tool). A connected host that matches the remote is
+  asked for its default branch and the branch's protection first; a host error refuses the push.
+  A protected or default branch needs `confirmBranch` typed exactly by the user (the agent's tools
+  can never confirm) and is never force-pushed (`--force-with-lease` otherwise). The commits the
+  remote lacks are scanned for secrets on the lines they add. The pre-push hook runs only in the
+  session's sandbox. The token is passed only through that one Git call's environment, never
+  written to config or a remote URL. A push with a connected host's token to an `http://` remote
+  is refused before anything is sent (403 `policy_denied`, reason `insecure_remote`).
+- **Pull requests and CI.** `POST …/pr` pushes and opens one (or returns the one already open);
+  its link and CI status show on the session. Open pull requests are polled every
+  `code.ciPollSeconds` (no webhook); a failure on an open pull request's head goes back to the
+  agent once per pushed head when `code.ciFeedback` is on, without the user's authority. Check
+  summaries from the host are untrusted.
+- **Branches and commits by the agent.** `git.branch` creates `nova/<name>` without a checkout;
+  `git.commit` commits only what the user accepted (no pending changes, no new branch) and is
+  audited with actor `agent`. Inside a command sandbox `.git` is read-only, so `git commit` typed
+  in a terminal or run with `exec` fails; commits go through these flows (`docs/12` §7.2).
+
 ## 9. Parallel agents & worktrees (FR-073)
 
 - Independent tasks run in separate git worktrees (`<repo>/.nova/worktrees/<id>`, branch
@@ -294,12 +370,36 @@ is kept and released; `worktree.leased` and `worktree.released` are emitted. Not
 worktree registry routes, lease renewal and expiry, handoff, `.worktreeinclude`, a cleanup
 setting, merging and best-of-N.
 
+*As shipped in M6 (ADR-093).* The registry routes are `/api/v1/code/worktrees` (create, renew,
+release, remove). A worktree created there can be leased to a session for a time (5 minutes to 7
+days; the 5-minute sweep releases expired leases with reason `expired`) or wait unleased for a
+session to bind it (`worktreeId` on New session). `.worktreeinclude` copies files that are both
+git-ignored and matched, never protected or credential locations or symbolic links, at most 2,000
+files and 200 MiB. At the cap of 15, `removeOldest: true` removes the oldest unleased clean
+worktree first; nothing is removed otherwise. A release is refused while a session works in the
+worktree; removing one is refused while it is leased and needs `force` when it is dirty.
+`code.worktreeCleanup` (`remove_clean` or `keep`) decides what an archived session does with its
+clean worktree; dirty ones are always kept. `task.spawn` starts a worker as its own Code session
+in a new worktree from the parent's HEAD, with the parent's environment, model and mode (Manual
+when that mode cannot be used), at most 4 at once; `task.wait` waits for them. Both are listed
+only in Code threads and count as read-only; each worker's actions pass the gate. Not in M6:
+session handoff, three-way merging and best-of-N.
+
 ## 10. Cross-session operations (FR-072)
 
 - `sessions.list`, `sessions.message`, `sessions.archive` tools let an agent coordinate with
   sibling sessions, with the user's permission.
 - Side questions (`Cmd/Ctrl+Alt+S`) answer using session context without adding turns to the
   main thread.
+
+*As shipped in M6 (ADR-093).* `sessions.list`, `sessions.message`, `sessions.archive` and
+`sessions.ask` are offered in Code threads (agent threads get their own `sessions.*`, `docs/09`
+§8). `sessions.message` starts a turn in the other session without the user's authority and,
+with `sessions.archive`, is a write the gate asks about by default. A side question
+(`POST …/ask`) is one model call without tools over the session's facts and its newest 60
+messages (≤ 24,000 characters, as data), at most 2,048 output tokens and 120 s; nothing is added to
+the thread. Code sessions also get budgets (time, tokens, cost; `docs/09` §2) from `code.budgets`
+or the session, checked before each model step and extended with `POST …/budget/extend`.
 
 ## 11. Context engineering for code
 

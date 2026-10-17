@@ -46,6 +46,11 @@ and browser), with a bottom panel for terminals (§4.3).
 
 Every thread, run, session and agent row carries a status chip (§1.1).
 
+**In M6** (ADR-093) the sidebar adds the agents under Agents, and **Spaces**, **Sites**,
+**Computers** and **Devices** after Library and Apps; Settings adds **Agents**, **Computer use**,
+**Channels**, **Triggers**, **Network** and **Browser**. Network is a Settings section in M6
+(egress, credentials, the decision log); the top-level Network surface of §9 is M6.5.
+
 **In M5** (ADR-092) the sidebar's Work entry lists the active runs with live status chips; the
 Work list (`/work`) shows every run and **Scheduled** (`/work/scheduled`) the schedules. Code mode
 (`/code`) lists the sessions.
@@ -323,6 +328,29 @@ decision can allow it.
 - **Not in M5:** the Browser pane, PR and CI status, layouts per session, the `diff` layout pane
   (still a placeholder) and `/review` as a composer command.
 
+**In M6** (ADR-093) Code mode has three tabs, **Sessions**, **Environments**
+(`/code/environments`) and **Worktrees** (`/code/worktrees`):
+
+- **New session** picks the environment first (This Hub, a container image, SSH, WSL on a
+  Windows device, or a `novad` device, each with its health), then the folder (a path on that
+  machine for remote ones), an existing unleased worktree or a new one, and optional budgets.
+- **Environments** lists, adds, checks, edits and deletes them; SSH keys and passwords are
+  write-only. A remote environment lists its processes; opening one reads the output buffered
+  while you were away.
+- **Worktrees** groups them by repository with "N of 15", the lease and its expiry, Renew,
+  Release (refused while a session works in it) and Remove (warns about uncommitted changes).
+- The session header adds **Branch…**, **Push…** (a protected or default branch needs its name
+  typed exactly; it is never force-pushed; secret-scan findings block the push and are listed),
+  **Pull request…**, the PR link with a CI badge, and a budget bar (time, tokens, cost; at a limit
+  it offers Extend). New tabs: **Pull request** (checks and their states), **Checks** (auto-verify
+  runs and logs), **Dev servers** (start, stop, stop all; **Open preview** opens it in the agent
+  browser of the session thread) and **Sessions** (other sessions: open, message, ask a side
+  question with Ctrl/Cmd+Alt+S, archive).
+- A session on another machine says plainly that diff, review, commit, Go to symbol, branches,
+  push, pull requests and dev servers work only for folders on the Hub; those controls are
+  disabled with the reason. Git hosts (connect with a write-only token) and the M6 Code settings
+  are in Settings → Code.
+
 ### 2.5 Agent setup and operation (FR-079…090)
 
 1. Create Agent → name, avatar, responsibility (with an optional goal), connect plugins.
@@ -335,6 +363,27 @@ decision can allow it.
    under the agent with the channel's icon; the agent's memory is shared across them (FR-088).
 7. Self-set wakes (FR-206) appear in the Scheduled list with "Set by agent"; the user can edit
    or cancel them.
+
+**In M6** (ADR-093):
+
+- The sidebar's **Agents** entry lists the agents with their status chips; `/agents` is the full
+  list and **New agent** opens `/agents/new`, a page (not a dialog): name, avatar, instructions,
+  responsibilities and an optional first goal, autonomy, budgets, proactive research, memory and
+  model. Connecting plugins per agent is not built.
+- The agent page (`/agents/<id>`, the section in `?tab=`) puts the agent's main thread beside its
+  sections: **Activity**, **Responsibilities**, **Goal**, **Rules** (the four effects, scope, an
+  optional command prefix, a preview of recent calls it would have matched), **Memory** (edit,
+  pin, forget; turning memory off says what it deletes), **Suggestions** (accept only records
+  it), **Schedules** (wakes the agent set show their reason and only their time can change there),
+  **Background**, **Threads** (channel and research threads open read-only; replies go through the
+  channel), **Channels**, **Computer** (its computer, and a computer of yours connected through
+  `novad`, FR-081) and **Profile**. Pause, Resume, Stop, Research now and Delete (with the
+  delete notice) are in the header; the derived status chip and the agent's own state (Paused,
+  Paused for safety, Stopped) show separately.
+- The Scheduled list says "Set by <agent>" for a wake the agent set, "Created by <agent>" for a
+  schedule it created and "For <agent>" for your schedule of an agent, each linking to the agent.
+- Custom Rules live on the agent page; external agents (FR-194) and the agents defaults are in
+  Settings → Agents.
 
 ### 2.6 Approve an action (FR-058/100)
 
@@ -442,6 +491,19 @@ The first time a run needs an app, a grant prompt appears:
 - The **kill key** (§5) stops control at once and discards queued input; the run shows Needs
   input, "Control stopped by you", with Resume control, Hand off and Stop run.
 - When sensitive-region masking fails, the action is refused and the tool card says why.
+
+**In M6** (ADR-093) the web UI shows computers at `/computers` and `/computers/<id>`: kind,
+substrate and state (with the reason when limited), owner agent, limits, snapshots (restore asks
+first), the **browser panel** (the agent browser's page, frame, action trace with before/after
+screenshots, pending private sign-ins) and the **screen panel** (computer use on/off, which asks
+first; grants per app; recorded actions; appshots; **Take over** with a live view over a
+WebSocket that sends your clicks, typing and keys; Tab and Esc never go to the remote screen, so
+focus can always leave). A global **control indicator** shows while Nova controls any computer,
+with Stop; while it shows, the kill key (`screen.killKey`, default Esc) stops control from
+anywhere in the app, before any dialog sees the key. Settings → Computer use holds the grant
+length, the kill key and tier overrides; Settings → Browser holds site permissions, allow and
+block lists, saved logins and the browser settings. The desktop pill and edge highlight drawn by
+`novad` come with its screen module (not built in M6).
 
 ### 2.9 MCP Apps (FR-198)
 
@@ -825,7 +887,9 @@ two differ (⌘⌥A and ⌃⌥A), and a browser tab has no global keys. "New run
 | `chat`, `chat/<id>`, `chat/<id>?m=<messageId>` | the chat, at the message when given |
 | `projects`, `projects/<id>` (alias `project`) | the project list or one project |
 | `code`, `code/<id>` | Code mode; in M5 `code/<id>` still opens the session list, not the session, and there is no `work` link yet |
-| `agent/<id>`, `agents` | Agents mode (agents arrive in M6) |
+| `agent/<id>`, `agents` | the agent list or one agent (M6) |
+| `computer/<id>`, `computers` | the computer list or one computer (M6) |
+| `device/<id>`, `devices` | the device list or one device (M6) |
 | `theme?data=<base64>` | `/settings/appearance?theme=<data>`: the theme import, filled in; nothing is kept until the user saves it (FR-011). The data is at most 44,000 characters |
 
 Ids must be 1–100 characters of letters, digits, `_` and `-` after decoding; anything else,
@@ -910,6 +974,13 @@ top-level surfaces in the sidebar:
 | **Automations** | Trigger→condition→action editor, dry-run, logs, versions |
 | **Smart Home** | Entities by area, scenes, natural-language control |
 | **Learning** | "What Nova learned": memory, skills, tuning, code changes, rollback |
+
+**In M6** (ADR-093) **Devices** is `/devices` (and `/devices/add`, `/devices/<id>?tab=`): every
+`novad` device with its role, status chip, version, last heartbeat and capabilities; **Add a
+device** shows the one-use command line (no QR code yet) and waits for the device to register; a
+device page has Capabilities, Modules and services, Power and Wake-on-LAN, Updates, Policy,
+Files (granted folders, access requests, staged writes with their diff, Commit and Discard),
+Agents (connections) and MCP. Settings → Devices keeps compute nodes and links to it.
 
 New flows:
 
