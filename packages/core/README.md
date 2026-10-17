@@ -37,3 +37,16 @@ Domain services for the Hub, independent of HTTP (`docs/05`, `docs/09` §2).
 - `MemoryService` — reviewable memory items (FR-032): explicit statements saved at once,
   model-extracted facts for real providers, redaction, dedupe by normalized content, scopes
   (global, project), the "What you know about the user" context section, and import.
+- Tools (`src/tools/`) — the tool runtime (FR-099, FR-196, docs/08 §1): the registry of built-ins
+  and MCP tools with deferral and `tool.search`; file tools with the Nova patch format; exec tools
+  in a container sandbox (or failing closed); `web.search`, `web.fetch`; artifacts; mentions.
+  Every call is validated, passes the policy gate, is persisted, audited by input hash and given
+  back to the model as untrusted data.
+- Approvals (`src/approvals/`) — the policy store and the gate (FR-048, FR-100, FR-189, FR-190):
+  rules, command rules, grants, tool defaults, permission profiles and roots, approvals with
+  every decision, timeouts and cancellation, previews.
+- Ops (`src/ops/`) — the hash-chained audit log, notifications, activity, diagnostics and the
+  data key that seals blobs at rest (FR-013, FR-104 partial, FR-118, FR-149 baseline).
+- `ConsolidationService`, history (`src/consolidation.ts`, `src/history.ts`) — memory
+  consolidation with summaries, topics and aging, and past-chat reference (FR-204, FR-205).
+

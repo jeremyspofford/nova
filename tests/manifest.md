@@ -20,7 +20,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-010 | ui themes.test | web settings.test | J1 | theming tokens |
 | FR-011 | todo | todo | J4 | theme import/export |
 | FR-012 | todo | todo | — | pets |
-| FR-013 | todo | todo | J3 | notifications |
+| FR-013 | core notifications.test | hub ops.test; web notifications.test | — | notifications |
 | FR-014 | web onboarding.test | web onboarding.test | J1 | onboarding |
 | FR-015 | ui primitives.test | web app.test (keyboard) | J1/J2 (axe) | accessibility |
 | FR-016 | todo | todo | — | i18n/RTL |
@@ -29,14 +29,14 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-019 | core conversation.test | hub conversation.test; web chat-followup.test | J2 | steer/queue |
 | FR-020 | core conversation.test | hub conversation.test; web chat-actions.test | J2 | edit/regenerate/branch |
 | FR-021 | core chat.test | hub chat.test | J1 | attachments |
-| FR-022 | todo | todo | J3 | @mentions |
+| FR-022 | core tools-registry/mentions tests | hub tools.test; web chat-mentions.test | — | @mentions |
 | FR-023 | core router.test; providers conformance.test | hub model-routes.test; web chat-models.test | J2 | model picker |
 | FR-024 | providers conformance.test | web chat.test | J2 | reasoning levels |
 | FR-025 | storage search.test; web chat-find.test | hub conversation.test | J1/J2 | find/search |
 | FR-026 | core conversation.test | web chat-panels.test | — | side chat |
 | FR-027 | core conversation.test | web chat-temporary.test | J2 | temporary chats |
 | FR-028 | todo | todo | J4 | suggested prompts |
-| FR-029 | todo | todo | J3 | web search citations |
+| FR-029 | core tools-web.test | hub tools.test | — | web search citations |
 | FR-030 | todo | todo | J5 | image gen |
 | FR-031 | todo | todo | — | voice |
 | FR-032 | core memory.test | hub conversation.test; web memory.test | J2 | memory |
@@ -45,17 +45,17 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-035 | todo | todo | J4 | local projects |
 | FR-036 | todo | todo | — | space/pages |
 | FR-037 | todo | todo | — | sites |
-| FR-038 | todo | todo | J5 | artifacts |
+| FR-038 | core tools artifacts tests | hub tools.test; web chat-artifacts.test | — | artifacts |
 | FR-039 | todo | todo | J4 | file editor |
 | FR-040 | core projects.test | hub conversation.test; web projects.test | — | sources |
 | FR-041 | todo | todo | J4 | library |
-| FR-042 | todo | todo | J3 | MCP client |
-| FR-043 | todo | todo | J3 | MCP health |
+| FR-042 | mcp names/content tests | mcp stdio/http tests; hub mcp.test | J3 | MCP client |
+| FR-043 | mcp connection tests | hub mcp.test; web tools-settings.test | J3 | MCP health |
 | FR-044 | todo | todo | J4 | MCP server |
 | FR-045 | todo | todo | J4 | plugins |
 | FR-046 | todo | todo | J4 | skills |
 | FR-047 | todo | todo | J4 | connectors |
-| FR-048 | todo | todo | J3 | per-tool defaults |
+| FR-048 | policy engine tests | hub policy.test; web tools-settings.test | J3 | per-tool defaults |
 | FR-049 | todo | todo | J10 | marketplace |
 | FR-050 | todo | todo | — | build plugin/skill |
 | FR-051 | todo | todo | J5 | work run |
@@ -106,12 +106,12 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-096 | todo | todo | — | browser profiles/extension |
 | FR-097 | todo | todo | J6 | dev servers |
 | FR-098 | todo | todo | J8 | action screenshots |
-| FR-099 | todo | todo | J3 | policy engine |
-| FR-100 | todo | todo | J3 | approvals |
-| FR-101 | todo | todo | J3 | secrets |
+| FR-099 | policy engine tests | core gate.test, loop.test | J3 | policy engine |
+| FR-100 | core gate.test | hub policy.test; web chat-approvals.test | J3 | approvals |
+| FR-101 | secrets keychain.test; security scan.test | hub ops.test (vault, keychain select) | — | secrets |
 | FR-102 | todo | todo | J8 | egress control |
 | FR-103 | todo | todo | J8 | injection defense |
-| FR-104 | todo | todo | J5 | audit log |
+| FR-104 | core audit.test | hub ops.test | J3 | audit log |
 | FR-105 | todo | todo | J10 | data controls |
 | FR-106 | todo | todo | J10 | managed policy |
 | FR-107 | todo | todo | J7 | sandboxing |
@@ -125,7 +125,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-115 | todo | todo | J4 | multiple accounts |
 | FR-116 | todo | todo | J10 | spend caps |
 | FR-117 | todo | todo | J10 | extension SDK |
-| FR-118 | todo | todo | J3 | logging |
+| FR-118 | telemetry ring.test | hub ops.test; web diagnostics-settings.test | — | logging |
 | FR-119 | todo | todo | J5 | diagnostics |
 | FR-120 | todo | todo | J11 | auto-update |
 | FR-121 | todo | todo | — | crash reporting |
@@ -156,7 +156,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-146 | todo | todo | J10 | BIOS/firmware management |
 | FR-147 | todo | todo | — | out-of-band management |
 | FR-148 | todo | todo | J7 | novad updates |
-| FR-149 | todo | todo | J9 | hub trusted, edges E2E |
+| FR-149 | core attachments.test (sealing) | hub ops.test (TLS) | — | hub trusted, edges E2E |
 | FR-150 | todo | todo | J7 | per-device overrides |
 | FR-151 | todo | todo | — | ambient capture |
 | FR-152 | todo | todo | — | OCR/STT pipeline |
@@ -196,14 +196,14 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-186 | todo | todo | J5 | chat escalation to Work |
 | FR-187 | todo | todo | J5 | verified outcomes |
 | FR-188 | todo | todo | J3 | server-to-client requests |
-| FR-189 | todo | todo | J3 | confirmation tiers + intent provenance |
-| FR-190 | todo | todo | J6 | permission profiles + protected paths |
-| FR-191 | todo | todo | J6 | command prefix rules + load-time examples |
-| FR-192 | todo | todo | — | listener tokens, Origin checks, no auto-registration |
+| FR-189 | policy engine tests (tiers, provenance) | core gate.test | J3 | confirmation tiers + intent provenance |
+| FR-190 | policy paths/profiles tests | core tools-fs.test | J3 | permission profiles + protected paths |
+| FR-191 | policy command tests | hub policy.test; web permissions-settings.test | J3 | command prefix rules + load-time examples |
+| FR-192 | security tokens tests | hub listeners.test, hub.test | — | listener tokens, Origin checks, no auto-registration |
 | FR-193 | todo | todo | J8 | proxy modes + credential injection |
 | FR-194 | todo | todo | J8 | external-agent rule |
 | FR-195 | todo | todo | — | micro-VM substrate (flagged) |
-| FR-196 | todo | todo | J3 | deferred tools + tool search |
+| FR-196 | core tools-registry/search tests | core loop.test | J3 | deferred tools + tool search |
 | FR-197 | todo | todo | J4 | lifecycle hooks (tighten-only) |
 | FR-198 | todo | todo | J4 | MCP Apps UI |
 | FR-199 | todo | todo | J4 | MCP bundles |
@@ -211,8 +211,8 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-201 | todo | todo | J7 | MCP event subscriptions |
 | FR-202 | todo | todo | — | scripted tool calls (flagged) |
 | FR-203 | todo | todo | — | external agent adapters (flagged) |
-| FR-204 | todo | todo | J2 | memory consolidation |
-| FR-205 | todo | todo | J2 | memory scopes + history reference |
+| FR-204 | core consolidation.test | hub consolidation.test; web memory-consolidation.test | — | memory consolidation |
+| FR-205 | core history.test | hub consolidation.test | — | memory scopes + history reference |
 | FR-206 | todo | todo | J7 | agent self-scheduling |
 | FR-207 | todo | todo | J8 | computer-use control tiers |
 | FR-208 | todo | todo | — | page-registered tools |

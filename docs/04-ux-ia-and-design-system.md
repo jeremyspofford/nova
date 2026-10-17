@@ -488,9 +488,12 @@ entry (or equivalent) with variants and a screenshot test.
 In a browser tab, combinations the browser reserves (for example Ctrl+N and Ctrl+1..4) are shown
 and matched with Alt added; the installed PWA and native shells use the keys below (ADR-088).
 The web UI's routes are `/chat`, `/chat/<id>` (`?m=<messageId>` jumps to a message,
-`?compare=<id>` compares two branches), `/chat?temporary=1`, `/projects`, `/projects/<id>`,
-`/settings/<section>`, `/onboarding` and `/open?url=<link>`; deep links map onto them (§5.1).
-Find in chat is Ctrl+F / ⌘F (Alt+F in a browser tab).
+`?compare=<id>` compares two branches, `?approval=<id>` focuses an approval card),
+`/chat?temporary=1`, `/approvals/<id>` (opens the chat at that approval), `/projects`,
+`/projects/<id>`, `/settings/<section>`, `/onboarding` and `/open?url=<link>`; deep links map onto
+them (§5.1). Find in chat is Ctrl+F / ⌘F (Alt+F in a browser tab). The Inspector has Artifacts,
+Files, Sources, Activity, Side chat and Branches tabs; the top bar's bell opens the notification
+center (FR-013).
 
 ### 5.1 Deep links (FR-007)
 

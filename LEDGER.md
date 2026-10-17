@@ -3,8 +3,8 @@
 > **This is the single source of truth for build progress.** The build agent keeps it current
 > before and after every task (`AGENTS.md` §4). Task IDs come from `docs/29-task-breakdown.md`.
 
-Current milestone: **M3 — Tools, MCP, Policy & Approvals**
-Last updated: 2026-10-17T08:40:00Z
+Current milestone: **M4 — Plugins, Skills, Workspaces & Profile**
+Last updated: 2026-10-17T12:00:00Z
 
 ## Phase status
 
@@ -12,7 +12,7 @@ Last updated: 2026-10-17T08:40:00Z
 | --- | --- | --- | --- |
 | Phase 0 — reconcile external findings | done | c63b82d | `docs/external/RECONCILIATION.md` (141 capabilities); `node scripts/check-spec.mjs` |
 | Phase 1 — finish the specification | done | 2868ce3 | topic docs + contracts updated; `node scripts/check-spec.mjs`; all schemas compile (Ajv 2020) |
-| Phase 2 — build | in_progress | 10bbcf4 | M0, M1, M2 done |
+| Phase 2 — build | in_progress | 10bbcf4 | M0, M1, M2, M3 done |
 
 ## Milestone status
 
@@ -21,7 +21,7 @@ Last updated: 2026-10-17T08:40:00Z
 | M0 Foundation | done | 2026-10-17 | 2026-10-17 | 10bbcf4; `docs/demos/M0.md`; Playwright smoke J0 green |
 | M1 Chat MVP | done | 2026-10-17 | 2026-10-17 | J1 green 3/3 (axe clean, cold start < 3 s); `docs/demos/M1.md` |
 | M2 Providers/Projects/Memory | done | 2026-10-17 | 2026-10-17 | J1 + J2 green 3/3 in parallel (axe clean); `docs/demos/M2.md` |
-| M3 Tools/MCP/Policy | in_progress | 2026-10-17 | — | — |
+| M3 Tools/MCP/Policy | done | 2026-10-17 | 2026-10-17 | J1, J2, J3 green 3/3 in parallel (axe clean); `docs/demos/M3.md` |
 | M4 Plugins/Workspace/Profile | todo | — | — | — |
 | M5 Agent Runtime (Work & Code) | todo | — | — | — |
 | M6 Agents/Computers/Channels | todo | — | — | — |
@@ -77,24 +77,24 @@ Last updated: 2026-10-17T08:40:00Z
 | T-M2-09 | M2 | FR-007 | done | 01c0e89 | web deeplinks tests (`web+nova` handler in the manifest) | Deep links |
 | T-M2-11 | M2 | FR-221 | done | 01c0e89 | core presets tests; web models-settings tests; J2 step 3 | Model presets (Faster ↔ Smarter) over virtual models |
 | T-M2-10 | M2 | — | done | 01c0e89 | `e2e/j2-providers-memory.spec.ts`, 3/3 with J1 in parallel | E2E J2 |
-| T-M3-01 | M3 | — | in_progress | — | — | Tool registry + built-in read/write/search/exec |
-| T-M3-02 | M3 | FR-042, FR-043 | in_progress | — | — | MCP client (stdio/http) + health/restart |
-| T-M3-03 | M3 | FR-099 | in_progress | — | — | Policy engine complete (allow/ask/handoff/deny) + reasons |
-| T-M3-04 | M3 | FR-100 | in_progress | — | — | Approval UX (allow once/always/deny/handoff) + grants |
-| T-M3-05 | M3 | FR-101 | in_progress | — | — | Secrets (keychain) + redaction + secret-scan CI |
-| T-M3-06 | M3 | FR-048 | in_progress | — | — | Per-tool defaults + effective policy preview |
-| T-M3-07 | M3 | — | in_progress | — | — | Agent tool loop + tool cards |
-| T-M3-08 | M3 | FR-029, FR-022, FR-038 | in_progress | — | — | Web search with citations; `@`-mentions; artifacts pane |
-| T-M3-09 | M3 | FR-104 | in_progress | — | — | Audit hash chain + Activity trace |
-| T-M3-10 | M3 | FR-013 | in_progress | — | — | Notifications center |
-| T-M3-11 | M3 | FR-149 | in_progress | — | — | Hub trusted + external E2E baseline; optional sealed mode |
-| T-M3-13 | M3 | FR-189 | in_progress | — | — | Confirmation tiers + intent provenance in the policy engine |
-| T-M3-14 | M3 | FR-190 | in_progress | — | — | Permission profiles + protected paths |
-| T-M3-15 | M3 | FR-191 | in_progress | — | — | Command prefix rules with load-time examples |
-| T-M3-16 | M3 | FR-192 | in_progress | — | — | Listener tokens, Origin checks, per-client MCP tokens |
-| T-M3-17 | M3 | FR-196 | in_progress | — | — | Deferred tools + `tool.search` |
-| T-M3-18 | M3 | FR-204, FR-205 | in_progress | — | — | Memory consolidation, project-only scope, history-reference toggle |
-| T-M3-12 | M3 | — | in_progress | — | — | E2E J3 |
+| T-M3-01 | M3 | — | done | (M3 commit) | core tools tests (fs, patch, exec, web, registry); hub tools.test | Tool registry + built-in read/write/search/exec |
+| T-M3-02 | M3 | FR-042, FR-043 | done | (M3 commit) | `packages/mcp` 47 tests (stdio + streamable HTTP fixture); hub mcp.test; J3 step 1 | MCP client (stdio/http) + health/restart |
+| T-M3-03 | M3 | FR-099 | done | (M3 commit) | `packages/policy` 79 tests, 97.8 % branches | Policy engine complete (allow/ask/handoff/deny) + reasons |
+| T-M3-04 | M3 | FR-100 | done | (M3 commit) | core gate.test; hub policy.test; web chat-approvals.test; J3 step 3 | Approval UX (allow once/always/deny/handoff) + grants |
+| T-M3-05 | M3 | FR-101 | done | (M3 commit) | secrets keychain.test (fake CLIs); `scripts/secret-scan.mjs` in CI | Secrets (keychain) + redaction + secret-scan CI |
+| T-M3-06 | M3 | FR-048 | done | (M3 commit) | hub policy.test (tool-defaults, evaluate); web tools-settings.test | Per-tool defaults + effective policy preview |
+| T-M3-07 | M3 | — | done | (M3 commit) | core loop.test (23); web chat-tools.test; J3 | Agent tool loop + tool cards |
+| T-M3-08 | M3 | FR-029, FR-022, FR-038 | done | (M3 commit) | core tools-web/artifacts/mentions tests; web chat-artifacts/chat-mentions tests | Web search with citations; `@`-mentions; artifacts pane |
+| T-M3-09 | M3 | FR-104 | done | (M3 commit) | core audit.test (hash chain, tamper); J3 step 5 (verify) | Audit hash chain + Activity trace |
+| T-M3-10 | M3 | FR-013 | done | (M3 commit) | core notifications.test; web notifications.test | Notifications center |
+| T-M3-11 | M3 | FR-149 | done | (M3 commit) | blob sealing + TLS (hub ops.test); full-DB encryption deferred (ADR-090) | Hub trusted + external E2E baseline; optional sealed mode |
+| T-M3-13 | M3 | FR-189 | done | (M3 commit) | policy engine tier/provenance tests; J3 step 4 | Confirmation tiers + intent provenance in the policy engine |
+| T-M3-14 | M3 | FR-190 | done | (M3 commit) | policy paths/profiles tests; core tools-fs.test | Permission profiles + protected paths |
+| T-M3-15 | M3 | FR-191 | done | (M3 commit) | policy command tests; J3 step 3c | Command prefix rules with load-time examples |
+| T-M3-16 | M3 | FR-192 | done | (M3 commit) | hub listeners.test (every route, WS handshake 401); per-client MCP tokens with Nova's MCP server in M4 | Listener tokens, Origin checks, per-client MCP tokens |
+| T-M3-17 | M3 | FR-196 | done | (M3 commit) | core registry/search tests; J3 step 1 | Deferred tools + `tool.search` |
+| T-M3-18 | M3 | FR-204, FR-205 | done | (M3 commit) | core consolidation.test (28), history.test (7); hub consolidation.test | Memory consolidation, project-only scope, history-reference toggle |
+| T-M3-12 | M3 | — | done | (M3 commit) | `e2e/j3-tools-approvals.spec.ts`, 3/3 with J1 and J2 in parallel | E2E J3 |
 | T-M4-01 | M4 | FR-045 | todo | — | — | Plugin manifest + loader sandbox + local install |
 | T-M4-02 | M4 | FR-046 | todo | — | — | Skills + slash invocation + auto-selection |
 | T-M4-03 | M4 | FR-047 | todo | — | — | Connector framework (OAuth/PKCE, keychain) |
@@ -248,7 +248,10 @@ Last updated: 2026-10-17T08:40:00Z
 - R-008: The dev host lacks Chromium's system libraries and sudo. Mitigation: E2E runs in the official Playwright container (`scripts/e2e-docker.sh`); CI installs the libraries itself.
 - R-009: The web bundle is 202 KB gzipped after M2 (73 KB at M0). Mitigation: split routes (settings, projects, compare) with dynamic imports when M4 adds the multi-pane workspace; cold start is still under budget.
 - R-010: Provider request details (Anthropic adaptive thinking and summarized reasoning, OpenRouter reasoning options) are verified only against recorded fixtures. Mitigation: opt-in live smoke tests behind a key, before M10.
-- R-011: One web test (Settings → Keyboard rebinding) failed once under a fully parallel run and passed on every rerun. Mitigation: watch CI; quarantine with a ledger task if it repeats.
+- R-011: Tests are timing-sensitive when every package runs at once (each Vitest spawns a worker per core). Mitigation: `npm test` runs at most 4 packages at a time, async queries wait up to 5 s (`apps/web/test/setup.ts`), timing guards leave room for loaded runs, and racy fixtures were fixed at the cause; quarantine with a ledger task if one still flakes.
+- R-012: MCP stdio servers run as the Hub's user without a sandbox or egress proxy until M6 (FR-107, FR-193). Mitigation: only a signed-in owner can add one; secrets are passed by reference; every add and change is audited.
+- R-013: Effect inference for MCP and plugin tools can be over-strict (`list_orders` reads as a purchase and is never pre-approvable). Mitigation: it only ever tightens; a manifest-declared effect list arrives with plugins (M4).
+- R-014: The SQLite database is not encrypted at rest (`node:sqlite` has no encrypting storage layer). Mitigation: blobs are sealed, Diagnostics warns when the data directory is not on an encrypted volume; revisit in M9 (ADR-090).
 
 ## Deferrals
 
@@ -258,6 +261,10 @@ Last updated: 2026-10-17T08:40:00Z
 | FR-040 (non-text sources) | M2 indexes text types only; PDF and office documents need extraction | T-M4-04 (file previews) |
 | FR-126 (mTLS, VRAM, quiet hours, `/node/v1/services/*`) | Bearer tokens over LAN until the Mesh (ADR-089) | T-M6.5 networking tasks |
 | docs/07 §9 concurrency limits | Global and per-provider semaphores are not enforced yet | T-M9 performance tasks |
+| FR-149 (database and backups at rest, sealed mode) | No encrypting SQLite layer; backups and sealed mode not yet | T-M9 hardening tasks |
+| FR-042 (OAuth, `auth`, `deviceId`, `required`, `deferred`, `policy` server fields) | Not implemented in the M3 client | T-M4 connector tasks (FR-047), T-M6 device tasks |
+| FR-192 (per-client MCP tokens) | They belong to Nova's own MCP server | T-M4 (FR-044) |
+| FR-100 (answer from a second client, server requests) | FR-188 server-to-client requests | T-M5 |
 
 ## Milestone summaries
 
@@ -274,3 +281,16 @@ Last updated: 2026-10-17T08:40:00Z
   extracted from chats and kept out of temporary chats; ranked search and find in chat; deep
   links. Evidence: about 950 unit and integration tests across 13 packages, J1 and J2 green three times in parallel.
   Risks added: R-009..R-011. Next: M3 (tools, MCP, policy and approvals).
+- **M3** (M3 commit): the policy engine (built-in safety, confirmation tiers, intent provenance,
+  permission profiles and protected paths, command prefix rules with examples, per-tool and
+  per-server defaults) and approvals with every decision, grants and previews; the tool runtime
+  and agent loop (file, exec in a container sandbox or failing closed, web search and fetch,
+  artifacts, deferred tools with `tool.search`, mentions) with results returned as untrusted
+  data; an MCP client on the official SDK with health, restart backoff and logs; a hash-chained
+  audit log, notifications with a bell and OS notifications, a log viewer and diagnostics;
+  keychain secret backends, sealed blobs, optional TLS and a secret scanner in CI; memory
+  consolidation with summaries, topics and aging, and past-chat reference. Found and fixed in
+  integration: a new chat's first approval card never appeared (the stream connected after the
+  request), and "Always allow" on a command preselected the whole tool. Evidence: about 1,600
+  unit and integration tests across 14 packages; J1, J2 and J3 green three times in parallel.
+  Risks added: R-012..R-014. Next: M4 (plugins, skills, workspaces and profile).

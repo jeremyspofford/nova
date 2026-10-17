@@ -258,15 +258,31 @@ export function useThreadFeed(
     [loadApproval, refetch, refreshQueue, threadId],
   );
   const onEventRef = useRef(onEvent);
+  const refetchRef = useRef(refetch);
+  const listApprovalsRef = useRef(listApprovals);
   useLayoutEffect(() => {
     onEventRef.current = onEvent;
+    refetchRef.current = refetch;
+    listApprovalsRef.current = listApprovals;
   });
 
   useEffect(() => {
     if (!threadId) return;
+    // The first connection has no cursor and receives live events only, so anything the Hub
+    // emitted between the load and the connection (a new chat's first approval, say) is fetched
+    // once the stream is open. Reconnects resume from their cursor.
+    let opened = false;
     const handle = openStream(
       api.threadStreamUrl(threadId),
-      { onEvent: (e) => onEventRef.current(e) },
+      {
+        onEvent: (e) => onEventRef.current(e),
+        onOpen: () => {
+          if (opened) return;
+          opened = true;
+          refetchRef.current();
+          void listApprovalsRef.current();
+        },
+      },
       { names: THREAD_EVENTS, factory: eventSource },
     );
     return () => handle.close();

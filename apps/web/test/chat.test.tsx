@@ -248,6 +248,8 @@ describe('streaming (FR-018)', () => {
       status: 'complete',
       parts: [{ type: 'text', text: '**Bold** and [a link](https://example.com)' }],
     });
+    // The load and the refetch when the stream opened are done; completion refetches once more.
+    await waitFor(() => expect(hub.api.getThread).toHaveBeenCalledTimes(2));
     es.emit(
       'chat.message.completed',
       { threadId: t.id, messageId: assistant!.id, status: 'complete', usage: null },
@@ -256,7 +258,7 @@ describe('streaming (FR-018)', () => {
     es.emit('turn.completed', { threadId: t.id }, t.id);
     expect(screen.getByTestId('announcer').textContent).toMatch(/Response complete/);
     expect(await screen.findByRole('button', { name: 'Send' })).toBeTruthy();
-    await waitFor(() => expect(hub.api.getThread).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(hub.api.getThread).toHaveBeenCalledTimes(3));
     expect(log.querySelectorAll('strong')).toHaveLength(1);
   });
 

@@ -62,12 +62,14 @@ Rules:
 
 | Name | Persisted | Payload |
 | --- | --- | --- |
-| `tool.call.started` | yes | `{callId,tool,source,argsPreview}`; correlation `{threadId,turnId}` |
+| `tool.call.started` | yes | `{callId,tool,title,source,argsPreview,messageId,threadId}`; correlation `{threadId,turnId,callId}` |
 | `tool.call.progress` | no | `{callId,chunk}` |
-| `tool.call.completed` | yes | `{callId,tool,status,durationMs,resultPreview,tags?}` |
+| `tool.call.completed` | yes | `{callId,tool,status,durationMs,resultPreview,messageId,threadId,tags?}` |
 | `artifact.created` / `.updated` | yes | `{artifactId,threadId,kind,version}` (FR-038) |
-| `approval.requested` | yes | `{approvalId,requestId,action,reason,scope,risk,tier}` |
-| `approval.decided` | yes | `{approvalId,decision,alwaysScope?,decidedBy,deviceId?,override}` (`ApprovalDecision`; `timeout` is a decision) |
+| `approval.requested` | yes | `{approvalId,callId,action,reason,scope,risk,tier}`; correlation `{threadId,turnId,callId}`; the thread's status becomes `needs_input` (`thread.status.changed`) until it is answered |
+| `approval.decided` | yes | `{approvalId,decision,alwaysScope?,decidedBy,deviceId?,override}` (`ApprovalDecision`; `timeout` is a decision); correlation `{threadId,turnId,callId}` |
+| `approval.cancelled` | yes | `{approvalId,reason}` (the turn ended or the Hub restarted while it waited) |
+| `approval.handoff_done` | yes | `{approvalId,note?}` (the handed-off step was marked done) |
 | `policy.denied` | yes | `{callId,tool,reason,ruleId?}` |
 | `policy.tier` | yes | `{callId,action,tier: handoff_required\|confirm_at_action\|pre_approvable,authorization: user_typed\|none,sources[]}` (FR-189) |
 | `review.started` | yes | `{reviewId,callId,approvalId?,attempt}` (FR-085) |

@@ -265,9 +265,10 @@ describe('approvals (FR-100)', () => {
         'handoff',
       ],
     });
-    expect(view.alwaysScopes.map((s) => s.kind)).toEqual(['tool', 'prefix_rule']);
+    expect(view.alwaysScopes.map((s) => s.kind)).toEqual(['prefix_rule', 'tool']);
     expect(view).toMatchObject({ ruleId: null, ruleLabel: null, alwaysAllowManaged: false });
-    expect(view.alwaysScopes[1]).toMatchObject({
+    // Narrowest first: the card preselects the prefix rule, not the whole tool.
+    expect(view.alwaysScopes[0]).toMatchObject({
       rule: {
         pattern: ['npm', 'test'],
         matchExamples: ['npm test'],
@@ -483,7 +484,7 @@ describe('approvals (FR-100)', () => {
       });
     const { outcome, approvalId } = await asking(r());
     const view = await store.getApproval(ACCOUNT, approvalId);
-    expect(view.alwaysScopes.map((s) => s.kind)).toEqual(['tool', 'host']);
+    expect(view.alwaysScopes.map((s) => s.kind)).toEqual(['host', 'tool']);
     await expect(
       gate.decide(ACCOUNT, {
         approvalId,

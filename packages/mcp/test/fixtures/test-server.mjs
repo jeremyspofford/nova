@@ -243,6 +243,9 @@ function addTestHooks(server, log) {
             method: 'notifications/progress',
             params: { progressToken: token, progress: i, total: steps, message: `step ${i}` },
           });
+          // Keep working a moment after each report, as a real tool would: progress that
+          // arrives after the result is dropped by the client, which made this racy.
+          await new Promise((r) => setTimeout(r, 50));
         }
       }
       return text(`done ${steps}`);

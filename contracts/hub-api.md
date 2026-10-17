@@ -111,11 +111,11 @@ signed artifacts only).
 | `GET/POST` | `/api/v1/policy/rules` | Tool/resource rules ([`policy-rule.json`](schemas/policy-rule.json)) |
 | `PATCH/DELETE` | `/api/v1/policy/rules/:id` | Edit/delete a rule |
 | `POST` | `/api/v1/policy/evaluate` | Preview the decision for a hypothetical action (FR-084 preview); no side effects |
-| `GET/POST` | `/api/v1/permission-profiles` | Permission profiles ([`permission-profile.json`](schemas/permission-profile.json), FR-190) |
-| `GET/PATCH/DELETE` | `/api/v1/permission-profiles/:id` | Built-in and managed profiles are read-only |
+| `GET/POST` | `/api/v1/permission-profiles` | Permission profiles ([`permission-profile.json`](schemas/permission-profile.json), FR-190): built-ins `read-only`, `workspace`, `full` and user ones |
+| `GET/DELETE` | `/api/v1/permission-profiles/:id` | Built-in and managed profiles are read-only (editing in place arrives later; create a new one) |
 | `GET/POST` | `/api/v1/command-rules` | Command prefix rules ([`command-rule.json`](schemas/command-rule.json), FR-191); a rule whose examples fail is rejected with `validation` |
 | `PATCH/DELETE` | `/api/v1/command-rules/:id` | Edit/delete a rule (examples re-checked) |
-| `POST` | `/api/v1/command-rules/test` | Match a command against the rules in a scope; returns the decision and the matching rule |
+| `POST` | `/api/v1/command-rules/test` | Match `{command, threadId?, projectId?}` against the rules in that scope; returns the decision and the matching rule. A failing rule example on create or edit is `validation` with `details: {field: matchExamples\|notMatchExamples, example}` |
 | `GET` | `/api/v1/permission-grants` | Remembered session and always grants |
 | `DELETE` | `/api/v1/permission-grants/:id` | Revoke a grant |
 | `GET/PUT` | `/api/v1/tool-defaults` | Per-tool defaults `{tool, default: allow\|ask\|deny\|null}` (FR-048); `null` clears one |
@@ -167,10 +167,10 @@ The "reference past chats" toggle (FR-205) is the setting `memory.referencePastC
 | `POST` | `/api/v1/mcp/events/:subscriptionId` | **Webhook receiver.** No bearer token: a valid signature is required (HMAC-SHA256 over id, timestamp and raw body; timestamp within 5 min); bodies over 256 KiB → 413; duplicates by delivery id → 2xx without effect; bad signature → 401 |
 | `GET/POST` | `/api/v1/plugins` | Plugins |
 | `GET/POST` | `/api/v1/skills` | Skills |
-| `POST` | `/api/v1/tools/:name/invoke` | Invoke a tool from the UI `{args, threadId?}`; it passes the policy gate like a model call (origin `ui`) |
+| `POST` | `/api/v1/tools/:name/invoke` | Invoke a tool from the UI `{args, threadId?}`; it passes the policy gate like a model call (origin `ui`). If it must wait for an approval for more than 60 s the answer is 202 `{approvalId, callId}` |
 | `GET` | `/api/v1/artifacts?threadId=` | A thread's artifacts (FR-038) |
 | `GET` | `/api/v1/artifacts/:id` | One artifact's metadata |
-| `GET` | `/api/v1/artifacts/:id/content` | Its bytes under a restrictive CSP: HTML only with `sandbox allow-scripts` (never same-origin), PDFs without a sandbox directive so the browser viewer works; `?v=` is ignored |
+| `GET` | `/api/v1/artifacts/:id/content` | Its bytes under a restrictive CSP: HTML only with `sandbox allow-scripts` (never same-origin), PDFs without a sandbox directive so the browser viewer works; `?version=N` serves an earlier version; `?v=` (a client cache-buster) is ignored |
 | `GET` | `/api/v1/mentions?q=&threadId=` | `@`-mention candidates: files and folders under the thread's roots, MCP servers and tools (FR-022) |
 | `GET/POST` | `/api/v1/app-authorizations` | Per-client tokens: MCP clients of Nova's MCP server (FR-192) and third-party apps (FR-222). Create returns the token once |
 | `DELETE` | `/api/v1/app-authorizations/:id` | Revoke; open sessions close at once |

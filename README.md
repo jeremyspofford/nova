@@ -21,10 +21,11 @@ without further human intervention.
 
 **Status (2026-10-17):** the Phase 0 reconciliation of external findings is complete
 ([`docs/external/RECONCILIATION.md`](docs/external/RECONCILIATION.md): 141 capabilities
-classified). The spec defines `FR-001`…`FR-233` and decisions `ADR-001`…`ADR-089`; every FR is
+classified). The spec defines `FR-001`…`FR-233` and decisions `ADR-001`…`ADR-090`; every FR is
 placed in exactly one milestone and has a row in [`tests/manifest.md`](tests/manifest.md). The
-build has completed M0 (Hub and web shell), M1 (chat MVP) and M2 (providers, presets and
-routing, compute nodes, projects and sources, memory, branches and search); M3 is next. Demo
+build has completed M0 (Hub and web shell), M1 (chat MVP), M2 (providers, presets and
+routing, compute nodes, projects and sources, memory, branches and search) and M3 (tools, MCP,
+the policy engine and approvals, audit, notifications); M4 is next. Demo
 scripts are in [`docs/demos/`](docs/demos/). Progress is tracked in [`LEDGER.md`](LEDGER.md).
 
 ---

@@ -568,6 +568,27 @@ component sources. Revisit if UI velocity suffers.
   rule plus a grant pointing at it; revoking the grant deletes the rule. A timeout and a cancel
   both deny and stop the turn, recorded as `timeout` and `cancelled`. While an approval is open
   the thread is `waiting_approval`; startup cancels approvals a crash left open.
+- *"Always allow" scopes* are offered narrowest first, and the card preselects the first: a
+  command prefix rule, then a network host, then the whole tool. A one-click "Always allow" on a
+  command therefore never allows every command.
+- *Tool loop.* One assistant message per model step; a call's card, result and artifact are
+  parts of that message. Only the current turn's tool calls are sent back to the model, which
+  keeps small-model contexts small. Results reach the model inside an
+  `<untrusted_data source id>` envelope whose id the content cannot predict, and each result adds
+  its origin (file, page, MCP, tool) to the turn's taint; so do attachments, file mentions and
+  project excerpts. A gate that throws counts as a deny; tools the policy denies outright are not
+  offered at all. Deny and stop ends the turn `cancelled`, a timeout `approval_timeout`, the
+  backstop `backstop`. `tool.search` is offered only when something is deferred, and tools it
+  loads stay loaded for that chat (until a restart).
+- *Sandbox until M6.* Exec tools run in a container (docker or podman CLI; `NOVA_SANDBOX`,
+  `NOVA_SANDBOX_IMAGE`, default `debian:stable-slim`) with `--network none` unless the profile
+  allows network and `NOVA_SANDBOX_NETWORK=open` is set (there is no egress proxy until M6); the
+  host root is never mounted. Without a container runtime exec tools fail closed with
+  `sandbox_unavailable`. `web.fetch` refuses private and loopback addresses and hands a redirect
+  to another host back to the model so the new host passes the gate.
+- *A new chat's first approval.* A thread's first stream connection receives live events only,
+  so the client refetches the thread and its pending approvals once the stream is open; an
+  approval requested before the connection is never missed.
 - *Paths and profiles (FR-190).* The gate resolves symlinks and `..` before the engine sees a
   path, and the engine refuses anything that is not absolute and clean. Credential locations are
   denied anywhere; `.git`, `.nova`, `.agents` and shell start-up files are read-only inside

@@ -33,6 +33,21 @@ async function openWaiting(over: Parameters<typeof approvalView>[1] = {}, opts =
 }
 
 describe('approval card (FR-100)', () => {
+  it('shows an approval created before the thread stream connected (the first call of a new chat)', async () => {
+    const { hub, t, es } = await openWith({
+      messages: (tid) => [
+        message(tid, { role: 'user', parts: [{ type: 'text', text: 'Write the plan' }] }),
+        waitingReply(tid),
+      ],
+    });
+    await waitFor(() => expect(hub.api.listApprovals).toHaveBeenCalled());
+    expect(screen.queryByRole('group', { name: 'Approval needed' })).toBeNull();
+    // The Hub asked while the stream was still connecting; the event never reached this client.
+    hub.state.m3.approvals = [approvalView(t.id)];
+    es.open();
+    expect(await approvalCard()).toBeTruthy();
+  });
+
   it('shows the waiting approval inside its tool call with every fact and option', async () => {
     const { hub, t } = await openWaiting();
     const card = await approvalCard();

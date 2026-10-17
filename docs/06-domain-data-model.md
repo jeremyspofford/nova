@@ -198,6 +198,7 @@ CREATE TABLE message_part (        -- the "items" of a turn
   message_id TEXT NOT NULL REFERENCES message(id),
   idx INTEGER NOT NULL,
   type TEXT NOT NULL,              -- text|reasoning|tool_call|tool_result|image|file|artifact_ref|error|
+                                   -- context (a resolved @-mention, FR-022)|
                                    -- plan|command_execution|file_change|mcp_tool_call|subagent_activity|
                                    -- web_search|compaction|review_marker|hook_prompt
   content TEXT,                    -- text or JSON (shape per type, below)
@@ -262,6 +263,7 @@ CREATE TABLE source_chunk (         -- retrieval units, indexed by the FTS5 tabl
 ```sql
 CREATE TABLE tool_call (
   id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES account(id),
   message_id TEXT REFERENCES message(id),
   thread_id TEXT REFERENCES thread(id),
   turn_id TEXT REFERENCES turn(id),
@@ -270,9 +272,12 @@ CREATE TABLE tool_call (
   tool_name TEXT NOT NULL,
   source TEXT NOT NULL,            -- builtin|mcp|plugin|computer|browser|page|device
   server_id TEXT, plugin_id TEXT,
-  args_json TEXT NOT NULL,
-  result_json TEXT, error TEXT,
-  status TEXT NOT NULL,            -- pending|running|ok|error|denied|timeout
+  origin TEXT NOT NULL DEFAULT 'model', -- model|ui|hook|mcp_client: who issued the call (audited)
+  args_json TEXT NOT NULL,         -- redacted
+  result_json TEXT, error TEXT,    -- redacted
+  status TEXT NOT NULL,            -- pending|awaiting_approval|running|ok|error|denied|timeout|
+                                   -- cancelled
+  decision TEXT, approval_id TEXT, -- the gate's outcome and the approval it waited on
   tags_json TEXT,                  -- trace tags, e.g. ["ambient.verbatim_copy"] (FR-232)
   started_at TEXT, ended_at TEXT,
   duration_ms INTEGER,
@@ -794,10 +799,18 @@ CREATE TABLE memory_thread_mark (   -- how far consolidation has read each threa
 CREATE TABLE artifact (
   id TEXT PRIMARY KEY, thread_id TEXT REFERENCES thread(id),
   message_id TEXT REFERENCES message(id), run_id TEXT REFERENCES run(id),
-  kind TEXT NOT NULL,                   -- markdown|code|html|image|chart|pdf|docx|pptx|xlsx|site|canvas|file
+  kind TEXT NOT NULL,                   -- markdown|code|html|image|svg|chart|pdf|docx|pptx|xlsx|site|canvas|file
   title TEXT, blob_path TEXT, mime TEXT, sha256 TEXT, version INTEGER NOT NULL DEFAULT 1,
   live INTEGER NOT NULL DEFAULT 0, meta_json TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE artifact_version (     -- every version of an artifact (FR-038); the artifact row is
+  artifact_id TEXT NOT NULL REFERENCES artifact(id), -- the latest
+  version INTEGER NOT NULL, message_id TEXT,
+  blob_path TEXT NOT NULL, mime TEXT NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (artifact_id, version)
 );
 
 CREATE TABLE usage_event (

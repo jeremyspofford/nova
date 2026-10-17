@@ -395,14 +395,9 @@ export class PolicyGate implements ToolGate {
 
   // ---- approvals -------------------------------------------------------------------------
 
+  /** Suggested "Always allow" scopes, narrowest first: the card preselects the first one. */
   #suggest(req: GateRequest, b: Built): AlwaysScope[] {
-    const out: AlwaysScope[] = [
-      {
-        kind: 'tool',
-        label: `This tool (${req.tool.name}) ${req.projectId ? 'in this project' : 'everywhere'}`,
-        tool: req.tool.name,
-      },
-    ];
+    const out: AlwaysScope[] = [];
     if (b.command !== undefined) {
       const s = suggestPrefixRule(redact(b.command));
       if (s)
@@ -415,6 +410,11 @@ export class PolicyGate implements ToolGate {
     const res = b.ctx.resource;
     if (req.tool.annotations?.requiresNetwork === true && res?.kind === 'host')
       out.push({ kind: 'host', label: `Network host ${res.value}`, host: res.value });
+    out.push({
+      kind: 'tool',
+      label: `This tool (${req.tool.name}) ${req.projectId ? 'in this project' : 'everywhere'}`,
+      tool: req.tool.name,
+    });
     return out;
   }
 

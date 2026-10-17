@@ -335,7 +335,10 @@ every grant.
 ## 5. Secrets (FR-101)
 
 - **Storage**: OS keychain via a cross-platform wrapper; encrypted-file vault fallback using
-  Argon2id (user passphrase) + XChaCha20-Poly1305.
+  Argon2id (user passphrase) + XChaCha20-Poly1305. The Hub chooses with `NOVA_SECRETS=keychain|vault`
+  (default `vault`); the keychain backends are `secret-tool` (Linux) and `security` (macOS),
+  with values passed only on stdin (ADR-090). Blobs are sealed with a per-Hub data key held in the
+  same store.
 - **Access**: only `SecretBroker` in the core/agent process resolves values, and only for the
   duration of a call. Values are never returned to the renderer or included in model context;
   tools see `secret://` references.
@@ -355,7 +358,9 @@ every grant.
   values, tokens, passwords) moves into the keychain and is replaced by a `secret://` reference
   before anything is written. The import preview shows how many secrets will move, with values
   masked.
-- **CI**: `gitleaks` (or equivalent) + a custom rule set; failing build on detection.
+- **CI**: Nova's own scanner (`scripts/secret-scan.mjs`), built from the redactor's patterns plus
+  private-key headers and token prefixes, fails the build on a finding; fixtures mark fake
+  values with `secret-scan: fake` (ADR-090).
 
 ## 6. Prompt-injection defense (FR-103)
 

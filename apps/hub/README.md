@@ -19,3 +19,12 @@ attachments, cancel, search, attachments download and a per-thread SSE stream. R
 in `contracts/hub-api.md` §1; the services live in `@nova/core`. On start the Hub marks replies
 that were streaming during a crash as incomplete, and a new owner gets a "Mock (offline)"
 provider so chat works with no network.
+
+M2 adds the router (presets, fallback, compute nodes), projects and sources, memory, branches,
+side chats and temporary chats. M3 adds the tool runtime and its routes, MCP servers
+(`@nova/mcp`), the policy gate with approvals, rules, grants and profiles, the audit log,
+notifications, diagnostics and logs, and memory consolidation; each area has its own setup file
+(`ops.ts`, `policy.ts`, `mcp.ts`, `tools.ts`, `consolidation.ts`) receiving a `HubContext`.
+
+More options: `NOVA_SECRETS=keychain|vault`, `NOVA_TLS_CERT` / `NOVA_TLS_KEY` (HTTPS),
+`NOVA_SANDBOX=auto|docker|podman|off`, `NOVA_SANDBOX_IMAGE`, `NOVA_DETECT_URLS`.
