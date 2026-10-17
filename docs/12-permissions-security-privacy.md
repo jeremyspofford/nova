@@ -960,10 +960,12 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
   MCP event deliveries and `novad`'s register, heartbeat and capability calls have no session;
   each authenticates by its sender's signature or token before the body is read
   (`contracts/hub-api.md` §1), with 5-minute replay windows and constant-time comparisons, and
-  still passes the Host and Origin checks. A webhook trigger's dedupe header is not part of its
+  still passes the Host and Origin checks. A webhook trigger's event id, when sent, is part of its
   signature. Until M6.5 `novad` uses bearer tokens over LAN HTTP (`nvd_` enrollment, `nvc_`
-  device credential, a management token the device generates, kept in the vault); the management
-  token shares the `nvm_` prefix with Nova's MCP client tokens. The artifact content route
+  device credential, and a management token the device generates, kept in the vault). The
+  management token starts `nvdm_`, distinct from Nova's MCP client tokens (`nvm_`); the Hub
+  refuses registration with any other prefix and `novad` refuses a stored token without it, so a
+  device enrolled before the change must be added again. The artifact content route
   answers with `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'` so the Inspector can
   frame it; site previews are sandboxed documents without same-origin; every other response keeps
   `X-Frame-Options: DENY`.

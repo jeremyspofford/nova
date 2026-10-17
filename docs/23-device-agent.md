@@ -180,8 +180,16 @@ routes do not go through the Hub's policy engine: the device enforces its grants
 (`exec`) and Code environment processes (`proc`) run only under bubblewrap, with no network, the
 grantee's folders bound by grant and `cwd` inside one; processes are kept by the storage module
 (the newest 1 MiB of output, exited ones for 10 minutes, 32 per grantee), so a Hub disconnect
-loses nothing. Credential folders are masked only directly under each granted root. macOS and
-Windows have no sandbox, so commands there are refused.
+loses nothing. Commands and Code processes get the Hub sandbox's protected locations (docs/12
+§7.2): in each granted folder and in every folder from it down to the working folder, credential
+locations (case-insensitive, `credentials*` prefixes) are hidden with an empty tmpfs or
+`/dev/null`, `novad`'s data folder is hidden wherever a grant holds it, and inside write grants
+`.git` (followed through a `.git` file to its Git and common directories), `.nova`, `.agents` and
+shell startup files are bound read-only, parents before children. Links are resolved and their
+targets protected when inside a grant; a grant of `/` is not mounted; locations that do not exist
+when the command starts, or that sit in a subfolder off the path to the working folder, are not
+covered. `novad`'s file operations refuse credential locations at any depth inside a grant. macOS
+and Windows have no sandbox, so commands there are refused.
 
 ### 4.2 Ambient capture helper (FR-228)
 

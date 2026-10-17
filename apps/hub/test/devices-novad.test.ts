@@ -304,8 +304,34 @@ describe.skipIf(!runnable)('the real novad binary', () => {
       expect((err as Error).message).toMatch(/sandbox/);
       return;
     }
-    if (res.exitCode === 0) expect(res.stdout).toContain('notes.md');
-    else expect(res.stderr).toMatch(/bwrap|namespace|permitted/i);
+    if (res.exitCode !== 0) {
+      expect(res.stderr).toMatch(/bwrap|namespace|permitted/i);
+      return;
+    }
+    expect(res.stdout).toContain('notes.md');
+    // Inside the grant, below it and down to the working folder, credential locations are
+    // hidden and `.git` stays read-only (FR-190, docs/12 §7.2).
+    const sub = join(proj, 'keys-here');
+    mkdirSync(join(sub, '.SSH'), { recursive: true });
+    mkdirSync(join(sub, '.git'), { recursive: true });
+    writeFileSync(join(sub, '.SSH', 'id_x'), 'SECRET-ssh');
+    writeFileSync(join(sub, '.netrc'), 'SECRET-netrc');
+    writeFileSync(join(sub, '.git', 'config'), '[core]\n');
+    const guarded = await area.service.exec(
+      ACCOUNT,
+      deviceId,
+      { kind: 'user', id: ACCOUNT },
+      {
+        cmd: '/bin/sh',
+        args: ['-c', 'cat .SSH/id_x .netrc; ls -A .SSH; echo x >> .git/config || echo READ-ONLY'],
+        cwd: sub,
+      },
+    );
+    expect(guarded.stdout).not.toContain('SECRET');
+    expect(guarded.stdout).not.toContain('id_x');
+    expect(guarded.stdout).toContain('READ-ONLY');
+    expect(readFileSync(join(sub, '.git', 'config'), 'utf8')).toBe('[core]\n');
+    rmSync(sub, { recursive: true, force: true });
   });
 
   it('keeps Code session processes on the device and reads their output (FR-078)', async () => {

@@ -82,6 +82,12 @@ fn seg_match(want: &str, seg: &str) -> bool {
     }
 }
 
+/// A file name on disk matches one location segment: folded (case-insensitive), `*` ending a
+/// prefix. The sandbox uses it to find protected locations inside granted folders.
+pub fn name_matches(want: &str, name: &str) -> bool {
+    seg_match(want, &fold(name))
+}
+
 /// Which location (joined with `/`) starts at any position of `segs`, if one does.
 pub fn matches_location(segs: &[String], locations: &[&[&str]]) -> Option<String> {
     for i in 0..segs.len() {
@@ -235,6 +241,29 @@ mod tests {
         // A parent of the data dir may be granted; the data dir inside it stays denied.
         assert!(protected_reason(Path::new("/var/lib"), Some(Path::new("/var/lib/nova"))).is_none());
         assert!(is_protected_ancestor(Path::new("/var/lib"), Some(Path::new("/var/lib/nova")), &[]));
+    }
+
+    #[test]
+    fn credential_matching_is_case_insensitive_with_prefixes_at_any_depth() {
+        for p in [
+            "/g/proj/a/b/.ssh/id_x",
+            "/g/proj/.Ssh",
+            "/g/proj/x/.CARGO/Credentials",
+            "/g/proj/x/.cargo/credentials.toml",
+            "/g/proj/.config/GH/hosts.yml",
+            "/g/proj/deep/.Docker/CONFIG.JSON",
+            "/g/proj/.netrc.",
+            "/g/proj/AppData/Roaming/Microsoft/Protect/k",
+        ] {
+            assert!(protected_reason(Path::new(p), None).is_some(), "{p}");
+        }
+        for p in ["/g/proj/.cargo/config.toml", "/g/proj/.docker/daemon.json", "/g/proj/.config/fish", "/g/proj/ssh"] {
+            assert!(protected_reason(Path::new(p), None).is_none(), "{p}");
+        }
+        assert!(name_matches("credentials*", "Credentials.TOML"));
+        assert!(name_matches(".ssh", ".SSH"));
+        assert!(!name_matches(".ssh", ".ssh2"));
+        assert!(!name_matches("credentials*", "creds"));
     }
 
     #[test]

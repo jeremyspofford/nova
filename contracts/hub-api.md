@@ -531,13 +531,13 @@ Hub → `novad` unless marked (novad → Hub).
 use bearer tokens over LAN HTTP, like compute nodes (ADR-089); `novad`'s client refuses
 `https://` until then. `novad` registers with a one-use enrollment token (`nvd_…`), an Ed25519
 public key, a capability document ([`device-capability.json`](schemas/device-capability.json))
-signed with that key over its canonical JSON, and a management token it generated (`nvm_…`). The
+signed with that key over its canonical JSON, and a management token it generated (`nvdm_…`). The
 Hub pins the key (its fingerprint is unique across devices, revoked ones included), keeps the
 management token in the vault (`secret://devices/<id>/management-token`) and returns a device
 credential (`nvc_…`, shown once, stored hashed in its own domain) for heartbeats and capability
 updates. Every re-sent document must verify against the pinned key. Heartbeats every 10 s; three
 missed beats mark the device `unreachable`. The Hub calls the device's endpoint (default port
-7420) with `Authorization: Bearer nvm_…`; `novad` compares it in constant time and answers 401
+7420) with `Authorization: Bearer nvdm_…`; `novad` compares it in constant time and answers 401
 `token_required` otherwise, 405 to anything but `POST`, 400 to a body that is not a JSON object,
 404 to an unknown route and 413 over 96 MiB. Errors use the Hub's error shape (§6). Calls run in
 a module process: a module that is not running is 503 `node_unavailable` `{reason:
@@ -550,7 +550,7 @@ novad → Hub (no session; §1 lists how each authenticates):
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/agent/v1/register` | (novad → Hub) `{enrollToken, name (1–100), endpoint (a plain http(s) base URL without credentials, query or fragment), publicKey (raw Ed25519, base64url), capability, signature, managementToken ("nvm_…"), novadVersion, protocolVersions}` → 201 `{deviceId, credential: "nvc_…", heartbeatIntervalMs, protocolVersion, updateChannel, updateKey}` (`updateKey`: the update signing key the device pins, or null; the M6 Hub has none). A bad body is `validation` and no protocol version in common `capability_missing`, both before the token is spent. An unknown, used or expired token is 401 `auth_missing`. After that the token is spent even on failure: a document that fails the schema is `validation` `{reason: invalid_capability}`, a bad signature `policy_denied` `{reason: bad_signature}`, a key already registered `conflict` `{reason: key_in_use}`. The roles are the ones the document declares (the token's when it declares none); the device's kind is `hub`, `wake-helper` or `client`, never `compute`. Audited as `device.register`; `device.registered` |
+| `POST` | `/agent/v1/register` | (novad → Hub) `{enrollToken, name (1–100), endpoint (a plain http(s) base URL without credentials, query or fragment), publicKey (raw Ed25519, base64url), capability, signature, managementToken ("nvdm_…"), novadVersion, protocolVersions}` → 201 `{deviceId, credential: "nvc_…", heartbeatIntervalMs, protocolVersion, updateChannel, updateKey}` (`updateKey`: the update signing key the device pins, or null; the M6 Hub has none). A bad body is `validation` and no protocol version in common `capability_missing`, both before the token is spent. An unknown, used or expired token is 401 `auth_missing`. After that the token is spent even on failure: a document that fails the schema is `validation` `{reason: invalid_capability}`, a bad signature `policy_denied` `{reason: bad_signature}`, a key already registered `conflict` `{reason: key_in_use}`. The roles are the ones the document declares (the token's when it declares none); the device's kind is `hub`, `wake-helper` or `client`, never `compute`. Audited as `device.register`; `device.registered` |
 | `POST` | `/agent/v1/heartbeat` | (novad → Hub) `Authorization: Bearer nvc_…` (none: 401 `token_required`; unknown or revoked: 401 `auth_missing`, and the device then stops its modules and wipes its credentials). `{novadVersion, modules?, events? (≤ 500), accessDecisions? (≤ 500), power?}` → `{ok: true, heartbeatIntervalMs, capabilityRequested}`. Marks the device `active`; module events become `device.module.changed` (crashes and disables are audited); decisions made on the device (`novad access approve\|deny`) close their Hub cards; a `novad` self-update the device reports is recorded; overrides or policy the device has not taken yet are pushed after the beat |
 | `POST` | `/agent/v1/capabilities` | (novad → Hub) Device credential as for heartbeats. `{capability, signature, novadVersion}` → `{ok: true}`. The document must pass the schema, verify against the pinned key and keep its `deviceId` (`validation` `{reason: device_mismatch}`). `device.capabilities.changed` when its modules or version changed. Sent at start, every 30th heartbeat and when a heartbeat answer asks |
 

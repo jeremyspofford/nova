@@ -27,7 +27,7 @@ pub struct DeviceState {
     /// `nvc_…`: presented to the Hub on heartbeats and capability updates.
     #[serde(default)]
     pub credential: Option<String>,
-    /// `nvm_…`: the Hub presents it on every management call to this device.
+    /// `nvdm_…`: the Hub presents it on every management call to this device.
     #[serde(default)]
     pub management_token: Option<String>,
     #[serde(default)]

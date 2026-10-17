@@ -109,6 +109,11 @@ impl GrantStore {
         GrantStore { path, data_dir }
     }
 
+    /// novad's data directory, canonical when it exists (sandboxes hide it inside every grant).
+    pub fn data_dir(&self) -> PathBuf {
+        std::fs::canonicalize(&self.data_dir).unwrap_or_else(|_| self.data_dir.clone())
+    }
+
     pub fn load(&self) -> OpResult<GrantsFile> {
         read_json_or(&self.path, GrantsFile::default()).map_err(|e| OpError::internal(e.to_string()))
     }

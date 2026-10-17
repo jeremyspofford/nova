@@ -53,6 +53,7 @@ describe('enrollment', () => {
     env.devices.push(fake);
     const r = await fake.enroll(env.hubUrl, t.token);
     expect(r.credential).toMatch(/^nvc_/);
+    expect(fake.managementToken).toMatch(/^nvdm_[A-Za-z0-9_-]{43}$/);
     expect(await env.secrets.get(managementTokenRef(fake.deviceId!))).toBe(fake.managementToken);
     const [view] = await env.svc.list(ACCOUNT);
     expect(view).toMatchObject({
@@ -100,6 +101,37 @@ describe('enrollment', () => {
     );
     expect(err.details).toMatchObject({ reason: 'bad_signature' });
     await expect(fake.enroll(env.hubUrl, t.token)).rejects.toThrow(/401/);
+  });
+
+  it('refuses a management token without the device prefix, before the token is spent', async () => {
+    const t = await env.svc.createEnrollToken(ACCOUNT, ['client'], 'http://hub');
+    const { FakeDevice } = await import('../src/index.ts');
+    const fake = new FakeDevice();
+    env.devices.push(fake);
+    await fake.listen();
+    const capability = fake.capability();
+    const body = {
+      enrollToken: t.token,
+      name: 'x',
+      endpoint: fake.endpoint,
+      publicKey: fake.publicKey,
+      capability,
+      signature: fake.sign(capability),
+      novadVersion: '0.6.0',
+      protocolVersions: [1],
+    };
+    // `nvm_` is Nova's MCP client token prefix; novad's management token is `nvdm_`.
+    for (const managementToken of [
+      `nvm_${fake.managementToken.slice('nvdm_'.length)}`,
+      fake.managementToken.slice('nvdm_'.length),
+    ]) {
+      await expect(env.svc.register({ ...body, managementToken })).rejects.toThrow(
+        /a management token \(nvdm_…\)/,
+      );
+    }
+    expect(await env.svc.list(ACCOUNT)).toEqual([]);
+    await fake.enroll(env.hubUrl, t.token);
+    expect(await env.secrets.get(managementTokenRef(fake.deviceId!))).toBe(fake.managementToken);
   });
 
   it('refuses compute-node tokens, bad protocols and unknown credentials', async () => {

@@ -1,11 +1,13 @@
 // Device file operations through novad (FR-210) and the connected computer (FR-081, FR-062):
 // the owner's own folder grants, staged writes with a diff and an atomic commit, conflicts, a
 // write outside the grants filing a folder-access request with a Hub approval card (decided on
-// the Hub or on the device), protected paths refused on the Hub too, one connection per agent
+// the Hub or on the device), protected paths refused on the Hub too (novad's list kept equal to
+// the policy engine's), one connection per agent
 // refused below the minimum version, the local_host Computer and the Code device environment.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CREDENTIAL_LOCATIONS, READ_ONLY_LOCATIONS } from '@nova/policy';
 import { NovaError } from '@nova/shared';
 import {
   DeviceComputerProvider,
@@ -123,6 +125,24 @@ describe('the owner’s folders', () => {
     await expect(
       env.svc.stage(ACCOUNT, id, USER, { path: 'relative/x', contentBase64: 'eA==' }),
     ).rejects.toThrow(/absolute/);
+  });
+
+  it('novad protects the same locations as the policy engine (docs/12 §7.2)', () => {
+    const rs = readFileSync(
+      join(import.meta.dirname, '../../../services/novad/src/paths.rs'),
+      'utf8',
+    );
+    const list = (name: string): string[][] => {
+      const body = new RegExp(
+        `pub const ${name}: &\\[&\\[&str\\]\\] = &\\[([\\s\\S]*?)\\n\\];`,
+      ).exec(rs)?.[1];
+      expect(body, name).toBeDefined();
+      return [...body!.matchAll(/&\[([^\]]*)\]/g)].map((m) =>
+        [...m[1]!.matchAll(/"([^"]*)"/g)].map((s) => s[1]!),
+      );
+    };
+    expect(list('CREDENTIAL_LOCATIONS')).toEqual(CREDENTIAL_LOCATIONS.map((l) => [...l]));
+    expect(list('READ_ONLY_LOCATIONS')).toEqual(READ_ONLY_LOCATIONS.map((l) => [...l]));
   });
 });
 

@@ -123,7 +123,7 @@ pub fn new_id() -> String {
     crate::crypto::hex(&b)
 }
 
-/// A random bearer token with a prefix, e.g. `nvm_…` (32 random bytes, base64url).
+/// A random bearer token with a prefix, e.g. `nvdm_…` (32 random bytes, base64url).
 pub fn new_token(prefix: &str) -> Result<String, String> {
     let mut b = [0u8; 32];
     crate::crypto::random_bytes(&mut b)?;

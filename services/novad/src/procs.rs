@@ -1,10 +1,11 @@
 //! Long-running commands for Code sessions on a device (FR-062, FR-078): a process belongs to
 //! novad, not to the Hub's connection, so it keeps running and buffering output when the
 //! connection drops, and a later read continues from any offset. Each one runs in the same
-//! sandbox as `exec` (grant folders bound, no network, cleared environment); output (stdout and
-//! stderr interleaved) keeps the newest 1 MiB.
+//! sandbox as `exec` (grant folders bound with their credential locations hidden and `.git` and
+//! friends read-only, no network, cleared environment); output (stdout and stderr interleaved)
+//! keeps the newest 1 MiB.
 
-use crate::exec::{ExecSpec, bwrap_args, kill_group};
+use crate::exec::{ExecSpec, grantee_bwrap_args, kill_group};
 use crate::grants::{GrantStore, Grantee, Need};
 use crate::hardening::{Limits, harden_command};
 use crate::util::{OpError, OpResult, iso, new_id, now_ms};
@@ -91,9 +92,8 @@ impl Procs {
                 return Err(OpError::new(429, "rate_limited", "too many processes for this session on the device"));
             }
         }
-        let roots = grants.roots(grantee)?;
         let mut command = Command::new(bwrap);
-        command.args(bwrap_args(&roots, &cwd.path, &spec));
+        command.args(grantee_bwrap_args(grants, grantee, &cwd.path, &spec)?);
         Ok(json!({ "id": self.start(command, grantee, cmd, cwd_raw, args["tag"].as_str())? }))
     }
 
@@ -315,6 +315,39 @@ mod tests {
         store.grant(&g(), "folder", base.to_str().unwrap(), "read", "hub").unwrap();
         assert_eq!(p.spawn(&store, &g(), &args, None).unwrap_err().code, "sandbox_unavailable");
         assert!(p.spawn(&store, &g(), &json!({ "cwd": base }), None).is_err());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn spawned_processes_get_the_protected_sandbox() {
+        let Some(bwrap) = crate::exec::working_bwrap() else {
+            eprintln!("skipped: bubblewrap cannot make namespaces here");
+            return;
+        };
+        let base = tmp("procs-real");
+        let proj = base.join("proj");
+        std::fs::create_dir_all(proj.join(".SSH")).unwrap();
+        std::fs::create_dir_all(proj.join(".git")).unwrap();
+        std::fs::write(proj.join(".SSH/id_x"), "SECRET-ssh").unwrap();
+        std::fs::write(proj.join(".git/config"), "[core]\n").unwrap();
+        let store = GrantStore::new(base.join("data/grants.json"), base.join("data"));
+        store.grant(&g(), "folder", proj.to_str().unwrap(), "write", "hub").unwrap();
+        let p = Procs::default();
+        let script = "cat .SSH/id_x; echo x >> .git/config || echo READ-ONLY; echo done";
+        let id = p.spawn(&store, &g(), &json!({ "cmd": script, "cwd": proj }), Some(&bwrap)).unwrap()["id"].as_str().unwrap().to_string();
+        let mut r = p.read(&g(), &id, 0, 2_000).unwrap();
+        for _ in 0..250 {
+            if r["running"] == false {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            r = p.read(&g(), &id, 0, 0).unwrap();
+        }
+        assert_eq!(r["running"], false);
+        let out = r["data"].as_str().unwrap();
+        assert!(!out.contains("SECRET"), "{out}");
+        assert!(out.contains("READ-ONLY") && out.contains("done"), "{out}");
+        assert_eq!(std::fs::read_to_string(proj.join(".git/config")).unwrap(), "[core]\n");
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

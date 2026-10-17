@@ -1363,8 +1363,8 @@ amends ADR-063 and two bullets of ADR-083; extends ADR-089's transport to `novad
   desktop in M6, and it is a mock.
 - *Devices and `novad` (FR-141..FR-150, FR-210, FR-081, FR-062).* Transport until M6.5 is bearer
   tokens over LAN HTTP, as ADR-089 does for compute nodes, extended to `novad`: an enrollment token
-  `nvd_`, a device credential `nvc_` (hashed in its own domain) and a management token `nvm_` the
-  device generated, kept in the vault. A `novad` device is a `device` row of kind `client`, `hub` or
+  `nvd_`, a device credential `nvc_` (hashed in its own domain) and a management token `nvdm_`
+  the device generated, kept in the vault (its own prefix, distinct from MCP client tokens). A `novad` device is a `device` row of kind `client`, `hub` or
   `wake-helper`, never `compute`; its roles come from its signed document. Every enrollment rotates
   the device key, so a revoked device can be added again. The supervisor runs each module as a
   separate process speaking JSON lines; a crash restarts it with backoff from 1 s to 60 s and five

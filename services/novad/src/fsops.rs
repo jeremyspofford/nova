@@ -518,4 +518,53 @@ mod tests {
         assert_eq!(e.details.unwrap()["reason"], "folder_access_required");
         std::fs::remove_dir_all(&base).unwrap();
     }
+
+    #[test]
+    fn credential_locations_are_refused_at_any_depth_inside_a_grant() {
+        let (base, s, g, proj) = setup();
+        for d in ["a/b/.ssh", "a/.Aws", "a/b/.cargo", "a/.config/gh"] {
+            std::fs::create_dir_all(proj.join(d)).unwrap();
+        }
+        for f in ["a/b/.ssh/id_x", "a/.Aws/credentials", "a/b/.cargo/credentials.toml", "a/.config/gh/hosts.yml"] {
+            std::fs::write(proj.join(f), "SECRET").unwrap();
+        }
+        std::fs::write(proj.join("a/b/.cargo/config.toml"), "ok").unwrap();
+        std::os::unix::fs::symlink(proj.join("a/b/.ssh"), proj.join("a/keys")).unwrap();
+        let p = |rel: &str| proj.join(rel).to_string_lossy().to_string();
+        let denied = |r: OpResult<Value>, what: &str| {
+            let e = r.expect_err(what);
+            let details = e.details.clone().unwrap_or_default();
+            assert_eq!((e.code.as_str(), details["reason"].as_str()), ("policy_denied", Some("protected_path")), "{what}");
+        };
+        // Case variants, trailing dots, `credentials*` prefixes and links into a credential folder.
+        for f in ["a/b/.ssh/id_x", "a/.Aws/credentials", "a/b/.cargo/credentials.toml", "a/.config/gh/hosts.yml", "a/b/.SSH./id_x", "a/keys/id_x"] {
+            denied(s.read(&g, &p(f), None), &format!("read {f}"));
+            denied(s.stat(&g, &p(f)), &format!("stat {f}"));
+            denied(s.stage(&g, &p(f), None, &b64_encode(b"x"), true, None), &format!("stage {f}"));
+            denied(s.delete(&g, &p(f)), &format!("delete {f}"));
+            denied(s.move_path(&g, &p(f), &p("a/stolen.txt")), &format!("move from {f}"));
+        }
+        for d in ["a/b/.ssh", "a/.aws", "a/.config/gh", "a/keys"] {
+            denied(s.list(&g, &p(d)), &format!("list {d}"));
+            denied(s.move_path(&g, &p("src/a.txt"), &p(&format!("{d}/planted"))), &format!("move into {d}"));
+        }
+        // A folder holding a credential location cannot be deleted or moved away.
+        denied(s.delete(&g, &p("a/b/.ssh")), "delete .ssh");
+        denied(s.move_path(&g, &p("a/b"), &p("moved")), "move the parent of .ssh");
+        // Listings leave credential locations out; neighbours stay reachable.
+        let names = |dir: &str| -> Vec<String> {
+            s.list(&g, &p(dir)).unwrap()["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap().to_string()).collect()
+        };
+        assert_eq!(names("a/b"), vec![".cargo"]);
+        assert_eq!(names("a/b/.cargo"), vec!["config.toml"]);
+        assert_eq!(names("a/.config"), Vec::<String>::new());
+        assert!(s.read(&g, &p("a/b/.cargo/config.toml"), None).is_ok());
+        // A staged write whose folder became a link into a credential location is refused at commit.
+        let st = s.stage(&g, &p("src/k.txt"), None, &b64_encode(b"planted"), false, None).unwrap();
+        std::fs::rename(proj.join("src"), proj.join("src-old")).unwrap();
+        std::os::unix::fs::symlink(proj.join("a/b/.ssh"), proj.join("src")).unwrap();
+        denied(s.commit(&g, st["staged"]["id"].as_str().unwrap()), "commit through a link");
+        assert!(!proj.join("a/b/.ssh/k.txt").exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 }

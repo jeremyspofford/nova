@@ -28,6 +28,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, join } from 'node:path';
 import { canonicalPath, pathAccess, within } from '@nova/policy';
 import { canonicalJson } from '../nodes/crypto.ts';
+import { MANAGEMENT_TOKEN_PREFIX } from './protocol.ts';
 
 export interface FakeDeviceOptions {
   name?: string;
@@ -155,7 +156,7 @@ export function fakeDeviceLineDiff(
 export class FakeDevice {
   readonly name: string;
   readonly localId = id();
-  readonly managementToken = `nvm_${randomBytes(32).toString('base64url')}`;
+  readonly managementToken = `${MANAGEMENT_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
   readonly publicKey: string;
   readonly #privateKey: KeyObject;
   readonly #opts: FakeDeviceOptions;

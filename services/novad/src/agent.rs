@@ -21,6 +21,10 @@ use std::time::Duration;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PROTOCOL_VERSIONS: &[u64] = &[1];
+/// The management token novad generates at enrollment starts with this, its own prefix, so it is
+/// never mistaken for Nova's MCP client tokens (`nvm_`); the Hub checks it on registration. A
+/// stored token without it (from before the prefix changed) is refused: add the device again.
+pub const MANAGEMENT_TOKEN_PREFIX: &str = "nvdm_";
 const MAX_BODY: usize = 96 * 1024 * 1024;
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const HUB_TIMEOUT: Duration = Duration::from_secs(15);
@@ -99,7 +103,7 @@ impl Agent {
     /// One management request from the Hub.
     pub fn handle(&self, req: Request) -> Response {
         let token = self.device().management_token;
-        let ok = match (token.as_deref(), req.bearer()) {
+        let ok = match (token.as_deref().filter(|t| t.starts_with(MANAGEMENT_TOKEN_PREFIX)), req.bearer()) {
             (Some(t), Some(b)) => constant_time_eq(t.as_bytes(), b.as_bytes()),
             _ => false,
         };
@@ -350,7 +354,7 @@ pub fn enroll(a: &crate::cli::EnrollArgs, exe: PathBuf) -> Result<Value, String>
     let name = a.name.clone().unwrap_or_else(|| Probe::current().hostname.unwrap_or_else(|| "device".into()));
     let mut state = data.new_device(&name, a.roles.clone()).map_err(|e| e.to_string())?;
     let previous = data.device().map_err(|e| e.to_string())?;
-    let mgmt = new_token("nvm_")?;
+    let mgmt = new_token(MANAGEMENT_TOKEN_PREFIX)?;
     state.management_token = Some(mgmt.clone());
     state.listen = Some(a.listen.clone());
     state.endpoint = Some(a.endpoint.clone());
@@ -457,7 +461,7 @@ mod tests {
         let data = DataDir(dir.join("data"));
         data.ensure().unwrap();
         let mut st = data.new_device("box", vec!["client".into()]).unwrap();
-        st.management_token = Some("nvm_test".into());
+        st.management_token = Some("nvdm_test".into());
         st.update_trust_key = Some(b64url_encode(&SigningKey::from_seed(&[3u8; 32]).public_key()));
         let pong = |n: &str| ModuleSpec { exec: Some(vec!["/bin/sh".into(), "-c".into(), PONG.into()]), ..ModuleSpec::builtin(n, true) };
         let mut a = Agent::new(data, PathBuf::from("/bin/false"), st, Manifest { modules: vec![pong("storage"), pong("compute")] });
@@ -483,12 +487,18 @@ mod tests {
         let dir = tmp("agent1");
         let a = agent(&dir);
         assert_eq!(a.handle(req("/agent/v1/status", None, json!({}))).status, 401);
-        assert_eq!(a.handle(req("/agent/v1/status", Some("nvm_wrong"), json!({}))).status, 401);
-        let ok = a.handle(req("/agent/v1/status", Some("nvm_test"), json!({})));
+        assert_eq!(a.handle(req("/agent/v1/status", Some("nvdm_wrong"), json!({}))).status, 401);
+        let ok = a.handle(req("/agent/v1/status", Some("nvdm_test"), json!({})));
         assert_eq!(ok.status, 200);
         assert_eq!(body(&ok)["novadVersion"], VERSION);
-        assert_eq!(a.handle(req("/agent/v1/firmware/apply", Some("nvm_test"), json!({}))).status, 403);
-        assert_eq!(a.handle(req("/agent/v1/nope", Some("nvm_test"), json!({}))).status, 404);
+        assert_eq!(a.handle(req("/agent/v1/firmware/apply", Some("nvdm_test"), json!({}))).status, 403);
+        assert_eq!(a.handle(req("/agent/v1/nope", Some("nvdm_test"), json!({}))).status, 404);
+        // The device's own prefix, distinct from Nova's MCP client tokens; a stored token from
+        // before the prefix changed is refused even when presented exactly.
+        let fresh = new_token(MANAGEMENT_TOKEN_PREFIX).unwrap();
+        assert!(fresh.starts_with("nvdm_") && fresh.len() == 5 + 43, "{fresh}");
+        a.state.lock().unwrap().management_token = Some("nvm_test".into());
+        assert_eq!(a.handle(req("/agent/v1/status", Some("nvm_test"), json!({}))).status, 401);
         a.sup.stop_all();
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -497,15 +507,15 @@ mod tests {
     fn manages_modules_and_services() {
         let dir = tmp("agent2");
         let a = agent(&dir);
-        let r = a.handle(req("/agent/v1/services/compute/stop", Some("nvm_test"), json!({})));
+        let r = a.handle(req("/agent/v1/services/compute/stop", Some("nvdm_test"), json!({})));
         assert_eq!(body(&r)["service"]["state"], "stopped");
-        let r = a.handle(req("/agent/v1/services/compute/start", Some("nvm_test"), json!({})));
+        let r = a.handle(req("/agent/v1/services/compute/start", Some("nvdm_test"), json!({})));
         assert_eq!(body(&r)["service"]["state"], "running");
-        let r = a.handle(req("/agent/v1/modules/storage/restart", Some("nvm_test"), json!({})));
+        let r = a.handle(req("/agent/v1/modules/storage/restart", Some("nvdm_test"), json!({})));
         assert_eq!(body(&r)["module"]["state"], "running");
-        assert_eq!(a.handle(req("/agent/v1/services/nope/start", Some("nvm_test"), json!({}))).status, 404);
+        assert_eq!(a.handle(req("/agent/v1/services/nope/start", Some("nvdm_test"), json!({}))).status, 404);
         // The management module is not installed here: power calls say so.
-        let p = a.handle(req("/agent/v1/power", Some("nvm_test"), json!({ "action": "status" })));
+        let p = a.handle(req("/agent/v1/power", Some("nvdm_test"), json!({ "action": "status" })));
         assert_eq!(p.status, 404);
         a.sup.stop_all();
         std::fs::remove_dir_all(&dir).unwrap();
@@ -517,7 +527,7 @@ mod tests {
         let a = agent(&dir);
         let r = a.handle(req(
             "/agent/v1/config",
-            Some("nvm_test"),
+            Some("nvdm_test"),
             json!({ "capabilityOverrides": { "scheduling": { "routingWeight": 5 } }, "policy": { "allowedModules": ["storage"] }, "updateChannel": "beta", "revision": 4 }),
         ));
         assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
@@ -529,7 +539,7 @@ mod tests {
         let sig: [u8; 64] = crate::crypto::b64url_decode(b["signature"].as_str().unwrap()).unwrap().try_into().unwrap();
         assert!(crate::crypto::verify(&key, capabilities::canonical_json(&b["capability"]).as_bytes(), &sig));
         assert_eq!(a.sup.status("compute").unwrap()["state"], "stopped");
-        let bad = a.handle(req("/agent/v1/config", Some("nvm_test"), json!({ "capabilityOverrides": { "hardware": { "cores": 1 } } })));
+        let bad = a.handle(req("/agent/v1/config", Some("nvdm_test"), json!({ "capabilityOverrides": { "hardware": { "cores": 1 } } })));
         assert_eq!(bad.status, 400);
         a.sup.stop_all();
         std::fs::remove_dir_all(&dir).unwrap();
@@ -542,10 +552,10 @@ mod tests {
         let k = SigningKey::from_seed(&[3u8; 32]);
         let good = format!("#!/bin/sh\n{PONG}\n");
         let b = crate::update::tests::bundle(&k, "compute", "9.1.0", "stable", good.as_bytes());
-        let r = a.handle(req("/agent/v1/update", Some("nvm_test"), json!({ "bundle": b })));
+        let r = a.handle(req("/agent/v1/update", Some("nvdm_test"), json!({ "bundle": b })));
         assert_eq!(body(&r)["status"], "applied", "{}", String::from_utf8_lossy(&r.body));
         let wrong = crate::update::tests::bundle(&SigningKey::from_seed(&[9u8; 32]), "compute", "9.2.0", "stable", good.as_bytes());
-        let r = a.handle(req("/agent/v1/update", Some("nvm_test"), json!({ "bundle": wrong })));
+        let r = a.handle(req("/agent/v1/update", Some("nvdm_test"), json!({ "bundle": wrong })));
         assert_eq!(r.status, 403);
         a.sup.stop_all();
         std::fs::remove_dir_all(&dir).unwrap();

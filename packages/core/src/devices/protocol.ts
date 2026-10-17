@@ -9,7 +9,11 @@ import { PUBLIC_KEY_PATTERN, SIGNATURE_PATTERN } from '../nodes/crypto.ts';
 export const DEVICE_PROTOCOL_VERSIONS: readonly number[] = [1];
 export const DEVICE_ENROLL_PREFIX = 'nvd_';
 export const DEVICE_CREDENTIAL_PREFIX = 'nvc_';
-export const MANAGEMENT_TOKEN_PREFIX = 'nvm_';
+/**
+ * The management token novad generates. Its own prefix, so it is never mistaken for Nova's MCP
+ * client tokens (`nvm_`); novad refuses a stored token without it too (docs/23 §9).
+ */
+export const MANAGEMENT_TOKEN_PREFIX = 'nvdm_';
 export const DEVICE_HEARTBEAT_INTERVAL_MS = 10_000;
 export const DEVICE_MISSED_BEATS = 3;
 export const DEVICE_ENROLL_TTL_MS = 15 * 60 * 1000;
@@ -41,7 +45,10 @@ export const registerDeviceSchema = z.object({
     .string()
     .min(20)
     .max(200)
-    .refine((t) => t.startsWith(MANAGEMENT_TOKEN_PREFIX), 'a management token (nvm_…)'),
+    .refine(
+      (t) => t.startsWith(MANAGEMENT_TOKEN_PREFIX),
+      `a management token (${MANAGEMENT_TOKEN_PREFIX}…)`,
+    ),
   novadVersion: novadVersionSchema,
   protocolVersions: z.array(z.number().int().min(1).max(1000)).min(1).max(16),
 });

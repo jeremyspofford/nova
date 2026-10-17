@@ -24,8 +24,19 @@ novad service-unit --platform linux|macos|windows  # systemd unit, launchd plist
 ```
 
 Until certificates arrive (M6.5) the Hub and the device authenticate with bearer tokens over LAN
-HTTP, like compute nodes (ADR-089): the device generates the management token (`nvm_…`) the Hub
-presents; the Hub issues the device credential (`nvc_…`) for heartbeats.
+HTTP, like compute nodes (ADR-089): the device generates the management token (`nvdm_…`, its own
+prefix, distinct from Nova's MCP client tokens `nvm_…`) the Hub presents; the Hub issues the
+device credential (`nvc_…`) for heartbeats. Both sides refuse a management token without the
+`nvdm_` prefix, so a device enrolled before the prefix changed must be added again.
+
+Commands (`exec`) and Code processes (`proc`) run under bubblewrap with the grantee's folders and
+the same protected locations as the Hub's own sandbox (`paths.rs`, kept equal to
+`packages/policy/src/paths.ts`): in each granted folder, and in every folder from it down to the
+working folder, credential locations (case-insensitive, `credentials*` prefixes) are hidden with an
+empty tmpfs or `/dev/null`; novad's data folder is hidden wherever a grant holds it; inside write
+grants `.git` (followed through a `.git` file to its Git and common directories), `.nova`,
+`.agents` and shell startup files are bound read-only. Parents are mounted before children;
+locations that do not exist when the command starts are not covered.
 
 | Source | What |
 | --- | --- |
