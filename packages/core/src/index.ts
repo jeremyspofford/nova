@@ -12,3 +12,7 @@ export * from './chat.ts';
 export * from './routing/index.ts';
 export * from './nodes/index.ts';
 export * from './tools/index.ts';
+export * from './approvals/index.ts';
+export * from './ops/index.ts';
+export * from './consolidation.ts';
+export * from './history.ts';
