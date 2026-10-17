@@ -41,18 +41,18 @@ set (`docs/00` §1, "delegated, ongoing responsibility"; `docs/02` §G; `docs/03
 
 ## Capability summary
 
-| # | Capability | Evidence records | rea coverage |
+| # | Capability | Evidence records | Nova coverage |
 | --- | --- | --- | --- |
-| 1 | Persistent, named agent inside the host product; one per user | ER-APP4-001 | `docs/09` §8, FR-079: covered. The one-per-user limit **diverges** (rea sets no limit). |
+| 1 | Persistent, named agent inside the host product; one per user | ER-APP4-001 | `docs/09` §8, FR-079: covered. The one-per-user limit **diverges** (Nova sets no limit). |
 | 2 | Its own persistent cloud computer and browser; take over and return control; private sign-in | ER-APP4-002 | `docs/11` §2.1, §4.1–4.2; FR-080, FR-086, FR-087: covered |
 | 3 | One optional connected personal computer, through the desktop client | ER-APP4-003 | `docs/11` §2.3, FR-081: partially. The "client must stay open" rule, the local-browser fallback, the separate grant and the version floor are **not covered**. |
-| 4 | Local executor registers with the backend; relay transport | ER-APP4-004, 005 | `docs/23` §2, §9 and `docs/22` §3: partially. rea uses a `novad` service and a content-blind Relay. |
+| 4 | Local executor registers with the backend; relay transport | ER-APP4-004, 005 | `docs/23` §2, §9 and `docs/22` §3: partially. Nova uses a `novad` service and a content-blind Relay. |
 | 5 | Delegation to subagents, delegated-work tasks and coding tasks | ER-APP4-006 | `docs/09` §4, §8; FR-053, FR-059, FR-083: partially. Agent-to-coding and agent-to-work delegation is **not covered**. |
 | 6 | Time-budget setting combined with reasoning effort | ER-APP4-007 | `docs/09` §2 (60-step / 60-minute caps), FR-024: **diverges** |
 | 7 | Self-paced wake-ups, saved schedules, plugin-declared triggers | ER-APP4-008 | `docs/09` §6–7, FR-055, FR-056. Schedules are covered. Self-paced wake-ups are **not covered**. Triggers **diverge**. |
 | 8 | Read-only proactive research | ER-APP4-009 | `docs/09` §8, `docs/21` §11, FR-082: covered. The trigger and where results go differ. |
-| 9 | Three-layer memory; same agent in every channel, histories not mirrored | ER-APP4-010 | `docs/09` §5, `docs/13` §4, FR-088, FR-089: **diverges** (rea puts every channel into one thread) |
-| 10 | Memory controls: notes may not be viewable; switching off host memory doesn't remove copies | ER-APP4-011 | FR-032, FR-089, `docs/27` §2: **diverges** (rea is stricter) |
+| 9 | Three-layer memory; same agent in every channel, histories not mirrored | ER-APP4-010 | `docs/09` §5, `docs/13` §4, FR-088, FR-089: **diverges** (Nova puts every channel into one thread) |
+| 10 | Memory controls: notes may not be viewable; switching off host memory doesn't remove copies | ER-APP4-011 | FR-032, FR-089, `docs/27` §2: **diverges** (Nova is stricter) |
 | 11 | Channels: chat, voice calls, Slack, Teams; texting "coming soon" | ER-APP4-012 | `docs/13` §4, FR-088, FR-110, FR-031: partially. Agent-initiated voice calls are **not covered**. |
 | 12 | Plugin bundle (skills, MCP, browser extensions, hooks); per-action permissions | ER-APP4-013 | `docs/08` §3, FR-045, FR-048: partially |
 | 13 | Four-layer safety stack; custom rules at four levels | ER-APP4-014 | `docs/12` §2–3, FR-084, FR-099. Custom rules are covered. The stack order **diverges**. |
@@ -61,9 +61,9 @@ set (`docs/00` §1, "delegated, ongoing responsibility"; `docs/02` §G; `docs/03
 | 16 | Safety evals: prompt injection and red-teaming | ER-APP4-017 | `docs/12` §12, `docs/16` §5, FR-123: partially |
 | 17 | Safety evals: persistent and proactive workflows | ER-APP4-018 | **not covered** |
 | 18 | Safety evals: time budgets, monitoring, misuse | ER-APP4-019 | **not covered** |
-| 19 | Availability, pricing, data use, no public API | ER-APP4-020 | `docs/12` §9, FR-105, FR-116: mostly not applicable (rea is self-hosted and never trains on user data) |
+| 19 | Availability, pricing, data use, no public API | ER-APP4-020 | `docs/12` §9, FR-105, FR-116: mostly not applicable (Nova is self-hosted and never trains on user data) |
 | 20 | Look-alike clones and fake "official download" lures | ER-APP4-021 | `docs/15` §3, FR-133: partially. Signing is covered; lure monitoring is **not covered**. |
-| 21 | No continuous screen or audio capture | ER-APP4-022 | `docs/24`, FR-151: rea goes beyond APP-4 here |
+| 21 | No continuous screen or audio capture | ER-APP4-022 | `docs/24`, FR-151: Nova goes beyond APP-4 here |
 
 ---
 
@@ -750,7 +750,7 @@ limits: >
 
 ## Divergences from the current spec (inputs for RECONCILIATION.md, not decisions)
 
-| rea doc today | Finding | Evidence |
+| Nova doc today | Finding | Evidence |
 | --- | --- | --- |
 | `docs/09` §2: runs are bounded by `max_steps = 60`, `max_wall_clock = 60 min` and a token cap; exceeding them pauses the run | A time-budget setting guides how long the agent works, combined with reasoning effort. It was evaluated with simulated budgets from 4 minutes to one year, plus a clock tool that can wait. | ER-APP4-007, 019 |
 | `docs/09` §6–7: work starts from cron/interval schedules, event triggers or user messages | The agent picks its own next wake-up, alongside saved schedules and plugin triggers | ER-APP4-008 |
@@ -771,5 +771,5 @@ limits: >
 | FR-106, `docs/12` §10: managed-policy keys for modes, tools, plugins, network and appearance | Separate admin switches for agent capabilities (Slack, custom rules, local access, cloud browser, network, computer use, password manager). Enterprise model controls do not apply. | ER-APP4-016 |
 | FR-045, `docs/08` §3: a plugin is skills, MCP servers and optional UI | Plugins also carry browser extensions and hooks. Hooks do not run in cloud orchestration. | ER-APP4-013 |
 | FR-123, `docs/16` §5: a generic security suite | Persistence-specific evals: permission changes mid-task, scope drift across chained tasks (it roughly doubles with chain length), misleading proactive inputs, behaviour across time budgets, and engagement with outside agents | ER-APP4-017..019 |
-| `docs/24`, FR-151: ambient screen and audio capture (track N1) | APP-4 has no continuous capture. rea goes beyond APP-4 here. | ER-APP4-022 |
+| `docs/24`, FR-151: ambient screen and audio capture (track N1) | APP-4 has no continuous capture. Nova goes beyond APP-4 here. | ER-APP4-022 |
 | `docs/15` §3, FR-133: signed builds | Fake "official download" repositories and look-alike clones appeared within weeks of launch | ER-APP4-021 |

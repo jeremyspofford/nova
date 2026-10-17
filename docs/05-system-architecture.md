@@ -68,7 +68,7 @@ application and canonical state; Clients present the UI; Compute Nodes supply he
 ## 4. Monorepo layout
 
 ```
-rea/
+nova/
 ├── apps/
 │   ├── hub/                     # Hub service: API, UI hosting, runtime, scheduler
 │   ├── web/                     # Shared web UI (React) — served by Hub, installable PWA

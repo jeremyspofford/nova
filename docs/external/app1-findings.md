@@ -45,10 +45,10 @@ Reading notes:
 
 ## Capability summary
 
-| # | Capability | Evidence records | rea coverage |
+| # | Capability | Evidence records | Nova coverage |
 | --- | --- | --- | --- |
-| 1 | One desktop client with chat, delegated-work and coding modes; classic app kept; import from other assistants | ER-APP1-001 | `docs/04` §1, FR-002 (rea has a fourth Agents mode; APP-1 ships always-on agents as APP-4); covered. Import: INV-B15, FR-032 (memory only); partially |
-| 2 | Chromium-based runtime inherited from a retired browser; bundled engine, plugins, skills | ER-APP1-002, 003 | ADR-001, ADR-006, `docs/15`; partially (rea pairs Electron with a separately launched automation browser) |
+| 1 | One desktop client with chat, delegated-work and coding modes; classic app kept; import from other assistants | ER-APP1-001 | `docs/04` §1, FR-002 (Nova has a fourth Agents mode; APP-1 ships always-on agents as APP-4); covered. Import: INV-B15, FR-032 (memory only); partially |
+| 2 | Chromium-based runtime inherited from a retired browser; bundled engine, plugins, skills | ER-APP1-002, 003 | ADR-001, ADR-006, `docs/15`; partially (Nova pairs Electron with a separately launched automation browser) |
 | 3 | Delegated-work mode; cloud coordination with local execution; cloud hook limits; admin controls | ER-APP1-004 | `docs/04` §1, `docs/21` §3, FR-051..060, FR-081, FR-106, FR-124, FR-125; covered in shape; mid-turn switching rule **not covered** |
 | 4 | Phone (or second PC) remote control of a desktop host via QR pairing and a relay | ER-APP1-005 | FR-077, FR-111, FR-132, `docs/13` §5, `docs/22` §3; partially |
 | 5 | Saved memories, chat-history reference, temporary chats; separate local store | ER-APP1-006 | FR-027, FR-032, FR-169, `docs/09` §5; partially (no separate chat-history reference control). Local store: see app3-findings |
@@ -59,7 +59,7 @@ Reading notes:
 | 10 | Quick-chat overlay with per-thread status | ER-APP1-012 | FR-008 (P2), FR-012, `docs/14` §2.3; partially |
 | 11 | Full-duplex voice that also steers tasks; dictation | ER-APP1-013 | FR-031, INV-B12; partially |
 | 12 | Plugin directory (skills + MCP + optional UI + hooks) | ER-APP1-014 | FR-045, FR-049, FR-165, `docs/08` §3, ADR-013; covered (hooks: see app3-findings) |
-| 13 | Plugin UI in a sandboxed iframe over the open MCP Apps bridge; UI extension points | ER-APP1-015 | `docs/08` §3.1, `docs/14` §4.1–4.2, FR-045, FR-117; **diverges** (rea uses its own bridge) |
+| 13 | Plugin UI in a sandboxed iframe over the open MCP Apps bridge; UI extension points | ER-APP1-015 | `docs/08` §3.1, `docs/14` §4.1–4.2, FR-045, FR-117; **diverges** (Nova uses its own bridge) |
 | 14 | MCP event triggers via signed webhooks | ER-APP1-016 | FR-056, FR-158, `docs/09` §7; **not covered** |
 | 15 | In-app browser, user-browser extension, cloud browser, per-site permissions | ER-APP1-017 | FR-086, FR-092, FR-094, FR-096, `docs/11` §4; covered; permission levels **diverge** |
 | 16 | Page-registered site tools | ER-APP1-018 | **not covered** |
@@ -833,7 +833,7 @@ limits: >
 
 ## Divergences from the current spec (inputs for RECONCILIATION.md, not decisions)
 
-| rea doc today | Finding | Evidence |
+| Nova doc today | Finding | Evidence |
 | --- | --- | --- |
 | `docs/24` §3: screen frames, then OCR, are the text source | APP-1's ambient history captures no screenshots: interaction events plus accessibility text only. Its preview used screenshots and dropped them at launch | ER-APP1-009, 010 |
 | `docs/24` §2, §7: local-first; cloud processing only if enabled per source | Summarization always runs on vendor servers (files not retained); the derived memories are stored locally | ER-APP1-009 |

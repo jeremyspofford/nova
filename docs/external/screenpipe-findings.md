@@ -1719,10 +1719,10 @@ unchanged.
 | ER-SP-017 | `openai/privacy-filter` is the "fallback text model", unloaded after 60 s idle | That model runs in the vendor's hosted confidential-compute enclave | **Both, with a qualifier.** The local adapter sits behind the `opf-text` cargo feature, off by default (`crates/screenpipe-redact/src/adapters/opf.rs:20-26`). The same model family runs in the enclave backend (`adapters/tinfoil.rs:4-6`), which enterprise builds use by default (`recording.rs:1079-1085`). See ER-SP-055 |
 | Provenance, licence | Repository `github.com/mediar-ai/screenpipe`; the licence changed from MIT on 2026-06-10 | The repository is now `github.com/screenpipe/screenpipe` and the old URL redirects; the licence applies "since 2026-06-09" | **Both.** The redirect does not change the commit. 2026-06-09 is the announcement blog post; 2026-06-10 is the commit, which the shallow clone cannot confirm |
 
-## Owner decisions from a related design session (context, not rea decisions)
+## Owner decisions from a related design session (context, not Nova decisions)
 
 On 2026-10-16 the owner designed this capability for the **existing Nova v4 codebase**
-(`~/workspace/nova`), not this bundle. Spec: `docs/plans/rebuild/capture-recall.md`, commit
+(then at `~/workspace/nova`; preserved on the `archive/v4-main` branch of `github.com/jeremyspofford/nova`), not this bundle. Spec: `docs/plans/rebuild/capture-recall.md`, commit
 `3e598b61` on branch `claude/reverse-engineer-screenpi-nova-d30618`.
 
 These are recorded so the reconciliation can see the owner's stated preferences. Where they
@@ -1761,11 +1761,11 @@ Design specifics from that session that may transfer:
 - Images are encrypted with age to a hub-held key before upload, and the local copy is deleted
   only after a read-back check of size and sha256 at the target.
 
-### From the 2026-10-17 nova-latest design session (context, not rea decisions)
+### From the 2026-10-17 nova-latest design session (context, not Nova decisions)
 
 That session designed a different product, a Windows-first developer desktop app, so this is
 context only. Source: nova-latest design spec (2026-10-17) §6-§7; copy at
-`rea/docs/external/private/research/nova-latest-design-spec.md`. Its recall choices:
+`nova/docs/external/private/research/nova-latest-design-spec.md`. Its recall choices:
 - Text first, foreground window only: developer sources first (shell, git), then UI
   Automation text, then OCR as a fallback.
 - Not captured in v1: keystrokes, clipboard or audio.

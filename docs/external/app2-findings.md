@@ -39,7 +39,7 @@ package family suffix (`pzs8sxrjxfjjc`) is kept.
 
 ## Capability summary
 
-| # | Capability | Evidence records | rea coverage |
+| # | Capability | Evidence records | Nova coverage |
 | --- | --- | --- | --- |
 | 1 | Chromium-framework shell that loads the hosted web app; window and worker inventory | ER-APP2-001..002 | `docs/05` §2 (Electron shell, ADR-001), FR-125; covered |
 | 2 | Native helper addon (input, audio, OS APIs) and bundled helpers/content | ER-APP2-003..004 | `docs/23` §4 puts screen/input in a `novad` module; partially, **diverges** on placement |
@@ -1609,7 +1609,7 @@ limits: >
 
 ## Divergences from the current spec (inputs for RECONCILIATION.md, not decisions)
 
-| rea doc today | Finding | Evidence |
+| Nova doc today | Finding | Evidence |
 | --- | --- | --- |
 | `docs/23` §1–4, `docs/21` §8, FR-141: the device agent is an elevated `novad` supervisor with signed, sandboxed modules and mTLS to the Hub | The device endpoint is the desktop app itself, connected outbound to a vendor relay. It serves a tool-level API to cloud sessions: shell, directory listing, staged-then-committed file writes, folder-access requests, artifacts, project memory, and pass-through of local MCP servers | ER-APP2-012, 014 |
 | `docs/22` §3, FR-137: a content-blind, end-to-end-encrypted Relay | The device bridge, the browser-extension bridge and remote control all go through vendor-hosted relays or APIs. No end-to-end claim was found. Remote control polls with short-lived scoped credentials | ER-APP2-014, 028, 035 |

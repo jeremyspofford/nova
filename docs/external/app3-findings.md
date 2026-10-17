@@ -37,14 +37,14 @@ language (`docs/01` §5, the brand-name invariant).
 
 ## Capability summary
 
-| # | Capability | Evidence records | rea coverage |
+| # | Capability | Evidence records | Nova coverage |
 | --- | --- | --- | --- |
 | 1 | One engine behind every client; one API ("app-server"); built-in MCP-server mode removed | ER-APP3-001 | `docs/05` §1 "one core, many faces"; FR-125; FR-044 exposes an MCP server, so APP-3 **diverges** |
 | 2 | App-server framing, transports, handshake | ER-APP3-002 | `contracts/hub-api.md` §1, §5 (REST + WS/SSE); **diverges** |
 | 3 | 175 requests, 87 notifications, 11 server→client requests | ER-APP3-003 | `contracts/hub-api.md` §1, `contracts/events.md`; server→client requests **not covered** |
 | 4 | Thread/turn/item data model; generated TS and JSON Schema | ER-APP3-004 | `docs/06` §2 (thread, message, message_part); `contracts/README.md`; partially |
 | 5 | Remote-control relay through the vendor backend; local daemon | ER-APP3-005 | `docs/13` §5, `docs/22` §3; FR-077, FR-111, FR-137; **diverges** (not E2E) |
-| 6 | Turn loop: no step cap, mid-turn steering, Stop-hook continuation | ER-APP3-006 | `docs/09` §2; FR-019; **diverges** (rea caps steps) |
+| 6 | Turn loop: no step cap, mid-turn steering, Stop-hook continuation | ER-APP3-006 | `docs/09` §2; FR-019; **diverges** (Nova caps steps) |
 | 7 | Compaction (three triggers), context blocks, WebSocket model transport with HTTP fallback | ER-APP3-007 | `docs/09` §11, `docs/07`; partially |
 | 8 | "Code mode": one JavaScript tool that calls the real tools inside V8 | ER-APP3-008 | `docs/08` §1; **not covered** |
 | 9 | Tool list; freeform patch grammar; deferred tool search | ER-APP3-009 | `docs/08` §1.1, `docs/10` §4; partially |
@@ -55,7 +55,7 @@ language (`docs/01` §5, the brand-name invariant).
 | 14 | Approval policies, eight review decisions, sandbox-first escalation | ER-APP3-014 | `docs/10` §3, `docs/12` §4; FR-063, FR-100; **diverges** |
 | 15 | Starlark prefix rules with inline tests | ER-APP3-015 | `docs/12` §3 custom rules; FR-084; **diverges** |
 | 16 | Network proxy: allowlist, read-only "limited" mode, MITM hooks | ER-APP3-016 | `docs/12` §8, `docs/11` §7; FR-102; partially |
-| 17 | AI auto-reviewer: model subagent, strict JSON, fails closed, circuit breaker | ER-APP3-017 | `docs/12` §6; FR-085, FR-095; partially (rea is far less specific) |
+| 17 | AI auto-reviewer: model subagent, strict JSON, fails closed, circuit breaker | ER-APP3-017 | `docs/12` §6; FR-085, FR-095; partially (Nova is far less specific) |
 | 18 | Project instruction-file discovery and its 32 KiB budget | ER-APP3-018 | `docs/10` §11; partially |
 | 19 | Skills: format, roots, progressive disclosure, catalog budget | ER-APP3-019 | `docs/08` §4; FR-046; partially |
 | 20 | Plugins that read other vendors' manifests; marketplaces; MCP client | ER-APP3-020 | `docs/08` §2.1, §3, §7; FR-042, FR-045, FR-049; **diverges** |
@@ -1200,7 +1200,7 @@ limits: >
 
 ## Divergences from the current spec (inputs for RECONCILIATION.md, not decisions)
 
-| rea doc today | Finding | Evidence |
+| Nova doc today | Finding | Evidence |
 | --- | --- | --- |
 | `docs/10` §3, `docs/12` §2: one ladder of five permission modes (Manual … Bypass), FR-063 | Two independent axes: an approval policy (untrusted / on-request / granular / never) × a permission profile (filesystem rules + network). Plus "run sandboxed first, escalate only on denial", and granular switches that auto-reject | ER-APP3-013, 014 |
 | `docs/12` §4, FR-100: Allow once / Always (scoped) / Deny / Hand off | Eight decisions. "Always" is split into session cache, exec-policy rule, MCP-policy amendment and network rule. Denied lets the agent continue; Abort stops it. A timeout is its own decision | ER-APP3-014 |
