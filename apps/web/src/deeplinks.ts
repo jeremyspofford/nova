@@ -3,8 +3,8 @@
 //
 //   nova://settings[/<section>]   → /settings/<section> (unknown or missing section: general)
 //   nova://chat[/<id>][?m=<msg>]  → /chat, /chat/<id>
-//   nova://code[/<id>]            → /code   (sessions arrive in M4)
-//   nova://agent[/<id>]           → /agents (agents arrive in M5)
+//   nova://code[/<id>]            → /code   (sessions arrive in M5)
+//   nova://agent[/<id>]           → /agents (agents arrive in M6)
 //   nova://projects[/<id>]        → /projects, /projects/<id>
 //   nova://theme?data=<base64url> → /settings/appearance?theme=<data> (import prefilled, FR-011)
 //

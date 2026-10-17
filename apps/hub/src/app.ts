@@ -208,12 +208,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   // M4: plugins (skills, their MCP servers and permissions) and hooks come before the tools,
   // whose chat loop uses them.
   const plugins = await setupPlugins({ ...ctx, audit: ops.audit, mcp });
-  // Each MCP server's default approval feeds the gate's per-server defaults (FR-048); a plugin
-  // server falls back to its manifest's `defaultApproval`.
-  policy.useServerDefaults(
-    async (accountId, serverId) =>
-      mcp.serverDefault(serverId) ?? (await plugins.serverDefault(accountId, serverId)),
-  );
+  // The user's default approval per MCP server feeds the gate (FR-048). A plugin server's
+  // manifest default is the plugin's: the gate reads it with the plugin's permissions.
+  policy.useServerDefaults((_accountId, serverId) => Promise.resolve(mcp.serverDefault(serverId)));
   const hooks = await setupHooks({
     ...ctx,
     audit: ops.audit,
@@ -225,6 +222,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   plugins.useHookTrust((accountId, pluginId) => hooks.untrustedPluginHooks(accountId, pluginId));
   policy.useHooks(hooks.dispatcher);
   policy.usePluginPermissions(plugins.permissions);
+  policy.usePluginViolations((accountId, pluginId) =>
+    plugins.service.setEnabled(accountId, pluginId, false),
+  );
   // The apps area exists after the tools; the chat loop reads its model context late-bound.
   let mcpApps: Awaited<ReturnType<typeof setupMcpApps>> | null = null;
   const tools = await setupTools({

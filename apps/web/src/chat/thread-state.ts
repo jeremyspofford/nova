@@ -575,7 +575,9 @@ export function messageSegments(
 
 /**
  * Live calls grouped by the assistant message whose card shows them. A call whose message was
- * not known when it started goes to the newest reply of its turn, else the newest reply.
+ * not known when it started goes to the newest reply of its turn, else the newest reply. A call
+ * with no turn and no message was made from the UI (an MCP App or the file editor), not by the
+ * model: it belongs to no reply, and its approval card shows on its own.
  */
 export function liveCallsByMessage(s: Pick<ThreadState, 'calls' | 'messages'>) {
   const out = new Map<string, LiveCall[]>();
@@ -586,6 +588,7 @@ export function liveCallsByMessage(s: Pick<ThreadState, 'calls' | 'messages'>) {
   for (const m of replies)
     for (const p of m.parts) if (p.type === 'tool_call') storedIn.set(p.callId, m.id);
   for (const c of Object.values(s.calls).sort((x, y) => x.seq - y.seq)) {
+    if (!c.turnId && !c.messageId && !storedIn.has(c.callId)) continue;
     const owner =
       storedIn.get(c.callId) ??
       (c.messageId && ids.has(c.messageId)

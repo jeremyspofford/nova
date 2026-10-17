@@ -38,6 +38,7 @@ import type {
   PolicyVerdict,
   Scope,
   ScopeKind,
+  ToolDescriptor,
 } from './types.ts';
 import { SEVERITY } from './types.ts';
 
@@ -119,6 +120,7 @@ export function evaluate(ctx: PolicyContext, set: PolicySet = {}): Decision {
       reason: `${undeclared} is not a host this plugin declared`,
       source: 'plugin',
       persistable: false,
+      violation: 'undeclared_host',
     };
 
   // 2-6. Layers.
@@ -497,12 +499,22 @@ function userDefault(
   if (exact) return { effect: exact, reason: `your default for ${name}` };
   const owner = ctx.tool.serverId ?? ctx.tool.pluginId;
   const server = owner ? set.serverDefaults?.[owner] : undefined;
-  if (server) return { effect: server, reason: `your default for ${owner}` };
+  if (owner && server)
+    return { effect: server, reason: `your default for ${ownerLabel(ctx.tool, owner)}` };
   const glob = Object.keys(set.toolDefaults ?? {})
     .filter((k) => k.includes('*') && globMatch(k, name))
     .sort((a, b) => b.length - a.length || (a < b ? -1 : 1))[0];
   if (glob) return { effect: set.toolDefaults![glob]!, reason: `your default for ${glob}` };
   return null;
+}
+
+/** A tool's server or plugin as the card names it: `mcp:<server>.<tool>` names its server. */
+function ownerLabel(tool: ToolDescriptor, owner: string): string {
+  if (tool.serverId && tool.name.startsWith('mcp:')) {
+    const server = tool.name.slice(4).split('.')[0];
+    if (server) return `the ${server} server`;
+  }
+  return owner;
 }
 
 /**
@@ -619,7 +631,10 @@ function undeclaredHost(ctx: PolicyContext, p: PluginPolicy): string | null {
   return hosts.find((h) => !declaresHost(p, h)) ?? null;
 }
 
-/** Step 4 for a plugin's tool: its per-tool default, its per-action default, or ask if undeclared. */
+/**
+ * Step 4 for a plugin's tool: its per-tool default, its per-action default, its server's
+ * `defaultApproval`, or ask if undeclared.
+ */
 function pluginDefault(ctx: PolicyContext, entry: PluginEntry | null): Step | null {
   if (!entry)
     return {
@@ -638,6 +653,13 @@ function pluginDefault(ctx: PolicyContext, entry: PluginEntry | null): Step | nu
     return {
       effect: byClass,
       reason: `the plugin's default for ${entry.action} actions`,
+      source: 'plugin',
+    };
+  const server = ctx.plugin?.serverDefault;
+  if (server)
+    return {
+      effect: server,
+      reason: `the plugin's default for its server's tools`,
       source: 'plugin',
     };
   return null;

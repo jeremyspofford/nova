@@ -133,7 +133,12 @@ describe('defaults and approval policies (docs/12 §2.1)', () => {
     );
     expect(
       evaluate(ctx({ tool: mcpTool }), { toolDefaults, serverDefaults: { files: 'deny' } }),
-    ).toMatchObject({ effect: 'deny', reason: 'your default for files' });
+    ).toMatchObject({ effect: 'deny', reason: 'your default for the files server' });
+    // The card names the server, never its id.
+    const byId = { ...mcpTool, serverId: '01a149d1-0000-7000-8000-000000000001' };
+    expect(
+      evaluate(ctx({ tool: byId }), { serverDefaults: { [byId.serverId]: 'ask' } }).reason,
+    ).toBe('your default for the files server');
     expect(
       evaluate(ctx({ tool: mcpTool }), { toolDefaults: { 'mcp:files.list_items': 'allow' } })
         .effect,

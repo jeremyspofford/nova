@@ -44,6 +44,8 @@ export interface PluginPermissions {
   fs: string[];
   tools: Record<string, { action: ActionClass; default?: 'allow' | 'ask' | 'deny' }>;
   actionDefaults: Partial<Record<ActionClass, 'allow' | 'ask' | 'deny'>>;
+  /** The manifest `defaultApproval` of the plugin server the tool comes from, if any. */
+  serverDefault?: 'allow' | 'ask' | 'deny';
   /** Its hooks may answer an `ask` from a user rule or tool default (FR-197). */
   hooksAnswerAsks: boolean;
 }

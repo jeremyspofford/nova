@@ -1,6 +1,6 @@
 // MCP Apps in the workspace (FR-198): a tool's app under its card, the chat's apps surviving
 // Inspector tab switches, and "Open app…" in the palette.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import type { UiEntryPointView } from '@nova/shared';
@@ -120,7 +120,20 @@ describe('tool apps under tool cards (FR-198)', () => {
 });
 
 describe('the chat’s apps in the Inspector (FR-198)', () => {
-  it('keeps an open app running when another Inspector tab is shown', async () => {
+  it('keeps an open app running when another Inspector tab is shown (moveBefore)', async () => {
+    // Browsers with a state-preserving move keep the very same frame (jsdom lacks it; stub it).
+    const had = Object.hasOwn(Element.prototype, 'moveBefore');
+    if (!had)
+      Object.defineProperty(Element.prototype, 'moveBefore', {
+        configurable: true,
+        writable: true,
+        value(this: Element, n: Node, c: Node | null) {
+          this.insertBefore(n, c);
+        },
+      });
+    onTestFinished(() => {
+      if (!had) Reflect.deleteProperty(Element.prototype, 'moveBefore');
+    });
     const { hub } = await openWith();
     hub.state.m4.entryPoints = [entry({ id: 'ep-notes', title: 'Notes board' })];
     await userEvent.click(within(inspector()).getByRole('tab', { name: 'Apps' }));
@@ -146,6 +159,28 @@ describe('the chat’s apps in the Inspector (FR-198)', () => {
     // The same app, never reloaded.
     expect(inspector().contains(frame)).toBe(true);
     expect(frame.querySelector('iframe')).toBe(iframe);
+  });
+
+  it('restarts an open app cleanly where moving a frame reloads it (no moveBefore)', async () => {
+    const { hub } = await openWith();
+    hub.state.m4.entryPoints = [entry({ id: 'ep-notes', title: 'Notes board' })];
+    await userEvent.click(within(inspector()).getByRole('tab', { name: 'Apps' }));
+    await userEvent.click(
+      await within(inspector()).findByRole('button', { name: 'Open Notes board' }),
+    );
+    const frame = (
+      await within(inspector()).findByRole('heading', { name: 'Notes board' })
+    ).closest('.app-frame')!;
+    const iframe = frame.querySelector('iframe')!;
+    act(() => void iframe.dispatchEvent(new Event('load')));
+    await userEvent.click(within(inspector()).getByRole('tab', { name: 'Files' }));
+    await userEvent.click(within(inspector()).getByRole('tab', { name: 'Apps' }));
+    // The browser reloaded the moved frame: the app restarted in a fresh frame, not stopped.
+    const fresh = frame.querySelector('iframe');
+    expect(fresh).toBeTruthy();
+    expect(fresh).not.toBe(iframe);
+    act(() => void fresh!.dispatchEvent(new Event('load')));
+    expect(within(frame as HTMLElement).queryByText(/left its page/)).toBeNull();
   });
 
   it('opens a global app from the palette command', async () => {

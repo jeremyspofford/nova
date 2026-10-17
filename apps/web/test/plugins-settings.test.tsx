@@ -631,6 +631,44 @@ describe('Settings → Plugins & skills: hooks (FR-197, docs/04 §2.10)', () => 
     expect(await within(dialog).findByText('Hub busy')).toBeTruthy();
   });
 
+  it("updates a plugin's status when its hook is trusted or untrusted, without a reload", async () => {
+    const id = 'hook:com.example.notes.guard';
+    const hub = createHub({
+      m4: m4State({
+        plugins: [plugin({ status: 'needs_trust' })],
+        hooks: [hook({ id, source: 'plugin', pluginId: 'com.example.notes' })],
+      }),
+    });
+    await renderApp({ hub, path: '/settings/plugins' });
+    const notes = await screen.findByRole('listitem', { name: 'Notes' });
+    expect(within(notes).getByText('Hooks need trust')).toBeTruthy();
+
+    // The Hub counts the plugin's untrusted hooks; once this one is trusted, the plugin is ready.
+    hub.state.m4.plugins = [plugin({ status: 'ok' })];
+    const row = screen.getByRole('listitem', { name: id });
+    await userEvent.click(within(row).getByRole('button', { name: `Trust ${id}` }));
+    const dialog = screen.getByRole('dialog', { name: 'Trust this hook?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Trust' }));
+    expect(await screen.findByText(`${id} is trusted. It runs from now on.`)).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('listitem', { name: 'Notes' })).getByText('Ready'),
+      ).toBeTruthy(),
+    );
+
+    hub.state.m4.plugins = [plugin({ status: 'needs_trust' })];
+    await userEvent.click(
+      within(screen.getByRole('listitem', { name: id })).getByRole('button', {
+        name: `Untrust ${id}`,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('listitem', { name: 'Notes' })).getByText('Hooks need trust'),
+      ).toBeTruthy(),
+    );
+  });
+
   it('shows a load failure with retry', async () => {
     const hub = createHub({ m4: m4State({ hooks: [hook({ id: 'later' })] }) });
     hub.state.failNext.listHooks = fail('Hooks unavailable');

@@ -167,6 +167,7 @@ export class PolicyGate implements ToolGate {
   #substrate: () => Substrate | null;
   #hooks: HookDispatcher | undefined;
   #plugins: PluginPermissionSource | undefined;
+  #onViolation: ((accountId: string, pluginId: string) => Promise<unknown>) | undefined;
   #folders: ProjectFolderSource | undefined;
 
   constructor(opts: PolicyGateOptions) {
@@ -188,6 +189,14 @@ export class PolicyGate implements ToolGate {
   /** Wire the confirmed plugin permissions (FR-045). */
   usePluginPermissions(source: PluginPermissionSource): void {
     this.#plugins = source;
+  }
+
+  /**
+   * What happens to a plugin that asked for something it did not declare, beyond the deny:
+   * the plugins area disables it (docs/08 §3.1). The gate also notifies the user.
+   */
+  usePluginViolations(fn: (accountId: string, pluginId: string) => Promise<unknown>): void {
+    this.#onViolation = fn;
   }
 
   /** Wire a project's folders as tool roots (FR-035); the tools area must use the same. */
@@ -326,6 +335,7 @@ export class PolicyGate implements ToolGate {
       network: [...p.network],
       tools: { ...p.tools },
       actionDefaults: { ...p.actionDefaults },
+      ...(p.serverDefault ? { serverDefault: p.serverDefault } : {}),
     };
   }
 
@@ -553,9 +563,36 @@ export class PolicyGate implements ToolGate {
         correlation,
         payload,
       });
+      if (d.violation && b.ctx.plugin) await this.#pluginViolation(req, b.ctx.plugin.pluginId, d);
       return { effect: 'deny', reason: d.reason, tier: d.tier, stop: false };
     }
     return this.#ask(req, b, d, signal);
+  }
+
+  /** Deny, disable, notify (docs/20 defaults): a plugin that oversteps is turned off. */
+  async #pluginViolation(req: GateRequest, pluginId: string, d: Decision): Promise<void> {
+    let disabled = false;
+    try {
+      if (this.#onViolation) {
+        await this.#onViolation(req.accountId, pluginId);
+        disabled = true;
+      }
+    } catch (err) {
+      this.#o.log?.warn('could not disable the plugin after an undeclared request', {
+        err,
+        pluginId,
+      });
+    }
+    await this.#o.notifier
+      .notify({
+        accountId: req.accountId,
+        kind: 'attention',
+        title: disabled ? `Plugin ${pluginId} was turned off` : `Plugin ${pluginId} was blocked`,
+        body: clip(`It tried to use ${req.tool.name} beyond its permissions: ${d.reason}.`, 200),
+        href: '/settings/plugins',
+        dedupeKey: `plugin-violation:${pluginId}`,
+      })
+      .catch((err: unknown) => this.#o.log?.warn('plugin violation notification failed', { err }));
   }
 
   #correlation(req: { threadId: string; turnId: string; callId: string }) {

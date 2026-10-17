@@ -573,7 +573,8 @@ export function setupMcpServer(
         );
       const token = newToken('mcp_client');
       const now = new Date();
-      const days = body.expiresInDays ?? DEFAULT_EXPIRY_DAYS;
+      // null: never expires (docs/08 §5); omitted: the default.
+      const days = body.expiresInDays === null ? null : (body.expiresInDays ?? DEFAULT_EXPIRY_DAYS);
       const row: AuthRow = {
         id: uuidv7(),
         accountId,
@@ -584,7 +585,7 @@ export function setupMcpServer(
         status: 'active',
         createdAt: now.toISOString(),
         lastUsedAt: null,
-        expiresAt: new Date(now.getTime() + days * 86_400_000).toISOString(),
+        expiresAt: days === null ? null : new Date(now.getTime() + days * 86_400_000).toISOString(),
         revokedAt: null,
       };
       await db.transaction(() => db.orm.insert(appAuthorization).values(row));

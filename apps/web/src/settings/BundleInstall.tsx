@@ -301,7 +301,10 @@ function BundlePreviewDialog({
             onChange={(v) => setFs(v as BundlePreview['permissions']['fs'])}
             options={FS_OPTIONS}
           />
-          <p className="muted">The server runs sandboxed with exactly these permissions.</p>
+          <p className="muted">
+            Nova records these permissions with the server. MCP servers are not sandboxed yet: this
+            one runs as the Hub's user, so install it only if you trust where it came from.
+          </p>
         </section>
         {failure ? (
           <p role="alert" className="nv-field-error">

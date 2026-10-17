@@ -136,7 +136,8 @@ export function PluginsPage() {
         busy={loadingPreview === 'local'}
       />
       <SkillsSection version={changes} />
-      <HooksSection version={changes} />
+      {/* A plugin's status says whether its hooks still need trust, so trust reloads the list. */}
+      <HooksSection version={changes} onTrustChanged={() => setVersion((v) => v + 1)} />
       {previewing ? (
         <PluginPreviewDialog
           preview={previewing.preview}

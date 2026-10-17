@@ -7,7 +7,7 @@ import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToolDescriptor, UiEntryPointView } from '@nova/shared';
 import type { ToolInvokeResult } from '../src/api.ts';
-import { McpAppFrame, type McpAppFrameProps } from '../src/apps/McpAppFrame.tsx';
+import { APPS_MOVED_EVENT, McpAppFrame, type McpAppFrameProps } from '../src/apps/McpAppFrame.tsx';
 import { RPC } from '../src/apps/bridge.ts';
 import { AnnouncerProvider, ServicesProvider } from '../src/services.tsx';
 import { approvalView } from './chat-m3-helpers.tsx';
@@ -451,6 +451,39 @@ describe('frame lifecycle', () => {
     expect(document.querySelector('iframe')).toBeNull();
     await userEvent.click(within(region()).getByRole('button', { name: /Reload app/ }));
     expect(document.querySelector('iframe')).toBeTruthy();
+  });
+
+  it('restarts the app in a fresh frame when its host moves with a reload, and still stops navigations', async () => {
+    const hub = createHub();
+    hub.state.m3.mcpTools.set('s1', [PANEL_TOOL]);
+    const host = document.createElement('div');
+    host.className = 'apps-host';
+    document.body.appendChild(host);
+    render(
+      <AnnouncerProvider>
+        <ServicesProvider api={hub.api} eventSource={fakeEventSource} registry={testRegistry()}>
+          <McpAppFrame entry={entryPoint()} threadId="t1" approvalPollMs={20} />
+        </ServicesProvider>
+      </AnnouncerProvider>,
+      { container: host },
+    );
+    const load = () => {
+      const el = document.querySelector('iframe');
+      if (el) act(() => void el.dispatchEvent(new Event('load')));
+    };
+    load();
+    const before = document.querySelector('iframe');
+    // The shell is about to move the host in a way that reloads frames (no moveBefore).
+    act(() => void host.dispatchEvent(new Event(APPS_MOVED_EVENT)));
+    const after = document.querySelector('iframe');
+    expect(after).toBeTruthy();
+    expect(after).not.toBe(before);
+    load();
+    expect(screen.queryByText(/left its page/)).toBeNull();
+    // A load after that is the app navigating away again: stopped.
+    load();
+    expect(await screen.findByText(/left its page/)).toBeTruthy();
+    host.remove();
   });
 
   it('tears the app down on Close and withdraws what it shared', async () => {

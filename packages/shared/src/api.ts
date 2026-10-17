@@ -868,6 +868,8 @@ export interface McpServerView {
   auth?: McpAuthView;
   /** Installed from a bundle (FR-199): its signature state. */
   bundle?: { name: string; version: string; signature: 'verified' | 'unverified' } | null;
+  /** The plugin that owns this server (FR-045); it is changed or removed only through the plugin. */
+  pluginId?: string | null;
   /** When the current connection was made, and automatic restarts in the last 10 minutes (FR-043). */
   connectedAt?: string | null;
   restarts?: number;
@@ -1288,7 +1290,8 @@ export const createAppAuthorizationSchema = z.object({
     threads: z.enum(['none', 'read', 'read_write']),
     mode: z.enum(['read_only', 'run_allowed']),
   }),
-  expiresInDays: z.number().int().min(1).max(365).optional(),
+  /** 1–365 days; null never expires (revoke it instead); omitted is 90 days. */
+  expiresInDays: z.number().int().min(1).max(365).nullable().optional(),
 });
 
 export interface AppAuthorizationCreated {

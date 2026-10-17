@@ -1,6 +1,6 @@
 // Where core services publish events (contracts/events.md). The Hub's EventStore satisfies this
 // structurally, so core never imports the Hub.
-import type { NewEvent } from '@nova/shared';
+import { makeEvent, type NewEvent } from '@nova/shared';
 
 export interface EventSink {
   /** Persist, then publish. */
@@ -39,6 +39,8 @@ export class MemoryEventSink implements EventSink {
   }
 
   #push<P extends Record<string, unknown>>(e: NewEvent<P>, ephemeral: boolean): void {
+    // The same envelope check as the Hub's EventStore, so a bad actor or name fails in tests too.
+    makeEvent(e);
     const rec: MemoryEventSink['events'][number] = { name: e.name, payload: e.payload, ephemeral };
     if (e.correlation) rec.correlation = e.correlation;
     this.events.push(rec);

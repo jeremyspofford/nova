@@ -113,6 +113,24 @@ describe('Settings → Apps & clients (FR-044)', () => {
       workspace: workspaceState({ projects: [project({ id: 'p1', name: 'Garden plan' })] }),
     });
 
+  it('sends a token that never expires as an explicit null', async () => {
+    const hub = setup();
+    await renderApp({ hub, path: '/settings/clients' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a client' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add an MCP client' });
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Client name' }), 'Notes');
+    await userEvent.selectOptions(
+      within(dialog).getByRole('combobox', { name: 'Token expires' }),
+      'never',
+    );
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add client' }));
+    await waitFor(() =>
+      expect(hub.api.createAppAuthorization).toHaveBeenCalledWith(
+        expect.objectContaining({ clientName: 'Notes', expiresInDays: null }),
+      ),
+    );
+  });
+
   it('adds a scoped client, shows its token once with a snippet, and turns the server on', async () => {
     const hub = setup();
     await renderApp({ hub, path: '/settings/clients' });
@@ -280,6 +298,9 @@ describe('Settings → Tools & MCP: bundles (FR-199)', () => {
     );
     const dialog = await screen.findByRole('dialog', { name: 'Install Weather 0.3.0?' });
     expect(within(dialog).getByText('Unverified')).toBeTruthy();
+    // It says plainly that MCP servers are not sandboxed yet (R-012).
+    expect(within(dialog).getByText(/MCP servers are not sandboxed yet/)).toBeTruthy();
+    expect(within(dialog).queryByText(/runs sandboxed/)).toBeNull();
     expect(within(dialog).getByText(/Runs with Node.js/)).toBeTruthy();
     expect(within(dialog).getByText('forecast')).toBeTruthy();
     const key = within(dialog).getByLabelText('API key');

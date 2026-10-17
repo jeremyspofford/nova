@@ -19,6 +19,7 @@ import {
   type GateRequest,
   type HookDispatcher,
   type HookOutcome,
+  type NotificationInput,
   type PluginPermissions,
 } from '../src/index.ts';
 import { scriptedHooks } from './loop-env.ts';
@@ -372,6 +373,54 @@ describe('plugin permissions in the gate (FR-045)', () => {
       effect: 'deny',
       reason: 'evil.example.org is not a host this plugin declared',
     });
+  });
+
+  it('an undeclared request also disables the plugin and tells the user; previews do not', async () => {
+    const notes: NotificationInput[] = [];
+    gate = makeGate({ notifier: { notify: (n) => (notes.push(n), Promise.resolve()) } });
+    gate.usePluginPermissions({
+      forTool: (_a, t) => Promise.resolve(t.pluginId === 'com.example.sample' ? SAMPLE : null),
+    });
+    const disabled: [string, string][] = [];
+    gate.usePluginViolations((a, p) => (disabled.push([a, p]), Promise.resolve()));
+    await gate.preview({
+      accountId: ACCOUNT,
+      threadId: THREAD,
+      projectId: null,
+      mode: 'chat',
+      tool: fetchStatus,
+      args: { url: 'https://nope.example' },
+      provenance: { userInstruction: { messageId: 'x', accountId: ACCOUNT }, taint: [] },
+      profile: { id: 'workspace', hash: '' },
+    });
+    // A declared host, or a plugin default's deny, is not a violation.
+    await gate.check(
+      req({ tool: fetchStatus, args: { url: 'https://api.example.com/x' } }),
+      new AbortController().signal,
+    );
+    expect(disabled).toEqual([]);
+    expect(notes).toEqual([]);
+    const no = await gate.check(
+      req({ tool: fetchStatus, args: { url: 'https://evil.example.org/x' } }),
+      new AbortController().signal,
+    );
+    expect(no.effect).toBe('deny');
+    expect(disabled).toEqual([[ACCOUNT, 'com.example.sample']]);
+    expect(notes).toEqual([
+      expect.objectContaining({
+        kind: 'attention',
+        title: 'Plugin com.example.sample was turned off',
+        href: '/settings/plugins',
+      }),
+    ]);
+    // When disabling fails, the call is still denied and the user is still told.
+    gate.usePluginViolations(() => Promise.reject(new Error('busy')));
+    const again = await gate.check(
+      req({ tool: fetchStatus, args: { url: 'https://evil.example.org/y' } }),
+      new AbortController().signal,
+    );
+    expect(again.effect).toBe('deny');
+    expect(notes.at(-1)?.title).toBe('Plugin com.example.sample was blocked');
   });
 
   it('applies per-tool and per-action defaults; an undeclared tool asks', async () => {

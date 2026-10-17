@@ -1009,12 +1009,17 @@ export class PluginService implements PluginPermissionSource {
    */
   async forTool(accountId: string, tool: ToolDescriptor): Promise<PluginPermissions | null> {
     let pluginId = tool.pluginId ?? null;
-    if (!pluginId && tool.serverId) {
+    let serverDefault: PluginApprovalDefault | null = null;
+    if (tool.serverId) {
       const [s] = await this.#db.orm
-        .select({ pluginId: mcpServer.pluginId, source: mcpServer.source })
+        .select()
         .from(mcpServer)
         .where(and(eq(mcpServer.id, tool.serverId), eq(mcpServer.accountId, accountId)));
-      if (s?.source === 'plugin') pluginId = s.pluginId;
+      if (s?.source === 'plugin' && (!pluginId || pluginId === s.pluginId)) {
+        pluginId = s.pluginId;
+        const d = serverConfig(s).defaultApproval;
+        if (d === 'allow' || d === 'ask' || d === 'deny') serverDefault = d;
+      }
     }
     if (!pluginId) return null;
     const [row] = await this.#db.orm
@@ -1037,6 +1042,7 @@ export class PluginService implements PluginPermissionSource {
       fs: perms.fs ?? [],
       tools,
       actionDefaults: perms.actionDefaults ?? {},
+      ...(serverDefault ? { serverDefault } : {}),
       hooksAnswerAsks: perms.hooks?.answersAsks === true,
     };
   }

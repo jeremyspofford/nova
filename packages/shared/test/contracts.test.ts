@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { Contracts } from '@nova/contracts';
+import { HTTP_STATUS, HUB_ERROR_CODES } from '../src/errors.ts';
 import { eventEnvelopeSchema, makeEvent } from '../src/events.ts';
 
 const root = join(import.meta.dirname, '../../../');
@@ -66,5 +67,16 @@ describe('novad capability document matches device-capability.json', () => {
     ]).toString();
     const r = c.validate('device-capability.json', JSON.parse(out));
     expect(r.ok, JSON.stringify(r.errors)).toBe(true);
+  });
+});
+
+describe('error codes: the code and contracts/hub-api.md agree', () => {
+  it('lists every code with the same HTTP status', () => {
+    const text = readFileSync(join(root, 'contracts/hub-api.md'), 'utf8');
+    const contract = Object.fromEntries(
+      [...text.matchAll(/^\| `([a-z_]+)` \| (\d{3}) \|/gm)].map((m) => [m[1], Number(m[2])]),
+    );
+    expect(Object.keys(contract).sort()).toEqual([...HUB_ERROR_CODES].sort());
+    expect(HTTP_STATUS).toEqual(contract);
   });
 });

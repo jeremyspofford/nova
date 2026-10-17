@@ -39,7 +39,7 @@ Rules:
 
 | Name | Persisted | Payload |
 | --- | --- | --- |
-| `chat.message.created` | yes | `{threadId,messageId,turnId,role,status,provenance?}` (`complete` for the user message, `streaming` for the assistant; `provenance: steer\|queued` for a follow-up, FR-019) |
+| `chat.message.created` | yes | `{threadId,messageId,turnId,role,status,provenance?}` (`complete` for the user message, `streaming` for the assistant; `provenance: steer\|queued` for a follow-up, FR-019; `hook` for a `stop` hook's continuation prompt, FR-197) |
 | `chat.delta` | no | `{threadId,messageId,type: text_delta\|reasoning_delta,text}` (`ChatDeltaPayload` in `packages/shared/src/api.ts`); at most 60 per second per stream |
 | `chat.message.completed` | yes | `{threadId,messageId,status,usage}` |
 | `chat.message.updated` | yes | `{threadId,messageId,reason}` |
@@ -50,6 +50,7 @@ Rules:
 | `chat.followup.cancelled` | yes | `{threadId,queuedId,reason: user\|failed,error?}` |
 | `project.created` / `.updated` / `.deleted` | yes | `{projectId}` (FR-034) |
 | `source.status.changed` | yes | `{sourceId,projectId,status: pending\|indexing\|ready\|error,error?}` (FR-040) |
+| `project.folder.indexed` | yes | `{projectId,folderId,fileCount,status: ready\|error,error?}` (FR-035); a cap that stopped indexing leaves `ready` with a note on the folder |
 | `chat.search.indexed` | yes | `{threadId,count}` |
 | `turn.started` | yes | `{threadId,turnId,idx,trigger: user\|schedule\|goal\|hook\|event\|channel,executionLocation}` |
 | `turn.completed` | yes | `{threadId,turnId,status: completed\|failed,stopReason,steps,usage}`; `usage` is `{inputTokens,outputTokens,cachedTokens,costUsd,timeSeconds}`; `steps` > 1 when steering added model steps (FR-019) |
@@ -78,7 +79,17 @@ Rules:
 | `hook.started` | yes | `{hookId,event,callId?}` (FR-197) |
 | `hook.completed` | yes | `{hookId,event,callId?,effect: none\|context\|decision\|continue,durationMs}` |
 | `hook.blocked` | yes | `{hookId,event,callId?,reason,failClosed}` |
-| `hook.skipped` | yes | `{hookId,event,reason: needs_trust\|revoked\|disabled\|timeout\|error}` |
+| `hook.skipped` | yes | `{hookId,event,reason: needs_trust\|revoked\|disabled\|timeout\|error,callId?}` |
+| `hook.trust.changed` | yes | `{hookId,status: trusted\|needs_trust\|disabled\|revoked}` (the user trusted or revoked it, it was trusted on a plugin's install screen, or a re-read found a new hash) |
+
+### plugins, skills, MCP servers & workspace
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `plugin.installed` / `.updated` / `.removed` | yes | `{pluginId,version}` (FR-045); enabling or disabling a plugin emits `plugin.updated` |
+| `skill.changed` | yes | `{skillId}` (created, imported, enabled, disabled or deleted, FR-046) |
+| `mcp.bundle.installed` | yes | `{serverId,name,signature: verified\|unverified}` (a bundle installed or updated, FR-199) |
+| `terminal.exited` | yes | `{terminalId,code}` (FR-006); `code` is null when the terminal was closed or killed |
 
 ### server-to-client requests (FR-188)
 
@@ -176,12 +187,14 @@ Rules:
 | `notification.created` | yes | `{notificationId,kind,title}`; a repeat with the same dedupe key while unread updates the notification and emits nothing |
 | `auth.session.created` / `.revoked` | yes | `{accountId}` (audited) |
 | `provider.account.created` / `.removed` | yes | `{providerAccountId,provider,secretRef}` (audited; never the key) |
+| `provider.account.activated` | yes | `{providerAccountId,provider}` (it became the active account of its kind, FR-115) |
+| `account.updated` | yes | `{accountId,fields}`; `fields` lists what changed: `displayName`, `username`, `avatar` (FR-113) |
 | `settings.changed` | yes | `{key,scope}` (security-relevant keys are audited) |
 | `mcp.server.status.changed` | yes | `{serverId,name,status: disabled\|starting\|connected\|error\|stopped,error?}` (FR-043) |
 | `audit.appended` | yes | `{auditId,kind,hash}` |
 | `import.completed` | yes | `{importId,imported,duplicates,disabled,secretsMigrated}` (FR-200) |
 | `flag.changed` | yes | `{key,stage,enabled,source}` (ADR-082) |
-| `app.authorization.changed` | yes | `{authorizationId,kind,clientName,status}` (FR-192, FR-222) |
+| `app.authorization.changed` | yes | `{authorizationId,kind: mcp_client\|app,clientName,status: active\|revoked}` (FR-192, FR-222) |
 
 ## Consumer rules
 
@@ -191,7 +204,8 @@ Rules:
 - **Activity view**: renders persisted events filtered by correlation id.
 - **Audit**: mirrors security-relevant events (approvals, `policy.*`, `review.*`, `hook.*`,
   `request.*`, `ambient.grant.denied`, `app.authorization.changed`) into `audit_event` with a
-  hash chain.
+  hash chain. Areas that act also append their own entries (the M4 actions are listed in
+  `docs/06` §2, "audit & events").
 - **Scheduler**: listens for `trigger.fired`, `schedule.fired`, `mcp.event.received` and
   `turn.completed` (goal continuation, FR-181).
 - **Sync**: replicates persisted events that are marked syncable.

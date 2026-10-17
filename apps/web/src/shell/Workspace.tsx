@@ -48,6 +48,7 @@ import {
 import { deepLinkPath } from '../deeplinks.ts';
 import { NotificationsBell } from '../notifications/Bell.tsx';
 import { AppsView, ThreadApps } from '../apps/AppsView.tsx';
+import { APPS_MOVED_EVENT } from '../apps/McpAppFrame.tsx';
 import { LibraryView } from '../library/LibraryView.tsx';
 import { ProjectsView } from '../projects/ProjectsView.tsx';
 import { useServices } from '../services.tsx';
@@ -178,7 +179,7 @@ export function Workspace({
   });
   const appsPark = useRef<HTMLDivElement>(null);
   const parkApps = useCallback(() => {
-    appsPark.current?.appendChild(appsHost);
+    if (appsPark.current) moveApps(appsPark.current, appsHost);
   }, [appsHost]);
   // The apps start once the Apps tab is first opened, and then stay.
   const [appsUsed, setAppsUsed] = useState(false);
@@ -1133,10 +1134,28 @@ function AppsSlot({
   useLayoutEffect(() => {
     const el = slot.current;
     if (!shown || !el) return;
-    el.appendChild(host);
+    moveApps(el, host);
     return onLeave;
   }, [host, onLeave, shown]);
   return <div ref={slot} className="apps-slot" />;
+}
+
+/**
+ * Move the apps host without reloading its frames where the browser can (`moveBefore`); elsewhere
+ * a moved frame reloads, so the frames are told first and restart their app cleanly.
+ */
+function moveApps(target: HTMLElement, host: HTMLElement): void {
+  if (host.parentElement === target) return;
+  if (host.isConnected && target.isConnected && 'moveBefore' in target) {
+    try {
+      target.moveBefore(host, null);
+      return;
+    } catch {
+      // Not movable here (another document or root): move it the old way.
+    }
+  }
+  if (host.isConnected) host.dispatchEvent(new Event(APPS_MOVED_EVENT));
+  target.appendChild(host);
 }
 
 function InspectorEmpty({ what }: { what: string }) {

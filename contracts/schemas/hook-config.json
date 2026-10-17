@@ -49,7 +49,7 @@
         "failClosed": {
           "type": "boolean",
           "default": false,
-          "description": "On error or timeout, block the tool call or prompt instead of having no effect."
+          "description": "On error or timeout, block the prompt (prompt.submit) instead of having no effect. tool.pre and permission.request hooks always fail closed: a failed or timed-out run blocks the call or denies the request whatever this says."
         },
         "statusMessage": { "type": "string", "maxLength": 120 },
         "enabled": { "type": "boolean", "default": true }

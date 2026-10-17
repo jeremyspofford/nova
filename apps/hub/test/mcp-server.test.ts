@@ -163,6 +163,31 @@ describe('app authorizations', () => {
     expect((await api('DELETE', `/api/v1/app-authorizations/${uuidv7()}`)).status).toBe(404);
   });
 
+  it('expires after 90 days by default, after the chosen days, or never when asked', async () => {
+    const day = 86_400_000;
+    const at = (c: AppAuthorizationCreated) =>
+      c.authorization.expiresAt === null
+        ? null
+        : Date.parse(c.authorization.expiresAt) - Date.now();
+    const byDefault = await addClient({}, 'default');
+    expect(at(byDefault)! / day).toBeCloseTo(90, 1);
+    for (const [expiresInDays, name] of [
+      [7, 'week'],
+      [null, 'never'],
+    ] as const) {
+      const r = await api('POST', '/api/v1/app-authorizations', {
+        kind: 'mcp_client',
+        clientName: name,
+        scopes: NONE,
+        expiresInDays,
+      });
+      expect(r.status, JSON.stringify(r.json)).toBe(201);
+      const c = r.json as AppAuthorizationCreated;
+      if (expiresInDays === null) expect(c.authorization.expiresAt).toBeNull();
+      else expect(at(c)! / day).toBeCloseTo(7, 1);
+    }
+  });
+
   it('shows the token once, stores its hash and turns the server on', async () => {
     expect(await enabled()).toBe(false);
     const created = await addClient({ projects: '*', threads: 'read' });

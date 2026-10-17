@@ -163,6 +163,16 @@ function bundleOf(row: Row): McpServerView['bundle'] {
   };
 }
 
+/** A plugin's server follows its manifest; it changes only through the plugin (FR-045). */
+function refusePluginOwned(row: Row): void {
+  if (row.source === 'plugin')
+    throw new NovaError(
+      'conflict',
+      `this server belongs to the plugin ${row.pluginId ?? ''}; change or remove it in Settings → Plugins`,
+      { details: { reason: 'plugin_owned', pluginId: row.pluginId } },
+    );
+}
+
 function toView(row: Row, state: McpServerState | null, auth?: McpAuthView): McpServerView {
   const c = storedConfig(row);
   const stored = STATUSES.find((s) => s === row.lastStatus) ?? 'stopped';
@@ -193,6 +203,7 @@ function toView(row: Row, state: McpServerState | null, auth?: McpAuthView): Mcp
     connectedAt: row.enabled ? (state?.connectedAt ?? null) : null,
     restarts: state?.restarts ?? 0,
     bundle: bundleOf(row),
+    pluginId: row.source === 'plugin' ? row.pluginId : null,
   };
   if (auth) view.auth = auth;
   return view;
@@ -535,7 +546,9 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
 
   // Connect every enabled server in the background; Hub startup never waits on them.
   for (const row of await db.orm.select().from(mcpServer).orderBy(asc(mcpServer.createdAt))) {
-    defaults.set(row.id, storedConfig(row).defaultApproval);
+    // A plugin server's `defaultApproval` is the plugin's, not the user's: the gate reads it
+    // through the plugin's permissions, below its per-tool and per-action defaults.
+    if (row.source !== 'plugin') defaults.set(row.id, storedConfig(row).defaultApproval);
     start(toConfig(row));
   }
   // Previews do not survive a restart.
@@ -623,6 +636,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     app.patch('/api/v1/mcp/servers/:id', async (req) => {
       const accountId = await accountOf(req);
       const row = await load(accountId, params.parse(req.params).id);
+      refusePluginOwned(row);
       const patch = patchBody.parse(req.body ?? {});
       assertPlainArgs(patch.args);
       const cur = storedConfig(row);
@@ -700,6 +714,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     app.delete('/api/v1/mcp/servers/:id', async (req) => {
       const accountId = await accountOf(req);
       const row = await load(accountId, params.parse(req.params).id);
+      refusePluginOwned(row);
       await manager.remove(row.id);
       await oauth.forget(row.id);
       await db.transaction(() => db.orm.delete(mcpServer).where(eq(mcpServer.id, row.id)));

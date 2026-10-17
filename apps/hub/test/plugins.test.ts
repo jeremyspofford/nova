@@ -196,6 +196,16 @@ describe('plugins routes', () => {
       'mcp:sample.fetch_status',
       'mcp:sample.panel_action',
     ]);
+    // The plugin owns its server: it is changed or removed only through the plugin.
+    expect(server.pluginId).toBe('com.example.sample');
+    for (const [method, body] of [
+      ['PATCH', { enabled: false }],
+      ['DELETE', undefined],
+    ] as const) {
+      const r = await api(method, `/api/v1/mcp/servers/${server.id}`, body);
+      expect(r.status, method).toBe(409);
+      expect(r.json.error.details).toMatchObject({ reason: 'plugin_owned' });
+    }
 
     const slash = (await api('GET', '/api/v1/slash-commands')).json.items as {
       name: string;

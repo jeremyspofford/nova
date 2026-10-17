@@ -993,7 +993,9 @@ export class ChatService {
     });
 
     const correlation = { threadId, turnId };
-    const actor = hook ? `hook:${hook.hookId}` : 'user';
+    // A hook continuation is the system's doing (contracts/events.md); the hook id is the turn's
+    // trigger_ref, never the actor.
+    const actor = hook ? 'system' : 'user';
     await this.#events.emit({
       name: 'turn.started',
       actor,

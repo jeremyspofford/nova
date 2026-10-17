@@ -51,6 +51,9 @@ import {
 import './apps.css';
 
 /** The MCP Apps protocol version Nova offers when an app names none (or one it cannot parse). */
+/** Sent on the apps host before it moves in a way that reloads its frames (shell/Workspace.tsx). */
+export const APPS_MOVED_EVENT = 'nova:apps-moved';
+
 export const UI_PROTOCOL_VERSION = '2026-01-26';
 /** Tool calls one app may have running at once. */
 export const MAX_APP_CALLS = 4;
@@ -470,6 +473,23 @@ export function McpAppFrame(props: McpAppFrameProps) {
   }, []);
 
   // ---- frame lifecycle --------------------------------------------------------------------------
+
+  // The chat's apps move between the Apps tab and an out-of-sight park (shell/Workspace.tsx).
+  // Where the browser cannot move a frame without reloading it, the host says so first, and the
+  // app restarts in a fresh frame on its resource: a later load still counts as navigating away.
+  useEffect(() => {
+    const host = frame.current?.closest('.apps-host');
+    if (!host) return;
+    const restart = () => {
+      loads.current = 0;
+      initialized.current = false;
+      tools.current = null;
+      sentResult.current = null;
+      setFrameKey((k) => k + 1);
+    };
+    host.addEventListener(APPS_MOVED_EVENT, restart);
+    return () => host.removeEventListener(APPS_MOVED_EVENT, restart);
+  }, []);
 
   /** A second load means the app navigated its frame away from its resource: stop it. */
   const onLoad = () => {

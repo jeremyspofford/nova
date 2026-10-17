@@ -118,7 +118,7 @@ describe('mergeCall', () => {
 });
 
 describe('liveCallsByMessage', () => {
-  it('uses the stored part, then the known message, then the turn, then the newest reply', () => {
+  it('uses the stored part, then the known message, then the turn, then the newest reply; UI calls belong to no reply', () => {
     const a = reply({
       id: 'a',
       turnId: 't1',
@@ -132,11 +132,13 @@ describe('liveCallsByMessage', () => {
         k: live({ callId: 'k', messageId: 'b', seq: 0 }),
         m: live({ callId: 'm', messageId: 'a', seq: 1 }),
         t: live({ callId: 't', messageId: 'gone', turnId: 't1', seq: 2 }),
-        n: live({ callId: 'n', messageId: null, turnId: null, seq: 3 }),
+        g: live({ callId: 'g', messageId: 'gone', turnId: 't9', seq: 3 }),
+        // An MCP App's own call (no turn, no message): never shown as the model's.
+        n: live({ callId: 'n', messageId: null, turnId: null, seq: 4 }),
       },
     });
     expect(map.get('a')?.map((c) => c.callId)).toEqual(['k', 'm', 't']);
-    expect(map.get('b')?.map((c) => c.callId)).toEqual(['n']);
+    expect(map.get('b')?.map((c) => c.callId)).toEqual(['g']);
     expect(liveCallsByMessage({ messages: [], calls: { x: live() } }).size).toBe(0);
   });
 });

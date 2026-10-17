@@ -451,9 +451,15 @@ describe('MCP Apps routes', () => {
     expect(await entries(app, '', other)).toEqual([]);
     // A disabled server's resources disappear; a disabled plugin server hides the plugin's apps.
     await call(app, 'PATCH', `/api/v1/mcp/servers/${userServer}`, { payload: { enabled: false } });
-    await call(app, 'PATCH', `/api/v1/mcp/servers/${pluginServer}`, {
-      payload: { enabled: false },
-    });
+    // A plugin's server is turned off by its plugin (the generic route refuses plugin servers).
+    expect(
+      (
+        await call(app, 'PATCH', `/api/v1/mcp/servers/${pluginServer}`, {
+          payload: { enabled: false },
+        })
+      ).statusCode,
+    ).toBe(409);
+    db.raw.prepare('UPDATE mcp_server SET enabled = 0 WHERE id = ?').run(pluginServer);
     expect(await entries(app)).toEqual([]);
   });
 

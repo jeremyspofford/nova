@@ -165,6 +165,8 @@ export interface PluginPolicy {
   tools: Readonly<Record<string, { action: ActionClass; default?: DefaultEffect }>>;
   /** Defaults per action class; a per-tool default overrides them. */
   actionDefaults: Partial<Record<ActionClass, DefaultEffect>>;
+  /** The manifest default of the plugin server the tool comes from; below the two above. */
+  serverDefault?: DefaultEffect;
 }
 
 /** A policy rule effect; `act_on_request` is "take action when you say so" (docs/12 §3). */
@@ -292,6 +294,11 @@ export interface Decision {
   answerable?: boolean;
   /** The hook that decided, when `source` is `hook`. */
   hookId?: string;
+  /**
+   * A plugin asked for something it did not declare (FR-045, docs/08 §3.1): the call is denied,
+   * and the caller disables the plugin and tells the user.
+   */
+  violation?: 'undeclared_host';
 }
 
 /** A hook (M4) or reviewer (M5) verdict; it can only tighten a decision (docs/12 §2.3). */

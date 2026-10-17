@@ -21,7 +21,14 @@ import {
   shortHash,
 } from './plugin-text.ts';
 
-export function HooksSection({ version }: { version: number }) {
+export function HooksSection({
+  version,
+  onTrustChanged,
+}: {
+  version: number;
+  /** A hook was trusted or its trust revoked: a plugin's status depends on its hooks' trust. */
+  onTrustChanged?: () => void;
+}) {
   const { api } = useServices();
   const toast = useToast();
   const [hooks, setHooks] = useState<HookView[] | null>(null);
@@ -58,6 +65,7 @@ export function HooksSection({ version }: { version: number }) {
   const untrust = async (h: HookView) => {
     try {
       replace(await api.untrustHook(h.id));
+      onTrustChanged?.();
       toast.show(`Trust for ${h.id} revoked. It stopped at once.`, { tone: 'success' });
     } catch (err) {
       toast.show(`Could not revoke trust for ${h.id}: ${errorMessage(err)}`, { tone: 'error' });
@@ -156,6 +164,7 @@ export function HooksSection({ version }: { version: number }) {
           onTrusted={(h) => {
             setTrusting(null);
             replace(h);
+            onTrustChanged?.();
             toast.show(`${h.id} is trusted. It runs from now on.`, { tone: 'success' });
           }}
           onChanged={(list) => setHooks(list)}

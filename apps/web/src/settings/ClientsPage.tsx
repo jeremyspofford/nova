@@ -261,7 +261,7 @@ function AddClientDialog({
         threads,
         mode,
       },
-      ...(expiry === 'never' ? {} : { expiresInDays: Number(expiry) }),
+      expiresInDays: expiry === 'never' ? null : Number(expiry),
     };
     try {
       const c = await api.createAppAuthorization(body);

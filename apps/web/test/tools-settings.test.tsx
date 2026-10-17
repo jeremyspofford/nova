@@ -216,6 +216,21 @@ describe('Settings → Tools & MCP: servers (FR-042, FR-043)', () => {
     expect(within(tracker).getByText('https://mcp.tracker.example/v1')).toBeTruthy();
   });
 
+  it("shows a plugin's server as managed by the plugin: no edit, remove or toggles", async () => {
+    const hub = setup({
+      mcpServers: [mcpServer({ id: 'p1', name: 'sample', pluginId: 'com.example.sample' })],
+    });
+    await renderApp({ hub, path: '/settings/tools' });
+    const row = await screen.findByRole('listitem', { name: 'sample' });
+    expect(within(row).getByText(/From the plugin com\.example\.sample/)).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(within(row).getByRole('switch', { name: 'Enable sample' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+  });
+
   it('adds a stdio server; the secret goes to the Hub and is never shown', async () => {
     const hub = setup({ mcpServers: [] });
     await renderApp({ hub, path: '/settings/tools' });

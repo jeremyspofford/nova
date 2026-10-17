@@ -104,8 +104,13 @@ describe('plugin network permissions (FR-045)', () => {
       source: 'plugin',
       reason: 'evil.example.org is not a host this plugin declared',
       persistable: false,
+      // The caller disables the plugin and tells the user (docs/08 §3.1).
+      violation: 'undeclared_host',
     });
     expect(d.answerable).toBeUndefined();
+    // A plugin default's deny is not a violation.
+    const deletes: PluginPolicy = { ...plugin, tools: { [panel.name]: { action: 'delete' } } };
+    expect(evaluate(ctx({ tool: panel, plugin: deletes })).violation).toBeUndefined();
     // Nested and later URLs count too, and so does a host resource.
     expect(
       evaluate(
@@ -170,6 +175,35 @@ describe('plugin per-tool and per-action defaults (FR-045, FR-048)', () => {
       effect: 'deny',
       reason: "the plugin's default for delete actions",
     });
+  });
+
+  it("applies the plugin server's default only below its per-tool and per-action defaults", () => {
+    // The sample declares fetch_status a read with no per-tool default: reads allow, even though
+    // its server's manifest says ask.
+    const sample: PluginPolicy = {
+      ...plugin,
+      tools: { 'plugin:com.example.sample.fetch_status': { action: 'read' } },
+      actionDefaults: { read: 'allow', write: 'ask' },
+      serverDefault: 'ask',
+    };
+    expect(evaluate(ctx({ tool: mcpOfPlugin, plugin: sample }))).toMatchObject({
+      effect: 'allow',
+      reason: "the plugin's default for read actions",
+      source: 'plugin',
+    });
+    // With no per-action default for the class, the server's default applies, as the plugin's.
+    const noClass: PluginPolicy = { ...sample, actionDefaults: {}, serverDefault: 'deny' };
+    expect(evaluate(ctx({ tool: mcpOfPlugin, plugin: noClass }))).toMatchObject({
+      effect: 'deny',
+      reason: "the plugin's default for its server's tools",
+      source: 'plugin',
+    });
+    // The user's own default for the server still wins.
+    expect(
+      evaluate(ctx({ tool: mcpOfPlugin, plugin: noClass }), {
+        serverDefaults: { sample: 'allow' },
+      }),
+    ).toMatchObject({ effect: 'allow', source: 'tool_default' });
   });
 
   it("the manifest's action class adds its effect: a send tool is confirmed every time", () => {

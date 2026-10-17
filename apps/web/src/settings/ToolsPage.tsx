@@ -289,6 +289,21 @@ function ServerRow({
             </>
           ) : null}
         </span>
+        {s.pluginId ? (
+          <span className="muted ws-row-meta">
+            From the plugin {s.pluginId}; change or remove it in{' '}
+            <a
+              href="/settings/plugins"
+              onClick={(e) => {
+                e.preventDefault();
+                navigate('/settings/plugins');
+              }}
+            >
+              Plugins
+            </a>
+            .
+          </span>
+        ) : null}
         {target ? <code className="ws-code-inline">{target}</code> : null}
         {secretNames.length ? (
           <span className="muted ws-row-meta">
@@ -320,7 +335,7 @@ function ServerRow({
         <Switch
           label={`Enable ${s.name}`}
           checked={s.enabled}
-          disabled={busy}
+          disabled={busy || !!s.pluginId}
           onChange={(v) =>
             void act(
               () => api.updateMcpServer(s.id, { enabled: v }),
@@ -358,12 +373,16 @@ function ServerRow({
         >
           Tools
         </Button>
-        <Button variant="ghost" onClick={onEdit}>
-          Edit
-        </Button>
-        <Button variant="ghost" onClick={onRemove}>
-          Remove
-        </Button>
+        {s.pluginId ? null : (
+          <>
+            <Button variant="ghost" onClick={onEdit}>
+              Edit
+            </Button>
+            <Button variant="ghost" onClick={onRemove}>
+              Remove
+            </Button>
+          </>
+        )}
       </div>
       {showLogs ? <ServerLogs id={logsId} server={s} /> : null}
       {showTools ? <ServerTools id={toolsId} server={s} onSaved={onSaved} /> : null}
@@ -482,7 +501,7 @@ function ServerTools({
                 <Switch
                   label={`Use ${t.name}`}
                   checked={allowListed && !server.disabledTools.includes(name)}
-                  disabled={!allowListed}
+                  disabled={!allowListed || !!server.pluginId}
                   onChange={(v) => void toggle(name, v)}
                 />
               </li>

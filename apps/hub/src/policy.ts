@@ -51,6 +51,8 @@ export interface PolicyAreaFull extends PolicyArea {
   useHooks(dispatcher: HookDispatcher): void;
   /** Confirmed plugin permissions, from the plugins area (FR-045). */
   usePluginPermissions(source: PluginPermissionSource): void;
+  /** Disable a plugin that asked for something it did not declare (docs/08 §3.1). */
+  usePluginViolations(fn: (accountId: string, pluginId: string) => Promise<unknown>): void;
   /** A project's folders (FR-035); the tools area must use the same source. */
   useProjectFolders(source: ProjectFolderSource): void;
 }
@@ -382,6 +384,7 @@ export async function setupPolicy(
     useSubstrate: (fn) => gate.useSubstrate(fn),
     useHooks: (dispatcher) => gate.useHooks(dispatcher),
     usePluginPermissions: (source) => gate.usePluginPermissions(source),
+    usePluginViolations: (fn) => gate.usePluginViolations(fn),
     useProjectFolders: (source) => gate.useProjectFolders(source),
     register,
     close: () => gate.close(),

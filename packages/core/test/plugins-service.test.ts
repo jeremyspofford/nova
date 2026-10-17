@@ -628,6 +628,8 @@ describe('permissions for the gate', () => {
       network: ['api.example.com'],
       fs: [],
       actionDefaults: { read: 'allow', write: 'ask', delete: 'deny' },
+      // The server's manifest `defaultApproval` travels as the plugin's, not as a user default.
+      serverDefault: 'ask',
       hooksAnswerAsks: false,
     });
     // The manifest's `plugin:<id>.<tool>` entry also answers for the server's canonical name.
@@ -651,6 +653,7 @@ describe('permissions for the gate', () => {
     );
     expect(byPlugin?.pluginId).toBe('com.example.sample');
     expect(byPlugin?.tools['plugin:com.example.sample.other']).toBeUndefined();
+    expect(byPlugin?.serverDefault).toBeUndefined();
   });
 
   it('answers null for tools no plugin owns, and for other accounts', async () => {
