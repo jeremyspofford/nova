@@ -83,6 +83,18 @@ describe('resolveToolRoots', () => {
     expect(r.deny).toEqual([join(real, 'secret')]);
   });
 
+  it("leaves the workspace out when a thread policy's roots replace it (FR-063)", () => {
+    const folder = join(dir, 'repo');
+    const r = resolveToolRoots({
+      profile: byId('workspace'),
+      roots: [{ path: folder, access: 'write', label: 'repo' }],
+      workspaceDir: null,
+      home: null,
+    });
+    // A Code session's folder is its only root, so relative paths resolve inside it.
+    expect(r.roots).toEqual([{ path: folder, access: 'write', label: 'repo' }]);
+  });
+
   it('keeps the full profile`s substrate requirement', () => {
     const r = resolveToolRoots({
       profile: byId('full'),

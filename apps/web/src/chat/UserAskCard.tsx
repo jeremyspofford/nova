@@ -1,4 +1,4 @@
-// A question from the assistant (FR-188, docs/09 §9): a `user.ask` call renders as a question
+// A question from the assistant (FR-188, docs/09 §9): a `ask_user` call renders as a question
 // card with its choices and, unless the question allows only the choices, a text box. Answering
 // resolves the server request that carries the question (found by the call id): the first valid
 // answer wins on any device, so a late answer here says it was already answered. An answered
@@ -13,8 +13,8 @@ import { isTerminal, type DisplayCall } from './thread-state.ts';
 import { previewArgs } from './tool-apps.tsx';
 import '../work/work.css';
 
-/** Tool names that ask the user a question (the spec's `user.ask`; docs/08 lists `ask_user`). */
-export const ASK_TOOLS: readonly string[] = ['user.ask', 'ask_user'];
+/** The tool that asks the user a question (docs/08 §1). */
+export const ASK_TOOLS: readonly string[] = ['ask_user'];
 
 const FAILED: readonly ToolCallStatus[] = ['error', 'denied', 'timeout', 'cancelled'];
 

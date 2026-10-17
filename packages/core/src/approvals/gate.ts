@@ -81,7 +81,7 @@ export * from './reviewer-breaker.ts';
  * The audit kind of reviewer verdicts and overrides. docs/06 lists `review`; it becomes that
  * once AuditRecord['kind'] (tools/types.ts, lead-owned) has it. The action names are final.
  */
-const REVIEW_AUDIT_KIND: AuditRecord['kind'] = 'policy';
+const REVIEW_AUDIT_KIND: AuditRecord['kind'] = 'review';
 
 export type SettingReader = <K extends SettingKey>(
   key: K,
@@ -327,9 +327,10 @@ export class PolicyGate implements ToolGate {
     ]);
     const resolved = resolveToolRoots({
       profile,
-      // A session's folder (and worktree) replaces the settings' roots (ThreadPolicy.roots).
+      // A session's folder (and worktree) replaces the settings' roots and the Nova workspace
+      // (ThreadPolicy.roots): it is the session's only root, as in the tool scope.
       roots: policy?.roots ?? [...rootSetting, ...folders],
-      workspaceDir: this.#workspace,
+      workspaceDir: policy?.roots ? null : this.#workspace,
       home: this.#home,
     });
     const approvalPolicy: ApprovalPolicy = { kind: policy?.approvalPolicy ?? approvalSetting };
@@ -384,7 +385,12 @@ export class PolicyGate implements ToolGate {
     // The mode name is a label for display and audit only (docs/12 §2.1).
     if (policy?.permissionMode) ctx.preset = { permissionMode: policy.permissionMode };
     if (command !== undefined) ctx.command = command;
-    const resource = this.#canonicalResource(req.resource);
+    // A relative path resolves where the tools resolve it: in the first root (a Code session's
+    // folder, else the workspace).
+    const resource = this.#canonicalResource(
+      req.resource,
+      resolved.roots[0]?.path ?? this.#workspace,
+    );
     if (resource) ctx.resource = resource;
     try {
       const plugin = await this.#pluginPolicy(req);
@@ -470,9 +476,9 @@ export class PolicyGate implements ToolGate {
     return out;
   }
 
-  #canonicalResource(r: GateRequest['resource']): GateRequest['resource'] {
+  #canonicalResource(r: GateRequest['resource'], base: string): GateRequest['resource'] {
     if (!r || r.kind !== 'path' || r.value.includes('\0')) return r;
-    const abs = isAbsolute(r.value) ? r.value : resolve(this.#workspace, r.value);
+    const abs = isAbsolute(r.value) ? r.value : resolve(base, r.value);
     return { kind: 'path', value: realpathLenient(resolve(abs)) };
   }
 

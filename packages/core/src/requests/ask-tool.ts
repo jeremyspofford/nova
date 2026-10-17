@@ -1,4 +1,4 @@
-// `user.ask` (FR-188): a Work run or a Code session asks the user a question through the
+// `ask_user` (FR-188): a Work run or a Code session asks the user a question through the
 // request broker and waits for the answer (thread status Needs input, FR-215). The answer comes
 // back as the tool result, labelled as the user's answer. Nobody answering before the timeout
 // (default 24 h, like an approval) ends the call with `approval_timeout`; a cancelled turn
@@ -27,7 +27,7 @@ export function userAskTool(opts: UserAskToolOptions): BuiltinTool {
     // The answer is what the signed-in user typed in a Nova client, not untrusted content.
     origin: null,
     descriptor: builtinDescriptor({
-      name: 'user.ask',
+      name: 'ask_user',
       title: 'Ask the user',
       description:
         'Ask the user a question and wait for their answer. Use it in Work runs and Code ' +
@@ -60,12 +60,12 @@ export function userAskTool(opts: UserAskToolOptions): BuiltinTool {
       const a = argsOf(args);
       const question = str(a.question)?.trim();
       if (!question) return fail('invalid_arguments', 'question is required');
-      if (!ctx.threadId) return fail('unavailable', 'user.ask needs a thread');
+      if (!ctx.threadId) return fail('unavailable', 'ask_user needs a thread');
       const mode = await opts.threadMode(ctx.accountId, ctx.threadId).catch(() => null);
       if (mode !== 'work' && mode !== 'code')
         return fail(
           'unavailable',
-          'user.ask is for Work runs and Code sessions; in a chat, ask in your reply instead.',
+          'ask_user is for Work runs and Code sessions; in a chat, ask in your reply instead.',
         );
       const payload: Record<string, unknown> = { question };
       const choices = Array.isArray(a.choices)
@@ -115,7 +115,12 @@ export function userAskTool(opts: UserAskToolOptions): BuiltinTool {
   };
 }
 
-/** The request tools (`user.ask`) as a tool source for the tool runtime. */
+/** The request tools (`ask_user`) as a tool source for the tool runtime. */
+/** `ask_user` is for Work runs and Code sessions; in a chat the model asks in its reply. */
 export function requestToolSource(tools: readonly BuiltinTool[]): ToolSourceProvider {
-  return { source: 'builtin', list: () => Promise.resolve([...tools]) };
+  return {
+    source: 'builtin',
+    list: (_accountId, scope) =>
+      Promise.resolve(scope && scope.mode !== 'work' && scope.mode !== 'code' ? [] : [...tools]),
+  };
 }

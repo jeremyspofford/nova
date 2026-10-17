@@ -14,6 +14,7 @@ import {
   setGoalSchema,
   updateGoalSchema,
   updatePlanSchema,
+  NovaError,
   type EventEnvelope,
 } from '@nova/shared';
 import {
@@ -162,6 +163,15 @@ export function setupRuns(ctx: HubContext & RunsDeps): Promise<RunsArea> {
       app.post('/api/v1/runs', async (req, reply) => {
         const accountId = await ctx.accountOf(req);
         const body = createRunSchema.parse(req.body);
+        // An autonomous run's consequential actions go to the auto-reviewer (FR-085); without a
+        // reviewer model each one would be denied, so say so before the run starts.
+        const autonomy = body.autonomy ?? (await ctx.setting('runs.autonomy', body.projectId));
+        if (autonomy === 'autonomous' && !(await ctx.setting('review.model')))
+          throw new NovaError(
+            'validation',
+            'an autonomous run needs a reviewer model: choose one in Settings → Code',
+            { details: { field: 'autonomy', reason: 'review_model_required' } },
+          );
         const run = await service.create({
           accountId,
           objective: body.objective,
@@ -252,7 +262,7 @@ export function setupRuns(ctx: HubContext & RunsDeps): Promise<RunsArea> {
         const events: EventEnvelope[] = [];
         let after: string | null = null;
         while (events.length < MAX_ACTIVITY_EVENTS) {
-          const page = await ctx.events.since(after, 500, { threadId });
+          const page = await ctx.events.since(after, 500, { threadId, accountId });
           events.push(...page);
           if (page.length < 500) break;
           after = page.at(-1)!.id;

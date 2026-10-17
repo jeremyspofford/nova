@@ -62,6 +62,20 @@ export function auditRecordFor(e: EventEnvelope): Omit<AuditRecord, 'accountId'>
     };
   }
   switch (e.name) {
+    case 'request.resolved':
+    case 'request.expired':
+      return {
+        actor,
+        kind: 'request',
+        action: e.name,
+        resource: str(p.requestId),
+        detail: {
+          kind: str(p.kind),
+          ...(e.name === 'request.resolved'
+            ? { resolvedBy: str(p.resolvedBy), deviceId: str(p.deviceId) }
+            : { reason: str(p.reason) }),
+        },
+      };
     case 'provider.account.created':
     case 'provider.account.removed':
       // Only the credential's reference is recorded, never the key.
@@ -106,6 +120,9 @@ export const AUDITED_EVENTS = [
   'settings.changed',
   'node.registered',
   'node.status.changed',
+  // Server-to-client requests (FR-188): who answered, or why none did; never the answer.
+  'request.resolved',
+  'request.expired',
 ];
 
 export interface SecurityAuditOptions {

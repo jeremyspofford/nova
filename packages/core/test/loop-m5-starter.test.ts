@@ -211,6 +211,25 @@ describe('queueing, cancel and validation', () => {
     expect(delivery.delivery).toBe('queued');
   });
 
+  it("runs the user's queued message before a start made in the same millisecond", async () => {
+    // A frozen clock: the queued message and the start share one timestamp.
+    const clock = new TestClock();
+    env = await makeM5Env({ noTools: true, clock, mock: { timing: { chunkDelayMs: 15 } } });
+    const t = await env.threads.create(ACCOUNT, {});
+    await env.chat.send(ACCOUNT, t.id, { text: 'first message with several words to stream' });
+    await env.chat.send(ACCOUNT, t.id, { text: 'queued by the user', inputMode: 'queue' });
+    const s = await env.chat.startTurn({
+      accountId: ACCOUNT,
+      threadId: t.id,
+      text: 'scheduled work',
+      trigger: 'schedule',
+      authority: { kind: 'user', source: 'schedule:x' },
+      authorKind: 'schedule',
+    });
+    await s.done;
+    expect(turnRows(env, t.id).map((r) => r.trigger)).toEqual(['user', 'user', 'schedule']);
+  });
+
   it('cancel ends queued starts and stops the running turn', async () => {
     env = await makeM5Env({ noTools: true, mock: { timing: 'slow' } });
     const t = await env.threads.create(ACCOUNT, {});
@@ -443,7 +462,7 @@ describe('tools of a turn (M5)', () => {
   it('ends the turn when a built-in waited for the user in vain', async () => {
     const ask: ToolDefinition = {
       descriptor: {
-        name: 'user.ask',
+        name: 'ask_user',
         title: 'Ask',
         description: 'ask the user',
         source: 'builtin',
@@ -474,7 +493,7 @@ describe('tools of a turn (M5)', () => {
     const s = await env.chat.startTurn({
       accountId: ACCOUNT,
       threadId: t.id,
-      text: '/tool user.ask {}',
+      text: '/tool ask_user {}',
       trigger: 'user',
       authority: { kind: 'user', source: 'run:x' },
       authorKind: 'run',

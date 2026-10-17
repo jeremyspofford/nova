@@ -3,7 +3,7 @@
 //
 //   nova://settings[/<section>]   → /settings/<section> (unknown or missing section: general)
 //   nova://chat[/<id>][?m=<msg>]  → /chat, /chat/<id>
-//   nova://code[/<id>]            → /code   (sessions arrive in M5)
+//   nova://code[/<id>]            → /code, /code/<id>
 //   nova://agent[/<id>]           → /agents (agents arrive in M6)
 //   nova://projects[/<id>]        → /projects, /projects/<id>
 //   nova://theme?data=<base64url> → /settings/appearance?theme=<data> (import prefilled, FR-011)
@@ -66,7 +66,7 @@ export function deepLinkPath(url: string): string | null {
       return chatPath(arg, messageId);
     }
     case 'code':
-      return '/code';
+      return arg ? `/code/${encodeURIComponent(arg)}` : '/code';
     case 'agent':
     case 'agents':
       return '/agents';

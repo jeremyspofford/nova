@@ -270,6 +270,39 @@ describe('auditInputHash', () => {
 describe('event-driven audit', () => {
   const ev = (e: NewEvent<Record<string, unknown>>) => makeEvent(e);
 
+  it('audits who answered a request, or why none did, never the answer (FR-188)', () => {
+    expect(
+      auditRecordFor(
+        ev({
+          name: 'request.resolved',
+          actor: 'user',
+          payload: {
+            requestId: 'r1',
+            kind: 'user_input',
+            resolvedBy: 'user',
+            deviceId: 'd1',
+            result: { text: 'secret plans' },
+          },
+        }),
+      ),
+    ).toEqual({
+      actor: 'user',
+      kind: 'request',
+      action: 'request.resolved',
+      resource: 'r1',
+      detail: { kind: 'user_input', resolvedBy: 'user', deviceId: 'd1' },
+    });
+    expect(
+      auditRecordFor(
+        ev({
+          name: 'request.expired',
+          actor: 'system',
+          payload: { requestId: 'r2', kind: 'user_input', reason: 'timeout' },
+        }),
+      ),
+    ).toMatchObject({ kind: 'request', resource: 'r2', detail: { reason: 'timeout' } });
+  });
+
   it('maps security-relevant events and ignores the rest', () => {
     expect(
       auditRecordFor(

@@ -323,6 +323,11 @@ describe('structured review (FR-069)', () => {
     expect(ok).toMatchObject({ status: 'done', findings: [] });
     const bad = await (await env.svc.startReview(ACCOUNT, s.id)).done;
     expect(bad.status).toBe('failed');
+    // The stored review says why it failed and which model ran it.
+    const stored = env.svc.review(ACCOUNT, s.id, bad.id);
+    expect(stored.status).toBe('failed');
+    expect(stored.error).toEqual(expect.any(String));
+    expect(stored.model).toEqual(expect.any(String));
   });
 });
 

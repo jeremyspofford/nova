@@ -262,16 +262,36 @@ export class RequestService implements RequestBroker {
    */
   async recover(): Promise<number> {
     const now = this.#now().toISOString();
-    return this.#db.transaction(() => {
-      const res = this.#db.raw
+    const expired = await this.#db.transaction(() => {
+      const ids = this.#db.raw
+        .prepare("SELECT id FROM server_request WHERE status = 'pending'")
+        .all() as { id: string }[];
+      this.#db.raw
         .prepare(
           `UPDATE server_request SET status = 'expired', expired_reason = 'restart', resolved_at = ?
            WHERE status = 'pending'`,
         )
         .run(now);
       this.#db.raw.prepare("UPDATE thread SET state = 'idle' WHERE state = 'waiting_input'").run();
-      return Number(res.changes);
+      return ids.map((r) => r.id);
     });
+    // Clients still showing these questions learn they are gone (contracts/events.md).
+    for (const id of expired) {
+      const row = this.#rowAny(id);
+      if (!row) continue;
+      try {
+        await this.#o.events.emit({
+          name: 'request.expired',
+          accountId: row.account_id,
+          actor: 'system',
+          correlation: this.#eventCorrelation(row),
+          payload: { requestId: id, kind: row.kind, fallback: 'none', reason: 'restart' },
+        });
+      } catch (err) {
+        this.#o.log?.error('recording a request expiry failed', { err, requestId: id });
+      }
+    }
+    return expired.length;
   }
 
   // ---- asking ---------------------------------------------------------------------------------

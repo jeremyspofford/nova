@@ -234,7 +234,7 @@ export async function setupOps(
       const events: EventEnvelope[] = [];
       let after: string | null = null;
       while (events.length < MAX_ACTIVITY_EVENTS) {
-        const page = await ctx.events.since(after, 500, { threadId: ref });
+        const page = await ctx.events.since(after, 500, { threadId: ref, accountId });
         events.push(...page);
         if (page.length < 500) break;
         after = page.at(-1)!.id;

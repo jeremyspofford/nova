@@ -1,5 +1,5 @@
 // Run and question cards in a chat (FR-186, FR-188; docs/04 §2.2.1): a `work.start` call becomes
-// an inline run card (propose, start, progress, result); a `user.ask` call becomes a question card
+// an inline run card (propose, start, progress, result); a `ask_user` call becomes a question card
 // answered through the server request it belongs to.
 import { afterEach, describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
@@ -246,7 +246,7 @@ describe('run card (FR-186)', () => {
 
 const askCall = (over: Partial<ToolCallPartView> = {}): Partial<ToolCallPartView> => ({
   callId: 'call-ask',
-  tool: 'user.ask',
+  tool: 'ask_user',
   title: 'Ask the user',
   status: 'running',
   argsPreview: JSON.stringify({ question: 'Which quarter?', choices: ['Q3', 'Q4'] }),

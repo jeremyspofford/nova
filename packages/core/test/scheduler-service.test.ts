@@ -505,6 +505,13 @@ describe('outcomes and delivery (FR-187)', () => {
     expect((await h.svc.reportTools.list(ACCOUNT)).map((t) => t.descriptor.name)).toEqual([
       'schedule.report',
     ]);
+    // A turn's listing offers it only in the fired run's thread.
+    expect(
+      await h.svc.reportTools.list(ACCOUNT, { threadId: 'thread-1', mode: 'work' }),
+    ).toHaveLength(1);
+    expect(
+      await h.svc.reportTools.list(ACCOUNT, { threadId: 'thread-other', mode: 'work' }),
+    ).toEqual([]);
     const other = await h.svc.report(ACCOUNT, 'thread-other', { notify: true });
     expect(other).toMatchObject({ ok: false, error: { code: 'not_scheduled' } });
     expect(await h.svc.report(ACCOUNT, 'thread-1', { notify: false })).toMatchObject({ ok: true });

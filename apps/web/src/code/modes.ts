@@ -30,12 +30,15 @@ export interface ModeContext {
   /** The `code.allowBypass` setting. */
   allowBypass: boolean;
   /** The environment the session runs in, when known. */
-  environment: Pick<EnvironmentView, 'kind'> | null;
+  environment: Pick<EnvironmentView, 'kind' | 'isolated'> | null;
 }
 
 /** Bypass runs only on a VM or container substrate (FR-195). */
-export function isIsolatedEnvironment(env: Pick<EnvironmentView, 'kind'> | null): boolean {
-  return env?.kind === 'container' || env?.kind === 'vm';
+/** The Hub says whether commands there run on a container or VM substrate (Bypass needs one). */
+export function isIsolatedEnvironment(
+  env: Pick<EnvironmentView, 'kind' | 'isolated'> | null,
+): boolean {
+  return env?.isolated === true || env?.kind === 'container' || env?.kind === 'vm';
 }
 
 /** Why `mode` cannot be picked now, as a short phrase, or null when it can. */

@@ -118,12 +118,10 @@ function CommitForm({
             <Icon name="check" /> Committed {plural(done.files, 'file')} to {done.branch} as{' '}
             <code title={done.sha}>{shortSha(done.sha)}</code>.
           </p>
-          {done.hooksRan === false ? (
+          {/* Only when the repository has hooks that did not run (FR-211): the Hub says why. */}
+          {done.hooksRan === false && done.hooksNote ? (
             <p className="code-hooks-note" role="note">
-              <Icon name="alert" /> The repository’s hooks did not run for this commit
-              {done.hooksNote
-                ? `: ${done.hooksNote}`
-                : '. Hooks run only inside the session sandbox.'}
+              <Icon name="alert" /> {done.hooksNote}
             </p>
           ) : null}
         </>

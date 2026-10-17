@@ -207,6 +207,22 @@ describe('New run (FR-051, FR-181, FR-182, FR-220)', () => {
     expect(screen.queryByRole('dialog', { name: 'New run' })).toBeNull();
   });
 
+  it('asks for a reviewer model before an autonomous run (FR-085)', async () => {
+    const hub = createHub();
+    await renderApp({ hub, path: '/work?new=1' });
+    const dialog = await screen.findByRole('dialog', { name: 'New run' });
+    await userEvent.type(
+      within(dialog).getByRole('textbox', { name: 'What should the run do?' }),
+      'Do it',
+    );
+    await userEvent.click(within(dialog).getByRole('radio', { name: /Autonomous/ }));
+    expect(within(dialog).getByRole('alert').textContent).toMatch(/reviewer model/);
+    expect(
+      within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Start run' }).disabled,
+    ).toBe(true);
+    expect(hub.api.createRun).not.toHaveBeenCalled();
+  });
+
   it('opens from the palette commands and moves between the Runs and Scheduled tabs', async () => {
     const hub = createHub();
     const { registry } = await renderApp({ hub, path: '/chat' });

@@ -258,6 +258,32 @@ describe('what the thread policy replaces', () => {
     expect((await decide(write(join(dir, 'other', 'x.ts')))).effect).toBe('deny');
   });
 
+  it("replaces the Nova workspace too: the session's folder is its only root", async () => {
+    policies.set(THREAD, preset('accept_edits'));
+    const inWorkspace = join(dir, 'data', 'workspace', 'a.md');
+    // A chat may write to the workspace (it asks by default) ...
+    expect((await decide(write(inWorkspace, { threadId: CHAT, mode: 'chat' }))).effect).toBe('ask');
+    // ... a Code session may not: its folder is the only root, so nothing is auto-accepted there.
+    expect((await decide(write(inWorkspace))).effect).toBe('deny');
+    expect((await decide(write(join(proj, 'a.md')))).effect).toBe('allow');
+  });
+
+  it("resolves a relative path in the session's folder, where its tools resolve it", async () => {
+    policies.set(THREAD, preset('accept_edits'));
+    const rel = (path: string) => write(path);
+    expect((await decide(rel('src/a.ts'))).effect).toBe('allow');
+    // A tool passes the raw path when its own containment check refuses it (a protected path):
+    // the gate still names the protection, inside the session's folder.
+    expect(await decide(rel('.git/config'))).toMatchObject({
+      effect: 'deny',
+      reason: '.git stays read-only',
+    });
+    expect(await decide(rel('.nova/x'))).toMatchObject({
+      effect: 'deny',
+      reason: '.nova stays read-only',
+    });
+  });
+
   it("uses the session's profile even when the tool scope names another", async () => {
     policies.set(THREAD, { ...preset('accept_edits'), profileId: 'read-only' });
     expect(

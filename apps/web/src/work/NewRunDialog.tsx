@@ -98,8 +98,11 @@ function NewRunForm({
   const parsed = parseBudgets(budget);
   const budgetError = 'error' in parsed ? parsed.error : null;
 
+  // Autonomous runs send consequential actions to the reviewer model (FR-085).
+  const reviewer = settings.get('review.model').value;
+  const needsReviewer = autonomy === 'autonomous' && !reviewer;
   const submit = async () => {
-    if (!objective.trim() || busy || 'error' in parsed) return;
+    if (!objective.trim() || busy || 'error' in parsed || needsReviewer) return;
     setBusy(true);
     setError(null);
     const body: CreateRunBody = {
@@ -203,9 +206,17 @@ function NewRunForm({
           options={(['ask_first', 'standard', 'autonomous'] as const).map((a) => ({
             value: a,
             label: AUTONOMY_TEXT[a].label,
-            description: AUTONOMY_TEXT[a].description,
+            description:
+              a === 'autonomous' && !reviewer
+                ? `${AUTONOMY_TEXT[a].description} Needs a reviewer model (Settings → Code).`
+                : AUTONOMY_TEXT[a].description,
           }))}
         />
+        {needsReviewer ? (
+          <p className="nv-field-error" role="alert">
+            Choose a reviewer model in Settings → Code first, or pick another autonomy level.
+          </p>
+        ) : null}
         <fieldset className="ws-fieldset">
           <legend>Budgets</legend>
           <p className="muted ws-flush">
@@ -305,7 +316,7 @@ function NewRunForm({
           <Button
             type="submit"
             variant="primary"
-            disabled={busy || !objective.trim() || budgetError !== null}
+            disabled={busy || !objective.trim() || budgetError !== null || needsReviewer}
           >
             {busy ? <Spinner /> : null} Start run
           </Button>

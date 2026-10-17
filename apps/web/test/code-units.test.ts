@@ -160,6 +160,13 @@ describe('permission modes (FR-063)', () => {
     expect(
       modeUnavailable('bypass', ctx({ environment: { kind: 'vm' }, allowBypass: true })),
     ).toBeNull();
+    // The Hub's local environment on a container sandbox counts as isolated, as the Hub decides.
+    expect(
+      modeUnavailable(
+        'bypass',
+        ctx({ environment: { kind: 'local', isolated: true }, allowBypass: true }),
+      ),
+    ).toBeNull();
     const opts = modeOptions(ctx());
     expect(opts.find((o) => o.value === 'auto')).toMatchObject({
       disabled: true,

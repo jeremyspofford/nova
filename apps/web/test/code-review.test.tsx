@@ -143,7 +143,11 @@ describe('Commit dialog (FR-070, FR-211)', () => {
       {
         code: {
           changes: [codeChange(SID)],
-          commitExtra: { hooksRan: false },
+          commitExtra: {
+            hooksRan: false,
+            hooksNote:
+              "The repository's commit hooks did not run: no sandbox with Git is available on this Hub.",
+          },
         },
       },
     );
@@ -172,7 +176,7 @@ describe('Commit dialog (FR-070, FR-211)', () => {
     const done = await screen.findByRole('dialog', { name: 'Committed' });
     expect(within(done).getByText(/Committed 1 file to feature\/x as/)).toBeTruthy();
     expect(within(done).getByText('9f8e7d6')).toBeTruthy();
-    expect(within(done).getByText(/hooks did not run for this commit/)).toBeTruthy();
+    expect(within(done).getByText(/commit hooks did not run/)).toBeTruthy();
     await waitFor(() =>
       expect(document.activeElement).toBe(within(done).getByRole('button', { name: 'Done' })),
     );

@@ -47,6 +47,32 @@ M4 also adds `PATCH /providers/:id {active: true}` (the active account per provi
 and plugin permissions into the policy gate, server defaults from MCP and plugins, the app model
 context into the chat, and the plugin, folder, memory and project services into import.
 
+M5 adds four areas and wires the agent runtime (decisions in ADR-092). `app.ts` sets up ops →
+policy → mcp → plugins → hooks → requests → schedules → code → runs → tools → consolidation →
+mcpServer → mcpApps → workspace → profile, then the `ChatService` with the runs and Code
+extensions. Runs and Code sessions start turns through `chat.turnStarter`; the scheduler starts
+runs through `runs.starter`; Code sessions and runs are per-thread policy sources for both the
+gate and the tool scope. `main.ts` calls `runs.recover()` after the chat loop recovers, so runs
+continue after a restart.
+
+| File | Area | Routes |
+| --- | --- | --- |
+| `runs.ts` | Work runs, plans, goals and sub-agents (FR-051..FR-054, FR-057, FR-181, FR-182, FR-186, FR-187, FR-220); the run tools join the tool sources | `GET`/`POST /runs`, `GET /runs/:id`, `POST /runs/:id/{pause,resume,start,cancel,redirect}`, `POST /runs/:id/budget` (adds to the bound; 409 `budget_exhausted` when resuming over budget), `PUT /runs/:id/plan`, `GET /runs/:id/subagents`, `GET /runs/:id/activity`, `GET`/`PUT`/`DELETE /runs/:id/goal`, `GET /goals`, `GET`/`PATCH /goals/:id`, `POST /goals/:id/{pause,resume,complete}` |
+| `schedules.ts` | Schedules, their history, delivery and the `schedule.report` tool (FR-055, FR-187, ADR-079); the `schedules` diagnostics probe | `GET`/`POST /schedules` (`origin` is refused), `PATCH`/`DELETE /schedules/:id`, `GET /schedules/:id/fires?limit=`, `POST /schedules/:id/run` (201 `{runId}`) |
+| `code.ts` | Code sessions, the local environment, changes, comments, reviews, commits, symbols and session terminals (FR-061..FR-066, FR-069, FR-073, FR-074, FR-211); the worktree sweep every 5 minutes | `GET /environments`, `GET`/`POST /code/sessions` (`?archived=`), `GET`/`PATCH /code/sessions/:id`, and under `/code/sessions/:id`: `GET …/changes`, `POST …/changes/:changeId/hunks` (409 `stale_hunk`), `POST …/changes/accept`, `POST …/changes/reject`, `GET`/`POST …/comments`, `POST …/comments/:commentId/resolve`, `POST …/review` (202), `GET …/reviews/:reviewId`, `POST …/commit`, `GET …/symbols?q=&limit=`, `GET …/refs?name=&limit=`, `POST …/terminal` (409 `sandbox_unavailable`) |
+| `requests.ts` | Server-to-client requests, `ask_user` and the thread status service (FR-188, FR-215) | `GET /requests?status=&threadId=`, `GET /requests/:id`, `POST /requests/:id/respond` (also takes approval ids; 409 answered, 410 expired, 403 another device's request) |
+
+`app.ts` also adds the authenticated `POST /api/v1/hello` (the server-request kinds a client
+takes and its `clientSessionId`; `GET /api/v1/hello` stays public) and attaches each WebSocket to
+the request broker (`?clientSessionId=`, `respond` frames). The global event stream and the
+WebSocket send only the signed-in account's events. `policy.ts` adds the per-thread policy
+sources and the default `ModelReviewer` on `review.model`; `tools.ts` adds `GET /exec/sessions`,
+`DELETE /exec/sessions/:id`, `GET /artifacts/:id/preview` (document previews), the document,
+image and plugin-draft tools; `ops.ts` adds `POST /diagnostics/test`
+(`{component: provider|mcp|sandbox|storage|update, ref?}`, 30 s per test). Waiting for the
+user's answer is left out of a turn's active time, and a run's exec sessions are killed when it
+ends.
+
 More options: `NOVA_SECRETS=keychain|vault`, `NOVA_TLS_CERT` / `NOVA_TLS_KEY` (HTTPS),
 `NOVA_SANDBOX=auto|docker|podman|off`, `NOVA_SANDBOX_IMAGE` (terminals and command hooks run in
 this image; the sample plugin's hook needs Node in it), `NOVA_DETECT_URLS`.

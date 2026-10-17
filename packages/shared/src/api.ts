@@ -1961,6 +1961,8 @@ export interface EnvironmentView {
   id: string;
   kind: 'local' | 'cloud' | 'ssh' | 'wsl' | 'container' | 'vm' | 'device';
   label: string;
+  /** Commands run on a container or VM substrate here (Bypass needs one, FR-195). */
+  isolated?: boolean;
   status: 'ok' | 'degraded' | 'down' | 'unknown';
   detail: string | null;
   checkedAt: string | null;

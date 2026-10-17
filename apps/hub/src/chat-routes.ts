@@ -283,7 +283,7 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
         if (!after) return;
         let cursor: string | null = after;
         for (;;) {
-          const page = await events.since(cursor, 500, { threadId: id });
+          const page = await events.since(cursor, 500, { threadId: id, accountId });
           for (const e of page) send(e);
           if (page.length < 500) break;
           cursor = page.at(-1)!.id;

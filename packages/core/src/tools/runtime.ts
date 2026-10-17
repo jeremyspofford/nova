@@ -758,7 +758,7 @@ export class ToolRuntime {
         { decision: outcome, startedAt, resource, hooks },
       );
     }
-    // A built-in that waited for the user in vain (an unanswered user.ask, FR-188) ends the
+    // A built-in that waited for the user in vain (an unanswered ask_user, FR-188) ends the
     // turn like an approval that timed out.
     const unanswered =
       !result.ok && result.error.code === 'approval_timeout' && def.descriptor.source === 'builtin';

@@ -614,13 +614,14 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   // ---- events (contracts/events.md, hub-api §5) -----------------------------------------
   app.get('/api/v1/events', async (req) => {
     requireAuth(req);
+    const accountId = await accountOf(req);
     const q = z
       .object({
         after: z.string().optional(),
         limit: z.coerce.number().int().min(1).max(500).default(100),
       })
       .parse(req.query);
-    return { events: await events.since(q.after ?? null, q.limit) };
+    return { events: await events.since(q.after ?? null, q.limit, { accountId }) };
   });
 
   app.get('/api/v1/events/stream', async (req, reply) => {
@@ -642,7 +643,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
         if (!lastId) return;
         let cursor: string = lastId;
         for (;;) {
-          const page = await events.since(cursor, 500);
+          const page = await events.since(cursor, 500, { accountId });
           for (const e of page) send(e);
           if (page.length < 500) break;
           cursor = page.at(-1)!.id;

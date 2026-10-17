@@ -898,7 +898,11 @@ export class RunService implements RunToolHost {
       });
     }
     await this.#loadMeters(run);
+    const goal = kind.kind === 'run' ? await this.#openGoal(run.id) : null;
     return {
+      // Every turn of the run's thread counts toward it, typed ones included (docs/06 turn).
+      runId: run.id,
+      goalId: goal?.id ?? null,
       context:
         kind.kind === 'run' ? await this.#runContext(run) : this.#childContext(run, kind.sub),
       bounds: {

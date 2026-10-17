@@ -28,7 +28,7 @@ describe('deepLinkPath (FR-007)', () => {
     ['nova://chat/t0001?m=m0002', '/chat/t0001?m=m0002'],
     ['nova://chat/t0001?m=bad%20id', '/chat/t0001'],
     ['nova://code', '/code'],
-    ['nova://code/s1', '/code'],
+    ['nova://code/s1', '/code/s1'],
     ['nova://agent/a1', '/agents'],
     ['nova://agents', '/agents'],
     ['nova://projects', '/projects'],

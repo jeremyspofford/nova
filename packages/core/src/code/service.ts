@@ -5,6 +5,7 @@
 // thread policy, an Environment context block and a change refresh after each turn, the coding
 // tools, and the blocked status. Changes are captured with a shadow Git repository per session
 // (shadow.ts), reviewed hunk by hunk, commented on, reviewed by the model and committed.
+import { isolatedSubstrate } from '@nova/policy';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { arch, homedir, platform, release } from 'node:os';
@@ -207,6 +208,7 @@ interface ReviewRow {
   status: CodeReviewView['status'];
   findingsJson: string;
   error: string | null;
+  modelId: string | null;
   createdAt: string;
 }
 
@@ -344,6 +346,8 @@ export class CodeService {
       id: env.id,
       kind: env.kind,
       label: env.label,
+      // The same rule the session policy applies to Bypass (code/policy.ts).
+      isolated: sandboxOk && isolatedSubstrate(sandbox?.substrate),
       status,
       detail,
       checkedAt: now,
@@ -1190,7 +1194,8 @@ export class CodeService {
     const r = this.#o.db.raw
       .prepare(
         `SELECT id, session_id AS sessionId, status, findings_json AS findingsJson, error,
-           created_at AS createdAt FROM code_review WHERE id = ? AND session_id = ?`,
+           model_id AS modelId, created_at AS createdAt FROM code_review
+           WHERE id = ? AND session_id = ?`,
       )
       .get(reviewId, s.id) as ReviewRow | undefined;
     if (!r) throw new NovaError('not_found', 'review not found');
@@ -1199,6 +1204,9 @@ export class CodeService {
       sessionId: r.sessionId,
       status: r.status,
       findings: JSON.parse(r.findingsJson) as ReviewFindingView[],
+      // Why a review failed reaches the client (it is already redacted when stored).
+      error: r.error,
+      model: r.modelId,
       createdAt: r.createdAt,
     };
   }

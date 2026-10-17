@@ -90,3 +90,61 @@ M4 (decisions in `docs/20` ADR-091):
   kept by `ProviderRegistry`: it is listed first for its kind and alone serves the models it
   shares with other accounts of that kind.
 
+M5 (decisions in `docs/20` ADR-092):
+
+- Runtime seams (`src/runtime/types.ts`) — the interfaces that keep one runtime (ADR-076):
+  `TurnStarter` (implemented by `ChatService.turnStarter`: start a labelled turn with its trigger,
+  run, goal and authority, or cancel one), `TurnExtension` (a mode's context blocks, bounds checked
+  before every model step, usage after each step and `onEnd`; added with `extensions` or
+  `ChatService.useExtension`), `RunStarter`, `ThreadPolicySource`, `Reviewer` and the request
+  broker. `ToolListScope {threadId, mode}` (`src/tools/types.ts`) lets a tool source list tools per
+  thread. `ChatService.awaitingUser(threadId, waiting)` leaves a wait for the user out of a turn's
+  active time.
+- Runs (`src/runs/`) — `RunService`, the supervisor of Work runs (FR-051..FR-054, FR-181,
+  FR-182, FR-186, FR-187, FR-220): runs, plans (`run_step`), goals with the 3-turn blocked rule
+  and idle continuation, sub-agents (depth 1, a queue behind the concurrency limit), budgets
+  checked through its `TurnExtension`, pauses and resume, `recover()` after a restart, chat
+  escalation (`work.start`), the deep research template, verified outcomes, the run tools
+  (`tools.ts`), prompts (`prompts.ts`), views and the activity merge (`activity.ts`). Its `policy`
+  maps autonomy to an approval policy for the gate.
+- Scheduler (`src/scheduler/`) — `ScheduleService` (FR-055, FR-187, ADR-079): cron, RRULE and
+  interval rules evaluated in a time zone through `Intl` (`zone.ts`, `cron.ts`, `rrule.ts`,
+  `recurrence.ts`), the fire loop with catch-up, skips and no overlap, history in
+  `schedule_fire`, delivery in-app, as an OS notification or to a signed webhook with a
+  private-address guard (`delivery.ts`), and the `schedule.report` tool (`report.ts`). It starts
+  runs through a `RunStarter`.
+- Code (`src/code/`) — `CodeService` (FR-061..FR-066, FR-069, FR-073, FR-074, FR-211): sessions
+  and the local environment, permission modes as a `ThreadPolicySource` (`policy.ts`), hook-free
+  Git (`git.ts`), change capture in a per-session shadow repository (`shadow.ts`, `changes.ts`),
+  diff parsing and hunk patches (`diff.ts`), comments, reviews (`review.ts`), commits on `nova/`
+  branches with staging of accepted content only (`commit.ts`), worktrees (`worktrees.ts`), the
+  pattern-based symbol index (`symbols.ts`), session terminals and the Code tools (`tools.ts`).
+- Requests (`src/requests/`) — `RequestService` (FR-188): server-to-client requests with per-kind
+  validation (`validate.ts`), first answer wins, delivery by kind and device, re-send on reconnect,
+  notification fallback and restart recovery; pending approvals listed as requests;
+  `userAskTool` (`ask_user`); and `ThreadStatusService` (`status.ts`, FR-215), which derives
+  needs input, blocked, running or ready for threads, runs and sessions and emits
+  `thread.status.changed`.
+- Auto-review (`src/approvals/reviewer.ts`, `reviewer-breaker.ts`) — `ModelReviewer` (FR-085,
+  ADR-061): one model call with no tools, a JSON-schema verdict, 90 s per attempt, 3 attempts,
+  fail closed; prompt version `auto-review-1`. `ReviewBreaker` trips at 3 denials in a row or 10
+  in the last 50. The gate (`gate.ts`) gains `useThreadPolicy`, `useReviewer` and
+  `resetReviewBreaker`.
+- Context (`src/context/`, re-exported from `chat.ts`) — compaction (FR-183: pre-turn, mid-turn,
+  post-turn and `context.fresh`, stored as a `summary` message with a `compaction` part, with an
+  extractive summary offline), instruction-file discovery (FR-185, `instructions.ts`), the
+  context-tool tracker and `context.remaining` / `context.fresh` (`tools.ts`).
+- Exec sessions (`src/tools/exec-sessions.ts`) — `ExecSessions` (FR-184): wraps the sandbox for
+  `exec.run`, `exec.poll` and `exec.write`, at most 8 sessions per thread, kills a thread's
+  sessions on cancel or when its run ends, and backs `GET`/`DELETE /exec/sessions`.
+- Documents (`src/documents/`, `src/tools/documents.ts`) — writers and readers for DOCX, PPTX,
+  XLSX and PDF built on the zip library and plain XML (FR-219), with zip, deflate and XML limits;
+  `documentTools` (`document.create`, `document.read`) and `artifactDocumentPreview` for the
+  Hub-side preview. Nothing in it imports the network.
+- Images (`src/tools/images.ts`) — `imageToolSource` and `providerImageGenerator` (FR-030):
+  `image.generate` is listed only while a provider adapter can make images; none can yet.
+- Plugin drafts (`src/plugins/authoring.ts`) — `pluginScaffoldTool` (`plugin.scaffold`, FR-050):
+  writes a draft under `<dataDir>/plugins-drafts/` and checks it with the installer's loader;
+  never installs.
+- Memory consolidation (`src/consolidation.ts`) reads only the messages the user typed into a
+  conversation, plus Nova's replies.

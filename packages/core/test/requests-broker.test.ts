@@ -285,6 +285,14 @@ describe('expiry, cancellation and fallback', () => {
     const next = make();
     expect(await next.recover()).toBe(1);
     expect(await next.get(ACCOUNT, 'stale')).toMatchObject({ status: 'expired' });
+    // Clients still showing the question learn it is gone.
+    expect(
+      events.events.find((e) => e.name === 'request.expired' && e.payload.requestId === 'stale')
+        ?.payload,
+    ).toMatchObject({
+      requestId: 'stale',
+      reason: 'restart',
+    });
     expect(threadState()).toBe('idle');
     await next.close();
   });

@@ -2,7 +2,7 @@
 // with its structured result; a Code session captures a file change in its folder; a schedule
 // fired now starts a run and records the fire; threads carry their derived status (FR-215).
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -114,6 +114,51 @@ describe('M5 through the wired Hub', () => {
       items: { path: string; additions: number }[];
     };
     expect(changes.items).toEqual([expect.objectContaining({ path: 'a.txt', additions: 1 })]);
+  });
+
+  it("runs the agent's file tools in the session folder, never the Nova workspace (FR-063)", async () => {
+    const repo = join(dir, 'repo');
+    mkdirSync(repo);
+    const git = (...args: string[]) =>
+      execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@example.com', ...args], {
+        cwd: repo,
+      });
+    git('init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'a.txt'), 'one\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'init');
+    const created = await api('POST', '/api/v1/code/sessions', {
+      folder: repo,
+      permissionMode: 'accept_edits',
+    });
+    expect(created.status, JSON.stringify(created.json)).toBe(201);
+    const id = created.json.id as string;
+    const threadId = created.json.threadId as string;
+    // Relative paths, as an agent writes them: they resolve in the session's folder.
+    const patch = '%%% patch\n%%% update a.txt\n@@\n one\n+two\n%%% end';
+    const sent = await api('POST', `/api/v1/threads/${threadId}/messages`, {
+      text: `/tool fs.edit ${JSON.stringify({ patch })}\n/tool fs.write {"path":"b.txt","content":"new"}`,
+    });
+    expect(sent.status, JSON.stringify(sent.json)).toBe(202);
+    const detail = await until(async () => {
+      const d = (await api('GET', `/api/v1/threads/${threadId}`)).json as {
+        thread: { state: string };
+        messages: { role: string; parts: { type: string; tool?: string; status?: string }[] }[];
+      };
+      const calls = d.messages.flatMap((m) => m.parts.filter((p) => p.type === 'tool_call'));
+      return d.thread.state === 'idle' && calls.length === 2 ? calls : null;
+    });
+    expect(detail.map((c) => [c.tool, c.status])).toEqual([
+      ['fs.edit', 'ok'],
+      ['fs.write', 'ok'],
+    ]);
+    expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('one\ntwo\n');
+    expect(readFileSync(join(repo, 'b.txt'), 'utf8')).toBe('new');
+    expect(existsSync(join(config.dataDir, 'workspace', 'b.txt'))).toBe(false);
+    const changes = (await api('GET', `/api/v1/code/sessions/${id}/changes`)).json as {
+      items: { path: string }[];
+    };
+    expect(changes.items.map((c) => c.path).sort()).toEqual(['a.txt', 'b.txt']);
   });
 
   it('fires a schedule now: a run starts and the fire is recorded', async () => {

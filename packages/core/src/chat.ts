@@ -943,7 +943,9 @@ export class ChatService {
     if (this.#closing || this.#active.has(threadId)) return;
     const row = nextQueued(this.#db, threadId);
     const sys = this.#starts.get(threadId)?.[0];
-    if (sys && (!row || sys.at <= row.createdAt)) {
+    // Oldest first; within the same millisecond the user's queued message goes first: it was
+    // persisted before a start that could share its timestamp (FR-019).
+    if (sys && (!row || sys.at < row.createdAt)) {
       this.#starts.get(threadId)?.shift();
       if (!this.#starts.get(threadId)?.length) this.#starts.delete(threadId);
       const { plan, resolve } = sys;
@@ -1961,12 +1963,22 @@ export class ChatService {
       }
       if (!a) continue;
       run.additions.set(i, a);
+      // A turn the user typed into a run's thread belongs to that run (turn.run_id, usage).
+      if ((a.runId && !run.runId) || (a.goalId && !run.goalId)) {
+        run.runId ??= a.runId ?? null;
+        run.goalId ??= a.goalId ?? null;
+        await this.#db.orm
+          .update(turn)
+          .set({ runId: run.runId, goalId: run.goalId })
+          .where(eq(turn.id, run.turnId));
+      }
       for (const b of a.context ?? []) {
         if (!b.text.trim()) continue;
         run.blocks.push({
           label: b.label.replace(/\s+/g, ' ').trim().slice(0, 100) || 'Context',
           text: this.#redactor.redactString(b.text).slice(0, MAX_SKILL_CHARS),
           trusted: b.trusted,
+          ...(b.origin ? { origin: b.origin } : {}),
         });
       }
     }
@@ -3001,7 +3013,7 @@ export class ChatService {
         // delimited as data (docs/09 §11 item 8, FR-189).
         for (const [i, b] of run.blocks.entries()) {
           if (b.trusted) continue;
-          run.taint.add('tool');
+          run.taint.add(b.origin ?? 'tool');
           if (content.length) content.push({ type: 'text', text: '\n\n' });
           content.push(...untrustedParts(b.label, b.text, nonce(`${run.turnId}:block:${i}`)));
         }

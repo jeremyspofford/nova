@@ -331,6 +331,11 @@ describe('runs routes', () => {
       (await call('POST', '/api/v1/runs', { objective: 'x', projectId: 'missing-project' }))
         .statusCode,
     ).toBe(400);
+    // An autonomous run needs a reviewer model (FR-085): refused before it starts, not denied
+    // action by action.
+    const auto = await call('POST', '/api/v1/runs', { objective: 'x', autonomy: 'autonomous' });
+    expect(auto.statusCode).toBe(400);
+    expect(auto.json().error.details).toMatchObject({ reason: 'review_model_required' });
   });
 
   it('a budgeted run pauses with a summary and finishes after Extend (J5 step 3)', async () => {

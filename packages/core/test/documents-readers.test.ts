@@ -250,6 +250,7 @@ describe('PDF reader (FR-219)', () => {
     expect(() => readPdf(new TextEncoder().encode('just text'))).toThrow(/not a PDF/);
   });
 
+  // Compressing and inflating 40 MiB is CPU-bound: allow for a loaded runner (R-011).
   it('refuses a stream that inflates past the cap', () => {
     const big = zlibSync(new Uint8Array(40 * 1024 * 1024));
     const bytes = onePage('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', {
@@ -257,7 +258,7 @@ describe('PDF reader (FR-219)', () => {
       stream: big,
     });
     expect(() => readPdf(bytes)).toThrow(/expands to too much data/);
-  });
+  }, 30_000);
 });
 
 // ---- Office files laid out differently -----------------------------------------------------------

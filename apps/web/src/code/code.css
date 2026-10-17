@@ -313,6 +313,10 @@
   user-select: none;
 }
 .code-ln-btn {
+  /* A target of at least 24 by 24 px however few digits the line number has (WCAG 2.5.8). */
+  min-width: 24px;
+  min-height: 24px;
+  text-align: right;
   padding: 0;
   border: 0;
   background: none;

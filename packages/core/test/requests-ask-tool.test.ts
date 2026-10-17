@@ -1,4 +1,4 @@
-// `user.ask` (FR-188): asked through the broker in Work and Code threads only, the answer comes
+// `ask_user` (FR-188): asked through the broker in Work and Code threads only, the answer comes
 // back labelled as the user's, an unanswered question ends like an approval timeout, a cancelled
 // turn withdraws it, and the gate lets the question itself through without a card.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,7 +47,7 @@ const modes: Record<string, string> = { [WORK]: 'work', [CHAT]: 'chat' };
 const threadMode = (_a: string, id: string) => Promise.resolve(modes[id] ?? null);
 const text = (r: ToolResult) => (r.ok ? (r.content[0] as { text: string }).text : r.error.message);
 
-describe('user.ask', () => {
+describe('ask_user', () => {
   it('asks the user through the broker and returns the answer as theirs', async () => {
     const { broker, asked } = fakeBroker({
       status: 'resolved',
@@ -146,11 +146,15 @@ describe('user.ask', () => {
     const tool = userAskTool({ ...fakeBroker({ status: 'expired' }), threadMode });
     const source = requestToolSource([tool]);
     expect(source.source).toBe('builtin');
-    expect((await source.list(ACCOUNT)).map((t) => t.descriptor.name)).toEqual(['user.ask']);
+    expect((await source.list(ACCOUNT)).map((t) => t.descriptor.name)).toEqual(['ask_user']);
+    // A turn's listing offers it in Work and Code threads only; a chat asks in its reply.
+    for (const mode of ['work', 'code'] as const)
+      expect(await source.list(ACCOUNT, { threadId: 't', mode })).toHaveLength(1);
+    expect(await source.list(ACCOUNT, { threadId: 't', mode: 'chat' })).toEqual([]);
   });
 });
 
-describe('user.ask with the real broker', () => {
+describe('ask_user with the real broker', () => {
   let db: NovaDatabase;
   let svc: RequestService;
 

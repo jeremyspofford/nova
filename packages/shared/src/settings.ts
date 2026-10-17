@@ -340,6 +340,8 @@ export const SETTINGS = {
     key: 'code.permissionMode',
     schema: z.enum(['manual', 'accept_edits', 'auto', 'bypass']),
     default: 'manual',
+    // A project folder must not loosen how Nova acts in it (docs/14 §1): global or managed only.
+    security: true,
     description:
       'Permission mode of a new Code session; the last one used per folder wins (FR-063).',
   }),

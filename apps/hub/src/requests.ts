@@ -1,4 +1,4 @@
-// M5 requests area: server-to-client requests (FR-188, contracts/hub-api.md §5), the `user.ask`
+// M5 requests area: server-to-client requests (FR-188, contracts/hub-api.md §5), the `ask_user`
 // tool and the derived thread status (FR-215). Routes need a session and validate their input
 // with zod: GET /api/v1/requests lists pending requests (with pending approvals as read-only
 // `approval` items); POST /api/v1/requests/:id/respond answers one (first valid answer wins:
@@ -42,7 +42,7 @@ export interface RequestsArea extends HubArea {
   service: RequestService;
   /** The derived thread status: `statusOf` fills ThreadView.derived (FR-215). */
   status: ThreadStatusService;
-  /** `user.ask` for the tool runtime (offered in Work and Code threads). */
+  /** `ask_user` for the tool runtime (offered in Work and Code threads). */
   tools: ToolSourceProvider;
   /**
    * The server-request part of POST /api/v1/hello: the kinds the Hub agrees to send this client

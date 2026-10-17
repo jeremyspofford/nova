@@ -325,7 +325,17 @@ export class ScheduleService {
     const tool = reportTool((accountId, threadId, args) => this.report(accountId, threadId, args));
     this.reportTools = {
       source: 'builtin',
-      list: (accountId) => Promise.resolve(this.#hasOpenFire(accountId) ? [tool] : []),
+      // With a turn's scope, only the thread of a run this schedule fired gets the tool.
+      list: (accountId, scope) =>
+        Promise.resolve(
+          (
+            scope
+              ? scope.threadId !== null && this.#openFireByThread(accountId, scope.threadId)
+              : this.#hasOpenFire(accountId)
+          )
+            ? [tool]
+            : [],
+        ),
     };
   }
 

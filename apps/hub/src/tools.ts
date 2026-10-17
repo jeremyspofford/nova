@@ -408,15 +408,18 @@ export function settingsScope(
       ...(await ctx.setting('tools.roots')),
       ...(await folderRoots(folders, projectId)),
     ];
+    // A session's roots replace the workspace too: its folder is its only (and first) root, so
+    // relative paths, exec's working folder and instruction files resolve there.
+    const own = policy?.roots ? null : workspace;
     const resolved = resolveToolRoots({
       profile,
       roots: extra,
-      workspaceDir: workspace,
+      workspaceDir: own,
     });
     let roots: ToolRoot[] = resolved.roots.filter((r) => dirname(r.path) !== r.path);
     if (!roots.length && resolved.roots.length) {
       roots = [
-        { path: workspace, access: 'write', label: 'Workspace' },
+        ...(own ? [{ path: own, access: 'write' as const, label: 'Workspace' }] : []),
         ...extra.map((r) => ({
           path: resolve(r.path),
           access: r.access,

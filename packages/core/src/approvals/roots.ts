@@ -22,16 +22,20 @@ import { listProjectFolderRoots } from '../workspace/roots.ts';
 export interface ToolRootsInput {
   /** A flattened profile (see `loadPermissionProfile`). */
   profile: PermissionProfile;
-  /** The `tools.roots` setting. */
+  /** The `tools.roots` setting, or a thread policy's roots (a Code session's folder). */
   roots: readonly { path: string; access: 'read' | 'write'; label?: string }[];
-  /** `<dataDir>/workspace`: always the first project root, writable when the profile allows. */
-  workspaceDir: string;
+  /**
+   * `<dataDir>/workspace`: the first project root, writable when the profile allows. Null when a
+   * thread policy's roots replace it: a Code session's folder is its only root (FR-063), so
+   * relative paths, `exec.run`'s working folder and instruction files resolve there.
+   */
+  workspaceDir: string | null;
   /** The home directory for `:home` and `~` entries; defaults to the Hub user's. */
   home?: string | null;
 }
 
 export interface ResolvedToolRoots {
-  /** Canonical roots, the workspace first; a path deny-listed by the profile is not a root. */
+  /** Canonical roots, the workspace (if any) first; a path the profile denies is not a root. */
   roots: ToolRoot[];
   /** Paths the profile denies inside the roots. */
   deny: string[];
@@ -56,7 +60,9 @@ const RANK: Record<FsAccess, number> = { read: 1, write: 2, deny: 3 };
 export function resolveToolRoots(input: ToolRootsInput): ResolvedToolRoots {
   const home = input.home === undefined ? homedir() : input.home;
   const projectRoots = [
-    { path: input.workspaceDir, access: 'write' as const, label: 'Workspace' },
+    ...(input.workspaceDir === null
+      ? []
+      : [{ path: input.workspaceDir, access: 'write' as const, label: 'Workspace' }]),
     ...input.roots.map((r) => {
       const path = expandHome(r.path, home);
       return { path, access: r.access, label: r.label ?? (basename(path) || path) };

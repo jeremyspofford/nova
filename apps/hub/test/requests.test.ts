@@ -1,7 +1,7 @@
 // The requests area (FR-188, FR-215; contracts/hub-api.md §5): sessions on every route, the
 // first valid answer wins (409 after, 410 once expired), pending approvals listed and answered
 // as `approval` requests, WebSocket `request` / `respond` / `respond.ack` frames for the kinds a
-// client declared in its handshake, `user.ask` through HTTP, and the derived thread status.
+// client declared in its handshake, `ask_user` through HTTP, and the derived thread status.
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -447,7 +447,7 @@ describe('WebSocket frames (contracts/hub-api.md §5)', () => {
   });
 });
 
-describe('user.ask and the thread status', () => {
+describe('ask_user and the thread status', () => {
   function toolCtx(over: Partial<ToolContext> = {}): ToolContext {
     return {
       accountId: ACCOUNT,
@@ -467,7 +467,7 @@ describe('user.ask and the thread status', () => {
 
   it('asks in a Work thread, shows Needs input, and returns the answer typed in a client', async () => {
     const [ask] = await area.tools.list(ACCOUNT);
-    expect(ask!.descriptor.name).toBe('user.ask');
+    expect(ask!.descriptor.name).toBe('ask_user');
     settings['policy.approvalTimeoutMinutes'] = 30;
     const pending = ask!.handler({ question: 'Which region?' }, toolCtx());
     let id = '';

@@ -81,6 +81,30 @@ describe('a run on the chat loop', () => {
     ]);
   });
 
+  it('a turn the user types into a run thread belongs to the run (turn and usage rows)', async () => {
+    const v = await runs.create({
+      accountId: ACCOUNT,
+      objective: '/tool plan.set {"steps":[{"title":"Wait"}]}',
+      origin: 'user',
+      authority: { kind: 'user', source: 'test' },
+      autonomy: 'ask_first',
+      start: true,
+    });
+    await env.chat.idle();
+    // The user writes into the run's thread from the composer: an ordinary user turn.
+    await env.chat.send(ACCOUNT, v.threadId, { text: 'Also mention the budget.' });
+    await env.chat.idle();
+    const turns = env.db.raw
+      .prepare('SELECT run_id AS runId FROM turn WHERE thread_id = ? ORDER BY idx')
+      .all(v.threadId) as { runId: string | null }[];
+    expect(turns.length).toBeGreaterThanOrEqual(2);
+    expect(turns.every((t) => t.runId === v.id)).toBe(true);
+    const usage = env.db.raw
+      .prepare('SELECT COUNT(*) AS n FROM usage_event WHERE thread_id = ? AND run_id IS NULL')
+      .get(v.threadId) as { n: number };
+    expect(usage.n).toBe(0);
+  });
+
   it('a chat offers work.start but not the run tools; Start runs the proposal', async () => {
     const chat = await env.threads.create(ACCOUNT, { mode: 'chat' });
     await env.chat.send(ACCOUNT, chat.id, {

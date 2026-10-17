@@ -28,6 +28,15 @@ M4 (ADR-091):
 | `0014_workspace` | `project_folder` (a folder bound to a project, canonical path, access, index status, file count, error; terminals have no table), `project_folder_file` (each indexed file linked to the file-backed source that holds its chunks) |
 | `0015_profile` | a partial unique index on live usernames, `provider_active` (the active account per provider kind), an index on `turn.started_at` for usage, and `import_record` (the import ledger with import id, target and SHA-256 dedupe) |
 
+M5 (ADR-092):
+
+| Migration | Tables |
+| --- | --- |
+| `0016_runs` | `run` (a `work` thread plus its run: origin, autonomy, status and pause reason, budgets and usage with time in milliseconds, authority, pending input, error count, progress note, template, expected output and result; one run per thread), `goal` (one open goal per run, created by the user or the agent, blocker count and budgets), `run_step` (the plan, one row per step; there is no `plan_json`), `subagent` (a child's role, objective, tools, inbox, thread and status). `agent_id` columns are plain TEXT until agents arrive (M6) |
+| `0017_schedules` | `schedule` (the rule, time zone, instructions, notify condition, delivery targets, output, catch-up policy, title, project, autonomy, next run and last outcome, including `no_news`), `schedule_fire` (every fire, catch-up run and recorded skip, with a unique index on schedule, kind and due time so a restart never fires the same rule time twice). Run ids are plain TEXT, so the history outlives a deleted run; the webhook secret is in the vault, not here |
+| `0018_code` | `environment` (one `local` row per account, with its health detail), `code_session` (account, folder, environment, mode, branch, worktree, status), `worktree` (path, branch, lease, status), `code_change` (one row per path: patch, binary flag, pending patch hash, review state and decided hunks, the tool call that made it), `code_review` (stored reviews, not in `docs/06`), `diff_comment` (author `user` or `review`, review id, submitted batch) |
+| `0019_requests` | `server_request` (kind, correlation, payload, target device, status, resolution, expiry and `expired_reason`: timeout, cancelled or restart), with a pending-by-thread index. Approvals keep their own table; `GET /requests` lists pending ones as `approval` items |
+
 Drizzle tables live one file per domain in `src/schema/`. Search is an external-content FTS5 table over
 `message_search`, an INTEGER-keyed copy of non-empty text parts kept in step by triggers, so FTS
 rowids stay stable across `VACUUM` (a TEXT-keyed table's rowids may be renumbered).

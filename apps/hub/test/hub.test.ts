@@ -335,6 +335,48 @@ describe('events', () => {
     expect(text).toContain('event: test.live');
   });
 
+  it("never lists or replays another account's events, live or stored", async () => {
+    const session = await signIn();
+    const auth = { ...HOST, authorization: `Bearer ${session}` };
+    const owner = (await hub.app.inject({ url: '/api/v1/account', headers: auth })).json()
+      .accountId as string;
+    const cursor = await hub.events.emit({ name: 'test.cursor', payload: {} });
+    await hub.events.emit({ name: 'test.mine', accountId: owner, payload: {} });
+    await hub.events.emit({ name: 'test.theirs', accountId: 'someone-else', payload: {} });
+    await hub.events.emit({ name: 'test.system', payload: {} });
+    const listed = await hub.app.inject({
+      url: `/api/v1/events?after=${cursor.id}`,
+      headers: auth,
+    });
+    expect(listed.json().events.map((e: { name: string }) => e.name)).toEqual([
+      'test.mine',
+      'test.system',
+    ]);
+    // A reconnect with a cursor replays stored events: the same filter applies.
+    const addr = await hub.app.listen({ host: '127.0.0.1', port: 0 });
+    const ac = new AbortController();
+    const res = await fetch(`${addr}/api/v1/events/stream`, {
+      headers: { authorization: `Bearer ${session}`, 'last-event-id': cursor.id },
+      signal: ac.signal,
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    setTimeout(() => {
+      void hub.events.emit({ name: 'test.live_theirs', accountId: 'someone-else', payload: {} });
+      void hub.events.emit({ name: 'test.live_mine', accountId: owner, payload: {} });
+    }, 50);
+    while (!text.includes('test.live_mine')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value);
+    }
+    ac.abort();
+    expect(text).toContain('event: test.mine');
+    expect(text).toContain('event: test.system');
+    expect(text).not.toContain('theirs');
+  });
+
   it('sends only live events when the client gives no cursor', async () => {
     const session = await signIn();
     await hub.events.emit({ name: 'test.old', payload: {} });
