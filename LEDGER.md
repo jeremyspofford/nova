@@ -3,8 +3,8 @@
 > **This is the single source of truth for build progress.** The build agent keeps it current
 > before and after every task (`AGENTS.md` §4). Task IDs come from `docs/29-task-breakdown.md`.
 
-Current milestone: **M6 — Agents, Computers & Channels**
-Last updated: 2026-10-17T18:00:00Z
+Current milestone: **M6.5 — Networking, Transports & Add Device**
+Last updated: 2026-10-17T19:30:00Z
 
 ## Phase status
 
@@ -12,7 +12,7 @@ Last updated: 2026-10-17T18:00:00Z
 | --- | --- | --- | --- |
 | Phase 0 — reconcile external findings | done | c63b82d | `docs/external/RECONCILIATION.md` (141 capabilities); `node scripts/check-spec.mjs` |
 | Phase 1 — finish the specification | done | 2868ce3 | topic docs + contracts updated; `node scripts/check-spec.mjs`; all schemas compile (Ajv 2020) |
-| Phase 2 — build | in_progress | 10bbcf4 | M0-M5 done |
+| Phase 2 — build | in_progress | 10bbcf4 | M0-M6 done |
 
 ## Milestone status
 
@@ -24,7 +24,7 @@ Last updated: 2026-10-17T18:00:00Z
 | M3 Tools/MCP/Policy | done | 2026-10-17 | 2026-10-17 | J1, J2, J3 green 3/3 in parallel (axe clean); `docs/demos/M3.md` |
 | M4 Plugins/Workspace/Profile | done | 2026-10-17 | 2026-10-17 | J1-J4 green 3/3 (axe clean); `docs/demos/M4.md` |
 | M5 Agent Runtime (Work & Code) | done | 2026-10-17 | 2026-10-17 | J1-J6 green twice in a row (axe clean); `docs/demos/M5.md` |
-| M6 Agents/Computers/Channels | todo | — | — | — |
+| M6 Agents/Computers/Channels | done | 2026-10-17 | 2026-10-17 | J1-J8 green (17/17, axe clean), J7 and J8 three runs in a row; `docs/demos/M6.md` |
 | M6.5 Networking/Add Device | todo | — | — | — |
 | M7 Cloud/Sync/Multi-device | todo | — | — | — |
 | M7.5 Boot/Power/Firmware | todo | — | — | — |
@@ -131,6 +131,29 @@ Last updated: 2026-10-17T18:00:00Z
 | T-M5-22 | M5 | FR-211 | done | 013ed1b | core code-git.test (marker hook never runs) | Hook-free app Git operations |
 | T-M5-23 | M5 | FR-216, FR-219, FR-220 | done | 013ed1b | core documents-* tests; web documents-preview.test; core runs-escalation.test (deep research) | Document outputs; deep research template; dictation deferred |
 | T-M5-14 | M5 | — | done | cefed67 | `scripts/e2e-docker.sh --repeat-each=2`: 18/18 (smoke, J1-J6); J6 also with a Docker sandbox | E2E J5, J6 |
+| T-M6-00 | M6 | — | done | d120865, 20de376 | core and storage tests | Seams for computers, the egress proxy, channels and the M6 areas; audit kinds |
+| T-M6-01 | M6 | FR-079 | done | e370899 | core agents-service, hub agents tests; web agents-* tests | Agent model, creation page, responsibilities, avatar |
+| T-M6-02 | M6 | FR-141, FR-142 | done | e370899, 827238a | `node scripts/cargo.mjs test` (120); hub devices-novad (real binary) | `novad` supervisor, modules, signed capability document; Ed25519/SHA-2 from vetted crates |
+| T-M6-03 | M6 | FR-107, FR-080, FR-081 | done | e370899, 2b29a96, 6772516 | core sandbox-bwrap, sandbox-container, sandbox-protect, computers-service tests | bubblewrap + container substrates, protected paths mounted read-only, mock cloud and device computers |
+| T-M6-04 | M6 | FR-092, FR-093, FR-087 | done | e370899, 6772516 | core browser-*, screen-* tests; J8 | Browser controller (Playwright), computer use with tiers and the kill key, takeover |
+| T-M6-05 | M6 | FR-086, FR-075 | done | e370899 | core browser-signin, screen-service tests | Private sign-in, appshots |
+| T-M6-06 | M6 | FR-082, FR-083 | done | e370899, 72e7144 | core agents-proactive, agents-loop (declared read-only MCP tool) | Read-only proactive research, background delegation |
+| T-M6-07 | M6 | FR-084 | done | e370899, 72e7144 | core gate-m6-agents; hub m6-integration | Agent rules in the gate (never the managed layer; a failing source denies) |
+| T-M6-08 | M6 | FR-056, FR-088, FR-110 | done | e370899, 6772516 | core channels-*, triggers-service; hub channels; J7 | Slack, Teams, webhook, in-app channels; triggers; private-to-shared check |
+| T-M6-09 | M6 | FR-089, FR-090 | done | e370899, 2b29a96 | core agents-service; hub m6-integration | Agent memory and notes; activity, pause, stop, delete with its computer |
+| T-M6-10 | M6 | FR-144, FR-145, FR-148 | done | e370899 | core devices-service; Rust power, update tests | Power and Wake-on-LAN, services, signed updates with rollback |
+| T-M6-11 | M6 | FR-102, FR-103 | done | e370899, 72e7144 | core egress-proxy, egress-policy, browser-injection tests; J8 | Egress control and injection defense |
+| T-M6-12 | M6 | FR-036, FR-037, FR-076, FR-012 | done | e370899 | core spaces-*, web spaces-*, pets-* tests | Spaces and pages, sites, visualizations, pets |
+| T-M6-13 | M6 | FR-150 | done | e370899 | core devices-service | Per-device overrides and policy |
+| T-M6-14 | M6 | — | done | 6772516 | `scripts/e2e-docker.sh`: 17/17; J7 and J8 three runs in a row | E2E J7, J8 |
+| T-M6-15 | M6 | FR-193, FR-194 | done | e370899, 72e7144 | core computers-egress (credential injection on real substrates), egress-proxy | Egress proxy modes and credential injection; external-agent rule |
+| T-M6-16 | M6 | FR-195 | done | e370899 | core sandbox-container (micro-VM flag) | Micro-VM substrate behind a flag (no runner shipped) |
+| T-M6-17 | M6 | FR-201, FR-206 | done | e370899, 72e7144 | core triggers-service, scheduler-service; J7 | MCP event subscriptions; agent self-scheduling |
+| T-M6-18 | M6 | FR-207, FR-208, FR-209 | done | e370899, 6772516 | core screen-*, browser-* tests; J8 | Control tiers; page tools; local browser fallback refuses with the reason (device browser module is M6.5) |
+| T-M6-19 | M6 | FR-210 | done | e370899, 8583520 | core devices-files; hub devices; J7 step 7 | `novad` staged writes, access requests, local MCP pass-through; agent device-file tools |
+| T-M6-20 | M6 | FR-062, FR-067, FR-068, FR-070, FR-072, FR-073, FR-078, FR-097 | done | e370899, 72e7144 | core code-m6-*, sandbox-publish, browser-devserver; web code-m6-* | Code environments, PRs and CI, worktree leases, dev servers through a port bridge, auto-verify, cross-session tools, budgets |
+| T-M6-21 | M6 | FR-060 | done | e370899, 72e7144 | core channels-notify, notifications; web channels-routing | Notification routing and quiet hours |
+| T-M6-22 | M6 | — | done | 3224b69, b658201 | `node scripts/check-spec.mjs` | Contracts, data model, ADR-093, topic docs, demo, ledger |
 | T-M6-01 | M6 | FR-079 | todo | — | — | Agent model + creation/onboarding + responsibilities |
 | T-M6-02 | M6 | FR-141, FR-142 | todo | — | — | `novad` supervisor + module sandbox + capability doc |
 | T-M6-03 | M6 | FR-107 | todo | — | — | Local sandbox (bwrap) + container + cloud stub |
@@ -256,6 +279,10 @@ Last updated: 2026-10-17T18:00:00Z
 - R-016: Documents are built and read synchronously on the Hub's main thread (a 100k-row workbook takes about 1 s). Mitigation: caps on size; move to a worker thread if it matters (ADR-092).
 - R-017: Office files are validated structurally (zip parts, content types, relationships, XML), not opened in an office suite in tests. Mitigation: minimal parts; add a conversion check in CI before M10.
 - R-018: Auto-review's circuit breaker and `startTurn`'s queue live in memory: a Hub restart resets the breaker count and drops queued runtime starts (the areas recover their own state). Mitigation: documented in ADR-092; persist if it becomes a problem.
+- R-019: The agent browser depends on Playwright's Chromium on the Hub (`npx playwright install chromium`); without it the browser tools refuse with the reason. Mitigation: diagnostics report it; CI and the E2E container have it.
+- R-020: Protected locations in sandboxes are mounted only where they exist when a command starts and on the path from a root to the working folder; a credential folder elsewhere in a granted folder stays visible to that command (Hub and `novad`). Mitigation: file tools refuse them at any depth; revisit with a full walk or landlock in M9.
+- R-021: The dev-server bridge port listens on 127.0.0.1 without a token, so any local process on the Hub machine can reach a running dev server (as with a native dev server). Mitigation: loopback only; closed with the server; documented in docs/12 §8.
+- R-022: `novad` uses bearer tokens over plain LAN HTTP until M6.5 (as compute nodes, ADR-089). Mitigation: per-device credentials, hashed; signed capability documents and updates; the Mesh in M6.5.
 
 ## Deferrals
 
@@ -266,20 +293,18 @@ Last updated: 2026-10-17T18:00:00Z
 | FR-126 (mTLS, VRAM, quiet hours, `/node/v1/services/*`) | Bearer tokens over LAN until the Mesh (ADR-089) | T-M6.5 networking tasks |
 | docs/07 §9 concurrency limits | Global and per-provider semaphores are not enforced yet | T-M9 performance tasks |
 | FR-149 (database and backups at rest, sealed mode) | No encrypting SQLite layer; backups and sealed mode not yet | T-M9 hardening tasks |
-| FR-042 (`deviceId` server field; `oauth`/`auth` in the shared server schema) | OAuth works for remote servers (M4); device-hosted servers come with devices | T-M6 device tasks |
+| FR-042 (`deviceId` server field; `oauth`/`auth` in the shared server schema) | OAuth works for remote servers (M4); device-hosted servers come with devices | T-M6.5 device tasks |
 | FR-185 (imported user instructions) | Import writes `<dataDir>/instructions.md`; the chat reads it with instruction-file discovery | T-M5 (FR-185) |
 | FR-011 (apply a custom palette) | Themes share and import in M4; applying a saved custom palette fully is not wired | T-M8 theming tasks |
 | FR-113 (public profile card, OIDC sign-in) | Not in M4 scope | T-M7 cloud tasks |
 | FR-115 (entitlements and limits), docs/14 §6 (spend caps, clear usage) | Usage insights only in M4 | T-M8 governance tasks |
-| FR-044 (`nova mcp stdio` launcher; resources and prompts on Nova's server) | Streamable HTTP with tools only in M4 | T-M6 device tasks |
-| FR-199 (bundle servers in the sandbox) | Bundle servers run like other MCP stdio servers (R-012); confirmed permissions are recorded | T-M6 (FR-107, FR-193) |
+| FR-044 (`nova mcp stdio` launcher; resources and prompts on Nova's server) | Streamable HTTP with tools only in M4 | T-M6.5 device tasks |
+| FR-199 (bundle servers in the sandbox) | Bundle servers run like other MCP stdio servers (R-012); confirmed permissions are recorded | T-M9 (MCP stdio servers in the sandbox and egress proxy) |
 | FR-216 (dictation), FR-031 (realtime voice) | Need a local speech engine or a realtime audio provider; Nova ships neither (assessment in ADR-092) | T-M9 or a voice milestone |
 | FR-030 (image generation visible) | Built and tested; hidden until a provider adapter has an images call (`Provider.generateImage`) | T-M7 provider tasks |
-| FR-070 (PR flow, CI status), FR-073 (worktree registry routes, leases, handoff, `.worktreeinclude`) | Commits stay local in M5; worktrees are created per session only | T-M7 code tasks |
-| FR-055 (webhook signing-secret reveal) | Secrets never appear in responses; a rotate-and-show-once route is needed | T-M6 channels |
-| FR-188 (`ask_user` answer authority) | The answer returns as an untrusted tool result; a loop hook to carry the user's authority is needed | T-M6 |
-| FR-053 (sub-agent tool allow-list) | Enforced only through the read-only profile | T-M6 |
-| FR-060 (quiet hours for goal continuations), FR-206 (self-set wakes), agent-made schedules | Agents arrive in M6 | T-M6 agents |
+| FR-055 (webhook signing-secret reveal) | Secrets never appear in responses; a rotate-and-show-once route is needed | T-M7 |
+| FR-188 (`ask_user` answer authority) | The answer returns as an untrusted tool result; a loop hook to carry the user's authority is needed | T-M7 |
+| FR-053 (sub-agent tool allow-list) | Enforced only through the read-only profile | T-M7 |
 | FR-074 (tree-sitter index; renames in diffs) | Pattern-based symbol index; renames show as delete + add | T-M9 |
 | FR-198 (allowed domains in the App frame header; Apps in the composer's + menu; `UiEntryPointView.domains`) | The frame, bridge, CSP and entry points ship; these surfaces do not | T-M8 extensibility tasks |
 | FR-200 (hooks from other plugin layouts) | Noted on the import item; not converted | T-M8 extensibility tasks |
@@ -304,6 +329,32 @@ queued message and a runtime start.
 | Schedule API body differs from `contracts/schemas/schedule.json` (`target`, `origin`, `wakeReason` arrive with agents; extra M5 fields) | T-M6 agents |
 | Requests: `request.created` reaches every stream (not only clients that declared the kind); resolution shape, `targetDeviceId: null`, id prefix and the full hello (protocol version, limits, `suppressEvents`) differ from contracts/hub-api.md §5 | T-M6 clients |
 | Images cannot be edited (FR-030); only `git.status`, `git.diff` and `git.log` exist among `git.*` tools | T-M7 |
+
+## Known gaps (code vs spec, M6)
+
+Found by the M6 docs review, the web agents and the journeys; fixed during integration: protected
+paths in sandboxes (writable `.git` let a command reach the Hub's own Git), hand-written crypto in
+`novad`, agent rules reaching the managed layer, unsealed browser screenshots and cookies, the
+agent browser losing its proxy credentials, a shared-channel reply counted as already public, the
+data-directory deny blocking agents' own computer folders, Bypass offered for remote sessions, a
+Git host token sent to `http://` remotes, `code.autoVerify` settable by a project, the egress
+deny list ignored by the gate and the browser ignoring the egress mode, notification copies to
+shared channels, an unsigned webhook event id, and container environments outside the proxy.
+
+| Gap | Follow-up |
+| --- | --- |
+| `novad` modules for compute, browser, screen and capture are placeholders; modules run as `novad`'s user; no macOS or Windows sandbox; install and uninstall | T-M6.5 device tasks |
+| Local browser fallback (FR-209): the consent flow refuses until a device offers a browser module; the extension bridge (FR-096) | T-M6.5 |
+| SSH environments have no transport bound; WSL answers `not_windows` everywhere; remote sessions have no Hub-side diff, review or commit | T-M7 code tasks |
+| Code: handoff, three-way merge, best-of-N, cloud environments; delegating from an agent to a Code session | T-M7 |
+| Browser: console and network capture, hover, element screenshots, restart after a crash, per-scope site levels; `GET /browser/actions` lists oldest first | T-M7 browser tasks |
+| Channels: email adapter, Telegram adapter, Slack interactive buttons; refresh route for MCP subscriptions; a test-notification route; a channel message log route | T-M7 channels |
+| Egress: SOCKS5; the browser ignores scope policies; `web.fetch` and MCP stdio servers bypass the proxy (R-012); compressed bodies are not scanned for credentials | T-M9 hardening |
+| Agents: goal retry after a usage limit; `thread.status.changed` for agents; plugins per agent | T-M7 |
+| Screen: the real desktop through `novad`; purchase classification of screen actions; browser takeover input not in `screen_action` | T-M6.5, T-M9 |
+| Spaces and sites: reorder and delete pages in the UI; change a site's source in the UI; remote hosting targets | T-M8 |
+| Devices UI: no QR code for Add a device; no routes for managed services, available updates, owner overrides | T-M6.5 Add Device |
+| A device-file commit's approval card shows the staged id, not the diff (the diff is on the device page) | T-M7 |
 
 ## Milestone summaries
 
@@ -371,3 +422,20 @@ queued message and a runtime start.
   listings and several UI corrections. Evidence: about 2,800 unit and integration tests across 14
   packages; smoke and J1-J6 green twice in a row, J6 also with a Docker sandbox. Risks added:
   R-016..R-018; known gaps listed above. Next: M6 (agents, computers and channels).
+- **M6** (e370899 and the M6 fix, web, docs, novad and e2e commits): always-on agents with
+  responsibilities, rules the gate enforces, notes and memory, read-only proactive research,
+  goals, self-set wakes, delegation and an external-agent rule; channels (Slack, Teams, webhook,
+  in-app) with a private-to-shared check, approvals answered from a channel, triggers, signed MCP
+  event subscriptions, notification routing and quiet hours; computers (bubblewrap and container
+  substrates, a mock cloud, devices) with an egress proxy as the only network route, HTTPS
+  inspection, injected credentials and a decision log; an agent browser on Playwright with site
+  permissions, a page-action classifier, private sign-in and injection defense; computer use with
+  tiers, grants, the kill key and takeover; `novad` with a supervisor, signed capabilities,
+  power and Wake-on-LAN, signed updates, two-phase device writes and access requests; Code
+  environments, pull requests and CI, worktree leases, dev servers through a port bridge and
+  auto-verify; spaces, pages, sites, visualizations and pets; and the web UI for all of it on one
+  shared event stream. Found and fixed in integration: see the M6 known gaps above (fourteen
+  security and correctness fixes before the milestone closed). Evidence: about 3,900 unit and
+  integration tests across 15 packages and 120 Rust tests; smoke and J1-J8 green (17/17), J7 and
+  J8 three runs in a row. Risks added: R-019..R-022. Next: M6.5 (networking, transports and Add
+  Device).
