@@ -4,7 +4,6 @@
 import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import {
   NovaError,
-  parseModelRef,
   uuidv7,
   type CreateThreadRequest,
   type MessageView,
@@ -17,7 +16,7 @@ import {
   type UpdateThreadRequest,
 } from '@nova/shared';
 import { schema, type NovaDatabase } from '@nova/storage';
-import type { ProviderRegistry } from './registry.ts';
+import type { ModelRouter } from './routing/types.ts';
 
 const { thread, message, messagePart, project } = schema;
 
@@ -36,7 +35,7 @@ export interface ListThreadsOptions {
 
 export interface ThreadServiceOptions {
   db: NovaDatabase;
-  registry: ProviderRegistry;
+  router: ModelRouter;
   /** The `chat.defaultModel` setting after precedence (docs/14 §1); null when unset. */
   defaultModel?: (accountId: string) => Promise<string | null>;
   now?: () => Date;
@@ -44,13 +43,13 @@ export interface ThreadServiceOptions {
 
 export class ThreadService {
   readonly #db: NovaDatabase;
-  readonly #registry: ProviderRegistry;
+  readonly #router: ModelRouter;
   readonly #defaultModel: (accountId: string) => Promise<string | null>;
   readonly #now: () => Date;
 
   constructor(opts: ThreadServiceOptions) {
     this.#db = opts.db;
-    this.#registry = opts.registry;
+    this.#router = opts.router;
     this.#defaultModel = opts.defaultModel ?? (() => Promise.resolve(null));
     this.#now = opts.now ?? (() => new Date());
   }
@@ -59,7 +58,7 @@ export class ThreadService {
   async defaultModel(accountId: string): Promise<string | null> {
     const setting = await this.#defaultModel(accountId);
     if (setting && (await this.#modelUsable(accountId, setting))) return setting;
-    return this.#registry.firstModel(accountId);
+    return this.#router.firstModel(accountId);
   }
 
   async create(accountId: string, req: CreateThreadRequest): Promise<ThreadView> {
@@ -273,15 +272,8 @@ export class ThreadService {
     }
   }
 
-  async #modelUsable(accountId: string, ref: string): Promise<boolean> {
-    const parsed = parseModelRef(ref);
-    if (!parsed) return false;
-    try {
-      await this.#registry.account(accountId, parsed.providerAccountId);
-      return true;
-    } catch {
-      return false;
-    }
+  #modelUsable(accountId: string, ref: string): Promise<boolean> {
+    return this.#router.usable(accountId, ref);
   }
 }
 

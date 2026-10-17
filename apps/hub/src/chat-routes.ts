@@ -19,6 +19,7 @@ import {
 import {
   readAttachmentBlob,
   type ChatService,
+  type ModelRouter,
   type ProviderRegistry,
   type ThreadService,
 } from '@nova/core';
@@ -30,6 +31,7 @@ export interface ChatRouteDeps {
   dataDir: string;
   events: EventStore;
   registry: ProviderRegistry;
+  router: ModelRouter;
   threads: ThreadService;
   chat: ChatService;
   /** The authenticated account id; throws `token_required` without a principal. */
@@ -51,7 +53,7 @@ const searchQuerySchema = z.object({
 });
 
 export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): void {
-  const { db, events, registry, threads, chat, accountOf } = deps;
+  const { db, events, registry, router, threads, chat, accountOf } = deps;
 
   // ---- providers & models -------------------------------------------------------------
   app.get('/api/v1/providers', async (req) => ({
@@ -78,7 +80,7 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
   });
 
   app.get('/api/v1/models', async (req) => ({
-    items: await registry.listModels(await accountOf(req)),
+    items: await router.listModels(await accountOf(req)),
   }));
 
   // ---- account --------------------------------------------------------------------------

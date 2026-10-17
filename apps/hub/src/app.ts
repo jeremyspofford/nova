@@ -20,10 +20,12 @@ import {
 } from '@nova/shared';
 import {
   ChatService,
+  DirectRouter,
   ProviderRegistry,
   ThreadService,
   type ChatServiceOptions,
   type ProviderFactory,
+  type ModelRouter,
 } from '@nova/core';
 import { MemorySecretStore, type SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
@@ -56,6 +58,8 @@ export interface HubDeps {
   /** Override provider construction (tests use scripted mock providers). */
   providerFactory?: ProviderFactory;
   chat?: Pick<ChatServiceOptions, 'flushIntervalMs' | 'deltaIntervalMs' | 'systemPrompt'>;
+  /** Build the model router (default: DirectRouter over the provider registry). */
+  router?: (registry: ProviderRegistry) => ModelRouter;
 }
 
 export interface Hub {
@@ -63,6 +67,7 @@ export interface Hub {
   auth: AuthService;
   events: EventStore;
   registry: ProviderRegistry;
+  router: ModelRouter;
   threads: ThreadService;
   chat: ChatService;
 }
@@ -104,14 +109,15 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     log: log.child('providers'),
     ...(deps.providerFactory ? { factory: deps.providerFactory } : {}),
   });
+  const router: ModelRouter = deps.router?.(registry) ?? new DirectRouter(registry);
   const threads = new ThreadService({
     db,
-    registry,
+    router,
     defaultModel: async () => resolveSetting('chat.defaultModel', await loadLayers()).value,
   });
   const chat = new ChatService({
     db,
-    registry,
+    router,
     threads,
     events,
     dataDir,
@@ -339,7 +345,17 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     if (!owner) throw new NovaError('auth_missing', 'the Hub has no owner account yet');
     return owner.id;
   };
-  registerChatRoutes(app, { db, dataDir, events, registry, threads, chat, accountOf, trackStream });
+  registerChatRoutes(app, {
+    db,
+    dataDir,
+    events,
+    registry,
+    router,
+    threads,
+    chat,
+    accountOf,
+    trackStream,
+  });
 
   void app.register((scoped, _opts, done) => {
     scoped.get('/api/v1/ws', { websocket: true }, (socket, req) => {
@@ -396,7 +412,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     log.warn('web UI not built; serving the API only', { webDir: config.webDir });
   }
 
-  return { app, auth, events, registry, threads, chat };
+  return { app, auth, events, registry, router, threads, chat };
 }
 
 async function authenticate(req: FastifyRequest, auth: AuthService): Promise<Principal | null> {

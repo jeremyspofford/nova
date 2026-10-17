@@ -6,10 +6,12 @@ import { MemorySecretStore } from '@nova/secrets';
 import { migrate, openDatabase, type NovaDatabase } from '@nova/storage';
 import {
   ChatService,
+  DirectRouter,
   MemoryEventSink,
   ProviderRegistry,
   ThreadService,
   type ChatServiceOptions,
+  type ModelRouter,
   type ProviderFactory,
 } from '../src/index.ts';
 
@@ -20,6 +22,7 @@ export interface Env {
   dir: string;
   secrets: MemorySecretStore;
   registry: ProviderRegistry;
+  router: ModelRouter;
   threads: ThreadService;
   chat: ChatService;
   events: MemoryEventSink;
@@ -34,6 +37,8 @@ export interface EnvOptions {
   factory?: ProviderFactory;
   chat?: Partial<ChatServiceOptions>;
   path?: string;
+  /** Build the router from the registry (default: DirectRouter). */
+  router?: (registry: ProviderRegistry) => ModelRouter;
 }
 
 export async function makeEnv(opts: EnvOptions = {}): Promise<Env> {
@@ -51,16 +56,17 @@ export async function makeEnv(opts: EnvOptions = {}): Promise<Env> {
   const factory: ProviderFactory = (input) =>
     opts.factory?.(input) ?? (input.row.provider === 'mock' ? mock : undefined);
   const registry = new ProviderRegistry({ db, secrets, factory });
+  const router: ModelRouter = opts.router?.(registry) ?? new DirectRouter(registry);
   const defaultModel = { value: null as string | null };
   const threads = new ThreadService({
     db,
-    registry,
+    router,
     defaultModel: () => Promise.resolve(defaultModel.value),
   });
   const events = new MemoryEventSink();
   const chat = new ChatService({
     db,
-    registry,
+    router,
     threads,
     events,
     dataDir: join(dir, 'data'),
@@ -74,6 +80,7 @@ export async function makeEnv(opts: EnvOptions = {}): Promise<Env> {
     dir,
     secrets,
     registry,
+    router,
     threads,
     chat,
     events,

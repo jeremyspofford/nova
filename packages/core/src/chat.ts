@@ -17,10 +17,8 @@ import type {
   ChatRequest,
   ContentPart,
   NormalizedMessage,
-  Provider,
   ReasoningLevel,
   StopReason,
-  StreamEvent,
 } from '@nova/providers';
 import { defaultRedactor, type Redactor } from '@nova/security';
 import { schema, type NovaDatabase } from '@nova/storage';
@@ -33,7 +31,13 @@ import {
   writeAttachmentBlob,
 } from './attachments.ts';
 import type { EventSink } from './events.ts';
-import type { ProviderRegistry } from './registry.ts';
+import {
+  locationLabel,
+  type ModelRoute,
+  type ModelRouter,
+  type RoutedEvent,
+  type RouteTarget,
+} from './routing/types.ts';
 import { titleFrom, type ThreadService } from './threads.ts';
 
 const { thread, turn, message, messagePart, attachment, usageEvent } = schema;
@@ -44,7 +48,7 @@ export const DEFAULT_SYSTEM_PROMPT =
 
 export interface ChatServiceOptions {
   db: NovaDatabase;
-  registry: ProviderRegistry;
+  router: ModelRouter;
   threads: ThreadService;
   events: EventSink;
   /** Hub data directory; attachment blobs live under `blobs/attachments/` (docs/06 §3). */
@@ -80,9 +84,11 @@ interface TurnRun {
   textPartId: string;
   reasoningPartId: string;
   ref: string;
+  route: ModelRoute;
+  /** The target answering now; replaced if the router falls back before any output. */
+  target: RouteTarget;
   modelId: string;
   providerKind: string;
-  provider: Provider;
   vision: boolean;
   reasoningLevel: string | null;
   signal: AbortSignal;
@@ -105,7 +111,7 @@ interface TurnRun {
 
 export class ChatService {
   readonly #db: NovaDatabase;
-  readonly #registry: ProviderRegistry;
+  readonly #router: ModelRouter;
   readonly #threads: ThreadService;
   readonly #events: EventSink;
   readonly #dataDir: string;
@@ -119,7 +125,7 @@ export class ChatService {
 
   constructor(opts: ChatServiceOptions) {
     this.#db = opts.db;
-    this.#registry = opts.registry;
+    this.#router = opts.router;
     this.#threads = opts.threads;
     this.#events = opts.events;
     this.#dataDir = opts.dataDir;
@@ -234,7 +240,11 @@ export class ChatService {
       throw new NovaError('validation', 'choose a model first: no provider is configured', {
         details: { reason: 'no_model' },
       });
-    const resolved = await this.#registry.resolve(accountId, ref);
+    const route = await this.#router.route(accountId, ref, {
+      needsVision: prepared.some((a) => attachmentKind(a.mime) === 'image'),
+    });
+    const primary = route.targets[0];
+    if (!primary) throw new NovaError('validation', `unknown model: ${ref}`);
     const reasoningLevel = req.reasoningLevel ?? row.reasoningLevel ?? null;
     const blobs = prepared.map((a) => writeAttachmentBlob(this.#dataDir, a.bytes));
 
@@ -256,7 +266,7 @@ export class ChatService {
         idx,
         status: 'in_progress',
         trigger: 'user',
-        executionLocation: 'hub',
+        executionLocation: locationLabel(primary.location),
         modelId: ref,
         reasoningLevel,
         startedAt: now,
@@ -320,7 +330,7 @@ export class ChatService {
         provenance: 'typed',
         status: 'streaming',
         modelId: ref,
-        provider: resolved.account.provider,
+        provider: primary.providerKind,
         createdAt: now,
         updatedAt: now,
       });
@@ -351,7 +361,13 @@ export class ChatService {
       actor: 'user',
       accountId,
       correlation,
-      payload: { threadId, turnId, idx, trigger: 'user', executionLocation: 'hub' },
+      payload: {
+        threadId,
+        turnId,
+        idx,
+        trigger: 'user',
+        executionLocation: locationLabel(primary.location),
+      },
     });
     await this.#events.emit({
       name: 'chat.message.created',
@@ -377,10 +393,11 @@ export class ChatService {
       textPartId,
       reasoningPartId,
       ref,
-      modelId: resolved.modelId,
-      providerKind: resolved.account.provider,
-      provider: resolved.provider,
-      vision: resolved.vision,
+      route,
+      target: primary,
+      modelId: primary.modelId,
+      providerKind: primary.providerKind,
+      vision: primary.vision,
       reasoningLevel,
       signal,
       startedAt,
@@ -406,14 +423,13 @@ export class ChatService {
   async #run(run: TurnRun): Promise<void> {
     try {
       const messages = await this.#context(run);
-      const req: ChatRequest = {
-        model: run.modelId,
+      const req: Omit<ChatRequest, 'model'> = {
         messages,
         signal: run.signal,
         metadata: { threadId: run.threadId, turnId: run.turnId },
       };
       if (run.reasoningLevel) req.reasoning = { level: run.reasoningLevel as ReasoningLevel };
-      await this.#consume(run, run.provider.stream(req, { requestId: run.turnId }));
+      await this.#consume(run, this.#router.stream(run.route, req, { requestId: run.turnId }));
     } catch (err) {
       run.stop = 'error';
       run.error = {
@@ -429,7 +445,26 @@ export class ChatService {
     }
   }
 
-  async #consume(run: TurnRun, stream: AsyncIterable<StreamEvent>): Promise<void> {
+  /** The router fell back before any output: the turn now runs on another target (FR-127). */
+  async #reroute(run: TurnRun, target: RouteTarget): Promise<void> {
+    run.target = target;
+    run.modelId = target.modelId;
+    run.providerKind = target.providerKind;
+    run.vision = target.vision;
+    const now = this.#now().toISOString();
+    await this.#db.transaction(async () => {
+      await this.#db.orm
+        .update(turn)
+        .set({ executionLocation: locationLabel(target.location), updatedAt: now })
+        .where(eq(turn.id, run.turnId));
+      await this.#db.orm
+        .update(message)
+        .set({ provider: target.providerKind, updatedAt: now })
+        .where(eq(message.id, run.assistantId));
+    });
+  }
+
+  async #consume(run: TurnRun, stream: AsyncIterable<RoutedEvent>): Promise<void> {
     const it = stream[Symbol.asyncIterator]();
     // Race every read against the abort signal so a provider that ignores it cannot hold a
     // cancelled turn open.
@@ -448,6 +483,9 @@ export class ChatService {
       if (r.done) return;
       const e = r.value;
       switch (e.type) {
+        case 'route':
+          if (e.target !== run.target) await this.#reroute(run, e.target);
+          break;
         case 'text_delta':
           if (!e.text) break;
           run.firstTokenAt ??= Date.now();
@@ -606,7 +644,7 @@ export class ChatService {
       cachedTokens: 0,
       costUsd: 0,
     };
-    const price = await this.#registry.pricing(run.accountId, run.providerKind, run.modelId);
+    const price = await this.#router.pricing(run.accountId, run.providerKind, run.modelId);
     if (price)
       usage.costUsd = (usage.inputTokens * price.costIn + usage.outputTokens * price.costOut) / 1e6;
     const endMs = Date.now();

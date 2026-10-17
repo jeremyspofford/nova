@@ -297,7 +297,12 @@ describe('messages, streaming and cancel (FR-018)', () => {
     const res = await send('POST', `/api/v1/threads/${t.id}/messages`, { text: 'Hello Nova' });
     expect(res.statusCode).toBe(202);
     const ids = res.json();
-    expect(Object.keys(ids).sort()).toEqual(['assistantMessageId', 'turnId', 'userMessageId']);
+    expect(Object.keys(ids).sort()).toEqual([
+      'assistantMessageId',
+      'disposition',
+      'turnId',
+      'userMessageId',
+    ]);
     await hub.chat.idle();
     const detail = (await get(`/api/v1/threads/${t.id}`)).json();
     expect(detail.thread).toMatchObject({ title: 'Hello Nova', state: 'idle' });

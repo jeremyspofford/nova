@@ -521,7 +521,7 @@ describe('recovery and shutdown', () => {
     // A second engine on the same database stands in for the restarted process.
     const restarted = new ChatService({
       db: env.db,
-      registry: env.registry,
+      router: env.router,
       threads: env.threads,
       events: new MemoryEventSink(),
       dataDir: join(env.dir, 'data'),
@@ -540,7 +540,7 @@ describe('recovery and shutdown', () => {
     await env.chat.send(ACCOUNT, t.id, { text: 'a b c d e' });
     const other = new ChatService({
       db: env.db,
-      registry: env.registry,
+      router: env.router,
       threads: env.threads,
       events: new MemoryEventSink(),
       dataDir: join(env.dir, 'data'),

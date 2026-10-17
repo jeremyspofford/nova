@@ -59,8 +59,38 @@ export interface ProviderTestResult {
   models?: number;
 }
 
-/** A model is addressed as `<providerAccountId>/<modelId>`. */
+/**
+ * A model is addressed as `<providerAccountId>/<modelId>` (a provider account),
+ * `node:<nodeId>/<modelId>` (a compute node, FR-126) or `preset:<presetId>` (a virtual
+ * model, FR-221).
+ */
 export type ModelRef = string;
+
+export type ParsedModelRef =
+  | { kind: 'account'; providerAccountId: string; modelId: string }
+  | { kind: 'node'; nodeId: string; modelId: string }
+  | { kind: 'preset'; presetId: string };
+
+export function nodeModelRef(nodeId: string, modelId: string): ModelRef {
+  return `node:${nodeId}/${modelId}`;
+}
+
+export function presetRef(presetId: string): ModelRef {
+  return `preset:${presetId}`;
+}
+
+export function parseAnyModelRef(ref: string): ParsedModelRef | null {
+  if (ref.startsWith('preset:')) {
+    const presetId = ref.slice('preset:'.length);
+    return /^[a-z0-9][a-z0-9-]{0,40}$/.test(presetId) ? { kind: 'preset', presetId } : null;
+  }
+  if (ref.startsWith('node:')) {
+    const p = parseModelRef(ref.slice('node:'.length));
+    return p ? { kind: 'node', nodeId: p.providerAccountId, modelId: p.modelId } : null;
+  }
+  const p = parseModelRef(ref);
+  return p ? { kind: 'account', ...p } : null;
+}
 
 export function modelRef(providerAccountId: string, modelId: string): ModelRef {
   return `${providerAccountId}/${modelId}`;
