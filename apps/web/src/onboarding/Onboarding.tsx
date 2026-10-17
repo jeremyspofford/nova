@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ProviderAccountView } from '@nova/shared';
 import { Button, Icon, Kbd, RadioGroup, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
-import { PROVIDER_NAMES } from '../chat/Composer.tsx';
+import { PROVIDER_NAMES } from '../providers/names.ts';
 import { formatBytes, pendingFromText } from '../chat/attachments.ts';
 import { formatBinding } from '../keys.ts';
 import { ProviderSetup } from '../providers/ProviderSetup.tsx';

@@ -6,6 +6,7 @@ import { REASONING_LEVELS, type ModelView } from '@nova/shared';
 import { Button, Icon, IconButton, SelectField, Spinner } from '@nova/ui';
 import type { Draft } from '../services.tsx';
 import { bindingText } from '../keys.ts';
+import { PROVIDER_NAMES } from '../providers/names.ts';
 import { checkFiles, formatBytes, toPending, type Rejection } from './attachments.ts';
 
 /** Reads accepted files into the draft and collects per-file errors. */
@@ -261,11 +262,3 @@ function groupModels(models: ModelView[]) {
   }
   return [...groups.values()];
 }
-
-export const PROVIDER_NAMES: Record<string, string> = {
-  mock: 'Mock',
-  openai_compatible: 'OpenAI-compatible',
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  ollama: 'Ollama',
-};

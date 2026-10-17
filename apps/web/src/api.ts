@@ -88,6 +88,7 @@ export interface Session {
 export interface ListThreadsQuery {
   mode?: ThreadMode;
   archived?: boolean;
+  projectId?: string;
   q?: string;
   cursor?: string;
   limit?: number;

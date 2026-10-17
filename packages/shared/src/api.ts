@@ -114,6 +114,8 @@ export interface ModelView {
   /** Where it runs: a provider account, or a registered compute node (FR-126). */
   source: 'account' | 'node' | 'preset';
   nodeId?: string;
+  /** Set when the entry cannot be used now (a preset whose targets are all unavailable). */
+  disabledReason?: string;
 }
 
 export const REASONING_LEVELS = [

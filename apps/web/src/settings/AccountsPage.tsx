@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import type { ProviderAccountView } from '@nova/shared';
 import { Button, Dialog, Spinner, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
-import { PROVIDER_NAMES } from '../chat/Composer.tsx';
+import { PROVIDER_NAMES } from '../providers/names.ts';
 import { ProviderSetup } from '../providers/ProviderSetup.tsx';
 import { useServices } from '../services.tsx';
 import { useModels } from '../stores.tsx';

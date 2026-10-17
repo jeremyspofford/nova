@@ -2,7 +2,7 @@
 // and the setup guide (FR-014).
 import { Button, RadioGroup, SelectField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
-import { PROVIDER_NAMES } from '../chat/Composer.tsx';
+import { PROVIDER_NAMES } from '../providers/names.ts';
 import { bindingText } from '../keys.ts';
 import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
