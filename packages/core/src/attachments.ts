@@ -1,8 +1,19 @@
 // Attachments (FR-021): validate type and size with clear errors, store content-addressed blobs
 // under `<dataDir>/blobs/attachments/<sha256>` (docs/06 §3), and turn them into model input.
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+// Blobs (attachments, sources, artifacts) are encrypted at rest once the Hub registers its data
+// key (FR-149 baseline, `useBlobKey`); blobs written before that stay readable as plaintext.
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, extname, join, resolve } from 'node:path';
 import { ATTACHMENT_LIMITS, NovaError } from '@nova/shared';
 import { resolveWithin } from '@nova/security';
 
@@ -127,22 +138,140 @@ export function writeAttachmentBlob(dataDir: string, bytes: Buffer): StoredBlob 
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   const blobPath = `blobs/attachments/${sha256}`;
   const abs = join(dataDir, blobPath);
-  if (!existsSync(abs)) {
-    mkdirSync(join(dataDir, 'blobs', 'attachments'), { recursive: true, mode: 0o700 });
-    const tmp = `${abs}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tmp, bytes, { mode: 0o600 });
-    renameSync(tmp, abs);
+  const key = keyrings.get(resolve(dataDir))?.current ?? null;
+  if (existsSync(abs)) {
+    // The same content written before encryption was on: seal it now.
+    if (key && !hasMagic(readHead(abs))) writeAtomic(abs, seal(key, sha256, bytes));
+    return { sha256, blobPath };
   }
+  mkdirSync(join(dataDir, 'blobs', 'attachments'), { recursive: true, mode: 0o700 });
+  writeAtomic(abs, key ? seal(key, sha256, bytes) : bytes);
   return { sha256, blobPath };
 }
 
 /** Read a stored blob; the path must stay inside the data directory. */
 export function readAttachmentBlob(dataDir: string, blobPath: string): Buffer {
+  let raw: Buffer;
   try {
-    return readFileSync(resolveWithin([dataDir], blobPath));
+    raw = readFileSync(resolveWithin([dataDir], blobPath));
   } catch {
     throw new NovaError('not_found', 'attachment content is missing');
   }
+  return unseal(dataDir, basename(blobPath), raw);
+}
+
+// ---- encryption at rest (FR-149 baseline, docs/12 §5) -------------------------------------------
+//
+// A sealed blob is MAGIC | key id (8) | nonce (12) | tag (16) | ChaCha20-Poly1305 ciphertext,
+// with the header and the blob's file name (its plaintext SHA-256) as associated data, so a
+// blob cannot be swapped for another. The magic starts with a NUL byte, which text attachments
+// never contain; a legacy plaintext blob that still happens to start with it is recognised by
+// its content hash.
+
+const MAGIC = Buffer.from([0x00, 0x4e, 0x56, 0x42, 0x01]);
+const KEY_ID = 8;
+const NONCE = 12;
+const TAG = 16;
+const HEADER = MAGIC.length + KEY_ID;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+interface BlobKey {
+  id: Buffer;
+  key: Buffer;
+}
+interface Keyring {
+  current: BlobKey | null;
+  /** Every key registered for the directory, by id, so older blobs stay readable. */
+  all: Map<string, Buffer>;
+}
+const keyrings = new Map<string, Keyring>();
+
+function keyId(key: Buffer): Buffer {
+  return createHash('sha256').update('nova-blob-key\0').update(key).digest().subarray(0, KEY_ID);
+}
+
+/**
+ * Register the Hub data key for a data directory: new blobs there are sealed with it. `null`
+ * stops sealing new blobs; keys stay registered so existing blobs remain readable.
+ */
+export function useBlobKey(dataDir: string, key: Buffer | null): void {
+  const dir = resolve(dataDir);
+  const ring = keyrings.get(dir) ?? { current: null, all: new Map<string, Buffer>() };
+  keyrings.set(dir, ring);
+  if (!key) {
+    ring.current = null;
+    return;
+  }
+  if (key.length !== 32) throw new TypeError('a blob key is 32 bytes');
+  const entry = { id: keyId(key), key: Buffer.from(key) };
+  ring.all.set(entry.id.toString('hex'), entry.key);
+  ring.current = entry;
+}
+
+/** Whether new blobs in this data directory are encrypted. */
+export function blobEncryption(dataDir: string): boolean {
+  return !!keyrings.get(resolve(dataDir))?.current;
+}
+
+function hasMagic(head: Buffer): boolean {
+  return head.length >= MAGIC.length && head.subarray(0, MAGIC.length).equals(MAGIC);
+}
+
+function readHead(path: string): Buffer {
+  const fd = openSync(path, 'r');
+  try {
+    const buf = Buffer.alloc(MAGIC.length);
+    return buf.subarray(0, readSync(fd, buf, 0, buf.length, 0));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function writeAtomic(abs: string, data: Buffer): void {
+  const tmp = `${abs}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, data, { mode: 0o600 });
+  renameSync(tmp, abs);
+}
+
+function seal(key: BlobKey, name: string, plain: Buffer): Buffer {
+  const header = Buffer.concat([MAGIC, key.id]);
+  const nonce = randomBytes(NONCE);
+  const c = createCipheriv('chacha20-poly1305', key.key, nonce, { authTagLength: TAG });
+  c.setAAD(Buffer.concat([header, Buffer.from(name, 'utf8')]), { plaintextLength: plain.length });
+  const body = Buffer.concat([c.update(plain), c.final()]);
+  return Buffer.concat([header, nonce, c.getAuthTag(), body]);
+}
+
+function unseal(dataDir: string, name: string, raw: Buffer): Buffer {
+  if (!hasMagic(raw)) return raw;
+  const addressed = SHA256_HEX.test(name);
+  const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+  if (addressed && sha(raw) === name) return raw;
+  const corrupt = () =>
+    new NovaError('server_error', 'attachment content failed its integrity check');
+  if (raw.length < HEADER + NONCE + TAG) throw corrupt();
+  const id = raw.subarray(MAGIC.length, HEADER).toString('hex');
+  const key = keyrings.get(resolve(dataDir))?.all.get(id);
+  if (!key)
+    throw new NovaError(
+      'server_error',
+      'attachment content is encrypted with a key this Hub does not have',
+    );
+  let plain: Buffer;
+  try {
+    const d = createDecipheriv('chacha20-poly1305', key, raw.subarray(HEADER, HEADER + NONCE), {
+      authTagLength: TAG,
+    });
+    d.setAAD(Buffer.concat([raw.subarray(0, HEADER), Buffer.from(name, 'utf8')]), {
+      plaintextLength: raw.length - HEADER - NONCE - TAG,
+    });
+    d.setAuthTag(raw.subarray(HEADER + NONCE, HEADER + NONCE + TAG));
+    plain = Buffer.concat([d.update(raw.subarray(HEADER + NONCE + TAG)), d.final()]);
+  } catch {
+    throw corrupt();
+  }
+  if (addressed && sha(plain) !== name) throw corrupt();
+  return plain;
 }
 
 export function attachmentKind(mime: string | null): AttachmentKind {

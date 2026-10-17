@@ -198,6 +198,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   const ops = await setupOps(ctx);
   const policy = await setupPolicy({ ...ctx, audit: ops.audit, notifier: ops.notifier });
   const mcp = await setupMcp({ ...ctx, audit: ops.audit });
+  // Each MCP server's default approval feeds the gate's per-server defaults (FR-048).
+  policy.useServerDefaults((_accountId, serverId) => Promise.resolve(mcp.serverDefault(serverId)));
   const tools = await setupTools({
     ...ctx,
     gate: policy.gate,
@@ -205,6 +207,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     audit: ops.audit,
     notifier: ops.notifier,
   });
+  // The gate previews and classifies with the tools' own descriptors and the sandbox in use.
+  policy.useToolCatalog(tools.catalog);
+  policy.useSubstrate(() => tools.substrate());
   const consolidation = await setupConsolidation({ ...ctx, memory });
   const areas = [tools, consolidation, mcp, policy, ops];
 
@@ -353,6 +358,12 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     const p = requireAuth(req);
     await auth.revoke(p.tokenId);
     void reply.clearCookie(SESSION_COOKIE, { path: '/' });
+    await events.emit({
+      name: 'auth.session.revoked',
+      actor: 'user',
+      accountId: p.accountId ?? undefined,
+      payload: { accountId: p.accountId },
+    });
     return { ok: true };
   });
 
@@ -452,8 +463,17 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       reply,
       { events, trackStream },
       () => true,
+      // Like the thread stream: replay only after a cursor; without one, live events only
+      // (contracts/hub-api.md §5), so a fresh client never receives old history.
       async (send) => {
-        for (const e of await events.since(lastId, 500)) send(e);
+        if (!lastId) return;
+        let cursor: string = lastId;
+        for (;;) {
+          const page = await events.since(cursor, 500);
+          for (const e of page) send(e);
+          if (page.length < 500) break;
+          cursor = page.at(-1)!.id;
+        }
       },
     );
   });
@@ -484,7 +504,12 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   for (const a of areas) a.register(app);
 
   void app.register((scoped, _opts, done) => {
-    scoped.get('/api/v1/ws', { websocket: true }, (socket, req) => {
+    // The session is checked before the upgrade (FR-192): without one the handshake gets 401.
+    const sessionFirst = (req: FastifyRequest): Promise<void> => {
+      requireAuth(req);
+      return Promise.resolve();
+    };
+    scoped.get('/api/v1/ws', { websocket: true, preValidation: sessionFirst }, (socket, req) => {
       if (!req.principal) {
         socket.close(4401, 'token_required');
         return;

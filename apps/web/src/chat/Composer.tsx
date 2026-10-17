@@ -3,14 +3,38 @@
 // button, drag-drop and paste with inline errors, the preset scale and model and reasoning
 // pickers, and Send/Stop. While a reply runs the box stays usable: sending steers or queues per
 // `general.followUp`, and Alt with the send key uses the other mode; queued messages wait in a
-// strip above the box until their turn starts.
-import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { REASONING_LEVELS, type InputMode, type ModelView } from '@nova/shared';
+// strip above the box until their turn starts. Typing `@` (or the mention button) opens a fuzzy,
+// grouped popover of files, folders, MCP servers and tools (FR-022); a choice becomes a removable
+// chip that goes out with the message. The box is an ARIA combobox while the popover is open:
+// arrows move, Enter or Tab chooses, Escape closes.
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
+import {
+  REASONING_LEVELS,
+  type InputMode,
+  type MentionCandidate,
+  type ModelView,
+} from '@nova/shared';
 import { Button, Icon, IconButton, PresetScale, SelectField, Spinner } from '@nova/ui';
-import type { Draft } from '../services.tsx';
+import { useAnnounce, type Draft, type MentionChip } from '../services.tsx';
 import { bindingText } from '../keys.ts';
 import { navigate } from '../router.ts';
 import { checkFiles, formatBytes, toPending, type Rejection } from './attachments.ts';
+import {
+  MAX_MENTIONS,
+  MENTION_ICON,
+  filterMentions,
+  groupMentions,
+  mentionAt,
+  rankMentions,
+} from './mentions.ts';
 import { modelGroups, type PresetStop } from './models.ts';
 
 /** A follow-up waiting for the running turn; `pending` until the Hub confirms it. */
@@ -88,6 +112,8 @@ export interface ComposerProps {
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   /** Shown instead of the input's placeholder while no model is available. */
   noModelHint?: string;
+  /** Looks up `@`-mention candidates (FR-022); without it, `@` is plain text. */
+  mentionSource?: (query: string) => Promise<MentionCandidate[]>;
 }
 
 export function Composer({
@@ -114,11 +140,15 @@ export function Composer({
   onReasoningChange,
   inputRef,
   noModelHint,
+  mentionSource,
 }: ComposerProps) {
   const own = useRef<HTMLTextAreaElement>(null);
   const textarea = inputRef ?? own;
   const fileInput = useRef<HTMLInputElement>(null);
-  const canSend = (draft.text.trim().length > 0 || draft.attachments.length > 0) && !!model;
+  const mentions = draft.mentions ?? [];
+  const canSend =
+    (draft.text.trim().length > 0 || draft.attachments.length > 0 || mentions.length > 0) &&
+    !!model;
 
   useLayoutEffect(() => {
     const el = textarea.current;
@@ -126,6 +156,7 @@ export function Composer({
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
   }, [draft.text, textarea]);
+  const mention = useMentions(draft, onDraftChange, textarea, mentionSource);
 
   const send = (alternate = false) => {
     if (!canSend) return;
@@ -222,6 +253,28 @@ export function Composer({
           ))}
         </ul>
       ) : null}
+      {mentions.length ? (
+        <ul className="chips" aria-label="Mentions">
+          {mentions.map((m) => (
+            <li key={m.ref} className="chip mention-chip" data-kind={m.kind}>
+              <Icon name={MENTION_ICON[m.kind]} />
+              <span className="chip-name" title={m.ref}>
+                {m.label}
+              </span>
+              <IconButton
+                label={`Remove mention ${m.label}`}
+                icon={<Icon name="close" />}
+                variant="ghost"
+                onClick={() => {
+                  onDraftChange({ ...draft, mentions: mentions.filter((x) => x.ref !== m.ref) });
+                  textarea.current?.focus();
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {mention.popover}
       <label htmlFor="composer-input" className="nv-vh">
         Message
       </label>
@@ -233,8 +286,16 @@ export function Composer({
         value={draft.text}
         placeholder={noModelHint ?? 'Message Nova'}
         aria-describedby="composer-help"
-        onChange={(e) => onDraftChange({ ...draft, text: e.target.value })}
+        onChange={(e) => {
+          onDraftChange({ ...draft, text: e.target.value });
+          mention.track(e.target.value, e.target.selectionStart);
+        }}
+        onSelect={(e) => mention.track(e.currentTarget.value, e.currentTarget.selectionStart)}
+        onFocus={() => mention.setFocused(true)}
+        onBlur={() => mention.setFocused(false)}
+        {...mention.inputProps}
         onKeyDown={(e) => {
+          if (mention.onKeyDown(e)) return;
           if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
           const mod = mac ? e.metaKey : e.ctrlKey;
           const sends = enterToSend === 'enter' ? !e.shiftKey && !mod : mod;
@@ -279,6 +340,14 @@ export function Composer({
           variant="ghost"
           onClick={() => fileInput.current?.click()}
         />
+        {mentionSource ? (
+          <IconButton
+            label="Mention a file, folder, tool or server"
+            icon={<Icon name="at" />}
+            variant="ghost"
+            onClick={mention.insertAt}
+          />
+        ) : null}
         <span className="composer-spacer" />
         {presets.length ? (
           <PresetScale
@@ -351,4 +420,200 @@ export function Composer({
       </div>
     </form>
   );
+}
+
+// ---- @-mentions (FR-022) -------------------------------------------------------------------------
+
+interface MentionResults {
+  query: string;
+  items: MentionCandidate[];
+  failed: boolean;
+}
+
+function useMentions(
+  draft: Draft,
+  onDraftChange: (d: Draft) => void,
+  textarea: RefObject<HTMLTextAreaElement | null>,
+  source: ((query: string) => Promise<MentionCandidate[]>) | undefined,
+) {
+  const listId = useId();
+  const announce = useAnnounce();
+  const [caret, setCaret] = useState<number | null>(null);
+  const [focused, setFocused] = useState(false);
+  const [dismissedAt, setDismissedAt] = useState<number | null>(null);
+  const [active, setActive] = useState(0);
+  const [results, setResults] = useState<MentionResults | null>(null);
+
+  const token = source && focused && caret !== null ? mentionAt(draft.text, caret) : null;
+  const open = !!token && token.start !== dismissedAt;
+  const query = token?.query ?? '';
+
+  useEffect(() => {
+    if (!open || !source) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      source(query).then(
+        (items) => {
+          if (alive) setResults({ query, items, failed: false });
+        },
+        () => {
+          if (alive) setResults({ query, items: [], failed: true });
+        },
+      );
+    }, 80);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [open, query, source]);
+
+  // While the Hub's answer for this query is on its way, filter the last answer.
+  const fresh = results?.query === query;
+  const ranked = !results
+    ? []
+    : fresh
+      ? rankMentions(results.items, query)
+      : filterMentions(results.items, query);
+  const groups = groupMentions(ranked);
+  const options = groups.flatMap((g) => g.items);
+  const current = options.length ? Math.min(active, options.length - 1) : -1;
+  const optionId = (i: number) => `${listId}-opt-${i}`;
+
+  const track = (text: string, at: number | null) => {
+    setCaret(at);
+    const next = at === null ? null : mentionAt(text, at);
+    if (!next || next.start !== token?.start || next.query !== token.query) setActive(0);
+    if (!next) setDismissedAt(null);
+  };
+
+  const place = (at: number) => {
+    setCaret(at);
+    queueMicrotask(() => {
+      const el = textarea.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(at, at);
+    });
+  };
+
+  const choose = (c: MentionCandidate) => {
+    if (!token) return;
+    const text = draft.text.slice(0, token.start) + draft.text.slice(token.end);
+    const list = draft.mentions ?? [];
+    const exists = list.some((m) => m.ref === c.ref);
+    if (!exists && list.length >= MAX_MENTIONS) {
+      announce(`A message can mention at most ${MAX_MENTIONS} items.`);
+      return;
+    }
+    const chip: MentionChip = { kind: c.kind, ref: c.ref, label: c.label };
+    onDraftChange({ ...draft, text, mentions: exists ? list : [...list, chip] });
+    setResults(null);
+    place(token.start);
+    announce(`Mentioned ${c.label}.`);
+  };
+
+  const insertAt = () => {
+    const el = textarea.current;
+    const pos = el?.selectionStart ?? draft.text.length;
+    const before = draft.text.slice(0, pos);
+    const insert = before && !/\s$/.test(before) ? ' @' : '@';
+    const text = before + insert + draft.text.slice(pos);
+    onDraftChange({ ...draft, text });
+    setDismissedAt(null);
+    setActive(0);
+    setFocused(true);
+    place(pos + insert.length);
+  };
+
+  /** Handles popover keys; true when the key was used. */
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (!open || !token) return false;
+    if (e.key === 'Escape') {
+      // Escape closes the popover only; it must not also stop a running reply.
+      e.preventDefault();
+      e.stopPropagation();
+      setDismissedAt(token.start);
+      return true;
+    }
+    if (!options.length) {
+      // While suggestions load, Enter waits for them instead of sending a half-typed mention.
+      if (e.key === 'Enter' && !fresh) {
+        e.preventDefault();
+        return true;
+      }
+      return false;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const by = e.key === 'ArrowDown' ? 1 : -1;
+      setActive((current + by + options.length) % options.length);
+      return true;
+    }
+    if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      const c = options[current];
+      if (c) choose(c);
+      return true;
+    }
+    return false;
+  };
+
+  const inputProps = source
+    ? {
+        'aria-autocomplete': 'list' as const,
+        ...(open
+          ? {
+              role: 'combobox',
+              'aria-expanded': true,
+              'aria-controls': listId,
+              'aria-activedescendant': current >= 0 ? optionId(current) : undefined,
+            }
+          : {}),
+      }
+    : {};
+
+  let n = 0;
+  const popover = open ? (
+    <div className="mention-popover">
+      <div id={listId} role="listbox" aria-label="Mention suggestions" className="mention-list">
+        {groups.map((g) => (
+          <div key={g.kind} role="group" aria-labelledby={`${listId}-${g.kind}`}>
+            <div id={`${listId}-${g.kind}`} role="presentation" className="mention-group">
+              {g.label}
+            </div>
+            {g.items.map((c) => {
+              const i = n++;
+              return (
+                <div
+                  key={`${c.kind}:${c.ref}`}
+                  id={optionId(i)}
+                  role="option"
+                  aria-selected={i === current}
+                  className="mention-option"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => choose(c)}
+                >
+                  <Icon name={MENTION_ICON[c.kind]} />
+                  <span className="mention-label">{c.label}</span>
+                  {c.detail ? <span className="muted mention-detail">{c.detail}</span> : null}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <p className="muted mention-status" role="status">
+        {results?.failed && fresh
+          ? 'Suggestions are unavailable right now.'
+          : !fresh && !options.length
+            ? 'Searching…'
+            : options.length
+              ? `${options.length} ${options.length === 1 ? 'suggestion' : 'suggestions'}`
+              : 'No matches'}
+      </p>
+    </div>
+  ) : null;
+
+  return { track, setFocused, onKeyDown, inputProps, popover, insertAt };
 }

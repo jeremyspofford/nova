@@ -49,6 +49,8 @@ export interface ToolContext {
   threadId: string;
   turnId: string;
   callId: string;
+  /** The assistant message the call belongs to (artifacts attach to it). */
+  messageId?: string;
   projectId: string | null;
   origin: 'model' | 'ui' | 'hook' | 'mcp_client';
   /** The permission profile in force (FR-190) and its hash, recorded with every decision. */
@@ -89,6 +91,10 @@ export interface GateRequest {
   provenance: Provenance;
   resource?: { kind: 'path' | 'host' | 'account'; value: string };
   profile: { id: string; hash: string };
+  /** Who issued the call; UI invocations are audited as the user. Default `model`. */
+  origin?: ToolContext['origin'];
+  /** The roots the tool runs with, so the gate checks exactly those. */
+  roots?: ToolRoot[];
 }
 
 /** What the runtime does with a call once the gate has decided (including any approval). */
@@ -148,6 +154,8 @@ export interface ExecRequest {
   /** Wait this long before returning a running session (FR-184). */
   yieldMs: number;
   signal: AbortSignal;
+  /** The turn that owns the session (killed when the turn ends). */
+  turnId?: string;
 }
 
 export type ExecResult =

@@ -8,6 +8,11 @@ export const LEVELS = ['trace', 'debug', 'info', 'warn', 'error'] as const;
 export type Level = (typeof LEVELS)[number];
 const RANK: Record<Level, number> = { trace: 10, debug: 20, info: 30, warn: 40, error: 50 };
 
+/** Whether `level` is at least as severe as `min`. */
+export function atLeast(level: Level, min: Level): boolean {
+  return RANK[level] >= RANK[min];
+}
+
 export interface LogRecord {
   ts: string;
   level: Level;
@@ -32,19 +37,31 @@ export interface LoggerOptions {
   moduleLevels?: Record<string, Level>;
 }
 
+/**
+ * The sinks a logger family writes to. Children share the parent's set, so a sink added later
+ * (the diagnostics ring, FR-118) receives records from every module.
+ */
+class SinkSet {
+  readonly list: LogSink[];
+  constructor(sinks: readonly LogSink[]) {
+    this.list = [...sinks];
+  }
+}
+
 export class Logger {
   readonly module: string;
-  readonly #opts: Required<Omit<LoggerOptions, 'moduleLevels' | 'bindings'>> & {
+  readonly #opts: Required<Omit<LoggerOptions, 'moduleLevels' | 'bindings' | 'sinks'>> & {
     moduleLevels: Record<string, Level>;
     bindings: Record<string, unknown>;
   };
+  readonly #sinks: SinkSet;
 
-  constructor(opts: LoggerOptions) {
+  constructor(opts: LoggerOptions, shared?: SinkSet) {
     this.module = opts.module;
+    this.#sinks = shared ?? new SinkSet(opts.sinks ?? [stderrSink]);
     this.#opts = {
       module: opts.module,
       level: opts.level ?? 'info',
-      sinks: opts.sinks ?? [stderrSink],
       redactor: opts.redactor ?? defaultRedactor,
       bindings: opts.bindings ?? {},
       now: opts.now ?? (() => new Date()),
@@ -54,20 +71,41 @@ export class Logger {
 
   /** A logger for a sub-module sharing sinks, level and bindings. */
   child(module: string, bindings: Record<string, unknown> = {}): Logger {
-    return new Logger({
-      ...this.#opts,
-      module: `${this.module}.${module}`,
-      bindings: { ...this.#opts.bindings, ...bindings },
-    });
+    return new Logger(
+      {
+        ...this.#opts,
+        module: `${this.module}.${module}`,
+        bindings: { ...this.#opts.bindings, ...bindings },
+      },
+      this.#sinks,
+    );
   }
 
   /** A logger with extra bound fields (same module). */
   with(bindings: Record<string, unknown>): Logger {
-    return new Logger({
-      ...this.#opts,
-      module: this.module,
-      bindings: { ...this.#opts.bindings, ...bindings },
-    });
+    return new Logger(
+      {
+        ...this.#opts,
+        module: this.module,
+        bindings: { ...this.#opts.bindings, ...bindings },
+      },
+      this.#sinks,
+    );
+  }
+
+  /** Add a sink to this logger and every logger that shares its sinks (parent and children). */
+  addSink(sink: LogSink): void {
+    if (!this.#sinks.list.includes(sink)) this.#sinks.list.push(sink);
+  }
+
+  removeSink(sink: LogSink): void {
+    const i = this.#sinks.list.indexOf(sink);
+    if (i >= 0) this.#sinks.list.splice(i, 1);
+  }
+
+  /** The first sink of a given class, e.g. `log.findSink(RingSink)`. */
+  findSink<T extends LogSink>(type: abstract new (...args: never[]) => T): T | undefined {
+    return this.#sinks.list.find((s): s is T => s instanceof type);
   }
 
   enabled(level: Level): boolean {
@@ -85,7 +123,7 @@ export class Logger {
       module: this.module,
       msg: red.redactString(msg),
     };
-    for (const sink of this.#opts.sinks) {
+    for (const sink of this.#sinks.list) {
       try {
         sink.write(record);
       } catch {

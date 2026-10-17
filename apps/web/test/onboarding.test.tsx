@@ -55,9 +55,20 @@ describe('onboarding (FR-014)', () => {
       expect(hub.api.updateAccount).toHaveBeenCalledWith({ displayName: 'Alex' }),
     );
 
-    // Step 4: tools come later.
+    // Step 4: add an MCP server with the same form as Settings → Tools & MCP.
     expect(await heading('Connect a tool')).toBeTruthy();
-    expect(screen.getByText('Connect a tool later in Settings.')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Add an MCP server' }));
+    const toolForm = screen.getByRole('form', { name: 'Add an MCP server' });
+    await userEvent.type(within(toolForm).getByRole('textbox', { name: 'Name' }), 'files');
+    await userEvent.type(within(toolForm).getByRole('textbox', { name: 'Command' }), 'npx');
+    await userEvent.click(within(toolForm).getByRole('button', { name: 'Add server' }));
+    expect(await screen.findByText('Added files. It connects in the background.')).toBeTruthy();
+    expect(hub.api.createMcpServer).toHaveBeenCalledWith({
+      name: 'files',
+      transport: 'stdio',
+      command: 'npx',
+    });
+    expect(screen.getByRole('button', { name: 'Add another server' })).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
     // Step 5: safety primer and the sample task.
@@ -195,6 +206,35 @@ describe('onboarding (FR-014)', () => {
     expect(hub.state.settings['onboarding.state']).toEqual({
       step: 'done',
       completed: true,
+      skipped: false,
+    });
+  });
+
+  it('skips the tool step, cancels the form, and keeps a failed add in the form', async () => {
+    const hub = fresh('tool');
+    await renderApp({ hub, path: '/onboarding' });
+    expect(await heading('Connect a tool')).toBeTruthy();
+    expect(screen.getByText(/connect tools later in Settings/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Add an MCP server' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('form', { name: 'Add an MCP server' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Add an MCP server' }));
+    const form = screen.getByRole('form', { name: 'Add an MCP server' });
+    hub.state.failNext.createMcpServer = new ApiError(400, {
+      code: 'validation',
+      message: 'Command not found on the Hub',
+      retryable: false,
+    });
+    await userEvent.type(within(form).getByRole('textbox', { name: 'Name' }), 'files');
+    await userEvent.type(within(form).getByRole('textbox', { name: 'Command' }), 'nope');
+    await userEvent.click(within(form).getByRole('button', { name: 'Add server' }));
+    expect(await within(form).findByText('Command not found on the Hub')).toBeTruthy();
+    expect(hub.state.m3.mcpServers).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: 'Skip this step' }));
+    expect(await heading('Run a first task')).toBeTruthy();
+    expect(hub.state.settings['onboarding.state']).toEqual({
+      step: 'sample',
+      completed: false,
       skipped: false,
     });
   });

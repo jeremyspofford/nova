@@ -3,6 +3,7 @@
 import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { SecretsMode } from '@nova/secrets';
 import type { Level } from '@nova/telemetry';
 
 export interface HubConfig {
@@ -20,6 +21,10 @@ export interface HubConfig {
   allowedOrigins: string[];
   version: string;
   dev: boolean;
+  /** Where secrets live (FR-101): the encrypted vault (default) or the OS keychain. */
+  secrets: SecretsMode;
+  /** TLS for the Hub listener (FR-149), from NOVA_TLS_CERT and NOVA_TLS_KEY (PEM files). */
+  tls: { certPath: string; keyPath: string } | null;
 }
 
 export function defaultDataDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -51,6 +56,13 @@ export function loadConfig(
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`invalid port: ${port}`);
   const level = (arg('log-level') ?? env.NOVA_LOG_LEVEL ?? 'info') as Level;
   if (!LEVELS.includes(level)) throw new Error(`invalid log level: ${level}`);
+  const secrets = (env.NOVA_SECRETS ?? 'vault') as SecretsMode;
+  if (secrets !== 'vault' && secrets !== 'keychain')
+    throw new Error(`invalid NOVA_SECRETS: ${String(secrets)} (use vault or keychain)`);
+  const cert = arg('tls-cert') ?? env.NOVA_TLS_CERT;
+  const key = arg('tls-key') ?? env.NOVA_TLS_KEY;
+  // Half a TLS configuration is a mistake, never a silent fallback to plain HTTP.
+  if (!!cert !== !!key) throw new Error('set both NOVA_TLS_CERT and NOVA_TLS_KEY, or neither');
   return {
     host: arg('host') ?? env.NOVA_HOST ?? '127.0.0.1',
     port,
@@ -71,5 +83,7 @@ export function loadConfig(
       .filter(Boolean),
     version: env.NOVA_VERSION ?? '0.0.0-dev',
     dev: env.NODE_ENV === 'development',
+    secrets,
+    tls: cert && key ? { certPath: resolve(cert), keyPath: resolve(key) } : null,
   };
 }

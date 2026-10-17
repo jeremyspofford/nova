@@ -21,7 +21,8 @@
     "@nova/telemetry": "^0.0.0",
     "drizzle-orm": "0.45.4",
     "zod": "4.6.7",
-    "@nova/contracts": "^0.0.0"
+    "@nova/contracts": "^0.0.0",
+    "@nova/policy": "^0.0.0"
   },
   "devDependencies": {
     "@nova/compute": "^0.0.0"

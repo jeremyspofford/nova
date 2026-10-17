@@ -622,3 +622,42 @@
   color: var(--u-text-muted);
   font-size: var(--u-text-xs);
 }
+
+/* CodeBlock (FR-038): token colors are mixed toward the text color so they keep body contrast. */
+.nv-code {
+  margin: 0;
+  padding: var(--u-space-3);
+  overflow: auto;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface);
+  color: var(--u-text);
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-sm);
+  line-height: 1.5;
+  tab-size: 2;
+}
+.nv-code > code {
+  font-family: inherit;
+}
+.nv-tok-comment {
+  color: var(--u-text-muted);
+  font-style: italic;
+}
+.nv-tok-keyword {
+  color: color-mix(in srgb, var(--u-accent) 75%, var(--u-text));
+  font-weight: 600;
+}
+.nv-tok-string {
+  color: color-mix(in srgb, var(--u-success) 60%, var(--u-text));
+}
+.nv-tok-number,
+.nv-tok-literal {
+  color: color-mix(in srgb, var(--u-warn) 60%, var(--u-text));
+}
+.nv-tok-tag {
+  color: color-mix(in srgb, var(--u-info) 65%, var(--u-text));
+}
+.nv-tok-attr {
+  color: color-mix(in srgb, var(--u-danger) 55%, var(--u-text));
+}

@@ -34,6 +34,8 @@ export function purgeThreadRows(db: NovaDatabase, threadIds: string[]): string[]
   // Children before parents (thread.parent_thread_id is a foreign key).
   const ordered = [...threadIds].reverse();
   for (const id of ordered) {
+    // Tool calls and artifacts first: they reference the thread's messages (0006).
+    for (const p of purgeToolRows(db, id)) blobs.add(p);
     for (const r of raw.prepare('SELECT blob_path FROM attachment WHERE thread_id = ?').all(id) as {
       blob_path: string;
     }[])
@@ -60,7 +62,36 @@ export function purgeThreadRows(db: NovaDatabase, threadIds: string[]): string[]
   return [...blobs];
 }
 
-/** Remove blobs that no attachment, source or queued input refers to any more. */
+/** Delete one thread's tool calls and artifacts; returns the artifact blob paths. */
+function purgeToolRows(db: NovaDatabase, threadId: string): string[] {
+  const raw = db.raw;
+  const inThread = 'SELECT id FROM message WHERE thread_id = ?';
+  raw
+    .prepare(`DELETE FROM tool_call WHERE thread_id = ? OR message_id IN (${inThread})`)
+    .run(threadId, threadId);
+  const arts = `SELECT id FROM artifact WHERE thread_id = ? OR message_id IN (${inThread})`;
+  const blobs = (
+    raw
+      .prepare(`SELECT blob_path AS p FROM artifact_version WHERE artifact_id IN (${arts})`)
+      .all(threadId, threadId) as { p: string }[]
+  ).map((r) => r.p);
+  for (const r of raw
+    .prepare(`SELECT blob_path AS p FROM artifact WHERE id IN (${arts}) AND blob_path IS NOT NULL`)
+    .all(threadId, threadId) as { p: string }[])
+    blobs.push(r.p);
+  raw
+    .prepare(`DELETE FROM artifact_version WHERE artifact_id IN (${arts})`)
+    .run(threadId, threadId);
+  raw
+    .prepare(`DELETE FROM artifact WHERE thread_id = ? OR message_id IN (${inThread})`)
+    .run(threadId, threadId);
+  return blobs;
+}
+
+/**
+ * Remove blobs nothing refers to any more: no attachment, source, artifact (or artifact version)
+ * or pending queued input. Blobs are content-addressed, so they may be shared.
+ */
 export function removeUnreferencedBlobs(
   db: NovaDatabase,
   dataDir: string,
@@ -71,6 +102,8 @@ export function removeUnreferencedBlobs(
     const used =
       db.raw.prepare('SELECT 1 AS x FROM attachment WHERE blob_path = ? LIMIT 1').get(p) ??
       db.raw.prepare('SELECT 1 AS x FROM source WHERE blob_path = ? LIMIT 1').get(p) ??
+      db.raw.prepare('SELECT 1 AS x FROM artifact WHERE blob_path = ? LIMIT 1').get(p) ??
+      db.raw.prepare('SELECT 1 AS x FROM artifact_version WHERE blob_path = ? LIMIT 1').get(p) ??
       db.raw
         .prepare(
           "SELECT 1 AS x FROM queued_input WHERE status = 'pending' AND instr(attachments, ?) > 0 LIMIT 1",

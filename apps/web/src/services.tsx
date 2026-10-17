@@ -1,8 +1,9 @@
 // App-wide services handed down by context: the Hub client, the stream factory, the command
-// registry, a screen-reader announcer, and per-session chat memory (drafts, scroll positions and
-// messages queued for a chat that was just created).
+// registry, a screen-reader announcer, per-session chat memory (drafts, scroll positions and
+// messages queued for a chat that was just created), and a bus that hands the open chat's events
+// to the inspector panels (artifacts, activity) without a second stream.
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
-import type { SendMessageRequest } from '@nova/shared';
+import type { EventEnvelope, MentionKind, SendMessageRequest } from '@nova/shared';
 import { VisuallyHidden } from '@nova/ui';
 import type { Api } from './api.ts';
 import type { CommandRegistry } from './commands.ts';
@@ -17,9 +18,38 @@ export interface PendingAttachment {
   data: string;
 }
 
+/** An `@`-mention chip in the composer (FR-022); `ref` goes back to the Hub with the message. */
+export interface MentionChip {
+  kind: MentionKind;
+  ref: string;
+  label: string;
+}
+
 export interface Draft {
   text: string;
   attachments: PendingAttachment[];
+  mentions?: MentionChip[];
+}
+
+/** Events of the open chat, re-published for panels that show the same thread. */
+export interface ThreadBus {
+  emit: (env: EventEnvelope) => void;
+  subscribe: (fn: (env: EventEnvelope) => void) => () => void;
+}
+
+export function createThreadBus(): ThreadBus {
+  const subs = new Set<(env: EventEnvelope) => void>();
+  return {
+    emit: (env) => {
+      for (const fn of [...subs]) fn(env);
+    },
+    subscribe: (fn) => {
+      subs.add(fn);
+      return () => {
+        subs.delete(fn);
+      };
+    },
+  };
 }
 
 export interface ChatMemory {
@@ -37,6 +67,7 @@ export interface Services {
   eventSource: EventSourceFactory;
   registry: CommandRegistry;
   memory: ChatMemory;
+  bus: ThreadBus;
 }
 
 const ServicesCtx = createContext<Services | null>(null);
@@ -46,15 +77,16 @@ export function ServicesProvider({
   eventSource,
   registry,
   children,
-}: Omit<Services, 'memory'> & { children: ReactNode }) {
+}: Omit<Services, 'memory' | 'bus'> & { children: ReactNode }) {
   const [mem] = useState<ChatMemory>(() => ({
     drafts: new Map(),
     scroll: new Map(),
     pending: new Map(),
   }));
+  const [bus] = useState(createThreadBus);
   const value = useMemo(
-    () => ({ api, eventSource, registry, memory: mem }),
-    [api, eventSource, registry, mem],
+    () => ({ api, eventSource, registry, memory: mem, bus }),
+    [api, eventSource, registry, mem, bus],
   );
   return <ServicesCtx.Provider value={value}>{children}</ServicesCtx.Provider>;
 }

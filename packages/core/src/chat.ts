@@ -8,6 +8,12 @@
 // steering input becomes a user message of the running turn and is applied at the start of the
 // next model step (the turn runs one more step into a new assistant message); queued input
 // starts as its own turn when the running one ends, also after a cancel or a restart.
+//
+// M3 adds the tool loop (docs/09 §2 step 6): each model step may end in tool calls; every call
+// passes the policy gate through the tool runtime and its untrusted result feeds the next step,
+// until the model answers, the user stops the turn or denies with stop, an approval times out,
+// or the 200-step backstop is reached.
+import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import {
   NovaError,
@@ -15,6 +21,7 @@ import {
   type ChatDeltaPayload,
   type ChatMessageCompletedPayload,
   type InputMode,
+  type MentionKind,
   type MessageStatus,
   type QueuedInputView,
   type SendMessageRequest,
@@ -63,6 +70,10 @@ import {
 } from './routing/types.ts';
 import type { SourceExcerpt, SourceService } from './sources.ts';
 import { sideDescendants, titleFrom, type ThreadRow, type ThreadService } from './threads.ts';
+import type { WebCitation } from './tools/builtin.ts';
+import type { StoredResult, ToolRuntime, TurnTools } from './tools/runtime.ts';
+import { untrustedParts } from './tools/text.ts';
+import type { Origin, ResolvedMention } from './tools/types.ts';
 import { visibleChain, type MessageRow } from './tree.ts';
 
 const { thread, turn, message, messagePart, attachment, usageEvent, citation, project } = schema;
@@ -104,6 +115,8 @@ export interface ChatServiceOptions {
   sources?: SourceService;
   /** Timeout of the model-based memory extraction request (default 20 s). */
   memoryTimeoutMs?: number;
+  /** The tool runtime (M3, docs/09 §2); omitted, chats carry no tools. */
+  tools?: ToolRuntime;
 }
 
 export interface EditMessageInput {
@@ -157,7 +170,14 @@ interface Step {
   lastDelta: number;
   deltaTimer: ReturnType<typeof setTimeout> | undefined;
   pending: { type: 'text_delta' | 'reasoning_delta'; text: string }[];
+  /** Tool calls the model is still streaming, by index. */
+  partialCalls: Map<number, { id: string; name: string; args: string }>;
+  /** Tool calls the step ended with, in order. */
+  calls: { id: string; name: string; args: unknown }[];
 }
+
+/** Why a turn ended early although its last step completed (docs/09 §2). */
+type TurnStop = 'backstop' | 'cancelled' | 'approval_timeout';
 
 interface TurnRun {
   accountId: string;
@@ -194,6 +214,14 @@ interface TurnRun {
   total: Usage;
   replies: string[];
   step: Step;
+  /** The turn's tools; undefined until the first step, null when the turn has none. */
+  tools: TurnTools | null | undefined;
+  /** Untrusted origins whose content is in the turn's context (FR-189). */
+  taint: Set<Origin>;
+  /** Web results cited by the reply, numbered after the project excerpts (FR-029). */
+  web: (WebCitation & { idx: number })[];
+  /** Set when the turn ends early: backstop, deny and stop, or an approval timeout. */
+  stop: TurnStop | null;
 }
 
 type Plan =
@@ -218,6 +246,7 @@ export class ChatService {
   readonly #memory: MemoryService | undefined;
   readonly #sources: SourceService | undefined;
   readonly #memoryTimeoutMs: number;
+  readonly #tools: ToolRuntime | undefined;
   readonly #active = new Map<string, Active>();
   readonly #background = new Set<Promise<unknown>>();
   readonly #stop = new AbortController();
@@ -242,6 +271,7 @@ export class ChatService {
     this.#memory = opts.memory;
     this.#sources = opts.sources;
     this.#memoryTimeoutMs = opts.memoryTimeoutMs ?? 20_000;
+    this.#tools = opts.tools;
   }
 
   /** True while a turn is running (or being set up) in the thread. */
@@ -312,11 +342,7 @@ export class ChatService {
     const dropped = await this.#db.transaction(() =>
       cancelQueued(this.#db, threadId, queuedId, now),
     );
-    removeUnreferencedBlobs(
-      this.#db,
-      this.#dataDir,
-      dropped.map((a) => a.blobPath),
-    );
+    this.#removeBlobs(dropped.map((a) => a.blobPath));
     await this.#events.emit({
       name: 'chat.followup.cancelled',
       actor: 'user',
@@ -409,9 +435,15 @@ export class ChatService {
            WHERE status = 'in_progress'`,
         )
         .run(now, now);
-      raw.prepare("UPDATE thread SET state = 'idle' WHERE state = 'streaming'").run();
+      raw
+        .prepare(
+          "UPDATE thread SET state = 'idle' WHERE state IN ('streaming', 'waiting_approval')",
+        )
+        .run();
       return { messages: Number(m.changes), turns: Number(t.changes) };
     });
+    // Tool calls of interrupted turns are cancelled (they will not resume).
+    if (this.#tools) await this.#tools.recover();
     for (const id of threadsWithQueue(this.#db)) this.#dispatchNext(id);
     return out;
   }
@@ -460,12 +492,16 @@ export class ChatService {
     const mode = req.inputMode ?? (await this.#settings.followUp(row.projectId));
     if (mode === 'steer') {
       const run = await active.ready;
+      const mentions = req.mentions?.length
+        ? await this.#mentionItems(accountId, threadId, run?.project?.id ?? null, req.mentions)
+        : [];
       // Checked and claimed without an await in between, so the turn cannot close meanwhile.
       if (run && !run.closing && this.#active.get(threadId) === active)
         return this.#steer(
           run,
           req.text,
           prepared.map((a) => this.#store(a)),
+          mentions,
         );
     }
     if (req.model !== undefined && !(await this.#router.usable(accountId, req.model))) {
@@ -486,11 +522,13 @@ export class ChatService {
     run: TurnRun,
     text: string,
     stored: StoredAttachment[],
+    mentions: ContextItem[] = [],
   ): Promise<SendMessageResponse> {
     const id = uuidv7();
     const parentId = run.tail;
     run.tail = id;
-    const recorded = this.#recordSteer(run, id, parentId, text, stored);
+    if (run.tools) run.tools.pin(mentions.flatMap((m) => m.tools));
+    const recorded = this.#recordSteer(run, id, parentId, text, stored, mentions);
     run.steers.push(
       recorded.then(
         () => ({ id, text }),
@@ -516,6 +554,7 @@ export class ChatService {
     parentId: string,
     text: string,
     stored: StoredAttachment[],
+    mentions: ContextItem[],
   ): Promise<void> {
     const now = this.#now().toISOString();
     await this.#db.transaction(async () => {
@@ -533,6 +572,7 @@ export class ChatService {
         updatedAt: now,
       });
       await this.#insertUserContent(id, run.threadId, text, stored, now);
+      await this.#insertContextItems(id, mentions, now);
       await this.#db.orm
         .update(thread)
         .set({ activeLeafId: id, updatedAt: now })
@@ -754,6 +794,16 @@ export class ChatService {
     const reasoningLevel = level ?? row.reasoningLevel ?? null;
     if (prepared.length) stored = prepared.map((a) => this.#store(a));
     const projectRow = await this.#contextProject(row);
+    // `@`-mentions become context items of the user message (FR-022); an edit keeps them.
+    let mentions: ContextItem[] = [];
+    if (plan.kind === 'send' && plan.req.mentions?.length)
+      mentions = await this.#mentionItems(
+        accountId,
+        threadId,
+        projectRow?.id ?? null,
+        plan.req.mentions,
+      );
+    else if (plan.kind === 'edit') mentions = this.#contextItemsOf(plan.messageId);
 
     const now = this.#now().toISOString();
     const turnId = uuidv7();
@@ -802,6 +852,7 @@ export class ChatService {
           updatedAt: now,
         });
         await this.#insertUserContent(userMessageId, threadId, text, stored, now);
+        await this.#insertContextItems(userMessageId, mentions, now);
       }
       await this.#db.orm.insert(message).values({
         id: assistantId,
@@ -913,6 +964,10 @@ export class ChatService {
       total: { inputTokens: 0, outputTokens: 0, cachedTokens: 0, costUsd: 0 },
       replies: [],
       step: newStep(assistantId, textPartId, newUser ? userMessageId : (parentId ?? '')),
+      tools: undefined,
+      taint: new Set(),
+      web: [],
+      stop: null,
     };
   }
 
@@ -1005,6 +1060,64 @@ export class ChatService {
     );
     if (rows.length) await this.#db.orm.insert(attachment).values(rows);
     if (parts.length) await this.#db.orm.insert(messagePart).values(parts);
+  }
+
+  /** Resolve mentions through the tool runtime; without one they add nothing. */
+  async #mentionItems(
+    accountId: string,
+    threadId: string,
+    projectId: string | null,
+    mentions: readonly { kind: MentionKind; ref: string }[],
+  ): Promise<ContextItem[]> {
+    // Unresolved mentions are still kept, so the message shows what was sent.
+    let resolved: ResolvedMention[] = mentions.map((m) => ({
+      kind: m.kind,
+      ref: m.ref,
+      label: m.ref.replace(/^(file|folder|tool):/, ''),
+      text: null,
+      tools: [],
+    }));
+    if (this.#tools) {
+      try {
+        resolved = await this.#tools.resolveMentions(accountId, threadId, projectId, mentions);
+      } catch (err) {
+        this.#log.warn('mentions could not be resolved', { err, threadId });
+      }
+    }
+    return resolved.map((m) => ({
+      kind: 'mention',
+      mention: m.kind,
+      ref: m.ref,
+      label: m.label,
+      text: m.text,
+      tools: m.tools,
+    }));
+  }
+
+  async #insertContextItems(messageId: string, items: ContextItem[], now: string): Promise<void> {
+    if (!items.length) return;
+    await this.#db.orm.insert(messagePart).values(
+      items.map((m, i) => ({
+        id: uuidv7(),
+        messageId,
+        idx: CONTEXT_PART_IDX + i,
+        type: 'context',
+        content: JSON.stringify(m),
+        createdAt: now,
+      })),
+    );
+  }
+
+  #contextItemsOf(messageId: string): ContextItem[] {
+    const rows = this.#db.raw
+      .prepare(
+        "SELECT content FROM message_part WHERE message_id = ? AND type = 'context' ORDER BY idx, id",
+      )
+      .all(messageId) as { content: string | null }[];
+    return rows.flatMap((r) => {
+      const item = parseContextItem(r.content);
+      return item ? [item] : [];
+    });
   }
 
   #store(a: PreparedAttachment): StoredAttachment {
@@ -1107,7 +1220,12 @@ export class ChatService {
 
   async #purge(threadIds: string[]): Promise<void> {
     const blobs = await this.#db.transaction(() => purgeThreadRows(this.#db, threadIds));
-    removeUnreferencedBlobs(this.#db, this.#dataDir, blobs);
+    this.#removeBlobs(blobs);
+  }
+
+  /** Remove blobs nothing refers to any more (they are content-addressed and may be shared). */
+  #removeBlobs(paths: readonly string[]): void {
+    removeUnreferencedBlobs(this.#db, this.#dataDir, paths);
   }
 
   #track(p: Promise<unknown>): void {
@@ -1122,10 +1240,24 @@ export class ChatService {
     try {
       for (;;) {
         await this.#runStep(run);
-        const outcome = classify(run.step, run.signal);
+        let outcome = classify(run.step, run.signal);
+        // A step that ended in tool calls runs them, then the model takes another step with
+        // their results (docs/09 §2 step 6-7).
+        let called = false;
+        if (outcome === 'completed' && run.step.calls.length && run.tools) {
+          await this.#runCalls(run);
+          if (run.signal.aborted) outcome = 'interrupted';
+          else called = run.stop === null;
+        }
         // Steering input runs one more step unless the user stopped the turn (FR-019); the
         // last step decides how the turn ends.
-        let more = outcome !== 'interrupted' && run.steers.length > 0 && run.steps < MAX_STEPS;
+        let more =
+          outcome !== 'interrupted' && run.stop === null && (called || run.steers.length > 0);
+        if (more && run.steps >= MAX_STEPS) {
+          // The per-turn backstop (FR-182): the turn ends instead of continuing silently.
+          more = false;
+          run.stop = 'backstop';
+        }
         if (!more) run.closing = true;
         await this.#finishStep(run, outcome);
         if (more) {
@@ -1138,14 +1270,15 @@ export class ChatService {
             }
           }
           // Decided without an await after the drain: no steering can slip in unanswered.
-          if (!steered) {
+          if (!steered && !called) {
             run.closing = true;
             more = false;
           }
         }
         if (!more) {
+          await this.#endTools(run);
           await this.#finishTurn(run, outcome);
-          if (outcome === 'completed') this.#afterCompleted(run);
+          if (outcome === 'completed' && run.stop === null) this.#afterCompleted(run);
           return;
         }
         await this.#openStep(run);
@@ -1153,19 +1286,125 @@ export class ChatService {
     } catch (err) {
       run.closing = true;
       this.#log.error('failed to finish turn', { err, threadId: run.threadId, turnId: run.turnId });
+      await this.#endTools(run);
       await this.#abandon(run);
     }
+  }
+
+  // ---- tools (docs/09 §2 step 6, FR-099, FR-100) -------------------------------------------
+
+  /** The turn's tools, started before its first step; null without a runtime or on failure. */
+  async #startTools(run: TurnRun): Promise<TurnTools | null> {
+    if (!this.#tools) return null;
+    try {
+      // Tools named by the turn's mentions are never deferred (FR-196).
+      const rows = this.#db.raw
+        .prepare(
+          `SELECT p.content AS content FROM message_part p JOIN message m ON m.id = p.message_id
+           WHERE p.type = 'context' AND (m.id = ? OR (m.turn_id = ? AND m.role = 'user'))`,
+        )
+        .all(run.userMessageId, run.turnId) as { content: string | null }[];
+      const pinned = rows.flatMap((r) => parseContextItem(r.content)?.tools ?? []);
+      return await this.#tools.beginTurn({
+        accountId: run.accountId,
+        threadId: run.threadId,
+        turnId: run.turnId,
+        projectId: run.project?.id ?? null,
+        mode: run.thread.mode,
+        signal: run.signal,
+        pinned,
+      });
+    } catch (err) {
+      // Without the scope or the catalog the turn runs without tools; nothing runs unchecked.
+      this.#log.warn('tools unavailable for this turn', { err, turnId: run.turnId });
+      return null;
+    }
+  }
+
+  /** Run the step's tool calls in order; stops early on cancel, deny-and-stop or a timeout. */
+  async #runCalls(run: TurnRun): Promise<void> {
+    const s = run.step;
+    const tools = run.tools;
+    if (!tools) return;
+    // The text before the calls is shown and saved before anything runs.
+    clearTimeout(s.deltaTimer);
+    s.deltaTimer = undefined;
+    this.#emitDeltas(run, s);
+    await s.flushChain;
+    await this.#writeParts(s);
+    let idx = TOOL_PART_IDX;
+    for (const call of s.calls) {
+      if (run.signal.aborted) return;
+      const r = await tools.call({
+        call,
+        messageId: s.assistantId,
+        partIdx: idx,
+        provenance: {
+          userInstruction: { messageId: run.userMessageId, accountId: run.accountId },
+          taint: [...run.taint],
+        },
+        onWaiting: (waiting) => this.#setWaiting(run, waiting),
+        cite: (items) => this.#citeWeb(run, items),
+      });
+      idx += 3;
+      if (r.origin) run.taint.add(r.origin);
+      if (r.stop) {
+        run.stop = r.stop === 'approval_timeout' ? 'approval_timeout' : 'cancelled';
+        return;
+      }
+    }
+  }
+
+  async #endTools(run: TurnRun): Promise<void> {
+    await run.tools?.end().catch(() => undefined);
+  }
+
+  /** The thread waits for an approval while a call is pending (docs/09 §9). */
+  async #setWaiting(run: TurnRun, waiting: boolean): Promise<void> {
+    const state = waiting ? 'waiting_approval' : 'streaming';
+    await this.#db.transaction(() =>
+      this.#db.raw
+        .prepare('UPDATE thread SET state = ?, updated_at = ? WHERE id = ?')
+        .run(state, this.#now().toISOString(), run.threadId),
+    );
+    await this.#events.emit({
+      name: 'thread.status.changed',
+      accountId: run.accountId,
+      correlation: { threadId: run.threadId, turnId: run.turnId },
+      payload: {
+        ref: { kind: 'thread', id: run.threadId },
+        from: waiting ? 'running' : 'needs_input',
+        status: waiting ? 'needs_input' : 'running',
+      },
+    });
+  }
+
+  /** Number web results after the project excerpts; the reply cites them (FR-029). */
+  #citeWeb(run: TurnRun, items: WebCitation[]): number[] {
+    const used = [...run.excerpts.map((e) => e.idx), ...run.web.map((w) => w.idx)];
+    let next = used.length ? Math.max(...used) + 1 : 1;
+    return items.map((item) => {
+      const known = run.web.find((w) => w.url === item.url);
+      if (known) return known.idx;
+      const idx = next++;
+      run.web.push({ ...item, idx });
+      return idx;
+    });
   }
 
   async #runStep(run: TurnRun): Promise<void> {
     const s = run.step;
     try {
-      const messages = await this.#context(run);
+      if (run.tools === undefined) run.tools = await this.#startTools(run);
+      let offer: Awaited<ReturnType<TurnTools['offer']>> | null = null;
+      if (run.tools && run.target.provider.capabilities.tools) offer = await run.tools.offer();
+      const messages = await this.#context(run, offer?.system ?? null);
       const req: Omit<ChatRequest, 'model'> = {
         messages,
         signal: run.signal,
         metadata: { threadId: run.threadId, turnId: run.turnId },
       };
+      if (offer?.tools.length) req.tools = offer.tools;
       if (run.reasoningLevel) req.reasoning = { level: run.reasoningLevel as ReasoningLevel };
       // Later steps stay where the turn started (FR-127): no fallback after the first.
       const route =
@@ -1253,12 +1492,30 @@ export class ChatService {
           u.costUsd += e.costUsd ?? 0;
           break;
         }
+        case 'tool_call_start':
+          s.partialCalls.set(e.index, { id: e.id, name: e.name, args: '' });
+          break;
+        case 'tool_call_delta': {
+          const p = s.partialCalls.get(e.index);
+          if (p) p.args += e.argsDelta;
+          break;
+        }
+        case 'tool_call_end': {
+          const p = s.partialCalls.get(e.index);
+          if (p) s.calls.push({ id: p.id, name: p.name, args: e.args });
+          s.partialCalls.delete(e.index);
+          break;
+        }
         case 'stop':
           s.stop = e.reason;
           s.error = e.error ?? null;
+          // A call the provider never closed still counts, with whatever arguments arrived.
+          for (const p of s.partialCalls.values())
+            s.calls.push({ id: p.id, name: p.name, args: parseArgs(p.args) });
+          s.partialCalls.clear();
           return;
         default:
-          // start, citations and tool calls: chat turns carry no tools yet (M3).
+          // start and provider citations carry nothing the engine stores.
           break;
       }
     }
@@ -1437,9 +1694,13 @@ export class ChatService {
     });
   }
 
-  async #finishTurn(run: TurnRun, outcome: Outcome): Promise<void> {
+  async #finishTurn(run: TurnRun, last: Outcome): Promise<void> {
+    // A completed step can still end the turn early: deny and stop, an approval timeout, or the
+    // backstop. The turn is then interrupted with that reason (docs/09 §2, contracts/events.md).
+    const outcome: Outcome = run.stop ? 'interrupted' : last;
     const stopReason =
-      outcome === 'interrupted' ? 'cancelled' : outcome === 'failed' ? 'error' : 'end';
+      run.stop ??
+      (outcome === 'interrupted' ? 'cancelled' : outcome === 'failed' ? 'error' : 'end');
     const turnUsage = { ...run.total, timeSeconds: (Date.now() - run.startedAt) / 1000 };
     const now = this.#now().toISOString();
     await this.#db.transaction(async () => {
@@ -1627,13 +1888,16 @@ export class ChatService {
    * instructions, source excerpts), then the visible path above the step's assistant message.
    * A side chat first reads its parent's current active path (FR-026).
    */
-  async #context(run: TurnRun): Promise<NormalizedMessage[]> {
+  async #context(run: TurnRun, toolSection: string | null): Promise<NormalizedMessage[]> {
     const s = run.step;
     const own = await visibleChain(this.#db, s.parentId || null, run.threadId);
     const prefix = run.thread.side ? await this.#sidePrefix(run.thread) : [];
     const history = [...prefix, ...own].filter((m) => m.role === 'user' || m.role === 'assistant');
-    const system = await this.#systemText(run);
-    if (run.excerpts.length) await this.#cite(run, s.assistantId);
+    let system = await this.#systemText(run);
+    if (toolSection) system = `${system}\n\n${toolSection}`;
+    // Project excerpts are file content in the context (FR-189 taint).
+    if (run.excerpts.length) run.taint.add('file');
+    if (run.excerpts.length || run.web.length) await this.#cite(run, s.assistantId);
     const ids = history.map((m) => m.id);
     const parts = ids.length
       ? (this.#db.raw
@@ -1642,30 +1906,113 @@ export class ChatService {
              ORDER BY idx, id`,
           )
           .all(...ids) as unknown as {
+          id: string;
           message_id: string;
           type: string;
           content: string | null;
+          ref_id: string | null;
           mime: string | null;
           blob_path: string | null;
         }[])
       : [];
+    // This turn's tool calls go back to the model as calls and results. Earlier turns' calls
+    // are left out: their answers carry what they found, and old tool output would crowd the
+    // context of small local models.
+    const current = history
+      .filter((m) => m.role === 'assistant' && m.turnId === run.turnId)
+      .map((m) => m.id);
+    const args = new Map<string, unknown>();
+    if (current.length) {
+      const rows = this.#db.raw
+        .prepare(
+          `SELECT id, args_json AS args FROM tool_call
+           WHERE message_id IN (${current.map(() => '?').join(',')})`,
+        )
+        .all(...current) as { id: string; args: string }[];
+      for (const r of rows) args.set(r.id, parseArgs(r.args));
+    }
     const out: NormalizedMessage[] = [
       { role: 'system', content: [{ type: 'text', text: system }] },
     ];
     for (const m of history) {
       const content: ContentPart[] = [];
+      const calls: ContentPart[] = [];
+      const results: ContentPart[] = [];
+      const answered = new Set<string>();
+      const ofThisTurn = m.role === 'assistant' && m.turnId === run.turnId;
       for (const p of parts) {
         if (p.message_id !== m.id) continue;
         if (p.type === 'text' && p.content) content.push({ type: 'text', text: p.content });
-        if (p.type === 'file' && m.role === 'user')
+        if (p.type === 'file' && m.role === 'user') {
+          run.taint.add('file');
           content.push(...this.#attachmentInput(p, run.vision, content.length > 0));
+        }
+        if (p.type === 'context' && m.role === 'user') {
+          const item = parseContextItem(p.content);
+          if (!item?.text) continue;
+          if (item.mention === 'file' || item.mention === 'folder') run.taint.add('file');
+          if (content.length) content.push({ type: 'text', text: '\n\n' });
+          content.push(...untrustedParts(`mention:${item.label}`, item.text, nonce(p.id)));
+        }
+        if (!ofThisTurn) continue;
+        if (p.type === 'tool_call') {
+          const v = parseJson(p.content) as { modelCallId?: unknown; tool?: unknown } | null;
+          const callId = p.ref_id ?? p.id;
+          const id = typeof v?.modelCallId === 'string' ? v.modelCallId : callId;
+          calls.push({
+            type: 'tool_call',
+            id,
+            name: typeof v?.tool === 'string' ? v.tool : 'unknown',
+            args: args.get(callId) ?? {},
+          });
+        }
+        if (p.type === 'tool_result') {
+          const r = parseJson(p.content) as StoredResult | null;
+          if (!r) continue;
+          const id = r.modelCallId ?? r.callId;
+          answered.add(id);
+          if (r.origin) run.taint.add(r.origin);
+          results.push({
+            type: 'tool_result',
+            callId: id,
+            content: this.#resultInput(r, run.vision),
+            isError: r.isError,
+            untrusted: true,
+          });
+        }
       }
-      if (content.length) out.push({ role: m.role as 'user' | 'assistant', content });
+      for (const c of calls) {
+        if (c.type !== 'tool_call' || answered.has(c.id)) continue;
+        // Every call needs a result; one that never finished says so.
+        results.push({
+          type: 'tool_result',
+          callId: c.id,
+          content: [{ type: 'text', text: 'The call did not finish.' }],
+          isError: true,
+          untrusted: true,
+        });
+      }
+      if (content.length || calls.length)
+        out.push({ role: m.role as 'user' | 'assistant', content: [...content, ...calls] });
+      if (results.length) out.push({ role: 'tool', content: results });
     }
-    s.inputChars = out.reduce(
-      (n, m) => n + m.content.reduce((k, p) => k + (p.type === 'text' ? p.text.length : 0), 0),
-      0,
-    );
+    s.inputChars = out.reduce((n, m) => n + m.content.reduce((k, p) => k + partChars(p), 0), 0);
+    return out;
+  }
+
+  /** A stored tool result as the model gets it: inside the untrusted envelope (FR-103). */
+  #resultInput(r: StoredResult, vision: boolean): ContentPart[] {
+    const text = r.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('');
+    const out = untrustedParts(r.tool, text, nonce(r.callId));
+    for (const c of r.content) {
+      if (c.type !== 'image') continue;
+      if (vision) out.push(c);
+      else
+        out.push({
+          type: 'text',
+          text: `\n[The tool returned an image (${c.mime}); the model cannot view images.]`,
+        });
+    }
     return out;
   }
 
@@ -1689,7 +2036,10 @@ export class ChatService {
     const p = run.project;
     if (this.#memory && !run.thread.temporary) {
       try {
-        const m = await this.#memory.contextSection(run.accountId, memoryScope(p), run.query);
+        // The thread id lets past-chat retrieval leave out this chat's own tree (FR-205).
+        const m = await this.#memory.contextSection(run.accountId, memoryScope(p), run.query, {
+          threadId: run.threadId,
+        });
         if (m) sections.push(m);
       } catch (err) {
         this.#log.warn('memory unavailable for this turn', { err, turnId: run.turnId });
@@ -1712,24 +2062,35 @@ export class ChatService {
     return run.system;
   }
 
-  /** Store the excerpts used as citations of an assistant message (FR-040). */
+  /** Store the excerpts and web results used as citations of an assistant message (FR-029,
+   *  FR-040). */
   async #cite(run: TurnRun, messageId: string): Promise<void> {
     const now = this.#now().toISOString();
-    await this.#db.transaction(() =>
-      this.#db.orm.insert(citation).values(
-        run.excerpts.map((e) => ({
-          id: uuidv7(),
-          messageId,
-          idx: e.idx,
-          url: null,
-          sourceId: e.sourceId,
-          title: e.name,
-          snippet: e.text.length > 500 ? `${e.text.slice(0, 500)}…` : e.text,
-          retrievedAt: now,
-          createdAt: now,
-        })),
-      ),
-    );
+    const rows = [
+      ...run.excerpts.map((e) => ({
+        id: uuidv7(),
+        messageId,
+        idx: e.idx,
+        url: null,
+        sourceId: e.sourceId,
+        title: e.name,
+        snippet: e.text.length > 500 ? `${e.text.slice(0, 500)}…` : e.text,
+        retrievedAt: now,
+        createdAt: now,
+      })),
+      ...run.web.map((w) => ({
+        id: uuidv7(),
+        messageId,
+        idx: w.idx,
+        url: w.url,
+        sourceId: null,
+        title: w.title,
+        snippet: w.snippet,
+        retrievedAt: now,
+        createdAt: now,
+      })),
+    ];
+    await this.#db.transaction(() => this.#db.orm.insert(citation).values(rows));
   }
 
   #attachmentInput(
@@ -1784,6 +2145,38 @@ export class ChatService {
   }
 }
 
+/** A context item stored on a user message (message part `context`): a resolved mention. */
+interface ContextItem {
+  kind: 'mention';
+  mention: MentionKind;
+  ref: string;
+  label: string;
+  text: string | null;
+  tools: string[];
+}
+
+/** Context items sit after the user's text and files. */
+const CONTEXT_PART_IDX = 100;
+/** Tool parts of a step start here; each call uses three indexes (call, result, artifact). */
+const TOOL_PART_IDX = 10;
+
+function parseContextItem(content: string | null): ContextItem | null {
+  try {
+    const v = JSON.parse(content ?? '') as Partial<ContextItem> | null;
+    if (!v || v.kind !== 'mention' || typeof v.ref !== 'string') return null;
+    return {
+      kind: 'mention',
+      mention: v.mention ?? 'file',
+      ref: v.ref,
+      label: typeof v.label === 'string' ? v.label : v.ref,
+      text: typeof v.text === 'string' ? v.text : null,
+      tools: Array.isArray(v.tools) ? v.tools.filter((t) => typeof t === 'string') : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 function newStep(assistantId: string, textPartId: string, parentId: string): Step {
   const now = Date.now();
   return {
@@ -1806,6 +2199,8 @@ function newStep(assistantId: string, textPartId: string, parentId: string): Ste
     lastDelta: 0,
     deltaTimer: undefined,
     pending: [],
+    partialCalls: new Map(),
+    calls: [],
   };
 }
 
@@ -1814,6 +2209,36 @@ function classify(s: Step, signal: AbortSignal): Outcome {
   if (s.stop === 'cancelled' || (s.stop === null && signal.aborted)) return 'interrupted';
   if (s.stop === 'error' || s.stop === null) return 'failed';
   return 'completed';
+}
+
+function parseJson(text: string | null): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/** A short, stable id for an untrusted envelope; content cannot predict it. */
+function nonce(id: string): string {
+  return createHash('sha256').update(`nova-untrusted:${id}`).digest('hex').slice(0, 12);
+}
+
+function partChars(p: ContentPart): number {
+  if (p.type === 'text') return p.text.length;
+  if (p.type === 'tool_result') return p.content.reduce((n, c) => n + partChars(c), 0);
+  if (p.type === 'tool_call') return JSON.stringify(p.args ?? null).length + p.name.length;
+  return 0;
+}
+
+function parseArgs(raw: string): unknown {
+  if (!raw.trim()) return {};
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
 }
 
 function memoryScope(p: ProjectRow | null): MemoryScope {

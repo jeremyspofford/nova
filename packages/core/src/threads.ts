@@ -7,8 +7,10 @@ import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm'
 import {
   NovaError,
   uuidv7,
+  type ArtifactKind,
   type CitationView,
   type CreateThreadRequest,
+  type MentionKind,
   type MessageView,
   type Page,
   type PartView,
@@ -17,6 +19,7 @@ import {
   type ThreadMode,
   type ThreadTree,
   type ThreadView,
+  type ToolCallPartView,
   type UpdateThreadRequest,
 } from '@nova/shared';
 import { schema, type NovaDatabase } from '@nova/storage';
@@ -209,7 +212,11 @@ export class ThreadService {
       }
       const cs = citesBy.get(m.id);
       if (cs?.length) v.citations = cs.map(toCitationView);
-      if (m.role === 'user') v.provenance = m.delivery ?? 'typed';
+      if (m.role === 'user') {
+        v.provenance = m.delivery ?? 'typed';
+        const mentions = mentionsOf(byMessage.get(m.id) ?? []);
+        if (mentions.length) v.mentions = mentions;
+      }
       return v;
     });
   }
@@ -669,9 +676,69 @@ export function toPartView(p: PartRow): PartView | null {
         size: typeof f?.size === 'number' ? f.size : 0,
       };
     }
+    case 'tool_call':
+      return toToolCallView(p);
+    case 'artifact_ref': {
+      const a = parseJson(p.content) as {
+        artifactId?: unknown;
+        kind?: unknown;
+        title?: unknown;
+      } | null;
+      const id = typeof a?.artifactId === 'string' ? a.artifactId : p.refId;
+      if (!id) return null;
+      return {
+        type: 'artifact',
+        artifactId: id,
+        kind: (typeof a?.kind === 'string' ? a.kind : 'file') as ArtifactKind,
+        title: typeof a?.title === 'string' ? a.title : null,
+      };
+    }
     default:
+      // tool_result and context parts feed the model only.
       return null;
   }
+}
+
+/** The `@`-mentions sent with a user message, from its `context` parts (FR-022). */
+function mentionsOf(parts: PartRow[]): NonNullable<MessageView['mentions']> {
+  return parts.flatMap((p) => {
+    if (p.type !== 'context') return [];
+    const c = parseJson(p.content) as {
+      kind?: unknown;
+      mention?: unknown;
+      ref?: unknown;
+      label?: unknown;
+    } | null;
+    if (c?.kind !== 'mention' || typeof c.ref !== 'string' || typeof c.mention !== 'string')
+      return [];
+    return [
+      {
+        kind: c.mention as MentionKind,
+        ref: c.ref,
+        label: typeof c.label === 'string' ? c.label : c.ref,
+      },
+    ];
+  });
+}
+
+/** A stored tool call card (M3, FR-099): the runtime keeps the part's JSON current. */
+function toToolCallView(p: PartRow): ToolCallPartView | null {
+  const v = parseJson(p.content) as Partial<ToolCallPartView> | null;
+  if (!v) return null;
+  const s = (x: unknown) => (typeof x === 'string' ? x : null);
+  return {
+    type: 'tool_call',
+    callId: s(v.callId) ?? p.refId ?? p.id,
+    tool: s(v.tool) ?? 'unknown',
+    title: s(v.title),
+    source: (s(v.source) ?? 'builtin') as ToolCallPartView['source'],
+    status: (s(v.status) ?? 'error') as ToolCallPartView['status'],
+    argsPreview: s(v.argsPreview) ?? '',
+    resultPreview: s(v.resultPreview),
+    error: s(v.error),
+    approvalId: s(v.approvalId),
+    durationMs: typeof v.durationMs === 'number' ? v.durationMs : null,
+  };
 }
 
 export function toMessageView(m: MessageRow, parts: PartRow[]): MessageView {

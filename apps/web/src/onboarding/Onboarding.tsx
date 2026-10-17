@@ -1,14 +1,16 @@
 // First-run onboarding (FR-014, docs/04 §2.1 and §8): provider → default model → name → tool →
 // sample task → land in the chat. Every step can be skipped, and progress is saved to the
-// `onboarding.state` setting after each step so a reload resumes where the user left off.
+// `onboarding.state` setting after each step so a reload resumes where the user left off. The
+// tool step adds an MCP server with the same form as Settings → Tools & MCP.
 import { useEffect, useRef, useState } from 'react';
-import type { ProviderAccountView } from '@nova/shared';
+import type { McpServerView, ProviderAccountView } from '@nova/shared';
 import { Button, Icon, Kbd, RadioGroup, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { PROVIDER_NAMES } from '../providers/names.ts';
 import { formatBytes, pendingFromText } from '../chat/attachments.ts';
 import { formatBinding } from '../keys.ts';
 import { ProviderSetup } from '../providers/ProviderSetup.tsx';
+import { McpServerForm } from '../settings/McpServerForm.tsx';
 import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
@@ -121,21 +123,7 @@ export function Onboarding({
           nav={nav}
         />
       ) : null}
-      {step === 'tool' ? (
-        <div className="stack">
-          <p>
-            Tools let Nova work with your files, code hosting and other services. Connecting tools
-            arrives in a later milestone.
-          </p>
-          <p className="muted">Connect a tool later in Settings.</p>
-          <div className="row">
-            <Button variant="primary" onClick={next}>
-              Continue
-            </Button>
-          </div>
-          {nav}
-        </div>
-      ) : null}
+      {step === 'tool' ? <ToolStep onDone={next} nav={nav} /> : null}
       {step === 'sample' ? <SampleStep onFinish={finish} nav={nav} /> : null}
     </div>
   );
@@ -299,6 +287,46 @@ function ProfileStep({
   );
 }
 
+function ToolStep({ onDone, nav }: { onDone: () => void; nav: React.ReactNode }) {
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState<McpServerView[]>([]);
+  return (
+    <div className="stack">
+      <p>
+        Tools let Nova work with your files, issue trackers, calendars and other services through
+        MCP servers. Add one now, or skip this step.
+      </p>
+      {added.length ? (
+        <p role="status">
+          Added {added.map((s) => s.name).join(', ')}. It connects in the background.
+        </p>
+      ) : null}
+      {adding ? (
+        <div className="panel-inset">
+          <McpServerForm
+            onCancel={() => setAdding(false)}
+            onSaved={(s) => {
+              setAdding(false);
+              setAdded((list) => [...list, s]);
+            }}
+          />
+        </div>
+      ) : (
+        <div className="row">
+          <Button onClick={() => setAdding(true)}>
+            <Icon name="plus" /> {added.length ? 'Add another server' : 'Add an MCP server'}
+          </Button>
+          <Button variant="primary" onClick={onDone}>
+            Continue
+          </Button>
+        </div>
+      )}
+      <p className="muted">You can connect tools later in Settings, Tools &amp; MCP.</p>
+      {nav}
+    </div>
+  );
+}
+
 function SampleStep({ onFinish, nav }: { onFinish: () => Promise<void>; nav: React.ReactNode }) {
   const { api, registry, memory } = useServices();
   const threads = useThreads();
@@ -347,8 +375,10 @@ function SampleStep({ onFinish, nav }: { onFinish: () => Promise<void>; nav: Rea
             reply at any time. What was written so far is kept and marked “Stopped”.
           </li>
           <li>
-            Before an agent takes a consequential action, later versions of Nova show an approval
-            card that says what it will do and why.
+            Before Nova takes a consequential action, it shows an approval card that says what it
+            will do and why. You can allow it once, for the session or always, deny it and let the
+            work continue, deny it and stop, or do the step yourself. Every decision is in the audit
+            log under Settings, Diagnostics.
           </li>
           <li>
             Open the command palette with <Kbd keys={formatBinding('mod+k', mac)} /> to find any

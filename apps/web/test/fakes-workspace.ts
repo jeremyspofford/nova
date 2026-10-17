@@ -69,6 +69,8 @@ export function memoryItem(over: Partial<MemoryItemView> = {}): MemoryItemView {
     sourceKind: 'chat',
     sourceThreadId: null,
     sourceMessageId: null,
+    kind: null,
+    validUntil: null,
     createdAt: at(),
     updatedAt: at(n),
     ...over,
@@ -318,6 +320,8 @@ export function workspaceImpl(
         sourceKind: 'manual',
         sourceThreadId: null,
         sourceMessageId: null,
+        kind: null,
+        validUntil: null,
         createdAt: ts(),
         updatedAt: ts(),
       };

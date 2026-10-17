@@ -46,9 +46,10 @@ describe('FileVault (key file)', () => {
   });
 
   it('never writes the value in plain text and keeps files private', async () => {
+    // secret-scan: fake
     await vault().put(REF, 'sk-live-very-secret-value');
     const raw = readFileSync(join(dir, 'secrets.vault'), 'utf8');
-    expect(raw).not.toContain('sk-live-very-secret-value');
+    expect(raw).not.toContain('sk-live-very-secret-value'); // secret-scan: fake
     expect(raw).not.toContain('provider/abc');
     expect(statSync(join(dir, 'secrets.vault')).mode & 0o777).toBe(0o600);
     expect(statSync(join(dir, 'vault.key')).mode & 0o777).toBe(0o600);

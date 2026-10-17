@@ -19,6 +19,7 @@ describe('redactString', () => {
     ['aws key', 'AKIAABCDEFGHIJKLMNOP', 'AKIAABCDEFGHIJKLMNOP'],
     [
       'jwt',
+      // secret-scan: fake
       'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
       'eyJhbGci',
     ],
@@ -47,6 +48,7 @@ describe('redactString', () => {
   });
 
   it('masks PEM private keys', () => {
+    // secret-scan: fake
     const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----';
     expect(r.redactString(`x ${pem} y`)).toBe(`x ${REDACTED} y`);
   });

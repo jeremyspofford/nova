@@ -1,8 +1,12 @@
-// State of one open chat (FR-018, FR-019, FR-020): messages from the Hub, an optimistic user
-// bubble, streamed text that has not been persisted yet, follow-ups queued behind a running turn,
-// and the turn status. Events may arrive before or after the HTTP responses that announce the
-// same ids, and a reconnect can replay events, so every transition is idempotent.
+// State of one open chat (FR-018, FR-019, FR-020, FR-100): messages from the Hub, an optimistic
+// user bubble, streamed text that has not been persisted yet, follow-ups queued behind a running
+// turn, the turn status, live tool calls (M3: `tool.call.*` events, merged with the stored
+// `tool_call` parts) and the approvals this chat waits on. Events may arrive before or after the
+// HTTP responses that announce the same ids, and a reconnect can replay events, so every
+// transition is idempotent.
 import type {
+  ApprovalDecisionKind,
+  ApprovalView,
   ChatDeltaPayload,
   ChatMessageCompletedPayload,
   MessageView,
@@ -11,6 +15,9 @@ import type {
   SendMessageResponse,
   ThreadDetail,
   ThreadView,
+  ToolCallPartView,
+  ToolCallStatus,
+  ToolSource,
 } from '@nova/shared';
 
 export interface ClientMessage extends MessageView {
@@ -32,7 +39,43 @@ export interface ThreadState {
   turnRunning: boolean;
   /** Follow-ups waiting for the running turn to end, oldest first (FR-019). */
   queue: QueuedInputView[];
+  /** Tool calls seen on the stream, by call id (M3). */
+  calls: Record<string, LiveCall>;
+  /** Approvals for this chat, by id (FR-100). */
+  approvals: Record<string, ClientApproval>;
 }
+
+/** A tool call as the stream reports it, before (or alongside) its stored `tool_call` part. */
+export interface LiveCall {
+  callId: string;
+  turnId: string | null;
+  /** The assistant message the call belongs to, when it was known at the time. */
+  messageId: string | null;
+  tool: string;
+  source: ToolSource;
+  status: ToolCallStatus;
+  argsPreview: string;
+  resultPreview: string | null;
+  error: string | null;
+  approvalId: string | null;
+  durationMs: number | null;
+  /** Output streamed so far (ephemeral `tool.call.progress`), keeping the newest text. */
+  progress: string;
+  /** Length of the message's streamed text when the call started: where its card sits. */
+  at: number;
+  /** Arrival order. */
+  seq: number;
+}
+
+export interface ClientApproval extends ApprovalView {
+  /** The user marked a handed-off step done (POST /approvals/:id/handoff-done). */
+  handoffDone?: boolean;
+  /** This client sent the decision (others show "answered on another device"). */
+  answeredHere?: boolean;
+}
+
+/** Streamed tool output kept per call; older text is dropped. */
+export const PROGRESS_LIMIT = 8000;
 
 export type ThreadAction =
   | { type: 'loaded'; detail: ThreadDetail }
@@ -49,7 +92,28 @@ export type ThreadAction =
   | { type: 'dequeued'; queuedId: string }
   /** A new version replaces the active path from `fromId` on (edit, regenerate; FR-020). */
   | { type: 'rewound'; fromId: string; add: ClientMessage[] }
-  | { type: 'removed'; ids: string[] };
+  | { type: 'removed'; ids: string[] }
+  | {
+      type: 'tool_started';
+      callId: string;
+      tool: string;
+      source: ToolSource;
+      argsPreview: string;
+      turnId: string | null;
+    }
+  | { type: 'tool_progress'; callId: string; chunk: string }
+  | {
+      type: 'tool_completed';
+      callId: string;
+      status: ToolCallStatus;
+      durationMs: number | null;
+      resultPreview: string | null;
+      turnId: string | null;
+    }
+  | { type: 'tool_denied'; callId: string; tool: string; reason: string; turnId: string | null }
+  | { type: 'approvals'; items: ClientApproval[] }
+  | { type: 'approval_decided'; approvalId: string; decision: ApprovalDecisionKind }
+  | { type: 'handoff_done'; approvalId: string };
 
 export function initialThreadState(thread: ThreadView | null): ThreadState {
   return {
@@ -61,6 +125,8 @@ export function initialThreadState(thread: ThreadView | null): ThreadState {
     loadError: null,
     turnRunning: thread?.state === 'streaming',
     queue: [],
+    calls: {},
+    approvals: {},
   };
 }
 
@@ -88,6 +154,23 @@ export function placeholder(
 }
 
 export function threadReducer(s: ThreadState, a: ThreadAction): ThreadState {
+  const next = reduce(s, a);
+  return next === s ? s : settleWaiting(next);
+}
+
+/**
+ * A thread marked `waiting_approval` whose known approvals are all answered is no longer waiting:
+ * the turn runs on (or has ended). The Hub's own status change follows; this avoids a stale
+ * Needs input in between.
+ */
+function settleWaiting(s: ThreadState): ThreadState {
+  if (s.thread?.state !== 'waiting_approval') return s;
+  const known = Object.values(s.approvals);
+  if (known.length === 0 || known.some(awaitsUser)) return s;
+  return { ...s, thread: { ...s.thread, state: s.turnRunning ? 'streaming' : 'idle' } };
+}
+
+function reduce(s: ThreadState, a: ThreadAction): ThreadState {
   switch (a.type) {
     case 'loaded': {
       const server = a.detail.messages;
@@ -234,7 +317,284 @@ export function threadReducer(s: ThreadState, a: ThreadAction): ThreadState {
       const gone = new Set(a.ids);
       return { ...s, messages: s.messages.filter((m) => !gone.has(m.id)) };
     }
+    case 'tool_started': {
+      const prev = s.calls[a.callId];
+      const owner = prev?.messageId ?? streamingAssistant(s.messages, a.turnId)?.id ?? null;
+      const call: LiveCall = {
+        ...(prev ?? emptyCall(a.callId, Object.keys(s.calls).length)),
+        turnId: a.turnId ?? prev?.turnId ?? null,
+        messageId: owner,
+        tool: a.tool || prev?.tool || '',
+        source: a.source,
+        argsPreview: a.argsPreview,
+        // A replayed start never moves a finished call back to running.
+        status: prev && isTerminal(prev.status) ? prev.status : 'running',
+        at: prev ? prev.at : owner ? (s.streamed[owner]?.length ?? 0) : 0,
+      };
+      return { ...s, calls: { ...s.calls, [a.callId]: call } };
+    }
+    case 'tool_progress': {
+      const prev = s.calls[a.callId];
+      if (!prev || isTerminal(prev.status)) return s;
+      const progress = (prev.progress + a.chunk).slice(-PROGRESS_LIMIT);
+      return { ...s, calls: { ...s.calls, [a.callId]: { ...prev, progress } } };
+    }
+    case 'tool_completed':
+    case 'tool_denied': {
+      const prev =
+        s.calls[a.callId] ??
+        ({
+          ...emptyCall(a.callId, Object.keys(s.calls).length),
+          turnId: a.turnId,
+          messageId: streamingAssistant(s.messages, a.turnId)?.id ?? null,
+        } satisfies LiveCall);
+      const done: LiveCall =
+        a.type === 'tool_completed'
+          ? {
+              ...prev,
+              status: a.status,
+              durationMs: a.durationMs,
+              resultPreview: a.resultPreview,
+            }
+          : { ...prev, tool: prev.tool || a.tool, status: 'denied', error: a.reason };
+      return { ...s, calls: { ...s.calls, [a.callId]: done } };
+    }
+    case 'approvals': {
+      if (a.items.length === 0) return s;
+      const approvals = { ...s.approvals };
+      let calls = s.calls;
+      for (const item of a.items) {
+        const prev = approvals[item.id];
+        // A view fetched before a decision arrived must not reopen the card.
+        if (prev && prev.status !== 'pending' && item.status === 'pending') continue;
+        approvals[item.id] = {
+          ...item,
+          handoffDone: item.handoffDone ?? prev?.handoffDone,
+          answeredHere: item.answeredHere ?? prev?.answeredHere,
+        };
+        const call = item.callId ? calls[item.callId] : undefined;
+        if (call && call.approvalId !== item.id)
+          calls = { ...calls, [call.callId]: { ...call, approvalId: item.id } };
+      }
+      return { ...s, approvals, calls };
+    }
+    case 'approval_decided': {
+      const prev = s.approvals[a.approvalId];
+      if (!prev) return s;
+      // A handed-off step keeps waiting until the user marks it done.
+      const status =
+        a.decision === 'timeout' ? 'expired' : a.decision === 'handoff' ? prev.status : 'decided';
+      return {
+        ...s,
+        approvals: { ...s.approvals, [a.approvalId]: { ...prev, status, decision: a.decision } },
+      };
+    }
+    case 'handoff_done': {
+      const prev = s.approvals[a.approvalId];
+      if (!prev) return s;
+      return {
+        ...s,
+        approvals: {
+          ...s.approvals,
+          [a.approvalId]: { ...prev, status: 'decided', handoffDone: true },
+        },
+      };
+    }
   }
+}
+
+function emptyCall(callId: string, seq: number): LiveCall {
+  return {
+    callId,
+    turnId: null,
+    messageId: null,
+    tool: '',
+    source: 'builtin',
+    status: 'pending',
+    argsPreview: '',
+    resultPreview: null,
+    error: null,
+    approvalId: null,
+    durationMs: null,
+    progress: '',
+    at: 0,
+    seq,
+  };
+}
+
+/** The reply a tool call of `turnId` belongs to: the newest streaming assistant message. */
+function streamingAssistant(messages: ClientMessage[], turnId: string | null) {
+  const replies = messages.filter((m) => m.role === 'assistant');
+  return (
+    replies.findLast((m) => m.status === 'streaming' && (!turnId || m.turnId === turnId)) ??
+    (turnId ? replies.findLast((m) => m.turnId === turnId) : undefined)
+  );
+}
+
+const TERMINAL: readonly ToolCallStatus[] = ['ok', 'error', 'denied', 'timeout', 'cancelled'];
+
+export function isTerminal(status: ToolCallStatus): boolean {
+  return TERMINAL.includes(status);
+}
+
+/** True while an approval still needs the user: undecided, or a hand-off not yet marked done. */
+export function awaitsUser(a: ClientApproval): boolean {
+  if (a.handoffDone) return false;
+  return a.status === 'pending' || (a.status === 'decided' && a.decision === 'handoff');
+}
+
+/** Approvals that still need the user, oldest first. */
+export function pendingApprovals(s: Pick<ThreadState, 'approvals'>): ClientApproval[] {
+  return Object.values(s.approvals)
+    .filter(awaitsUser)
+    .sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+}
+
+/** A tool call as a card shows it: the stored part, updated by anything newer from the stream. */
+export type DisplayCall = ToolCallPartView & { progress: string };
+
+export function mergeCall(part: ToolCallPartView | null, live: LiveCall | undefined): DisplayCall {
+  const base: DisplayCall = part
+    ? { ...part, progress: '' }
+    : {
+        type: 'tool_call',
+        callId: live?.callId ?? '',
+        tool: live?.tool ?? '',
+        title: null,
+        source: live?.source ?? 'builtin',
+        status: live?.status ?? 'pending',
+        argsPreview: live?.argsPreview ?? '',
+        resultPreview: live?.resultPreview ?? null,
+        error: live?.error ?? null,
+        approvalId: live?.approvalId ?? null,
+        durationMs: live?.durationMs ?? null,
+        progress: '',
+      };
+  if (!live) return base;
+  // A stored part that already finished wins over a stale live state, and the other way round.
+  const liveNewer = isTerminal(live.status) || !isTerminal(base.status);
+  return {
+    ...base,
+    tool: base.tool || live.tool,
+    argsPreview: base.argsPreview || live.argsPreview,
+    approvalId: base.approvalId ?? live.approvalId,
+    progress: live.progress,
+    ...(liveNewer
+      ? {
+          status: live.status,
+          resultPreview: live.resultPreview ?? base.resultPreview,
+          error: live.error ?? base.error,
+          durationMs: live.durationMs ?? base.durationMs,
+        }
+      : {}),
+  };
+}
+
+export type ArtifactPart = Extract<PartView, { type: 'artifact' }>;
+
+/** What an assistant message shows, in order: text runs, tool cards and artifact cards. */
+export type Segment =
+  | { kind: 'text'; text: string }
+  | { kind: 'call'; call: DisplayCall }
+  | { kind: 'artifact'; part: ArtifactPart };
+
+/**
+ * The visible pieces of an assistant message. Stored parts keep their order; streamed text (not
+ * persisted yet) is split where live calls started, so a card sits between the text before and
+ * after it. When the Hub persisted part of the streamed text, the streamed copy is used once.
+ */
+export function messageSegments(
+  m: ClientMessage,
+  streamed: string | undefined,
+  live: LiveCall[],
+): Segment[] {
+  const out: Segment[] = [];
+  const addText = (text: string) => {
+    if (!text) return;
+    const last = out.at(-1);
+    if (last?.kind === 'text') last.text += text;
+    else out.push({ kind: 'text', text });
+  };
+  const byId = new Map(live.map((c) => [c.callId, c]));
+  const storedCalls = new Set(m.parts.flatMap((p) => (p.type === 'tool_call' ? [p.callId] : [])));
+  const extra = live
+    .filter((c) => !storedCalls.has(c.callId))
+    .sort((x, y) => x.at - y.at || x.seq - y.seq)
+    .map((c): { at: number; seg: Segment } => ({
+      at: c.at,
+      seg: { kind: 'call', call: mergeCall(null, c) },
+    }));
+  const nonText = (p: PartView): Segment | null =>
+    p.type === 'tool_call'
+      ? { kind: 'call', call: mergeCall(p, byId.get(p.callId)) }
+      : p.type === 'artifact'
+        ? { kind: 'artifact', part: p }
+        : null;
+  const split = (text: string, markers: { at: number; seg: Segment }[]) => {
+    let pos = 0;
+    for (const mk of markers) {
+      const at = Math.min(Math.max(mk.at, pos), text.length);
+      addText(text.slice(pos, at));
+      out.push(mk.seg);
+      pos = at;
+    }
+    addText(text.slice(pos));
+  };
+
+  const stored = m.parts
+    .filter((p): p is Extract<PartView, { type: 'text' }> => p.type === 'text')
+    .map((p) => p.text)
+    .join('');
+  if (streamed && streamed.startsWith(stored)) {
+    // The streamed text covers the stored text: place stored cards at their text offsets.
+    const markers: { at: number; seg: Segment }[] = [];
+    let offset = 0;
+    for (const p of m.parts) {
+      if (p.type === 'text') offset += p.text.length;
+      else {
+        const seg = nonText(p);
+        if (seg) markers.push({ at: offset, seg });
+      }
+    }
+    split(
+      streamed,
+      [...markers, ...extra].sort((x, y) => x.at - y.at),
+    );
+    return out;
+  }
+  for (const p of m.parts) {
+    if (p.type === 'text') addText(p.text);
+    else {
+      const seg = nonText(p);
+      if (seg) out.push(seg);
+    }
+  }
+  split(streamed ?? '', extra);
+  return out;
+}
+
+/**
+ * Live calls grouped by the assistant message whose card shows them. A call whose message was
+ * not known when it started goes to the newest reply of its turn, else the newest reply.
+ */
+export function liveCallsByMessage(s: Pick<ThreadState, 'calls' | 'messages'>) {
+  const out = new Map<string, LiveCall[]>();
+  const ids = new Set(s.messages.map((m) => m.id));
+  const replies = s.messages.filter((m) => m.role === 'assistant');
+  // A stored part decides where a call lives, whatever the stream guessed.
+  const storedIn = new Map<string, string>();
+  for (const m of replies)
+    for (const p of m.parts) if (p.type === 'tool_call') storedIn.set(p.callId, m.id);
+  for (const c of Object.values(s.calls).sort((x, y) => x.seq - y.seq)) {
+    const owner =
+      storedIn.get(c.callId) ??
+      (c.messageId && ids.has(c.messageId)
+        ? c.messageId
+        : (replies.findLast((m) => !!c.turnId && m.turnId === c.turnId) ?? replies.at(-1))?.id);
+    if (!owner) continue;
+    out.set(owner, [...(out.get(owner) ?? []), c]);
+  }
+  return out;
 }
 
 /** The messages a deletion removes: a user message takes the reply in its turn with it. */

@@ -21,7 +21,7 @@ Last updated: 2026-10-17T08:40:00Z
 | M0 Foundation | done | 2026-10-17 | 2026-10-17 | 10bbcf4; `docs/demos/M0.md`; Playwright smoke J0 green |
 | M1 Chat MVP | done | 2026-10-17 | 2026-10-17 | J1 green 3/3 (axe clean, cold start < 3 s); `docs/demos/M1.md` |
 | M2 Providers/Projects/Memory | done | 2026-10-17 | 2026-10-17 | J1 + J2 green 3/3 in parallel (axe clean); `docs/demos/M2.md` |
-| M3 Tools/MCP/Policy | todo | — | — | — |
+| M3 Tools/MCP/Policy | in_progress | 2026-10-17 | — | — |
 | M4 Plugins/Workspace/Profile | todo | — | — | — |
 | M5 Agent Runtime (Work & Code) | todo | — | — | — |
 | M6 Agents/Computers/Channels | todo | — | — | — |
@@ -77,24 +77,24 @@ Last updated: 2026-10-17T08:40:00Z
 | T-M2-09 | M2 | FR-007 | done | 01c0e89 | web deeplinks tests (`web+nova` handler in the manifest) | Deep links |
 | T-M2-11 | M2 | FR-221 | done | 01c0e89 | core presets tests; web models-settings tests; J2 step 3 | Model presets (Faster ↔ Smarter) over virtual models |
 | T-M2-10 | M2 | — | done | 01c0e89 | `e2e/j2-providers-memory.spec.ts`, 3/3 with J1 in parallel | E2E J2 |
-| T-M3-01 | M3 | — | todo | — | — | Tool registry + built-in read/write/search/exec |
-| T-M3-02 | M3 | FR-042, FR-043 | todo | — | — | MCP client (stdio/http) + health/restart |
-| T-M3-03 | M3 | FR-099 | todo | — | — | Policy engine complete (allow/ask/handoff/deny) + reasons |
-| T-M3-04 | M3 | FR-100 | todo | — | — | Approval UX (allow once/always/deny/handoff) + grants |
-| T-M3-05 | M3 | FR-101 | todo | — | — | Secrets (keychain) + redaction + secret-scan CI |
-| T-M3-06 | M3 | FR-048 | todo | — | — | Per-tool defaults + effective policy preview |
-| T-M3-07 | M3 | — | todo | — | — | Agent tool loop + tool cards |
-| T-M3-08 | M3 | FR-029, FR-022, FR-038 | todo | — | — | Web search with citations; `@`-mentions; artifacts pane |
-| T-M3-09 | M3 | FR-104 | todo | — | — | Audit hash chain + Activity trace |
-| T-M3-10 | M3 | FR-013 | todo | — | — | Notifications center |
-| T-M3-11 | M3 | FR-149 | todo | — | — | Hub trusted + external E2E baseline; optional sealed mode |
-| T-M3-13 | M3 | FR-189 | todo | — | — | Confirmation tiers + intent provenance in the policy engine |
-| T-M3-14 | M3 | FR-190 | todo | — | — | Permission profiles + protected paths |
-| T-M3-15 | M3 | FR-191 | todo | — | — | Command prefix rules with load-time examples |
-| T-M3-16 | M3 | FR-192 | todo | — | — | Listener tokens, Origin checks, per-client MCP tokens |
-| T-M3-17 | M3 | FR-196 | todo | — | — | Deferred tools + `tool.search` |
-| T-M3-18 | M3 | FR-204, FR-205 | todo | — | — | Memory consolidation, project-only scope, history-reference toggle |
-| T-M3-12 | M3 | — | todo | — | — | E2E J3 |
+| T-M3-01 | M3 | — | in_progress | — | — | Tool registry + built-in read/write/search/exec |
+| T-M3-02 | M3 | FR-042, FR-043 | in_progress | — | — | MCP client (stdio/http) + health/restart |
+| T-M3-03 | M3 | FR-099 | in_progress | — | — | Policy engine complete (allow/ask/handoff/deny) + reasons |
+| T-M3-04 | M3 | FR-100 | in_progress | — | — | Approval UX (allow once/always/deny/handoff) + grants |
+| T-M3-05 | M3 | FR-101 | in_progress | — | — | Secrets (keychain) + redaction + secret-scan CI |
+| T-M3-06 | M3 | FR-048 | in_progress | — | — | Per-tool defaults + effective policy preview |
+| T-M3-07 | M3 | — | in_progress | — | — | Agent tool loop + tool cards |
+| T-M3-08 | M3 | FR-029, FR-022, FR-038 | in_progress | — | — | Web search with citations; `@`-mentions; artifacts pane |
+| T-M3-09 | M3 | FR-104 | in_progress | — | — | Audit hash chain + Activity trace |
+| T-M3-10 | M3 | FR-013 | in_progress | — | — | Notifications center |
+| T-M3-11 | M3 | FR-149 | in_progress | — | — | Hub trusted + external E2E baseline; optional sealed mode |
+| T-M3-13 | M3 | FR-189 | in_progress | — | — | Confirmation tiers + intent provenance in the policy engine |
+| T-M3-14 | M3 | FR-190 | in_progress | — | — | Permission profiles + protected paths |
+| T-M3-15 | M3 | FR-191 | in_progress | — | — | Command prefix rules with load-time examples |
+| T-M3-16 | M3 | FR-192 | in_progress | — | — | Listener tokens, Origin checks, per-client MCP tokens |
+| T-M3-17 | M3 | FR-196 | in_progress | — | — | Deferred tools + `tool.search` |
+| T-M3-18 | M3 | FR-204, FR-205 | in_progress | — | — | Memory consolidation, project-only scope, history-reference toggle |
+| T-M3-12 | M3 | — | in_progress | — | — | E2E J3 |
 | T-M4-01 | M4 | FR-045 | todo | — | — | Plugin manifest + loader sandbox + local install |
 | T-M4-02 | M4 | FR-046 | todo | — | — | Skills + slash invocation + auto-selection |
 | T-M4-03 | M4 | FR-047 | todo | — | — | Connector framework (OAuth/PKCE, keychain) |

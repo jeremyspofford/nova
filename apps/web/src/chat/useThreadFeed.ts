@@ -1,19 +1,42 @@
 // Loads one thread and follows its event stream into the thread reducer (FR-018, FR-019). Shared
 // by the chat view and the side chat panel; callers add their own reactions (announcements, list
-// updates) through `onEvent`.
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef } from 'react';
+// updates) through `onEvent`. M3: tool calls update live from `tool.call.*` and `policy.denied`,
+// and the approvals the chat waits on are listed on load and fetched when one is requested
+// (FR-100), so a card appears whichever client or device opened the chat.
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type {
+  ApprovalDecisionKind,
   ChatDeltaPayload,
   ChatMessageCompletedPayload,
   EventEnvelope,
   MessageView,
   ThreadDetail,
+  ThreadState,
   ThreadView,
+  ToolCallStatus,
+  ToolSource,
 } from '@nova/shared';
 import { ApiError, errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
 import { THREAD_EVENTS, openStream } from '../sse.ts';
-import { initialThreadState, threadReducer } from './thread-state.ts';
+import { initialThreadState, pendingApprovals, threadReducer } from './thread-state.ts';
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+const numOrNull = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
+
+/** `thread.status.changed` statuses (FR-215) as the thread state the views read. */
+const STATE_OF: Record<string, ThreadState> = {
+  needs_input: 'waiting_approval',
+  running: 'streaming',
+  ready: 'idle',
+  blocked: 'error',
+};
+
+export function threadStateOf(status: unknown): ThreadState | null {
+  return typeof status === 'string' ? (STATE_OF[status] ?? null) : null;
+}
 
 export interface FeedOptions {
   /** Runs after the shared handling of each event for this thread. */
@@ -29,11 +52,34 @@ export function useThreadFeed(
 ) {
   const { api, eventSource } = useServices();
   const [state, dispatch] = useReducer(threadReducer, known, initialThreadState);
+  /** The first listing of pending approvals finished (or failed). */
+  const [approvalsLoaded, setApprovalsLoaded] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latest = useRef({ opts, state });
   useLayoutEffect(() => {
     latest.current = { opts, state };
   });
+
+  const listApprovals = useCallback(() => {
+    if (!threadId) return Promise.resolve();
+    return api.listApprovals({ status: 'pending', threadId }).then(
+      ({ items }) => dispatch({ type: 'approvals', items }),
+      () => undefined,
+    );
+  }, [api, threadId]);
+
+  const loadApproval = useCallback(
+    (approvalId: string) => {
+      api.getApproval(approvalId).then(
+        (view) => {
+          if (view.threadId && view.threadId !== threadId) return;
+          dispatch({ type: 'approvals', items: [view] });
+        },
+        () => void listApprovals(),
+      );
+    },
+    [api, listApprovals, threadId],
+  );
 
   const refetch = useCallback(() => {
     if (!threadId) return;
@@ -44,11 +90,17 @@ export function useThreadFeed(
         (detail) => {
           dispatch({ type: 'loaded', detail });
           latest.current.opts.onLoaded?.(detail, false);
+          // Waiting on an approval this view has not seen (missed while offline): list them.
+          if (
+            detail.thread.state === 'waiting_approval' &&
+            pendingApprovals(latest.current.state).length === 0
+          )
+            void listApprovals();
         },
         () => undefined,
       );
     }, 40);
-  }, [api, threadId]);
+  }, [api, listApprovals, threadId]);
 
   const refreshQueue = useCallback(() => {
     if (!threadId) return;
@@ -78,11 +130,14 @@ export function useThreadFeed(
         });
       },
     );
+    void listApprovals().finally(() => {
+      if (alive) setApprovalsLoaded(true);
+    });
     return () => {
       alive = false;
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [api, threadId]);
+  }, [api, listApprovals, threadId]);
 
   const onEvent = useCallback(
     (env: EventEnvelope) => {
@@ -140,12 +195,67 @@ export function useThreadFeed(
           dispatch({ type: 'dequeued', queuedId: String(p.queuedId) });
           refetch();
           break;
+        case 'thread.status.changed': {
+          const ref = p.ref as { kind?: unknown; id?: unknown } | undefined;
+          const next = threadStateOf(p.status);
+          const current = latest.current.state.thread;
+          if (ref?.kind === 'thread' && ref.id === threadId && next && current)
+            dispatch({ type: 'thread', thread: { ...current, state: next } });
+          break;
+        }
+        case 'tool.call.started':
+          if (typeof p.callId !== 'string') break;
+          dispatch({
+            type: 'tool_started',
+            callId: p.callId,
+            tool: str(p.tool),
+            source: (str(p.source) || 'builtin') as ToolSource,
+            argsPreview: str(p.argsPreview),
+            turnId: env.correlation?.turnId ?? null,
+          });
+          break;
+        case 'tool.call.progress':
+          if (typeof p.callId === 'string')
+            dispatch({ type: 'tool_progress', callId: p.callId, chunk: str(p.chunk) });
+          break;
+        case 'tool.call.completed':
+          if (typeof p.callId !== 'string') break;
+          dispatch({
+            type: 'tool_completed',
+            callId: p.callId,
+            status: (str(p.status) || 'ok') as ToolCallStatus,
+            durationMs: numOrNull(p.durationMs),
+            resultPreview: strOrNull(p.resultPreview),
+            turnId: env.correlation?.turnId ?? null,
+          });
+          break;
+        case 'policy.denied':
+          if (typeof p.callId !== 'string') break;
+          dispatch({
+            type: 'tool_denied',
+            callId: p.callId,
+            tool: str(p.tool),
+            reason: str(p.reason),
+            turnId: env.correlation?.turnId ?? null,
+          });
+          break;
+        case 'approval.requested':
+          if (typeof p.approvalId === 'string') loadApproval(p.approvalId);
+          break;
+        case 'approval.decided':
+          if (typeof p.approvalId === 'string' && typeof p.decision === 'string')
+            dispatch({
+              type: 'approval_decided',
+              approvalId: p.approvalId,
+              decision: p.decision as ApprovalDecisionKind,
+            });
+          break;
         default:
           break;
       }
       latest.current.opts.onEvent?.(env);
     },
-    [refetch, refreshQueue, threadId],
+    [loadApproval, refetch, refreshQueue, threadId],
   );
   const onEventRef = useRef(onEvent);
   useLayoutEffect(() => {
@@ -162,5 +272,5 @@ export function useThreadFeed(
     return () => handle.close();
   }, [api, eventSource, threadId]);
 
-  return { state, dispatch, refetch, refreshQueue };
+  return { state, dispatch, refetch, refreshQueue, approvalsLoaded, listApprovals };
 }

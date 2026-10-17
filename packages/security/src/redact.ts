@@ -8,6 +8,12 @@ export interface RedactionRule {
   pattern: RegExp;
   /** Replace the whole match, or only the named group `secret`. */
   group?: 'secret';
+  /**
+   * How the repository secret scan uses the rule (scan.ts, FR-101): `token` matches are
+   * findings by their shape alone; `context` matches only when the captured value is a plain
+   * literal; `config` is `context` limited to configuration files.
+   */
+  scan?: 'token' | 'context' | 'config';
 }
 
 // Patterns are deliberately broad: a false positive costs a masked string, a false negative
@@ -16,43 +22,78 @@ export const DEFAULT_RULES: readonly RedactionRule[] = [
   {
     id: 'pem',
     pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+    scan: 'token',
   },
-  { id: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g },
+  // A private key cut off before its END line (a truncated paste or log line).
+  {
+    id: 'pem-header',
+    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[A-Za-z0-9+/=\s]*/g,
+    scan: 'token',
+  },
+  {
+    id: 'jwt',
+    pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+    scan: 'token',
+  },
   {
     id: 'bearer',
     pattern: /\b(?:bearer|token)\s+(?<secret>[A-Za-z0-9._~+/=-]{12,})/gi,
     group: 'secret',
+    scan: 'context',
   },
   {
     id: 'authorization-header',
     pattern:
       /\b(?:authorization|x-api-key|api-key|cookie|set-cookie)\s*[:=]\s*(?<secret>[^\s,;"']{6,}[^\n"']*)/gi,
     group: 'secret',
+    scan: 'context',
   },
-  { id: 'provider-key', pattern: /\b(?:sk|pk|rk)-(?:[A-Za-z0-9]+-)*[A-Za-z0-9_-]{16,}\b/g },
+  {
+    id: 'provider-key',
+    pattern: /\b(?:sk|pk|rk)-(?:[A-Za-z0-9]+-)*[A-Za-z0-9_-]{16,}\b/g,
+    scan: 'token',
+  },
   {
     id: 'github-token',
     pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
+    scan: 'token',
   },
-  { id: 'chat-token', pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g },
-  { id: 'aws-access-key', pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
-  { id: 'google-key', pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g },
+  { id: 'chat-token', pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g, scan: 'token' },
+  { id: 'aws-access-key', pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, scan: 'token' },
+  { id: 'google-key', pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g, scan: 'token' },
+  // Nova's own bearer tokens (tokens.ts) and enrollment tokens.
+  { id: 'nova-token', pattern: /\bnv[sxdmae]_[A-Za-z0-9_-]{20,}/g, scan: 'token' },
+  // Common prefixed tokens: source-hosting personal tokens, package registries, model hubs.
+  {
+    id: 'prefixed-token',
+    pattern: /\b(?:glpat-[A-Za-z0-9_-]{20,}|npm_[A-Za-z0-9]{36}|hf_[A-Za-z0-9]{30,})\b/g,
+    scan: 'token',
+  },
+  { id: 'payment-key', pattern: /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g, scan: 'token' },
+  {
+    id: 'mail-api-key',
+    pattern: /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b/g,
+    scan: 'token',
+  },
   {
     id: 'url-credentials',
     pattern: /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)(?<secret>[^\s@/]+)(@)/gi,
     group: 'secret',
+    scan: 'context',
   },
   {
     id: 'secret-assignment-quoted',
     pattern:
       /\b(?:password|passwd|pwd|secret|api_?key|access_?token|refresh_?token|client_?secret)\b\s*["']?\s*[:=]\s*(?<q>["'])(?<secret>(?:(?!\k<q>)[^\n]){1,})\k<q>/gi,
     group: 'secret',
+    scan: 'context',
   },
   {
     id: 'secret-assignment',
     pattern:
       /\b(?:password|passwd|pwd|secret|api_?key|access_?token|refresh_?token|client_?secret)\b\s*["']?\s*[:=]\s*(?<secret>[^\s"',;]{4,})/gi,
     group: 'secret',
+    scan: 'config',
   },
 ];
 

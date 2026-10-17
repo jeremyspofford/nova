@@ -47,3 +47,22 @@ self.addEventListener('fetch', (event) => {
     ),
   );
 });
+
+// A notification shown by this worker (FR-013) opens or focuses the app at its link. Only
+// same-origin paths are followed.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const raw = event.notification.data && event.notification.data.href;
+  const href = typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const target = new URL(href, self.location.origin).href;
+      for (const client of list) {
+        if (new URL(client.url).origin === self.location.origin && 'focus' in client) {
+          return client.focus().then((c) => (c && 'navigate' in c ? c.navigate(target) : c));
+        }
+      }
+      return self.clients.openWindow(target);
+    }),
+  );
+});

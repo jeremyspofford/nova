@@ -111,7 +111,8 @@ export function openStream(
   };
 }
 
-/** Event names a chat thread view listens for (contracts/events.md "chat & turns"). */
+/** Event names a chat thread view listens for (contracts/events.md "chat & turns", and "tools,
+ *  approvals, review & policy" plus artifacts for M3). */
 export const THREAD_EVENTS = [
   'turn.started',
   'turn.completed',
@@ -125,4 +126,13 @@ export const THREAD_EVENTS = [
   'chat.followup.queued',
   'chat.followup.started',
   'thread.status.changed',
+  'tool.call.started',
+  'tool.call.progress',
+  'tool.call.completed',
+  'approval.requested',
+  'approval.decided',
+  'policy.denied',
+  'policy.tier',
+  'artifact.created',
+  'artifact.updated',
 ] as const;

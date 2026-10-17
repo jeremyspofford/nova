@@ -91,11 +91,18 @@ signed artifacts only).
 | `GET/POST` | `/api/v1/schedules` | Recurring tasks, agent schedules and self-set wakes ([`schedule.json`](schemas/schedule.json)) |
 | `PATCH/DELETE` | `/api/v1/schedules/:id` | Edit a schedule (`enabled: false` pauses it) or cancel it; proxied by the shell's `schedule.upsert` / `schedule.cancel` |
 | `GET/POST` | `/api/v1/agents` | Always-on agents |
-| `GET/POST` | `/api/v1/approvals` | List/decide approvals; a decision is an [`ApprovalDecision`](schemas/approval-decision.json) |
+| `GET/POST` | `/api/v1/approvals` | List (`status=pending\|all`, `threadId`; a handed-off approval stays pending until marked done) / decide approvals; a decision is an [`ApprovalDecision`](schemas/approval-decision.json) without `decidedBy`/`decidedAt`, which the Hub sets. The first valid answer wins; a later one is `conflict`. A decision the tier does not offer is `validation`; `allow_always` while managed policy disables persistent grants is `policy_denied` (FR-100, FR-189) |
+| `GET` | `/api/v1/approvals/:id` | One approval as shown on the card |
+| `POST` | `/api/v1/approvals/:id/handoff-done` | The user finished a handed-off step `{note?}`; the waiting turn resumes |
 | `GET` | `/api/v1/requests?status=pending` | Pending server-to-client requests for this client ([`server-request.json`](schemas/server-request.json)) |
 | `POST` | `/api/v1/requests/:id/respond` | Answer a request; first valid answer wins (§5) |
-| `GET` | `/api/v1/activity?ref=` | Activity trace for a thread/run/agent |
-| `GET` | `/api/v1/audit/export` | Audit log export (JSONL) |
+| `GET` | `/api/v1/activity?ref=` | Activity trace for a thread/run/agent, oldest first: turns, tool calls, approvals, policy decisions; `not_found` for another account's thread |
+| `GET` | `/api/v1/audit?kind=&threadId=&cursor=&limit=` | Audit entries, newest first, paged by sequence (FR-104) |
+| `GET` | `/api/v1/audit/verify` | Walk the hash chain; reports the first entry whose sequence, previous hash or hash does not match |
+| `GET` | `/api/v1/audit/export` | Audit log export (`application/x-ndjson`, redacted) |
+| `GET` | `/api/v1/notifications?unread=` | Notifications, newest first, with the unread count (FR-013) |
+| `POST` | `/api/v1/notifications/read` | Mark `{ids}` or `{all: true}` read (one of them is required) |
+| `DELETE` | `/api/v1/notifications/:id` | Delete a notification |
 
 ### Permissions, rules & hooks
 
@@ -111,6 +118,8 @@ signed artifacts only).
 | `POST` | `/api/v1/command-rules/test` | Match a command against the rules in a scope; returns the decision and the matching rule |
 | `GET` | `/api/v1/permission-grants` | Remembered session and always grants |
 | `DELETE` | `/api/v1/permission-grants/:id` | Revoke a grant |
+| `GET/PUT` | `/api/v1/tool-defaults` | Per-tool defaults `{tool, default: allow\|ask\|deny\|null}` (FR-048); `null` clears one |
+| `GET` | `/api/v1/tools?threadId=` | Built-in and MCP tools with the user's default and the effective decision preview (FR-048) |
 | `GET/POST` | `/api/v1/hooks` | Hooks from every source with trust state ([`hook-config.json`](schemas/hook-config.json), FR-197) |
 | `PATCH/DELETE` | `/api/v1/hooks/:id` | Enable/disable or delete a user hook |
 | `POST` | `/api/v1/hooks/:id/trust` | Trust `{contentHash}`: must equal the current hash, else `conflict`; managed hooks are trusted by policy |
@@ -123,7 +132,7 @@ signed artifacts only).
 | `GET/POST` | `/api/v1/memory/items?scopeKind=&scopeRef=&category=&q=&status=` | Memory items, pinned first (FR-032, FR-204) / add one by hand |
 | `PATCH/DELETE` | `/api/v1/memory/items/:id` | Correct, pin, dismiss or delete an item |
 | `POST` | `/api/v1/memory/import` | Import facts from a provided export (JSON array or one per line); duplicates skipped (FR-032) |
-| `GET` | `/api/v1/memory/summary?scope=` | The current injected summary (≤ 2,500 tokens) and its source run |
+| `GET` | `/api/v1/memory/summary?scopeKind=&scopeRef=` | The current injected summary (≤ 2,500 tokens) and its source run (`scope` is accepted for `scopeKind`). Correcting, dismissing or deleting an item clears its scope's summary until the next run |
 | `POST` | `/api/v1/memory/consolidate` | Start a consolidation run now `{scope}` |
 | `GET` | `/api/v1/memory/consolidations` | Consolidation run history |
 | `PATCH` | `/api/v1/memory/topics` | "Remember more / less about this topic" `{topic, preference: more\|less\|default}` |
@@ -146,7 +155,11 @@ The "reference past chats" toggle (FR-205) is the setting `memory.referencePastC
 | `POST` | `/api/v1/code/worktrees` | Create a worktree and lease it to a session (max 15 per repo, else `conflict`) |
 | `POST` | `/api/v1/code/worktrees/:id/{renew,release}` | Renew or release the lease |
 | `DELETE` | `/api/v1/code/worktrees/:id` | Remove the worktree (Git hooks disabled, FR-211) |
-| `GET/POST` | `/api/v1/mcp/servers` | MCP servers ([`mcp-config.json`](schemas/mcp-config.json)); `PATCH /:id` sets tool lists and defaults |
+| `GET/POST` | `/api/v1/mcp/servers` | MCP servers ([`mcp-config.json`](schemas/mcp-config.json)); env values go to the vault and only their names come back; for `sse`/`http` servers each env entry is sent as a header with `_` turned into `-`; names are unique per account (FR-042) |
+| `GET/PATCH/DELETE` | `/api/v1/mcp/servers/:id` | One server / change it (a sent `env` is the complete set: an empty value keeps the saved secret, a value replaces it, an omitted name is deleted; `secret://` values are refused) / remove it with its secrets and working directory |
+| `POST` | `/api/v1/mcp/servers/:id/restart` | Reconnect now and reset the restart backoff (`conflict` while disabled) (FR-043) |
+| `GET` | `/api/v1/mcp/servers/:id/logs` | Last 500 redacted log lines (stderr, protocol, status) |
+| `GET` | `/api/v1/mcp/servers/:id/tools` | Every tool the server offers, including disabled ones |
 | `POST` | `/api/v1/mcp/bundles/preview` | Upload a bundle; returns manifest, signature state and proposed permissions (FR-199) |
 | `POST` | `/api/v1/mcp/bundles/install` | Install `{previewId, permissions, userConfig, confirmSideload?}`; unsigned without `confirmSideload: true` is refused |
 | `GET/POST` | `/api/v1/mcp/subscriptions` | MCP event subscriptions bound to triggers (FR-201) |
@@ -154,7 +167,11 @@ The "reference past chats" toggle (FR-205) is the setting `memory.referencePastC
 | `POST` | `/api/v1/mcp/events/:subscriptionId` | **Webhook receiver.** No bearer token: a valid signature is required (HMAC-SHA256 over id, timestamp and raw body; timestamp within 5 min); bodies over 256 KiB → 413; duplicates by delivery id → 2xx without effect; bad signature → 401 |
 | `GET/POST` | `/api/v1/plugins` | Plugins |
 | `GET/POST` | `/api/v1/skills` | Skills |
-| `POST` | `/api/v1/tools/:name/invoke` | Invoke a tool (policy-gated) |
+| `POST` | `/api/v1/tools/:name/invoke` | Invoke a tool from the UI `{args, threadId?}`; it passes the policy gate like a model call (origin `ui`) |
+| `GET` | `/api/v1/artifacts?threadId=` | A thread's artifacts (FR-038) |
+| `GET` | `/api/v1/artifacts/:id` | One artifact's metadata |
+| `GET` | `/api/v1/artifacts/:id/content` | Its bytes under a restrictive CSP: HTML only with `sandbox allow-scripts` (never same-origin), PDFs without a sandbox directive so the browser viewer works; `?v=` is ignored |
+| `GET` | `/api/v1/mentions?q=&threadId=` | `@`-mention candidates: files and folders under the thread's roots, MCP servers and tools (FR-022) |
 | `GET/POST` | `/api/v1/app-authorizations` | Per-client tokens: MCP clients of Nova's MCP server (FR-192) and third-party apps (FR-222). Create returns the token once |
 | `DELETE` | `/api/v1/app-authorizations/:id` | Revoke; open sessions close at once |
 | `POST` | `/api/v1/app-authorizations/requests` | A third-party app requests scopes; returns a user code and verification URL (FR-222) |
@@ -190,7 +207,9 @@ gaps. Calls on behalf of a schedule, automation, agent or app are checked agains
 | `POST` | `/api/v1/network/setup` | Run the Network Setup assistant step |
 | `POST` | `/api/v1/network/test` | Reachability test (LAN/Mesh/Relay) |
 | `POST` | `/api/v1/network/rollback` | Revert the last network change |
-| `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, sandboxes, devices, flags) |
+| `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, MCP servers, sandbox, secrets backend, encryption at rest, warnings, other probes) |
+| `GET` | `/api/v1/diagnostics/logs?level=&module=&since=&limit=` | Recent log entries from the in-memory ring (5,000), newest first; `level` means that level and above; redacted (FR-118) |
+| `GET` | `/api/v1/diagnostics/logs/export` | The same as `application/x-ndjson` |
 
 ## 2. Hub ↔ Compute Node
 
@@ -282,7 +301,8 @@ The shell never receives raw secrets; it requests scoped operations that `novad`
 - High-frequency deltas are coalesced (≤ 60/s); screenshots ≤ 1 per 2 s.
 - Slow clients drop ephemeral deltas but never persisted events.
 - Reconnect resumes from the last event id; the Hub replays missed persisted events and
-  re-sends every request that is still `pending`.
+  re-sends every request that is still `pending`. Without a cursor (`Last-Event-ID` or
+  `?after=`) a stream sends live events only, on `/api/v1/events/stream` as on a thread's stream.
 - **Notification opt-out**: a client lists event names it does not want in `/api/v1/hello`
   (`suppressEvents`); the Hub omits them from that client's streams. `request.*` events
   cannot be suppressed.

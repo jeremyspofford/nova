@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MockProvider, collect, loadFixture, splitWords } from '../src/index.ts';
+import { MockProvider, collect, loadFixture, splitWords, toolSteps } from '../src/index.ts';
 import type { ChatRequest, StreamEvent } from '../src/index.ts';
 
 const req = (text: string, signal = new AbortController().signal): ChatRequest => ({
@@ -122,5 +122,89 @@ describe('MockProvider', () => {
   it('splits text into word chunks', () => {
     expect(splitWords('a bc  d')).toEqual(['a ', 'bc  ', 'd']);
     expect(splitWords('')).toEqual(['']);
+  });
+});
+
+describe('MockProvider tool scripting (M3)', () => {
+  const tools = [{ name: 'fs.read', description: 'read', inputSchema: { type: 'object' } }];
+  const withTools = (messages: ChatRequest['messages']): ChatRequest => ({
+    model: 'mock-fast',
+    messages,
+    tools,
+    signal: new AbortController().signal,
+  });
+
+  it('calls the tools named by /tool lines in one step', async () => {
+    const p = new MockProvider();
+    const c = await collect(
+      p.stream(
+        withTools([
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'please\n/tool fs.read {"path":"a.txt"}\n/tool fs.list\n/tool x.y {bad',
+              },
+            ],
+          },
+        ]),
+        ctx,
+      ),
+    );
+    expect(c.stop).toBe('tool_calls');
+    expect(c.text).toBe('');
+    expect(c.toolCalls).toEqual([
+      { id: 'call_1', name: 'fs.read', args: { path: 'a.txt' } },
+      { id: 'call_2', name: 'fs.list', args: {} },
+      { id: 'call_3', name: 'x.y', args: '{bad' },
+    ]);
+    expect(c.usage.outputTokens).toBeGreaterThan(0);
+  });
+
+  it('answers from the results once they are in the request, without the untrusted envelope', async () => {
+    const p = new MockProvider();
+    const c = await collect(
+      p.stream(
+        withTools([
+          { role: 'user', content: [{ type: 'text', text: '/tool fs.read {"path":"a"}' }] },
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_call', id: 'call_1', name: 'fs.read', args: { path: 'a' } }],
+          },
+          {
+            role: 'tool',
+            content: [
+              {
+                type: 'tool_result',
+                callId: 'call_1',
+                untrusted: true,
+                content: [
+                  { type: 'text', text: '<untrusted_data source="fs.read" id="x">\n' },
+                  { type: 'text', text: `${'z'.repeat(250)}` },
+                  { type: 'text', text: '\n</untrusted_data id="x">' },
+                ],
+              },
+            ],
+          },
+        ]),
+        ctx,
+      ),
+    );
+    expect(c.text).toBe(`Tool fs.read returned: ${'z'.repeat(200)}`);
+    expect(c.stop).toBe('end');
+  });
+
+  it('behaves as before without tools or without /tool lines', async () => {
+    const p = new MockProvider();
+    const noTools = await collect(p.stream(req('/tool fs.read {}'), ctx));
+    expect(noTools.text).toBe('You said: /tool fs.read {}');
+    const plain = await collect(
+      p.stream(withTools([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]), ctx),
+    );
+    expect(plain.text).toBe('You said: hi');
+    expect(
+      toolSteps(withTools([{ role: 'system', content: [{ type: 'text', text: 'x' }] }])),
+    ).toBeNull();
   });
 });

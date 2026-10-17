@@ -1,5 +1,5 @@
 // Matching helpers for policy rules. String-based on purpose: the engine is pure, so callers
-// pass already-canonicalized paths (see @nova/security resolveWithin).
+// pass already-canonicalized paths (see @nova/security realpathLenient).
 
 /** Glob over dotted names: `*` matches within a segment run of non-dots, `**` matches anything. */
 export function globMatch(pattern: string, value: string): boolean {
@@ -23,7 +23,7 @@ export function globMatch(pattern: string, value: string): boolean {
 
 /** Host match: exact, or `*.example.com` for any subdomain (not the apex). Case-insensitive. */
 export function hostMatch(pattern: string, host: string): boolean {
-  const p = pattern.toLowerCase();
+  const p = pattern.toLowerCase().replace(/\.$/, '');
   const h = host.toLowerCase().replace(/\.$/, '');
   if (p === '*') return true;
   if (p.startsWith('*.')) return h.endsWith(p.slice(1)) && h.length > p.length - 1;

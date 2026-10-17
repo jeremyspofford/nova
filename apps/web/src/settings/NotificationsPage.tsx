@@ -1,9 +1,102 @@
-// Settings → Notifications (M3). Filled in by M3.
+// Settings → Notifications (FR-013, docs/14 §1.1): which categories Nova shows and sends to the
+// operating system, and permission for OS notifications on this device. The browser keeps that
+// permission per device; once blocked, only the browser's site settings can allow it again.
+import { useState } from 'react';
+import { NOTIFICATION_KINDS, type NotificationKind } from '@nova/shared';
+import { Button, useToast } from '@nova/ui';
+import { errorMessage } from '../api.ts';
+import { osPermission, requestOsPermission, type OsPermission } from '../notifications/os.ts';
+import { useSettings } from '../settings.tsx';
+import { SwitchField } from './controls.tsx';
+import '../workspace.css';
+
+export const CATEGORY_TEXT: Record<NotificationKind, { label: string; description: string }> = {
+  approval: {
+    label: 'Approvals',
+    description: 'An action is waiting for your decision.',
+  },
+  completion: {
+    label: 'Finished work',
+    description: 'A reply, run or task you started has finished.',
+  },
+  error: {
+    label: 'Errors',
+    description: 'Something failed, such as a reply, a tool or a server.',
+  },
+  attention: {
+    label: 'Needs attention',
+    description: 'Something needs you, such as a step handed to you or a device that went away.',
+  },
+  system: {
+    label: 'System',
+    description: 'Updates and notices about the Hub itself.',
+  },
+};
+
+const PERMISSION_TEXT: Record<OsPermission, string> = {
+  unsupported: 'This browser cannot show notifications.',
+  default: 'Notifications are not allowed on this device yet.',
+  granted: 'Notifications are allowed on this device.',
+  denied:
+    'Notifications are blocked on this device. Allow them in your browser’s site settings, then reload.',
+};
+
 export function NotificationsPage() {
+  const settings = useSettings();
+  const toast = useToast();
+  const cats = settings.get('notifications.categories');
+  const [permission, setPermission] = useState<OsPermission>(() => osPermission());
+  const [asking, setAsking] = useState(false);
+
+  const ask = async () => {
+    setAsking(true);
+    const next = await requestOsPermission();
+    setAsking(false);
+    setPermission(next);
+  };
+
   return (
-    <section className="stack" aria-labelledby="notificationspage-title">
-      <h2 id="notificationspage-title">Notifications</h2>
-      <p className="muted">Which notifications Nova shows and sends to your device.</p>
-    </section>
+    <div className="settings-page">
+      <h2>Notifications</h2>
+      <section className="settings-section" aria-labelledby="notif-categories">
+        <h3 id="notif-categories">What to notify you about</h3>
+        <p className="muted">
+          Turned-off categories are not listed in the notification center and are not sent to your
+          devices.
+        </p>
+        {NOTIFICATION_KINDS.map((k) => (
+          <SwitchField
+            key={k}
+            label={CATEGORY_TEXT[k].label}
+            description={CATEGORY_TEXT[k].description}
+            checked={cats.value[k]}
+            locked={cats.locked}
+            onChange={(v) =>
+              void settings
+                .set('notifications.categories', { ...cats.value, [k]: v })
+                .catch((err: unknown) =>
+                  toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' }),
+                )
+            }
+          />
+        ))}
+      </section>
+      <section className="settings-section" aria-labelledby="notif-device">
+        <h3 id="notif-device">This device</h3>
+        <p className="muted">
+          When Nova is in the background, notifications can also appear on this device.
+        </p>
+        <p role="status" className="ws-flush">
+          {PERMISSION_TEXT[permission]}
+        </p>
+        {permission === 'default' ? (
+          <div className="row">
+            <Button variant="primary" disabled={asking} onClick={() => void ask()}>
+              Allow notifications on this device
+            </Button>
+          </div>
+        ) : null}
+      </section>
+    </div>
   );
 }

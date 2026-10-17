@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",
+    "@nova/providers": "^0.0.0",
+    "@nova/security": "^0.0.0",
     "@nova/shared": "^0.0.0",
     "@nova/telemetry": "^0.0.0"
   },

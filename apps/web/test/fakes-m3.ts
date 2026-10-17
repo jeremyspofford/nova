@@ -174,6 +174,36 @@ export function m3Impl(
     if (!v) throw notFound();
     return v;
   };
+  // Settings surfaces (Tools & MCP, Permissions, Diagnostics): the Hub checks command-rule
+  // examples on save, so does the fake, with a plain word-prefix match (docs/12 §3.1).
+  const words = (cmd: string) => cmd.trim().split(/\s+/).filter(Boolean);
+  const matches = (pattern: (string | string[])[], cmd: string) => {
+    const w = words(cmd);
+    return (
+      w.length >= pattern.length &&
+      pattern.every((p, i) => (Array.isArray(p) ? p.includes(w[i]!) : p === w[i]))
+    );
+  };
+  const checkExamples = (
+    r: Pick<CommandRuleView, 'pattern' | 'matchExamples' | 'notMatchExamples'>,
+  ) => {
+    const bad = (field: string, example: string, message: string) =>
+      new ApiError(400, {
+        code: 'validation',
+        message,
+        retryable: false,
+        details: { field, example },
+      });
+    for (const e of r.matchExamples)
+      if (!matches(r.pattern, e))
+        throw bad('matchExamples', e, `Match example "${e}" does not match the rule.`);
+    for (const e of r.notMatchExamples)
+      if (matches(r.pattern, e))
+        throw bad('notMatchExamples', e, `Not-match example "${e}" matches the rule.`);
+  };
+  // What a tool decided before any user default, so clearing the default restores it.
+  const baseEffective = new Map<string, ToolView['effective']>();
+  const LEVELS = ['debug', 'info', 'warn', 'error'];
   const unread = () => st.notifications.filter((n) => !n.read).length;
   return {
     listApprovals: async (q = {}) => {
@@ -193,9 +223,25 @@ export function m3Impl(
     decideApproval: async (body) => {
       maybeFail('decideApproval');
       const a = find(st.approvals, body.approvalId);
+      // The first valid answer wins; a handed-off step stays pending until it is marked done.
+      if (a.status !== 'pending' || a.decision === 'handoff')
+        throw new ApiError(409, {
+          code: 'conflict',
+          message: 'This approval was already answered.',
+          retryable: false,
+        });
+      if (
+        !a.options.includes(body.decision) ||
+        (body.decision === 'allow_always' && !body.alwaysScope)
+      )
+        throw new ApiError(400, {
+          code: 'validation',
+          message: 'That decision is not offered for this approval.',
+          retryable: false,
+        });
       const next: ApprovalView = {
         ...a,
-        status: 'decided',
+        status: body.decision === 'handoff' ? 'pending' : 'decided',
         decision: body.decision,
         decidedBy: 'user',
         decidedAt: ts(),
@@ -206,6 +252,12 @@ export function m3Impl(
     handoffDone: async (aid) => {
       maybeFail('handoffDone');
       const a = find(st.approvals, aid);
+      if (a.status !== 'pending' || a.decision !== 'handoff')
+        throw new ApiError(409, {
+          code: 'conflict',
+          message: 'Nothing is handed off.',
+          retryable: false,
+        });
       const next: ApprovalView = { ...a, status: 'decided', decidedAt: ts() };
       st.approvals = st.approvals.map((x) => (x.id === a.id ? next : x));
       return next;
@@ -259,6 +311,7 @@ export function m3Impl(
     },
     createCommandRule: async (body) => {
       maybeFail('createCommandRule');
+      checkExamples(body);
       const r: CommandRuleView = {
         id: id('cmd'),
         scopeKind: body.scopeKind ?? 'global',
@@ -279,6 +332,7 @@ export function m3Impl(
     updateCommandRule: async (rid, body) => {
       maybeFail('updateCommandRule');
       const next = { ...find(st.commandRules, rid), ...body };
+      checkExamples(next);
       st.commandRules = st.commandRules.map((x) => (x.id === rid ? next : x));
       return next;
     },
@@ -289,9 +343,7 @@ export function m3Impl(
     },
     testCommandRules: async (command) => {
       maybeFail('testCommandRules');
-      const hit = st.commandRules.find((r) =>
-        command.startsWith(r.pattern.map((p) => (Array.isArray(p) ? p[0] : p)).join(' ')),
-      );
+      const hit = st.commandRules.find((r) => r.enabled && matches(r.pattern, command));
       return hit
         ? { decision: hit.decision, ruleId: hit.id, reason: hit.justification ?? 'Matched a rule' }
         : { decision: null, ruleId: null, reason: 'No rule matches' };
@@ -317,7 +369,15 @@ export function m3Impl(
       maybeFail('setToolDefault');
       const t = st.tools.find((x) => x.name === name);
       if (!t) throw notFound();
-      const next: ToolView = { ...t, userDefault: value };
+      if (!baseEffective.has(name)) baseEffective.set(name, t.effective);
+      const base = baseEffective.get(name)!;
+      const next: ToolView = {
+        ...t,
+        userDefault: value,
+        effective: value
+          ? { ...base, effect: value, reason: `Your default for ${name}: ${value}.` }
+          : base,
+      };
       st.tools = st.tools.map((x) => (x.name === name ? next : x));
       return { tool: name, default: value };
     },
@@ -359,10 +419,22 @@ export function m3Impl(
     updateMcpServer: async (sid, body) => {
       maybeFail('updateMcpServer');
       const cur = find(st.mcpServers, sid);
+      // `env` on a PATCH is the complete set of names; values go to the vault (never kept here).
       const next: McpServerView = {
         ...cur,
-        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.transport !== undefined ? { transport: body.transport } : {}),
+        ...(body.command !== undefined ? { command: body.command } : {}),
+        ...(body.args !== undefined ? { args: body.args } : {}),
+        ...(body.url !== undefined ? { url: body.url } : {}),
+        ...(body.env !== undefined ? { envKeys: Object.keys(body.env) } : {}),
+        ...(body.enabled !== undefined
+          ? { enabled: body.enabled, status: body.enabled ? 'starting' : 'disabled' }
+          : {}),
+        ...(body.toolTimeoutMs !== undefined ? { toolTimeoutMs: body.toolTimeoutMs } : {}),
+        ...(body.startupTimeoutMs !== undefined ? { startupTimeoutMs: body.startupTimeoutMs } : {}),
         ...(body.defaultApproval !== undefined ? { defaultApproval: body.defaultApproval } : {}),
+        ...(body.enabledTools !== undefined ? { enabledTools: body.enabledTools } : {}),
         ...(body.disabledTools ? { disabledTools: body.disabledTools } : {}),
         updatedAt: ts(),
       };
@@ -407,9 +479,14 @@ export function m3Impl(
       st.notifications = st.notifications.filter((n) => n.id !== nid);
       return { ok: true } as const;
     },
-    listAudit: async () => {
+    listAudit: async (q = {}) => {
       maybeFail('listAudit');
-      return { items: st.audit, nextCursor: null };
+      const start = Number(q.cursor ?? 0);
+      const end = start + (q.limit ?? 50);
+      return {
+        items: st.audit.slice(start, end),
+        nextCursor: end < st.audit.length ? String(end) : null,
+      };
     },
     verifyAudit: async () => {
       maybeFail('verifyAudit');
@@ -424,9 +501,14 @@ export function m3Impl(
       maybeFail('diagnostics');
       return st.diagnostics;
     },
-    logs: async () => {
+    logs: async (q = {}) => {
       maybeFail('logs');
-      return { items: st.logs };
+      // `level` is the minimum level shown.
+      const min = q.level ? LEVELS.indexOf(q.level) : 0;
+      const items = st.logs.filter(
+        (l) => LEVELS.indexOf(l.level) >= min && (!q.module || l.module === q.module),
+      );
+      return { items: q.limit ? items.slice(-q.limit) : items };
     },
     logsExportUrl: () => '/api/v1/diagnostics/logs/export',
     listArtifacts: async (tid) => {

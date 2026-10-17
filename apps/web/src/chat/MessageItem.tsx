@@ -2,8 +2,11 @@
 // the model that answered, a Steering badge, a version navigator, the sources it cited, and an
 // actions toolbar (copy, edit, regenerate, branch, quote, delete). The toolbar is one tab stop
 // whose buttons the arrow keys move between; actions that change history wait while a reply runs.
-import { useEffect, useId, useRef, useState } from 'react';
-import type { CitationView } from '@nova/shared';
+// M3: a reply shows its tool calls as cards between the text written before and after them, with
+// any approval inside the card (FR-099, FR-100), and its artifacts as cards that open the
+// Inspector (FR-038). Web sources show their title and host and open in a new tab (FR-029).
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import type { CitationView, ToolCallStatus } from '@nova/shared';
 import {
   Button,
   Icon,
@@ -15,9 +18,24 @@ import {
   type IconName,
   type MenuItem,
 } from '@nova/ui';
+import { ArtifactCard } from './Artifacts.tsx';
 import { Highlighted } from './find.tsx';
 import { Markdown } from './Markdown.tsx';
-import { messageText, type ClientMessage } from './thread-state.ts';
+import {
+  messageSegments,
+  messageText,
+  type ClientMessage,
+  type DisplayCall,
+  type LiveCall,
+} from './thread-state.ts';
+import { ToolCard } from './ToolCard.tsx';
+
+/** What a tool call's card shows about its approval: the card or outcome, and its status. */
+export interface CallApproval {
+  node: ReactNode;
+  /** Shown as the call's status while the approval waits for the user. */
+  status?: ToolCallStatus;
+}
 
 export interface MessageActions {
   onCopy: (text: string) => void;
@@ -50,6 +68,12 @@ export interface MessageItemProps {
   busy?: boolean;
   /** Id prefix for the article, so two views of one message do not share ids. */
   idPrefix?: string;
+  /** Tool calls of this reply seen on the stream (M3). */
+  liveCalls?: LiveCall[];
+  /** The approval to show inside a tool call's card, if any. */
+  approvalFor?: (call: DisplayCall) => CallApproval | null;
+  /** Opens an artifact in the Inspector; without it artifact cards are not interactive. */
+  onOpenArtifact?: (artifactId: string) => void;
 }
 
 const BUSY_HINT = 'Wait for the reply to finish';
@@ -67,9 +91,13 @@ export function MessageItem({
   actions,
   busy = false,
   idPrefix = 'msg-',
+  liveCalls,
+  approvalFor,
+  onOpenArtifact,
 }: MessageItemProps) {
   const [editing, setEditing] = useState(false);
   const text = messageText(m, streamed);
+  const segments = m.role === 'assistant' ? messageSegments(m, streamed, liveCalls ?? []) : null;
   const storedReasoning = m.parts
     .filter((p) => p.type === 'reasoning')
     .map((p) => (p.type === 'reasoning' ? p.text : ''))
@@ -132,14 +160,32 @@ export function MessageItem({
           onDone={() => setEditing(false)}
           busy={busy}
         />
+      ) : segments ? (
+        segments.map((seg, i) => {
+          if (seg.kind === 'text')
+            return <Markdown key={`text-${i}`} text={seg.text} find={find} />;
+          if (seg.kind === 'artifact')
+            return (
+              <ArtifactCard
+                key={`artifact-${seg.part.artifactId}-${i}`}
+                part={seg.part}
+                onOpen={onOpenArtifact}
+              />
+            );
+          const approval = approvalFor?.(seg.call) ?? null;
+          return (
+            <ToolCard
+              key={`call-${seg.call.callId}`}
+              call={seg.call}
+              status={approval?.status}
+              approval={approval?.node}
+            />
+          );
+        })
       ) : text ? (
-        m.role === 'assistant' ? (
-          <Markdown text={text} find={find} />
-        ) : (
-          <p className="msg-text">
-            <Highlighted text={text} query={find} />
-          </p>
-        )
+        <p className="msg-text">
+          <Highlighted text={text} query={find} />
+        </p>
       ) : null}
       {files.length ? (
         <ul className="chips" aria-label="Attached files">
@@ -455,6 +501,16 @@ function EditForm({
 
 const SAFE_URL = /^https?:\/\//i;
 
+/** The host of a web source, without `www.` (FR-029). */
+export function sourceHost(url: string | null): string | null {
+  if (!url || !SAFE_URL.test(url)) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, '') || null;
+  } catch {
+    return null;
+  }
+}
+
 function Citations({ items }: { items: CitationView[] }) {
   const id = useId();
   const sorted = [...items].sort((a, b) => a.idx - b.idx);
@@ -466,16 +522,18 @@ function Citations({ items }: { items: CitationView[] }) {
       </span>
       <ol>
         {sorted.map((c, i) => {
-          const name = c.title?.trim() || c.url || `Source ${i + 1}`;
+          const host = sourceHost(c.url);
+          const name = c.title?.trim() || host || c.url || `Source ${i + 1}`;
           return (
             <li key={c.id}>
-              {c.url && SAFE_URL.test(c.url) ? (
+              {c.url && host ? (
                 <a href={c.url} target="_blank" rel="noopener noreferrer">
                   {name}
                 </a>
               ) : (
                 <span className="msg-source-name">{name}</span>
               )}
+              {host && host !== name ? <span className="msg-source-host">{host}</span> : null}
               {c.snippet ? <p className="msg-source-snippet">{c.snippet}</p> : null}
             </li>
           );

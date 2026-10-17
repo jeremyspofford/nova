@@ -1,4 +1,5 @@
-/* M2 workspace surfaces: projects, sources, memory, models, devices (docs/04 §2.7, §3.1, §4, §9).
+/* Workspace and settings surfaces: projects, sources, memory, models, devices (M2), tools, MCP,
+   permissions, notifications and diagnostics (M3) (docs/04 §2.7, §3.1, §4, §9; docs/14 §1.1).
    Colors, spacing and type come only from design tokens (docs/14 §2.2). */
 
 /* ---- page frame ------------------------------------------------------------------------- */
@@ -211,7 +212,8 @@
   display: grid;
   gap: var(--u-space-2);
 }
-.ws-memory-group > h4 {
+.ws-memory-group > h4,
+.ws-group-head > h4 {
   margin: var(--u-space-2) 0 0;
   color: var(--u-text-muted);
   font-size: var(--u-text-xs);
@@ -291,6 +293,218 @@
   overflow-wrap: anywhere;
 }
 
+/* ---- M3: tools, permissions, diagnostics, memory consolidation (docs/14 §1.1) -------------- */
+.ws-flush {
+  margin: 0;
+}
+.ws-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+}
+.ws-group-head > h4 {
+  margin: var(--u-space-2) 0 0;
+}
+.ws-topic {
+  align-items: center;
+  gap: var(--u-space-1);
+}
+.ws-topic [aria-pressed='true'] {
+  border-color: var(--u-accent);
+  background: var(--u-surface-2);
+  font-weight: 600;
+}
+.ws-subpanel {
+  display: grid;
+  flex-basis: 100%;
+  gap: var(--u-space-2);
+  min-width: 0;
+}
+.ws-secret-row > .nv-field {
+  min-width: 160px;
+}
+.ws-log {
+  max-height: 320px;
+  margin: 0;
+  padding: var(--u-space-3);
+  overflow: auto;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ws-log-list {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+}
+.ws-log-list li[data-level='warn'] .ws-log-level {
+  color: var(--u-warn);
+}
+.ws-log-list li[data-level='error'] .ws-log-level {
+  color: var(--u-danger);
+}
+.ws-log-ts,
+.ws-log-module {
+  color: var(--u-text-muted);
+}
+.ws-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.ws-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--u-space-2);
+}
+.ws-diag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--u-space-3);
+}
+.ws-diag-card {
+  align-content: start;
+}
+.ws-diag-card > h4 {
+  margin: 0;
+}
+.ws-dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--u-space-1) var(--u-space-3);
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.ws-dl dt {
+  color: var(--u-text-muted);
+}
+.ws-dl dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ws-plain-list {
+  margin: 0;
+  padding-left: var(--u-space-4);
+  font-size: var(--u-text-sm);
+}
+.ws-ok {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  color: var(--u-success);
+}
+.ws-meter {
+  width: 100%;
+}
+.ws-summary {
+  margin: var(--u-space-2) 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- notification center (FR-013) ---------------------------------------------------------- */
+.bell {
+  position: relative;
+}
+.bell-button {
+  position: relative;
+}
+.bell-count {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--u-space-1);
+  border-radius: 999px;
+  background: var(--u-accent);
+  color: var(--u-accent-contrast);
+  font-size: var(--u-text-xs);
+  line-height: 16px;
+  text-align: center;
+}
+.bell-panel {
+  position: absolute;
+  top: calc(100% + var(--u-space-1));
+  right: 0;
+  z-index: var(--u-z-overlay);
+  display: grid;
+  gap: var(--u-space-3);
+  width: min(380px, calc(100vw - 2 * var(--u-space-2)));
+  max-height: min(70vh, 560px);
+  padding: var(--u-space-3);
+  overflow: auto;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.bell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+}
+.bell-head > h2 {
+  margin: 0;
+  font-size: var(--u-text-lg);
+}
+.bell-empty {
+  margin: 0;
+}
+.bell-list {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.bell-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--u-space-1) var(--u-space-2);
+  padding: var(--u-space-2);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+}
+.bell-item[data-unread] {
+  border-left: 3px solid var(--u-accent);
+}
+.bell-item-main {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bell-item-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.bell-item-body {
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+.bell-item-meta {
+  font-size: var(--u-text-xs);
+}
+.bell-item-actions {
+  align-items: center;
+  gap: var(--u-space-1);
+}
+
 /* ---- sidebar: projects ------------------------------------------------------------------ */
 .sidebar-projects {
   padding: var(--u-space-2);
@@ -303,4 +517,11 @@
 }
 .app[data-layout='phone'] .ws-switch-field {
   gap: var(--u-space-2);
+}
+.app[data-layout='phone'] .bell-panel {
+  position: fixed;
+  top: 56px;
+  right: var(--u-space-2);
+  left: var(--u-space-2);
+  width: auto;
 }

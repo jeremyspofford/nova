@@ -73,13 +73,29 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
     const accountId = await accountOf(req);
     const body = createProviderSchema.parse(req.body);
     const view = await registry.create(accountId, body);
+    // Audited by the ops area: the credential's reference only, never the key (FR-101).
+    const row = await registry.account(accountId, view.id);
+    await events.emit({
+      name: 'provider.account.created',
+      actor: 'user',
+      accountId,
+      payload: { providerAccountId: view.id, provider: view.provider, secretRef: row.secretRef },
+    });
     void reply.status(201);
     return view;
   });
 
   app.delete('/api/v1/providers/:id', async (req) => {
     const accountId = await accountOf(req);
-    await registry.remove(accountId, params.parse(req.params).id);
+    const { id } = params.parse(req.params);
+    const row = await registry.account(accountId, id);
+    await registry.remove(accountId, id);
+    await events.emit({
+      name: 'provider.account.removed',
+      actor: 'user',
+      accountId,
+      payload: { providerAccountId: id, provider: row.provider, secretRef: row.secretRef },
+    });
     return { ok: true };
   });
 

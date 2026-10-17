@@ -11,6 +11,8 @@ import {
   toggledTheme,
   writeCachedTheme,
 } from '../appearance.ts';
+import { ActivityPanel } from '../chat/ActivityPanel.tsx';
+import { ArtifactsPanel } from '../chat/Artifacts.tsx';
 import { BranchesPanel } from '../chat/BranchesPanel.tsx';
 import { ChatView, type ChatControls, type ChatPanel } from '../chat/ChatView.tsx';
 import { CompareView } from '../chat/CompareView.tsx';
@@ -71,7 +73,7 @@ export function Workspace({
   onSignOut,
   announceEveryMs,
 }: WorkspaceProps) {
-  const { registry } = useServices();
+  const { api, registry } = useServices();
   const settings = useSettings();
   const route = useRoute();
   const location = useLocation();
@@ -102,6 +104,7 @@ export function Workspace({
   );
   const newTemporary = !!chatRoute && chatRoute.threadId === null && query.get('temporary') === '1';
   const compareWith = chatRoute?.threadId ? query.get('compare') : null;
+  const approvalLink = chatRoute?.threadId ? query.get('approval') : null;
 
   // ---- layout ------------------------------------------------------------------------------------
   const [sidebarToggle, setSidebarToggle] = useState<{ layout: string; open: boolean } | null>(
@@ -127,6 +130,9 @@ export function Workspace({
   // The side chat of the open chat; it is dropped when another chat opens (FR-026).
   const [side, setSide] = useState<{ parent: string; id: string } | null>(null);
   const sideId = side && side.parent === chatThreadId ? side.id : null;
+  // The artifact open in the Artifacts panel, for the chat it belongs to (FR-038).
+  const [artifact, setArtifact] = useState<{ thread: string | null; id: string } | null>(null);
+  const artifactId = artifact && artifact.thread === chatThreadId ? artifact.id : null;
   const temporaryChats = useTemporaryChats(chatThreadId);
   const reportTemporary = temporaryChats.report;
 
@@ -157,15 +163,37 @@ export function Workspace({
     },
     [inspectorFits],
   );
+  const openArtifact = useCallback(
+    (id: string) => {
+      setArtifact({ thread: chatThreadId, id });
+      openPanel('artifacts');
+    },
+    [chatThreadId, openPanel],
+  );
   useEffect(() => {
     if (!panelFocus) return;
-    const target =
+    const find = () =>
       panelFocus.panel === 'side'
         ? document.getElementById('side-chat-input')
-        : document.querySelector<HTMLElement>('#inspector [role="tree"] [tabindex="0"]');
-    (
-      target ?? document.querySelector<HTMLElement>('#inspector [role="tab"][aria-selected="true"]')
-    )?.focus();
+        : panelFocus.panel === 'artifacts'
+          ? document.querySelector<HTMLElement>('#inspector .artifact-viewer-title')
+          : document.querySelector<HTMLElement>('#inspector [role="tree"] [tabindex="0"]');
+    const tab = () =>
+      document.querySelector<HTMLElement>('#inspector [role="tab"][aria-selected="true"]');
+    // An opened artifact renders once its view loads; wait briefly for it before settling on the tab.
+    let tries = panelFocus.panel === 'artifacts' ? 20 : 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const attempt = () => {
+      const target = find();
+      if (target) target.focus();
+      else if (tries-- > 0) timer = setTimeout(attempt, 50);
+      else tab()?.focus();
+    };
+    if (!find()) tab()?.focus();
+    attempt();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
   }, [panelFocus]);
 
   // ---- appearance (FR-010) ---------------------------------------------------------------------
@@ -209,6 +237,31 @@ export function Workspace({
     if (openTarget === null) return;
     navigate(deepLinkPath(openTarget) ?? '/chat', { replace: true });
   }, [openTarget]);
+
+  // ---- approval links (FR-100): /approvals/<id> opens the chat that waits on it, at the card ----------
+  const approvalOnly = /^\/approvals\/([^/?#]+)/.exec(location)?.[1] ?? null;
+  useEffect(() => {
+    if (!approvalOnly) return;
+    let alive = true;
+    const go = (path: string) => {
+      if (alive) navigate(path, { replace: true });
+    };
+    let id: string;
+    try {
+      id = decodeURIComponent(approvalOnly);
+    } catch {
+      go('/chat');
+      return;
+    }
+    api.getApproval(id).then(
+      (v) =>
+        go(v.threadId ? `${chatPath(v.threadId)}?approval=${encodeURIComponent(v.id)}` : '/chat'),
+      () => go('/chat'),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, approvalOnly]);
 
   // ---- commands (FR-003) ---------------------------------------------------------------------------
   const switchMode = useCallback(
@@ -314,6 +367,18 @@ export function Workspace({
         title: 'Show branches',
         category: 'Chat',
         run: () => a().openPanel('branches'),
+      },
+      {
+        id: 'chat.artifacts',
+        title: 'Show artifacts',
+        category: 'Chat',
+        run: () => a().openPanel('artifacts'),
+      },
+      {
+        id: 'chat.activity',
+        title: 'Show activity',
+        category: 'Chat',
+        run: () => a().openPanel('activity'),
       },
       {
         id: 'chat.stop',
@@ -529,6 +594,8 @@ export function Workspace({
                 announceEveryMs={announceEveryMs}
                 onControls={onControls}
                 onOpenPanel={openPanel}
+                approvalId={chatRoute?.threadId ? approvalLink : null}
+                onOpenArtifact={openArtifact}
               />
             </div>
           </div>
@@ -569,9 +636,25 @@ export function Workspace({
             value={inspectorTab}
             onChange={setInspectorTab}
             items={[
-              { id: 'artifacts', label: 'Artifacts', panel: <InspectorEmpty what="Artifacts" /> },
+              {
+                id: 'artifacts',
+                label: 'Artifacts',
+                panel: (
+                  <ArtifactsPanel
+                    key={chatThreadId ?? 'none'}
+                    threadId={chatThreadId}
+                    selectedId={artifactId}
+                    onSelect={(id) => setArtifact(id ? { thread: chatThreadId, id } : null)}
+                  />
+                ),
+              },
               { id: 'files', label: 'Files', panel: <InspectorEmpty what="Files" /> },
               { id: 'sources', label: 'Sources', panel: <InspectorEmpty what="Sources" /> },
+              {
+                id: 'activity',
+                label: 'Activity',
+                panel: <ActivityPanel key={chatThreadId ?? 'none'} threadId={chatThreadId} />,
+              },
               {
                 id: 'side',
                 label: 'Side chat',

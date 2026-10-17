@@ -34,7 +34,7 @@ describe('Logger', () => {
     const log = new Logger({ module: 'hub', sinks: [sink], now: fixed });
     log.error('call failed with Bearer abcdefghijklmnop1234', {
       headers: { authorization: 'Bearer abcdefghijklmnop1234' },
-      url: 'https://u:p4ssw0rd@example.com/x',
+      url: 'https://u:p4ssw0rd@example.com/x', // secret-scan: fake
     });
     const text = JSON.stringify(sink.records);
     expect(text).not.toContain('abcdefghijklmnop1234');

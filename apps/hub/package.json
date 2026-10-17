@@ -32,7 +32,8 @@
     "@nova/secrets": "^0.0.0",
     "@nova/providers": "^0.0.0",
     "@nova/policy": "^0.0.0",
-    "@nova/contracts": "^0.0.0"
+    "@nova/contracts": "^0.0.0",
+    "@nova/mcp": "^0.0.0"
   },
   "devDependencies": {
     "@types/ws": "^8.18.2",

@@ -279,15 +279,23 @@ CREATE TABLE tool_call (
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE approval (
-  id TEXT PRIMARY KEY,
+CREATE TABLE approval (            -- ids of threads, turns, runs, calls and rules are plain columns
+  id TEXT PRIMARY KEY,              -- (no FKs), so purges and run deletion never block on it
+  account_id TEXT NOT NULL REFERENCES account(id),
   tool_call_id TEXT REFERENCES tool_call(id),
   thread_id TEXT REFERENCES thread(id),
   turn_id TEXT REFERENCES turn(id),
   run_id TEXT REFERENCES run(id),
   agent_id TEXT REFERENCES agent(id),
+  tool_name TEXT,
   requested_action TEXT NOT NULL,
+  args_preview TEXT, args_hash TEXT, -- redacted preview for the card; hash for repeat denials
   reason TEXT, scope TEXT, risk TEXT,
+  user_asked INTEGER NOT NULL DEFAULT 0, -- intent provenance shown on the card (FR-189)
+  options_json TEXT NOT NULL,      -- the decisions this card offers (tier, managed policy)
+  always_scopes_json TEXT NOT NULL DEFAULT '[]', -- suggested "Always allow" scopes
+  status TEXT NOT NULL DEFAULT 'pending', -- pending|decided|expired|cancelled; a hand-off stays
+                                   -- pending (decision = 'handoff') until it is marked done
   tier TEXT,                       -- handoff_required|confirm_at_action|pre_approvable (FR-189)
   review_json TEXT,                -- auto-review verdict, schema auto-review-verdict.json (FR-085)
   decision TEXT,                   -- allow_once|allow_session|allow_always|deny_continue|deny_stop|
@@ -299,7 +307,9 @@ CREATE TABLE approval (
   decided_by TEXT,                 -- user|hook:<id>|system ('system' only for timeout)
   decided_device_id TEXT, decided_at TEXT,
   expires_at TEXT,                 -- reaching it records decision = 'timeout'
-  rule_id TEXT REFERENCES policy_rule(id),
+  rule_id TEXT, rule_label TEXT,
+  always_allow_managed INTEGER NOT NULL DEFAULT 0, -- "Always allow" shown disabled (managed)
+  handoff_note TEXT, handoff_done_at TEXT,
   created_at TEXT NOT NULL,
   CHECK (decision IS NULL OR decision <> 'allow_always' OR always_scope IS NOT NULL),
   CHECK (override = 0 OR decision = 'allow_once'),
@@ -358,13 +368,24 @@ CREATE TABLE permission_profile (   -- what the sandbox allows (FR-190, ADR-059)
 
 CREATE TABLE permission_grant (     -- remembered approvals (allow_session, allow_always)
   id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES account(id),
   approval_id TEXT REFERENCES approval(id),
-  rule_id TEXT REFERENCES policy_rule(id),
-  command_rule_id TEXT REFERENCES command_rule(id), -- "Always allow" on a command appends a rule
+  rule_id TEXT REFERENCES policy_rule(id) ON DELETE SET NULL,
+  command_rule_id TEXT REFERENCES command_rule(id) ON DELETE SET NULL, -- "Always allow" on a
+                                   -- command appends a rule; revoking the grant deletes it
+  label TEXT NOT NULL,             -- what it allows, as listed in Settings → Permissions
   duration TEXT NOT NULL DEFAULT 'always', -- session|always
   scope_kind TEXT, scope_ref TEXT,  -- session grants: scope_kind = 'session'
   action_match TEXT, host TEXT,
   expires_at TEXT, revoked_at TEXT, created_at TEXT NOT NULL
+);
+
+CREATE TABLE tool_default (         -- per-tool defaults set by the user (FR-048)
+  account_id TEXT NOT NULL REFERENCES account(id),
+  tool TEXT NOT NULL,              -- canonical name, e.g. fs.write or mcp:files.search
+  effect TEXT NOT NULL,            -- allow|ask|deny
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, tool)
 );
 
 CREATE TABLE hook (                 -- lifecycle hooks (FR-197, ADR-068); schema hook-config.json
@@ -414,8 +435,9 @@ CREATE INDEX idx_server_request_pending ON server_request(account_id, expires_at
 ### audit & events
 
 ```sql
-CREATE TABLE audit_event (
+CREATE TABLE audit_event (          -- append-only: triggers refuse UPDATE and DELETE
   id TEXT PRIMARY KEY,
+  seq INTEGER NOT NULL UNIQUE,     -- chain order; the hash covers every column except hash
   account_id TEXT NOT NULL REFERENCES account(id),
   actor TEXT NOT NULL,             -- user|agent:<id>|system (run and sub-agent ids go in run_id/detail)
   kind TEXT NOT NULL,              -- tool_call|approval|review|hook|fs|network|egress|auth|update|
@@ -751,9 +773,23 @@ CREATE TABLE memory_consolidation_run ( -- FR-204 background job (docs/09 §5)
   model_id TEXT, error TEXT,
   started_at TEXT NOT NULL, ended_at TEXT
 );
+
+CREATE TABLE memory_topic (         -- "Remember more / less about this topic" (FR-204)
+  account_id TEXT NOT NULL REFERENCES account(id),
+  topic_key TEXT NOT NULL, topic TEXT NOT NULL,
+  preference TEXT NOT NULL,        -- more|less ('default' deletes the row)
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, topic_key)
+);
+
+CREATE TABLE memory_thread_mark (   -- how far consolidation has read each thread
+  thread_id TEXT PRIMARY KEY REFERENCES thread(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES account(id),
+  last_message_id TEXT NOT NULL, run_id TEXT, updated_at TEXT NOT NULL
+);
 -- The current memory summary for a scope is the latest completed 'consolidate' run.
--- Settings keys (no table): memory.referencePastChats (bool, FR-205), memory.topicPreferences
--- (JSON {topic: "more"|"less"}, FR-204).
+-- Settings key (no table): memory.referencePastChats (bool, FR-205); topic preferences live in
+-- memory_topic (FR-204).
 
 CREATE TABLE artifact (
   id TEXT PRIMARY KEY, thread_id TEXT REFERENCES thread(id),
@@ -773,7 +809,11 @@ CREATE TABLE usage_event (
 
 CREATE TABLE notification (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
-  kind TEXT NOT NULL, title TEXT, body TEXT, refs_json TEXT,
+  kind TEXT NOT NULL,              -- approval|completion|error|attention|system (FR-013)
+  title TEXT NOT NULL, body TEXT,
+  href TEXT,                       -- a same-origin app path
+  refs_json TEXT,
+  dedupe_key TEXT,                 -- an unread notification with the same key is updated in place
   read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
 );
 ```

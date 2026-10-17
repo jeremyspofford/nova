@@ -4,8 +4,18 @@
 // delete) and a version navigator (FR-020); a branch shows the messages it inherits read-only.
 // Find in chat marks matches in the rendered text (FR-025). A send never loses the user's input:
 // on any failure the text and attachments go back into the composer with the reason.
+// M3: replies show tool cards that update live and approval cards inline at the call that waits
+// (FR-100); focus moves to a new approval and the announcer says so, and `?approval=<id>` scrolls
+// to one. While an approval waits the chat shows Needs input (FR-215). Artifact cards open the
+// Inspector (FR-038), and `@`-mentions go out with the message (FR-022).
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { EventEnvelope, InputMode, REASONING_LEVELS, ThreadDetail } from '@nova/shared';
+import type {
+  EventEnvelope,
+  InputMode,
+  MentionCandidate,
+  REASONING_LEVELS,
+  ThreadDetail,
+} from '@nova/shared';
 import {
   Button,
   Dialog,
@@ -19,6 +29,7 @@ import {
   type MenuItem,
 } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
+import { isEditable } from '../hooks.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useAnnounce, useServices, type Draft, type PendingAttachment } from '../services.tsx';
 import { useSetting, useSettings } from '../settings.tsx';
@@ -27,23 +38,30 @@ import { readAsBase64 } from './attachments.ts';
 import { Composer, useAttachmentIntake, type QueueItem } from './Composer.tsx';
 import { FindBar } from './FindBar.tsx';
 import { findMarks } from './find.tsx';
-import { MessageItem, type MessageActions } from './MessageItem.tsx';
+import { ApprovalCard } from './ApprovalCard.tsx';
+import { MessageItem, type CallApproval, type MessageActions } from './MessageItem.tsx';
 import { fallbackModel, presetStops } from './models.ts';
 import { threadTitle } from './ThreadList.tsx';
 import {
+  awaitsUser,
   deletionIds,
   isStreaming,
+  liveCallsByMessage,
   messageText,
+  pendingApprovals,
   placeholder,
+  type ClientApproval,
   type ClientMessage,
+  type DisplayCall,
 } from './thread-state.ts';
 import { threadStatus } from './status.ts';
-import { useThreadFeed } from './useThreadFeed.ts';
+import { TOOL_STATUS_TEXT } from './ToolCard.tsx';
+import { threadStateOf, useThreadFeed } from './useThreadFeed.ts';
 
 const EMPTY_DRAFT: Draft = { text: '', attachments: [] };
 
 /** Inspector panels a chat can ask the workspace to open. */
-export type ChatPanel = 'side' | 'branches';
+export type ChatPanel = 'side' | 'branches' | 'artifacts' | 'activity';
 
 export interface ChatViewProps {
   threadId: string | null;
@@ -58,6 +76,10 @@ export interface ChatViewProps {
   /** Lets the app run "Stop generation", "Find in chat" and "Focus composer" on this view. */
   onControls?: (c: ChatControls | null) => void;
   onOpenPanel?: (panel: ChatPanel) => void;
+  /** Approval to scroll to and focus (`/chat/<id>?approval=<approvalId>`). */
+  approvalId?: string | null;
+  /** Opens an artifact in the Inspector (FR-038). */
+  onOpenArtifact?: (artifactId: string) => void;
 }
 
 export interface ChatControls {
@@ -80,8 +102,10 @@ export function ChatView({
   announceEveryMs = 4000,
   onControls,
   onOpenPanel,
+  approvalId = null,
+  onOpenArtifact,
 }: ChatViewProps) {
-  const { api, registry, memory } = useServices();
+  const { api, registry, memory, bus } = useServices();
   const threads = useThreads();
   const { models, presets } = useModels();
   const settings = useSettings();
@@ -92,9 +116,13 @@ export function ChatView({
   const toast = useToast();
   const known = threadId ? (threads.threads.find((t) => t.id === threadId) ?? null) : null;
   const progress = useRef({ last: 0, words: 0 });
+  /** The approval card to focus, bumped when one appears or is asked for. */
+  const [focusTarget, setFocusTarget] = useState<{ id: string; n: number } | null>(null);
 
   const onEvent = (env: EventEnvelope) => {
     const p = env.payload;
+    // Panels showing this chat (artifacts, activity) follow the same events.
+    if (env.name !== 'chat.delta' && env.name !== 'tool.call.progress') bus.emit(env);
     switch (env.name) {
       case 'turn.started':
         progress.current = { last: Date.now(), words: 0 };
@@ -129,6 +157,38 @@ export function ChatView({
       case 'chat.branch.created':
         void threads.refresh();
         break;
+      case 'thread.status.changed': {
+        const ref = p.ref as { kind?: unknown; id?: unknown } | undefined;
+        const next = threadStateOf(p.status);
+        if (threadId && next && ref?.kind === 'thread' && ref.id === threadId)
+          threads.upsertLocal({ id: threadId, state: next });
+        break;
+      }
+      case 'tool.call.started':
+        if (typeof p.tool === 'string' && p.tool) announce(`Running ${p.tool}.`);
+        break;
+      case 'tool.call.completed': {
+        const st = p.status as keyof typeof TOOL_STATUS_TEXT;
+        const name = typeof p.tool === 'string' && p.tool ? p.tool : 'The tool call';
+        if (st in TOOL_STATUS_TEXT && st !== 'ok') announce(`${name}: ${TOOL_STATUS_TEXT[st]}.`);
+        break;
+      }
+      case 'approval.requested': {
+        if (typeof p.approvalId !== 'string') break;
+        const what = typeof p.action === 'string' && p.action ? `: ${p.action}` : '';
+        // Focus moves to the card (docs/04 §2.6) unless that would pull the user out of typing.
+        const el = document.activeElement;
+        const typing =
+          isEditable(el) && !!(el as HTMLInputElement | HTMLTextAreaElement).value?.trim();
+        if (typing) {
+          announce(`Approval needed${what}. It is in the chat, above the message box.`);
+        } else {
+          announce(`Approval needed${what}.`);
+          const aid = p.approvalId;
+          setFocusTarget((f) => ({ id: aid, n: (f?.n ?? 0) + 1 }));
+        }
+        break;
+      }
       default:
         break;
     }
@@ -141,10 +201,11 @@ export function ChatView({
       threads.update(threadId, { unread: false }).catch(() => undefined);
   };
 
-  const { state, dispatch, refetch, refreshQueue } = useThreadFeed(threadId, known, {
-    onEvent,
-    onLoaded,
-  });
+  const { state, dispatch, refetch, refreshQueue, approvalsLoaded } = useThreadFeed(
+    threadId,
+    known,
+    { onEvent, onLoaded },
+  );
   const [draft, setDraftState] = useState<Draft>(
     () => memory.drafts.get(threadId ?? 'new') ?? EMPTY_DRAFT,
   );
@@ -215,6 +276,9 @@ export function ChatView({
             ? d.attachments.map((a) => ({ name: a.name, mime: a.mime, data: a.data }))
             : undefined,
           ...(mode ? { inputMode: mode } : {}),
+          ...(d.mentions?.length
+            ? { mentions: d.mentions.map(({ kind, ref }) => ({ kind, ref })) }
+            : {}),
         });
         dispatch({ type: 'accepted', tempId, res });
         if (res.disposition === 'queued') {
@@ -248,6 +312,12 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void sendTo(threadId, queued);
   }, [memory, sendTo, threadId]);
+
+  const mentionSource = useCallback(
+    (q: string): Promise<MentionCandidate[]> =>
+      api.mentions(q, threadId ?? undefined).then((r) => r.items),
+    [api, threadId],
+  );
 
   const send = async (d: Draft, mode?: InputMode) => {
     setSendError(null);
@@ -638,13 +708,92 @@ export function ChatView({
     };
   }, [messageId, state.status]);
 
+  // ---- approvals (FR-100, FR-215) ---------------------------------------------------------------
+
+  const pending = pendingApprovals(state);
+  const needsInput = pending.length > 0;
+
+  // The thread list shows Needs input while an approval waits, and the live state after.
+  const sync = useRef({ threads, streaming, waiting: false });
+  useLayoutEffect(() => {
+    sync.current = { ...sync.current, threads, streaming };
+  });
+  useEffect(() => {
+    if (!threadId) return;
+    const s = sync.current;
+    if (needsInput) {
+      s.waiting = true;
+      s.threads.upsertLocal({ id: threadId, state: 'waiting_approval' });
+    } else if (s.waiting) {
+      s.waiting = false;
+      s.threads.upsertLocal({ id: threadId, state: s.streaming ? 'streaming' : 'idle' });
+    }
+  }, [needsInput, threadId]);
+
+  // `?approval=<id>`: focus that card; fetch it when this chat's list does not have it.
+  const linkedHere = !!approvalId && !!state.approvals[approvalId];
+  const linkChecked = useRef<string | null>(null);
+  useEffect(() => {
+    if (!approvalId || !threadId || linkedHere || !approvalsLoaded) return;
+    if (linkChecked.current === approvalId) return;
+    linkChecked.current = approvalId;
+    api.getApproval(approvalId).then(
+      (view) => {
+        if (view.threadId && view.threadId !== threadId) {
+          navigate(`${chatPath(view.threadId)}?approval=${encodeURIComponent(view.id)}`, {
+            replace: true,
+          });
+        } else if (view.status === 'pending') {
+          dispatch({ type: 'approvals', items: [view] });
+        } else {
+          toast.show('That approval was already answered.', { tone: 'info' });
+        }
+      },
+      () => toast.show('That approval no longer exists.', { tone: 'info' }),
+    );
+  }, [api, approvalId, approvalsLoaded, dispatch, linkedHere, threadId, toast]);
+
+  const focusKeyFor = (id: string) =>
+    (focusTarget?.id === id ? focusTarget.n : 0) + (approvalId === id ? 1 : 0);
+
+  const approvalCard = (a: ClientApproval) => (
+    <ApprovalCard
+      key={a.id}
+      approval={a}
+      focusKey={focusKeyFor(a.id)}
+      onChange={(view) => dispatch({ type: 'approvals', items: [view] })}
+    />
+  );
+
+  const liveByMessage = liveCallsByMessage(state);
+  const approvalByCall = new Map<string, ClientApproval>();
+  for (const a of Object.values(state.approvals)) {
+    if (!a.callId) continue;
+    const prev = approvalByCall.get(a.callId);
+    if (!prev || prev.createdAt <= a.createdAt) approvalByCall.set(a.callId, a);
+  }
+  const approvalFor = (call: DisplayCall): CallApproval | null => {
+    const a =
+      (call.approvalId ? state.approvals[call.approvalId] : undefined) ??
+      approvalByCall.get(call.callId);
+    if (!a) return null;
+    return { node: approvalCard(a), status: awaitsUser(a) ? 'awaiting_approval' : undefined };
+  };
+
   // ---- render ------------------------------------------------------------------------------------
 
   const title =
     thread?.title || (threadId ? 'Untitled chat' : isTemporary ? 'New temporary chat' : 'New chat');
-  const status = thread ? threadStatus(thread, streaming) : null;
+  const status = thread ? (needsInput ? 'needs_input' : threadStatus(thread, streaming)) : null;
   const noModel = models.length === 0;
   const shown = state.messages.filter((m) => m.expect !== 'queue');
+  // Approvals whose call is not on screen (no part or live call yet) still get a card.
+  const shownCalls = new Set<string>();
+  for (const m of shown) {
+    for (const p of m.parts) if (p.type === 'tool_call') shownCalls.add(p.callId);
+    for (const c of liveByMessage.get(m.id) ?? []) shownCalls.add(c.callId);
+  }
+  const orphans = pending.filter((a) => !a.callId || !shownCalls.has(a.callId));
   const queue: QueueItem[] = [
     ...state.queue.map((q) => ({ id: q.id, text: q.text, attachmentCount: q.attachmentCount })),
     ...state.messages
@@ -669,6 +818,12 @@ export function ChatView({
           ? [
               { id: 'side', label: 'Ask in a side chat', onSelect: () => onOpenPanel('side') },
               { id: 'branches', label: 'Show branches', onSelect: () => onOpenPanel('branches') },
+              {
+                id: 'artifacts',
+                label: 'Show artifacts',
+                onSelect: () => onOpenPanel('artifacts'),
+              },
+              { id: 'activity', label: 'Show activity', onSelect: () => onOpenPanel('activity') },
             ]
           : []),
         ...(thread.temporary
@@ -825,11 +980,35 @@ export function ChatView({
                 find={findQuery}
                 actions={actionsFor(m, inherited)}
                 busy={streaming}
+                liveCalls={liveByMessage.get(m.id)}
+                approvalFor={approvalFor}
+                onOpenArtifact={onOpenArtifact}
               />
             </Fragment>
           );
         })}
+        {orphans.length ? (
+          <div className="approval-orphans">{orphans.map(approvalCard)}</div>
+        ) : null}
       </div>
+      {needsInput ? (
+        <p className="approval-pending" role="note">
+          <Icon name="hand" />{' '}
+          {pending.length === 1
+            ? 'An approval is waiting for you.'
+            : `${pending.length} approvals are waiting for you.`}{' '}
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              const first = pending[0];
+              if (first) setFocusTarget((f) => ({ id: first.id, n: (f?.n ?? 0) + 1 }));
+            }}
+          >
+            Go to {pending.length === 1 ? 'it' : 'the first'}
+          </button>
+        </p>
+      ) : null}
       <Composer
         draft={draft}
         onDraftChange={(d) => {
@@ -857,6 +1036,7 @@ export function ChatView({
         onReasoningChange={changeReasoning}
         inputRef={input}
         noModelHint={noModel ? 'Connect a model provider to start' : undefined}
+        mentionSource={mentionSource}
       />
       {!threadId && defaultModel === null && auto && model === auto.ref ? (
         <p className="muted composer-note">

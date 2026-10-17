@@ -62,9 +62,10 @@ Rules:
 
 | Name | Persisted | Payload |
 | --- | --- | --- |
-| `tool.call.started` | yes | `{callId,tool,source,argsPreview}` |
+| `tool.call.started` | yes | `{callId,tool,source,argsPreview}`; correlation `{threadId,turnId}` |
 | `tool.call.progress` | no | `{callId,chunk}` |
-| `tool.call.completed` | yes | `{callId,status,durationMs,resultPreview,tags?}` |
+| `tool.call.completed` | yes | `{callId,tool,status,durationMs,resultPreview,tags?}` |
+| `artifact.created` / `.updated` | yes | `{artifactId,threadId,kind,version}` (FR-038) |
 | `approval.requested` | yes | `{approvalId,requestId,action,reason,scope,risk,tier}` |
 | `approval.decided` | yes | `{approvalId,decision,alwaysScope?,decidedBy,deviceId?,override}` (`ApprovalDecision`; `timeout` is a decision) |
 | `policy.denied` | yes | `{callId,tool,reason,ruleId?}` |
@@ -111,7 +112,7 @@ Rules:
 | `trigger.fired` | yes | `{triggerId,kind,dedupeKey}` |
 | `mcp.event.received` | yes | `{subscriptionId,triggerId,eventName,deliveryId,duplicate,sizeBytes}` (FR-201) |
 | `mcp.subscription.changed` | yes | `{subscriptionId,status: active\|refreshing\|lapsed\|failed\|removed,expiresAt?}` |
-| `memory.consolidated` | yes | `{runId,scope,phase,created,updated,aged,summaryTokens}` (FR-204) |
+| `memory.consolidated` | yes | `{runId,scope: {kind,ref},phase,status,created,updated,aged,summaryTokens}` (FR-204) |
 | `memory.item.created` / `.updated` / `.deleted` | yes | `{itemId,scopeKind}` (FR-032) |
 
 ### code
@@ -170,7 +171,11 @@ Rules:
 | `sync.conflict` | yes | `{entityKind,entityId,resolution}` |
 | `update.available` / `.downloaded` / `.applied` / `.failed` | yes | `{version,channel}` |
 | `diagnostics.updated` | no | `{subsystem,status}` |
-| `notification.created` | yes | `{notificationId,kind,title}` |
+| `notification.created` | yes | `{notificationId,kind,title}`; a repeat with the same dedupe key while unread updates the notification and emits nothing |
+| `auth.session.created` / `.revoked` | yes | `{accountId}` (audited) |
+| `provider.account.created` / `.removed` | yes | `{providerAccountId,provider,secretRef}` (audited; never the key) |
+| `settings.changed` | yes | `{key,scope}` (security-relevant keys are audited) |
+| `mcp.server.status.changed` | yes | `{serverId,name,status: disabled\|starting\|connected\|error\|stopped,error?}` (FR-043) |
 | `audit.appended` | yes | `{auditId,kind,hash}` |
 | `import.completed` | yes | `{importId,imported,duplicates,disabled,secretsMigrated}` (FR-200) |
 | `flag.changed` | yes | `{key,stage,enabled,source}` (ADR-082) |

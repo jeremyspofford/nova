@@ -311,11 +311,12 @@ describe('events', () => {
 
   it('streams replayed and live events over SSE', async () => {
     const session = await signIn();
+    const cursor = await hub.events.emit({ name: 'test.cursor', payload: {} });
     await hub.events.emit({ name: 'test.before', payload: {} });
     const addr = await hub.app.listen({ host: '127.0.0.1', port: 0 });
     const ac = new AbortController();
     const res = await fetch(`${addr}/api/v1/events/stream`, {
-      headers: { authorization: `Bearer ${session}` },
+      headers: { authorization: `Bearer ${session}`, 'last-event-id': cursor.id },
       signal: ac.signal,
     });
     expect(res.headers.get('content-type')).toContain('text/event-stream');
@@ -330,7 +331,30 @@ describe('events', () => {
     }
     ac.abort();
     expect(text).toContain('event: test.before');
+    expect(text).not.toContain('event: test.cursor');
     expect(text).toContain('event: test.live');
+  });
+
+  it('sends only live events when the client gives no cursor', async () => {
+    const session = await signIn();
+    await hub.events.emit({ name: 'test.old', payload: {} });
+    const addr = await hub.app.listen({ host: '127.0.0.1', port: 0 });
+    const ac = new AbortController();
+    const res = await fetch(`${addr}/api/v1/events/stream`, {
+      headers: { authorization: `Bearer ${session}` },
+      signal: ac.signal,
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    setTimeout(() => void hub.events.emit({ name: 'test.fresh', payload: {} }), 50);
+    while (!text.includes('test.fresh')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value);
+    }
+    ac.abort();
+    expect(text).not.toContain('test.old');
   });
 });
 

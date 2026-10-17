@@ -261,6 +261,8 @@ export interface MessageView {
   citations?: CitationView[];
   /** How a user message entered the turn: typed, a steer of a running turn, or a queued send. */
   provenance?: 'typed' | 'steer' | 'queued';
+  /** The `@`-mentions sent with a user message (FR-022). */
+  mentions?: { kind: MentionKind; ref: string; label: string }[];
 }
 
 export interface ThreadDetail {
@@ -514,6 +516,10 @@ export interface MemoryItemView {
   sourceKind: 'chat' | 'consolidation' | 'import' | 'manual' | 'ambient';
   sourceThreadId: string | null;
   sourceMessageId: string | null;
+  /** `plan` for a dated intention; `past_event` once its date has passed (FR-204 aging). */
+  kind: 'plan' | 'past_event' | null;
+  /** When a plan stops being upcoming. */
+  validUntil: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -702,6 +708,10 @@ export interface ApprovalView {
   /** Whether the authenticated user asked for this action (intent provenance, FR-189). */
   userAsked: boolean;
   ruleId: string | null;
+  /** The matched rule's label, when it has one. */
+  ruleLabel?: string | null;
+  /** Managed policy turned persistent grants off: show "Always allow" disabled, marked Managed. */
+  alwaysAllowManaged?: boolean;
   /** Which decisions the card may offer (tier and managed policy decide). */
   options: ApprovalDecisionKind[];
   /** Suggested "Always allow" scopes, ready to send back as `alwaysScope`. */
@@ -836,6 +846,8 @@ export interface PolicyPreview {
   reason: string;
   source: string;
   ruleId: string | null;
+  /** The per-tool default the user set, when the preview is for a tool (FR-048). */
+  userDefault?: 'allow' | 'ask' | 'deny' | null;
 }
 
 // ---- MCP servers (FR-042, FR-043; contracts/schemas/mcp-config.json) ---------------------------
@@ -975,12 +987,14 @@ export interface DiagnosticsSnapshot {
   sandbox: { substrate: SandboxSubstrate | null; available: boolean; detail: string };
   secrets: { backend: 'keychain' | 'vault' | 'memory'; detail: string };
   warnings: string[];
+  /** Further probes other areas register (e.g. `memoryConsolidation`), by name. */
+  probes?: Record<string, unknown>;
 }
 
 export type SandboxSubstrate = 'os_sandbox' | 'container' | 'micro_vm' | 'cloud';
 
 export interface EncryptionStatus {
-  /** Blobs and backups are encrypted with the Hub data key (ADR-090). */
+  /** Attachment, source and artifact blobs are encrypted with the Hub data key (ADR-090). */
   blobs: boolean;
   /** Whether the data directory sits on an encrypted volume, when it can be told. */
   volume: 'encrypted' | 'unencrypted' | 'unknown';

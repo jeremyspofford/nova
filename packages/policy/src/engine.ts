@@ -1,40 +1,42 @@
-// The policy engine (docs/12 §2, FR-099, FR-189). Pure and deterministic: the same context and
-// policy set always give the same decision. Evaluation:
-//   1. Built-in safety: hard denies, confirmation tiers and intent provenance set a floor that
-//      no later layer can relax.
-//   2. Managed rules, then user custom rules, then per-tool defaults, then mode defaults, then a
-//      fallback. The first layer that decides wins, except that any matching deny wins outright.
-//   3. The final effect is the stricter of the floor and the decision.
+// The policy engine (docs/12 §2, FR-048, FR-099, FR-189, FR-190, FR-191). Pure and deterministic:
+// the same context and policy set always give the same decision. Steps (docs/12 §2.3):
+//   1. Built-in safety: hard denies (agent self-modification, secret access, unnamed external
+//      agents, protected and out-of-profile paths, denied hosts, `full` outside a VM or
+//      container) and the confirmation tier from the action's effect classes. `handoff_required`
+//      and `confirm_at_action` are floors nothing can pre-approve.
+//   2. Managed policy rules, then 3. user rules (policy and command prefix rules, most specific
+//      scope first, then priority), then remembered grants. Any matching deny wins outright.
+//   4. Per-tool and per-server defaults the user set, 5. the approval policy, 6. the fallback
+//      (read-only actions allow, everything else asks).
+// Intent provenance: only a typed user instruction authorizes. Without one, a consequential
+// action asks unless a standing rule or grant covers it; any taint stops "act on request" rules.
+// Hooks (M4) and the reviewer (M5) come after, through `tighten`, which can only tighten.
+import { effectiveEffects, isReadOnly, writesPath } from './classify.ts';
+import { commandCoveredBy, evaluateCommand } from './command.ts';
+import { globMatch, hostMatch, isWithinPath } from './match.ts';
+import { isProtectedAncestor, pathAccess, type PathCheck } from './paths.ts';
+import { isolatedSubstrate } from './profiles.ts';
 import type {
   ActionEffect,
+  CommandRule,
   ConfirmationTier,
-  CustomRuleEffect,
   Decision,
+  DefaultEffect,
   Effect,
-  Layer,
   PolicyContext,
+  PolicyGrant,
   PolicyRule,
   PolicySet,
+  PolicyVerdict,
   Scope,
   ScopeKind,
 } from './types.ts';
 import { SEVERITY } from './types.ts';
-import { globMatch, hostMatch, isWithinPath } from './match.ts';
 
-const TRUSTED_INTENT = new Set(['user_typed', 'user_voice', 'schedule']);
-const HANDOFF_EFFECTS: ActionEffect[] = ['captcha', 'security_bypass', 'credential_change'];
-const CONFIRM_EFFECTS: ActionEffect[] = ['purchase', 'account_change', 'install'];
-const CONSEQUENTIAL: ActionEffect[] = [
-  'external_communication',
-  'purchase',
-  'account_change',
+const HANDOFF_EFFECTS: readonly ActionEffect[] = [
   'credential_change',
-  'data_delete',
-  'install',
-  'network',
-  'exec',
-  'secret_access',
-  'policy_change',
+  'security_bypass',
+  'captcha',
 ];
 
 const SCOPE_SPECIFICITY: Record<ScopeKind, number> = {
@@ -49,253 +51,299 @@ const SCOPE_SPECIFICITY: Record<ScopeKind, number> = {
   global: 1,
 };
 
-interface Floor {
-  effect: Effect;
-  tier: ConfirmationTier;
-  reason: string;
-  /** Effects a matching custom rule may not relax below this floor. */
-  locked: boolean;
+type Step = Pick<Decision, 'effect' | 'reason' | 'source'> & {
+  ruleId?: string;
+  grantId?: string;
+  userSet?: boolean;
+  /** The rule or grant names the call's host (it satisfies the network allowlist). */
+  namesHost?: boolean;
+};
+
+interface Candidate extends Step {
+  layer: 'managed' | 'user';
+  allowLike: boolean;
+  specificity: number;
+  priority: number;
+  id: string;
+  /** A user-created allow that names the message recipient (docs/12 §2.2). */
+  namesRecipient: boolean;
 }
 
-export interface EvaluateResult extends Decision {
-  /** True when an allowed action is consequential and must pass the auto-reviewer (FR-085). */
-  review: boolean;
-}
-
-export function evaluate(ctx: PolicyContext, policies: PolicySet = {}): EvaluateResult {
-  const effects = new Set(ctx.tool.effects ?? []);
-  const readOnly = ctx.tool.annotations?.readOnly === true && !hasAny(effects, CONSEQUENTIAL);
-  const scope = ctx.scopes[0] ?? { kind: 'global' };
-
-  // 1. Built-in safety.
-  const hard = hardDeny(ctx, effects);
-  if (hard)
-    return finish(
-      { effect: 'deny', reason: hard, layer: 'builtin', tier: 'handoff_required' },
-      ctx,
-      false,
-    );
-
-  const matched = [
-    ...matchingRules(ctx, policies.managed ?? [], 'managed'),
-    ...matchingRules(ctx, policies.custom ?? [], 'custom'),
+export function evaluate(ctx: PolicyContext, set: PolicySet = {}): Decision {
+  const effects = effectiveEffects(ctx.tool);
+  const readOnly = isReadOnly(ctx.tool, effects);
+  const authorization = ctx.provenance.userInstruction ? 'user_typed' : 'none';
+  const scope: Scope = ctx.scopes[0] ?? { kind: 'global' };
+  const path = ctx.resource?.kind === 'path' ? pathAccess(ctx.resource.value, ctx.fs) : null;
+  const candidates = [
+    ...ordered([
+      ...policyCandidates(ctx, set.managed ?? [], 'managed', effects, readOnly),
+      ...commandCandidates(ctx, set.commandRules ?? [], 'managed'),
+    ]),
+    ...ordered([
+      ...policyCandidates(ctx, set.rules ?? [], 'user', effects, readOnly),
+      ...commandCandidates(ctx, set.commandRules ?? [], 'user'),
+    ]),
   ];
-  const floor = builtinFloor(ctx, effects, readOnly, matched);
+  const tier = tierFor(ctx, effects, candidates, path);
+  const base = {
+    tier: tier.tier,
+    scope,
+    authorization,
+    effects,
+    review: false,
+  } as const;
 
-  // 2. Layers.
-  const anyDeny = matched.find((m) => m.effect === 'deny');
-  let decision: Omit<Decision, 'tier'>;
-  if (anyDeny) {
-    decision = {
-      effect: 'deny',
-      reason: label(anyDeny.rule, 'denied by rule'),
-      layer: anyDeny.layer,
-      ruleId: anyDeny.rule.id,
-    };
-  } else {
-    decision =
-      firstRule(matched, 'managed') ??
-      firstRule(matched, 'custom') ??
-      toolDefault(ctx, policies) ??
-      modeDefault(ctx, effects, readOnly) ??
-      fallback(ctx, readOnly);
-  }
+  // 1. Built-in safety: hard denies.
+  const hard = hardDeny(ctx, effects, readOnly, path);
+  if (hard) return { ...base, effect: 'deny', reason: hard, source: 'builtin', persistable: false };
 
-  // 3. Combine with the floor.
-  let final: Decision = { ...decision, tier: floor.tier, scope };
-  if (SEVERITY[floor.effect] > SEVERITY[final.effect]) {
-    final = {
-      effect: floor.effect,
-      reason: floor.reason,
-      layer: 'builtin',
-      tier: floor.tier,
-      scope,
-    };
-  }
-  const consequential =
-    !readOnly && (hasAny(effects, CONSEQUENTIAL) || !TRUSTED_INTENT.has(ctx.intent.source));
-  return finish(final, ctx, consequential);
-}
+  // 2-6. Layers.
+  const deny = candidates.find((c) => c.effect === 'deny');
+  const grant = (set.grants ?? []).find((g) => grantMatches(g, ctx));
+  const decision: Step =
+    deny ??
+    candidates.find((c) => c.layer === 'managed') ??
+    candidates.find((c) => c.layer === 'user') ??
+    (grant ? grantDecision(grant, ctx) : null) ??
+    defaults(ctx, set, effects, readOnly, path);
 
-function finish(d: Decision, ctx: PolicyContext, consequential: boolean): EvaluateResult {
-  return { ...d, review: d.effect === 'allow' && consequential && ctx.actor.kind === 'agent' };
-}
-
-function hardDeny(ctx: PolicyContext, effects: Set<ActionEffect>): string | null {
-  if (ctx.actor.kind === 'agent' && effects.has('policy_change')) {
-    return 'agents cannot change policy, safety, permission or audit settings';
+  // Floors: the tier is locked; provenance and the network allowlist yield to standing
+  // authorization (an allow from a rule or grant; for hosts, one that names the host).
+  const standing =
+    decision.effect === 'allow' &&
+    (decision.source === 'managed' || decision.source === 'rule' || decision.source === 'grant');
+  const floors: { effect: Effect; reason: string }[] = [];
+  if (tier.tier === 'handoff_required') floors.push({ effect: 'handoff', reason: tier.reason });
+  if (tier.tier === 'confirm_at_action') floors.push({ effect: 'ask', reason: tier.reason });
+  if (!readOnly && authorization === 'none' && !standing) {
+    const from = [...new Set(ctx.provenance.taint)].join(', ');
+    floors.push({
+      effect: 'ask',
+      reason: from
+        ? `the request came from ${from} content, which cannot authorize actions`
+        : 'no instruction from you authorizes this action',
+    });
   }
-  if (ctx.actor.kind === 'agent' && effects.has('secret_access')) {
-    return 'secret values are never exposed to agents';
-  }
+  const host = ctx.resource?.kind === 'host' ? ctx.resource.value : null;
   if (
-    ctx.resource?.kind === 'path' &&
-    (effects.has('file_write') ||
-      effects.has('data_delete') ||
-      ctx.tool.annotations?.destructive === true) &&
-    ctx.allowedRoots !== undefined &&
-    !ctx.allowedRoots.some((root) => isWithinPath(root, ctx.resource!.value))
+    !readOnly &&
+    host &&
+    ctx.tool.annotations?.requiresNetwork === true &&
+    !(ctx.egress?.allow ?? []).some((p) => hostMatch(p, host)) &&
+    !(standing && decision.namesHost === true)
   ) {
-    return 'path is outside the allowed file scope';
+    floors.push({ effect: 'ask', reason: `${host} is not on the network allowlist` });
   }
-  if (ctx.permissionMode === 'bypass' && !isIsolated(ctx)) {
-    return 'bypass mode requires a VM or container environment';
+  let final: Step = decision;
+  for (const f of floors) {
+    if (SEVERITY[f.effect] > SEVERITY[final.effect])
+      final = { effect: f.effect, reason: f.reason, source: 'builtin' };
+  }
+  const persistable =
+    tier.tier === 'pre_approvable' && final.source !== 'managed' && final.source !== 'rule';
+  const out: Decision = {
+    ...base,
+    effect: final.effect,
+    reason: final.reason,
+    source: final.source,
+    persistable,
+    review:
+      final.effect === 'allow' &&
+      !readOnly &&
+      ctx.approvalPolicy.kind === 'review' &&
+      ctx.actor.kind === 'agent',
+  };
+  if (final.ruleId) out.ruleId = final.ruleId;
+  if (final.grantId) out.grantId = final.grantId;
+  if (final.userSet) out.userSet = true;
+  return out;
+}
+
+/**
+ * Apply a hook or reviewer verdict (docs/12 §2.3 steps 7-8): the stricter of the two wins, and a
+ * verdict can never loosen a decision.
+ */
+export function tighten(decision: Decision, verdict: PolicyVerdict): Decision {
+  if (SEVERITY[verdict.effect] <= SEVERITY[decision.effect]) return decision;
+  return {
+    ...decision,
+    effect: verdict.effect,
+    reason: verdict.reason,
+    source: verdict.source,
+    review: false,
+    persistable: false,
+  };
+}
+
+function tierFor(
+  ctx: PolicyContext,
+  effects: readonly ActionEffect[],
+  candidates: readonly Candidate[],
+  path: PathCheck | null,
+): { tier: ConfirmationTier; reason: string } {
+  const has = (e: ActionEffect) => effects.includes(e);
+  if (ctx.tool.annotations?.requiresUser === true || HANDOFF_EFFECTS.some(has))
+    return { tier: 'handoff_required', reason: 'you need to do this step yourself' };
+  if (has('purchase'))
+    return { tier: 'confirm_at_action', reason: 'purchases and payments are confirmed every time' };
+  if (has('account_change'))
+    return {
+      tier: 'confirm_at_action',
+      reason: 'new accounts, permissions, API keys and OAuth grants are confirmed every time',
+    };
+  if (has('install'))
+    return { tier: 'confirm_at_action', reason: 'installing software is confirmed every time' };
+  if (has('data_delete') && path?.access !== 'write')
+    return {
+      tier: 'confirm_at_action',
+      reason: 'deleting data outside the project is confirmed every time',
+    };
+  if (has('external_communication') && !candidates.some((c) => c.allowLike && c.namesRecipient))
+    return {
+      tier: 'confirm_at_action',
+      reason: 'messages to others are confirmed every time unless a rule you made names them',
+    };
+  return { tier: 'pre_approvable', reason: '' };
+}
+
+function hardDeny(
+  ctx: PolicyContext,
+  effects: readonly ActionEffect[],
+  readOnly: boolean,
+  path: PathCheck | null,
+): string | null {
+  const agent = ctx.actor.kind === 'agent';
+  if (agent && effects.includes('policy_change'))
+    return 'agents cannot change policy, safety, permission or audit settings';
+  if (agent && effects.includes('secret_access')) return 'secret values are never given to agents';
+  if (
+    ctx.counterpart?.externalAgent === true &&
+    !(ctx.provenance.namedAgents ?? []).includes(ctx.counterpart.id)
+  )
+    return `you did not name the external agent ${ctx.counterpart.id} for this task`;
+  if (
+    ctx.permissionProfile.requiresSubstrate === 'vm_or_container' &&
+    !isolatedSubstrate(ctx.environment.substrate)
+  )
+    return `the ${ctx.permissionProfile.id} profile runs only inside a VM or container`;
+  if (path && ctx.resource) {
+    const writes = writesPath(ctx.tool, effects) && !readOnly;
+    if (path.access === 'deny') return path.reason;
+    if (writes && path.access !== 'write')
+      return path.reason || 'this folder is read-only for tools';
+    if (!writes && path.access === 'none') return path.reason;
+    const deletes = effects.includes('data_delete') || ctx.tool.annotations?.action === 'delete';
+    if (deletes && isProtectedAncestor(ctx.resource.value, ctx.fs))
+      return 'deleting this would remove a protected folder or a whole root';
+  }
+  if (ctx.resource?.kind === 'host') {
+    const host = ctx.resource.value;
+    if ((ctx.egress?.deny ?? []).some((p) => hostMatch(p, host)))
+      return `${host} is on the network deny list`;
   }
   return null;
 }
 
-function isIsolated(ctx: PolicyContext): boolean {
-  return (
-    ctx.environment.sandboxed &&
-    (ctx.environment.kind === 'container' || ctx.environment.kind === 'vm')
+function ordered(cs: Candidate[]): Candidate[] {
+  return cs.sort(
+    (a, b) =>
+      b.specificity - a.specificity ||
+      a.priority - b.priority ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
 }
 
-function builtinFloor(
+function policyCandidates(
   ctx: PolicyContext,
-  effects: Set<ActionEffect>,
+  rules: readonly PolicyRule[],
+  layer: 'managed' | 'user',
+  effects: readonly ActionEffect[],
   readOnly: boolean,
-  matched: Matched[],
-): Floor {
-  if (ctx.tool.annotations?.requiresUser === true || hasAny(effects, HANDOFF_EFFECTS)) {
-    return {
-      effect: 'handoff',
-      tier: 'handoff_required',
-      reason: 'only you can do this step',
-      locked: true,
-    };
-  }
-  if (hasAny(effects, CONFIRM_EFFECTS)) {
-    return {
-      effect: 'ask',
-      tier: 'confirm_at_action',
-      reason: 'this action always needs your confirmation',
-      locked: true,
-    };
-  }
-  if (effects.has('data_delete')) {
-    const inScope =
-      ctx.resource?.kind === 'path' &&
-      (ctx.allowedRoots ?? []).some((r) => isWithinPath(r, ctx.resource!.value));
-    if (!inScope) {
-      return {
-        effect: 'ask',
-        tier: 'confirm_at_action',
-        reason: 'deleting data outside the project needs your confirmation',
-        locked: true,
-      };
-    }
-  }
-  if (effects.has('external_communication')) {
-    const standing = matched.some(
-      (m) => m.layer === 'custom' && m.allowLike && namesRecipient(m.rule) && m.trusted,
-    );
-    if (!standing) {
-      return {
-        effect: 'ask',
-        tier: 'confirm_at_action',
-        reason: 'messages to others need your confirmation',
-        locked: true,
-      };
-    }
-  }
-  if (!readOnly && !TRUSTED_INTENT.has(ctx.intent.source)) {
-    const authorizedByRule = matched.some((m) => m.layer === 'custom' && m.allowLike && m.trusted);
-    if (!authorizedByRule) {
-      return {
-        effect: 'ask',
-        tier: 'pre_approvable',
-        reason: `the request came from ${ctx.intent.source} content, which cannot authorize actions`,
-        locked: false,
-      };
-    }
-  }
-  if (
-    !readOnly &&
-    ctx.tool.annotations?.requiresNetwork === true &&
-    ctx.resource?.kind === 'host'
-  ) {
-    const host = ctx.resource.value;
-    if (!(ctx.egressAllow ?? []).some((pattern) => hostMatch(pattern, host))) {
-      return {
-        effect: 'ask',
-        tier: 'pre_approvable',
-        reason: `${host} is not on the network allowlist`,
-        locked: false,
-      };
-    }
-  }
-  return { effect: 'allow', tier: 'pre_approvable', reason: '', locked: false };
-}
-
-interface Matched {
-  rule: PolicyRule;
-  layer: 'managed' | 'custom';
-  effect: Effect;
-  /** The rule grants (allow/act) rather than restricts. */
-  allowLike: boolean;
-  /** The grant applies to this request's provenance (act_on_request needs an active user request). */
-  trusted: boolean;
-}
-
-function matchingRules(
-  ctx: PolicyContext,
-  rules: PolicyRule[],
-  layer: 'managed' | 'custom',
-): Matched[] {
+): Candidate[] {
+  const actOk = ctx.provenance.userInstruction !== undefined && ctx.provenance.taint.length === 0;
   return rules
-    .filter((r) => r.enabled !== false && scopeApplies(r.scope, ctx) && ruleMatches(r, ctx))
-    .sort(
-      (a, b) =>
-        (a.priority ?? 100) - (b.priority ?? 100) ||
-        SCOPE_SPECIFICITY[b.scope.kind] - SCOPE_SPECIFICITY[a.scope.kind],
+    .filter(
+      (r) =>
+        r.enabled !== false && scopeApplies(r.scope, ctx) && ruleMatches(r, ctx, effects, readOnly),
     )
     .map((rule) => {
-      const effect = mapEffect(rule.effect, ctx);
+      let effect: Effect;
+      let reason = rule.label
+        ? `rule "${rule.label}"`
+        : `${layer === 'managed' ? 'managed' : 'your'} rule`;
+      if (rule.effect === 'act_on_request') {
+        effect = actOk ? 'allow' : 'ask';
+        if (!actOk) reason = `${reason} acts only when you ask for it`;
+      } else {
+        effect = rule.effect;
+      }
+      const host = ctx.resource?.kind === 'host' ? ctx.resource.value : null;
       return {
-        rule,
         layer,
         effect,
-        allowLike:
-          rule.effect === 'allow' ||
-          rule.effect === 'act' ||
-          (rule.effect === 'act_on_request' && effect === 'allow'),
-        trusted: rule.effect !== 'act_on_request' || effect === 'allow',
+        reason,
+        source: layer === 'managed' ? 'managed' : 'rule',
+        ruleId: rule.id,
+        userSet: true,
+        allowLike: effect === 'allow',
+        specificity: SCOPE_SPECIFICITY[rule.scope.kind],
+        priority: rule.priority ?? 100,
+        id: rule.id,
+        namesRecipient:
+          layer === 'user' && (rule.source ?? 'user') === 'user' && namesRecipient(rule),
+        namesHost:
+          host !== null &&
+          ((rule.scope.kind === 'site' && rule.scope.ref !== undefined && rule.scope.ref !== '*') ||
+            (rule.match.resource?.host !== undefined && rule.match.resource.host !== '*')),
       };
     });
 }
 
-function mapEffect(e: CustomRuleEffect, ctx: PolicyContext): Effect {
-  switch (e) {
-    case 'act':
-    case 'allow':
-      return 'allow';
-    case 'act_on_request':
-      return ctx.intent.requestActive === true && TRUSTED_INTENT.has(ctx.intent.source)
-        ? 'allow'
-        : 'ask';
-    case 'ask':
-      return 'ask';
-    case 'handoff':
-      return 'handoff';
-    case 'deny':
-      return 'deny';
-  }
+function commandCandidates(
+  ctx: PolicyContext,
+  rules: readonly CommandRule[],
+  layer: 'managed' | 'user',
+): Candidate[] {
+  if (ctx.command === undefined) return [];
+  const applicable = rules.filter(
+    (r) =>
+      r.enabled !== false &&
+      (r.source === 'managed') === (layer === 'managed') &&
+      appliesToTool(r, ctx.tool.name) &&
+      scopeApplies(r.scope, ctx),
+  );
+  if (applicable.length === 0) return [];
+  const sorted = [...applicable].sort(
+    (a, b) =>
+      SCOPE_SPECIFICITY[b.scope.kind] - SCOPE_SPECIFICITY[a.scope.kind] ||
+      (a.priority ?? 100) - (b.priority ?? 100) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+  const ev = evaluateCommand(ctx.command, sorted);
+  if (ev.decision === null || ev.ruleId === null) return [];
+  const rule = sorted.find((r) => r.id === ev.ruleId)!;
+  return [
+    {
+      layer,
+      effect: ev.decision,
+      reason: ev.reason,
+      source: layer === 'managed' ? 'managed' : 'rule',
+      ruleId: rule.id,
+      userSet: true,
+      allowLike: ev.decision === 'allow',
+      specificity: SCOPE_SPECIFICITY[rule.scope.kind],
+      priority: rule.priority ?? 100,
+      id: rule.id,
+      namesRecipient: false,
+      namesHost: false,
+    },
+  ];
 }
 
-function firstRule(matched: Matched[], layer: 'managed' | 'custom'): Omit<Decision, 'tier'> | null {
-  const m = matched.find((x) => x.layer === layer);
-  if (!m) return null;
-  return {
-    effect: m.effect,
-    reason: label(m.rule, `${layer} rule`),
-    layer: m.layer,
-    ruleId: m.rule.id,
-  };
-}
-
-function label(rule: PolicyRule, fallbackText: string): string {
-  return rule.label ? `rule "${rule.label}"` : fallbackText;
+function appliesToTool(rule: CommandRule, tool: string): boolean {
+  const tools = rule.tools ?? ['exec.run'];
+  return tools.includes(tool) || (tool === 'exec.write' && tools.includes('exec.run'));
 }
 
 function scopeApplies(scope: Scope, ctx: PolicyContext): boolean {
@@ -314,13 +362,17 @@ function scopeApplies(scope: Scope, ctx: PolicyContext): boolean {
   );
 }
 
-function ruleMatches(rule: PolicyRule, ctx: PolicyContext): boolean {
+function ruleMatches(
+  rule: PolicyRule,
+  ctx: PolicyContext,
+  effects: readonly ActionEffect[],
+  readOnly: boolean,
+): boolean {
   const m = rule.match;
   if (m.tool && !m.tool.some((t) => globMatch(t, ctx.tool.name))) return false;
   if (m.source && !m.source.includes(ctx.tool.source)) return false;
-  if (m.readOnly !== undefined && (ctx.tool.annotations?.readOnly === true) !== m.readOnly)
-    return false;
-  if (m.effect && !m.effect.some((e) => (ctx.tool.effects ?? []).includes(e))) return false;
+  if (m.readOnly !== undefined && readOnly !== m.readOnly) return false;
+  if (m.effect && !m.effect.some((e) => effects.includes(e))) return false;
   if (m.resource) {
     const res = ctx.resource;
     if (!res) return false;
@@ -349,53 +401,103 @@ function namesRecipient(rule: PolicyRule): boolean {
   return target !== undefined && target !== '*' && target !== '**';
 }
 
-function toolDefault(ctx: PolicyContext, policies: PolicySet): Omit<Decision, 'tier'> | null {
-  const defaults = policies.toolDefaults ?? {};
-  const exact = defaults[ctx.tool.name];
-  if (exact)
-    return { effect: exact, reason: `default for ${ctx.tool.name}`, layer: 'tool_default' };
-  const glob = Object.keys(defaults)
-    .filter((k) => k.includes('*') && globMatch(k, ctx.tool.name))
-    .sort((a, b) => b.length - a.length)[0];
-  if (glob)
-    return { effect: defaults[glob]!, reason: `default for ${glob}`, layer: 'tool_default' };
+function grantMatches(g: PolicyGrant, ctx: PolicyContext): boolean {
+  if (!scopeApplies(g.scope, ctx) || !globMatch(g.tool, ctx.tool.name)) return false;
+  if (g.host !== undefined) {
+    if (ctx.resource?.kind !== 'host' || !hostMatch(g.host, ctx.resource.value)) return false;
+  }
+  if (g.command !== undefined) {
+    if (ctx.command === undefined || !commandCoveredBy(g.command, ctx.command)) return false;
+  }
+  if (g.argsHash !== undefined && g.argsHash !== ctx.argsHash) return false;
+  return true;
+}
+
+function grantDecision(g: PolicyGrant, ctx: PolicyContext): Step {
+  return {
+    effect: 'allow',
+    reason: g.label ? `you allowed ${g.label}` : 'you allowed this earlier',
+    source: 'grant',
+    grantId: g.id,
+    namesHost: g.host !== undefined && g.host !== '*' && ctx.resource?.kind === 'host',
+  };
+}
+
+function userDefault(
+  ctx: PolicyContext,
+  set: PolicySet,
+): { effect: DefaultEffect; reason: string } | null {
+  const name = ctx.tool.name;
+  const exact = set.toolDefaults?.[name];
+  if (exact) return { effect: exact, reason: `your default for ${name}` };
+  const owner = ctx.tool.serverId ?? ctx.tool.pluginId;
+  const server = owner ? set.serverDefaults?.[owner] : undefined;
+  if (server) return { effect: server, reason: `your default for ${owner}` };
+  const glob = Object.keys(set.toolDefaults ?? {})
+    .filter((k) => k.includes('*') && globMatch(k, name))
+    .sort((a, b) => b.length - a.length || (a < b ? -1 : 1))[0];
+  if (glob) return { effect: set.toolDefaults![glob]!, reason: `your default for ${glob}` };
   return null;
 }
 
-function modeDefault(
+/** Steps 4-6: user defaults, the approval policy (docs/12 §2.1) and the fallback. */
+function defaults(
   ctx: PolicyContext,
-  effects: Set<ActionEffect>,
+  set: PolicySet,
+  effects: readonly ActionEffect[],
   readOnly: boolean,
-): Omit<Decision, 'tier'> | null {
-  if (readOnly) return null;
-  const layer: Layer = 'mode';
-  switch (ctx.permissionMode) {
-    case 'plan':
-      return { effect: 'deny', reason: 'plan mode only reads and proposes', layer };
-    case 'manual':
-      return { effect: 'ask', reason: 'manual mode asks before every change', layer };
-    case 'accept_edits': {
-      const editOnly = effects.size > 0 && [...effects].every((e) => e === 'file_write');
-      return editOnly
-        ? { effect: 'allow', reason: 'accept-edits mode allows file edits in the project', layer }
-        : { effect: 'ask', reason: 'accept-edits mode asks before commands', layer };
+  path: PathCheck | null,
+): Step {
+  const user = userDefault(ctx, set);
+  const fromUser: Step | null = user
+    ? { effect: user.effect, reason: user.reason, source: 'tool_default', userSet: true }
+    : null;
+  if (fromUser?.effect === 'deny') return fromUser;
+  if (readOnly)
+    return fromUser ?? { effect: 'allow', reason: 'read-only action', source: 'fallback' };
+  const builtin: Step = {
+    effect: 'ask',
+    reason: `the default for ${ctx.tool.name} is to ask`,
+    source: 'tool_default',
+  };
+  switch (ctx.approvalPolicy.kind) {
+    case 'ask_always':
+      return {
+        effect: 'ask',
+        reason: 'your approval policy asks before every change',
+        source: 'approval_policy',
+        userSet: true,
+      };
+    case 'defaults': {
+      if (fromUser) return fromUser;
+      const edit =
+        effects.length > 0 &&
+        effects.every((e) => e === 'file_write') &&
+        path?.access === 'write' &&
+        (ctx.approvalPolicy.autoAccept ?? []).includes('file_edit');
+      if (edit)
+        return {
+          effect: 'allow',
+          reason: 'file edits inside writable folders are accepted automatically',
+          source: 'approval_policy',
+        };
+      return builtin;
     }
-    case 'auto':
-    case 'bypass':
-      return { effect: 'allow', reason: `${ctx.permissionMode} mode`, layer };
-    case undefined:
-      return null;
+    case 'review':
+      return (
+        fromUser ?? {
+          effect: 'allow',
+          reason: 'allowed under auto-review',
+          source: 'approval_policy',
+        }
+      );
+    case 'never_ask':
+      return (
+        fromUser ?? {
+          effect: 'allow',
+          reason: 'your approval policy does not ask for this',
+          source: 'approval_policy',
+        }
+      );
   }
-}
-
-function fallback(ctx: PolicyContext, readOnly: boolean): Omit<Decision, 'tier'> {
-  if (readOnly) return { effect: 'allow', reason: 'read-only action', layer: 'fallback' };
-  if (ctx.tool.annotations === undefined && ctx.tool.source !== 'builtin') {
-    return { effect: 'deny', reason: 'unknown tool with undeclared effects', layer: 'fallback' };
-  }
-  return { effect: 'ask', reason: 'this action changes something', layer: 'fallback' };
-}
-
-function hasAny<T>(set: Set<T>, values: readonly T[]): boolean {
-  return values.some((v) => set.has(v));
 }

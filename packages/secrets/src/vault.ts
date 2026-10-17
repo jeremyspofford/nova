@@ -25,8 +25,17 @@ export function secretRef(...segments: string[]): string {
   return ref;
 }
 
+/** What Diagnostics shows about the store in use (FR-101, FR-118). */
+export interface SecretStoreInfo {
+  backend: 'keychain' | 'vault' | 'memory';
+  detail: string;
+  /** Set when the store is a fallback or is not durable, e.g. the keychain was unavailable. */
+  warning: string | null;
+}
+
 export interface SecretStore {
   readonly kind: string;
+  readonly info?: SecretStoreInfo;
   put(ref: string, value: string): Promise<void>;
   /** Resolve a value. Every value read is registered with the redactor so it never leaks. */
   get(ref: string): Promise<string | null>;
@@ -50,8 +59,14 @@ export type VaultKey =
 // Argon2id parameters (docs/12 §5): 64 MiB, 3 passes, 4 lanes.
 const ARGON = { memory: 64 * 1024, passes: 3, parallelism: 4, tagLength: 32 } as const;
 
+export interface FileVaultOptions {
+  /** Shown in Diagnostics, e.g. why the OS keychain was not used. */
+  warning?: string | null;
+}
+
 export class FileVault implements SecretStore {
   readonly kind = 'file-vault';
+  readonly info: SecretStoreInfo;
   readonly #path: string;
   readonly #keySpec: VaultKey;
   readonly #redactor: Redactor;
@@ -60,10 +75,28 @@ export class FileVault implements SecretStore {
   #cache: Map<string, string> | null = null;
   #queue: Promise<unknown> = Promise.resolve();
 
-  constructor(path: string, key: VaultKey, redactor: Redactor = defaultRedactor) {
+  constructor(
+    path: string,
+    key: VaultKey,
+    redactor: Redactor = defaultRedactor,
+    opts: FileVaultOptions = {},
+  ) {
     this.#path = path;
     this.#keySpec = key;
     this.#redactor = redactor;
+    this.info = {
+      backend: 'vault',
+      detail:
+        key.kind === 'keyfile'
+          ? 'Encrypted file vault (ChaCha20-Poly1305, key file)'
+          : 'Encrypted file vault (ChaCha20-Poly1305, passphrase)',
+      warning: opts.warning ?? null,
+    };
+  }
+
+  /** Whether the vault file exists yet. */
+  exists(): boolean {
+    return existsSync(this.#path);
   }
 
   #deriveKey(file: VaultFile | null): Buffer {
@@ -207,6 +240,12 @@ export class FileVault implements SecretStore {
 /** In-memory store for tests and ephemeral profiles. */
 export class MemorySecretStore implements SecretStore {
   readonly kind = 'memory';
+  readonly info: SecretStoreInfo = {
+    backend: 'memory',
+    detail: 'In-memory store',
+    warning:
+      'Secrets are kept in memory only: they are not encrypted at rest and are lost when the Hub stops.',
+  };
   readonly #map = new Map<string, string>();
   readonly #redactor: Redactor;
   constructor(redactor: Redactor = defaultRedactor) {
@@ -247,6 +286,9 @@ function attempt<T>(fn: () => T): Promise<T> {
   return Promise.resolve().then(fn);
 }
 
-function assertRef(ref: string): void {
+/** Throws `validation` unless `ref` is a well-formed `secret://` reference. */
+export function assertSecretRef(ref: string): void {
   if (!isSecretRef(ref)) throw new NovaError('validation', 'not a secret:// reference');
 }
+
+const assertRef = assertSecretRef;

@@ -1,18 +1,29 @@
-// Navigation commands for projects (FR-003, FR-034). Memory, Models and Devices are settings
-// sections, reached by the shell's "Open … settings" commands. The shell registers these once.
+// Navigation commands for projects (FR-003, FR-034) and the notification center (FR-013). Memory,
+// Models, Devices, Tools & MCP, Permissions, Notifications and Diagnostics are settings sections,
+// reached by the shell's "Open … settings" commands. The shell registers these once.
 import type { Command, CommandRegistry } from './commands.ts';
 import { navigate as routerNavigate, projectPath } from './router.ts';
 
 /** Opening this path shows the projects list with the New project dialog open. */
 export const NEW_PROJECT_PATH = '/projects?new=1';
 
+/** Window event the notifications bell listens for to open its panel. */
+export const OPEN_NOTIFICATIONS_EVENT = 'nova:open-notifications';
+
+export function openNotifications(): void {
+  window.dispatchEvent(new Event(OPEN_NOTIFICATIONS_EVENT));
+}
+
 export interface WorkspaceCommandDeps {
   /** Defaults to the History API router. */
   navigate?: (path: string) => void;
+  /** Defaults to opening the bell panel in the top bar. */
+  showNotifications?: () => void;
 }
 
 export function workspaceCommands(deps: WorkspaceCommandDeps = {}): Command[] {
   const go = deps.navigate ?? ((path: string) => routerNavigate(path));
+  const show = deps.showNotifications ?? openNotifications;
   return [
     {
       id: 'projects.open',
@@ -25,6 +36,12 @@ export function workspaceCommands(deps: WorkspaceCommandDeps = {}): Command[] {
       title: 'New project',
       category: 'Projects',
       run: () => go(NEW_PROJECT_PATH),
+    },
+    {
+      id: 'notifications.open',
+      title: 'Show notifications',
+      category: 'General',
+      run: show,
     },
   ];
 }

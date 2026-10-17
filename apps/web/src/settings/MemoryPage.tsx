@@ -1,7 +1,9 @@
 // Settings → Memory (FR-032, docs/04 §2.7): turn saved memories on or off, review what Nova
 // remembers grouped by category, and pin, correct, dismiss or delete each item; add one by hand or
 // import an export. Temporary chats never produce memories (the Hub enforces it), and each chat
-// can opt out from its own menu.
+// can opt out from its own menu. M3 adds the consolidated summary, "Consolidate now" and its
+// history, "Remember more / less" per category and the "Reference past chats" switch (FR-204,
+// FR-205; MemoryConsolidation.tsx).
 import { useEffect, useId, useRef, useState } from 'react';
 import type { MemoryItemView } from '@nova/shared';
 import {
@@ -22,6 +24,12 @@ import { useSettings } from '../settings.tsx';
 import { useThreads } from '../stores.tsx';
 import { formatWhen, plural } from './common.ts';
 import { SwitchField } from './controls.tsx';
+import {
+  ConsolidationSection,
+  PastChatsSwitch,
+  TopicControls,
+  useMemoryTopics,
+} from './MemoryConsolidation.tsx';
 import '../workspace.css';
 
 type Status = MemoryItemView['status'];
@@ -65,6 +73,7 @@ export function MemoryPage() {
   const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<MemoryItemView | null>(null);
+  const topics = useMemoryTopics();
 
   useEffect(() => {
     let alive = true;
@@ -150,7 +159,9 @@ export function MemoryPage() {
             nothing new is saved.
           </p>
         ) : null}
+        <PastChatsSwitch />
       </section>
+      <ConsolidationSection />
       <section className="settings-section" aria-labelledby="memory-items">
         <h3 id="memory-items">Saved memories</h3>
         <div className="ws-toolbar">
@@ -204,7 +215,16 @@ export function MemoryPage() {
             className="ws-memory-group"
             aria-label={g.category ?? UNCATEGORIZED}
           >
-            <h4>{g.category ?? UNCATEGORIZED}</h4>
+            <div className="ws-group-head">
+              <h4>{g.category ?? UNCATEGORIZED}</h4>
+              {g.category ? (
+                <TopicControls
+                  topic={g.category}
+                  preference={topics.preference(g.category)}
+                  onSet={(p) => g.category && topics.set(g.category, p)}
+                />
+              ) : null}
+            </div>
             <ul className="ws-list">
               {g.items.map((m) => (
                 <MemoryRow

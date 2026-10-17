@@ -98,6 +98,7 @@ silently.
 | ADR-087 | Styling | **Token CSS + component classes**, no utility framework (supersedes ADR-004) |
 | ADR-088 | M1 implementation choices | Search index, reasoning levels, cut-off replies, offline mock provider, browser-tab shortcuts |
 | ADR-089 | M2 implementation choices | Model router seam, message versions, follow-ups, memory extraction, sources, compute-node transport |
+| ADR-090 | M3 implementation choices | Tool loop and gate seams, container sandbox until M6, MCP SDK, audit chain, at-rest baseline, consolidation |
 
 ## Details & rationale
 
@@ -549,6 +550,74 @@ component sources. Revisit if UI velocity suffers.
 - *Sessions only.* Only session tokens authenticate as a user; device, app and MCP-client
   tokens are checked by the routes that accept them (FR-192).
 - *New chats* start on the Balanced preset when no default model is set.
+
+**ADR-090 — M3 implementation choices.**
+- *Policy engine.* Rules are ordered by scope specificity, then priority, then id. Only Nova's
+  own tools (built-in, browser, computer) can be read-only; an MCP or plugin tool with no default
+  asks. MCP, plugin, page and device tools get effect classes inferred from their name, title and
+  description (purchase, messaging, deletion, install, credentials, accounts), which only ever
+  add classes; the known cost is that an honest tool such as `list_orders` is treated as a
+  purchase and can never be pre-approved. Without a typed instruction a consequential action
+  asks unless a standing rule or grant covers it. `review` with no reviewer configured asks every
+  time, and a hook or reviewer that errors counts as a deny. `tighten()` is the extension point
+  for hooks (M4) and the reviewer (M5); it can only make a decision stricter.
+- *Approvals and grants.* An ask that came from a rule offers no session or "Always allow"
+  option (rules are checked before grants, so the grant could never apply). Session grants are
+  scoped to the thread: exec tools by a suggested command prefix (else the exact arguments),
+  network tools by tool and host, others by tool. "Always allow" writes a policy rule or command
+  rule plus a grant pointing at it; revoking the grant deletes the rule. A timeout and a cancel
+  both deny and stop the turn, recorded as `timeout` and `cancelled`. While an approval is open
+  the thread is `waiting_approval`; startup cancels approvals a crash left open.
+- *Paths and profiles (FR-190).* The gate resolves symlinks and `..` before the engine sees a
+  path, and the engine refuses anything that is not absolute and clean. Credential locations are
+  denied anywhere; `.git`, `.nova`, `.agents` and shell start-up files are read-only inside
+  writable roots; the Hub data directory is denied except its `workspace` folder; deleting a root
+  or a folder above a protected location is denied. An unknown profile falls back to
+  `read-only`.
+- *MCP client.* Built on the official TypeScript SDK (`@modelcontextprotocol/client`, Apache-2.0)
+  rather than a hand-written protocol. Nova offers protocol 2025-11-25 or later and refuses older
+  servers with a clear message. MCP annotations are hints that can only make a tool stricter
+  (`destructiveHint`, `openWorldHint`); `readOnlyHint` never loosens a default, and effect
+  classes are never taken from a server. Tool names are `mcp:<server>.<tool>`, sanitized, with
+  numeric suffixes on collisions. Restarts back off from 1 s to 30 s, at most 5 in 10 minutes,
+  then the server stays in `error` until restarted by hand. An env value that is itself a
+  `secret://` reference is refused, so a session cannot start a process holding another vault
+  secret. For `sse`/`http` servers env entries are sent as headers (`X_Api_Key` → `X-Api-Key`).
+  MCP servers are not yet sandboxed or routed through the egress proxy (FR-107, FR-193, M6).
+- *Audit log.* SHA-256 hash chain over the canonical JSON of each row (the form compute nodes
+  sign), with a sequence number and triggers that refuse UPDATE and DELETE. Verification reports
+  the first broken entry; truncation at the end needs an external anchor and is not detected
+  yet. Security events (sign-in and sign-out, provider credentials by reference, security
+  settings, node enrolment) are audited from the event bus; tool calls and policy decisions are
+  appended by their areas. Inputs are stored only as hashes.
+- *At rest (FR-149 baseline).* Attachment, source and artifact blobs are sealed with a per-Hub
+  data key (ChaCha20-Poly1305, random 96-bit nonces; the header and blob name are bound as
+  associated data) kept in the secret store; blobs written before M3 are read as they are and
+  sealed when written again. The SQLite file is not encrypted: `node:sqlite` has no encrypting
+  storage layer, so full-database encryption waits for an encryption-capable build (revisit in
+  M9); until then Diagnostics warns when the data directory is not on an encrypted volume.
+  Backups are not encrypted yet. The Hub can serve HTTPS from `NOVA_TLS_CERT` / `NOVA_TLS_KEY`
+  (TLS 1.2 minimum); end-to-end encryption for the Relay and sync arrives with them (M6.5, M7).
+- *Secrets (FR-101).* `NOVA_SECRETS=keychain|vault` (default `vault`). The keychain backends use
+  `secret-tool` on Linux and `security` on macOS, pass values only on stdin, and keep an index
+  item because neither CLI lists items; switching to the keychain moves vault secrets after
+  reading each back. Windows falls back to the vault. CI runs Nova's own secret scanner
+  (`scripts/secret-scan.mjs`), built from the redactor's patterns, instead of an external tool;
+  test fixtures mark fake values with `secret-scan: fake`.
+- *Notifications (FR-013).* A turned-off category is not stored. A repeat with the same dedupe
+  key updates the unread notification instead of adding one. At most 1,000 per account; links
+  are same-origin app paths only. The web client shows an OS notification only while the page is
+  hidden and only for notifications that arrive after it loaded.
+- *Event streams.* Without a cursor, both the global and the per-thread stream send live events
+  only; WebSocket upgrades without a session are refused in the handshake (401).
+- *Memory consolidation (FR-204, FR-205).* Two recorded phases per scope (extract, consolidate)
+  every 15 minutes and on demand; with only the Mock provider an offline heuristic runs, so
+  memory works without a model. A thread is read again only after new messages and a new idle
+  window. Pinned and user-edited items are never rewritten; a newer fact about a one-value
+  subject (name, home, work) retires the older item; dated plans become past events. Correcting,
+  dismissing or deleting an item clears its scope's summary so a forgotten fact never lingers.
+  Past-chat retrieval is computed per turn and stores nothing, so turning it off leaves nothing
+  to purge.
 
 ## Defaults for common ambiguities
 
