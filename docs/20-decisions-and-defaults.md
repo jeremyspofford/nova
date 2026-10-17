@@ -58,9 +58,12 @@ silently.
 | ADR-047 | Automations | Run on the Hub; physical actions require approval |
 | ADR-048 | Smart home | Integrate (Home Assistant primary); do not ship radios |
 | ADR-049 | Community catalog | Signed, permission-enforced, self-hostable |
-| ADR-050 | Learning levels | L0–L5; **guardrails are immutable** |
+| ADR-050 | Learning levels | L0–L5; guardrails on by default, toggleable in Advanced |
 | ADR-051 | Self-modification | Sandboxed, tested, staged, approved, reversible |
 | ADR-052 | Eval harness | Mandatory gate for any learning/self-improvement change |
+| ADR-053 | Catalog hosting | Public domain + tailnet + self-hosted/offline |
+| ADR-054 | Smart home | Managed Home Assistant or direct MQTT/Matter; bridges later |
+| ADR-055 | Skill authoring | Markdown skills; Nova may generate/refine its own with approval |
 
 ## Details & rationale
 
@@ -150,15 +153,29 @@ shipping radios and a second device database.
 declared permissions are enforced at runtime, signatures are verified, updates show a
 permission diff, and the catalog can be self-hosted or offline.
 
-**ADR-050 — Learning levels with immutable guardrails.** L0–L3 are transparent and reversible;
-L4/L5 require explicit approval. The agent may **never** modify policy, permissions, safety,
-audit, signing, or the self-improvement gates.
+**ADR-050 — Learning levels with guardrails on by default.** L0–L3 are transparent and
+reversible; L4/L5 require explicit approval. By default the agent may not modify policy,
+permissions, safety, audit, signing, or the self-improvement gates. An administrator can
+toggle this protection off in Advanced settings (audited); toggling is always a human action.
 
 **ADR-051 — Self-modification is gated.** Isolated worktree, tests + security + safety eval,
 diff/evidence approval, staged deploy, health check, automatic rollback.
 
 **ADR-052 — Evaluation is mandatory.** No learning or self-improvement change ships without
 passing the regression suite; regressions auto-revert and notify.
+
+**ADR-053 — Catalog hosting.** The catalog is served from a public custom domain, a
+tailnet/Lattice URL, and/or self-hosted/offline, selected by the user. Signed entries make any
+endpoint equivalent.
+
+**ADR-054 — Smart home bootstrap and bridges.** Home Assistant is preferred but optional:
+Nova can manage an HA instance or use MQTT/Matter/vendor connectors directly. Ecosystem
+exposure is HomeKit (local) first, then a Matter bridge; direct Google/Alexa cloud skills are
+deferred.
+
+**ADR-055 — Skill authoring.** Skills are markdown files. Users author them directly, and Nova
+may generate or refine its own skills from repeated workflows or explicit requests; generated
+skills carry provenance, are versioned, and require approval before use.
 
 ## Defaults for common ambiguities
 

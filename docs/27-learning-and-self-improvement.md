@@ -14,8 +14,11 @@ dangerous, so the design is explicit about what may change automatically and wha
 | **L4 — Code** | Nova's own source/plugins/config code | Sandboxed, tested, versioned, **explicit approval** |
 | **L5 — Models** | Local fine-tunes/LoRA adapters | Optional, gated, evaluated, reversible |
 
-Guardrail: **L4 and L5 may never modify safety, policy, permissions, or the self-improvement
-gates themselves.** Those are immutable from the agent's perspective.
+Guardrail: by default, **L4 and L5 may not modify safety, policy, permissions, audit, signing,
+or the self-improvement gates themselves.** This protection is a setting that is **on by
+default**; an administrator can turn it off in Advanced settings, with a strong warning and an
+audit entry. Even when allowed, a change still follows the full L4 approval and rollback
+process. Toggling the guardrail itself is always a human action, never initiated by an agent.
 
 ## 2. L0 — Memory & preference learning
 
@@ -26,7 +29,7 @@ gates themselves.** Those are immutable from the agent's perspective.
 
 ## 3. L1 — Skill synthesis
 
-- Detect repeated successful workflows; propose a skill (instructions + allowed tools).
+- Detect repeated successful  orkflows; propose a skill (instructions + allowed tools).
 - The user reviews the generated skill, tests it, and installs it.
 - Skills carry provenance and can be versioned/rolled back.
 
@@ -54,8 +57,10 @@ propose change → sandbox worktree → implement → run tests + evals
 
 Rules:
 
-1. **Never** modify: the policy engine, permission model, safety classifiers, audit log,
-   update signing, or self-improvement gates.
+1. **Protected by default:** the policy engine, permission model, safety classifiers, audit
+   log, update signing, and self-improvement gates may not be modified while the guardrail
+   setting is on (the default). Turning it off is an explicit administrator action and is
+   itself audited; even then, changes follow the full L4 approval process.
 2. All changes are made in an **isolated worktree/sandbox**, never the live tree.
 3. Changes must pass **unit + integration + security** tests and a **safety eval**.
 4. Deployment is **staged** (canary → full) with a **health check** and automatic rollback.

@@ -349,9 +349,9 @@ parallel when they touch different packages.
 | M7.5 | FR-143, FR-146, FR-147 |
 | post-v1 | FR-130 |
 | N1 (Ambient Memory) | FR-151, FR-152, FR-153, FR-154, FR-155, FR-156 |
-| N2 (Automations & Smart Home) | FR-157, FR-158, FR-159, FR-160, FR-161, FR-162, FR-163, FR-164 |
-| N3 (Extensions & Community) | FR-165, FR-166, FR-167, FR-168 |
-| N4 (Learning & Self-Improvement) | FR-169, FR-170, FR-171, FR-172, FR-173, FR-174, FR-175 |
+| N2 (Automations & Smart Home) | FR-157, FR-158, FR-159, FR-160, FR-161, FR-162, FR-163, FR-164, FR-176, FR-179, FR-180 |
+| N3 (Extensions & Community) | FR-165, FR-166, FR-167, FR-168, FR-177 |
+| N4 (Learning & Self-Improvement) | FR-169, FR-170, FR-171, FR-172, FR-173, FR-174, FR-175, FR-178 |
 
 ---
 

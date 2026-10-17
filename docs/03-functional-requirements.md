@@ -272,6 +272,16 @@ tests in `docs/16`.
 | FR-174 | P2 | N4 | **L5 — optional local fine-tuning**: user-approved data only, resource-bounded, evaluated, versioned, deletable; base model never altered. |
 | FR-175 | P1 | N4 | **Evaluation harness, transparency, and kill switch**: regression gates with auto-revert; a "What Nova learned" view with provenance/rollback; an instant stop control. |
 
+## S. Follow-ups & bridges — capability tracks
+
+| ID | Pri | Ms | Requirement / Acceptance |
+| --- | --- | --- | --- |
+| FR-176 | P1 | N2 | **Smart-home bootstrap**: Nova can provision, configure, and supervise a Home Assistant instance on a compute node, **or** operate without it using direct MQTT / Matter / vendor connectors. |
+| FR-177 | P1 | N3 | **Catalog endpoints**: serve the catalog from a public custom domain, a Lattice/tailnet URL, and/or self-hosted/offline; clients accept several catalog URLs and try them in order; every entry is signature-verified regardless of endpoint. |
+| FR-178 | P1 | N4 | **Skill authoring & generation**: users author markdown skills; Nova may generate and refine its own skills from repeated workflows or explicit requests, with provenance, versioning, and approval before use. |
+| FR-179 | P2 | N2 | **HomeKit bridge** (local, no cloud) exposing Nova entities as HomeKit accessories; opt-in per entity/area. |
+| FR-180 | P2 | N2 | **Matter bridge** exposing Nova entities to Apple/Google/Amazon via Matter; preferred over per-ecosystem cloud skills. Direct Google/Alexa cloud integrations are deferred. |
+
 ---
 
 ## Requirement traceability

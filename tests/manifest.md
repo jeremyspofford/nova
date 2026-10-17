@@ -183,3 +183,8 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-173 | todo | todo | — | L4 code self-modification |
 | FR-174 | todo | todo | — | L5 local fine-tuning |
 | FR-175 | todo | todo | — | eval harness + kill switch |
+| FR-176 | todo | todo | — | smart-home bootstrap |
+| FR-177 | todo | todo | — | catalog endpoints |
+| FR-178 | todo | todo | — | skill authoring/generation |
+| FR-179 | todo | todo | — | HomeKit bridge |
+| FR-180 | todo | todo | — | Matter bridge |

@@ -69,7 +69,34 @@ shipping Zigbee/Z-Wave/Thread radios.
 | **Voice ecosystems** | Google Home / Apple HomeKit / Alexa as *bridges* (Nova exposes scenes/devices) rather than replacements |
 | **Cloud bridges** | Optional; local-first is preferred |
 
-### 2.1 Device registry & state
+### 2.1 If you don't run Home Assistant
+
+Home Assistant is the broadest integration, but it must not be mandatory. Two paths:
+
+1. **Managed Home Assistant** — Nova can provision, configure, and supervise a Home Assistant
+   instance on a compute node (container), then use it as the smart-home backend. Widest device
+   support (Zigbee/Z-Wave/Thread/Matter/vendor) with the least custom code, and it provides the
+   ecosystem bridges for free (below).
+2. **Direct** — for simple setups, use MQTT, vendor connectors, and Matter where a controller
+   exists, with no Home Assistant at all.
+
+### 2.2 Exposing Nova to voice ecosystems
+
+This is real work, and the ecosystems differ sharply:
+
+| Target | Effort | Notes |
+| --- | --- | --- |
+| **HomeKit** (local bridge) | Medium | HAP bridge (e.g., `hap-nodejs`); no cloud certification |
+| **Matter bridge** | Medium–High | One bridge covers Apple/Google/Amazon; SDK work; device coverage maturing |
+| **Google Home** | High | Cloud-to-cloud: OAuth linking, public endpoint, certification/review |
+| **Amazon Alexa** | High | Smart-home skill + certification/review |
+
+**Recommendation:** consume first. When a managed Home Assistant is present it already exposes
+entities to HomeKit/Google/Alexa, so Nova need not. Then add a **native HomeKit bridge**
+(local, no cloud), plan a **Matter bridge** as the unifying long-term path, and **defer**
+direct Google/Alexa cloud skills.
+
+### 2.3 Device registry & state
 
 - Normalized `entity` model: id, type (light, switch, sensor, climate, lock, media, camera,
   cover, vacuum…), state, attributes, area/room, tags.
@@ -77,7 +104,7 @@ shipping Zigbee/Z-Wave/Thread radios.
 - Areas/rooms and scenes are first-class; natural-language control maps to entities and
   services ("turn off the kitchen lights").
 
-### 2.2 Agent integration
+### 2.4 Agent integration
 
 - Agents can read state and issue commands through the same policy engine; commands are
   **untrusted-output-safe** (device text is data).

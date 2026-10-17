@@ -27,6 +27,18 @@ integrations contributed by third parties.
   without extra warning.
 - **Sideload**: install from a file or git URL with an explicit trust prompt.
 
+### 2.1 Catalog hosting
+
+A catalog can be served from several endpoints at once:
+
+- **Public domain** — e.g., `catalog.<your-domain>`.
+- **Lattice/tailnet URL** — e.g., `https://catalog.<tailnet>.ts.net` for private/mesh access.
+- **Self-hosted / offline** — a local directory or a container.
+
+Clients accept one or more catalog URLs and try them in order. The index and every artifact are
+signed, so any endpoint can serve them. Hosting the catalog at **both** a public domain and a
+tailnet name is supported and recommended.
+
 ## 3. Install & trust flow
 
 ```
