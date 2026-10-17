@@ -8,7 +8,11 @@
   "additionalProperties": true,
   "if": {
     "properties": {
-      "server": { "type": "object", "properties": { "type": { "const": "uv" } }, "required": ["type"] }
+      "server": {
+        "type": "object",
+        "properties": { "type": { "const": "uv" } },
+        "required": ["type"]
+      }
     },
     "required": ["server"]
   },

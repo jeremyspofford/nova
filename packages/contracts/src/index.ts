@@ -11,7 +11,8 @@ export const SCHEMA_DIR = join(import.meta.dirname, '../../../contracts/schemas/
 
 // ajv-formats is CommonJS; under NodeNext its default import is the plugin itself at runtime.
 const addFormats: FormatsPlugin =
-  (formatsPlugin as unknown as { default?: FormatsPlugin }).default ?? (formatsPlugin as unknown as FormatsPlugin);
+  (formatsPlugin as unknown as { default?: FormatsPlugin }).default ??
+  (formatsPlugin as unknown as FormatsPlugin);
 
 export function listSchemas(dir = SCHEMA_DIR): string[] {
   return readdirSync(dir)
