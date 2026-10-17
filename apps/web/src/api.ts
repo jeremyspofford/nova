@@ -329,7 +329,11 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
       call<{ items: PermissionProfileView[] }>('GET', `${V1}/permission-profiles`),
     listTools: () => call<{ items: ToolView[] }>('GET', `${V1}/tools`),
     setToolDefault: (tool: string, value: 'allow' | 'ask' | 'deny' | null) =>
-      call<ToolView>('PUT', `${V1}/tool-defaults`, { tool, default: value }),
+      call<{ tool: string; default: 'allow' | 'ask' | 'deny' | null }>(
+        'PUT',
+        `${V1}/tool-defaults`,
+        { tool, default: value },
+      ),
     invokeTool: (name: string, body: { args: unknown; threadId?: string }) =>
       call<ToolInvokeResult>('POST', `${V1}/tools/${enc(name)}/invoke`, body),
     listMcpServers: () => call<{ items: McpServerView[] }>('GET', `${V1}/mcp/servers`),

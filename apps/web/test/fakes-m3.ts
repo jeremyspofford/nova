@@ -319,7 +319,7 @@ export function m3Impl(
       if (!t) throw notFound();
       const next: ToolView = { ...t, userDefault: value };
       st.tools = st.tools.map((x) => (x.name === name ? next : x));
-      return next;
+      return { tool: name, default: value };
     },
     invokeTool: async () => {
       maybeFail('invokeTool');
