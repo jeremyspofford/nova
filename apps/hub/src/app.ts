@@ -308,6 +308,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       agents.tools,
       channels.tools,
       spaces.tools,
+      // An agent's tools for the files of its connected computer (FR-081, FR-210).
+      devices.tools,
       browser.tools,
       // Computer use goes last (its tools defer to the browser's and the shell's).
       screen.tools,
@@ -442,6 +444,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       return false;
     }
   });
+  devices.useAgentThreads((accountId, threadId) =>
+    agents.service.agentOfThread(accountId, threadId),
+  );
   code.useDevices(devices.codeEnvironments);
   // The browser: its artifacts, egress, computers, the thread's computer and the external-agent
   // rule (FR-092..FR-098, FR-194).

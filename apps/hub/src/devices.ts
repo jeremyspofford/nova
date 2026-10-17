@@ -3,9 +3,10 @@
 // and policy (FR-142, FR-150), capabilities and version gating (FR-148), modules and services
 // (FR-141, FR-145), power and Wake-on-LAN (FR-144), signed updates (FR-148), device files with
 // folder grants, access requests and staged writes (FR-210), local MCP pass-through, and agents'
-// connected computers (FR-081). The /agent/v1 routes are novad's: register authenticates with the
-// one-use token in its body, heartbeat and capabilities with the device credential, which they
-// check themselves; a device credential never authenticates a user route.
+// connected computers (FR-081) with the agent's tools for their files. The /agent/v1 routes are
+// novad's: register authenticates with the one-use token in its body, heartbeat and capabilities
+// with the device credential, which they check themselves; a device credential never
+// authenticates a user route.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
@@ -31,10 +32,13 @@ import {
   DeviceService,
   deviceEnvProvider,
   deviceEnvironment,
+  deviceToolSource,
   type AuditSink,
+  type DeviceAgentThreadResolver,
   type DeviceEnvironment,
   type DeviceTransport,
   type Notifier,
+  type ToolSourceProvider,
   type WolTarget,
 } from '@nova/core';
 import type { HubArea, HubContext } from './hub-context.ts';
@@ -44,6 +48,11 @@ export interface DevicesArea extends HubArea {
   service: DeviceService;
   /** `local_host` computers for the computers area: an agent's connected device (FR-081). */
   computers: DeviceComputerProvider;
+  /**
+   * An agent's tools for the files of its connected computer (`device.files.*`, FR-081, FR-210),
+   * for the tools area's sources; listed in its threads once `useAgentThreads` is bound.
+   */
+  tools: ToolSourceProvider;
   /** A Code session's `device` environment (FR-062), for the code area. */
   environment(input: {
     accountId: string;
@@ -59,6 +68,8 @@ export interface DevicesArea extends HubArea {
   useNotifier(notifier: Notifier): void;
   /** Whether an agent exists (the agents area); connections accept any agent id without it. */
   useAgents(exists: (accountId: string, agentId: string) => Promise<boolean>): void;
+  /** The agent a thread belongs to (the agents area), for the device tools' listing and calls. */
+  useAgentThreads(resolver: DeviceAgentThreadResolver): void;
   /**
    * The computers area registers a `local_host` computer row when an agent connects a device;
    * `computers` above serves it (`useLocalHost(devices.computers)`).
@@ -147,6 +158,13 @@ export function setupDevices(ctx: HubContext, deps: DevicesDeps = {}): Promise<D
     },
   });
   const computers = new DeviceComputerProvider(service);
+  let audit: AuditSink | null = deps.audit ?? null;
+  let agentThreads: DeviceAgentThreadResolver | null = null;
+  const tools = deviceToolSource({
+    service,
+    agentOf: () => agentThreads,
+    audit: () => audit,
+  });
   service.start();
 
   // A folder-access card answered on the Hub reaches the device (FR-210). Device-side answers
@@ -441,12 +459,19 @@ export function setupDevices(ctx: HubContext, deps: DevicesDeps = {}): Promise<D
   return Promise.resolve({
     service,
     computers,
+    tools,
     environment: (input) => deviceEnvironment(service, input),
     codeEnvironments: deviceEnvProvider(service),
     nodeRoutes,
-    useAudit: (a) => service.useAudit(a),
+    useAudit: (a) => {
+      audit = a;
+      service.useAudit(a);
+    },
     useNotifier: (n) => service.useNotifier(n),
     useAgents: (fn) => service.useAgents(fn),
+    useAgentThreads: (resolver) => {
+      agentThreads = resolver;
+    },
     useComputers: (c) => {
       service.onConnectionChanged(async (accountId, conn) => {
         if (conn.status === 'active')

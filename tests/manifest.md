@@ -217,7 +217,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-207 | core screen-tools.test; core screen-service.test | hub screen.test | J8 | computer-use control tiers |
 | FR-208 | core browser-session.test | core browser-chromium.test | — | page-registered tools |
 | FR-209 | core browser-session.test (refuses) | — | — | local browser fallback (refuses until a device serves it) |
-| FR-210 | core devices-files.test; novad fsops and grants tests | hub devices-novad.test; hub devices.test | J7 | novad staged writes + local MCP |
+| FR-210 | core devices-files.test, devices-tools.test; novad fsops and grants tests | hub devices-novad.test; hub devices.test, devices-tools.test | J7 | novad staged writes + local MCP; agent `device.files.*` tools |
 | FR-211 | core code-git.test | core code-git.test (marker hook) | J6 | hook-free app git ops |
 | FR-212 | todo | todo | — | best-of-N attempts |
 | FR-213 | todo | todo | J9 | session handoff |

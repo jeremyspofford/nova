@@ -1,6 +1,6 @@
 // M6 devices: devices running `novad` (docs/23) — the registry and management channel, versions
 // and capability gating, Wake-on-LAN, file operations with staged writes, an agent's connected
-// computer, a Code session's device environment, and a fake device for tests.
+// computer and its file tools, a Code session's device environment, and a fake device for tests.
 export {
   DeviceService,
   deviceSecretHash,
@@ -52,3 +52,14 @@ export {
   type DeviceHelperConnection,
 } from './environment.ts';
 export { FakeDevice, fakeDeviceLineDiff, type FakeDeviceOptions } from './fake-device.ts';
+export {
+  DEVICE_FILE_TOOL_NAMES,
+  DEVICE_READ_DEFAULT_BYTES,
+  DEVICE_READ_MAX_BYTES,
+  DEVICE_STAGE_MAX_CHARS,
+  deviceFileTools,
+  deviceToolSource,
+  type DeviceAgentThread,
+  type DeviceAgentThreadResolver,
+  type DeviceToolsOptions,
+} from './tools.ts';

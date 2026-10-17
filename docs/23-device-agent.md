@@ -191,6 +191,18 @@ when the command starts, or that sit in a subfolder off the path to the working 
 covered. `novad`'s file operations refuse credential locations at any depth inside a grant. macOS
 and Windows have no sandbox, so commands there are refused.
 
+*Agent tools (FR-081).* An agent with a connected computer works on its files with
+`device.files.list`, `device.files.read` (1 MiB by default, at most 8 MiB),
+`device.files.stage_write`, `device.files.commit` and `device.files.discard`. They act only under
+the agent's own grants (grantee `agent`) and appear only in the agent's private threads while its
+connection includes `files` (reading) or `staged_writes` (writing); proactive research only reads.
+Staging writes nothing: the result gives the staged id and the diff, and the write appears under
+Staged writes on the device page. A commit is a write the policy gate asks the owner about under
+the default policy, and a changed target is a `conflict`. A path outside the grants files a
+folder-access request (its card also shows in the agent's conversation) and nothing is written.
+File names, contents and diffs are untrusted content, and every call is audited (kind `device`)
+with its thread, turn and call.
+
 ### 4.2 Ambient capture helper (FR-228)
 
 - A separate capture helper process, launched and supervised by `novad`, reads the

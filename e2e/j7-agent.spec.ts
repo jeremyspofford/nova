@@ -8,9 +8,10 @@
 // channel: two threads under the agent with one memory, private notes stay out of the channel, a
 // custom rule makes it ask before it posts to the channel, Slack answers deny and then allow
 // once, and the owner decides whether the DM's detail may reach the channel. On a connected device
-// (the fake novad, FakeDevice) its write is staged, shown as a diff and lands on Commit; a write
-// outside its folders asks for folder access. Its computer is taken over and returned, and the
-// audit log shows it. The offline Mock provider drives every call with `/tool <name> <json>` lines
+// (the fake novad, FakeDevice) the agent stages a write with its device tool, shown as a diff that
+// lands on Commit; a write outside its folders asks for folder access, and once allowed the agent
+// stages it again and commits it on the owner's approval. Its computer is taken over and
+// returned, and the audit log shows it. The offline Mock provider drives every call with `/tool <name> <json>` lines
 // (packages/providers mock).
 //
 // How the outside world is played, and what the UI cannot do:
@@ -20,12 +21,9 @@
 //   Slack and the calendar would.
 // - Research turns act on `/tool` lines of the agent's responsibilities; the responsibility
 //   Details field is a single line, so the scripted lines are set through the API.
-// - The agent has no tool for a connected device's files (its tools act on its own computer), so
-//   its staged writes are made with POST /api/v1/devices/:id/staged under its grant; the owner's
-//   part (add the device, connect, share, review, commit, allow access) is the UI.
 // - The journey sends the DM more than its default 10 messages a minute: the limit is raised in
 //   the channel's settings.
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
@@ -600,15 +598,22 @@ test('J7: staged writes on the connected device; taking over the agent computer 
     await share.getByRole('button', { name: 'Share', exact: true }).click();
     await expect(page.getByRole('list', { name: 'Grants' })).toContainText(join(project, 'src'));
 
-    //    The agent stages a write through novad: shown as a diff, nothing on disk until Commit.
-    //    (The agent's tools act on its own computer: there is no agent tool for a device's files,
-    //    so the agent's staging goes through the Hub API under the agent's grant.)
-    const agent = { kind: 'agent', id: agentId };
-    const staged = await page.request.post(`${hub.url}/api/v1/devices/${device.deviceId}/staged`, {
-      data: { path: notes, content: '# Notes\n\nsecond\n', grantee: agent },
-    });
-    expect(staged.status()).toBe(201);
-    await page.reload();
+    const filesPage = page.url();
+
+    //    In its conversation the agent stages a write with its device tool: it waits as a diff,
+    //    nothing on disk until the owner commits it on the device page.
+    await page.goto(`${hub.url}/agents/${agentId}`);
+    const scout = agentRegion(page, AGENT);
+    await send(
+      scout,
+      call('device.files.stage_write', { path: notes, content: '# Notes\n\nsecond\n' }),
+    );
+    await expect(messages(scout)).toContainText(
+      `Tool device.files.stage_write returned: Staged a write to ${notes} on Laptop`,
+    );
+    expect(readFileSync(notes, 'utf8')).toBe('# Notes\n\nfirst\n');
+    await expectNoSeriousA11yIssues(page, 'agent conversation with a staged device write');
+    await page.goto(filesPage);
     const writes = page.getByRole('list', { name: 'Staged writes' });
     await writes.getByRole('button', { name: `Review ${notes}` }).click();
     const diff = page.getByLabel(`Changes to ${notes}`);
@@ -620,20 +625,16 @@ test('J7: staged writes on the connected device; taking over the agent computer 
     await expect(toast(page, `Written to ${notes}.`)).toBeVisible();
     expect(readFileSync(notes, 'utf8')).toBe('# Notes\n\nsecond\n');
 
-    //    A write outside the granted folders is refused and asks for folder access; once the
-    //    owner allows it on the device page, the write stages and commits.
-    const outside = await page.request.post(`${hub.url}/api/v1/devices/${device.deviceId}/staged`, {
-      data: { path: plan, content: 'plan\n', grantee: agent },
-    });
-    expect(outside.status()).toBe(403);
-    const refused = (await outside.json()) as {
-      error: { details: { reason: string; path: string; requestId: string } };
-    };
-    expect(refused.error.details).toMatchObject({
-      reason: 'folder_access_required',
-      path: join(project, 'docs'),
-    });
-    await page.reload();
+    //    A write outside the shared folder writes nothing and asks for folder access; once the
+    //    owner allows it on the device page, the agent stages it again and commits it, which the
+    //    owner approves in the conversation.
+    await page.goto(`${hub.url}/agents/${agentId}`);
+    await send(scout, call('device.files.stage_write', { path: plan, content: 'plan\n' }));
+    await expect(messages(scout)).toContainText(
+      `Tool device.files.stage_write returned: Error (folder_access_required): ${join(project, 'docs')} on Laptop is outside the folders shared with you.`,
+    );
+    expect(existsSync(plan)).toBe(false);
+    await page.goto(filesPage);
     const requests = page.getByRole('list', { name: 'Access requests' });
     const request = requests.getByRole('listitem', {
       name: `Agent ${AGENT} asks for ${join(project, 'docs')}`,
@@ -646,21 +647,25 @@ test('J7: staged writes on the connected device; taking over the agent computer 
       })
       .click();
     await until('the folder access is granted', async () => {
-      const r = await json<{ status: string }>(
-        await page.request.get(
-          `${hub.url}/api/v1/devices/${device.deviceId}/access-requests/${refused.error.details.requestId}`,
-        ),
+      const { items } = await json<{ items: { status: string; target: string }[] }>(
+        await page.request.get(`${hub.url}/api/v1/devices/${device.deviceId}/grants`),
       );
-      return r.status === 'granted';
+      return items.some((g) => g.status === 'granted' && g.target === join(project, 'docs'));
     });
-    const again = await page.request.post(`${hub.url}/api/v1/devices/${device.deviceId}/staged`, {
-      data: { path: plan, content: 'plan\n', grantee: agent },
-    });
-    expect(again.status()).toBe(201);
-    await json(
-      await page.request.post(
-        `${hub.url}/api/v1/devices/${device.deviceId}/staged/${((await again.json()) as { id: string }).id}/commit`,
-      ),
+    await page.goto(`${hub.url}/agents/${agentId}`);
+    await send(scout, call('device.files.stage_write', { path: plan, content: 'plan\n' }));
+    await expect(messages(scout)).toContainText(
+      `Tool device.files.stage_write returned: Staged a write to ${plan} on Laptop`,
+    );
+    const { items: staged } = await json<{ items: { id: string; path: string }[] }>(
+      await page.request.get(`${hub.url}/api/v1/devices/${device.deviceId}/staged?status=staged`),
+    );
+    const stagedId = staged.find((w) => w.path === plan)?.id;
+    expect(stagedId, JSON.stringify(staged)).toBeTruthy();
+    await send(scout, call('device.files.commit', { stagedId }));
+    await decide(scout, 'device.files.commit', 'Allow once');
+    await expect(messages(scout)).toContainText(
+      `Tool device.files.commit returned: Wrote ${plan} on Laptop`,
     );
     expect(readFileSync(plan, 'utf8')).toBe('plan\n');
   } finally {

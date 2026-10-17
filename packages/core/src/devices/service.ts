@@ -112,6 +112,9 @@ export interface DeviceCallContext {
   runId?: string | null;
   agentId?: string | null;
   sessionId?: string | null;
+  /** The turn and tool call an agent's device tool ran in (devices/tools.ts). */
+  turnId?: string | null;
+  callId?: string | null;
 }
 
 /** The vault reference of the token the Hub presents to a device (docs/12 §5). */
@@ -413,7 +416,8 @@ export class DeviceService {
         action,
         resource,
         threadId: ctx.threadId ?? null,
-        detail,
+        ...(ctx.turnId ? { turnId: ctx.turnId } : {}),
+        detail: ctx.callId ? { ...detail, callId: ctx.callId } : detail,
         ...(extra.decision ? { decision: extra.decision } : {}),
         ...(extra.result ? { result: extra.result } : {}),
         ...(extra.inputHash ? { inputHash: extra.inputHash } : {}),
@@ -434,6 +438,8 @@ export class DeviceService {
     if (ctx.runId) correlation.runId = ctx.runId;
     if (ctx.agentId) correlation.agentId = ctx.agentId;
     if (ctx.sessionId) correlation.sessionId = ctx.sessionId;
+    if (ctx.turnId) correlation.turnId = ctx.turnId;
+    if (ctx.callId) correlation.callId = ctx.callId;
     const actor = ctx.actor && /^(user|system|agent:.+)$/.test(ctx.actor) ? ctx.actor : 'system';
     await this.#events.emit({
       name,

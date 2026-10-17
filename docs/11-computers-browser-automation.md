@@ -111,6 +111,12 @@ longer exist. Deleting an agent removes its computer, browser session, screen re
 files. `<dataDir>/computers` is the one part of the data folder besides the workspace that the
 gate and the tools' path policy let through; a thread still reaches only its roots.
 
+The agent reaches a connected device's files through its `device.files.*` tools (source
+`computer`; `docs/23` §4.1). Listing, reading, staging and discarding are read-only for the gate,
+because a staged write changes nothing until it is committed. `device.files.commit` is a `write`
+action with the `file_write` effect, so under the default approval policy the owner approves each
+commit. The agent can only commit or discard its own staged writes on the connected device.
+
 ### 2.4 Windows sandbox detail (FR-107, ADR-064)
 
 Windows support stays behind a flag until the security suite passes on it.
