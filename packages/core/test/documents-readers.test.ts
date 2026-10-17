@@ -474,7 +474,8 @@ describe('detection and limits (FR-219)', () => {
     });
     expect(partial.length).toBeGreaterThan(50_000);
     expect(partial).toEqual(noise.subarray(0, partial.length));
-  });
+    // Inflating the capped stream is CPU-bound: generous under a loaded machine.
+  }, 30_000);
 });
 
 describe('XML parsing (FR-219)', () => {

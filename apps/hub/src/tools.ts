@@ -170,8 +170,11 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
   const artifacts = new ArtifactService({ db: ctx.db, events: ctx.events, dataDir: ctx.dataDir });
   const searxngUrl = () => ctx.setting('search.searxngUrl');
   // The data folder holds the database, the vault and blobs: no tool touches it, except the
-  // workspace inside it (docs/12 §7.2).
-  const paths: PathPolicy = { denied: [ctx.dataDir], allowed: [workspace] };
+  // workspace and agents' computer folders inside it (docs/12 §7.2, FR-080).
+  const paths: PathPolicy = {
+    denied: [ctx.dataDir],
+    allowed: [workspace, join(ctx.dataDir, 'computers')],
+  };
   // The loop and the context tools share what each running turn's context holds (FR-183).
   const turnContext = new TurnContextTracker();
   const builtins = [

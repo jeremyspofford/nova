@@ -117,6 +117,11 @@ export interface PolicyGateOptions {
   dataDir: string;
   /** Defaults to `<dataDir>/workspace`. */
   workspaceDir?: string;
+  /**
+   * Other folders inside the data directory that roots may name (agents' computer folders,
+   * `<dataDir>/computers`, FR-080). The rest of the data directory stays denied (docs/12 §7.2).
+   */
+  dataDirAllow?: string[];
   /** Defaults to the Hub user's home directory. */
   home?: string;
   log?: Logger;
@@ -358,7 +363,10 @@ export class PolicyGate implements ToolGate {
         ...resolved.deny.map((p) => ({ path: p, access: 'deny' as const })),
       ],
       dataDir: realpathLenient(this.#o.dataDir),
-      dataDirAllow: [realpathLenient(this.#workspace)],
+      dataDirAllow: [
+        realpathLenient(this.#workspace),
+        ...(this.#o.dataDirAllow ?? []).map((p) => realpathLenient(p)),
+      ],
       home: realpathLenient(this.#home),
     };
     const set = await store.policySet(req.accountId, { threadId, home: this.#home });

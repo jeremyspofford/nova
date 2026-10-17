@@ -11,6 +11,7 @@
 // Code session's permission mode, FR-063), and the `review` policy goes through the model
 // auto-reviewer (FR-085), wired here with `review.model` through the router; `useReviewer`
 // replaces it. `approvals` is the approvals flow for the requests area's `approval` mirror.
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
@@ -202,6 +203,8 @@ export async function setupPolicy(
     notifier: ctx.notifier,
     setting: ctx.setting,
     dataDir: ctx.dataDir,
+    // Agents' computers are folders in the data directory (FR-080): their threads' only root.
+    dataDirAllow: [join(ctx.dataDir, 'computers')],
     log,
     projectFolders: projectFolderSource(ctx.db),
     ...(opts.home ? { home: opts.home } : {}),

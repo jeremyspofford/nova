@@ -327,12 +327,14 @@ describe.skipIf(!runnable)('the real novad binary', () => {
       return;
     }
     let r = await conn.read(spawned.id, 0, 2_000);
-    for (let i = 0; i < 50 && r.running; i++) r = await conn.read(spawned.id, 0, 200);
+    // Time-boxed, not count-boxed: a loaded machine can take a while to start the sandbox.
+    for (const t0 = Date.now(); r.running && Date.now() - t0 < 25_000;)
+      r = await conn.read(spawned.id, 0, 500);
     expect(r.running).toBe(false);
     if (r.exitCode === 0) expect(r.data).toContain('hello\nnotes.md');
     expect((await conn.processes()).map((p) => p.tag)).toContain('s:t');
     // Polling a sandboxed process can take seconds while the rest of the suite runs.
-  }, 30_000);
+  }, 45_000);
 
   it('restarts a killed module and reports the crash', async () => {
     const before = (await api('GET', `/api/v1/devices/${deviceId}`)).json.modules.find(

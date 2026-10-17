@@ -374,6 +374,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     projects,
   });
   // ---- M6 wiring (docs/09 §7-§8, docs/11, docs/13 §4, docs/23) ---------------------------------
+  // Cloud computers' desktops (mock until a cloud provider serves real ones, FR-093).
+  const desktops = new MockDesktops();
   // Agents: schedules and wakes, delegated runs, their computer, quiet hours, deletion.
   agents.useScheduler(schedules.service);
   schedules.service.useAgents(agents.scheduleTarget);
@@ -387,7 +389,14 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   agents.useComputers(computers.service);
   agents.useQuietHours((accountId, at) => channels.quietHours(accountId, at));
   agents.onDelete((accountId, agentId) => channels.removeForAgent(accountId, agentId));
+  // Deleting an agent removes its computer with its browser session, screen records and desktop.
   agents.onDelete(async (accountId, agentId) => {
+    for (const c of await computers.service.list(accountId)) {
+      if (c.agentId !== agentId) continue;
+      await browser.service.closeSession(accountId, c.id);
+      await screen.service.purgeComputer(accountId, c.id);
+      desktops.delete(c.id);
+    }
     await computers.service.purgeAgent(accountId, agentId);
   });
   // Channels: turns, runs, approvals answered from a channel, the owner's share questions, the
@@ -408,7 +417,6 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   schedules.useChannel('teams', channels.delivery.teams);
   ops.useNotificationRouting(channels.routing);
   // Computers: the browser and the desktop of each computer, and devices as local hosts.
-  const desktops = new MockDesktops();
   computers.useBrowser(browser.service.browserFactory());
   computers.useScreen((computer) =>
     Promise.resolve(computer.kind === 'cloud' ? desktops.screen(computer.id) : null),
