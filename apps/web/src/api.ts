@@ -110,6 +110,7 @@ import type {
   updatePlanSchema,
   updateScheduleSchema,
 } from '@nova/shared';
+import { spacesApi } from './spaces/api.ts';
 
 export type CreateProjectRequest = z.input<typeof createProjectSchema>;
 export type UpdateProjectRequest = z.input<typeof updateProjectSchema>;
@@ -666,6 +667,9 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
 
     // streams (contracts/hub-api.md §5)
     threadStreamUrl: (id: string) => `${V1}/threads/${enc(id)}/stream`,
+
+    // ---- M6 areas (each in its own module) -----------------------------------------------------
+    ...spacesApi(call),
   };
 }
 

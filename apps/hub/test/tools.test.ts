@@ -309,6 +309,9 @@ describe('tool routes', () => {
     expect(md.statusCode).toBe(200);
     expect(md.body).toBe('# Notes');
     expect(md.headers['content-security-policy']).toBe(ARTIFACT_CSP);
+    // Framed by Nova's own pages only (the Inspector), never by another site.
+    expect(md.headers['x-frame-options']).toBe('SAMEORIGIN');
+    expect(ARTIFACT_CSP).toContain("frame-ancestors 'self'");
     expect(md.headers['content-type']).toBe('text/markdown; charset=utf-8');
     expect(md.headers['x-content-type-options']).toBe('nosniff');
     expect(md.headers['content-disposition']).toBe('inline; filename="Notes.md"');
@@ -326,7 +329,9 @@ describe('tool routes', () => {
       url: `/api/v1/artifacts/${pdf.id}/content`,
       headers: AUTH,
     });
-    expect(p.headers['content-security-policy']).toBe("default-src 'none'; object-src 'none'");
+    expect(p.headers['content-security-policy']).toBe(
+      "default-src 'none'; object-src 'none'; frame-ancestors 'self'",
+    );
     expect(p.headers['content-disposition']).toBe('inline; filename="Doc.pdf"');
     const f = await e.app.inject({
       method: 'GET',

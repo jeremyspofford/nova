@@ -59,6 +59,7 @@ describe('NotificationService', () => {
       notificationId: a!.id,
       kind: 'completion',
       title: 'First',
+      os: true,
     });
   });
 
@@ -67,6 +68,32 @@ describe('NotificationService', () => {
     expect(await svc.create(n())).toBeNull();
     expect((await svc.list(ACCOUNT)).items).toEqual([]);
     expect(events.events).toEqual([]);
+  });
+
+  it("follows the channels area's routing: in-app off records it read, OS off says so (FR-060)", async () => {
+    const rules = { inapp: true, os: false };
+    svc.useRouting({
+      inappEnabled: () => rules.inapp,
+      osEnabled: () => rules.os,
+    });
+    const quiet = await svc.create(n({ title: 'Quiet hours' }));
+    expect(quiet).toMatchObject({ read: false });
+    expect(events.events.at(-1)!.payload).toMatchObject({ os: false });
+    rules.inapp = false;
+    rules.os = true;
+    const hidden = await svc.create(n({ title: 'Channel only' }));
+    // Still recorded (history, channel copies), but never badges or reaches the OS.
+    expect(hidden).toMatchObject({ read: true });
+    expect(events.events.at(-1)!.payload).toMatchObject({ os: false });
+    expect((await svc.list(ACCOUNT)).unread).toBe(1);
+    // Routing that cannot be read never loses a notification.
+    svc.useRouting({
+      inappEnabled: () => {
+        throw new Error('db gone');
+      },
+      osEnabled: () => true,
+    });
+    expect(await svc.create(n({ title: 'Kept' }))).toMatchObject({ read: false });
   });
 
   it('collapses repeats with the same dedupe key while unread', async () => {

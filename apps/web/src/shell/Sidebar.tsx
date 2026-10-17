@@ -194,6 +194,34 @@ export function Sidebar({
           <span className="mode-label">Library</span>
         </a>
         <a
+          href="/spaces"
+          className="mode-link"
+          aria-current={route.name === 'spaces' ? 'page' : undefined}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            navigate('/spaces');
+            onNavigated();
+          }}
+        >
+          <Icon name="edit" />
+          <span className="mode-label">Spaces</span>
+        </a>
+        <a
+          href="/sites"
+          className="mode-link"
+          aria-current={route.name === 'sites' ? 'page' : undefined}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            navigate('/sites');
+            onNavigated();
+          }}
+        >
+          <Icon name="external" />
+          <span className="mode-label">Sites</span>
+        </a>
+        <a
           href="/apps"
           className="mode-link"
           aria-current={route.name === 'apps' ? 'page' : undefined}

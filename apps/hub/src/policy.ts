@@ -29,6 +29,7 @@ import {
   PolicyStore,
   RULE_EFFECT_CLASSES,
   projectFolderSource,
+  type AgentRuleSource,
   type ApprovalRequests,
   type AuditSink,
   type HookDispatcher,
@@ -66,6 +67,8 @@ export interface PolicyAreaFull extends PolicyArea {
   useProjectFolders(source: ProjectFolderSource): void;
   /** Per-thread policy: a Code session's permission mode, a run's autonomy (FR-063). */
   useThreadPolicy(source: ThreadPolicySource): void;
+  /** The rules of the agent that owns a thread (FR-084), from the agents area. */
+  useAgentPolicy(source: AgentRuleSource): void;
   /** Replace the auto-reviewer (default: the `review.model` model reviewer, FR-085). */
   useReviewer(reviewer: Reviewer): void;
   /** The approvals flow as the requests area lists and answers it (FR-188). */
@@ -419,6 +422,7 @@ export async function setupPolicy(
     usePluginViolations: (fn) => gate.usePluginViolations(fn),
     useProjectFolders: (source) => gate.useProjectFolders(source),
     useThreadPolicy: (source) => gate.useThreadPolicy(source),
+    useAgentPolicy: (source) => gate.useAgentPolicy(source),
     useReviewer: (reviewer) => gate.useReviewer(reviewer),
     approvals,
     register,

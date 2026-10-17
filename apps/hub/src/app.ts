@@ -29,12 +29,16 @@ import {
   Router,
   SourceService,
   ThreadService,
+  MockDesktops,
   detectLocalServers,
+  threadSandboxRouter,
   type ChatServiceOptions,
   type ModelRouter,
   type ProviderFactory,
+  type ThreadPolicySource,
   type ToolRuntimeOptions,
 } from '@nova/core';
+import { McpEventsClient, sdkClientTransport } from '@nova/mcp';
 import { MemorySecretStore, type SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
 import type { Logger } from '@nova/telemetry';
@@ -258,18 +262,44 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     roots: async (accountId, threadId, projectId) =>
       toolsRef ? (await toolsRef.runtime.scopeFor(accountId, threadId, projectId)).roots : [],
   });
+  // M6: computers (the tools' sandbox is theirs: network only through the egress proxy, an
+  // agent's commands on its computer), then the areas whose tools the tools area lists.
+  const computers = await setupComputers({ ...ctx, audit: ops.audit });
+  const channels = await setupChannels(ctx, { audit: ops.audit });
+  const agents = await setupAgents({ ...ctx, audit: ops.audit, notifier: ops.notifier });
+  const browser = await setupBrowser(ctx, {
+    gate: policy.gate,
+    audit: ops.audit,
+    notifier: ops.notifier,
+  });
+  const screen = await setupScreen({ ...ctx, audit: ops.audit });
+  const devices = await setupDevices(ctx, { audit: ops.audit, notifier: ops.notifier });
+  const spaces = await setupSpaces(ctx, { audit: ops.audit });
+  // A Code session on another machine runs its commands there (FR-062); every other command
+  // goes through the computers area's router.
+  const sandbox = threadSandboxRouter(computers.router(computers.sandbox), (accountId, threadId) =>
+    code.sandboxForThread(accountId, threadId),
+  );
   // The apps area exists after the tools; the chat loop reads its model context late-bound.
   let mcpApps: Awaited<ReturnType<typeof setupMcpApps>> | null = null;
   const tools = await setupTools({
     ...ctx,
     gate: policy.gate,
+    sandbox,
     sources: [
       mcp.source,
       plugins.skills.tools,
       runs.tools,
       code.tools,
+      code.toolsM6,
       requests.tools,
       schedules.reportTools,
+      agents.tools,
+      channels.tools,
+      spaces.tools,
+      browser.tools,
+      // Computer use goes last (its tools defer to the browser's and the shell's).
+      screen.tools,
     ],
     audit: ops.audit,
     notifier: ops.notifier,
@@ -280,13 +310,25 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       Promise.resolve(mcpApps ? mcpApps.modelContext(accountId, threadId) : null),
   });
   toolsRef = tools;
-  // A Code session's permission mode and a run's autonomy set the gate's approval policy and the
-  // tools' profile and roots for their threads (FR-063, docs/09 §10); both read the same sources.
-  for (const source of [code.policy, runs.policy]) {
+  // A Code session's permission mode, a run's autonomy and an agent's autonomy set the gate's
+  // approval policy and the tools' profile and roots for their threads (FR-063, docs/09 §10);
+  // both read the same sources. An agent's threads work in its computer's folder (FR-080).
+  const agentThreads: ThreadPolicySource = {
+    forThread: async (accountId, threadId) => {
+      const p = await agents.policy.forThread(accountId, threadId);
+      if (!p) return null;
+      const c = await computers.threadPolicy.forThread(accountId, threadId);
+      return c?.roots ? { ...p, roots: c.roots } : p;
+    },
+  };
+  for (const source of [code.policy, runs.policy, agentThreads]) {
     policy.useThreadPolicy(source);
     tools.useThreadPolicy(source);
   }
-  requests.useStatusSources(runs.status, code.status);
+  // An agent's rules join the policy set of its threads (FR-084).
+  policy.useAgentPolicy(agents.agentPolicy);
+  requests.useStatusSources(runs.status, code.status, agents.status);
+  agents.useStatus((accountId, ids) => requests.status.statusOf(accountId, ids));
   runs.useStatus((accountId, ids) => requests.status.statusOf(accountId, ids));
   runs.useReviewReset((key) => policy.gate.resetReviewBreaker(key));
   schedules.useRuns(runs.starter);
@@ -331,14 +373,101 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     memory,
     projects,
   });
-  // M6: agents, channels, computers, browser, screen, devices and spaces (wired by their areas).
-  const computers = await setupComputers(ctx);
-  const browser = await setupBrowser(ctx);
-  const screen = await setupScreen(ctx);
-  const channels = await setupChannels(ctx);
-  const agents = await setupAgents(ctx);
-  const devices = await setupDevices(ctx);
-  const spaces = await setupSpaces(ctx);
+  // ---- M6 wiring (docs/09 §7-§8, docs/11, docs/13 §4, docs/23) ---------------------------------
+  // Agents: schedules and wakes, delegated runs, their computer, quiet hours, deletion.
+  agents.useScheduler(schedules.service);
+  schedules.service.useAgents(agents.scheduleTarget);
+  agents.useRuns({
+    createRun: (input) => runs.starter.createRun(input),
+    whenFinished: (accountId, runId) => runs.starter.whenFinished(accountId, runId),
+    pause: (accountId, runId) => runs.service.pause(accountId, runId),
+    resume: (accountId, runId) => runs.service.resume(accountId, runId),
+    cancel: (accountId, runId) => runs.service.cancel(accountId, runId),
+  });
+  agents.useComputers(computers.service);
+  agents.useQuietHours((accountId, at) => channels.quietHours(accountId, at));
+  agents.onDelete((accountId, agentId) => channels.removeForAgent(accountId, agentId));
+  agents.onDelete(async (accountId, agentId) => {
+    await computers.service.purgeAgent(accountId, agentId);
+  });
+  // Channels: turns, runs, approvals answered from a channel, the owner's share questions, the
+  // agents' threads and the external-agent rule (FR-088, FR-100, FR-194), MCP events (FR-201).
+  channels.useApprovals(policy.approvals);
+  channels.useRequests(requests.service);
+  channels.useRuns(runs.starter);
+  channels.useAgents({
+    threadFor: agents.channels.threadFor,
+    agentThread: agents.channels.agentThread,
+    externalAgents: agents.externalAgentGuard,
+  });
+  channels.useMcp(new McpEventsClient(sdkClientTransport((id) => mcp.manager.sdkClient(id))));
+  mcp.onServerRemoving((accountId, serverId) =>
+    channels.mcpEvents.removeForServer(accountId, serverId),
+  );
+  schedules.useChannel('slack', channels.delivery.slack);
+  schedules.useChannel('teams', channels.delivery.teams);
+  ops.useNotificationRouting(channels.routing);
+  // Computers: the browser and the desktop of each computer, and devices as local hosts.
+  const desktops = new MockDesktops();
+  computers.useBrowser(browser.service.browserFactory());
+  computers.useScreen((computer) =>
+    Promise.resolve(computer.kind === 'cloud' ? desktops.screen(computer.id) : null),
+  );
+  computers.useLocalHost(devices.computers);
+  devices.useComputers(computers.service);
+  devices.useAgents(async (accountId, agentId) => {
+    try {
+      await agents.service.get(accountId, agentId);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  code.useDevices(devices.codeEnvironments);
+  // The browser: its artifacts, egress, computers, the thread's computer and the external-agent
+  // rule (FR-092..FR-098, FR-194).
+  browser.useArtifacts(tools.artifacts);
+  browser.useEgress(computers.proxy);
+  browser.useComputers(computers.service);
+  browser.useComputerResolver(async (accountId, threadId) => {
+    if (!threadId) return null;
+    const agentId = await computers.service.agentOfThread(accountId, threadId);
+    return agentId ? (await computers.service.forAgent(accountId, agentId)).id : null;
+  });
+  browser.useExternalAgentGuard(agents.externalAgentGuard);
+  // Computer use (FR-093, FR-207) and takeover (FR-087): the kill key and a takeover pause the
+  // agent that uses the computer and its browser; returning control resumes what they paused.
+  screen.useComputers(computers.service);
+  screen.useComputerOf(async (accountId, threadId) => {
+    const agentId = await computers.service.agentOfThread(accountId, threadId);
+    if (!agentId) return null;
+    return { computerId: (await computers.service.forAgent(accountId, agentId)).id, agentId };
+  });
+  screen.useRequests(requests.service);
+  const pausedByScreen = new Set<string>();
+  const agentOfComputer = async (accountId: string, computerId: string) =>
+    (await computers.service.view(accountId, computerId).catch(() => null))?.agentId ?? null;
+  screen.useAgentControl({
+    pause: async ({ accountId, computerId, reason }) => {
+      await browser.service.pauseComputer(accountId, computerId, reason).catch(() => undefined);
+      const agentId = await agentOfComputer(accountId, computerId);
+      if (!agentId) return;
+      const agent = await agents.service.get(accountId, agentId);
+      if (agent.status !== 'active') return;
+      await agents.service.pause(accountId, agentId, {
+        reason: 'user',
+        detail: reason === 'kill' ? 'stopped with the kill key' : 'you took over its computer',
+      });
+      pausedByScreen.add(agentId);
+    },
+    resume: async ({ accountId, computerId }) => {
+      await browser.service.resumeComputer(accountId, computerId).catch(() => undefined);
+      const agentId = await agentOfComputer(accountId, computerId);
+      if (!agentId || !pausedByScreen.delete(agentId)) return;
+      await agents.service.resume(accountId, agentId);
+    },
+  });
+  spaces.useAudit(ops.audit);
   const areas = [
     spaces,
     devices,
@@ -379,13 +508,16 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     },
     ...tools.chatOptions,
     ...tools.loopOptions,
-    // Runs and Code sessions shape each turn on their threads (docs/09 §2, §11).
-    extensions: [runs.extension, code.extension],
+    // Runs, Code sessions and agents shape each turn on their threads (docs/09 §2, §8, §11).
+    extensions: [runs.extension, code.extension, agents.extension],
     ...deps.chat,
   });
-  // Runs, Code sessions and schedules start turns through the same loop (ADR-076).
+  // Runs, Code sessions, agents, channels and schedules start turns through the same loop
+  // (ADR-076).
   runs.useTurns(chat.turnStarter);
   code.useTurns(chat.turnStarter);
+  agents.useTurns(chat.turnStarter);
+  channels.useTurns(chat.turnStarter);
   // Time spent waiting for the user's answer does not count against a run's time budget.
   events.bus.subscribe('request.*', (e) => {
     const threadId = e.correlation?.threadId;
@@ -697,7 +829,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     detect: () => (deps.detect ?? detectLocalServers)(),
     accountOf,
   });
-  registerNodeRoutes(app, { nodes, accountOf });
+  registerNodeRoutes(app, { nodes, accountOf, novad: devices.nodeRoutes });
   for (const a of areas) a.register(app);
 
   void app.register((scoped, _opts, done) => {

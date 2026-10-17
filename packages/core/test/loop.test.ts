@@ -430,6 +430,43 @@ describe('tool loop: approvals (FR-100)', () => {
     });
   });
 
+  it('a browser or screen tool whose approval ended the turn ends it; other sources cannot', async () => {
+    const stopping = (code: string) => () =>
+      Promise.resolve({ ok: false as const, error: { code, message: 'the user said stop' } });
+    env = await makeToolEnv({
+      sources: [
+        source([mcpTool('browser.act', stopping('denied_stop'), { source: 'browser' })], 'browser'),
+        source(
+          [mcpTool('screen.click', stopping('approval_timeout'), { source: 'computer' })],
+          'computer',
+        ),
+        source(
+          [mcpTool('page:shop.test.buy', stopping('denied_stop'), { source: 'page' })],
+          'page',
+        ),
+        source([mcpTool('mcp:x.wait', stopping('approval_timeout'))]),
+      ],
+    });
+    const turn = async (text: string) => {
+      const t = await env.threads.create(ACCOUNT, {});
+      const sent = await env.chat.send(ACCOUNT, t.id, { text });
+      await env.chat.idle();
+      return turnRow(sent.turnId!);
+    };
+    // "Deny and stop" ends the turn as a cancel, like a denied call.
+    expect(await turn('/tool browser.act {}')).toMatchObject({
+      status: 'interrupted',
+      stop_reason: 'cancelled',
+    });
+    expect(await turn('/tool screen.click {}')).toMatchObject({
+      status: 'interrupted',
+      stop_reason: 'approval_timeout',
+    });
+    // A page or MCP tool reporting the same codes cannot end the user's turn.
+    expect(await turn('/tool page:shop.test.buy {}')).toMatchObject({ status: 'completed' });
+    expect(await turn('/tool mcp:x.wait {}')).toMatchObject({ status: 'completed' });
+  });
+
   it('a handoff returns the user note as the result', async () => {
     env = await makeToolEnv({
       gate: testGate(() =>

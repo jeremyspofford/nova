@@ -111,14 +111,17 @@ export interface ToolsDeps {
   appContext?: ChatServiceOptions['appContext'];
 }
 
-/** Content endpoint policy: nothing loads or runs, even when opened directly (FR-038). */
+/**
+ * Content endpoint policy: nothing loads or runs, even when opened directly (FR-038). Every
+ * variant may be framed by Nova's own pages only (the Inspector), never by another site.
+ */
 export const ARTIFACT_CSP =
-  "default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; sandbox";
+  "default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'self'";
 /** HTML may run its own inline scripts, always in a unique origin (never allow-same-origin). */
 export const HTML_ARTIFACT_CSP =
-  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:";
+  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; frame-ancestors 'self'";
 /** PDFs: no `sandbox` directive, which blanks the browser's PDF viewer; nothing else loads. */
-export const PDF_ARTIFACT_CSP = "default-src 'none'; object-src 'none'";
+export const PDF_ARTIFACT_CSP = "default-src 'none'; object-src 'none'; frame-ancestors 'self'";
 
 export function artifactCsp(kind: string): string {
   if (kind === 'html') return HTML_ARTIFACT_CSP;
@@ -154,6 +157,8 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
     ctx.sandbox ??
     detectSandbox({
       mode: process.env.NOVA_SANDBOX ?? 'auto',
+      // The data directory (vault, rule files) is hidden wherever a root contains it.
+      deniedPaths: [ctx.dataDir],
       ...(process.env.NOVA_SANDBOX_IMAGE ? { image: process.env.NOVA_SANDBOX_IMAGE } : {}),
       ...(process.env.NOVA_SANDBOX_NETWORK === 'open' ? { allowedNetwork: 'open' as const } : {}),
     });
@@ -332,6 +337,8 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
         void reply
           .header('Content-Type', mime)
           .header('Content-Security-Policy', artifactCsp(view.kind))
+          // The Inspector frames it; the global DENY would blank the frame.
+          .header('X-Frame-Options', 'SAMEORIGIN')
           .header('X-Content-Type-Options', 'nosniff')
           .header('Cross-Origin-Resource-Policy', 'same-origin')
           .header('Cache-Control', 'private, no-cache')

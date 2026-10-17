@@ -13,10 +13,12 @@ const KIND: Record<ActivityItemView['kind'], { icon: IconName; text: string }> =
   approval: { icon: 'shield', text: 'Approval' },
   policy: { icon: 'shield', text: 'Policy' },
   notice: { icon: 'alert', text: 'Notice' },
+  computer: { icon: 'eye', text: 'Computer' },
 };
 
 /** Events after which the trace has new lines. */
-const REFRESH_ON = /^(tool\.call\.(started|completed)|approval\.|policy\.|turn\.)/;
+const REFRESH_ON =
+  /^(tool\.call\.(started|completed)|approval\.|policy\.|turn\.|browser\.(action|navigated)|screen\.action)/;
 
 function aboutThread(env: EventEnvelope): string | null {
   const p = env.payload;

@@ -969,12 +969,14 @@ export interface AuditVerifyResult {
 export interface ActivityItemView {
   id: string;
   ts: string;
-  kind: 'turn' | 'tool_call' | 'approval' | 'policy' | 'notice';
+  kind: 'turn' | 'tool_call' | 'approval' | 'policy' | 'notice' | 'computer';
   title: string;
   detail: string | null;
   status: string | null;
   callId: string | null;
   turnId: string | null;
+  /** Before/after screenshots of a browser or screen action (FR-098): API paths, when kept. */
+  shots?: { before: string | null; after: string | null } | null;
 }
 
 // ---- notifications (FR-013) ---------------------------------------------------------------------
@@ -1930,6 +1932,10 @@ export interface ScheduleView {
   output: ExpectedOutput | null;
   catchUp: { policy: 'once' | 'skip'; lookbackSeconds: number };
   origin: 'user' | 'agent' | 'agent_self';
+  /** The agent the schedule wakes (FR-206), shown as "set by agent"; null for other schedules. */
+  agentId: string | null;
+  /** Why an agent set its wake-up; null otherwise. */
+  wakeReason: string | null;
   projectId: string | null;
   autonomy: RunAutonomy;
   enabled: boolean;

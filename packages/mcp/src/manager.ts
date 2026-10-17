@@ -1,7 +1,7 @@
 // The MCP client manager (FR-042, FR-043): one supervised connection per configured server,
 // their status, logs and tools, and tool calls routed to the right server.
 import { join } from 'node:path';
-import type { AuthProvider } from '@modelcontextprotocol/client';
+import type { AuthProvider, Client } from '@modelcontextprotocol/client';
 import type { McpLogLine } from '@nova/shared';
 import { defaultRedactor, type Redactor } from '@nova/security';
 import type { Logger } from '@nova/telemetry';
@@ -192,6 +192,11 @@ export class McpManager {
       });
     }
     return conn.readResourceContents(uri, signal);
+  }
+
+  /** A server's connected SDK client, for protocol extensions such as event subscriptions. */
+  sdkClient(serverId: string): Client | null {
+    return this.#conns.get(serverId)?.sdkClient ?? null;
   }
 
   /** Stop every server (Hub shutdown). */

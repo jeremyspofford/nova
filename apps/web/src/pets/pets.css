@@ -1,0 +1,149 @@
+/* The companion (FR-012): theme tokens only, decoration only. It sits below dialogs and toasts,
+   takes no pointer events, and its motion stops under reduced motion (the OS preference unless
+   the user chose full motion, or the user's own choice), leaving one still pose per state. */
+.pet {
+  position: fixed;
+  bottom: var(--u-space-3);
+  z-index: var(--u-z-sticky);
+  width: 44px;
+  height: 44px;
+  pointer-events: none;
+  user-select: none;
+}
+.pet[data-position='bottom-right'] {
+  right: var(--u-space-3);
+}
+.pet[data-position='bottom-left'] {
+  left: var(--u-space-3);
+}
+.pet svg {
+  display: block;
+  overflow: visible;
+}
+.pet-body {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.pet-shadow {
+  fill: color-mix(in srgb, var(--u-text) 14%, transparent);
+}
+.pet-fill {
+  fill: var(--u-accent);
+}
+.pet-star {
+  stroke: var(--u-accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.pet-leaf {
+  fill: var(--u-success);
+}
+.pet-stem {
+  fill: none;
+  stroke: var(--u-success);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.pet-face {
+  fill: var(--u-accent-contrast);
+}
+.pet-line {
+  fill: none;
+  stroke: var(--u-accent-contrast);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pet-extra {
+  fill: var(--u-text-muted);
+}
+.pet-extra-line {
+  fill: none;
+  stroke: var(--u-text-muted);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+/* Still poses: what each state looks like without motion. */
+.pet[data-state='waiting'] .pet-body {
+  transform: rotate(-8deg);
+}
+.pet[data-state='error'] .pet-body {
+  transform: translateY(2px) scaleY(0.94);
+}
+.pet[data-state='success'] .pet-body {
+  transform: translateY(-2px);
+}
+
+/* Motion, only where it is allowed. */
+.pet[data-animate='true'][data-state='idle'] .pet-body {
+  animation: pet-bob 3.2s ease-in-out infinite;
+}
+.pet[data-animate='true'][data-state='thinking'] .pet-body {
+  animation: pet-think 1s ease-in-out infinite;
+}
+.pet[data-animate='true'][data-state='waiting'] .pet-body {
+  animation: pet-sway 2.4s ease-in-out infinite;
+}
+.pet[data-animate='true'][data-state='success'] .pet-body {
+  animation: pet-hop 0.6s ease-out 2;
+}
+.pet[data-animate='true'][data-state='error'] .pet-body {
+  animation: pet-droop 0.8s ease-out 1 both;
+}
+@keyframes pet-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+@keyframes pet-think {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0);
+  }
+  25% {
+    transform: translateY(-2px) rotate(-5deg);
+  }
+  75% {
+    transform: translateY(-2px) rotate(5deg);
+  }
+}
+@keyframes pet-sway {
+  0%,
+  100% {
+    transform: rotate(-8deg);
+  }
+  50% {
+    transform: rotate(-3deg);
+  }
+}
+@keyframes pet-hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  45% {
+    transform: translateY(-9px);
+  }
+}
+@keyframes pet-droop {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateY(2px) scaleY(0.94);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='full']) .pet * {
+    animation: none !important;
+  }
+}
+:root[data-motion='reduce'] .pet * {
+  animation: none !important;
+}

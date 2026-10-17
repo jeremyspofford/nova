@@ -33,6 +33,9 @@ export type Route =
   | { name: 'settings'; section: SettingsSection }
   | { name: 'projects'; projectId: string | null }
   | { name: 'library' }
+  /** /spaces, /spaces/:spaceId, /spaces/:spaceId/:pageId (FR-036); /sites, /sites/:id (FR-037). */
+  | { name: 'spaces'; spaceId: string | null; pageId: string | null }
+  | { name: 'sites'; siteId: string | null }
   | { name: 'apps'; entryId: string | null }
   | { name: 'open'; target: string }
   | { name: 'onboarding' };
@@ -51,6 +54,8 @@ export function parseRoute(pathname: string, search = ''): Route {
   if (head === 'onboarding') return { name: 'onboarding' };
   if (head === 'projects') return { name: 'projects', projectId: arg ?? null };
   if (head === 'library') return { name: 'library' };
+  if (head === 'spaces') return { name: 'spaces', spaceId: arg ?? null, pageId: parts[2] ?? null };
+  if (head === 'sites') return { name: 'sites', siteId: arg ?? null };
   if (head === 'apps') return { name: 'apps', entryId: arg ?? null };
   if (head === 'open')
     return { name: 'open', target: new URLSearchParams(search).get('url') ?? '' };

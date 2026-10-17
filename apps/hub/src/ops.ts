@@ -32,6 +32,7 @@ import {
   loadDataKey,
   notifyOnEvents,
   useBlobKey,
+  type NotificationRouting,
   type SandboxClient,
   type VolumeEncryption,
 } from '@nova/core';
@@ -116,6 +117,8 @@ export interface DiagnosticTestDeps {
 export interface HubOpsArea extends OpsArea {
   /** Give the diagnostics tests the MCP manager and the sandbox (FR-119). */
   useDiagnosticTests(deps: DiagnosticTestDeps): void;
+  /** The channels area's routing rules and quiet hours decide in-app and OS delivery (FR-060). */
+  useNotificationRouting(routing: NotificationRouting | null): void;
 }
 
 /** How long one test may take before it reports a timeout. */
@@ -310,6 +313,7 @@ export async function setupOps(
     useDiagnosticTests: (deps) => {
       testDeps = { ...testDeps, ...deps };
     },
+    useNotificationRouting: (routing) => notifications.useRouting(routing),
     close: async () => {
       for (const s of subscriptions) s.stop();
       await Promise.all(subscriptions.map((s) => s.idle()));

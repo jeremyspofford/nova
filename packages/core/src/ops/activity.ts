@@ -10,10 +10,11 @@ function item(
   e: EventEnvelope,
   kind: ActivityItemView['kind'],
   title: string,
-  rest: Partial<Pick<ActivityItemView, 'detail' | 'status' | 'callId' | 'turnId'>> = {},
+  rest: Partial<Pick<ActivityItemView, 'detail' | 'status' | 'callId' | 'turnId' | 'shots'>> = {},
 ): ActivityItemView {
   const p = e.payload;
   return {
+    ...(rest.shots ? { shots: rest.shots } : {}),
     id: e.id,
     ts: e.ts,
     kind,
@@ -122,6 +123,48 @@ export function buildActivity(events: readonly EventEnvelope[]): ActivityItemVie
       case 'compaction.completed':
         out.push(item(e, 'notice', 'Context compacted'));
         break;
+      // Computer use (FR-098): browser and screen actions with their screenshots.
+      case 'browser.navigated': {
+        const allowed = p.allowed !== false;
+        out.push(
+          item(
+            e,
+            'computer',
+            `${allowed ? 'Browser opened' : 'Browser blocked'} ${str(p.url) ?? 'a page'}`,
+            {
+              status: allowed ? 'ok' : 'blocked',
+            },
+          ),
+        );
+        break;
+      }
+      case 'browser.action': {
+        const id = str(p.actionId);
+        const shot = (which: 'before' | 'after') =>
+          id && p[which] === true ? `/api/v1/browser/actions/${id}/screenshots/${which}` : null;
+        const what = [str(p.action) ?? 'action', str(p.target)].filter(Boolean).join(' ');
+        out.push(
+          item(e, 'computer', `Browser: ${what}`, {
+            status: str(p.result),
+            shots: id ? { before: shot('before'), after: shot('after') } : null,
+          }),
+        );
+        break;
+      }
+      case 'screen.action': {
+        const id = str(p.actionId);
+        const computer = str(p.computerId);
+        const base = id && computer ? `/api/v1/computers/${computer}/screen/actions/${id}` : null;
+        const app = str(p.app);
+        out.push(
+          item(e, 'computer', `Screen: ${str(p.kind) ?? 'action'}${app ? ` in ${app}` : ''}`, {
+            status: str(p.status),
+            detail: str(p.error),
+            shots: base ? { before: `${base}/before`, after: `${base}/after` } : null,
+          }),
+        );
+        break;
+      }
       default:
         break;
     }

@@ -1,2 +1,62 @@
-// M6 screen module; filled in by its area.
-export {};
+// M6 screen module (FR-093, FR-207, FR-098, FR-087, FR-075): the mock desktop, control tiers,
+// the screen service (grants, kill key, recorded actions, takeover, appshots) and its tools.
+export {
+  Raster,
+  cropPng,
+  decodePng,
+  encodePng,
+  pngSize,
+  type DecodedPng,
+  type ScreenRect,
+} from './png.ts';
+export {
+  TIER_LABEL,
+  allowedAt,
+  allowedList,
+  classTierOf,
+  effectiveTier,
+  lowestTier,
+  tierRefusal,
+  tierAlternative,
+  type ControlTier,
+} from './tiers.ts';
+export {
+  MOCK_TITLE_BAR,
+  MockDesktop,
+  MockDesktops,
+  defaultMockWindows,
+  type MockAppClass,
+  type MockDesktopOptions,
+  type MockInputEvent,
+  type MockWidget,
+  type MockWidgetRole,
+  type MockWidgetSpec,
+  type MockWindow,
+  type MockWindowSpec,
+  type ScreenWindowWithBounds,
+} from './mock-desktop.ts';
+export {
+  OBSERVATION_MAX_AGE_MS,
+  OBSERVE_INTERVAL_MS,
+  ScreenService,
+  redactScreenAction,
+  windowBounds,
+  type AppshotInput,
+  type BrowserTakeoverEvent,
+  type ScreenActResult,
+  type ScreenCaller,
+  type ScreenControlHooks,
+  type ScreenOutcome,
+  type ScreenPauseReason,
+  type ScreenRefusal,
+  type ScreenServiceOptions,
+  type ScreenSettings,
+  type TakeoverInput,
+} from './service.ts';
+export {
+  SCREEN_TOOL_NAMES,
+  screenToolSource,
+  screenTools,
+  type ScreenComputerRef,
+  type ScreenToolOptions,
+} from './tools.ts';

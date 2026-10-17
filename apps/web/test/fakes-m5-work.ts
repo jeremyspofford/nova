@@ -149,6 +149,8 @@ export function scheduleView(over: Partial<ScheduleView> = {}): ScheduleView {
     output: null,
     catchUp: { policy: 'once', lookbackSeconds: 604_800 },
     origin: 'user',
+    agentId: null,
+    wakeReason: null,
     projectId: null,
     autonomy: 'standard',
     enabled: true,

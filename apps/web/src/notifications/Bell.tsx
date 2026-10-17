@@ -54,6 +54,8 @@ export function NotificationsBell() {
   const loading = useRef(false);
   const again = useRef(false);
   const cats = useRef<Categories>(categories);
+  /** Notifications whose event said not to raise them on the OS (`os: false`). */
+  const quietIds = useRef(new Set<string>());
   useEffect(() => {
     cats.current = categories;
   });
@@ -69,6 +71,8 @@ export function NotificationsBell() {
       for (const n of list) {
         if (before.has(n.id) || n.read || !cats.current[n.kind]) continue;
         announce(`New notification: ${n.title}`);
+        // Routing or quiet hours said not to raise this one on the OS (FR-060).
+        if (quietIds.current.has(n.id)) continue;
         void showOsNotification(n, () => {
           const href = safeHref(n.href);
           if (href) navigate(href);
@@ -113,7 +117,13 @@ export function NotificationsBell() {
     refresh(false);
     const handle = openStream(
       EVENTS_STREAM_URL,
-      { onEvent: () => refresh(true) },
+      {
+        onEvent: (e) => {
+          const id = e.payload.notificationId;
+          if (e.payload.os === false && typeof id === 'string') quietIds.current.add(id);
+          refresh(true);
+        },
+      },
       { names: ['notification.created'], factory: eventSource },
     );
     return () => handle.close();

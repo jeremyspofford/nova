@@ -251,6 +251,8 @@ export function codeTools(svc: CodeService): BuiltinTool[] {
           yieldMs: TEST_TIMEOUT_MS,
           signal: ctx.signal,
           turnId: ctx.turnId,
+          // The session's machine runs it (a remote environment's sandbox, FR-062).
+          egress: { accountId: ctx.accountId, threadId: ctx.threadId },
           ...(ctx.progress
             ? { onOutput: (chunk: string) => ctx.progress?.(defaultRedactor.redactString(chunk)) }
             : {}),

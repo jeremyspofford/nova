@@ -173,6 +173,11 @@ export type StatusLookup = (
 
 /** POST /runs and the RunStarter seam, plus what only the Hub's own callers pass. */
 export interface CreateRunOptions extends CreateRunInput {
+  /**
+   * M6: the always-on agent that delegated the run (FR-059, FR-083): recorded as run.agent_id, so
+   * pausing or deleting the agent reaches it. A child run inherits its parent's.
+   */
+  agentId?: string | null;
   template?: 'deep_research';
   goal?: { objective: string; budgets?: BudgetAmounts };
   plan?: { title: string; detail?: string }[];
@@ -2535,7 +2540,7 @@ export class RunService implements RunToolHost {
       accountId: input.accountId,
       projectId,
       threadId: thread.id,
-      agentId: null,
+      agentId: input.agentId ?? parent?.agentId ?? null,
       parentRunId: parent?.id ?? null,
       origin: input.origin,
       originRef: input.originRef ?? null,

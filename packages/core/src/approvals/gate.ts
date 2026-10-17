@@ -59,7 +59,12 @@ import type {
   PluginPermissionSource,
   PluginPermissions,
 } from '../extensions/types.ts';
-import type { Reviewer, ThreadPolicy, ThreadPolicySource } from '../runtime/types.ts';
+import type {
+  AgentRuleSource,
+  Reviewer,
+  ThreadPolicy,
+  ThreadPolicySource,
+} from '../runtime/types.ts';
 import type {
   AuditRecord,
   AuditSink,
@@ -128,6 +133,8 @@ export interface PolicyGateOptions {
   autoReviewer?: Reviewer;
   /** A thread's mode policy (Code sessions, FR-063); also `useThreadPolicy`. */
   threadPolicy?: ThreadPolicySource;
+  /** The rules of the agent that owns a thread (FR-084); also `useAgentPolicy`. */
+  agentPolicy?: AgentRuleSource;
   /** `permission.request` hooks (FR-197); also wired later with `useHooks`. */
   permissionHooks?: HookDispatcher;
   /** The confirmed permissions of plugins (FR-045); also `usePluginPermissions`. */
@@ -218,6 +225,7 @@ export class PolicyGate implements ToolGate {
   #folders: ProjectFolderSource | undefined;
   #autoReviewer: Reviewer | undefined;
   readonly #threadPolicies: ThreadPolicySource[] = [];
+  #agentPolicy: AgentRuleSource | undefined;
   readonly #breaker = new ReviewBreaker();
 
   constructor(opts: PolicyGateOptions) {
@@ -231,6 +239,7 @@ export class PolicyGate implements ToolGate {
     this.#folders = opts.projectFolders;
     this.#autoReviewer = opts.autoReviewer;
     if (opts.threadPolicy) this.#threadPolicies.push(opts.threadPolicy);
+    this.#agentPolicy = opts.agentPolicy;
   }
 
   /**
@@ -240,6 +249,14 @@ export class PolicyGate implements ToolGate {
    */
   useThreadPolicy(source: ThreadPolicySource): void {
     this.#threadPolicies.push(source);
+  }
+
+  /**
+   * Wire the rules of agents (FR-084): for a thread an agent owns, its rules join the user rules
+   * of the policy set. A source that fails denies (fail closed).
+   */
+  useAgentPolicy(source: AgentRuleSource): void {
+    this.#agentPolicy = source;
   }
 
   /** Wire the auto-reviewer of the `review` approval policy (FR-085, ADR-061). */
@@ -345,6 +362,28 @@ export class PolicyGate implements ToolGate {
       home: realpathLenient(this.#home),
     };
     const set = await store.policySet(req.accountId, { threadId, home: this.#home });
+    if (threadId && this.#agentPolicy) {
+      try {
+        const extra = await this.#agentPolicy.forThread(req.accountId, threadId);
+        if (extra) {
+          // An agent's rules are user rules: never the managed layer, whatever they say.
+          set.rules = [
+            ...(set.rules ?? []),
+            ...extra.rules.map((r) => ({ ...r, source: 'user' as const })),
+          ];
+          set.commandRules = [
+            ...(set.commandRules ?? []),
+            ...extra.commandRules.map((r) => ({ ...r, source: 'user' as const })),
+          ];
+        }
+      } catch (err) {
+        this.#o.log?.warn('agent rules unavailable', { err, threadId });
+        blocked ??= {
+          reason: "the agent's rules could not be read, so the call was not allowed",
+          source: 'builtin',
+        };
+      }
+    }
     const owner = req.tool.serverId ?? req.tool.pluginId;
     if (owner && this.#serverDefaults) {
       const d = await this.#serverDefaults(req.accountId, owner);

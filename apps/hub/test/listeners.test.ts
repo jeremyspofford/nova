@@ -23,6 +23,15 @@ const PUBLIC: Record<string, string> = {
   'POST /node/v1/register': 'one-use enrollment token in the body',
   'POST /node/v1/heartbeat': 'node credential',
   'POST /node/v1/models/sync': 'node credential',
+  // novad devices (docs/23): enrollment token, then the device credential.
+  'POST /agent/v1/register': 'one-use enrollment token in the body',
+  'POST /agent/v1/heartbeat': 'device credential',
+  'POST /agent/v1/capabilities': 'device credential',
+  // Inbound deliveries from outside (docs/13 §4, docs/09 §7): each is verified by its sender's
+  // signature or token before anything is read, and answers 401 otherwise.
+  'POST /api/v1/channels/:id/inbound': "the channel's signature or token",
+  'POST /api/v1/triggers/:id/webhook': 'HMAC signature with the trigger secret',
+  'POST /api/v1/mcp/events/:subscriptionId': 'HMAC signature with the subscription secret',
   // A cross-site redirect carries no session; the single-use state from the start call is the
   // credential, and the route only ever redirects back to settings (FR-047).
   'GET /api/v1/mcp/oauth/callback': 'single-use OAuth state in the query',
@@ -117,7 +126,7 @@ describe('HTTP routes', () => {
     const offenders: string[] = [];
     for (const r of routes()) {
       const key = `${r.method} ${r.path}`;
-      const api = r.path.startsWith('/api/') || r.path.startsWith('/node/');
+      const api = /^\/(api|node|agent)\//.test(r.path);
       if (PUBLIC[key] || r.path === '/api/v1/ws' || !api) continue;
       const res = await call(r.method, concrete(r.path));
       if (res.status !== 401 || res.code !== 'token_required')
@@ -141,7 +150,7 @@ describe('HTTP routes', () => {
     // `/mcp` is Nova's MCP server (FR-044): it needs a client token of its own, and is off until
     // a client exists (mcp-server.test.ts covers it).
     const statics = routes().filter(
-      (r) => !r.path.startsWith('/api/') && !r.path.startsWith('/node/') && r.path !== '/mcp',
+      (r) => !/^\/(api|node|agent)\//.test(r.path) && r.path !== '/mcp',
     );
     for (const r of statics) expect(r.method, r.path).toBe('GET');
     for (const method of ['GET', 'POST', 'DELETE']) {

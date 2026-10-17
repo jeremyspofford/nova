@@ -268,6 +268,28 @@ describe('notification center (FR-013)', () => {
     expect(FakeNotification.shown).toHaveLength(1);
   });
 
+  it('does not raise a notification on the OS when routing or quiet hours say so (FR-060)', async () => {
+    vi.stubGlobal('Notification', FakeNotification);
+    FakeNotification.permission = 'granted';
+    setHidden(true);
+    const hub = hubWith();
+    await renderApp({ hub });
+    await waitFor(() => expect(bell().getAttribute('aria-label')).toBe('Notifications, 2 unread'));
+    hub.state.m3.notifications = [
+      notification({ id: 'n7', kind: 'completion', title: 'Quiet one' }),
+      ...hub.state.m3.notifications,
+    ];
+    bellStream().emit('notification.created', {
+      notificationId: 'n7',
+      kind: 'completion',
+      title: 'x',
+      os: false,
+    });
+    await waitFor(() => expect(bell().getAttribute('aria-label')).toBe('Notifications, 3 unread'));
+    expect(screen.getByTestId('announcer').textContent).toContain('New notification: Quiet one');
+    expect(FakeNotification.shown).toHaveLength(0);
+  });
+
   it('hides categories turned off and never sends them to the OS', async () => {
     vi.stubGlobal('Notification', FakeNotification);
     FakeNotification.permission = 'granted';

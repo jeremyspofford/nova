@@ -89,8 +89,37 @@ function purgeToolRows(db: NovaDatabase, threadId: string): string[] {
 }
 
 /**
- * Remove blobs nothing refers to any more: no attachment, source, artifact (or artifact version)
- * or pending queued input. Blobs are content-addressed, so they may be shared.
+ * Every column that names a blob in the content-addressed store (attachments.ts). Identical
+ * content shares one blob, so a blob is removed only when none of these still names it.
+ */
+export const BLOB_REFERENCES: readonly (readonly [table: string, column: string])[] = [
+  ['attachment', 'blob_path'],
+  ['source', 'blob_path'],
+  ['artifact', 'blob_path'],
+  ['artifact_version', 'blob_path'],
+  ['account', 'avatar_path'],
+  ['agent', 'avatar_path'],
+  ['screen_action', 'before_blob'],
+  ['screen_action', 'after_blob'],
+  ['site_version', 'blob_path'],
+  ['site_version', 'preview_blob_path'],
+];
+
+/** Whether any row still names the blob (a pending queued input counts). */
+export function blobInUse(db: NovaDatabase, path: string): boolean {
+  for (const [table, column] of BLOB_REFERENCES)
+    if (db.raw.prepare(`SELECT 1 AS x FROM ${table} WHERE ${column} = ? LIMIT 1`).get(path))
+      return true;
+  return !!db.raw
+    .prepare(
+      "SELECT 1 AS x FROM queued_input WHERE status = 'pending' AND instr(attachments, ?) > 0 LIMIT 1",
+    )
+    .get(JSON.stringify(path));
+}
+
+/**
+ * Remove blobs nothing refers to any more (BLOB_REFERENCES, or a pending queued input). Blobs
+ * are content-addressed, so they may be shared.
  */
 export function removeUnreferencedBlobs(
   db: NovaDatabase,
@@ -99,18 +128,7 @@ export function removeUnreferencedBlobs(
 ): number {
   let removed = 0;
   for (const p of new Set(paths)) {
-    const used =
-      db.raw.prepare('SELECT 1 AS x FROM attachment WHERE blob_path = ? LIMIT 1').get(p) ??
-      db.raw.prepare('SELECT 1 AS x FROM source WHERE blob_path = ? LIMIT 1').get(p) ??
-      db.raw.prepare('SELECT 1 AS x FROM artifact WHERE blob_path = ? LIMIT 1').get(p) ??
-      db.raw.prepare('SELECT 1 AS x FROM artifact_version WHERE blob_path = ? LIMIT 1').get(p) ??
-      db.raw.prepare('SELECT 1 AS x FROM account WHERE avatar_path = ? LIMIT 1').get(p) ??
-      db.raw
-        .prepare(
-          "SELECT 1 AS x FROM queued_input WHERE status = 'pending' AND instr(attachments, ?) > 0 LIMIT 1",
-        )
-        .get(JSON.stringify(p));
-    if (used) continue;
+    if (blobInUse(db, p)) continue;
     try {
       rmSync(resolveWithin([dataDir], p), { force: true });
       removed++;

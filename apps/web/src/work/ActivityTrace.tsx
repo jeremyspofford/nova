@@ -15,6 +15,7 @@ const KIND: Record<ActivityItemView['kind'], { icon: IconName; text: string }> =
   approval: { icon: 'shield', text: 'Approval' },
   policy: { icon: 'shield', text: 'Policy' },
   notice: { icon: 'alert', text: 'Notice' },
+  computer: { icon: 'eye', text: 'Computer' },
 };
 
 export const REPLAY_STEP_MS = 1200;

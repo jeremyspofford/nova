@@ -91,6 +91,7 @@ export interface BrowserController {
 
 export type ScreenAppTier = 'view' | 'click' | 'full';
 
+/** A window on the controlled desktop; `ScreenObservation.windows` lists them front first. */
 export interface ScreenWindow {
   id: string;
   app: string;
@@ -98,6 +99,8 @@ export interface ScreenWindow {
   tier: ScreenAppTier;
   title: string;
   focused: boolean;
+  /** Where the window is, in screen pixels; input outside every window is refused. */
+  bounds?: { x: number; y: number; width: number; height: number };
 }
 
 export interface ScreenObservation {

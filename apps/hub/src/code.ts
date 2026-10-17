@@ -6,24 +6,60 @@
 // every tool call on a code thread that may have written files (tool.call.completed), so a
 // change carries the call that made it. The mode last used in a folder is saved in the
 // `code.folderModes` setting.
+//
+// M6 (docs/10 §2, §7-§10): saved environments with health checks (FR-062, FR-078; the SSH helper
+// transport and the device provider are bound late by the devices area), Git hosts, pushes and
+// pull requests with CI polling and failure feedback (FR-070), the worktree registry (FR-073),
+// dev servers whose URLs the browser pane opens (FR-097, FR-067; the egress proxy's dev-server
+// grant is bound late by the computers area), auto-verify after edits (FR-068), cross-session
+// operations and side questions (FR-072), workers (`task.spawn` with a worktree) and session
+// budgets (docs/09 §2). `sandboxForThread` names the sandbox a session's commands use, for the
+// tool runtime.
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
+  NovaError,
   SETTINGS,
   commitSchema,
-  createCodeSessionSchema,
+  createCodeSessionM6Schema,
+  createGitHostSchema,
+  createPullRequestSchema,
+  createWorktreeSchema,
   diffCommentsSchema,
+  environmentOutputQuery,
+  extendCodeBudgetSchema,
   hunkDecisionSchema,
   idSchema,
   isNovaError,
+  pushSchema,
+  removeWorktreeQuery,
+  renewWorktreeSchema,
+  sideQuestionSchema,
+  startDevServerSchema,
   updateCodeSessionSchema,
+  updateEnvironmentSchema,
+  worktreeListQuery,
+  type CodeSessionExtrasView,
   type PermissionMode,
 } from '@nova/shared';
 import {
+  AutoVerifier,
   CodeService,
+  CodeSessionOps,
+  DevServerManager,
+  GitHostService,
+  PullRequestService,
+  codeAreaToolSource,
+  codeM6Tools,
   codeToolSource,
+  detectSandbox,
   noopAudit,
   type AuditSink,
+  type DevServerGrant,
+  type DevServerOpener,
+  type EnvDeviceProvider,
+  type EnvSshTransport,
+  type GitHostClient,
   type SandboxClient,
   type TerminalManager,
   type ThreadPolicySource,
@@ -38,18 +74,47 @@ import type { HubArea, HubContext } from './hub-context.ts';
 
 export interface CodeArea extends HubArea {
   service: CodeService;
+  /** Connected Git hosts (FR-070). */
+  hosts: GitHostService;
+  /** Pushes, pull requests and CI status (FR-070). */
+  prs: PullRequestService;
+  /** Dev servers of sessions (FR-097). */
+  devServers: DevServerManager;
+  /** Auto-verify after edits (FR-068). */
+  verifier: AutoVerifier;
+  /** Cross-session operations and workers (FR-072, FR-073). */
+  ops: CodeSessionOps;
   /** A Code session's permission mode as approval policy, profile and roots (gate, tool scope). */
   policy: ThreadPolicySource;
   /** The Environment block and the change refresh for each turn of a code thread. */
   extension: TurnExtension;
   /** git.status, git.diff, git.log, test.run, code.symbols, code.refs (source `builtin`). */
   tools: ToolSourceProvider;
+  /**
+   * The M6 tools (source `builtin`): in Code threads git.branch, git.commit, pr.create,
+   * pr.status, devserver.*, task.spawn and task.wait, and the cross-session sessions.* tools,
+   * which agent threads get too.
+   */
+  toolsM6: ToolSourceProvider;
   /** Blocked when the environment is down or the folder is gone (FR-215). */
   status: ThreadStatusSource;
   /** Comments submitted to the agent start a turn (FR-065). */
   useTurns(starter: TurnStarter): void;
   /** Terminals in the session folder (FR-066). */
   useTerminals(terminals: TerminalManager): void;
+  /** The devices area's connections to `novad` on devices (device and WSL environments). */
+  useDevices(provider: EnvDeviceProvider): void;
+  /** `novad` over SSH (the devices area builds it). */
+  useSsh(transport: EnvSshTransport): void;
+  /** The egress proxy's dev-server grant (computers area). */
+  useDevServerGrant(grant: DevServerGrant): void;
+  /** The browser pane's controller opening a dev server's URL (browser area). */
+  useBrowserOpener(opener: DevServerOpener): void;
+  /**
+   * The sandbox a Code thread's commands run in: null for the Hub's own (local sessions and
+   * other threads); a container environment's image; the helper of an ssh, wsl or device one.
+   */
+  sandboxForThread(accountId: string, threadId: string): SandboxClient | null;
 }
 
 export interface CodeDeps {
@@ -62,11 +127,21 @@ export interface CodeDeps {
   home?: string | null;
   /** How often archived sessions release their worktrees (default 5 min). */
   sweepIntervalMs?: number;
+  /** A sandbox for a container environment's image (default: docker or podman with it). */
+  containerSandbox?: (image: string) => SandboxClient | null;
+  /** `novad` over SSH; usually bound later with `useSsh`. */
+  sshTransport?: EnvSshTransport;
+  /** Build Git host clients (tests point them at a mock host). */
+  gitHostClient?: (host: { kind: 'github'; apiUrl: string; token: string }) => GitHostClient;
+  /** How often open pull requests are checked for due CI polls (default 15 s). */
+  ciTickMs?: number;
+  /** How long a dev server start waits for an early exit (default 3 s). */
+  devServerYieldMs?: number;
 }
 
 /** Tools that never write files: no refresh after them. */
 const READ_ONLY_TOOLS =
-  /^(fs\.(read|list|search)|git\.(status|diff|log)|code\.(symbols|refs)|web\.\w+|tool\.search|artifact\.\w+|context\.\w+)$/;
+  /^(fs\.(read|list|search)|git\.(status|diff|log)|code\.(symbols|refs)|web\.\w+|tool\.search|artifact\.\w+|context\.\w+|pr\.status|devserver\.list|sessions\.(list|ask)|task\.wait)$/;
 /** Folders remembered in `code.folderModes` at most (oldest dropped first). */
 const MAX_FOLDER_MODES = 200;
 
@@ -92,13 +167,19 @@ const terminalBody = z
     rows: z.number().int().min(5).max(200).default(30),
   })
   .strict();
+const processParams = z.object({ id: idSchema, processId: z.string().min(1).max(100) });
+const serverParams = z.object({ id: idSchema, serverId: idSchema });
+const verifyParams = z.object({ id: idSchema, verifyId: idSchema });
+const wslQuery = z.object({ deviceId: idSchema });
+const branchBody = z.object({ name: z.string().trim().min(1).max(200) }).strict();
 
 export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
   const log = ctx.log.child('code');
+  const audit = ctx.audit ?? noopAudit;
   const service = new CodeService({
     db: ctx.db,
     events: ctx.events,
-    audit: ctx.audit ?? noopAudit,
+    audit,
     threads: ctx.threads,
     router: ctx.router,
     dataDir: ctx.dataDir,
@@ -106,11 +187,55 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
     rememberMode: (accountId, folder, mode) => rememberMode(ctx, accountId, folder, mode),
     sandbox: () => ctx.sandbox?.() ?? null,
     ...(ctx.home !== undefined ? { home: ctx.home } : {}),
+    secrets: ctx.secrets,
+    // A container environment runs its image on the same engine and network rule as the tools'
+    // sandbox (apps/hub/src/tools.ts).
+    containerSandbox:
+      ctx.containerSandbox ??
+      ((image) =>
+        detectSandbox({
+          mode: process.env.NOVA_SANDBOX ?? 'auto',
+          image,
+          deniedPaths: [ctx.dataDir],
+          ...(process.env.NOVA_SANDBOX_NETWORK === 'open'
+            ? { allowedNetwork: 'open' as const }
+            : {}),
+        })),
+    sshTransport: ctx.sshTransport ?? null,
     log,
   });
   if (ctx.terminals) service.useTerminals(ctx.terminals);
   if (ctx.turns) service.useTurns(ctx.turns);
+  const hosts = new GitHostService({
+    db: ctx.db,
+    secrets: ctx.secrets,
+    audit,
+    ...(ctx.gitHostClient ? { client: ctx.gitHostClient } : {}),
+  });
+  const prs = new PullRequestService({
+    db: ctx.db,
+    code: service,
+    hosts,
+    audit,
+    setting: ctx.setting,
+    log,
+  });
+  const devServers = new DevServerManager({
+    code: service,
+    audit,
+    ...(ctx.devServerYieldMs !== undefined ? { startYieldMs: ctx.devServerYieldMs } : {}),
+    log,
+  });
+  const verifier = new AutoVerifier({ db: ctx.db, code: service, setting: ctx.setting, log });
+  service.useTurnEndHook(verifier.onTurnEnd);
+  const ops = new CodeSessionOps({
+    code: service,
+    threads: ctx.threads,
+    router: ctx.router,
+    audit,
+  });
   const tools = codeToolSource(service);
+  const toolsM6 = codeAreaToolSource([], codeM6Tools({ code: service, prs, devServers, ops }));
 
   // A tool call on a code thread may have changed files: capture them with its call id.
   const off = ctx.events.bus.subscribe('tool.call.completed', (e) => {
@@ -127,29 +252,161 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
       .refreshThread(e.accountId, p.threadId, p.callId)
       .catch((err: unknown) => log.warn('refreshing code changes failed', { err }));
   });
+  const sweep = async () => {
+    await service.sweepArchived();
+    await service.worktrees.sweepExpired();
+    const active = new Set(service.activeSessionIds());
+    await devServers.stopInactive((id) => active.has(id));
+    await service.envs.checkInUse();
+  };
   const sweeper = setInterval(
     () => {
-      service
-        .sweepArchived()
-        .catch((err: unknown) => log.warn('code session sweep failed', { err }));
+      sweep().catch((err: unknown) => log.warn('code session sweep failed', { err }));
     },
     ctx.sweepIntervalMs ?? 5 * 60_000,
   );
   sweeper.unref();
+  // CI of open pull requests is read every `code.ciPollSeconds`; this tick finds the due ones.
+  const ciTicker = setInterval(() => {
+    prs.pollDue().catch((err: unknown) => log.warn('CI polling failed', { err }));
+  }, ctx.ciTickMs ?? 15_000);
+  ciTicker.unref();
 
   return Promise.resolve({
     service,
+    hosts,
+    prs,
+    devServers,
+    verifier,
+    ops,
     policy: service.policy,
     extension: service.extension,
     tools,
+    toolsM6,
     status: service.status,
     useTurns: (starter) => service.useTurns(starter),
     useTerminals: (terminals) => service.useTerminals(terminals),
+    useDevices: (provider) => service.envs.useDevices(provider),
+    useSsh: (transport) => service.envs.useSsh(transport),
+    useDevServerGrant: (grant) => devServers.useGrant(grant),
+    useBrowserOpener: (opener) => devServers.useOpener(opener),
+    sandboxForThread: (accountId, threadId) => service.sandboxForThread(accountId, threadId),
     register(app: FastifyInstance) {
-      // ---- environments (FR-062) ---------------------------------------------------------
+      // ---- environments (FR-062, FR-078) ---------------------------------------------------
       app.get('/api/v1/environments', async (req) => {
         const accountId = await ctx.accountOf(req);
-        return { items: await service.environments(accountId) };
+        return { items: await service.envs.list(accountId) };
+      });
+
+      app.post('/api/v1/environments', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        const view = await service.envs.create(accountId, req.body);
+        void reply.status(201);
+        return view;
+      });
+
+      app.get('/api/v1/environments/wsl/distros', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const q = wslQuery.parse(req.query);
+        return { items: await service.envs.wslDistros(accountId, q.deviceId) };
+      });
+
+      app.get('/api/v1/environments/:id', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return service.envs.get(accountId, idParams.parse(req.params).id);
+      });
+
+      app.patch('/api/v1/environments/:id', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        return service.envs.update(accountId, id, updateEnvironmentSchema.parse(req.body));
+      });
+
+      app.delete('/api/v1/environments/:id', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        await service.envs.remove(accountId, idParams.parse(req.params).id);
+        return reply.status(204).send();
+      });
+
+      app.post('/api/v1/environments/:id/check', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return service.envs.check(accountId, idParams.parse(req.params).id);
+      });
+
+      app.get('/api/v1/environments/:id/processes', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return { items: await service.envs.processes(accountId, idParams.parse(req.params).id) };
+      });
+
+      app.get('/api/v1/environments/:id/processes/:processId/output', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const p = processParams.parse(req.params);
+        const q = environmentOutputQuery.parse(req.query);
+        return service.envs.output(accountId, p.id, p.processId, q.offset);
+      });
+
+      // ---- Git hosts (FR-070) --------------------------------------------------------------
+      app.get('/api/v1/code/githosts', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return { items: hosts.list(accountId) };
+      });
+
+      app.post('/api/v1/code/githosts', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        const view = await hosts.create(accountId, createGitHostSchema.parse(req.body));
+        void reply.status(201);
+        return view;
+      });
+
+      app.post('/api/v1/code/githosts/:id/check', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return hosts.check(accountId, idParams.parse(req.params).id);
+      });
+
+      app.delete('/api/v1/code/githosts/:id', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        await hosts.remove(accountId, idParams.parse(req.params).id);
+        return reply.status(204).send();
+      });
+
+      // ---- worktree registry (FR-073) ------------------------------------------------------
+      app.get('/api/v1/code/worktrees', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const q = worktreeListQuery.parse(req.query);
+        // Worktrees on devices come with device sessions; the Hub's own are listed.
+        if (q.deviceId) return { items: [] };
+        return {
+          items: await service.listWorktrees(accountId, {
+            ...(q.repo ? { repo: q.repo } : {}),
+            ...(q.status ? { status: q.status } : {}),
+          }),
+        };
+      });
+
+      app.post('/api/v1/code/worktrees', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        const view = await service.createWorktree(accountId, createWorktreeSchema.parse(req.body));
+        void reply.status(201);
+        return view;
+      });
+
+      app.post('/api/v1/code/worktrees/:id/renew', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        const body = renewWorktreeSchema.parse(req.body ?? {});
+        return service.worktrees.renew(accountId, id, body.ttlMinutes);
+      });
+
+      app.post('/api/v1/code/worktrees/:id/release', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return service.worktrees.release(accountId, idParams.parse(req.params).id);
+      });
+
+      app.delete('/api/v1/code/worktrees/:id', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        const q = removeWorktreeQuery.parse(req.query);
+        return service.worktrees.remove(accountId, id, q.force === 'true');
       });
 
       // ---- sessions (FR-061, FR-063) -----------------------------------------------------
@@ -161,7 +418,7 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
 
       app.post('/api/v1/code/sessions', async (req, reply) => {
         const accountId = await ctx.accountOf(req);
-        const view = await service.create(accountId, createCodeSessionSchema.parse(req.body));
+        const view = await service.create(accountId, createCodeSessionM6Schema.parse(req.body));
         void reply.status(201);
         return view;
       });
@@ -257,6 +514,132 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
         return { items: await service.refs(accountId, id, q.name, q.limit, 'repo') };
       });
 
+      // ---- M6 session facts, budgets and branches -------------------------------------------
+      app.get('/api/v1/code/sessions/:id/extras', async (req): Promise<CodeSessionExtrasView> => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        const info = service.info(accountId, id);
+        const env = info.environmentId
+          ? await service.envs.get(accountId, info.environmentId).catch(() => null)
+          : null;
+        const lineage = service.lineage(id);
+        return {
+          sessionId: id,
+          environment: env ? { id: env.id, kind: env.kind, label: env.label } : null,
+          parentSessionId: lineage.parentSessionId,
+          role: lineage.role,
+          setup: service.setupState(id),
+          budget: service.budget(accountId, id),
+          pullRequest: prs.get(accountId, id),
+          lastVerify: verifier.list(accountId, id, 1)[0] ?? null,
+          devServers: await devServers.list(accountId, id),
+        };
+      });
+
+      app.post('/api/v1/code/sessions/:id/budget/extend', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        return service.extendBudget(accountId, id, extendCodeBudgetSchema.parse(req.body));
+      });
+
+      app.post('/api/v1/code/sessions/:id/branch', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        return service.createBranch(accountId, id, branchBody.parse(req.body).name, 'user');
+      });
+
+      // ---- pushes and pull requests (FR-070) ----------------------------------------------
+      app.post('/api/v1/code/sessions/:id/push', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        return prs.push(accountId, id, pushSchema.parse(req.body ?? {}), 'user');
+      });
+
+      app.post('/api/v1/code/sessions/:id/pr', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        const view = await prs.open(accountId, id, createPullRequestSchema.parse(req.body), 'user');
+        void reply.status(201);
+        return view;
+      });
+
+      app.get('/api/v1/code/sessions/:id/pr', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const view = prs.get(accountId, idParams.parse(req.params).id);
+        if (!view) throw new NovaError('not_found', 'this session has no pull request');
+        return view;
+      });
+
+      app.post('/api/v1/code/sessions/:id/pr/refresh', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return prs.refresh(accountId, idParams.parse(req.params).id);
+      });
+
+      // ---- dev servers (FR-097, FR-067) ---------------------------------------------------
+      app.get('/api/v1/code/sessions/:id/devservers', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        return {
+          candidates: await devServers.detect(accountId, id),
+          items: await devServers.list(accountId, id),
+        };
+      });
+
+      app.post('/api/v1/code/sessions/:id/devservers', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        const body = startDevServerSchema.parse(req.body ?? {});
+        try {
+          const view = await devServers.start(accountId, id, body, 'user');
+          void reply.status(201);
+          return view;
+        } catch (err) {
+          if (isNovaError(err) && err.code === 'sandbox_unavailable')
+            return reply.status(409).send({ error: err.toJSON(), requestId: req.id });
+          throw err;
+        }
+      });
+
+      app.post('/api/v1/code/sessions/:id/devservers/stop-all', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return {
+          items: await devServers.stopAll(accountId, idParams.parse(req.params).id, 'user'),
+        };
+      });
+
+      app.post('/api/v1/code/sessions/:id/devservers/:serverId/stop', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const p = serverParams.parse(req.params);
+        return devServers.stop(accountId, p.id, p.serverId, 'user');
+      });
+
+      // ---- auto-verify (FR-068) -----------------------------------------------------------
+      app.get('/api/v1/code/sessions/:id/verify', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return { items: verifier.list(accountId, idParams.parse(req.params).id) };
+      });
+
+      app.post('/api/v1/code/sessions/:id/verify', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        const { view, done } = await verifier.run(accountId, idParams.parse(req.params).id);
+        done.catch((err: unknown) => log.warn('verify failed', { err }));
+        void reply.status(202);
+        return view;
+      });
+
+      app.get('/api/v1/code/sessions/:id/verify/:verifyId', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const p = verifyParams.parse(req.params);
+        return verifier.get(accountId, p.id, p.verifyId);
+      });
+
+      // ---- side questions (FR-072) --------------------------------------------------------
+      app.post('/api/v1/code/sessions/:id/ask', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        return ops.ask(accountId, id, sideQuestionSchema.parse(req.body).question);
+      });
+
       // ---- terminal (FR-066) -------------------------------------------------------------
       app.post('/api/v1/code/sessions/:id/terminal', async (req, reply) => {
         const accountId = await ctx.accountOf(req);
@@ -277,6 +660,9 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
     async close() {
       off();
       clearInterval(sweeper);
+      clearInterval(ciTicker);
+      await devServers.close();
+      await verifier.close();
       await service.close();
     },
   });

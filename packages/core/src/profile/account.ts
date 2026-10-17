@@ -130,12 +130,9 @@ export class ProfileService {
     if (rows[0]) throw usernameTaken(username);
   }
 
-  /** Remove a replaced avatar blob unless another account or a chat still refers to it. */
+  /** Remove a replaced avatar blob unless anything else still refers to it (BLOB_REFERENCES). */
   #dropBlob(path: string): void {
-    const shared = this.#db.raw
-      .prepare('SELECT 1 AS x FROM account WHERE avatar_path = ? LIMIT 1')
-      .get(path);
-    if (!shared) removeUnreferencedBlobs(this.#db, this.#dataDir, [path]);
+    removeUnreferencedBlobs(this.#db, this.#dataDir, [path]);
   }
 }
 

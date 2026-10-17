@@ -13,7 +13,7 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { ATTACHMENT_LIMITS, NovaError } from '@nova/shared';
 import { resolveWithin } from '@nova/security';
 
@@ -272,6 +272,23 @@ function unseal(dataDir: string, name: string, raw: Buffer): Buffer {
   }
   if (addressed && sha(plain) !== name) throw corrupt();
   return plain;
+}
+
+/**
+ * Write a file that is not content-addressed (a screenshot, a browser's cookie state) sealed with
+ * the data key when encryption is on (docs/12 §5). `label` binds the ciphertext to its use, so a
+ * file cannot be swapped for another one: pass the same label to `readSealedFile`.
+ */
+export function writeSealedFile(dataDir: string, abs: string, label: string, bytes: Buffer): void {
+  if (SHA256_HEX.test(label)) throw new TypeError('a sealed file label is not a content hash');
+  const key = keyrings.get(resolve(dataDir))?.current ?? null;
+  mkdirSync(dirname(abs), { recursive: true, mode: 0o700 });
+  writeAtomic(abs, key ? seal(key, label, bytes) : bytes);
+}
+
+/** Read a file written by `writeSealedFile` (plaintext files written without a key read as-is). */
+export function readSealedFile(dataDir: string, abs: string, label: string): Buffer {
+  return unseal(dataDir, label, readFileSync(abs));
 }
 
 export function attachmentKind(mime: string | null): AttachmentKind {

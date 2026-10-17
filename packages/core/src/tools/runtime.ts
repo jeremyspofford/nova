@@ -72,6 +72,8 @@ import type {
 
 const { toolCall, messagePart } = schema;
 
+/** Sources whose tools can end the turn from inside a call (a timed-out or stopping approval). */
+const STOPPING_SOURCES: ReadonlySet<string> = new Set(['builtin', 'browser', 'computer']);
 export const DEFAULT_TOOL_TIMEOUT_MS = 60_000;
 /** Characters of a result the model gets back (10,000 tokens, FR-184). */
 export const MAX_RESULT_CHARS = DEFAULT_OUTPUT_TOKENS * CHARS_PER_TOKEN;
@@ -758,17 +760,26 @@ export class ToolRuntime {
         { decision: outcome, startedAt, resource, hooks },
       );
     }
-    // A built-in that waited for the user in vain (an unanswered ask_user, FR-188) ends the
-    // turn like an approval that timed out.
-    const unanswered =
-      !result.ok && result.error.code === 'approval_timeout' && def.descriptor.source === 'builtin';
+    // A trusted tool that waited for the user in vain (an unanswered ask_user, FR-188; an
+    // approval inside a browser or screen action) ends the turn like an approval that timed out,
+    // and one whose approval the user answered "Deny and stop" ends it like a denied call.
+    // Tools of other sources cannot end the turn this way.
+    const trusted = STOPPING_SOURCES.has(def.descriptor.source);
+    const stop =
+      result.ok || !trusted
+        ? null
+        : result.error.code === 'approval_timeout'
+          ? ('approval_timeout' as const)
+          : result.error.code === 'denied_stop'
+            ? ('deny_stop' as const)
+            : null;
     return finish(result.ok ? 'ok' : 'error', result, {
       decision: outcome,
       startedAt,
       resource,
       hooks,
       post: this.#hooks !== undefined && x.origin !== 'hook',
-      ...(unanswered ? { stop: 'approval_timeout' as const } : {}),
+      ...(stop ? { stop } : {}),
     });
   }
 

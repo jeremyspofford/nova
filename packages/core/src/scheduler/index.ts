@@ -37,6 +37,9 @@ export {
 export { REPORT_TOOL, reportTool, type ReportArgs } from './report.ts';
 export {
   ScheduleService,
+  type AgentFireInput,
+  type AgentFireTarget,
+  type AgentScheduleOptions,
   type ScheduleAuditSink,
   type ScheduleInput,
   type SchedulePatch,

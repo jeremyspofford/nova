@@ -5,7 +5,14 @@
 // thread policy, an Environment context block and a change refresh after each turn, the coding
 // tools, and the blocked status. Changes are captured with a shadow Git repository per session
 // (shadow.ts), reviewed hunk by hunk, commented on, reviewed by the model and committed.
-import { isolatedSubstrate } from '@nova/policy';
+//
+// M6 (docs/10 §2, §9): a session binds to any saved environment (environments.ts; the local one
+// stays the default). Sessions in a `container` environment work on the Hub's files like local
+// ones and run commands in the environment's image; sessions in `ssh`, `wsl` and `device`
+// environments work on that machine's files through the helper, so change capture, review,
+// commits, the symbol index and the Git tools (all Hub-side) are not available there yet.
+// Worktrees come from the registry (worktrees.ts), sessions may carry budgets (docs/09 §2), and
+// other parts of the area hear when a turn edited files (auto-verify, FR-068).
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { arch, homedir, platform, release } from 'node:os';
@@ -24,26 +31,34 @@ import {
   type PermissionMode,
   type ReviewFindingView,
   type StatusView,
+  type CodeBudgetView,
   type commitSchema,
-  type createCodeSessionSchema,
+  type createCodeSessionM6Schema,
+  type createWorktreeSchema,
+  type WorktreeView,
   type diffCommentsSchema,
+  type extendCodeBudgetSchema,
   type hunkDecisionSchema,
   type updateCodeSessionSchema,
 } from '@nova/shared';
-import { isWithin, realpathLenient } from '@nova/security';
+import { defaultRedactor, isWithin, realpathLenient } from '@nova/security';
 import type { NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
 import type { ModelRouter } from '../routing/types.ts';
 import type {
+  BoundHit,
   ThreadPolicy,
   ThreadPolicySource,
   ThreadStatusSource,
+  TurnBounds,
   TurnExtension,
+  TurnOutcome,
   TurnStarter,
 } from '../runtime/types.ts';
 import type { SettingReader } from '../approvals/gate.ts';
 import type { ThreadService } from '../threads.ts';
+import { MemorySecretStore, type SecretStore } from '@nova/secrets';
 import { isCredentialPath, isProtectedRel } from '../tools/roots.ts';
 import { sha256 } from '../tools/text.ts';
 import type { AuditSink, SandboxClient, ToolRoot } from '../tools/types.ts';
@@ -74,6 +89,7 @@ import {
   type StageEntry,
 } from './commit.ts';
 import { buildHunkPatch, type ParsedDiffFile } from './diff.ts';
+import { EnvironmentService, type EnvSshTransport } from './environments.ts';
 import { HookFreeGit, branchSlug, isDefaultBranch, repoInfo, type RepoInfo } from './git.ts';
 import {
   assertModeAvailable,
@@ -85,14 +101,11 @@ import {
 import { runCodeReview } from './review.ts';
 import { ShadowRepo, repoUserExcludes, type ShadowTreeUpdate } from './shadow.ts';
 import { SymbolIndex, findCodeRefs, type CodeRef } from './symbols.ts';
-import {
-  createWorktree,
-  releaseWorktree,
-  WORKTREE_COLUMNS,
-  type WorktreeRow,
-} from './worktrees.ts';
+import { WORKTREE_COLUMNS, WorktreeRegistry, type WorktreeRow } from './worktrees.ts';
 
-export type CreateCodeSessionRequest = z.input<typeof createCodeSessionSchema>;
+export type CreateCodeSessionRequest = z.input<typeof createCodeSessionM6Schema>;
+export type ExtendCodeBudgetRequest = z.input<typeof extendCodeBudgetSchema>;
+export type CreateWorktreeRequest = z.input<typeof createWorktreeSchema>;
 export type UpdateCodeSessionRequest = z.input<typeof updateCodeSessionSchema>;
 export type HunkDecisionRequest = z.input<typeof hunkDecisionSchema>;
 export type DiffCommentsRequest = z.input<typeof diffCommentsSchema>;
@@ -135,7 +148,61 @@ export interface CodeServiceOptions {
   log?: Logger;
   /** How long a review may take (default 5 min). */
   reviewTimeoutMs?: number;
+  /** The keychain (SSH credentials of saved environments); in-memory by default. */
+  secrets?: SecretStore;
+  /** A sandbox running a container environment's image (FR-062). */
+  containerSandbox?: (image: string) => SandboxClient | null;
+  /** `novad` over SSH (FR-062, FR-078). */
+  sshTransport?: EnvSshTransport | null;
 }
+
+/** What other parts of the Code area need to know about a session (M6). */
+export interface CodeSessionInfo {
+  id: string;
+  accountId: string;
+  threadId: string;
+  title: string | null;
+  /** Where the session works: its worktree (at the same place inside it) or its folder. */
+  folder: string;
+  /** The folder the user chose (the main checkout when it works in a worktree). */
+  folderPath: string;
+  environmentId: string | null;
+  /** Whether the session works on the Hub's files (local and container environments). */
+  hubLocal: boolean;
+  worktreeId: string | null;
+  branch: string | null;
+  permissionMode: PermissionMode;
+  modelId: string | null;
+  projectId: string | null;
+  active: boolean;
+  threadState: string;
+  updatedAt: string;
+}
+
+/** Called when a turn of a session ends, after its changes were refreshed (auto-verify). */
+export type CodeTurnEndHook = (
+  session: CodeSessionInfo,
+  turn: { turnId: string; edited: boolean; outcome: TurnOutcome },
+) => Promise<void>;
+
+interface StateRow {
+  timeLimitS: number | null;
+  tokenLimit: number | null;
+  costLimitUsd: number | null;
+  timeUsedMs: number;
+  tokensUsed: number;
+  costUsedUsd: number;
+  budgetReached: 'time' | 'tokens' | 'cost' | null;
+  setupStatus: 'running' | 'ok' | 'failed' | null;
+  setupDetail: string | null;
+  parentSessionId: string | null;
+  role: string | null;
+}
+
+const STATE_COLUMNS = `time_limit_s AS timeLimitS, token_limit AS tokenLimit,
+  cost_limit_usd AS costLimitUsd, time_used_ms AS timeUsedMs, tokens_used AS tokensUsed,
+  cost_used_usd AS costUsedUsd, budget_reached AS budgetReached, setup_status AS setupStatus,
+  setup_detail AS setupDetail, parent_session_id AS parentSessionId, role`;
 
 interface SessionRow {
   id: string;
@@ -172,16 +239,6 @@ const SESSION_SELECT = `SELECT s.id, s.account_id AS accountId, s.thread_id AS t
   t.archived, t.deleted_at AS deletedAt
   FROM code_session s JOIN thread t ON t.id = s.thread_id
   LEFT JOIN worktree w ON w.id = s.worktree_id`;
-
-interface EnvRow {
-  id: string;
-  accountId: string;
-  kind: EnvironmentView['kind'];
-  label: string;
-  status: EnvironmentView['status'];
-  statusDetail: string | null;
-  lastCheckAt: string | null;
-}
 
 interface CommentRow {
   id: string;
@@ -238,6 +295,10 @@ const MAX_INDEXES = 16;
 
 export class CodeService {
   readonly git: HookFreeGit;
+  /** Saved environments and their health (FR-062). */
+  readonly envs: EnvironmentService;
+  /** The worktree registry (FR-073). */
+  readonly worktrees: WorktreeRegistry;
   readonly #o: CodeServiceOptions;
   readonly #log: Logger;
   readonly #now: () => Date;
@@ -250,7 +311,8 @@ export class CodeService {
   #turns: TurnStarter | null = null;
   #terminals: TerminalManager | null = null;
   #statusFn: ((accountId: string, threadId: string) => Promise<StatusView>) | null = null;
-  #gitVersion: Promise<string | null> | null = null;
+  readonly #turnEndHooks: CodeTurnEndHook[] = [];
+  #stateTable = false;
 
   constructor(opts: CodeServiceOptions) {
     this.#o = opts;
@@ -259,6 +321,26 @@ export class CodeService {
     this.#home = opts.home === undefined ? homedir() : opts.home;
     this.git =
       opts.git ?? new HookFreeGit({ emptyHooksDir: join(opts.dataDir, 'code', 'no-hooks') });
+    this.envs = new EnvironmentService({
+      db: opts.db,
+      events: opts.events,
+      audit: opts.audit,
+      secrets: opts.secrets ?? new MemorySecretStore(),
+      git: this.git,
+      ...(opts.sandbox ? { sandbox: opts.sandbox } : {}),
+      ...(opts.containerSandbox ? { containerSandbox: opts.containerSandbox } : {}),
+      sshTransport: opts.sshTransport ?? null,
+      now: this.#now,
+      log: this.#log,
+    });
+    this.worktrees = new WorktreeRegistry({
+      db: opts.db,
+      git: this.git,
+      events: opts.events,
+      audit: opts.audit,
+      now: this.#now,
+      log: this.#log,
+    });
   }
 
   // ---- late-bound collaborators ------------------------------------------------------------
@@ -278,91 +360,38 @@ export class CodeService {
     this.#statusFn = fn;
   }
 
-  // ---- environments (FR-062; M5: local only) -------------------------------------------------
+  /** Called after each turn of a session ends and its changes were refreshed (M6). */
+  useTurnEndHook(hook: CodeTurnEndHook): void {
+    this.#turnEndHooks.push(hook);
+  }
 
+  // ---- environments (FR-062) -------------------------------------------------------------------
+
+  /** `GET /environments`: every saved environment, the local one checked now. */
   async environments(accountId: string): Promise<EnvironmentView[]> {
-    const env = await this.#localEnv(accountId);
-    return [await this.#checkEnv(env)];
-  }
-
-  async #localEnv(accountId: string): Promise<EnvRow> {
-    const select = () =>
-      this.#o.db.raw
-        .prepare(
-          `SELECT id, account_id AS accountId, kind, label, status, status_detail AS statusDetail,
-             last_check_at AS lastCheckAt
-           FROM environment WHERE account_id = ? AND kind = 'local'`,
-        )
-        .get(accountId) as EnvRow | undefined;
-    const found = select();
-    if (found) return found;
-    const now = this.#iso();
-    await this.#o.db.transaction(() => {
-      this.#o.db.raw
-        .prepare(
-          `INSERT OR IGNORE INTO environment (id, account_id, kind, label, status, created_at,
-             updated_at) VALUES (?, ?, 'local', 'This Hub', 'unknown', ?, ?)`,
-        )
-        .run(uuidv7(), accountId, now, now);
-    });
-    return select()!;
-  }
-
-  /** Health of the local environment: Git for change capture, the sandbox for commands. */
-  async #checkEnv(env: EnvRow): Promise<EnvironmentView> {
-    this.#gitVersion ??= this.git.version();
-    const version = await this.#gitVersion;
-    const sandbox = this.#o.sandbox?.() ?? null;
-    let sandboxOk = false;
-    let sandboxDetail = 'no sandbox';
-    if (sandbox) {
-      try {
-        const a = await sandbox.available();
-        sandboxOk = a.ok;
-        sandboxDetail = a.ok ? `${sandbox.substrate ?? 'sandbox'} sandbox` : a.detail;
-      } catch (err) {
-        sandboxDetail = err instanceof Error ? err.message : String(err);
-      }
-    }
-    const status: EnvironmentView['status'] = version && sandboxOk ? 'ok' : 'degraded';
-    const detail = [
-      version
-        ? version.replace(/^git version /, 'Git ')
-        : 'Git is not installed: changes cannot be captured',
-      sandboxOk ? sandboxDetail : `commands cannot run (${sandboxDetail})`,
-    ].join('; ');
-    const now = this.#iso();
-    if (status !== env.status || detail !== env.statusDetail) {
-      await this.#o.db.transaction(() => {
-        this.#o.db.raw
-          .prepare(
-            `UPDATE environment SET status = ?, status_detail = ?, last_check_at = ?, updated_at = ?
-             WHERE id = ?`,
-          )
-          .run(status, detail, now, now, env.id);
-      });
-    }
-    return {
-      id: env.id,
-      kind: env.kind,
-      label: env.label,
-      // The same rule the session policy applies to Bypass (code/policy.ts).
-      isolated: sandboxOk && isolatedSubstrate(sandbox?.substrate),
-      status,
-      detail,
-      checkedAt: now,
-    };
+    return this.envs.views(accountId);
   }
 
   // ---- sessions (FR-061) ---------------------------------------------------------------------
 
-  async create(accountId: string, req: CreateCodeSessionRequest): Promise<CodeSessionView> {
-    const folder = await this.#checkFolder(req.folder);
+  async create(
+    accountId: string,
+    req: CreateCodeSessionRequest,
+    extra: { parentSessionId?: string; role?: string; base?: string } = {},
+  ): Promise<CodeSessionView> {
     if (req.projectId) this.#assertProject(accountId, req.projectId);
-    const env = await this.#localEnv(accountId);
-    if (req.environmentId && req.environmentId !== env.id)
-      throw new NovaError('not_found', 'environment not found');
-    const projectFolderId = this.#projectFolderFor(accountId, folder, req.projectId ?? null);
+    const env = await this.envs.resolve(accountId, req.environmentId);
+    const hubLocal = this.envs.isHubLocal(env.kind);
+    if (!hubLocal && (req.worktree || req.worktreeId))
+      throw new NovaError('validation', 'worktrees are only available for folders on the Hub', {
+        details: { reason: 'worktree_unavailable' },
+      });
+    const folder = hubLocal
+      ? await this.#checkFolder(req.folder)
+      : await this.envs.checkRemoteFolder(accountId, env.id, this.#checkRemotePath(req.folder));
+    const projectFolderId = hubLocal
+      ? this.#projectFolderFor(accountId, folder, req.projectId ?? null)
+      : null;
     const conditions = await this.#conditions();
     let mode: PermissionMode;
     if (req.permissionMode) {
@@ -380,6 +409,13 @@ export class CodeService {
       throw new NovaError('validation', `unknown model: ${req.model}`, {
         details: { reason: 'unknown_model', model: req.model },
       });
+    const defaults = await this.#o.setting('code.budgets');
+    const budgets = {
+      timeSeconds:
+        req.budgets?.timeSeconds !== undefined ? req.budgets.timeSeconds : defaults.timeSeconds,
+      tokens: req.budgets?.tokens !== undefined ? req.budgets.tokens : defaults.tokens,
+      costUsd: req.budgets?.costUsd !== undefined ? req.budgets.costUsd : defaults.costUsd,
+    };
 
     const id = uuidv7();
     let worktree: WorktreeRow | null = null;
@@ -389,27 +425,37 @@ export class CodeService {
       if (req.worktree) {
         const info = await repoInfo(this.git, folder);
         if (!info) throw new NovaError('validation', 'a worktree needs a Git repository');
-        worktree = await createWorktree({
-          git: this.git,
-          db: this.#o.db,
-          accountId,
-          repoRoot: info.root,
-          sourceBranch: info.branch ?? 'HEAD',
-          slug: branchSlug(req.title ?? basename(folder)),
-          now: this.#now,
-        });
+        worktree = (
+          await this.worktrees.create({
+            accountId,
+            repoRoot: info.root,
+            sourceBranch: info.branch ?? 'HEAD',
+            slug: branchSlug(req.title ?? basename(folder)),
+            ...(extra.base ? { base: extra.base } : {}),
+            actor: extra.parentSessionId ? 'agent' : 'user',
+          })
+        ).row;
         const wt = worktree;
-        cleanup.push(() =>
-          releaseWorktree({ git: this.git, db: this.#o.db, row: wt, now: this.#now }),
-        );
+        cleanup.push(() => this.worktrees.releaseForArchive(wt, 'remove_clean'));
         work = join(worktree.path, relative(info.root, folder));
+      } else if (req.worktreeId) {
+        const info = await repoInfo(this.git, folder);
+        const wt = this.worktrees.assertBindable(accountId, req.worktreeId);
+        if (!info || wt.repoPath !== info.root)
+          throw new NovaError('validation', 'the worktree belongs to another repository', {
+            details: { reason: 'worktree_repo' },
+          });
+        worktree = wt;
+        work = join(wt.path, relative(info.root, folder));
       }
-      const shadow = this.#shadowAt(id, work);
-      cleanup.push(() => shadow.remove());
-      await shadow.init(await repoUserExcludes(this.git, work));
-      const baseline = await shadow.snapshot();
-      await shadow.setRef('baseline', baseline);
-      await shadow.setRef('start', baseline);
+      if (hubLocal) {
+        const shadow = this.#shadowAt(id, work);
+        cleanup.push(() => shadow.remove());
+        await shadow.init(await repoUserExcludes(this.git, work));
+        const baseline = await shadow.snapshot();
+        await shadow.setRef('baseline', baseline);
+        await shadow.setRef('start', baseline);
+      }
       const thread = await this.#o.threads.create(accountId, {
         mode: 'code',
         title: req.title ?? basename(folder),
@@ -441,24 +487,50 @@ export class CodeService {
           );
         if (worktree)
           this.#o.db.raw
-            .prepare('UPDATE worktree SET lease_session_id = ?, updated_at = ? WHERE id = ?')
+            .prepare(
+              `UPDATE worktree SET lease_session_id = ?, lease_expires_at = NULL, status = 'active',
+                 updated_at = ? WHERE id = ?`,
+            )
             .run(id, now, worktree.id);
+        if (this.#hasStateTable())
+          this.#o.db.raw
+            .prepare(
+              `INSERT INTO code_session_state (session_id, time_limit_s, token_limit,
+                 cost_limit_usd, parent_session_id, role, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              id,
+              budgets.timeSeconds,
+              budgets.tokens,
+              budgets.costUsd,
+              extra.parentSessionId ?? null,
+              extra.role ?? null,
+              now,
+            );
       });
     } catch (err) {
       for (const undo of cleanup.reverse()) await undo().catch(() => undefined);
       throw err;
     }
-    if (req.permissionMode && mode !== 'plan') await this.#remember(accountId, folder, mode);
+    // A worker's mode is its parent's, not a choice to remember for the folder.
+    if (req.permissionMode && mode !== 'plan' && !extra.parentSessionId)
+      await this.#remember(accountId, folder, mode);
     const s = this.#session(accountId, id);
     await this.#o.audit.append({
       accountId,
-      actor: 'user',
+      actor: extra.parentSessionId ? 'agent' : 'user',
       kind: 'code',
       action: 'code.session.created',
       resource: work,
       decision: mode,
       threadId: s.threadId,
-      detail: { sessionId: id, mode, environmentId: env.id, worktreeId: worktree?.id ?? null },
+      detail: {
+        sessionId: id,
+        mode,
+        environmentId: env.id,
+        worktreeId: worktree?.id ?? null,
+        ...(extra.parentSessionId ? { parentSessionId: extra.parentSessionId } : {}),
+      },
     });
     await this.#emit(s, 'code.session.created', {
       sessionId: id,
@@ -473,7 +545,65 @@ export class CodeService {
         sessionId: id,
         expiresAt: null,
       });
+    const setup = this.envs.setupScript(accountId, env.id);
+    if (setup) this.#runSetup(s, setup);
     return this.#view(s);
+  }
+
+  /**
+   * Run a container environment's setup script once in the session folder, in the background
+   * (network off until the egress proxy grants more, docs/12 §8). The result is kept on the
+   * session and announced as `code.session.updated`.
+   */
+  #runSetup(s: SessionRow, script: string): void {
+    const sandbox = s.environmentId ? this.envs.sandboxFor(s.accountId, s.environmentId) : null;
+    if (!this.#hasStateTable()) return;
+    const done = (status: 'ok' | 'failed', detail: string) =>
+      this.#o.db
+        .transaction(() => {
+          this.#o.db.raw
+            .prepare(
+              'UPDATE code_session_state SET setup_status = ?, setup_detail = ?, updated_at = ? WHERE session_id = ?',
+            )
+            .run(status, detail.slice(0, 4000), this.#iso(), s.id);
+        })
+        .then(() => this.#emit(s, 'code.session.updated', { sessionId: s.id }, 'system'));
+    const work = workFolder(s);
+    const run = async () => {
+      await this.#o.db.transaction(() => {
+        this.#o.db.raw
+          .prepare(
+            "UPDATE code_session_state SET setup_status = 'running', updated_at = ? WHERE session_id = ?",
+          )
+          .run(this.#iso(), s.id);
+      });
+      if (!sandbox) {
+        await done('failed', 'no container engine on this Hub');
+        return;
+      }
+      const r = await sandbox.exec({
+        cmd: script,
+        cwd: work,
+        roots: [{ path: work, access: 'write', label: basename(work) }],
+        network: 'off',
+        yieldMs: 30 * 60_000,
+        signal: AbortSignal.any([this.#stop.signal, AbortSignal.timeout(31 * 60_000)]),
+        turnId: `code-setup:${s.id}`,
+      });
+      if (r.status !== 'exited') {
+        await sandbox.killTurn(`code-setup:${s.id}`).catch(() => undefined);
+        await done('failed', 'the setup script did not finish in 30 minutes');
+        return;
+      }
+      const tail = defaultRedactor.redactString(r.output.trim().split('\n').slice(-20).join('\n'));
+      await done(
+        r.exitCode === 0 ? 'ok' : 'failed',
+        `exit ${r.exitCode}${tail ? `\n${tail}` : ''}`,
+      );
+    };
+    void run().catch((err: unknown) =>
+      done('failed', err instanceof Error ? err.message : String(err)).catch(() => undefined),
+    );
   }
 
   async list(accountId: string, opts: { archived?: boolean } = {}): Promise<CodeSessionView[]> {
@@ -562,23 +692,29 @@ export class CodeService {
           .run(this.#iso(), s.id);
       });
       this.#indexes.delete(s.id);
-      if (!s.worktreeId) continue;
-      const wt = this.#o.db.raw
-        .prepare(`SELECT ${WORKTREE_COLUMNS} FROM worktree WHERE id = ?`)
-        .get(s.worktreeId) as WorktreeRow | undefined;
-      if (!wt || wt.leaseSessionId !== s.id) continue;
-      try {
-        await releaseWorktree({ git: this.git, db: this.#o.db, row: wt, now: this.#now });
-        await this.#emit(s, 'worktree.released', {
-          worktreeId: wt.id,
-          sessionId: s.id,
-          reason: 'done',
-        });
-      } catch (err) {
-        this.#log.warn('releasing a worktree failed', { err, worktreeId: wt.id });
-      }
+      await this.#releaseOwnWorktree(s);
+      // Leases the session held for its workers end with it (FR-073).
+      await this.worktrees.releaseHeldBy(s.id).catch(() => 0);
     }
     return rows.length;
+  }
+
+  async #releaseOwnWorktree(s: SessionRow): Promise<void> {
+    if (!s.worktreeId) return;
+    const wt = this.#o.db.raw
+      .prepare(`SELECT ${WORKTREE_COLUMNS} FROM worktree WHERE id = ?`)
+      .get(s.worktreeId) as WorktreeRow | undefined;
+    if (wt?.leaseSessionId !== s.id) return;
+    try {
+      await this.worktrees.releaseForArchive(wt, await this.#o.setting('code.worktreeCleanup'));
+      await this.#emit(s, 'worktree.released', {
+        worktreeId: wt.id,
+        sessionId: s.id,
+        reason: 'done',
+      });
+    } catch (err) {
+      this.#log.warn('releasing a worktree failed', { err, worktreeId: wt.id });
+    }
   }
 
   // ---- runtime seams -----------------------------------------------------------------------
@@ -613,19 +749,38 @@ export class CodeService {
     children: () => Promise.resolve([]),
   };
 
-  /** The Environment block for each turn and a change refresh when it ends (docs/09 §11). */
+  /**
+   * The Environment block for each turn, the session's budgets (docs/09 §2), and a change
+   * refresh when it ends (docs/09 §11); then the turn-end hooks hear whether the turn edited
+   * files (auto-verify, FR-068).
+   */
   readonly extension: TurnExtension = {
     forTurn: async (input) => {
       if (input.mode !== 'code') return null;
       const s = this.#byThread(input.accountId, input.threadId);
       if (!s) return null;
+      const before = this.#fingerprint(s.id);
       return {
         context: [{ label: 'Environment', text: await this.#environmentText(s), trusted: true }],
-        onEnd: async () => {
+        bounds: this.#bounds(s.id),
+        onEnd: async (outcome) => {
+          if (outcome.stop === 'budget' && outcome.bound)
+            await this.#budgetReached(s, outcome.bound);
+          if (this.#remote(s)) return;
           try {
             await this.refresh(s.accountId, s.id);
           } catch (err) {
             this.#log.warn('refreshing changes after a turn failed', { err, sessionId: s.id });
+          }
+          if (!this.#turnEndHooks.length) return;
+          const edited = this.#fingerprint(s.id) !== before;
+          const info = this.#info(this.#session(s.accountId, s.id));
+          for (const hook of this.#turnEndHooks) {
+            try {
+              await hook(info, { turnId: input.turnId, edited, outcome });
+            } catch (err) {
+              this.#log.warn('a code turn-end hook failed', { err, sessionId: s.id });
+            }
           }
         },
       };
@@ -634,18 +789,190 @@ export class CodeService {
 
   async #environmentText(s: SessionRow): Promise<string> {
     const work = workFolder(s);
-    const info = await this.#repo(work, true);
-    const git = info
-      ? `branch ${info.branch ?? '(detached HEAD)'}${info.head ? ` at ${info.head.slice(0, 12)}` : ', no commits yet'}; ${info.dirty ? 'uncommitted changes' : 'clean'}`
-      : 'not a Git repository';
-    return [
+    const remote = this.#remote(s);
+    const info = remote ? null : await this.#repo(work, true);
+    const git = remote
+      ? 'run git through exec.run in this environment'
+      : info
+        ? `branch ${info.branch ?? '(detached HEAD)'}${info.head ? ` at ${info.head.slice(0, 12)}` : ', no commits yet'}; ${info.dirty ? 'uncommitted changes' : 'clean'}`
+        : 'not a Git repository';
+    const lines = [
       `Working folder: ${work}`,
-      `Runs on: this Hub (local environment); commands run in its sandbox`,
-      `Operating system: ${platform()} ${release()} (${arch()})`,
+      `Runs on: ${this.envs.describe(s.accountId, s.environmentId)}`,
+    ];
+    if (!remote) lines.push(`Operating system: ${platform()} ${release()} (${arch()})`);
+    lines.push(
       `Git: ${git}`,
       `Time: ${this.#iso()}`,
       `Permission mode: ${describePermissionMode(s.permissionMode)}`,
-    ].join('\n');
+    );
+    const budget = this.budget(s.accountId, s.id);
+    const left: string[] = [];
+    if (budget.limits.timeSeconds !== null)
+      left.push(
+        `${Math.max(0, Math.round((budget.limits.timeSeconds - budget.used.timeSeconds) / 60))} min`,
+      );
+    if (budget.limits.tokens !== null)
+      left.push(`${Math.max(0, budget.limits.tokens - budget.used.tokens)} tokens`);
+    if (budget.limits.costUsd !== null)
+      left.push(`$${Math.max(0, budget.limits.costUsd - budget.used.costUsd).toFixed(2)}`);
+    if (left.length) lines.push(`Budget left: ${left.join(', ')}`);
+    return lines.join('\n');
+  }
+
+  // ---- budgets (docs/09 §2; ADR-058) ---------------------------------------------------------
+
+  /** The session's bounds and what its turns used. */
+  budget(accountId: string, id: string): CodeBudgetView {
+    const s = this.#session(accountId, id);
+    const st = this.#state(s.id);
+    return {
+      limits: {
+        timeSeconds: st?.timeLimitS ?? null,
+        tokens: st?.tokenLimit ?? null,
+        costUsd: st?.costLimitUsd ?? null,
+      },
+      used: {
+        timeSeconds: Math.round((st?.timeUsedMs ?? 0) / 1000),
+        tokens: st?.tokensUsed ?? 0,
+        costUsd: st?.costUsedUsd ?? 0,
+      },
+      reached: st?.budgetReached ?? null,
+    };
+  }
+
+  /** Extend the bounds: each given amount is added to its limit (a session without one gets it). */
+  async extendBudget(
+    accountId: string,
+    id: string,
+    req: ExtendCodeBudgetRequest,
+  ): Promise<CodeBudgetView> {
+    const s = this.#session(accountId, id);
+    const b = this.budget(accountId, id);
+    const add = (limit: number | null, used: number, more: number | undefined) =>
+      more === undefined ? limit : (limit === null ? used : limit) + more;
+    await this.#ensureState(s.id);
+    await this.#o.db.transaction(() => {
+      this.#o.db.raw
+        .prepare(
+          `UPDATE code_session_state SET time_limit_s = ?, token_limit = ?, cost_limit_usd = ?,
+             budget_reached = NULL, updated_at = ? WHERE session_id = ?`,
+        )
+        .run(
+          add(b.limits.timeSeconds, b.used.timeSeconds, req.timeSeconds),
+          add(b.limits.tokens, b.used.tokens, req.tokens),
+          add(b.limits.costUsd, b.used.costUsd, req.costUsd),
+          this.#iso(),
+          s.id,
+        );
+    });
+    await this.#o.audit.append({
+      accountId,
+      actor: 'user',
+      kind: 'code',
+      action: 'code.budget.extended',
+      resource: workFolder(s),
+      result: 'ok',
+      threadId: s.threadId,
+      detail: { sessionId: s.id, ...req },
+    });
+    await this.#emit(s, 'code.session.updated', { sessionId: s.id });
+    return this.budget(accountId, id);
+  }
+
+  /**
+   * Bounds checked before each model step of a session's turn; each step's usage is written
+   * through at once, so a restart loses nothing and parallel turns add up.
+   */
+  #bounds(sessionId: string): TurnBounds {
+    return {
+      check: (): BoundHit | null => {
+        const st = this.#state(sessionId);
+        if (!st) return null;
+        const timeS = st.timeUsedMs / 1000;
+        if (st.timeLimitS !== null && timeS >= st.timeLimitS)
+          return { bound: 'time', used: Math.round(timeS), limit: st.timeLimitS };
+        if (st.tokenLimit !== null && st.tokensUsed >= st.tokenLimit)
+          return { bound: 'tokens', used: st.tokensUsed, limit: st.tokenLimit };
+        if (st.costLimitUsd !== null && st.costUsedUsd >= st.costLimitUsd)
+          return { bound: 'cost', used: st.costUsedUsd, limit: st.costLimitUsd };
+        return null;
+      },
+      record: (step) => {
+        if (!this.#hasStateTable()) return;
+        const tokens = step.inputTokens + step.outputTokens;
+        const at = this.#iso();
+        void this.#o.db
+          .transaction(() => {
+            this.#o.db.raw
+              .prepare(
+                `UPDATE code_session_state SET time_used_ms = time_used_ms + ?,
+                   tokens_used = tokens_used + ?, cost_used_usd = cost_used_usd + ?,
+                   updated_at = ? WHERE session_id = ?`,
+              )
+              .run(Math.round(step.activeMs), tokens, step.costUsd, at, sessionId);
+          })
+          .catch((err: unknown) => this.#log.warn('recording session usage failed', { err }));
+      },
+    };
+  }
+
+  async #budgetReached(s: SessionRow, hit: BoundHit): Promise<void> {
+    if (!this.#hasStateTable()) return;
+    await this.#ensureState(s.id);
+    await this.#o.db.transaction(() => {
+      this.#o.db.raw
+        .prepare(
+          'UPDATE code_session_state SET budget_reached = ?, updated_at = ? WHERE session_id = ?',
+        )
+        .run(hit.bound, this.#iso(), s.id);
+    });
+    await this.#emit(s, 'code.session.updated', { sessionId: s.id }, 'system');
+  }
+
+  /**
+   * Whether the database has `code_session_state` (migration 0025). Without it sessions work as
+   * in M5: no budgets, setup state or worker lineage are kept.
+   */
+  #hasStateTable(): boolean {
+    if (this.#stateTable) return true;
+    this.#stateTable = !!this.#o.db.raw
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'code_session_state'")
+      .get();
+    return this.#stateTable;
+  }
+
+  #state(sessionId: string): StateRow | null {
+    if (!this.#hasStateTable()) return null;
+    return (
+      (this.#o.db.raw
+        .prepare(`SELECT ${STATE_COLUMNS} FROM code_session_state WHERE session_id = ?`)
+        .get(sessionId) as StateRow | undefined) ?? null
+    );
+  }
+
+  /** M5 sessions have no state row yet. */
+  async #ensureState(sessionId: string): Promise<void> {
+    if (!this.#hasStateTable())
+      throw new NovaError('server_error', 'session budgets need the database to be upgraded');
+    if (this.#state(sessionId)) return;
+    await this.#o.db.transaction(() => {
+      this.#o.db.raw
+        .prepare('INSERT OR IGNORE INTO code_session_state (session_id, updated_at) VALUES (?, ?)')
+        .run(sessionId, this.#iso());
+    });
+  }
+
+  /** Pending changes of a session as one string; a turn that changes it edited files. */
+  #fingerprint(sessionId: string): string {
+    const r = this.#o.db.raw
+      .prepare(
+        `SELECT group_concat(path || ':' || COALESCE(patch_sha256, '') || ':' || pending, '|')
+           AS f FROM (SELECT path, patch_sha256, pending FROM code_change
+           WHERE session_id = ? ORDER BY path)`,
+      )
+      .get(sessionId) as { f: string | null } | undefined;
+    return r?.f ?? '';
   }
 
   // ---- changes (FR-064, FR-065) --------------------------------------------------------------
@@ -674,6 +1001,8 @@ export class CodeService {
   }
 
   async #refresh(s: SessionRow, callId: string | null): Promise<string[]> {
+    // Sessions on another machine have no Hub-side change capture yet.
+    if (this.#remote(s)) return [];
     const shadow = await this.#ensureShadow(s);
     const { files } = await shadow.changes();
     const rows = this.#changeRows(s.id);
@@ -1217,8 +1546,14 @@ export class CodeService {
    * Commit the session's accepted changes. Refuses on the default branch unless `branch` creates
    * `nova/<slug>`, refuses when the staged diff holds likely secrets, and never pushes.
    */
-  async commit(accountId: string, id: string, req: CodeCommitRequest): Promise<CodeCommitResult> {
+  async commit(
+    accountId: string,
+    id: string,
+    req: CodeCommitRequest,
+    actor: 'user' | 'agent' = 'user',
+  ): Promise<CodeCommitResult> {
     const s = this.#session(accountId, id);
+    if (this.#remote(s)) throw notOnHub();
     const result = await this.#serial(s.id, async () => {
       const work = workFolder(s);
       const info = await repoInfo(this.git, work);
@@ -1327,7 +1662,7 @@ export class CodeService {
       });
     await this.#o.audit.append({
       accountId,
-      actor: 'user',
+      actor,
       kind: 'code',
       action: 'code.commit',
       resource: workFolder(s),
@@ -1349,6 +1684,41 @@ export class CodeService {
     });
     await this.#emit(s, 'code.session.updated', { sessionId: s.id });
     return out;
+  }
+
+  /**
+   * Create `nova/<slug>` (a short suffix when taken) at HEAD and switch to it without a checkout,
+   * so no file changes and no hook runs (docs/10 §8, FR-211).
+   */
+  async createBranch(
+    accountId: string,
+    id: string,
+    name: string,
+    actor: 'user' | 'agent' = 'user',
+  ): Promise<{ branch: string; from: string | null }> {
+    const s = this.#session(accountId, id);
+    if (this.#remote(s)) throw notOnHub();
+    const branch = await this.#serial(s.id, async () => {
+      const info = await repoInfo(this.git, workFolder(s));
+      if (!info) throw new NovaError('validation', 'the session folder is not a Git repository');
+      const next = await freeBranch(this.git, info.root, branchSlug(name));
+      await switchToNewBranch(this.git, info.root, next);
+      this.#repoCache.delete(workFolder(s));
+      return { branch: next, from: info.branch };
+    });
+    await this.setBranch(s.id, branch.branch);
+    await this.#o.audit.append({
+      accountId,
+      actor,
+      kind: 'code',
+      action: 'code.branch.created',
+      resource: workFolder(s),
+      result: 'ok',
+      threadId: s.threadId,
+      detail: { sessionId: s.id, branch: branch.branch, from: branch.from },
+    });
+    await this.#emit(s, 'code.session.updated', { sessionId: s.id });
+    return branch;
   }
 
   /** After a commit: committed changes leave the list and `start` moves to the commit. */
@@ -1395,6 +1765,8 @@ export class CodeService {
       cwd: repoRoot,
       roots,
       network: 'off',
+      // Git writes `.git`; its config, hooks and info stay read-only (docs/12 §7.2).
+      gitWrite: true,
       env: { ...(await identity(this.git, repoRoot)), NOVA_COMMIT_MESSAGE: message },
       yieldMs: 5 * 60_000,
       signal,
@@ -1468,7 +1840,7 @@ export class CodeService {
   // ---- read-only Git for the coding tools (FR-211) -------------------------------------------
 
   async gitStatus(accountId: string, threadId: string): Promise<string> {
-    const s = this.#requireThread(accountId, threadId);
+    const s = this.#requireThread(accountId, threadId, true);
     const r = await this.git.run(['status', '--porcelain=v1', '-b', '--untracked-files=normal'], {
       cwd: workFolder(s),
     });
@@ -1480,7 +1852,7 @@ export class CodeService {
     threadId: string,
     opts: { path?: string; staged?: boolean },
   ): Promise<string> {
-    const s = this.#requireThread(accountId, threadId);
+    const s = this.#requireThread(accountId, threadId, true);
     const args = [
       'diff',
       '--no-ext-diff',
@@ -1500,7 +1872,7 @@ export class CodeService {
     threadId: string,
     opts: { limit?: number; path?: string },
   ): Promise<string> {
-    const s = this.#requireThread(accountId, threadId);
+    const s = this.#requireThread(accountId, threadId, true);
     const n = Math.min(Math.max(opts.limit ?? 20, 1), 100);
     const args = ['log', `-n${n}`, '--no-color', '--date=short', '--format=%h %ad %an%x09%s'];
     if (opts.path) args.push('--', `:(literal)${relPath(opts.path)}`);
@@ -1539,10 +1911,215 @@ export class CodeService {
     });
   }
 
+  // ---- worktree registry (FR-073) ------------------------------------------------------------
+
+  /** The account's worktrees, of one repository (a folder inside it) when `repo` is given. */
+  async listWorktrees(
+    accountId: string,
+    q: { repo?: string; status?: 'active' | 'released' | 'removed' | 'all' } = {},
+  ): Promise<WorktreeView[]> {
+    let repoRoot: string | undefined;
+    if (q.repo) {
+      const info = await repoInfo(this.git, await this.#checkFolder(q.repo));
+      if (!info) throw new NovaError('validation', 'that folder is not in a Git repository');
+      repoRoot = info.root;
+    }
+    return this.worktrees.list(accountId, {
+      ...(repoRoot ? { repoRoot } : {}),
+      ...(q.status ? { status: q.status } : {}),
+    });
+  }
+
+  /**
+   * Create a worktree of the repository a folder belongs to, optionally leased to a session of
+   * the account (with a length); `.worktreeinclude` files are copied in.
+   */
+  async createWorktree(accountId: string, req: CreateWorktreeRequest): Promise<WorktreeView> {
+    const folder = await this.#checkFolder(req.repo);
+    const info = await repoInfo(this.git, folder);
+    if (!info) throw new NovaError('validation', 'a worktree needs a Git repository');
+    if (req.sessionId) {
+      const s = this.#session(accountId, req.sessionId);
+      if (s.status !== 'active' || s.archived)
+        throw new NovaError('conflict', 'that session is archived');
+    }
+    const { row, included } = await this.worktrees.create({
+      accountId,
+      repoRoot: info.root,
+      sourceBranch: info.branch ?? 'HEAD',
+      slug: branchSlug(req.branch ?? basename(info.root)),
+      leaseSessionId: req.sessionId ?? null,
+      ttlMinutes: req.ttlMinutes ?? null,
+      removeOldest: req.removeOldest ?? false,
+    });
+    return this.worktrees.view(accountId, row.id, included);
+  }
+
+  // ---- M6: what the rest of the area reads ------------------------------------------------
+
+  /** A session as the rest of the area sees it; `not_found` for another account's. */
+  info(accountId: string, id: string): CodeSessionInfo {
+    return this.#info(this.#session(accountId, id));
+  }
+
+  /** The session of a code thread, or null. */
+  infoByThread(accountId: string, threadId: string): CodeSessionInfo | null {
+    const s = this.#byThread(accountId, threadId);
+    return s ? this.#info(s) : null;
+  }
+
+  /** The account's sessions (active ones by default), newest change first. */
+  infos(accountId: string, opts: { archived?: boolean; limit?: number } = {}): CodeSessionInfo[] {
+    const rows = this.#o.db.raw
+      .prepare(
+        `${SESSION_SELECT} WHERE s.account_id = ? AND t.deleted_at IS NULL AND t.archived = ?
+         ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`,
+      )
+      .all(accountId, opts.archived ? 1 : 0, opts.limit ?? 200) as unknown as SessionRow[];
+    return rows.map((r) => this.#info(r));
+  }
+
+  /** Ids of every active session (the Hub's sweep stops the dev servers of the others). */
+  activeSessionIds(): string[] {
+    return (
+      this.#o.db.raw
+        .prepare(
+          `SELECT s.id FROM code_session s JOIN thread t ON t.id = s.thread_id
+           WHERE s.status = 'active' AND t.archived = 0 AND t.deleted_at IS NULL`,
+        )
+        .all() as { id: string }[]
+    ).map((r) => r.id);
+  }
+
+  /** Archive a session's thread; the session and its worktree lease follow (sweepArchived). */
+  async archive(accountId: string, id: string): Promise<void> {
+    const s = this.#session(accountId, id);
+    await this.#o.threads.update(accountId, s.threadId, { archived: true });
+    await this.sweepArchived(accountId);
+  }
+
+  /** The parent session and role of a worker session (task.spawn), if it is one. */
+  lineage(sessionId: string): { parentSessionId: string | null; role: string | null } {
+    const st = this.#state(sessionId);
+    return { parentSessionId: st?.parentSessionId ?? null, role: st?.role ?? null };
+  }
+
+  /** Worker sessions a session started with task.spawn. */
+  workers(accountId: string, parentSessionId: string): CodeSessionInfo[] {
+    if (!this.#hasStateTable()) return [];
+    const rows = this.#o.db.raw
+      .prepare(
+        `${SESSION_SELECT} JOIN code_session_state st ON st.session_id = s.id
+         WHERE s.account_id = ? AND st.parent_session_id = ? AND t.deleted_at IS NULL
+         ORDER BY s.created_at`,
+      )
+      .all(accountId, parentSessionId) as unknown as SessionRow[];
+    return rows.map((r) => this.#info(r));
+  }
+
+  /** The container setup state of a session (null when it has none). */
+  setupState(
+    sessionId: string,
+  ): { status: 'running' | 'ok' | 'failed'; detail: string | null } | null {
+    const st = this.#state(sessionId);
+    return st?.setupStatus ? { status: st.setupStatus, detail: st.setupDetail } : null;
+  }
+
+  /**
+   * The sandbox a session's commands run in: null for the local environment (the Hub's own),
+   * the environment's image for a container, the helper for ssh, wsl and device environments.
+   */
+  sandboxFor(info: Pick<CodeSessionInfo, 'accountId' | 'environmentId'>): SandboxClient | null {
+    if (!info.environmentId) return null;
+    try {
+      return this.envs.sandboxFor(info.accountId, info.environmentId);
+    } catch {
+      return null;
+    }
+  }
+
+  /** `sandboxFor` by thread (the tool runtime picks the session's sandbox per call). */
+  sandboxForThread(accountId: string, threadId: string): SandboxClient | null {
+    const s = this.#byThread(accountId, threadId);
+    return s ? this.sandboxFor(s) : null;
+  }
+
+  /** The Hub's own sandbox (local sessions). */
+  hubSandbox(): SandboxClient | null {
+    return this.#o.sandbox?.() ?? null;
+  }
+
+  /** A folder on the Hub a session or a worktree may use (the same checks as a new session). */
+  checkFolder(input: string): Promise<string> {
+    return this.#checkFolder(input);
+  }
+
+  /** The TurnStarter (comments, CI feedback, auto-verify feedback, workers). */
+  get turns(): TurnStarter | null {
+    return this.#turns;
+  }
+
+  /** Announce an event about a session (other parts of the area). */
+  async announce(
+    info: Pick<CodeSessionInfo, 'id' | 'accountId' | 'threadId'>,
+    name: string,
+    payload: Record<string, unknown>,
+    actor: 'user' | 'system' = 'system',
+  ): Promise<void> {
+    await this.#emit(
+      { id: info.id, accountId: info.accountId, threadId: info.threadId } as SessionRow,
+      name,
+      payload,
+      actor,
+    );
+  }
+
+  /** Record the pull request and CI status on the session (CodeSessionView fields). */
+  async setPullRequest(sessionId: string, url: string | null, ci: string | null): Promise<void> {
+    await this.#o.db.transaction(() => {
+      this.#o.db.raw
+        .prepare(
+          'UPDATE code_session SET pull_request_url = ?, ci_status = ?, updated_at = ? WHERE id = ?',
+        )
+        .run(url, ci, this.#iso(), sessionId);
+    });
+  }
+
+  /** Record the branch a session works on (after git.branch). */
+  async setBranch(sessionId: string, branch: string): Promise<void> {
+    await this.#o.db.transaction(() => {
+      this.#o.db.raw
+        .prepare('UPDATE code_session SET branch = ?, updated_at = ? WHERE id = ?')
+        .run(branch, this.#iso(), sessionId);
+    });
+  }
+
+  #info(s: SessionRow): CodeSessionInfo {
+    return {
+      id: s.id,
+      accountId: s.accountId,
+      threadId: s.threadId,
+      title: s.title,
+      folder: workFolder(s),
+      folderPath: s.folderPath,
+      environmentId: s.environmentId,
+      hubLocal: !this.#remote(s),
+      worktreeId: s.worktreeId,
+      branch: s.branch,
+      permissionMode: s.permissionMode,
+      modelId: s.modelId,
+      projectId: s.projectId,
+      active: s.status === 'active' && s.archived === 0 && !s.deletedAt,
+      threadState: s.threadState,
+      updatedAt: s.updatedAt,
+    };
+  }
+
   // ---- lifecycle ---------------------------------------------------------------------------
 
   async close(): Promise<void> {
     this.#stop.abort();
+    await this.envs.close();
     await Promise.allSettled([...this.#reviews.values()]);
     await Promise.allSettled([...this.#locks.values()]);
   }
@@ -1580,12 +2157,13 @@ export class CodeService {
     return s ?? null;
   }
 
-  #requireThread(accountId: string, threadId: string): SessionRow {
+  #requireThread(accountId: string, threadId: string, hubOnly = false): SessionRow {
     const s = this.#byThread(accountId, threadId);
     if (!s)
       throw new NovaError('not_found', 'this tool works only in Code sessions', {
         details: { reason: 'not_a_code_session' },
       });
+    if (hubOnly && this.#remote(s)) throw notOnHub();
     return s;
   }
 
@@ -1599,6 +2177,7 @@ export class CodeService {
 
   /** The session's shadow; recreated (with a fresh baseline) if the data folder lost it. */
   async #ensureShadow(s: SessionRow): Promise<ShadowRepo> {
+    if (this.#remote(s)) throw notOnHub();
     const shadow = this.#shadowAt(s.id, workFolder(s));
     if (!shadow.exists) {
       await shadow.init(await repoUserExcludes(this.git, workFolder(s)));
@@ -1623,7 +2202,7 @@ export class CodeService {
       title: s.title,
       environmentId: s.environmentId,
       folder: { path: work, projectFolderId: s.projectFolderId },
-      repo: await this.#repo(work),
+      repo: this.#remote(s) ? null : await this.#repo(work),
       worktreeId: s.worktreeId,
       permissionMode: s.permissionMode,
       model: s.modelId,
@@ -1633,6 +2212,12 @@ export class CodeService {
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
     };
+  }
+
+  /** Whether the session works on another machine (ssh, wsl or device environment). */
+  #remote(s: { accountId: string; environmentId: string | null }): boolean {
+    const kind = this.envs.kindOf(s.accountId, s.environmentId);
+    return kind !== null && !this.envs.isHubLocal(kind);
   }
 
   async #repo(folder: string, fresh = false): Promise<RepoInfo | null> {
@@ -1668,6 +2253,7 @@ export class CodeService {
         .get(s.environmentId) as { status: string } | undefined;
       if (env?.status === 'down') return 'Environment down';
     }
+    if (this.#remote(s)) return null;
     try {
       if (!(await stat(workFolder(s))).isDirectory()) return 'Folder missing';
     } catch {
@@ -1727,6 +2313,22 @@ export class CodeService {
     if (isProtectedRel(real.split(/[\\/]/).filter(Boolean)))
       throw refuse('protected folders (.git, .nova, .agents) cannot be session folders');
     return real;
+  }
+
+  /**
+   * A folder on another machine gets the checks a path can have without its filesystem: not a
+   * system folder, a credential location or inside a protected one (the helper checks the rest).
+   */
+  #checkRemotePath(input: string): string {
+    const p = input.trim().replace(/\/+$/, '') || '/';
+    const refuse = (message: string) =>
+      new NovaError('policy_denied', message, { details: { reason: 'protected_folder' } });
+    for (const sys of SYSTEM_FOLDERS)
+      if (isWithin(sys, p)) throw refuse(`${sys} is a system folder`);
+    if (isCredentialPath(p)) throw refuse('credential folders cannot be session folders');
+    if (isProtectedRel(p.split('/').filter(Boolean)))
+      throw refuse('protected folders (.git, .nova, .agents) cannot be session folders');
+    return p;
   }
 
   #assertProject(accountId: string, projectId: string): void {
@@ -1810,6 +2412,14 @@ function commentView(r: CommentRow): CodeDiffComment {
     reviewId: r.reviewId,
     submittedAt: r.submittedAt,
   };
+}
+
+function notOnHub(): NovaError {
+  return new NovaError(
+    'capability_missing',
+    'this works only for sessions whose folder is on the Hub; use exec.run in this environment',
+    { details: { reason: 'remote_environment' } },
+  );
 }
 
 function stale(message: string): NovaError {

@@ -4,6 +4,7 @@
 export * from './bundle.ts';
 export * from './connection.ts';
 export * from './content.ts';
+export * from './events.ts';
 export * from './log-ring.ts';
 export * from './manager.ts';
 export * from './names.ts';

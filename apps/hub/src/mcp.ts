@@ -79,6 +79,11 @@ export interface HubMcpArea extends McpArea {
   serverDefault(serverId: string): Approval | null;
   /** Called when a server's tool list, or what its lists expose, changes (FR-196 index). */
   onToolsChanged(listener: (serverId: string) => void): () => void;
+  /**
+   * Called before a server is removed, while it is still connected (its event subscriptions are
+   * cancelled, FR-201). A hook that fails is logged; the removal goes on.
+   */
+  onServerRemoving(hook: (accountId: string, serverId: string) => Promise<unknown>): void;
 }
 
 /** What `config_json` holds (the mcp-config.json fields without their own column). */
@@ -303,6 +308,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
   const { db, secrets, events, audit, accountOf } = ctx;
   const log = ctx.log.child('mcp');
   const listeners = new Set<(serverId: string) => void>();
+  const removing: ((accountId: string, serverId: string) => Promise<unknown>)[] = [];
   const defaults = new Map<string, Approval | null>();
   // Status writes and events go out in order, one at a time.
   let statusChain: Promise<void> = Promise.resolve();
@@ -715,6 +721,10 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
       const accountId = await accountOf(req);
       const row = await load(accountId, params.parse(req.params).id);
       refusePluginOwned(row);
+      for (const hook of removing)
+        await hook(accountId, row.id).catch((err: unknown) =>
+          log.warn('server removal hook failed', { err, serverId: row.id }),
+        );
       await manager.remove(row.id);
       await oauth.forget(row.id);
       await db.transaction(() => db.orm.delete(mcpServer).where(eq(mcpServer.id, row.id)));
@@ -999,6 +1009,9 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
   return {
     source: new McpToolSource(manager),
     manager,
+    onServerRemoving: (hook) => {
+      removing.push(hook);
+    },
     serverDefault: (serverId) => defaults.get(serverId) ?? null,
     onToolsChanged: (listener) => {
       listeners.add(listener);

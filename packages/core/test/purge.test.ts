@@ -4,7 +4,13 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { uuidv7 } from '@nova/shared';
-import { purgeThreadRows, removeUnreferencedBlobs, writeAttachmentBlob } from '../src/index.ts';
+import {
+  BLOB_REFERENCES,
+  blobInUse,
+  purgeThreadRows,
+  removeUnreferencedBlobs,
+  writeAttachmentBlob,
+} from '../src/index.ts';
 import { ACCOUNT, makeEnv, type Env } from './helpers.ts';
 
 let env: Env | undefined;
@@ -53,6 +59,28 @@ describe('purge (FR-027) and shared blobs', () => {
     const second = await env.db.transaction(() => purgeThreadRows(env!.db, [keep.id]));
     expect(removeUnreferencedBlobs(env.db, dataDir, second)).toBe(1);
     expect(existsSync(join(dataDir, blob.blobPath))).toBe(false);
+  });
+
+  it('checks every column that names a blob, and each one exists', async () => {
+    env = await makeEnv();
+    for (const [table, column] of BLOB_REFERENCES) {
+      const cols = env.db.raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      expect(
+        cols.map((c) => c.name),
+        `${table}.${column}`,
+      ).toContain(column);
+    }
+    // The M6 areas that write content-addressed blobs are all covered.
+    expect(BLOB_REFERENCES).toEqual(
+      expect.arrayContaining([
+        ['agent', 'avatar_path'],
+        ['screen_action', 'before_blob'],
+        ['screen_action', 'after_blob'],
+        ['site_version', 'blob_path'],
+        ['site_version', 'preview_blob_path'],
+      ]),
+    );
+    expect(blobInUse(env.db, 'attachments/aa/nothing')).toBe(false);
   });
 
   it("keeps a blob the account's avatar uses", async () => {

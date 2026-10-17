@@ -12,6 +12,7 @@ import type { ArtifactKind, ArtifactView, EventEnvelope } from '@nova/shared';
 import { Button, CodeBlock, Icon, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
+import { ChartArtifactBody } from '../spaces/Visualization.tsx';
 import { formatBytes } from './attachments.ts';
 import { Markdown } from './Markdown.tsx';
 import type { ArtifactPart } from './thread-state.ts';
@@ -299,7 +300,7 @@ export function ArtifactViewer({ artifact: a, rev = 0 }: { artifact: ArtifactVie
         <TextContent
           url={url}
           size={a.size}
-          render={(t) => <CodeBlock code={t} language="json" label={`Chart data: ${title}`} />}
+          render={(t) => <ChartArtifactBody text={t} title={title} />}
         />
       );
       break;

@@ -166,6 +166,11 @@ export interface ExecRequest {
   signal: AbortSignal;
   /** The turn that owns the session (killed when the turn ends). */
   turnId?: string;
+  /**
+   * Nova's own Git invocation (FR-211, docs/12 §7.2): `.git` is writable except its config,
+   * hooks and info. Never taken from a tool's arguments.
+   */
+  gitWrite?: boolean;
 }
 
 export type ExecResult =

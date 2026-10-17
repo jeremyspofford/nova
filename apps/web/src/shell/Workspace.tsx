@@ -52,6 +52,9 @@ import { APPS_MOVED_EVENT } from '../apps/McpAppFrame.tsx';
 import { CodeView } from '../code/CodeView.tsx';
 import { WorkView } from '../work/WorkView.tsx';
 import { LibraryView } from '../library/LibraryView.tsx';
+import { PetOverlay } from '../pets/PetOverlay.tsx';
+import { SitesView } from '../spaces/SitesView.tsx';
+import { SpacesView } from '../spaces/SpacesView.tsx';
 import { ProjectsView } from '../projects/ProjectsView.tsx';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
@@ -875,9 +878,13 @@ export function Workspace({
           ? 'Projects'
           : route.name === 'library'
             ? 'Library'
-            : route.name === 'apps'
-              ? 'Apps'
-              : MODE_INFO[mode ?? lastMode].label;
+            : route.name === 'spaces'
+              ? 'Spaces'
+              : route.name === 'sites'
+                ? 'Sites'
+                : route.name === 'apps'
+                  ? 'Apps'
+                  : MODE_INFO[mode ?? lastMode].label;
 
   return (
     <div
@@ -1015,6 +1022,10 @@ export function Workspace({
           ) : null}
           {route.name === 'projects' ? <ProjectsView projectId={route.projectId} /> : null}
           {route.name === 'library' ? <LibraryView /> : null}
+          {route.name === 'spaces' ? (
+            <SpacesView spaceId={route.spaceId} pageId={route.pageId} />
+          ) : null}
+          {route.name === 'sites' ? <SitesView siteId={route.siteId} /> : null}
           {route.name === 'apps' ? <AppsView entryId={route.entryId} /> : null}
           {route.name === 'onboarding' ? (
             <Onboarding displayName={displayName} onDisplayName={onDisplayName} />
@@ -1113,6 +1124,7 @@ export function Workspace({
           stays on screen (FR-198). */}
       <div ref={appsPark} className="apps-park" />
       {appsUsed ? createPortal(<ThreadApps threadId={chatThreadId} />, appsHost) : null}
+      <PetOverlay />
     </div>
   );
 }

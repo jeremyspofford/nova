@@ -97,6 +97,59 @@ describe('buildActivity', () => {
     expect(items[5]?.callId).toBe('c2');
   });
 
+  it('shows browser and screen actions with their screenshots (FR-098)', () => {
+    const c = { threadId: 't1', turnId: 'u1', callId: 'c1' };
+    const items = buildActivity([
+      ev({
+        name: 'browser.navigated',
+        correlation: c,
+        payload: { computerId: 'pc', url: 'https://shop.test/', allowed: true },
+      }),
+      ev({
+        name: 'browser.navigated',
+        correlation: c,
+        payload: { computerId: 'pc', url: 'https://evil.test/', allowed: false },
+      }),
+      ev({
+        name: 'browser.action',
+        correlation: c,
+        payload: {
+          computerId: 'pc',
+          actionId: 'b1',
+          action: 'click',
+          target: '"Buy now" (button)',
+          result: 'ok',
+          before: true,
+          after: false,
+        },
+      }),
+      ev({
+        name: 'screen.action',
+        correlation: c,
+        payload: { computerId: 'pc', actionId: 's1', kind: 'type', app: 'Notes', status: 'ok' },
+      }),
+      ev({ name: 'browser.action', payload: {} }),
+      ev({ name: 'screen.action', payload: { status: 'denied', error: 'view only' } }),
+    ]);
+    expect(items.map((i) => [i.kind, i.title, i.status, i.detail])).toEqual([
+      ['computer', 'Browser opened https://shop.test/', 'ok', null],
+      ['computer', 'Browser blocked https://evil.test/', 'blocked', null],
+      ['computer', 'Browser: click "Buy now" (button)', 'ok', null],
+      ['computer', 'Screen: type in Notes', 'ok', null],
+      ['computer', 'Browser: action', null, null],
+      ['computer', 'Screen: action', 'denied', 'view only'],
+    ]);
+    expect(items[2]).toMatchObject({
+      callId: 'c1',
+      shots: { before: '/api/v1/browser/actions/b1/screenshots/before', after: null },
+    });
+    expect(items[3]?.shots).toEqual({
+      before: '/api/v1/computers/pc/screen/actions/s1/before',
+      after: '/api/v1/computers/pc/screen/actions/s1/after',
+    });
+    expect(items[4]?.shots).toBeUndefined();
+  });
+
   it('copes with sparse payloads', () => {
     const items = buildActivity([
       ev({ name: 'tool.call.started', payload: {} }),

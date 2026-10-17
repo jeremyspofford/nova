@@ -4,7 +4,7 @@
 // before anything is committed. The repository's commit hooks run only inside the session
 // sandbox; when no sandbox with Git is available the commit runs on the Hub with hooks disabled
 // and the result says so. Nothing is ever pushed.
-import { access, constants, readdir } from 'node:fs/promises';
+import { access, constants } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { NovaError } from '@nova/shared';
 import { scanText, type ScanFinding } from '@nova/security';
@@ -24,6 +24,32 @@ export interface StageEntry {
 
 /** Whether the repository has any active commit hook (core.hooksPath or `.git/hooks`). */
 export async function hasCommitHooks(git: HookFreeGit, folder: string): Promise<boolean> {
+  const dir = await hooksDir(git, folder);
+  for (const n of COMMIT_HOOKS) if (await executable(join(dir, n))) return true;
+  return false;
+}
+
+/** The executable hook `name` of the repository (core.hooksPath or `.git/hooks`), if any. */
+export async function hookFile(
+  git: HookFreeGit,
+  folder: string,
+  name: string,
+): Promise<string | null> {
+  const p = join(await hooksDir(git, folder), name);
+  return (await executable(p)) ? p : null;
+}
+
+async function executable(p: string): Promise<boolean> {
+  try {
+    await access(p, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Where the repository's hooks live: the user's own core.hooksPath, else `.git/hooks`. */
+export async function hooksDir(git: HookFreeGit, folder: string): Promise<string> {
   // The user's own core.hooksPath: the last value from a config file (ours, from the command
   // line, points at the empty folder).
   const configured = await git.run(['config', '--show-origin', '--get-all', 'core.hooksPath'], {
@@ -37,29 +63,9 @@ export async function hasCommitHooks(git: HookFreeGit, folder: string): Promise<
     .map((l) => l.slice(l.indexOf('\t') + 1).trim())
     .at(-1);
   const top = await git.text(['rev-parse', '--show-toplevel'], { cwd: folder });
-  let dir: string;
-  if (own) {
-    dir = isAbsolute(own) ? own : join(top, own);
-  } else {
-    const common = await git.text(['rev-parse', '--git-common-dir'], { cwd: folder });
-    dir = join(isAbsolute(common) ? common : join(folder, common), 'hooks');
-  }
-  let names: string[];
-  try {
-    names = await readdir(dir);
-  } catch {
-    return false;
-  }
-  for (const n of names) {
-    if (!COMMIT_HOOKS.includes(n)) continue;
-    try {
-      await access(join(dir, n), constants.X_OK);
-      return true;
-    } catch {
-      continue;
-    }
-  }
-  return false;
+  if (own) return isAbsolute(own) ? own : join(top, own);
+  const common = await git.text(['rev-parse', '--git-common-dir'], { cwd: folder });
+  return join(isAbsolute(common) ? common : join(folder, common), 'hooks');
 }
 
 /** Whether HEAD points at a commit (false on an unborn branch). */

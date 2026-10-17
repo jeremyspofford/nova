@@ -388,6 +388,11 @@ export class McpConnection {
     }
   }
 
+  /** The connected SDK client, null while not connected (MCP event subscriptions, FR-201). */
+  get sdkClient(): Client | null {
+    return this.#client;
+  }
+
   async readResource(uri: string, signal?: AbortSignal): Promise<McpToolResult> {
     const client = this.#client;
     if (!client) {

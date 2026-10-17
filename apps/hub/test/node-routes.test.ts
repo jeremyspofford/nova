@@ -127,19 +127,17 @@ async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, ms = 
 }
 
 describe('owner routes', () => {
-  it('require a session and support only compute nodes in M2', async () => {
+  it('require a session; compute nodes here, other roles enroll novad (M6)', async () => {
     const anon = { 'x-none': '1' };
     expect((await api('POST', '/api/v1/devices/add/start', { role: 'compute' }, anon)).status).toBe(
       401,
     );
     expect((await api('GET', '/api/v1/devices', undefined, anon)).status).toBe(401);
     expect((await api('POST', '/api/v1/devices/x/revoke', undefined, anon)).status).toBe(401);
+    // Other roles are novad devices (M6): a one-use enrollment token for `novad`.
     const client = await api('POST', '/api/v1/devices/add/start', { role: 'client' });
-    expect(client.status).toBe(400);
-    expect(client.json.error).toMatchObject({
-      code: 'validation',
-      details: { reason: 'role_unsupported' },
-    });
+    expect(client.status).toBe(201);
+    expect(JSON.stringify(client.json)).toContain('nvd_');
     expect((await api('POST', '/api/v1/devices/add/start', { role: 'toaster' })).status).toBe(400);
     expect((await api('GET', '/api/v1/devices')).json).toEqual({ items: [] });
     expect((await api('GET', '/api/v1/devices?role=client')).json).toEqual({ items: [] });

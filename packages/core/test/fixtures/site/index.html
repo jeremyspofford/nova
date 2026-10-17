@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Nova test site</title>
+  </head>
+  <body>
+    <h1>Nova test site</h1>
+    <p>A local site for the agent browser tests (docs/18 J8).</p>
+    <form action="/search" method="get" role="search">
+      <input type="search" name="q" aria-label="Search" />
+      <button type="submit">Search</button>
+    </form>
+    <ul>
+      <li><a href="/form.html">Contact form</a></li>
+      <li><a href="/shop.html">Shop</a></li>
+      <li><a href="/injected.html">News</a></li>
+      <li><a href="/billing.html">Invoices</a></li>
+      <li><a href="/login.html">Sign in</a></li>
+      <li><a href="/download.html">Downloads</a></li>
+      <li><a href="/tools.html">Page tools</a></li>
+      <li><a id="away" href="http://localhost:PORT/form.html">Same site, other host</a></li>
+    </ul>
+    <img src="http://localhost:PORT/pixel.svg" alt="" width="1" height="1" />
+  </body>
+</html>

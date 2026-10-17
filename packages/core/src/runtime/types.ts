@@ -1,7 +1,7 @@
 // M5 seams of the agent runtime (docs/09, docs/10, ADR-076). One runtime and one policy engine
 // for every mode: Work runs, Code sessions, schedules and goals start and shape turns of the same
 // chat loop (ChatService) through these interfaces. Lead-owned: request changes, never edit.
-import type { ApprovalPolicyKind } from '@nova/policy';
+import type { ApprovalPolicyKind, CommandRule, PolicyRule } from '@nova/policy';
 import type {
   PermissionMode,
   RunAutonomy,
@@ -193,6 +193,14 @@ export interface ThreadPolicy {
 
 export interface ThreadPolicySource {
   forThread(accountId: string, threadId: string): Promise<ThreadPolicy | null>;
+}
+
+/** The rules of the agent that owns a thread (FR-084); null for a thread no agent owns. */
+export interface AgentRuleSource {
+  forThread(
+    accountId: string,
+    threadId: string,
+  ): Promise<{ rules: PolicyRule[]; commandRules: CommandRule[] } | null>;
 }
 
 // ---- auto-review (FR-085, ADR-061) ---------------------------------------------------------------

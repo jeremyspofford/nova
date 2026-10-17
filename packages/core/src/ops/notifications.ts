@@ -44,7 +44,16 @@ export function safeHref(href: string | undefined | null): string | null {
   return /^[\x21-\x7e]+$/.test(href) && href.length <= 2000 ? href : null;
 }
 
+/** Per-category routing (the channels area's NotificationRouter, FR-060). */
+export interface NotificationRouting {
+  /** Show it in the in-app list as unread (off: recorded read, for channel copies and history). */
+  inappEnabled(accountId: string, kind: NotificationKind): boolean;
+  /** Raise it on the OS now (off, or during quiet hours). */
+  osEnabled(accountId: string, kind: NotificationKind): boolean;
+}
+
 export class NotificationService implements Notifier {
+  #routing: NotificationRouting | null = null;
   readonly #db: NovaDatabase;
   readonly #events: EventSink | undefined;
   readonly #enabled: (kind: NotificationKind, accountId: string) => Promise<boolean>;
@@ -65,6 +74,11 @@ export class NotificationService implements Notifier {
     await this.create(n);
   }
 
+  /** Wire the channels area's routing rules and quiet hours (FR-060). */
+  useRouting(routing: NotificationRouting | null): void {
+    this.#routing = routing;
+  }
+
   /** Record a notification; null when its category is off. Collapsed repeats return the existing one. */
   async create(n: NotificationInput): Promise<NotificationView | null> {
     if (!(NOTIFICATION_KINDS as readonly string[]).includes(n.kind))
@@ -76,6 +90,15 @@ export class NotificationService implements Notifier {
     const dedupe = n.dedupeKey ? n.dedupeKey.slice(0, 300) : null;
     const now = this.#now().toISOString();
     const raw = this.#db.raw;
+    let inapp = true;
+    let os = true;
+    try {
+      inapp = this.#routing?.inappEnabled(n.accountId, n.kind) ?? true;
+      os = this.#routing?.osEnabled(n.accountId, n.kind) ?? true;
+    } catch {
+      // Routing unreadable: the notification still shows in-app (never lost).
+    }
+    const read = inapp ? 0 : 1;
     const { row, created } = await this.#db.transaction(() => {
       const existing = dedupe
         ? (raw
@@ -103,15 +126,15 @@ export class NotificationService implements Notifier {
         body,
         href,
         dedupe_key: dedupe,
-        read: 0,
+        read,
         created_at: now,
       };
       raw
         .prepare(
           `INSERT INTO notification (id, account_id, kind, title, body, href, dedupe_key, read, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(fresh.id, fresh.account_id, fresh.kind, title, body, href, dedupe, now);
+        .run(fresh.id, fresh.account_id, fresh.kind, title, body, href, dedupe, read, now);
       // Bound the table: drop the oldest beyond `keep`, read ones first.
       raw
         .prepare(
@@ -127,7 +150,8 @@ export class NotificationService implements Notifier {
       await this.#events?.emit({
         name: 'notification.created',
         accountId: n.accountId,
-        payload: { notificationId: row.id, kind: row.kind, title: row.title },
+        // `os`: whether clients may raise it on the OS now (routing and quiet hours).
+        payload: { notificationId: row.id, kind: row.kind, title: row.title, os: inapp && os },
       });
     }
     return toView(row);

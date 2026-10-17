@@ -10,6 +10,7 @@ import { contrastWarnings, resolveAppearance } from '../appearance.ts';
 import { useMediaQuery } from '../hooks.ts';
 import { useSettings, type SettingValue } from '../settings.tsx';
 import { MANAGED } from './common.ts';
+import { PetSettings } from '../pets/PetSettings.tsx';
 import { ThemeShare } from './ThemeShare.tsx';
 
 const THEMES: { value: ThemeChoice; label: string; description?: string }[] = [
@@ -164,6 +165,7 @@ export function AppearancePage() {
         />
       </section>
 
+      <PetSettings />
       <ThemeShare effective={effective} baseId={baseTheme.id} prefersDark={prefersDark} />
     </div>
   );

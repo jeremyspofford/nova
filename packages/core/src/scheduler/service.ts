@@ -77,6 +77,43 @@ export interface ScheduleInput {
 
 export type SchedulePatch = Partial<ScheduleInput>;
 
+/** Who made an agent-targeted schedule (M6, FR-059, FR-206; docs/09 §6). */
+export interface AgentScheduleOptions {
+  agentId: string;
+  /** `user`: the user scheduled the agent; `agent`: schedule.create; `agent_self`: schedule.wake. */
+  origin: 'user' | 'agent' | 'agent_self';
+  /** Required for `agent_self` (≤ 500 characters). */
+  wakeReason?: string | null;
+  /** The event and audit actor: `user` or `agent:<id>`. */
+  actor: string;
+}
+
+/** A fire of an agent-targeted schedule: a turn on the agent's main thread (trigger `schedule`). */
+export interface AgentFireInput {
+  accountId: string;
+  agentId: string;
+  scheduleId: string;
+  fireId: string;
+  kind: 'fire' | 'catch_up';
+  title: string;
+  /** The instructions (plus the notify condition and a catch-up window), as for a run. */
+  text: string;
+  origin: 'user' | 'agent' | 'agent_self';
+  wakeReason: string | null;
+  manual: boolean;
+}
+
+/** The agents area starts agent turns for fires (late-bound with `useAgents`). */
+export interface AgentFireTarget {
+  /** Throws when the agent cannot take the turn (deleted, paused); the fire then fails. */
+  fire(input: AgentFireInput): Promise<{
+    threadId: string;
+    done: Promise<Pick<RunFinish, 'status' | 'summary'>>;
+  }>;
+}
+
+/** A schedule as the API shows it, with the agent it targets (M6). */
+
 /** The audit sink with a kind of its own (`schedule`); AuditLog satisfies it. */
 export interface ScheduleAuditSink {
   append(rec: Omit<AuditRecord, 'kind'> & { kind: string }): Promise<void>;
@@ -214,6 +251,8 @@ function defaultTitle(instructions: string): string {
 function toView(r: ScheduleRow): ScheduleView {
   return {
     id: r.id,
+    agentId: r.agent_id,
+    wakeReason: r.wake_reason,
     title: r.title,
     when: whenOf(r),
     timezone: r.timezone,
@@ -272,6 +311,7 @@ export class ScheduleService {
   #audit: ScheduleAuditSink | null;
   #notifier: Notifier | ReceiptNotifier | null;
   #runs: RunStarter | null = null;
+  #agents: AgentFireTarget | null = null;
 
   #started = false;
   #closed = false;
@@ -347,6 +387,12 @@ export class ScheduleService {
     this.#arm(0);
   }
 
+  /** M6: the agents area takes the fires of agent-targeted schedules (late-bound). */
+  useAgents(target: AgentFireTarget): void {
+    this.#agents = target;
+    this.#arm(0);
+  }
+
   useNotifier(notifier: Notifier | ReceiptNotifier): void {
     this.#notifier = notifier;
   }
@@ -373,8 +419,49 @@ export class ScheduleService {
     return Promise.resolve().then(() => toView(this.#row(accountId, id)));
   }
 
+  /** M6: the schedules that target one agent, newest first (FR-059, FR-206). */
+  listForAgent(accountId: string, agentId: string): Promise<ScheduleView[]> {
+    const rows = this.#db.raw
+      .prepare(
+        `SELECT * FROM schedule WHERE account_id = ? AND agent_id = ?
+         ORDER BY created_at DESC, id DESC`,
+      )
+      .all(accountId, agentId) as unknown as ScheduleRow[];
+    return Promise.resolve(rows.map(toView));
+  }
+
   /** Create a schedule the signed-in user wrote (origin `user`). */
-  async create(accountId: string, input: ScheduleInput): Promise<ScheduleView> {
+  create(accountId: string, input: ScheduleInput): Promise<ScheduleView> {
+    return this.#create(accountId, input, null);
+  }
+
+  /**
+   * M6: a schedule whose fires start turns on an agent (docs/09 §6): the user's own (`user`),
+   * one the agent made with schedule.create (`agent`, FR-059) or a self-set wake from
+   * schedule.wake (`agent_self`, FR-206: one-shot, with a reason). Only `user` instructions carry
+   * the user's authority when they fire (FR-189).
+   */
+  createForAgent(
+    accountId: string,
+    input: ScheduleInput,
+    opts: AgentScheduleOptions,
+  ): Promise<ScheduleView> {
+    return Promise.resolve().then(() => {
+      if (opts.origin === 'agent_self') {
+        if (!('at' in input.when)) throw fieldError('when', 'a self-set wake fires once: use at');
+        if (!opts.wakeReason?.trim())
+          throw fieldError('wakeReason', 'a self-set wake needs a reason');
+      }
+      return this.#create(accountId, input, opts);
+    });
+  }
+
+  async #create(
+    accountId: string,
+    input: ScheduleInput,
+    agent: AgentScheduleOptions | null,
+  ): Promise<ScheduleView> {
+    const actor = agent?.actor ?? 'user';
     const now = this.#now();
     const createdAt = now.toISOString();
     const id = uuidv7();
@@ -386,7 +473,7 @@ export class ScheduleService {
       account_id: accountId,
       project_id: input.projectId ?? null,
       run_id: null,
-      agent_id: null,
+      agent_id: agent?.agentId ?? null,
       title: input.title?.trim() || defaultTitle(input.instructions),
       cron: 'cron' in input.when ? input.when.cron.trim() : null,
       rrule: 'rrule' in input.when ? input.when.rrule.trim() : null,
@@ -402,8 +489,9 @@ export class ScheduleService {
       catch_up_policy: input.catchUp?.policy ?? 'once',
       catch_up_lookback_s: input.catchUp?.lookbackSeconds ?? DEFAULT_LOOKBACK_S,
       autonomy: input.autonomy ?? 'standard',
-      origin: 'user',
-      wake_reason: null,
+      origin: agent?.origin ?? 'user',
+      wake_reason:
+        agent?.origin === 'agent_self' ? (agent.wakeReason ?? '').trim().slice(0, 500) : null,
       enabled: input.enabled === false ? 0 : 1,
       last_run_at: null,
       next_run_at: next === null ? null : iso(next),
@@ -454,25 +542,55 @@ export class ScheduleService {
     });
     await this.#events.emit({
       name: 'schedule.created',
-      actor: 'user',
+      actor,
       accountId,
       payload: { scheduleId: id, origin: row.origin },
     });
+    if (row.origin === 'agent_self' && row.agent_id)
+      await this.#events.emit({
+        name: 'schedule.wake.set',
+        actor,
+        accountId,
+        correlation: { agentId: row.agent_id },
+        payload: {
+          scheduleId: id,
+          agentId: row.agent_id,
+          at: row.once_at,
+          reason: row.wake_reason,
+        },
+      });
     await this.#auditAppend({
       accountId,
-      actor: 'user',
+      actor,
       kind: 'schedule',
-      action: 'schedule.create',
+      action: row.origin === 'agent_self' ? 'schedule.wake' : 'schedule.create',
       resource: `schedule:${id}`,
-      detail: { when: whenOf(row), timezone: row.timezone, targets: targets.map((t) => t.kind) },
+      detail: {
+        when: whenOf(row),
+        timezone: row.timezone,
+        targets: targets.map((t) => t.kind),
+        ...(row.agent_id ? { agentId: row.agent_id, origin: row.origin } : {}),
+      },
     });
     this.#arm();
     return toView(row);
   }
 
-  /** Change a schedule; `enabled: false` pauses it, and resuming skips what fell in the pause. */
-  async update(accountId: string, id: string, patch: SchedulePatch): Promise<ScheduleView> {
+  /**
+   * Change a schedule; `enabled: false` pauses it, and resuming skips what fell in the pause.
+   * M6: `opts.agentId` limits the edit to that agent's schedules (schedule.create with an id,
+   * FR-059); `opts.actor` names who changed it (default the user).
+   */
+  async update(
+    accountId: string,
+    id: string,
+    patch: SchedulePatch,
+    opts: { actor?: string; agentId?: string } = {},
+  ): Promise<ScheduleView> {
     const row = this.#row(accountId, id);
+    if (opts.agentId !== undefined && row.agent_id !== opts.agentId)
+      throw new NovaError('not_found', 'schedule not found');
+    const actor = opts.actor ?? 'user';
     const keys = Object.keys(patch).filter(
       (k) => (patch as Record<string, unknown>)[k] !== undefined,
     );
@@ -541,13 +659,13 @@ export class ScheduleService {
     });
     await this.#events.emit({
       name: 'schedule.changed',
-      actor: 'user',
+      actor,
       accountId,
       payload: { scheduleId: id, origin: row.origin, changed: keys },
     });
     await this.#auditAppend({
       accountId,
-      actor: 'user',
+      actor,
       kind: 'schedule',
       action: 'schedule.update',
       resource: `schedule:${id}`,
@@ -558,7 +676,8 @@ export class ScheduleService {
   }
 
   /** Cancel a schedule: its history and webhook secret go with it; a running run continues. */
-  async remove(accountId: string, id: string): Promise<void> {
+  async remove(accountId: string, id: string, opts: { actor?: string } = {}): Promise<void> {
+    const actor = opts.actor ?? 'user';
     const row = this.#row(accountId, id);
     await this.#db.transaction(() => {
       this.#db.raw
@@ -568,16 +687,17 @@ export class ScheduleService {
     await this.#secrets.delete(webhookSecretRef(id)).catch(() => false);
     await this.#events.emit({
       name: 'schedule.cancelled',
-      actor: 'user',
+      actor,
       accountId,
       payload: { scheduleId: id, origin: row.origin },
     });
     await this.#auditAppend({
       accountId,
-      actor: 'user',
+      actor,
       kind: 'schedule',
       action: 'schedule.delete',
       resource: `schedule:${id}`,
+      ...(row.agent_id ? { detail: { agentId: row.agent_id, origin: row.origin } } : {}),
     });
     this.#arm();
   }
@@ -597,9 +717,18 @@ export class ScheduleService {
   }
 
   /** Fire now, outside the rule (a test run); the rule's next fire is unchanged. */
-  async runNow(accountId: string, id: string): Promise<{ runId: string }> {
-    if (!this.#runs) throw new NovaError('capability_missing', 'Work runs are not available');
+  async runNow(
+    accountId: string,
+    id: string,
+  ): Promise<{ runId: string } | { runId: null; threadId: string }> {
+    if (!this.#runs && !this.#agents)
+      throw new NovaError('capability_missing', 'Work runs are not available');
     const row = this.#row(accountId, id);
+    if (row.agent_id ? !this.#agents : !this.#runs)
+      throw new NovaError(
+        'capability_missing',
+        row.agent_id ? 'agents are not available' : 'Work runs are not available',
+      );
     const now = this.#now().toISOString();
     const fireId = uuidv7();
     // Mark it as starting before the row exists, so recovery never fails it in between.
@@ -619,12 +748,13 @@ export class ScheduleService {
       this.#starting.delete(fireId);
       throw err;
     }
-    const runId = await this.#startRun(row, fireId, 'fire', null, true);
-    if (!runId) {
+    const started = await this.#startRun(row, fireId, 'fire', null, true);
+    if (!started) {
       const fire = this.#fire(fireId);
       throw new NovaError('server_error', fire?.detail ?? 'the run could not be started');
     }
-    return { runId };
+    // An agent's fire is a turn on its thread, not a run (M6).
+    return row.agent_id ? { runId: null, threadId: started } : { runId: started };
   }
 
   // ---- the loop -----------------------------------------------------------------------------------
@@ -670,7 +800,7 @@ export class ScheduleService {
 
   /** Handle every due schedule once (the loop calls it; tests may too). */
   async tick(): Promise<void> {
-    if (!this.#runs || this.#closed) return;
+    if ((!this.#runs && !this.#agents) || this.#closed) return;
     if (!this.#recovered) await this.#recover();
     const now = this.#now().getTime();
     const due = this.#db.raw
@@ -718,7 +848,7 @@ export class ScheduleService {
 
   /** Sleep until the earliest next fire, at most `recheckMs`. */
   #delay(): number {
-    if (!this.#runs) return this.#recheckMs;
+    if (!this.#runs && !this.#agents) return this.#recheckMs;
     const row = this.#db.raw
       .prepare(
         'SELECT MIN(next_run_at) AS next FROM schedule WHERE enabled = 1 AND next_run_at IS NOT NULL',
@@ -903,6 +1033,7 @@ export class ScheduleService {
     window: FireWindow | null,
     manual: boolean,
   ): Promise<string | null> {
+    if (row.agent_id !== null) return this.#startAgentTurn(row, fireId, kind, window, manual);
     const runs = this.#runs;
     if (!runs) return null;
     const output = parseJson<ExpectedOutput>(row.expected_output_json);
@@ -986,6 +1117,110 @@ export class ScheduleService {
     return work;
   }
 
+  /**
+   * M6: start the turn of an agent-targeted fire on the agent's main thread (trigger `schedule`);
+   * returns the thread id, or null when it could not start (the fire then fails). The fire
+   * settles when the turn ends, like a run's (FR-187).
+   */
+  async #startAgentTurn(
+    row: ScheduleRow,
+    fireId: string,
+    kind: 'fire' | 'catch_up',
+    window: FireWindow | null,
+    manual: boolean,
+  ): Promise<string | null> {
+    const agents = this.#agents;
+    const agentId = row.agent_id;
+    if (!agents || !agentId) {
+      const fire = this.#fire(fireId);
+      if (fire) await this.#finish(fire, 'failed', 'agents are not available', null);
+      return null;
+    }
+    const started = agents.fire({
+      accountId: row.account_id,
+      agentId,
+      scheduleId: row.id,
+      fireId,
+      kind,
+      title: kind === 'catch_up' ? `${row.title} (catch-up)` : row.title,
+      text: objectiveFor(row, kind, window),
+      origin: row.origin,
+      wakeReason: row.wake_reason,
+      manual,
+    });
+    this.#starting.set(fireId, started);
+    const work = this.#track(
+      (async () => {
+        try {
+          const { threadId, done } = await started;
+          await this.#db.transaction(() => {
+            this.#db.raw
+              .prepare('UPDATE schedule_fire SET thread_id = ? WHERE id = ?')
+              .run(threadId, fireId);
+          });
+          await this.#events.emit({
+            name: 'schedule.fired',
+            actor: manual ? 'user' : 'system',
+            accountId: row.account_id,
+            correlation: { threadId, agentId },
+            payload: {
+              scheduleId: row.id,
+              runId: null,
+              agentId,
+              threadId,
+              kind,
+              ...(manual ? { manual: true } : {}),
+              ...(window ? { window: windowPayload(window) } : {}),
+            },
+          });
+          if (kind === 'catch_up' && window)
+            await this.#events.emit({
+              name: 'schedule.catchup',
+              accountId: row.account_id,
+              correlation: { threadId, agentId },
+              payload: {
+                scheduleId: row.id,
+                policy: 'once',
+                windowFrom: iso(window.first),
+                windowTo: iso(window.last),
+                missed: window.count,
+              },
+            });
+          await this.#auditAppend({
+            accountId: row.account_id,
+            actor: manual ? 'user' : 'system',
+            kind: 'schedule',
+            action: manual ? 'schedule.run_now' : 'schedule.fire',
+            resource: `schedule:${row.id}`,
+            threadId,
+            result: threadId,
+            detail: { kind, agentId, ...(window ? { window: windowPayload(window) } : {}) },
+          });
+          done.then(
+            (finish) => {
+              if (!this.#closed) void this.#track(this.#settle(fireId, finish));
+            },
+            (err: unknown) => {
+              if (this.#closed) return;
+              const f = this.#fire(fireId);
+              if (f) void this.#track(this.#finish(f, 'failed', messageOf(err), null));
+            },
+          );
+          return threadId;
+        } catch (err) {
+          this.#log.warn('scheduled agent turn did not start', { err, scheduleId: row.id });
+          const fire = this.#fire(fireId);
+          if (fire)
+            await this.#finish(fire, 'failed', `the agent did not start: ${messageOf(err)}`, null);
+          return null;
+        } finally {
+          this.#starting.delete(fireId);
+        }
+      })(),
+    );
+    return work;
+  }
+
   /** Wait for a fire's run to end, then settle it (not part of `idle()`: runs can take hours). */
   #watch(fireId: string): void {
     const fire = this.#fire(fireId);
@@ -1004,7 +1239,7 @@ export class ScheduleService {
   }
 
   /** Deliver (unless no news) and decide the outcome of a finished run (FR-187). */
-  async #settle(fireId: string, finish: RunFinish): Promise<void> {
+  async #settle(fireId: string, finish: Pick<RunFinish, 'status' | 'summary'>): Promise<void> {
     const fire = this.#fire(fireId);
     if (!fire || fire.outcome !== null) return;
     const row = this.#scheduleRow(fire.schedule_id);
