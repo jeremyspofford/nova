@@ -11,3 +11,4 @@ export * from './purge.ts';
 export * from './chat.ts';
 export * from './routing/index.ts';
 export * from './nodes/index.ts';
+export * from './tools/index.ts';

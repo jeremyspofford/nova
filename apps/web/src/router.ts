@@ -11,9 +11,13 @@ export const SETTINGS_SECTIONS = [
   'accounts',
   'models',
   'memory',
+  'tools',
+  'permissions',
+  'notifications',
   'devices',
   'appearance',
   'keyboard',
+  'diagnostics',
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 

@@ -32,6 +32,7 @@ import {
   type Mode,
 } from '../router.ts';
 import { deepLinkPath } from '../deeplinks.ts';
+import { NotificationsBell } from '../notifications/Bell.tsx';
 import { ProjectsView } from '../projects/ProjectsView.tsx';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
@@ -474,6 +475,7 @@ export function Workspace({
         >
           Commands
         </Button>
+        <NotificationsBell />
         {layout !== 'phone' && mode !== null ? (
           <IconButton
             label="Toggle inspector"

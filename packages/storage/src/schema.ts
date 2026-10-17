@@ -5,3 +5,8 @@ export * from './schema/core.ts';
 export * from './schema/chat.ts';
 export * from './schema/conversation.ts';
 export * from './schema/nodes.ts';
+export * from './schema/tools.ts';
+export * from './schema/policy.ts';
+export * from './schema/mcp.ts';
+export * from './schema/ops.ts';
+export * from './schema/consolidation.ts';

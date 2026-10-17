@@ -149,6 +149,86 @@ export const SETTINGS = {
     description:
       'Whether a turn may fall back to a cloud provider when no local option fits (FR-127).',
   }),
+  'memory.referencePastChats': def({
+    key: 'memory.referencePastChats',
+    schema: z.boolean(),
+    default: true,
+    description:
+      'Use relevant past chats as context, separately from saved memories; turning it off purges derived data within 30 days (FR-205).',
+  }),
+  'memory.consolidation': def({
+    key: 'memory.consolidation',
+    schema: z.object({
+      enabled: z.boolean(),
+      idleMinutes: z
+        .number()
+        .int()
+        .min(5)
+        .max(7 * 24 * 60),
+    }),
+    default: { enabled: true, idleMinutes: 60 },
+    description: 'Background memory consolidation of idle chats (FR-204).',
+  }),
+  'tools.roots': def({
+    key: 'tools.roots',
+    schema: z
+      .array(
+        z.object({
+          path: z.string().min(1).max(1000),
+          access: z.enum(['read', 'write']),
+          label: z.string().max(100).optional(),
+        }),
+      )
+      .max(50),
+    default: [] as { path: string; access: 'read' | 'write'; label?: string }[],
+    security: true,
+    description:
+      'Folders on the Hub that file and exec tools may use, besides the Hub workspace folder (FR-190).',
+  }),
+  'tools.permissionProfile': def({
+    key: 'tools.permissionProfile',
+    schema: z.string().min(1).max(100),
+    default: 'workspace',
+    security: true,
+    description:
+      'Permission profile for tools in chats: read-only, workspace or a custom one (FR-190).',
+  }),
+  'tools.approvalPolicy': def({
+    key: 'tools.approvalPolicy',
+    schema: z.enum(['ask_always', 'defaults', 'review', 'never_ask']),
+    default: 'defaults',
+    security: true,
+    description: 'When chats ask before a tool runs (docs/12 §2.1).',
+  }),
+  'tools.deferBudget': def({
+    key: 'tools.deferBudget',
+    schema: z.object({
+      tools: z.number().int().min(1).max(500),
+      schemaTokens: z.number().int().min(500).max(100_000),
+    }),
+    default: { tools: 40, schemaTokens: 8000 },
+    description:
+      'Above this many tools or schema tokens, MCP and plugin tools are deferred (FR-196).',
+  }),
+  'search.searxngUrl': def({
+    key: 'search.searxngUrl',
+    schema: z.string().url().max(500).nullable(),
+    default: null as string | null,
+    security: true,
+    description: 'SearXNG instance the web.search tool uses (FR-029); unset means no web search.',
+  }),
+  'notifications.categories': def({
+    key: 'notifications.categories',
+    schema: z.object({
+      approval: z.boolean(),
+      completion: z.boolean(),
+      error: z.boolean(),
+      attention: z.boolean(),
+      system: z.boolean(),
+    }),
+    default: { approval: true, completion: true, error: true, attention: true, system: true },
+    description: 'Which notification categories are shown and sent to the OS (FR-013).',
+  }),
   'privacy.telemetry': def({
     key: 'privacy.telemetry',
     schema: z.boolean(),

@@ -1,0 +1,23 @@
+{
+  "name": "@nova/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MCP client: server connections over stdio, SSE and streamable HTTP, health, and their tools.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@nova/shared": "^0.0.0",
+    "@nova/telemetry": "^0.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.3.1"
+  }
+}

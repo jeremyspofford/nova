@@ -43,7 +43,13 @@ import type { HubConfig } from './config.ts';
 import { EventStore } from './event-store.ts';
 import { registerMemoryRoutes } from './memory-routes.ts';
 import { registerModelRoutes } from './model-routes.ts';
+import { setupConsolidation } from './consolidation.ts';
+import { DiagnosticsRegistry, type HubContext } from './hub-context.ts';
+import { setupMcp } from './mcp.ts';
 import { registerNodeRoutes } from './node-routes.ts';
+import { setupOps } from './ops.ts';
+import { setupPolicy } from './policy.ts';
+import { setupTools } from './tools.ts';
 import { registerProjectRoutes } from './project-routes.ts';
 
 export const SESSION_COOKIE = 'nova_session';
@@ -164,6 +170,44 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     log: log.child('memory'),
     enabled: (projectId) => setting('memory.enabled', projectId),
   });
+  const accountOf = async (req: FastifyRequest): Promise<string> => {
+    const p = requireAuth(req);
+    if (p.accountId) return p.accountId;
+    // Only sessions authenticate here (auth.ts); one without an account acts for the owner.
+    const owner = await auth.ownerAccount();
+    if (!owner) throw new NovaError('auth_missing', 'the Hub has no owner account yet');
+    return owner.id;
+  };
+
+  // ---- M3 areas: ops (audit, notifications, logs), policy and approvals, MCP, tools -------
+  const ctx: HubContext = {
+    config,
+    db,
+    log,
+    events,
+    secrets,
+    dataDir,
+    registry,
+    router,
+    nodes,
+    threads,
+    setting,
+    accountOf,
+    diagnostics: new DiagnosticsRegistry(),
+  };
+  const ops = await setupOps(ctx);
+  const policy = await setupPolicy({ ...ctx, audit: ops.audit, notifier: ops.notifier });
+  const mcp = await setupMcp({ ...ctx, audit: ops.audit });
+  const tools = await setupTools({
+    ...ctx,
+    gate: policy.gate,
+    sources: [mcp.source],
+    audit: ops.audit,
+    notifier: ops.notifier,
+  });
+  const consolidation = await setupConsolidation({ ...ctx, memory });
+  const areas = [tools, consolidation, mcp, policy, ops];
+
   const chat = new ChatService({
     db,
     router,
@@ -177,6 +221,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       followUp: (projectId) => setting('general.followUp', projectId),
       temporaryTtlHours: () => setting('chat.temporaryTtlHours'),
     },
+    ...tools.chatOptions,
     ...deps.chat,
   });
   const app = Fastify({
@@ -212,6 +257,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     nodes.stop();
     await chat.shutdown();
     await sources.stop();
+    for (const a of areas) await a.close();
   });
 
   await app.register(fastifyCookie);
@@ -413,14 +459,6 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   });
 
   // ---- chat, projects, memory (M1, M2) ------------------------------------------------------
-  const accountOf = async (req: FastifyRequest): Promise<string> => {
-    const p = requireAuth(req);
-    if (p.accountId) return p.accountId;
-    // Only sessions authenticate here (auth.ts); one without an account acts for the owner.
-    const owner = await auth.ownerAccount();
-    if (!owner) throw new NovaError('auth_missing', 'the Hub has no owner account yet');
-    return owner.id;
-  };
   registerChatRoutes(app, {
     db,
     dataDir,
@@ -443,6 +481,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     accountOf,
   });
   registerNodeRoutes(app, { nodes, accountOf });
+  for (const a of areas) a.register(app);
 
   void app.register((scoped, _opts, done) => {
     scoped.get('/api/v1/ws', { websocket: true }, (socket, req) => {

@@ -18,6 +18,7 @@ import {
 import { ApiError, type Api } from '../src/api.ts';
 import { CommandRegistry } from '../src/commands.ts';
 import type { EventSourceLike } from '../src/sse.ts';
+import { m3Impl, m3State, type M3State } from './fakes-m3.ts';
 import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
 
 let seq = 0;
@@ -103,6 +104,8 @@ export interface HubState {
   paths: Map<string, MessageView[]>;
   /** Projects, sources, memory, presets and nodes (test/fakes-workspace.ts). */
   workspace: WorkspaceState;
+  /** Approvals, policy, tools, MCP, notifications, audit, artifacts (test/fakes-m3.ts). */
+  m3: M3State;
 }
 
 export const DONE_ONBOARDING = { step: 'done', completed: true, skipped: false };
@@ -122,6 +125,7 @@ export function createHub(init: Partial<HubState> = {}) {
     queues: new Map(),
     paths: new Map(),
     workspace: workspaceState(),
+    m3: m3State(),
     ...init,
   };
 
@@ -467,6 +471,7 @@ export function createHub(init: Partial<HubState> = {}) {
       };
     },
     ...workspaceImpl(state.workspace, { id, ts: () => ts(), maybeFail }),
+    ...m3Impl(state.m3, { id, ts: () => ts(), maybeFail }),
     attachmentUrl: (aid) => `/api/v1/attachments/${aid}`,
     fetchAttachment: async () => new Blob(['file-bytes'], { type: 'text/plain' }),
     threadStreamUrl: (tid) => `/api/v1/threads/${tid}/stream`,

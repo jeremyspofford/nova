@@ -2,6 +2,28 @@
 // session lives in an HttpOnly cookie, so the UI never sees or stores a credential (FR-125).
 import type { z } from 'zod';
 import type {
+  ActivityItemView,
+  ApprovalView,
+  ArtifactView,
+  AuditEntryView,
+  AuditVerifyResult,
+  CommandRuleView,
+  ConsolidationRunView,
+  DecideApprovalRequest,
+  DiagnosticsSnapshot,
+  LogEntryView,
+  McpLogLine,
+  McpServerRequest,
+  McpServerView,
+  MemorySummaryView,
+  MentionCandidate,
+  NotificationView,
+  PermissionGrantView,
+  PermissionProfileView,
+  PolicyPreview,
+  PolicyRuleView,
+  ToolDescriptor,
+  ToolView,
   addSourceSchema,
   createMemorySchema,
   createProjectSchema,
@@ -40,6 +62,33 @@ export type AddSourceRequest = z.input<typeof addSourceSchema>;
 export type CreateMemoryRequest = z.input<typeof createMemorySchema>;
 export type UpdateMemoryRequest = z.input<typeof updateMemorySchema>;
 export type ImportMemoryRequest = z.input<typeof importMemorySchema>;
+
+export interface CreatePolicyRuleRequest {
+  scopeKind: PolicyRuleView['scopeKind'];
+  scopeRef?: string;
+  match: PolicyRuleView['match'];
+  effect: PolicyRuleView['effect'];
+  label?: string;
+  priority?: number;
+}
+
+export interface CreateCommandRuleRequest {
+  scopeKind?: CommandRuleView['scopeKind'];
+  scopeRef?: string;
+  pattern: (string | string[])[];
+  decision: CommandRuleView['decision'];
+  justification?: string;
+  matchExamples: string[];
+  notMatchExamples: string[];
+  priority?: number;
+}
+
+export interface ToolInvokeResult {
+  ok: boolean;
+  /** Text of the result, redacted. */
+  text: string;
+  error?: { code: string; message: string };
+}
 
 export interface ListMemoryQuery {
   scopeKind?: 'global' | 'project';
@@ -236,6 +285,107 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
     createNodeEnrollToken: () =>
       call<NodeEnrollToken>('POST', `${V1}/devices/add/start`, { role: 'compute' }),
     revokeNode: (id: string) => call<{ ok: true }>('POST', `${V1}/devices/${enc(id)}/revoke`),
+
+    // M3: approvals, policy, tools, MCP, notifications, audit, diagnostics, artifacts, mentions
+    listApprovals: (q: { status?: 'pending' | 'all'; threadId?: string } = {}) =>
+      call<{ items: ApprovalView[] }>('GET', `${V1}/approvals${query({ ...q })}`),
+    getApproval: (id: string) => call<ApprovalView>('GET', `${V1}/approvals/${enc(id)}`),
+    decideApproval: (body: DecideApprovalRequest) =>
+      call<ApprovalView>('POST', `${V1}/approvals`, body),
+    handoffDone: (id: string, note?: string) =>
+      call<ApprovalView>('POST', `${V1}/approvals/${enc(id)}/handoff-done`, note ? { note } : {}),
+    listPolicyRules: () => call<{ items: PolicyRuleView[] }>('GET', `${V1}/policy/rules`),
+    createPolicyRule: (body: CreatePolicyRuleRequest) =>
+      call<PolicyRuleView>('POST', `${V1}/policy/rules`, body),
+    updatePolicyRule: (
+      id: string,
+      body: Partial<CreatePolicyRuleRequest> & { enabled?: boolean },
+    ) => call<PolicyRuleView>('PATCH', `${V1}/policy/rules/${enc(id)}`, body),
+    deletePolicyRule: (id: string) => call<{ ok: true }>('DELETE', `${V1}/policy/rules/${enc(id)}`),
+    previewPolicy: (body: {
+      tool: string;
+      args?: unknown;
+      threadId?: string;
+      userAsked?: boolean;
+    }) => call<PolicyPreview>('POST', `${V1}/policy/evaluate`, body),
+    listCommandRules: () => call<{ items: CommandRuleView[] }>('GET', `${V1}/command-rules`),
+    createCommandRule: (body: CreateCommandRuleRequest) =>
+      call<CommandRuleView>('POST', `${V1}/command-rules`, body),
+    updateCommandRule: (
+      id: string,
+      body: Partial<CreateCommandRuleRequest> & { enabled?: boolean },
+    ) => call<CommandRuleView>('PATCH', `${V1}/command-rules/${enc(id)}`, body),
+    deleteCommandRule: (id: string) =>
+      call<{ ok: true }>('DELETE', `${V1}/command-rules/${enc(id)}`),
+    testCommandRules: (command: string) =>
+      call<{ decision: 'allow' | 'ask' | 'deny' | null; ruleId: string | null; reason: string }>(
+        'POST',
+        `${V1}/command-rules/test`,
+        { command },
+      ),
+    listGrants: () => call<{ items: PermissionGrantView[] }>('GET', `${V1}/permission-grants`),
+    revokeGrant: (id: string) => call<{ ok: true }>('DELETE', `${V1}/permission-grants/${enc(id)}`),
+    listProfiles: () =>
+      call<{ items: PermissionProfileView[] }>('GET', `${V1}/permission-profiles`),
+    listTools: () => call<{ items: ToolView[] }>('GET', `${V1}/tools`),
+    setToolDefault: (tool: string, value: 'allow' | 'ask' | 'deny' | null) =>
+      call<ToolView>('PUT', `${V1}/tool-defaults`, { tool, default: value }),
+    invokeTool: (name: string, body: { args: unknown; threadId?: string }) =>
+      call<ToolInvokeResult>('POST', `${V1}/tools/${enc(name)}/invoke`, body),
+    listMcpServers: () => call<{ items: McpServerView[] }>('GET', `${V1}/mcp/servers`),
+    createMcpServer: (body: McpServerRequest) =>
+      call<McpServerView>('POST', `${V1}/mcp/servers`, body),
+    updateMcpServer: (id: string, body: Partial<McpServerRequest>) =>
+      call<McpServerView>('PATCH', `${V1}/mcp/servers/${enc(id)}`, body),
+    deleteMcpServer: (id: string) => call<{ ok: true }>('DELETE', `${V1}/mcp/servers/${enc(id)}`),
+    restartMcpServer: (id: string) =>
+      call<McpServerView>('POST', `${V1}/mcp/servers/${enc(id)}/restart`),
+    mcpServerLogs: (id: string) =>
+      call<{ items: McpLogLine[] }>('GET', `${V1}/mcp/servers/${enc(id)}/logs`),
+    mcpServerTools: (id: string) =>
+      call<{ items: ToolDescriptor[] }>('GET', `${V1}/mcp/servers/${enc(id)}/tools`),
+    listNotifications: (q: { unread?: boolean } = {}) =>
+      call<{ items: NotificationView[]; unread: number }>(
+        'GET',
+        `${V1}/notifications${query({ ...q })}`,
+      ),
+    markNotificationsRead: (body: { ids?: string[]; all?: boolean }) =>
+      call<{ unread: number }>('POST', `${V1}/notifications/read`, body),
+    deleteNotification: (id: string) =>
+      call<{ ok: true }>('DELETE', `${V1}/notifications/${enc(id)}`),
+    listAudit: (q: { kind?: string; threadId?: string; cursor?: string; limit?: number } = {}) =>
+      call<Page<AuditEntryView>>('GET', `${V1}/audit${query({ ...q })}`),
+    verifyAudit: () => call<AuditVerifyResult>('GET', `${V1}/audit/verify`),
+    auditExportUrl: () => `${V1}/audit/export`,
+    activity: (threadId: string) =>
+      call<{ items: ActivityItemView[] }>('GET', `${V1}/activity${query({ ref: threadId })}`),
+    diagnostics: () => call<DiagnosticsSnapshot>('GET', `${V1}/diagnostics`),
+    logs: (q: { level?: string; module?: string; since?: string; limit?: number } = {}) =>
+      call<{ items: LogEntryView[] }>('GET', `${V1}/diagnostics/logs${query({ ...q })}`),
+    logsExportUrl: () => `${V1}/diagnostics/logs/export`,
+    listArtifacts: (threadId: string) =>
+      call<{ items: ArtifactView[] }>('GET', `${V1}/artifacts${query({ threadId })}`),
+    getArtifact: (id: string) => call<ArtifactView>('GET', `${V1}/artifacts/${enc(id)}`),
+    artifactContentUrl: (id: string) => `${V1}/artifacts/${enc(id)}/content`,
+    mentions: (q: string, threadId?: string) =>
+      call<{ items: MentionCandidate[] }>('GET', `${V1}/mentions${query({ q, threadId })}`),
+    memorySummary: (q: { scopeKind?: 'global' | 'project'; scopeRef?: string } = {}) =>
+      call<MemorySummaryView>('GET', `${V1}/memory/summary${query({ ...q })}`),
+    consolidateMemory: (body: { scopeKind?: 'global' | 'project'; scopeRef?: string } = {}) =>
+      call<ConsolidationRunView>('POST', `${V1}/memory/consolidate`, body),
+    listConsolidations: () =>
+      call<{ items: ConsolidationRunView[] }>('GET', `${V1}/memory/consolidations`),
+    listMemoryTopics: () =>
+      call<{ items: { topic: string; preference: 'more' | 'less' | 'default' }[] }>(
+        'GET',
+        `${V1}/memory/topics`,
+      ),
+    setMemoryTopic: (topic: string, preference: 'more' | 'less' | 'default') =>
+      call<{ topic: string; preference: 'more' | 'less' | 'default' }>(
+        'PATCH',
+        `${V1}/memory/topics`,
+        { topic, preference },
+      ),
 
     // attachments (FR-021)
     attachmentUrl: (id: string) => `${V1}/attachments/${enc(id)}`,
