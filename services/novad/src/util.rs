@@ -107,6 +107,36 @@ pub fn iso(ms: u64) -> String {
     )
 }
 
+/// Days since 1970-01-01 for a civil date (Howard Hinnant's days_from_civil).
+pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Unix seconds from an RFC 3339 UTC timestamp like `toISOString` writes
+/// (`2026-10-17T15:20:00.000Z`, fraction optional); None for anything else.
+pub fn parse_iso(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' || *b.last()? != b'Z' {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| -> Option<i64> { s.get(r).filter(|t| t.bytes().all(|c| c.is_ascii_digit()))?.parse().ok() };
+    let (y, mo, d, h, mi, se) = (num(0..4)?, num(5..7)?, num(8..10)?, num(11..13)?, num(14..16)?, num(17..19)?);
+    let frac = &s[19..s.len() - 1];
+    if !(frac.is_empty() || (frac.starts_with('.') && frac.len() > 1 && frac[1..].bytes().all(|c| c.is_ascii_digit()))) {
+        return None;
+    }
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 {
+        return None;
+    }
+    u64::try_from(days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + se).ok()
+}
+
 pub fn now_iso() -> String {
     iso(now_ms())
 }
@@ -210,6 +240,17 @@ mod tests {
         assert_eq!(iso(0), "1970-01-01T00:00:00.000Z");
         assert_eq!(iso(951_782_400_123), "2000-02-29T00:00:00.123Z");
         assert_eq!(iso(1_792_000_000_000), "2026-10-14T17:46:40.000Z");
+    }
+
+    #[test]
+    fn parses_iso_timestamps() {
+        assert_eq!(parse_iso("1970-01-01T00:00:00.000Z"), Some(0));
+        assert_eq!(parse_iso("2026-10-14T17:46:40.000Z"), Some(1_792_000_000));
+        assert_eq!(parse_iso("2000-02-29T00:00:00Z"), Some(951_782_400));
+        assert_eq!(parse_iso(&iso(1_835_481_599_000)), Some(1_835_481_599));
+        for bad in ["", "2026-10-14 17:46:40Z", "2026-10-14T17:46:40+02:00", "2026-13-14T17:46:40Z", "2026-10-14T17:46:40.Z", "2026-1a-14T17:46:40Z", "2026-10-14T17:46:4\u{e9}Z"] {
+            assert_eq!(parse_iso(bad), None, "{bad}");
+        }
     }
 
     #[test]

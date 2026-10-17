@@ -7,7 +7,7 @@ import { Logger, stderrSink } from '@nova/telemetry';
 import { Backend, guardedFetch, type BackendKind } from './backend.ts';
 import { buildCapability, type HardwareFacts, type OsFacts } from './capability.ts';
 import { HubClient, HubError } from './hub-client.ts';
-import { generateKeys, newDeviceId, newJobToken, signDocument } from './identity.ts';
+import { generateKeys, newDeviceId, newJobToken, signDocument, type NodeKeys } from './identity.ts';
 import { JobManager } from './jobs.ts';
 import { PROTOCOL_VERSIONS } from './protocol.ts';
 import { buildJobServer } from './server.ts';
@@ -31,6 +31,8 @@ export interface EnrollOptions {
   fetch?: typeof fetch;
   hardware?: HardwareFacts;
   os?: OsFacts;
+  /** The node's key pair (Add Device approved this key); a new one by default. */
+  keys?: NodeKeys;
 }
 
 /** `host:port`, `:port` or `port`; IPv6 hosts in brackets. */
@@ -65,7 +67,7 @@ export function advertiseUrl(listen: { host: string; port: number }): string {
   return `http://${host.includes(':') ? `[${host}]` : host}:${listen.port}`;
 }
 
-function plainHttpUrl(value: string, what: string): string {
+export function plainHttpUrl(value: string, what: string): string {
   let url: URL;
   try {
     url = new URL(value);
@@ -108,7 +110,7 @@ export async function enroll(opts: EnrollOptions): Promise<NodeState> {
       { cause: err },
     );
   }
-  const keys = generateKeys();
+  const keys = opts.keys ?? generateKeys();
   const jobToken = newJobToken();
   const deviceId = existing?.deviceId ?? newDeviceId();
   const capability = buildCapability({

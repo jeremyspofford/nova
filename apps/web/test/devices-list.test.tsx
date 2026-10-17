@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../src/api.ts';
 import { DevicesView } from '../src/devices/DevicesView.tsx';
 import { FakeEventSource, createHub } from './fakes.ts';
-import { deviceView, renderWithDevices } from './fakes-m6-devices.ts';
+import { deviceView } from './fakes-m6-devices.ts';
+import { renderWithAllDevices as renderWithDevices } from './fakes-m65-devices.ts';
 import { renderApp, resetDom } from './render.tsx';
 
 afterEach(() => {
@@ -67,7 +68,7 @@ describe('the device list (docs/04 §9)', () => {
     expect(within(old).getByText(/2 need an update/)).toBeTruthy();
     const fresh = rows[2]!;
     expect(within(fresh).getByText('Waiting for first contact')).toBeTruthy();
-    expect(within(fresh).getByText('Version unknown')).toBeTruthy();
+    expect(within(fresh).getByText('novad, version unknown')).toBeTruthy();
     expect(within(fresh).getByText('no heartbeat yet')).toBeTruthy();
     expect(within(fresh).getByText('Kept out of agent work')).toBeTruthy();
     expect(within(fresh).getByText('Changes waiting for the device')).toBeTruthy();
@@ -148,9 +149,14 @@ describe('the device list (docs/04 §9)', () => {
   });
 });
 
-describe('Add a device (docs/04 §9 flow 1)', () => {
+describe('Add a device with a one-use command (docs/23 §2, kept for scripted installs)', () => {
   it('chooses roles, shows the one-use command, and waits for the device to register', async () => {
+    window.history.replaceState(null, '', '/devices/add');
     const { api, state } = await renderWithDevices(<DevicesView deviceId="add" />);
+    expect(screen.getByRole('heading', { name: 'Add a device', level: 1 })).toBeTruthy();
+    // One click from the code flow (J7 step 7 takes it).
+    await userEvent.click(screen.getByRole('link', { name: 'Use a one-use command instead' }));
+    expect(window.location.search).toBe('?method=command');
     expect(screen.getByRole('heading', { name: 'Add a device', level: 1 })).toBeTruthy();
     const client = screen.getByRole('checkbox', { name: 'Client' });
     expect(client).toHaveProperty('checked', true);
@@ -183,6 +189,7 @@ describe('Add a device (docs/04 §9 flow 1)', () => {
   });
 
   it('finds the new device with Check now, and replaces an expired command', async () => {
+    window.history.replaceState(null, '', '/devices/add?method=command');
     const { state, api } = await renderWithDevices(<DevicesView deviceId="add" />, {
       devices: { devices: [deviceView({ id: 'd1', name: 'Old one' })] },
     });
@@ -211,6 +218,7 @@ describe('Add a device (docs/04 §9 flow 1)', () => {
   });
 
   it('shows why a command could not be made', async () => {
+    window.history.replaceState(null, '', '/devices/add?method=command');
     const { devices } = await renderWithDevices(<DevicesView deviceId="add" />);
     devices.failNext.enrollNovadDevice = new ApiError(403, {
       code: 'policy_denied',

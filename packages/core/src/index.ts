@@ -34,3 +34,7 @@ export * from './browser/index.ts';
 export * from './screen/index.ts';
 export * from './devices/index.ts';
 export * from './spaces/index.ts';
+export * from './pairing/index.ts';
+export * from './network/index.ts';
+export * from './trust/index.ts';
+export * from './relayhub/index.ts';

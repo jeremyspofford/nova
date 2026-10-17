@@ -1,4 +1,4 @@
-//! Minimal HTTP/1.1 for novad's management channel (contracts/hub-api.md §3) without external crates: a threaded server for JSON requests and a client for plain http:// URLs. TLS and mTLS arrive with the M6.5 transports (FR-134).
+//! Minimal HTTP/1.1 for novad's management channel (contracts/hub-api.md §3) without external crates: a threaded server for JSON requests and a client for plain http:// URLs. There is no TLS client yet: installs rely on the pinned Hub key and signed manifests (FR-133, ADR-094).
 #![allow(dead_code)]
 
 use serde_json::{Value, json};
@@ -675,7 +675,10 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 // Client
 // ---------------------------------------------------------------------------------------------
 
-/// POST a JSON body to an http:// URL (https:// -> Err("https needs the M6.5 transport")).
+/// What an https:// URL gets: novad has no TLS client yet (ADR-094).
+pub const HTTPS_UNSUPPORTED: &str = "novad has no TLS client yet: use the Hub's http:// address";
+
+/// POST a JSON body to an http:// URL (https:// -> Err(HTTPS_UNSUPPORTED)).
 /// Sends Content-Length, `Connection: close`, `Authorization: Bearer` when given, and the Host
 /// header with the port. Reads a Content-Length, chunked or read-to-EOF response body (max 16 MiB).
 /// Returns the status and the parsed JSON body (Value::Null when the body is empty; Err when the
@@ -714,7 +717,8 @@ struct Target {
 
 fn parse_url(url: &str) -> Result<Target, String> {
     if strip_prefix_ci(url, "https://").is_some() {
-        return Err("https needs the M6.5 transport".into());
+        // The pin and signed manifests protect installs (FR-133); TLS is ADR-094's follow-up.
+        return Err(HTTPS_UNSUPPORTED.into());
     }
     let rest = strip_prefix_ci(url, "http://")
         .ok_or("unsupported URL: only http:// and https:// are understood")?;
@@ -745,6 +749,11 @@ fn parse_url(url: &str) -> Result<Target, String> {
         authority,
         path,
     })
+}
+
+/// The host and port of an http:// URL (Err for anything the client would refuse).
+pub fn host_port(url: &str) -> Result<(String, u16), String> {
+    parse_url(url).map(|t| (t.host, t.port))
 }
 
 fn split_host_port(authority: &str) -> Result<(String, u16), String> {
@@ -801,11 +810,60 @@ fn exchange(
     body: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<(u16, Value), String> {
+    let mut headers = Vec::new();
+    let auth;
+    if let Some(token) = bearer {
+        if token.is_empty() || token.bytes().any(|b| b <= b' ' || b == 0x7f) {
+            return Err("the bearer token is empty or contains spaces or control characters".into());
+        }
+        auth = format!("Bearer {token}");
+        headers.push(("Authorization", auth.as_str()));
+    }
+    let r = request(method, url, &headers, body, timeout)?;
+    decode_json(r.status, &r.body)
+}
+
+/// A response as received: status, headers (names lowercased) and the raw body.
+#[derive(Debug, Clone)]
+pub struct RawResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl RawResponse {
+    /// The first header with this name, compared case-insensitively.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The body as JSON (Value::Null when empty; Err when it is not JSON).
+    pub fn json(&self) -> Result<Value, String> {
+        decode_json(self.status, &self.body).map(|(_, v)| v)
+    }
+}
+
+/// One request to an http:// URL with extra headers (signed status polls, FR-132) and the raw
+/// response (signed manifests are verified over their exact bytes, FR-133). A JSON body gets
+/// its Content-Type; header names and values with control characters are refused.
+pub fn request(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<RawResponse, String> {
     let target = parse_url(url)?;
-    if let Some(token) = bearer
-        && (token.is_empty() || token.bytes().any(|b| b <= b' ' || b == 0x7f))
-    {
-        return Err("the bearer token is empty or contains spaces or control characters".into());
+    for (name, value) in headers {
+        if name.is_empty()
+            || !name.bytes().all(is_tchar)
+            || value.bytes().any(|b| b < b' ' || b == 0x7f)
+        {
+            return Err(format!("the request header {name:?} is not valid"));
+        }
     }
     let deadline = Instant::now()
         .checked_add(timeout)
@@ -817,8 +875,8 @@ fn exchange(
         "{method} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: novad\r\nAccept: application/json\r\n",
         target.path, target.authority
     );
-    if let Some(token) = bearer {
-        head.push_str(&format!("Authorization: Bearer {token}\r\n"));
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
     }
     if let Some(body) = body {
         head.push_str(&format!(
@@ -844,12 +902,15 @@ fn exchange(
         return Err(timed_out(timeout));
     }
     let mut reader = BufReader::new(io);
-    let received = read_response_head(&mut reader)
-        .and_then(|(status, headers)| {
-            read_response_body(&mut reader, status, &headers).map(|body| (status, body))
-        });
+    let received = read_response_head(&mut reader).and_then(|(status, headers)| {
+        read_response_body(&mut reader, status, &headers).map(|body| (status, headers, body))
+    });
     match (received, sent) {
-        (Ok((status, body)), _) => decode_json(status, &body),
+        (Ok((status, headers, body)), _) => Ok(RawResponse {
+            status,
+            headers,
+            body,
+        }),
         (Err(_), Err(e)) => Err(format!("sending the request failed: {e}")),
         (Err(e), Ok(())) => Err(describe(e, timeout)),
     }
@@ -989,6 +1050,32 @@ fn describe(err: ReadError, timeout: Duration) -> String {
             format!("the response body exceeds {MAX_RESPONSE_BODY} bytes")
         }
     }
+}
+
+/// Unix seconds from an HTTP date in the IMF-fixdate form servers send
+/// (`Sun, 06 Nov 1994 08:49:37 GMT`, RFC 9110 §5.6.7); None for anything else.
+pub fn parse_http_date(s: &str) -> Option<u64> {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    let [_, day, month, year, time, "GMT"] = parts.as_slice() else {
+        return None;
+    };
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let m = MONTHS.iter().position(|x| x == month)? as i64 + 1;
+    let d: i64 = day.parse().ok().filter(|d| (1..=31).contains(d))?;
+    let y: i64 = year.parse().ok().filter(|y| (1970..=9999).contains(y))?;
+    let hms: Vec<i64> = time
+        .split(':')
+        .map(|p| p.parse().ok())
+        .collect::<Option<Vec<i64>>>()?;
+    let [h, mi, se] = hms.as_slice() else {
+        return None;
+    };
+    if !(0..24).contains(h) || !(0..60).contains(mi) || !(0..61).contains(se) {
+        return None;
+    }
+    u64::try_from(crate::util::days_from_civil(y, m, d) * 86_400 + h * 3600 + mi * 60 + se).ok()
 }
 
 fn timed_out(timeout: Duration) -> String {
@@ -1327,9 +1414,45 @@ mod tests {
     #[test]
     fn https_urls_are_refused() {
         let err = get_json("https://127.0.0.1:1/x", None, WAIT).unwrap_err();
-        assert_eq!(err, "https needs the M6.5 transport");
+        assert_eq!(err, HTTPS_UNSUPPORTED);
         let err = post_json("HTTPS://hub.local/x", None, &json!({}), WAIT).unwrap_err();
-        assert_eq!(err, "https needs the M6.5 transport");
+        assert_eq!(err, HTTPS_UNSUPPORTED);
+    }
+
+    #[test]
+    fn raw_requests_carry_extra_headers_and_return_exact_bytes() {
+        let server = start(1024, |req: Request| Response {
+            status: 200,
+            headers: vec![
+                ("content-type".into(), "application/octet-stream".into()),
+                ("date".into(), "Sat, 17 Oct 2026 15:20:00 GMT".into()),
+                ("x-seen".into(), req.header("x-nova-device-time").unwrap_or("-").into()),
+            ],
+            body: b"{ \"exact\": 1 }\n".to_vec(),
+        });
+        let r = request("GET", &url(&server, "/m"), &[("x-nova-device-time", "123")], None, WAIT).unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.body, b"{ \"exact\": 1 }\n");
+        assert_eq!(r.header("X-Seen"), Some("123"));
+        assert_eq!(r.json().unwrap()["exact"], 1);
+        assert_eq!(r.header("date").and_then(parse_http_date), Some(1_792_250_400));
+        // Header injection is refused before anything is sent.
+        let err = request("GET", &url(&server, "/m"), &[("x-a", "1\r\nx-b: 2")], None, WAIT).unwrap_err();
+        assert!(err.contains("not valid"), "{err}");
+        assert!(request("GET", &url(&server, "/m"), &[("bad name", "1")], None, WAIT).is_err());
+        server.stop();
+    }
+
+    #[test]
+    fn http_dates_parse_only_the_fixed_form() {
+        assert_eq!(parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+        assert_eq!(parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT"), Some(784_111_777));
+        assert_eq!(parse_http_date("Tue, 29 Feb 2028 23:59:59 GMT"), Some(1_835_481_599));
+        assert_eq!(parse_http_date("Sunday, 06-Nov-94 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, 06 Nov 1994 08:49:37 PST"), None);
+        assert_eq!(parse_http_date("Sun, 06 Foo 1994 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, 06 Nov 1994 25:49:37 GMT"), None);
+        assert_eq!(parse_http_date(""), None);
     }
 
     #[test]

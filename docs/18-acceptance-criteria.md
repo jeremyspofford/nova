@@ -146,6 +146,25 @@ with Playwright against a running Hub's web UI; native-shell steps start at M7 (
 6. Computer use on the mock desktop (FR-207): the browser app is view-only, the terminal
    click-only; pressing the kill key stops control and no further input event is delivered.
 
+### J8.5 — Add Device & transports (M6.5)
+1. Settings → Devices → **Add a device**, role Compute: the QR, the short code (single use,
+   5 min) and the one-line command are shown.
+2. The command's `novad install … --no-service` runs against the Hub: it verifies the Hub's
+   pinned identity and the signed manifest, prints a confirmation code; the Hub lists the request
+   with the same code; approving it registers the device, which reports its capabilities. A wrong
+   confirmation is refused; the code cannot be used twice (FR-132, FR-133).
+3. A phone (a mobile browser context) opens the QR link: the join page shows the confirmation code
+   and how to install the app; nothing is reachable until the owner approves on the Hub; after
+   approval the phone's session works; revoking the phone ends it (FR-132, FR-140).
+4. A self-hosted Relay on loopback is enabled; a client whose LAN endpoint is unreachable falls
+   back LAN → Mesh → Relay and reaches the Hub through the sealed tunnel; the fallback is in the
+   transport log and Network shows the paired client; revoking it drops its envelopes (FR-135,
+   FR-137, FR-139).
+5. Network setup with the mock mesh: plan, consent, apply; a failing reachability test rolls the
+   change back and the failing path is never advertised; one-click rollback reverts a successful
+   change (FR-136).
+6. A sleeping device is woken through a wake helper on its LAN; the wake is audited (FR-138).
+
 ### J9 — Sync & multi-device (M7)
 1. Two profiles pair devices.
 2. Create a chat on device A; it appears on B.

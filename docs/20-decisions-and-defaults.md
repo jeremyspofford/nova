@@ -102,6 +102,7 @@ silently.
 | ADR-091 | M4 implementation choices | Plugins and skills on disk, every plugin a sideload, hooks fail closed (supersedes part of ADR-083), direct user actions, MCP Apps, Nova's MCP server, bundles, OAuth, workspace, profile, import |
 | ADR-092 | M5 implementation choices | One runtime through turn seams, per-thread policy and tool scope, runs, goals, sub-agents, schedules, Code sessions, auto-review denies without a reviewer model (supersedes part of ADR-090), requests, compaction, documents in-process |
 | ADR-093 | M6 implementation choices | Agents in the one loop with rules in the user layer, channel text never authority (amends ADR-083), egress proxy with HTTPS inspection (amends ADR-063), bubblewrap and container substrates (supersedes ADR-090 "Sandbox until M6"), protected paths mounted in sandboxes, computers as folders, Playwright browser with per-action checks, screen tiers and kill key, `novad` over bearer tokens (extends ADR-089), Code environments, PRs and worktrees, spaces and sites |
+| ADR-094 | M6.5 implementation choices | Add Device commit-then-reveal with a Hub-signed confirmation (the Relay keeps v1), code-only guess budget, grants bound to the device key, approved roles only, signed `novad` manifest with a domain tag and `novad install` over HTTP with a pinned identity (extends ADR-089), Hub identity and CA never replaced silently, name constraints without single labels, nonce-bound identity statement, real hello probes, Wake Helper routing, consent bound to the exact text, lock-out guard, Relay sealing and PBKDF2-stretched pairing codes (extends ADR-071) |
 
 ## Details & rationale
 
@@ -1446,6 +1447,33 @@ amends ADR-063 and two bullets of ADR-083; extends ADR-089's transport to `novad
   Windows, firmware, out-of-band and low-level boot, the Wake Helper, a watchdog rollback report,
   Windows enrollment, `thread.status.changed` for agents, remote hosting targets for sites, and the
   web UI for these areas (it lands with the M6 web wave).
+
+**ADR-094 — M6.5 implementation choices** (extends ADR-089's bearer-token transport to Add
+Device and `novad install`, and ADR-071's Relay; see `docs/adr/0094-m65-implementation-choices.md`,
+which lists every decision with the known limitations).
+- *Add Device (FR-132, FR-140).* Commit-then-reveal: the device commits to a secret nonce, the
+  Hub answers with its own, the device reveals; the six digits hash both nonces, and the Hub signs
+  them for a device that pinned its fingerprint. The owner types the digits the device shows. Typed
+  codes have their own guess budget; grants are handed out once and bound to the device key; a
+  device keeps only the roles the owner approved; revocation blocks the key for every kind of
+  device. The Relay path keeps the single-round confirmation because its claim is sealed with a
+  key derived from the code.
+- *Signed builds and install (FR-133).* The Hub identity signs `novad-manifest.json` behind a
+  domain tag; `novad install` checks the pinned key, the signature and its own hash before writing
+  anything, takes the code on standard input and installs exactly the bytes it hashed. It runs over
+  plain HTTP: `novad` has no TLS client yet.
+- *Trust (FR-134).* An identity key and a local CA that are never replaced on their own, name
+  constraints without single-label names, a nonce-bound identity statement for pinning, and a
+  loopback-only fallback when certificates cannot be read.
+- *Transports and setup (FR-135, FR-136, FR-138, FR-139).* Real hello probes with the signed
+  identity check decide what is advertised; mDNS only while LAN is advertised; Wake Helpers by
+  reported subnets with the broadcast computed by the Hub; Network Setup with consent bound to the
+  exact text, a lock-out guard that treats loopback as unknown, automatic rollback, `rollback_failed`
+  and fixed system search paths.
+- *Relay (FR-137).* X25519 per side signed by Ed25519, per-direction HKDF keys,
+  XChaCha20-Poly1305 with the routing fields as associated data, PBKDF2-stretched pairing codes,
+  persisted stream floors, an `/api/v1`-only tunnel and bounded Relay resources; no forward
+  secrecy yet. Built in M6.5; real push senders and the channel relay stay in M7.
 
 ## Defaults for common ambiguities
 

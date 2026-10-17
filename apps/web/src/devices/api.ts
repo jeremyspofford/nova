@@ -1,9 +1,14 @@
-// Hub client calls for devices running `novad` (docs/23; FR-141..FR-150, FR-210, FR-081), in the
-// conventions of src/api.ts. `createApi` spreads `devicesApi(call)` into the client, so `Api`
-// includes these; until then `useDevicesApi` reads them from the same services object. The M2
-// compute-node calls (`listNodes`, `revokeNode`) stay in src/api.ts.
+// Hub client calls for devices running `novad` (docs/23; FR-141..FR-150, FR-210, FR-081) and for
+// Add Device and device management (FR-132, FR-140; docs/22 §4), in the conventions of
+// src/api.ts. `createApi` spreads `devicesApi(call)` into the client, so `Api` includes these;
+// until then `useDevicesApi` reads them from the same services object. The M2 compute-node calls
+// (`listNodes`, `revokeNode`) stay in src/api.ts.
 import type { z } from 'zod';
 import type {
+  AddDeviceBootstrap,
+  AddDeviceRequestStatus,
+  AddDeviceRequestView,
+  AddDeviceStartView,
   AgentDeviceConnectionView,
   AgentView,
   DeviceAccessRequestView,
@@ -12,9 +17,11 @@ import type {
   DeviceEnrollToken,
   DeviceModuleView,
   DeviceUpdateView,
+  DeviceSummaryView,
   DeviceView,
   DeviceWakeView,
   StagedWriteView,
+  addDeviceStartSchema,
   connectAgentDeviceSchema,
   deviceAccessRequestSchema,
   deviceGrantSchema,
@@ -73,6 +80,17 @@ export type DeviceMcpServer = Record<string, unknown>;
 
 export type StagedStatus = StagedWriteView['status'];
 
+/** A wake: `via` is the Wake Helper's device id, or `hub` when the Hub sent it (FR-138). */
+export type DeviceWakeResult = DeviceWakeView & { via?: string | null };
+
+/**
+ * The start answer. The agent-dist area also builds the Windows command; it reaches the page once
+ * the add-device area passes it on (`powershell`).
+ */
+export type AddDeviceStarted = AddDeviceStartView & {
+  bootstrap: AddDeviceBootstrap & { powershell?: string | null };
+};
+
 export function devicesApi(call: HubCall) {
   return {
     // ---- the registry (FR-142, FR-148, FR-150) --------------------------------------------------
@@ -110,8 +128,11 @@ export function devicesApi(call: HubCall) {
     /** WoL plans and changes (applied only with `apply`), sleep, restart, shutdown. */
     devicePowerAction: (id: string, body: z.input<typeof devicePowerSchema>) =>
       call<DevicePowerResult>('POST', `${dev(id)}/power`, body),
-    /** A magic packet; 429 `rate_limited` past `devices.wakesPerHour`. */
-    wakeDevice: (id: string) => call<DeviceWakeView>('POST', `${dev(id)}/wake`, {}),
+    /**
+     * A magic packet, through a Wake Helper on the device's network or from the Hub (`via`); 409
+     * `no_wake_helper` when neither reaches it, 429 `rate_limited` past `devices.wakesPerHour`.
+     */
+    wakeDevice: (id: string) => call<DeviceWakeResult>('POST', `${dev(id)}/wake`, {}),
 
     // ---- updates (FR-148) -----------------------------------------------------------------------
     listDeviceUpdates: (id: string) =>
@@ -169,8 +190,42 @@ export function devicesApi(call: HubCall) {
 
 export type DevicesApi = ReturnType<typeof devicesApi>;
 
+/**
+ * Add Device and every device (FR-132, FR-140; docs/22 §4). A separate part so the M6 fakes keep
+ * their type; `createApi` spreads `addDeviceApi(call)` next to `devicesApi(call)`.
+ */
+export function addDeviceApi(call: HubCall) {
+  return {
+    /** Every device record, whatever it runs: browsers and apps, novad devices, compute nodes. */
+    listAllDevices: () => call<{ items: DeviceSummaryView[] }>('GET', `${V1}/devices/all`),
+    /** A pairing: a single-use code (5 minutes), the QR payload and the install command. */
+    startAddDevice: (body: z.input<typeof addDeviceStartSchema>) =>
+      call<AddDeviceStarted>('POST', `${V1}/devices/add/start`, body),
+    /** Requests to join, newest first; pending ones by default. */
+    listAddRequests: (status?: AddDeviceRequestStatus | 'all') =>
+      call<{ items: AddDeviceRequestView[] }>(
+        'GET',
+        `${V1}/devices/add/requests${query({ status })}`,
+      ),
+    /** 400 `confirmation_mismatch` unless `confirmation` is the code the device shows. */
+    approveAddRequest: (id: string, confirmation: string) =>
+      call<AddDeviceRequestView>('POST', `${V1}/devices/add/requests/${enc(id)}/approve`, {
+        confirmation,
+      }),
+    denyAddRequest: (id: string) =>
+      call<AddDeviceRequestView>('POST', `${V1}/devices/add/requests/${enc(id)}/deny`, {}),
+    /** 409 `revoked` for a revoked device. */
+    setDeviceScopes: (id: string, scopes: string[]) =>
+      call<DeviceSummaryView>('PUT', `${dev(id)}/scopes`, { scopes }),
+    /** Any device: its sessions end, its credentials go and its key is blocked. */
+    revokeDevice: (id: string) => call<{ ok: true }>('POST', `${dev(id)}/revoke`),
+  };
+}
+
+export type AddDeviceApi = ReturnType<typeof addDeviceApi>;
+
 /** The devices calls of the app's client (part of `Api` once `createApi` spreads them in). */
-export function useDevicesApi(): DevicesApi {
+export function useDevicesApi(): DevicesApi & AddDeviceApi {
   const api: unknown = useServices().api;
-  return api as DevicesApi;
+  return api as DevicesApi & AddDeviceApi;
 }

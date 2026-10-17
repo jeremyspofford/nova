@@ -37,11 +37,16 @@ function osReducedMotion(reduce: boolean) {
 }
 
 describe('PetOverlay (FR-012)', () => {
-  it('renders nothing and opens no stream while off', async () => {
+  it('renders nothing and opens no stream of its own while off', async () => {
     await renderWithSpaces(<PetOverlay />);
     expect(pet()).toBeNull();
     expect(document.querySelector('svg')).toBeNull();
-    expect(FakeEventSource.all.filter((s) => !s.closed)).toHaveLength(0);
+    // At most the app's one shared stream (the settings store follows `settings.changed`).
+    const open = FakeEventSource.all.filter((s) => !s.closed);
+    expect(open.length).toBeLessThanOrEqual(1);
+    // A run event while off still shows nothing.
+    open[0]?.emit('thread.status.changed', { threadId: 't1', status: 'running' });
+    expect(pet()).toBeNull();
   });
 
   it('is decoration only: hidden from assistive tech, not focusable, in the chosen corner', async () => {

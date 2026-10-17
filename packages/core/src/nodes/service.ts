@@ -11,6 +11,7 @@ import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
 import { keyFingerprint, nodeSecretHash, verifyDocument } from './crypto.ts';
+import { enrollBindingOf, type EnrollKeyBinding } from '../pairing/binding.ts';
 import {
   ENROLL_TOKEN_PREFIX,
   ENROLL_TOKEN_TTL_MS,
@@ -101,8 +102,12 @@ export class NodeService {
 
   // ---- enrollment -------------------------------------------------------------------------
 
-  /** A one-use enrollment token for a compute node. Creating it is the owner's approval. */
-  async createEnrollToken(accountId: string): Promise<NodeEnrollToken> {
+  /**
+   * A one-use enrollment token for a compute node. Creating it is the owner's approval. Add Device
+   * binds it to the node's key and the pending record its approval created (FR-132): register
+   * must then present that key and activates that record.
+   */
+  async createEnrollToken(accountId: string, bind?: EnrollKeyBinding): Promise<NodeEnrollToken> {
     const token = ENROLL_TOKEN_PREFIX + randomBytes(32).toString('base64url');
     const now = this.#now();
     const expiresAt = new Date(now.getTime() + this.#enrollTtlMs).toISOString();
@@ -112,6 +117,7 @@ export class NodeService {
         accountId,
         role: 'compute',
         codeHash: nodeSecretHash(token),
+        ...(bind ? { scopes: JSON.stringify({ bind }) } : {}),
         status: 'pending',
         expiresAt,
         createdAt: now.toISOString(),
@@ -128,21 +134,46 @@ export class NodeService {
     const body = registerNodeSchema.parse(input);
     const protocolVersion = negotiateProtocol(body.protocolVersions);
     const request = await this.#consumeEnrollToken(body.enrollToken);
+    const bind = enrollBindingOf(request.scopes);
     const nowIso = this.#now().toISOString();
-    const nodeId = uuidv7();
+    const nodeId = bind?.deviceId ?? uuidv7();
     const fingerprint = keyFingerprint(body.publicKey);
     const credential = NODE_CREDENTIAL_PREFIX + randomBytes(32).toString('base64url');
     const ref = jobTokenRef(nodeId);
+    let name = body.name;
     try {
+      // A token from Add Device works only with the key the owner approved (FR-132).
+      if (bind && bind.publicKey !== body.publicKey) {
+        throw new NovaError('policy_denied', 'this enrollment token belongs to another node key', {
+          details: { reason: 'key_mismatch' },
+          action: 'Register with the key you added the node with',
+        });
+      }
       this.#checkDocument(body.capability, body.signature, body.publicKey);
       await this.#secrets.put(ref, body.jobToken);
       await this.#db.transaction(async () => {
         const taken = await this.#db.orm
-          .select({ id: device.id })
+          .select()
           .from(device)
           .where(eq(device.certFingerprint, fingerprint))
           .limit(1);
-        if (taken.length) {
+        const pending = taken[0];
+        if (bind) {
+          // The record approval created waits for exactly this key; a revoked one stays dead.
+          if (
+            !pending ||
+            pending.id !== bind.deviceId ||
+            pending.accountId !== request.accountId ||
+            pending.kind !== 'compute' ||
+            pending.status !== 'pending'
+          ) {
+            throw new NovaError('conflict', 'the node this token was made for is not waiting', {
+              details: { reason: 'device_not_pending' },
+              action: 'Add the node again',
+            });
+          }
+          name = pending.name;
+        } else if (pending) {
           throw new NovaError('conflict', 'this node key is already registered', {
             details: { reason: 'key_in_use' },
             action: 'Enroll with a new key',
@@ -158,21 +189,35 @@ export class NodeService {
           scopes: JSON.stringify(['node']),
           createdAt: nowIso,
         });
-        await this.#db.orm.insert(device).values({
-          id: nodeId,
-          accountId: request.accountId,
-          name: body.name,
-          kind: 'compute',
-          platform: platformOf(body.capability),
-          certFingerprint: fingerprint,
-          publicKey: body.publicKey,
-          roles: JSON.stringify(['compute']),
-          status: 'active',
-          credentialTokenId: tokenId,
-          lastSeenAt: nowIso,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-        });
+        if (bind) {
+          // The name and scopes the owner approved stay.
+          await this.#db.orm
+            .update(device)
+            .set({
+              platform: platformOf(body.capability),
+              status: 'active',
+              credentialTokenId: tokenId,
+              lastSeenAt: nowIso,
+              updatedAt: nowIso,
+            })
+            .where(eq(device.id, nodeId));
+        } else {
+          await this.#db.orm.insert(device).values({
+            id: nodeId,
+            accountId: request.accountId,
+            name: body.name,
+            kind: 'compute',
+            platform: platformOf(body.capability),
+            certFingerprint: fingerprint,
+            publicKey: body.publicKey,
+            roles: JSON.stringify(['compute']),
+            status: 'active',
+            credentialTokenId: tokenId,
+            lastSeenAt: nowIso,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          });
+        }
         await this.#db.orm.insert(deviceCapability).values({
           deviceId: nodeId,
           document: JSON.stringify(body.capability),
@@ -198,9 +243,9 @@ export class NodeService {
     await this.#events.emit({
       name: 'node.registered',
       accountId: request.accountId,
-      payload: { nodeId, name: body.name, models: modelsOf(body.capability) },
+      payload: { nodeId, name, models: modelsOf(body.capability) },
     });
-    this.#log.info('compute node registered', { nodeId, name: body.name });
+    this.#log.info('compute node registered', { nodeId, name });
     return { nodeId, credential, heartbeatIntervalMs: this.heartbeatIntervalMs, protocolVersion };
   }
 

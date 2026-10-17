@@ -475,6 +475,22 @@ every grant.
   Files that are not content-addressed, such as browser screenshots and the browser cookie state,
   are sealed with the data key and bound to a label (`writeSealedFile`), so one cannot be swapped
   for another.
+- **As shipped in M6.5** (ADR-094). Every Hub key is a vault entry; rows hold only references:
+  the Hub identity key (`secret://hub/identity`, Ed25519; its public half is in `trust_identity`,
+  and a missing or different key makes the identity refuse to load rather than make a new one),
+  the local CA's key (`secret://hub/ca/<id>/key`), the Hub's TLS keys
+  (`secret://hub/tls/<id>/key`, `secret://hub/tls/mesh/<id>/key`), the Relay route token and the
+  Hub's X25519 key for each Relay registration (`secret://relay/<registration id>/route-token`,
+  `…/x25519`, imported non-extractable), the WireGuard private key
+  (`secret://network/wireguard/<interface>/private-key`) and the mesh secrets the owner types or a
+  Headscale pre-auth key (`secret://network/setup/<runId>/auth-key`, `…/headscale-api-key`,
+  `…/preauth-key`). Keys of retired CAs, superseded certificates and replaced Relay registrations
+  are deleted from the vault. Add Device codes are stored only as SHA-256 hashes salted with the
+  pairing id (`device_pairing.code_hash`); device sessions are `auth_token` rows stored hashed like
+  any session, tied to their device in `device_session`; an enrollment token Add Device grants is
+  hashed in its own domain like the M2 and M6 ones. Mesh CLIs get secrets on standard input, in
+  their environment or from a 0600 file (`docs/22` §6), never as arguments. A device keeps its own
+  private keys: the Hub stores only its public key and certificate.
 
 ## 6. Prompt-injection defense (FR-103)
 
@@ -849,6 +865,19 @@ administrator can write it, or as a signed remote policy:
   `space`, every egress decision (kind `network`), egress scope and credential changes (kinds
   `settings` and `secret`) and the Code M6 actions; the full list is in `docs/06` §2 "audit &
   events". A denied action records its cause (`external_agent`, `password`, a tier refusal).
+- M6.5 adds (ADR-094; the full list is in `docs/06` §2 "audit & events"): Add Device with kind
+  `device` (`device.add.start`, `device.add.complete` with result `committed` or `denied` and the
+  reason, `device.add.reveal` with `ok` or `denied` and `bad_reveal`, `device.add.approve`,
+  `device.add.deny`, `device.add.expire` with what expired: `pairing`, `commit`, `request` or
+  `grant`), `device.scopes.update`, `device.revoke` for every kind of device (compute nodes
+  included) and `device.wake` with `via`; and with kind `network` the network panel
+  (`network.change`, `network.rollback`), the setup assistant (`network.setup.consent`,
+  `network.setup.apply`, `network.setup.rollback`), trust (`trust.change`, `trust.ca.create`,
+  `trust.ca.rotate`, `trust.leaf.issue`, `trust.device.issue`, `trust.device.revoke`,
+  `trust.mesh.store`) and the Relay (`relay.change`, `relay.pair` with decision `approved`,
+  `denied`, `expired` or `refused` and its reason, `relay.revoke`). No code, nonce, token or key is
+  ever in an entry; trust actions the Hub takes on its own are attributed to the owner account
+  (none is written before setup).
 - Sensitive raw inputs can be recorded only if the user opts in; defaults store hashes.
 
 ## 12. Security testing (FR-123)
@@ -969,3 +998,27 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
   answers with `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'` so the Inspector can
   frame it; site previews are sandboxed documents without same-origin; every other response keeps
   `X-Frame-Options: DENY`.
+- **Public routes as shipped in M6.5** (ADR-094; the list `apps/hub/test/listeners.test.ts`
+  enforces is in `contracts/hub-api.md` §1). Add Device's `complete` authenticates by the
+  single-use code, `reveal` by the commitment and the device key's signature, and `status` by a
+  fresh signature newer than the last poll; all three are rate-limited per client address, five
+  wrong codes burn a pairing and typed codes have their own budget per account. The root
+  certificate (`/api/v1/trust/ca.pem`, `ca.crt`), the signed identity statement
+  (`/api/v1/trust/identity?nonce=`) and the `novad` builds (`/api/v1/agent/dist/:file`, 60 a
+  minute per address) take no credential and hand out only public information whose integrity is
+  its signature. The Relay adds no public route: tunnelled requests reach only `/api/v1` (never
+  the WebSocket), carry the address `relay:<client id>` and authenticate by the client's own
+  session, never by a route token. The Hub answers to its mDNS name and its direct public host only
+  while each is in use. If the trust certificates cannot be read at start, the Hub binds plain HTTP
+  to `127.0.0.1` only. Network setup treats loopback and forwarded requests as an unknown path
+  (`docs/22` §6). `NOVA_NETWORK_TOOLS_FILE`, which names the programs network setup runs, can be
+  set only by whoever starts the Hub, is logged when set, and stops the start when unreadable.
+- **Known limitations (M6.5).** `novad` and compute nodes still talk to the Hub with bearer
+  tokens over plain HTTP, so Add Device codes and granted tokens are visible on the LAN (the pin,
+  the signed manifest and the Hub-signed confirmation protect integrity); device certificates are
+  issued but nothing checks them (mutual TLS is M7). A device session from Add Device is a full
+  owner session: its scopes are recorded, not enforced. The Relay has no forward secrecy (static
+  X25519 keys per pairing; `docs/22` §3.1) and accepts any push token. The identity key cannot be
+  rotated, the CA is replaced only on the owner's explicit request, and device certificates are
+  not renewed. Network setup has no elevation and was exercised only
+  against fake CLIs.

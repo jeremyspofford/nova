@@ -35,7 +35,34 @@ const PUBLIC: Record<string, string> = {
   // A cross-site redirect carries no session; the single-use state from the start call is the
   // credential, and the route only ever redirects back to settings (FR-047).
   'GET /api/v1/mcp/oauth/callback': 'single-use OAuth state in the query',
+  // Add Device (FR-132, docs/22 §4, §9): a new device has no session yet. All three are rate-limited
+  // per client address.
+  'POST /api/v1/devices/add/complete':
+    'the single-use pairing code in the body (5 minutes; five wrong codes burn it)',
+  'POST /api/v1/devices/add/reveal':
+    "the commitment from complete and the device key's Ed25519 signature over the request id and a fresh time (a bad one burns the request)",
+  'GET /api/v1/devices/add/status/:requestId':
+    "the device key's Ed25519 signature over the request id and a time newer than the last poll",
+  // Public information a device needs before it can trust the Hub (FR-134, docs/22 §5): the
+  // local CA's root certificate (PEM and DER) and the Hub's identity statement, which carries its
+  // own Ed25519 signature for native shells to check against their pin. Nothing secret.
+  'GET /api/v1/trust/ca.pem': 'none: the root certificate is public',
+  'GET /api/v1/trust/ca.crt': 'none: the root certificate is public',
+  'GET /api/v1/trust/identity': 'none: public, signed by the Hub identity key',
+  // Signed novad builds for the one-line install (FR-133, docs/22 §4.3): not secret; integrity
+  // comes from the manifest's Ed25519 signature and each build's SHA-256.
+  'GET /api/v1/agent/dist/:file': 'none: public builds, verified by the signed manifest',
 };
+
+/** Public routes that take no credential at all: they may answer anyone. */
+const OPEN = new Set([
+  'GET /api/v1/hello',
+  'GET /api/v1/health',
+  'GET /api/v1/trust/ca.pem',
+  'GET /api/v1/trust/ca.crt',
+  'GET /api/v1/trust/identity',
+  'GET /api/v1/agent/dist/:file',
+]);
 
 let dir: string;
 let db: NovaDatabase;
@@ -136,9 +163,7 @@ describe('HTTP routes', () => {
   });
 
   it('never lets an unauthenticated call succeed on the public routes that take credentials', async () => {
-    for (const key of Object.keys(PUBLIC).filter(
-      (k) => !k.includes('hello') && !k.includes('health'),
-    )) {
+    for (const key of Object.keys(PUBLIC).filter((k) => !OPEN.has(k))) {
       const [method, path] = key.split(' ') as [string, string];
       const res = await call(method, path);
       expect(res.status, key).toBeGreaterThanOrEqual(400);

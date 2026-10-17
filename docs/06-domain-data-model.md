@@ -656,6 +656,25 @@ Audit actions added in M6 (ADR-093; `kind` / `action`; inputs are stored as a ha
 Creating spaces, saving pages, comments, building sites, checking environments, Git
 hosts or verify runs, side questions and file reads on a device are not audited.
 
+Audit actions added in M6.5 (ADR-094; `kind` / `action`; no new kind):
+
+| Kind | Action | Resource | Written for |
+| --- | --- | --- | --- |
+| `device` | `device.add.start` | the pairing id | an owner starts Add Device (FR-132): role, scopes, transport, expiry; actor `user` |
+| `device` | `device.add.complete` | the request id; for a refusal the pairing id (none for a typed code) | a device commits: `result` `committed`; a refusal `result: denied` with `detail.reason` (`wrong_code`, `burned`, `expired`, `unknown`, `code_only_locked`, `key_revoked`, `kind_not_allowed`, `key_in_use`), audited for the pairing or, for a typed code, for each account it was tried against; a Relay claim that becomes a request is `result: ok` |
+| `device` | `device.add.reveal` | the request id | a good reveal (`result: ok`, the request is now pending) or a burned one (`result: denied`, `reason: bad_reveal`) |
+| `device` | `device.add.approve`, `device.add.deny` | the request id | the owner's decision (`decision` `approved` or `denied`; actor `user`); a deny that lost to an approval writes nothing |
+| `device` | `device.add.expire` | the pairing or request id | `detail.what`: `pairing` (an unused code), `commit` (never revealed), `request` (never decided) or `grant` (approved, never collected) |
+| `device` | `device.scopes.update` | the device id | `PUT /devices/:id/scopes`: `{from, to}` |
+| `device` | `device.revoke` | the device id | M6.5 also writes it for compute nodes, browsers and apps (`{name, kind, sessions, fingerprint}`); `device.wake` gains `via` (the helper's id, `hub`, or null for `no_wake_helper`) and `device.register` gains `addDevice: true` for a bound token |
+| `network` | `network.change`, `network.rollback` | the change id | the network panel's settings (`{keys, values}`) and one-click rollback (`result: failed` with the error when the undo throws) (FR-135, FR-139) |
+| `network` | `network.setup.consent`, `network.setup.apply`, `network.setup.rollback` | `network_setup_step:<id>` | the setup assistant (FR-136): consent `granted` or `revoked`; every apply, also when denied (`system_changes_disabled`, `would_lock_out`); every rollback (actor `system` when automatic), with `allowSystemChanges`, `failed` and `reason`, `result: rollback_failed` when an undo failed |
+| `network` | `trust.change`, `trust.ca.create`, `trust.ca.rotate`, `trust.leaf.issue`, `trust.device.issue`, `trust.device.revoke`, `trust.mesh.store` | `trust`, or the CA, certificate or device id | trust (FR-134): a mode change with `{from, to, via: settings\|rollback}`; certificates by serial, never a key |
+| `network` | `relay.change`, `relay.pair`, `relay.revoke` | `relay`, or the relay client id | the Relay (FR-137): settings changes; pairing outcomes with `decision` `approved`, `denied`, `expired` or `refused` and `detail.reason` (`expired`, `bad_claim`, `client_conflict`, `revoked_key`, `add_device_unavailable`, `add_device_refused`); revocations with whether the Relay was told |
+
+No entry holds a code, nonce, token or key. Trust actions the Hub takes on its own are attributed
+to the owner account and not written before setup.
+
 ### work runs, goals, schedules, triggers
 
 ```sql
@@ -1963,7 +1982,7 @@ CREATE TABLE wake_request (         -- Wake-on-LAN requests (FR-144): rate-limit
   helper_device_id TEXT REFERENCES device(id), -- NULL: the Hub sent the packet itself (M6); a
                                    -- Wake Helper sends it from M6.5 (FR-138)
   mac TEXT NOT NULL,
-  status TEXT NOT NULL,            -- sent|failed|rate_limited
+  status TEXT NOT NULL,            -- pending (M6.5, 0029)|sent|failed|rate_limited
   error TEXT, created_at TEXT NOT NULL
 );
 
@@ -2009,6 +2028,176 @@ compute node; `firmware_change` requires an `approval` before `applied`; `wake_r
 requires an active `wake-helper` device on the same LAN; a `staged_write` commits only when the
 file's current hash still equals `base_sha256` and policy allows (otherwise `conflict`);
 revoking a device also stops relay routing for its `relay_client_id`.
+
+### Add Device, network, trust and the Relay (M6.5)
+
+Migrations 0028 (Add Device), 0029 (network), 0030 (network setup), 0031 (trust) and 0032
+(Relay); ADR-094. All timestamps are UTC ISO-8601 and ids UUIDv7. No private key, code, nonce or
+token is stored in clear: codes are salted SHA-256 hashes, sessions are hashed `auth_token`
+rows, and keys and typed secrets are vault entries named by `secret://` references.
+
+```sql
+CREATE TABLE device_pairing (       -- 0028: what the owner started (FR-132)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  role TEXT NOT NULL,              -- client|compute|wake-helper
+  scopes TEXT NOT NULL DEFAULT '[]', name TEXT, -- the owner's name wins over the device's
+  transport TEXT NOT NULL DEFAULT 'direct',      -- direct|relay
+  code_hash TEXT NOT NULL,         -- hex SHA-256 of `nova-add-device-code-v1|<id>|<CODE>`
+  relay_pairing_id TEXT,           -- the Relay's slot (transport relay)
+  attempts INTEGER NOT NULL DEFAULT 0, -- wrong codes; the fifth burns it
+  status TEXT NOT NULL DEFAULT 'open', -- open|used|expired|burned
+  expires_at TEXT NOT NULL, created_at TEXT NOT NULL, used_at TEXT
+);
+
+CREATE TABLE device_pairing_request ( -- 0028: a device's request to join, one per pairing
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  pairing_id TEXT NOT NULL UNIQUE REFERENCES device_pairing(id), -- makes the code single use
+  role TEXT NOT NULL, kind TEXT NOT NULL, -- browser|novad|compute|native
+  scopes TEXT NOT NULL DEFAULT '[]', name TEXT NOT NULL, platform TEXT NOT NULL,
+  public_key TEXT NOT NULL,        -- raw Ed25519, base64url
+  fingerprint TEXT NOT NULL,       -- hex SHA-256 of the key, as device.cert_fingerprint
+  confirmation TEXT,               -- the six digits; NULL until the reveal (v2)
+  commitment TEXT, hub_nonce TEXT, revealed_at TEXT, -- v2 commit-then-reveal
+  via TEXT NOT NULL DEFAULT 'direct', relay_client_id TEXT, -- direct|relay
+  status TEXT NOT NULL DEFAULT 'pending', -- committed|pending|approved|denied|expired
+  device_id TEXT REFERENCES device(id), -- the record approval created
+  last_poll INTEGER,               -- newest accepted status poll (Unix s); a poll must be newer
+  grant_type TEXT, granted_at TEXT, -- session|novad|compute, handed out once (never the secret)
+  decided_at TEXT, expires_at TEXT NOT NULL, created_at TEXT NOT NULL
+);
+
+CREATE TABLE device_session (       -- 0028: a browser's or app's session belongs to its device
+  token_id TEXT PRIMARY KEY REFERENCES auth_token(id),
+  device_id TEXT NOT NULL REFERENCES device(id), account_id TEXT NOT NULL REFERENCES account(id),
+  request_id TEXT REFERENCES device_pairing_request(id), created_at TEXT NOT NULL
+);
+
+CREATE TABLE revoked_device_key (   -- 0028: keys of revoked devices; Add Device refuses them
+  fingerprint TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT,                  -- plain TEXT: the row outlives a purge of the device
+  reason TEXT NOT NULL, created_at TEXT NOT NULL
+);
+
+CREATE TABLE network_endpoint_check ( -- 0029: one row per probe; kept 7 days (FR-135)
+  id TEXT PRIMARY KEY, transport TEXT NOT NULL, -- lan|mesh|relay|direct
+  url TEXT NOT NULL, health TEXT NOT NULL, -- ok|failing
+  latency_ms INTEGER, detail TEXT, checked_at TEXT NOT NULL
+);
+
+CREATE TABLE network_transport_event ( -- 0029: what is advertised changed; kept 90 days
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,              -- advertised|withdrawn|up|down|off|primary
+  transport TEXT, from_transport TEXT, -- for primary: the new and the previous preferred one
+  url TEXT, detail TEXT, created_at TEXT NOT NULL
+);
+
+CREATE TABLE network_change (       -- 0029: the change log behind one-click rollback (FR-139)
+  id TEXT PRIMARY KEY, account_id TEXT REFERENCES account(id), actor TEXT NOT NULL,
+  kind TEXT NOT NULL,              -- network.settings|trust.mode|network.setup.step
+  summary TEXT NOT NULL,
+  undo_json TEXT NOT NULL,         -- read by the kind's undo handler; secret:// refs only
+  status TEXT NOT NULL DEFAULT 'applied', -- applied|rolled_back
+  error TEXT, created_at TEXT NOT NULL, rolled_back_at TEXT -- error: the last failed rollback
+);
+
+CREATE TABLE network_setup_run (    -- 0030: a Network Setup plan (FR-136)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  provider TEXT NOT NULL,          -- headscale|tailscale|netbird|wireguard
+  status TEXT NOT NULL,            -- planned|in_progress|completed|failed|rolled_back
+  options_json TEXT NOT NULL,      -- write-only secrets replaced by vault refs
+  outputs_json TEXT NOT NULL DEFAULT '{}', detection_json TEXT, error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE network_setup_step (   -- 0030: one step of a run, UNIQUE (run_id, idx)
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES network_setup_run(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES account(id), idx INTEGER NOT NULL,
+  kind TEXT NOT NULL, provider TEXT NOT NULL, -- headscale|tailscale|netbird|wireguard|ufw|os|hub
+  mode TEXT NOT NULL,              -- change|manual|skip|check
+  title TEXT NOT NULL, description TEXT NOT NULL, -- what the owner confirms word for word
+  commands_json TEXT NOT NULL,     -- argv lists only
+  params_json TEXT NOT NULL, affects_json TEXT NOT NULL, undo_affects_json TEXT NOT NULL,
+  expects_json TEXT NOT NULL, system_change INTEGER NOT NULL,
+  status TEXT NOT NULL,            -- pending|applied|verified|failed|rolled_back|rollback_failed|
+                                   -- manual|skipped
+  checks_json TEXT NOT NULL DEFAULT '[]', error TEXT,
+  auto_rolled_back INTEGER NOT NULL DEFAULT 0,
+  change_ref TEXT,                 -- the network_change entry (plain TEXT)
+  applied_at TEXT, verified_at TEXT, rolled_back_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE network_setup_snapshot ( -- 0030: what a step changed, taken before it did
+  id TEXT PRIMARY KEY, step_id TEXT NOT NULL REFERENCES network_setup_step(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL REFERENCES network_setup_run(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES account(id),
+  data_json TEXT NOT NULL, undo_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
+
+CREATE TABLE network_setup_consent ( -- 0030: one active per (account, kind, provider)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  kind TEXT NOT NULL, provider TEXT NOT NULL,
+  description TEXT NOT NULL,       -- a consent covers only this exact text
+  granted_at TEXT NOT NULL, revoked_at TEXT
+);
+
+CREATE TABLE trust_identity (       -- 0031: the Hub identity's public half; one row (id 'hub')
+  id TEXT PRIMARY KEY, public_key TEXT NOT NULL, -- raw Ed25519, base64url
+  fingerprint TEXT NOT NULL,       -- base64url SHA-256 of the key: what devices pin
+  key_ref TEXT NOT NULL, created_at TEXT NOT NULL -- secret://hub/identity
+);
+
+CREATE TABLE trust_ca (             -- 0031: the Hub local CA; one active (retired_at NULL)
+  id TEXT PRIMARY KEY, cert_pem TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,       -- SHA-256 of the DER, upper-case hex with colons
+  key_ref TEXT,                    -- secret://hub/ca/<id>/key; NULL once a retired key left
+  name_constraints_json TEXT NOT NULL, -- {"dns": [...], "ip": [...]}
+  not_before TEXT NOT NULL, not_after TEXT NOT NULL, created_at TEXT NOT NULL, retired_at TEXT
+);
+
+CREATE TABLE trust_certificate (    -- 0031: issued and stored certificates; UNIQUE (ca_id, serial)
+  id TEXT PRIMARY KEY, ca_id TEXT REFERENCES trust_ca(id), -- NULL for a mesh certificate
+  kind TEXT NOT NULL,              -- hub_tls|device|mesh
+  serial TEXT NOT NULL, subject TEXT NOT NULL,
+  device_id TEXT, role TEXT,       -- plain TEXT: a novad device or a compute node
+  sans_json TEXT NOT NULL DEFAULT '[]', public_key TEXT, cert_pem TEXT NOT NULL,
+  key_ref TEXT,                    -- the Hub's own TLS keys; NULL for device certificates
+  not_before TEXT NOT NULL, not_after TEXT NOT NULL, created_at TEXT NOT NULL,
+  superseded_at TEXT, revoked_at TEXT, revoked_reason TEXT -- revoked rows: the revocation list
+);
+
+CREATE TABLE relay_registration (   -- 0032: the Hub at one Relay (FR-137)
+  id TEXT PRIMARY KEY, url TEXT NOT NULL,
+  route_id TEXT NOT NULL,          -- the Hub's routing id there
+  token_ref TEXT NOT NULL,         -- secret://relay/<id>/route-token
+  x25519_key_ref TEXT NOT NULL, x25519_public_key TEXT NOT NULL, -- secret://relay/<id>/x25519 (secret-scan: fake)
+  status TEXT NOT NULL DEFAULT 'active', -- active|rejected (the Relay forgot it)|retired
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE relay_client (         -- 0032: a client paired through the Relay
+  id TEXT PRIMARY KEY,             -- its relay client id
+  account_id TEXT NOT NULL REFERENCES account(id),
+  registration_id TEXT NOT NULL REFERENCES relay_registration(id),
+  route_id TEXT NOT NULL,          -- UNIQUE (registration_id, route_id)
+  relay_pairing_id TEXT NOT NULL, add_pairing_id TEXT, request_id TEXT, device_id TEXT,
+  name TEXT NOT NULL, platform TEXT NOT NULL, kind TEXT NOT NULL, -- browser|native
+  public_key TEXT NOT NULL, x25519_public_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending|active|denied|expired|revoked
+  stream_floor INTEGER NOT NULL DEFAULT 0, -- highest client stream counter accepted
+  last_seen_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revoked_at TEXT
+);
+```
+
+Migration 0029 also rebuilds `wake_request` (SQLite cannot change a CHECK constraint, and nothing
+references the table) so that `status` takes `pending`: a wake is counted and recorded as
+`pending` in the same transaction before a Wake Helper is called, then becomes `sent` or `failed`
+(`rate_limited` stays). `helper_device_id` names the Wake Helper that sent it (FR-138). Ids of
+other areas' rows are plain TEXT here (`relay_client.device_id`, `network_setup_step.change_ref`,
+`trust_certificate.device_id`). An enrollment token Add Device grants is a 0005
+`add_device_request` row whose `scopes` JSON carries `bind: {publicKey, deviceId}`; registration
+must present that key and activates that pending `device` row. Only a `revoked` Relay client's key
+is refused when it pairs again; `denied` and `expired` rows are kept.
 
 ## 8. Automations, smart home & ambient (added)
 

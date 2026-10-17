@@ -1,6 +1,7 @@
-// Power and Wake-on-LAN (FR-144; docs/23 §5.3): the device's power state as it reports it, Wake
-// for a device that reports Wake-on-LAN (rate-limited by `devices.wakesPerHour`), the steps to
-// turn Wake-on-LAN on (shown first; applied only when the user asks, and novad may need
+// Power and Wake-on-LAN (FR-144, FR-138; docs/23 §5.3, docs/22 §7): the device's power state as
+// it reports it, Wake for a device that reports Wake-on-LAN (sent through a Wake helper on its
+// network, or by the Hub when it is on that network; rate-limited by `devices.wakesPerHour`), the
+// steps to turn Wake-on-LAN on (shown first; applied only when the user asks, and novad may need
 // elevation), and Sleep, Restart and Shut down, each confirmed first.
 import { useState } from 'react';
 import { Button, Spinner, useToast } from '@nova/ui';
@@ -9,7 +10,7 @@ import { plural } from '../settings/common.ts';
 import { followLink } from '../work/nav.tsx';
 import { useDevicesApi, type DevicePowerResult } from './api.ts';
 import type { PanelProps } from './DevicePage.tsx';
-import { capabilityBlocked, deviceErrorMessage } from './format.ts';
+import { addDevicePath, capabilityBlocked, deviceErrorMessage, wakeSentText } from './format.ts';
 import { ConfirmDialog, LoadError, Unavailable, useLoad } from './parts.tsx';
 
 type PowerAction = 'sleep' | 'restart' | 'shutdown';
@@ -52,7 +53,7 @@ export function planStepText(step: unknown): string {
 
 const yesNo = (v: unknown) => (v === true ? 'Yes' : v === false ? 'No' : 'Unknown');
 
-export function PowerPanel({ device }: PanelProps) {
+export function PowerPanel({ device, deviceName }: PanelProps) {
   const api = useDevicesApi();
   const toast = useToast();
   const limit = useSetting('devices.wakesPerHour').value;
@@ -77,7 +78,7 @@ export function PowerPanel({ device }: PanelProps) {
     setWaking(true);
     try {
       const w = await api.wakeDevice(device.id);
-      toast.show(`Wake signal sent to ${w.mac}.`, { tone: 'success' });
+      toast.show(wakeSentText(device.name, w, deviceName), { tone: 'success' });
     } catch (err) {
       toast.show(deviceErrorMessage(err, 'Could not send the wake signal.'), { tone: 'error' });
     } finally {
@@ -155,7 +156,8 @@ export function PowerPanel({ device }: PanelProps) {
         ) : wakeable ? (
           <>
             <p className="muted ws-flush">
-              Sends a Wake-on-LAN signal on the Hub&apos;s network.
+              Sends a Wake-on-LAN signal through a Wake helper on the device&apos;s network, or from
+              the Hub when it is on that network.
               {device.status === 'active' ? ' The device is online now.' : ''} At most{' '}
               {plural(limit, 'wake')} an hour for a device;{' '}
               <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
@@ -168,6 +170,16 @@ export function PowerPanel({ device }: PanelProps) {
                 {waking ? <Spinner /> : null} Wake {device.name}
               </Button>
             </div>
+            <p className="muted ws-flush">
+              No Wake helper on its network yet?{' '}
+              <a
+                href={addDevicePath('wake-helper')}
+                onClick={(e) => followLink(e, addDevicePath('wake-helper'))}
+              >
+                Add one
+              </a>
+              : an always-on device there, such as a NAS or a mini PC.
+            </p>
           </>
         ) : (
           <p className="muted ws-flush">

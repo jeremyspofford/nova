@@ -218,6 +218,18 @@ Performance budgets are set against the supported minimum (see `docs/16`).
 Every listener requires a token or certificate (FR-192). Detailed contracts live in
 `contracts/`.
 
+*As built in M6.5 (ADR-094).*
+
+| Path | Protocol | Notes |
+| --- | --- | --- |
+| Client ↔ Hub | HTTP on port 7419 (the next free port when taken); HTTPS with the Hub local CA's or the mesh certificate once `trust.mode` is `local-ca` or `mesh` (after a restart), or with `NOVA_TLS_CERT` | Session cookie or bearer token; device sessions come from Add Device (`docs/22` §4) |
+| Client ↔ Hub (off-LAN) | The same over a mesh address, or the API tunnelled through the Relay (sealed streams, `/api/v1` only, no WebSocket) | Clients pick an endpoint from those the Hub advertises; no shipped client does yet (`docs/22` §2) |
+| LAN discovery | mDNS on UDP 5353: `_nova._tcp` with the Hub's port and a TXT record of `v=1` and the fingerprint | Only while LAN is advertised and the Hub listens beyond loopback |
+| Hub ↔ Relay, client ↔ Relay | One outbound WebSocket each to `/v1/relay/connect` (subprotocol `nova-relay.v1`), plus HTTPS calls; the self-hosted Relay listens on 7430 behind TLS | Route token in a bearer header or the `bearer.<token>` subprotocol; content-blind (`contracts/rest-api.md` §3) |
+| Hub ↔ Compute Node | HTTP over LAN or Mesh; the node listens on 7420 | Bearer tokens (ADR-089); Add Device binds the enrollment token to the node's key |
+| `novad` ↔ Hub | HTTP over LAN or Mesh; the management channel on 7420 | Bearer tokens; `novad` has no TLS client yet, so `novad install` checks the pinned identity key and the signed manifest instead; device certificates are issued in `local-ca` mode, mutual TLS is M7 |
+| Wake Helper ↔ target | UDP magic packet to port 9 (or 7) on the helper's own subnet | Sent by a `novad` Wake Helper, or by the Hub on its own LAN (FR-138) |
+
 ## 14. Non-goals
 
 - No peer-to-peer client mesh in v1 (clients do not talk to each other).

@@ -20,9 +20,12 @@ export {
   MANAGEMENT_TOKEN_PREFIX,
   deviceCapabilitiesUpdateSchema,
   deviceHeartbeatSchema,
+  deviceLanSubnetSchema,
+  devicePowerReportSchema,
   negotiateDeviceProtocol,
   registerDeviceSchema,
   type DeviceHeartbeat,
+  type DeviceLanSubnet,
   type RegisterDeviceRequest,
   type RegisterDeviceResponse,
 } from './protocol.ts';

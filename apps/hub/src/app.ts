@@ -64,6 +64,12 @@ import { setupChannels } from './channels.ts';
 import { setupCode } from './code.ts';
 import { setupComputers } from './computers.ts';
 import { setupDevices } from './devices.ts';
+import { setupAddDevice } from './add-device.ts';
+import { setupAgentDist } from './agent-dist.ts';
+import { setupNetwork, type NetworkArea } from './network.ts';
+import { setupNetworkSetup } from './network-setup.ts';
+import { setupRelay, type RelayArea, type RelayDeps } from './relay.ts';
+import { setupTrust, type TrustArea } from './trust.ts';
 import { setupScreen } from './screen.ts';
 import { setupSpaces } from './spaces.ts';
 import { setupRequests } from './requests.ts';
@@ -105,6 +111,8 @@ export interface HubDeps {
   >;
   /** How often temporary chats past their TTL are purged (default 10 min, FR-027). */
   sweepIntervalMs?: number;
+  /** Relay connector timings and the pairing key-derivation cost (tests shorten them). */
+  relay?: Pick<RelayDeps, 'backoff' | 'retransmitMs' | 'pingIntervalMs' | 'kdfIterations'>;
   /** Replace the model router (tests); the default is the full Router (docs/07 §8-§9). */
   router?: (registry: ProviderRegistry) => ModelRouter;
   /** Probe for local model servers (tests replace it; docs/07 §12). */
@@ -125,6 +133,12 @@ export interface Hub {
   memory: MemoryService;
   /** Work runs (M5): `recover()` continues runs a restart interrupted (FR-052). */
   runs: { recover(): Promise<number> };
+  /** M6.5 trust (FR-134): main.ts serves HTTPS with its certificates. */
+  trust: TrustArea;
+  /** M6.5 transports (FR-135): main.ts reports the listener so endpoints can be checked. */
+  network: NetworkArea;
+  /** M6.5 Relay connector (FR-137). */
+  relay: RelayArea;
 }
 
 const CSP = [
@@ -285,6 +299,100 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   });
   const screen = await setupScreen({ ...ctx, audit: ops.audit });
   const devices = await setupDevices(ctx, { audit: ops.audit, notifier: ops.notifier });
+  // M6.5: the Hub's identity and certificates (FR-134), its transports and endpoints (FR-135,
+  // FR-139), Add Device (FR-132) and the signed novad builds it serves (FR-133).
+  const trust = await setupTrust(ctx, { audit: ops.audit });
+  const network = await setupNetwork(ctx, {
+    audit: ops.audit,
+    writeSetting: (accountId, key, value) =>
+      writeSetting(accountId, { key, value, scope: 'global' }),
+  });
+  const addDevice = await setupAddDevice(ctx, {
+    audit: ops.audit,
+    notifier: ops.notifier,
+    sessionCookie: SESSION_COOKIE,
+  });
+  const agentDist = setupAgentDist(ctx);
+  // The identity until its key is loaded is none (hello answers null fields meanwhile).
+  const hubIdentity = () => (trust.helloFields().hubFingerprint ? trust.identity : null);
+  addDevice.useDevices(devices.service);
+  addDevice.useHubIdentity(hubIdentity);
+  addDevice.useCertIssuer({
+    issueDeviceCertificate: (input) => trust.certIssuer.issueDeviceCertificate(input),
+    revokeDeviceCertificates: (deviceId) => trust.revokeDevice(deviceId),
+  });
+  addDevice.useBootstrap((role, code, hubUrl, pairingId) =>
+    agentDist.bootstrap(role, code, hubUrl, hubIdentity()?.fingerprint ?? null, pairingId),
+  );
+  addDevice.useEndpoints(() => Promise.resolve(network.endpoints()));
+  agentDist.useHubIdentity(hubIdentity);
+  devices.service.useWakeRouter(network.wakeRouter);
+  network.useHubIdentity(hubIdentity);
+  network.useTrustSummary(() => trust.trustSummary());
+  network.useProbeCa(() => Promise.resolve(trust.service.caCertificate()));
+  trust.useChangeLog(network.changes);
+  trust.useHostnames(() => network.hostNames());
+  // The Network Setup assistant (FR-136) verifies each change with the network area's checks
+  // and registers its undo with the same change log; meshes feed endpoints and certificates.
+  const listenerOf = () => network.registry.listener;
+  const networkSetup = await setupNetworkSetup(ctx, {
+    audit: ops.audit,
+    hubPort: () => listenerOf()?.port ?? config.port,
+    hubUrl: (host) =>
+      `${listenerOf()?.protocol ?? 'http'}://${host}:${listenerOf()?.port ?? config.port}`,
+  });
+  networkSetup.useReachability({
+    test: async () =>
+      (await network.test()).transports.flatMap((t) =>
+        t.endpoints.map((c) => ({
+          transport: c.transport,
+          url: c.url,
+          ok: c.health === 'ok',
+          latencyMs: c.latencyMs,
+          detail: c.detail,
+        })),
+      ),
+  });
+  networkSetup.useChangeLog(network.changes);
+  network.useEndpointSource(networkSetup.endpointSource);
+  network.useMeshSummary(async () => ({ ...(await networkSetup.aclSummary()) }));
+  trust.useMeshCerts(networkSetup.meshCerts);
+  networkSetup.useTrust({
+    ensureLocalCa: async () => ({ caFingerprint: (await trust.ensureLocalCa()).fingerprint }),
+    requestMeshCert: (host) => trust.requestMeshCert(host),
+  });
+  // The Relay (FR-137): pairing goes through Add Device; tunneled requests are dispatched into
+  // this Hub's own routes (`useInject` below) and authenticate like direct ones.
+  const relay = await setupRelay(ctx, { audit: ops.audit, ...deps.relay });
+  addDevice.useRelayPairing((input) => relay.openPairing(input));
+  relay.usePairing(addDevice.service);
+  relay.onClientRevoked((accountId, deviceId) => addDevice.revoker.revoke(accountId, deviceId));
+  relay.useHubIdentity(hubIdentity);
+  network.useEndpointSource(relay.endpointSource);
+  network.useRelayStatus(() => Promise.resolve({ ...relay.status() }));
+  // The Relay endpoint's health is the connector's state: a fresh check when it connects or drops,
+  // so clients are told at once rather than at the next scheduled check (docs/22 §9.7).
+  events.bus.subscribe('relay.status.changed', () => {
+    network.registry
+      .check()
+      .catch((err: unknown) => log.warn('endpoint check after a Relay change failed', { err }));
+  });
+  networkSetup.useRelay({
+    state: async () => {
+      const st = relay.status();
+      return {
+        enabled: await ctx.setting('relay.enabled'),
+        url: st.url,
+        connected: st.state === 'connected',
+      };
+    },
+    set: async ({ enabled, url }) => {
+      // The URL first, so the connector never starts against the old one (the relay area applies
+      // settings as they change).
+      await writeSetting(null, { key: 'relay.url', value: url ?? '', scope: 'global' });
+      await writeSetting(null, { key: 'relay.enabled', value: enabled, scope: 'global' });
+    },
+  });
   const spaces = await setupSpaces(ctx, { audit: ops.audit });
   // A Code session on another machine runs its commands there (FR-062); every other command
   // goes through the computers area's router.
@@ -515,6 +623,12 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   });
   spaces.useAudit(ops.audit);
   const areas = [
+    trust,
+    network,
+    networkSetup,
+    relay,
+    addDevice,
+    agentDist,
     spaces,
     devices,
     agents,
@@ -581,9 +695,13 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   // The public address inbound webhooks use (`channels.publicUrl`, docs/13 §4) is a name the Hub
   // answers to, like the configured origins; it follows the setting.
   const publicHosts = new Set<string>();
+  // The Hub's own advertised names (its mDNS name, the direct public address) are too (FR-135):
+  // an endpoint the Host check refused would fail its own reachability test.
   const refreshPublicHosts = async () => {
     const url = await setting('channels.publicUrl');
+    const names = await network.hostNames();
     publicHosts.clear();
+    for (const n of names) publicHosts.add(n.toLowerCase());
     if (!url) return;
     try {
       const u = new URL(url);
@@ -593,17 +711,24 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       // not a URL: nothing to add
     }
   };
+  const refreshHosts = () =>
+    refreshPublicHosts().catch((err: unknown) => log.warn('public names not read', { err }));
   await refreshPublicHosts();
   events.bus.subscribe('settings.changed', (e) => {
-    if (e.payload.key === 'channels.publicUrl')
-      refreshPublicHosts().catch((err: unknown) => log.warn('public URL not read', { err }));
+    const key = typeof e.payload.key === 'string' ? e.payload.key : '';
+    if (key === 'channels.publicUrl' || key.startsWith('network.')) void refreshHosts();
   });
+  network.useHostNamesChanged(refreshPublicHosts);
   const app = Fastify({
     logger: false,
     bodyLimit: 1024 * 1024,
     genReqId: () => uuidv7(),
     trustProxy: false,
   });
+  // Requests the Relay tunnels in arrive from `relay:<client id>`: dispatched in-process, so the
+  // network setup's lock-out guard learns their transport here (FR-136).
+  relay.useInject(app);
+  networkSetup.useRequestTransport((req) => (req.ip.startsWith('relay:') ? 'relay' : null));
 
   // Open event streams are ended before the server closes, and running turns are cancelled and
   // saved before the database goes away (FR-018).
@@ -693,6 +818,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     apiVersions: ['v1'],
     features: [],
     setupRequired: (await auth.ownerAccount()) === null,
+    ...trust.helloFields(),
   }));
 
   // The authenticated handshake (contracts/hub-api.md §1, §5): the server-request kinds this
@@ -709,6 +835,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       name: 'nova-hub',
       version: config.version,
       apiVersions: ['v1'],
+      // The endpoints that passed their own reachability test (FR-135, docs/22 §9.7).
+      endpoints: network.endpoints(),
       ...requests.hello({
         accountId,
         deviceId: req.principal?.tokenId ?? null,
@@ -895,7 +1023,12 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     detect: () => (deps.detect ?? detectLocalServers)(),
     accountOf,
   });
-  registerNodeRoutes(app, { nodes, accountOf, novad: devices.nodeRoutes });
+  registerNodeRoutes(app, {
+    nodes,
+    accountOf,
+    novad: devices.nodeRoutes,
+    added: addDevice.revoker,
+  });
   for (const a of areas) a.register(app);
 
   void app.register((scoped, _opts, done) => {
@@ -982,6 +1115,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     sources,
     memory,
     runs,
+    trust,
+    network,
+    relay,
   };
 }
 

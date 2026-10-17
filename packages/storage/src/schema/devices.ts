@@ -120,7 +120,8 @@ export const wakeRequest = sqliteTable(
     /** NULL: the Hub sent it (M6); a Wake Helper from M6.5 (FR-138). */
     helperDeviceId: text('helper_device_id').references(() => device.id),
     mac: text('mac').notNull(),
-    status: text('status', { enum: ['sent', 'failed', 'rate_limited'] }).notNull(),
+    /** `pending` while a wake is being sent (counted toward the limit; 0029). */
+    status: text('status', { enum: ['pending', 'sent', 'failed', 'rate_limited'] }).notNull(),
     error: text('error'),
     createdAt: text('created_at').notNull(),
   },

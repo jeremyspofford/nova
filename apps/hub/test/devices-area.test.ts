@@ -1,7 +1,8 @@
 // The devices area on its own (FR-144, FR-148, FR-150): its late-bound audit and notifier, Wake-on-
 // LAN to a UDP socket on loopback with the per-hour limit from settings, the node routes' novad
-// hooks (Add Device for client roles, listing by role, revoking a novad device), the diagnostics
-// probe and the Code environment it hands the code area.
+// hooks (listing by role, revoking a novad device), the diagnostics probe and the Code environment
+// it hands the code area. Devices enroll with the owner's scripted token (`novad/enroll`); Add
+// Device with a code is the add-device area's (apps/hub/test/add-device.test.ts).
 import { createSocket } from 'node:dgram';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -101,7 +102,7 @@ async function api(method: string, path: string, body?: unknown) {
 }
 
 async function enroll(opts: ConstructorParameters<typeof FakeDevice>[0] = {}): Promise<FakeDevice> {
-  const t = await api('POST', '/api/v1/devices/add/start', { role: 'client' });
+  const t = await api('POST', '/api/v1/devices/novad/enroll', { roles: ['client'] });
   expect(t.status).toBe(201);
   expect(t.json.token).toMatch(/^nvd_/);
   const fake = new FakeDevice(opts);

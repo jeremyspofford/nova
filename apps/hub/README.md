@@ -107,8 +107,42 @@ environments the egress proxy (late-bound). The Hub answers to the host of `chan
 follows the setting. Not wired in M6: an SSH transport, the Hub's update key and the local browser
 fallback.
 
+M6.5 adds six areas (decisions in ADR-094). `app.ts` sets them up after devices: trust →
+network → add device → agent dist → network setup → relay, and wires them together. The trust
+area's identity signs the Add Device reveal, the `novad` manifest and the Relay offer, and issues
+device certificates; the network area routes wakes for the devices area, takes Mesh endpoints from
+network setup and the Relay endpoint from the relay area, and keeps the change log the trust and
+setup areas register their undo with; the relay area opens pairing slots for Add Device, hands it
+claims and receives its decisions, and its tunnel dispatches clients' requests into this Hub with
+`inject` (address `relay:<client id>`, which network setup reads as the Relay transport).
+`GET /api/v1/hello` adds `hubFingerprint` and `hubPublicKey`, the authenticated `POST` adds
+`endpoints`, and the Host allowlist follows the network area's names. `main.ts` serves HTTPS with
+the trust area's certificates when no `NOVA_TLS_CERT` is set (renewals swap in live; unreadable
+certificates mean plain HTTP on 127.0.0.1 only) and reports the bound listener to the network
+area, which starts the endpoint checks and mDNS.
+
+| File | Area | Routes |
+| --- | --- | --- |
+| `add-device.ts` | Add Device v2 and device management (FR-132, FR-140): pairings, commit-then-reveal, signed polls, grants, approvals, the device list and scopes, revocation of browsers and apps | `POST /devices/add/start`, `GET /devices/add/requests`, `POST /devices/add/requests/:id/{approve,deny}`, `GET /devices/all`, `PUT /devices/:id/scopes`, and the public `POST /devices/add/complete`, `POST /devices/add/reveal`, `GET /devices/add/status/:requestId` (rate-limited per address) |
+| `agent-dist.ts` | Signed `novad` builds from `NOVA_NOVAD_DIST` and the one-line install command (FR-133); the `agentDist` probe | the public `GET /agent/dist/:file` (60 a minute per address) |
+| `network.ts` | Endpoints, health checks, mDNS, the change log with one-click rollback, diagnostics, Wake Helper routing (FR-135, FR-138, FR-139); the `network` probe | `GET`/`PATCH /network`, `POST /network/test`, `POST /network/rollback`, `GET /network/diagnostics` |
+| `network-setup.ts` | The Network Setup assistant (FR-136): detection, plans, consented steps, verification, rollback; Mesh endpoints, the ACL summary and mesh certificates for the other areas; the `networkSetup` probe | `POST /network/setup`, `GET /network/setup/runs`, `GET /network/setup/runs/:id`, `POST /network/setup/runs/:id/rollback`, `GET /network/setup/consents`, `DELETE /network/setup/consents/:id` |
+| `trust.ts` | The Hub identity, the local CA, the Hub's TLS and mesh certificates, device certificates (FR-134); the `trust` probe | `GET`/`PATCH /trust`, `POST /trust/renew`, and the public `GET /trust/ca.pem`, `GET /trust/ca.crt`, `GET /trust/identity?nonce=` |
+| `relay.ts` | The Relay connector and its tunnel (FR-137); the `relay` probe | `GET`/`PATCH /relay`, `POST /relay/test`, `GET /relay/clients`, `POST /relay/clients/:id/revoke` |
+
+`node-routes.ts` loses `add/start` (Add Device's now) and gains `POST /devices/compute/enroll`
+(the scripted compute-node token); `POST /devices/:id/revoke` also revokes devices only the
+add-device area knows. `devices.ts` keeps `POST /devices/novad/enroll` for scripted `novad`
+enrollment, and its wake route goes through the network area's Wake Helper router.
+
 More options: `NOVA_SECRETS=keychain|vault`, `NOVA_TLS_CERT` / `NOVA_TLS_KEY` (HTTPS),
-`NOVA_SANDBOX=auto|docker|podman|bwrap|microvm|off` (M6 adds bubblewrap and the micro-VM stub; `auto`
-tries a container engine, then bubblewrap), `NOVA_SANDBOX_IMAGE` (terminals and command hooks run in
-this image; the sample plugin's hook needs Node in it), `NOVA_DETECT_URLS`, `NOVA_SLACK_API_BASE`
-(a Slack-compatible API address instead of Slack's own: a test double or a proxy).
+`NOVA_SANDBOX=auto|docker|podman|bwrap|microvm|off` (M6 adds bubblewrap and the micro-VM stub;
+`auto` tries a container engine, then bubblewrap), `NOVA_SANDBOX_IMAGE` (terminals and command hooks
+run in this image; the sample plugin's hook needs Node in it), `NOVA_DETECT_URLS`,
+`NOVA_SLACK_API_BASE` (a Slack-compatible API address instead of Slack's own: a test double or a
+proxy), `NOVA_NOVAD_DIST` (M6.5: the folder of `novad-<os>-<arch>` builds and an optional `VERSION`
+file the Hub signs and serves; without it the install command is unavailable) and
+`NOVA_NETWORK_TOOLS_FILE` (M6.5: a JSON file `{bins: {<cli>: [absolute argv prefix]}, baseEnv: {…}}`
+naming the programs Network Setup runs for each mesh, firewall or package CLI instead of looking in
+the system folders; the E2E journeys point it at fakes. Only whoever starts the Hub can set it, the
+Hub logs a warning when it is set, and a file that cannot be read or parsed stops the start).

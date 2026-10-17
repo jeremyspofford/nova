@@ -16,10 +16,10 @@ import {
   deviceView,
   grantView,
   pendingRequest,
-  renderWithDevices,
   stagedView,
   type M6DevicesState,
 } from './fakes-m6-devices.ts';
+import { renderWithAllDevices as renderWithDevices } from './fakes-m65-devices.ts';
 import { resetDom } from './render.tsx';
 
 afterEach(() => {

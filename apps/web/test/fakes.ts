@@ -30,6 +30,8 @@ import { m6ChannelsImpl, m6ChannelsState, type M6ChannelsState } from './fakes-m
 import { m6CodeImpl, m6CodeState, type M6CodeState } from './fakes-m6-code.ts';
 import { m6ComputersImpl, m6ComputersState, type M6ComputersState } from './fakes-m6-computers.ts';
 import { m6DevicesImpl, m6DevicesState, type M6DevicesState } from './fakes-m6-devices.ts';
+import { m65DevicesImpl, m65DevicesState, type M65DevicesState } from './fakes-m65-devices.ts';
+import { m65NetworkImpl, m65NetworkState, type M65NetworkState } from './fakes-m65-network.ts';
 import { m6SpacesImpl, m6SpacesState, type M6SpacesState } from './fakes-m6-spaces.ts';
 import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
 
@@ -128,6 +130,8 @@ export interface HubState {
   m6browser: M6BrowserState;
   m6agents: M6AgentsState;
   m6devices: M6DevicesState;
+  m65devices: M65DevicesState;
+  m65network: M65NetworkState;
   m6code: M6CodeState;
   /** Code sessions, changes, comments and reviews (test/fakes-m5-code.ts). */
   m5code: M5CodeState;
@@ -161,6 +165,8 @@ export function createHub(init: Partial<HubState> = {}) {
     m5code: m5CodeState(),
     m6agents: m6AgentsState(),
     m6devices: m6DevicesState(),
+    m65devices: m65DevicesState(),
+    m65network: m65NetworkState(),
     m6code: m6CodeState(),
     ...init,
   };
@@ -550,6 +556,18 @@ export function createHub(init: Partial<HubState> = {}) {
           state.m3.approvals = [...state.m3.approvals, a];
         },
       },
+    }),
+    ...m65DevicesImpl(state.m65devices, {
+      m6: state.m6devices,
+      id,
+      ts: () => ts(),
+      maybeFail,
+    }),
+    ...m65NetworkImpl(state.m65network, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      setting: (k) => resolveSetting(k, layers()).value,
     }),
     ...m6AgentsImpl(state.m6agents, {
       id,

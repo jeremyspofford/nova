@@ -95,7 +95,7 @@ async function api(
 }
 
 async function enrollNode(): Promise<string> {
-  const start = await api('POST', '/api/v1/devices/add/start', { role: 'compute' });
+  const start = await api('POST', '/api/v1/devices/compute/enroll');
   expect(start.status).toBe(201);
   expect(start.json.token).toMatch(/^nve_/);
   const nodeDir = join(dir, 'node');
@@ -129,16 +129,20 @@ async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, ms = 
 describe('owner routes', () => {
   it('require a session; compute nodes here, other roles enroll novad (M6)', async () => {
     const anon = { 'x-none': '1' };
-    expect((await api('POST', '/api/v1/devices/add/start', { role: 'compute' }, anon)).status).toBe(
-      401,
-    );
+    expect((await api('POST', '/api/v1/devices/compute/enroll', {}, anon)).status).toBe(401);
     expect((await api('GET', '/api/v1/devices', undefined, anon)).status).toBe(401);
     expect((await api('POST', '/api/v1/devices/x/revoke', undefined, anon)).status).toBe(401);
+    // The scripted compute path: a one-use `nve_` token (Add Device is the path with a code).
+    const node = await api('POST', '/api/v1/devices/compute/enroll');
+    expect(node.status).toBe(201);
+    expect(node.json.token).toMatch(/^nve_/);
     // Other roles are novad devices (M6): a one-use enrollment token for `novad`.
-    const client = await api('POST', '/api/v1/devices/add/start', { role: 'client' });
+    const client = await api('POST', '/api/v1/devices/novad/enroll', { roles: ['client'] });
     expect(client.status).toBe(201);
     expect(JSON.stringify(client.json)).toContain('nvd_');
-    expect((await api('POST', '/api/v1/devices/add/start', { role: 'toaster' })).status).toBe(400);
+    expect((await api('POST', '/api/v1/devices/novad/enroll', { roles: ['toaster'] })).status).toBe(
+      400,
+    );
     expect((await api('GET', '/api/v1/devices')).json).toEqual({ items: [] });
     expect((await api('GET', '/api/v1/devices?role=client')).json).toEqual({ items: [] });
     expect((await api('POST', '/api/v1/devices/nope/revoke')).status).toBe(404);
@@ -258,7 +262,7 @@ describe('a compute node end to end', () => {
   });
 
   it('refuses a second registration with the same enrollment token', async () => {
-    const start = await api('POST', '/api/v1/devices/add/start', { role: 'compute' });
+    const start = await api('POST', '/api/v1/devices/compute/enroll');
     const opts = {
       hubUrl,
       token: start.json.token as string,

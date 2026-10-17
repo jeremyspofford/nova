@@ -227,3 +227,39 @@ M6 (decisions in `docs/20` ADR-093):
   `BLOB_REFERENCES` (`purge.ts`) lists every column naming a content-addressed blob;
   `writeSealedFile` / `readSealedFile` (`attachments.ts`) seal files that are not
   content-addressed; the activity trace adds `computer` items with screenshot links.
+
+M6.5 (decisions in `docs/20` ADR-094):
+
+- Add Device (`src/pairing/`) — `PairingService` (FR-132, FR-140): pairings with a short code
+  (`code.ts`: Crockford base32, the salted code hash, the v1 and v2 confirmations, the commitment,
+  the Hub's reveal statement and the device-signed reveal and status messages), the v2
+  commit-then-reveal handshake, the code-only guess budget, signed status polls, grants handed out
+  once (device sessions, or enrollment tokens bound to the device key through `binding.ts`), the
+  owner's approve and deny, expiry (`startSweeper`), revocation for every kind of device (sessions
+  deleted, the key blocked in `revoked_device_key`), the device list and scopes, and
+  `requestFromRelay` / `onDecided` for the Relay. `SlidingWindowLimiter` (`limiter.ts`) rate-limits
+  public routes per client address. `DeviceService` and `NodeService` take the binding in
+  `createEnrollToken` and check it on register; `DeviceService.onRevoked` and `useWakeRouter` are
+  new.
+- Network (`src/network/`) — `EndpointRegistry` (`endpoints.ts`, FR-135): LAN candidates from the
+  interfaces, Mesh and Relay sources, Direct public, scheduled and on-demand checks with
+  `probeHello` (`probe.ts`: the hello probe with the signed identity check), what is advertised,
+  the probe history and transport event log. `MdnsAdvertiser` (`mdns.ts`, on `multicast-dns`),
+  `NetworkChangeLog` (`changes.ts`: changes with registered undo handlers, one-click rollback),
+  `WakeHelperRouter` (`wake.ts`, FR-138), `deviceReachability` (`reachability.ts`) and the address
+  helpers (`subnet.ts`). Mesh adapters (`mesh/`: Headscale, the Tailscale client, NetBird, plain
+  WireGuard, ufw and package installs over `ProcessMeshRunner`, which runs argument lists with
+  timeouts, process groups, a fixed environment and fixed search paths) and the Network Setup
+  assistant (`setup/`: `NetworkSetupService`, the planner, the store, the lock-out guard and the
+  seams to the other areas, FR-136).
+- Trust (`src/trust/`) — `TrustService` (FR-134): the Hub local CA with name constraints, the
+  Hub's TLS certificate and its renewal, device certificates and their revocation list, mesh
+  certificates, CA replacement on request, the TLS material the listener serves and the signed
+  identity statement. `HubIdentity` (`identity.ts`) is the Ed25519 identity key, which refuses to
+  load rather than replace a recorded key; `checkHubIdentity` (`pinning.ts`) is the reference
+  pinning check; `x509.ts` is the X.509 builder the egress CA now shares.
+- Relay connector (`src/relayhub/`) — `RelayHub` (FR-137): registration with a Relay (the route
+  token and the Hub's X25519 key in the vault), the outbound connection, pairing slots for Add
+  Device and claims handed to it, the paired-client registry with revocation, persisted stream
+  floors, and the tunnel that dispatches clients' requests into the Hub. The protocol itself is
+  `@nova/relay` (`packages/relay`).

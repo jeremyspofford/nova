@@ -13,6 +13,7 @@ small; large recordings go in the release assets, not the repo.
 | M4 | [Plugins, skills, hooks, MCP Apps, bundles, workspace and profile](M4.md) |
 | M5 | [Work runs, budgets, schedules, chat escalation and a Code session](M5.md) |
 | M6 | [An agent books a meeting and asks before sending; research, Slack, events, browser, takeover](M6.md) |
+| M6.5 | [Add a computer and a phone with a code; turn the LAN off and the Relay takes over](M6.5.md) |
 
 ## Template
 

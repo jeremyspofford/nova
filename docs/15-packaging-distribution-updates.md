@@ -71,6 +71,19 @@ page):
 A build that fails any step must not be run. Nova never asks users to turn off signature
 checks, and the Hub refuses to pair a `novad` whose signature does not verify.
 
+*As built in M6.5* (ADR-094). Step 5 is what the Hub's own bootstrap command does (`docs/22`
+§4.3): the builds a Hub serves come from its `NOVA_NOVAD_DIST` folder (packaging copies
+`novad-<os>-<arch>` there, `.exe` on Windows, with a `VERSION` file), and the Hub signs their
+manifest `novad-manifest.json` with its own identity key (`novad-manifest.sig`, over the tag
+`nova-novad-manifest-v1\n` followed by the manifest bytes). The one-line command checks the
+download's SHA-256 against the manifest before running it; `novad install` then checks that the
+Hub's identity key hashes to the pinned fingerprint, that the manifest signature verifies with it
+and that its own binary is the listed build, and refuses to continue otherwise. To verify by hand,
+fetch both files from `/api/v1/agent/dist/`, check the signature with the `hubPublicKey` of
+`GET /api/v1/hello` (whose SHA-256 is the fingerprint the Hub shows with the code), then the
+build's SHA-256. The release signing key, `SHA256SUMS` and platform signatures of steps 2 to 4 are
+not built yet (M10); it is the device that refuses a build that does not verify, not the Hub.
+
 ## 4. Updates (FR-120)
 
 - Channels: **stable**, **beta**, **nightly** (developer).

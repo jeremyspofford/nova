@@ -27,3 +27,8 @@ export * from './schema/devices.ts';
 export * from './schema/code_m6.ts';
 export * from './schema/spaces.ts';
 export * from './schema/screen.ts';
+export * from './schema/add_device.ts';
+export * from './schema/network.ts';
+export * from './schema/network_setup.ts';
+export * from './schema/trust.ts';
+export * from './schema/relay.ts';

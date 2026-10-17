@@ -890,6 +890,7 @@ two differ (⌘⌥A and ⌃⌥A), and a browser tab has no global keys. "New run
 | `agent/<id>`, `agents` | the agent list or one agent (M6) |
 | `computer/<id>`, `computers` | the computer list or one computer (M6) |
 | `device/<id>`, `devices` | the device list or one device (M6) |
+| `add-device?p=<pairing id>&fp=<hub fingerprint>&r=<relay url>&rp=<relay pairing id>#c=<code>` | `/add-device` (the joining device's page, M6.5, FR-132) with only the fields that validate; the code stays in the fragment. The Hub's QR link opens the same page directly |
 | `theme?data=<base64>` | `/settings/appearance?theme=<data>`: the theme import, filled in; nothing is kept until the user saves it (FR-011). The data is at most 44,000 characters |
 
 Ids must be 1–100 characters of letters, digits, `_` and `-` after decoding; anything else,
@@ -981,6 +982,51 @@ device** shows the one-use command line (no QR code yet) and waits for the devic
 device page has Capabilities, Modules and services, Power and Wake-on-LAN, Updates, Policy,
 Files (granted folders, access requests, staged writes with their diff, Commit and Discard),
 Agents (connections) and MCP. Settings → Devices keeps compute nodes and links to it.
+
+**In M6.5** (ADR-094) **Devices** lists every device record, whatever it runs (FR-140): `novad`
+devices, compute nodes, browsers and apps added with a code, with their kind, status, scopes,
+version and last contact; pending requests appear first under "Waiting for approval". **Add a
+device** (`/devices/add`) picks the role (Client, Compute node, Wake helper), scopes (none on by
+default; Client: Offline copy, Local models, Files, Browser, Computer use; Compute node: Commands),
+an optional name and, when `relay.enabled` is on, whether to pair through the Relay. It then shows
+the QR code (drawn in the browser as an SVG, black on white in both themes for scanners), the code
+with Copy, a live countdown with New code, the join link, the install commands for headless
+devices (or why there are none), and Start over. The request card (`/devices/add?request=<id>`,
+where the Hub's notification links) asks the owner to type the six digits the device shows (never
+prefilled), then Approve or Deny; a mismatch shows the Hub's refusal, and the success screen shows
+role, scopes, what it runs and the platform. `?role=` preselects a role and `?method=command`
+keeps the M6 one-use command ("Use a one-use command instead"). A device page adds Scopes with
+Edit, Wake ("through <helper>" or "by the Hub", or why no helper can) and Revoke, which says what
+revoking does and signs this browser out when it is the device being revoked. Settings → Devices
+gains "Adding devices" (`devices.add.enabled`, `devices.add.sessionDays`) and "Add with a code"
+for compute nodes.
+
+The joining device's page is `/add-device`, served without a session (`docs/22` §4.4): it takes
+the code from the link (or asks for it), checks the Hub, shows the six digits with "On the Hub,
+type this code to approve…", waits for approval, then offers **Open Nova** and how to install the
+app on this platform; a denial or expiry says so and offers to start again.
+
+**Network** is a top-level sidebar entry (`/network`, `/network/:section`; a setup run is
+`/network/setup?run=<id>`). Its sections are tabs on desktop; on phones `/network` lists them and
+each is a full page with a link back. **Overview** (FR-135, FR-139): the primary transport, what
+clients are told (only endpoints that pass their test are advertised), Test now, problems with
+guided fixes (`docs/22` §10), each transport with its endpoints, latency and 24-hour checks and why
+one was withdrawn, the change list with "Roll back the last change" (it asks first), the transport
+event log in sentences ("LAN failed its check; Mesh is now primary."), per-device reachability,
+certificate, mesh, Relay and egress status, and the network settings form (saved through
+`PATCH /api/v1/network`, so each save can be rolled back). **Setup** (FR-136): the host-changes
+switch (`network.setup.allowSystemChanges`, which asks before turning on and shows as locked under
+managed policy), detection, the four mesh choices with help (including the iOS note), options with
+write-only keys, the plan, per-step consent showing the exact text, automatic rollback and
+`rollback_failed` shown plainly, check, roll back the last step or the whole run, run history and
+remembered consents with Revoke; no Apply or Roll back button appears while host changes are off.
+**Trust** (FR-134): the three modes, the restart notice, the Hub and CA fingerprints, `ca.crt` and
+`ca.pem` downloads with install hints for five platforms, certificate expiry and names, renewal,
+problems and issued certificates, a missing identity key and the loopback-only start. **Relay**
+(FR-137): on or off (it asks before connecting out), own or hosted Relay, address, state, latency,
+Test, and paired clients with Revoke. **Wake helpers** (FR-138): which devices may wake others,
+which to use and in what order, and the recent wakes with how each was sent. Updates arrive live
+through the event stream.
 
 New flows:
 

@@ -71,6 +71,7 @@ The golden journeys are the scripts in `docs/18` §3:
 | J6 | M5 | Code session, protected paths, prefix rules, exec sessions |
 | J7 | M6 | agent, per-channel threads, events, self-set wakes, `novad` staged writes |
 | J8 | M6 | browser safety, proxy credential injection, external-agent rule, computer-use tiers |
+| J8.5 | M6.5 | Add Device (headless and phone), signed `novad` install, LAN → Mesh → Relay fallback, network setup rollback, wake helper |
 | J9 | M7 | sync and multi-device, session handoff |
 | J10 | M8 | extension and governance |
 | J11 | M10 | install, update, rollback, install robustness |

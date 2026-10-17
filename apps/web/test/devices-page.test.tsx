@@ -11,10 +11,10 @@ import {
   bundle,
   deviceView,
   moduleView,
-  renderWithDevices,
   updateView,
   type M6DevicesState,
 } from './fakes-m6-devices.ts';
+import { renderWithAllDevices as renderWithDevices } from './fakes-m65-devices.ts';
 import { resetDom } from './render.tsx';
 
 afterEach(() => {
@@ -60,7 +60,7 @@ describe('the device page', () => {
     // Focus starts on Cancel, never on the destructive button.
     expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }));
     await userEvent.click(within(confirm).getByRole('button', { name: 'Revoke' }));
-    expect(api.revokeNovadDevice).toHaveBeenCalledWith('d1');
+    expect(api.revokeDevice).toHaveBeenCalledWith('d1');
     expect(await screen.findByText('Revoked')).toBeTruthy();
     expect(screen.getByText(/it can no longer reach this Hub/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull();
@@ -287,7 +287,9 @@ describe('power and Wake-on-LAN (FR-144)', () => {
     expect(screen.getByText(/The device is online now/)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Wake Desk PC' }));
     expect(api.wakeDevice).toHaveBeenCalledWith('d1');
-    expect(await screen.findByText('Wake signal sent to aa:bb:cc:dd:ee:ff.')).toBeTruthy();
+    expect(
+      await screen.findByText('Wake signal sent to Desk PC (aa:bb:cc:dd:ee:ff).'),
+    ).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Wake Desk PC' }));
     expect(await screen.findByText(/woken 1 time in the last hour/)).toBeTruthy();
   });

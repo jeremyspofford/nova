@@ -274,6 +274,20 @@ export function Sidebar({
           <Icon name="server" />
           <span className="mode-label">Devices</span>
         </a>
+        <a
+          href="/network"
+          className="mode-link"
+          aria-current={route.name === 'network' ? 'page' : undefined}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            navigate('/network');
+            onNavigated();
+          }}
+        >
+          <Icon name="network" />
+          <span className="mode-label">Network</span>
+        </a>
       </div>
       <div className="sidebar-bottom">
         <a

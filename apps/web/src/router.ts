@@ -45,6 +45,8 @@ export type Route =
   | { name: 'apps'; entryId: string | null }
   /** /devices, /devices/add, /devices/:id (docs/04 §9, docs/23). */
   | { name: 'devices'; deviceId: string | null }
+  /** /network and /network/:section (docs/04 §9, docs/22). */
+  | { name: 'network'; section: string | null }
   /** /computers, /computers/:id (FR-080). */
   | { name: 'computers'; computerId: string | null }
   | { name: 'open'; target: string }
@@ -69,6 +71,7 @@ export function parseRoute(pathname: string, search = ''): Route {
   if (head === 'apps') return { name: 'apps', entryId: arg ?? null };
   if (head === 'computers') return { name: 'computers', computerId: arg ?? null };
   if (head === 'devices') return { name: 'devices', deviceId: arg ?? null };
+  if (head === 'network') return { name: 'network', section: arg ?? null };
   if (head === 'open')
     return { name: 'open', target: new URLSearchParams(search).get('url') ?? '' };
   const messageId = new URLSearchParams(search).get('m');

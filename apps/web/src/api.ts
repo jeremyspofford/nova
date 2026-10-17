@@ -115,7 +115,8 @@ import { browserApi } from './browser/api.ts';
 import { channelsApi } from './channels/api.ts';
 import { codeM6Api } from './code/api-m6.ts';
 import { computersApi } from './computers/api.ts';
-import { devicesApi } from './devices/api.ts';
+import { addDeviceApi, devicesApi } from './devices/api.ts';
+import { networkSurfaceApi } from './netsurface/api.ts';
 import { screenApi } from './screen/api.ts';
 import { spacesApi } from './spaces/api.ts';
 
@@ -353,8 +354,7 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
       call<{ items: Preset[]; builtIn: boolean }>('PUT', `${V1}/presets`, { items }),
     detectServers: () => call<{ items: DetectedServer[] }>('GET', `${V1}/providers/detect`),
     listNodes: () => call<{ items: NodeView[] }>('GET', `${V1}/devices?role=compute`),
-    createNodeEnrollToken: () =>
-      call<NodeEnrollToken>('POST', `${V1}/devices/add/start`, { role: 'compute' }),
+    createNodeEnrollToken: () => call<NodeEnrollToken>('POST', `${V1}/devices/compute/enroll`),
     revokeNode: (id: string) => call<{ ok: true }>('POST', `${V1}/devices/${enc(id)}/revoke`),
 
     // M3: approvals, policy, tools, MCP, notifications, audit, diagnostics, artifacts, mentions
@@ -680,6 +680,8 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
     ...agentsApi(call),
     ...computersApi(call),
     ...devicesApi(call),
+    ...addDeviceApi(call),
+    ...networkSurfaceApi(call),
     ...codeM6Api(call),
     ...channelsApi(call),
     ...browserApi(call),

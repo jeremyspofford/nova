@@ -139,15 +139,15 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-129 | todo | todo | J9 | capability-gated offline replica |
 | FR-130 | todo | todo | — | hub failover (post-v1) |
 | FR-131 | core scheduler-service.test | hub schedules.test | J5 | reactive + proactive |
-| FR-132 | todo | todo | J9 | add device via QR |
-| FR-133 | todo | todo | J9 | signed novad bootstrap |
-| FR-134 | todo | todo | J9 | trust paths |
-| FR-135 | todo | todo | J9 | pluggable transports |
-| FR-136 | todo | todo | J9 | network setup assistant |
-| FR-137 | todo | todo | J9 | relay |
-| FR-138 | todo | todo | J7 | wake helper |
-| FR-139 | todo | todo | J9 | network diagnostics |
-| FR-140 | todo | todo | J9 | device management UI |
+| FR-132 | core pairing.test, pairing-binding.test (fixed v1/v2 vectors, on-path attacker, code-only budget, deny race, mid-grant revocation); compute add-device.test; novad install tests (`node scripts/cargo.mjs test`); web join-units.test | hub add-device.test (v2 over HTTP); hub m65-integration.test (real `novad`, wired Hub); hub relay-integration.test (join over the Relay); web devices-add.test, join-page.test | J8.5 | add device: QR or code, commit-then-reveal, Hub-signed confirmation, approval, one-time grant |
+| FR-133 | hub agent-dist.test (manifest, domain-tagged signature, command shape, rate limit); novad install tests (pin, signature, self-hash, bytes installed, code off argv) | hub agent-dist-novad.test (Node signs, the real binary verifies); hub m65-integration.test | J8.5 | signed novad builds and `novad install` |
+| FR-134 | core trust.test (identity refuses to load, CA never replaced on its own, name constraints, nonce-bound statement, pinning check), trust-x509.test | hub trust.test; hub trust-main.test (real HTTPS start, live renewal, loopback fallback); web netsurface-trust.test | J8.5 | trust paths: local CA, mesh certificates, pinning |
+| FR-135 | core network-endpoints.test (candidates, signed probe, Hub CA plus default roots), network-mdns.test; shared network.test (`selectEndpoint`) | hub network.test; web netsurface-overview.test | J8.5 | endpoints, health checks, LAN → Mesh → Relay order, mDNS |
+| FR-136 | core network-mesh.test, network-setup.test (fake CLIs: plans, consent, lock-out guard, rollback, `rollback_failed`, secrets never in argv) | hub network-setup.test; web netsurface-setup.test | J8.5 | network setup assistant |
+| FR-137 | relay envelope.test, crypto.test, session.test, connection.test, client.test; relay-service server.test, limits.test; core relayhub.test | hub relay.test (tunnel path filter); hub relay-integration.test (real Add Device, buildHub, Relay restart); web netsurface-relay.test | J8.5 | relay: built in M6.5 except real push senders and the channel relay (M7) |
+| FR-138 | core network-wake.test (helper matching, computed broadcast, attempts counted); novad power tests (`wake_helper_*`) | hub network-wake.test; web netsurface-wake.test | J8.5 | wake helper |
+| FR-139 | core network-changes.test (change log, undo handlers, rollback lock) | hub network.test (diagnostics, rollback); web netsurface-overview.test, netsurface-surface.test | J8.5 | network diagnostics and one-click rollback |
+| FR-140 | core pairing.test (device list, scopes, revocation of every kind) | hub add-device.test; hub node-routes.test (revoke falls through); web devices-manage.test, devices-list.test, devices-page.test | J8.5 | device management UI |
 | FR-141 | novad supervisor, module and hardening tests (`node scripts/cargo.mjs test`); core devices-service.test | hub devices-novad.test (real binary); hub devices.test | J7 | novad supervisor + modules |
 | FR-142 | novad capabilities and crypto tests; core devices-service.test | hub devices-novad.test (Rust signs, Node verifies); hub devices.test | J7 | capability declaration |
 | FR-143 | todo | todo | — | low-level boot |

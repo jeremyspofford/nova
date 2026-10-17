@@ -1,5 +1,6 @@
 // Application root: connects to the Hub, handles first-run setup and sign-in, then mounts the
 // signed-in workspace with its stores. Until settings load, the cached theme paints the page.
+// `/add-device` is the joining device's page instead, which needs no session (FR-132).
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, TextField, ToastProvider, applyTheme, resolveTheme } from '@nova/ui';
 import {
@@ -17,6 +18,7 @@ import { SettingsProvider } from './settings.tsx';
 import { browserEventSource, type EventSourceFactory } from './sse.ts';
 import { ModelsProvider, ThreadsProvider } from './stores.tsx';
 import { Workspace } from './shell/Workspace.tsx';
+import { JoinPage, isJoinPath } from './join/JoinPage.tsx';
 import type { TerminalScreenFactory, WebSocketFactory } from './terminal/session.ts';
 import { TerminalsProvider } from './terminal/TerminalPanel.tsx';
 
@@ -46,7 +48,16 @@ export function takeSetupCodeFromLocation(): string | null {
   return m[1] ?? null;
 }
 
-export function App({
+/**
+ * The joining device's page (`/add-device`, FR-132) renders without a session, before the setup
+ * or sign-in screen; every other path is the Hub app.
+ */
+export function App(props: AppProps) {
+  const [joining] = useState(() => isJoinPath(window.location.pathname));
+  return joining ? <JoinPage /> : <HubApp {...props} />;
+}
+
+function HubApp({
   api,
   registry: given,
   eventSource = browserEventSource,

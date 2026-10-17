@@ -1,6 +1,6 @@
-// How the Devices views stay current (docs/23, FR-141..FR-150, FR-210, FR-081): the `device.*`
-// events the devices area emits on the global stream, plus `approval.decided` (a folder-access
-// card answered anywhere). The Devices surface opens one stream (`DeviceEventsProvider`) and every
+// How the Devices views stay current (docs/23, FR-141..FR-150, FR-210, FR-081, FR-132, FR-140):
+// the `device.*` events the devices and add-device areas emit on the global stream, plus
+// `approval.decided` (a folder-access card answered anywhere). The Devices surface opens one stream (`DeviceEventsProvider`) and every
 // view under it subscribes to that; a view used elsewhere (the agent's computer panel) opens its
 // own. Views refetch on the events they care about.
 import {
@@ -34,6 +34,9 @@ export const DEVICE_EVENTS = [
   'device.write.committed',
   'device.write.discarded',
   'device.connection.changed',
+  'device.add.requested',
+  'device.add.decided',
+  'device.scopes.changed',
 ] as const;
 
 /** Everything the Devices surface listens for on its one stream. */
@@ -47,7 +50,13 @@ export const DEVICE_ROW_EVENTS: readonly string[] = [
   'device.module.changed',
   'device.overrides.changed',
   'device.update.result',
+  'device.scopes.changed',
+  // An approval creates the device record.
+  'device.add.decided',
 ];
+
+/** A device asked to join, or the owner (or the clock) decided (FR-132). */
+export const ADD_REQUEST_EVENTS: readonly string[] = ['device.add.requested', 'device.add.decided'];
 
 export const GRANT_EVENTS: readonly string[] = [
   'device.access.requested',

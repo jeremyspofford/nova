@@ -2,6 +2,7 @@
 // enrollment token, then heartbeats and capability updates with its device credential; the Hub
 // calls the device's management endpoint with the management token the device generated. Until
 // certificates arrive (M6.5) these are bearer tokens over LAN HTTP, like compute nodes (ADR-089).
+import { isIPv4 } from 'node:net';
 import { z } from 'zod';
 import { NovaError } from '@nova/shared';
 import { PUBLIC_KEY_PATTERN, SIGNATURE_PATTERN } from '../nodes/crypto.ts';
@@ -98,12 +99,41 @@ export const accessDecisionSchema = z.object({
 
 export type AccessDecision = z.infer<typeof accessDecisionSchema>;
 
+/** `a.b.c.d/p` with p from 1 to 30 and no host bits set (a /31 or /32 has no broadcast). */
+function isLanNetwork(value: string): boolean {
+  const [ip, bits, extra] = value.split('/');
+  if (extra !== undefined || !ip || !bits || !/^\d{1,2}$/.test(bits) || !isIPv4(ip)) return false;
+  const prefix = Number(bits);
+  if (prefix < 1 || prefix > 30) return false;
+  const n = ip.split('.').reduce((acc, part) => ((acc << 8) | Number(part)) >>> 0, 0);
+  return (n & (0xffffffff >>> prefix)) === 0;
+}
+
+/**
+ * One physical LAN subnet a device reports with its power status (FR-138), for Wake Helper
+ * routing. A reported `broadcast` is accepted but never used: the Hub computes it from `network`.
+ */
+export const deviceLanSubnetSchema = z.object({
+  interface: z.string().max(64).optional(),
+  network: z
+    .string()
+    .max(18)
+    .refine(isLanNetwork, 'an IPv4 network like 192.168.1.0/24 (/1 to /30)'),
+  broadcast: z.string().max(45).optional(),
+});
+export type DeviceLanSubnet = z.infer<typeof deviceLanSubnetSchema>;
+
+/** The power status a device reports; `lan` is checked, the rest is kept as reported. */
+export const devicePowerReportSchema = z
+  .object({ lan: z.array(deviceLanSubnetSchema).max(32).optional() })
+  .catchall(z.unknown());
+
 export const deviceHeartbeatSchema = z.object({
   novadVersion: novadVersionSchema,
   modules: z.array(moduleReportSchema).max(20).default([]),
   events: z.array(z.record(z.string(), z.unknown())).max(500).default([]),
   accessDecisions: z.array(accessDecisionSchema).max(500).default([]),
-  power: z.record(z.string(), z.unknown()).optional(),
+  power: devicePowerReportSchema.optional(),
 });
 export type DeviceHeartbeat = z.infer<typeof deviceHeartbeatSchema>;
 

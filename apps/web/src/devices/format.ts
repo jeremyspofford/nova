@@ -2,17 +2,21 @@
 // FR-081): what each status, capability and module is called, why something is unavailable, how
 // a Hub error reads, folder paths on the device, file previews and unified diffs.
 import type {
+  AddDeviceKind,
+  AddDeviceRole,
   DeviceAccessRequestView,
   DeviceCapabilityName,
   DeviceCapabilityStatus,
   DeviceGrantee,
   DeviceModuleName,
   DeviceModuleView,
+  DeviceSummaryView,
   DeviceView,
   StagedWriteView,
 } from '@nova/shared';
 import { ApiError, errorMessage } from '../api.ts';
 import { plural } from '../settings/common.ts';
+import type { DeviceWakeResult } from './api.ts';
 
 const enc = encodeURIComponent;
 
@@ -32,6 +36,13 @@ export const DEVICES_PATH = '/devices';
 /** The Add a device flow, a page of its own (like /work/scheduled). */
 export const DEVICES_ADD_PATH = '/devices/add';
 export const ADD_DEVICE_ID = 'add';
+/** The one-use command path for scripted installs (M6). */
+export const ADD_COMMAND_PATH = `${DEVICES_ADD_PATH}?method=command`;
+
+/** `/devices/add?role=compute`. */
+export function addDevicePath(role?: AddDeviceRole): string {
+  return role ? `${DEVICES_ADD_PATH}?role=${role}` : DEVICES_ADD_PATH;
+}
 
 export function devicePath(id?: string | null, tab?: DeviceTab): string {
   if (!id) return DEVICES_PATH;
@@ -68,6 +79,101 @@ export const ROLE_LABEL: Record<string, string> = {
 
 export function rolesText(roles: readonly string[]): string {
   return roles.length ? roles.map((r) => ROLE_LABEL[r] ?? r).join(', ') : 'No role';
+}
+
+// ---- Add Device: roles, scopes and kinds (FR-132, docs/22 §4.2) --------------------------------
+
+export const ROLE_HELP: Record<AddDeviceRole, string> = {
+  client: 'A phone, tablet or computer you use Nova on.',
+  compute: 'Runs models and other heavy work for this Hub.',
+  'wake-helper': 'Always on, on the same network as your other devices, so it can wake them.',
+};
+
+/**
+ * The scopes each role can be given at add time and later (docs/22 §4.2). They are recorded on the
+ * device and shown on its page; folders, the browser and the screen still ask before each use.
+ */
+export const SCOPES_BY_ROLE: Record<AddDeviceRole, readonly string[]> = {
+  client: ['offline-replica', 'local-runtime', 'files', 'browser', 'computer_use'],
+  compute: ['exec'],
+  'wake-helper': [],
+};
+
+export const SCOPE_TEXT: Record<string, { label: string; help: string }> = {
+  'offline-replica': {
+    label: 'Offline copy',
+    help: 'Keeps a copy of your chats and files on the device, to use without the Hub.',
+  },
+  'local-runtime': {
+    label: 'Local models',
+    help: 'May run models on the device itself when it has them.',
+  },
+  files: {
+    label: 'Files',
+    help: 'Agents may ask for its folders. Each folder is still shared only when you allow it.',
+  },
+  browser: { label: 'Browser', help: 'Agents may use its browser when you allow it.' },
+  computer_use: {
+    label: 'Computer use',
+    help: 'Agents may use its screen and keyboard when you allow it.',
+  },
+  exec: { label: 'Commands', help: 'Agents may run commands on it, in a sandbox.' },
+};
+
+export function scopeLabel(scope: string): string {
+  return SCOPE_TEXT[scope]?.label ?? scope;
+}
+
+/** "Offline copy, Files", or "No extra scopes". */
+export function scopesText(scopes: readonly string[]): string {
+  return scopes.length ? scopes.map(scopeLabel).join(', ') : 'No extra scopes';
+}
+
+/** The scopes a device with these roles can have, then any others it already has. */
+export function scopeChoices(roles: readonly string[], current: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const r of roles) {
+    for (const s of SCOPES_BY_ROLE[r as AddDeviceRole] ?? []) if (!out.includes(s)) out.push(s);
+  }
+  for (const s of current) if (!out.includes(s)) out.push(s);
+  return out;
+}
+
+export const JOIN_KIND_LABEL: Record<AddDeviceKind, string> = {
+  browser: 'Web browser',
+  native: 'Nova app',
+  novad: 'novad',
+  compute: 'nova-compute',
+};
+
+/** What the device runs: "novad 0.7.0", "Web browser", "nova-compute", "This Hub". */
+export function runsText(
+  d: DeviceSummaryView,
+  novad: Pick<DeviceView, 'novadVersion'> | null,
+): string {
+  if (d.kind === 'hub') return 'This Hub';
+  if (novad || d.addedAs === 'novad' || d.novadVersion)
+    return (novad?.novadVersion ?? d.novadVersion)
+      ? `novad ${novad?.novadVersion ?? d.novadVersion}`
+      : 'novad, version unknown';
+  if (d.addedAs) return JOIN_KIND_LABEL[d.addedAs];
+  return d.kind === 'compute' ? 'nova-compute' : 'Unknown';
+}
+
+/** A browser or the app: it signs in with a session instead of being reached by the Hub. */
+export function isSessionDevice(d: Pick<DeviceSummaryView, 'addedAs'>): boolean {
+  return d.addedAs === 'browser' || d.addedAs === 'native';
+}
+
+/** The Wake result in words: through which helper, or by the Hub (FR-138). */
+export function wakeSentText(
+  name: string,
+  w: Pick<DeviceWakeResult, 'mac' | 'via'>,
+  helperName: (id: string) => string | null = () => null,
+): string {
+  if (!w.via) return `Wake signal sent to ${name} (${w.mac}).`;
+  if (w.via === 'hub') return `Wake signal sent to ${name} by the Hub.`;
+  return `Wake signal sent to ${name} through ${helperName(w.via) ?? 'a Wake helper'}.`;
 }
 
 export const CAPABILITY_LABEL: Record<DeviceCapabilityName, string> = {
@@ -247,6 +353,26 @@ export function deviceErrorMessage(err: unknown, fallback = 'Something went wron
       return 'This agent already has a connected computer.';
     case 'firmware_disabled':
       return 'Firmware changes are off.';
+    case 'no_wake_helper':
+      return 'Nothing on this device’s network can wake it: there is no Wake helper there, and the Hub is not on that network. Add an always-on device there as a Wake helper.';
+    case 'confirmation_mismatch':
+      return 'That code does not match the one on the device. Compare the six digits on both screens.';
+    case 'decided':
+      return `This request was already ${str(d.status) ?? 'decided'}.`;
+    case 'expired':
+      return 'This request has expired. Add the device again with a new code.';
+    case 'key_revoked':
+      return 'This device’s key was revoked. Reset the device so it makes a new key, then add it again.';
+    case 'key_in_use':
+      return 'This device’s key is already registered.';
+    case 'add_device_disabled':
+      return 'Adding devices with a code is turned off. Turn it on in Settings → Devices.';
+    case 'start_rate_limited':
+      return `Too many codes were made in the last hour${typeof d.limit === 'number' ? ` (at most ${d.limit})` : ''}. Try again later.`;
+    case 'relay_unavailable':
+      return 'The Relay is not set up on this Hub. Add the device directly, or set up a Relay in Network.';
+    case 'revoked':
+      return 'This device was revoked.';
     default:
       return errorMessage(err, fallback);
   }

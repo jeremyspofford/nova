@@ -1,7 +1,8 @@
 //! Command-line parsing without dependencies (docs/23 §2).
 //!   novad version
 //!   novad capabilities [--device-id ID] [--role R]... [--data-dir D] [--sign]
-//!   novad install --hub URL --code CODE [--role client|compute|wake] [--dry-run]
+//!   novad install --hub URL --code CODE --pin FINGERPRINT [--pairing ID] [--role R]... [--name N]
+//!                 [--listen ADDR] [--endpoint URL] [--no-service] [--dry-run] [--data-dir D]
 //!   novad enroll --hub URL --token TOKEN [--name N] [--role R]... [--listen ADDR] [--endpoint URL]
 //!                [--channel C] [--update-key KEY] [--data-dir D]
 //!   novad run [--data-dir D]
@@ -17,7 +18,7 @@ pub const DEFAULT_LISTEN: &str = "0.0.0.0:7420";
 pub enum Command {
     Version,
     Capabilities { device_id: String, roles: Vec<String>, data_dir: Option<String>, sign: bool },
-    Install { hub: String, code: String, role: String, dry_run: bool },
+    Install(InstallArgs),
     Enroll(EnrollArgs),
     Run { data_dir: String },
     Module { name: String, data_dir: String },
@@ -40,9 +41,68 @@ pub struct EnrollArgs {
     pub data_dir: String,
 }
 
+/// `novad install` (FR-133, docs/22 §4.3): join a Hub with an Add Device code.
+#[derive(Debug, PartialEq, Clone)]
+pub struct InstallArgs {
+    /// The Hub's http:// address, without a trailing slash.
+    pub hub: String,
+    /// The Add Device code, normalized to its 8 characters (`ABCDEFGH`).
+    pub code: String,
+    /// The pairing the code belongs to (the `p=` of the Add Device link); without it the Hub finds
+    /// the pairing by the code and says which it was.
+    pub pairing: Option<String>,
+    /// The Hub identity fingerprint to pin: base64url(SHA-256(raw Ed25519 public key)).
+    pub pin: String,
+    pub roles: Vec<String>,
+    pub name: Option<String>,
+    pub listen: String,
+    /// None: the address this device uses to reach the Hub, with the listen port.
+    pub endpoint: Option<String>,
+    pub no_service: bool,
+    pub dry_run: bool,
+    pub data_dir: String,
+}
+
 pub const ROLES: [&str; 4] = ["client", "compute", "wake-helper", "hub"];
 
+/// Add Device codes: Crockford base32 without I, L, O and U (docs/22 §4.1).
+pub const CODE_ALPHABET: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// The canonical code, as the Hub computes it: upper case, without spaces or hyphens, with
+/// Crockford's reading of the look-alikes (O → 0, I and L → 1); None unless that leaves 8
+/// characters of the alphabet.
+pub fn normalize_code(s: &str) -> Option<String> {
+    let c: String = s
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .map(|c| match c.to_ascii_uppercase() {
+            'O' => '0',
+            'I' | 'L' => '1',
+            u => u,
+        })
+        .collect();
+    (c.len() == 8 && c.chars().all(|ch| CODE_ALPHABET.contains(ch))).then_some(c)
+}
+
+/// A pin is a SHA-256 fingerprint in base64url: 43 characters that decode to 32 bytes.
+pub fn valid_pin(s: &str) -> bool {
+    s.len() == 43 && crate::crypto::b64url_decode(s).is_some_and(|b| b.len() == 32)
+}
+
+/// Where `novad install` takes the Add Device code from when `--code` is not on the command
+/// line, so the code stays out of the process list (other users can read argv; the environment
+/// and standard input are private to the process).
+pub const CODE_ENV: &str = "NOVA_ADD_CODE";
+
 pub fn parse(args: &[String]) -> Result<Command, String> {
+    parse_with(args, &|k| std::env::var(k).ok(), &|| {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok().map(|_| line)
+    })
+}
+
+/// `parse` with the environment and standard input given (tests).
+pub fn parse_with(args: &[String], env: &dyn Fn(&str) -> Option<String>, stdin_line: &dyn Fn() -> Option<String>) -> Result<Command, String> {
     let mut it = args.iter();
     let Some(cmd) = it.next() else { return Ok(Command::Help) };
     let rest: Vec<&String> = it.collect();
@@ -77,7 +137,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 continue;
             }
             if a.starts_with("--") {
-                skip = !a.contains('=') && !matches!(a.as_str(), "--apply" | "--sign" | "--dry-run");
+                skip = !a.contains('=') && !matches!(a.as_str(), "--apply" | "--sign" | "--dry-run" | "--no-service");
                 continue;
             }
             if seen == n {
@@ -107,24 +167,66 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             })
         }
         "install" => {
-            let hub = value("--hub").ok_or("--hub is required")?;
-            if !(hub.starts_with("https://") || hub.starts_with("http://127.0.0.1") || hub.starts_with("http://localhost")) {
-                return Err("--hub must be https:// (plain http is allowed only for localhost)".into());
+            // novad has no TLS client yet: the pin and the signed manifest protect the install
+            // over LAN HTTP (FR-133, ADR-094).
+            let hub = value("--hub").ok_or("--hub is required")?.trim_end_matches('/').to_string();
+            if hub.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("https://")) {
+                return Err(format!("--hub: {}", crate::http::HTTPS_UNSUPPORTED));
             }
-            let code = value("--code").ok_or("--code is required")?;
-            if code.len() < 6 {
-                return Err("--code looks too short".into());
+            crate::http::host_port(&hub).map_err(|e| format!("--hub: {e}"))?;
+            // `--code -` reads it from standard input (the bootstrap command pipes it in, which
+            // survives sudo); without --code it comes from NOVA_ADD_CODE.
+            let code = match value("--code").as_deref() {
+                Some("-") => stdin_line().filter(|l| !l.trim().is_empty()).ok_or("--code -: no code on standard input")?,
+                Some(c) => c.to_string(),
+                None => env(CODE_ENV).ok_or("--code is required (or --code - with the code on standard input, or NOVA_ADD_CODE)")?,
+            };
+            let code = normalize_code(&code).ok_or("--code must be the 8-character Add Device code shown on the Hub (ABCD-EFGH)")?;
+            let pairing = value("--pairing");
+            if pairing.as_ref().is_some_and(|p| !crate::install::valid_id(p)) {
+                return Err("--pairing must be the pairing id from the Hub".into());
             }
-            let role = value("--role").unwrap_or_else(|| "client".to_string());
-            check_role(&role)?;
-            Ok(Command::Install { hub, code, role, dry_run: flag("--dry-run") })
+            let pin = value("--pin").ok_or("--pin is required (the Hub fingerprint shown with the code)")?;
+            if !valid_pin(&pin) {
+                return Err("--pin must be the Hub's 43-character fingerprint".into());
+            }
+            let mut roles = all("--role");
+            for r in &roles {
+                check_role(r)?;
+            }
+            roles.dedup();
+            let name = value("--name");
+            if name.as_ref().is_some_and(|n| n.trim().is_empty() || n.chars().count() > 100 || n.chars().any(char::is_control)) {
+                return Err("--name must be 1 to 100 printable characters".into());
+            }
+            let listen = value("--listen").unwrap_or_else(|| DEFAULT_LISTEN.to_string());
+            if listen.parse::<std::net::SocketAddr>().is_err() {
+                return Err("--listen must be HOST:PORT".into());
+            }
+            let endpoint = value("--endpoint");
+            if endpoint.as_ref().is_some_and(|e| !e.starts_with("http://")) {
+                return Err("--endpoint must be an http:// URL the Hub can reach".into());
+            }
+            Ok(Command::Install(InstallArgs {
+                hub,
+                code,
+                pairing,
+                pin,
+                roles: if roles.is_empty() { vec!["client".to_string()] } else { roles },
+                name,
+                listen,
+                endpoint,
+                no_service: flag("--no-service"),
+                dry_run: flag("--dry-run"),
+                data_dir: data_dir(),
+            }))
         }
         "enroll" => {
             // Until certificates arrive (M6.5), devices enroll over LAN HTTP with a one-use token,
             // like compute nodes (ADR-089).
             let hub = value("--hub").ok_or("--hub is required")?;
             if !hub.starts_with("http://") {
-                return Err("--hub must be an http:// LAN address until the M6.5 transports (https and mTLS) arrive".into());
+                return Err("--hub must be an http:// LAN address (novad has no TLS client yet)".into());
             }
             let token = value("--token").ok_or("--token is required")?;
             if !token.starts_with("nvd_") || token.len() < 20 {
@@ -292,17 +394,77 @@ mod tests {
         assert!(parse(&args(&["wol", "reboot"])).is_err());
     }
 
+    const PIN: &str = "LXEWQrcmsEQBYnyp-6wy9chTD7GQPMTbAiWHF5IaSIE";
+
+    fn install(extra: &[&str]) -> Result<Command, String> {
+        let mut a = vec!["install", "--hub", "http://hub.lan:7419/", "--code", "abcd-efgh", "--pairing", "0192abcd-0000-7000-8000-000000000001", "--pin", PIN];
+        a.extend_from_slice(extra);
+        parse_with(&args(&a), &|_| None, &|| None)
+    }
+
     #[test]
     fn validates_install() {
-        let ok = parse(&args(&["install", "--hub", "https://hub.lan", "--code", "ABC-123", "--dry-run"])).unwrap();
-        assert_eq!(ok, Command::Install { hub: "https://hub.lan".into(), code: "ABC-123".into(), role: "client".into(), dry_run: true });
-        assert!(parse(&args(&["install", "--code", "ABC-123"])).unwrap_err().contains("--hub"));
-        assert!(parse(&args(&["install", "--hub", "http://hub.lan", "--code", "ABC-123"])).unwrap_err().contains("https"));
-        assert!(parse(&args(&["install", "--hub", "http://localhost:7419", "--code", "ABC-123"])).is_ok());
-        assert!(parse(&args(&["install", "--hub", "https://h", "--code", "1"])).unwrap_err().contains("short"));
-        assert!(parse(&args(&["install", "--hub", "https://h", "--code", "ABC-123", "--role", "root"])).unwrap_err().contains("role"));
+        let Command::Install(i) = install(&["--role", "compute", "--role", "wake-helper", "--no-service", "--data-dir", "/d"]).unwrap() else { panic!("install") };
+        assert_eq!(i.hub, "http://hub.lan:7419");
+        assert_eq!(i.code, "ABCDEFGH");
+        assert_eq!(i.pin, PIN);
+        assert_eq!(i.roles, vec!["compute".to_string(), "wake-helper".to_string()]);
+        assert_eq!((i.listen.as_str(), i.endpoint.as_deref()), (DEFAULT_LISTEN, None));
+        assert!(i.no_service && !i.dry_run);
+        assert_eq!(i.data_dir, "/d");
+        let Command::Install(d) = install(&["--dry-run", "--name", "box", "--listen", "127.0.0.1:7421", "--endpoint", "http://10.0.0.5:7421"]).unwrap() else { panic!("install") };
+        assert_eq!(d.roles, vec!["client".to_string()]);
+        assert_eq!((d.name.as_deref(), d.endpoint.as_deref(), d.dry_run), (Some("box"), Some("http://10.0.0.5:7421"), true));
+        assert_eq!(normalize_code("ABCD EFGH").as_deref(), Some("ABCDEFGH"));
+        assert_eq!(normalize_code(" 0123-4567 ").as_deref(), Some("01234567"));
+        assert_eq!(normalize_code("abcd-oil0").as_deref(), Some("ABCD0110"), "look-alikes read as digits");
+        for bad in ["ABCD-EFG", "ABCD-EFGHJ", "ABCD_EFGH", "ABCDEFGU", "ABC\u{e9}EFGH", "$(id)-xx"] {
+            assert_eq!(normalize_code(bad), None, "{bad}");
+        }
+        let err = |a: &[&str]| parse_with(&args(a), &|_| None, &|| None).unwrap_err();
+        assert!(err(&["install", "--code", "ABCD-EFGH"]).contains("--hub"));
+        assert!(err(&["install", "--hub", "https://hub.lan", "--code", "ABCD-EFGH"]).contains("TLS"));
+        assert!(err(&["install", "--hub", "http://user@hub.lan", "--code", "ABCD-EFGH"]).contains("--hub"));
+        assert!(err(&["install", "--hub", "http://hub.lan"]).contains("--code"));
+        assert!(err(&["install", "--hub", "http://hub.lan", "--code", "1"]).contains("8-character"));
+        let Command::Install(np) = parse(&args(&["install", "--hub", "http://hub.lan", "--code", "ABCD-EFGH", "--pin", PIN])).unwrap() else { panic!("install") };
+        assert_eq!(np.pairing, None, "the Hub finds the pairing by its code");
+        assert!(err(&["install", "--hub", "http://hub.lan", "--code", "ABCD-EFGH", "--pairing", "a/b", "--pin", PIN]).contains("--pairing"));
+        assert!(err(&["install", "--hub", "http://hub.lan", "--code", "ABCD-EFGH", "--pairing", "p1"]).contains("--pin"));
+        let Command::Install(p) = install(&[]).unwrap() else { panic!("install") };
+        assert_eq!(p.pairing.as_deref(), Some("0192abcd-0000-7000-8000-000000000001"));
+        assert!(install(&[]).is_ok());
+        assert!(parse(&args(&["install", "--hub", "http://hub.lan", "--code", "ABCD-EFGH", "--pairing", "p1", "--pin", "short"])).unwrap_err().contains("fingerprint"));
+        assert!(install(&["--role", "root"]).unwrap_err().contains("role"));
+        assert!(install(&["--listen", "nope"]).unwrap_err().contains("--listen"));
+        assert!(install(&["--endpoint", "https://x"]).unwrap_err().contains("--endpoint"));
+        assert!(install(&["--name", "a\nb"]).unwrap_err().contains("--name"));
         assert!(parse(&args(&["capabilities", "--role", "x"])).is_err());
         assert!(parse(&args(&["frobnicate"])).unwrap_err().contains("unknown command"));
+    }
+
+    /// The code can stay off argv: from standard input (`--code -`) or NOVA_ADD_CODE.
+    #[test]
+    fn takes_the_code_off_the_command_line() {
+        let base = ["install", "--hub", "http://hub.lan", "--pin", PIN];
+        let code_of = |extra: &[&str], env: Option<&str>, stdin: Option<&str>| -> Result<String, String> {
+            let mut a = base.to_vec();
+            a.extend_from_slice(extra);
+            let env = env.map(str::to_string);
+            let stdin = stdin.map(str::to_string);
+            match parse_with(&args(&a), &|k| if k == CODE_ENV { env.clone() } else { None }, &|| stdin.clone())? {
+                Command::Install(i) => Ok(i.code),
+                _ => Err("not install".into()),
+            }
+        };
+        assert_eq!(code_of(&["--code", "-"], None, Some("abcd-efgh\n")).unwrap(), "ABCDEFGH");
+        assert_eq!(code_of(&[], Some("WXYZ-0123"), None).unwrap(), "WXYZ0123");
+        // An explicit --code wins over the environment; stdin is read only for `--code -`.
+        assert_eq!(code_of(&["--code", "ABCD-EFGH"], Some("WXYZ-0123"), Some("JJJJJJJJ")).unwrap(), "ABCDEFGH");
+        assert!(code_of(&["--code", "-"], None, Some("\n")).unwrap_err().contains("standard input"));
+        assert!(code_of(&["--code", "-"], None, None).unwrap_err().contains("standard input"));
+        assert!(code_of(&[], None, None).unwrap_err().contains("NOVA_ADD_CODE"));
+        assert!(code_of(&[], Some("$(id)"), None).unwrap_err().contains("8-character"));
     }
 
     #[test]

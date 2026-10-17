@@ -39,12 +39,23 @@ pub struct Agent {
     pub restart: AtomicBool,
     /// Module health-check timing for updates (shorter in tests).
     pub health: (Duration, Duration),
+    /// Wake-on-LAN for other devices when this one has the wake-helper role (FR-138).
+    pub wake: crate::power::WakeHelper,
 }
 
 impl Agent {
     pub fn new(data: DataDir, exe: PathBuf, state: DeviceState, manifest: Manifest) -> Self {
         let sup = Supervisor::new(Options::new(exe.clone(), data.path().to_path_buf()), manifest);
-        Agent { data, sup, exe, state: Mutex::new(state), started_ms: now_ms(), restart: AtomicBool::new(false), health: (Duration::from_secs(10), Duration::from_secs(2)) }
+        Agent {
+            data,
+            sup,
+            exe,
+            state: Mutex::new(state),
+            started_ms: now_ms(),
+            restart: AtomicBool::new(false),
+            health: (Duration::from_secs(10), Duration::from_secs(2)),
+            wake: crate::power::WakeHelper::system(),
+        }
     }
 
     fn device(&self) -> DeviceState {
@@ -144,6 +155,7 @@ impl Agent {
             },
             ["services", name, action] => self.service(name, action),
             ["power"] => self.power(body),
+            ["power", "wake-other"] => self.wake_other(body),
             ["update"] => self.update(body),
             ["config"] => self.config(body),
             ["fs", op] => {
@@ -219,6 +231,16 @@ impl Agent {
             a @ ("sleep" | "restart" | "shutdown") => call("power.action", json!({ "action": a })),
             _ => Err(OpError::validation("unknown power action")),
         }
+    }
+
+    /// Wake another device on this LAN (FR-138, docs/22 §7): only with the wake-helper role,
+    /// which the owner grants at Add Device. Validation, the LAN check and the local rate limit
+    /// are the helper's.
+    fn wake_other(&self, body: &Value) -> OpResult<Value> {
+        if !self.device().roles.iter().any(|r| r == "wake-helper") {
+            return Err(OpError::denied("not_wake_helper", "this device does not have the wake-helper role"));
+        }
+        self.wake.wake(body)
     }
 
     fn update(&self, body: &Value) -> OpResult<Value> {
@@ -351,6 +373,12 @@ pub fn enroll(a: &crate::cli::EnrollArgs, exe: PathBuf) -> Result<Value, String>
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("cannot rotate the device key: {e}")),
     }
+    register(&data, a, exe)
+}
+
+/// Register with the Hub (`POST /agent/v1/register`) with the device key already in `data`
+/// (created when missing): `novad install` registers with the key the Hub approved (FR-132).
+pub fn register(data: &DataDir, a: &crate::cli::EnrollArgs, exe: PathBuf) -> Result<Value, String> {
     let name = a.name.clone().unwrap_or_else(|| Probe::current().hostname.unwrap_or_else(|| "device".into()));
     let mut state = data.new_device(&name, a.roles.clone()).map_err(|e| e.to_string())?;
     let previous = data.device().map_err(|e| e.to_string())?;
@@ -411,7 +439,7 @@ pub fn run(data_dir: &str, exe: PathBuf) -> Result<i32, String> {
         }
         _ => {}
     }
-    let state = data.device().map_err(|e| e.to_string())?.ok_or("this device is not enrolled; run `novad enroll` first")?;
+    let state = data.device().map_err(|e| e.to_string())?.ok_or("this device is not enrolled; run `novad install` or `novad enroll` first")?;
     if state.revoked || state.credential.is_none() {
         return Err("this device was revoked; enroll it again".into());
     }
@@ -499,6 +527,34 @@ mod tests {
         assert!(fresh.starts_with("nvdm_") && fresh.len() == 5 + 43, "{fresh}");
         a.state.lock().unwrap().management_token = Some("nvm_test".into());
         assert_eq!(a.handle(req("/agent/v1/status", Some("nvm_test"), json!({}))).status, 401);
+        a.sup.stop_all();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn wakes_other_devices_only_as_a_wake_helper() {
+        let dir = tmp("agent-wake");
+        let mut a = agent(&dir);
+        let sender = crate::power::tests::FakeSender::default();
+        a.wake = crate::power::tests::helper(sender.clone());
+        let wake = json!({ "mac": "aa:bb:cc:dd:ee:01", "broadcast": "192.168.1.255" });
+        // The management token is required like for every other call.
+        assert_eq!(a.handle(req("/agent/v1/power/wake-other", None, wake.clone())).status, 401);
+        let r = a.handle(req("/agent/v1/power/wake-other", Some("nvdm_test"), wake.clone()));
+        assert_eq!(r.status, 403);
+        assert_eq!(body(&r)["error"]["details"]["reason"], "not_wake_helper");
+        a.state.lock().unwrap().roles.push("wake-helper".into());
+        let r = a.handle(req("/agent/v1/power/wake-other", Some("nvdm_test"), wake.clone()));
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        assert_eq!(body(&r)["targets"][0]["interface"], "eth0");
+        assert_eq!(sender.0.lock().unwrap().len(), 1);
+        let bad = a.handle(req("/agent/v1/power/wake-other", Some("nvdm_test"), json!({ "mac": "ff:ff:ff:ff:ff:ff" })));
+        assert_eq!((bad.status, body(&bad)["error"]["code"].as_str()), (400, Some("validation")));
+        for _ in 0..9 {
+            assert_eq!(a.handle(req("/agent/v1/power/wake-other", Some("nvdm_test"), wake.clone())).status, 200);
+        }
+        let limited = a.handle(req("/agent/v1/power/wake-other", Some("nvdm_test"), wake));
+        assert_eq!((limited.status, body(&limited)["error"]["code"].as_str()), (429, Some("rate_limited")));
         a.sup.stop_all();
         std::fs::remove_dir_all(&dir).unwrap();
     }

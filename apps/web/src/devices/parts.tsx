@@ -1,8 +1,8 @@
 // Small pieces shared by the Devices views: a loader with retry, chips that pair icon and text,
-// an error box with Retry, an "unavailable because…" note, and a confirmation dialog for
-// destructive or outward-facing actions (docs/04 §4.4, §6, §7).
+// an error box with Retry, an "unavailable because…" note, a confirmation dialog for
+// destructive or outward-facing actions (docs/04 §4.4, §6, §7), and copying to the clipboard.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Button, Dialog, Icon, Spinner, type IconName } from '@nova/ui';
+import { Button, Dialog, Icon, Spinner, useToast, type IconName } from '@nova/ui';
 import type { DeviceView } from '@nova/shared';
 import { DEVICE_STATUS, deviceErrorMessage, type ChipTone } from './format.ts';
 
@@ -199,5 +199,35 @@ function ConfirmBody({
         </p>
       ) : null}
     </Dialog>
+  );
+}
+
+/**
+ * Copy text to the clipboard; when the browser refuses, select it on the page (`el`) so the user
+ * can copy it with the keyboard. `what` names it in the toast: "Command copied."
+ */
+export function useCopy(): (text: string, el: HTMLElement | null, what: string) => Promise<void> {
+  const toast = useToast();
+  return useCallback(
+    async (text, el, what) => {
+      try {
+        if (!navigator.clipboard) throw new Error('no clipboard');
+        await navigator.clipboard.writeText(text);
+        toast.show(`${what} copied.`, { tone: 'success' });
+      } catch {
+        const sel = window.getSelection();
+        if (el && sel) {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+        toast.show(
+          `Could not copy. The ${what.toLowerCase()} is selected; copy it with your keyboard.`,
+          { tone: 'error' },
+        );
+      }
+    },
+    [toast],
   );
 }

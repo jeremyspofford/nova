@@ -1,6 +1,8 @@
 //! novad: the Nova device agent (docs/23). A small supervisor that enrolls with the Hub, reports
 //! a signed capability document, serves the management channel and runs signed, sandboxed modules
-//! as separate processes (FR-141, FR-142, FR-144, FR-145, FR-148, FR-150, FR-210).
+//! as separate processes (FR-141, FR-142, FR-144, FR-145, FR-148, FR-150, FR-210), installs
+//! itself on a device through Add Device (FR-132, FR-133) and wakes other devices on its LAN as
+//! a Wake Helper (FR-138).
 
 mod agent;
 mod capabilities;
@@ -12,6 +14,7 @@ mod fsops;
 mod grants;
 mod hardening;
 mod http;
+mod install;
 mod mcp;
 mod module;
 mod paths;
@@ -32,16 +35,31 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const HELP: &str = "novad — Nova device agent
 
 USAGE:
-  novad version
-  novad capabilities [--device-id ID] [--role ROLE]... [--data-dir DIR] [--sign]
+  novad install --hub http://HUB:PORT --code ABCD-EFGH --pin FINGERPRINT [--pairing ID]
+                [--role client|compute|wake-helper]... [--name NAME] [--listen HOST:PORT]
+                [--endpoint http://HOST:PORT] [--no-service] [--dry-run] [--data-dir DIR]
+      Join a Hub with the Add Device code shown in Settings → Devices (the Hub's one-line
+      install command fills these in). `--code -` reads the code from standard input, and
+      without --code it comes from NOVA_ADD_CODE, so it stays out of the process list. Before
+      anything is written it checks that the Hub's key hashes to FINGERPRINT, that the Hub's
+      build manifest is signed by that key and that this binary is the signed build. Then it
+      shows a confirmation code (signed by the Hub for this device's key) to compare with the
+      Hub, waits for the owner's approval, registers, and installs and starts the service
+      (root needed; --no-service skips it). --dry-run stops after the checks.
   novad enroll --hub http://HUB:PORT --token nvd_… [--name NAME] [--role ROLE]...
                [--listen HOST:PORT] [--endpoint http://HOST:PORT] [--channel stable|beta|nightly]
                [--update-key KEY] [--data-dir DIR]
+      Register with a one-use token the owner created on the Hub (scripted setups).
   novad run [--data-dir DIR]
+      The supervisor, its modules and the management channel (what the service runs).
+  novad version
+  novad capabilities [--device-id ID] [--role ROLE]... [--data-dir DIR] [--sign]
   novad access list | approve ID | deny ID [--data-dir DIR]
   novad wol status | plan | enable [--apply] [--data-dir DIR]
-  novad install --hub URL --code CODE [--role client|compute|wake-helper] [--dry-run]
   novad service-unit [--exec PATH] [--platform linux|macos|windows] [--data-dir DIR]
+
+The Hub address is http:// (novad has no TLS client yet; the pinned fingerprint and the signed
+manifest protect the install). The data folder defaults to /var/lib/nova.
 ";
 
 fn main() -> ExitCode {
@@ -117,17 +135,10 @@ fn run(cmd: Command) -> ExitCode {
             print!("{text}");
             ExitCode::SUCCESS
         }
-        Command::Install { hub, role, dry_run, .. } => {
-            // Signed download, Hub pinning and pairing arrive in M6.5 (FR-132, FR-133); M6 uses
-            // `novad enroll` with a one-use token.
-            if dry_run {
-                println!("would register with {hub} as {role} and install the service unit");
-                ExitCode::SUCCESS
-            } else {
-                eprintln!("novad: install arrives with M6.5; use `novad enroll` with a token from Settings → Devices");
-                ExitCode::from(3)
-            }
-        }
+        Command::Install(a) => match install::run(&a, &install::Env::system(exe())) {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(e) => fail(e),
+        },
         Command::Enroll(a) => match agent::enroll(&a, exe()) {
             Ok(v) => print_json(&v),
             Err(e) => fail(e),

@@ -48,6 +48,27 @@ describe('deepLinkPath (FR-007)', () => {
     expect(deepLinkPath(url)).toBe(path);
   });
 
+  it('maps an Add Device link to the join page with only fields that validate (FR-132)', () => {
+    const fp = 'A'.repeat(43);
+    expect(
+      deepLinkPath(
+        `nova://add-device?p=pair-1&fp=${fp}&r=wss%3A%2F%2Frelay.example%2F&rp=rp-1&e=http%3A%2F%2Fx#c=ABCD-EFGH`,
+      ),
+    ).toBe(`/add-device?p=pair-1&fp=${fp}&r=wss%3A%2F%2Frelay.example%2F&rp=rp-1#c=ABCD-EFGH`);
+    // A bad fingerprint, a Relay URL with credentials or another scheme, and a bad code are dropped.
+    expect(
+      deepLinkPath(
+        'nova://add-device?p=pair-1&fp=short&r=javascript%3Aalert(1)&rp=rp-1#c=<script>',
+      ),
+    ).toBe('/add-device?p=pair-1');
+    expect(
+      deepLinkPath('nova://add-device?p=pair-1&r=wss%3A%2F%2Fu%3Apw%40relay.example&rp=x'),
+    ).toBe('/add-device?p=pair-1');
+    // Without a valid pairing id, or with a path, it is not a link Nova opens.
+    expect(deepLinkPath('nova://add-device?p=bad%20id')).toBeNull();
+    expect(deepLinkPath('nova://add-device/extra?p=pair-1')).toBeNull();
+  });
+
   it('decodes percent-encoded ids and re-encodes them safely', () => {
     expect(deepLinkPath('nova://chat/abc%2D123')).toBe('/chat/abc-123');
     expect(deepLinkPath('nova://projects/p%5F1')).toBe('/projects/p_1');

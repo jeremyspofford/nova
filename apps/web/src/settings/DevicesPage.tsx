@@ -1,19 +1,27 @@
-// Settings → Devices (FR-126, docs/04 §9, docs/14 §7): the way into Devices (computers running
-// novad, M6) with the rules that apply to every device (wakes per hour, minimum novad versions,
-// FR-144, FR-148), then compute nodes that run models for this Hub (M2). "Add compute node"
-// creates a one-use enrollment token (creating it is the approval, ADR-089) and shows the command
-// to run on the node; Revoke stops a node's credential at once. The node list refreshes every 5 s
-// while the page is open.
+// Settings → Devices (FR-126, FR-132, FR-140, docs/04 §9, docs/14 §7): the way into Devices
+// (every device of the Hub) and Add a device, whether devices may be added with a code and how
+// long an added browser stays signed in (FR-132), the rules that apply to every device (wakes per
+// hour, minimum novad versions, FR-144, FR-148), then compute nodes that run models for this Hub
+// (M2). "Add with a code" opens Add a device for a compute node; "Add compute node" creates a
+// one-use enrollment token for scripted installs (creating it is the approval, ADR-089) and shows
+// the command to run on the node; Revoke stops a node's credential at once. The node list
+// refreshes every 5 s while the page is open.
 import { useEffect, useId, useRef, useState } from 'react';
 import { DEVICE_CAPABILITIES, type NodeEnrollToken, type NodeView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, TextField, useToast, type IconName } from '@nova/ui';
 import { errorMessage } from '../api.ts';
-import { CAPABILITY_LABEL, DEVICES_ADD_PATH, DEVICES_PATH } from '../devices/format.ts';
+import {
+  CAPABILITY_LABEL,
+  DEVICES_ADD_PATH,
+  DEVICES_PATH,
+  addDevicePath,
+} from '../devices/format.ts';
 import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useModels } from '../stores.tsx';
 import { MANAGED, formatWhen, plural, useInterval } from './common.ts';
+import { SwitchField } from './controls.tsx';
 import '../workspace.css';
 import '../devices/devices.css';
 
@@ -97,8 +105,8 @@ export function DevicesPage() {
       <section className="settings-section" aria-labelledby="devices-novad">
         <h3 id="devices-novad">Your devices</h3>
         <p className="muted">
-          Computers running novad: what each one can do, its modules, power, updates, the folders it
-          shares and the agents that use it.
+          Browsers, phones, computers running novad and compute nodes: their roles and scopes, what
+          each one can do, its power and updates, the folders it shares and the agents that use it.
         </p>
         <div className="row">
           <Button variant="primary" onClick={() => navigate(DEVICES_PATH)}>
@@ -109,6 +117,7 @@ export function DevicesPage() {
           </Button>
         </div>
       </section>
+      <AddDeviceRules />
       <DeviceRules />
       <section className="settings-section" aria-labelledby="devices-nodes">
         <h3 id="devices-nodes">Compute nodes</h3>
@@ -116,10 +125,14 @@ export function DevicesPage() {
           Computers that run models for this Hub. A node only runs work this Hub sends it, and it
           never connects to your other devices.
         </p>
+        <p className="muted">
+          Add one with a code, like any device, or with a one-use token for scripted installs.
+        </p>
         <div className="row">
-          <Button variant="primary" onClick={() => setAdding(true)}>
-            <Icon name="plus" /> Add compute node
+          <Button variant="primary" onClick={() => navigate(addDevicePath('compute'))}>
+            <Icon name="plus" /> Add with a code
           </Button>
+          <Button onClick={() => setAdding(true)}>Add compute node</Button>
         </div>
         {error ? (
           <div role="alert" className="ws-error">
@@ -303,6 +316,61 @@ function AddNode({ onClose }: { onClose: () => void }) {
         </div>
       ) : null}
     </Dialog>
+  );
+}
+
+const DAYS_MIN = 1;
+const DAYS_MAX = 365;
+
+/** Adding with a code (FR-132): on or off, and how long an added browser or app stays signed in. */
+function AddDeviceRules() {
+  const settings = useSettings();
+  const toast = useToast();
+  const enabled = settings.get('devices.add.enabled');
+  const days = settings.get('devices.add.sessionDays');
+  const fail = (err: unknown) =>
+    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+  const [draft, setDraft] = useState<{ base: number; text: string } | null>(null);
+  const text = draft && draft.base === days.value ? draft.text : String(days.value);
+  const n = Number(text);
+  const invalid = !/^\d+$/.test(text.trim()) || n < DAYS_MIN || n > DAYS_MAX;
+  const commit = () => {
+    if (invalid || n === days.value) return;
+    setDraft(null);
+    void settings.set('devices.add.sessionDays', n).catch(fail);
+  };
+  return (
+    <section className="settings-section" aria-labelledby="devices-adding">
+      <h3 id="devices-adding">Adding devices</h3>
+      <SwitchField
+        label="Add devices with a code"
+        description="Off, new codes and requests to join are refused. Devices already added keep working."
+        checked={enabled.value}
+        locked={enabled.locked}
+        onChange={(v) => void settings.set('devices.add.enabled', v).catch(fail)}
+      />
+      <TextField
+        label="Days an added browser or app stays signed in"
+        hint={`${days.locked ? `${MANAGED}. ` : ''}After this it must be added again. ${DAYS_MIN} to ${DAYS_MAX}.`}
+        type="number"
+        className="ws-number"
+        inputMode="numeric"
+        min={DAYS_MIN}
+        max={DAYS_MAX}
+        step={1}
+        value={text}
+        disabled={days.locked}
+        error={invalid ? `Enter a whole number from ${DAYS_MIN} to ${DAYS_MAX}.` : undefined}
+        onChange={(e) => setDraft({ base: days.value, text: e.target.value })}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          }
+        }}
+      />
+    </section>
   );
 }
 

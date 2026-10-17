@@ -66,6 +66,47 @@ commands; nothing installs them yet. Other commands: `novad version`, `capabilit
 servers, local overrides), `hub-config.json`, `modules.json`, `storage/` and `modules/`. Key
 generation reads `/dev/urandom`, so enrollment does not work on Windows yet.
 
+*As built in M6.5 (ADR-094).* `novad install` joins with an Add Device code (FR-132, FR-133;
+`docs/22` §4.3 has the one-line command the Hub shows, which always passes `--pairing`):
+
+```bash
+novad install --hub http://<hub> --code - --pin <hub fingerprint> [--pairing <id>] \
+  [--role client|compute|wake-helper]… [--name N] [--listen ADDR] [--endpoint URL] \
+  [--no-service] [--dry-run] [--data-dir D]
+```
+
+- **The code stays off the command line.** `--code -` reads it from standard input (the Hub's
+  command pipes it in with the shell's `printf` builtin, which survives `sudo`); without `--code` it
+  comes from `NOVA_ADD_CODE` (the PowerShell command sets it and removes it afterwards);
+  `--code ABCD-EFGH` still works by hand. Codes are normalised like the Hub's (O reads as 0, I and L
+  as 1).
+- **Checks before anything is written.** The Hub's identity key from `GET /api/v1/hello`
+  (`hubPublicKey`) must hash to `--pin`; `novad-manifest.sig` must verify with that key over the
+  domain tag `nova-novad-manifest-v1\n` followed by the exact bytes of `novad-manifest.json` (so no
+  other statement the Hub identity signs can pass as a manifest); and the SHA-256 of `novad`'s own
+  binary must be the manifest's entry for its OS and architecture. The binary is read once and those
+  same bytes are installed. A data folder already enrolled is refused. `--dry-run` stops after these
+  checks.
+- **Add Device v2** as `kind: novad` with a fresh Ed25519 key held in memory: `complete` with a
+  commitment to a secret nonce, then `reveal`, signed at the Hub's clock (from its `Date` header).
+  The Hub's confirmation must equal `novad`'s own computation and `hubSignature` must verify with
+  the pinned key over the request, the pairing, this device's key and the digits; otherwise it stops
+  with "This is not your Hub" before showing anything. It prints
+  `Confirm this code on the Hub: 123 456`, then polls `status` with signed requests (every 1 s,
+  slowing to 5 s; each newer than the last).
+- **After approval** it writes the key, registers with the granted `nvd_` token and the same key
+  (`/agent/v1/register`; the token is bound to that key), keeps a granted device certificate as
+  `device-cert.pem`, writes the checked bytes to `/usr/local/bin/novad`, hashes the installed copy
+  again and installs and starts the service: `systemctl daemon-reload` and `enable --now` on Linux,
+  `launchctl load -w` on macOS, `sc.exe create`, `failure` and `start` on Windows. Installing the
+  service needs root (checked first); `--no-service` skips it.
+
+**Known limitations.** The install runs over plain HTTP: `novad` has no TLS client and refuses an
+`https://` Hub, so the pin, the signed manifest and the Hub-signed confirmation carry its integrity
+while the code and the granted token are visible on the LAN, as for `enroll`. The Windows command is
+generated but untested and key generation reads `/dev/urandom`, so install fails there; the macOS
+service setup is untested. `novad uninstall` is still not built.
+
 ## 3. Capability declaration
 
 On first connect and on change, `novad` reports a capability document. Default: declare
@@ -254,6 +295,18 @@ command and a systemd-networkd `.link` file per NIC); applying needs `apply`, th
 is no Wake Helper yet: the Hub sends the magic packet itself as a UDP broadcast on its own LAN,
 at most `devices.wakesPerHour` per device. Low-level boot answers `capability_missing`.
 
+*As built in M6.5 (ADR-094).* A device whose roles include `wake-helper` accepts
+`POST /agent/v1/power/wake-other {mac, broadcast?, port?}` on the management channel, with the same
+management token as every management call (`contracts/hub-api.md` §3). The MAC must be unicast;
+`broadcast`, when given, must lie on one of the device's physical IPv4 subnets (from
+`/proc/net/route`; container bridges and tunnels do not count), else the packet goes to every
+physical subnet's broadcast address; the port is 9 (default) or 7. At most 10 wakes a minute,
+counted in the supervisor so a module restart does not reset it (429 `rate_limited`). Refusals are
+403 `policy_denied` (`not_wake_helper`, `not_on_lan`), 409 (`no_lan`) and 400 `validation`. The
+power status in every heartbeat carries `lan: [{interface, network, broadcast}]`, the device's
+physical subnets, so the Hub can pick a helper on a target's subnet (`docs/22` §7); the Hub computes
+the broadcast address from `network` itself. Linux only.
+
 ## 6. BIOS / firmware management
 
 Capability varies by platform. Support ladder (BM1): **Dell → Lenovo → HP → ASUS →
@@ -355,6 +408,11 @@ deny-attach and no core dumps; the Windows measures are not built. Every privile
 audited on the Hub (kind `device`). The local socket for the native shell
 (`contracts/hub-api.md` §4) is not built. Revocation reaches the device at its next heartbeat: the
 401 makes it stop its modules and wipe its credentials.
+
+*As built in M6.5 (ADR-094).* The management channel is still bearer tokens over LAN HTTP. A
+device added with Add Device may hold a device certificate (`device-cert.pem`, issued in the
+`local-ca` trust mode), which nothing checks yet: mutual TLS is M7. Revoking a device now also
+blocks its key and refuses an enrollment token still bound to it (`docs/22` §4.5).
 
 ## 10. Failure & recovery
 

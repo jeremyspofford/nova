@@ -1,6 +1,40 @@
-// Calls from the node to its Hub (contracts/hub-api.md §2): register, heartbeat, model sync. The
-// node never contacts anything else but its backend (FR-126); redirects are refused.
+// Calls from the node to its Hub (contracts/hub-api.md §1, §2): Add Device v2 (hello, complete with
+// a commitment, the signed reveal and status poll), register, heartbeat, model sync. The node never contacts anything else but
+// its backend (FR-126); redirects are refused.
 import type { HeartbeatBody, RegisterBody, RegisterResult, SyncBody } from './protocol.ts';
+
+/** `POST /api/v1/devices/add/complete` as a compute node sends it (Add Device v2). */
+export interface AddDeviceCompleteBody {
+  pairingId?: string;
+  code: string;
+  publicKey: string;
+  name: string;
+  platform: string;
+  kind: 'compute';
+  /** base64url SHA-256 of `nova-add-device-commit-v1|<publicKey>|<deviceNonce>`. */
+  commitment: string;
+}
+
+export interface AddDeviceCompleteResult {
+  requestId: string;
+  pairingId: string;
+  expiresAt: string;
+  hubNonce: string;
+  status: 'committed';
+}
+
+export interface AddDeviceRevealResult {
+  requestId: string;
+  confirmation: string;
+  status: 'pending';
+  hubSignature: string | null;
+}
+
+export interface AddDeviceStatusResult {
+  status: 'pending' | 'approved' | 'denied' | 'expired';
+  deviceId?: string;
+  grant?: { type: string; enrollToken?: string; token?: string; certificatePem?: string };
+}
 
 /** A failed Hub call; `status` 401 means the credential no longer works (revoked). */
 export class HubError extends Error {
@@ -40,6 +74,43 @@ export class HubClient {
     return this.#post<RegisterResult>('/node/v1/register', body, null);
   }
 
+  /** `GET /api/v1/hello` (public): once the Hub has an identity, its fingerprint and key. */
+  hello(): Promise<{ hubFingerprint?: unknown; hubPublicKey?: unknown }> {
+    return this.#call('GET', '/api/v1/hello', undefined, {});
+  }
+
+  /** `POST /api/v1/devices/add/complete`: the code, this node's key and its commitment (FR-132). */
+  addDeviceComplete(body: AddDeviceCompleteBody): Promise<AddDeviceCompleteResult> {
+    return this.#call('POST', '/api/v1/devices/add/complete', body, {});
+  }
+
+  /** `POST /api/v1/devices/add/reveal`: the nonce behind the commitment, signed by this node's key. */
+  addDeviceReveal(
+    body: { requestId: string; nonce: string },
+    proof: { time: number; signature: string },
+  ): Promise<AddDeviceRevealResult> {
+    return this.#call('POST', '/api/v1/devices/add/reveal', body, {
+      'x-nova-device-time': String(proof.time),
+      'x-nova-device-signature': proof.signature,
+    });
+  }
+
+  /** `GET /api/v1/devices/add/status/:id`, signed by this node's key. */
+  addDeviceStatus(
+    requestId: string,
+    proof: { time: number; signature: string },
+  ): Promise<AddDeviceStatusResult> {
+    return this.#call(
+      'GET',
+      `/api/v1/devices/add/status/${encodeURIComponent(requestId)}`,
+      undefined,
+      {
+        'x-nova-device-time': String(proof.time),
+        'x-nova-device-signature': proof.signature,
+      },
+    );
+  }
+
   async heartbeat(credential: string, body: HeartbeatBody): Promise<void> {
     await this.#post('/node/v1/heartbeat', body, credential);
   }
@@ -48,18 +119,29 @@ export class HubClient {
     await this.#post('/node/v1/models/sync', body, credential);
   }
 
-  async #post<T>(path: string, body: unknown, credential: string | null): Promise<T> {
-    const headers: Record<string, string> = {
-      'content-type': 'application/json',
-      accept: 'application/json',
-    };
-    if (credential) headers.authorization = `Bearer ${credential}`;
+  #post<T>(path: string, body: unknown, credential: string | null): Promise<T> {
+    return this.#call(
+      'POST',
+      path,
+      body,
+      credential ? { authorization: `Bearer ${credential}` } : {},
+    );
+  }
+
+  async #call<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    body: unknown,
+    extra: Record<string, string>,
+  ): Promise<T> {
+    const headers: Record<string, string> = { accept: 'application/json', ...extra };
+    if (body !== undefined) headers['content-type'] = 'application/json';
     let res: Response;
     try {
       res = await this.#fetch(`${this.hubUrl}${path}`, {
-        method: 'POST',
+        method,
         headers,
-        body: JSON.stringify(body),
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         redirect: 'error',
         signal: AbortSignal.timeout(this.#timeoutMs),
       });

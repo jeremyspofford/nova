@@ -56,6 +56,7 @@ import { BrowserPanel } from '../browser/BrowserPanel.tsx';
 import { ComputersView } from '../computers/ComputersView.tsx';
 import { computerPath } from '../computers/format.ts';
 import { DevicesView } from '../devices/DevicesView.tsx';
+import { NetworkSurface } from '../netsurface/NetworkSurface.tsx';
 import { ControlIndicator } from '../screen/ControlIndicator.tsx';
 import { ScreenPanel } from '../screen/ScreenPanel.tsx';
 import { LibraryView } from '../library/LibraryView.tsx';
@@ -887,7 +888,9 @@ export function Workspace({
                     ? 'Computers'
                     : route.name === 'devices'
                       ? 'Devices'
-                      : MODE_INFO[mode ?? lastMode].label;
+                      : route.name === 'network'
+                        ? 'Network'
+                        : MODE_INFO[mode ?? lastMode].label;
 
   return (
     <div
@@ -1027,6 +1030,7 @@ export function Workspace({
           {route.name === 'sites' ? <SitesView siteId={route.siteId} /> : null}
           {route.name === 'apps' ? <AppsView entryId={route.entryId} /> : null}
           {route.name === 'devices' ? <DevicesView deviceId={route.deviceId} /> : null}
+          {route.name === 'network' ? <NetworkSurface section={route.section} /> : null}
           {route.name === 'computers' ? (
             <ComputersView
               computerId={route.computerId}

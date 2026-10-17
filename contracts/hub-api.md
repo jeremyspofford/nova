@@ -11,7 +11,7 @@ Transport: HTTPS (REST) plus WebSocket/SSE for streams. Authentication: device c
 + scoped bearer token issued at Add Device. All requests are authorized by the policy engine.
 Every listener requires a token or certificate; loopback is never treated as authorization
 (FR-192, ADR-075). The only exceptions authenticate another way and say so below: Add Device
-(pairing code), the MCP event webhook (signature), the `novad` download route (static,
+(pairing code, then the device key), the MCP event webhook (signature), the `novad` download route (static,
 signed artifacts only), the MCP OAuth callback (single-use state), Nova's OAuth client
 metadata document and `GET /api/v1/hello` (both public, no account data), and `/mcp` (a
 client token of its own). M6 adds (the list `apps/hub/test/listeners.test.ts` enforces):
@@ -24,8 +24,25 @@ client token of its own). M6 adds (the list `apps/hub/test/listeners.test.ts` en
 | `POST /agent/v1/register` | A one-use `novad` enrollment token (`nvd_…`) in the body |
 | `POST /agent/v1/heartbeat`, `POST /agent/v1/capabilities` | The device credential (`nvc_…`) as a bearer token |
 
+M6.5 adds (ADR-094; same list). Add Device's three routes are rate-limited per client address;
+the routes marked "none" hand out only public information and answer anyone:
+
+| Route | How it authenticates |
+| --- | --- |
+| `POST /api/v1/devices/add/complete` | The single-use pairing code in the body (5 minutes; five wrong codes burn its pairing; a code sent without `pairingId` spends the account's code-only budget instead). 10 a minute per address |
+| `POST /api/v1/devices/add/reveal` | The commitment sent with `complete`, plus the device key's Ed25519 signature (`x-nova-device-signature`) over `nova-add-device-reveal-v1.<requestId>.<time>`, with `x-nova-device-time` within 60 s. A wrong nonce or signature burns the request. 10 a minute per address |
+| `GET /api/v1/devices/add/status/:requestId` | The device key's signature over `nova-add-device-status-v1.<requestId>.<time>`; the time is within 60 s and newer than the last accepted poll, so a captured poll cannot be replayed. 120 a minute per address |
+| `GET /api/v1/trust/ca.pem`, `GET /api/v1/trust/ca.crt` | None: the local CA's root certificate is public (404 unless the trust mode is `local-ca`) |
+| `GET /api/v1/trust/identity?nonce=` | None: the statement is signed by the Hub identity key and echoes the caller's nonce |
+| `GET /api/v1/agent/dist/:file` | None: builds are not secret; their integrity is the manifest's Ed25519 signature by the Hub identity plus each build's SHA-256. 60 a minute per address |
+
+The Relay adds no public Hub route: requests a client tunnels through it are dispatched into the
+Hub's own routes and authenticate like direct ones (`/api/v1/relay` below).
+
 These receivers still pass the Host and Origin checks: the host name external services use must
-be one of the Hub's names; the host of `channels.publicUrl` is one (it follows the setting). `GET /api/v1/health`
+be one of the Hub's names; the host of `channels.publicUrl` is one (it follows the setting), and
+so are the Hub's mDNS name (`<name>.local`, while mDNS runs) and the host of
+`network.directPublic.url` (while Direct public is on). `GET /api/v1/health`
 (liveness), `POST /api/v1/auth/setup` (the one-use setup code) and `/node/v1/*` (an enrollment
 token or the node credential, §2) are public in the same way.
 
@@ -33,25 +50,60 @@ token or the node credential, §2) are public in the same way.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/v1/hello` | Public: `{name, version, apiVersions, features, setupRequired}`; no account data |
-| `POST` | `/api/v1/hello` | Capability handshake (§7), with a session. M5 ships the body `{capabilities: {serverRequests}}` (other fields are accepted and ignored) and the answer `{name, version, apiVersions, serverRequests, clientSessionId}`: `serverRequests` is the request kinds the Hub agrees to send this client (the known kinds it asked for, §5) and `clientSessionId` a new id the client names on its WebSocket (`?clientSessionId=`) and in the `x-nova-client-session` header. Client sessions live in Hub memory (the newest 1,000); the session's token is the client's device for `targetDeviceId`. The full §7 shape is a follow-up |
+| `GET` | `/api/v1/hello` | Public: `{name, version, apiVersions, features, setupRequired}`; no account data. M6.5 adds `hubFingerprint` (base64url SHA-256 of the Hub identity's raw Ed25519 public key, 43 characters: what devices pin) and `hubPublicKey` (that key, base64url of its raw 32 bytes); both are null while the identity key cannot be loaded (FR-134) |
+| `POST` | `/api/v1/hello` | Capability handshake (§7), with a session. M5 ships the body `{capabilities: {serverRequests}}` (other fields are accepted and ignored) and the answer `{name, version, apiVersions, serverRequests, clientSessionId}`: `serverRequests` is the request kinds the Hub agrees to send this client (the known kinds it asked for, §5) and `clientSessionId` a new id the client names on its WebSocket (`?clientSessionId=`) and in the `x-nova-client-session` header. Client sessions live in Hub memory (the newest 1,000); the session's token is the client's device for `targetDeviceId`. M6.5 adds `endpoints`: the Hub's endpoints that passed their own reachability test, best first, as `EndpointCandidate` (Network below; FR-135). The full §7 shape is a follow-up |
 | `GET` | `/api/v1/events/stream` | SSE stream of the signed-in account's events and account-less system events (§5), `request.created` included. Opens with `: connected`; with `Last-Event-ID` or `?after=` it first replays persisted events after that id, else live events only |
 | `GET` (WebSocket) | `/api/v1/ws?clientSessionId=` | The same events as `event` frames, plus server-to-client `request` frames for the kinds the handshake agreed, and `respond` frames from the client (§5). The session is checked before the upgrade (401 `token_required`) |
 
 ### Auth & devices
 
+Add Device as built in M6.5 (FR-132, FR-140, `docs/22` §4, ADR-094) is a commit-then-reveal
+handshake ("v2"). The owner starts a pairing with a session and gets a short code. The new device
+sends the code, its Ed25519 public key and a commitment to a secret nonce (`complete`), gets the
+Hub's nonce, then reveals its own (`reveal`). Both sides then compute the same six-digit
+confirmation; the owner types the digits the device shows to approve. The device polls its status
+with requests signed by its key and gets its grant once. `complete`, `reveal` and `status` are
+public (table above). Owner routes need a session.
+
+- **Code.** 8 characters of Crockford base32 without I, L, O and U (40 bits), shown as
+  `ABCD-EFGH`; case, dashes and spaces are ignored, and O reads as 0, I and L as 1. Single use,
+  5 minutes, stored only as hex SHA-256 of `nova-add-device-code-v1|<pairingId>|<CODE>`.
+- **Commitment.** base64url SHA-256 of UTF-8 `nova-add-device-commit-v1|<publicKey>|<deviceNonce>`;
+  `deviceNonce` is 32 random bytes (base64url), kept on the device until `reveal`.
+- **Confirmation.** SHA-256 of UTF-8
+  `nova-add-device-v2|<hubFingerprint or ''>|<pairingId>|<publicKey>|<CODE>|<deviceNonce>|<hubNonce>`
+  read as one big-endian integer, mod 10^6, zero-padded to six digits (shown `123 456`). `CODE` is
+  the canonical code (upper case, no dash). A Relay claim keeps the v1 formula (`nova-add-device-v1`
+  without the two nonces): its claim travels sealed with a key derived from the code (§3 of
+  `rest-api.md`).
+- **Hub signature.** `hubSignature` is the Hub identity's Ed25519 signature (base64url) over UTF-8
+  `nova-add-device-reveal-v1|<requestId>|<pairingId>|<publicKey>|<confirmation>`, or null while
+  the Hub has no identity. A device that holds a pin (QR `fp=`, `--pin`) fetches `hubPublicKey`
+  from `GET /api/v1/hello`, checks base64url(SHA-256(raw key)) equals the pin and verifies the
+  signature before it shows the digits; a null or bad signature with a pin is a hard stop. Every
+  device also compares the Hub's confirmation with its own computation.
+- **Windows.** A committed request must be revealed within 2 minutes; a revealed request waits
+  10 minutes for the owner; after approval the device has 10 more minutes to collect its grant.
+  The code is kept in Hub memory only between `complete` and `reveal`, so a Hub restart in
+  between expires the request.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/v1/devices/add/start` | Create an Add Device request; returns QR payload + short code + TTL (direct or via Relay). Body `{role: compute\|client\|wake-helper}`. M2: `compute` returns a one-use enrollment token `{token: "nve_…", expiresAt}` (15 min) that a compute node presents to `/node/v1/register`; creating it is the human approval for that node (ADR-089). M6: `client` and `wake-helper` return 201 `{token: "nvd_…", expiresAt, command}`, a one-use `novad` enrollment token (15 min) and the command to run on the device (`novad enroll --hub <Hub URL> --token … --role <role> --endpoint http://<device>:7420`); creating it is the owner's approval for that device. The QR payload, short code and Relay path are not built |
-| `POST` | `/api/v1/devices/add/complete` | Device submits public key + code (authenticated by the code); Hub returns a pending approval. Not built |
-| `POST` | `/api/v1/devices/add/approve` | Hub-side human approves; issues device cert + scoped token. Not built |
-| `GET` | `/api/v1/agent/dist/:file` | Signed per-arch `novad` binaries and checksums for the bootstrap command (`docs/22` §4.3); serves nothing else. Not built (M6.5) |
-| `GET` | `/api/v1/devices?role=` | List devices with role, scopes, health, reachability, `novad` version. Without `role`, or `role=compute`, compute nodes as `NodeView` (M2); `role=client\|wake-helper` lists the `novad` devices whose roles include it as `DeviceView` (M6; `GET /devices/novad` lists them all) |
+| `POST` | `/api/v1/devices/add/start` | Start Add Device (owner) `{role: client\|compute\|wake-helper, scopes? (≤ 20 names, `^[a-z][a-z0-9_.:-]{0,63}$`), name? (1–100; wins over the name the device reports), transport?: direct\|relay}` → 201 `AddDeviceStartView` `{pairingId, code, expiresAt, role, scopes, transport, qr, deepLink, pageUrl, bootstrap: {command, powershell, why}, hubFingerprint, endpoints, relay: {relayUrl, relayPairingId}\|null}`, `Cache-Control: no-store`. `qr` is `<hub>/add-device?p=<pairingId>&fp=<hubFingerprint>&e=<endpoint>…&r=<relayUrl>&rp=<relayPairingId>#c=<code>` (the code rides in the fragment, which never reaches a server log); `deepLink` is `nova://add-device?h=<hub>&…#c=<code>`; `pageUrl` carries no code. `endpoints` are at most 4 healthy http(s) endpoints (Network below). `bootstrap` is the agent-dist area's one-line install for `novad` (sh `command`; `powershell` when the Hub has Windows builds), or null with `why`. `transport: relay` opens a Relay pairing slot (FR-137). Refusals: `policy_denied` `{reason: add_device_disabled}` (`devices.add.enabled` off), 429 `rate_limited` `{reason: start_rate_limited, limit: 20}` (starts per account per hour), `capability_missing` `{reason: relay_unavailable}`, `node_unavailable` `{reason: relay_refused}`. Audited as `device.add.start`. M6.5 replaces the M2/M6 behaviour of this route: no token is handed out before approval (the scripted paths are `compute/enroll` and `novad/enroll`) |
+| `POST` | `/api/v1/devices/add/complete` | The new device commits (public) `{pairingId?, code (8–20 characters), publicKey (raw Ed25519, base64url, 43 characters), name (1–100), platform (1–50), kind: browser\|novad\|compute\|native, commitment}` → 202 `{requestId, pairingId, expiresAt (the reveal deadline), hubNonce (32 random bytes, base64url), status: committed}`, `Cache-Control: no-store`. A good code consumes its pairing. Kinds per role: `client` takes `browser`, `native` or `novad`; `wake-helper` takes `novad`; `compute` takes `compute` or `novad`. Without `pairingId` (a typed code) the code finds its pairing alone and a wrong guess spends the account's code-only budget (10 per 5 minutes, then code-only completes are refused for 5 minutes) instead of a pairing's attempts. Refusals: 401 `auth_missing` `{reason: wrong_code, attemptsLeft}` (the fifth wrong code burns the pairing); 410 `request_expired` `{reason: expired}` for an unknown, expired, used or burned pairing (alike: no oracle); 429 `rate_limited` `{reason: code_only_locked}` or `{reason: address_rate_limited}`; `policy_denied` `{reason: key_revoked}` (a revoked device's key); `validation` `{reason: kind_not_allowed, role, kind}`; `conflict` `{reason: key_in_use}`; `policy_denied` `{reason: add_device_disabled}`. Nothing is shown to the owner yet. Audited as `device.add.complete` (result `committed`, or `denied` with the reason) |
+| `POST` | `/api/v1/devices/add/reveal` | The device reveals its nonce (public) `{requestId, nonce}` with `x-nova-device-time` and `x-nova-device-signature` → 200 `{requestId, confirmation, status: pending, hubSignature}`. The Hub checks the signature and that the nonce matches the commitment. A wrong nonce or signature burns the request (`denied`) and counts as a wrong code on its pairing: 401 `auth_missing` `{reason: bad_reveal}`. A good signature with a time more than 60 s off is 401 `{reason: stale_time}` and burns nothing; missing headers `{reason: missing_proof}`; an unknown request answers like a bad signature (`{reason: bad_signature}`). A second reveal is 409 `conflict` `{reason: already_revealed}`; one after 2 minutes, or after a Hub restart since `complete`, is 410 `request_expired`. Only now is the request pending for the owner: `device.add.requested`, an `attention` notification linking to `/devices/add?request=<id>` (the digits stay out of it). Audited as `device.add.reveal` |
+| `GET` | `/api/v1/devices/add/status/:requestId` | The device's signed poll (public) → `{status: pending\|approved\|denied\|expired, deviceId?, grant?}`, `Cache-Control: no-store`; a committed request answers `pending`. The first approved poll hands out the grant exactly once: `{type: session, token}` for a `browser` or `native` device (a device session lasting `devices.add.sessionDays`, 30 by default; a browser also gets the HttpOnly, `SameSite=Strict` session cookie), `{type: novad, enrollToken: "nvd_…"}` or `{type: compute, enrollToken: "nve_…"}` (one use, 15 min, bound to this key: `/agent/v1/register` or `/node/v1/register` must present the same key, else `policy_denied` `{reason: key_mismatch}`, and activate the record approval created), plus `certificatePem` when the trust mode issues device certificates (`local-ca`). A device revoked before it collects gets `denied`, now and later. Refusals: 401 `auth_missing` `{reason: missing_proof\|bad_signature\|stale_time\|replayed}` (`replayed`: not newer than the last accepted poll). A grant that fails to issue is put back for the next poll |
+| `GET` | `/api/v1/devices/add/requests?status=pending\|approved\|denied\|expired\|all` | Requests for the owner, newest first, at most 200 (default `pending`): `{items: AddDeviceRequestView[]}` `{id, pairingId, role, kind, name, platform, scopes, confirmation, fingerprint (hex SHA-256 of the key), via: direct\|relay, status, deviceId, createdAt, expiresAt, decidedAt}`. Committed requests that were never revealed are never listed |
+| `POST` | `/api/v1/devices/add/requests/:id/approve` | `{confirmation}` (`123456` or `123 456`): the digits the device shows, which must equal the request's. Creates the device record: `active` for a browser or app, `pending` until it registers for `novad` and compute nodes; its `kind` is `compute` for a compute node, `wake-helper` for a `novad` Wake Helper, else `client`; roles `[role]`, scopes as chosen. Returns `AddDeviceRequestView`. Refusals: `validation` `{reason: confirmation_mismatch, field: confirmation}`, `policy_denied` `{reason: key_revoked}`, `conflict` `{reason: decided, status}` or `{reason: key_in_use}`, `request_expired`, `not_found`. Audited as `device.add.approve`; `device.add.decided` |
+| `POST` | `/api/v1/devices/add/requests/:id/deny` | Returns `AddDeviceRequestView`. Takes effect only while the request is still pending: if an approval won, `conflict` `{reason: decided, status}` and nothing is audited or announced. Audited as `device.add.deny`; `device.add.decided` |
+| `POST` | `/api/v1/devices/compute/enroll` | The scripted path for a compute node (ADR-089, M6.5): 201 `{token: "nve_…", expiresAt}`, one use, 15 min, for `nova-compute enroll --token`; creating it with a session is the owner's approval. (M2 returned this from `add/start {role: compute}`) |
+| `GET` | `/api/v1/devices/all` | Every device record of the account, whatever it runs, oldest first (FR-140, M6.5): `{items: DeviceSummaryView[]}` `{id, name, kind, addedAs: browser\|novad\|compute\|native\|null, roles, scopes, platform, status: pending\|active\|revoked\|unreachable, fingerprint, sessions (live device sessions), novadVersion, lastSeenAt, createdAt}` |
+| `PUT` | `/api/v1/devices/:id/scopes` | Replace a device's scopes `{scopes (≤ 20)}` (`docs/22` §4.2) → `DeviceSummaryView`; a revoked device is `conflict` `{reason: revoked}`. `offline-replica` and `local-runtime` also set the device's capability flags; the other scopes are recorded and shown, not yet enforced. Audited as `device.scopes.update`; `device.scopes.changed` |
+| `GET` | `/api/v1/agent/dist/:file` | Signed `novad` builds for the one-line install (FR-133, `docs/22` §4.3; public, above). Serves `novad-manifest.json`, `novad-manifest.sig` and each build the manifest lists, `novad-<linux\|darwin\|windows>-<amd64\|arm64>` (`.exe` for Windows); every other name is 404. The manifest is `{version, files: [{name, os, arch, sha256, size}], hubFingerprint, signedAt}`; the signature is standard base64 of the Hub identity's Ed25519 signature over `nova-novad-manifest-v1\n` followed by the manifest's exact bytes, re-signed only when a build or the identity changes, and 404 while the Hub has no identity. Builds come from the folder in `NOVA_NOVAD_DIST` (with an optional `VERSION` file); empty files and files over 512 MiB are skipped. `Cache-Control: no-store`, `Content-Length`, attachment disposition for builds. Over 60 a minute from one address: 429 `rate_limited` `{reason: address_rate_limited}` |
+| `GET` | `/api/v1/devices?role=` | List devices with role, scopes, health, reachability, `novad` version. Without `role`, or `role=compute`, compute nodes as `NodeView` (M2); `role=client\|wake-helper` lists the `novad` devices whose roles include it as `DeviceView` (M6; `GET /devices/novad` lists them all; `GET /devices/all` lists every record) |
 | `PATCH` | `/api/v1/devices/:id` | Edit a `novad` device (M6) `{name? (1–100), capabilityOverrides?, policy?, updateChannel?: stable\|beta\|nightly}`. `capabilityOverrides` (FR-142) replaces the Hub's set and takes only the Advanced fields: `models {storagePaths, cacheQuotaBytes}`, `computePolicy {gpuSharing, vramReserveBytes, maxConcurrentJobs, maxJobDurationSec}`, `scheduling {quietHours, routingWeight, energyPriceTier}`, `limits {maxEgressMbps}`, `power {policy, thermalLimitC}`, `locale {locale}`; detected facts cannot be overridden. `policy` (FR-150) `{routingEligible?, allowedModules?, resourceCaps?: {memoryBytes, cpuSeconds, openFiles}, quietHours?}` is merged. A change goes to the device at once (it answers with its re-signed capability document, which must verify against the pinned key) or with its next heartbeat; `configPending` is true until then. Returns `DeviceView`; a revoked device is `conflict`. Audited as `device.update`; `device.overrides.changed` |
-| `POST` | `/api/v1/devices/:id/wake` | Wake-on-LAN (FR-144). M6 has no Wake Helper: the Hub sends the magic packet itself as a UDP broadcast on its own LAN (port 9). `capability_missing` `{reason: not_wakeable}` unless the signed document reports `power.wakeable` and a MAC; at most `devices.wakesPerHour` (default 6) per device per hour, then 429 `rate_limited` (recorded and audited too). Returns `{id, deviceId, mac, status: sent, createdAt}`; works while the device is unreachable. Audited as `device.wake`; `device.wake.sent` |
-| `POST` | `/api/v1/devices/:id/revoke` | Revoke a compute node or a `novad` device: `{ok: true}`. For `novad` the device credential and the management token are deleted, its agent connections and the Hub's copy of its grants are revoked, and it becomes `revoked` (`device.status.changed`); the device stops its modules and wipes its credentials when its next heartbeat gets 401. Relay routing is not built. Audited as `device.revoke` |
-| `GET` | `/api/v1/relay/clients` | Paired clients reachable through the Relay: device, relay client id, last seen (FR-137, ADR-071) |
-| `POST` | `/api/v1/relay/clients/:id/revoke` | Revoke a paired client: drops its key and tells the Relay to stop routing it |
+| `POST` | `/api/v1/devices/:id/wake` | Wake-on-LAN (FR-144, FR-138). `capability_missing` `{reason: not_wakeable}` unless the signed document reports `power.wakeable` and a MAC. M6.5 routes it through a Wake Helper: an active `novad` device with the `wake-helper` role (only those in `network.wakeHelpers`, in that order, when the setting lists any) on the target's LAN. A device's LAN is what it last reported: the physical subnets in its heartbeat's `power.lan` (exact), else its endpoint address with the prefix of the Hub's own interface on that network, else /24 (IPv4) or /64 (IPv6); loopback and mesh addresses never match. The Hub calls the helper's `POST /agent/v1/power/wake-other` (§3) with the broadcast address computed from the subnet (a reported one is ignored). With no helper, the Hub sends a directed broadcast itself only from a physical LAN interface on the target's subnet; else 409 `conflict` `{reason: no_wake_helper, tried}`, logged as a failed wake and audited with `via: null`. The limit counts every attempt (pending, sent, failed) in the last hour, recorded in one transaction before anything is sent: past `devices.wakesPerHour` (default 6), 429 `rate_limited` `{reason: wake_rate_limited, limit}`. Returns `{id, deviceId, mac, status: sent, createdAt, via}` (`via`: the helper's device id or `hub`); a send that fails is `server_error`. Works while the target is unreachable. Audited as `device.wake` (with `via`); `device.wake.sent` |
+| `POST` | `/api/v1/devices/:id/revoke` | Revoke any device: a compute node, a `novad` device, or (M6.5) a browser or app added with a code or an approved device that never registered; tried in that order, `not_found` when none has the id. Returns `{ok: true}`. For `novad` the device credential and the management token are deleted, its agent connections and the Hub's copy of its grants are revoked, and it becomes `revoked` (`device.status.changed`); the device stops its modules and wipes its credentials when its next heartbeat gets 401. A browser or app becomes `revoked`, its credential goes and its transport endpoints are marked unhealthy (`device.status.changed`). For every kind (M6.5, `docs/22` §4.5) its device sessions are deleted, its key is blocked (a later `complete`, approval or Relay claim with it is `policy_denied` `{reason: key_revoked}`), an enrollment token bound to it and a grant it has not collected are refused, its device certificates are revoked and its Relay client is revoked. Audited as `device.revoke` (compute nodes by the add-device area) |
 
 ### Chat, projects, files
 
@@ -489,14 +541,97 @@ gaps. Calls on behalf of a schedule, automation, agent or app are checked agains
 | `GET/PATCH` | `/api/v1/settings` | Read/update settings |
 | `GET` | `/api/v1/flags` | Feature flags with stage ([`feature-flag.json`](schemas/feature-flag.json), ADR-082) |
 | `PATCH` | `/api/v1/flags/:key` | Toggle a `beta` or `experimental` flag; `removed` flags and managed locks are refused |
-| `GET/PATCH` | `/api/v1/network` | Transports, trust, egress, wake helpers. Not built: M6's egress policy lives under `/api/v1/egress` |
-| `POST` | `/api/v1/network/setup` | Run the Network Setup assistant step |
-| `POST` | `/api/v1/network/test` | Reachability test (LAN/Mesh/Relay) |
-| `POST` | `/api/v1/network/rollback` | Revert the last network change |
-| `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, MCP servers, sandbox, secrets backend, encryption at rest, warnings, other probes); M6 adds the probes `agents`, `channels`, `egress`, `browser`, `devices` and `spaces` |
+| `GET/PATCH` | `/api/v1/network` | Transports, endpoints, mDNS and Wake Helpers (M6.5; Network below). The egress policy lives under `/api/v1/egress` (M6) |
+| `POST` | `/api/v1/network/setup` | One Network Setup assistant action (M6.5; Network setup below) |
+| `POST` | `/api/v1/network/test` | Run every reachability test now (M6.5; Network below) |
+| `POST` | `/api/v1/network/rollback` | Revert the last network change, or a named one (M6.5; Network below) |
+| `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, MCP servers, sandbox, secrets backend, encryption at rest, warnings, other probes); M6 adds the probes `agents`, `channels`, `egress`, `browser`, `devices` and `spaces`; M6.5 adds `trust`, `network`, `networkSetup`, `relay` and `agentDist` |
 | `GET` | `/api/v1/diagnostics/logs?level=&module=&since=&limit=` | Recent log entries from the in-memory ring (5,000), newest first; `level` means that level and above; redacted (FR-118) |
 | `GET` | `/api/v1/diagnostics/logs/export` | The same as `application/x-ndjson` |
 | `POST` | `/api/v1/diagnostics/test` | Test one component (FR-119) `{component: provider\|mcp\|sandbox\|storage\|update, ref?}`; `ref` is a provider account or MCP server id (all of them when omitted). Returns `{component, ref, status: ok\|warning\|error\|unavailable, detail, checks: [{name, ref, status, detail}], durationMs, testedAt}`; a failing component is a result, not an error. `provider` connects, lists the account's own models and sends one 16-token request held to that account (no fallback); `mcp` reports the connection and the server's last tool list; `sandbox` runs `true` with network off; `storage` writes, reads back and deletes a test file in the data folder, runs a SQLite integrity check and reports free space (`warning` under 1 GB); `update` is `unavailable` (no update channel yet). Each test stops after 30 s. Results are not audited. A bad body is `validation`, an unknown `ref` is `not_found`. M5 keeps the result type in the Hub; a shared type is a follow-up |
+
+### Network (M6.5, `docs/22` §2, §6, §7)
+
+Every route needs a session; none is public (FR-135, FR-138, FR-139). An endpoint is
+`EndpointCandidate` `{transport: lan\|mesh\|relay\|direct, url, priority, health: ok\|failing\|unknown,
+latencyMs, checkedAt, detail}`; lower `priority` is tried first (LAN 10, the mDNS name 11, LAN
+IPv6 12, Mesh 20+, Relay 30+, Direct public 40). The Hub checks each candidate with a real
+`GET <url>/api/v1/hello` and advertises only healthy ones of enabled transports, best first
+(`docs/22` §2). Nothing is checked or advertised until the listener is bound.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/network` | `NetworkView` `{transports: [{transport, enabled, status: up\|down\|off\|none, endpoints, detail}], advertised, primary, listener: {host, port, protocol}\|null, lan: {mdns: {enabled, running, name}, includeLoopback, includeLinkLocal}, directPublic: {url}, healthCheckSeconds, trust (the trust summary, or null), egress: {mode, href: "/api/v1/egress"}, wakeHelpers: {configured, available: WakeHelperView[], recent: WakeLogView[]}, lastChange}`. `WakeHelperView` `{deviceId, name, status, addresses, subnets, lastSeenAt}`; `recent` is the account's newest 20 wakes `{id, deviceId, deviceName, mac, status: pending\|sent\|failed\|rate_limited, via (helper id, `hub`, or null), viaName, error, createdAt}` |
+| `PATCH` | `/api/v1/network` | `{transports?: {lan?, mesh?, relay?, directPublic?}, lan?: {mdns?, mdnsName? (a DNS label or null), includeLoopback?, includeLinkLocal?}, directPublic?: {url (plain http(s), no credentials, query or fragment) \| null}, wakeHelpers? (≤ 50 ids), healthCheckSeconds? (10–3,600)}` → the `NetworkView` plus `change` (null when nothing changed). Written as the `network.*` settings, all or nothing (a failed write puts back what was written; a value managed policy sets is refused as on `PATCH /api/v1/settings`). Refusals: `validation` `{field: transports, reason: no_transport}` (every transport off), `{field: directPublic.url, reason: url_required}` (Direct public on without a URL), `{field: wakeHelpers, reason: unknown_device, ids}`. The switches only change what is advertised; no listener is ever closed, so this cannot lock the owner out. Recorded in the change log (kind `network.settings`), audited as `network.change`; `network.changed` |
+| `POST` | `/api/v1/network/test` | Run every reachability test now → `NetworkTestResult` `{checkedAt, transports, advertised, primary}`; concurrent calls share one running check. `capability_missing` `{reason: no_listener}` before the listener is bound |
+| `POST` | `/api/v1/network/rollback` | One-click rollback (FR-139) `{changeId?}`: the newest applied change, or the one named → `{change, network}`. Each change kind has an undo handler: `network.settings` (this panel), `trust.mode` (a trust change, through any route) and `network.setup.step` (an applied setup step, undone like `POST /network/setup/runs/:id/rollback {stepId}`). Refusals: `conflict` `{reason: nothing_to_roll_back}`, `{reason: rolled_back}` (already), `{reason: rollback_in_progress}`; `not_found`; `capability_missing` `{reason: no_undo_handler, kind}`. Audited as `network.rollback` (result `failed` with the error when the undo throws); `network.changed` |
+| `GET` | `/api/v1/network/diagnostics` | `NetworkDiagnosticsView` `{checkedAt, primary, transports, endpoints (each with uptime24h: {checks, ok}), trust, mesh (the mesh ACL summary), relay (the Relay connector's status), devices: [{deviceId, name, kind, roles, status, lastSeenAt, reachable, relayPaired, endpoints}], events (the transport event log, newest first, 50), changes (newest first, 20), problems (plain sentences, e.g. "LAN: …", "Trust: …")}`. Probe history is kept 7 days, transport events 90 days |
+
+### Network setup (M6.5, `docs/22` §6)
+
+The Network Setup assistant (FR-136). Every route needs a session. Steps that run host commands
+need `network.setup.allowSystemChanges` (security setting, off by default); detection and
+planning never change anything. Secrets the owner types (`authKey`, `headscale.apiKey`) are
+write-only: planning moves them to the vault (`secret://network/setup/<runId>/…`) and views show
+`stored`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/v1/network/setup` | One action. `{action: detect}` → `{action, detection: NetworkDetectionView}` (interfaces and their kind, LAN subnets, DNS, each mesh provider's state, peers and routes, ufw, the package manager, the Hub's mesh URLs). `{action: plan, provider: headscale\|tailscale\|netbird\|wireguard, options?}` → 201 `{action, run: NetworkSetupRunView}` (`options`: `controlUrl`, `hostname`, `authKey`, `installClient`, `headscale {user, cliAddress, apiKey, acl}`, `tags`, `magicDns`, `advertiseRoutes`, `exitNode`, `certs: auto\|mesh\|local-ca\|none`, `firewall`, `relay {url}`, `wireguard {interface, address, listenPort, dns, peers}`, `replaceExisting`). `{action: apply, runId, stepId?, consent?: {stepId, description}}` → `{action, run, step}`: applies the next pending step (or `stepId`), checks it with the reachability test and rolls it back automatically when an expected path fails. `{action: verify, runId, stepId?}` → `{action, run, ok, checks}`. A step that fails comes back as a result (step status `failed`, `rolled_back` with `autoRolledBack`, or `rollback_failed`), not as an error |
+| `GET` | `/api/v1/network/setup/runs` | The account's runs: `{items: NetworkSetupRunView[]}` `{id, provider, status: planned\|in_progress\|completed\|failed\|rolled_back, options (secrets as `stored`), outputs (public material, e.g. the Hub's WireGuard public key), steps: NetworkSetupStepView[], error, createdAt, updatedAt}`; a step is `{id, runId, index, kind, provider, title, description, commands (argv lists; secrets as `<secret>`), undoCommands, affects, undoAffects, systemChange, status: pending\|applied\|verified\|failed\|rolled_back\|rollback_failed\|manual\|skipped, consent: {required, remembered}, checks, error, autoRolledBack, appliedAt, verifiedAt, rolledBackAt}` |
+| `GET` | `/api/v1/network/setup/runs/:id` | One `NetworkSetupRunView` |
+| `POST` | `/api/v1/network/setup/runs/:id/rollback` | `{stepId?}`: undo the whole run (every applied step, newest first, and `rollback_failed` ones again), or only its last applied step → the run. Allowed while `network.setup.allowSystemChanges` is off (undo puts back what the owner had; the audit records the setting's value) |
+| `GET` | `/api/v1/network/setup/consents` | Remembered consents `{items: [{id, kind, provider, description, grantedAt}]}` |
+| `DELETE` | `/api/v1/network/setup/consents/:id` | Revoke one: `{ok: true}`; the next step of that kind and provider asks again |
+
+Refusals: 403 `policy_denied` `{reason: system_changes_disabled, setting}` (a host change with the
+setting off) and `{reason: consent_required, stepId, description, changed?}` (send the exact
+description back as `consent`; `changed: true` when a remembered consent covered different text);
+409 `conflict` `{reason: would_lock_out, transport, affects}` (the step, or its undo, could cut the
+path the request came in on and no other path passes its test), `setup_busy`,
+`earlier_step_pending`, `not_applicable`, `already_applied`, `nothing_to_apply`,
+`rollback_pending` (undoing this step failed: roll it back again first), `not_applied`,
+`not_last_step`, `nothing_to_roll_back`, `mesh_in_use` (already joined elsewhere: set
+`replaceExisting`); 400 `validation` `{reason: control_url_required\|auth_key_required\|headscale_unavailable\|api_key_required\|wireguard_options_required\|mesh_certs_unavailable}`.
+Audited (kind `network`): `network.setup.consent` (`granted` or `revoked`), `network.setup.apply`
+(also when denied), `network.setup.rollback` (actor `system` when automatic; result
+`rollback_failed` when an undo failed); `network.setup.step`.
+
+### Trust (M6.5, `docs/22` §5)
+
+The Hub identity, the Hub local CA, the Hub's TLS certificate and mesh certificates (FR-134).
+Owner routes need a session; the three public routes are in the table at the top of §1.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/trust` | `TrustView` `{mode: none\|local-ca\|mesh, meshCerts, pinNativeShells, hubFingerprint, hubPublicKey (both null while the identity cannot load), serving: {scheme, source: explicit\|trust\|none, fallbackReason}\|null, restartRequired, ca: {fingerprint (SHA-256 of the DER, upper-case hex with colons), subject, notBefore, notAfter, nameConstraints: {dns, ip}}\|null, leaf: {serial, sans, notBefore, notAfter, renewAt}\|null, meshCert: {host, notAfter, status: ok\|expiring\|expired}\|null, issued (newest 200 certificates), problems}` |
+| `PATCH` | `/api/v1/trust` | `{mode?, meshCerts?, pinNativeShells?}` (at least one) → `TrustView`. Written as the `trust.*` settings; a value managed policy sets is refused with `policy_denied` `{reason: managed}` and the write rolled back. Switching between HTTP and HTTPS applies at the next start (`restartRequired`); choosing `local-ca` creates the CA and its certificate at once, so devices can install the root first. A change through this route or `PATCH /api/v1/settings` is audited as `trust.change`, recorded in the change log (kind `trust.mode`) and emits `trust.changed` |
+| `POST` | `/api/v1/trust/renew` | `{target: leaf\|mesh\|all\|ca}` (default `all`) → `TrustView`. `all` renews the Hub certificate and the mesh certificates; `ca` replaces the local CA (the owner's explicit choice, never part of `all`: every device must install the new root and device certificates of the old CA stop verifying). Refusals: `conflict` `{reason: trust_off\|no_local_ca\|no_mesh_cert}`; `capability_missing` `{reason: no_mesh_cert_source}` |
+| `GET` | `/api/v1/trust/ca.pem`, `/api/v1/trust/ca.crt` | Public. The local CA's root certificate as PEM (`application/x-pem-file`) or DER (`application/x-x509-ca-cert`, which phones open to install), as an attachment; 404 unless the mode is `local-ca` |
+| `GET` | `/api/v1/trust/identity?nonce=` | Public, `Cache-Control: no-store`. `nonce`: 16–64 base64url characters (else `validation`). → `HubIdentityStatement` `{v: 1, nonce, hubFingerprint, hubPublicKey, pinning: required\|off, certificates: [{kind: ca\|leaf\|mesh, sha256 (hex of the DER), notAfter}], issuedAt, signature}`: the signature (base64url Ed25519 by the Hub identity) covers `nova-hub-identity-v1\n` followed by the canonical JSON of the other fields (`hubIdentityStatementBytes` in `@nova/shared`). While the identity cannot load: 409 `conflict` `{reason: identity_missing\|identity_mismatch\|identity_unavailable}` |
+
+### Relay (M6.5, `docs/22` §3, `rest-api.md` §3)
+
+The Hub's connector to a content-blind Relay (FR-137). Every route needs a session. The settings
+are `relay.enabled`, `relay.url` and `relay.selfHosted` (security settings); a change through
+these routes or `PATCH /api/v1/settings` applies at once. Requests a paired client tunnels through
+the Relay are dispatched into the Hub's own `/api/v1` routes (not `/api/v1/ws`) and authenticate
+by the client's own `Authorization` header, like direct requests; the Relay's route token never
+authorizes anything here.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/relay` | `RelayConfigView` `{enabled, url, selfHosted, effectiveUrl (the URL, or the hosted Relay `wss://relay.arialabs.ai` when not self-hosted and no URL is set), status: {state: disabled\|unconfigured\|registering\|connecting\|connected\|error, detail, url, routeId, since, latencyMs}, clients: {active, pending}}` |
+| `PATCH` | `/api/v1/relay` | `{enabled?, url?, selfHosted?}` → `RelayConfigView`. The URL is written before `enabled`, so turning the Relay on in the same change never sees the old URL. `url` is `wss://` or `https://` (`ws://` or `http://` only to this machine), without credentials, query or fragment, or `''`. A value managed policy sets is `policy_denied` `{reason: managed}`. Audited as `relay.change` |
+| `POST` | `/api/v1/relay/test` | `RelayTestView` `{ok, url, reachable, latencyMs, version, state, detail}`: the Relay's `GET /v1/relay/health` and the connection's state |
+| `GET` | `/api/v1/relay/clients` | Paired clients, newest first: `{items: RelayPairedClientView[]}` `{id (the relay client id), deviceId, requestId, name, platform, kind: browser\|native, status: pending\|active\|denied\|expired\|revoked, routeId, relayUrl, createdAt, lastSeenAt, revokedAt}` |
+| `POST` | `/api/v1/relay/clients/:id/revoke` | `{ok: true, client}`: the Relay stops routing it (its open connections close with `revoked`; a Relay that cannot be reached is told when the Hub next connects), the Hub drops its envelopes, its key stays refused for new pairings and its device is revoked (`POST /devices/:id/revoke`). A device revoked anywhere else loses its Relay client too. `not_found` for an unknown client. Audited as `relay.revoke`; `relay.client.revoked` |
+
+Pairing through the Relay is Add Device with `transport: relay` (Auth & devices above): the claim
+reaches the Hub as a pending Add Device request (v1 confirmation), and the owner's decision
+confirms or drops the client's route. Pairing outcomes are audited as `relay.pair` with decision
+`approved`, `denied`, `expired` or `refused`; a refusal's reason is `expired`, `bad_claim`,
+`client_conflict`, `revoked_key`, `add_device_unavailable` or `add_device_refused`.
 
 ## 2. Hub ↔ Compute Node
 
@@ -510,6 +645,14 @@ that key; the Hub pins the key, returns a node credential (`nvn_…`, stored has
 heartbeats and model sync, and keeps the node's job token (generated by the node) in the
 secret vault to call the node's job API. Every re-sent capability document must verify against
 the pinned key. Heartbeats every 10 s; three missed beats mark the node `unreachable`.
+
+*As built in M6.5* (ADR-094): still bearer tokens over LAN or Mesh HTTP. A node joins with Add
+Device (`nova-compute enroll --code`, §1) or with a token from `POST /api/v1/devices/compute/enroll`.
+A token Add Device granted is bound to the node's key and to the pending device record its
+approval created: `/node/v1/register` must present that key (else `policy_denied` `{reason:
+key_mismatch}`) and activates that record, keeping the name the owner approved (`conflict`
+`{reason: device_not_pending}` when the record is gone or revoked). Device certificates are issued
+in `local-ca` mode but no route checks them yet (mutual TLS is M7).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -546,12 +689,23 @@ calls in flight to one module is 429. The Hub does not run these calls through t
 the device enforces its grants and protected paths, and the Hub checks protected paths again on
 writes.
 
+*As built in M6.5* (ADR-094): the channel is still bearer tokens over plain HTTP; `novad` has no
+TLS client, and the device certificate a grant may carry is kept (`device-cert.pem`) but not used
+yet (mutual TLS is M7). `novad install` joins with Add Device (§1, `docs/23` §2) and registers
+with the `nvd_` token it was granted: that token is bound to its key and to the pending device
+record approval created, so `/agent/v1/register` must present the same key (`policy_denied`
+`{reason: key_mismatch}`), activates that record and keeps the name and scopes the owner approved
+(`conflict` `{reason: device_not_pending}` when the record is gone or revoked). The roles are
+only those the document declares that the owner approved (the approved list when it declares
+none of them): a device's own document can narrow its roles, never widen them. Heartbeats may
+report the device's physical LAN subnets (`power.lan`, below), which Wake Helper routing uses.
+
 novad → Hub (no session; §1 lists how each authenticates):
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/agent/v1/register` | (novad → Hub) `{enrollToken, name (1–100), endpoint (a plain http(s) base URL without credentials, query or fragment), publicKey (raw Ed25519, base64url), capability, signature, managementToken ("nvdm_…"), novadVersion, protocolVersions}` → 201 `{deviceId, credential: "nvc_…", heartbeatIntervalMs, protocolVersion, updateChannel, updateKey}` (`updateKey`: the update signing key the device pins, or null; the M6 Hub has none). A bad body is `validation` and no protocol version in common `capability_missing`, both before the token is spent. An unknown, used or expired token is 401 `auth_missing`. After that the token is spent even on failure: a document that fails the schema is `validation` `{reason: invalid_capability}`, a bad signature `policy_denied` `{reason: bad_signature}`, a key already registered `conflict` `{reason: key_in_use}`. The roles are the ones the document declares (the token's when it declares none); the device's kind is `hub`, `wake-helper` or `client`, never `compute`. Audited as `device.register`; `device.registered` |
-| `POST` | `/agent/v1/heartbeat` | (novad → Hub) `Authorization: Bearer nvc_…` (none: 401 `token_required`; unknown or revoked: 401 `auth_missing`, and the device then stops its modules and wipes its credentials). `{novadVersion, modules?, events? (≤ 500), accessDecisions? (≤ 500), power?}` → `{ok: true, heartbeatIntervalMs, capabilityRequested}`. Marks the device `active`; module events become `device.module.changed` (crashes and disables are audited); decisions made on the device (`novad access approve\|deny`) close their Hub cards; a `novad` self-update the device reports is recorded; overrides or policy the device has not taken yet are pushed after the beat |
+| `POST` | `/agent/v1/heartbeat` | (novad → Hub) `Authorization: Bearer nvc_…` (none: 401 `token_required`; unknown or revoked: 401 `auth_missing`, and the device then stops its modules and wipes its credentials). `{novadVersion, modules?, events? (≤ 500), accessDecisions? (≤ 500), power?}` → `{ok: true, heartbeatIntervalMs, capabilityRequested}`. Marks the device `active`; module events become `device.module.changed` (crashes and disables are audited); decisions made on the device (`novad access approve\|deny`) close their Hub cards; a `novad` self-update the device reports is recorded; overrides or policy the device has not taken yet are pushed after the beat. M6.5: `power` may carry `lan: [{interface?, network, broadcast?}]`, the device's physical IPv4 subnets (from `/proc/net/route`, container bridges and tunnels left out), for Wake Helper routing; `network` must be an IPv4 network `a.b.c.d/p` with p from 1 to 30 and no host bits set (at most 32 entries), else the beat is `validation`. A reported `broadcast` is kept but never used: the Hub computes it from `network` |
 | `POST` | `/agent/v1/capabilities` | (novad → Hub) Device credential as for heartbeats. `{capability, signature, novadVersion}` → `{ok: true}`. The document must pass the schema, verify against the pinned key and keep its `deviceId` (`validation` `{reason: device_mismatch}`). `device.capabilities.changed` when its modules or version changed. Sent at start, every 30th heartbeat and when a heartbeat answer asks |
 
 Hub → novad (all `POST`, management token):
@@ -563,7 +717,8 @@ Hub → novad (all `POST`, management token):
 | `POST` | `/agent/v1/config` | The Hub's overrides and policy (FR-142, FR-150) `{capabilityOverrides?, policy?: {allowedModules?, resourceCaps?, quietHours?, routingEligible?}, updateChannel?, revision}`: saved and applied (modules outside `allowedModules` stop; resource caps apply from each module's next start); answers `{capability, signature, revision, modules}` with the re-signed document. An override outside the Advanced fields is `validation` |
 | `POST` | `/agent/v1/modules/:name/{start,stop,restart,rollback}` | Start, stop, restart a module or roll it back to the version an update replaced (FR-141): `{module}`. `not_found` for a module that is not installed; `policy_denied` `{reason: module_not_allowed\|checksum_mismatch}`; `conflict` without a previous version |
 | `POST` | `/agent/v1/services/:name/{start,stop,restart,status}` | A service the device owner declared: a supervised module, or a systemd unit through `systemctl` (FR-145). `{service: {name, kind, state}}` |
-| `POST` | `/agent/v1/power` | `{action: status\|wol-plan\|wol-enable\|sleep\|restart\|shutdown, apply?}` (FR-144); refusals as `POST /api/v1/devices/:id/power`. There is no `wake`: the Hub sends magic packets itself. Linux only |
+| `POST` | `/agent/v1/power` | `{action: status\|wol-plan\|wol-enable\|sleep\|restart\|shutdown, apply?}` (FR-144); refusals as `POST /api/v1/devices/:id/power`. There is no `wake` here: a device wakes other devices through `power/wake-other`. Linux only |
+| `POST` | `/agent/v1/power/wake-other` | The Wake Helper (FR-138, M6.5) `{mac, broadcast?, port?}` → `{sent: true, mac, port, targets: [{broadcast, interface}]}`: the device sends the magic packet on its LAN. Only a device whose roles include `wake-helper` (else 403 `policy_denied` `{reason: not_wake_helper}`). `mac` must be a unicast address; `broadcast`, when given, must be on one of the device's physical IPv4 subnets (else 403 `policy_denied` `{reason: not_on_lan, lan}`), otherwise the packet goes to every physical subnet's broadcast address; `port` is 9 (default) or 7. A device with no LAN interface is 409 `{reason: no_lan}`; more than 10 a minute is 429 `rate_limited` `{retryAfterMs}` (counted in the supervisor, so a module restart does not reset it); a bad body is 400 `validation`. The Hub calls it from `POST /api/v1/devices/:id/wake` with the broadcast address it computed. Linux only |
 | `POST` | `/agent/v1/update` | Apply a signed bundle `{bundle: {manifest: {target, version, channel, sha256, size}, signature, payload}}` (FR-148) → `{status: applied\|rolled_back, target, from, to, at}` for a module, `{status: staged, target: novad, restart: true}` for `novad` (it exits with 75 for its service manager to restart it). `policy_denied` `{reason: no_trust_key\|bad_signature\|channel_mismatch\|checksum_mismatch\|elevation_required}`, `conflict` `{reason: not_newer}` |
 | `POST` | `/agent/v1/fs/{list,stat,read}` | Inside the grantee's grants (FR-210): `{grantee, path}` → a listing (5,000 entries, protected ones left out), `{path, kind, size, mtimeMs}`, or `{path, contentBase64, size, sha256, truncated}` (`maxBytes` default 1 MiB, at most 8 MiB) |
 | `POST` | `/agent/v1/fs/request-access` | Ask for a folder or an MCP server `{grantee, kind?: folder\|mcp, path\|target, access?, reason?}` → `{request}`; approved on the device (`novad access approve`) or the Hub (`fs/decide`); a folder an existing grant covers comes back `granted`; 200 pending at most |
@@ -768,25 +923,25 @@ Rules:
 
 | Code | HTTP | Meaning |
 | --- | --- | --- |
-| `auth_missing` | 401 | No credentials |
+| `auth_missing` | 401 | No credentials. M6.5 also answers it for a wrong Add Device code (`wrong_code`, with `attemptsLeft`) and for a reveal or status poll the device key did not sign freshly (`missing_proof`, `bad_signature`, `bad_reveal`, `stale_time`, `replayed`) |
 | `auth_expired` | 401 | Token or certificate expired |
 | `token_required` | 401 | A listener or stream upgrade without a valid token or certificate (FR-192) |
 | `origin_rejected` | 403 | WebSocket or MCP request with a non-allowlisted `Origin` or `Host` |
-| `policy_denied` | 403 | The policy engine denied the action |
+| `policy_denied` | 403 | The policy engine denied the action. M6.5 also answers it with `details.reason` `add_device_disabled`, `key_revoked`, `key_mismatch`, `managed` (a setting managed policy fixes), `system_changes_disabled` and `consent_required` (Network setup) |
 | `approval_required` | 409 | An approval is pending; `details.approvalId` |
 | `hook_untrusted` | 409 | The hook's content hash changed or was never trusted |
-| `rate_limited` | 429 | Retry after `details.retryAfter`. M6 also answers it for a wake past `devices.wakesPerHour` and for more than 200 pending folder requests on a device |
+| `rate_limited` | 429 | Retry after `details.retryAfter`. M6 also answers it for a wake past `devices.wakesPerHour` and for more than 200 pending folder requests on a device. M6.5 adds `details.reason`: `start_rate_limited` (20 Add Device starts an hour), `code_only_locked` (10 wrong typed codes in 5 minutes), `address_rate_limited` (the public Add Device and dist routes per client address), `wake_rate_limited` |
 | `over_budget` | 402 | Account or provider spend cap reached (FR-116) |
 | `budget_exhausted` | 409 | A run or goal budget, or the 200-step backstop, was reached; `details.bound` (FR-182). M5 answers it when a run or goal is resumed while that budget is still used up |
 | `goal_blocked` | 409 | The goal is `blocked`; `details.blocker` (FR-181) |
-| `request_expired` | 410 | The server request expired before this answer |
+| `request_expired` | 410 | The server request expired before this answer. M6.5: an Add Device pairing or request that expired, was used or never existed (`details.reason: expired`) |
 | `capability_missing` | 400 | Feature, request kind or experimental field not negotiated (§7) |
 | `sandbox_unavailable` | 409 | No sandbox could be created (for example for a terminal); fails closed, read-only mode offered |
 | `node_unavailable` | 503 | No node can take the job |
 | `firmware_disabled` | 403 | Firmware changes are off |
 | `oob_disabled` | 403 | Out-of-band module is off |
 | `validation` | 400 | Payload failed its schema or rule examples |
-| `conflict` | 409 | State changed (request already resolved, stale hash, lease held, worktree cap); `details.reason` names it where there is one, e.g. `stale_hunk`, `staged_changes`, `detached_head`, `commit_failed`, `worktree_cap`; M6 adds `stale_version`, `stale_proposal`, `decided`, `slug_taken`, `published`, `not_published`, `folder_in_use`, `in_use`, `leased`, `dirty`, `not_leased`, `verify_running`, `too_many_dev_servers`, `dev_server_exited`, `hook_failed`, `push_failed`, `base_mismatch`, `staged_tampered`, `access_granted`, `agent_connected`, `key_in_use` |
+| `conflict` | 409 | State changed (request already resolved, stale hash, lease held, worktree cap); `details.reason` names it where there is one, e.g. `stale_hunk`, `staged_changes`, `detached_head`, `commit_failed`, `worktree_cap`; M6 adds `stale_version`, `stale_proposal`, `decided`, `slug_taken`, `published`, `not_published`, `folder_in_use`, `in_use`, `leased`, `dirty`, `not_leased`, `verify_running`, `too_many_dev_servers`, `dev_server_exited`, `hook_failed`, `push_failed`, `base_mismatch`, `staged_tampered`, `access_granted`, `agent_connected`, `key_in_use`; M6.5 adds `already_revealed`, `device_not_pending`, `revoked`, `no_wake_helper`, `nothing_to_roll_back`, `rollback_in_progress`, `rolled_back`, `trust_off`, `no_local_ca`, `no_mesh_cert`, `identity_missing`, `identity_mismatch`, `identity_unavailable`, and the Network setup reasons (`would_lock_out`, `setup_busy`, `earlier_step_pending`, `not_applicable`, `already_applied`, `nothing_to_apply`, `rollback_pending`, `not_applied`, `not_last_step`, `mesh_in_use`) |
 | `not_found` | 404 | No such resource |
 | `server_error` | 500 | Unexpected failure |
 

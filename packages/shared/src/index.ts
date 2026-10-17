@@ -12,3 +12,8 @@ export * from './m6/screen.ts';
 export * from './m6/devices.ts';
 export * from './m6/spaces.ts';
 export * from './m6/code.ts';
+export * from './m65/add-device.ts';
+export * from './m65/network.ts';
+export * from './m65/mesh.ts';
+export * from './m65/trust.ts';
+export * from './m65/relay.ts';

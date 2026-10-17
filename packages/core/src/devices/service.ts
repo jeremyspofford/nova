@@ -38,6 +38,7 @@ import type { EventSink } from '../events.ts';
 import type { AuditSink, Notifier } from '../tools/types.ts';
 import type { ComputerExecResult, ComputerExecSpec } from '../computers/types.ts';
 import { keyFingerprint, verifyDocument } from '../nodes/crypto.ts';
+import { enrollBindingOf, type EnrollKeyBinding } from '../pairing/binding.ts';
 import { callDevice, httpDeviceTransport, type DeviceTransport } from './client.ts';
 import {
   DEVICE_CREDENTIAL_PREFIX,
@@ -115,6 +116,19 @@ export interface DeviceCallContext {
   /** The turn and tool call an agent's device tool ran in (devices/tools.ts). */
   turnId?: string | null;
   callId?: string | null;
+}
+
+/**
+ * Where a wake goes (FR-138; the network area's WakeHelperRouter): a Wake Helper that already
+ * sent it, or the Hub's own broadcast (to `address` when given). It throws `conflict` with reason
+ * `no_wake_helper` when neither reaches the target's LAN. Without a router the Hub broadcasts (M6).
+ */
+export interface DeviceWakeRouter {
+  route(input: {
+    accountId: string;
+    deviceId: string;
+    mac: string;
+  }): Promise<{ via: 'helper'; helperDeviceId: string } | { via: 'hub'; address: string | null }>;
 }
 
 /** The vault reference of the token the Hub presents to a device (docs/12 §5). */
@@ -313,7 +327,9 @@ export class DeviceService {
   readonly #updateKey: () => Promise<string | null>;
   readonly #callTimeoutMs: number;
   #agentExists: ((accountId: string, agentId: string) => Promise<boolean>) | null;
+  #wakeRouter: DeviceWakeRouter | null = null;
   readonly #connectionHooks = new Set<ConnectionHook>();
+  readonly #revokeHooks = new Set<(accountId: string, deviceId: string) => void | Promise<void>>();
   #timer: ReturnType<typeof setInterval> | null = null;
   readonly #pushing = new Set<string>();
 
@@ -347,6 +363,20 @@ export class DeviceService {
 
   useAgents(exists: (accountId: string, agentId: string) => Promise<boolean>): void {
     this.#agentExists = exists;
+  }
+
+  /** Route wakes through Wake Helpers (FR-138; the network area). */
+  useWakeRouter(router: DeviceWakeRouter | null): void {
+    this.#wakeRouter = router;
+  }
+
+  /**
+   * Called after a device is revoked (Add Device deletes its sessions and blocks its key,
+   * docs/22 §4.5). A failing hook is logged and does not undo the revocation.
+   */
+  onRevoked(hook: (accountId: string, deviceId: string) => void | Promise<void>): () => void {
+    this.#revokeHooks.add(hook);
+    return () => this.#revokeHooks.delete(hook);
   }
 
   /** Called when an agent's connection starts or ends (the computers area registers its row). */
@@ -452,11 +482,16 @@ export class DeviceService {
 
   // ---- enrollment and the novad → Hub routes -------------------------------------------------
 
-  /** A one-use enrollment token (`nvd_…`, 15 min). Creating it is the owner's approval. */
+  /**
+   * A one-use enrollment token (`nvd_…`, 15 min). Creating it is the owner's approval. Add Device
+   * binds it to the device key and the pending record its approval created (FR-132): register
+   * must then present that key and activates that record.
+   */
   async createEnrollToken(
     accountId: string,
     roles: readonly string[],
     hubUrl: string,
+    bind?: EnrollKeyBinding,
   ): Promise<DeviceEnrollToken> {
     const token = DEVICE_ENROLL_PREFIX + randomBytes(32).toString('base64url');
     const now = this.#now();
@@ -468,7 +503,7 @@ export class DeviceService {
         accountId,
         role: primary,
         codeHash: deviceSecretHash(token),
-        scopes: JSON.stringify({ novad: true, roles }),
+        scopes: JSON.stringify({ novad: true, roles, ...(bind ? { bind } : {}) }),
         status: 'pending',
         expiresAt,
         createdAt: now.toISOString(),
@@ -488,25 +523,55 @@ export class DeviceService {
     const protocolVersion = negotiateDeviceProtocol(body.protocolVersions);
     const request = await this.#consumeEnrollToken(body.enrollToken);
     const requested = parseJson<{ roles?: string[] }>(request.scopes, {}).roles ?? [request.role];
+    const bind = enrollBindingOf(request.scopes);
     const nowIso = this.#iso();
-    const deviceId = uuidv7();
+    const deviceId = bind?.deviceId ?? uuidv7();
     const credential = DEVICE_CREDENTIAL_PREFIX + randomBytes(32).toString('base64url');
     const ref = managementTokenRef(deviceId);
     const fingerprint = keyFingerprint(body.publicKey);
     const docRoles = Array.isArray(body.capability.roles)
       ? body.capability.roles.filter((r): r is string => typeof r === 'string')
       : [];
-    const roles = docRoles.length ? docRoles : requested;
+    // Only roles the owner approved: a device's own document may narrow them, never widen them
+    // (a client claiming `wake-helper` or `hub` would otherwise get it; review finding 3).
+    const declared = [...new Set(docRoles.filter((r) => requested.includes(r)))];
+    const roles = declared.length ? declared : [...new Set(requested)];
+    let name = body.name;
     try {
+      // A token from Add Device works only with the key the owner approved (FR-132).
+      if (bind && bind.publicKey !== body.publicKey) {
+        throw new NovaError(
+          'policy_denied',
+          'this enrollment token belongs to another device key',
+          {
+            details: { reason: 'key_mismatch' },
+            action: 'Register with the key you added the device with',
+          },
+        );
+      }
       this.#checkDocument(body.capability, body.signature, body.publicKey);
       await this.#secrets.put(ref, body.managementToken);
       await this.#db.transaction(async () => {
         const taken = await this.#db.orm
-          .select({ id: device.id })
+          .select()
           .from(device)
           .where(eq(device.certFingerprint, fingerprint))
           .limit(1);
-        if (taken.length) {
+        const pending = taken[0];
+        if (bind) {
+          // The record approval created waits for exactly this key; a revoked one stays dead.
+          if (
+            !pending ||
+            pending.id !== bind.deviceId ||
+            pending.accountId !== request.accountId ||
+            pending.status !== 'pending'
+          ) {
+            throw new NovaError('conflict', 'the device this token was made for is not waiting', {
+              details: { reason: 'device_not_pending' },
+              action: 'Add the device again',
+            });
+          }
+        } else if (pending) {
           throw new NovaError('conflict', 'this device key is already registered', {
             details: { reason: 'key_in_use' },
             action: 'Enroll with a new key',
@@ -522,23 +587,41 @@ export class DeviceService {
           scopes: JSON.stringify(['novad']),
           createdAt: nowIso,
         });
-        await this.#db.orm.insert(device).values({
-          id: deviceId,
-          accountId: request.accountId,
-          name: body.name,
-          kind: kindFor(roles),
-          platform: platformOf(body.capability),
-          certFingerprint: fingerprint,
-          publicKey: body.publicKey,
-          roles: JSON.stringify(roles),
-          scopes: JSON.stringify([]),
-          status: 'active',
-          novadVersion: body.novadVersion,
-          credentialTokenId: tokenId,
-          lastSeenAt: nowIso,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-        });
+        if (bind && pending) {
+          // The name and scopes the owner approved stay.
+          name = pending.name;
+          await this.#db.orm
+            .update(device)
+            .set({
+              kind: kindFor(roles),
+              platform: platformOf(body.capability),
+              roles: JSON.stringify(roles),
+              status: 'active',
+              novadVersion: body.novadVersion,
+              credentialTokenId: tokenId,
+              lastSeenAt: nowIso,
+              updatedAt: nowIso,
+            })
+            .where(eq(device.id, deviceId));
+        } else {
+          await this.#db.orm.insert(device).values({
+            id: deviceId,
+            accountId: request.accountId,
+            name: body.name,
+            kind: kindFor(roles),
+            platform: platformOf(body.capability),
+            certFingerprint: fingerprint,
+            publicKey: body.publicKey,
+            roles: JSON.stringify(roles),
+            scopes: JSON.stringify([]),
+            status: 'active',
+            novadVersion: body.novadVersion,
+            credentialTokenId: tokenId,
+            lastSeenAt: nowIso,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          });
+        }
         await this.#db.orm.insert(deviceCapability).values({
           deviceId,
           document: JSON.stringify(body.capability),
@@ -576,7 +659,7 @@ export class DeviceService {
     }
     await this.#emit('device.registered', request.accountId, {
       deviceId,
-      name: body.name,
+      name,
       roles,
       novadVersion: body.novadVersion,
     });
@@ -584,10 +667,16 @@ export class DeviceService {
       request.accountId,
       'device.register',
       deviceId,
-      { name: body.name, roles, novadVersion: body.novadVersion, fingerprint },
+      {
+        name,
+        roles,
+        novadVersion: body.novadVersion,
+        fingerprint,
+        ...(bind ? { addDevice: true } : {}),
+      },
       { actor: 'system' },
     );
-    this.#log.info('device registered', { deviceId, name: body.name });
+    this.#log.info('device registered', { deviceId, name });
     return {
       deviceId,
       credential,
@@ -1195,6 +1284,13 @@ export class DeviceService {
     await this.#secrets.delete(managementTokenRef(deviceId));
     await this.#statusChanged(d.row, d.row.status, 'revoked');
     await this.#auditAppend(accountId, 'device.revoke', deviceId, { name: d.row.name }, ctx);
+    for (const hook of this.#revokeHooks) {
+      try {
+        await hook(accountId, deviceId);
+      } catch (err) {
+        this.#log.warn('revoke hook failed', { err });
+      }
+    }
   }
 
   // ---- modules, services, power, wake (FR-141, FR-144, FR-145, FR-150) -----------------------
@@ -1349,12 +1445,15 @@ export class DeviceService {
     return res;
   }
 
-  /** Send a magic packet to a wakeable device: rate-limited and logged (FR-144). */
+  /**
+   * Send a magic packet to a wakeable device: rate-limited and logged (FR-144), through a Wake
+   * Helper on its LAN when a router is set (FR-138). `via` is the helper's device id or `hub`.
+   */
   async wake(
     accountId: string,
     deviceId: string,
     ctx: DeviceCallContext = {},
-  ): Promise<DeviceWakeView> {
+  ): Promise<DeviceWakeView & { via: string }> {
     const d = await this.device(accountId, deviceId);
     if (d.row.status === 'revoked') throw new NovaError('not_found', 'device not found');
     const view = await this.#view(d);
@@ -1368,29 +1467,45 @@ export class DeviceService {
     const now = this.#now();
     const hourAgo = new Date(now.getTime() - 3_600_000).toISOString();
     const limit = (await this.#settings.wakesPerHour?.()) ?? 6;
-    const sent =
-      this.#get<{ n: number }>(
-        "SELECT count(*) AS n FROM wake_request WHERE target_device_id = ? AND status = 'sent' AND created_at >= ?",
-        deviceId,
-        hourAgo,
-      )?.n ?? 0;
     const id = uuidv7();
-    const insert = (status: DeviceWakeView['status'], error: string | null) =>
+    // Counted and recorded in one transaction before anything is sent, so concurrent wakes cannot
+    // all pass the check while a Wake Helper call is in flight; failed attempts count too.
+    const limited = await this.#db.transaction(() => {
+      const started =
+        this.#get<{ n: number }>(
+          `SELECT count(*) AS n FROM wake_request WHERE target_device_id = ?
+           AND status IN ('pending', 'sent', 'failed') AND created_at >= ?`,
+          deviceId,
+          hourAgo,
+        )?.n ?? 0;
+      const over = started >= limit;
+      this.#run(
+        `INSERT INTO wake_request (id, account_id, target_device_id, helper_device_id, mac, status, error, created_at)
+         VALUES (?, ?, ?, NULL, ?, ?, NULL, ?)`,
+        id,
+        accountId,
+        deviceId,
+        mac,
+        over ? 'rate_limited' : 'pending',
+        now.toISOString(),
+      );
+      return over;
+    });
+    const finish = (
+      status: 'sent' | 'failed',
+      error: string | null,
+      helper: string | null = null,
+    ) =>
       this.#db.transaction(() => {
         this.#run(
-          `INSERT INTO wake_request (id, account_id, target_device_id, helper_device_id, mac, status, error, created_at)
-           VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`,
-          id,
-          accountId,
-          deviceId,
-          mac,
+          'UPDATE wake_request SET status = ?, error = ?, helper_device_id = ? WHERE id = ?',
           status,
           error,
-          now.toISOString(),
+          helper,
+          id,
         );
       });
-    if (sent >= limit) {
-      await insert('rate_limited', null);
+    if (limited) {
       await this.#auditAppend(
         accountId,
         'device.wake',
@@ -1402,28 +1517,50 @@ export class DeviceService {
         details: { reason: 'wake_rate_limited', limit },
       });
     }
-    let status: DeviceWakeView['status'] = 'sent';
+    let status: 'sent' | 'failed' = 'sent';
     let error: string | null = null;
+    let helper: string | null = null;
     try {
-      await (this.#wol.send ?? sendMagicPacket)(mac, {
-        ...(this.#wol.address ? { address: this.#wol.address } : {}),
-        ...(this.#wol.port ? { port: this.#wol.port } : {}),
-      });
+      let address = this.#wol.address;
+      if (this.#wakeRouter) {
+        const route = await this.#wakeRouter.route({ accountId, deviceId, mac });
+        if (route.via === 'helper') helper = route.helperDeviceId;
+        else address ??= route.address ?? undefined;
+      }
+      if (!helper) {
+        await (this.#wol.send ?? sendMagicPacket)(mac, {
+          ...(address ? { address } : {}),
+          ...(this.#wol.port ? { port: this.#wol.port } : {}),
+        });
+      }
     } catch (err) {
+      // Nothing on the target's LAN can send it (FR-138): logged and audited, no packet sent.
+      if (err instanceof NovaError && err.details?.reason === 'no_wake_helper') {
+        await finish('failed', 'no_wake_helper');
+        await this.#auditAppend(
+          accountId,
+          'device.wake',
+          deviceId,
+          { mac, status: 'failed', via: null, error: 'no_wake_helper' },
+          ctx,
+        );
+        throw err;
+      }
       status = 'failed';
       error = err instanceof Error ? err.message.slice(0, 300) : 'send failed';
     }
-    await insert(status, error);
+    const via = helper ?? 'hub';
+    await finish(status, error, helper);
     await this.#emit(
       'device.wake.sent',
       accountId,
-      { deviceId, wakeRequestId: id, mac, status },
+      { deviceId, wakeRequestId: id, mac, status, via },
       ctx,
     );
-    await this.#auditAppend(accountId, 'device.wake', deviceId, { mac, status, error }, ctx);
+    await this.#auditAppend(accountId, 'device.wake', deviceId, { mac, status, error, via }, ctx);
     if (status === 'failed')
       throw new NovaError('server_error', `the magic packet was not sent: ${error ?? ''}`);
-    return { id, deviceId, mac, status, createdAt: now.toISOString() };
+    return { id, deviceId, mac, status, createdAt: now.toISOString(), via };
   }
 
   // ---- updates (FR-148) ---------------------------------------------------------------------

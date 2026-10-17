@@ -2,8 +2,8 @@
 // agent computers reach the network through the egress proxy. The access level and the allowed
 // and blocked hosts for every sandbox (security settings: global only, managed policy can lock
 // them), HTTPS inspection and its certificate, rules for one agent, run or session, the
-// credentials the proxy adds, and the decision log. Transports, trust and wake helpers join this
-// page in M6.5 (docs/04 §9).
+// credentials the proxy adds, and the decision log. How devices reach the Hub (transports, trust,
+// the Relay, Wake helpers) is the top-level Network surface (/network, M6.5), linked from here.
 import { useCallback, useEffect, useId, useState } from 'react';
 import type { EgressCredentialView, EgressModeView, EgressView } from '@nova/shared';
 import { Button, Icon, RadioGroup, Spinner, useToast } from '@nova/ui';
@@ -14,6 +14,7 @@ import { MODE_TEXT } from '../computers/format.ts';
 import { useAnnounce } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useDebounced } from '../work/events.ts';
+import { followLink } from '../work/nav.tsx';
 import { Credentials } from './Credentials.tsx';
 import { DecisionLog } from './DecisionLog.tsx';
 import { HostListEditor } from './HostListEditor.tsx';
@@ -76,6 +77,14 @@ export function NetworkPage() {
       <p className="muted">
         Sandboxes, containers and agent computers reach the network only through Nova&apos;s egress
         proxy. These rules decide where they can go; every request is logged below.
+      </p>
+      <p className="muted">
+        How your devices reach this Hub (transports, certificates, the Relay and Wake helpers) is on
+        the{' '}
+        <a href="/network" onClick={(e) => followLink(e, '/network')}>
+          Network page
+        </a>
+        .
       </p>
       <GlobalAccess inspects={egress?.inspection.https ?? null} />
       {egressError ? (

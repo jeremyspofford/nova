@@ -558,6 +558,8 @@ test('J7: staged writes on the connected device; taking over the agent computer 
   await page.goto(`${hub.url}/devices`);
   await page.getByRole('button', { name: 'Add device' }).first().click();
   await expect(page.getByRole('heading', { level: 1, name: 'Add a device' })).toBeVisible();
+  // The scripted path: a one-use command instead of a code (M6.5 made the code the default).
+  await page.getByRole('link', { name: 'Use a one-use command instead' }).click();
   const client = page.getByRole('checkbox', { name: 'Client' });
   if (!(await client.isChecked())) await client.check();
   await page.getByRole('button', { name: 'Create command' }).click();

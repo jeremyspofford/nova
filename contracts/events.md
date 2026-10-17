@@ -232,7 +232,7 @@ device environment `{sessionId,threadId}`.
 | `device.service.changed` | yes | `{deviceId,service,action: start\|stop\|restart,state}` (FR-145) |
 | `device.overrides.changed` | yes | `{deviceId,pushed}` (FR-142, FR-150) |
 | `device.power.requested` | yes | `{deviceId,action: wol-enable\|sleep\|restart\|shutdown,applied}` (FR-144) |
-| `device.wake.sent` | yes | `{deviceId,wakeRequestId,mac,status: sent\|failed}` |
+| `device.wake.sent` | yes | `{deviceId,wakeRequestId,mac,status: sent\|failed,via}`; `via` (M6.5, FR-138) is the Wake Helper's device id or `hub` when the Hub sent the packet itself. A wake refused with `no_wake_helper` emits nothing |
 | `device.update.result` | yes | `{deviceId,target,from,to,channel,status: applied\|staged\|rolled_back\|refused\|failed}` (FR-148), one per pushed bundle |
 | `device.access.requested` | yes | `{deviceId,requestId,grantee: {kind,id},path,access: read\|write,approvalId}` (FR-210); `approval.requested` (scope `device:<deviceId>`, tier `confirm_at_action`) goes with it |
 | `device.access.decided` | yes | `{deviceId,requestId,status: granted\|denied,decidedBy: device\|hub}`; a decision made on the device also emits `approval.decided` with `decidedBy: "device:<deviceId>"` |
@@ -242,6 +242,28 @@ device environment `{sessionId,threadId}`.
 | `device.write.discarded` | yes | `{deviceId,stagedId}` |
 | `device.write.conflict` | yes | `{deviceId,stagedId,path}` |
 | `device.connection.changed` | yes | `{connectionId,agentId,deviceId,status: active\|revoked}` (FR-081); correlation `{agentId}` |
+| `device.add.requested` | yes | `{requestId,role,kind,platform,name}` (M6.5, FR-132): a request is now the owner's to decide: at the reveal for a direct join (Add Device v2), at the claim for a Relay join (v1). A committed request that is never revealed emits nothing. Never carries the confirmation |
+| `device.add.decided` | yes | `{requestId,decision: approved\|denied\|expired}`; actor `user`, or `system` for `expired`. A deny that lost to an approval emits nothing |
+| `device.scopes.changed` | yes | `{deviceId,scopes}` (M6.5, `PUT /api/v1/devices/:id/scopes`); actor `user` |
+
+M6.5 also emits `device.status.changed` (`{deviceId,from,status: revoked}`, actor `user`) when a
+browser or app added with a code, or an approved device that never registered, is revoked.
+
+### network, trust & Relay (M6.5)
+
+All persisted. `network.endpoints.changed`, `network.transport.changed`, `network.changed` and
+`relay.status.changed` are account-less system events (every stream of the Hub gets them).
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `network.endpoints.changed` | yes | `{advertised: [{transport,url,priority}],added: [url],removed: [url]}` (FR-135): what the Hub advertises changed after a check; actor `system` |
+| `network.transport.changed` | yes | `{primary,previousPrimary,transports: {lan\|mesh\|relay\|direct: up\|down\|off\|none},changed: [transport]}`: a transport went up or down or the preferred one changed (the logged fallback, e.g. LAN down and Mesh primary); actor `system` |
+| `network.changed` | yes | `{changeId,kind: network.settings\|trust.mode\|network.setup.step,summary,status: applied\|rolled_back}` (FR-139): a change was recorded in the network change log or rolled back; actor the change's |
+| `network.setup.step` | yes | `{runId,stepId,kind,provider,status,autoRolledBack,error?}` (FR-136): a setup step was applied, verified, failed, rolled back (`autoRolledBack` when automatic) or could not be undone (`rollback_failed`); `error` is redacted, at most 300 characters; actor `user` |
+| `trust.changed` | yes | `{reason, …}` (FR-134); `reason` is `mode` (`{mode,meshCerts,pinNativeShells,previous,restartRequired}`, after a change through `PATCH /api/v1/trust`, the settings route or a rollback), `ca_created` (`{fingerprint}`), `ca_rotated` (`{fingerprint,previous}`), `leaf_issued` (`{serial,sans,notAfter}`), `device_issued` (`{deviceId,serial}`), `device_revoked` (`{deviceId,certificates}`) or `mesh_cert` (`{host,notAfter}`). Attributed to the owner account |
+| `relay.status.changed` | yes | `{state: disabled\|unconfigured\|registering\|connecting\|connected\|error,detail,url}` (FR-137): the Relay connector's state changed |
+| `relay.client.paired` | yes | `{clientId,deviceId,name,platform}`: the owner approved a client that paired through the Relay; actor `user` |
+| `relay.client.revoked` | yes | `{clientId,deviceId}`: actor `user`, or `system` when its device was revoked elsewhere |
 
 ### spaces & sites (M6)
 
@@ -302,10 +324,15 @@ agent as author) has actor `system` and correlation `{threadId,turnId}` when kno
 - **Activity view**: renders persisted events filtered by correlation id.
 - **Audit**: mirrors security-relevant events (approvals, `policy.*`, `review.*`, `hook.*`,
   `request.*`, `ambient.grant.denied`, `app.authorization.changed`) into `audit_event` with a
-  hash chain. Areas that act also append their own entries (the M4, M5 and M6 actions are listed
+  hash chain. Areas that act also append their own entries (the M4, M5, M6 and M6.5 actions are listed
   in `docs/06` §2, "audit & events"). M5 writes no audit entry for `request.*` yet.
 - **Scheduler**: listens for `trigger.fired`, `schedule.fired`, `mcp.event.received` and
   `turn.completed` (goal continuation, FR-181).
+- **M6.5 Hub areas**: the trust, network and relay areas listen for `settings.changed` of their
+  own keys (`trust.*`, `network.*`, `relay.*`), so a change through `PATCH /api/v1/settings` applies
+  at once and a trust change is audited and logged like one made on its own route; the Hub
+  refreshes its Host allowlist on `network.*`; the relay area revokes a device's Relay client on
+  `device.status.changed` with status `revoked`.
 - **M6 Hub areas**: the agents area listens for `approval.requested` (a proactive research turn
   that asks for an approval is stopped) and `goal.status.changed` (an agent's goal continues or
   stops); the devices area answers `approval.decided` for folder-access cards; the Activity trace

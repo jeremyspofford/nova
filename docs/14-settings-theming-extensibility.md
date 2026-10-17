@@ -117,6 +117,33 @@ per-category notification routing are not settings: they are stored in the `quie
 `/api/v1/notification-rules`, because Hub areas cannot write settings. SOCKS5, per-scope site
 levels and a dev-server port grant have no setting yet.
 
+*Added in M6.5* (ADR-094). The keys are in `packages/shared/src/settings.ts` (the `// ---- M6.5`
+blocks). Settings → Devices shows the two `devices.add.*` keys under "Adding devices"; Network
+(`/network`) edits the others through `PATCH /api/v1/network`, `PATCH /api/v1/trust` and
+`PATCH /api/v1/relay`, which write these keys (so each change is audited and, for `network.*` and
+`trust.*`, can be rolled back), and the host-changes switch sits at the top of Network → Setup.
+A change through `PATCH /api/v1/settings` applies at once too.
+
+| Key | Default | Security | Notes |
+| --- | --- | --- | --- |
+| `devices.add.enabled` | `true` | yes | Allow adding devices with a code or QR; off, new pairings and joins are refused (`add_device_disabled`) (FR-132) |
+| `devices.add.sessionDays` | `30` | yes | How long a browser's or app's device session lasts (1 to 365 days) before it must be added again (FR-132) |
+| `network.transports` | `{lan: true, mesh: true, relay: true, directPublic: false}` | yes | Which transports the Hub advertises, tried LAN → Mesh → Relay → Direct public; turning one off only stops advertising it, and at least one stays on (FR-135) |
+| `network.lan.mdns` | `true` | yes | Announce `_nova._tcp` on the LAN (TXT: only `v=1` and the Hub fingerprint) while the Hub listens beyond loopback |
+| `network.lan.mdnsName` | `null` | yes | The mDNS name, a DNS label (`<name>.local`); `null` uses the host name's first label |
+| `network.lan.includeLoopback` | `false` | yes | Also list loopback addresses as LAN endpoints (useful only on the Hub itself) |
+| `network.lan.includeLinkLocal` | `false` | yes | Also list IPv4 link-local addresses (169.254.x.x) as LAN endpoints |
+| `network.directPublic.url` | `null` | yes | The Hub's public address (a plain http(s) URL, no credentials, query or fragment); required while Direct public is on, advertised last and only while it passes its test |
+| `network.healthCheckSeconds` | `60` | no | How often each endpoint is tested (10 to 3,600 s) |
+| `network.wakeHelpers` | `[]` | yes | Wake Helper device ids to use, in order (at most 50); empty uses any active helper on the target's subnet (FR-138) |
+| `network.setup.allowSystemChanges` | `false` | yes | Let Network Setup run mesh, firewall and package commands on the Hub; off, it detects and plans only (rollback still works) (FR-136) |
+| `trust.mode` | `none` | yes | `none` (plain HTTP unless `NOVA_TLS_CERT`), `local-ca` or `mesh`; turning HTTPS on or off applies at the next start. Onboarding does not set it yet (FR-134) |
+| `trust.meshCerts` | `true` | yes | With the local CA, also serve the mesh certificate to clients that name the mesh host |
+| `trust.pinNativeShells` | `true` | yes | Native shells must match the identity key they pinned at Add Device before they trust the Hub's certificate; the signed identity statement says `pinning: off` otherwise |
+| `relay.enabled` | `false` | yes | Connect out to a Relay; nothing is contacted while it is off (FR-137) |
+| `relay.url` | `''` | yes | The Relay: `wss://` or `https://` (`ws://` or `http://` only to this machine), no credentials, query or fragment; empty for none |
+| `relay.selfHosted` | `true` | yes | The Relay is your own; off with no URL uses the hosted `wss://relay.arialabs.ai` |
+
 ### 1.2 Settings UI
 
 - Grouped left nav; search across all settings; each control has a label, description, and

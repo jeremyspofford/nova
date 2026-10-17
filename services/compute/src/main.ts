@@ -1,18 +1,23 @@
 #!/usr/bin/env node
-// nova-compute: the compute node CLI (FR-126). Usage:
-//   nova-compute enroll --hub <url> --token <nve_...> --backend <url>
+// nova-compute: the compute node CLI (FR-126, FR-132). Usage:
+//   nova-compute enroll --hub <url> (--token <nve_...> | --code <ABCD-EFGH> [--pairing <id>]
+//                       [--pin <fingerprint>]) --backend <url>
 //                       [--backend-kind ollama|llamacpp|openai_compatible] [--name <n>]
 //                       [--listen <host:port>] [--advertise <url>] [--max-jobs <n>]
 //                       [--data-dir <dir>]
 //   nova-compute run [--data-dir <dir>]
+// With --code the node joins through Add Device: it prints the confirmation to compare with the
+// Hub's screen and waits for the owner to approve it there.
 // Secrets (keys, credential, job token) stay in the 0600 state file and are never printed.
 import { parseArgs } from 'node:util';
+import { formatConfirmation, joinWithCode } from './add-device.ts';
 import { BACKEND_KINDS, type BackendKind } from './backend.ts';
 import { ComputeNode, enroll } from './node.ts';
 import { defaultDataDir, statePath } from './state.ts';
 
 const USAGE = `Usage:
-  nova-compute enroll --hub <url> --token <nve_...> --backend <url>
+  nova-compute enroll --hub <url> (--token <nve_...> | --code <ABCD-EFGH> [--pairing <id>]
+                      [--pin <fingerprint>]) --backend <url>
                       [--backend-kind ollama|llamacpp|openai_compatible] [--name <name>]
                       [--listen <host:port>] [--advertise <url>] [--max-jobs <n>]
                       [--data-dir <dir>]
@@ -31,6 +36,9 @@ async function main(argv: string[]): Promise<number> {
       options: {
         hub: { type: 'string' },
         token: { type: 'string' },
+        code: { type: 'string' },
+        pairing: { type: 'string' },
+        pin: { type: 'string' },
         backend: { type: 'string' },
         'backend-kind': { type: 'string' },
         name: { type: 'string' },
@@ -40,7 +48,7 @@ async function main(argv: string[]): Promise<number> {
         'data-dir': { type: 'string' },
       },
     });
-    if (!values.hub || !values.token || !values.backend) {
+    if (!values.hub || !values.backend || (values.token ? values.code : !values.code)) {
       process.stderr.write(USAGE);
       return 2;
     }
@@ -50,9 +58,8 @@ async function main(argv: string[]): Promise<number> {
       return 2;
     }
     const dataDir = values['data-dir'] ?? defaultDataDir();
-    const state = await enroll({
+    const common = {
       hubUrl: values.hub,
-      token: values.token,
       backendUrl: values.backend,
       backendKind: kind as BackendKind,
       dataDir,
@@ -60,7 +67,19 @@ async function main(argv: string[]): Promise<number> {
       ...(values.listen ? { listen: values.listen } : {}),
       ...(values.advertise ? { advertise: values.advertise } : {}),
       ...(values['max-jobs'] ? { maxConcurrentJobs: Number(values['max-jobs']) } : {}),
-    });
+    };
+    const state = values.code
+      ? await joinWithCode({
+          ...common,
+          code: values.code,
+          ...(values.pairing ? { pairingId: values.pairing } : {}),
+          ...(values.pin !== undefined ? { pin: values.pin } : {}),
+          onConfirmation: (c) => {
+            out(`Confirm this code on the Hub: ${formatConfirmation(c)}`);
+            out('Waiting for the owner to approve this node...');
+          },
+        })
+      : await enroll({ ...common, token: values.token! });
     out(`Enrolled "${state.name}" as node ${state.enrollment?.nodeId ?? '?'}.`);
     out(`The Hub will call this node at ${state.endpoint}.`);
     out(`State: ${statePath(dataDir)} (keep it private).`);

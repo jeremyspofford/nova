@@ -16,6 +16,7 @@
     "@nova/contracts": "^0.0.0",
     "@nova/policy": "^0.0.0",
     "@nova/providers": "^0.0.0",
+    "@nova/relay": "^0.0.0",
     "@nova/secrets": "^0.0.0",
     "@nova/security": "^0.0.0",
     "@nova/shared": "^0.0.0",
@@ -23,10 +24,12 @@
     "@nova/telemetry": "^0.0.0",
     "drizzle-orm": "0.45.4",
     "fflate": "0.8.3",
+    "multicast-dns": "7.2.5",
     "playwright-core": "1.64.1",
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@nova/compute": "^0.0.0"
+    "@nova/compute": "^0.0.0",
+    "@types/multicast-dns": "7.2.4"
   }
 }

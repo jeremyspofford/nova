@@ -198,6 +198,12 @@ impl DataDir {
         }
     }
 
+    /// Store a key generated elsewhere (`novad install` keeps it in memory until the Hub approves
+    /// the device, FR-132), mode 0600.
+    pub fn save_seed(&self, seed: &[u8; 32]) -> OpResult<()> {
+        write_atomic(&self.seed_path(), seed, true).map_err(OpError::from)
+    }
+
     pub fn public_key(&self) -> OpResult<String> {
         Ok(b64url_encode(&self.key()?.public_key()))
     }
@@ -236,6 +242,8 @@ mod tests {
         d.ensure().unwrap();
         let k1 = d.public_key().unwrap();
         assert_eq!(d.public_key().unwrap(), k1, "the key is stable");
+        d.save_seed(&[7u8; 32]).unwrap();
+        assert_eq!(d.public_key().unwrap(), b64url_encode(&SigningKey::from_seed(&[7u8; 32]).public_key()));
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(d.seed_path()).unwrap().permissions().mode() & 0o777, 0o600);
         assert!(d.device().unwrap().is_none());

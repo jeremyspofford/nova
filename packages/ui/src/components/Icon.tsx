@@ -135,6 +135,15 @@ const PATHS = {
     </>
   ),
   down: <path d="M6 9l6 6 6-6" />,
+  // M6.5 Network surface: three connected nodes.
+  network: (
+    <>
+      <circle cx="12" cy="5" r="2" />
+      <circle cx="5" cy="18" r="2" />
+      <circle cx="19" cy="18" r="2" />
+      <path d="M11 6.8L6 16.2M13 6.8l5 9.4M7 18h10" />
+    </>
+  ),
   // M4 workspace (FR-005, FR-006, FR-039, FR-041, FR-046).
   'split-right': (
     <>

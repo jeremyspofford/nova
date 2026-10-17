@@ -212,6 +212,13 @@ tests in `docs/16`.
 | FR-139 | P0 | M6.5 | **Network diagnostics** panel with active transports, latency, certificate status, ACL summary, Relay status, per-device reachability, and one-click rollback. |
 | FR-140 | P0 | M6.5 | **Device management** UI: list devices and compute nodes, show capabilities/health/reachability, edit scopes, wake, and revoke. |
 
+*FR-137 note (ADR-094).* The Relay was built in M6.5 with the transports it completes: the sealed
+envelope framing, pairing by QR (a Relay pairing slot opened by Add Device), the self-hostable
+Relay, the Hub's connector, the API tunnel and the client library, and listing and revoking paired
+clients (`docs/22` §3.1). Still M7, where FR-137 stays: real push adapters (APNs and FCM; the
+Relay has a recording mock), the channel relay (`/v1/relay/messages` and `/v1/relay/outbox`
+answer 501), and clients that pair through the Relay (native apps).
+
 ## N. Device agent & firmware
 
 | ID | Pri | Ms | Requirement / Acceptance |

@@ -3,6 +3,9 @@
 import { z } from 'zod';
 import { presetSchema, ROUTING_STEPS, type Preset } from './api.ts';
 import { hostPatternSchema } from './m6/computers.ts';
+import { TRUST_MODES } from './m65/trust.ts';
+import { networkBaseUrlSchema } from './m65/network.ts';
+import { relayUrlSchema } from './m65/relay.ts';
 
 export type SettingSource = 'default' | 'global' | 'project' | 'managed';
 
@@ -725,6 +728,152 @@ export const SETTINGS = {
     schema: z.number().int().min(1).max(60),
     default: 6,
     description: 'How many Wake-on-LAN requests a device may get per hour (FR-144).',
+  }),
+  // ---- M6.5 network setup
+  'network.setup.allowSystemChanges': def({
+    key: 'network.setup.allowSystemChanges',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Let the Network Setup assistant run mesh, firewall and package commands on the Hub; off, it detects and plans only (FR-136).',
+  }),
+  // ---- M6.5 add device
+  'devices.add.enabled': def({
+    key: 'devices.add.enabled',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Allow adding devices with a code or QR; off, new pairings and joins are refused (FR-132).',
+  }),
+  'devices.add.sessionDays': def({
+    key: 'devices.add.sessionDays',
+    schema: z.number().int().min(1).max(365),
+    default: 30,
+    security: true,
+    description:
+      'How long the session of a browser or app added with a code lasts before it must be added again (FR-132).',
+  }),
+  // ---- M6.5 network
+  'network.transports': def({
+    key: 'network.transports',
+    schema: z
+      .object({
+        lan: z.boolean(),
+        mesh: z.boolean(),
+        relay: z.boolean(),
+        directPublic: z.boolean(),
+      })
+      .strict(),
+    default: { lan: true, mesh: true, relay: true, directPublic: false },
+    security: true,
+    description:
+      'Which transports the Hub advertises to its clients, tried in the order LAN, Mesh, Relay, Direct public; only endpoints that pass their reachability test are advertised (FR-135).',
+  }),
+  'network.lan.mdns': def({
+    key: 'network.lan.mdns',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Announce the Hub on the LAN over mDNS as _nova._tcp (only the version and the Hub fingerprint; never a secret) while it listens on a LAN address (FR-135).',
+  }),
+  'network.lan.mdnsName': def({
+    key: 'network.lan.mdnsName',
+    schema: z
+      .string()
+      .regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/, 'a DNS label: a-z, 0-9 and hyphens')
+      .nullable(),
+    default: null as string | null,
+    security: true,
+    description: 'The mDNS name (<name>.local); null uses this computer’s host name.',
+  }),
+  'network.lan.includeLoopback': def({
+    key: 'network.lan.includeLoopback',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description: 'Also list loopback addresses as LAN endpoints (useful only on this computer).',
+  }),
+  'network.lan.includeLinkLocal': def({
+    key: 'network.lan.includeLinkLocal',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description: 'Also list IPv4 link-local addresses (169.254.x.x) as LAN endpoints.',
+  }),
+  'network.directPublic.url': def({
+    key: 'network.directPublic.url',
+    schema: networkBaseUrlSchema.nullable(),
+    default: null as string | null,
+    security: true,
+    description:
+      'The Hub’s public address when it is exposed directly (port forwarding or a public host); advertised last, and only while it passes its reachability test (FR-135).',
+  }),
+  'network.healthCheckSeconds': def({
+    key: 'network.healthCheckSeconds',
+    schema: z.number().int().min(10).max(3_600),
+    default: 60,
+    description: 'How often the Hub tests that each of its endpoints is reachable (FR-135).',
+  }),
+  'network.wakeHelpers': def({
+    key: 'network.wakeHelpers',
+    schema: z.array(z.string().min(1).max(100)).max(50),
+    default: [] as string[],
+    security: true,
+    description:
+      'The Wake Helper devices to use, in order; empty uses any active device with the wake-helper role on the target’s subnet (FR-138).',
+  }),
+  // ---- M6.5 trust
+  'trust.mode': def({
+    key: 'trust.mode',
+    schema: z.enum(TRUST_MODES),
+    default: 'none',
+    security: true,
+    description:
+      'How clients reach the Hub over HTTPS: the Hub local CA, mesh certificates, or none (plain HTTP); turning HTTPS on or off applies at the next start (FR-134).',
+  }),
+  'trust.meshCerts': def({
+    key: 'trust.meshCerts',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'With the local CA, also serve the mesh certificate for the mesh host name when there is one (FR-134).',
+  }),
+  'trust.pinNativeShells': def({
+    key: 'trust.pinNativeShells',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      "Native shells must match the Hub identity key they pinned at Add Device before they trust the Hub's certificate (FR-134).",
+  }),
+  // ---- M6.5 relay
+  'relay.enabled': def({
+    key: 'relay.enabled',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Connect out to a content-blind Relay so paired clients reach the Hub from anywhere; off by default (FR-137).',
+  }),
+  'relay.url': def({
+    key: 'relay.url',
+    schema: relayUrlSchema,
+    default: '',
+    security: true,
+    description:
+      'The Relay to use: wss:// or https:// (ws:// or http:// only on this machine); empty for none (FR-137).',
+  }),
+  'relay.selfHosted': def({
+    key: 'relay.selfHosted',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'The Relay is your own; turn off to use the hosted Relay when no URL is set (FR-137, docs/22 §3).',
   }),
   'privacy.telemetry': def({
     key: 'privacy.telemetry',

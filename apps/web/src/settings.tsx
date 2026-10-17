@@ -1,5 +1,7 @@
 // Client view of Hub settings (docs/14 §1). The Hub owns the values (FR-125); this store mirrors
-// GET /settings, applies writes optimistically, and rolls back if the Hub rejects them.
+// GET /settings, applies writes optimistically, and rolls back if the Hub rejects them. A setting
+// another page or device changes through its own route (the Relay, the network panel) arrives as
+// `settings.changed`, and the store reloads.
 import {
   createContext,
   useCallback,
@@ -13,6 +15,7 @@ import {
 import { SETTINGS, type SettingKey, type SettingValue as SharedValue } from '@nova/shared';
 import type { ThemeChoice } from '@nova/ui';
 import type { Api, ResolvedSetting } from './api.ts';
+import { useHubStream } from './hub-events.ts';
 
 export type OnboardingStep = 'provider' | 'model' | 'profile' | 'tool' | 'sample' | 'done';
 
@@ -54,7 +57,7 @@ export function SettingsProvider({
   initial,
   children,
 }: {
-  api: Pick<Api, 'setSetting'>;
+  api: Pick<Api, 'setSetting' | 'settings'>;
   initial: ResolvedSetting[];
   children: ReactNode;
 }) {
@@ -63,6 +66,29 @@ export function SettingsProvider({
   useEffect(() => {
     latest.current = values;
   });
+  // One reload at a time; a change during a reload asks for one more.
+  const reload = useRef<{ running: boolean; again: boolean }>({ running: false, again: false });
+  const refresh = useCallback(() => {
+    const r = reload.current;
+    if (r.running) {
+      r.again = true;
+      return;
+    }
+    r.running = true;
+    void (async () => {
+      do {
+        r.again = false;
+        try {
+          const { settings } = await api.settings();
+          setValues(toMap(settings));
+        } catch {
+          // The next change or a page reload catches up; the values shown stay the last known.
+        }
+      } while (r.again);
+      r.running = false;
+    })();
+  }, [api]);
+  useHubStream(['settings.changed'], refresh);
 
   const get = useCallback(
     <K extends SettingKey>(key: K): SettingEntry<K> => {
