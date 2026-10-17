@@ -173,6 +173,12 @@ export interface EgressPolicy {
   /** Ids of credentials the proxy injects for allowed hosts (ADR-063); values stay in the vault. */
   credentials: string[];
   allowLocalBinding: boolean;
+  /**
+   * Exact hosts this session may reach on a private or loopback address, with
+   * `allowLocalBinding` (the agent browser's sites the owner allowed by name, when
+   * `browser.allowLocalSites` is on). Others need a dev-server grant.
+   */
+  localHosts?: string[];
 }
 
 export interface EgressSession {

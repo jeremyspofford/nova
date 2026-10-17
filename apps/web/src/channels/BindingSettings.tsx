@@ -89,10 +89,13 @@ export function BindingSettings({
   const [base, setBase] = useState(binding);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  // A newer binding from outside (an event, a connect) resets the form to it.
+  // A list refresh hands a new object for the same binding: keep the user's edits. Only a
+  // binding that really changed (another save, a connect) resets a form with no edits pending.
   if (base !== binding) {
     setBase(binding);
-    setDraft(draftOf(binding));
+    const untouched = Object.keys(settingsPatch(base, draft)).length === 0;
+    if (base.id !== binding.id || (binding.updatedAt !== base.updatedAt && untouched))
+      setDraft(draftOf(binding));
   }
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   const patch = settingsPatch(binding, draft);

@@ -256,7 +256,11 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
             <dt>Target</dt>
             <dd>
               {a.tool ? <code>{a.tool}</code> : null}
-              {a.argsPreview ? <pre className="approval-args">{a.argsPreview}</pre> : null}
+              {a.argsPreview ? (
+                <pre className="approval-args" tabIndex={0} aria-label="Arguments">
+                  {a.argsPreview}
+                </pre>
+              ) : null}
             </dd>
           </div>
         ) : null}

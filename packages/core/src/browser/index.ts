@@ -44,7 +44,7 @@ export {
   type SigninDeskOptions,
   type SigninFill,
 } from './signin.ts';
-export { PlaywrightDriver, type PlaywrightDriverOptions } from './playwright.ts';
+export { PlaywrightDriver, playwrightProxy, type PlaywrightDriverOptions } from './playwright.ts';
 export {
   BrowserService,
   BROWSER_MAX_READ_CHARS,

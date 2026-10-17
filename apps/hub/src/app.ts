@@ -272,7 +272,11 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   // agent's commands on its computer), then the areas whose tools the tools area lists.
   const computers = await setupComputers({ ...ctx, audit: ops.audit });
   egressRef = computers.egress;
-  const channels = await setupChannels(ctx, { audit: ops.audit });
+  const channels = await setupChannels(ctx, {
+    audit: ops.audit,
+    // A Slack-compatible API elsewhere (a test double, a proxy); Slack's own API otherwise.
+    ...(process.env.NOVA_SLACK_API_BASE ? { slackApiBase: process.env.NOVA_SLACK_API_BASE } : {}),
+  });
   const agents = await setupAgents({ ...ctx, audit: ops.audit, notifier: ops.notifier });
   const browser = await setupBrowser(ctx, {
     gate: policy.gate,
@@ -483,7 +487,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       await browser.service.resumeComputer(accountId, computerId).catch(() => undefined);
       const agentId = await agentOfComputer(accountId, computerId);
       if (!agentId || !pausedByScreen.delete(agentId)) return;
-      await agents.service.resume(accountId, agentId);
+      // The user may have resumed it already: nothing to undo then.
+      const agent = await agents.service.get(accountId, agentId);
+      if (agent.status === 'paused') await agents.service.resume(accountId, agentId);
     },
   });
   // Local browser fallback (FR-209): an agent with a connected computer may continue on that

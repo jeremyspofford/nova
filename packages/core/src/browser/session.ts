@@ -80,6 +80,8 @@ export interface BrowserSessionOptions {
     deny: string[];
     /** The Hub's `network.egressMode` (default allowlist). */
     mode?: 'off' | 'allowlist' | 'limited';
+    /** Sites allowed by exact name. */
+    named?: string[];
   }>;
   timers: SessionTimers;
   log: Logger;
@@ -206,6 +208,9 @@ export class BrowserSession {
       deny: [...lists.deny],
       credentials: [],
       allowLocalBinding: local,
+      // With `browser.allowLocalSites`, a site the owner allowed by name may be on the local
+      // network (a test site, a router page); nothing else private is reachable.
+      ...(this.#o.allowLocalBinding && lists.named?.length ? { localHosts: lists.named } : {}),
     };
     const session = await this.#o.egress.open({
       accountId: this.accountId,

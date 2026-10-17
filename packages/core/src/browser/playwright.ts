@@ -456,8 +456,9 @@ export class PlaywrightDriver implements BrowserDriver {
       headless: true,
       args,
       ...(opts.executablePath ? { executablePath: opts.executablePath } : {}),
-      // Playwright also routes loopback through the proxy (it adds `<-loopback>` itself).
-      ...(opts.proxy ? { proxy: { server: opts.proxy.server } } : {}),
+      // Playwright also routes loopback through the proxy (it adds `<-loopback>` itself). The
+      // session's proxy credentials go separately: Chromium ignores them inside the URL.
+      ...(opts.proxy ? { proxy: playwrightProxy(opts.proxy.server) } : {}),
     });
     try {
       const contextOptions: PwContextOptions = {
@@ -524,4 +525,20 @@ export class PlaywrightDriver implements BrowserDriver {
       throw err;
     }
   }
+}
+
+/** Playwright's proxy option for a `http://user:pass@host:port` URL: server and credentials apart. */
+export function playwrightProxy(url: string): {
+  server: string;
+  username?: string;
+  password?: string;
+} {
+  const u = new URL(url);
+  const username = decodeURIComponent(u.username);
+  const password = decodeURIComponent(u.password);
+  return {
+    server: `${u.protocol}//${u.host}`,
+    ...(username ? { username } : {}),
+    ...(password ? { password } : {}),
+  };
 }

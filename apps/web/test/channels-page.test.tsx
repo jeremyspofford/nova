@@ -374,6 +374,20 @@ describe('a channel’s settings', () => {
     expect(api.updateChannel).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps unsaved edits when the channel list refreshes', async () => {
+    const { api } = await renderWithChannels(<ChannelsPage />, {
+      channels: { bindings: [SLACK] },
+    });
+    await userEvent.click(await screen.findByRole('button', { name: 'Settings of Slack #ops' }));
+    const f = within(screen.getByRole('form', { name: 'Slack #ops settings' }));
+    await userEvent.type(f.getByLabelText('Bot user ID'), 'U0BOT');
+    const lists = api.listChannels.mock.calls.length;
+    emitAll('channel.binding.changed', { bindingId: 'other' });
+    await waitFor(() => expect(api.listChannels.mock.calls.length).toBeGreaterThan(lists));
+    expect(f.getByLabelText<HTMLInputElement>('Bot user ID').value).toBe('U0BOT');
+    expect(f.getByRole<HTMLButtonElement>('button', { name: 'Save changes' }).disabled).toBe(false);
+  });
+
   it('replaces a credential without ever showing it, and shows not-set ones', async () => {
     const { api, state } = await renderWithChannels(<ChannelsPage />, {
       channels: {

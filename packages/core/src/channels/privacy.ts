@@ -1,9 +1,9 @@
 // Private to shared (FR-088, docs/13 §4, ADR-070, docs/06 invariant 18): before a reply goes to a
 // shared channel, find private content it carries. The agents area replaces this with exact
 // provenance (`memory.originOf`); until then the default compares the reply with private sources
-// by word sequences: private-origin memory items and agent notes, the threads of the agent's
-// private bindings and in-app channel, and the owner's recent chats (past-chat recall can bring
-// those into a turn).
+// by word sequences: private-origin memory items and agent notes, and what people said in the
+// threads of the agent's private bindings and in-app channel and in the owner's recent chats
+// (past-chat recall can bring those into a turn).
 // Text the shared thread itself already holds is not private (someone in the channel said it).
 // A match does not block by itself: the channel's policy decides (default ask the owner).
 import type { NovaDatabase } from '@nova/storage';
@@ -68,8 +68,9 @@ export function overlapPrivacyCheck(db: NovaDatabase): PrivateOriginCheck {
   return (input) => {
     const reply = fingerprints(input.text);
     if (!reply.size) return Promise.resolve([]);
-    // What the shared thread already holds is public to its channel.
-    for (const t of threadTexts(db, input.threadId))
+    // What the shared thread already holds is public to its channel, except the reply's own turn
+    // (stored before the check runs: counting it would make every reply look public).
+    for (const t of threadTexts(db, input.threadId, { exceptTurn: input.turnId }))
       for (const f of fingerprints(t)) reply.delete(f);
     if (!reply.size) return Promise.resolve([]);
     const hits: PrivateSource[] = [];
@@ -96,14 +97,24 @@ function dedupe(list: PrivateSource[]): PrivateSource[] {
   });
 }
 
-function threadTexts(db: NovaDatabase, threadId: string): string[] {
+function threadTexts(
+  db: NovaDatabase,
+  threadId: string,
+  opts: { exceptTurn?: string | null; role?: 'user' } = {},
+): string[] {
+  const exceptTurn = opts.exceptTurn ?? null;
+  const role = opts.role ?? null;
   const rows = db.raw
     .prepare(
       `SELECT p.content FROM message_part p JOIN message m ON m.id = p.message_id
        WHERE m.thread_id = ? AND m.deleted_at IS NULL AND p.type = 'text' AND p.content IS NOT NULL
+         AND (? IS NULL OR m.turn_id IS NULL OR m.turn_id <> ?)
+         AND (? IS NULL OR m.role = ?)
        ORDER BY m.created_at DESC LIMIT ?`,
     )
-    .all(threadId, MAX_PARTS_PER_THREAD) as { content: string }[];
+    .all(threadId, exceptTurn, exceptTurn, role, role, MAX_PARTS_PER_THREAD) as {
+    content: string;
+  }[];
   return rows.map((r) => r.content);
 }
 
@@ -148,5 +159,8 @@ function* privateSources(db: NovaDatabase, input: PrivateOriginInput): Generator
     )
     .all(input.accountId, input.threadId, MAX_THREADS) as { id: string }[];
   const ids = [...new Set([...bound, ...recent].map((r) => r.id))];
-  for (const id of ids) for (const text of threadTexts(db, id)) yield { kind: 'thread', id, text };
+  // What people said in those threads; the agent's own wording there restates it (and its stock
+  // phrases, the same in every thread, would look private everywhere).
+  for (const id of ids)
+    for (const text of threadTexts(db, id, { role: 'user' })) yield { kind: 'thread', id, text };
 }

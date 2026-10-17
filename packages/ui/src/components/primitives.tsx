@@ -96,7 +96,8 @@ export interface KbdProps {
 
 export function Kbd({ keys }: KbdProps) {
   return (
-    <span className="nv-kbds" aria-label={keys.join(' plus ')}>
+    // A named image: an aria-label on a plain span is not announced (axe aria-prohibited-attr).
+    <span className="nv-kbds" role="img" aria-label={keys.join(' plus ')}>
       {keys.map((k, i) => (
         <span key={`${k}-${i}`}>
           {i > 0 ? <span aria-hidden="true">+</span> : null}

@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { EgressPolicy, EgressProxy } from '../src/index.ts';
-import { browserToolSource } from '../src/browser/index.ts';
+import { browserToolSource, playwrightProxy } from '../src/browser/index.ts';
 import { caSpki } from '../src/browser/session.ts';
 import { ACCOUNT, THREAD, makeBrowserEnv, type BrowserEnv } from './browser-env.ts';
 import { PNG } from './browser-fake.ts';
@@ -491,5 +491,16 @@ describe('the Playwright driver without a browser', () => {
     expect(p.detail).toContain('libnspr4.so');
     // Cached per executable.
     expect(await broken.probe(null)).toBe(p);
+  });
+});
+
+describe('the Playwright proxy option', () => {
+  it('passes the session credentials apart from the server (Chromium ignores them in the URL)', () => {
+    expect(playwrightProxy('http://nova:t%2Fk3n@127.0.0.1:9001')).toEqual({
+      server: 'http://127.0.0.1:9001',
+      username: 'nova',
+      password: 't/k3n',
+    });
+    expect(playwrightProxy('http://127.0.0.1:9001')).toEqual({ server: 'http://127.0.0.1:9001' });
   });
 });

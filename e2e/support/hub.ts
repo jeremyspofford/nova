@@ -14,19 +14,31 @@ export interface RunningHub {
   stop(): Promise<void>;
 }
 
-export async function startHub(opts: { port: number; dataDir?: string }): Promise<RunningHub> {
+export async function startHub(opts: {
+  port: number;
+  dataDir?: string;
+  /** Node options before the entry point (for example `--import` of a test preload). */
+  nodeArgs?: string[];
+  /** Extra environment for the Hub process. */
+  env?: Record<string, string>;
+}): Promise<RunningHub> {
   const dataDir = opts.dataDir ?? mkdtempSync(join(tmpdir(), 'nova-e2e-'));
   const t0 = Date.now();
-  const child: ChildProcess = spawn(process.execPath, ['apps/hub/src/main.ts'], {
-    env: {
-      ...process.env,
-      NOVA_DATA_DIR: dataDir,
-      NOVA_PORT: String(opts.port),
-      NOVA_PORT_FALLBACKS: '0',
-      NOVA_LOG_LEVEL: 'warn',
+  const child: ChildProcess = spawn(
+    process.execPath,
+    [...(opts.nodeArgs ?? []), 'apps/hub/src/main.ts'],
+    {
+      env: {
+        ...process.env,
+        NOVA_DATA_DIR: dataDir,
+        NOVA_PORT: String(opts.port),
+        NOVA_PORT_FALLBACKS: '0',
+        NOVA_LOG_LEVEL: 'warn',
+        ...opts.env,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  );
   let out = '';
   child.stdout?.on('data', (d: Buffer) => (out += d.toString()));
   child.stderr?.on('data', (d: Buffer) => process.stderr.write(d));

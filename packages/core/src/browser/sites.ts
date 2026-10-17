@@ -278,9 +278,13 @@ export class BrowserSites {
   }
 
   /** The patterns the egress proxy lets the browser reach, and the ones it never does. */
-  async networkLists(
-    accountId: string,
-  ): Promise<{ allow: string[]; deny: string[]; mode: 'off' | 'allowlist' | 'limited' }> {
+  async networkLists(accountId: string): Promise<{
+    allow: string[];
+    deny: string[];
+    mode: 'off' | 'allowlist' | 'limited';
+    /** Sites the owner allowed by exact name (local addresses under browser.allowLocalSites). */
+    named: string[];
+  }> {
     const [egressAllow, egressDeny, egressMode] = await Promise.all([
       this.#setting('network.egressAllow'),
       this.#setting('network.egressDeny'),
@@ -291,6 +295,9 @@ export class BrowserSites {
       // The Hub's network mode bounds the browser like every sandbox (FR-193): off is no
       // network, limited is reads only; allowlist leaves the sites and lists to decide.
       mode: egressMode,
+      named: rows
+        .filter((r) => r.access === 'allow' && !r.pattern.includes('*'))
+        .map((r) => r.pattern),
       allow: [...rows.filter((r) => r.access === 'allow').map((r) => r.pattern), ...egressAllow],
       deny: [...rows.filter((r) => r.access === 'block').map((r) => r.pattern), ...egressDeny],
     };

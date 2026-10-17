@@ -109,13 +109,20 @@ export function ToolCard({ call, status, approval }: ToolCardProps) {
           {call.argsPreview ? (
             <>
               <p className="tool-card-label">Arguments</p>
-              <pre className="tool-card-pre">{call.argsPreview}</pre>
+              <pre className="tool-card-pre" tabIndex={0} aria-label="Arguments">
+                {call.argsPreview}
+              </pre>
             </>
           ) : null}
           {call.progress && !isTerminal(shown) ? (
             <>
               <p className="tool-card-label">Output so far</p>
-              <pre className="tool-card-pre" data-untrusted="true">
+              <pre
+                className="tool-card-pre"
+                data-untrusted="true"
+                tabIndex={0}
+                aria-label="Output so far"
+              >
                 {call.progress}
               </pre>
             </>
@@ -123,7 +130,7 @@ export function ToolCard({ call, status, approval }: ToolCardProps) {
           {problem ? (
             <>
               <p className="tool-card-label">Error</p>
-              <pre className="tool-card-pre" data-untrusted="true">
+              <pre className="tool-card-pre" data-untrusted="true" tabIndex={0} aria-label="Error">
                 {problem}
               </pre>
             </>
@@ -132,7 +139,7 @@ export function ToolCard({ call, status, approval }: ToolCardProps) {
               <p className="tool-card-label">
                 Result <span className="muted">(output from the tool, shown as plain text)</span>
               </p>
-              <pre className="tool-card-pre" data-untrusted="true">
+              <pre className="tool-card-pre" data-untrusted="true" tabIndex={0} aria-label="Result">
                 {call.resultPreview}
               </pre>
             </>

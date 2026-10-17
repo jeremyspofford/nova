@@ -145,6 +145,24 @@ describe('M6 through the wired Hub', () => {
     expect(outside).toBe('denied');
   }, 30_000);
 
+  it('works in the folder of a mock cloud computer too (FR-080)', async () => {
+    expect(
+      (await api('PATCH', '/api/v1/settings', { key: 'computers.agentComputer', value: 'cloud' }))
+        .status,
+    ).toBe(200);
+    const agent = await newAgent('Cloudy');
+    await agentComputer(agent.id);
+    await api('POST', `/api/v1/threads/${agent.primaryThreadId}/messages`, {
+      text: '/tool fs.list {}',
+    });
+    const card = await until(async () => {
+      const t = JSON.stringify((await api('GET', `/api/v1/threads/${agent.primaryThreadId}`)).json);
+      const m = /"tool":"fs\.list"[^}]*"status":"(\w+)"/.exec(t);
+      return m && m[1] !== 'running' && m[1] !== 'pending' ? m[1] : null;
+    });
+    expect(card).toBe('ok');
+  }, 30_000);
+
   it("makes the agent's computer, and the kill key pauses the agent until control returns (FR-207)", async () => {
     const agent = await newAgent();
     const computerId = await agentComputer(agent.id);

@@ -204,7 +204,8 @@ export async function setupPolicy(
     setting: ctx.setting,
     dataDir: ctx.dataDir,
     // Agents' computers are folders in the data directory (FR-080): their threads' only root.
-    dataDirAllow: [join(ctx.dataDir, 'computers')],
+    // Local computers live in `computers/`, the mock cloud's in `cloud-mock/`.
+    dataDirAllow: [join(ctx.dataDir, 'computers'), join(ctx.dataDir, 'cloud-mock')],
     log,
     projectFolders: projectFolderSource(ctx.db),
     ...(opts.home ? { home: opts.home } : {}),

@@ -56,14 +56,15 @@ export function insertMessage(
   threadId: string,
   role: string,
   text: string,
+  turnId: string | null = null,
 ): void {
   const id = uuidv7();
   const now = new Date().toISOString();
   db.raw
     .prepare(
-      'INSERT INTO message (id, thread_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO message (id, thread_id, turn_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
     )
-    .run(id, threadId, role, now, now);
+    .run(id, threadId, turnId, role, now, now);
   db.raw
     .prepare(
       "INSERT INTO message_part (id, message_id, idx, type, content, created_at) VALUES (?, ?, 0, 'text', ?, ?)",

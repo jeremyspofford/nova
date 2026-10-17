@@ -508,7 +508,9 @@ export class EgressProxyService implements EgressProxy {
     const classes = addresses.map((a) => this.#classify(a));
     // Any non-public answer blocks the name (a rebinding answer cannot sneak through).
     const bad = classes.find((c) => c !== 'public');
-    if (bad && !addressAllowed(s.policy, bad, devServer)) return { address: null, cls: bad };
+    const named = (s.policy.localHosts ?? []).includes(h);
+    if (bad && !addressAllowed(s.policy, bad, devServer || named))
+      return { address: null, cls: bad };
     return { address: addresses[0] ?? null, cls: classes[0] ?? 'reserved' };
   }
 

@@ -17,6 +17,7 @@ import {
   channelDelivery,
   channelToolSource,
   channelTools,
+  overlapPrivacyCheck,
   type ApprovalRequests,
   type GateOutcome,
   type ToolContext,
@@ -506,6 +507,49 @@ describe('private to shared (docs/13 §4)', () => {
     const check = env.audit.filter((a) => a.action === 'channel.share.check');
     expect(check).toHaveLength(1);
     expect(String((check[0]!.detail as { sources: string[] }).sources[0])).toMatch(/^memory:/);
+  });
+
+  it("never counts the reply's own turn as already said in the shared thread", async () => {
+    const c = await setup();
+    const sharedThread = (await env.service.get(ACCOUNT, c.id)).threadId;
+    const check = overlapPrivacyCheck(env.db);
+    const dmThread = env.db.raw
+      .prepare("SELECT thread_id AS t FROM channel_binding WHERE external_ref = 'D1'")
+      .get() as { t: string };
+    expect(dmThread.t).toBeTruthy();
+    // The reply is stored in the shared thread before the check runs (the turn's own message).
+    const shared =
+      sharedThread ??
+      ((await say(c.id, { channel: 'C1', user: 'U2', text: '<@UBOT> hi' })).threadId as string);
+    env.db.raw.exec('PRAGMA foreign_keys = OFF');
+    insertMessage(env.db, shared, 'assistant', 'The locker code is 4417.', 'turn-reply');
+    env.db.raw.exec('PRAGMA foreign_keys = ON');
+    const input = {
+      accountId: ACCOUNT,
+      agentId: 'agent-1',
+      threadId: shared,
+      text: 'The locker code is 4417.',
+    };
+    expect(await check({ ...input, turnId: 'turn-reply' })).toEqual([
+      expect.objectContaining({ kind: 'thread' }),
+    ]);
+  });
+
+  it("counts what people said in a private thread, not the agent's stock wording there", async () => {
+    const c = await setup();
+    const dmThread = (
+      env.db.raw
+        .prepare("SELECT thread_id AS t FROM channel_binding WHERE external_ref = 'D1'")
+        .get() as { t: string }
+    ).t;
+    insertMessage(env.db, dmThread, 'assistant', 'Tool agent.note returned: Note saved');
+    const shared = (await say(c.id, { channel: 'C1', user: 'U2', text: '<@UBOT> hi' }))
+      .threadId as string;
+    const check = overlapPrivacyCheck(env.db);
+    const base = { accountId: ACCOUNT, agentId: 'agent-1', threadId: shared, turnId: null };
+    expect(await check({ ...base, text: 'Tool agent.note returned: Note saved' })).toEqual([]);
+    // What the owner said in the DM still counts.
+    expect(await check({ ...base, text: 'Your locker code is 4417.' })).not.toEqual([]);
   });
 
   it("checks the agent's notes from private threads too (FR-089)", async () => {

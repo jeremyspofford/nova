@@ -131,6 +131,14 @@ export function validateEgressPolicy(policy: EgressPolicy): EgressPolicy {
     deny: [...new Set(policy.deny.map(normalizeHost))],
     credentials: [...new Set(policy.credentials)],
     allowLocalBinding: policy.allowLocalBinding,
+    // Exact names only: a wildcard never opens private addresses.
+    ...(policy.localHosts?.length
+      ? {
+          localHosts: [
+            ...new Set(policy.localHosts.filter((h) => !h.includes('*')).map(normalizeHost)),
+          ],
+        }
+      : {}),
   };
 }
 

@@ -363,6 +363,31 @@ describe('egress proxy: private addresses and redirects', () => {
     expect((await viaProxy(local, `http://dev.test:${devPort}/`)).status).toBe(403);
   });
 
+  it('reaches a named local site with local binding: exact names only (browser.allowLocalSites)', async () => {
+    setup();
+    const named = await open({
+      allow: ['dev.test'],
+      allowLocalBinding: true,
+      localHosts: ['dev.test'],
+    });
+    expect((await viaProxy(named, `http://dev.test:${devPort}/`)).status).toBe(200);
+    // Without local binding, or by a wildcard, or with no name: still blocked.
+    const off = await open({
+      allow: ['dev.test'],
+      allowLocalBinding: false,
+      localHosts: ['dev.test'],
+    });
+    expect((await viaProxy(off, `http://dev.test:${devPort}/`)).status).toBe(403);
+    const wild = await open({
+      allow: ['dev.test'],
+      allowLocalBinding: true,
+      localHosts: ['*.test'],
+    });
+    expect((await viaProxy(wild, `http://dev.test:${devPort}/`)).status).toBe(403);
+    const none = await open({ allow: ['dev.test'], allowLocalBinding: true });
+    expect((await viaProxy(none, `http://dev.test:${devPort}/`)).status).toBe(403);
+  });
+
   it('never follows a redirect: the next hop is checked as a new request', async () => {
     setup();
     const s = await open();

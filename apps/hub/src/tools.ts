@@ -173,7 +173,7 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
   // workspace and agents' computer folders inside it (docs/12 §7.2, FR-080).
   const paths: PathPolicy = {
     denied: [ctx.dataDir],
-    allowed: [workspace, join(ctx.dataDir, 'computers')],
+    allowed: [workspace, join(ctx.dataDir, 'computers'), join(ctx.dataDir, 'cloud-mock')],
   };
   // The loop and the context tools share what each running turn's context holds (FR-183).
   const turnContext = new TurnContextTracker();
