@@ -1724,6 +1724,8 @@ export const createRunSchema = z
     expectedOutput: expectedOutputSchema.optional(),
     model: z.string().max(200).optional(),
     attachmentIds: z.array(idSchema).max(20).optional(),
+    /** A run template: `deep_research` plans sub-questions and writes a cited report (FR-220). */
+    template: z.enum(['deep_research']).optional(),
   })
   .strict();
 export type CreateRunRequest = z.infer<typeof createRunSchema>;
