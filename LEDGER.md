@@ -77,24 +77,24 @@ Last updated: 2026-10-17T12:00:00Z
 | T-M2-09 | M2 | FR-007 | done | 01c0e89 | web deeplinks tests (`web+nova` handler in the manifest) | Deep links |
 | T-M2-11 | M2 | FR-221 | done | 01c0e89 | core presets tests; web models-settings tests; J2 step 3 | Model presets (Faster ↔ Smarter) over virtual models |
 | T-M2-10 | M2 | — | done | 01c0e89 | `e2e/j2-providers-memory.spec.ts`, 3/3 with J1 in parallel | E2E J2 |
-| T-M3-01 | M3 | — | done | (M3 commit) | core tools tests (fs, patch, exec, web, registry); hub tools.test | Tool registry + built-in read/write/search/exec |
-| T-M3-02 | M3 | FR-042, FR-043 | done | (M3 commit) | `packages/mcp` 47 tests (stdio + streamable HTTP fixture); hub mcp.test; J3 step 1 | MCP client (stdio/http) + health/restart |
-| T-M3-03 | M3 | FR-099 | done | (M3 commit) | `packages/policy` 79 tests, 97.8 % branches | Policy engine complete (allow/ask/handoff/deny) + reasons |
-| T-M3-04 | M3 | FR-100 | done | (M3 commit) | core gate.test; hub policy.test; web chat-approvals.test; J3 step 3 | Approval UX (allow once/always/deny/handoff) + grants |
-| T-M3-05 | M3 | FR-101 | done | (M3 commit) | secrets keychain.test (fake CLIs); `scripts/secret-scan.mjs` in CI | Secrets (keychain) + redaction + secret-scan CI |
-| T-M3-06 | M3 | FR-048 | done | (M3 commit) | hub policy.test (tool-defaults, evaluate); web tools-settings.test | Per-tool defaults + effective policy preview |
-| T-M3-07 | M3 | — | done | (M3 commit) | core loop.test (23); web chat-tools.test; J3 | Agent tool loop + tool cards |
-| T-M3-08 | M3 | FR-029, FR-022, FR-038 | done | (M3 commit) | core tools-web/artifacts/mentions tests; web chat-artifacts/chat-mentions tests | Web search with citations; `@`-mentions; artifacts pane |
-| T-M3-09 | M3 | FR-104 | done | (M3 commit) | core audit.test (hash chain, tamper); J3 step 5 (verify) | Audit hash chain + Activity trace |
-| T-M3-10 | M3 | FR-013 | done | (M3 commit) | core notifications.test; web notifications.test | Notifications center |
-| T-M3-11 | M3 | FR-149 | done | (M3 commit) | blob sealing + TLS (hub ops.test); full-DB encryption deferred (ADR-090) | Hub trusted + external E2E baseline; optional sealed mode |
-| T-M3-13 | M3 | FR-189 | done | (M3 commit) | policy engine tier/provenance tests; J3 step 4 | Confirmation tiers + intent provenance in the policy engine |
-| T-M3-14 | M3 | FR-190 | done | (M3 commit) | policy paths/profiles tests; core tools-fs.test | Permission profiles + protected paths |
-| T-M3-15 | M3 | FR-191 | done | (M3 commit) | policy command tests; J3 step 3c | Command prefix rules with load-time examples |
-| T-M3-16 | M3 | FR-192 | done | (M3 commit) | hub listeners.test (every route, WS handshake 401); per-client MCP tokens with Nova's MCP server in M4 | Listener tokens, Origin checks, per-client MCP tokens |
-| T-M3-17 | M3 | FR-196 | done | (M3 commit) | core registry/search tests; J3 step 1 | Deferred tools + `tool.search` |
-| T-M3-18 | M3 | FR-204, FR-205 | done | (M3 commit) | core consolidation.test (28), history.test (7); hub consolidation.test | Memory consolidation, project-only scope, history-reference toggle |
-| T-M3-12 | M3 | — | done | (M3 commit) | `e2e/j3-tools-approvals.spec.ts`, 3/3 with J1 and J2 in parallel | E2E J3 |
+| T-M3-01 | M3 | — | done | aef94eb | core tools tests (fs, patch, exec, web, registry); hub tools.test | Tool registry + built-in read/write/search/exec |
+| T-M3-02 | M3 | FR-042, FR-043 | done | aef94eb | `packages/mcp` 47 tests (stdio + streamable HTTP fixture); hub mcp.test; J3 step 1 | MCP client (stdio/http) + health/restart |
+| T-M3-03 | M3 | FR-099 | done | aef94eb | `packages/policy` 79 tests, 97.8 % branches | Policy engine complete (allow/ask/handoff/deny) + reasons |
+| T-M3-04 | M3 | FR-100 | done | aef94eb | core gate.test; hub policy.test; web chat-approvals.test; J3 step 3 | Approval UX (allow once/always/deny/handoff) + grants |
+| T-M3-05 | M3 | FR-101 | done | aef94eb | secrets keychain.test (fake CLIs); `scripts/secret-scan.mjs` in CI | Secrets (keychain) + redaction + secret-scan CI |
+| T-M3-06 | M3 | FR-048 | done | aef94eb | hub policy.test (tool-defaults, evaluate); web tools-settings.test | Per-tool defaults + effective policy preview |
+| T-M3-07 | M3 | — | done | aef94eb | core loop.test (23); web chat-tools.test; J3 | Agent tool loop + tool cards |
+| T-M3-08 | M3 | FR-029, FR-022, FR-038 | done | aef94eb | core tools-web/artifacts/mentions tests; web chat-artifacts/chat-mentions tests | Web search with citations; `@`-mentions; artifacts pane |
+| T-M3-09 | M3 | FR-104 | done | aef94eb | core audit.test (hash chain, tamper); J3 step 5 (verify) | Audit hash chain + Activity trace |
+| T-M3-10 | M3 | FR-013 | done | aef94eb | core notifications.test; web notifications.test | Notifications center |
+| T-M3-11 | M3 | FR-149 | done | aef94eb | blob sealing + TLS (hub ops.test); full-DB encryption deferred (ADR-090) | Hub trusted + external E2E baseline; optional sealed mode |
+| T-M3-13 | M3 | FR-189 | done | aef94eb | policy engine tier/provenance tests; J3 step 4 | Confirmation tiers + intent provenance in the policy engine |
+| T-M3-14 | M3 | FR-190 | done | aef94eb | policy paths/profiles tests; core tools-fs.test | Permission profiles + protected paths |
+| T-M3-15 | M3 | FR-191 | done | aef94eb | policy command tests; J3 step 3c | Command prefix rules with load-time examples |
+| T-M3-16 | M3 | FR-192 | done | aef94eb | hub listeners.test (every route, WS handshake 401); per-client MCP tokens with Nova's MCP server in M4 | Listener tokens, Origin checks, per-client MCP tokens |
+| T-M3-17 | M3 | FR-196 | done | aef94eb | core registry/search tests; J3 step 1 | Deferred tools + `tool.search` |
+| T-M3-18 | M3 | FR-204, FR-205 | done | aef94eb | core consolidation.test (28), history.test (7); hub consolidation.test | Memory consolidation, project-only scope, history-reference toggle |
+| T-M3-12 | M3 | — | done | aef94eb | `e2e/j3-tools-approvals.spec.ts`, 3/3 with J1 and J2 in parallel | E2E J3 |
 | T-M4-01 | M4 | FR-045 | todo | — | — | Plugin manifest + loader sandbox + local install |
 | T-M4-02 | M4 | FR-046 | todo | — | — | Skills + slash invocation + auto-selection |
 | T-M4-03 | M4 | FR-047 | todo | — | — | Connector framework (OAuth/PKCE, keychain) |
@@ -281,7 +281,7 @@ Last updated: 2026-10-17T12:00:00Z
   extracted from chats and kept out of temporary chats; ranked search and find in chat; deep
   links. Evidence: about 950 unit and integration tests across 13 packages, J1 and J2 green three times in parallel.
   Risks added: R-009..R-011. Next: M3 (tools, MCP, policy and approvals).
-- **M3** (M3 commit): the policy engine (built-in safety, confirmation tiers, intent provenance,
+- **M3** (aef94eb): the policy engine (built-in safety, confirmation tiers, intent provenance,
   permission profiles and protected paths, command prefix rules with examples, per-tool and
   per-server defaults) and approvals with every decision, grants and previews; the tool runtime
   and agent loop (file, exec in a container sandbox or failing closed, web search and fetch,
