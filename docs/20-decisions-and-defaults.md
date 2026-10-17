@@ -54,6 +54,13 @@ silently.
 | ADR-043 | Out-of-band mgmt | IPMI/Redfish/AMT **off by default**, admin-only |
 | ADR-044 | Encryption | Hub trusted; **E2E for everything leaving the Hub**; optional sealed mode |
 | ADR-045 | Minimum Hub hardware | Intel N100/N150-class, 8–16 GB |
+| ADR-046 | Ambient capture | Off by default; local-first; exclusions + redaction + pause |
+| ADR-047 | Automations | Run on the Hub; physical actions require approval |
+| ADR-048 | Smart home | Integrate (Home Assistant primary); do not ship radios |
+| ADR-049 | Community catalog | Signed, permission-enforced, self-hostable |
+| ADR-050 | Learning levels | L0–L5; **guardrails are immutable** |
+| ADR-051 | Self-modification | Sandboxed, tested, staged, approved, reversible |
+| ADR-052 | Eval harness | Mandatory gate for any learning/self-improvement change |
 
 ## Details & rationale
 
@@ -124,6 +131,34 @@ weaken security; they require an explicit toggle, per-change approval, snapshots
 **ADR-044 — Hub trusted, edges E2E.** The Hub must read content to index, search, and run
 proactive agents. Everything that leaves the Hub is end-to-end encrypted. Optional sealed
 mode keeps keys in the secure enclave and pauses proactive work while locked.
+
+### Capability tracks (added)
+
+**ADR-046 — Ambient capture off by default.** Screen/audio capture is sensitive; it requires
+an explicit opt-in, shows a persistent indicator, ships with a sensitive-app exclusion list,
+and keeps OCR/STT local by default.
+
+**ADR-047 — Automations on the Hub, physical actions gated.** The always-on Hub is the right
+place for triggers and schedules. Anything that affects the physical world requires approval
+or an explicit scoped standing rule.
+
+**ADR-048 — Integrate smart home, don't rebuild it.** Home Assistant is the primary integration
+(covers Zigbee/Z-Wave/Thread/Matter); MQTT and vendor connectors extend it. This avoids
+shipping radios and a second device database.
+
+**ADR-049 — Community catalog is signed and permission-enforced.** Same model as plugins:
+declared permissions are enforced at runtime, signatures are verified, updates show a
+permission diff, and the catalog can be self-hosted or offline.
+
+**ADR-050 — Learning levels with immutable guardrails.** L0–L3 are transparent and reversible;
+L4/L5 require explicit approval. The agent may **never** modify policy, permissions, safety,
+audit, signing, or the self-improvement gates.
+
+**ADR-051 — Self-modification is gated.** Isolated worktree, tests + security + safety eval,
+diff/evidence approval, staged deploy, health check, automatic rollback.
+
+**ADR-052 — Evaluation is mandatory.** No learning or self-improvement change ships without
+passing the regression suite; regressions auto-revert and notify.
 
 ## Defaults for common ambiguities
 

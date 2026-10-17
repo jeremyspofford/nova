@@ -348,3 +348,66 @@ parallel when they touch different packages.
 | M7 | FR-128, FR-129, FR-137 |
 | M7.5 | FR-143, FR-146, FR-147 |
 | post-v1 | FR-130 |
+| N1 (Ambient Memory) | FR-151, FR-152, FR-153, FR-154, FR-155, FR-156 |
+| N2 (Automations & Smart Home) | FR-157, FR-158, FR-159, FR-160, FR-161, FR-162, FR-163, FR-164 |
+| N3 (Extensions & Community) | FR-165, FR-166, FR-167, FR-168 |
+| N4 (Learning & Self-Improvement) | FR-169, FR-170, FR-171, FR-172, FR-173, FR-174, FR-175 |
+
+---
+
+## Post-core capability tracks (N1–N4)
+
+These tracks are in scope but scheduled after the core Hub/agent/coding platform is stable.
+They may run in parallel once their dependencies are met. Each track gets its own milestone
+gate and acceptance demo.
+
+### N1 — Ambient Memory (`docs/24`)
+
+**Depends on:** M6 (novad, computer use), M3 (policy). **Pending:** reconcile with the external
+Screenpipe findings document before implementation.
+
+**Deliverables:** opt-in screen/mic/system-audio capture; OCR + transcription pipeline;
+searchable timeline; privacy controls (exclusions, redaction, retention, pause); scoped agent
+and MCP access; resource governor.
+
+**Exit criteria:** capture off by default; enabling shows a persistent indicator; a query
+returns matches from screen and audio; exclusions and “forget last N minutes” work; a capture
+containing an injection payload never triggers an action.
+
+### N2 — Automations & Smart Home (`docs/25`)
+
+**Depends on:** M5 (agent runtime), M6.5 (networking), M3 (policy).
+
+**Deliverables:** versioned trigger→condition→action engine; time/event/device/ambient/
+location/manual triggers; smart-home/agent/tool/messaging/script/webhook actions; dry-run,
+logs, rollback; Home Assistant + MQTT + one vendor connector; normalized entity model;
+agent↔automation interop; managed-policy controls.
+
+**Exit criteria:** a scheduled automation runs an agent and controls a (mock) smart-home
+entity; a physical-world action requires approval; a dry-run produces no side effects; a
+failed action rolls back where compensation exists.
+
+### N3 — Extensions & Community (`docs/26`)
+
+**Depends on:** M8 (extension SDK, marketplace). Expands M8 rather than replacing it.
+
+**Deliverables:** unified catalog for all extension types; MCP registry import; signed publish
+with permission diffs; governance (review, scanning, report/takedown, managed allow/deny, kill
+switch).
+
+**Exit criteria:** install a signed community MCP server and plugin; an added permission on
+update forces re-confirmation; an unsigned/sideloaded entry warns; the fleet kill switch
+disables an extension.
+
+### N4 — Learning & Self-Improvement (`docs/27`)
+
+**Depends on:** M9 (hardening, eval harness), M5/M6 (agent runtime), M3 (policy). Runs last.
+
+**Deliverables:** L0 memory learning; L1 skill synthesis; L2 evaluated optimization; L3
+bounded self-tuning; L4 gated/tested/staged/approved code self-modification; L5 optional local
+fine-tuning; evaluation harness with regression gates; transparency view and kill switch.
+
+**Exit criteria:** memory learning is reviewable/reversible; a proposed skill requires
+approval; an optimization is backed by eval evidence and can be rolled back; an attempt to
+modify the policy engine is denied and logged high-severity; the kill switch halts all
+self-improvement activity.

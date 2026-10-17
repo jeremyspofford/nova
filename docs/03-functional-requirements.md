@@ -227,6 +227,51 @@ tests in `docs/16`.
 | FR-149 | P0 | M3 | **Hub trusted, external paths E2E**: data encrypted at rest on the Hub, TLS in transit, and end-to-end encryption for everything leaving the Hub (Relay, cloud, device sync). Optional sealed mode keeps keys in the OS secure enclave. |
 | FR-150 | P1 | M6 | **Per-device policy overrides** for routing eligibility, allowed modules, resource caps, and quiet hours. |
 
+## O. Ambient Memory (screen & audio) — track N1
+
+| ID | Pri | Ms | Requirement / Acceptance |
+| --- | --- | --- | --- |
+| FR-151 | P1 | N1 | **Ambient capture** of screen, microphone, and system audio; independent per-source toggles; **off by default**; global pause and a visible capture indicator. |
+| FR-152 | P1 | N1 | **OCR + transcription** pipeline with local-first adapters (platform OCR / Tesseract / PaddleOCR; local Whisper-family STT) and per-OS permission handling. |
+| FR-153 | P1 | N1 | **Searchable timeline**: day view with thumbnails/waveform, full-text and semantic search, filters by app/source/person/time. |
+| FR-154 | P1 | N1 | **Privacy controls**: default sensitive-app/site exclusions, on-device redaction, retention windows, "forget last N minutes", and hard delete. |
+| FR-155 | P1 | N1 | **Agent/MCP access** to ambient memory via scoped tools; captures are treated as untrusted input and cannot trigger consequential actions directly. |
+| FR-156 | P1 | N1 | **Resource governor**: CPU/GPU/battery caps, pause on low battery or full-screen media, graceful gaps when frames are dropped. |
+
+## P. Automations & Smart Home — track N2
+
+| ID | Pri | Ms | Requirement / Acceptance |
+| --- | --- | --- | --- |
+| FR-157 | P1 | N2 | **Automation engine**: versioned triggers → conditions → actions executed as a DAG with parallel branches, timeouts, retries, and compensation. |
+| FR-158 | P1 | N2 | **Trigger kinds**: time (cron/interval/sun), event (webhook/Slack/email/file/connector), device state, ambient, location (geofence), and manual. |
+| FR-159 | P1 | N2 | **Action kinds**: smart home, agent run, tool call, messaging, sandboxed script, notification, webhook. |
+| FR-160 | P1 | N2 | **Safety**: dry-run/test, logs, rollback, loop prevention, rate limits, and approval for physical-world/consequential actions. |
+| FR-161 | P1 | N2 | **Smart-home integrations**: Home Assistant (primary), MQTT, and at least one vendor connector; local-first with optional cloud bridges. |
+| FR-162 | P1 | N2 | **Normalized entity model** (type/state/attributes/area), rooms/scenes, and natural-language device control. |
+| FR-163 | P1 | N2 | **Agent ↔ automation interop**: agents can read state, issue commands, and propose automations (proposals require approval). |
+| FR-164 | P1 | N2 | **Managed policy** can restrict entity classes, require approval for physical actions, or disable automation. |
+
+## Q. Extensions & Community — track N3
+
+| ID | Pri | Ms | Requirement / Acceptance |
+| --- | --- | --- | --- |
+| FR-165 | P1 | N3 | **Unified catalog** for MCP servers, connectors, plugins, skills, themes, automation templates, and device integrations, with a self-hostable/offline option. |
+| FR-166 | P1 | N3 | **MCP registry import**: discover and install community MCP servers, automatically wrapped with declared permissions. |
+| FR-167 | P1 | N3 | **Signed publish/install** with mandatory permission preview and a permission **diff** on update; failed installs roll back. |
+| FR-168 | P1 | N3 | **Governance**: automated review + dependency/secret scanning, report/takedown, managed allow/deny, and a fleet-wide kill switch. |
+
+## R. Learning & Self-Improvement — track N4
+
+| ID | Pri | Ms | Requirement / Acceptance |
+| --- | --- | --- | --- |
+| FR-169 | P1 | N4 | **L0 — memory learning**: extract durable facts/preferences with per-item review, edit, revoke; excludes temporary chats; never trains externally. |
+| FR-170 | P1 | N4 | **L1 — skill synthesis**: detect repeated workflows and propose a versioned skill with provenance; user approval to install. |
+| FR-171 | P1 | N4 | **L2 — workflow/prompt optimization**: evaluated against a held-out task set on correctness, cost, latency, and safety; proposals require approval and are reversible. |
+| FR-172 | P1 | N4 | **L3 — bounded self-tuning**: tune retrieval, routing, cache, and scheduling within declared bounds with drift detection and automatic rollback. |
+| FR-173 | P2 | N4 | **L4 — code self-modification**: isolated worktree, tests + security checks + safety eval, mandatory diff/evidence approval, staged deploy with auto-rollback; **must never modify policy/safety/audit/signing/self-improvement gates**. |
+| FR-174 | P2 | N4 | **L5 — optional local fine-tuning**: user-approved data only, resource-bounded, evaluated, versioned, deletable; base model never altered. |
+| FR-175 | P1 | N4 | **Evaluation harness, transparency, and kill switch**: regression gates with auto-revert; a "What Nova learned" view with provenance/rollback; an instant stop control. |
+
 ---
 
 ## Requirement traceability

@@ -62,6 +62,10 @@ new decisions in an ADR and continue.
 | 21 | [`21-hub-and-device-model.md`](docs/21-hub-and-device-model.md) | Hub/spoke roles, routing, offline, failover |
 | 22 | [`22-networking-transports-relay.md`](docs/22-networking-transports-relay.md) | Transports (LAN/Lattice/Relay), Add Device, trust, WoL |
 | 23 | [`23-device-agent.md`](docs/23-device-agent.md) | Device agent `novad`: modules, capabilities, boot, BIOS/OOB |
+| 24 | [`24-ambient-memory.md`](docs/24-ambient-memory.md) | Opt-in screen/audio capture, OCR/STT, searchable timeline |
+| 25 | [`25-automation-and-smart-home.md`](docs/25-automation-and-smart-home.md) | Automation engine + smart-home integrations |
+| 26 | [`26-extensions-and-community.md`](docs/26-extensions-and-community.md) | Community marketplace: MCP, connectors, plugins, skills |
+| 27 | [`27-learning-and-self-improvement.md`](docs/27-learning-and-self-improvement.md) | Learning levels, self-modification guardrails, eval gates |
 | — | [`contracts/`](contracts/README.md) | Hub API, IPC, events, REST API, JSON schemas |
 
 ## Repository conventions

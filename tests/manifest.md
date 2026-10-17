@@ -158,3 +158,28 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-148 | todo | todo | J7 | novad updates |
 | FR-149 | todo | todo | J9 | hub trusted, edges E2E |
 | FR-150 | todo | todo | J7 | per-device overrides |
+| FR-151 | todo | todo | — | ambient capture |
+| FR-152 | todo | todo | — | OCR/STT pipeline |
+| FR-153 | todo | todo | — | ambient timeline/search |
+| FR-154 | todo | todo | — | ambient privacy controls |
+| FR-155 | todo | todo | — | ambient agent/MCP access |
+| FR-156 | todo | todo | — | ambient resource governor |
+| FR-157 | todo | todo | — | automation engine |
+| FR-158 | todo | todo | — | trigger kinds |
+| FR-159 | todo | todo | — | action kinds |
+| FR-160 | todo | todo | — | automation safety |
+| FR-161 | todo | todo | — | smart-home integrations |
+| FR-162 | todo | todo | — | entity model |
+| FR-163 | todo | todo | — | agent↔automation interop |
+| FR-164 | todo | todo | — | managed policy for smart home |
+| FR-165 | todo | todo | — | unified catalog |
+| FR-166 | todo | todo | — | MCP registry import |
+| FR-167 | todo | todo | — | signed publish + permission diff |
+| FR-168 | todo | todo | — | community governance |
+| FR-169 | todo | todo | — | L0 memory learning |
+| FR-170 | todo | todo | — | L1 skill synthesis |
+| FR-171 | todo | todo | — | L2 evaluated optimization |
+| FR-172 | todo | todo | — | L3 bounded self-tuning |
+| FR-173 | todo | todo | — | L4 code self-modification |
+| FR-174 | todo | todo | — | L5 local fine-tuning |
+| FR-175 | todo | todo | — | eval harness + kill switch |
