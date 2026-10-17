@@ -209,7 +209,14 @@ export interface AuditRecord {
     | 'schedule'
     | 'review'
     | 'request'
-    | 'code';
+    | 'code'
+    | 'agent'
+    | 'channel'
+    | 'computer'
+    | 'browser'
+    | 'screen'
+    | 'device'
+    | 'space';
   action: string;
   resource?: string | null;
   /** SHA-256 of the canonical inputs; inputs themselves are never stored here. */
