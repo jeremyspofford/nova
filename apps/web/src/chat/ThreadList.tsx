@@ -1,9 +1,19 @@
-// Chat list (FR-017): Pinned and Recent groups, with rename (inline), pin, archive and delete
-// (confirmed) from each row's menu or its context menu. Rows use a roving tabindex so the list is
-// one tab stop: arrows, Home and End move; F2 renames; Shift+F10 opens the row's menu.
+// Chat list (FR-017): Pinned and Recent groups, with rename (inline), pin, memory use (FR-032),
+// archive and delete (confirmed) from each row's menu or its context menu. Branches and temporary
+// chats carry a marker (FR-027, FR-033). Rows use a roving tabindex so the list is one tab stop:
+// arrows, Home and End move; F2 renames; Shift+F10 opens the row's menu.
 import { useEffect, useRef, useState } from 'react';
 import type { ThreadView } from '@nova/shared';
-import { Button, Dialog, Menu, StatusChip, VisuallyHidden, rovingIndex, useToast } from '@nova/ui';
+import {
+  Button,
+  Dialog,
+  Icon,
+  Menu,
+  StatusChip,
+  VisuallyHidden,
+  rovingIndex,
+  useToast,
+} from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useThreads } from '../stores.tsx';
@@ -81,6 +91,29 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
             onSelect: () => void act('Could not pin', store.update(t.id, { pinned: !t.pinned })),
           },
         ]),
+    ...(t.temporary
+      ? []
+      : [
+          {
+            id: 'memory',
+            label: "Don't use for memory",
+            checked: t.memoryOptOut,
+            onSelect: () =>
+              void act(
+                'Could not change memory use',
+                store
+                  .update(t.id, { memoryOptOut: !t.memoryOptOut })
+                  .then(() =>
+                    toast.show(
+                      t.memoryOptOut
+                        ? 'This chat can be used for memory.'
+                        : 'This chat will not be used for memory.',
+                      { tone: 'success' },
+                    ),
+                  ),
+              ),
+          },
+        ]),
     {
       id: 'archive',
       label: t.archived ? 'Unarchive' : 'Archive',
@@ -138,9 +171,21 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
             }}
           >
             {t.unread ? <span className="unread-dot" aria-hidden="true" /> : null}
+            {t.parentThreadId && !t.side ? (
+              <span className="thread-mark" title="Branch">
+                <Icon name="branch" />
+              </span>
+            ) : null}
+            {t.temporary ? (
+              <span className="thread-mark" data-kind="temporary" title="Temporary chat">
+                <Icon name="clock" />
+              </span>
+            ) : null}
             <span className="thread-title">{threadTitle(t)}</span>
             {t.unread ? <VisuallyHidden>, unread</VisuallyHidden> : null}
             {t.pinned ? <VisuallyHidden>, pinned</VisuallyHidden> : null}
+            {t.parentThreadId && !t.side ? <VisuallyHidden>, branch</VisuallyHidden> : null}
+            {t.temporary ? <VisuallyHidden>, temporary</VisuallyHidden> : null}
             {status !== 'ready' ? <StatusChip status={status} compact /> : null}
           </a>
         )}

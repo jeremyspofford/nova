@@ -3,6 +3,8 @@ import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { uuidv7 } from '@nova/shared';
+import { hashToken, newToken } from '@nova/security';
 import { migrate, openDatabase, type NovaDatabase } from '@nova/storage';
 import { Logger, MemorySink } from '@nova/telemetry';
 import { SESSION_COOKIE, buildHub, type Hub } from '../src/app.ts';
@@ -147,6 +149,26 @@ describe('authentication (FR-192)', () => {
       headers: { ...HOST, authorization: `Bearer ${session}` },
     });
     expect(after.statusCode).toBe(401);
+  });
+
+  it('never lets a device, app or MCP-client token act as the user (FR-192)', async () => {
+    await signIn();
+    const now = new Date().toISOString();
+    for (const kind of ['device', 'app', 'mcp_client'] as const) {
+      const token = newToken(kind);
+      db.raw
+        .prepare(
+          'INSERT INTO auth_token (id, kind, token_hash, account_id, created_at) VALUES (?, ?, ?, NULL, ?)',
+        )
+        .run(uuidv7(), kind, hashToken(token), now);
+      for (const url of ['/api/v1/session', '/api/v1/threads']) {
+        const res = await hub.app.inject({
+          url,
+          headers: { ...HOST, authorization: `Bearer ${token}` },
+        });
+        expect(res.statusCode, `${kind} on ${url}`).toBe(401);
+      }
+    }
   });
 
   it('validates the setup body', async () => {

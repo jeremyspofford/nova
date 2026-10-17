@@ -1,7 +1,14 @@
+import { createServer } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { NovaError } from '@nova/shared';
-import { OpenAICompatibleProvider, type ModelInfo, type Provider } from '@nova/providers';
-import { MOCK_PROVIDER_LABEL, ProviderRegistry } from '../src/index.ts';
+import { NovaError, type ProviderKind } from '@nova/shared';
+import {
+  AnthropicProvider,
+  OpenAICompatibleProvider,
+  collect,
+  type ModelInfo,
+  type Provider,
+} from '@nova/providers';
+import { MOCK_PROVIDER_LABEL, ProviderRegistry, isLocalProvider } from '../src/index.ts';
 import { ACCOUNT, makeEnv, type Env } from './helpers.ts';
 
 let env: Env;
@@ -76,7 +83,9 @@ describe('ProviderRegistry', () => {
   it('validates provider requests', async () => {
     const create = (req: Parameters<ProviderRegistry['create']>[1]) =>
       env.registry.create(ACCOUNT, req);
-    await expect(create({ provider: 'anthropic', label: 'a', apiKey: 'k' })).rejects.toMatchObject({
+    await expect(
+      create({ provider: 'gemini' as ProviderKind, label: 'a', apiKey: 'k' }),
+    ).rejects.toMatchObject({
       code: 'validation',
       details: { reason: 'unsupported_provider' },
     });
@@ -230,6 +239,145 @@ describe('ProviderRegistry', () => {
       'mock-fast',
       'mock-smart',
     ]);
-    expect(() => plain.provider({ ...row, id: 'x', provider: 'anthropic' })).toThrow(/no adapter/);
+    expect(() => plain.provider({ ...row, id: 'x', provider: 'gemini' })).toThrow(/no adapter/);
+  });
+});
+
+describe('ProviderRegistry M2 kinds and routing helpers', () => {
+  it('creates Anthropic, OpenRouter and llama.cpp accounts with their defaults (docs/07 §3)', async () => {
+    const create = (req: Parameters<ProviderRegistry['create']>[1]) =>
+      env.registry.create(ACCOUNT, req);
+    await expect(create({ provider: 'anthropic', label: 'a' })).rejects.toThrow(
+      /API key is required for Anthropic/,
+    );
+    await expect(create({ provider: 'openrouter', label: 'r' })).rejects.toThrow(/OpenRouter/);
+    const anthropic = await create({ provider: 'anthropic', label: 'A', apiKey: KEY });
+    expect(anthropic.baseUrl).toBe('https://api.anthropic.com');
+    const proxied = await create({
+      provider: 'anthropic',
+      label: 'A2',
+      apiKey: KEY,
+      baseUrl: 'http://127.0.0.1:9999',
+    });
+    const router = await create({ provider: 'openrouter', label: 'R', apiKey: KEY });
+    expect(router.baseUrl).toBe('https://openrouter.ai/api/v1');
+    const llama = await create({ provider: 'llamacpp', label: 'L' });
+    expect(llama).toMatchObject({ baseUrl: 'http://127.0.0.1:8080/v1', hasSecret: false });
+
+    const build = async (id: string) =>
+      env.registry.provider(await env.registry.account(ACCOUNT, id));
+    const a = await build(anthropic.id);
+    expect(a).toBeInstanceOf(AnthropicProvider);
+    expect((a as AnthropicProvider).baseUrl).toBe('https://api.anthropic.com/v1');
+    // The account's own base URL is honoured (J2 points Anthropic at a local fake server).
+    expect(((await build(proxied.id)) as AnthropicProvider).baseUrl).toBe(
+      'http://127.0.0.1:9999/v1',
+    );
+    expect(((await build(router.id)) as OpenAICompatibleProvider).kind).toBe('openrouter');
+    expect(((await build(llama.id)) as OpenAICompatibleProvider).kind).toBe('llamacpp');
+  });
+
+  it('builds adapters that leave retries to the router', async () => {
+    let hits = 0;
+    const server = createServer((_req, res) => {
+      hits++;
+      res.writeHead(503, { 'content-type': 'application/json' }).end('{"error":"busy"}');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const port = (server.address() as { port: number }).port;
+      const v = await env.registry.create(ACCOUNT, {
+        provider: 'ollama',
+        label: 'busy',
+        baseUrl: `http://127.0.0.1:${port}`,
+      });
+      const p = env.registry.provider(await env.registry.account(ACCOUNT, v.id));
+      const c = await collect(
+        p.stream(
+          { model: 'm', messages: [], signal: new AbortController().signal },
+          { requestId: 'r' },
+        ),
+      );
+      expect(c.error).toMatchObject({ code: 'provider_error', retryable: true });
+      expect(hits).toBe(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it('classifies local and cloud accounts, failing closed for public hosts', () => {
+    expect(isLocalProvider('mock', null)).toBe(true);
+    expect(isLocalProvider('anthropic', 'http://127.0.0.1:1')).toBe(false);
+    expect(isLocalProvider('openai', null)).toBe(false);
+    expect(isLocalProvider('ollama', null)).toBe(true);
+    expect(isLocalProvider('ollama', 'https://ollama.example.com')).toBe(false);
+    for (const host of [
+      'http://localhost:1234/v1',
+      'http://127.0.0.1:8080/v1',
+      'http://10.0.0.5/v1',
+      'http://172.20.1.1/v1',
+      'http://192.168.1.9:11434',
+      'http://100.101.1.2/v1',
+      'http://box.local/v1',
+      'http://gpu.tail1234.ts.net/v1',
+      'http://gpubox:8080/v1',
+      'http://[::1]:8080/v1',
+      'http://[fd12:3456::1]/v1',
+    ])
+      expect(isLocalProvider('openai_compatible', host)).toBe(true);
+    expect(isLocalProvider('openai_compatible', 'https://api.example.com/v1')).toBe(false);
+    expect(isLocalProvider('openai_compatible', 'http://172.32.0.1/v1')).toBe(false);
+    expect(isLocalProvider('openai_compatible', 'not a url')).toBe(false);
+  });
+
+  it('exposes cached model lists, local servers serving a model, and resolved details', async () => {
+    const info: ModelInfo[] = [
+      { id: 'qwen3:8b', label: 'qwen3:8b', capabilities: { vision: true }, costIn: 1, costOut: 2 },
+    ];
+    const local = await makeEnv({
+      factory: ({ row }) =>
+        row.provider === 'ollama' || row.provider === 'llamacpp'
+          ? {
+              id: row.id,
+              capabilities: new OpenAICompatibleProvider({ id: 'x', kind: 'ollama' }).capabilities,
+              listModels: () => Promise.resolve(info),
+              // eslint-disable-next-line require-yield
+              stream: async function* () {
+                await Promise.resolve();
+              },
+            }
+          : undefined,
+    });
+    try {
+      const a = await local.registry.create(ACCOUNT, { provider: 'ollama', label: 'o' });
+      const b = await local.registry.create(ACCOUNT, { provider: 'llamacpp', label: 'l' });
+      expect(local.registry.cachedModels(a.id)).toBeUndefined();
+      expect(await local.registry.localServing(ACCOUNT, 'qwen3:8b', a.id)).toEqual([]);
+      const models = await local.registry.accountModels(ACCOUNT);
+      expect(models.filter((m) => m.local).map((m) => m.view.ref)).toEqual([
+        `${local.mockAccountId}/mock-fast`,
+        `${local.mockAccountId}/mock-smart`,
+        `${a.id}/qwen3:8b`,
+        `${b.id}/qwen3:8b`,
+      ]);
+      expect(local.registry.cachedModels(a.id)).toEqual(info);
+      const serving = await local.registry.localServing(ACCOUNT, 'qwen3:8b', a.id);
+      expect(serving.map((r) => r.ref)).toEqual([`${b.id}/qwen3:8b`]);
+      expect(serving[0]).toMatchObject({
+        vision: true,
+        reasoning: false,
+        local: true,
+        costIn: 1,
+        costOut: 2,
+      });
+      const smart = await local.registry.resolve(ACCOUNT, `${local.mockAccountId}/mock-smart`);
+      expect(smart).toMatchObject({ reasoning: true, local: true });
+      expect(
+        (await local.registry.resolve(ACCOUNT, `${local.mockAccountId}/mock-fast`)).reasoning,
+      ).toBe(false);
+    } finally {
+      await local.close();
+    }
   });
 });

@@ -1,6 +1,6 @@
 // J1 — First chat (docs/18 §3, M1 exit criteria in docs/17).
-import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+import { expectNoSeriousA11yIssues } from './support/a11y.ts';
 import { startHub, type RunningHub } from './support/hub.ts';
 
 // One port per parallel worker so repeated or parallel runs never collide.
@@ -13,22 +13,6 @@ test.describe.configure({ mode: 'serial' });
 test.afterEach(async () => {
   await hub?.stop();
 });
-
-async function expectNoSeriousA11yIssues(page: Page, where: string) {
-  const result = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
-    .analyze();
-  const serious = result.violations.filter(
-    (v) => v.impact === 'serious' || v.impact === 'critical',
-  );
-  expect(
-    serious.map(
-      (v) =>
-        `${v.id}: ${v.help}\n${v.nodes.map((n) => `  ${n.target.join(' ')}: ${n.failureSummary ?? ''}`).join('\n')}`,
-    ),
-    `axe on ${where}`,
-  ).toEqual([]);
-}
 
 test('J1: onboard, stream, stop, restart, search, theme', async ({ page }, testInfo) => {
   const PORT = portFor(testInfo.parallelIndex);

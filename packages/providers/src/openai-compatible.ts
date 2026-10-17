@@ -1,9 +1,9 @@
-// OpenAI-compatible chat-completions adapter (docs/07 §3, §5, §9, §12, §14). One adapter serves
-// OpenAI itself, Ollama's /v1 endpoint, llama.cpp-style servers and any other compatible API.
-// Plain `fetch` + SSE; no vendor SDK. `stream()` never throws: every outcome, including errors
-// and cancellation, ends with a `stop` event.
-import { NovaError, uuidv7, type ProviderErrorCode } from '@nova/shared';
-import { SseParser } from './sse.ts';
+// OpenAI-compatible chat-completions adapter (docs/07 §3, §5, §6, §9, §12, §14). One adapter
+// serves OpenAI itself, OpenRouter, Ollama's /v1 endpoint, llama.cpp servers and any other
+// compatible API. Plain `fetch` + SSE; no vendor SDK. `stream()` never throws: every outcome,
+// including errors and cancellation, ends with a `stop` event.
+import { NovaError, uuidv7 } from '@nova/shared';
+import { DEFAULT_BASE_URLS } from './defaults.ts';
 import type {
   AgentErrorShape,
   CallContext,
@@ -16,13 +16,23 @@ import type {
   StopReason,
   StreamEvent,
 } from './types.ts';
+import {
+  ToolNames,
+  connectSse,
+  err,
+  getJson,
+  isRecord,
+  normalizeBase,
+  readSseData,
+  resolveKey,
+  scrub,
+  stopError,
+} from './wire.ts';
 
-export type OpenAICompatibleKind = 'openai_compatible' | 'openai' | 'ollama';
+export { parseRetryAfter } from './wire.ts';
 
-export const DEFAULT_BASE_URLS: Record<'openai' | 'ollama', string> = {
-  openai: 'https://api.openai.com/v1',
-  ollama: 'http://127.0.0.1:11434/v1',
-};
+export type OpenAICompatibleKind =
+  'openai_compatible' | 'openai' | 'ollama' | 'openrouter' | 'llamacpp';
 
 export interface OpenAICompatibleOptions {
   id: string;
@@ -36,7 +46,7 @@ export interface OpenAICompatibleOptions {
   connectTimeoutMs?: number;
   /** Longest silence allowed while streaming (docs/07 §9: 90 s). */
   idleTimeoutMs?: number;
-  /** Retries before the first byte only (default 2). */
+  /** Retries before the first byte only (default 2; the Hub's router retries instead, so 0). */
   maxRetries?: number;
   retryBaseMs?: number;
   /** A Retry-After longer than this is reported instead of waited out. */
@@ -72,15 +82,21 @@ const KIND_CAPS: Record<OpenAICompatibleKind, Partial<ProviderCapabilities>> = {
     maxContextTokens: 128_000,
     maxOutputTokens: 16_384,
   },
+  // Per-model vision and reasoning come from OpenRouter's model list.
+  openrouter: {
+    parallelToolCalls: true,
+    reasoning: 'levels',
+    structuredOutput: true,
+    maxContextTokens: 128_000,
+    maxOutputTokens: 16_384,
+  },
   ollama: {},
+  llamacpp: {},
   openai_compatible: {},
 };
 
-const MAX_ERROR_BODY = 8_192;
-
-type Outcome =
-  | { ok: true; res: Response; conn: AbortController }
-  | { ok: false; error: AgentErrorShape; retryAfterMs?: number };
+/** Kinds whose servers run on the user's hardware; their bare address gets the `/v1` path. */
+const LOCAL_SERVER_KINDS = new Set<OpenAICompatibleKind>(['ollama', 'llamacpp']);
 
 export class OpenAICompatibleProvider implements Provider {
   readonly id: string;
@@ -97,12 +113,8 @@ export class OpenAICompatibleProvider implements Provider {
       opts.baseUrl ??
       (this.kind === 'openai_compatible' ? undefined : DEFAULT_BASE_URLS[this.kind]);
     if (!base) throw new NovaError('validation', 'a base URL is required for this provider');
-    const url = new URL(base);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:')
-      throw new NovaError('validation', 'the base URL must use http or https');
-    const trimmed = base.replace(/\/+$/, '');
     // Local servers are often entered as their bare address; their OpenAI-style API lives at /v1.
-    this.baseUrl = this.kind === 'ollama' && !/\/v1$/.test(trimmed) ? `${trimmed}/v1` : trimmed;
+    this.baseUrl = normalizeBase(base, LOCAL_SERVER_KINDS.has(this.kind));
     this.capabilities = { ...BASE_CAPS, ...KIND_CAPS[this.kind], ...opts.capabilities };
     this.#opts = opts;
     this.#fetch = opts.fetch ?? ((...a) => fetch(...a));
@@ -112,82 +124,46 @@ export class OpenAICompatibleProvider implements Provider {
     return new URL(this.baseUrl).host;
   }
 
-  async #key(): Promise<string | null> {
-    const k = this.#opts.apiKey;
-    if (typeof k === 'function') return k();
-    return k ?? null;
-  }
-
   #headers(key: string | null, accept: string): Record<string, string> {
     const h: Record<string, string> = { accept, ...this.#opts.headers };
     if (key) h.authorization = `Bearer ${key}`;
     return h;
   }
 
-  /** Strip the credential from any text that came back from the server. */
-  #scrub(text: string, key: string | null): string {
-    const clipped = text.length > 500 ? `${text.slice(0, 500)}…` : text;
-    return key && key.length >= 4 ? clipped.split(key).join('[REDACTED]') : clipped;
-  }
-
   // ---- models ---------------------------------------------------------------------------
 
   async listModels(): Promise<ModelInfo[]> {
-    const key = await this.#key();
+    const key = await resolveKey(this.#opts.apiKey);
     try {
       const body = await this.#getJson(`${this.baseUrl}/models`, key);
       const data = isRecord(body) && Array.isArray(body.data) ? body.data : [];
+      if (this.kind === 'openrouter') return openRouterModels(data);
       const ids = data.flatMap((m) => (isRecord(m) && typeof m.id === 'string' ? [m.id] : []));
-      return toModels(ids);
-    } catch (err) {
+      return toModels(ids, this.kind);
+    } catch (e) {
       // Ollama detection (docs/07 §12): older servers lack /v1/models but always have /api/tags.
-      if (this.kind === 'openai') throw err;
+      if (this.kind === 'openai' || this.kind === 'openrouter') throw e;
       const origin = this.baseUrl.replace(/\/v1$/, '');
       try {
         const tags = await this.#getJson(`${origin}/api/tags`, key);
-        const list = isRecord(tags) && Array.isArray(tags.models) ? tags.models : [];
-        const ids = list.flatMap((m) =>
-          isRecord(m) && typeof (m.model ?? m.name) === 'string' ? [String(m.model ?? m.name)] : [],
-        );
-        return toModels(ids);
+        return toModels(ollamaTagIds(tags), this.kind);
       } catch {
-        throw err;
+        throw e;
       }
     }
   }
 
-  async #getJson(url: string, key: string | null): Promise<unknown> {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), this.#opts.connectTimeoutMs ?? 10_000);
-    try {
-      let res: Response;
-      try {
-        res = await this.#fetch(url, {
-          headers: this.#headers(key, 'application/json'),
-          signal: ac.signal,
-        });
-      } catch {
-        throw new NovaError(
-          ac.signal.aborted ? 'timeout' : 'network',
-          ac.signal.aborted
-            ? `${this.#host} did not answer in time`
-            : `could not reach ${this.#host}`,
-        );
-      }
-      if (!res.ok) {
-        const e = mapHttpError(res.status, await readCapped(res), key !== null, (t) =>
-          this.#scrub(t, key),
-        );
-        throw new NovaError(e.code, e.message, { retryable: e.retryable, action: e.action });
-      }
-      try {
-        return await res.json();
-      } catch {
-        throw new NovaError('provider_error', `${this.#host} returned a response that is not JSON`);
-      }
-    } finally {
-      clearTimeout(timer);
-    }
+  #getJson(url: string, key: string | null): Promise<unknown> {
+    return getJson({
+      url,
+      headers: this.#headers(key, 'application/json'),
+      fetch: this.#fetch,
+      host: this.#host,
+      timeoutMs: this.#opts.connectTimeoutMs ?? 10_000,
+      mapError: (status, text) => mapHttpError(status, text, key !== null, (t) => scrub(t, key)),
+      toError: (e) =>
+        new NovaError(e.code, e.message, { retryable: e.retryable, action: e.action }),
+    });
   }
 
   // ---- streaming ------------------------------------------------------------------------
@@ -199,42 +175,31 @@ export class OpenAICompatibleProvider implements Provider {
     }
     let key: string | null;
     try {
-      key = await this.#key();
+      key = await resolveKey(this.#opts.apiKey);
     } catch {
       yield stopError('auth_missing', 'the credential for this provider could not be read', false);
       return;
     }
     const names = new ToolNames(req.tools?.map((t) => t.name) ?? []);
-    const body = JSON.stringify(this.#body(req, names));
-    const url = `${this.baseUrl}/chat/completions`;
-    const maxRetries = this.#opts.maxRetries ?? 2;
-
-    let outcome: Outcome;
-    for (let attempt = 0; ; attempt++) {
-      outcome = await this.#connect(url, body, key, req.signal);
-      if (outcome.ok) break;
-      if (req.signal.aborted) {
-        yield { type: 'stop', reason: 'cancelled' };
-        return;
-      }
-      const maxWait = this.#opts.maxRetryAfterMs ?? 30_000;
-      const wait = Math.max(this.#backoff(attempt), outcome.retryAfterMs ?? 0);
-      if (!outcome.error.retryable || attempt >= maxRetries || wait > maxWait) {
-        yield { type: 'stop', reason: 'error', error: outcome.error };
-        return;
-      }
-      if (!(await sleep(wait, req.signal))) {
-        yield { type: 'stop', reason: 'cancelled' };
-        return;
-      }
+    const connected = await connectSse({
+      url: `${this.baseUrl}/chat/completions`,
+      body: JSON.stringify(this.#body(req, names)),
+      headers: { ...this.#headers(key, 'text/event-stream'), 'content-type': 'application/json' },
+      signal: req.signal,
+      fetch: this.#fetch,
+      host: this.#host,
+      connectTimeoutMs: this.#opts.connectTimeoutMs ?? 10_000,
+      maxRetries: this.#opts.maxRetries ?? 2,
+      retryBaseMs: this.#opts.retryBaseMs ?? 500,
+      maxRetryAfterMs: this.#opts.maxRetryAfterMs ?? 30_000,
+      random: this.#opts.random ?? Math.random,
+      mapError: (status, text) => mapHttpError(status, text, key !== null, (t) => scrub(t, key)),
+    });
+    if (!connected.ok) {
+      yield connected.stop;
+      return;
     }
-    yield* this.#read(outcome.res, outcome.conn, req, names, key);
-  }
-
-  #backoff(attempt: number): number {
-    const base = this.#opts.retryBaseMs ?? 500;
-    const random = this.#opts.random ?? Math.random;
-    return Math.round(base * 2 ** attempt + random() * base);
+    yield* this.#read(connected.res, connected.conn, req, names, key);
   }
 
   #body(req: ChatRequest, names: ToolNames): Record<string, unknown> {
@@ -271,52 +236,13 @@ export class OpenAICompatibleProvider implements Provider {
         json_schema: { name: 'response', schema: req.responseFormat.schema },
       };
     }
+    // Reasoning levels (docs/07 §6): OpenAI takes `reasoning_effort`; OpenRouter passes its
+    // `reasoning` object through to the upstream model. Local servers: not applicable.
+    if (req.reasoning && this.kind === 'openai')
+      body.reasoning_effort = openAIEffort(req.reasoning);
+    if (req.reasoning && this.kind === 'openrouter')
+      body.reasoning = openRouterReasoning(req.reasoning);
     return body;
-  }
-
-  async #connect(
-    url: string,
-    body: string,
-    key: string | null,
-    signal: AbortSignal,
-  ): Promise<Outcome> {
-    const conn = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      conn.abort();
-    }, this.#opts.connectTimeoutMs ?? 10_000);
-    try {
-      let res: Response;
-      try {
-        res = await this.#fetch(url, {
-          method: 'POST',
-          headers: {
-            ...this.#headers(key, 'text/event-stream'),
-            'content-type': 'application/json',
-          },
-          body,
-          signal: AbortSignal.any([signal, conn.signal]),
-        });
-      } catch {
-        if (signal.aborted) return { ok: false, error: err('cancelled', 'cancelled', false) };
-        return {
-          ok: false,
-          error: timedOut
-            ? err('timeout', `${this.#host} did not answer within the connect timeout`, true)
-            : err('network', `could not reach ${this.#host}`, true),
-        };
-      }
-      if (res.ok && res.body) return { ok: true, res, conn };
-      const text = res.ok ? '' : await readCapped(res);
-      const retryAfterMs = parseRetryAfter(res.headers);
-      const error = res.ok
-        ? err('provider_error', `${this.#host} returned an empty response`, true)
-        : mapHttpError(res.status, text, key !== null, (t) => this.#scrub(t, key));
-      return retryAfterMs === undefined ? { ok: false, error } : { ok: false, error, retryAfterMs };
-    } finally {
-      clearTimeout(timer);
-    }
   }
 
   async *#read(
@@ -326,99 +252,59 @@ export class OpenAICompatibleProvider implements Provider {
     names: ToolNames,
     key: string | null,
   ): AsyncGenerator<StreamEvent> {
-    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
-    const decoder = new TextDecoder();
-    const parser = new SseParser();
     const tools = new ToolCallAccumulator(names);
     const idleMs = this.#opts.idleTimeoutMs ?? 90_000;
-    let idle: ReturnType<typeof setTimeout> | undefined;
-    let idleFired = false;
-    const armIdle = () => {
-      clearTimeout(idle);
-      idle = setTimeout(() => {
-        idleFired = true;
-        conn.abort();
-      }, idleMs);
-    };
     let finish: string | null = null;
     let done = false;
     let failure: AgentErrorShape | null = null;
     let started = false;
 
-    armIdle();
-    try {
-      outer: for (;;) {
-        let chunk: Awaited<ReturnType<typeof reader.read>>;
-        try {
-          chunk = await reader.read();
-        } catch {
-          if (req.signal.aborted) break;
-          failure = idleFired
-            ? err(
-                'timeout',
-                `${this.#host} stopped sending for ${Math.round(idleMs / 1000)} s`,
-                true,
-              )
-            : err('network', `the connection to ${this.#host} was lost mid-response`, true);
-          break;
-        }
-        const datas = chunk.done
-          ? parser.end()
-          : parser.push(decoder.decode(chunk.value, { stream: true }));
-        if (!chunk.done) armIdle();
-        for (const data of datas) {
-          if (data === '[DONE]') {
-            done = true;
-            break outer;
-          }
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(data);
-          } catch {
-            failure = err('provider_error', `${this.#host} sent a malformed stream event`, false);
-            break outer;
-          }
-          if (!isRecord(parsed)) continue;
-          if (isRecord(parsed.error)) {
-            failure = mapHttpError(0, JSON.stringify(parsed), key !== null, (t) =>
-              this.#scrub(t, key),
-            );
-            break outer;
-          }
-          if (!started) {
-            started = true;
-            yield {
-              type: 'start',
-              messageId: typeof parsed.id === 'string' ? parsed.id : uuidv7(),
-              model: typeof parsed.model === 'string' ? parsed.model : req.model,
-            };
-          }
-          const choice = Array.isArray(parsed.choices)
-            ? (parsed.choices as unknown[])[0]
-            : undefined;
-          if (isRecord(choice)) {
-            const delta = isRecord(choice.delta) ? choice.delta : {};
-            // Local servers put thinking in `reasoning` / `reasoning_content`; never content.
-            const reasoning = delta.reasoning ?? delta.reasoning_content;
-            if (typeof reasoning === 'string' && reasoning)
-              yield { type: 'reasoning_delta', text: reasoning };
-            if (typeof delta.content === 'string' && delta.content)
-              yield { type: 'text_delta', text: delta.content };
-            if (Array.isArray(delta.tool_calls)) yield* tools.push(delta.tool_calls);
-            if (typeof choice.finish_reason === 'string' && choice.finish_reason) {
-              finish = choice.finish_reason;
-              yield* tools.end();
-            }
-          }
-          if (isRecord(parsed.usage)) yield toUsage(parsed.usage);
-          if (req.signal.aborted) break outer;
-        }
-        if (chunk.done || req.signal.aborted) break;
+    for await (const item of readSseData(res, conn, req.signal, idleMs, this.#host)) {
+      if ('failure' in item) {
+        failure = item.failure;
+        break;
       }
-    } finally {
-      clearTimeout(idle);
-      if (!done) await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
+      if (item.data === '[DONE]') {
+        done = true;
+        break;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(item.data);
+      } catch {
+        failure = err('provider_error', `${this.#host} sent a malformed stream event`, false);
+        break;
+      }
+      if (!isRecord(parsed)) continue;
+      if (isRecord(parsed.error)) {
+        failure = mapHttpError(0, JSON.stringify(parsed), key !== null, (t) => scrub(t, key));
+        break;
+      }
+      if (!started) {
+        started = true;
+        yield {
+          type: 'start',
+          messageId: typeof parsed.id === 'string' ? parsed.id : uuidv7(),
+          model: typeof parsed.model === 'string' ? parsed.model : req.model,
+        };
+      }
+      const choice = Array.isArray(parsed.choices) ? (parsed.choices as unknown[])[0] : undefined;
+      if (isRecord(choice)) {
+        const delta = isRecord(choice.delta) ? choice.delta : {};
+        // Local servers and OpenRouter put thinking in `reasoning` / `reasoning_content`; never content.
+        const reasoning = delta.reasoning ?? delta.reasoning_content;
+        if (typeof reasoning === 'string' && reasoning)
+          yield { type: 'reasoning_delta', text: reasoning };
+        if (typeof delta.content === 'string' && delta.content)
+          yield { type: 'text_delta', text: delta.content };
+        if (Array.isArray(delta.tool_calls)) yield* tools.push(delta.tool_calls);
+        if (typeof choice.finish_reason === 'string' && choice.finish_reason) {
+          finish = choice.finish_reason;
+          yield* tools.end();
+        }
+      }
+      if (isRecord(parsed.usage)) yield toUsage(parsed.usage);
+      if (req.signal.aborted) break;
     }
 
     if (req.signal.aborted) {
@@ -448,6 +334,40 @@ export class OpenAICompatibleProvider implements Provider {
     }
     yield { type: 'stop', reason: toStop(finish) };
   }
+}
+
+// ---- reasoning (docs/07 §6) -------------------------------------------------------------
+
+/** Nova level → OpenAI `reasoning_effort`: off → none; xhigh/max → high. */
+export function openAIEffort(r: NonNullable<ChatRequest['reasoning']>): string {
+  if ('budgetTokens' in r) return effortForBudget(r.budgetTokens);
+  switch (r.level) {
+    case 'off':
+      return 'none';
+    case 'minimal':
+      return 'minimal';
+    case 'low':
+      return 'low';
+    case 'medium':
+      return 'medium';
+    default:
+      return 'high';
+  }
+}
+
+/** Nova level → OpenRouter's normalized `reasoning` object, passed through to the model. */
+export function openRouterReasoning(
+  r: NonNullable<ChatRequest['reasoning']>,
+): Record<string, unknown> {
+  if ('budgetTokens' in r) return { max_tokens: r.budgetTokens };
+  if (r.level === 'off') return { enabled: false };
+  return { effort: openAIEffort(r) };
+}
+
+function effortForBudget(n: number): string {
+  if (n <= 2_048) return 'low';
+  if (n <= 8_192) return 'medium';
+  return 'high';
 }
 
 // ---- wire mapping -----------------------------------------------------------------------
@@ -494,26 +414,6 @@ function toWire(m: NormalizedMessage): Record<string, unknown>[] {
     ];
   }
   return [{ role: m.role, content: text }];
-}
-
-/** Function names must match ^[a-zA-Z0-9_-]+$ on the wire; Nova names use dots (docs/07 §7). */
-class ToolNames {
-  readonly #toWire = new Map<string, string>();
-  readonly #fromWire = new Map<string, string>();
-  constructor(names: string[]) {
-    for (const n of names) {
-      let w = n.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'tool';
-      for (let i = 2; this.#fromWire.has(w); i++) w = `${w.slice(0, 60)}_${i}`;
-      this.#toWire.set(n, w);
-      this.#fromWire.set(w, n);
-    }
-  }
-  wire(name: string): string {
-    return this.#toWire.get(name) ?? name;
-  }
-  original(wire: string): string {
-    return this.#fromWire.get(wire) ?? wire;
-  }
 }
 
 interface PendingCall {
@@ -569,17 +469,18 @@ class ToolCallAccumulator {
         call.id ||= `call_${index}`;
         yield { type: 'tool_call_start', index, id: call.id, name: call.name || 'unknown' };
       }
-      let args: unknown = {};
-      if (call.args.trim()) {
-        try {
-          args = JSON.parse(call.args);
-        } catch {
-          // Left as the raw string: the runtime validates arguments before running a tool.
-          args = call.args;
-        }
-      }
-      yield { type: 'tool_call_end', index, args };
+      yield { type: 'tool_call_end', index, args: parseArgs(call.args) };
     }
+  }
+}
+
+/** Parsed tool arguments; malformed JSON is left as the raw string for the runtime to reject. */
+export function parseArgs(raw: string): unknown {
+  if (!raw.trim()) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
   }
 }
 
@@ -604,20 +505,80 @@ function toStop(finish: string | null): StopReason {
   }
 }
 
-function toModels(ids: string[]): ModelInfo[] {
-  return [...new Set(ids)].sort().map((id) => ({ id, label: id, capabilities: {} }));
+// ---- model lists ------------------------------------------------------------------------
+
+function ollamaTagIds(tags: unknown): string[] {
+  const list = isRecord(tags) && Array.isArray(tags.models) ? tags.models : [];
+  return list.flatMap((m) =>
+    isRecord(m) && typeof (m.model ?? m.name) === 'string' ? [String(m.model ?? m.name)] : [],
+  );
+}
+
+function toModels(ids: string[], kind: OpenAICompatibleKind): ModelInfo[] {
+  return [...new Set(ids)].sort().map((id) => ({
+    id,
+    label: id,
+    capabilities: kind === 'openai' ? openAIModelCaps(id) : {},
+  }));
+}
+
+// OpenAI's /models reports ids only; capabilities follow its published model families.
+const OPENAI_REASONING = /^(o\d|gpt-5)(?!.*-chat)/;
+const OPENAI_VISION =
+  /^(gpt-4o|chatgpt-4o|gpt-4\.1|gpt-4-turbo|gpt-4\.5|gpt-5|o1(?!-mini)|o3(?!-mini)|o4)/;
+
+export function openAIModelCaps(id: string): Partial<ProviderCapabilities> {
+  return {
+    reasoning: OPENAI_REASONING.test(id) ? 'levels' : false,
+    vision: OPENAI_VISION.test(id),
+  };
+}
+
+/** OpenRouter reports modalities, supported parameters and per-token prices per model. */
+function openRouterModels(data: unknown[]): ModelInfo[] {
+  const out: ModelInfo[] = [];
+  for (const m of data) {
+    if (!isRecord(m) || typeof m.id !== 'string') continue;
+    const arch = isRecord(m.architecture) ? m.architecture : {};
+    const inputs = Array.isArray(arch.input_modalities) ? arch.input_modalities : [];
+    const params = Array.isArray(m.supported_parameters) ? m.supported_parameters : [];
+    const caps: Partial<ProviderCapabilities> = {
+      vision: inputs.includes('image'),
+      reasoning: params.includes('reasoning') ? 'levels' : false,
+    };
+    if (params.length) caps.tools = params.includes('tools');
+    if (typeof m.context_length === 'number') caps.maxContextTokens = m.context_length;
+    const info: ModelInfo = {
+      id: m.id,
+      label: typeof m.name === 'string' && m.name ? m.name : m.id,
+      capabilities: caps,
+    };
+    const pricing = isRecord(m.pricing) ? m.pricing : {};
+    const costIn = perMillion(pricing.prompt);
+    const costOut = perMillion(pricing.completion);
+    if (costIn !== undefined) info.costIn = costIn;
+    if (costOut !== undefined) info.costOut = costOut;
+    out.push(info);
+  }
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** A per-token USD price string as USD per 1M tokens; negative means variable (unknown). */
+function perMillion(v: unknown): number | undefined {
+  const n = typeof v === 'string' || typeof v === 'number' ? Number(v) : NaN;
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 1e6 * 1e6) / 1e6 : undefined;
 }
 
 // ---- errors (docs/07 §14) ---------------------------------------------------------------
 
-const CONTEXT =
+export const CONTEXT_TOO_LONG =
   /context[ _-]?(length|window)|maximum context|too many tokens|prompt is too long|reduce the length/i;
 
 export function mapHttpError(
   status: number,
   bodyText: string,
   hadKey: boolean,
-  scrub: (text: string) => string = (t) => t,
+  clean: (text: string) => string = (t) => t,
 ): AgentErrorShape {
   let detail = bodyText.trim();
   let code = '';
@@ -633,7 +594,7 @@ export function mapHttpError(
   } catch {
     // not JSON: keep the text
   }
-  detail = scrub(detail);
+  detail = clean(detail);
   const suffix = detail ? `: ${detail}` : '';
   if (status === 401 || status === 403) {
     return hadKey
@@ -650,7 +611,10 @@ export function mapHttpError(
           'Add an API key',
         );
   }
-  if (status === 429 && /insufficient_quota|billing/i.test(code + detail)) {
+  if (
+    (status === 429 || status === 402) &&
+    /insufficient_quota|billing|credit/i.test(code + detail)
+  ) {
     return err(
       'over_budget',
       `the provider account is out of credit${suffix}`,
@@ -665,7 +629,7 @@ export function mapHttpError(
       true,
       'Wait or switch model',
     );
-  if (/context_length/i.test(code) || CONTEXT.test(detail)) {
+  if (/context_length/i.test(code) || CONTEXT_TOO_LONG.test(detail)) {
     return err(
       'context_length',
       `the conversation is too long for this model${suffix}`,
@@ -680,62 +644,4 @@ export function mapHttpError(
   if (status >= 400)
     return err('invalid_request', `the provider refused the request (${status})${suffix}`, false);
   return err('provider_error', `the provider reported an error${suffix}`, false);
-}
-
-export function parseRetryAfter(headers: Headers, now = Date.now()): number | undefined {
-  const ms = headers.get('retry-after-ms');
-  if (ms && Number.isFinite(Number(ms))) return Math.max(0, Number(ms));
-  const v = headers.get('retry-after');
-  if (!v) return undefined;
-  if (/^\d+(\.\d+)?$/.test(v.trim())) return Math.max(0, Number(v) * 1000);
-  const at = Date.parse(v);
-  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
-}
-
-function err(
-  code: ProviderErrorCode,
-  message: string,
-  retryable: boolean,
-  action?: string,
-): AgentErrorShape {
-  const e: AgentErrorShape = { code, message: capitalize(message), retryable };
-  if (action) e.action = action;
-  return e;
-}
-
-function stopError(code: ProviderErrorCode, message: string, retryable: boolean): StreamEvent {
-  return { type: 'stop', reason: 'error', error: err(code, message, retryable) };
-}
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-async function readCapped(res: Response): Promise<string> {
-  try {
-    const text = await res.text();
-    return text.slice(0, MAX_ERROR_BODY);
-  } catch {
-    return '';
-  }
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<boolean> {
-  if (signal.aborted) return Promise.resolve(false);
-  if (ms <= 0) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve(true);
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve(false);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
 }

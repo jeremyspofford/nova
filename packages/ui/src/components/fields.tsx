@@ -51,6 +51,8 @@ export interface SelectOption {
   value: string;
   label: string;
   disabled?: boolean;
+  /** Tooltip text, e.g. why an option is disabled. */
+  title?: string;
 }
 
 export interface SelectFieldProps extends Omit<
@@ -86,7 +88,7 @@ export function SelectField({
 }: SelectFieldProps) {
   const id = `s${useId()}`;
   const opt = (o: SelectOption) => (
-    <option key={o.value} value={o.value} disabled={o.disabled}>
+    <option key={o.value} value={o.value} disabled={o.disabled} title={o.title}>
       {o.label}
     </option>
   );
@@ -106,8 +108,8 @@ export function SelectField({
         {...rest}
       >
         {options.map(opt)}
-        {groups.map((g) => (
-          <optgroup key={g.label} label={g.label}>
+        {groups.map((g, i) => (
+          <optgroup key={`${i}-${g.label}`} label={g.label}>
             {g.options.map(opt)}
           </optgroup>
         ))}

@@ -154,24 +154,27 @@ describe('ChatService.send (FR-018)', () => {
     expect(env.mock.requests[0]!.reasoning).toBeUndefined();
   });
 
-  it('refuses a second send while a turn runs (conflict)', async () => {
+  it('queues a second send while a turn runs and starts it when the turn ends (FR-019)', async () => {
     env = await makeEnv({ mock: { timing: { chunkDelayMs: 20 } } });
     const t = await env.threads.create(ACCOUNT, {});
     const first = env.chat.send(ACCOUNT, t.id, { text: 'one two three four five' });
-    await expect(env.chat.send(ACCOUNT, t.id, { text: 'again' })).rejects.toMatchObject({
-      code: 'conflict',
+    const again = await env.chat.send(ACCOUNT, t.id, { text: 'again' });
+    expect(again).toMatchObject({
+      disposition: 'queued',
+      turnId: null,
+      assistantMessageId: null,
+      queuePosition: 1,
     });
     await first;
-    await expect(env.chat.send(ACCOUNT, t.id, { text: 'again' })).rejects.toMatchObject({
-      code: 'conflict',
-    });
     await env.chat.idle();
-    await expect(env.chat.send(ACCOUNT, t.id, { text: 'now ok' })).resolves.toBeTruthy();
+    await expect(env.chat.send(ACCOUNT, t.id, { text: 'now ok' })).resolves.toMatchObject({
+      disposition: 'started',
+    });
     await env.chat.idle();
     const turns = env.db.raw
       .prepare('SELECT idx FROM turn WHERE thread_id = ? ORDER BY idx')
       .all(t.id);
-    expect(turns).toEqual([{ idx: 0 }, { idx: 1 }]);
+    expect(turns).toEqual([{ idx: 0 }, { idx: 1 }, { idx: 2 }]);
   });
 
   it('cancels mid-stream and keeps the partial text, marked incomplete', async () => {

@@ -130,7 +130,15 @@ Levels map to provider-specific settings:
 | xhigh/max | max budget | high (max if supported) | max budget | n/a |
 
 The effective level is stored per message and shown in the UI. Models that do not support
-reasoning hide the selector (FR-024).
+reasoning hide the selector (FR-024), and the router removes the parameter for them.
+
+- **Anthropic.** Newer models take adaptive thinking with an effort level (with summarized
+  reasoning so it can be shown); older ones that support it take `budget_tokens` scaled by
+  level. A model that cannot turn thinking off maps `off` to its lowest effort. Sampling
+  parameters a model rejects with thinking on are dropped, and a forced tool choice becomes
+  `auto`. `speed: fast` uses the provider's fast mode where the model offers one.
+- **OpenAI** maps levels to `reasoning_effort`; `xhigh`/`max` send `high`. **OpenRouter** passes
+  reasoning through. Local kinds ignore reasoning.
 
 ## 7. Tool calling
 
@@ -182,7 +190,12 @@ whose target fixes provider, model, reasoning level and speed:
 ```
 
 - Presets are generated at setup from the configured providers and are editable. An advanced
-  panel shows and edits each preset's underlying choices.
+  panel shows and edits each preset's underlying choices. Until the user saves their own list
+  (`models.presets`), the built-in three are regenerated from the models available now: chat
+  models are scored by size markers in their ids (small, large, parameter counts) and reasoning
+  support; Faster takes the lowest score, Smarter the highest, Balanced the middle; reasoning
+  levels are off, medium and high; each falls back to a model of a different account or node
+  when one exists. The offline Mock provider is used only when nothing else is configured.
 - A preset whose targets are all unavailable is disabled with a tooltip; it never silently
   falls back to a different preset.
 - Each assistant turn stores the preset and the resolved model and reasoning level (FR-023).
@@ -191,8 +204,20 @@ whose target fixes provider, model, reasoning level and speed:
 
 ## 9. Routing, retries, and limits
 
-- **Circuit breaker** per provider account: open after N consecutive failures; half-open probe.
-- **Retry** with exponential backoff + jitter for 429/5xx/network; respect `Retry-After`.
+- **Router.** Every turn resolves its model reference through one router
+  (`packages/core/src/routing`): `<accountId>/<modelId>`, `node:<nodeId>/<modelId>` or
+  `preset:<id>` becomes an ordered list of targets. For local models the router also gathers
+  the other local places serving the same model and orders all candidates by `routing.order`
+  (FR-127). With `routing.allowCloud` off, every cloud target is dropped; OpenAI, Anthropic and
+  OpenRouter accounts always count as cloud, and other kinds count as local only on loopback,
+  private, `.local`/`.lan`/`.ts.net` or CGNAT hosts. A route with no target left fails closed.
+- **Circuit breaker** per provider account or node: open after 3 consecutive transient
+  failures; half-open probe after 30 s. Request errors (auth, invalid request, context length,
+  content filter) do not count.
+- **Retry** with exponential backoff + jitter for 429/5xx/network, at most 2 per target; respect
+  `Retry-After` up to 10 s, else move to the next target. Retries live in the router, so
+  adapters are built with their own retries off. Retry and fallback happen only before the first
+  content event; after that an error ends the turn (ADR-089).
 - **Timeouts**: connect 10 s, idle stream 90 s (configurable), total per-request cap.
 - **Concurrency**: global semaphore + per-provider limit; queue with visible status.
 - **Rate limit/over budget**: surface a non-destructive banner; offer to switch model or wait.
@@ -219,7 +244,9 @@ whose target fixes provider, model, reasoning level and speed:
 
 ## 12. Local models
 
-- Detect **Ollama** (`/api/tags`) and **llama.cpp server** (`/v1/models`) automatically.
+- Detect **Ollama** (`/api/tags`) and **llama.cpp server** (`/v1/models`) automatically
+  (`GET /api/v1/providers/detect`: 127.0.0.1:11434, 127.0.0.1:8080 and any base URLs in
+  `NOVA_DETECT_URLS`; 1.5 s per probe; no credentials; redirects refused).
 - Allow a user-configured base URL for any OpenAI-compatible endpoint.
 - Download/management of GGUF models is post-v1; v1 links to the user's installed server and
   provides a "test connection" flow.

@@ -1,5 +1,6 @@
-// Shared lists the sidebar and views both read: chat threads (FR-017) and models (FR-023). The Hub
-// is the source of truth; these mirror it and refetch after changes.
+// Shared lists the sidebar and views both read: chat threads (FR-017) and models with presets
+// (FR-023, FR-221). The Hub is the source of truth; these mirror it and refetch after changes.
+// Side chats never enter the thread list (FR-026).
 import {
   createContext,
   useCallback,
@@ -10,7 +11,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import type { ModelView, ThreadView, UpdateThreadRequest } from '@nova/shared';
+import type { ModelView, Preset, ThreadView, UpdateThreadRequest } from '@nova/shared';
 import { errorMessage, type Api } from './api.ts';
 
 export interface ThreadsStore {
@@ -52,7 +53,7 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
         limit: Math.min(200, Math.max(50, loaded.current)),
       });
       loaded.current = page.items.length;
-      setThreads(page.items.filter((t) => !t.archived));
+      setThreads(page.items.filter((t) => !t.archived && !t.side));
       setCursor(page.nextCursor);
       setError(null);
     } catch (err) {
@@ -69,7 +70,7 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
       loaded.current += page.items.length;
       setThreads((list) => {
         const seen = new Set(list.map((t) => t.id));
-        return [...list, ...page.items.filter((t) => !seen.has(t.id) && !t.archived)];
+        return [...list, ...page.items.filter((t) => !seen.has(t.id) && !t.archived && !t.side)];
       });
       setCursor(page.nextCursor);
     } catch (err) {
@@ -91,6 +92,7 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
   }, [refresh]);
 
   const upsertLocal = useCallback((view: Partial<ThreadView> & { id: string }) => {
+    if (view.side) return;
     setThreads((list) => {
       const i = list.findIndex((t) => t.id === view.id);
       if (i < 0) {
@@ -173,7 +175,10 @@ export function useThreads(): ThreadsStore {
 // ---- models ---------------------------------------------------------------------------------------
 
 export interface ModelsStore {
+  /** Presets first, then provider and compute-node models (GET /models). */
   models: ModelView[];
+  /** Preset definitions; their ranks order the Faster to Smarter control (FR-221). */
+  presets: Preset[];
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
@@ -183,9 +188,15 @@ const ModelsCtx = createContext<ModelsStore | null>(null);
 
 export function ModelsProvider({ api, children }: { api: Api; children: ReactNode }) {
   const [models, setModels] = useState<ModelView[]>([]);
+  const [presets, setPresets] = useState<Preset[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(async () => {
+    // Preset ranks are optional polish: without them the control keeps the /models order.
+    const ranks = api.listPresets().then(
+      (r) => setPresets(r.items),
+      () => undefined,
+    );
     try {
       const { items } = await api.listModels();
       setModels(items);
@@ -195,6 +206,7 @@ export function ModelsProvider({ api, children }: { api: Api; children: ReactNod
     } finally {
       setLoading(false);
     }
+    await ranks;
   }, [api]);
   useEffect(() => {
     // refresh() sets state only after awaiting the network, so this cannot cascade renders.
@@ -202,8 +214,8 @@ export function ModelsProvider({ api, children }: { api: Api; children: ReactNod
     void refresh();
   }, [refresh]);
   const store = useMemo(
-    () => ({ models, loading, error, refresh }),
-    [models, loading, error, refresh],
+    () => ({ models, presets, loading, error, refresh }),
+    [models, presets, loading, error, refresh],
   );
   return <ModelsCtx.Provider value={store}>{children}</ModelsCtx.Provider>;
 }
@@ -217,5 +229,8 @@ export function useModels(): ModelsStore {
 /** Display name for a model ref, falling back to the raw id. */
 export function modelLabel(models: ModelView[], ref: string | null): string {
   if (!ref) return 'No model';
-  return models.find((m) => m.ref === ref)?.label ?? ref.slice(ref.indexOf('/') + 1);
+  const known = models.find((m) => m.ref === ref)?.label;
+  if (known) return known;
+  if (ref.startsWith('preset:')) return ref.slice('preset:'.length);
+  return ref.slice(ref.indexOf('/') + 1);
 }

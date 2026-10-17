@@ -8,46 +8,46 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 
 | FR | U | I | E | Notes |
 | --- | --- | --- | --- | --- |
-| FR-001 | todo | todo | J1 | shell layout + a11y |
-| FR-002 | todo | todo | J1 | mode switching preserves state |
-| FR-003 | todo | todo | J1 | command palette |
-| FR-004 | todo | todo | J1 | shortcut registry |
+| FR-001 | web app.test | web app.test (fake Hub) | J1 | shell layout + a11y |
+| FR-002 | web app.test | web app.test | J1 | mode switching preserves state |
+| FR-003 | web keys.test | web app.test | J1 | command palette |
+| FR-004 | web keys.test | web settings.test | J1 | shortcut registry |
 | FR-005 | todo | todo | J4 | pane layout |
 | FR-006 | todo | todo | J4 | bottom panel + terminal |
-| FR-007 | todo | todo | — | deep links |
+| FR-007 | web deeplinks.test | web deeplinks.test (router) | — | deep links |
 | FR-008 | todo | todo | — | tray |
 | FR-009 | todo | todo | — | multi-window |
-| FR-010 | todo | todo | J1 | theming tokens |
+| FR-010 | ui themes.test | web settings.test | J1 | theming tokens |
 | FR-011 | todo | todo | J4 | theme import/export |
 | FR-012 | todo | todo | — | pets |
 | FR-013 | todo | todo | J3 | notifications |
-| FR-014 | todo | todo | J1 | onboarding |
-| FR-015 | todo | todo | J1/all | accessibility |
+| FR-014 | web onboarding.test | web onboarding.test | J1 | onboarding |
+| FR-015 | ui primitives.test | web app.test (keyboard) | J1/J2 (axe) | accessibility |
 | FR-016 | todo | todo | — | i18n/RTL |
-| FR-017 | todo | todo | J1 | chat CRUD |
-| FR-018 | todo | todo | J1 | streaming/stop |
-| FR-019 | todo | todo | J2 | steer/queue |
-| FR-020 | todo | todo | J2 | edit/regenerate/branch |
-| FR-021 | todo | todo | J2 | attachments |
+| FR-017 | core threads.test | hub chat.test | J1 | chat CRUD |
+| FR-018 | core chat.test | hub chat.test | J1 | streaming/stop |
+| FR-019 | core conversation.test | hub conversation.test; web chat-followup.test | J2 | steer/queue |
+| FR-020 | core conversation.test | hub conversation.test; web chat-actions.test | J2 | edit/regenerate/branch |
+| FR-021 | core chat.test | hub chat.test | J1 | attachments |
 | FR-022 | todo | todo | J3 | @mentions |
-| FR-023 | todo | todo | J2 | model picker |
-| FR-024 | todo | todo | J2 | reasoning levels |
-| FR-025 | todo | todo | J2 | find/search |
-| FR-026 | todo | todo | J3 | side chat |
-| FR-027 | todo | todo | J2 | temporary chats |
+| FR-023 | core router.test; providers conformance.test | hub model-routes.test; web chat-models.test | J2 | model picker |
+| FR-024 | providers conformance.test | web chat.test | J2 | reasoning levels |
+| FR-025 | storage search.test; web chat-find.test | hub conversation.test | J1/J2 | find/search |
+| FR-026 | core conversation.test | web chat-panels.test | — | side chat |
+| FR-027 | core conversation.test | web chat-temporary.test | J2 | temporary chats |
 | FR-028 | todo | todo | J4 | suggested prompts |
 | FR-029 | todo | todo | J3 | web search citations |
 | FR-030 | todo | todo | J5 | image gen |
 | FR-031 | todo | todo | — | voice |
-| FR-032 | todo | todo | J2 | memory |
-| FR-033 | todo | todo | — | branch tree |
-| FR-034 | todo | todo | J2 | projects |
+| FR-032 | core memory.test | hub conversation.test; web memory.test | J2 | memory |
+| FR-033 | core conversation.test | web chat-panels.test | — | branch tree |
+| FR-034 | core projects.test | hub conversation.test; web projects.test | — | projects |
 | FR-035 | todo | todo | J4 | local projects |
 | FR-036 | todo | todo | — | space/pages |
 | FR-037 | todo | todo | — | sites |
 | FR-038 | todo | todo | J5 | artifacts |
 | FR-039 | todo | todo | J4 | file editor |
-| FR-040 | todo | todo | J3 | sources |
+| FR-040 | core projects.test | hub conversation.test; web projects.test | — | sources |
 | FR-041 | todo | todo | J4 | library |
 | FR-042 | todo | todo | J3 | MCP client |
 | FR-043 | todo | todo | J3 | MCP health |
@@ -131,10 +131,10 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-121 | todo | todo | — | crash reporting |
 | FR-122 | todo | todo | — | performance budgets |
 | FR-123 | todo | todo | — | security suite |
-| FR-124 | todo | todo | J1 | hub service hosts canonical state |
-| FR-125 | todo | todo | J1 | thin clients, hub-served UI |
-| FR-126 | todo | todo | J2 | compute node registration |
-| FR-127 | todo | todo | J2 | routing order |
+| FR-124 | hub hub.test | hub hub.test | J1 | hub service hosts canonical state |
+| FR-125 | hub hub.test | hub chat.test | J1 | thin clients, hub-served UI |
+| FR-126 | core nodes.test; compute *.test | hub node-routes.test (real node); web devices.test | — | compute node registration |
+| FR-127 | core router.test, nodes-routing.test | core router.test (chat through router) | — | routing order |
 | FR-128 | todo | todo | J9 | local fallback |
 | FR-129 | todo | todo | J9 | capability-gated offline replica |
 | FR-130 | todo | todo | — | hub failover (post-v1) |
@@ -228,7 +228,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-218 | todo | todo | — | voice-call channel |
 | FR-219 | todo | todo | J5 | document outputs |
 | FR-220 | todo | todo | J5 | deep research run |
-| FR-221 | todo | todo | J2 | model presets |
+| FR-221 | core presets.test | hub model-routes.test; web models-settings.test | J2 | model presets |
 | FR-222 | todo | todo | — | third-party app authorization |
 | FR-223 | todo | todo | — | opt-in OTLP export |
 | FR-224 | todo | todo | — | persistence safety evals |

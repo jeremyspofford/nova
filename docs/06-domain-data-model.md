@@ -130,17 +130,21 @@ CREATE TABLE thread (
   parent_thread_id TEXT REFERENCES thread(id),  -- branching / side chat / sub-agent child
   branch_from_message_id TEXT,
   temporary INTEGER NOT NULL DEFAULT 0,
+  side INTEGER NOT NULL DEFAULT 0,  -- side chat: reads the parent's path, adds no turns to it (FR-026)
+  memory_opt_out INTEGER NOT NULL DEFAULT 0, -- excluded from memory extraction (FR-032)
+  active_leaf_id TEXT,              -- the active path runs from this message to the root (FR-020)
   model_id TEXT, reasoning_level TEXT,
   pinned INTEGER NOT NULL DEFAULT 0,
   archived INTEGER NOT NULL DEFAULT 0,
   unread INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL DEFAULT 'idle', -- idle|streaming|waiting_approval|waiting_input|error
-  input_mode TEXT NOT NULL DEFAULT 'steer', -- steer|queue: input sent during a turn (FR-019)
+  input_mode TEXT NOT NULL DEFAULT 'steer', -- unused since M2: the general.followUp setting decides (ADR-089)
   metadata TEXT,                   -- JSON (env, cwd, session opts, agent id, ...)
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
 );
 CREATE INDEX idx_thread_account_mode ON thread(account_id, mode, updated_at DESC);
 CREATE INDEX idx_thread_project ON thread(project_id);
+CREATE INDEX idx_thread_parent ON thread(parent_thread_id);
 
 CREATE TABLE turn (                -- one trigger and everything the runtime did for it (docs/09 §2)
   id TEXT PRIMARY KEY,
@@ -170,12 +174,24 @@ CREATE TABLE message (
   role TEXT NOT NULL,              -- system|user|assistant|tool|summary
   author_kind TEXT,                -- user|agent|subagent|system
   provenance TEXT NOT NULL DEFAULT 'typed', -- typed|pasted|tool|channel|capture|import (FR-189)
+  delivery TEXT,                   -- NULL|steer|queued: how a follow-up entered its turn (FR-019)
+  parent_id TEXT,                  -- the message this one follows; siblings are versions (FR-020)
   status TEXT NOT NULL DEFAULT 'complete', -- streaming|complete|incomplete|error
-  model_id TEXT, provider TEXT, usage_json TEXT, cost_usd REAL,
+  model_id TEXT, provider TEXT, usage_json TEXT, cost_usd REAL, -- model_id: the model that answered
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
 );
 CREATE INDEX idx_message_thread ON message(thread_id, created_at);
 CREATE INDEX idx_message_turn ON message(turn_id);
+CREATE INDEX idx_message_parent ON message(parent_id);
+
+CREATE TABLE queued_input (         -- follow-ups sent in queue mode; survive a restart (FR-019)
+  id TEXT PRIMARY KEY,             -- becomes the id of the user message it creates
+  thread_id TEXT NOT NULL REFERENCES thread(id), account_id TEXT NOT NULL,
+  text TEXT NOT NULL, attachments TEXT, -- JSON list of stored blobs
+  model TEXT, reasoning_level TEXT,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending|started|cancelled
+  turn_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 
 CREATE TABLE message_part (        -- the "items" of a turn
   id TEXT PRIMARY KEY,
@@ -223,7 +239,21 @@ CREATE TABLE attachment (
 
 CREATE TABLE citation (
   id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES message(id),
-  idx INTEGER, url TEXT, title TEXT, snippet TEXT, retrieved_at TEXT
+  idx INTEGER, url TEXT, source_id TEXT, -- source_id for project sources (FR-040)
+  title TEXT, snippet TEXT, retrieved_at TEXT, created_at TEXT NOT NULL
+);
+
+CREATE TABLE source (               -- project sources (FR-040); content is a blob (§3)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES project(id),
+  name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL, blob_path TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending|indexing|ready|error
+  error TEXT, chunk_count INTEGER NOT NULL DEFAULT 0, indexed_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE TABLE source_chunk (         -- retrieval units, indexed by the FTS5 table source_chunk_fts
+  seq INTEGER PRIMARY KEY, source_id TEXT NOT NULL REFERENCES source(id),
+  idx INTEGER NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL
 );
 ```
 
@@ -691,12 +721,13 @@ CREATE TABLE memory_item (          -- canonical, reviewable memory (FR-032, FR-
   scope_kind TEXT NOT NULL,             -- global|project|thread|agent
   scope_ref TEXT,
   content TEXT NOT NULL, kind TEXT,
+  content_key TEXT NOT NULL,            -- normalized content; duplicates in a scope are skipped
   category TEXT,                        -- Memory page grouping (FR-204)
   confidence REAL,
   as_of TEXT,                           -- when the fact was observed or true
   valid_until TEXT,                     -- after this, consolidation ages the item
-  source_kind TEXT NOT NULL DEFAULT 'chat', -- chat|consolidation|import|ambient
-  source_message_id TEXT,
+  source_kind TEXT NOT NULL DEFAULT 'chat', -- chat|consolidation|import|ambient|manual
+  source_thread_id TEXT, source_message_id TEXT,
   origin_audience TEXT NOT NULL DEFAULT 'private', -- private|shared: audience of the thread or channel
                                         -- binding it came from; a consolidated item is private if any
                                         -- source is (docs/13 §4, ADR-070)

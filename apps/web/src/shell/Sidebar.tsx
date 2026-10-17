@@ -1,11 +1,14 @@
-// Sidebar (FR-001, docs/04 §1): New chat, Search, the four modes (Chat lists its threads), and
-// Settings. It is a landmark with a logical tab order; the thread list is one roving tab stop.
-import { Icon, Kbd, type IconName } from '@nova/ui';
+// Sidebar (FR-001, docs/04 §1): New chat, Search, the four modes (Chat lists its threads),
+// Projects with the most recent few (FR-034), and Settings. It is a landmark with a logical tab
+// order; the thread list is one roving tab stop.
+import { Icon, IconButton, Kbd, type IconName } from '@nova/ui';
 import { ThreadList } from '../chat/ThreadList.tsx';
 import { SearchPanel } from '../chat/SearchPanel.tsx';
 import { formatBinding } from '../keys.ts';
-import { navigate, type Mode } from '../router.ts';
+import { useRecentProjects } from '../projects/events.ts';
+import { navigate, projectPath, useRoute, type Mode } from '../router.ts';
 import { useServices } from '../services.tsx';
+import '../workspace.css';
 
 export const MODE_INFO: Record<Mode, { label: string; icon: IconName; command: string }> = {
   chat: { label: 'Chat', icon: 'chat', command: 'mode.chat' },
@@ -43,6 +46,9 @@ export function Sidebar({
   hidden,
 }: SidebarProps) {
   const { registry } = useServices();
+  const route = useRoute();
+  const recentProjects = useRecentProjects();
+  const openProjectId = route.name === 'projects' ? route.projectId : null;
   const mac = registry.platform.mac;
   const keys = (cmd: string) => {
     const b = registry.primaryBinding(cmd);
@@ -60,6 +66,15 @@ export function Sidebar({
         >
           <Icon name="plus" /> New chat
         </button>
+        <IconButton
+          label="New temporary chat"
+          icon={<Icon name="clock" />}
+          variant="ghost"
+          onClick={() => {
+            registry.run('chat.newTemporary');
+            onNavigated();
+          }}
+        />
         <button
           type="button"
           className="nv-btn sidebar-search"
@@ -111,6 +126,47 @@ export function Sidebar({
           );
         })}
       </ul>
+      <div className="sidebar-projects">
+        <a
+          href={projectPath(null)}
+          className="mode-link"
+          aria-current={route.name === 'projects' && !openProjectId ? 'page' : undefined}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            navigate(projectPath(null));
+            onNavigated();
+          }}
+        >
+          <Icon name="folder" />
+          <span className="mode-label">Projects</span>
+        </a>
+        {recentProjects.length ? (
+          <ul className="threads" aria-label="Recent projects">
+            {recentProjects.map((p) => (
+              <li
+                key={p.id}
+                className="thread-row"
+                data-selected={p.id === openProjectId || undefined}
+              >
+                <a
+                  href={projectPath(p.id)}
+                  className="thread-link"
+                  aria-current={p.id === openProjectId ? 'page' : undefined}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                    e.preventDefault();
+                    navigate(projectPath(p.id));
+                    onNavigated();
+                  }}
+                >
+                  <span className="thread-title">{p.name}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
       <div className="sidebar-bottom">
         <a
           href="/settings/general"

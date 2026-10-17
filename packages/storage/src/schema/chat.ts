@@ -1,4 +1,4 @@
-// Chat tables (0002_chat). SQL migrations are authoritative; test/schema.test.ts checks them.
+// Chat tables (0002_chat, 0003_thread_flags, 0004_conversation columns). SQL migrations are authoritative; test/schema.test.ts checks them.
 import {
   index,
   integer,
@@ -108,6 +108,8 @@ export const thread = sqliteTable(
       .notNull()
       .default('steer'),
     metadata: text('metadata'),
+    /** End of the active path through the message tree (FR-020, 0004). */
+    activeLeafId: text('active_leaf_id'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     deletedAt: text('deleted_at'),
@@ -171,6 +173,10 @@ export const message = sqliteTable(
     provider: text('provider'),
     usageJson: text('usage_json'),
     costUsd: real('cost_usd'),
+    /** The message this one follows (FR-020, 0004); edits and regenerations are siblings. */
+    parentId: text('parent_id'),
+    /** A user message sent while a turn ran: steered into it or queued behind it (FR-019). */
+    delivery: text('delivery', { enum: ['steer', 'queued'] }),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     deletedAt: text('deleted_at'),
@@ -178,6 +184,7 @@ export const message = sqliteTable(
   (t) => [
     index('idx_message_thread').on(t.threadId, t.createdAt),
     index('idx_message_turn').on(t.turnId),
+    index('idx_message_parent').on(t.parentId),
   ],
 );
 

@@ -19,14 +19,23 @@ import {
   readAsBase64,
   textToBase64,
 } from '../src/chat/attachments.ts';
+import type { ModelView } from '@nova/shared';
+import { comparePath } from '../src/chat/BranchesPanel.tsx';
+import { otherMode } from '../src/chat/Composer.tsx';
+import { findMarks, findPattern, rehypeFind, splitMatches } from '../src/chat/find.tsx';
+import { fallbackModel, isDisabled, modelGroups, presetStops } from '../src/chat/models.ts';
 import { threadStatus } from '../src/chat/status.ts';
 import {
+  deletionIds,
   initialThreadState,
   isStreaming,
   messageText,
+  placeholder,
   threadReducer,
   type ThreadState,
 } from '../src/chat/thread-state.ts';
+import { browserAlternate, isBrowserReserved } from '../src/keys.ts';
+import { modelLabel } from '../src/stores.tsx';
 import { chatPath, navigate, parseRoute, routeMode } from '../src/router.ts';
 import { THREAD_EVENTS, openStream } from '../src/sse.ts';
 import { FakeEventSource, message, thread } from './fakes.ts';
@@ -418,5 +427,257 @@ describe('thread state (FR-018)', () => {
     expect(threadStatus({ state: 'waiting_approval' })).toBe('needs_input');
     expect(threadStatus({ state: 'waiting_input' })).toBe('needs_input');
     expect(threadStatus({ state: 'error' })).toBe('blocked');
+  });
+});
+
+describe('thread state for M2 (FR-019, FR-020)', () => {
+  const t = thread({ id: 't1' });
+  const base = () =>
+    threadReducer(initialThreadState(t), {
+      type: 'loaded',
+      detail: {
+        thread: t,
+        messages: [
+          message('t1', { id: 'u1', role: 'user', turnId: 'tu1' }),
+          message('t1', { id: 'a1', role: 'assistant', turnId: 'tu1', status: 'streaming' }),
+        ],
+        queue: [],
+      },
+    });
+  const temp = (id: string, text: string, expect?: 'queue' | 'steer') => ({
+    ...message('t1', { id, parts: [{ type: 'text' as const, text }] }),
+    local: true,
+    ...(expect ? { expect } : {}),
+  });
+
+  it('moves a queued send out of the log into the queue, once', () => {
+    let s = threadReducer(base(), {
+      type: 'optimistic',
+      message: temp('local-1', 'later', 'queue'),
+    });
+    s = threadReducer(s, {
+      type: 'accepted',
+      tempId: 'local-1',
+      res: {
+        disposition: 'queued',
+        turnId: null,
+        userMessageId: 'q1',
+        assistantMessageId: null,
+        queuePosition: 1,
+      },
+    });
+    expect(s.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+    expect(s.queue).toEqual([expect.objectContaining({ id: 'q1', text: 'later', position: 1 })]);
+    s = threadReducer(s, {
+      type: 'accepted',
+      tempId: 'local-1',
+      res: { disposition: 'queued', turnId: null, userMessageId: 'q1', assistantMessageId: null },
+    });
+    expect(s.queue).toHaveLength(1);
+    s = threadReducer(s, { type: 'dequeued', queuedId: 'q1' });
+    expect(s.queue).toEqual([]);
+    s = threadReducer(s, {
+      type: 'queue',
+      items: [
+        { id: 'q2', threadId: 't1', text: 'x', attachmentCount: 0, position: 1, createdAt: '' },
+      ],
+    });
+    expect(s.queue.map((q) => q.id)).toEqual(['q2']);
+    // A reload without a queue field keeps what is known.
+    s = threadReducer(s, { type: 'loaded', detail: { thread: t, messages: s.messages } });
+    expect(s.queue.map((q) => q.id)).toEqual(['q2']);
+  });
+
+  it('marks a steered send, whether or not its created event came first', () => {
+    let s = threadReducer(base(), {
+      type: 'optimistic',
+      message: temp('local-2', 'shorter', 'steer'),
+    });
+    s = threadReducer(s, {
+      type: 'accepted',
+      tempId: 'local-2',
+      res: { disposition: 'steered', turnId: 'tu1', userMessageId: 's1', assistantMessageId: null },
+    });
+    const steered = s.messages.find((m) => m.id === 's1')!;
+    expect(steered.provenance).toBe('steer');
+    expect(steered.expect).toBeUndefined();
+    expect(s.messages).toHaveLength(3);
+
+    let r = threadReducer(base(), {
+      type: 'created',
+      messageId: 's2',
+      role: 'user',
+      turnId: 'tu1',
+    });
+    r = threadReducer(r, { type: 'optimistic', message: temp('local-3', 'again', 'steer') });
+    r = threadReducer(r, {
+      type: 'accepted',
+      tempId: 'local-3',
+      res: { disposition: 'steered', turnId: 'tu1', userMessageId: 's2', assistantMessageId: null },
+    });
+    expect(r.messages.filter((m) => m.id === 's2')).toEqual([
+      expect.objectContaining({ provenance: 'steer', parts: [{ type: 'text', text: 'again' }] }),
+    ]);
+  });
+
+  it('rewinds the path for a new version and removes deleted messages', () => {
+    let s = base();
+    s = threadReducer(s, { type: 'created', messageId: 'a2', role: 'assistant', turnId: 'tu2' });
+    s = threadReducer(s, {
+      type: 'rewound',
+      fromId: 'a1',
+      add: [message('t1', { id: 'a2', role: 'assistant', status: 'streaming' })],
+    });
+    expect(s.messages.map((m) => m.id)).toEqual(['u1', 'a2']);
+    expect(s.turnRunning).toBe(true);
+    expect(threadReducer(s, { type: 'rewound', fromId: 'missing', add: [] })).toBe(s);
+    s = threadReducer(s, { type: 'removed', ids: ['a2'] });
+    expect(s.messages.map((m) => m.id)).toEqual(['u1']);
+  });
+
+  it('deletes a user message together with the reply in its turn', () => {
+    const msgs = [
+      message('t1', { id: 'u1', role: 'user', turnId: 'tu1' }),
+      message('t1', { id: 'a1', role: 'assistant', turnId: 'tu1' }),
+      message('t1', { id: 'u2', role: 'user', turnId: null }),
+    ];
+    expect(deletionIds(msgs, 'u1')).toEqual(['u1', 'a1']);
+    expect(deletionIds(msgs, 'a1')).toEqual(['a1']);
+    expect(deletionIds(msgs, 'u2')).toEqual(['u2']);
+    expect(deletionIds(msgs, 'zz')).toEqual(['zz']);
+    expect(placeholder('p', 't1', 'user', null).status).toBe('complete');
+  });
+});
+
+describe('find helpers (FR-025)', () => {
+  it('matches literally and case-insensitively', () => {
+    expect(findPattern('  ')).toBeNull();
+    expect(splitMatches('Price (USD) is $5, price? yes', 'price')).toEqual([
+      { text: 'Price', hit: true },
+      { text: ' (USD) is $5, ', hit: false },
+      { text: 'price', hit: true },
+      { text: '? yes', hit: false },
+    ]);
+    expect(splitMatches('a.b axb', 'a.b').filter((p) => p.hit)).toHaveLength(1);
+    expect(splitMatches('', 'x')).toEqual([]);
+    expect(splitMatches('abc', '')).toEqual([{ text: 'abc', hit: false }]);
+  });
+
+  it('marks matches in a rendered tree without touching other nodes', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'element',
+          tagName: 'p',
+          children: [
+            { type: 'text', value: 'Due soon, due now' },
+            { type: 'element', tagName: 'strong', children: [{ type: 'text', value: 'due' }] },
+          ],
+        },
+      ],
+    };
+    rehypeFind('due')()(tree);
+    const p = tree.children[0]!;
+    expect(p.children.map((c) => (c.type === 'text' ? 'text' : c.tagName))).toEqual([
+      'mark',
+      'text',
+      'mark',
+      'text',
+      'strong',
+    ]);
+    const strong = p.children[4] as { children: { tagName?: string }[] };
+    expect(strong.children[0]!.tagName).toBe('mark');
+    const untouched = { type: 'root', children: [{ type: 'text', value: 'due' }] };
+    rehypeFind(' ')()(untouched);
+    expect(untouched.children[0]!.type).toBe('text');
+    expect(findMarks(null)).toEqual([]);
+  });
+});
+
+describe('model choices (FR-023, FR-221)', () => {
+  const preset = (id: string, over: Partial<ModelView> = {}): ModelView => ({
+    ref: `preset:${id}`,
+    kind: 'preset',
+    source: 'preset',
+    providerAccountId: '',
+    provider: 'preset',
+    modelId: id,
+    label: id,
+    reasoning: false,
+    ...over,
+  });
+  const direct: ModelView = {
+    ref: 'pa1/m',
+    kind: 'model',
+    source: 'account',
+    providerAccountId: 'pa1',
+    provider: 'mock',
+    modelId: 'm',
+    label: 'M',
+    reasoning: false,
+  };
+
+  it('orders enabled presets by rank and describes what they run on', () => {
+    const models = [preset('b'), preset('a'), preset('off', { disabledReason: 'none' }), direct];
+    const ranks = [
+      { id: 'a', label: 'A', strategy: 'single' as const, targets: ['pa1/m'], rank: 1 },
+      { id: 'b', label: 'B', strategy: 'single' as const, targets: ['gone/x'], rank: 2 },
+    ];
+    expect(presetStops(models, ranks)).toEqual([
+      { ref: 'preset:a', label: 'a', rank: 1, description: 'Uses M' },
+      { ref: 'preset:b', label: 'b', rank: 2 },
+    ]);
+    expect(presetStops(models, []).map((s) => s.ref)).toEqual(['preset:b', 'preset:a']);
+  });
+
+  it('picks Balanced, else the middle preset, else the first usable model', () => {
+    expect(fallbackModel([preset('fast'), preset('balanced'), direct], [])?.ref).toBe(
+      'preset:balanced',
+    );
+    expect(fallbackModel([preset('x'), preset('y'), preset('z'), direct], [])?.ref).toBe(
+      'preset:y',
+    );
+    expect(fallbackModel([preset('p', { disabledReason: 'no' }), direct], [])?.ref).toBe('pa1/m');
+    expect(fallbackModel([], [])).toBeNull();
+    expect(isDisabled([preset('p', { disabledReason: 'no' })], 'preset:p')).toBe(true);
+    expect(isDisabled([direct], 'pa1/m')).toBe(false);
+    expect(isDisabled([direct], null)).toBe(false);
+  });
+
+  it('groups presets first even when listed later, and nodes apart', () => {
+    const node: ModelView = {
+      ...direct,
+      ref: 'node:n1/x',
+      source: 'node',
+      provider: 'node',
+      nodeId: 'n1',
+      providerAccountId: '',
+    };
+    const groups = modelGroups([direct, node, preset('a')]);
+    expect(groups.map((g) => g.label)).toEqual(['Presets', 'Mock', 'Compute node']);
+    expect(
+      modelGroups([direct, { ...direct, ref: 'pa2/m', providerAccountId: 'pa2' }]).map(
+        (g) => g.label,
+      ),
+    ).toEqual(['Mock', 'Mock (2)']);
+    expect(modelLabel([], 'preset:smart')).toBe('smart');
+    expect(modelLabel([], 'pa9/model-x')).toBe('model-x');
+    expect(modelLabel([], null)).toBe('No model');
+  });
+
+  it('switches follow-up modes and reserves Mod+F in a browser tab', () => {
+    expect(otherMode('steer')).toBe('queue');
+    expect(otherMode('queue')).toBe('steer');
+    expect(isBrowserReserved('mod+f')).toBe(true);
+    expect(browserAlternate('mod+f', false)).toBe('alt+f');
+    for (const name of [
+      'chat.message.deleted',
+      'chat.branch.created',
+      'chat.followup.queued',
+      'chat.followup.started',
+    ])
+      expect(THREAD_EVENTS).toContain(name);
+    expect(comparePath('a b', 'c')).toBe('/chat/a%20b?compare=c');
   });
 });

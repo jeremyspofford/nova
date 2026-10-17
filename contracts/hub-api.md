@@ -24,11 +24,11 @@ signed artifacts only).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/v1/devices/add/start` | Create an Add Device request; returns QR payload + short code + TTL (direct or via Relay) |
+| `POST` | `/api/v1/devices/add/start` | Create an Add Device request; returns QR payload + short code + TTL (direct or via Relay). M2: `{role: "compute"}` returns a one-use enrollment token `{token: "nve_…", expiresAt}` (15 min) that a compute node presents to `/node/v1/register`; creating it is the human approval for that node (ADR-089). Other roles arrive in M6 |
 | `POST` | `/api/v1/devices/add/complete` | Device submits public key + code (authenticated by the code); Hub returns a pending approval |
 | `POST` | `/api/v1/devices/add/approve` | Hub-side human approves; issues device cert + scoped token |
 | `GET` | `/api/v1/agent/dist/:file` | Signed per-arch `novad` binaries and checksums for the bootstrap command (`docs/22` §4.3); serves nothing else |
-| `GET` | `/api/v1/devices` | List devices with role, scopes, health, reachability, `novad` version |
+| `GET` | `/api/v1/devices` | List devices with role, scopes, health, reachability, `novad` version. `?role=compute` lists compute nodes as `NodeView` (M2 lists only compute nodes) |
 | `PATCH` | `/api/v1/devices/:id` | Edit scopes/capabilities/overrides |
 | `POST` | `/api/v1/devices/:id/wake` | Request WoL via a Wake Helper |
 | `POST` | `/api/v1/devices/:id/revoke` | Revoke certificate, stop modules and stop relay routing |
@@ -40,25 +40,40 @@ signed artifacts only).
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET/POST` | `/api/v1/projects` | List/create projects (`memoryScope: shared\|project_only`, fixed at creation, FR-205) |
-| `GET/POST` | `/api/v1/threads` | List (`mode`, `archived`, `q`, `cursor`, `limit`; pinned first, then most recent) / create conversations. Shapes: `packages/shared/src/api.ts` |
-| `GET/PATCH/DELETE` | `/api/v1/threads/:id` | Thread with its messages / rename, pin, archive, model, reasoning level / soft delete |
-| `POST` | `/api/v1/threads/:id/messages` | Send a message (202 with `{turnId, userMessageId, assistantMessageId}`); output arrives as events (§5). Body up to 30 MB with attachments, else 413. Steers or queues per the thread setting while a turn runs (FR-019); until M2, a second send during a turn is 409 `conflict` |
+| `GET/PATCH/DELETE` | `/api/v1/projects/:id` | Project / rename, instructions (FR-034) / soft delete; its chats stay, detached |
+| `GET/POST` | `/api/v1/projects/:id/sources` | List / add a source (file as base64 or pasted text); indexing runs in the background, `pending → indexing → ready\|error`, with `source.status.changed` events (FR-040). M2 indexes text types only |
+| `POST` | `/api/v1/sources/:id/reindex` | Index again |
+| `DELETE` | `/api/v1/sources/:id` | Remove; its chunks leave retrieval at once |
+| `GET/POST` | `/api/v1/threads` | List (`mode`, `archived`, `q`, `projectId`, `cursor`, `limit`; pinned first, then most recent; side chats excluded) / create conversations (`temporary`, `memoryOptOut`, `projectId`). Shapes: `packages/shared/src/api.ts` |
+| `GET/PATCH/DELETE` | `/api/v1/threads/:id` | Thread with its active path, version info, citations and follow-up queue / rename, pin, archive, model, reasoning level, memory opt-out, project / soft delete; a temporary thread is purged (FR-027) |
+| `POST` | `/api/v1/threads/:id/messages` | Send a message: 202 `{disposition, turnId, userMessageId, assistantMessageId, queuePosition?}`; output arrives as events (§5). Body up to 30 MB with attachments, else 413. While a turn runs, `inputMode` (or the `general.followUp` setting) decides (FR-019): `steered` joins the running turn and is applied at the start of its next model step; `queued` is persisted and runs as the next turn, surviving a restart; its id becomes the `userMessageId` of the message it creates |
+| `GET` | `/api/v1/threads/:id/queue` | Queued follow-ups, oldest first |
+| `DELETE` | `/api/v1/threads/:id/queue/:queuedId` | Cancel a queued follow-up |
+| `POST` | `/api/v1/threads/:id/messages/:mid/edit` | Edit a user message as a new sibling version and run it; prior turns are kept (FR-020) |
+| `POST` | `/api/v1/threads/:id/messages/:mid/regenerate` | Add a sibling reply to the same user message (FR-020) |
+| `POST` | `/api/v1/threads/:id/active` | Switch the active path to the one through `{messageId}` (the thread's own messages only); returns the thread detail; `conflict` while a turn runs |
+| `DELETE` | `/api/v1/threads/:id/messages/:mid` | Soft-delete a message (a user message takes its reply with it); excluded from view, context and search |
+| `POST` | `/api/v1/threads/:id/branch` | Branch from `{fromMessageId}` into a new thread that inherits the path by reference (FR-020, FR-033) |
+| `GET` | `/api/v1/threads/:id/tree` | The lineage tree: root, branches and side chats (FR-033) |
+| `POST` | `/api/v1/threads/:id/side` | Side chat `{text, model?}`: a child thread that reads the parent's context and adds no turns to it (FR-026) |
 | `GET` | `/api/v1/threads/:id/turns` | Turns with their items (`docs/06` §2), paged |
 | `GET` | `/api/v1/threads/:id/stream` | SSE stream of this thread's events and server requests (§5). Opens with a `: connected` comment. With `Last-Event-ID` or `?after=` it first replays persisted events after that id (ids compare as UUIDv7, so an ephemeral id works); without a cursor it sends live events only, so clients load the thread first and refetch on `chat.message.completed` |
 | `POST` | `/api/v1/threads/:id/cancel` | Cancel generation; the turn ends `interrupted` |
 | `POST` | `/api/v1/threads/:id/handoff` | Move a chat to another device or environment (FR-213) |
 | `GET/POST` | `/api/v1/files` | List/upload files (projects, artifacts, window-capture attachments, FR-214) |
-| `GET` | `/api/v1/search?q=` | Search message text, newest first; snippets mark matches with `<mark>…</mark>` and are otherwise plain text; temporary and deleted threads excluded (vector ranking joins in M2) |
+| `GET` | `/api/v1/search?q=` | Search message text (`projectId?`), ranked by relevance (FTS5 bm25, recency breaks ties); snippets mark matches with `<mark>…</mark>` and are otherwise plain text; temporary, side and deleted threads and deleted messages excluded (FR-025). Vector ranking joins when local embeddings land |
 | `GET` | `/api/v1/attachments/:id` | Attachment bytes with their type; `Content-Disposition: attachment` except images |
 
-### Providers, models, account (M1)
+### Providers, models, account
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET/POST` | `/api/v1/providers` | List / add provider accounts. `apiKey` is write-only: stored in the secret vault, never returned; the database holds only a `secret://` reference (FR-101) |
 | `DELETE` | `/api/v1/providers/:id` | Remove an account and its secret |
 | `POST` | `/api/v1/providers/:id/test` | Connect and list models; returns `{ok, detail?, models?}` and never fails the request for a bad key |
-| `GET` | `/api/v1/models` | Models of all active accounts as `{ref: "<accountId>/<modelId>", label, reasoning, ...}` |
+| `GET` | `/api/v1/models` | Presets first (`ref: "preset:<id>"`, `disabledReason` when no target is usable), then models of all active accounts (`ref: "<accountId>/<modelId>"`), then compute-node models (`ref: "node:<nodeId>/<modelId>"`); each with `kind`, `source`, `label`, `reasoning` (FR-023, FR-221) |
+| `GET/PUT` | `/api/v1/presets` | The Faster ↔ Smarter presets `{items, builtIn}`; `PUT {items: []}` restores the built-in set generated from the configured models (FR-221, `docs/07` §8.1) |
+| `GET` | `/api/v1/providers/detect` | Probe local model servers (Ollama, llama.cpp, `NOVA_DETECT_URLS`); never sends credentials (`docs/07` §12) |
 | `PATCH` | `/api/v1/account` | Update the display name |
 
 ### Tasks, goals, agents, approvals, requests
@@ -105,8 +120,9 @@ signed artifacts only).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/v1/memory/items?scope=&category=` | Memory items grouped by category (FR-032, FR-204) |
+| `GET/POST` | `/api/v1/memory/items?scopeKind=&scopeRef=&category=&q=&status=` | Memory items, pinned first (FR-032, FR-204) / add one by hand |
 | `PATCH/DELETE` | `/api/v1/memory/items/:id` | Correct, pin, dismiss or delete an item |
+| `POST` | `/api/v1/memory/import` | Import facts from a provided export (JSON array or one per line); duplicates skipped (FR-032) |
 | `GET` | `/api/v1/memory/summary?scope=` | The current injected summary (≤ 2,500 tokens) and its source run |
 | `POST` | `/api/v1/memory/consolidate` | Start a consolidation run now `{scope}` |
 | `GET` | `/api/v1/memory/consolidations` | Consolidation run history |
@@ -181,14 +197,23 @@ gaps. Calls on behalf of a schedule, automation, agent or app are checked agains
 Internal, authenticated (mTLS over Mesh or LAN). The Hub authorizes every job; nodes never
 initiate to clients.
 
+Until certificates arrive with the Mesh (M6.5), a node authenticates with bearer tokens over
+LAN HTTP (ADR-089): it registers with a one-use enrollment token, an Ed25519 public key and a
+capability document ([`device-capability.json`](schemas/device-capability.json)) signed with
+that key; the Hub pins the key, returns a node credential (`nvn_…`, stored hashed) for
+heartbeats and model sync, and keeps the node's job token (generated by the node) in the
+secret vault to call the node's job API. Every re-sent capability document must verify against
+the pinned key. Heartbeats every 10 s; three missed beats mark the node `unreachable`.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/node/v1/register` | Node announces capabilities + certificate |
-| `POST` | `/node/v1/heartbeat` | Health, load, queue depth, temperature |
-| `POST` | `/node/v1/models/sync` | Compare/advertise available models |
-| `POST` | `/node/v1/jobs` | Submit a job (chat/tool/embedding/media) |
-| `GET` | `/node/v1/jobs/:id/stream` | Stream job output |
-| `POST` | `/node/v1/jobs/:id/cancel` | Cancel a job |
+| `POST` | `/node/v1/register` | (node → Hub) Announce capabilities + certificate; M2: `{enrollToken, name, endpoint, publicKey, capability, signature, jobToken, protocolVersions}` → `{nodeId, credential, heartbeatIntervalMs, protocolVersion}` |
+| `POST` | `/node/v1/heartbeat` | (node → Hub) Health, load, queue depth, temperature; `401` once revoked |
+| `POST` | `/node/v1/models/sync` | (node → Hub) Advertise available models in a re-signed capability document |
+| `POST` | `/node/v1/jobs` | (Hub → node) Submit a job (chat/tool/embedding/media); M2: `{kind: "chat", request}` → `{jobId}` |
+| `GET` | `/node/v1/jobs/:id/stream` | (Hub → node) Stream job output as SSE of normalized stream events (`docs/07` §2) |
+| `POST` | `/node/v1/jobs/:id/cancel` | (Hub → node) Cancel a job |
+| `GET` | `/node/v1/health` | (Hub → node) Health and load |
 | `POST` | `/node/v1/services/:name/{start,stop,restart}` | Manage a service |
 
 ## 3. Hub ↔ `novad` (management channel)

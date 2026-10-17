@@ -3,16 +3,16 @@
 > **This is the single source of truth for build progress.** The build agent keeps it current
 > before and after every task (`AGENTS.md` §4). Task IDs come from `docs/29-task-breakdown.md`.
 
-Current milestone: **M2 — Multi-Provider, Projects, Memory & Search**
-Last updated: 2026-10-17T06:10:00Z
+Current milestone: **M3 — Tools, MCP, Policy & Approvals**
+Last updated: 2026-10-17T08:40:00Z
 
 ## Phase status
 
 | Phase | Status | Commit | Evidence |
 | --- | --- | --- | --- |
 | Phase 0 — reconcile external findings | done | c63b82d | `docs/external/RECONCILIATION.md` (141 capabilities); `node scripts/check-spec.mjs` |
-| Phase 1 — finish the specification | done | (this commit) | topic docs + contracts updated; `node scripts/check-spec.mjs`; all schemas compile (Ajv 2020) |
-| Phase 2 — build | in_progress | 10bbcf4 | M0 done |
+| Phase 1 — finish the specification | done | 2868ce3 | topic docs + contracts updated; `node scripts/check-spec.mjs`; all schemas compile (Ajv 2020) |
+| Phase 2 — build | in_progress | 10bbcf4 | M0, M1, M2 done |
 
 ## Milestone status
 
@@ -20,7 +20,7 @@ Last updated: 2026-10-17T06:10:00Z
 | --- | --- | --- | --- | --- |
 | M0 Foundation | done | 2026-10-17 | 2026-10-17 | 10bbcf4; `docs/demos/M0.md`; Playwright smoke J0 green |
 | M1 Chat MVP | done | 2026-10-17 | 2026-10-17 | J1 green 3/3 (axe clean, cold start < 3 s); `docs/demos/M1.md` |
-| M2 Providers/Projects/Memory | todo | — | — | — |
+| M2 Providers/Projects/Memory | done | 2026-10-17 | 2026-10-17 | J1 + J2 green 3/3 in parallel (axe clean); `docs/demos/M2.md` |
 | M3 Tools/MCP/Policy | todo | — | — | — |
 | M4 Plugins/Workspace/Profile | todo | — | — | — |
 | M5 Agent Runtime (Work & Code) | todo | — | — | — |
@@ -41,7 +41,7 @@ Last updated: 2026-10-17T06:10:00Z
 | ID | Milestone | Requirement | Status | Commit | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | T-P0-01 | P0 | — | done | c63b82d | `node scripts/check-spec.mjs` | Reconciliation table, FR-181..233, ADR-056..082 |
-| T-P1-01 | P1 | — | done | (this commit) | `node scripts/check-spec.mjs`; `packages/contracts` tests | Reconciliation applied across docs/ and contracts/; ADR-083..087 |
+| T-P1-01 | P1 | — | done | 2868ce3 | `node scripts/check-spec.mjs`; `packages/contracts` tests | Reconciliation applied across docs/ and contracts/; ADR-083..087 |
 | T-M0-01 | M0 | — | done | 10bbcf4 | `npm run lint`, `npm run typecheck` | Monorepo (npm workspaces + Turborepo), TS strict, ESLint/Prettier |
 | T-M0-02 | M0 | FR-124, FR-192 | done | 10bbcf4 | `apps/hub` 15 integration tests | `apps/hub` Fastify service skeleton (HTTP/WS/SSE, config, graceful shutdown, token-guarded listeners) |
 | T-M0-03 | M0 | FR-125 | done | 10bbcf4 | `apps/web` 11 tests; `vite build`; e2e/m0-smoke.spec.ts | `apps/web` React/Vite UI served by the Hub; PWA manifest + service worker |
@@ -66,17 +66,17 @@ Last updated: 2026-10-17T06:10:00Z
 | T-M1-08 | M1 | — | done | ba340d5 | `packages/providers` 34 tests (fake server) | OpenAI-compatible + Mock provider adapters; usage accounting stub |
 | T-M1-09 | M1 | FR-017 | done | ba340d5 | J1 restart + search steps | Persistence across restart; chat search |
 | T-M1-10 | M1 | FR-125 | done | ba340d5 | `e2e/j1-first-chat.spec.ts` 3/3 | E2E J1 |
-| T-M2-01 | M2 | FR-023 | in_progress | — | — | Anthropic + OpenAI adapters with tool normalization |
-| T-M2-02 | M2 | FR-024 | in_progress | — | — | Virtual models, routing/fallback, circuit breaker, retries |
-| T-M2-03 | M2 | FR-126, FR-127 | in_progress | — | — | Compute node registration + routing order |
-| T-M2-04 | M2 | FR-034, FR-040 | in_progress | — | — | Projects (instructions, sources, per-project chats) |
-| T-M2-05 | M2 | FR-032 | in_progress | — | — | Memory extraction + Memory panel + per-chat opt-out |
-| T-M2-06 | M2 | FR-025 | in_progress | — | — | Cross-chat search + in-chat find |
-| T-M2-07 | M2 | FR-019, FR-020 | in_progress | — | — | Steer/queue setting; edit/regenerate/branch |
-| T-M2-08 | M2 | FR-026, FR-027, FR-033 | in_progress | — | — | Side chat; temporary chats; branch tree |
-| T-M2-09 | M2 | FR-007 | in_progress | — | — | Deep links |
-| T-M2-11 | M2 | FR-221 | in_progress | — | — | Model presets (Faster ↔ Smarter) over virtual models |
-| T-M2-10 | M2 | — | in_progress | — | — | E2E J2 |
+| T-M2-01 | M2 | FR-023 | done | (M2 commit) | `packages/providers` 156 tests (conformance × 6 kinds); J2 on a fake Anthropic server | Anthropic + OpenAI adapters with tool normalization |
+| T-M2-02 | M2 | FR-024 | done | (M2 commit) | `packages/core` router/breaker/retry tests; hub model-routes | Virtual models, routing/fallback, circuit breaker, retries |
+| T-M2-03 | M2 | FR-126, FR-127 | done | (M2 commit) | core nodes tests; `services/compute` 40 tests; hub node-routes (real node end to end) | Compute node registration + routing order |
+| T-M2-04 | M2 | FR-034, FR-040 | done | (M2 commit) | core projects tests; hub conversation tests; web projects tests | Projects (instructions, sources, per-project chats) |
+| T-M2-05 | M2 | FR-032 | done | (M2 commit) | core memory tests; web memory tests; J2 step 4 | Memory extraction + Memory panel + per-chat opt-out |
+| T-M2-06 | M2 | FR-025 | done | (M2 commit) | storage search tests; web chat-find tests; J2 step 5 | Cross-chat search + in-chat find |
+| T-M2-07 | M2 | FR-019, FR-020 | done | (M2 commit) | core conversation tests; web chat-followup/chat-actions; J2 step 5 | Steer/queue setting; edit/regenerate/branch |
+| T-M2-08 | M2 | FR-026, FR-027, FR-033 | done | (M2 commit) | core conversation tests; web chat-panels/chat-temporary; J2 step 4 | Side chat; temporary chats; branch tree |
+| T-M2-09 | M2 | FR-007 | done | (M2 commit) | web deeplinks tests (`web+nova` handler in the manifest) | Deep links |
+| T-M2-11 | M2 | FR-221 | done | (M2 commit) | core presets tests; web models-settings tests; J2 step 3 | Model presets (Faster ↔ Smarter) over virtual models |
+| T-M2-10 | M2 | — | done | (M2 commit) | `e2e/j2-providers-memory.spec.ts`, 3/3 with J1 in parallel | E2E J2 |
 | T-M3-01 | M3 | — | todo | — | — | Tool registry + built-in read/write/search/exec |
 | T-M3-02 | M3 | FR-042, FR-043 | todo | — | — | MCP client (stdio/http) + health/restart |
 | T-M3-03 | M3 | FR-099 | todo | — | — | Policy engine complete (allow/ask/handoff/deny) + reasons |
@@ -246,9 +246,31 @@ Last updated: 2026-10-17T06:10:00Z
 - R-006: No Rust toolchain on the dev host. Mitigation: build and test `services/novad` in a `rust` container; CI runners have cargo.
 - R-007: Node built-in SQLite is still marked "active development". Mitigation: storage access goes through `packages/storage`, so the driver can be swapped (ADR-084).
 - R-008: The dev host lacks Chromium's system libraries and sudo. Mitigation: E2E runs in the official Playwright container (`scripts/e2e-docker.sh`); CI installs the libraries itself.
+- R-009: The web bundle is 202 KB gzipped after M2 (73 KB at M0). Mitigation: split routes (settings, projects, compare) with dynamic imports when M4 adds the multi-pane workspace; cold start is still under budget.
+- R-010: Provider request details (Anthropic adaptive thinking and summarized reasoning, OpenRouter reasoning options) are verified only against recorded fixtures. Mitigation: opt-in live smoke tests behind a key, before M10.
+- R-011: One web test (Settings → Keyboard rebinding) failed once under a fully parallel run and passed on every rerun. Mitigation: watch CI; quarantine with a ledger task if it repeats.
 
 ## Deferrals
 
 | Requirement | Reason | Follow-up task |
 | --- | --- | --- |
 | FR-130 | Hub failover is post-v1 (ADR-035) | — |
+| FR-040 (non-text sources) | M2 indexes text types only; PDF and office documents need extraction | T-M4-04 (file previews) |
+| FR-126 (mTLS, VRAM, quiet hours, `/node/v1/services/*`) | Bearer tokens over LAN until the Mesh (ADR-089) | T-M6.5 networking tasks |
+| docs/07 §9 concurrency limits | Global and per-provider semaphores are not enforced yet | T-M9 performance tasks |
+
+## Milestone summaries
+
+- **M0** (10bbcf4): monorepo, Hub service skeleton with token-guarded listeners, web shell, storage
+  with migrations and backups, policy engine skeleton, contracts harness, `novad` skeleton, CI.
+- **M1** (ba340d5): chat MVP: onboarding, streaming with stop, attachments, search, settings,
+  themes and keyboard map; J1 green with axe checks and a cold start under 3 s.
+- **M2** (M2 commit): Anthropic, OpenRouter and llama.cpp adapters behind one conformance suite;
+  one router for every turn with presets (Faster / Balanced / Smarter), fallback and retries
+  before output, a circuit breaker and `routing.allowCloud`; compute nodes (`@nova/compute`) that
+  enroll with a one-use token and signed capability documents; steer and queue follow-ups,
+  message versions, branches with a tree and compare view, side chats, temporary chats with
+  TTL purge; projects with instructions and indexed sources cited in replies; reviewable memory
+  extracted from chats and kept out of temporary chats; ranked search and find in chat; deep
+  links. Evidence: about 950 unit and integration tests across 13 packages, J1 and J2 green three times in parallel.
+  Risks added: R-009..R-011. Next: M3 (tools, MCP, policy and approvals).

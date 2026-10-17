@@ -7,6 +7,8 @@ export * from './components/Tooltip.tsx';
 export * from './components/Toast.tsx';
 export * from './components/feedback.tsx';
 export * from './components/fields.tsx';
+export * from './components/PresetScale.tsx';
+export * from './components/Tree.tsx';
 export * from './themes/builtin.ts';
 export * from './contrast.ts';
 export * from './color.ts';

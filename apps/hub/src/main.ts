@@ -28,10 +28,16 @@ export async function start(
     kind: 'keyfile',
     path: join(config.dataDir, 'vault.key'),
   });
-  const { app, auth, chat, registry } = await buildHub({ config, db, log, secrets });
+  const { app, auth, chat, registry, sources } = await buildHub({ config, db, log, secrets });
   // A crash may have left replies mid-stream: keep their text, mark them incomplete (FR-018).
+  // Queued follow-ups then start (FR-019), unfinished source indexing resumes (FR-040), and
+  // temporary chats past their TTL are purged (FR-027).
   const recovered = await chat.recoverOnStartup();
   if (recovered.messages || recovered.turns) log.warn('recovered interrupted turns', recovered);
+  const reindexing = await sources.recover();
+  if (reindexing) log.info('resuming source indexing', { sources: reindexing });
+  const purged = await chat.sweepTemporary();
+  if (purged) log.info('purged expired temporary chats', { threads: purged });
   const owner = await auth.ownerAccount();
   if (owner) await registry.ensureDefaultProvider(owner.id);
   const port = await listenWithFallback(app, config, log);

@@ -1,12 +1,13 @@
-// State of one open chat (FR-018): messages from the Hub, an optimistic user bubble, streamed
-// text that has not been persisted yet, and the turn status. Events may arrive before or after
-// the HTTP responses that announce the same ids, and a reconnect can replay events, so every
-// transition is idempotent.
+// State of one open chat (FR-018, FR-019, FR-020): messages from the Hub, an optimistic user
+// bubble, streamed text that has not been persisted yet, follow-ups queued behind a running turn,
+// and the turn status. Events may arrive before or after the HTTP responses that announce the
+// same ids, and a reconnect can replay events, so every transition is idempotent.
 import type {
   ChatDeltaPayload,
   ChatMessageCompletedPayload,
   MessageView,
   PartView,
+  QueuedInputView,
   SendMessageResponse,
   ThreadDetail,
   ThreadView,
@@ -15,6 +16,8 @@ import type {
 export interface ClientMessage extends MessageView {
   /** Created on this client and not yet seen in a Hub response. */
   local?: boolean;
+  /** A send made while a turn runs: how this client expects the Hub to take it (FR-019). */
+  expect?: 'steer' | 'queue';
 }
 
 export interface ThreadState {
@@ -27,6 +30,8 @@ export interface ThreadState {
   loadError: string | null;
   /** True between turn.started and turn.completed/interrupted. */
   turnRunning: boolean;
+  /** Follow-ups waiting for the running turn to end, oldest first (FR-019). */
+  queue: QueuedInputView[];
 }
 
 export type ThreadAction =
@@ -39,7 +44,12 @@ export type ThreadAction =
   | { type: 'created'; messageId: string; role: MessageView['role']; turnId: string | null }
   | { type: 'delta'; payload: ChatDeltaPayload }
   | { type: 'completed'; payload: ChatMessageCompletedPayload }
-  | { type: 'turn'; running: boolean };
+  | { type: 'turn'; running: boolean }
+  | { type: 'queue'; items: QueuedInputView[] }
+  | { type: 'dequeued'; queuedId: string }
+  /** A new version replaces the active path from `fromId` on (edit, regenerate; FR-020). */
+  | { type: 'rewound'; fromId: string; add: ClientMessage[] }
+  | { type: 'removed'; ids: string[] };
 
 export function initialThreadState(thread: ThreadView | null): ThreadState {
   return {
@@ -50,14 +60,17 @@ export function initialThreadState(thread: ThreadView | null): ThreadState {
     status: thread ? 'loading' : 'ready',
     loadError: null,
     turnRunning: thread?.state === 'streaming',
+    queue: [],
   };
 }
 
-function placeholder(
+/** A message known only by id so far (from an event or an HTTP response). */
+export function placeholder(
   id: string,
   threadId: string,
   role: MessageView['role'],
   turnId: string | null,
+  over: Partial<ClientMessage> = {},
 ): ClientMessage {
   return {
     id,
@@ -70,6 +83,7 @@ function placeholder(
     usage: null,
     createdAt: new Date().toISOString(),
     local: true,
+    ...over,
   };
 }
 
@@ -101,6 +115,7 @@ export function threadReducer(s: ThreadState, a: ThreadAction): ThreadState {
         status: 'ready',
         loadError: null,
         turnRunning: anyStreaming || a.detail.thread.state === 'streaming' || hasLocalTurn(pending),
+        queue: a.detail.queue ?? s.queue,
       };
     }
     case 'load_failed':
@@ -110,22 +125,46 @@ export function threadReducer(s: ThreadState, a: ThreadAction): ThreadState {
     case 'optimistic':
       return { ...s, messages: [...s.messages, a.message] };
     case 'accepted': {
-      const { userMessageId, assistantMessageId, turnId } = a.res;
+      const { userMessageId, assistantMessageId, turnId, disposition } = a.res;
       const temp = s.messages.find((m) => m.id === a.tempId);
+      if (disposition === 'queued') {
+        // Not part of any turn yet: it waits in the queue strip, not in the log.
+        const text = temp ? messageText(temp, undefined) : '';
+        const item: QueuedInputView = {
+          id: userMessageId,
+          threadId: temp?.threadId ?? s.thread?.id ?? '',
+          text,
+          attachmentCount: temp?.parts.filter((p) => p.type === 'file').length ?? 0,
+          position: a.res.queuePosition ?? s.queue.length + 1,
+          createdAt: temp?.createdAt ?? new Date().toISOString(),
+        };
+        return {
+          ...s,
+          messages: s.messages.filter((m) => m.id !== a.tempId),
+          queue: s.queue.some((q) => q.id === item.id) ? s.queue : [...s.queue, item],
+        };
+      }
+      const provenance = disposition === 'steered' ? ('steer' as const) : undefined;
       let messages = s.messages;
       if (messages.some((m) => m.id === userMessageId)) {
         // The created event won the race: fill its placeholder with our text, drop the temp.
         messages = messages
           .filter((m) => m.id !== a.tempId)
           .map((m) =>
-            m.id === userMessageId && m.parts.length === 0 && temp
-              ? { ...m, parts: temp.parts }
+            m.id === userMessageId
+              ? {
+                  ...m,
+                  ...(m.parts.length === 0 && temp ? { parts: temp.parts } : {}),
+                  ...(provenance ? { provenance } : {}),
+                }
               : m,
           );
       } else {
-        messages = messages.map((m) =>
-          m.id === a.tempId ? { ...m, id: userMessageId, turnId } : m,
-        );
+        messages = messages.map((m) => {
+          if (m.id !== a.tempId) return m;
+          const { expect: _expect, ...rest } = m;
+          return { ...rest, id: userMessageId, turnId, ...(provenance ? { provenance } : {}) };
+        });
       }
       if (assistantMessageId && turnId && !messages.some((m) => m.id === assistantMessageId)) {
         const threadId = temp?.threadId ?? s.thread?.id ?? '';
@@ -179,7 +218,34 @@ export function threadReducer(s: ThreadState, a: ThreadAction): ThreadState {
     }
     case 'turn':
       return { ...s, turnRunning: a.running };
+    case 'queue':
+      return { ...s, queue: a.items };
+    case 'dequeued':
+      return { ...s, queue: s.queue.filter((q) => q.id !== a.queuedId) };
+    case 'rewound': {
+      const at = s.messages.findIndex((m) => m.id === a.fromId);
+      if (at < 0) return s;
+      const added = new Set(a.add.map((m) => m.id));
+      // Events for the new ids may have arrived first; the rewound list places them once.
+      const kept = s.messages.slice(0, at).filter((m) => !added.has(m.id));
+      return { ...s, messages: [...kept, ...a.add], turnRunning: true };
+    }
+    case 'removed': {
+      const gone = new Set(a.ids);
+      return { ...s, messages: s.messages.filter((m) => !gone.has(m.id)) };
+    }
   }
+}
+
+/** The messages a deletion removes: a user message takes the reply in its turn with it. */
+export function deletionIds(messages: MessageView[], id: string): string[] {
+  const m = messages.find((x) => x.id === id);
+  if (!m) return [id];
+  if (m.role !== 'user' || !m.turnId) return [id];
+  const replies = messages.filter(
+    (x) => x.turnId === m.turnId && x.role === 'assistant' && x.id !== id,
+  );
+  return [id, ...replies.map((r) => r.id)];
 }
 
 function hasLocalTurn(pending: ClientMessage[]): boolean {

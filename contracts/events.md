@@ -39,14 +39,20 @@ Rules:
 
 | Name | Persisted | Payload |
 | --- | --- | --- |
-| `chat.message.created` | yes | `{threadId,messageId,turnId,role,status}` (`complete` for the user message, `streaming` for the assistant) |
+| `chat.message.created` | yes | `{threadId,messageId,turnId,role,status,provenance?}` (`complete` for the user message, `streaming` for the assistant; `provenance: steer\|queued` for a follow-up, FR-019) |
 | `chat.delta` | no | `{threadId,messageId,type: text_delta\|reasoning_delta,text}` (`ChatDeltaPayload` in `packages/shared/src/api.ts`); at most 60 per second per stream |
 | `chat.message.completed` | yes | `{threadId,messageId,status,usage}` |
 | `chat.message.updated` | yes | `{threadId,messageId,reason}` |
+| `chat.message.deleted` | yes | `{threadId,messageId}` (FR-020) |
 | `chat.branch.created` | yes | `{threadId,parentId,fromMessageId}` |
+| `chat.followup.queued` | yes | `{threadId,queuedId,position}` (FR-019) |
+| `chat.followup.started` | yes | `{threadId,queuedId,turnId}` |
+| `chat.followup.cancelled` | yes | `{threadId,queuedId,reason: user\|failed,error?}` |
+| `project.created` / `.updated` / `.deleted` | yes | `{projectId}` (FR-034) |
+| `source.status.changed` | yes | `{sourceId,projectId,status: pending\|indexing\|ready\|error,error?}` (FR-040) |
 | `chat.search.indexed` | yes | `{threadId,count}` |
 | `turn.started` | yes | `{threadId,turnId,idx,trigger: user\|schedule\|goal\|hook\|event\|channel,executionLocation}` |
-| `turn.completed` | yes | `{threadId,turnId,status: completed\|failed,stopReason,steps,usage}`; `usage` is `{inputTokens,outputTokens,cachedTokens,costUsd,timeSeconds}` |
+| `turn.completed` | yes | `{threadId,turnId,status: completed\|failed,stopReason,steps,usage}`; `usage` is `{inputTokens,outputTokens,cachedTokens,costUsd,timeSeconds}`; `steps` > 1 when steering added model steps (FR-019) |
 | `turn.interrupted` | yes | `{threadId,turnId,stopReason: cancelled\|budget\|backstop\|approval_timeout\|location_lost,steps,usage}` |
 | `compaction.completed` | yes | `{threadId,turnId,itemId,trigger: pre_turn\|mid_turn\|post_turn\|manual,tokensBefore,tokensAfter}` (FR-183) |
 | `thread.status.changed` | yes | `{ref:{kind: thread\|run\|session\|agent,id},from,status: running\|needs_input\|ready\|blocked}` (FR-215) |
@@ -106,6 +112,7 @@ Rules:
 | `mcp.event.received` | yes | `{subscriptionId,triggerId,eventName,deliveryId,duplicate,sizeBytes}` (FR-201) |
 | `mcp.subscription.changed` | yes | `{subscriptionId,status: active\|refreshing\|lapsed\|failed\|removed,expiresAt?}` |
 | `memory.consolidated` | yes | `{runId,scope,phase,created,updated,aged,summaryTokens}` (FR-204) |
+| `memory.item.created` / `.updated` / `.deleted` | yes | `{itemId,scopeKind}` (FR-032) |
 
 ### code
 
@@ -156,6 +163,9 @@ Rules:
 
 | Name | Persisted | Payload |
 | --- | --- | --- |
+| `node.registered` | yes | `{nodeId,name,models}` (FR-126) |
+| `node.status.changed` | yes | `{nodeId,from,status: active\|unreachable\|revoked}` |
+| `node.models.changed` | yes | `{nodeId,models}` |
 | `sync.status.changed` | yes | `{deviceId,status,pending}` |
 | `sync.conflict` | yes | `{entityKind,entityId,resolution}` |
 | `update.available` / `.downloaded` / `.applied` / `.failed` | yes | `{version,channel}` |

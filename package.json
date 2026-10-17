@@ -16,7 +16,7 @@
   "scripts": {
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "turbo run typecheck && tsc --noEmit -p tsconfig.json",
     "test": "turbo run test",
     "test:e2e": "playwright test",
     "test:rust": "node scripts/cargo.mjs test",

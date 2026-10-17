@@ -1,6 +1,8 @@
 // The signed-in app (FR-001, FR-002, FR-003, FR-004, FR-010, FR-015): sidebar, main area and a
 // collapsible inspector; the four modes stay mounted so each keeps its state; global commands and
-// their key bindings; live appearance; and the first-run redirect to onboarding.
+// their key bindings; live appearance; and the first-run redirect to onboarding. For chats it adds
+// the side chat and branches panels (FR-026, FR-033), compare (/chat/<id>?compare=<id2>), find
+// (FR-025) and temporary chats, which are deleted when left (FR-027).
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, EmptyState, Icon, IconButton, Menu, Tabs } from '@nova/ui';
 import {
@@ -9,7 +11,11 @@ import {
   toggledTheme,
   writeCachedTheme,
 } from '../appearance.ts';
-import { ChatView, type ChatControls } from '../chat/ChatView.tsx';
+import { BranchesPanel } from '../chat/BranchesPanel.tsx';
+import { ChatView, type ChatControls, type ChatPanel } from '../chat/ChatView.tsx';
+import { CompareView } from '../chat/CompareView.tsx';
+import { SideChat } from '../chat/SideChat.tsx';
+import { useTemporaryChats } from '../chat/temporary.tsx';
 import { CommandPalette } from '../CommandPalette.tsx';
 import type { Command } from '../commands.ts';
 import { isEditable, useLayout, useMediaQuery } from '../hooks.ts';
@@ -21,6 +27,7 @@ import {
   chatPath,
   navigate,
   routeMode,
+  useLocation,
   useRoute,
   type Mode,
 } from '../router.ts';
@@ -29,6 +36,7 @@ import { ProjectsView } from '../projects/ProjectsView.tsx';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { SECTION_LABELS, SettingsView } from '../settings/SettingsView.tsx';
+import { registerWorkspaceCommands } from '../workspace-commands.ts';
 import { MODE_INFO, Sidebar } from './Sidebar.tsx';
 
 export interface WorkspaceProps {
@@ -65,6 +73,7 @@ export function Workspace({
   const { registry } = useServices();
   const settings = useSettings();
   const route = useRoute();
+  const location = useLocation();
   const { layout, inspectorFits } = useLayout();
   const prefersDark = useMediaQuery('(prefers-color-scheme: dark)', true);
   useSyncExternalStore(
@@ -86,6 +95,12 @@ export function Workspace({
       ? null
       : decodeURIComponent(lastChatPath.slice('/chat/'.length));
   const visibleMode: Mode | null = mode;
+  // Chat extras carried in the query string: a temporary new chat, and a compare partner.
+  const query = new URLSearchParams(
+    location.includes('?') ? location.slice(location.indexOf('?')) : '',
+  );
+  const newTemporary = !!chatRoute && chatRoute.threadId === null && query.get('temporary') === '1';
+  const compareWith = chatRoute?.threadId ? query.get('compare') : null;
 
   // ---- layout ------------------------------------------------------------------------------------
   const [sidebarToggle, setSidebarToggle] = useState<{ layout: string; open: boolean } | null>(
@@ -96,18 +111,23 @@ export function Workspace({
   const [inspectorToggle, setInspectorToggle] = useState<{ fits: boolean; open: boolean } | null>(
     null,
   );
-  // The inspector belongs to the modes; Settings and Setup use the full width.
+  // The inspector belongs to the modes; Settings and Setup use the full width. On phones it
+  // only opens on request (a side chat or branches command) and then fills the screen.
   const inspectorOpen =
-    layout !== 'phone' &&
     mode !== null &&
     (inspectorToggle && inspectorToggle.fits === inspectorFits
       ? inspectorToggle.open
-      : inspectorFits);
+      : inspectorFits && layout !== 'phone');
   const [searchOpen, setSearchOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState('artifacts');
   const chatControls = useRef<ChatControls | null>(null);
   const [streamingThreadId, setStreamingThreadId] = useState<string | null>(null);
+  // The side chat of the open chat; it is dropped when another chat opens (FR-026).
+  const [side, setSide] = useState<{ parent: string; id: string } | null>(null);
+  const sideId = side && side.parent === chatThreadId ? side.id : null;
+  const temporaryChats = useTemporaryChats(chatThreadId);
+  const reportTemporary = temporaryChats.report;
 
   const toggleSidebar = useCallback(
     () => setSidebarToggle({ layout, open: !sidebarOpen }),
@@ -121,9 +141,31 @@ export function Workspace({
     (c: ChatControls | null) => {
       chatControls.current = c;
       setStreamingThreadId(c?.streaming ? chatThreadId : null);
+      reportTemporary(c);
     },
-    [chatThreadId],
+    [chatThreadId, reportTemporary],
   );
+
+  // Opening a panel by command moves focus into it once it has rendered.
+  const [panelFocus, setPanelFocus] = useState<{ panel: ChatPanel; n: number } | null>(null);
+  const openPanel = useCallback(
+    (panel: ChatPanel) => {
+      setInspectorTab(panel);
+      setInspectorToggle({ fits: inspectorFits, open: true });
+      setPanelFocus((p) => ({ panel, n: (p?.n ?? 0) + 1 }));
+    },
+    [inspectorFits],
+  );
+  useEffect(() => {
+    if (!panelFocus) return;
+    const target =
+      panelFocus.panel === 'side'
+        ? document.getElementById('side-chat-input')
+        : document.querySelector<HTMLElement>('#inspector [role="tree"] [tabindex="0"]');
+    (
+      target ?? document.querySelector<HTMLElement>('#inspector [role="tab"][aria-selected="true"]')
+    )?.focus();
+  }, [panelFocus]);
 
   // ---- appearance (FR-010) ---------------------------------------------------------------------
   const appearance = {
@@ -180,11 +222,18 @@ export function Workspace({
     closeOverlaySidebar();
     queueMicrotask(() => chatControls.current?.focusComposer());
   }, [closeOverlaySidebar]);
+  const newTemporaryChat = useCallback(() => {
+    navigate('/chat?temporary=1');
+    closeOverlaySidebar();
+    queueMicrotask(() => chatControls.current?.focusComposer());
+  }, [closeOverlaySidebar]);
 
   const noop = (): void => undefined;
   const actions = useRef<{
     switchMode: (m: Mode) => void;
     newChat: () => void;
+    newTemporaryChat: () => void;
+    openPanel: (panel: ChatPanel) => void;
     toggleSidebar: () => void;
     openSearch: () => void;
     toggleTheme: () => void;
@@ -192,6 +241,8 @@ export function Workspace({
   }>({
     switchMode,
     newChat,
+    newTemporaryChat,
+    openPanel,
     toggleSidebar,
     openSearch: noop,
     toggleTheme: noop,
@@ -201,6 +252,11 @@ export function Workspace({
     actions.current = {
       switchMode,
       newChat,
+      newTemporaryChat,
+      openPanel: (panel) => {
+        if (mode !== 'chat') switchMode('chat');
+        openPanel(panel);
+      },
       toggleSidebar,
       openSearch: () => {
         setSearchOpen(true);
@@ -231,7 +287,33 @@ export function Workspace({
         binding: 'mod+n',
         run: () => a().newChat(),
       },
+      {
+        id: 'chat.newTemporary',
+        title: 'New temporary chat',
+        category: 'Chat',
+        run: () => a().newTemporaryChat(),
+      },
       { id: 'chat.search', title: 'Search chats', category: 'Chat', run: () => a().openSearch() },
+      {
+        id: 'chat.find',
+        title: 'Find in chat',
+        category: 'Chat',
+        binding: 'mod+f',
+        when: 'mode == chat',
+        run: () => chatControls.current?.openFind(),
+      },
+      {
+        id: 'chat.sideChat',
+        title: 'Ask in a side chat',
+        category: 'Chat',
+        run: () => a().openPanel('side'),
+      },
+      {
+        id: 'chat.branches',
+        title: 'Show branches',
+        category: 'Chat',
+        run: () => a().openPanel('branches'),
+      },
       {
         id: 'chat.stop',
         title: 'Stop generation',
@@ -308,7 +390,11 @@ export function Workspace({
       },
     ];
     const offs = commands.map((c) => registry.register(c));
-    return () => offs.forEach((off) => off());
+    const offWorkspace = registerWorkspaceCommands(registry);
+    return () => {
+      offs.forEach((off) => off());
+      offWorkspace();
+    };
   }, [registry]);
 
   // ---- global key handler (FR-004) -----------------------------------------------------------------
@@ -428,14 +514,21 @@ export function Workspace({
         />
         <main id="main" className="main" tabIndex={-1} hidden={phoneMenu}>
           <div className="mode-pane" hidden={visibleMode !== 'chat'} data-mode="chat">
-            <ChatView
-              key={chatThreadId ?? 'new'}
-              threadId={chatThreadId}
-              messageId={chatRoute?.messageId ?? null}
-              active={visibleMode === 'chat'}
-              announceEveryMs={announceEveryMs}
-              onControls={onControls}
-            />
+            {compareWith && chatThreadId ? (
+              <CompareView leftId={chatThreadId} rightId={compareWith} />
+            ) : null}
+            <div className="chat-pane" hidden={!!compareWith}>
+              <ChatView
+                key={chatThreadId ?? (newTemporary ? 'new-temporary' : 'new')}
+                threadId={chatThreadId}
+                messageId={chatRoute?.messageId ?? null}
+                active={visibleMode === 'chat' && !compareWith}
+                temporary={newTemporary}
+                announceEveryMs={announceEveryMs}
+                onControls={onControls}
+                onOpenPanel={openPanel}
+              />
+            </div>
           </div>
           {(['work', 'code', 'agents'] as const).map((m) => (
             <div key={m} className="mode-pane" hidden={visibleMode !== m} data-mode={m}>
@@ -461,6 +554,14 @@ export function Workspace({
           ) : null}
         </main>
         <aside id="inspector" className="inspector" aria-label="Inspector" hidden={!inspectorOpen}>
+          {layout === 'phone' ? (
+            <Button
+              className="inspector-close"
+              onClick={() => setInspectorToggle({ fits: inspectorFits, open: false })}
+            >
+              <Icon name="close" /> Close panel
+            </Button>
+          ) : null}
           <Tabs
             label="Inspector"
             value={inspectorTab}
@@ -469,6 +570,25 @@ export function Workspace({
               { id: 'artifacts', label: 'Artifacts', panel: <InspectorEmpty what="Artifacts" /> },
               { id: 'files', label: 'Files', panel: <InspectorEmpty what="Files" /> },
               { id: 'sources', label: 'Sources', panel: <InspectorEmpty what="Sources" /> },
+              {
+                id: 'side',
+                label: 'Side chat',
+                panel: (
+                  <SideChat
+                    key={chatThreadId ?? 'none'}
+                    parentId={chatThreadId}
+                    sideId={sideId}
+                    onSideId={(id) => {
+                      if (chatThreadId) setSide({ parent: chatThreadId, id });
+                    }}
+                  />
+                ),
+              },
+              {
+                id: 'branches',
+                label: 'Branches',
+                panel: <BranchesPanel threadId={chatThreadId} />,
+              },
             ]}
           />
         </aside>
@@ -478,6 +598,7 @@ export function Workspace({
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
       />
+      {temporaryChats.dialog}
     </div>
   );
 }

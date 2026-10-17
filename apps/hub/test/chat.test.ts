@@ -174,9 +174,20 @@ describe('providers & models', () => {
       label: 'Mock (offline)',
       hasSecret: false,
     });
-    const models = (await get('/api/v1/models')).json().items;
-    expect(models.map((m: { modelId: string }) => m.modelId)).toEqual(['mock-fast', 'mock-smart']);
-    expect(models[0].ref).toBe(`${providers[0].id}/mock-fast`);
+    const all = (await get('/api/v1/models')).json().items as {
+      kind: string;
+      ref: string;
+      modelId: string;
+    }[];
+    // The built-in presets come first (FR-221), then the account's models.
+    expect(all.filter((m) => m.kind === 'preset').map((m) => m.ref)).toEqual([
+      'preset:faster',
+      'preset:balanced',
+      'preset:smarter',
+    ]);
+    const models = all.filter((m) => m.kind === 'model');
+    expect(models.map((m) => m.modelId)).toEqual(['mock-fast', 'mock-smart']);
+    expect(models[0]!.ref).toBe(`${providers[0].id}/mock-fast`);
   });
 
   it('adds, tests and removes an OpenAI-compatible account without ever echoing the key', async () => {
@@ -230,9 +241,10 @@ describe('providers & models', () => {
     expect(
       (await post({ provider: 'openai_compatible', label: 'x', baseUrl: 'not a url' })).statusCode,
     ).toBe(400);
-    const anthropic = await post({ provider: 'anthropic', label: 'x', apiKey: 'k' });
+    // Cloud APIs need a key (M2 supports every kind; the providers agent owns the details).
+    const anthropic = await post({ provider: 'anthropic', label: 'x' });
     expect(anthropic.statusCode).toBe(400);
-    expect(anthropic.json().error.details.reason).toBe('unsupported_provider');
+    expect(anthropic.json().error.code).toBe('validation');
   });
 });
 
@@ -321,7 +333,7 @@ describe('messages, streaming and cancel (FR-018)', () => {
     expect(names).not.toContain('chat.delta');
   });
 
-  it('validates sends and refuses a second one while a turn runs (409)', async () => {
+  it('validates sends and queues a second one while a turn runs (FR-019)', async () => {
     await hub.app.close();
     hub = await makeHub({ mock: { timing: { chunkDelayMs: 30 } } });
     auth = await signIn();
@@ -338,9 +350,20 @@ describe('messages, streaming and cancel (FR-018)', () => {
         .statusCode,
     ).toBe(202);
     const again = await send('POST', `/api/v1/threads/${t.id}/messages`, { text: 'again' });
-    expect(again.statusCode).toBe(409);
-    expect(again.json().error.code).toBe('conflict');
+    expect(again.statusCode).toBe(202);
+    expect(again.json()).toMatchObject({ disposition: 'queued', turnId: null, queuePosition: 1 });
     await hub.chat.idle();
+    const detail = (await get(`/api/v1/threads/${t.id}`)).json();
+    expect(detail.messages.map((m: { role: string }) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+    ]);
+    expect(detail.messages[2]).toMatchObject({
+      id: again.json().userMessageId,
+      provenance: 'queued',
+    });
   });
 
   it('cancel mid-stream keeps the partial text, marked incomplete', async () => {

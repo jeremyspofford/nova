@@ -97,6 +97,7 @@ silently.
 | ADR-086 | CI Node version | **Node 24 LTS** (supersedes the Node 22 part of ADR-025) |
 | ADR-087 | Styling | **Token CSS + component classes**, no utility framework (supersedes ADR-004) |
 | ADR-088 | M1 implementation choices | Search index, reasoning levels, cut-off replies, offline mock provider, browser-tab shortcuts |
+| ADR-089 | M2 implementation choices | Model router seam, message versions, follow-ups, memory extraction, sources, compute-node transport |
 
 ## Details & rationale
 
@@ -480,6 +481,74 @@ component sources. Revisit if UI velocity suffers.
   Remaps are stored once, platform-neutral, using `mod`.
 - *Streams.* A client follows the open thread's stream; other threads refresh their status when
   the list is reloaded. `chat.delta` is coalesced to at most 60 events per second.
+
+**ADR-089 — M2 implementation choices.**
+- *Model router* (details in `docs/07` §6, §8.1, §9). The conversation engine resolves every
+  model reference through one `ModelRouter` (`packages/core/src/routing`). References are
+  `<accountId>/<modelId>`, `node:<nodeId>/<modelId>` or `preset:<id>`. A route is an ordered
+  list of targets; the router emits a marker before each attempt so the turn records which
+  target answered (the turn keeps the requested reference, the reply the model that answered
+  and the turn the reasoning level used). Fallback,
+  retries (exponential backoff with jitter, at most 2, `Retry-After` honored up to 10 s) and
+  the per-account or per-node circuit breaker (open after 3 consecutive failures, half-open
+  probe after 30 s) act only before the first content event; once output has started an error
+  ends the turn. So a turn's execution location never changes after it starts producing output
+  (FR-127), and a fallback before output updates the turn's recorded location.
+- *Follow-ups (FR-019).* The behavior is the `general.followUp` setting (default `queue`) with a
+  per-message override; the M1 `thread.input_mode` column is unused. A steer joins the running
+  turn as a user message and is applied when the current model step ends, as one more step of
+  the same turn. A queued message is persisted and starts as the next turn, also after a
+  restart or a cancel. How a follow-up entered its turn is `message.delivery` (`steer`,
+  `queued`), separate from `provenance`, which is where the text came from (FR-189). A failed
+  step still lets a pending steer run; a steer that arrives after the turn closed is queued
+  instead; a queued input that cannot start is cancelled with `chat.followup.cancelled`.
+- *Versions and branches (FR-020, FR-033).* Messages form a tree (`message.parent_id`) with the
+  thread's active leaf; edit and regenerate add sibling versions and never change earlier
+  turns. Branch from here creates a new thread that inherits the parent's path by reference,
+  without copying rows, and copies the parent's project, model, temporary flag and memory
+  opt-out; it keeps showing what it inherited after the parent is deleted. Side chats are child
+  threads that read the parent's current path (and project instructions, sources and memory
+  scope from the nearest non-side ancestor), are deleted with their parent and are never listed
+  among chats. Switching versions, editing, regenerating and deleting wait while a turn runs.
+- *Context order.* One system message: the system prompt, then memory, then project
+  instructions, then source excerpts, which are labelled as reference material, not
+  instructions.
+- *Temporary chats (FR-027)* neither write nor read memory, are excluded from search, are purged
+  (rows and blobs) when deleted or `chat.temporaryTtlHours` (24) after the last activity in
+  their family (branches and side chats included). Usage rows are kept without thread or turn
+  ids, so spend totals stay right; a blob is deleted only when nothing else uses it. In the web
+  UI, leaving a temporary chat deletes it.
+- *Memory extraction (FR-032)* runs after each completed turn unless memory is off or the chat is
+  temporary, a side chat or opted out. A deterministic extractor for explicit statements
+  ("remember that…", "my name is…", "I prefer…") always runs, so memory works offline and with
+  the Mock provider, and its facts are saved at once; a model-based extractor runs for real
+  providers and adds at most 5 facts when its reply arrives. Secrets are redacted before
+  anything is sent or stored. In context: pinned items, then items matching the message, then
+  the most recent, up to about 2,500 tokens. A chat outside projects reads global memory; a
+  shared project reads global and its own items; a project-only project reads only its own.
+  Consolidation (FR-204) is M3.
+- *Sources (FR-040).* M2 indexes text types only into ~1,500-character chunks searched with
+  FTS5; up to five excerpts (6,000 characters) are added to a project chat's context and stored
+  as citations of the reply. Other file types end in `error` until extraction lands.
+- *Search ranking (FR-025)* uses FTS5 bm25 with recency as the tie-breaker.
+- *Presets (FR-221).* With no saved presets, Faster, Balanced and Smarter are generated from the
+  configured models; a preset whose targets are all unavailable is shown disabled and never
+  replaced by another preset. With `routing.allowCloud` off, cloud targets are dropped and a
+  turn with no target left fails closed.
+- *Compute nodes (FR-126).* Until certificates arrive with the Mesh (M6.5), a compute node is
+  the `@nova/compute` service speaking `/node/v1` over LAN HTTP with bearer tokens: it enrolls
+  with a one-use token created in Settings → Devices (creating it is the human approval), pins an
+  Ed25519 key whose signature every capability document must carry, and accepts jobs only with
+  the job token the Hub holds in its secret vault. `novad`'s compute module supervises this
+  service from M6. The Hub assigns node ids; an enrollment token is used up once a valid one is
+  presented; a heartbeat's model list can only hide signed models, never add them; unreachable
+  and revoked nodes offer no models. A node listens on 7420 by default, runs one job at a time
+  with a queue of four (then `rate_limited`), refuses requests that carry an `Origin` header,
+  reaches only its Hub and its backend, and wipes its credentials and exits when the Hub
+  answers 401. Revocation mid-turn ends the stream with a `network` error and cancels the job.
+- *Sessions only.* Only session tokens authenticate as a user; device, app and MCP-client
+  tokens are checked by the routes that accept them (FR-192).
+- *New chats* start on the Balanced preset when no default model is set.
 
 ## Defaults for common ambiguities
 

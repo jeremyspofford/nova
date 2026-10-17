@@ -1,10 +1,13 @@
 // Threads (FR-017): create, list, rename, pin, archive, soft-delete and search. Lists put pinned
-// threads first, then most recently updated; search is FTS5 over message text (docs/06 §4) and
-// never returns temporary or deleted threads (FR-027).
+// threads first, then most recently updated, and leave out side chats (FR-026). Search is FTS5
+// over message text (docs/06 §4) ranked by bm25 and never returns temporary, side or deleted
+// threads (FR-025, FR-027). M2 adds the message tree (FR-020): the detail is the active path,
+// with versions, citations and queued input; branches inherit their parent's path (FR-033).
 import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import {
   NovaError,
   uuidv7,
+  type CitationView,
   type CreateThreadRequest,
   type MessageView,
   type Page,
@@ -12,17 +15,22 @@ import {
   type SearchHit,
   type ThreadDetail,
   type ThreadMode,
+  type ThreadTree,
   type ThreadView,
   type UpdateThreadRequest,
 } from '@nova/shared';
 import { schema, type NovaDatabase } from '@nova/storage';
+import type { EventSink } from './events.ts';
+import { queueViews } from './followups.ts';
 import type { ModelRouter } from './routing/types.ts';
+import { chainIds, newestDescendant, siblingGroups, visibleChain } from './tree.ts';
 
-const { thread, message, messagePart, project } = schema;
+const { thread, message, messagePart, project, citation } = schema;
 
 export type ThreadRow = typeof thread.$inferSelect;
 type MessageRow = typeof message.$inferSelect;
 type PartRow = typeof messagePart.$inferSelect;
+type CitationRow = typeof citation.$inferSelect;
 
 export interface ListThreadsOptions {
   mode?: ThreadMode | undefined;
@@ -33,11 +41,18 @@ export interface ListThreadsOptions {
   limit?: number | undefined;
 }
 
+export interface SearchOptions {
+  limit?: number | undefined;
+  projectId?: string | undefined;
+}
+
 export interface ThreadServiceOptions {
   db: NovaDatabase;
   router: ModelRouter;
   /** The `chat.defaultModel` setting after precedence (docs/14 §1); null when unset. */
   defaultModel?: (accountId: string) => Promise<string | null>;
+  /** Where branch and message-delete events go (optional for headless use). */
+  events?: EventSink;
   now?: () => Date;
 }
 
@@ -45,12 +60,14 @@ export class ThreadService {
   readonly #db: NovaDatabase;
   readonly #router: ModelRouter;
   readonly #defaultModel: (accountId: string) => Promise<string | null>;
+  readonly #events: EventSink | undefined;
   readonly #now: () => Date;
 
   constructor(opts: ThreadServiceOptions) {
     this.#db = opts.db;
     this.#router = opts.router;
     this.#defaultModel = opts.defaultModel ?? (() => Promise.resolve(null));
+    this.#events = opts.events;
     this.#now = opts.now ?? (() => new Date());
   }
 
@@ -65,30 +82,15 @@ export class ThreadService {
     if (req.projectId) await this.#assertProject(accountId, req.projectId);
     if (req.model !== undefined) await this.#assertModel(accountId, req.model);
     const model = req.model ?? (await this.defaultModel(accountId));
-    const now = this.#now().toISOString();
-    const row: ThreadRow = {
-      id: uuidv7(),
-      accountId,
+    const row = this.#newRow(accountId, {
       projectId: req.projectId ?? null,
       mode: req.mode ?? 'chat',
       title: cleanTitle(req.title),
-      parentThreadId: null,
-      branchFromMessageId: null,
       temporary: req.temporary ?? false,
-      side: false,
       memoryOptOut: req.memoryOptOut ?? false,
       modelId: model,
       reasoningLevel: req.reasoningLevel ?? null,
-      pinned: false,
-      archived: false,
-      unread: false,
-      state: 'idle',
-      inputMode: 'steer',
-      metadata: null,
-      createdAt: now,
-      updatedAt: now,
-      deletedAt: null,
-    };
+    });
     await this.#db.transaction(() => this.#db.orm.insert(thread).values(row));
     return toThreadView(row);
   }
@@ -99,6 +101,7 @@ export class ThreadService {
       eq(thread.accountId, accountId),
       isNull(thread.deletedAt),
       eq(thread.archived, opts.archived ?? false),
+      eq(thread.side, false),
     ];
     if (opts.mode) where.push(eq(thread.mode, opts.mode));
     if (opts.projectId) where.push(eq(thread.projectId, opts.projectId));
@@ -154,40 +157,67 @@ export class ThreadService {
     return toThreadView(await this.row(accountId, id));
   }
 
+  /** The active path (oldest first), with versions, citations, provenance and the queue. */
   async detail(accountId: string, id: string): Promise<ThreadDetail> {
     const row = await this.row(accountId, id);
-    const messages = await this.#db.orm
+    const path = await this.activePath(row);
+    return {
+      thread: toThreadView(row),
+      messages: await this.messageViews(row.id, path),
+      queue: queueViews(this.#db, row.id),
+    };
+  }
+
+  /** Visible messages on the thread's active path, oldest first. */
+  activePath(row: ThreadRow): Promise<MessageRow[]> {
+    return visibleChain(this.#db, row.activeLeafId, row.id);
+  }
+
+  /** Message views for `rows`; versions are listed only for the viewing thread's own messages. */
+  async messageViews(viewThreadId: string, rows: MessageRow[]): Promise<MessageView[]> {
+    if (!rows.length) return [];
+    const ids = rows.map((m) => m.id);
+    const parts = await this.#db.orm
       .select()
-      .from(message)
-      .where(and(eq(message.threadId, id), isNull(message.deletedAt)))
-      .orderBy(asc(message.createdAt), asc(message.id));
-    const parts = messages.length
-      ? await this.#db.orm
-          .select()
-          .from(messagePart)
-          .where(
-            inArray(
-              messagePart.messageId,
-              messages.map((m) => m.id),
-            ),
-          )
-          .orderBy(asc(messagePart.idx), asc(messagePart.id))
-      : [];
+      .from(messagePart)
+      .where(inArray(messagePart.messageId, ids))
+      .orderBy(asc(messagePart.idx), asc(messagePart.id));
     const byMessage = new Map<string, PartRow[]>();
     for (const p of parts) {
       const list = byMessage.get(p.messageId) ?? [];
       list.push(p);
       byMessage.set(p.messageId, list);
     }
-    return {
-      thread: toThreadView(row),
-      messages: messages.map((m) => toMessageView(m, byMessage.get(m.id) ?? [])),
-    };
+    const cites = await this.#db.orm
+      .select()
+      .from(citation)
+      .where(inArray(citation.messageId, ids))
+      .orderBy(asc(citation.idx), asc(citation.id));
+    const citesBy = new Map<string, CitationRow[]>();
+    for (const c of cites) {
+      const list = citesBy.get(c.messageId) ?? [];
+      list.push(c);
+      citesBy.set(c.messageId, list);
+    }
+    const groups = siblingGroups(this.#db, viewThreadId);
+    return rows.map((m) => {
+      const v = toMessageView(m, byMessage.get(m.id) ?? []);
+      v.parentId = m.parentId;
+      if (m.threadId === viewThreadId) {
+        const sibs = groups.get(m.parentId ?? '');
+        if (sibs && sibs.length > 1) v.siblingIds = sibs;
+      }
+      const cs = citesBy.get(m.id);
+      if (cs?.length) v.citations = cs.map(toCitationView);
+      if (m.role === 'user') v.provenance = m.delivery ?? 'typed';
+      return v;
+    });
   }
 
   async update(accountId: string, id: string, req: UpdateThreadRequest): Promise<ThreadView> {
     await this.row(accountId, id);
     if (req.model !== undefined) await this.#assertModel(accountId, req.model);
+    if (req.projectId) await this.#assertProject(accountId, req.projectId);
     const set: Partial<ThreadRow> = {};
     if (req.title !== undefined) set.title = cleanTitle(req.title);
     if (req.pinned !== undefined) set.pinned = req.pinned;
@@ -195,6 +225,8 @@ export class ThreadService {
     if (req.unread !== undefined) set.unread = req.unread;
     if (req.model !== undefined) set.modelId = req.model;
     if (req.reasoningLevel !== undefined) set.reasoningLevel = req.reasoningLevel;
+    if (req.memoryOptOut !== undefined) set.memoryOptOut = req.memoryOptOut;
+    if (req.projectId !== undefined) set.projectId = req.projectId;
     // Toggling flags is not activity; renaming or changing the model is.
     if (req.title !== undefined || req.model !== undefined || req.reasoningLevel !== undefined)
       set.updatedAt = this.#now().toISOString();
@@ -206,41 +238,225 @@ export class ThreadService {
     return this.view(accountId, id);
   }
 
-  /** Soft delete; its messages are marked too so nothing of it is searchable (docs/06 §6.5). */
+  /**
+   * Soft delete; its messages are marked too so nothing of it is searchable (docs/06 §6.5). Its
+   * side chats go with it; branches are chats of their own and stay.
+   */
   async remove(accountId: string, id: string): Promise<void> {
     await this.row(accountId, id);
     const now = this.#now().toISOString();
+    const ids = [id, ...sideDescendants(this.#db, id)];
     await this.#db.transaction(async () => {
       await this.#db.orm
         .update(thread)
         .set({ deletedAt: now, updatedAt: now })
-        .where(eq(thread.id, id));
+        .where(inArray(thread.id, ids));
       await this.#db.orm
         .update(message)
         .set({ deletedAt: now })
-        .where(and(eq(message.threadId, id), isNull(message.deletedAt)));
+        .where(and(inArray(message.threadId, ids), isNull(message.deletedAt)));
     });
   }
 
-  /** Full-text search over message text, newest first. Any input string is safe. */
-  search(accountId: string, q: string, limit = 20): SearchHit[] {
+  // ---- versions, branches, side chats (FR-020, FR-026, FR-033) ---------------------------
+
+  /** Move the active path through `messageId`, continuing to its newest descendant. */
+  async selectVersion(accountId: string, id: string, messageId: string): Promise<ThreadDetail> {
+    await this.row(accountId, id);
+    const m = await this.#ownMessage(id, messageId);
+    const leaf = newestDescendant(this.#db, m.id, id);
+    await this.#db.transaction(() =>
+      this.#db.orm.update(thread).set({ activeLeafId: leaf }).where(eq(thread.id, id)),
+    );
+    return this.detail(accountId, id);
+  }
+
+  /**
+   * Soft-delete a message of this thread and, for a user message, the reply to it in the same
+   * turn. Deleted messages leave the detail, the model context and search. Returns their ids.
+   */
+  async deleteMessage(accountId: string, id: string, messageId: string): Promise<string[]> {
+    const row = await this.row(accountId, id);
+    const m = await this.#ownMessage(id, messageId);
+    const ids = [m.id];
+    if (m.role === 'user' && m.turnId) {
+      const replies = await this.#db.orm
+        .select({ id: message.id })
+        .from(message)
+        .where(
+          and(
+            eq(message.parentId, m.id),
+            eq(message.turnId, m.turnId),
+            eq(message.role, 'assistant'),
+            isNull(message.deletedAt),
+          ),
+        );
+      ids.push(...replies.map((r) => r.id));
+    }
+    const now = this.#now().toISOString();
+    await this.#db.transaction(async () => {
+      await this.#db.orm
+        .update(message)
+        .set({ deletedAt: now, updatedAt: now })
+        .where(inArray(message.id, ids));
+      // A deleted leaf hands the active path to its nearest live ancestor.
+      if (row.activeLeafId && ids.includes(row.activeLeafId)) {
+        const path = await visibleChain(this.#db, row.activeLeafId, id);
+        await this.#db.orm
+          .update(thread)
+          .set({ activeLeafId: path.at(-1)?.id ?? null })
+          .where(eq(thread.id, id));
+      }
+    });
+    for (const mid of ids) {
+      await this.#events?.emit({
+        name: 'chat.message.deleted',
+        actor: 'user',
+        accountId,
+        correlation: { threadId: id },
+        payload: { threadId: id, messageId: mid },
+      });
+    }
+    return ids;
+  }
+
+  /**
+   * A new chat continuing from `fromMessageId` on this thread's active path. It inherits the
+   * path up to and including that message by reference: no rows are copied (FR-020, FR-033).
+   */
+  async branch(
+    accountId: string,
+    id: string,
+    req: { fromMessageId: string; title?: string | undefined },
+  ): Promise<ThreadView> {
+    const parent = await this.row(accountId, id);
+    const path = await this.activePath(parent);
+    if (!path.some((m) => m.id === req.fromMessageId))
+      throw new NovaError('not_found', 'message not found on this chat');
+    const title =
+      cleanTitle(req.title) ?? (parent.title ? `Branch: ${parent.title}`.slice(0, 300) : 'Branch');
+    const row = this.#newRow(accountId, {
+      projectId: parent.projectId,
+      mode: parent.mode,
+      title,
+      temporary: parent.temporary,
+      memoryOptOut: parent.memoryOptOut,
+      modelId: parent.modelId,
+      reasoningLevel: parent.reasoningLevel,
+      parentThreadId: parent.id,
+      branchFromMessageId: req.fromMessageId,
+      activeLeafId: req.fromMessageId,
+    });
+    await this.#db.transaction(() => this.#db.orm.insert(thread).values(row));
+    await this.#events?.emit({
+      name: 'chat.branch.created',
+      actor: 'user',
+      accountId,
+      correlation: { threadId: row.id },
+      payload: { threadId: row.id, parentId: parent.id, fromMessageId: req.fromMessageId },
+    });
+    return toThreadView(row);
+  }
+
+  /** A side chat of `parent` (FR-026): never listed, kept out of memory, temporary like it. */
+  async createSide(accountId: string, parent: ThreadRow, model?: string): Promise<ThreadRow> {
+    if (model !== undefined) await this.#assertModel(accountId, model);
+    const row = this.#newRow(accountId, {
+      projectId: parent.projectId,
+      mode: parent.mode,
+      title: null,
+      temporary: parent.temporary,
+      memoryOptOut: true,
+      side: true,
+      modelId: model ?? parent.modelId ?? (await this.defaultModel(accountId)),
+      reasoningLevel: parent.reasoningLevel,
+      parentThreadId: parent.id,
+    });
+    await this.#db.transaction(() => this.#db.orm.insert(thread).values(row));
+    return row;
+  }
+
+  /** The lineage of a thread: its root plus every live descendant branch and side chat. */
+  async tree(accountId: string, id: string): Promise<ThreadTree> {
+    let root = await this.row(accountId, id);
+    for (let i = 0; i < 1000 && root.parentThreadId; i++) {
+      const up = await this.#db.orm
+        .select()
+        .from(thread)
+        .where(
+          and(
+            eq(thread.id, root.parentThreadId),
+            eq(thread.accountId, accountId),
+            isNull(thread.deletedAt),
+          ),
+        )
+        .limit(1);
+      if (!up[0]) break;
+      root = up[0];
+    }
+    const rows = this.#db.raw
+      .prepare(
+        `WITH RECURSIVE d(id, depth) AS (
+           SELECT ?, 0
+           UNION
+           SELECT t.id, d.depth + 1 FROM thread t JOIN d ON t.parent_thread_id = d.id
+           WHERE t.deleted_at IS NULL AND t.account_id = ? AND d.depth < 1000
+         )
+         SELECT t.id AS threadId, t.parent_thread_id AS parentThreadId,
+                t.branch_from_message_id AS branchFromMessageId, t.title AS title, t.side AS side,
+                t.created_at AS createdAt, t.updated_at AS updatedAt,
+                (SELECT count(*) FROM message m WHERE m.thread_id = t.id AND m.deleted_at IS NULL)
+                  AS messageCount
+         FROM d JOIN thread t ON t.id = d.id
+         ORDER BY d.depth, t.created_at, t.id`,
+      )
+      .all(root.id, accountId) as unknown as (Omit<ThreadTree['nodes'][number], 'side'> & {
+      side: number;
+    })[];
+    return {
+      rootThreadId: root.id,
+      nodes: rows.map((r) => ({
+        ...r,
+        parentThreadId: r.threadId === root.id ? null : r.parentThreadId,
+        side: r.side === 1,
+      })),
+    };
+  }
+
+  // ---- search ---------------------------------------------------------------------------
+
+  /**
+   * Full-text search over message text, best match first (bm25; newer breaks ties). Leaves out
+   * temporary, side and deleted threads and deleted messages. Any input string is safe.
+   */
+  search(accountId: string, q: string, opts: SearchOptions | number = {}): SearchHit[] {
+    const o = typeof opts === 'number' ? { limit: opts } : opts;
+    const limit = Math.min(Math.max(o.limit ?? 20, 1), 100);
     const fts = ftsQuery(q);
     if (!fts) return [];
+    const params: (string | number)[] = [fts, accountId];
+    let projectFilter = '';
+    if (o.projectId) {
+      projectFilter = 'AND t.project_id = ?';
+      params.push(o.projectId);
+    }
+    params.push(limit * 2);
     const rows = this.#db.raw
       .prepare(
         `SELECT m.thread_id AS threadId, m.id AS messageId, t.title AS threadTitle,
-                snippet(message_fts, 0, '<mark>', '</mark>', '…', 16) AS snippet, m.created_at AS createdAt
+                snippet(message_fts, 0, '<mark>', '</mark>', '…', 16) AS snippet,
+                m.created_at AS createdAt, m.role AS role, t.project_id AS projectId
          FROM message_fts
          JOIN message_search s ON s.seq = message_fts.rowid
          JOIN message m ON m.id = s.message_id
          JOIN thread t ON t.id = m.thread_id
          WHERE message_fts MATCH ?
-           AND t.account_id = ? AND t.deleted_at IS NULL AND t.temporary = 0
-           AND m.deleted_at IS NULL
-         ORDER BY m.created_at DESC, m.id DESC
+           AND t.account_id = ? AND t.deleted_at IS NULL AND t.temporary = 0 AND t.side = 0
+           AND m.deleted_at IS NULL ${projectFilter}
+         ORDER BY bm25(message_fts), m.created_at DESC, m.id DESC
          LIMIT ?`,
       )
-      .all(fts, accountId, Math.min(Math.max(limit, 1), 100) * 2) as unknown as SearchHit[];
+      .all(...params) as unknown as SearchHit[];
     const seen = new Set<string>();
     const out: SearchHit[] = [];
     for (const r of rows) {
@@ -250,6 +466,54 @@ export class ThreadService {
       if (out.length >= limit) break;
     }
     return out;
+  }
+
+  // ---- helpers --------------------------------------------------------------------------
+
+  /** True when `messageId` is on the chain of the thread's active leaf (deleted or not). */
+  onActivePath(row: ThreadRow, messageId: string): boolean {
+    return chainIds(this.#db, row.activeLeafId).has(messageId);
+  }
+
+  async #ownMessage(threadId: string, messageId: string): Promise<MessageRow> {
+    const rows = await this.#db.orm
+      .select()
+      .from(message)
+      .where(
+        and(eq(message.id, messageId), eq(message.threadId, threadId), isNull(message.deletedAt)),
+      )
+      .limit(1);
+    const m = rows[0];
+    if (!m) throw new NovaError('not_found', 'message not found');
+    return m;
+  }
+
+  #newRow(accountId: string, f: Partial<ThreadRow> & Pick<ThreadRow, 'mode'>): ThreadRow {
+    const now = this.#now().toISOString();
+    return {
+      id: uuidv7(),
+      accountId,
+      projectId: null,
+      title: null,
+      parentThreadId: null,
+      branchFromMessageId: null,
+      temporary: false,
+      side: false,
+      memoryOptOut: false,
+      modelId: null,
+      reasoningLevel: null,
+      pinned: false,
+      archived: false,
+      unread: false,
+      state: 'idle',
+      inputMode: 'steer',
+      metadata: null,
+      activeLeafId: null,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+      ...f,
+    };
   }
 
   async #assertProject(accountId: string, projectId: string): Promise<void> {
@@ -275,6 +539,23 @@ export class ThreadService {
   #modelUsable(accountId: string, ref: string): Promise<boolean> {
     return this.#router.usable(accountId, ref);
   }
+}
+
+/** Side chats below a thread (recursively), which share its fate on delete. */
+export function sideDescendants(db: NovaDatabase, id: string): string[] {
+  return (
+    db.raw
+      .prepare(
+        `WITH RECURSIVE d(id, depth) AS (
+           SELECT id, 1 FROM thread WHERE parent_thread_id = ? AND side = 1
+           UNION
+           SELECT t.id, d.depth + 1 FROM thread t JOIN d ON t.parent_thread_id = d.id
+           WHERE t.side = 1 AND d.depth < 1000
+         )
+         SELECT id FROM d`,
+      )
+      .all(id) as { id: string }[]
+  ).map((r) => r.id);
 }
 
 // ---- search query -----------------------------------------------------------------------
@@ -418,6 +699,18 @@ export function toMessageView(m: MessageRow, parts: PartRow[]): MessageView {
         }
       : null,
     createdAt: m.createdAt,
+  };
+}
+
+export function toCitationView(c: CitationRow): CitationView {
+  return {
+    id: c.id,
+    messageId: c.messageId,
+    idx: c.idx ?? 0,
+    url: c.url,
+    sourceId: c.sourceId,
+    title: c.title,
+    snippet: c.snippet,
   };
 }
 

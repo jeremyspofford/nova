@@ -573,6 +573,267 @@ kbd {
   font-size: var(--u-text-sm);
 }
 
+/* ---- chat M2: actions, versions, steering, queue, find, temporary (FR-019…FR-027) ---------- */
+.chat-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.chat-header-spacer {
+  flex: 1;
+}
+.chat-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  padding: 0 var(--u-space-2);
+  border: 1px solid var(--u-border);
+  border-radius: 999px;
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+  white-space: nowrap;
+}
+.chat-temp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  font-size: var(--u-text-sm);
+}
+.temp-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: var(--u-space-2) var(--u-space-4);
+  border-bottom: 1px solid var(--u-warn);
+  background: color-mix(in srgb, var(--u-warn) 12%, var(--u-surface));
+  font-size: var(--u-text-sm);
+}
+.chat[data-temporary='true'] .composer {
+  border-style: dashed;
+}
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  padding: var(--u-space-2) var(--u-space-4);
+  border-bottom: 1px solid var(--u-border);
+  background: var(--u-surface);
+}
+.find-input {
+  flex: 1;
+  max-width: 320px;
+}
+.find-status {
+  min-width: 6ch;
+  font-size: var(--u-text-sm);
+}
+mark.find-hit {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--u-accent) 30%, transparent);
+  color: var(--u-text);
+}
+mark.find-hit[data-current='true'] {
+  outline: 2px solid var(--u-accent);
+  background: color-mix(in srgb, var(--u-accent) 55%, transparent);
+}
+.msg-model {
+  color: var(--u-text-muted);
+}
+.msg-badge[data-kind='steer'] {
+  border-color: var(--u-info);
+  color: var(--u-info);
+}
+.msg-versions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.msg-versions .nv-btn {
+  min-height: 24px;
+  width: 24px;
+}
+.msg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--u-dur-fast) var(--u-ease);
+}
+.msg:hover .msg-actions,
+.msg:focus-within .msg-actions {
+  opacity: 1;
+}
+@media (hover: none) {
+  .msg-actions {
+    opacity: 1;
+  }
+}
+.msg-actions .nv-btn {
+  min-height: 28px;
+  width: 28px;
+  color: var(--u-text-muted);
+}
+.msg-actions .nv-btn[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.msg-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+  color: var(--u-text-muted);
+  font-size: var(--u-text-sm);
+}
+.msg-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--u-border);
+}
+.msg-edit {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.msg-edit-input {
+  width: 100%;
+  min-width: min(480px, 70vw);
+  resize: vertical;
+}
+.msg-sources {
+  display: grid;
+  gap: var(--u-space-1);
+  padding-top: var(--u-space-2);
+  border-top: 1px solid var(--u-border);
+  font-size: var(--u-text-sm);
+}
+.msg-sources-title {
+  color: var(--u-text-muted);
+  font-weight: 600;
+}
+.msg-sources ol {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding-left: var(--u-space-4);
+}
+.msg-source-snippet {
+  margin: 2px 0 0;
+  color: var(--u-text-muted);
+}
+.queue-strip {
+  display: grid;
+  gap: var(--u-space-1);
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+  font-size: var(--u-text-sm);
+}
+.queue-title {
+  font-weight: 600;
+}
+.queue-items {
+  display: grid;
+  gap: var(--u-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-advanced {
+  font-size: var(--u-text-xs);
+}
+.thread-mark {
+  display: inline-flex;
+  flex: none;
+  color: var(--u-text-muted);
+}
+.thread-mark[data-kind='temporary'] {
+  color: var(--u-warn);
+}
+.search-hit-role {
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+}
+
+/* ---- inspector panels: side chat, branches; compare ------------------------------------- */
+.side-chat,
+.branches {
+  display: grid;
+  gap: var(--u-space-3);
+}
+.side-chat-note,
+.branches-hint {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.side-chat-log {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.side-chat-log .msg {
+  padding: var(--u-space-2) var(--u-space-3);
+}
+.side-chat-log .msg[data-role='user'] {
+  justify-self: end;
+}
+.side-chat-form {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.side-chat-input {
+  width: 100%;
+  resize: vertical;
+}
+.compare {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.compare-cols {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 1fr 1fr;
+  min-height: 0;
+}
+.compare-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--u-space-3) var(--u-space-4);
+  overflow: auto;
+}
+.compare-col + .compare-col {
+  border-left: 1px solid var(--u-border);
+}
+.compare-title {
+  margin: 0 0 var(--u-space-3);
+  font-size: var(--u-text-md);
+}
+.compare-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--u-space-3);
+}
+.inspector-close {
+  margin-bottom: var(--u-space-2);
+}
+
 /* ---- settings ----------------------------------------------------------------------------- */
 .settings {
   display: grid;
@@ -881,6 +1142,21 @@ kbd {
 }
 .app[data-layout='phone'] .topbar-title {
   display: none;
+}
+/* Phones: the inspector opens only on request, as a full-screen page. */
+.app[data-layout='phone'] .inspector {
+  position: absolute;
+  inset: 0;
+  z-index: var(--u-z-overlay);
+  width: 100%;
+  border-left: 0;
+}
+.app[data-layout='phone'] .compare-cols {
+  grid-template-columns: 1fr;
+}
+.app[data-layout='phone'] .compare-col + .compare-col {
+  border-top: 1px solid var(--u-border);
+  border-left: 0;
 }
 @media (max-width: 640px) {
   .shell .main {

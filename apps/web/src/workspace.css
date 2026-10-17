@@ -1,0 +1,306 @@
+/* M2 workspace surfaces: projects, sources, memory, models, devices (docs/04 §2.7, §3.1, §4, §9).
+   Colors, spacing and type come only from design tokens (docs/14 §2.2). */
+
+/* ---- page frame ------------------------------------------------------------------------- */
+.ws-page {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  gap: var(--u-space-4);
+  min-height: 0;
+  /* Content stays in an 880 px column; the scrollbar stays at the window edge. */
+  padding: var(--u-space-6) max(var(--u-space-6), calc((100% - 880px) / 2));
+  overflow: auto;
+}
+.ws-page-header,
+.ws-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+}
+.ws-page-header > h1,
+.ws-section-header > h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ws-breadcrumb a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  font-size: var(--u-text-sm);
+}
+.ws-section {
+  display: grid;
+  gap: var(--u-space-3);
+  padding-top: var(--u-space-4);
+  border-top: 1px solid var(--u-border);
+}
+.ws-section > h2,
+.ws-section > p {
+  margin: 0;
+}
+.ws-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-3);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-danger);
+  border-radius: var(--u-radius-sm);
+}
+.ws-error > p {
+  margin: 0;
+}
+.ws-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+  color: var(--u-warn);
+  font-size: var(--u-text-sm);
+}
+.ws-textarea {
+  width: 100%;
+  min-height: 4lh;
+  resize: vertical;
+  font: inherit;
+}
+.ws-rename {
+  align-items: flex-end;
+}
+.ws-rename .nv-field {
+  flex: 1;
+  min-width: 220px;
+}
+.ws-number {
+  max-width: 10rem;
+}
+.ws-advanced > summary {
+  cursor: pointer;
+  font-size: var(--u-text-sm);
+}
+.ws-advanced[open] > summary {
+  margin-bottom: var(--u-space-3);
+}
+
+/* ---- lists and rows --------------------------------------------------------------------- */
+.ws-cards,
+.ws-list {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ws-card,
+.ws-list-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2) var(--u-space-4);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.ws-card {
+  display: grid;
+  justify-content: stretch;
+  gap: var(--u-space-1);
+}
+.ws-card-link {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ws-card-meta,
+.ws-row-meta {
+  font-size: var(--u-text-sm);
+}
+.ws-row-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1) var(--u-space-3);
+}
+.ws-source-main,
+.ws-memory-main {
+  display: grid;
+  flex: 1;
+  justify-items: start;
+  gap: var(--u-space-1);
+  min-width: 0;
+}
+.ws-source-name {
+  overflow-wrap: anywhere;
+}
+.ws-source-error {
+  font-size: var(--u-text-sm);
+}
+.ws-row-actions {
+  align-items: center;
+  gap: var(--u-space-1);
+}
+.ws-rejections {
+  margin: 0;
+  padding: var(--u-space-2) var(--u-space-3) var(--u-space-2) var(--u-space-6);
+  border: 1px solid var(--u-warn);
+  border-radius: var(--u-radius-sm);
+  font-size: var(--u-text-sm);
+}
+.ws-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  padding: 0 var(--u-space-2);
+  border: 1px solid var(--u-border);
+  border-radius: 999px;
+  font-size: var(--u-text-xs);
+  color: var(--u-text);
+}
+.ws-code-inline {
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* ---- sources ---------------------------------------------------------------------------- */
+.ws-dropzone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  padding: var(--u-space-4);
+  border: 1px dashed var(--u-border);
+  border-radius: var(--u-radius-md);
+}
+.ws-sources[data-dragging='true'] .ws-dropzone {
+  border-color: var(--u-accent);
+  background: var(--u-surface-2);
+}
+
+/* ---- settings controls ------------------------------------------------------------------ */
+.ws-switch-field {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--u-space-4);
+}
+.ws-switch-text {
+  display: grid;
+  gap: var(--u-space-1);
+}
+.ws-switch-field .nv-switch {
+  flex: none;
+  margin-top: 2px;
+}
+.ws-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--u-space-2);
+}
+.ws-toolbar > .nv-field:first-child {
+  flex: 1;
+  min-width: 200px;
+}
+
+/* ---- memory ----------------------------------------------------------------------------- */
+.ws-memory-group {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.ws-memory-group > h4 {
+  margin: var(--u-space-2) 0 0;
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ws-memory-content {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ws-memory-edit {
+  flex: 1;
+  min-width: 0;
+}
+.ws-quote {
+  margin: 0;
+  padding-left: var(--u-space-3);
+  border-left: 3px solid var(--u-border);
+  overflow-wrap: anywhere;
+}
+.ws-import-result {
+  margin: 0;
+}
+
+/* ---- presets ---------------------------------------------------------------------------- */
+.ws-presets {
+  display: grid;
+  gap: var(--u-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ws-fieldset {
+  display: grid;
+  gap: var(--u-space-3);
+  margin: 0;
+  padding: var(--u-space-4);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.ws-fieldset > legend {
+  padding: 0 var(--u-space-1);
+  font-weight: 600;
+}
+.ws-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: start;
+  gap: var(--u-space-3);
+}
+.ws-targets {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.ws-target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--u-space-2);
+}
+.ws-target > .nv-field {
+  flex: 1;
+  min-width: 220px;
+}
+
+/* ---- devices ---------------------------------------------------------------------------- */
+.ws-command {
+  margin: 0;
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+  font-size: var(--u-text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- sidebar: projects ------------------------------------------------------------------ */
+.sidebar-projects {
+  padding: var(--u-space-2);
+  border-top: 1px solid var(--u-border);
+}
+
+/* ---- phones (docs/04 §4.3) -------------------------------------------------------------- */
+.app[data-layout='phone'] .ws-page {
+  padding: var(--u-space-4);
+}
+.app[data-layout='phone'] .ws-switch-field {
+  gap: var(--u-space-2);
+}

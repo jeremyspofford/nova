@@ -16,9 +16,11 @@ import {
   type ProviderTestResult,
 } from '@nova/shared';
 import {
+  AnthropicProvider,
   DEFAULT_BASE_URLS,
   MockProvider,
   OpenAICompatibleProvider,
+  hasDefaultBase,
   type ModelInfo,
   type Provider,
 } from '@nova/providers';
@@ -49,6 +51,11 @@ export interface ProviderRegistryOptions {
   modelCacheMs?: number;
   now?: () => Date;
   redactor?: Redactor;
+  /**
+   * Retries inside the adapters built here, before the first byte (default 0): the router
+   * retries and falls back (docs/07 §9), so attempts are not multiplied.
+   */
+  adapterRetries?: number;
 }
 
 export interface ResolvedModel {
@@ -57,17 +64,78 @@ export interface ResolvedModel {
   provider: Provider;
   modelId: string;
   vision: boolean;
+  reasoning: boolean;
+  /** Runs on hardware the user owns (mock, or a local or LAN server), not a cloud API. */
+  local: boolean;
+  /** Per-1M-token prices the provider reported in its model list, when it did. */
+  costIn?: number;
+  costOut?: number;
+}
+
+/** An account model with the details the router and preset generation need. */
+export interface AccountModel {
+  view: ModelView;
+  info: ModelInfo;
+  account: ProviderAccountRow;
+  local: boolean;
 }
 
 export const MOCK_PROVIDER_LABEL = 'Mock (offline)';
 
-/** Kinds with an adapter in this build. Anthropic arrives with its own adapter (M2). */
+/** Kinds with an adapter in this build (docs/07 §3). */
 export const SUPPORTED_PROVIDER_KINDS: readonly ProviderKind[] = [
   'mock',
   'openai_compatible',
   'openai',
+  'anthropic',
+  'openrouter',
   'ollama',
+  'llamacpp',
 ];
+
+/** Cloud APIs need a key; local servers and generic endpoints may not. */
+const KEY_REQUIRED: ReadonlySet<string> = new Set(['openai', 'anthropic', 'openrouter']);
+const KIND_LABEL: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  openrouter: 'OpenRouter',
+};
+
+/**
+ * Whether a provider account runs on hardware the user owns (FR-127 `routing.allowCloud`).
+ * Cloud APIs never do; local server kinds and generic endpoints do when their address is on
+ * this machine or a private network. Unknown or public addresses count as cloud (fail closed).
+ */
+export function isLocalProvider(kind: string, baseUrl: string | null): boolean {
+  if (kind === 'mock') return true;
+  if (KEY_REQUIRED.has(kind)) return false;
+  if (!baseUrl) return kind === 'ollama' || kind === 'llamacpp';
+  try {
+    return isPrivateHost(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isPrivateHost(raw: string): boolean {
+  const h = raw.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h.includes('.') && !h.includes(':')) return true; // single-label LAN name
+  if (h === 'localhost' || /\.(localhost|local|lan|internal|home\.arpa|ts\.net)$/.test(h))
+    return true;
+  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(h);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 127 ||
+      a === 10 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) ||
+      (a === 100 && b >= 64 && b <= 127) // carrier-grade NAT, used by tailnets
+    );
+  }
+  return h === '::1' || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h);
+}
 
 export class ProviderRegistry {
   readonly #db: NovaDatabase;
@@ -77,6 +145,7 @@ export class ProviderRegistry {
   readonly #cacheMs: number;
   readonly #now: () => Date;
   readonly #redactor: Redactor;
+  readonly #adapterRetries: number;
   readonly #instances = new Map<string, Provider>();
   readonly #models = new Map<string, { at: number; models: ModelInfo[] }>();
 
@@ -88,6 +157,7 @@ export class ProviderRegistry {
     this.#cacheMs = opts.modelCacheMs ?? 30_000;
     this.#now = opts.now ?? (() => new Date());
     this.#redactor = opts.redactor ?? defaultRedactor;
+    this.#adapterRetries = opts.adapterRetries ?? 0;
   }
 
   async list(accountId: string): Promise<ProviderAccountView[]> {
@@ -128,12 +198,9 @@ export class ProviderRegistry {
     }
     if (req.provider === 'openai_compatible' && !req.baseUrl)
       throw new NovaError('validation', 'a base URL is required for an OpenAI-compatible endpoint');
-    if (req.provider === 'openai' && !req.apiKey)
-      throw new NovaError('validation', 'an API key is required for OpenAI');
-    const defaultBase =
-      req.provider === 'openai' || req.provider === 'ollama'
-        ? DEFAULT_BASE_URLS[req.provider]
-        : null;
+    if (KEY_REQUIRED.has(req.provider) && !req.apiKey)
+      throw new NovaError('validation', `an API key is required for ${KIND_LABEL[req.provider]}`);
+    const defaultBase = hasDefaultBase(req.provider) ? DEFAULT_BASE_URLS[req.provider] : null;
     const baseUrl = req.provider === 'mock' ? null : (req.baseUrl ?? defaultBase);
     if (baseUrl) {
       // Validates scheme and shape the same way the adapter will.
@@ -224,25 +291,30 @@ export class ProviderRegistry {
 
   /** Models across every provider account; an unreachable provider is skipped, not fatal. */
   async listModels(accountId: string): Promise<ModelView[]> {
-    const rows = (
-      await this.#db.orm
-        .select()
-        .from(providerAccount)
-        .where(and(eq(providerAccount.accountId, accountId), isNull(providerAccount.deletedAt)))
-        .orderBy(asc(providerAccount.createdAt), asc(providerAccount.id))
-    ).filter((r) => r.status !== 'revoked');
+    return (await this.accountModels(accountId)).map((m) => m.view);
+  }
+
+  /** Account models with their reported capabilities, in account then model order. */
+  async accountModels(accountId: string): Promise<AccountModel[]> {
+    const rows = (await this.#activeRows(accountId)).filter((r) => r.status !== 'revoked');
     const lists = await Promise.all(
       rows.map(async (row) => {
         try {
-          return (await this.#fetchModels(row, false)).map((m): ModelView => ({
-            ref: modelRef(row.id, m.id),
-            kind: 'model',
-            source: 'account',
-            providerAccountId: row.id,
-            provider: row.provider as ProviderKind,
-            modelId: m.id,
-            label: m.label,
-            reasoning: Boolean(m.capabilities.reasoning),
+          const local = isLocalProvider(row.provider, row.baseUrl);
+          return (await this.#fetchModels(row, false)).map((m): AccountModel => ({
+            view: {
+              ref: modelRef(row.id, m.id),
+              kind: 'model',
+              source: 'account',
+              providerAccountId: row.id,
+              provider: row.provider as ProviderKind,
+              modelId: m.id,
+              label: m.label,
+              reasoning: Boolean(m.capabilities.reasoning),
+            },
+            info: m,
+            account: row,
+            local,
           }));
         } catch (err) {
           this.#log.warn('provider model list failed', {
@@ -257,6 +329,41 @@ export class ProviderRegistry {
       }),
     );
     return lists.flat();
+  }
+
+  /**
+   * The model list last fetched for a provider account, without any network call; undefined
+   * when it has not been fetched yet. Lets routing check availability cheaply.
+   */
+  cachedModels(providerAccountId: string): ModelInfo[] | undefined {
+    return this.#models.get(providerAccountId)?.models;
+  }
+
+  /**
+   * The Hub's own local servers (other than `exceptId`) whose last known model list includes
+   * `modelId`, for routing a local model across places (FR-127). Never calls the network.
+   */
+  async localServing(
+    accountId: string,
+    modelId: string,
+    exceptId: string,
+  ): Promise<ResolvedModel[]> {
+    const out: ResolvedModel[] = [];
+    for (const row of await this.#activeRows(accountId)) {
+      if (row.id === exceptId || row.status === 'revoked' || row.provider === 'mock') continue;
+      if (!isLocalProvider(row.provider, row.baseUrl)) continue;
+      if (!this.cachedModels(row.id)?.some((m) => m.id === modelId)) continue;
+      out.push(this.#resolved(row, modelId));
+    }
+    return out;
+  }
+
+  #activeRows(accountId: string): Promise<ProviderAccountRow[]> {
+    return this.#db.orm
+      .select()
+      .from(providerAccount)
+      .where(and(eq(providerAccount.accountId, accountId), isNull(providerAccount.deletedAt)))
+      .orderBy(asc(providerAccount.createdAt), asc(providerAccount.id));
   }
 
   /** The first model of the first provider account that answers (new-chat default). */
@@ -279,15 +386,25 @@ export class ProviderRegistry {
         },
       );
     }
+    return this.#resolved(account, parsed.modelId);
+  }
+
+  #resolved(account: ProviderAccountRow, modelId: string): ResolvedModel {
     const provider = this.provider(account);
-    const info = this.#models.get(account.id)?.models.find((m) => m.id === parsed.modelId);
-    return {
-      ref,
+    const info = this.#models.get(account.id)?.models.find((m) => m.id === modelId);
+    const reasoning = info?.capabilities.reasoning ?? provider.capabilities.reasoning;
+    const r: ResolvedModel = {
+      ref: modelRef(account.id, modelId),
       account,
       provider,
-      modelId: parsed.modelId,
+      modelId,
       vision: info?.capabilities.vision ?? provider.capabilities.vision,
+      reasoning: reasoning !== false,
+      local: isLocalProvider(account.provider, account.baseUrl),
     };
+    if (info?.costIn !== undefined) r.costIn = info.costIn;
+    if (info?.costOut !== undefined) r.costOut = info.costOut;
+    return r;
   }
 
   /** Per-1M-token prices from `model_pref`, when the user set them (docs/07 §11). */
@@ -326,14 +443,24 @@ export class ProviderRegistry {
     switch (row.provider) {
       case 'mock':
         return new MockProvider({ id: row.id, timing: 'streamed' });
+      case 'anthropic':
+        return new AnthropicProvider({
+          id: row.id,
+          ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
+          apiKey,
+          maxRetries: this.#adapterRetries,
+        });
       case 'openai':
+      case 'openrouter':
       case 'ollama':
+      case 'llamacpp':
       case 'openai_compatible':
         return new OpenAICompatibleProvider({
           id: row.id,
           kind: row.provider,
           ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
           apiKey,
+          maxRetries: this.#adapterRetries,
         });
       default:
         throw new NovaError('capability_missing', `no adapter for ${row.provider} in this build`);

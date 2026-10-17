@@ -44,6 +44,7 @@ export type ImportMemoryRequest = z.input<typeof importMemorySchema>;
 export interface ListMemoryQuery {
   scopeKind?: 'global' | 'project';
   scopeRef?: string;
+  category?: string;
   q?: string;
   status?: 'active' | 'dismissed';
 }
@@ -217,11 +218,12 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
 
     // memory (FR-032)
     listMemory: (q: ListMemoryQuery = {}) =>
-      call<{ items: MemoryItemView[] }>('GET', `${V1}/memory${query({ ...q })}`),
-    createMemory: (body: CreateMemoryRequest) => call<MemoryItemView>('POST', `${V1}/memory`, body),
+      call<{ items: MemoryItemView[] }>('GET', `${V1}/memory/items${query({ ...q })}`),
+    createMemory: (body: CreateMemoryRequest) =>
+      call<MemoryItemView>('POST', `${V1}/memory/items`, body),
     updateMemory: (id: string, body: UpdateMemoryRequest) =>
-      call<MemoryItemView>('PATCH', `${V1}/memory/${enc(id)}`, body),
-    deleteMemory: (id: string) => call<{ ok: true }>('DELETE', `${V1}/memory/${enc(id)}`),
+      call<MemoryItemView>('PATCH', `${V1}/memory/items/${enc(id)}`, body),
+    deleteMemory: (id: string) => call<{ ok: true }>('DELETE', `${V1}/memory/items/${enc(id)}`),
     importMemory: (body: ImportMemoryRequest) =>
       call<MemoryImportResult>('POST', `${V1}/memory/import`, body),
 
@@ -230,9 +232,10 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
     savePresets: (items: Preset[]) =>
       call<{ items: Preset[]; builtIn: boolean }>('PUT', `${V1}/presets`, { items }),
     detectServers: () => call<{ items: DetectedServer[] }>('GET', `${V1}/providers/detect`),
-    listNodes: () => call<{ items: NodeView[] }>('GET', `${V1}/nodes`),
-    createNodeEnrollToken: () => call<NodeEnrollToken>('POST', `${V1}/nodes/enroll-token`),
-    revokeNode: (id: string) => call<{ ok: true }>('DELETE', `${V1}/nodes/${enc(id)}`),
+    listNodes: () => call<{ items: NodeView[] }>('GET', `${V1}/devices?role=compute`),
+    createNodeEnrollToken: () =>
+      call<NodeEnrollToken>('POST', `${V1}/devices/add/start`, { role: 'compute' }),
+    revokeNode: (id: string) => call<{ ok: true }>('POST', `${V1}/devices/${enc(id)}/revoke`),
 
     // attachments (FR-021)
     attachmentUrl: (id: string) => `${V1}/attachments/${enc(id)}`,

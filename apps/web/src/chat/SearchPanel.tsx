@@ -1,5 +1,6 @@
-// Global chat search (FR-017): full-text search over messages via GET /search; each hit shows its
-// chat, a snippet with the match and the date, and jumps to the message.
+// Global chat search (FR-017, FR-025): full-text search over messages via GET /search, best
+// match first as the Hub ranks them; each hit shows its chat, who wrote it, a snippet with the
+// match and the date, and jumps to the message.
 import { useEffect, useRef, useState } from 'react';
 import type { SearchHit } from '@nova/shared';
 import { Spinner } from '@nova/ui';
@@ -121,6 +122,7 @@ export function SearchPanel({ onClose, onOpen, debounceMs = 200 }: SearchPanelPr
                 }}
               >
                 <span className="search-hit-title">{h.threadTitle?.trim() || 'Untitled chat'}</span>
+                {h.role ? <span className="search-hit-role">{roleName(h.role)}</span> : null}
                 <Snippet text={h.snippet} />
                 <time className="muted search-hit-date" dateTime={h.createdAt}>
                   {formatDate(h.createdAt)}
@@ -148,6 +150,12 @@ export function Snippet({ text }: { text: string }) {
       })}
     </span>
   );
+}
+
+function roleName(role: NonNullable<SearchHit['role']>): string {
+  if (role === 'user') return 'You';
+  if (role === 'assistant') return 'Assistant';
+  return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
 export function formatDate(iso: string): string {

@@ -99,6 +99,8 @@ export interface HubState {
   testResult: { ok: boolean; detail?: string; models?: number };
   /** Queued follow-ups per thread (FR-019). */
   queues: Map<string, QueuedInputView[]>;
+  /** The active path selectVersion switches to, per selected message id (FR-020). */
+  paths: Map<string, MessageView[]>;
   /** Projects, sources, memory, presets and nodes (test/fakes-workspace.ts). */
   workspace: WorkspaceState;
 }
@@ -118,6 +120,7 @@ export function createHub(init: Partial<HubState> = {}) {
     failNext: {},
     testResult: { ok: true, models: 2 },
     queues: new Map(),
+    paths: new Map(),
     workspace: workspaceState(),
     ...init,
   };
@@ -194,8 +197,10 @@ export function createHub(init: Partial<HubState> = {}) {
     },
     listThreads: async (q = {}) => {
       maybeFail('listThreads');
+      // Side chats are never listed (FR-026).
       const items = state.threads
         .filter((t) => (q.archived ? true : !t.archived))
+        .filter((t) => !t.side && (!q.projectId || t.projectId === q.projectId))
         .sort(
           (a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt),
         );
@@ -206,6 +211,9 @@ export function createHub(init: Partial<HubState> = {}) {
       const t = thread({
         title: body.title ?? null,
         model: body.model ?? state.models[0]?.ref ?? null,
+        temporary: body.temporary ?? false,
+        memoryOptOut: body.memoryOptOut ?? false,
+        projectId: body.projectId ?? null,
         updatedAt: ts(59),
       });
       state.threads = [t, ...state.threads];
@@ -214,7 +222,11 @@ export function createHub(init: Partial<HubState> = {}) {
     },
     getThread: async (tid) => {
       maybeFail('getThread');
-      return { thread: { ...find(tid) }, messages: [...(state.messages.get(tid) ?? [])] };
+      return {
+        thread: { ...find(tid) },
+        messages: [...(state.messages.get(tid) ?? [])],
+        queue: [...(state.queues.get(tid) ?? [])],
+      };
     },
     updateThread: async (tid, body) => {
       maybeFail('updateThread');
@@ -231,6 +243,45 @@ export function createHub(init: Partial<HubState> = {}) {
     sendMessage: async (tid, body) => {
       maybeFail('sendMessage');
       find(tid);
+      // While a reply streams, the message steers it or waits in the queue (FR-019).
+      const running = (state.messages.get(tid) ?? []).find(
+        (m) => m.role === 'assistant' && m.status === 'streaming',
+      );
+      if (running) {
+        const mode = body.inputMode ?? (state.settings['general.followUp'] as string) ?? 'queue';
+        if (mode === 'steer') {
+          const steer = message(tid, {
+            role: 'user',
+            turnId: running.turnId,
+            provenance: 'steer',
+            parts: [{ type: 'text', text: body.text }],
+          });
+          state.messages.set(tid, [...(state.messages.get(tid) ?? []), steer]);
+          return {
+            disposition: 'steered' as const,
+            turnId: running.turnId,
+            userMessageId: steer.id,
+            assistantMessageId: null,
+          };
+        }
+        const list = state.queues.get(tid) ?? [];
+        const item: QueuedInputView = {
+          id: id('q'),
+          threadId: tid,
+          text: body.text,
+          attachmentCount: body.attachments?.length ?? 0,
+          position: list.length + 1,
+          createdAt: ts(),
+        };
+        state.queues.set(tid, [...list, item]);
+        return {
+          disposition: 'queued' as const,
+          turnId: null,
+          userMessageId: item.id,
+          assistantMessageId: null,
+          queuePosition: item.position,
+        };
+      }
       const turnId = id('turn');
       const user = message(tid, {
         role: 'user',
@@ -286,6 +337,7 @@ export function createHub(init: Partial<HubState> = {}) {
         parentId: original.parentId ?? null,
         parts: [{ type: 'text', text: body.text }],
       });
+      user.siblingIds = [...(original.siblingIds ?? [original.id]), user.id];
       const assistant = message(tid, {
         role: 'assistant',
         turnId,
@@ -324,15 +376,25 @@ export function createHub(init: Partial<HubState> = {}) {
         assistantMessageId: assistant.id,
       };
     },
-    selectVersion: async (tid) => {
+    selectVersion: async (tid, mid) => {
       maybeFail('selectVersion');
+      const path = state.paths.get(mid);
+      if (path) state.messages.set(tid, [...path]);
       return { thread: { ...find(tid) }, messages: [...(state.messages.get(tid) ?? [])] };
     },
     deleteMessage: async (tid, mid) => {
       maybeFail('deleteMessage');
+      // A user message takes the reply in its turn with it (FR-020).
+      const msgs = state.messages.get(tid) ?? [];
+      const target = msgs.find((m) => m.id === mid);
+      if (!target) throw notFound();
       state.messages.set(
         tid,
-        (state.messages.get(tid) ?? []).filter((m) => m.id !== mid),
+        msgs.filter(
+          (m) =>
+            m.id !== mid &&
+            !(target.role === 'user' && target.turnId && m.turnId === target.turnId),
+        ),
       );
       return { ok: true } as const;
     },
@@ -423,7 +485,27 @@ export function createHub(init: Partial<HubState> = {}) {
     );
   };
 
-  return { api, state, persist };
+  /** Start the oldest queued follow-up as its own turn, as the Hub does when a turn ends. */
+  const startQueued = (tid: string) => {
+    const [first, ...rest] = state.queues.get(tid) ?? [];
+    if (!first) throw new Error(`nothing queued on ${tid}`);
+    state.queues.set(
+      tid,
+      rest.map((q, i) => ({ ...q, position: i + 1 })),
+    );
+    const turnId = id('turn');
+    const user = message(tid, {
+      role: 'user',
+      turnId,
+      provenance: 'queued',
+      parts: [{ type: 'text', text: first.text }],
+    });
+    const assistant = message(tid, { role: 'assistant', turnId, status: 'streaming', parts: [] });
+    state.messages.set(tid, [...(state.messages.get(tid) ?? []), user, assistant]);
+    return { queuedId: first.id, turnId, user, assistant };
+  };
+
+  return { api, state, persist, startQueued };
 }
 
 // ---- EventSource --------------------------------------------------------------------------------

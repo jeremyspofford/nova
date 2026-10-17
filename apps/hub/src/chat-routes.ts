@@ -1,16 +1,22 @@
-// M1 Hub API: providers, models, account profile, threads, messages, the per-thread event
-// stream, search and attachments (contracts/hub-api.md §1; FR-017, FR-018, FR-021, FR-023,
-// FR-125). Every route requires authentication and validates its input with the shared zod
-// schemas; services live in @nova/core.
+// Chat Hub API: providers, models, account profile, threads, messages, the per-thread event
+// stream, search and attachments (M1: FR-017, FR-018, FR-021, FR-023, FR-125), plus follow-up
+// queues, message versions, branches, side chats and the thread tree (M2: FR-019, FR-020,
+// FR-025, FR-026, FR-027, FR-033). Every route requires authentication and validates its input
+// with the shared zod schemas (contracts/hub-api.md §1); services live in @nova/core.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  branchSchema,
   createProviderSchema,
   createThreadSchema,
+  editMessageSchema,
   idSchema,
   listThreadsQuerySchema,
+  regenerateSchema,
+  selectVersionSchema,
   sendMessageSchema,
+  sideChatSchema,
   updateThreadSchema,
   NovaError,
   type EventEnvelope,
@@ -44,12 +50,15 @@ export interface ChatRouteDeps {
 export const MESSAGE_BODY_LIMIT = 30 * 1024 * 1024;
 
 const params = z.object({ id: idSchema });
+const messageParams = z.object({ id: idSchema, mid: idSchema });
+const queueParams = z.object({ id: idSchema, queuedId: idSchema });
 
 // PATCH /account (contracts/hub-api.md §1). `avatar: null` clears the avatar; uploads are M2.
 
 const searchQuerySchema = z.object({
   q: z.string().min(1).max(200),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+  projectId: idSchema.optional(),
 });
 
 export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): void {
@@ -127,13 +136,11 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
     return threads.update(accountId, id, updateThreadSchema.parse(req.body));
   });
 
+  // A running reply is stopped (and saved) first; a temporary chat is purged (FR-027).
   app.delete('/api/v1/threads/:id', async (req) => {
     const accountId = await accountOf(req);
     const { id } = params.parse(req.params);
-    await threads.row(accountId, id);
-    // A running reply is stopped (and saved) before the thread goes away.
-    if (chat.isActive(id)) await chat.cancel(accountId, id);
-    await threads.remove(accountId, id);
+    await chat.deleteThread(accountId, id);
     return { ok: true };
   });
 
@@ -153,6 +160,71 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
     const accountId = await accountOf(req);
     const cancelled = await chat.cancel(accountId, params.parse(req.params).id);
     return { ok: true, cancelled };
+  });
+
+  // ---- follow-up queue (FR-019) ---------------------------------------------------------
+  app.get('/api/v1/threads/:id/queue', async (req) => {
+    const accountId = await accountOf(req);
+    return { items: await chat.listQueue(accountId, params.parse(req.params).id) };
+  });
+
+  app.delete('/api/v1/threads/:id/queue/:queuedId', async (req) => {
+    const accountId = await accountOf(req);
+    const { id, queuedId } = queueParams.parse(req.params);
+    await chat.cancelQueued(accountId, id, queuedId);
+    return { ok: true };
+  });
+
+  // ---- versions, branches, side chats (FR-020, FR-026, FR-033) ---------------------------
+  app.post('/api/v1/threads/:id/messages/:mid/edit', async (req, reply) => {
+    const accountId = await accountOf(req);
+    const { id, mid } = messageParams.parse(req.params);
+    const res = await chat.edit(accountId, id, mid, editMessageSchema.parse(req.body));
+    void reply.status(202);
+    return res;
+  });
+
+  app.post('/api/v1/threads/:id/messages/:mid/regenerate', async (req, reply) => {
+    const accountId = await accountOf(req);
+    const { id, mid } = messageParams.parse(req.params);
+    const res = await chat.regenerate(accountId, id, mid, regenerateSchema.parse(req.body ?? {}));
+    void reply.status(202);
+    return res;
+  });
+
+  app.post('/api/v1/threads/:id/active', async (req) => {
+    const accountId = await accountOf(req);
+    const { id } = params.parse(req.params);
+    const body = selectVersionSchema.parse(req.body);
+    return chat.selectVersion(accountId, id, body.messageId);
+  });
+
+  app.delete('/api/v1/threads/:id/messages/:mid', async (req) => {
+    const accountId = await accountOf(req);
+    const { id, mid } = messageParams.parse(req.params);
+    await chat.deleteMessage(accountId, id, mid);
+    return { ok: true };
+  });
+
+  app.post('/api/v1/threads/:id/branch', async (req, reply) => {
+    const accountId = await accountOf(req);
+    const { id } = params.parse(req.params);
+    const view = await threads.branch(accountId, id, branchSchema.parse(req.body));
+    void reply.status(201);
+    return view;
+  });
+
+  app.get('/api/v1/threads/:id/tree', async (req) => {
+    const accountId = await accountOf(req);
+    return threads.tree(accountId, params.parse(req.params).id);
+  });
+
+  app.post('/api/v1/threads/:id/side', async (req, reply) => {
+    const accountId = await accountOf(req);
+    const { id } = params.parse(req.params);
+    const res = await chat.sideChat(accountId, id, sideChatSchema.parse(req.body));
+    void reply.status(201);
+    return res;
   });
 
   // Per-thread SSE: persisted events after the cursor, then live ones (including ephemeral
@@ -187,7 +259,7 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
   app.get('/api/v1/search', async (req) => {
     const accountId = await accountOf(req);
     const q = searchQuerySchema.parse(req.query);
-    return { items: threads.search(accountId, q.q, q.limit) };
+    return { items: threads.search(accountId, q.q, { limit: q.limit, projectId: q.projectId }) };
   });
 
   app.get('/api/v1/attachments/:id', async (req, reply) => {

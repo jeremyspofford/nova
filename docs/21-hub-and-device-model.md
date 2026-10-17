@@ -113,6 +113,12 @@ service) so the Hub stays running and restarts on failure.
 - Enforce its own limits (max concurrent jobs, VRAM reserve, quiet hours).
 - Never initiate connections to clients; only accept Hub-authorized work.
 
+From M2 the compute node is the `@nova/compute` service (`nova-compute enroll`, `nova-compute
+run`): it enrolls with a one-use token from Settings → Devices, signs its capability document
+with a pinned Ed25519 key, heartbeats every 10 s and serves `/node/v1/jobs` only to the Hub's
+job token. Certificates and the Mesh replace the bearer tokens in M6.5, and `novad`'s compute
+module supervises the service from M6 (ADR-089, `contracts/hub-api.md` §2).
+
 ## 8. Client responsibilities
 
 - Present the Hub-served UI (PWA or native shell).

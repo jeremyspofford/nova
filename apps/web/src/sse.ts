@@ -120,5 +120,9 @@ export const THREAD_EVENTS = [
   'chat.delta',
   'chat.message.completed',
   'chat.message.updated',
+  'chat.message.deleted',
+  'chat.branch.created',
+  'chat.followup.queued',
+  'chat.followup.started',
   'thread.status.changed',
 ] as const;

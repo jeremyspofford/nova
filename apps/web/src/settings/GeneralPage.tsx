@@ -1,13 +1,17 @@
-// Settings → General (docs/14 §1.1): which key sends, the default model for new chats (FR-023),
+// Settings → General (docs/14 §1.1): which key sends, what a message sent during a reply does
+// (FR-019), how long temporary chats are kept (FR-027), the default model for new chats (FR-023),
 // and the setup guide (FR-014).
-import { Button, RadioGroup, SelectField, useToast } from '@nova/ui';
+import { useState } from 'react';
+import { Button, RadioGroup, SelectField, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
-import { PROVIDER_NAMES } from '../providers/names.ts';
+import { modelGroups } from '../providers/model-groups.ts';
 import { bindingText } from '../keys.ts';
 import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useModels } from '../stores.tsx';
+import { MANAGED } from './common.ts';
+import '../workspace.css';
 
 export function GeneralPage() {
   const { registry } = useServices();
@@ -16,20 +20,13 @@ export function GeneralPage() {
   const { models } = useModels();
   const enter = settings.get('general.enterToSend');
   const model = settings.get('chat.defaultModel');
+  const followUp = settings.get('general.followUp');
   const mac = registry.platform.mac;
 
   const fail = (err: unknown) =>
     toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
 
-  const groups = new Map<string, { label: string; options: { value: string; label: string }[] }>();
-  for (const m of models) {
-    const g = groups.get(m.providerAccountId) ?? {
-      label: PROVIDER_NAMES[m.provider] ?? m.provider,
-      options: [],
-    };
-    g.options.push({ value: m.ref, label: m.label });
-    groups.set(m.providerAccountId, g);
-  }
+  const groups = modelGroups(models);
 
   return (
     <div className="settings-page">
@@ -54,13 +51,39 @@ export function GeneralPage() {
         />
       </section>
       <section className="settings-section">
+        <RadioGroup
+          legend="While a reply is streaming, new messages"
+          name="follow-up"
+          value={followUp.value}
+          locked={followUp.locked}
+          onChange={(v) =>
+            void settings.set('general.followUp', v as 'steer' | 'queue').catch(fail)
+          }
+          options={[
+            {
+              value: 'steer',
+              label: 'Steer the reply',
+              description: 'Join the running reply and change its direction at its next step.',
+            },
+            {
+              value: 'queue',
+              label: 'Wait in a queue',
+              description: 'Are sent one by one after the current reply finishes.',
+            },
+          ]}
+        />
+      </section>
+      <section className="settings-section">
+        <TemporaryRetention onError={fail} />
+      </section>
+      <section className="settings-section">
         <SelectField
           label="Default model for new chats"
           value={model.value ?? ''}
           locked={model.locked}
           onChange={(v) => void settings.set('chat.defaultModel', v || null).catch(fail)}
           options={[{ value: '', label: 'First available model' }]}
-          groups={[...groups.values()]}
+          groups={groups}
           hint={
             models.length
               ? 'You can still pick another model in each chat.'
@@ -74,5 +97,49 @@ export function GeneralPage() {
         <Button onClick={() => navigate('/onboarding')}>Open the setup guide</Button>
       </section>
     </div>
+  );
+}
+
+const TTL_MIN = 1;
+const TTL_MAX = 720;
+
+/** Hours a temporary chat is kept after its last activity (FR-027); saved on Enter or blur. */
+function TemporaryRetention({ onError }: { onError: (err: unknown) => void }) {
+  const settings = useSettings();
+  const ttl = settings.get('chat.temporaryTtlHours');
+  const [draft, setDraft] = useState<{ base: number; text: string } | null>(null);
+  // A draft belongs to the value it was typed against; a new value from the Hub discards it.
+  const text = draft && draft.base === ttl.value ? draft.text : String(ttl.value);
+  const n = Number(text);
+  const invalid = !/^\d+$/.test(text.trim()) || n < TTL_MIN || n > TTL_MAX;
+
+  const commit = () => {
+    if (invalid || n === ttl.value) return;
+    setDraft(null);
+    void settings.set('chat.temporaryTtlHours', n).catch(onError);
+  };
+
+  return (
+    <TextField
+      label="Delete temporary chats after (hours)"
+      hint={`${ttl.locked ? `${MANAGED}. ` : ''}Temporary chats and their files are deleted this long after their last activity. ${TTL_MIN} to ${TTL_MAX} hours.`}
+      type="number"
+      className="ws-number"
+      inputMode="numeric"
+      min={TTL_MIN}
+      max={TTL_MAX}
+      step={1}
+      value={text}
+      disabled={ttl.locked}
+      error={invalid ? `Enter a whole number from ${TTL_MIN} to ${TTL_MAX}.` : undefined}
+      onChange={(e) => setDraft({ base: ttl.value, text: e.target.value })}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+        }
+      }}
+    />
   );
 }

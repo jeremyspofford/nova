@@ -482,7 +482,7 @@ export interface MemoryItemView {
   pinned: boolean;
   confidence: number | null;
   status: 'active' | 'dismissed';
-  sourceKind: 'chat' | 'consolidation' | 'import' | 'manual';
+  sourceKind: 'chat' | 'consolidation' | 'import' | 'manual' | 'ambient';
   sourceThreadId: string | null;
   sourceMessageId: string | null;
   createdAt: string;
@@ -570,3 +570,4 @@ export const ROUTING_STEPS = [
   'cost',
   'cloud',
 ] as const;
+export type RoutingStep = (typeof ROUTING_STEPS)[number];

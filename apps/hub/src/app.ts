@@ -16,16 +16,23 @@ import {
   resolveAll,
   resolveSetting,
   uuidv7,
+  type SettingKey,
   type SettingLayers,
 } from '@nova/shared';
 import {
   ChatService,
-  DirectRouter,
+  MemoryService,
+  NodeModelSource,
+  NodeService,
+  ProjectService,
   ProviderRegistry,
+  Router,
+  SourceService,
   ThreadService,
+  detectLocalServers,
   type ChatServiceOptions,
-  type ProviderFactory,
   type ModelRouter,
+  type ProviderFactory,
 } from '@nova/core';
 import { MemorySecretStore, type SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
@@ -34,6 +41,10 @@ import { AuthService, type Principal } from './auth.ts';
 import { openStream, registerChatRoutes } from './chat-routes.ts';
 import type { HubConfig } from './config.ts';
 import { EventStore } from './event-store.ts';
+import { registerMemoryRoutes } from './memory-routes.ts';
+import { registerModelRoutes } from './model-routes.ts';
+import { registerNodeRoutes } from './node-routes.ts';
+import { registerProjectRoutes } from './project-routes.ts';
 
 export const SESSION_COOKIE = 'nova_session';
 
@@ -57,9 +68,16 @@ export interface HubDeps {
   dataDir?: string;
   /** Override provider construction (tests use scripted mock providers). */
   providerFactory?: ProviderFactory;
-  chat?: Pick<ChatServiceOptions, 'flushIntervalMs' | 'deltaIntervalMs' | 'systemPrompt'>;
-  /** Build the model router (default: DirectRouter over the provider registry). */
+  chat?: Pick<
+    ChatServiceOptions,
+    'flushIntervalMs' | 'deltaIntervalMs' | 'systemPrompt' | 'memoryTimeoutMs'
+  >;
+  /** How often temporary chats past their TTL are purged (default 10 min, FR-027). */
+  sweepIntervalMs?: number;
+  /** Replace the model router (tests); the default is the full Router (docs/07 §8-§9). */
   router?: (registry: ProviderRegistry) => ModelRouter;
+  /** Probe for local model servers (tests replace it; docs/07 §12). */
+  detect?: typeof detectLocalServers;
 }
 
 export interface Hub {
@@ -68,8 +86,12 @@ export interface Hub {
   events: EventStore;
   registry: ProviderRegistry;
   router: ModelRouter;
+  nodes: NodeService;
   threads: ThreadService;
   chat: ChatService;
+  projects: ProjectService;
+  sources: SourceService;
+  memory: MemoryService;
 }
 
 const CSP = [
@@ -103,17 +125,44 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   const auth = deps.auth ?? new AuthService(db);
   const events = deps.events ?? new EventStore(db);
   const dataDir = deps.dataDir ?? config.dataDir;
+  const secrets = deps.secrets ?? new MemorySecretStore();
   const registry = new ProviderRegistry({
     db,
-    secrets: deps.secrets ?? new MemorySecretStore(),
+    secrets,
     log: log.child('providers'),
     ...(deps.providerFactory ? { factory: deps.providerFactory } : {}),
   });
-  const router: ModelRouter = deps.router?.(registry) ?? new DirectRouter(registry);
+  const setting = async <K extends SettingKey>(key: K, projectId?: string | null) =>
+    resolveSetting(key, await loadLayers(projectId ?? undefined)).value;
+  // Compute nodes register with the Hub and serve models as a router source (FR-126, FR-127).
+  const nodes = new NodeService({ db, secrets, events, log: log.child('nodes') });
+  const fullRouter = new Router({
+    registry,
+    sources: [new NodeModelSource({ nodes })],
+    settings: async () => {
+      const layers = await loadLayers();
+      return {
+        presets: resolveSetting('models.presets', layers).value,
+        order: resolveSetting('routing.order', layers).value,
+        allowCloud: resolveSetting('routing.allowCloud', layers).value,
+      };
+    },
+    log: log.child('router'),
+  });
+  const router: ModelRouter = deps.router?.(registry) ?? fullRouter;
   const threads = new ThreadService({
     db,
     router,
-    defaultModel: async () => resolveSetting('chat.defaultModel', await loadLayers()).value,
+    events,
+    defaultModel: () => setting('chat.defaultModel'),
+  });
+  const projects = new ProjectService({ db });
+  const sources = new SourceService({ db, events, dataDir, log: log.child('sources') });
+  const memory = new MemoryService({
+    db,
+    events,
+    log: log.child('memory'),
+    enabled: (projectId) => setting('memory.enabled', projectId),
   });
   const chat = new ChatService({
     db,
@@ -122,6 +171,12 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     events,
     dataDir,
     log: log.child('chat'),
+    memory,
+    sources,
+    settings: {
+      followUp: (projectId) => setting('general.followUp', projectId),
+      temporaryTtlHours: () => setting('chat.temporaryTtlHours'),
+    },
     ...deps.chat,
   });
   const app = Fastify({
@@ -142,8 +197,21 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     for (const end of [...streams]) end();
     done();
   });
+  // Temporary chats past their TTL are purged in the background (FR-027); main.ts also sweeps
+  // at startup.
+  const sweeper = setInterval(
+    () => {
+      chat.sweepTemporary().catch((err: unknown) => log.warn('temporary sweep failed', { err }));
+    },
+    deps.sweepIntervalMs ?? 10 * 60_000,
+  );
+  sweeper.unref();
+  nodes.start();
   app.addHook('onClose', async () => {
+    clearInterval(sweeper);
+    nodes.stop();
     await chat.shutdown();
+    await sources.stop();
   });
 
   await app.register(fastifyCookie);
@@ -265,6 +333,15 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   app.patch('/api/v1/settings', async (req) => {
     const p = requireAuth(req);
     const body = patchBody.parse(req.body);
+    await writeSetting(p.accountId, body);
+    return { settings: resolveAll(await loadLayers(body.projectId)) };
+  });
+
+  /** Validate and store one setting, then announce it (docs/14 §1). */
+  async function writeSetting(
+    accountId: string | null,
+    body: z.infer<typeof patchBody>,
+  ): Promise<void> {
     if (body.scope === 'project' && !body.projectId)
       throw new NovaError('validation', 'projectId is required');
     const layers = await loadLayers(body.projectId);
@@ -301,11 +378,10 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     await events.emit({
       name: 'settings.changed',
       actor: 'user',
-      accountId: p.accountId ?? undefined,
+      accountId: accountId ?? undefined,
       payload: { key: body.key, scope: body.scope },
     });
-    return { settings: resolveAll(await loadLayers(body.projectId)) };
-  });
+  }
 
   // ---- events (contracts/events.md, hub-api §5) -----------------------------------------
   app.get('/api/v1/events', async (req) => {
@@ -336,11 +412,11 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     );
   });
 
-  // ---- chat (M1) --------------------------------------------------------------------------
+  // ---- chat, projects, memory (M1, M2) ------------------------------------------------------
   const accountOf = async (req: FastifyRequest): Promise<string> => {
     const p = requireAuth(req);
     if (p.accountId) return p.accountId;
-    // Device-scoped tokens carry no account; a single-owner Hub acts for its owner.
+    // Only sessions authenticate here (auth.ts); one without an account acts for the owner.
     const owner = await auth.ownerAccount();
     if (!owner) throw new NovaError('auth_missing', 'the Hub has no owner account yet');
     return owner.id;
@@ -356,6 +432,17 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     accountOf,
     trackStream,
   });
+  registerProjectRoutes(app, { projects, sources, accountOf });
+  registerMemoryRoutes(app, { memory, accountOf });
+  registerModelRoutes(app, {
+    router: fullRouter,
+    readPresets: async () => resolveSetting('models.presets', await loadLayers()).value,
+    writePresets: (accountId, items) =>
+      writeSetting(accountId, { key: 'models.presets', value: items, scope: 'global' }),
+    detect: () => (deps.detect ?? detectLocalServers)(),
+    accountOf,
+  });
+  registerNodeRoutes(app, { nodes, accountOf });
 
   void app.register((scoped, _opts, done) => {
     scoped.get('/api/v1/ws', { websocket: true }, (socket, req) => {
@@ -412,7 +499,19 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     log.warn('web UI not built; serving the API only', { webDir: config.webDir });
   }
 
-  return { app, auth, events, registry, router, threads, chat };
+  return {
+    app,
+    auth,
+    events,
+    registry,
+    router,
+    nodes,
+    threads,
+    chat,
+    projects,
+    sources,
+    memory,
+  };
 }
 
 async function authenticate(req: FastifyRequest, auth: AuthService): Promise<Principal | null> {

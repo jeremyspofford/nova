@@ -10,7 +10,9 @@ and accessible components. Components use tokens only; a test fails on hard-code
 | `Button`, `IconButton`, `TextField`, `Kbd`, `Switch` | Foundation primitives |
 | `SelectField`, `RadioGroup`, `ColorField` | Labelled fields with hint, error and a managed-policy lock |
 | `Dialog` | `aria-modal`, labelled, traps Tab, Esc and backdrop close, returns focus to the opener |
-| `Menu` | Menu button or context menu (`at`), roving tabindex, arrows/Home/End/type-ahead, Esc |
+| `Menu` | Menu button or context menu (`at`), roving tabindex, arrows/Home/End/type-ahead, Esc; `checked` items are `menuitemcheckbox` |
+| `PresetScale` | The Faster to Smarter preset control (FR-221): native radios in a fieldset, visible labels, optional trailing link |
+| `Tree` | WAI-ARIA tree: one tab stop, Up/Down/Home/End, Right/Left expand and collapse, Enter activates, Space multi-selects |
 | `Tabs` | One tab stop, arrow keys with automatic activation |
 | `Tooltip` | Hover and focus, Esc dismisses, linked with `aria-describedby` |
 | `ToastProvider` / `useToast` | Polite live region (errors assertive), optional action, auto-dismiss |

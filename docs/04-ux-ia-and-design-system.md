@@ -271,7 +271,7 @@ Decisions (FR-100, ADR-060):
 
 ### 2.7 Memory (FR-032, FR-204, FR-205)
 
-Settings → Personalization → Memory, also reachable from the Inspector:
+Settings → Memory, also reachable from the Inspector:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -487,8 +487,25 @@ entry (or equivalent) with variants and a screenshot test.
 
 In a browser tab, combinations the browser reserves (for example Ctrl+N and Ctrl+1..4) are shown
 and matched with Alt added; the installed PWA and native shells use the keys below (ADR-088).
-The web UI's routes are `/chat`, `/chat/<id>`, `/settings/<section>` and `/onboarding`; deep
-links (`nova://…`, FR-007) map onto them.
+The web UI's routes are `/chat`, `/chat/<id>` (`?m=<messageId>` jumps to a message,
+`?compare=<id>` compares two branches), `/chat?temporary=1`, `/projects`, `/projects/<id>`,
+`/settings/<section>`, `/onboarding` and `/open?url=<link>`; deep links map onto them (§5.1).
+Find in chat is Ctrl+F / ⌘F (Alt+F in a browser tab).
+
+### 5.1 Deep links (FR-007)
+
+| Link (`nova://` or `web+nova://`) | Opens |
+| --- | --- |
+| `settings`, `settings/<section>` | `/settings/<section>` (unknown section → General) |
+| `chat`, `chat/<id>`, `chat/<id>?m=<messageId>` | the chat, at the message when given |
+| `projects`, `projects/<id>` (alias `project`) | the project list or one project |
+| `code`, `code/<id>` | Code mode (sessions arrive in M5) |
+| `agent/<id>`, `agents` | Agents mode (agents arrive in M6) |
+
+Ids must be 1–100 characters of letters, digits, `_` and `-` after decoding; anything else,
+other schemes and longer paths are refused and the app opens `/chat`. The installed PWA
+registers `web+nova` as a protocol handler that opens `/open?url=%s`; native shells register
+`nova://` (M7).
 
 | Action | Linux/Win | macOS |
 | --- | --- | --- |
@@ -561,7 +578,7 @@ top-level surfaces in the sidebar:
 
 | Surface | Purpose |
 | --- | --- |
-| **Devices** | Devices/compute nodes; capabilities, health, reachability; add/wake/revoke |
+| **Devices** | Devices/compute nodes; capabilities, health, reachability; add/wake/revoke. M2 ships compute nodes under Settings → Devices: an "Add compute node" command line with a one-use token, status, models, load and revoke |
 | **Network** | Transports (LAN/Mesh/Relay), trust/certs, paired Relay clients, egress, wake helpers, diagnostics |
 | **Ambient** | Capture timeline, activity summary, search, filters, privacy controls |
 | **Automations** | Trigger→condition→action editor, dry-run, logs, versions |

@@ -215,8 +215,10 @@ export function ariaKeyShortcut(binding: string, mac: boolean): string {
   return [...mods, ARIA_KEYS[key] ?? (key.length === 1 ? key.toUpperCase() : key)].join('+');
 }
 
-// Keys a browser tab cannot intercept (docs/04 §5): new window/tab, close, tab switching.
+// Keys a browser tab cannot intercept (docs/04 §5): new window/tab, close, tab switching, and
+// the browser's own find (Find in chat, FR-025).
 const BROWSER_RESERVED = new Set([
+  'mod+f',
   'mod+n',
   'mod+shift+n',
   'mod+t',

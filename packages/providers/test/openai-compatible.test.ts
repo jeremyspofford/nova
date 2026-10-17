@@ -5,10 +5,14 @@ import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_BASE_URLS,
   OpenAICompatibleProvider,
   SseParser,
   collect,
   mapHttpError,
+  openAIEffort,
+  openAIModelCaps,
+  openRouterReasoning,
   parseRetryAfter,
   type ChatRequest,
   type OpenAICompatibleOptions,
@@ -485,5 +489,109 @@ describe('SseParser', () => {
     expect(p.push('\n')).toEqual(['d']);
     expect(p.push('data')).toEqual([]);
     expect(p.end()).toEqual(['']);
+  });
+});
+
+describe('OpenAICompatibleProvider reasoning, kinds and model capabilities (docs/07 §6)', () => {
+  it('maps reasoning levels to reasoning_effort for OpenAI only', async () => {
+    handlers.push(sse(fixture('text')));
+    await collect(provider({ kind: 'openai' }).stream(req({ reasoning: { level: 'xhigh' } }), ctx));
+    expect(JSON.parse(seen[0]!.body).reasoning_effort).toBe('high');
+    handlers.push(sse(fixture('text')));
+    await collect(provider({ kind: 'ollama' }).stream(req({ reasoning: { level: 'high' } }), ctx));
+    const local = JSON.parse(seen[1]!.body);
+    expect(local.reasoning_effort).toBeUndefined();
+    expect(local.reasoning).toBeUndefined();
+    expect(openAIEffort({ level: 'off' })).toBe('none');
+    expect(openAIEffort({ level: 'minimal' })).toBe('minimal');
+    expect(openAIEffort({ level: 'max' })).toBe('high');
+    expect(openAIEffort({ budgetTokens: 1_000 })).toBe('low');
+    expect(openAIEffort({ budgetTokens: 5_000 })).toBe('medium');
+    expect(openAIEffort({ budgetTokens: 50_000 })).toBe('high');
+  });
+
+  it('passes reasoning through to OpenRouter and reads its model details', async () => {
+    handlers.push(sse(fixture('reasoning')));
+    const c = await collect(
+      provider({ kind: 'openrouter' }).stream(req({ reasoning: { level: 'medium' } }), ctx),
+    );
+    expect(c.reasoning).toBe('Let me think about it. Still thinking.');
+    expect(JSON.parse(seen[0]!.body).reasoning).toEqual({ effort: 'medium' });
+    expect(openRouterReasoning({ level: 'off' })).toEqual({ enabled: false });
+    expect(openRouterReasoning({ budgetTokens: 4_000 })).toEqual({ max_tokens: 4_000 });
+
+    handlers.push(
+      json(200, {
+        data: [
+          {
+            id: 'vendor/vision-thinker',
+            name: 'Vision Thinker',
+            context_length: 200_000,
+            architecture: { input_modalities: ['text', 'image'] },
+            supported_parameters: ['tools', 'reasoning'],
+            pricing: { prompt: '0.000003', completion: '0.000015' },
+          },
+          { id: 'vendor/plain', pricing: { prompt: '-1' } },
+          { nope: true },
+        ],
+      }),
+    );
+    const models = await provider({ kind: 'openrouter' }).listModels();
+    expect(models).toEqual([
+      {
+        id: 'vendor/plain',
+        label: 'vendor/plain',
+        capabilities: { vision: false, reasoning: false },
+      },
+      {
+        id: 'vendor/vision-thinker',
+        label: 'Vision Thinker',
+        capabilities: { vision: true, reasoning: 'levels', tools: true, maxContextTokens: 200_000 },
+        costIn: 3,
+        costOut: 15,
+      },
+    ]);
+    // A cloud catalog never falls back to Ollama's /api/tags.
+    handlers.push(json(500, {}));
+    await expect(provider({ kind: 'openrouter' }).listModels()).rejects.toMatchObject({
+      code: 'provider_error',
+    });
+    expect(seen.at(-1)!.url).toBe('/v1/models');
+  });
+
+  it('gives OpenAI models per-family capabilities', async () => {
+    handlers.push(json(200, { data: [{ id: 'gpt-5-mini' }, { id: 'gpt-3.5-turbo' }] }));
+    const models = await provider({ kind: 'openai' }).listModels();
+    expect(models).toEqual([
+      {
+        id: 'gpt-3.5-turbo',
+        label: 'gpt-3.5-turbo',
+        capabilities: { reasoning: false, vision: false },
+      },
+      {
+        id: 'gpt-5-mini',
+        label: 'gpt-5-mini',
+        capabilities: { reasoning: 'levels', vision: true },
+      },
+    ]);
+    expect(openAIModelCaps('o3-mini')).toEqual({ reasoning: 'levels', vision: false });
+    expect(openAIModelCaps('gpt-5-chat-latest')).toEqual({ reasoning: false, vision: true });
+    expect(openAIModelCaps('gpt-4o')).toEqual({ reasoning: false, vision: true });
+  });
+
+  it('defaults llama.cpp and OpenRouter base URLs; llama.cpp sends no key', async () => {
+    expect(new OpenAICompatibleProvider({ id: 'l', kind: 'llamacpp' }).baseUrl).toBe(
+      DEFAULT_BASE_URLS.llamacpp,
+    );
+    expect(
+      new OpenAICompatibleProvider({ id: 'l', kind: 'llamacpp', baseUrl: 'http://box:8080' })
+        .baseUrl,
+    ).toBe('http://box:8080/v1');
+    expect(new OpenAICompatibleProvider({ id: 'r', kind: 'openrouter' }).baseUrl).toBe(
+      'https://openrouter.ai/api/v1',
+    );
+    handlers.push(sse(fixture('text')));
+    await collect(provider({ kind: 'llamacpp', apiKey: undefined }).stream(req(), ctx));
+    expect(seen[0]!.headers.authorization).toBeUndefined();
   });
 });

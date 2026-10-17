@@ -78,7 +78,37 @@ const PATHS = {
     </>
   ),
   file: <path d="M6 3h8l4 4v14H6zM14 3v4h4" />,
+  folder: <path d="M3 6h6l2 2h10v11H3z" />,
   back: <path d="M15 6l-6 6 6 6" />,
+  forward: <path d="M9 6l6 6-6 6" />,
+  branch: (
+    <>
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="6" cy="19" r="2" />
+      <circle cx="18" cy="7" r="2" />
+      <path d="M6 7v10M18 9v1a4 4 0 0 1-4 4H9a3 3 0 0 0-3 3" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M15 9V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h4" />
+    </>
+  ),
+  quote: <path d="M5 8h5v5c0 3-2 4.5-4 5M14 8h5v5c0 3-2 4.5-4 5" />,
+  refresh: <path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5" />,
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </>
+  ),
+  compare: (
+    <>
+      <rect x="3" y="4" width="8" height="16" rx="1" />
+      <rect x="13" y="4" width="8" height="16" rx="1" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof PATHS;

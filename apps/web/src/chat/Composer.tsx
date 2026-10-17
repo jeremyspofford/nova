@@ -1,13 +1,31 @@
-// Composer (docs/04 §3, FR-018, FR-021, FR-023, FR-024): auto-growing input, Enter or Mod+Enter
-// sends per `general.enterToSend`, Shift+Enter adds a line, attachments by button, drag-drop and
-// paste with inline errors, the model and reasoning pickers, and Send/Stop.
+// Composer (docs/04 §3, FR-018, FR-019, FR-021, FR-023, FR-024, FR-221): auto-growing input,
+// Enter or Mod+Enter sends per `general.enterToSend`, Shift+Enter adds a line, attachments by
+// button, drag-drop and paste with inline errors, the preset scale and model and reasoning
+// pickers, and Send/Stop. While a reply runs the box stays usable: sending steers or queues per
+// `general.followUp`, and Alt with the send key uses the other mode; queued messages wait in a
+// strip above the box until their turn starts.
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { REASONING_LEVELS, type ModelView } from '@nova/shared';
-import { Button, Icon, IconButton, SelectField, Spinner } from '@nova/ui';
+import { REASONING_LEVELS, type InputMode, type ModelView } from '@nova/shared';
+import { Button, Icon, IconButton, PresetScale, SelectField, Spinner } from '@nova/ui';
 import type { Draft } from '../services.tsx';
 import { bindingText } from '../keys.ts';
-import { PROVIDER_NAMES } from '../providers/names.ts';
+import { navigate } from '../router.ts';
 import { checkFiles, formatBytes, toPending, type Rejection } from './attachments.ts';
+import { modelGroups, type PresetStop } from './models.ts';
+
+/** A follow-up waiting for the running turn; `pending` until the Hub confirms it. */
+export interface QueueItem {
+  id: string;
+  text: string;
+  attachmentCount: number;
+  pending?: boolean;
+}
+
+export function otherMode(mode: InputMode): InputMode {
+  return mode === 'steer' ? 'queue' : 'steer';
+}
+
+const MODE_LABEL: Record<InputMode, string> = { steer: 'Steer', queue: 'Queue' };
 
 /** Reads accepted files into the draft and collects per-file errors. */
 export function useAttachmentIntake(draft: Draft, setDraft: (d: Draft) => void) {
@@ -44,10 +62,17 @@ export function useAttachmentIntake(draft: Draft, setDraft: (d: Draft) => void) 
 export interface ComposerProps {
   draft: Draft;
   onDraftChange: (d: Draft) => void;
-  onSend: (d: Draft) => void;
+  /** `mode` is set while a reply runs: steer it, or queue behind it (FR-019). */
+  onSend: (d: Draft, mode?: InputMode) => void;
   onStop: () => void;
   streaming: boolean;
   stopping: boolean;
+  /** What a send does while a reply runs (`general.followUp`). */
+  followUp?: InputMode;
+  queue?: QueueItem[];
+  onCancelQueued?: (id: string) => void;
+  /** Enabled presets, faster to smarter, for the preset scale (FR-221). */
+  presets?: PresetStop[];
   enterToSend: 'enter' | 'mod+enter';
   mac: boolean;
   /** Why the last send failed; the text is back in the box. */
@@ -72,6 +97,10 @@ export function Composer({
   onStop,
   streaming,
   stopping,
+  followUp = 'queue',
+  queue = [],
+  onCancelQueued,
+  presets = [],
   enterToSend,
   mac,
   sendError,
@@ -89,8 +118,7 @@ export function Composer({
   const own = useRef<HTMLTextAreaElement>(null);
   const textarea = inputRef ?? own;
   const fileInput = useRef<HTMLInputElement>(null);
-  const canSend =
-    !streaming && (draft.text.trim().length > 0 || draft.attachments.length > 0) && !!model;
+  const canSend = (draft.text.trim().length > 0 || draft.attachments.length > 0) && !!model;
 
   useLayoutEffect(() => {
     const el = textarea.current;
@@ -99,13 +127,24 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
   }, [draft.text, textarea]);
 
-  const send = () => {
-    if (canSend) onSend(draft);
+  const send = (alternate = false) => {
+    if (!canSend) return;
+    if (streaming) onSend(draft, alternate ? otherMode(followUp) : followUp);
+    else onSend(draft);
   };
 
   const sendKey = enterToSend === 'enter' ? 'Enter' : bindingText('mod+enter', mac);
+  const altKey =
+    enterToSend === 'enter' ? bindingText('alt+enter', mac) : bindingText('mod+alt+enter', mac);
   const selected = models.find((m) => m.ref === model);
-  const groups = groupModels(models);
+  const groups = modelGroups(models);
+  const onScale = presets.some((p) => p.ref === model) ? model : null;
+  const sendLabel = streaming ? MODE_LABEL[followUp] : 'Send';
+  const sendHint = streaming
+    ? followUp === 'queue'
+      ? `Queue: sends when the reply finishes. ${altKey} steers the reply instead.`
+      : `Steer: the reply takes this into account at its next step. ${altKey} queues it instead.`
+    : undefined;
 
   return (
     <form
@@ -132,6 +171,34 @@ export function Composer({
             Dismiss
           </Button>
         </div>
+      ) : null}
+      {queue.length ? (
+        <section className="queue-strip" aria-label="Queued messages">
+          <span className="queue-title">Queued: {queue.length}</span>
+          <ul className="queue-items">
+            {queue.map((q) => {
+              const label =
+                q.text.trim() ||
+                `${q.attachmentCount} ${q.attachmentCount === 1 ? 'attachment' : 'attachments'}`;
+              return (
+                <li key={q.id} className="queue-item">
+                  <span className="queue-text">{label}</span>
+                  {q.pending ? (
+                    <Spinner label="Queuing" />
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      aria-label={`Cancel queued message: ${label.slice(0, 80)}`}
+                      onClick={() => onCancelQueued?.(q.id)}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       ) : null}
       {draft.attachments.length ? (
         <ul className="chips" aria-label="Attachments">
@@ -173,7 +240,7 @@ export function Composer({
           const sends = enterToSend === 'enter' ? !e.shiftKey && !mod : mod;
           if (sends) {
             e.preventDefault();
-            send();
+            send(e.altKey);
           }
         }}
         onPaste={(e) => {
@@ -189,6 +256,9 @@ export function Composer({
           ? 'Enter sends, Shift+Enter adds a line.'
           : `${sendKey} sends, Enter adds a line.`}{' '}
         Escape stops a reply.
+        {streaming
+          ? ` While the reply runs, ${sendKey} ${followUp === 'queue' ? 'queues your message' : 'steers the reply'} and ${altKey} ${followUp === 'queue' ? 'steers the reply' : 'queues your message'}.`
+          : ''}
       </span>
       <div className="composer-bar">
         <input
@@ -210,6 +280,31 @@ export function Composer({
           onClick={() => fileInput.current?.click()}
         />
         <span className="composer-spacer" />
+        {presets.length ? (
+          <PresetScale
+            className="composer-presets"
+            label="Model preset"
+            value={onScale}
+            onChange={onModelChange}
+            options={presets.map((p) => ({
+              value: p.ref,
+              label: p.label,
+              ...(p.description ? { description: p.description } : {}),
+            }))}
+          >
+            <a
+              href="/settings/models"
+              className="link composer-advanced"
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                navigate('/settings/models');
+              }}
+            >
+              Advanced…
+            </a>
+          </PresetScale>
+        ) : null}
         {models.length ? (
           <SelectField
             className="composer-model"
@@ -241,24 +336,19 @@ export function Composer({
             {stopping ? <Spinner /> : <Icon name="stop" />}
             {stopping ? 'Stopping…' : 'Stop'}
           </Button>
-        ) : (
-          <Button type="submit" variant="primary" disabled={!canSend} className="composer-send">
-            <Icon name="send" />
-            Send
-          </Button>
-        )}
+        ) : null}
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={!canSend}
+          className="composer-send"
+          data-mode={streaming ? followUp : undefined}
+          title={sendHint}
+        >
+          <Icon name={streaming && followUp === 'steer' ? 'forward' : 'send'} />
+          {sendLabel}
+        </Button>
       </div>
     </form>
   );
-}
-
-function groupModels(models: ModelView[]) {
-  const groups = new Map<string, { label: string; options: { value: string; label: string }[] }>();
-  for (const m of models) {
-    const key = m.providerAccountId;
-    const g = groups.get(key) ?? { label: PROVIDER_NAMES[m.provider] ?? m.provider, options: [] };
-    g.options.push({ value: m.ref, label: m.label });
-    groups.set(key, g);
-  }
-  return [...groups.values()];
 }

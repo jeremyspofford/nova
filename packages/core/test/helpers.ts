@@ -8,7 +8,10 @@ import {
   ChatService,
   DirectRouter,
   MemoryEventSink,
+  MemoryService,
+  ProjectService,
   ProviderRegistry,
+  SourceService,
   ThreadService,
   type ChatServiceOptions,
   type ModelRouter,
@@ -26,9 +29,14 @@ export interface Env {
   threads: ThreadService;
   chat: ChatService;
   events: MemoryEventSink;
+  projects: ProjectService;
+  sources: SourceService;
+  memory: MemoryService;
   mock: MockProvider;
   mockAccountId: string;
   defaultModel: { value: string | null };
+  /** Live settings the services read (FR-019, FR-027, FR-032). */
+  settings: { followUp: 'steer' | 'queue'; ttlHours: number; memoryEnabled: boolean };
   close: () => Promise<void>;
 }
 
@@ -58,20 +66,36 @@ export async function makeEnv(opts: EnvOptions = {}): Promise<Env> {
   const registry = new ProviderRegistry({ db, secrets, factory });
   const router: ModelRouter = opts.router?.(registry) ?? new DirectRouter(registry);
   const defaultModel = { value: null as string | null };
+  const settings: Env['settings'] = { followUp: 'queue', ttlHours: 24, memoryEnabled: true };
+  const events = new MemoryEventSink();
   const threads = new ThreadService({
     db,
     router,
+    events,
     defaultModel: () => Promise.resolve(defaultModel.value),
   });
-  const events = new MemoryEventSink();
+  const dataDir = join(dir, 'data');
+  const projects = new ProjectService({ db });
+  const sources = new SourceService({ db, events, dataDir });
+  const memory = new MemoryService({
+    db,
+    events,
+    enabled: () => Promise.resolve(settings.memoryEnabled),
+  });
   const chat = new ChatService({
     db,
     router,
     threads,
     events,
-    dataDir: join(dir, 'data'),
+    dataDir,
     deltaIntervalMs: 0,
     flushIntervalMs: 20,
+    memory,
+    sources,
+    settings: {
+      followUp: () => Promise.resolve(settings.followUp),
+      temporaryTtlHours: () => Promise.resolve(settings.ttlHours),
+    },
     ...opts.chat,
   });
   const created = await registry.ensureDefaultProvider(ACCOUNT);
@@ -84,11 +108,16 @@ export async function makeEnv(opts: EnvOptions = {}): Promise<Env> {
     threads,
     chat,
     events,
+    projects,
+    sources,
+    memory,
     mock,
     mockAccountId: created?.id ?? '',
     defaultModel,
+    settings,
     close: async () => {
       await chat.shutdown();
+      await sources.stop();
       db.close();
       rmSync(dir, { recursive: true, force: true });
     },

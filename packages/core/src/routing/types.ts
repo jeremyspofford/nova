@@ -36,6 +36,8 @@ export interface RouteTarget {
   local: boolean;
   /** A preset may pin the reasoning level for its target. */
   reasoningLevel?: ReasoningLevel;
+  /** A preset may pin the serving speed (docs/07 §8.1). */
+  speed?: 'standard' | 'fast';
 }
 
 export interface ModelRoute {

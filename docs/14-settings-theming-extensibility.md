@@ -8,9 +8,10 @@ variables may override only in developer mode.
 
 **Security-relevant keys are not project-settable.** A project-scoped value, whether set in the
 app or read from a project's `.nova/` folder, cannot change these keys: sandbox and permission
-profile (FR-190), egress allowlist and proxy mode (FR-102, FR-193), approval policy, permission
-mode defaults and "Always allow" rules (FR-063, FR-100), instruction root markers and the
-instruction budget (FR-185), and the hook trust list (FR-197). They resolve only from the
+profile (FR-190), egress allowlist and proxy mode (FR-102, FR-193), whether cloud models may
+be used (`routing.allowCloud`), approval policy, permission mode defaults and "Always allow"
+rules (FR-063, FR-100), instruction root markers and the instruction budget (FR-185), and the
+hook trust list (FR-197). They resolve only from the
 built-in default, user global settings and managed policy. A project value for one of them is
 ignored, and Diagnostics shows a warning naming the key and the project.
 
@@ -18,17 +19,19 @@ ignored, and Diagnostics shows a warning naming the key and the project.
 
 | Section | Keys |
 | --- | --- |
-| **General** | language, enter-to-send (`enter`\|`mod+enter`), prevent-sleep, follow-up behavior (`steer`\|`queue`), restore-session, check-updates |
-| **Accounts** | provider accounts, active account, default model, virtual models, spend caps |
+| **General** | language, enter-to-send (`enter`\|`mod+enter`), prevent-sleep, follow-up behavior (`general.followUp`: `steer`\|`queue`, default `queue`, FR-019), temporary-chat retention (`chat.temporaryTtlHours`, default 24, FR-027), restore-session, check-updates |
+| **Accounts** | provider accounts, active account, default model, spend caps |
+| **Models** | presets from Faster to Smarter (`models.presets`; empty = generated built-ins, FR-221), local model server detection, routing order (`routing.order`, FR-127), allow cloud models (`routing.allowCloud`, security-relevant) |
+| **Devices** | compute nodes: add (one-use enrollment token), status, models, load, revoke (FR-126) |
 | **Appearance** | theme, accent, background, foreground, uiFont, codeFont, fontSize, density, sidebarWidth, reducedMotion, highContrast |
 | **Pets** | enabled, petId, position, size, reactions, mute |
 | **Keyboard** | bindings map, reset, search |
 | **Notifications** | per-category (completion, approval, error, scheduled), OS permission, quiet hours |
-| **Chat** | default reasoning, citations, memory on/off, temporary-chat TTL, suggested prompts |
+| **Chat** | default reasoning, citations, suggested prompts |
 | **Work** | default autonomy, max sub-agents, run budgets (time, tokens, cost; FR-182), approval timeout, chat escalation (`propose` (default) \| `auto` \| `off`, FR-186) |
 | **Code** | default permission mode, default environment, auto-verify, review-before-commit, dev-server auto-start, worktree cleanup, worktree include file (copy files listed in `.worktreeinclude`, on by default), worktree limit per repo (default 15) (FR-073) |
 | **Agents** | proactive research toggle/frequency, default rules, connected computer, channels, self-scheduling limits (minimum interval 5 min, horizon 30 days, max 24 self-set wakes per day, FR-206) |
-| **Memory** | retention, extraction on/off, embedding provider, review frequency, reference past chats (on/off; off purges derived data within 30 days, FR-205), default project memory scope (`shared` \| `project_only`), background consolidation (on/off, idle delay, summary budget 2,500 tokens, FR-204) |
+| **Memory** | use saved memories (`memory.enabled`), the item list (correct, pin, dismiss, delete, add, import; FR-032), retention, extraction on/off, embedding provider, review frequency, reference past chats (on/off; off purges derived data within 30 days, FR-205), default project memory scope (`shared` \| `project_only`), background consolidation (on/off, idle delay, summary budget 2,500 tokens, FR-204) |
 | **Tools & MCP** | server list and per-server settings (`startupTimeoutMs`, `toolTimeoutMs`, `enabledTools`/`disabledTools`, `required`, `defaultApproval`, `deferred`, `oauth`; `contracts/schemas/mcp-config.json`, `docs/08` §2.1), per-tool and per-action defaults, plugin permissions, approval rules ("Always allow" list, revocable, FR-100), hook trust list (source, event, hash, status; trust/revoke, FR-197), deferred-tool budget (default 40 tools or 8,000 schema tokens, FR-196), skill roots and shadowed skills, Nova-as-MCP-server clients (per-client scoped tokens, FR-192), import from other assistants (FR-200) |
 | **Network** | egress allowlist, proxy mode (`allowlist` \| `limited`, FR-193), SOCKS5 for non-HTTP clients, private-IP access, dev-server ports |
 | **Data** | retention overrides, export, delete, storage usage, backup folder, import ledger (FR-200) |

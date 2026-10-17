@@ -1,6 +1,6 @@
 // Menu button and context menu (docs/04 §4.2). Items use a roving tabindex: arrows, Home/End and
 // first-letter type-ahead move focus; Enter or Space selects; Esc closes and returns focus to the
-// trigger; Tab or a click outside closes.
+// trigger; Tab or a click outside closes. An item with `checked` is a checkbox item.
 import {
   useEffect,
   useId,
@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { rovingIndex } from '../focus.ts';
+import { Icon } from './Icon.tsx';
 
 export interface MenuItem {
   id: string;
@@ -17,6 +18,10 @@ export interface MenuItem {
   onSelect: () => void;
   danger?: boolean;
   disabled?: boolean;
+  /** Makes the item a checkbox item (menuitemcheckbox) showing this state. */
+  checked?: boolean;
+  /** Tooltip text (also the accessible description), e.g. why an item is disabled. */
+  description?: string;
 }
 
 export interface MenuProps {
@@ -181,9 +186,11 @@ function MenuList({
         return (
           <li
             key={item.id}
-            role="menuitem"
+            role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+            aria-checked={item.checked}
             tabIndex={idx === active ? 0 : -1}
             aria-disabled={item.disabled ? true : undefined}
+            title={item.description}
             data-danger={item.danger ? true : undefined}
             className="nv-menu-item"
             onClick={() => {
@@ -193,6 +200,11 @@ function MenuList({
               if (idx >= 0) setActive(idx);
             }}
           >
+            {item.checked === undefined ? null : (
+              <span className="nv-menu-check" aria-hidden="true">
+                {item.checked ? <Icon name="check" /> : null}
+              </span>
+            )}
             {item.label}
           </li>
         );

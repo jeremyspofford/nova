@@ -98,7 +98,8 @@ export const SETTINGS = {
     key: 'chat.defaultModel',
     schema: z.string().max(300).nullable(),
     default: null as string | null,
-    description: 'Model ref (`<providerAccountId>/<modelId>`) used for new chats (FR-023).',
+    description:
+      'Model ref used for new chats: `<providerAccountId>/<modelId>`, `node:<nodeId>/<modelId>` or `preset:<id>` (FR-023).',
   }),
   'general.enterToSend': def({
     key: 'general.enterToSend',

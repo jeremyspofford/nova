@@ -319,6 +319,8 @@ describe('keyboard-only navigation (FR-015)', () => {
       await userEvent.tab();
     expect(document.activeElement?.textContent?.trim()).toBe('New chat');
     await userEvent.tab();
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('New temporary chat');
+    await userEvent.tab();
     expect(document.activeElement?.textContent?.trim()).toBe('Search');
     await userEvent.tab();
     expect(document.activeElement?.getAttribute('href')).toBe('/chat');

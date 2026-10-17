@@ -108,7 +108,9 @@ export class AuthService {
   /** Verify a bearer or cookie credential. Setup codes never authenticate API calls. */
   async verify(token: string): Promise<Principal | null> {
     const row = await this.#find(token);
-    if (!row || row.kind === 'setup') return null;
+    // Only sessions act as a user. Device, MCP-client and app tokens carry their own scopes and
+    // are checked by the routes that accept them (FR-192), never here.
+    if (!row || row.kind !== 'session') return null;
     return { tokenId: row.id, kind: row.kind, accountId: row.accountId };
   }
 

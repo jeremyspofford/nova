@@ -216,4 +216,24 @@ describe('onboarding (FR-014)', () => {
       'Kim',
     );
   });
+
+  it('offers local llama.cpp with its default address', async () => {
+    const hub = fresh();
+    await renderApp({ hub, path: '/onboarding' });
+    for (const name of ['Anthropic', 'OpenRouter', 'OpenAI', 'Ollama (local)'])
+      expect(await screen.findByRole('radio', { name })).toBeTruthy();
+    await userEvent.click(screen.getByRole('radio', { name: 'llama.cpp (local)' }));
+    expect(screen.getByRole('textbox', { name: 'Base URL' }).getAttribute('placeholder')).toBe(
+      'http://127.0.0.1:8080',
+    );
+    expect(screen.getByLabelText('API key').getAttribute('aria-describedby')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Connect and test' }));
+    await waitFor(() =>
+      expect(hub.api.createProvider).toHaveBeenCalledWith({
+        provider: 'llamacpp',
+        label: 'llama.cpp (local)',
+        baseUrl: 'http://127.0.0.1:8080',
+      }),
+    );
+  });
 });

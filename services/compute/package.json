@@ -22,5 +22,8 @@
     "@nova/telemetry": "^0.0.0",
     "fastify": "5.12.7",
     "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@nova/contracts": "^0.0.0"
   }
 }

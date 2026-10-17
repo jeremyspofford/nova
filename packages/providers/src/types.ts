@@ -16,6 +16,8 @@ export interface ProviderCapabilities {
   promptCache: 'none' | 'short' | 'long' | 'both';
   structuredOutput: boolean;
   imageGeneration: boolean;
+  /** A faster serving tier can be requested with `ChatRequest.speed` (docs/07 §2, §5). */
+  fastTier?: boolean;
   maxContextTokens: number;
   maxOutputTokens: number;
 }
@@ -60,6 +62,8 @@ export interface ChatRequest {
   topP?: number;
   maxTokens?: number;
   reasoning?: { level: ReasoningLevel } | { budgetTokens: number };
+  /** `fast` asks for a faster serving tier; adapters ignore it unless the model has one. */
+  speed?: 'standard' | 'fast';
   responseFormat?: { type: 'text' } | { type: 'json_schema'; schema: unknown };
   cacheHints?: { system?: boolean; tools?: boolean; history?: boolean };
   metadata?: Record<string, string>;
@@ -71,6 +75,8 @@ export interface AgentErrorShape {
   message: string;
   retryable: boolean;
   action?: string;
+  /** How long the provider asked to wait before retrying (from Retry-After), when it said. */
+  retryAfterMs?: number;
 }
 
 export type StopReason = 'end' | 'tool_calls' | 'length' | 'cancelled' | 'error';

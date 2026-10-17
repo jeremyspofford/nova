@@ -492,3 +492,133 @@
   outline: 2px solid var(--u-focus);
   outline-offset: 2px;
 }
+
+.nv-menu-check {
+  display: inline-flex;
+  width: 1.25em;
+}
+
+/* PresetScale (FR-221): stops on a line, each with its own visible label. */
+.nv-preset {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: var(--u-text-sm);
+}
+.nv-preset-end {
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+}
+.nv-preset-track {
+  position: relative;
+  display: inline-flex;
+  gap: var(--u-space-3);
+}
+.nv-preset-track::before {
+  content: '';
+  position: absolute;
+  top: 9px;
+  right: 8px;
+  left: 8px;
+  border-top: 2px solid var(--u-border);
+}
+.nv-preset-stop {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  cursor: pointer;
+}
+.nv-preset-stop input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--u-accent);
+  cursor: pointer;
+}
+.nv-preset-stop input:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 2px;
+}
+.nv-preset-label {
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+  white-space: nowrap;
+}
+.nv-preset-stop:has(input:checked) .nv-preset-label {
+  color: var(--u-text);
+  font-weight: 600;
+}
+
+/* Tree (docs/04 §4.2). */
+.nv-tree,
+.nv-tree-group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nv-tree-item {
+  border-radius: var(--u-radius-sm);
+  cursor: pointer;
+}
+.nv-tree-item:focus {
+  outline: none;
+}
+.nv-tree-item:focus-visible > .nv-tree-row {
+  outline: 2px solid var(--u-focus);
+  outline-offset: -2px;
+}
+.nv-tree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  padding: var(--u-space-1) var(--u-space-2);
+  border-radius: var(--u-radius-sm);
+}
+.nv-tree-row:hover,
+.nv-tree-item[aria-current='page'] > .nv-tree-row {
+  background: var(--u-surface-2);
+}
+.nv-tree-item[aria-current='page'] > .nv-tree-row .nv-tree-label {
+  font-weight: 600;
+}
+.nv-tree-toggle {
+  display: inline-flex;
+  flex: none;
+  width: 1em;
+  color: var(--u-text-muted);
+}
+.nv-tree-toggle[data-open='true'] .nv-icon {
+  transform: rotate(90deg);
+}
+.nv-tree-check {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--u-border);
+  border-radius: 4px;
+}
+.nv-tree-check[data-checked='true'] {
+  border-color: var(--u-accent);
+  background: var(--u-accent);
+  color: var(--u-accent-contrast);
+}
+.nv-tree-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nv-tree-detail {
+  flex: none;
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+}

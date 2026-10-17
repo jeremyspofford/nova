@@ -176,7 +176,7 @@ describe('ThreadService (FR-017)', () => {
 });
 
 describe('search (FR-017, FR-027)', () => {
-  it('finds messages with snippets, newest first, excluding temporary and deleted threads', async () => {
+  it('finds messages with snippets, best match first, excluding temporary and deleted threads', async () => {
     const a = await env.threads.create(ACCOUNT, { title: 'Cooking' });
     const tmp = await env.threads.create(ACCOUNT, { title: 'Temp', temporary: true });
     const old = addMessage(
@@ -186,12 +186,13 @@ describe('search (FR-017, FR-027)', () => {
     );
     const recent = addMessage(a.id, 'Banana pancakes on Sunday', '2026-02-01T00:00:00.000Z');
     addMessage(tmp.id, 'banana in a temporary chat');
+    // Ranked by bm25 (FR-025): the message with two matches wins over the newer one.
     const hits = env.threads.search(ACCOUNT, 'banan');
-    expect(hits.map((h) => h.messageId)).toEqual([recent, old]);
-    expect(hits[0]).toMatchObject({ threadId: a.id, threadTitle: 'Cooking' });
-    expect(hits[1]!.snippet.replace(/<\/?mark>/g, '')).toContain('banana bread');
+    expect(hits.map((h) => h.messageId)).toEqual([old, recent]);
+    expect(hits[0]).toMatchObject({ threadId: a.id, threadTitle: 'Cooking', role: 'user' });
+    expect(hits[0]!.snippet.replace(/<\/?mark>/g, '')).toContain('banana bread');
     // Matches are marked for highlighting; the client renders everything else as plain text.
-    expect(hits[1]!.snippet).toMatch(/<mark>[^<]+<\/mark>/);
+    expect(hits[0]!.snippet).toMatch(/<mark>[^<]+<\/mark>/);
     expect(env.threads.search(ACCOUNT, 'banana', 1)).toHaveLength(1);
     expect(env.threads.search('other-account', 'banana')).toEqual([]);
   });

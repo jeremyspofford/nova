@@ -250,3 +250,97 @@ describe('Settings → General and Accounts', () => {
     expect(hub.state.providers).toEqual([]);
   });
 });
+
+describe('Settings → General: follow-ups and temporary chats (FR-019, FR-027)', () => {
+  it('chooses steer or queue and saves the retention hours', async () => {
+    const { hub } = await renderApp({ path: '/settings/general' });
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Wait in a queue' }).checked).toBe(
+      true,
+    );
+    await userEvent.click(screen.getByRole('radio', { name: 'Steer the reply' }));
+    await waitFor(() => expect(hub.state.settings['general.followUp']).toBe('steer'));
+    expect(
+      screen.getByRole('group', { name: 'While a reply is streaming, new messages' }),
+    ).toBeTruthy();
+
+    const hours = screen.getByRole<HTMLInputElement>('spinbutton', {
+      name: 'Delete temporary chats after (hours)',
+    });
+    expect(hours.value).toBe('24');
+    await userEvent.clear(hours);
+    await userEvent.type(hours, '0');
+    expect(screen.getByText('Enter a whole number from 1 to 720.')).toBeTruthy();
+    hours.blur();
+    expect(hub.state.settings['chat.temporaryTtlHours']).toBeUndefined();
+    await userEvent.clear(hours);
+    await userEvent.type(hours, '48{Enter}');
+    await waitFor(() => expect(hub.state.settings['chat.temporaryTtlHours']).toBe(48));
+    expect(hours.value).toBe('48');
+  });
+
+  it('disables managed follow-up and retention settings', async () => {
+    const hub = createHub({
+      managed: { 'general.followUp': 'steer', 'chat.temporaryTtlHours': 12 },
+    });
+    await renderApp({ hub, path: '/settings/general' });
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Steer the reply' }).checked).toBe(
+      true,
+    );
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Wait in a queue' }).disabled).toBe(
+      true,
+    );
+    const hours = screen.getByRole<HTMLInputElement>('spinbutton', {
+      name: 'Delete temporary chats after (hours)',
+    });
+    expect(hours.disabled).toBe(true);
+    expect(hours.value).toBe('12');
+  });
+});
+
+describe('Settings → Accounts: more provider kinds (docs/07 §3)', () => {
+  it('connects Anthropic with an optional base URL under Advanced', async () => {
+    const { hub } = await renderApp({ path: '/settings/accounts' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a provider' }));
+    for (const name of ['Anthropic', 'OpenRouter', 'llama.cpp (local)', 'OpenAI', 'Mock'])
+      expect(screen.getByRole('radio', { name })).toBeTruthy();
+    await userEvent.click(screen.getByRole('radio', { name: 'Anthropic' }));
+    const advanced = screen.getByText('Advanced').closest('details')!;
+    expect(advanced.open).toBe(false);
+    await userEvent.click(screen.getByText('Advanced'));
+    expect(advanced.open).toBe(true);
+    await userEvent.type(screen.getByLabelText('API key'), 'sk-ant-test');
+    const url = screen.getByRole('textbox', { name: 'Base URL' });
+    await userEvent.type(url, 'nope');
+    expect(screen.getByText(/Enter a full URL/)).toBeTruthy();
+    await userEvent.clear(url);
+    await userEvent.type(url, 'http://127.0.0.1:9100');
+    await userEvent.click(screen.getByRole('button', { name: 'Save and test' }));
+    await waitFor(() =>
+      expect(hub.api.createProvider).toHaveBeenCalledWith({
+        provider: 'anthropic',
+        label: 'Anthropic',
+        baseUrl: 'http://127.0.0.1:9100',
+        apiKey: 'sk-ant-test',
+      }),
+    );
+    expect(await screen.findByText('Anthropic connected with 2 models.')).toBeTruthy();
+    expect(document.body.innerHTML).not.toContain('sk-ant-test');
+  });
+
+  it('connects OpenRouter without a base URL, and requires its key', async () => {
+    const { hub } = await renderApp({ path: '/settings/accounts' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a provider' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'OpenRouter' }));
+    const save = screen.getByRole<HTMLButtonElement>('button', { name: 'Save and test' });
+    expect(save.disabled).toBe(true);
+    await userEvent.type(screen.getByLabelText('API key'), 'or-key');
+    await userEvent.click(save);
+    await waitFor(() =>
+      expect(hub.api.createProvider).toHaveBeenCalledWith({
+        provider: 'openrouter',
+        label: 'OpenRouter',
+        apiKey: 'or-key',
+      }),
+    );
+  });
+});
