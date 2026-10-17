@@ -5,9 +5,14 @@ autonomously** without human intervention while remaining safe, reversible, and 
 
 ## 1. Mission
 
-Build **Nova**, a customizable cross-platform desktop application that unifies
-conversational AI, long-running work agents, always-on personal agents, and a coding agent
-into one product, per the spec in `docs/` and `contracts/`.
+Build **Nova**, a hub-and-spoke, multi-device AI system that unifies conversational AI,
+long-running work agents, always-on agents, a coding agent, and device management, per the spec
+in `docs/` and `contracts/`.
+
+Before building, complete the spec reconciliation in `PROMPT.md` Phase 0: review any external
+reverse-engineering findings under `docs/external/`, write `docs/external/RECONCILIATION.md`
+(keep / modify / add / replace / reject per capability), apply the resulting spec changes, and
+record decisions as ADRs. Only then proceed to build.
 
 ## 2. Non-negotiables
 
