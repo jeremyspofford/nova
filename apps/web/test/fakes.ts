@@ -583,7 +583,10 @@ export function testRegistry(mac = false, browserTab = false) {
   return new CommandRegistry({ mac, browserTab });
 }
 
-/** Simulate a full assistant reply on a thread's stream. */
+/**
+ * Simulate an assistant reply on a thread's stream. With `end`, persist the final message with
+ * `hub.persist` first: the client refetches the thread on completion, as it does from the Hub.
+ */
 export function streamReply(
   es: FakeEventSource,
   tid: string,

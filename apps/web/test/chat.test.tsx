@@ -301,6 +301,12 @@ describe('streaming (FR-018)', () => {
     streamReply(es, t.id, assistant!.id, ['Partial ', 'answer'], null);
     await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
     expect(hub.api.cancel).toHaveBeenCalledWith(t.id);
+    // Like the Hub, save the partial reply before announcing it: the client refetches the
+    // thread on completion, and must then still see the partial text.
+    hub.persist(t.id, assistant!.id, {
+      status: 'incomplete',
+      parts: [{ type: 'text', text: 'Partial answer' }],
+    });
     es.emit(
       'chat.message.completed',
       { threadId: t.id, messageId: assistant!.id, status: 'incomplete', usage: null },
