@@ -176,6 +176,32 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
 
 ---
 
+## M6.5 — Networking, Transports & Add Device
+
+**Goal:** reach the Hub from anywhere, and add devices safely and automatically.
+
+**Deliverables**
+- **Add a Device** flow: QR/short code, role + scope selection, required Hub approval
+  (FR-132); per-device bootstrap (PWA / native / headless).
+- Hub serves **signed** `novad` builds + one-line bootstrap command (FR-133).
+- **Transport abstraction**: LAN/mDNS, Lattice (Headscale/Tailscale/NetBird/WireGuard),
+  Relay client, ordered fallback with health checks (FR-135).
+- **Trust paths**: Core local CA, Lattice certificates, native-shell pinning (FR-134).
+- **Network Setup assistant** + diagnostics + one-click rollback (FR-136, FR-139).
+- **Wake Helper** role for WoL (FR-138).
+- **Device management UI**: devices, capabilities, health, scopes, wake, revoke (FR-140).
+
+**Exit criteria**
+- Add a headless node via the one-line command; it registers and reports capabilities.
+- Add a phone via QR; Hub approval is required; the PWA install path works.
+- LAN → Lattice → Relay fallback is demonstrated and logged.
+- Network setup installs/configures a mesh (Headscale or NetBird, or a mock) with a
+  reachability test and rollback; a failing path is never advertised.
+
+**Demo:** add a device; disable the LAN; watch the Relay path take over.
+
+---
+
 ## M7 — Cloud, Sync, Multi-Device & Mobile
 
 **Goal:** Continuity across devices and environments.
@@ -195,6 +221,30 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
 - Offline edits queue and flush on reconnect with correct ordering.
 
 **Demo:** start a task on the "phone" relay, approve it from the desktop.
+
+---
+
+## M7.5 — Device Management: Boot, Power & Firmware
+
+**Goal:** manage the hardware lifecycle of devices safely, off by default.
+
+**Deliverables**
+- **Low-level boot** (PXE/iPXE, bootloader entries) opt-in, with a watchdog that reverts a
+  failed boot (FR-143).
+- **BIOS/firmware management**: allowlisted settings, dry-run diff, snapshot, explicit
+  approval, rollback, audit; global toggle **off by default**, never proactive (FR-146).
+- **Out-of-band management** (IPMI/Redfish/Intel AMT/vPro), off by default, admin-only
+  (FR-147).
+- Hardware support matrix + clear refusals for unsupported devices.
+
+**Exit criteria**
+- On a supported mock device: BIOS changes are impossible until the global toggle is enabled;
+  once enabled, each change requires approval, produces a diff and snapshot, and can roll back;
+  an audit entry is written.
+- A failing boot profile is reverted automatically by the watchdog.
+- The out-of-band module is disabled by default; enabling it requires explicit admin consent.
+
+**Demo:** enable WoL and power-on-after-power-loss on a test device with approval and rollback.
 
 ---
 
@@ -259,9 +309,11 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
 ## Milestone dependency graph
 
 ```
-M0 ─▶ M1 ─▶ M2 ─▶ M3 ─▶ M4 ─▶ M5 ─▶ M6 ─▶ M7 ─▶ M8 ─▶ M9 ─▶ M10
+M0 ─▶ M1 ─▶ M2 ─▶ M3 ─▶ M4 ─▶ M5 ─▶ M6 ─▶ M6.5 ─▶ M7 ─▶ M7.5 ─▶ M8 ─▶ M9 ─▶ M10
                          └──────────────▶ (M5 Code depends on M3 tools/policy)
                                         (M6 Agents depends on M5 runtime + M3 policy)
+                                        (M6.5 networking depends on M6 novad + M2 nodes)
+                                        (M7.5 firmware depends on M6.5 device mgmt)
 ```
 
 All milestones are serial at the dependency level; within a milestone, tasks may proceed in
@@ -281,3 +333,18 @@ parallel when they touch different packages.
 | M8 | FR-016, FR-049, FR-105, FR-106, FR-116, FR-117, FR-121 |
 | M9 | FR-122, FR-123 |
 | M10 | FR-120 |
+
+### Hub, devices & networking (added)
+
+| Milestone | Requirements |
+| --- | --- |
+| M0 | FR-124 |
+| M1 | FR-125 |
+| M2 | FR-126, FR-127 |
+| M3 | FR-149 |
+| M5 | FR-131 |
+| M6 | FR-141, FR-142, FR-144, FR-145, FR-148, FR-150 |
+| M6.5 | FR-132, FR-133, FR-134, FR-135, FR-136, FR-138, FR-139, FR-140 |
+| M7 | FR-128, FR-129, FR-137 |
+| M7.5 | FR-143, FR-146, FR-147 |
+| post-v1 | FR-130 |

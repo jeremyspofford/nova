@@ -495,4 +495,59 @@ CREATE TABLE sync_state (
 4. `audit_event.hash` chains to `prev_hash`; verification tool included.
 5. Deleting a `thread` cascades to messages/parts/attachments/artifacts but preserves
    `audit_event` (tombstoned via `thread_id`).
-6. A `agent` always has exactly one cloud `computer`.
+6. An `agent` always has exactly one cloud `computer`.
+
+## 7. Hub, devices & transports (added)
+
+The Hub holds the canonical database. Clients and compute nodes are registrations in it.
+
+```sql
+CREATE TABLE device (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+  name TEXT NOT NULL, kind TEXT NOT NULL,        -- hub|compute|client|wake-helper
+  cert_fingerprint TEXT NOT NULL, public_key TEXT NOT NULL,
+  roles TEXT NOT NULL, scopes TEXT,              -- JSON
+  status TEXT NOT NULL DEFAULT 'pending',        -- pending|active|revoked|unreachable
+  offline_replica INTEGER NOT NULL DEFAULT 0,    -- capability gate
+  local_runtime INTEGER NOT NULL DEFAULT 0,      -- capability gate
+  last_seen_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE device_capability (
+  device_id TEXT PRIMARY KEY REFERENCES device(id),
+  document TEXT NOT NULL,                        -- JSON, schema device-capability.json
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE transport_endpoint (
+  id TEXT PRIMARY KEY, device_id TEXT REFERENCES device(id),
+  net TEXT NOT NULL,                             -- lan|lattice|relay|direct
+  url TEXT NOT NULL, healthy INTEGER NOT NULL DEFAULT 1,
+  latency_ms INTEGER, last_checked_at TEXT, created_at TEXT NOT NULL
+);
+
+CREATE TABLE add_device_request (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+  role TEXT NOT NULL, code_hash TEXT NOT NULL, scopes TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',        -- pending|approved|expired|denied
+  expires_at TEXT NOT NULL, created_at TEXT NOT NULL
+);
+
+CREATE TABLE wake_request (
+  id TEXT PRIMARY KEY, target_device_id TEXT NOT NULL,
+  helper_device_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL
+);
+
+CREATE TABLE firmware_change (
+  id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES device(id),
+  setting TEXT NOT NULL, old_value TEXT, new_value TEXT,
+  method TEXT NOT NULL, snapshot_ref TEXT,
+  status TEXT NOT NULL,                          -- planned|approved|applied|rolled_back|failed
+  approval_id TEXT REFERENCES approval(id),
+  created_at TEXT NOT NULL, applied_at TEXT
+);
+```
+
+Invariants: a `device` certificate is unique; a `device_capability` exists for every active
+compute node; `firmware_change` requires an `approval` before `applied`; `wake_request`
+requires an active `wake-helper` device on the same LAN.

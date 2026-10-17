@@ -7,10 +7,14 @@ contract wins** — fix the code or amend the contract with an ADR (`docs/20`).
 
 | File | Boundary |
 | --- | --- |
-| [`ipc-channels.md`](ipc-channels.md) | Renderer ↔ Main typed IPC API |
+| [`hub-api.md`](hub-api.md) | Client ↔ Hub, Hub ↔ Node, Hub ↔ `novad`, shell ↔ local `novad` |
+| [`ipc-channels.md`](ipc-channels.md) | Native-shell internal IPC (renderer ↔ shell main) |
 | [`events.md`](events.md) | Event envelope + event catalog (UI, persistence, Activity) |
 | [`rest-api.md`](rest-api.md) | Optional server APIs (relay, sync, catalog, cloud runner) |
 | [`schemas/`](schemas/) | JSON Schemas for persisted/transported objects |
+
+`hub-api.md` is the primary boundary in the hub-and-spoke model. `ipc-channels.md` applies only
+inside a native shell (the web UI served by the Hub is not an Electron renderer).
 
 ## Conventions
 

@@ -190,6 +190,43 @@ tests in `docs/16`.
 | FR-122 | P0 | M9 | Performance budgets enforced in CI per `AGENTS.md` §9. |
 | FR-123 | P0 | M9 | Security test suite: policy bypass attempts, secret leakage, injection payloads, sandbox escape — all must fail safely. |
 
+## M. Hub, devices & networking
+
+| ID | Pri | Ms | Requirement / Acceptance |
+| --- | --- | --- | --- |
+| FR-124 | P0 | M0 | A **Hub** service is the canonical store and runtime host: it holds the database, runs the agent runtime/scheduler/policy, and serves the web UI. It runs on the supported minimum hardware (N100/N150-class, 8–16 GB). |
+| FR-125 | P0 | M1 | **Clients are thin**: the Hub serves the UI over HTTPS to authenticated devices; native shells wrap the same UI and add local capabilities. No client holds canonical state. |
+| FR-126 | P0 | M2 | **Compute nodes** register a signed capability document and accept only Hub-authorized work; they never initiate connections to clients. |
+| FR-127 | P0 | M2 | **Routing** selects a node by the default order: same device/LAN → required model+capability → least-loaded → lowest cost/energy → cloud (only if allowed). Order is configurable. |
+| FR-128 | P1 | M7 | **Local fallback**: when the Hub is unreachable, a capable device runs local models/agents via `novad` and queues actions; it never silently drops work. |
+| FR-129 | P1 | M7 | **Capability-gated offline replica**: a client keeps an encrypted local replica only if the Hub grants that capability to that device. |
+| FR-130 | P2 | post-v1 | **Hub failover**: another candidate node can take over as Hub with lease-based leadership and client redirection. Deferred until after v1. |
+| FR-131 | P0 | M5 | Nova is **reactive** (responds to requests and events) **and proactive** (schedules, watches, and initiates) subject to policy and approvals. |
+| FR-132 | P0 | M6.5 | **Add a Device** via QR code or short code, with per-device bootstrap (PWA / native shell / headless command) and a required Hub-side approval. |
+| FR-133 | P0 | M6.5 | The Hub serves **signed** `novad` builds and a one-line bootstrap command; installs verify signature, checksum, and Hub identity. |
+| FR-134 | P0 | M6.5 | **Trust paths** selectable in Hub settings: Core-generated local CA, Lattice certificates, or native-shell pinning. |
+| FR-135 | P0 | M6.5 | **Pluggable transports** (LAN, Lattice, Relay, optional direct public) with ordered fallback and per-endpoint health checks. |
+| FR-136 | P0 | M6.5 | **Network Setup assistant** detects state and can install/configure a Lattice (Headscale/Tailscale/NetBird/WireGuard), tags/ACLs, MagicDNS, subnet routes, certs, and firewall — with one-time consent, reachability tests, and rollback. |
+| FR-137 | P0 | M7 | **Relay**: content-blind, end-to-end-encrypted forwarding; self-hostable; provides off-LAN reach and push (APNs/FCM); per-platform reachability strategy. |
+| FR-138 | P1 | M6.5 | **Wake Helper** role: an always-on LAN device may send WoL magic packets for wakeable devices; wakes are rate-limited and audited. |
+| FR-139 | P0 | M6.5 | **Network diagnostics** panel with active transports, latency, certificate status, ACL summary, Relay status, per-device reachability, and one-click rollback. |
+| FR-140 | P0 | M6.5 | **Device management** UI: list devices and compute nodes, show capabilities/health/reachability, edit scopes, wake, and revoke. |
+
+## N. Device agent & firmware
+
+| ID | Pri | Ms | Requirement / Acceptance |
+| --- | --- | --- | --- |
+| FR-141 | P0 | M6 | **`novad` supervisor + modules**: a small elevated supervisor spawns signed, sandboxed, independently updatable modules (management/compute/browser/screen/storage). Installs as a system service. |
+| FR-142 | P0 | M6 | **Capability declaration** with defaults + Advanced overrides (model storage paths, GPU sharing, VRAM reserve, concurrency limits, quiet hours, routing weight, egress limits). |
+| FR-143 | P1 | M7.5 | **Low-level boot** (PXE/iPXE, bootloader entries) is opt-in; boot profiles use a watchdog that reverts on failed boot. |
+| FR-144 | P0 | M6 | **Power & WoL**: report wakeability, enable WoL where supported, and support power-on-after-power-loss. |
+| FR-145 | P0 | M6 | **Service management**: start/stop/restart compute and other managed services on a device. |
+| FR-146 | P1 | M7.5 | **BIOS/firmware management** (allowlisted settings, dry-run diff, snapshot, explicit approval, rollback, audit). Global toggle **off by default**; never proactive. |
+| FR-147 | P2 | M7.5 | **Out-of-band management** (IPMI/Redfish/Intel AMT/vPro) for power/settings without an OS. Off by default; admin-only; credentials in the keychain. |
+| FR-148 | P0 | M6 | **`novad` updates**: signed bundles, staged, health-checked, with automatic rollback; channels stable/beta/nightly. |
+| FR-149 | P0 | M3 | **Hub trusted, external paths E2E**: data encrypted at rest on the Hub, TLS in transit, and end-to-end encryption for everything leaving the Hub (Relay, cloud, device sync). Optional sealed mode keeps keys in the OS secure enclave. |
+| FR-150 | P1 | M6 | **Per-device policy overrides** for routing eligibility, allowed modules, resource caps, and quiet hours. |
+
 ---
 
 ## Requirement traceability

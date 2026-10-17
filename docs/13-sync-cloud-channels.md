@@ -3,6 +3,11 @@
 All cloud features are **optional**. The app must be fully usable offline with local models
 and local tools. Cloud is an accelerator and a bridge, never a requirement.
 
+> **Architecture note:** this document assumes the hub-and-spoke model (`docs/21`). The Hub
+> is canonical; sync replicates between the Hub and the user's other devices. The **Relay**
+> (`docs/22` §3) provides off-LAN reach and push; it is content-blind and end-to-end encrypted.
+> Transports (LAN / Lattice / Relay) and Add Device are defined in `docs/22`.
+
 ## 1. Cloud components
 
 | Component | Purpose | Data at rest |

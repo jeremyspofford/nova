@@ -51,7 +51,7 @@ connects one set of tools.
 
 ### In scope
 
-- Cross-platform desktop app: **Linux (primary), macOS, Windows**.
+- **Hub-and-spoke, multi-device system** (see `docs/21`): a self-hosted **Hub** (minimum: Intel N100/N150-class mini PC) hosts the app and canonical state; **Clients** (browser/PWA, native desktop shells, mobile) present the UI; **Compute Nodes** supply heavy services; **`novad`** runs on capable devices for local execution and management.
 - Four modes: **Chat**, **Work**, **Code**, **Agents**, plus shared **Projects**, **Library**,
   **Activity**, **Settings**, and **Marketplace**.
 - Multi-provider model layer with streaming, tool calling, reasoning levels, and local models.

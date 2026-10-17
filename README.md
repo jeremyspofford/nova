@@ -59,7 +59,10 @@ new decisions in an ADR and continue.
 | 18 | [`18-acceptance-criteria.md`](docs/18-acceptance-criteria.md) | Global definition of done, release checklist, demos |
 | 19 | [`19-legal-and-ethics.md`](docs/19-legal-and-ethics.md) | Clean-room, IP, ToS, privacy, licensing |
 | 20 | [`20-decisions-and-defaults.md`](docs/20-decisions-and-defaults.md) | ADR log + resolved defaults |
-| — | [`contracts/`](contracts/README.md) | IPC channels, events, REST API, JSON schemas |
+| 21 | [`21-hub-and-device-model.md`](docs/21-hub-and-device-model.md) | Hub/spoke roles, routing, offline, failover |
+| 22 | [`22-networking-transports-relay.md`](docs/22-networking-transports-relay.md) | Transports (LAN/Lattice/Relay), Add Device, trust, WoL |
+| 23 | [`23-device-agent.md`](docs/23-device-agent.md) | Device agent `novad`: modules, capabilities, boot, BIOS/OOB |
+| — | [`contracts/`](contracts/README.md) | Hub API, IPC, events, REST API, JSON schemas |
 
 ## Repository conventions
 

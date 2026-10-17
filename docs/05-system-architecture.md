@@ -1,70 +1,68 @@
 # 05 — System Architecture
 
+Nova is a **hub-and-spoke, multi-device system** (see `docs/21`). A central Hub hosts the
+application and canonical state; Clients present the UI; Compute Nodes supply heavy services;
+`novad` runs on capable devices to provide local execution and management.
+
 ## 1. Architectural principles
 
-1. **One core, many surfaces.** All business logic lives in `packages/core` and services;
-   UI is a thin renderer over typed IPC.
-2. **Process isolation for safety.** Untrusted work (agent tools, plugins, MCP servers,
-   browser automation) runs in separate processes/containers.
-3. **Contracts first.** Every boundary (IPC, HTTP, events, DB) has a schema in `contracts/`.
-4. **Local-first.** SQLite is the source of truth; sync/cloud are adapters.
-5. **Everything is an event.** The UI reacts to a typed event stream; actions are auditable.
+1. **Hub is canonical.** One always-on Hub owns the database, agent runtime, policy, and
+   scheduler. Clients and nodes are replaceable.
+2. **One core, many faces.** Business logic lives in shared packages; the Hub serves it; the
+   web UI and native shells consume it.
+3. **Process isolation for safety.** Untrusted work (tools, plugins, MCP servers, browser,
+   device management) runs in separate processes/containers with policy enforcement.
+4. **Contracts first.** Every boundary (client↔hub, hub↔node, hub↔relay, hub↔`novad`) has a
+   schema in `contracts/`.
+5. **Local-first, cloud-optional.** LAN works with zero setup; the Relay and cloud are opt-in.
+6. **Everything is an event.** The UI reacts to a typed event stream; actions are auditable.
 
-## 2. Technology stack (decisions)
+## 2. Technology stack
 
 | Layer | Choice | Rationale |
 | --- | --- | --- |
-| Desktop shell | **Electron** (main + renderer) | Mature cross-platform, best webview/tooling parity with source apps, Node ecosystem for MCP |
-| UI | **React 19 + TypeScript + Vite** | Ecosystem, performance, types |
-| Styling | **Tailwind CSS + CSS variables** + headless primitives | Token-driven theming; accessible primitives |
-| State | **Zustand** (client) + **TanStack Query** (server/session data) | Simple, testable |
-| Editor | **CodeMirror 6** | Lightweight, extensible, permissive |
-| Terminal | **xterm.js** + node-pty | Standard, robust |
-| Browser pane | **Electron `<webview>`/`BrowserView`** for display + **Playwright/CDP** for agent control | Reliable automation + user view |
-| Local DB | **SQLite** via `better-sqlite3`, **Drizzle ORM**, WAL mode | Fast, embedded, sync-friendly |
-| Vector index | **SQLite + `sqlite-vec`** (or LanceDB fallback) | Local, no server |
-| Agent runtime | **Node.js worker threads / child processes** (`services/agentd`) | Isolation, parallelism |
-| MCP | **`@modelcontextprotocol/sdk` (TypeScript)** | Standard |
-| Sandbox (Linux) | **bubblewrap** + optional rootless container (podman) | Strong, no root |
-| Sandbox (macOS) | **seatbelt (sandbox-exec)** | Built-in |
-| Sandbox (Windows) | **AppContainer / Job Objects** | Built-in |
-| Crypto | **libsodium (via `sodium-native`)**: XChaCha20-Poly1305; Argon2id | Audited primitives |
-| Secrets | **OS keychain** (`keytar`/`@napi-rs/keyring`) with encrypted-file fallback | Standard |
-| Packaging | **electron-builder** + **electron-updater** | Cross-platform installers |
-| Testing | **Vitest**, **Testing Library**, **Playwright**, **MSW** | Fast + E2E |
-| Monorepo | **npm workspaces** (already present) + **Turborepo** | Simple, fast caching |
+| **Hub service** | Node.js + TypeScript, Fastify (HTTP/WS/SSE) | Matches the agent/MCP ecosystem; easy to extend |
+| **Web UI** | React + TypeScript + Vite, served by the Hub | One UI for browser, PWA, and native shells |
+| **Desktop shell** | Electron (primary), Tauri as an option | Tray, global hotkey, local FS/screen via `novad`, auto-update |
+| **Mobile** | Native shells (later) around the same web UI | Platform APIs, push, camera/mic |
+| **Device agent (`novad`)** | Rust supervisor + modules (Rust or Node workers) | Small, memory-safe, privileged daemon; per-arch static builds |
+| **Relay** | Rust or Node, containerized | Content-blind forwarding + push |
+| **Database** | SQLite (WAL) + Drizzle by default; PostgreSQL optional | Fits the mini-PC Hub; Postgres for teams |
+| **Vector index** | `sqlite-vec` (or LanceDB) | Local, no external service |
+| **Sandbox (Linux)** | bubblewrap + optional rootless container | Strong, no root |
+| **Sandbox (macOS/Windows)** | seatbelt / AppContainer | Built-in |
+| **Crypto** | libsodium: XChaCha20-Poly1305, Argon2id, Ed25519 | Audited primitives |
+| **Secrets** | OS keychain, encrypted-vault fallback | Standard |
+| **Packaging** | Hub: container/AppImage/systemd; `novad`: signed per-arch; Clients: PWA + native installers | See `docs/15` |
 
-> **Decision FR-ARCH-1:** Electron over Tauri, because the source products' behavior maps
-> cleanly to Chromium webview features (browser pane, dev-server preview, extensions) and the
-> MCP/agent ecosystem is TypeScript-first. Native helpers are used for sandboxing and keychain.
-> Revisit only if performance budgets fail.
+> **ADR-031:** The Hub is a long-running Node service, not an Electron main process. Electron
+> becomes a client shell only.
+> **ADR-032:** `novad` supervisor is written in Rust for a small, privileged, cross-platform
+> binary; modules may be Rust or Node.
 
-## 3. Process & component diagram
+## 3. Component diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ Electron Main Process (Node)                                              │
-│  • Window/tray/menu management      • Auto-update                         │
-│  • IPC router (typed, validated)    • Deep links / protocol handler       │
-│  • Service supervisor (spawns)      • OS integration (keychain, notif.)   │
-└───────┬───────────────┬─────────────────┬──────────────┬─────────────────┘
-        │ typed IPC     │ child IPC       │ child IPC    │ child IPC
-        ▼               ▼                 ▼              ▼
-┌───────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐
-│ Renderer (UI) │ │ Core service │ │ Agent daemon │ │ MCP/Plugin host   │
-│ React + Vite  │ │ (Node)       │ │ (workers)    │ │ (per-server proc) │
-│ no Node access│ │ DB, policy,  │ │ planner,     │ │ tools/resources   │
-│ contextIsol.  │ │ providers,   │ │ tools, tasks │ │ sandboxed         │
-│               │ │ sync, search │ │ scheduler    │ │                   │
-└───────────────┘ └──────┬───────┘ └──────┬───────┘ └──────────────────┘
-                         │                │
-                         ▼                ▼
-                  ┌────────────┐   ┌───────────────────────────────┐
-                  │ SQLite WAL │   │ Execution substrate            │
-                  │ + files    │   │  • local sandbox (bwrap/seatbelt)│
-                  └────────────┘   │  • container/VM (podman/WSL)   │
-                                   │  • cloud runner (remote)       │
-                                   └───────────────────────────────┘
+                         ┌───────────────────────────────────────────┐
+                         │                 HUB                        │
+                         │  Fastify API · Web UI hosting · WebSocket  │
+                         │  Canonical DB · Agent runtime · Scheduler  │
+                         │  Policy engine · Audit · Capability registry│
+                         │  Sync coordinator · Update distributor     │
+                         └───┬───────────────┬───────────────┬───────┘
+             HTTPS/WS/SSE    │               │ internal      │ mTLS
+        ┌────────────────────┘               │               └───────────────┐
+        ▼                                    ▼                               ▼
+┌───────────────┐   ┌───────────────┐   ┌───────────────┐            ┌───────────────┐
+│ Client: PWA   │   │ Client: native│   │ Compute Node  │            │ novad module  │
+│ (browser)     │   │ shell (desk)  │   │ (compute mod) │            │ mgmt/power/BIOS│
+└───────────────┘   └───────┬───────┘   └───────────────┘            └───────────────┘
+                            │ local IPC (novad)
+                    ┌───────┴────────┐
+                    │  local runtime │  (offline fallback)
+                    └────────────────┘
+
+                     Hub ⇄ Relay (outbound, E2E)  ──▶  clients off-LAN
 ```
 
 ## 4. Monorepo layout
@@ -72,106 +70,102 @@
 ```
 rea/
 ├── apps/
-│   ├── desktop/                 # Electron main + preload + renderer
-│   │   ├── src/main/            # window, ipc router, updater, tray
-│   │   ├── src/preload/         # contextBridge, typed API surface
-│   │   └── src/renderer/        # React app (routes = modes)
-│   └── web-relay/               # optional channels/mobile relay (Node)
+│   ├── hub/                     # Hub service: API, UI hosting, runtime, scheduler
+│   ├── web/                     # Shared web UI (React) — served by Hub, installable PWA
+│   ├── desktop/                 # Native desktop shell wrapping the web UI
+│   └── mobile/                  # iOS/Android shells (later)
 ├── packages/
-│   ├── core/                    # domain logic: threads, messages, projects, runs, agents
-│   ├── agent/                   # planner, executor, tool registry, memory
-│   ├── providers/               # provider adapters + streaming normalization
+│   ├── core/                    # Domain: threads, projects, runs, agents, files
+│   ├── agent/                   # Planner, executor, tool registry, memory
+│   ├── providers/               # Provider adapters + streaming normalization
 │   ├── mcp/                     # MCP client/server wrappers
-│   ├── plugins/                 # manifest, loader, sandbox bridge, catalog
-│   ├── policy/                  # policy engine + rule DSL
-│   ├── security/                # secret redaction, sandbox abstraction, egress
+│   ├── plugins/                 # Manifest, loader, sandbox bridge, catalog
+│   ├── policy/                  # Policy engine + rule evaluation
+│   ├── security/                # Redaction, sandbox abstraction, egress, crypto
 │   ├── storage/                 # Drizzle schema, migrations, repositories
-│   ├── sync/                    # E2E encrypted sync client
-│   ├── ui/                      # design system components
-│   ├── shared/                  # types, zod schemas, utils, event bus
-│   └── telemetry/               # opt-in metrics + logging facade
+│   ├── sync/                    # E2E sync client + conflict resolution
+│   ├── transport/               # LAN/Lattice/Relay abstraction + endpoint selection
+│   ├── ui/                      # Design system components (shared by web + shells)
+│   ├── shared/                  # Types, zod schemas, event bus, errors
+│   └── telemetry/               # Opt-in metrics + logging facade
 ├── services/
-│   ├── agentd/                  # long-lived agent daemon (worker pool)
-│   ├── sandboxd/                # sandbox broker (bwrap/seatbelt/AppContainer)
-│   ├── browserv/                # browser automation controller (CDP/Playwright)
-│   └── scheduler/               # cron/event scheduler
-├── contracts/                   # source-of-truth interfaces & schemas
-├── docs/                        # this specification
-├── scripts/                     # build, release, seed, e2e fixtures
-├── tests/
-│   ├── unit/  integration/  e2e/
+│   ├── novad/                   # Device agent supervisor (Rust)
+│   │   └── modules/             # management, compute, browser, screen, storage, firmware
+│   ├── relay/                   # Relay server (content-blind, E2E)
+│   └── compute/                 # Inference/embeddings/media backends
+├── contracts/                   # Source-of-truth interfaces & schemas
+├── docs/                        # This specification
+├── tests/                       # unit · integration · e2e
 └── LEDGER.md
 ```
 
-## 5. IPC & event contracts
+## 5. Protocol boundaries
 
-- **Renderer ↔ Main**: `contextBridge` exposes a namespaced typed API generated from
-  `contracts/ipc-channels.md`. No `nodeIntegration`; `contextIsolation: true`;
-  `sandbox: true` for renderers.
-- **Main ↔ Services**: child-process JSON-RPC over stdio or a local socket, validated with Zod.
-- **Event bus**: in-process typed emitter; persistent events (runs, tool calls) are appended
-  to an `events` table for replay and the Activity view.
-- **Validation**: every inbound message is validated; invalid messages are rejected and logged,
-  never executed.
+| Boundary | Protocol | Contract |
+| --- | --- | --- |
+| Client ↔ Hub (UI) | HTTPS + WebSocket/SSE | `contracts/hub-api.md` |
+| Client ↔ Hub (off-LAN) | Same, via Lattice or Relay (E2E) | `contracts/hub-api.md`, `docs/22` |
+| Hub ↔ Compute Node | Internal HTTP/gRPC over LAN/Lattice | `contracts/hub-api.md` |
+| Hub ↔ `novad` | mTLS, capability + management RPC | `contracts/hub-api.md`, `contracts/schemas/device-capability.json` |
+| Hub ↔ Relay | Outbound WebSocket, sealed payloads | `contracts/rest-api.md`, `docs/22` |
+| Hub ↔ Hub (later failover) | Replicated store + leases | `docs/21` §10 |
+| Native shell ↔ local `novad` | Local IPC (Unix socket / named pipe) | `contracts/hub-api.md` (local subsection) |
 
-See `contracts/` for the authoritative list.
+All messages are validated against schemas in `contracts/`; invalid messages are rejected and
+logged, never executed.
 
 ## 6. Execution substrate
 
 ```
 Policy Engine ──allow──▶ Sandbox Broker ──▶ Local sandbox (bwrap/seatbelt/AppContainer)
-                                   ├──────▶ Container/VM (podman, WSL)
-                                   └──────▶ Cloud runner (remote agent + object store)
+                                    ├──────▶ Container/VM (podman, WSL)
+                                    └──────▶ Compute Node (local or remote)
+                                             Cloud runner (optional)
 ```
 
-- **Local sandbox** is the default for tool execution: no network by default, scoped FS
-  (project dir RW, temp RW, everything else RO/deny), resource limits, no host env leakage.
-- **Container/VM** for heavier or untrusted work; network policy applies.
-- **Cloud runner** for always-on Agents and cloud Code sessions; state persisted as a snapshot
-  (tarball of the workdir) plus event log.
-
-All three expose the same `Computer` interface (see `contracts/`): `fs.*`, `exec`, `browser.*`,
+All substrates expose the same `Computer` interface (`docs/11`): `fs.*`, `exec`, `browser.*`,
 `screen.*`, `snapshot`, `restore`.
 
-## 7. Data flow example: send message
+## 7. Data flow: send a message
 
 ```
-UI composer → IPC invoke("chat.send") → Core validates (zod)
-  → Provider adapters stream deltas → Core emits event("chat.delta")
-  → Event persisted → UI renders
-  → Tool call requested → Policy Engine decides
-       ├─ allow → Sandbox broker executes → result event
-       ├─ ask   → Approval event → UI card → user decision → resume/deny
-       └─ deny  → denial event with reason
-  → Assistant turn finalized → message row + usage row + memory extraction job
+Client (browser) → Hub POST /api/chat (HTTPS)
+  → Hub validates, assembles context, resolves policy
+  → Hub selects compute node (routing order)
+  → Hub streams request to node; node streams tokens back
+  → Hub persists the turn, emits events, forwards deltas to client over WS/SSE
+  → Hub writes usage + audit
+  → (offline) local novad runtime produces the answer; Hub reconciles on reconnect
 ```
 
 ## 8. Cross-cutting concerns
 
 | Concern | Approach |
 | --- | --- |
-| Config | Layered: defaults → app settings (DB) → managed policy → env. Precedence documented. |
-| Feature flags | DB + env, evaluated at startup and per-request; surfaced in Diagnostics. |
-| Migrations | Drizzle migrations, forward-only, with a backup before each app update. |
-| i18n | `i18next`, external strings, locale negotiation, RTL. |
+| Config | Layered: defaults → Hub settings (DB) → managed policy → env. |
+| Feature flags | DB + env; surfaced in Diagnostics. |
+| Migrations | Drizzle, forward-only, backup before each Hub update. |
+| i18n | `i18next`; external strings; RTL-ready. |
 | Theming | CSS variables + theme JSON; no hard-coded colors. |
-| Caching | Provider prompt cache hints; local response cache keyed by hash for idempotent reads. |
-| Concurrency | Agent runs are isolated; DB uses repositories with serialized writes; optimistic UI. |
-| Error handling | Typed error taxonomy; retry/backoff for transient; circuit breaker per provider. |
+| Caching | Provider prompt cache hints; node-level model pre-warm. |
+| Concurrency | Hub serializes writes; agent workers isolated; per-node job limits. |
+| Errors | Typed taxonomy; retry/backoff; circuit breaker per provider and per node. |
 
 ## 9. Security boundaries
 
-1. **Renderer** is untrusted: no Node, no raw FS, strict CSP, no remote code.
-2. **Plugins/MCP servers** are untrusted: sandboxed, permissioned, resource-limited.
+1. **Clients** are untrusted: authenticated, scoped, no canonical writes bypassing the Hub.
+2. **Modules/plugins/MCP servers** are untrusted: sandboxed, permissioned, resource-limited.
 3. **Tool output** is data, never authority (injection defense).
-4. **Secrets** never cross into the renderer or model context in plaintext.
-5. **Network** is deny-by-default for agents; allowlists are explicit.
-6. **Signing** of updates, plugins, and sync payloads is verified.
+4. **Secrets** never cross into the UI or model context in plaintext.
+5. **Network** is deny-by-default for agents and modules; allowlists are explicit.
+6. **`novad`** is elevated but minimal; every privileged action is signed, policy-gated, and
+   audited.
+7. **Relay** is content-blind; updates, plugins, and sync payloads are signature-verified.
 
 ## 10. Scalability & performance
 
-- Lazy-load modes and panes; code-split the renderer.
-- Virtualize long lists (messages, files, logs).
-- Stream and batch DB writes; index hot columns; keep DB under 1 GB with retention/compaction.
-- Cap concurrent agent workers (default 4, configurable) and browser contexts (default 2).
-- Background indexers are throttled and pause on battery/idle (configurable).
+- The Hub is designed for a single small device; heavy work is offloaded to compute nodes.
+- Lazy-load UI surfaces; virtualize lists; stream responses.
+- Cap concurrent agent workers (default 4) and node jobs (per capability declaration).
+- Index build and model warm-up are throttled and respect quiet hours.
+- Backups and compaction run on a schedule during low activity.

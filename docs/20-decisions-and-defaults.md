@@ -39,6 +39,21 @@ silently.
 | ADR-028 | Feature flags | DB + env, visible in Diagnostics |
 | ADR-029 | Retention defaults | 90d tool results, 30d screenshots, 14d logs |
 | ADR-030 | Default model | first connected provider's flagship; overridable |
+| ADR-031 | Hub runtime | **Standalone Node service**, not an Electron main process |
+| ADR-032 | Device agent | **`novad` supervisor in Rust**; modules Rust or Node |
+| ADR-033 | Topology | **Hub-and-spoke**; Hub canonical; clients thin |
+| ADR-034 | Routing order | same device/LAN → model+capability → least-loaded → cost/energy → cloud |
+| ADR-035 | Hub down | **Local fallback first**; automatic failover deferred |
+| ADR-036 | Offline replica | Capability-gated per device, encrypted at rest |
+| ADR-037 | Transports | Pluggable: LAN / Lattice / Relay; **Headscale recommended**, NetBird for self-hosted mobile |
+| ADR-038 | Relay | E2E, content-blind, self-hostable |
+| ADR-039 | Trust paths | Local CA / Lattice certs / native pinning, user-selectable |
+| ADR-040 | Add Device | QR/short code + **required Hub approval**; auto-approve off by default |
+| ADR-041 | novad layout | Supervisor + signed, sandboxed modules |
+| ADR-042 | BIOS/firmware | **Off by default**; allowlist + dry-run + snapshot + approval + rollback |
+| ADR-043 | Out-of-band mgmt | IPMI/Redfish/AMT **off by default**, admin-only |
+| ADR-044 | Encryption | Hub trusted; **E2E for everything leaving the Hub**; optional sealed mode |
+| ADR-045 | Minimum Hub hardware | Intel N100/N150-class, 8–16 GB |
 
 ## Details & rationale
 
@@ -73,6 +88,42 @@ edits this ADR.
 ### ADR-025 — Node/Electron
 CI uses Node 22 LTS for stability even though the dev box has Node 26; pin the Electron
 version at M0 and upgrade quarterly with a full test pass.
+
+### Hub & device model (added)
+
+**ADR-031 — Hub as a Node service.** The Hub is a long-running Fastify/Node process served by
+systemd/launchd/Windows service, not an Electron main process. Electron is demoted to a client
+shell. This keeps the always-on component headless and easy to run on a mini PC.
+
+**ADR-032 — `novad` in Rust.** The privileged supervisor is a small, memory-safe, statically
+built binary. Modules may be Rust (compute/management) or Node (tools/MCP-facing) and are
+spawned as sandboxed workers.
+
+**ADR-033 — Hub-and-spoke.** One canonical Hub; clients are the face; compute nodes are hands.
+Simpler to secure and audit than a peer mesh, and matches the always-on requirement.
+
+**ADR-034 — Routing order.** Predictable, privacy-first: keep work local when possible, then
+match capability, then balance load, then optimize cost/energy, then (only if allowed) cloud.
+
+**ADR-035 — Hub down.** Local fallback first because it is simpler and always available on a
+capable device; automatic failover needs consensus and is deferred (FR-130).
+
+**ADR-037 — Transports.** One abstraction; LAN always works; Lattice (Headscale recommended,
+managed Tailscale for convenience, NetBird for self-hosted mobile) when configured; Relay
+always available. This avoids a hard dependency on any third party.
+
+**ADR-039 — Trust paths.** The Hub can use a Core-generated CA (fully private), Lattice
+certificates (remote + mobile), or native-shell pinning (desktop). Chosen in onboarding.
+
+**ADR-041 — novad hybrid.** Least privilege + isolation + independent updates, without the
+packaging sprawl of fully separate products.
+
+**ADR-042/043 — Firmware and out-of-band off by default.** These can brick hardware or
+weaken security; they require an explicit toggle, per-change approval, snapshots, and audit.
+
+**ADR-044 — Hub trusted, edges E2E.** The Hub must read content to index, search, and run
+proactive agents. Everything that leaves the Hub is end-to-end encrypted. Optional sealed
+mode keeps keys in the secure enclave and pauses proactive work while locked.
 
 ## Defaults for common ambiguities
 

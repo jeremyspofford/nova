@@ -131,3 +131,30 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-121 | todo | todo | — | crash reporting |
 | FR-122 | todo | todo | — | performance budgets |
 | FR-123 | todo | todo | — | security suite |
+| FR-124 | todo | todo | J1 | hub service hosts canonical state |
+| FR-125 | todo | todo | J1 | thin clients, hub-served UI |
+| FR-126 | todo | todo | J2 | compute node registration |
+| FR-127 | todo | todo | J2 | routing order |
+| FR-128 | todo | todo | J9 | local fallback |
+| FR-129 | todo | todo | J9 | capability-gated offline replica |
+| FR-130 | todo | todo | — | hub failover (post-v1) |
+| FR-131 | todo | todo | J5 | reactive + proactive |
+| FR-132 | todo | todo | J9 | add device via QR |
+| FR-133 | todo | todo | J9 | signed novad bootstrap |
+| FR-134 | todo | todo | J9 | trust paths |
+| FR-135 | todo | todo | J9 | pluggable transports |
+| FR-136 | todo | todo | J9 | network setup assistant |
+| FR-137 | todo | todo | J9 | relay |
+| FR-138 | todo | todo | J7 | wake helper |
+| FR-139 | todo | todo | J9 | network diagnostics |
+| FR-140 | todo | todo | J9 | device management UI |
+| FR-141 | todo | todo | J7 | novad supervisor + modules |
+| FR-142 | todo | todo | J7 | capability declaration |
+| FR-143 | todo | todo | — | low-level boot |
+| FR-144 | todo | todo | J7 | power & WoL |
+| FR-145 | todo | todo | J7 | service management |
+| FR-146 | todo | todo | J10 | BIOS/firmware management |
+| FR-147 | todo | todo | — | out-of-band management |
+| FR-148 | todo | todo | J7 | novad updates |
+| FR-149 | todo | todo | J9 | hub trusted, edges E2E |
+| FR-150 | todo | todo | J7 | per-device overrides |
