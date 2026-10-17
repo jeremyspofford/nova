@@ -43,9 +43,9 @@ describe('ChatService.send (FR-018)', () => {
     ]);
     expect(reply.model).toBe(`${env.mockAccountId}/mock-fast`);
     expect(reply.usage!.outputTokens).toBeGreaterThan(0);
-    expect(reply.id).toBe(res.assistantMessageId);
+    expect(reply.id).toBe(res.assistantMessageId!);
 
-    expect(turnRow(res.turnId)).toMatchObject({
+    expect(turnRow(res.turnId!)).toMatchObject({
       status: 'completed',
       stop_reason: 'end',
       trigger: 'user',
@@ -182,13 +182,13 @@ describe('ChatService.send (FR-018)', () => {
     await waitFor(() => env.events.events.filter((e) => e.name === 'chat.delta').length >= 3);
     expect(await env.chat.cancel(ACCOUNT, t.id)).toBe(true);
     expect(env.chat.isActive(t.id)).toBe(false);
-    const status = msgRow(res.assistantMessageId).status;
+    const status = msgRow(res.assistantMessageId!).status;
     expect(status).toBe('incomplete');
-    const partial = textOf(res.assistantMessageId)!;
+    const partial = textOf(res.assistantMessageId!)!;
     expect(partial.length).toBeGreaterThan(0);
     expect(`You said: ${words}`.startsWith(partial)).toBe(true);
     expect(partial.length).toBeLessThan(`You said: ${words}`.length);
-    expect(turnRow(res.turnId)).toMatchObject({ status: 'interrupted', stop_reason: 'cancelled' });
+    expect(turnRow(res.turnId!)).toMatchObject({ status: 'interrupted', stop_reason: 'cancelled' });
     expect(env.events.names()).toContain('turn.interrupted');
     expect(env.events.names()).not.toContain('turn.completed');
     expect(await env.chat.cancel(ACCOUNT, t.id)).toBe(false);
@@ -224,8 +224,8 @@ describe('ChatService.send (FR-018)', () => {
     const res = await env.chat.send(ACCOUNT, t.id, { text: 'go' });
     await waitFor(() => env.events.names().includes('chat.delta'));
     await env.chat.cancel(ACCOUNT, t.id);
-    expect(msgRow(res.assistantMessageId).status).toBe('incomplete');
-    expect(textOf(res.assistantMessageId)).toBe('before ');
+    expect(msgRow(res.assistantMessageId!).status).toBe('incomplete');
+    expect(textOf(res.assistantMessageId!)).toBe('before ');
   });
 
   it('persists partial text while streaming, at most every flush interval', async () => {
@@ -234,11 +234,11 @@ describe('ChatService.send (FR-018)', () => {
     const res = await env.chat.send(ACCOUNT, t.id, {
       text: Array.from({ length: 40 }, (_, i) => `x${i}`).join(' '),
     });
-    await waitFor(() => (textOf(res.assistantMessageId) ?? '').length > 0);
-    expect(msgRow(res.assistantMessageId).status).toBe('streaming');
+    await waitFor(() => (textOf(res.assistantMessageId!) ?? '').length > 0);
+    expect(msgRow(res.assistantMessageId!).status).toBe('streaming');
     expect((await env.threads.view(ACCOUNT, t.id)).state).toBe('streaming');
     await env.chat.idle();
-    expect(msgRow(res.assistantMessageId).status).toBe('complete');
+    expect(msgRow(res.assistantMessageId!).status).toBe('complete');
   });
 
   it('records provider errors as an error part, a failed turn and an error thread state', async () => {
@@ -255,7 +255,7 @@ describe('ChatService.send (FR-018)', () => {
     const errPart = reply.parts.find((p) => p.type === 'error');
     expect(errPart).toMatchObject({ type: 'error', code: 'auth_expired' });
     expect(JSON.stringify(errPart)).not.toContain('sk-live-abcdefghijklmnop1234');
-    expect(turnRow(res.turnId)).toMatchObject({ status: 'failed', stop_reason: 'error' });
+    expect(turnRow(res.turnId!)).toMatchObject({ status: 'failed', stop_reason: 'error' });
     expect((await env.threads.view(ACCOUNT, t.id)).state).toBe('error');
     const done = env.events.events.find((e) => e.name === 'turn.completed')!;
     expect(done.payload).toMatchObject({ status: 'failed', stopReason: 'error' });
@@ -318,8 +318,8 @@ describe('ChatService.send (FR-018)', () => {
     const t = await env.threads.create(ACCOUNT, {});
     const res = await env.chat.send(ACCOUNT, t.id, { text: 'long' });
     await env.chat.idle();
-    expect(msgRow(res.assistantMessageId).status).toBe('incomplete');
-    expect(turnRow(res.turnId)).toMatchObject({ status: 'completed', stop_reason: 'end' });
+    expect(msgRow(res.assistantMessageId!).status).toBe('incomplete');
+    expect(turnRow(res.turnId!)).toMatchObject({ status: 'completed', stop_reason: 'end' });
   });
 
   it('uses the request model and reasoning level, persists them on the thread, and prices usage', async () => {
@@ -347,8 +347,8 @@ describe('ChatService.send (FR-018)', () => {
       model: ref,
       reasoningLevel: 'high',
     });
-    expect(turnRow(res.turnId)).toMatchObject({ model_id: ref, reasoning_level: 'high' });
-    const m = msgRow(res.assistantMessageId);
+    expect(turnRow(res.turnId!)).toMatchObject({ model_id: ref, reasoning_level: 'high' });
+    const m = msgRow(res.assistantMessageId!);
     const u = JSON.parse(m.usage_json as string);
     expect(m.cost_usd).toBe(u.inputTokens * 1 + u.outputTokens * 2);
   });
@@ -517,7 +517,7 @@ describe('recovery and shutdown', () => {
     env = dir;
     const t = await env.threads.create(ACCOUNT, {});
     const res = await env.chat.send(ACCOUNT, t.id, { text: 'a b c d e f g h' });
-    await waitFor(() => (textOf(res.assistantMessageId) ?? '').length > 0);
+    await waitFor(() => (textOf(res.assistantMessageId!) ?? '').length > 0);
     // A second engine on the same database stands in for the restarted process.
     const restarted = new ChatService({
       db: env.db,
@@ -527,10 +527,10 @@ describe('recovery and shutdown', () => {
       dataDir: join(env.dir, 'data'),
     });
     expect(await restarted.recoverOnStartup()).toEqual({ messages: 1, turns: 1 });
-    expect(msgRow(res.assistantMessageId).status).toBe('incomplete');
-    expect(turnRow(res.turnId)).toMatchObject({ status: 'interrupted', stop_reason: 'error' });
+    expect(msgRow(res.assistantMessageId!).status).toBe('incomplete');
+    expect(turnRow(res.turnId!)).toMatchObject({ status: 'interrupted', stop_reason: 'error' });
     expect((await env.threads.view(ACCOUNT, t.id)).state).toBe('idle');
-    expect(textOf(res.assistantMessageId)!.length).toBeGreaterThan(0);
+    expect(textOf(res.assistantMessageId!)!.length).toBeGreaterThan(0);
     expect(await restarted.recoverOnStartup()).toEqual({ messages: 0, turns: 0 });
   });
 
@@ -556,8 +556,8 @@ describe('recovery and shutdown', () => {
     const res = await env.chat.send(ACCOUNT, t.id, { text: 'one two three four five six seven' });
     await waitFor(() => env.events.names().includes('chat.delta'));
     await env.chat.shutdown();
-    expect(msgRow(res.assistantMessageId).status).toBe('incomplete');
-    expect(textOf(res.assistantMessageId)!.length).toBeGreaterThan(0);
+    expect(msgRow(res.assistantMessageId!).status).toBe('incomplete');
+    expect(textOf(res.assistantMessageId!)!.length).toBeGreaterThan(0);
     expect(env.chat.isActive(t.id)).toBe(false);
   });
 });

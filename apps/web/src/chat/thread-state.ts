@@ -127,7 +127,7 @@ export function threadReducer(s: ThreadState, a: ThreadAction): ThreadState {
           m.id === a.tempId ? { ...m, id: userMessageId, turnId } : m,
         );
       }
-      if (!messages.some((m) => m.id === assistantMessageId)) {
+      if (assistantMessageId && turnId && !messages.some((m) => m.id === assistantMessageId)) {
         const threadId = temp?.threadId ?? s.thread?.id ?? '';
         messages = [...messages, placeholder(assistantMessageId, threadId, 'assistant', turnId)];
       }

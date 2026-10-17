@@ -236,6 +236,8 @@ export class ProviderRegistry {
         try {
           return (await this.#fetchModels(row, false)).map((m): ModelView => ({
             ref: modelRef(row.id, m.id),
+            kind: 'model',
+            source: 'account',
             providerAccountId: row.id,
             provider: row.provider as ProviderKind,
             modelId: m.id,

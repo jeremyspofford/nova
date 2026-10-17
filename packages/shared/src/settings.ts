@@ -1,6 +1,7 @@
 // Settings registry and precedence (docs/14 §1): built-in default → user global → user project →
 // managed policy. Managed values lock the key. Project values cannot set security-relevant keys.
 import { z } from 'zod';
+import { presetSchema, ROUTING_STEPS, type Preset } from './api.ts';
 
 export type SettingSource = 'default' | 'global' | 'project' | 'managed';
 
@@ -110,6 +111,42 @@ export const SETTINGS = {
     schema: z.enum(['steer', 'queue']),
     default: 'queue',
     description: 'What a message sent during a run does (FR-019).',
+  }),
+  'chat.temporaryTtlHours': def({
+    key: 'chat.temporaryTtlHours',
+    schema: z.number().int().min(1).max(720),
+    default: 24,
+    description: 'Hours after its last activity that a temporary chat is deleted (FR-027).',
+  }),
+  'memory.enabled': def({
+    key: 'memory.enabled',
+    schema: z.boolean(),
+    default: true,
+    description: 'Extract durable facts from chats into Memory and use them in context (FR-032).',
+  }),
+  'models.presets': def({
+    key: 'models.presets',
+    schema: z.array(presetSchema).max(20),
+    default: [] as Preset[],
+    description:
+      'Virtual models on the Faster to Smarter control (FR-221). Empty means the built-in presets.',
+  }),
+  'routing.order': def({
+    key: 'routing.order',
+    schema: z
+      .array(z.enum(ROUTING_STEPS))
+      .min(1)
+      .refine((v) => new Set(v).size === v.length, 'each step at most once'),
+    default: [...ROUTING_STEPS] as (typeof ROUTING_STEPS)[number][],
+    description: 'Order in which a turn picks where it runs (FR-127).',
+  }),
+  'routing.allowCloud': def({
+    key: 'routing.allowCloud',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Whether a turn may fall back to a cloud provider when no local option fits (FR-127).',
   }),
   'privacy.telemetry': def({
     key: 'privacy.telemetry',

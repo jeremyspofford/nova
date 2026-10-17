@@ -154,6 +154,7 @@ export class ChatService {
         resolve();
       });
       return {
+        disposition: 'started',
         turnId: run.turnId,
         userMessageId: run.userMessageId,
         assistantMessageId: run.assistantId,

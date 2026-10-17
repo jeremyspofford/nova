@@ -333,7 +333,7 @@ describe('thread state (FR-018)', () => {
     s = threadReducer(s, {
       type: 'accepted',
       tempId: 'local-1',
-      res: { turnId: 'x', userMessageId: 'u1', assistantMessageId: 'a1' },
+      res: { disposition: 'started', turnId: 'x', userMessageId: 'u1', assistantMessageId: 'a1' },
     });
     expect(s.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
     expect(isStreaming(s)).toBe(true);
@@ -372,7 +372,7 @@ describe('thread state (FR-018)', () => {
     s = threadReducer(s, {
       type: 'accepted',
       tempId: 'local-2',
-      res: { turnId: 'x', userMessageId: 'u9', assistantMessageId: 'a9' },
+      res: { disposition: 'started', turnId: 'x', userMessageId: 'u9', assistantMessageId: 'a9' },
     });
     expect(s.messages.map((m) => m.id)).toEqual(['u9', 'a9']);
     expect(messageText(s.messages[0]!, undefined)).toBe('hey');

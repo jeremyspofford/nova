@@ -25,6 +25,8 @@ const ts = (n = 0) => new Date(Date.UTC(2026, 9, 1, 12, 0, n)).toISOString();
 export const MODELS: ModelView[] = [
   {
     ref: 'pa1/mock-fast',
+    kind: 'model',
+    source: 'account',
     providerAccountId: 'pa1',
     provider: 'mock',
     modelId: 'mock-fast',
@@ -33,6 +35,8 @@ export const MODELS: ModelView[] = [
   },
   {
     ref: 'pa1/mock-smart',
+    kind: 'model',
+    source: 'account',
     providerAccountId: 'pa1',
     provider: 'mock',
     modelId: 'mock-smart',
@@ -54,6 +58,10 @@ export function thread(over: Partial<ThreadView> = {}): ThreadView {
     state: 'idle',
     model: 'pa1/mock-fast',
     reasoningLevel: null,
+    parentThreadId: null,
+    branchFromMessageId: null,
+    side: false,
+    memoryOptOut: false,
     createdAt: ts(),
     updatedAt: ts(),
     ...over,
@@ -232,7 +240,12 @@ export function createHub(init: Partial<HubState> = {}) {
       });
       const assistant = message(tid, { role: 'assistant', turnId, status: 'streaming', parts: [] });
       state.messages.set(tid, [...(state.messages.get(tid) ?? []), user, assistant]);
-      return { turnId, userMessageId: user.id, assistantMessageId: assistant.id };
+      return {
+        disposition: 'started' as const,
+        turnId,
+        userMessageId: user.id,
+        assistantMessageId: assistant.id,
+      };
     },
     cancel: async () => ({ ok: true, cancelled: true }) as const,
     search: async () => {

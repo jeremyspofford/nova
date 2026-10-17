@@ -25,6 +25,8 @@ export const PROVIDER_KINDS = [
   'openai',
   'anthropic',
   'ollama',
+  'openrouter',
+  'llamacpp',
 ] as const;
 export const providerKindSchema = z.enum(PROVIDER_KINDS);
 export type ProviderKind = z.infer<typeof providerKindSchema>;
@@ -72,11 +74,16 @@ export function parseModelRef(ref: string): { providerAccountId: string; modelId
 
 export interface ModelView {
   ref: ModelRef;
+  /** `model` = a provider or node model; `preset` = a virtual model (FR-221, docs/07 §8). */
+  kind: 'model' | 'preset';
   providerAccountId: string;
-  provider: ProviderKind;
+  provider: ProviderKind | 'node' | 'preset';
   modelId: string;
   label: string;
   reasoning: boolean;
+  /** Where it runs: a provider account, or a registered compute node (FR-126). */
+  source: 'account' | 'node' | 'preset';
+  nodeId?: string;
 }
 
 export const REASONING_LEVELS = [
@@ -123,9 +130,20 @@ export interface ThreadView {
   state: ThreadState;
   model: ModelRef | null;
   reasoningLevel: string | null;
+  /** Branch and side-chat lineage (FR-020, FR-026, FR-033). */
+  parentThreadId: string | null;
+  branchFromMessageId: string | null;
+  /** A side chat answers using its parent's context without adding turns to it (FR-026). */
+  side: boolean;
+  /** True when this chat is excluded from memory extraction (FR-032). */
+  memoryOptOut: boolean;
   createdAt: string;
   updatedAt: string;
 }
+
+export const INPUT_MODES = ['steer', 'queue'] as const;
+export const inputModeSchema = z.enum(INPUT_MODES);
+export type InputMode = z.infer<typeof inputModeSchema>;
 
 export const createThreadSchema = z.object({
   mode: threadModeSchema.default('chat'),
@@ -134,6 +152,7 @@ export const createThreadSchema = z.object({
   model: z.string().max(300).optional(),
   reasoningLevel: reasoningLevelSchema.optional(),
   temporary: z.boolean().optional(),
+  memoryOptOut: z.boolean().optional(),
 });
 export type CreateThreadRequest = z.input<typeof createThreadSchema>;
 
@@ -145,6 +164,8 @@ export const updateThreadSchema = z
     unread: z.boolean().optional(),
     model: z.string().max(300).optional(),
     reasoningLevel: reasoningLevelSchema.optional(),
+    memoryOptOut: z.boolean().optional(),
+    projectId: idSchema.nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'nothing to update');
 export type UpdateThreadRequest = z.infer<typeof updateThreadSchema>;
@@ -238,13 +259,22 @@ export const sendMessageSchema = z.object({
   attachments: z.array(attachmentInputSchema).max(ATTACHMENT_LIMITS.maxCount).optional(),
   model: z.string().max(300).optional(),
   reasoningLevel: reasoningLevelSchema.optional(),
+  /** Overrides the `general.followUp` setting for this message while a turn runs (FR-019). */
+  inputMode: inputModeSchema.optional(),
 });
 export type SendMessageRequest = z.infer<typeof sendMessageSchema>;
 
 export interface SendMessageResponse {
-  turnId: string;
+  /** `started` a new turn; `steered` the running turn (applied at its next model step);
+   *  `queued` behind the running turn (FR-019). */
+  disposition: 'started' | 'steered' | 'queued';
+  /** The new turn, or the running turn that was steered; null while queued. */
+  turnId: string | null;
   userMessageId: string;
-  assistantMessageId: string;
+  /** The assistant message that will answer; null while queued. */
+  assistantMessageId: string | null;
+  /** Position in the queue (1-based) when queued. */
+  queuePosition?: number;
 }
 
 export interface SearchHit {
@@ -268,3 +298,214 @@ export interface ChatMessageCompletedPayload {
   status: MessageStatus;
   usage: { inputTokens: number; outputTokens: number; costUsd: number } | null;
 }
+
+// ==== M2: branches, side chats, projects, sources, memory, presets, nodes ====================
+
+// ---- branches, edits, regenerate, tree (FR-020, FR-026, FR-033) -------------------------------
+
+export const branchSchema = z.object({ fromMessageId: idSchema });
+
+/** Edit a user message: forks a branch before it and sends the edited text there (FR-020). */
+export const editMessageSchema = z.object({
+  text: z.string().min(1).max(200_000),
+  model: z.string().max(300).optional(),
+});
+
+/** Regenerate an assistant reply: forks a branch before it and re-runs the turn (FR-020). */
+export const regenerateSchema = z.object({ model: z.string().max(300).optional() });
+
+export interface BranchResponse {
+  thread: ThreadView;
+  /** Present when the branch also started a turn (edit, regenerate). */
+  send?: SendMessageResponse;
+}
+
+export interface ThreadTreeNode {
+  threadId: string;
+  parentThreadId: string | null;
+  branchFromMessageId: string | null;
+  title: string | null;
+  side: boolean;
+  createdAt: string;
+  messageCount: number;
+}
+
+export interface ThreadTree {
+  rootThreadId: string;
+  nodes: ThreadTreeNode[];
+}
+
+/** Side chat: a temporary child thread that sees the parent's context (FR-026). */
+export const sideChatSchema = z.object({
+  text: z.string().min(1).max(200_000),
+  model: z.string().max(300).optional(),
+});
+
+export interface SideChatResponse {
+  thread: ThreadView;
+  send: SendMessageResponse;
+}
+
+// ---- projects & sources (FR-034, FR-040) ------------------------------------------------------
+
+export interface ProjectView {
+  id: string;
+  name: string;
+  instructions: string | null;
+  memoryScope: 'shared' | 'project_only';
+  threadCount: number;
+  sourceCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const createProjectSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  instructions: z.string().max(20_000).optional(),
+  memoryScope: z.enum(['shared', 'project_only']).default('shared'),
+});
+
+export const updateProjectSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    instructions: z.string().max(20_000).nullable().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, 'nothing to update');
+
+export type SourceStatus = 'pending' | 'indexing' | 'ready' | 'error';
+
+export interface SourceView {
+  id: string;
+  projectId: string;
+  name: string;
+  mime: string;
+  size: number;
+  status: SourceStatus;
+  chunkCount: number;
+  error: string | null;
+  indexedAt: string | null;
+  createdAt: string;
+}
+
+export const addSourceSchema = z.union([
+  attachmentInputSchema.extend({ kind: z.literal('file') }),
+  z.object({
+    kind: z.literal('text'),
+    name: z.string().min(1).max(255),
+    text: z.string().min(1).max(2_000_000),
+  }),
+]);
+
+/** A source passage used in an answer, stored with the turn (FR-040, docs/06 citation). */
+export interface CitationView {
+  id: string;
+  messageId: string;
+  idx: number;
+  url: string | null;
+  sourceId: string | null;
+  title: string | null;
+  snippet: string | null;
+}
+
+// ---- memory (FR-032) --------------------------------------------------------------------------
+
+export type MemoryScopeKind = 'global' | 'project' | 'thread' | 'agent';
+
+export interface MemoryItemView {
+  id: string;
+  scopeKind: MemoryScopeKind;
+  scopeRef: string | null;
+  content: string;
+  category: string | null;
+  pinned: boolean;
+  confidence: number | null;
+  status: 'active' | 'dismissed';
+  sourceKind: 'chat' | 'consolidation' | 'import' | 'manual';
+  sourceThreadId: string | null;
+  sourceMessageId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const createMemorySchema = z.object({
+  content: z.string().trim().min(1).max(2_000),
+  scopeKind: z.enum(['global', 'project']).default('global'),
+  scopeRef: idSchema.optional(),
+  category: z.string().max(60).optional(),
+  pinned: z.boolean().optional(),
+});
+
+export const updateMemorySchema = z
+  .object({
+    content: z.string().trim().min(1).max(2_000).optional(),
+    pinned: z.boolean().optional(),
+    status: z.enum(['active', 'dismissed']).optional(),
+    category: z.string().max(60).nullable().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, 'nothing to update');
+
+/** Import memories from an export: a JSON array of strings or {content, category?}, or lines of text. */
+export const importMemorySchema = z.object({
+  format: z.enum(['json', 'text']),
+  data: z.string().min(1).max(1_000_000),
+  scopeKind: z.enum(['global', 'project']).default('global'),
+  scopeRef: idSchema.optional(),
+});
+
+export interface MemoryImportResult {
+  imported: number;
+  skipped: number;
+}
+
+// ---- presets / virtual models (FR-221, docs/07 §8) ---------------------------------------------
+
+export const presetStrategySchema = z.enum(['single', 'fallback', 'cheapest', 'best']);
+
+export const presetSchema = z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,40}$/),
+  label: z.string().min(1).max(60),
+  strategy: presetStrategySchema,
+  /** Ordered model refs; `single` uses the first, `fallback` tries them in order. */
+  targets: z.array(z.string().max(300)).min(1).max(8),
+  reasoningLevel: reasoningLevelSchema.optional(),
+  speed: z.enum(['normal', 'fast']).optional(),
+  /** Position on the Faster ↔ Smarter control; lower is faster. */
+  rank: z.number().int().min(0).max(100),
+});
+export type Preset = z.infer<typeof presetSchema>;
+
+// ---- local servers & compute nodes (docs/07 §12, FR-126, FR-127) ------------------------------
+
+export interface DetectedServer {
+  kind: 'ollama' | 'llamacpp' | 'openai_compatible';
+  baseUrl: string;
+  models: string[];
+}
+
+export interface NodeView {
+  id: string;
+  name: string;
+  status: 'pending' | 'active' | 'unreachable' | 'revoked';
+  /** Where the Hub reaches the node's job API. */
+  endpoint: string;
+  models: string[];
+  capabilities: { gpus: number; vramBytes: number | null; maxConcurrentJobs: number };
+  load: { running: number; queued: number } | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+}
+
+export interface NodeEnrollToken {
+  token: string;
+  expiresAt: string;
+}
+
+export const ROUTING_STEPS = [
+  'same_device',
+  'capability',
+  'least_loaded',
+  'cost',
+  'cloud',
+] as const;

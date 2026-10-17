@@ -56,27 +56,27 @@ Last updated: 2026-10-17T06:10:00Z
 | T-M0-12 | M0 | — | done | 10bbcf4 | this ledger; `docs/adr/` | `LEDGER.md` seeded from this document; ADR directory |
 | T-M0-13 | M0 | FR-141 | done | 10bbcf4 | `node scripts/cargo.mjs test` (6 tests); capability doc validates against schema | `services/novad` supervisor skeleton (Rust) + service install |
 | T-M0-14 | M0 | — | done | 10bbcf4 | `node scripts/check-spec.mjs` in CI | `scripts/check-spec.mjs` wired into CI (FR sync, schemas, links, names) |
-| T-M1-01 | M1 | FR-001, FR-002, FR-003 | done | (M1 commit) | `apps/web` shell tests; J1 | Hub-served UI shell: sidebar, mode tabs, command palette |
-| T-M1-02 | M1 | FR-004 | done | (M1 commit) | `apps/web` keys tests; Settings → Keyboard | Shortcut registry + defaults |
-| T-M1-03 | M1 | FR-017 | done | (M1 commit) | `packages/core` threads tests; hub chat routes | Chat CRUD (create/rename/pin/archive/delete/search) |
-| T-M1-04 | M1 | FR-018 | done | (M1 commit) | core chat tests; J1 stop step | Streaming send/stop with partial retention |
-| T-M1-05 | M1 | FR-021 | done | (M1 commit) | composer + attachment tests | Composer + attachments (images/files) + markdown |
-| T-M1-06 | M1 | FR-014 | done | (M1 commit) | onboarding tests; J1 step 1 | Onboarding wizard (one provider + mock) |
-| T-M1-07 | M1 | FR-015 | done | (M1 commit) | axe on chat + settings in J1 | Accessibility baseline + focus management |
-| T-M1-08 | M1 | — | done | (M1 commit) | `packages/providers` 34 tests (fake server) | OpenAI-compatible + Mock provider adapters; usage accounting stub |
-| T-M1-09 | M1 | FR-017 | done | (M1 commit) | J1 restart + search steps | Persistence across restart; chat search |
-| T-M1-10 | M1 | FR-125 | done | (M1 commit) | `e2e/j1-first-chat.spec.ts` 3/3 | E2E J1 |
-| T-M2-01 | M2 | FR-023 | todo | — | — | Anthropic + OpenAI adapters with tool normalization |
-| T-M2-02 | M2 | FR-024 | todo | — | — | Virtual models, routing/fallback, circuit breaker, retries |
-| T-M2-03 | M2 | FR-126, FR-127 | todo | — | — | Compute node registration + routing order |
-| T-M2-04 | M2 | FR-034, FR-040 | todo | — | — | Projects (instructions, sources, per-project chats) |
-| T-M2-05 | M2 | FR-032 | todo | — | — | Memory extraction + Memory panel + per-chat opt-out |
-| T-M2-06 | M2 | FR-025 | todo | — | — | Cross-chat search + in-chat find |
-| T-M2-07 | M2 | FR-019, FR-020 | todo | — | — | Steer/queue setting; edit/regenerate/branch |
-| T-M2-08 | M2 | FR-026, FR-027, FR-033 | todo | — | — | Side chat; temporary chats; branch tree |
-| T-M2-09 | M2 | FR-007 | todo | — | — | Deep links |
-| T-M2-11 | M2 | FR-221 | todo | — | — | Model presets (Faster ↔ Smarter) over virtual models |
-| T-M2-10 | M2 | — | todo | — | — | E2E J2 |
+| T-M1-01 | M1 | FR-001, FR-002, FR-003 | done | ba340d5 | `apps/web` shell tests; J1 | Hub-served UI shell: sidebar, mode tabs, command palette |
+| T-M1-02 | M1 | FR-004 | done | ba340d5 | `apps/web` keys tests; Settings → Keyboard | Shortcut registry + defaults |
+| T-M1-03 | M1 | FR-017 | done | ba340d5 | `packages/core` threads tests; hub chat routes | Chat CRUD (create/rename/pin/archive/delete/search) |
+| T-M1-04 | M1 | FR-018 | done | ba340d5 | core chat tests; J1 stop step | Streaming send/stop with partial retention |
+| T-M1-05 | M1 | FR-021 | done | ba340d5 | composer + attachment tests | Composer + attachments (images/files) + markdown |
+| T-M1-06 | M1 | FR-014 | done | ba340d5 | onboarding tests; J1 step 1 | Onboarding wizard (one provider + mock) |
+| T-M1-07 | M1 | FR-015 | done | ba340d5 | axe on chat + settings in J1 | Accessibility baseline + focus management |
+| T-M1-08 | M1 | — | done | ba340d5 | `packages/providers` 34 tests (fake server) | OpenAI-compatible + Mock provider adapters; usage accounting stub |
+| T-M1-09 | M1 | FR-017 | done | ba340d5 | J1 restart + search steps | Persistence across restart; chat search |
+| T-M1-10 | M1 | FR-125 | done | ba340d5 | `e2e/j1-first-chat.spec.ts` 3/3 | E2E J1 |
+| T-M2-01 | M2 | FR-023 | in_progress | — | — | Anthropic + OpenAI adapters with tool normalization |
+| T-M2-02 | M2 | FR-024 | in_progress | — | — | Virtual models, routing/fallback, circuit breaker, retries |
+| T-M2-03 | M2 | FR-126, FR-127 | in_progress | — | — | Compute node registration + routing order |
+| T-M2-04 | M2 | FR-034, FR-040 | in_progress | — | — | Projects (instructions, sources, per-project chats) |
+| T-M2-05 | M2 | FR-032 | in_progress | — | — | Memory extraction + Memory panel + per-chat opt-out |
+| T-M2-06 | M2 | FR-025 | in_progress | — | — | Cross-chat search + in-chat find |
+| T-M2-07 | M2 | FR-019, FR-020 | in_progress | — | — | Steer/queue setting; edit/regenerate/branch |
+| T-M2-08 | M2 | FR-026, FR-027, FR-033 | in_progress | — | — | Side chat; temporary chats; branch tree |
+| T-M2-09 | M2 | FR-007 | in_progress | — | — | Deep links |
+| T-M2-11 | M2 | FR-221 | in_progress | — | — | Model presets (Faster ↔ Smarter) over virtual models |
+| T-M2-10 | M2 | — | in_progress | — | — | E2E J2 |
 | T-M3-01 | M3 | — | todo | — | — | Tool registry + built-in read/write/search/exec |
 | T-M3-02 | M3 | FR-042, FR-043 | todo | — | — | MCP client (stdio/http) + health/restart |
 | T-M3-03 | M3 | FR-099 | todo | — | — | Policy engine complete (allow/ask/handoff/deny) + reasons |
