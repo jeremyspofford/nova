@@ -13,9 +13,9 @@ layer. Product brand: **Nova**. Domain: **arialabs.ai**.
 | **Relay** | A content-blind, end-to-end-encrypted forwarding service for off-LAN clients and push. |
 | **Wake Helper** | An always-on device on the same LAN that can send WoL magic packets. |
 | **`novad`** | The Nova device agent: a Rust supervisor plus signed, sandboxed modules. |
-| **Lattice** | The device-to-device mesh transport (Headscale/Tailscale/NetBird/WireGuard). |
-| **Transport** | A way roles reach each other: LAN, Lattice, Relay, or direct public. |
-| **Trust path** | How HTTPS is trusted: Core local CA, Lattice certificates, or native-shell pinning. |
+| **Mesh** | The device-to-device mesh transport (Headscale/Tailscale/NetBird/WireGuard). |
+| **Transport** | A way roles reach each other: LAN, Mesh, Relay, or direct public. |
+| **Trust path** | How HTTPS is trusted: Hub local CA, Mesh certificates, or native-shell pinning. |
 | **Sealed mode** | Optional mode where keys stay in the secure enclave and plaintext is never written to disk; proactive work pauses while locked. |
 
 ## Domain objects
@@ -48,7 +48,7 @@ layer. Product brand: **Nova**. Domain: **arialabs.ai**.
 | **Approval** | A user decision required before a gated action. |
 | **Permission Grant** | A remembered approval scoped to an action/resource. |
 | **Capability Declaration** | The document `novad` reports describing hardware/OS/services/models/limits. |
-| **Flight Recorder** | The append-only, hash-chained audit log. |
+| **Audit Log** | The append-only, hash-chained record of every consequential action (`audit_event`). |
 | **Learning Level** | L0 memory · L1 skills · L2 workflow optimization · L3 self-tuning · L4 code self-modification · L5 local fine-tuning. |
 | **Guardrail** | The on-by-default protection that prevents the agent from modifying policy/safety/permissions/audit/signing/self-improvement gates. |
 

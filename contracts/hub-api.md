@@ -42,7 +42,7 @@ Transport: HTTPS (REST) plus WebSocket/SSE for streams. Authentication: device c
 | `GET/POST` | `/api/v1/agents` | Always-on agents |
 | `GET/POST` | `/api/v1/approvals` | List/decide approvals |
 | `GET` | `/api/v1/activity?ref=` | Activity trace for a thread/run/agent |
-| `GET` | `/api/v1/audit/export` | Flight recorder export (JSONL) |
+| `GET` | `/api/v1/audit/export` | Audit log export (JSONL) |
 
 ### Code, tools, extensions
 
@@ -63,13 +63,13 @@ Transport: HTTPS (REST) plus WebSocket/SSE for streams. Authentication: device c
 | `GET/PATCH` | `/api/v1/settings` | Read/update settings |
 | `GET/PATCH` | `/api/v1/network` | Transports, trust, egress, wake helpers |
 | `POST` | `/api/v1/network/setup` | Run the Network Setup assistant step |
-| `POST` | `/api/v1/network/test` | Reachability test (LAN/Lattice/Relay) |
+| `POST` | `/api/v1/network/test` | Reachability test (LAN/Mesh/Relay) |
 | `POST` | `/api/v1/network/rollback` | Revert the last network change |
 | `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, sandboxes, devices) |
 
 ## 2. Hub ↔ Compute Node
 
-Internal, authenticated (mTLS over Lattice or LAN). The Hub authorizes every job; nodes never
+Internal, authenticated (mTLS over Mesh or LAN). The Hub authorizes every job; nodes never
 initiate to clients.
 
 | Method | Path | Purpose |

@@ -32,7 +32,7 @@ integrations contributed by third parties.
 A catalog can be served from several endpoints at once:
 
 - **Public domain** — e.g., `catalog.<your-domain>`.
-- **Lattice/tailnet URL** — e.g., `https://catalog.<tailnet>.ts.net` for private/mesh access.
+- **mesh/tailnet URL** — e.g., `https://catalog.<tailnet>.ts.net` for private/mesh access.
 - **Self-hosted / offline** — a local directory or a container.
 
 Clients accept one or more catalog URLs and try them in order. The index and every artifact are

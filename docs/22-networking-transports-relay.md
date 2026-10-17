@@ -11,7 +11,7 @@ trust/HTTPS story, and the Relay.
 - Never hard-depend on a third-party service.
 - Be safe by default: authenticated, encrypted, least-privilege.
 
-## 2. Transports (the "Lattice" abstraction)
+## 2. Transports (the mesh abstraction)
 
 A **transport** is a way two Nova roles can reach each other. The Hub publishes a set of
 reachable **endpoints**; clients try them in order and use the first that works.
@@ -19,14 +19,14 @@ reachable **endpoints**; clients try them in order and use the first that works.
 | Transport | Description | Requires |
 | --- | --- | --- |
 | **LAN** | Direct on the local network (mDNS/`.local` names or IP). | Same network |
-| **Lattice** | A WireGuard-based mesh. Supported control planes: **Headscale** (self-hosted, recommended), **Tailscale** (managed), **NetBird** (self-hosted, mobile-friendly), or **plain WireGuard**. | An installed mesh client |
+| **Mesh** | A WireGuard-based mesh. Supported control planes: **Headscale** (self-hosted, recommended), **Tailscale** (managed), **NetBird** (self-hosted, mobile-friendly), or **plain WireGuard**. | An installed mesh client |
 | **Relay** | A content-blind forwarding server that both sides connect **outbound** to. | A reachable Relay |
 | **Direct public** | Hub exposed on a public address/port. | Port forwarding or public host |
 
 Endpoint selection order (happy-eyeballs, roughly 300 ms budget per candidate):
 
 ```
-LAN → Lattice → Relay → (Direct public if configured)
+LAN → Mesh → Relay → (Direct public if configured)
 ```
 
 If a candidate fails a health check, the Hub stops advertising it (`docs/23` diagnostics).
@@ -45,14 +45,14 @@ Self-hosting Headscale gives you a self-hosted control plane, but:
   server. If mobile must work with a self-hosted mesh, prefer **NetBird** (self-hostable
   with mobile apps) or rely on the **Relay**.
 
-### 2.2 Lattice recommendation
+### 2.2 Mesh recommendation
 
 - **Default recommendation for self-hosters: Headscale**, documented and orchestrated by Nova.
 - **Managed Tailscale** offered for the easiest mobile experience.
 - **NetBird** supported and evaluated as the "self-hosted *and* mobile" answer.
 - **Plain WireGuard** supported for minimalists.
 
-Nova never requires a Lattice; LAN + Relay always work.
+Nova never requires a Mesh; LAN + Relay always work.
 
 ## 3. The Relay
 
@@ -71,16 +71,16 @@ It forwards sealed messages between them when no direct path exists.
 
 | Platform | Interactive path | Background wake |
 | --- | --- | --- |
-| Desktop (with `novad`) | LAN → Lattice → Relay | OS notification; no wake needed |
-| Android | Lattice → Relay, plus optional persistent connection (foreground service) | FCM push; optional long-lived socket |
-| iOS | Relay (or Lattice while foregrounded) | **APNs push only** (iOS suspends background tunnels) |
+| Desktop (with `novad`) | LAN → Mesh → Relay | OS notification; no wake needed |
+| Android | Mesh → Relay, plus optional persistent connection (foreground service) | FCM push; optional long-lived socket |
+| iOS | Relay (or Mesh while foregrounded) | **APNs push only** (iOS suspends background tunnels) |
 | Browser/PWA | Same as its host device | Web push where supported |
 
-Policy: **Relay guarantees mobile**; Lattice is preferred for desktop and compute-node traffic.
+Policy: **Relay guarantees mobile**; Mesh is preferred for desktop and compute-node traffic.
 
 ## 4. Add Device
 
-The Hub exposes **Add a Device** (Bridge → Devices). A device is added by scanning a QR code
+The Hub exposes **Add a Device** (Settings → Devices). A device is added by scanning a QR code
 or entering a short code.
 
 ### 4.1 Flow
@@ -150,7 +150,7 @@ applicable.
 - One-click **Revoke** on the Hub kills the device certificate and instructs the device to
   wipe its credentials.
 - Re-adding requires a fresh code; revoked keys are blacklisted.
-- Every add/revoke writes a **Flight recorder** entry.
+- Every add/revoke writes an **audit log** entry.
 
 ## 5. Trust & HTTPS
 
@@ -159,24 +159,24 @@ context**. Three supported paths, chosen in Hub settings during onboarding (H1):
 
 | Path | How | Best for |
 | --- | --- | --- |
-| **Core local CA** | Hub generates a CA; Add Device installs the root cert on the device. | Fully private, LAN-only |
-| **Lattice certificates** | Real TLS certs from the mesh (`*.ts.net` or your domain). | Remote + mobile |
+| **Hub local CA** | Hub generates a CA; Add Device installs the root cert on the device. | Fully private, LAN-only |
+| **Mesh certificates** | Real TLS certs from the mesh (`*.ts.net` or your domain). | Remote + mobile |
 | **Native shell pinning** | Native clients pin the Hub key. | Desktop, no CA install |
 
-A device may use more than one path (e.g., LAN via local CA, remote via Lattice certs).
+A device may use more than one path (e.g., LAN via local CA, remote via Mesh certs).
 
 ## 6. Network Setup (assistant)
 
 Nova must be able to configure its own networking (L3). The assistant:
 
 1. Detects existing VPNs, meshes, IP/subnet, and DNS state.
-2. Offers to install and authenticate a chosen Lattice (Headscale / Tailscale / NetBird /
+2. Offers to install and authenticate a chosen Mesh (Headscale / Tailscale / NetBird /
    WireGuard), with a **one-time consent** per change, then remembers the choice.
 3. Applies tags/ACLs, MagicDNS names, subnet routes, and (optionally) an exit node.
-4. Fetches/installs TLS certs, or provisions the Core CA.
+4. Fetches/installs TLS certs, or provisions the Hub local CA.
 5. Configures the Hub/Compute firewall and which ports listen.
 6. Enrolls the Relay and verifies an off-LAN path.
-7. Runs **reachability tests** (LAN, Lattice, Relay) and refuses to advertise a failing path.
+7. Runs **reachability tests** (LAN, Mesh, Relay) and refuses to advertise a failing path.
 8. Offers **one-click rollback**; must never lock the user out of their own Hub.
 
 A **Network** panel shows active transports, latency, certificate status, ACL summary, Relay
@@ -199,11 +199,11 @@ Wake-on-LAN magic packets only cross a single LAN segment. To wake a sleeping de
 {
   "transports": {
     "lan": { "enabled": true, "mdns": true },
-    "lattice": { "enabled": true, "provider": "headscale", "controlUrl": "https://headscale.lan" },
+    "mesh": { "enabled": true, "provider": "headscale", "controlUrl": "https://headscale.lan" },
     "relay":   { "enabled": true, "url": "wss://relay.arialabs.ai", "selfHosted": true },
     "directPublic": { "enabled": false }
   },
-  "trust": { "mode": "local-ca", "latticeCerts": true, "pinNativeShells": true },
+  "trust": { "mode": "local-ca", "meshCerts": true, "pinNativeShells": true },
   "egress": { "allow": ["*.corp.example"], "deny": ["*"] },
   "wakeHelpers": ["device:<id>"]
 }
@@ -225,9 +225,9 @@ Managed policy can restrict transports, require a specific provider, or force th
 
 | Failure | Behavior |
 | --- | --- |
-| LAN down | Use Lattice; else Relay |
-| Lattice down | Use LAN; else Relay |
-| Relay down | LAN/Lattice continue; mobile loses background wake but resumes on reconnect |
-| Cert expired | Native shells warn; Lattice path auto-renews; CA path prompts re-install |
+| LAN down | Use Mesh; else Relay |
+| Mesh down | Use LAN; else Relay |
+| Relay down | LAN/Mesh continue; mobile loses background wake but resumes on reconnect |
+| Cert expired | Native shells warn; Mesh path auto-renews; CA path prompts re-install |
 | ACL misconfig | Reachability test fails; Nova refuses to advertise; rollback offered |
 | Hub unreachable | Client local fallback (`docs/21` §9) |

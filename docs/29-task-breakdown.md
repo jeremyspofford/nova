@@ -10,7 +10,7 @@ tasks as long as the milestone exit criteria are met.
 | Task | Description | FR |
 | --- | --- | --- |
 | T-M0-01 | Monorepo (npm workspaces + Turborepo), TS strict, ESLint/Prettier | — |
-| T-M0-02 | `apps/hub` Fastify service skeleton (HTTP/WS/SSE, config, graceful shutdown) | FR-124 |
+| T-M0-02 | `apps/hub` Fastify service skeleton (HTTP/WS/SSE, config, graceful shutdown, token-guarded listeners) | FR-124, FR-192 |
 | T-M0-03 | `apps/web` React/Vite UI served by the Hub; PWA manifest + service worker | FR-125 |
 | T-M0-04 | `packages/shared` zod schemas, event bus, error taxonomy | — |
 | T-M0-05 | `packages/storage` Drizzle + SQLite (WAL) + migration runner + backup | — |
@@ -22,6 +22,7 @@ tasks as long as the milestone exit criteria are met.
 | T-M0-11 | CI pipelines (lint, typecheck, unit, build) on Linux | — |
 | T-M0-12 | `LEDGER.md` seeded from this document; ADR directory | — |
 | T-M0-13 | `services/novad` supervisor skeleton (Rust) + service install | FR-141 |
+| T-M0-14 | `scripts/check-spec.mjs` wired into CI (FR sync, schemas, links, names) | — |
 
 ## M1 — Chat MVP + Shell
 
@@ -51,6 +52,7 @@ tasks as long as the milestone exit criteria are met.
 | T-M2-07 | Steer/queue setting; edit/regenerate/branch | FR-019, FR-020 |
 | T-M2-08 | Side chat; temporary chats; branch tree | FR-026, FR-027, FR-033 |
 | T-M2-09 | Deep links | FR-007 |
+| T-M2-11 | Model presets (Faster ↔ Smarter) over virtual models | FR-221 |
 | T-M2-10 | E2E J2 | — |
 
 ## M3 — Tools, MCP, Policy & Approvals
@@ -68,6 +70,12 @@ tasks as long as the milestone exit criteria are met.
 | T-M3-09 | Audit hash chain + Activity trace | FR-104 |
 | T-M3-10 | Notifications center | FR-013 |
 | T-M3-11 | Hub trusted + external E2E baseline; optional sealed mode | FR-149 |
+| T-M3-13 | Confirmation tiers + intent provenance in the policy engine | FR-189 |
+| T-M3-14 | Permission profiles + protected paths | FR-190 |
+| T-M3-15 | Command prefix rules with load-time examples | FR-191 |
+| T-M3-16 | Listener tokens, Origin checks, per-client MCP tokens | FR-192 |
+| T-M3-17 | Deferred tools + `tool.search` | FR-196 |
+| T-M3-18 | Memory consolidation, project-only scope, history-reference toggle | FR-204, FR-205 |
 | T-M3-12 | E2E J3 | — |
 
 ## M4 — Plugins, Skills, Workspaces & Profile
@@ -82,6 +90,10 @@ tasks as long as the milestone exit criteria are met.
 | T-M4-06 | Local projects; Library view | FR-035, FR-041 |
 | T-M4-07 | Profile + usage insights + multiple accounts | FR-113, FR-114, FR-115 |
 | T-M4-08 | Nova-as-MCP-server with consent | FR-044 |
+| T-M4-10 | Lifecycle hooks (trust by hash, tighten-only) | FR-197 |
+| T-M4-11 | MCP Apps UI host (sandboxed iframes, bridge, CSP) | FR-198 |
+| T-M4-12 | MCP bundle install | FR-199 |
+| T-M4-13 | Import from other assistants (preview, dedupe, secret migration) | FR-200 |
 | T-M4-09 | E2E J4 | — |
 
 ## M5 — Agent Runtime: Work & Code
@@ -101,6 +113,15 @@ tasks as long as the milestone exit criteria are met.
 | T-M5-11 | Diagnostics page; audit export | FR-119, FR-104 |
 | T-M5-12 | Image generation; realtime voice | FR-030, FR-031 |
 | T-M5-13 | Plugin authoring from conversation | FR-050 |
+| T-M5-15 | Goals + budgeted execution + per-turn backstop | FR-181, FR-182 |
+| T-M5-16 | Compaction triggers + context tools | FR-183 |
+| T-M5-17 | Interactive exec sessions | FR-184 |
+| T-M5-18 | Instruction-file discovery | FR-185 |
+| T-M5-19 | Chat escalation to Work; thread status model | FR-186, FR-215 |
+| T-M5-20 | Verified outcomes; server-to-client requests | FR-187, FR-188 |
+| T-M5-21 | Model-based auto-review (fail-closed, circuit breaker) | FR-085 |
+| T-M5-22 | Hook-free app Git operations | FR-211 |
+| T-M5-23 | Dictation; document outputs; deep research template | FR-216, FR-219, FR-220 |
 | T-M5-14 | E2E J5, J6 | — |
 
 ## M6 — Agents, Computers & Channels (+ novad core)
@@ -113,13 +134,18 @@ tasks as long as the milestone exit criteria are met.
 | T-M6-04 | Browser controller + computer use + takeover | FR-092, FR-093, FR-087 |
 | T-M6-05 | Sign-in flow + appshots | FR-086, FR-075 |
 | T-M6-06 | Proactive research + background threads | FR-082, FR-083 |
-| T-M6-07 | Custom rules + auto-review | FR-084, FR-085 |
+| T-M6-07 | Custom rules | FR-084 |
 | T-M6-08 | Event triggers + channels (Slack/Teams/webhook) | FR-056, FR-088 |
 | T-M6-09 | Agent memory + activity/stop | FR-089, FR-090 |
 | T-M6-10 | Power/WoL + service management + `novad` updates | FR-144, FR-145, FR-148 |
 | T-M6-11 | Egress control + injection defense | FR-102, FR-103 |
 | T-M6-12 | Spaces/Pages + Sites + visualizations; pets | FR-036, FR-037, FR-076, FR-012 |
 | T-M6-13 | Per-device overrides | FR-150 |
+| T-M6-15 | Egress proxy modes + credential injection; external-agent rule | FR-193, FR-194 |
+| T-M6-16 | Micro-VM substrate (flagged) | FR-195 |
+| T-M6-17 | MCP event subscriptions; agent self-scheduling | FR-201, FR-206 |
+| T-M6-18 | Computer-use control tiers; local browser fallback; page tools | FR-207, FR-209, FR-208 |
+| T-M6-19 | `novad` staged writes + local MCP pass-through | FR-210 |
 | T-M6-14 | E2E J7, J8 | — |
 
 ## M6.5 — Networking, Transports & Add Device
@@ -129,9 +155,9 @@ tasks as long as the milestone exit criteria are met.
 | T-M65-01 | Add-Device flow (QR/short code, roles/scopes, approval) | FR-132 |
 | T-M65-02 | Hub-served signed `novad` builds + bootstrap command | FR-133 |
 | T-M65-03 | Transport abstraction + LAN/mDNS + endpoint health | FR-135 |
-| T-M65-04 | Lattice adapters (Headscale/Tailscale/NetBird/WireGuard) | FR-135 |
+| T-M65-04 | Mesh adapters (Headscale/Tailscale/NetBird/WireGuard) | FR-135 |
 | T-M65-05 | Relay client + E2E sealing | FR-137 |
-| T-M65-06 | Trust paths (local CA / Lattice certs / pinning) | FR-134 |
+| T-M65-06 | Trust paths (local CA / Mesh certs / pinning) | FR-134 |
 | T-M65-07 | Network Setup assistant + reachability tests + rollback | FR-136, FR-139 |
 | T-M65-08 | Wake Helper role | FR-138 |
 | T-M65-09 | Device management UI | FR-140 |
@@ -148,6 +174,9 @@ tasks as long as the milestone exit criteria are met.
 | T-M7-05 | Tray/quick chat/multi-window | FR-008, FR-009 |
 | T-M7-06 | Telegram/email channels; mobile relay + push + deep links | FR-110, FR-111, FR-077 |
 | T-M7-07 | Specialist/team agents | FR-091 |
+| T-M7-09 | Session handoff; attach window | FR-213, FR-214 |
+| T-M7-10 | Best-of-N; shared threads; voice-call channel | FR-212, FR-217, FR-218 |
+| T-M7-11 | Flagged: scripted tool calls; external agent adapters | FR-202, FR-203 |
 | T-M7-08 | E2E J9 | — |
 
 ## M7.5 — Device Management: Boot, Power & Firmware
@@ -169,6 +198,7 @@ tasks as long as the milestone exit criteria are met.
 | T-M8-03 | Managed policy file + precedence UI | FR-106 |
 | T-M8-04 | Data export/delete + retention; spend caps; crash reporting | FR-105, FR-116, FR-121 |
 | T-M8-05 | i18n + RTL + accessibility audit | FR-016, FR-015 |
+| T-M8-07 | Third-party app authorization; opt-in OTLP export | FR-222, FR-223 |
 | T-M8-06 | E2E J10 | — |
 
 ## M9 — Hardening, Performance & Security
@@ -180,6 +210,7 @@ tasks as long as the milestone exit criteria are met.
 | T-M9-03 | Test-suite completion; flakiness elimination | — |
 | T-M9-04 | Error/degraded/empty-state polish | — |
 | T-M9-05 | Device-lab tests (multi-device, transports, novad) | FR-135, FR-141 |
+| T-M9-06 | Persistence safety evals + reviewer metrics | FR-224 |
 
 ## M10 — Packaging & Release
 
@@ -191,19 +222,25 @@ tasks as long as the milestone exit criteria are met.
 | T-M10-04 | Signing/notarization + SBOM + checksums | — |
 | T-M10-05 | Auto-update + staged rollout + rollback | FR-120 |
 | T-M10-06 | Docs, tutorials, changelog, release notes | — |
+| T-M10-08 | Install robustness (data dirs, port conflicts, download verification) | FR-225 |
 | T-M10-07 | E2E J11; release checklist | — |
 
 ## N1 — Ambient Memory
 
 | Task | Description | FR |
 | --- | --- | --- |
-| T-N1-01 | Reconcile external Screenpipe findings; finalize capture design | — |
-| T-N1-02 | Capture pipeline (screen/mic/system audio) + permissions | FR-151 |
-| T-N1-03 | OCR + STT adapters (local-first + cloud option) | FR-152 |
-| T-N1-04 | Timeline UI + FTS + vector search | FR-153 |
-| T-N1-05 | Privacy controls (exclusions, redaction, pause, forget) | FR-154 |
-| T-N1-06 | Ambient tools + MCP exposure (untrusted) | FR-155 |
-| T-N1-07 | Resource governor | FR-156 |
+| T-N1-01 | Reconcile ambient findings; finalize capture design (done in Phase 0, ADR-073) | — |
+| T-N1-02 | Event-driven capture of the focused window + permissions (Windows first) | FR-151 |
+| T-N1-03 | Accessibility-first text extraction, OCR fallback; audio STT (phase 2) | FR-152 |
+| T-N1-04 | Timeline UI + FTS (time-ordered) + optional vector index | FR-153 |
+| T-N1-05 | Privacy controls (rules, built-in exclusions, pauses, forget, retention) | FR-154 |
+| T-N1-06 | Ambient tools (broad to narrow) + MCP exposure with coverage | FR-155 |
+| T-N1-07 | Resource governor (power profiles, CPU lane, disk guard) | FR-156 |
+| T-N1-08 | Redaction release gate + per-category switches | FR-227 |
+| T-N1-09 | Capture split: networkless helper, `novad` transport, Hub storage, pixel upload | FR-228 |
+| T-N1-10 | Activity summary | FR-229 |
+| T-N1-11 | Provenance checks + scoped ambient grants | FR-232, FR-233 |
+| T-N1-12 | Meeting detection + speaker identity (phase 2) | FR-230, FR-231 |
 
 ## N2 — Automations & Smart Home
 
@@ -240,3 +277,4 @@ tasks as long as the milestone exit criteria are met.
 | T-N4-06 | L4 gated code self-modification + guardrail toggle | FR-173 |
 | T-N4-07 | L5 optional local fine-tuning | FR-174 |
 | T-N4-08 | Transparency view + kill switch | FR-175 |
+| T-N4-09 | Skill proposals from a recorded demonstration | FR-226 |

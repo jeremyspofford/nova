@@ -20,7 +20,7 @@ A milestone is **accepted** when all of the following are true:
 The product is release-ready when:
 
 - M0–M9 accepted and M10 tasks complete.
-- All 123 `FR-*` implemented or explicitly deferred (P2 deferrals listed with rationale).
+- Every `FR-*` in `docs/03` implemented or explicitly deferred (P2 deferrals listed with rationale).
 - Full test suite green on all three platforms; security suite green.
 - Performance budgets met (`AGENTS.md` §9).
 - Signed installers for Linux/macOS/Windows with SBOM + checksums.

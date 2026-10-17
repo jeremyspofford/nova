@@ -92,7 +92,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-082 | todo | todo | J7 | proactive research |
 | FR-083 | todo | todo | J7 | background threads |
 | FR-084 | todo | todo | J7 | custom rules |
-| FR-085 | todo | todo | J7 | auto-review |
+| FR-085 | todo | todo | J6 | auto-review (model reviewer, fails closed) |
 | FR-086 | todo | todo | J8 | sign-in flow |
 | FR-087 | todo | todo | J7 | takeover |
 | FR-088 | todo | todo | J7 | channels |
@@ -188,3 +188,56 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-178 | todo | todo | — | skill authoring/generation |
 | FR-179 | todo | todo | — | HomeKit bridge |
 | FR-180 | todo | todo | — | Matter bridge |
+| FR-181 | todo | todo | J5 | goals: statuses, blocked-after-3, idle continuation |
+| FR-182 | todo | todo | J5 | budgets pause; per-turn backstop |
+| FR-183 | todo | todo | — | three compaction triggers |
+| FR-184 | todo | todo | J6 | interactive exec sessions |
+| FR-185 | todo | todo | J6 | instruction-file discovery + budget |
+| FR-186 | todo | todo | J5 | chat escalation to Work |
+| FR-187 | todo | todo | J5 | verified outcomes |
+| FR-188 | todo | todo | J3 | server-to-client requests |
+| FR-189 | todo | todo | J3 | confirmation tiers + intent provenance |
+| FR-190 | todo | todo | J6 | permission profiles + protected paths |
+| FR-191 | todo | todo | J6 | command prefix rules + load-time examples |
+| FR-192 | todo | todo | — | listener tokens, Origin checks, no auto-registration |
+| FR-193 | todo | todo | J8 | proxy modes + credential injection |
+| FR-194 | todo | todo | J8 | external-agent rule |
+| FR-195 | todo | todo | — | micro-VM substrate (flagged) |
+| FR-196 | todo | todo | J3 | deferred tools + tool search |
+| FR-197 | todo | todo | J4 | lifecycle hooks (tighten-only) |
+| FR-198 | todo | todo | J4 | MCP Apps UI |
+| FR-199 | todo | todo | J4 | MCP bundles |
+| FR-200 | todo | todo | — | import from other assistants |
+| FR-201 | todo | todo | J7 | MCP event subscriptions |
+| FR-202 | todo | todo | — | scripted tool calls (flagged) |
+| FR-203 | todo | todo | — | external agent adapters (flagged) |
+| FR-204 | todo | todo | J2 | memory consolidation |
+| FR-205 | todo | todo | J2 | memory scopes + history reference |
+| FR-206 | todo | todo | J7 | agent self-scheduling |
+| FR-207 | todo | todo | J8 | computer-use control tiers |
+| FR-208 | todo | todo | — | page-registered tools |
+| FR-209 | todo | todo | — | local browser fallback |
+| FR-210 | todo | todo | J7 | novad staged writes + local MCP |
+| FR-211 | todo | todo | J6 | hook-free app git ops |
+| FR-212 | todo | todo | — | best-of-N attempts |
+| FR-213 | todo | todo | J9 | session handoff |
+| FR-214 | todo | todo | — | attach window |
+| FR-215 | todo | todo | J5 | thread status model |
+| FR-216 | todo | todo | — | dictation |
+| FR-217 | todo | todo | — | shared threads |
+| FR-218 | todo | todo | — | voice-call channel |
+| FR-219 | todo | todo | J5 | document outputs |
+| FR-220 | todo | todo | J5 | deep research run |
+| FR-221 | todo | todo | J2 | model presets |
+| FR-222 | todo | todo | — | third-party app authorization |
+| FR-223 | todo | todo | — | opt-in OTLP export |
+| FR-224 | todo | todo | — | persistence safety evals |
+| FR-225 | todo | todo | J11 | install robustness |
+| FR-226 | todo | todo | — | skill from demonstration |
+| FR-227 | todo | todo | — | redaction release gate |
+| FR-228 | todo | todo | — | capture split |
+| FR-229 | todo | todo | — | activity summary |
+| FR-230 | todo | todo | — | meeting detection |
+| FR-231 | todo | todo | — | speaker identity |
+| FR-232 | todo | todo | — | capture provenance checks |
+| FR-233 | todo | todo | — | scoped ambient grants |

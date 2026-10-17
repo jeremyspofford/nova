@@ -64,6 +64,33 @@ silently.
 | ADR-053 | Catalog hosting | Public domain + tailnet + self-hosted/offline |
 | ADR-054 | Smart home | Managed Home Assistant or direct MQTT/Matter; bridges later |
 | ADR-055 | Skill authoring | Markdown skills; Nova may generate/refine its own with approval |
+| ADR-056 | Brand-name scope | Reference-app names banned from the spec; integration targets, protocols and dependencies allowed; `docs/external/` is the evidence zone |
+| ADR-057 | Plain terminology | **Mesh** (was Lattice), **audit log** (was Flight recorder), **Hub local CA** (was Core CA) |
+| ADR-058 | Run bounds | **Budgets** (time, tokens, cost) + **goals** + a 200-step per-turn backstop; supersedes ADR-016 |
+| ADR-059 | Permission model | Modes are presets over an approval policy × a permission profile; protected paths; allow rules never remove the sandbox |
+| ADR-060 | Approval decisions | Allow once / for session / always (tool, prefix rule, host) / deny and continue / deny and stop / hand off; timeout recorded |
+| ADR-061 | Auto-review | Model reviewer with a strict verdict, fail-closed, circuit breaker; runs after deterministic policy and only tightens |
+| ADR-062 | Confirmation tiers | handoff_required / confirm_at_action / pre_approvable; only user-typed text is authorization |
+| ADR-063 | Network credentials | **Injected by the egress proxy**, never placed in the sandbox |
+| ADR-064 | Windows sandbox | **Restricted tokens + per-root capability SIDs**, not AppContainer |
+| ADR-065 | Micro-VM substrate | Optional and flagged; the OS sandbox stays the default |
+| ADR-066 | Extension UI | The open **MCP Apps** standard replaces the Nova-specific panel bridge |
+| ADR-067 | Skill format | Folder with `SKILL.md`; catalog-only injection within a budget |
+| ADR-068 | Lifecycle hooks | Trusted by hash; tighten-only; may answer non-safety asks |
+| ADR-069 | Memory | `memory_item` stays canonical; background consolidation; never writes skills |
+| ADR-070 | Channel threads | **Per-channel threads**, shared agent memory |
+| ADR-071 | Relay | Stays content-blind and E2E; adopts stream/sequence framing, segmenting and acks |
+| ADR-072 | Hub API | Stays REST + WS/SSE; adds server-to-client requests and handshake capabilities |
+| ADR-073 | Ambient capture | Event-driven, accessibility-first, text-first, release gate, device/Hub split; vector index optional |
+| ADR-074 | Captured instructions | Never trigger consequential actions; also marked and audited |
+| ADR-075 | Integration hygiene | Nova never writes into other apps' configs; every listener needs a token |
+| ADR-076 | One runtime | No embedded third-party coding engines; external agents only via policy-routed adapters (P2) |
+| ADR-077 | Modes | Four modes kept; chat can escalate into an inline Work run |
+| ADR-078 | Managed policy channels | OS-protected locations trusted by ACL; remote policy must be signed |
+| ADR-079 | Missed schedules | One catch-up run over a 7-day lookback; RRULE supported; supersedes the 15-min grace |
+| ADR-080 | Rejected capabilities | Recorded list of capabilities Nova will not adopt |
+| ADR-081 | M0 target | Hub + web UI first; the native shell is a later client |
+| ADR-082 | Feature-flag lifecycle | Flags carry a stage: experimental, beta, stable, deprecated, removed |
 
 ## Details & rationale
 
@@ -176,6 +203,160 @@ deferred.
 **ADR-055 — Skill authoring.** Skills are markdown files. Users author them directly, and Nova
 may generate or refine its own skills from repeated workflows or explicit requests; generated
 skills carry provenance, are versioned, and require approval before use.
+
+### Phase 0 reconciliation (added 2026-10-17)
+
+These decisions come from `docs/external/RECONCILIATION.md`. Superseding decisions also have
+a file under `docs/adr/`.
+
+**ADR-056 — Brand-name scope.** The invariant "no third-party product or brand names" applies
+to reference applications: products studied for this spec are named only by opaque IDs, and
+their names never appear outside `docs/external/`. Integration targets (chat services,
+smart-home platforms, mesh control planes, Git hosts), protocols and dependencies may be named,
+because they are API targets like the model providers. `docs/external/` holds evidence inputs
+and is exempt; `scripts/check-spec.mjs` enforces the rule with a name list kept in the private
+ledger.
+
+**ADR-057 — Plain terminology.** "Lattice" becomes **Mesh**, "Flight recorder" becomes **audit
+log**, and "Core local CA" becomes **Hub local CA**, to honour the plain-naming rule
+(`docs/28`). ADR-037 and ADR-039 keep their original wording as history; their decisions are
+unchanged.
+
+**ADR-058 — Budgets and goals replace the fixed step cap** (supersedes ADR-016; see
+`docs/adr/0058-budgets-and-goals.md`). A fixed 60-step cap stops legitimate long work and gives
+the user no way to say how long a task may run. Runs now carry time, token and cost budgets
+(defaults: 60 min, 2M tokens, the provider spend cap) and an optional goal with system-owned
+budget states. A hard backstop of 200 model steps per turn keeps every turn bounded, so the
+"bounded" guarantee in `docs/09` §2 still holds.
+
+**ADR-059 — Permission model.** The five Code permission modes stay as the user-facing
+control, but each is defined as a preset over two axes: an approval policy (when to ask) and a
+permission profile (what the sandbox allows, FR-190). Protected paths stay read-only inside
+writable roots. Escalation after a sandbox denial happens only through a policy `ask`; Nova
+never retries a command outside the sandbox on its own, and no allow rule removes the sandbox
+(security invariant).
+
+**ADR-060 — Approval decisions.** The four-option card becomes: Allow once, Allow for this
+session, Always allow (scoped to the tool, a command prefix rule or a network host), Deny and
+continue, Deny and stop, Hand off. A timeout is recorded as its own outcome. "Always" splits by
+scope so a user can grant exactly what they mean.
+
+**ADR-061 — Auto-review contract and position.** FR-085 is now a model reviewer in a read-only
+sandbox with no inherited allow rules, returning a strict JSON verdict; it fails closed on
+timeout, bad output or error, trips a circuit breaker after repeated denials, and records user
+overrides. It runs **after** the deterministic policy engine and can only tighten a decision.
+The reference ordering in which user custom rules come after the reviewer is rejected: the
+deterministic engine is a hard invariant and must stay authoritative and testable. FR-085 moves
+to M5 because the Auto permission mode depends on it.
+
+**ADR-062 — Confirmation tiers and intent provenance.** Built-in safety sorts actions into
+`handoff_required`, `confirm_at_action` and `pre_approvable` (FR-189). Only instructions typed
+by the authenticated user count as authorization; pasted, fetched, channel or captured text
+never does. Messages to third parties are `confirm_at_action` unless a user-created standing
+rule names the recipient or channel, so channel agents remain usable.
+
+**ADR-063 — Credentials injected at the egress proxy** (amends `docs/12` §5; see
+`docs/adr/0063-proxy-credential-injection.md`). Network credentials for allowed hosts are added
+by the egress proxy and never enter the sandbox, so a compromised sandbox cannot read them.
+Environment-variable injection remains only for tools that cannot use a proxy, and is audited.
+
+**ADR-064 — Windows sandbox** (supersedes the Windows part of ADR-007 and `docs/11` §2.3; see
+`docs/adr/0064-windows-sandbox.md`). Windows sandboxing uses restricted, write-restricted tokens
+with random per-root capability SIDs, hidden offline/online sandbox users, a private desktop,
+firewall rules that never fail open, and an optional OS container mode. AppContainer is not
+used: it breaks common developer tools, and the token design is proven in practice.
+
+**ADR-065 — Micro-VM substrate is optional.** A per-session micro-VM gives stronger isolation
+at a cost in disk (images of several GB) and memory (about 4 GB per VM). It is offered behind a
+flag per environment; the OS sandbox stays the default, especially on the minimum Hub hardware.
+
+**ADR-066 — MCP Apps for extension UI** (supersedes the UI part of ADR-013; see
+`docs/adr/0066-mcp-apps-ui.md`). Plugin and MCP-server UI uses the open MCP Apps extension
+instead of a Nova-specific bridge. Servers written once render in Nova; the sandbox properties
+(isolated iframe, typed `postMessage` bridge, no host DOM) are unchanged; every tool call from a
+UI still passes the policy engine.
+
+**ADR-067 — Skill folder format** (amends ADR-055; see `docs/adr/0067-skill-folder-format.md`).
+A skill is a folder with `SKILL.md` and optional files, compatible with the open agent-skills
+layout. Only a catalog of names and descriptions is injected (≤ 2 % of context, max 10k
+tokens); the body loads on use. This keeps context small for local models.
+
+**ADR-068 — Lifecycle hooks.** Hooks are trusted by content hash, run sandboxed, and can only
+tighten a decision. A hook may answer an `ask` that came from a user rule or a tool default; it
+never overrides built-in safety, managed policy or a deny.
+
+**ADR-069 — Memory consolidation.** `memory_item` rows remain the canonical, reviewable store.
+A background job consolidates and ages them and produces a capped summary. Consolidation never
+writes skills: skill creation stays an L1 proposal that needs approval (guardrail).
+
+**ADR-070 — Per-channel threads** (supersedes the single-thread rule in FR-088; see
+`docs/adr/0070-per-channel-threads.md`). Each channel binding keeps its own thread; the agent's
+identity and memory are shared. This stops content from a private DM surfacing in a shared
+channel. The owner's private channels can opt into one shared thread.
+
+**ADR-071 — Relay framing.** The Relay stays content-blind and end-to-end encrypted. Every
+reference implementation relays through a vendor backend with no end-to-end claim; that model
+is rejected. Their framing is adopted inside sealed envelopes: client, stream and sequence ids,
+segmenting, cumulative acks, keepalive, pairing by QR or code, and list/revoke of paired
+clients.
+
+**ADR-072 — Hub API shape.** REST plus WebSocket/SSE stays, because browser clients need it.
+The API adds server-to-client requests over the stream (FR-188), a capability handshake in
+`/api/v1/hello`, per-client notification opt-out, and Origin checks on WebSocket upgrades.
+
+**ADR-073 — Ambient capture redesign** (supersedes `docs/24` §3–4 of the draft; see
+`docs/adr/0073-ambient-capture.md`). Capture is event-driven, reads the accessibility tree
+first and falls back to OCR, and is text-first: pixels are optional. A capture helper with no
+network access feeds `novad`, which sends text to the Hub; recall runs on the Hub. A release
+gate hides everything until model-based redaction certifies it. The vector index is optional
+and enabled only when an eval shows a recall gain.
+
+**ADR-074 — Captured instructions.** An owner design session for an earlier codebase chose to
+mark and audit instructions found in captured text rather than gate them. That conflicts with
+the policy and security invariants (`docs/24` §5, `docs/12` §6), which win under the conflict
+precedence. Captured content can never directly trigger a consequential action. Marking and
+auditing are adopted in addition (FR-232).
+
+**ADR-075 — Integration hygiene.** Nova never writes itself, its keys or its skills into another
+application's configuration, and every local listener requires a token (loopback is not an
+authorization boundary). Exposing Nova's MCP server is an explicit per-client action with a
+scoped, revocable token.
+
+**ADR-076 — One runtime.** Nova does not embed a separately versioned third-party coding engine
+or agent runtime; doing so would bypass the policy engine and the audit log. External agents
+are allowed only as P2 adapters that route every permission request through Nova's policy
+engine and run inside Nova's sandbox (FR-203).
+
+**ADR-077 — Modes and escalation.** The four modes stay as surfaces. A chat request that needs
+multi-step work can become an inline Work run (FR-186), proposed by default, so users get the
+benefit of a unified mode without losing the distinct surfaces.
+
+**ADR-078 — Managed policy channels** (amends `docs/12` §10). A policy file in an OS-protected
+location (root-owned file, machine policy registry, device-management profile) is trusted
+because only an administrator can write it. A policy delivered over the network must be signed.
+Unsigned files in user-writable locations are still ignored with a warning.
+
+**ADR-079 — Missed schedules** (supersedes the 15-minute grace window in `docs/09` §12; see
+`docs/adr/0079-missed-schedules.md`). Missed fires collapse into one catch-up run, told which
+window it covers, with a 7-day default lookback and a per-schedule `once` or `skip` policy.
+RRULE is accepted alongside cron and intervals.
+
+**ADR-080 — Rejected capabilities.** Nova will not adopt: relays that can read content;
+telemetry, crash reports or support-log requests on by default; remote feature flags; a vendor
+AI gateway in front of providers; sign-in that reuses another vendor's OAuth client; keystroke
+or typed-text logging; raw SQL access for agents; exporting cookies or login state from the
+user's browsers; auto-registration into other apps; silent unsigned installs; paywall gates; a
+one-agent-per-user limit; agent notes the user cannot view; embedding a third-party coding
+engine; storage that bypasses the redaction gate (immutable side archives); a startup check
+that exits silently when a port is taken.
+
+**ADR-081 — M0 builds the Hub and web UI first.** `docs/17` M0 previously named an Electron app,
+which contradicted ADR-031. M0 now delivers `apps/hub` and `apps/web`; the native desktop shell
+arrives with the client work in M7 and is packaged in M10.
+
+**ADR-082 — Feature-flag lifecycle** (amends ADR-028). Each flag carries a stage:
+`experimental` (off, hidden), `beta` (off, visible in Advanced), `stable` (on), `deprecated`,
+`removed`. Diagnostics shows each flag's stage; removed flags are rejected at load.
 
 ## Defaults for common ambiguities
 

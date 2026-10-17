@@ -60,7 +60,7 @@ new decisions in an ADR and continue.
 | 19 | [`19-legal-and-ethics.md`](docs/19-legal-and-ethics.md) | Clean-room, IP, ToS, privacy, licensing |
 | 20 | [`20-decisions-and-defaults.md`](docs/20-decisions-and-defaults.md) | ADR log + resolved defaults |
 | 21 | [`21-hub-and-device-model.md`](docs/21-hub-and-device-model.md) | Hub/spoke roles, routing, offline, failover |
-| 22 | [`22-networking-transports-relay.md`](docs/22-networking-transports-relay.md) | Transports (LAN/Lattice/Relay), Add Device, trust, WoL |
+| 22 | [`22-networking-transports-relay.md`](docs/22-networking-transports-relay.md) | Transports (LAN/Mesh/Relay), Add Device, trust, WoL |
 | 23 | [`23-device-agent.md`](docs/23-device-agent.md) | Device agent `novad`: modules, capabilities, boot, BIOS/OOB |
 | 24 | [`24-ambient-memory.md`](docs/24-ambient-memory.md) | Opt-in screen/audio capture, OCR/STT, searchable timeline |
 | 25 | [`25-automation-and-smart-home.md`](docs/25-automation-and-smart-home.md) | Automation engine + smart-home integrations |

@@ -131,7 +131,7 @@ A milestone is test-complete when:
 
 | Track | Required tests |
 | --- | --- |
-| **Hub/devices (M6.5)** | Add-device handshake (approve/deny/expire); transport fallback LAN→Lattice→Relay; network setup rollback; reachability gating |
+| **Hub/devices (M6.5)** | Add-device handshake (approve/deny/expire); transport fallback LAN→Mesh→Relay; network setup rollback; reachability gating |
 | **novad** | capability schema validation; module sandbox violations denied; WoL path; signed update + rollback |
 | **Firmware** | disabled by default returns 403; with toggle on, apply requires approval; snapshot+rollback; audit entry |
 | **Ambient (N1)** | off by default; exclusions enforced; redaction; “forget last N minutes”; injection payload never triggers an action |

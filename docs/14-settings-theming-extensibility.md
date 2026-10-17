@@ -148,7 +148,7 @@ variables may override only in developer mode.
 | Section | Keys |
 | --- | --- |
 | **Devices** | registered devices/nodes, roles, scopes, wake, revoke, per-device overrides |
-| **Network** | transports (LAN/Lattice/Relay), trust mode, certs, egress, wake helpers, diagnostics |
+| **Network** | transports (LAN/Mesh/Relay), trust mode, certs, egress, wake helpers, diagnostics |
 | **Ambient** | enable screen/mic/system-audio, quality, OCR/STT backends, cloud option, exclusions, retention, pause hotkey |
 | **Automations** | list, enable/disable, dry-run, logs, versions, default approval rules |
 | **Smart Home** | integrations (HA/MQTT/vendor), areas/rooms, scenes, allowed entity classes |

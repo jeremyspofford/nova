@@ -84,7 +84,7 @@ nova/
 │   ├── security/                # Redaction, sandbox abstraction, egress, crypto
 │   ├── storage/                 # Drizzle schema, migrations, repositories
 │   ├── sync/                    # E2E sync client + conflict resolution
-│   ├── transport/               # LAN/Lattice/Relay abstraction + endpoint selection
+│   ├── transport/               # LAN/Mesh/Relay abstraction + endpoint selection
 │   ├── ui/                      # Design system components (shared by web + shells)
 │   ├── shared/                  # Types, zod schemas, event bus, errors
 │   └── telemetry/               # Opt-in metrics + logging facade
@@ -104,8 +104,8 @@ nova/
 | Boundary | Protocol | Contract |
 | --- | --- | --- |
 | Client ↔ Hub (UI) | HTTPS + WebSocket/SSE | `contracts/hub-api.md` |
-| Client ↔ Hub (off-LAN) | Same, via Lattice or Relay (E2E) | `contracts/hub-api.md`, `docs/22` |
-| Hub ↔ Compute Node | Internal HTTP/gRPC over LAN/Lattice | `contracts/hub-api.md` |
+| Client ↔ Hub (off-LAN) | Same, via Mesh or Relay (E2E) | `contracts/hub-api.md`, `docs/22` |
+| Hub ↔ Compute Node | Internal HTTP/gRPC over LAN/Mesh | `contracts/hub-api.md` |
 | Hub ↔ `novad` | mTLS, capability + management RPC | `contracts/hub-api.md`, `contracts/schemas/device-capability.json` |
 | Hub ↔ Relay | Outbound WebSocket, sealed payloads | `contracts/rest-api.md`, `docs/22` |
 | Hub ↔ Hub (later failover) | Replicated store + leases | `docs/21` §10 |

@@ -209,7 +209,7 @@ top-level surfaces in the sidebar:
 | Surface | Purpose |
 | --- | --- |
 | **Devices** | Devices/compute nodes; capabilities, health, reachability; add/wake/revoke |
-| **Network** | Transports (LAN/Lattice/Relay), trust/certs, egress, wake helpers, diagnostics |
+| **Network** | Transports (LAN/Mesh/Relay), trust/certs, egress, wake helpers, diagnostics |
 | **Ambient** | Capture timeline (screen/audio), search, filters, privacy controls |
 | **Automations** | Trigger→condition→action editor, dry-run, logs, versions |
 | **Smart Home** | Entities by area, scenes, natural-language control |

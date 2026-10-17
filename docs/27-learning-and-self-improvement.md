@@ -95,7 +95,7 @@ Rules:
 - **Transparency**: a "What Nova learned" view lists memory, skills, tuning, and code changes
   with provenance and rollback.
 - **No covert autonomy**: self-improvement never runs without visible, auditable activity.
-- The Hub's **Flight recorder** captures every proposal, approval, deploy, and rollback.
+- The Hub's **audit log** captures every proposal, approval, deploy, and rollback.
 
 ## 10. Requirements (see `docs/03` §R)
 

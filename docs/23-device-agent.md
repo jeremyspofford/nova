@@ -72,7 +72,7 @@ for DA7 (timezone/locale, energy/quiet hours, routing weight, egress limits).
     "maxConcurrentJobs": 2, "maxJobDurationSec": 3600
   },
   "peripherals": { "screens": 2, "camera": true, "mic": true, "speakers": true, "browser": true },
-  "access": { "fsScopes": ["/home/user/projects"], "admin": true, "network": "lan+lattice" },
+  "access": { "fsScopes": ["/home/user/projects"], "admin": true, "network": "lan+mesh" },
   "power": { "ac": true, "alwaysOn": true, "wakeable": true, "policy": "stay-awake",
              "thermalLimitC": 85 },
   "data": { "retentionDays": 30, "telemetryAllowed": false, "updateChannel": "stable" },
@@ -159,7 +159,7 @@ Secure Boot / TPM state · fan/thermal profile.
    firmware write-protect) are blocked by default and require a separate, explicit override.
 6. **Supported-hardware matrix**; unsupported devices get a clear refusal, never a guess.
 7. Reboot/power-cycle coordination, with a watchdog and automatic rollback on failed boot.
-8. Every change is written to the **Flight recorder** with before/after values.
+8. Every change is written to the **audit log** with before/after values.
 
 ## 7. Out-of-band management (BM4, opt-in)
 
@@ -187,7 +187,7 @@ Secure Boot / TPM state · fan/thermal profile.
 - **No secrets to the model**: credentials stay in the keychain/vault; modules receive
   short-lived tokens only for the operation in flight.
 - **Audit**: every privileged action (install, module start/stop, power, boot, BIOS, OOB) is
-  recorded on the Hub's Flight recorder.
+  recorded on the Hub audit log.
 - **Revocation** instantly disables the device certificate and stops module execution.
 
 ## 10. Failure & recovery

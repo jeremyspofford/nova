@@ -521,7 +521,7 @@ CREATE TABLE device_capability (
 
 CREATE TABLE transport_endpoint (
   id TEXT PRIMARY KEY, device_id TEXT REFERENCES device(id),
-  net TEXT NOT NULL,                             -- lan|lattice|relay|direct
+  net TEXT NOT NULL,                             -- lan|mesh|relay|direct
   url TEXT NOT NULL, healthy INTEGER NOT NULL DEFAULT 1,
   latency_ms INTEGER, last_checked_at TEXT, created_at TEXT NOT NULL
 );

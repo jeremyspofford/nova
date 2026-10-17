@@ -34,7 +34,7 @@ All-in-one                         Split                              Off-site c
 
 - **All-in-one** — the hub also computes. Simplest; good for a single power user.
 - **Split** — a small hub plus one or more compute nodes (e.g., a GPU desktop).
-- **Off-site** — clients reach the hub through the Relay or a Lattice; compute may be remote.
+- **Off-site** — clients reach the hub through the Relay or a Mesh; compute may be remote.
 
 Topology is configuration, not code. Any device may take any role if it meets the requirements.
 
@@ -134,7 +134,7 @@ Automatic failover (another node becomes the Hub) is deferred. When implemented 
 - A **Hub candidate** list with priority and health checks.
 - **Lease-based leadership** backed by the replicated store; followers keep a warm replica.
 - **Split-brain prevention** via quorum (for >2 candidates) or a tie-breaker.
-- **Client redirection**: clients discover the active Hub via the Lattice/MagicDNS or a Relay
+- **Client redirection**: clients discover the active Hub via the Mesh/MagicDNS or a Relay
   pointer, and re-point automatically.
 
 Until then, the Hub's supervisor restarts it on crash, and clients fall back locally.
@@ -167,8 +167,8 @@ Performance budgets are set against the supported minimum (see `docs/16`).
 | Path | Protocol | Notes |
 | --- | --- | --- |
 | Client ↔ Hub | HTTPS (web UI + REST/WebSocket/SSE) | Served by the Hub |
-| Client ↔ Hub (off-LAN) | HTTPS via Lattice or Relay | End-to-end encrypted |
-| Hub ↔ Compute Node | Internal gRPC/HTTP over LAN or Lattice | Hub-authorized |
+| Client ↔ Hub (off-LAN) | HTTPS via Mesh or Relay | End-to-end encrypted |
+| Hub ↔ Compute Node | Internal gRPC/HTTP over LAN or Mesh | Hub-authorized |
 | Hub ↔ Relay | WebSocket/HTTPS, outbound | Content-blind |
 | `novad` ↔ Hub | mTLS (device certificate) | Capability + management channel |
 

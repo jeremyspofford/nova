@@ -49,7 +49,7 @@ scheduler and event bus, able to call any Nova tool (including agents).
 
 - A DAG with parallel branches, timeouts, retries, and compensation (undo) where available.
 - **Dry-run/test** mode that reports what would happen without side effects.
-- Every run is logged in the **Activity** view and the **Flight recorder**.
+- Every run is logged in the **Activity** view and the **audit log**.
 - Versioning with diff and rollback; disabling is instant.
 - **Approvals**: physical-world or consequential actions require approval unless the user
   grants a scoped standing rule (`docs/12` §3).

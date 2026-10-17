@@ -6,7 +6,7 @@ and local tools. Cloud is an accelerator and a bridge, never a requirement.
 > **Architecture note:** this document assumes the hub-and-spoke model (`docs/21`). The Hub
 > is canonical; sync replicates between the Hub and the user's other devices. The **Relay**
 > (`docs/22` §3) provides off-LAN reach and push; it is content-blind and end-to-end encrypted.
-> Transports (LAN / Lattice / Relay) and Add Device are defined in `docs/22`.
+> Transports (LAN / Mesh / Relay) and Add Device are defined in `docs/22`.
 
 ## 1. Cloud components
 
@@ -144,6 +144,6 @@ Default hosted endpoints for `arialabs.ai` (all configurable and self-hostable):
 | Auth | `https://auth.arialabs.ai` | Optional OIDC |
 | Cloud runner | `https://runner.arialabs.ai` | Optional |
 
-The catalog is also reachable at `https://catalog.<tailnet>.ts.net` for Lattice-only access.
+The catalog is also reachable at `https://catalog.<tailnet>.ts.net` for Mesh-only access.
 Clients try catalog URLs in order; every entry is signature-verified. Self-hosting replaces any
 of these by changing the configured URL.
