@@ -118,7 +118,9 @@ test('J3: MCP tools, deferral, read and write tools, every approval decision', a
     always.getByRole('radio', { name: 'Commands starting with npm test' }),
   ).toBeChecked();
   await always.getByRole('button', { name: 'Always allow', exact: true }).click();
-  await expect(messages(page)).toContainText('Tool exec.run returned:');
+  // Where a container runtime exists (CI), the command really runs in the sandbox: starting the
+  // container, and pulling its image the first time, takes longer than the default wait.
+  await expect(messages(page)).toContainText('Tool exec.run returned:', { timeout: 90_000 });
   await send(page, '/tool exec.run {"cmd":"npm test && curl https://example.com"}');
   // 3e. Deny and stop → the turn stops.
   await decide(page, 'Deny and stop');
