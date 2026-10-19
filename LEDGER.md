@@ -3,8 +3,8 @@
 > **This is the single source of truth for build progress.** The build agent keeps it current
 > before and after every task (`AGENTS.md` §4). Task IDs come from `docs/29-task-breakdown.md`.
 
-Current milestone: **M7 — Cloud, Sync, Multi-Device & Mobile**
-Last updated: 2026-10-17T22:30:00Z
+Current milestone: **M7.5 — Device Management: Boot, Power & Firmware**
+Last updated: 2026-10-19T12:00:00Z
 
 ## Phase status
 
@@ -12,7 +12,7 @@ Last updated: 2026-10-17T22:30:00Z
 | --- | --- | --- | --- |
 | Phase 0 — reconcile external findings | done | c63b82d | `docs/external/RECONCILIATION.md` (141 capabilities); `node scripts/check-spec.mjs` |
 | Phase 1 — finish the specification | done | 2868ce3 | topic docs + contracts updated; `node scripts/check-spec.mjs`; all schemas compile (Ajv 2020) |
-| Phase 2 — build | in_progress | 10bbcf4 | M0-M6.5 done |
+| Phase 2 — build | in_progress | 1fac175 | M0-M7 done |
 
 ## Milestone status
 
@@ -26,7 +26,7 @@ Last updated: 2026-10-17T22:30:00Z
 | M5 Agent Runtime (Work & Code) | done | 2026-10-17 | 2026-10-17 | J1-J6 green twice in a row (axe clean); `docs/demos/M5.md` |
 | M6 Agents/Computers/Channels | done | 2026-10-17 | 2026-10-17 | J1-J8 green (17/17, axe clean), J7 and J8 three runs in a row; `docs/demos/M6.md` |
 | M6.5 Networking/Add Device | done | 2026-10-17 | 2026-10-17 | J1-J8.5 green (21/21, axe clean), J8.5 three runs in a row; `docs/demos/M6.5.md` |
-| M7 Cloud/Sync/Multi-device | todo | — | — | — |
+| M7 Cloud/Sync/Multi-device | done | 2026-10-17 | 2026-10-19 | J1-J9 green (25/25, axe clean), J9 three runs in a row; desktop shell journey (e2e-shell); `docs/demos/M7.md` |
 | M7.5 Boot/Power/Firmware | todo | — | — | — |
 | M8 Extensibility/Governance | todo | — | — | — |
 | M9 Hardening/Security/Perf | todo | — | — | — |
@@ -185,17 +185,22 @@ Last updated: 2026-10-17T22:30:00Z
 | T-M65-10 | M6.5 | — | done | eb95271 | `scripts/e2e-docker.sh`: 21/21; J8.5 three runs in a row | E2E J8.5 (Add Device & transports) |
 | T-M65-11 | M6.5 | — | done | e8441eb | regression tests per finding (review probes ported) | Two security reviews (18 and 6 findings, two high: confirmation brute force on the path, silent identity replacement), all fixed |
 | T-M65-12 | M6.5 | — | done | e8441eb | `node scripts/check-spec.mjs` | Contracts, topic docs, ADR-094, demo, test manifest |
-| T-M7-01 | M7 | FR-108, FR-071 | todo | — | — | Cloud runner integration + environments |
-| T-M7-02 | M7 | FR-109 | todo | — | — | E2E sync: keys, device linking, merge log |
-| T-M7-03 | M7 | FR-129, FR-128 | todo | — | — | Offline replica (capability-gated) + local fallback |
-| T-M7-04 | M7 | FR-112 | todo | — | — | Offline queue + retry |
-| T-M7-05 | M7 | FR-008, FR-009 | todo | — | — | Tray/quick chat/multi-window |
-| T-M7-06 | M7 | FR-110, FR-111, FR-077 | todo | — | — | Telegram/email channels; mobile relay + push + deep links |
-| T-M7-07 | M7 | FR-091 | todo | — | — | Specialist/team agents |
-| T-M7-09 | M7 | FR-213, FR-214 | todo | — | — | Session handoff; attach window |
-| T-M7-10 | M7 | FR-212, FR-217, FR-218 | todo | — | — | Best-of-N; shared threads; voice-call channel |
-| T-M7-11 | M7 | FR-202, FR-203 | todo | — | — | Flagged: scripted tool calls; external agent adapters |
-| T-M7-08 | M7 | — | todo | — | — | E2E J9 |
+| T-M7-01 | M7 | FR-108, FR-071 | done | 783a955 | runner-service unit, server tests (bubblewrap); core cloudrun.test (bubblewrap, else the host test double); hub cloudrun.test (a Code session's command on a real runner on loopback); web cloud-settings, cloud-environment, cloud-run tests; J9 step 6 | `services/runner` (Apache-2.0): environments with several repositories, a setup script run once, caches, rebuild and snapshots; commands in bubblewrap or a container with process, memory and disk limits, live output, cancel, artifacts into the thread; CPU, wall-time and disk caps with a warning at 80 % (FR-116); the Hub's `cloud` environment kind, with Code sessions and Work runs that keep running while the client is offline; Settings → Cloud runner. Not built: runner network through the Hub's egress proxy (network stays off unless the owner turns on `cloud.runner.unrestrictedNetwork`, R-030), snapshots encrypted by Nova, agent computers on the real runner (they stay on the mock) |
+| T-M7-02 | M7 | FR-109 | done | 783a955 | core sync-hlc, sync-service, sync-idempotency tests; hub sync, sync-idempotency tests (device A pushes, B pulls; merge log and restore); web replica-engine, sync-settings, sync-units tests; J9 steps 1-3 | Hub-canonical sync over `/api/v1/sync/*` (the Hub plays the sync service of `contracts/rest-api.md` §2; the Relay path stays content-blind): a change feed, per-field last writer wins by hybrid logical clock, device and clock-skew checks, a merge log with restore, `Idempotency-Key` with replay opted in per route; Settings → Sync. Not built: replicas in clients other than the web app, `sync.status.changed`, a `sync` audit kind (entries use `device`) |
+| T-M7-03 | M7 | FR-129, FR-128 | done | 783a955 | hub sync.test (replica routes need `offline-replica`; revocation ends the copy); web replica-engine, offline-reads, offline-local, offline-labels tests; desktop local-runtime.test, shell.spec (offline start); `node scripts/cargo.mjs test` (local runtime, per-user sockets); hub m7-novad-tls.test (the scope reaches `scopes.json`) | FR-129: a device keeps a copy only while it has the `offline-replica` scope, sealed in IndexedDB under a non-extractable AES-GCM key; revocation, a 401 or a withdrawn grant wipes it. FR-128, partly built: in the desktop app a local model answers a waiting chat message through `novad`'s local runtime (a 0600 per-user socket, or loopback with a token; `local-runtime` scope), and the answer is queued and stored labelled as answered offline; the shell starts offline from its service-worker copy. Not built: local agents and tools, a Windows named pipe |
+| T-M7-04 | M7 | FR-112 | done | 783a955 | web offline-queue, offline-reads tests; core and hub sync-idempotency tests; J9 step 4 | Offline writes (messages, new chats, renames, pins, archives, page and project edits, space names) become sync changes with a visible status and their own `Idempotency-Key`, sent in order once the copy catches up, with backoff and jitter; retry, copy, or discard (asks first); the Hub answers the last message written offline (`POST /api/v1/threads/:id/messages/:mid/answer`). Refused offline: files, deletes, model or reasoning changes, temporary chats |
+| T-M7-05 | M7 | FR-008, FR-009 | done | 783a955 | `npm test -w apps/desktop` (pinning, routes, shell-parts, hub-client, connect, hardening); `npm run test:shell -w apps/desktop` (Electron journey, 3 tests; CI job e2e-shell); web shellbridge-units, shellbridge-views tests | `apps/desktop` (Electron): joins through Add Device as a browser device, checking the pinned identity on the same TLS connection before sending anything; tray and quick overlay (current or new chat, New task, the status list, Quit), global shortcuts (two modifiers, system keys refused, conflicts reported), windows of their own for app routes, OS notifications, `nova://` links, an offline start. Not built: voice in quick chat, detaching panes without a route, Electron fuses (M10) |
+| T-M7-06 | M7 | FR-110, FR-111, FR-077, FR-137 | done | 783a955 | core channels-telegram, channels-email, channels-mail-drops, channels-push, channels-webpush tests; hub channels-m7, push tests; relay-service push.test (APNs and FCM against local fakes); web channels-m7-setup, channels-m7-log, push-subscribe, push-sw, push-approvals, push-newtask, relay-join, relay-transport, deeplinks-m7 tests; J9 step 7 | Telegram (webhook with a Hub-made secret, or polling; inline-keyboard approvals), email (IMAP and SMTP, the RFC 8601 sender check against the binding's authserv-id, approvals by signed one-use link only), Slack buttons, a message log; Web Push from the Hub (RFC 8291, 8292) and native push through the Relay's APNs and FCM senders; the Approvals page and the New task sheet; deep links `nova://run`, `nova://code`, `nova://approval`; the web join page and transport through the Relay (the Hub's CSP names the Relay it uses; the Relay answers CORS on its client routes). Not built: Telegram files, email OAuth, the channel relay, native apps; attachments, raw files, avatars and the terminal do not go through the tunnel |
+| T-M7-07 | M7 | FR-091 | done | 783a955 | core team-agents, team-members, team-shared, team-oidc, team-review tests; hub team, team-oidc, team-review tests; web team-agents, team-members, team-member-mode, team-join, team-oidc, team-card tests | Several people on one Hub (ADR-095 decision 5): one-use invitations, members with their own accounts, folders and settings, owner-only routes, non-owners limited to public addresses; OIDC sign-in, link and join and the public profile card (FR-113). Team agents: an identity account that never signs in, credentials as `secret://` references, each task in its own thread with the requester's authority, approvals answered by the owner. Not built: purging a removed member's data, sharing the owner's providers, a member mode for Tools & MCP, Notifications and Channels |
+| T-M7-09 | M7 | FR-213, FR-214 | done | 783a955 | core code-m7-handoff, code-m7-transport, code-m7-ssh tests (stand-in ssh client); hub code-m7.test; web code-m7-session, code-m7-environments tests; J9 step 5; desktop capture.test (AT-SPI through a fake `gdbus`) | Code handoff to another environment or worktree with the branch, HEAD, local commits as a Git bundle and uncommitted changes as one binary-safe patch, the target confirming the same state; the Moves tab. Also the M6 gaps of FR-062: SSH environments (off by default, host key pinned, helper checked by SHA-256) and Hub-side capture, review and commits for remote sessions. A chat handoff is recorded and announced, but its turns still run on the Hub and no UI moves a chat. Attach window: Linux text through AT-SPI, redacted, sent after the preview; window text on macOS and Windows and screenshot redaction are not built |
+| T-M7-10 | M7 | FR-212, FR-217, FR-218 | done | 783a955 | core code-m7-attempts, code-m7-merge, team-shared, gate-m7-limits tests; hub code-m7, team, team-review tests; web code-m7-session (Best of N, Merges), team-shared tests | Best-of-N: 2 to 4 attempts in their own worktrees with budgets and an optional model; compare and apply one. Three-way merges (the M6 gap of FR-073): conflicts refused with their three sides, or written as markers that block commits. Shared threads: each turn runs under its writer, an allow-list of content tools, nobody's memory, instructions or connectors join. FR-218 (voice-call channel) is not built: it needs the voice pipeline (FR-031, FR-216), follow-up T-M9-07 |
+| T-M7-11 | M7 | FR-202, FR-203 | done | 783a955 | core scripts-vm, scripts-tool, acp-protocol (fake ACP agent), acp-delegation, acp-security, egress-agent-policy tests; hub flagged.test; web flagged-settings, flagged-panes tests | Both behind security settings, off by default. `script.run`: QuickJS in a worker with time, memory and call limits; each nested call goes through the tool runtime and the gate without the user's instruction; never served to MCP clients. External agents (an ACP v1 subset): started only from the user's route, in the session's sandbox with the folder read-only and network only to the adapter's declared hosts, every file and command request through the gate, only the adapter's own secrets. Not built: a `script` origin in `tool_call`, ACP terminal environment variables |
+| T-M7-08 | M7 | — | done | 1fac175 | `scripts/e2e-docker.sh`: 25/25; J9 4/4 three runs in a row; e2e-shell | E2E J9 (two devices with offline copies, a conflict restored, the offline queue in order, a Code handoff, a cloud Code session finishing while the laptop is offline, a phone's task through the Relay approved on the desktop). In the Playwright container the runner uses its host test double (the real sandbox path is hub cloudrun.test). J9 found seven product bugs, all fixed (M7 known gaps) |
+| T-M7-12 | M7 | FR-092, FR-094, FR-098, FR-103 | done | 783a955 | core browser-capture, browser-crash, browser-observe, browser-scope, browser-review, browser-chromium tests (Playwright container); hub browser.test; web browser-m7.test | The M6 browser gaps: `browser.hover`, element screenshots, console and network capture (masked, never stored, scanned for injection), restart after a crash (only a navigation replayed), site levels per project and agent (the policy engine's `ruleTool`), a newest-first trace with a cursor; scoped levels go with their project or agent |
+| T-M7-13 | M7 | FR-126, FR-192 | done | 783a955 | `node scripts/cargo.mjs test` (165 passed); compute hub-tls.test; hub device-trust, m7-novad-tls (real `novad`, also in CI's novad job), relay-token tests; web devices-tls, netsurface-relay-token tests | `novad`'s TLS client (rustls): install, enrollment and heartbeats over HTTPS, the pinned identity checked on the same connection first, the device certificate shown only to a verified Hub; mutual TLS on the device and node routes (a device that holds a certificate cannot call without it); heartbeat scopes kept in `scopes.json`; compute nodes check the CA's name constraints; the Relay registration token, tied to its Relay. The Hub → `novad` management channel is still plain HTTP (R-022); certificates are not renewed |
+| T-M7-14 | M7 | FR-030, FR-042, FR-044, FR-053, FR-055, FR-060, FR-188 | done | 783a955 | hub mcp-m7, mcp-server-m7, channels-m7 tests; mcp stdio-launcher, device-transport tests; providers images.test; core images-openai, gate-m7-limits, runs-m7-limits, loop-m7-answer, approval-detail, agents-m7 tests; web flagged-images, channels-m7-log tests | Earlier deferrals and M6 gaps closed: device-hosted MCP servers, `auth` and `oauth`; resources, prompts and the stdio launcher on Nova's MCP server; image generation through OpenAI-compatible providers; sub-agent tool lists at the gate; the user's `ask_user` answer carries their authority; the schedule webhook secret shown once; test notifications, MCP subscription refresh, the channel message log; goal retry after a usage limit, `thread.status.changed` and plugins per agent; a device-file commit's diff on its approval card |
+| T-M7-15 | M7 | — | done | 783a955 | regression tests per finding (review probes ported) | Security reviews (identity, execution, transports, browser, desktop): 46 findings, one critical, six high and one high/medium, all fixed; the docs pass found ten places where code and spec disagreed, all resolved (eight code fixes, ADR-095 decision 90 for the FR-126 tag, CI's `novad` job for the skipped TLS tests) |
+| T-M7-16 | M7 | — | done | 783a955 | `node scripts/check-spec.mjs` | Contracts (`hub-api.md`, `rest-api.md` §2, §3, §5, `events.md`, `ipc-channels.md`, the capability schema), topic docs, ADR-095, demo, test manifest |
 | T-M75-01 | M7.5 | FR-143 | todo | — | — | Low-level boot (PXE/iPXE, bootloader) + watchdog |
 | T-M75-02 | M7.5 | FR-146 | todo | — | — | Firmware read/plan/apply/rollback + allowlist + toggle |
 | T-M75-03 | M7.5 | FR-146 | todo | — | — | Hardware support matrix + clear refusals |
@@ -214,6 +219,7 @@ Last updated: 2026-10-17T22:30:00Z
 | T-M9-04 | M9 | — | todo | — | — | Error/degraded/empty-state polish |
 | T-M9-05 | M9 | FR-135, FR-141 | todo | — | — | Device-lab tests (multi-device, transports, novad) |
 | T-M9-06 | M9 | FR-224 | todo | — | — | Persistence safety evals + reviewer metrics |
+| T-M9-07 | M9 | FR-218 | todo | — | — | Voice-call channel (in-app and telephony, streaming speech both ways); needs the voice pipeline (FR-031, FR-216 are deferred) |
 | T-M10-01 | M10 | FR-124 | todo | — | — | Hub packaging (container/systemd/launchd/service) |
 | T-M10-02 | M10 | FR-148 | todo | — | — | `novad` signed per-arch builds + update channel |
 | T-M10-03 | M10 | FR-125 | todo | — | — | Client installers (Linux/macOS/Windows) + PWA |
@@ -284,12 +290,20 @@ Last updated: 2026-10-17T22:30:00Z
 - R-019: The agent browser depends on Playwright's Chromium on the Hub (`npx playwright install chromium`); without it the browser tools refuse with the reason. Mitigation: diagnostics report it; CI and the E2E container have it.
 - R-020: Protected locations in sandboxes are mounted only where they exist when a command starts and on the path from a root to the working folder; a credential folder elsewhere in a granted folder stays visible to that command (Hub and `novad`). Mitigation: file tools refuse them at any depth; revisit with a full walk or landlock in M9.
 - R-021: The dev-server bridge port listens on 127.0.0.1 without a token, so any local process on the Hub machine can reach a running dev server (as with a native dev server). Mitigation: loopback only; closed with the server; documented in docs/12 §8.
-- R-022: `novad` uses bearer tokens over plain LAN HTTP until M6.5 (as compute nodes, ADR-089). Mitigation: per-device credentials, hashed; signed capability documents and updates; the Mesh in M6.5.
-- R-023: `novad` has no TLS client: install and enrollment run over plain LAN HTTP. The pin, the signed manifest and the v2 commit-reveal give integrity, but codes and tokens are readable on the LAN. Mitigation: one-use, short-lived codes; owner approval; the Mesh; a TLS client in M7.
-- R-024: Relay sessions have no forward secrecy (static per-pairing keys from X25519): a later leak of either side's Relay key exposes recorded traffic of that pairing. Mitigation: re-pairing rotates the keys; the Relay sees only ciphertext; a ratchet in M9.
-- R-025: Phones cannot join a Hub that serves plain HTTP at a network address (no secure context, so no Web Crypto); the trust mode defaults to `none`. Mitigation: the join page says so, Add a device warns the owner; onboarding (H1) should offer the Hub local CA; the native app and Relay pairing in M7.
-- R-026: Add Device sessions are full owner sessions; device scopes are stored but not enforced. Mitigation: every join needs the owner's approval with the device's code; one-click revoke ends the session and blocks the key; scoped sessions in M7.
+- R-022: The Hub → `novad` management channel (port 7420) is still bearer tokens over plain HTTP, and so is a device or node whose Hub serves plain HTTP; `devices.tls.allowWithoutCertificate` (on for one release) accepts a device that never had a certificate. Narrowed in M7: `novad` and compute nodes reach an HTTPS Hub through the pinned identity and present their device certificate (mutual TLS), and a device that holds one cannot call without it. Mitigation: per-device credentials, hashed; signed capability documents and updates; the Mesh; TLS on the management channel before M7.5's boot and firmware actions use it.
+- R-023 (closed in M7): `novad` has a TLS client (rustls with the ring provider): install, enrollment and heartbeats go over HTTPS, the pinned identity statement is checked on the same connection before anything is sent, and the device certificate is shown only to a verified Hub (ADR-095 decisions 73-75; `apps/hub/test/m7-novad-tls.test.ts` against the real binary, also in CI's `novad` job). The install command fetches with `curl -fsSLk`; the SHA-256 in the command carries the integrity.
+- R-024: Relay sessions have no forward secrecy (static per-pairing keys from X25519): a later leak of either side's Relay key exposes recorded traffic of that pairing. Since M7 a browser paired through the Relay also holds such keys, as raw bytes sealed in IndexedDB that page script can use (R-031). Mitigation: re-pairing rotates the keys; the Relay sees only ciphertext; a ratchet in M9.
+- R-025: Phones cannot join a Hub that serves plain HTTP at a network address (no secure context, so no Web Crypto, for a direct join and for pairing through the Relay alike); the trust mode defaults to `none`. M7 did not change this: pairing through the Relay from the web needs Web Crypto too, no native app exists, and the desktop shell needs HTTPS for any Hub not on its own computer. Mitigation: the join page says so, Add a device warns the owner; onboarding (H1) should offer the Hub local CA; native apps in M10.
+- R-026: Add Device sessions of browsers and apps are owner sessions: only the `offline-replica` and `local-runtime` scopes are enforced (since M7, read on every request, so a revoked device fails closed); `files`, `browser`, `computer_use` and `exec` are recorded and shown but do not narrow the session. Mitigation: every join needs the owner's approval with the device's code; one-click revoke ends the session, blocks the key and wipes the offline copy; scoped sessions in M9.
 - R-027: Mesh adapters were exercised only against fake CLIs, and network setup runs as the Hub's user (no elevation). Mitigation: off-by-default host-changes setting, consent per exact step, automatic rollback, lock-out guard; manual runs against real meshes in M9/M10.
+- R-028: Email sender authentication rests on the receiving server: a sender counts as their mapped person only by the topmost Authentication-Results header with the binding's authserv-id (RFC 8601), so a mail server that adds no header of its own lets a forged one with that id count; for large providers the default id (the IMAP host's domain) does not match, so their mail stays unverified until the owner sets `authservId`. Mitigation: DMARC pass for the From domain or an aligned DKIM pass in the same result; email approvals only by a signed one-use link mailed to the real address; `senderCheck: none` needs a confirmation and is audited; docs/13 §4 says the server must add its own header.
+- R-029: The desktop shell's app identity off Linux (System Events on macOS, PowerShell and user32 on Windows), on which excluded apps depend, is tested only against recorded command output; the shell's journey runs only on Linux; its Electron fuses are not set before packaging; and with Electron 44 a certificate check that races one from the main process fails a page load (worked around by sending one request alone first, so a renewal under concurrent requests can still fail one). Mitigation: capture refuses a window whose app it cannot name; the e2e-shell CI job; manual runs on macOS and Windows and the fuses in M10.
+- R-030: With `cloud.runner.unrestrictedNetwork` on, cloud commands get the runner host's network outside the Hub's egress proxy: no allow or deny lists, no private-address block, no credential scanning, no egress audit; under bubblewrap that is the runner machine's own network, which for the local runner is the Hub's machine and its loopback services. Mitigation: off by default (an owner security setting that asks first); only when the turn's network mode is not `off`; environments with network are refused without it (`cloud_network_off`); external agents refuse network there (`no_egress_proxy`); the container substrate on a shared runner; proxying runner network through the Hub in M9.
+- R-031: A browser paired through the Relay authenticates with a device token sent as a bearer header (the Hub's cookies do not come back through the tunnel); the token and the Relay session keys are sealed in IndexedDB under a non-extractable key, but page script can use them, so a script injection on the Hub's origin could take a long-lived device credential (weaker than an HttpOnly cookie). Mitigation: the Hub's strict CSP (scripts from the Hub only); revoking the device ends the token and the Relay route at once; a binding page script cannot read, in M9.
+- R-032: What keeps members off the Hub's administration and machine is `OWNER_ONLY_ROUTES` (`packages/core/src/team/access.ts`), which every new Hub-administration route must join by hand; nothing fails when one is left off (no test classifies every route, as `listeners.test.ts` does for public routes), and member-reachable areas rely on filtering by account. Mitigation: non-owners work in their own folder and reach only public addresses whatever the route; the identity review swept the M0-M7 routes; a route-classification test in M8 (governance).
+- R-033: M7's outside services are verified only against local fakes: the Telegram Bot API, IMAP and SMTP, APNs and FCM, Web Push services (the RFC 8291 test vector, no real push service), OIDC providers, SSH (a stand-in client, no real sshd) and external coding agents (a fake ACP agent; the protocol subset was written from its public description). Mitigation: each adapter follows its RFC or public API and fails closed; SSH and external agents are off by default; opt-in live smoke tests before M10 (as R-010).
+- R-034: `novad` running as root makes each listed user's local-runtime socket by forking, switching to the user's ids and binding in the user's folder; this is tested only with the build user's own ids, never across users as root, and the macOS path never on a Mac. A mistake here is a local privilege escalation (the transports review found one). Mitigation: root never creates or changes anything in the user's folder, refuses links, and re-checks the socket's owner, mode, link count and inode; cross-user runs in the M9 device lab (T-M9-05).
+- R-035 (closed in M7): In SSH, WSL and device Code sessions the Hub's `fs.*` tools acted on the Hub's own disk at the session folder's path. They now reach the folder on that machine through the session's helper or device provider with the Hub's path rules (no escape, no credential files, protected paths read-only, links never followed), `fs.search` and the document tools are hidden there, the tool runtime gets no root on the Hub's disk, terminals are refused, and an unreachable machine fails closed (`packages/core/test/code-m7-remote-files.test.ts`). Still open: a cloud thread's tool scope names `/workspace/<folder>` as a Hub path for mentions and instruction files (its `fs.*` stay denied), T-M9.
 
 ## Deferrals
 
@@ -297,21 +311,23 @@ Last updated: 2026-10-17T22:30:00Z
 | --- | --- | --- |
 | FR-130 | Hub failover is post-v1 (ADR-035) | — |
 | FR-040 (non-text sources) | Text types only; PDF and office documents need extraction (M4 previews PDFs in the file viewer but indexes neither) | T-M9 (document extraction) |
-| FR-126 (mTLS, VRAM, quiet hours, `/node/v1/services/*`) | Bearer tokens over LAN; M6.5 issues device certificates but nothing checks them yet (ADR-089, ADR-094) | T-M7 (mTLS) |
+| FR-126 (VRAM, quiet hours, `/node/v1/services/*`) | Mutual TLS shipped in M7 (ADR-095); compute nodes report no VRAM, keep no quiet hours and expose no service routes | T-M7.5 (device modules) |
 | docs/07 §9 concurrency limits | Global and per-provider semaphores are not enforced yet | T-M9 performance tasks |
 | FR-149 (database and backups at rest, sealed mode) | No encrypting SQLite layer; backups and sealed mode not yet | T-M9 hardening tasks |
-| FR-042 (`deviceId` server field; `oauth`/`auth` in the shared server schema) | OAuth works for remote servers (M4); device-hosted servers come with devices | T-M7 device tasks |
+| FR-042 (`deviceId` server field; `oauth`/`auth` in the shared server schema) | Closed in M7: device-hosted servers through the device bridge, never spawned on the Hub; `auth` from the vault (`apps/hub/test/mcp-m7.test.ts`) | done (T-M7-14) |
 | FR-185 (imported user instructions) | Import writes `<dataDir>/instructions.md`; the chat reads it with instruction-file discovery | T-M5 (FR-185) |
 | FR-011 (apply a custom palette) | Themes share and import in M4; applying a saved custom palette fully is not wired | T-M8 theming tasks |
-| FR-113 (public profile card, OIDC sign-in) | Not in M4 scope | T-M7 cloud tasks |
+| FR-113 (public profile card, OIDC sign-in) | Closed in M7: OIDC sign-in, link and join; the card needs `team.publicProfiles` and the person's opt-in (`apps/hub/test/team-oidc.test.ts`, `apps/hub/test/team.test.ts`) | done (T-M7-07) |
 | FR-115 (entitlements and limits), docs/14 §6 (spend caps, clear usage) | Usage insights only in M4 | T-M8 governance tasks |
-| FR-044 (`nova mcp stdio` launcher; resources and prompts on Nova's server) | Streamable HTTP with tools only in M4 | T-M7 device tasks |
+| FR-044 (a `nova` command on the PATH) | Resources, prompts and the stdio launcher shipped in M7 (`apps/hub/test/mcp-server-m7.test.ts`, `packages/mcp/test/stdio-launcher.test.ts`); the launcher runs as `node packages/mcp/src/launcher-main.ts mcp stdio`, and no package installs a `nova` command | T-M10 packaging |
 | FR-199 (bundle servers in the sandbox) | Bundle servers run like other MCP stdio servers (R-012); confirmed permissions are recorded | T-M9 (MCP stdio servers in the sandbox and egress proxy) |
 | FR-216 (dictation), FR-031 (realtime voice) | Need a local speech engine or a realtime audio provider; Nova ships neither (assessment in ADR-092) | T-M9 or a voice milestone |
-| FR-030 (image generation visible) | Built and tested; hidden until a provider adapter has an images call (`Provider.generateImage`) | T-M7 provider tasks |
-| FR-055 (webhook signing-secret reveal) | Secrets never appear in responses; a rotate-and-show-once route is needed | T-M7 |
-| FR-188 (`ask_user` answer authority) | The answer returns as an untrusted tool result; a loop hook to carry the user's authority is needed | T-M7 |
-| FR-053 (sub-agent tool allow-list) | Enforced only through the read-only profile | T-M7 |
+| FR-030 (image generation visible) | Closed in M7: `OpenAICompatibleProvider.generateImage`; `image.generate` and the composer's button appear when an image model is configured (`packages/core/test/images-openai.test.ts`) | done (T-M7-14) |
+| FR-055 (webhook signing-secret reveal) | Closed in M7: `POST /api/v1/schedules/:id/webhook-secret` rotates it and shows it once (`no-store`) (`apps/hub/test/channels-m7.test.ts`) | done (T-M7-14) |
+| FR-188 (`ask_user` answer authority) | Closed in M7: a signed-in user's answer gives the rest of the turn their authority and reaches the model as their words (`packages/core/test/loop-m7-answer.test.ts`) | done (T-M7-14) |
+| FR-053 (sub-agent tool allow-list) | Closed in M7: enforced at the gate, plus `run.complete`, `tool.search`, `context.remaining` and `context.fresh` (`packages/core/test/gate-m7-limits.test.ts`) | done (T-M7-14) |
+| FR-218 (voice-call channel) | Needs the voice pipeline (streaming speech both ways); Nova ships none (FR-031, FR-216) | T-M9-07 |
+| FR-128 (local agents and tools on a device while the Hub is away) | M7 built a local model answering a waiting chat message in the desktop app (ADR-095) | T-M9 |
 | FR-074 (tree-sitter index; renames in diffs) | Pattern-based symbol index; renames show as delete + add | T-M9 |
 | FR-198 (allowed domains in the App frame header; Apps in the composer's + menu; `UiEntryPointView.domains`) | The frame, bridge, CSP and entry points ship; these surfaces do not | T-M8 extensibility tasks |
 | FR-200 (hooks from other plugin layouts) | Noted on the import item; not converted | T-M8 extensibility tasks |
@@ -335,7 +351,7 @@ queued message and a runtime start.
 | Runs: goal continuations ignore quiet hours; the step limit does not set a goal `budget_limited`; persistent model errors fail instead of pausing; usage-limit retries use a fixed 15 min; a child's approval is not mirrored in the parent thread; `task.spawn` takes no budget cap; children's active time adds to the parent's time meter (parallel children use it up faster); researchers get the read-only profile only with an all-read-only tool list | T-M6 runtime hardening |
 | Schedule API body differs from `contracts/schemas/schedule.json` (`target`, `origin`, `wakeReason` arrive with agents; extra M5 fields) | T-M6 agents |
 | Requests: `request.created` reaches every stream (not only clients that declared the kind); resolution shape, `targetDeviceId: null`, id prefix and the full hello (protocol version, limits, `suppressEvents`) differ from contracts/hub-api.md §5 | T-M6 clients |
-| Images cannot be edited (FR-030); only `git.status`, `git.diff` and `git.log` exist among `git.*` tools | T-M7 |
+| Images cannot be edited (FR-030; generation is visible since M7; `git.branch` and `git.commit` arrived in M6) | T-M9 |
 
 ## Known gaps (code vs spec, M6)
 
@@ -350,18 +366,18 @@ shared channels, an unsigned webhook event id, and container environments outsid
 
 | Gap | Follow-up |
 | --- | --- |
-| `novad` modules for compute, browser, screen and capture are placeholders; modules run as `novad`'s user; no macOS or Windows sandbox; install and uninstall | T-M7 device tasks (install shipped in M6.5) |
-| Local browser fallback (FR-209): the consent flow refuses until a device offers a browser module; the extension bridge (FR-096) | T-M7 |
-| SSH environments have no transport bound; WSL answers `not_windows` everywhere; remote sessions have no Hub-side diff, review or commit | T-M7 code tasks |
-| Code: handoff, three-way merge, best-of-N, cloud environments; delegating from an agent to a Code session | T-M7 |
-| Browser: console and network capture, hover, element screenshots, restart after a crash, per-scope site levels; `GET /browser/actions` lists oldest first | T-M7 browser tasks |
-| Channels: email adapter, Telegram adapter, Slack interactive buttons; refresh route for MCP subscriptions; a test-notification route; a channel message log route | T-M7 channels |
+| `novad` modules for compute, browser, screen and capture are placeholders (M7 added only `local-runtime`); uninstall and decommission; modules run as `novad`'s user; no macOS or Windows sandbox | T-M7.5 (modules, uninstall), T-M9 (module sandboxes) |
+| Local browser fallback (FR-209): the consent flow refuses until a device offers a browser module; the extension bridge (FR-096) | T-M7.5 |
+| WSL environments answer `not_windows` everywhere (`novad` has no WSL operations); SSH environments and remote capture, review and commits shipped in M7 | T-M10 (with `novad` on Windows) |
+| Code: handoff, three-way merge, best-of-N, cloud environments; delegating from an agent to a Code session | Closed in M7 (T-M7-01, T-M7-09, T-M7-10; `apps/hub/test/code-m7.test.ts`) |
+| Browser: console and network capture, hover, element screenshots, restart after a crash, per-scope site levels; `GET /browser/actions` lists oldest first | Closed in M7 (T-M7-12; `packages/core/test/browser-scope.test.ts`, `browser-crash.test.ts`) |
+| Channels: email adapter, Telegram adapter, Slack interactive buttons; refresh route for MCP subscriptions; a test-notification route; a channel message log route | Closed in M7 (T-M7-06; `apps/hub/test/channels-m7.test.ts`) |
 | Egress: SOCKS5; the browser ignores scope policies; `web.fetch` and MCP stdio servers bypass the proxy (R-012); compressed bodies are not scanned for credentials | T-M9 hardening |
-| Agents: goal retry after a usage limit; `thread.status.changed` for agents; plugins per agent | T-M7 |
-| Screen: the real desktop through `novad`; purchase classification of screen actions; browser takeover input not in `screen_action` | T-M7, T-M9 |
+| Agents: goal retry after a usage limit; `thread.status.changed` for agents; plugins per agent | Closed in M7 (T-M7-14; `packages/core/test/agents-m7.test.ts`) |
+| Screen: the real desktop through `novad`; purchase classification of screen actions; browser takeover input not in `screen_action` | T-M7.5 (screen module), T-M9 |
 | Spaces and sites: reorder and delete pages in the UI; change a site's source in the UI; remote hosting targets | T-M8 |
 | Devices UI: no routes for managed services, available updates, owner overrides (the QR code shipped in M6.5) | T-M7.5 |
-| A device-file commit's approval card shows the staged id, not the diff (the diff is on the device page) | T-M7 |
+| A device-file commit's approval card shows the staged id, not the diff (the diff is on the device page) | Closed in M7 (T-M7-14; `packages/core/test/approval-detail.test.ts`) |
 
 ## Known gaps (code vs spec, M6.5)
 
@@ -380,12 +396,55 @@ two minutes.
 
 | Gap | Follow-up |
 | --- | --- |
-| No shipped client pairs through the Relay or uses `selectEndpoint` (the web join page joins directly; `@nova/relay` is the library); push (APNs/FCM) is a mock; channel relay answers 501 | T-M7 mobile and Relay tasks |
-| A Hub cannot register with a private Relay (no setting for the registration token); two tabs on one paired record get replies only on the newest connection; push registration accepts any token | T-M7 |
-| Device scopes are not enforced; `GET /api/v1/session` has no `deviceId`; device certificates are issued but not checked (no mTLS yet) | T-M7 |
+| No native app registers with the Relay for push (the APNs and FCM senders are in the Relay, and the web pairs and works through it, since M7); the channel relay answers 501 (`channel_relay_not_built`) | T-M10 |
+| Two tabs on one paired record get Hub replies only on the newest connection (the registration token and push token checks shipped in M7) | T-M9 |
+| Only the `offline-replica` and `local-runtime` scopes are enforced; the others are recorded and shown, and a browser's or app's device session is an owner session scopes do not narrow (R-026); `deviceId`, `scopes` and mutual TLS shipped in M7 | T-M9 |
 | Identity and CA rotation, device certificate renewal, `ca.mobileconfig`; mDNS name-conflict probing; IPv6 Wake-on-LAN from the Hub | T-M9 |
 | `novad` on Windows (key generation reads `/dev/urandom`) and macOS services are untested; no elevation for network setup commands | T-M10 packaging |
-| Diagnostics problems are free text; the diagnostics `mesh` and `relay` fields are untyped | T-M7 |
+| Diagnostics problems are free text; the diagnostics `mesh`, `relay` and `deviceTls` fields are untyped | T-M9 (T-M9-04) |
+
+## Known gaps (code vs spec, M7)
+
+Found by the security reviews (identity, execution, transports, browser, desktop: 46 findings, one
+critical) and the docs pass; fixed during the milestone: members' tool calls with no thread ran in
+the Hub's own folders (critical), and a removed member's schedules, channels, triggers and sockets
+kept running there; members could make the Hub call its loopback and LAN and widen its egress allow
+list; an OIDC callback bound to no browser; one person's messages steering another's tools in a
+shared thread, and team tasks sharing one thread; the idempotency store replaying tokens; cloud
+commands outside the egress policy; external agents reading any vault secret, running unsandboxed
+in SSH, WSL and device sessions, reaching hosts they did not declare and outliving their flag; a
+runner-chosen folder becoming a Hub write root, credentials in repository URLs, `/nova` writable by
+commands, no process or memory limits per sandbox and a bypassable disk cap; a handoff into a folder
+no check approved, delegated sessions losing the agent's rules and budgets, and SSH hosts read as
+options; a page freezing the Hub through quadratic redaction, tokens in network capture and scoped
+site levels bypassing hooks; excluded apps never matched off Linux and the shell bridge trusting a
+frame's URL; root in `novad` changing modes and owners through links in a user's folder, forged
+email sender authentication, Web Push after device revocation and the device certificate offered
+to unverified servers; cloud environments reported as isolated and handoff refusals never produced.
+J9 found seven more: a page the Hub serves could not reach the Relay (the CSP allowed only the Hub,
+whatever scheme the Relay URL used, and the Relay answered no CORS preflight); a Hub without a
+sandbox of its own refused commands of cloud sessions, which run on the runner, and `test.run`
+looked for the test command on the Hub's disk; the chat list did not show chats made on another
+device until a reload; a chat open while offline kept its sent messages "Queued" after
+reconnecting; the runner ran the setup script outside the repository; and the composer silently
+dropped a message sent before the model list loaded (J3 and J4 under load). Closing the ledger
+found one more, also fixed: the file tools of SSH, WSL and device Code sessions acted on the Hub's
+own disk at the remote folder's path (R-035).
+
+| Gap | Follow-up |
+| --- | --- |
+| Sync: only the web app keeps a replica; `sync.status.changed` is not emitted; sync audit entries use kind `device`; offline, a chat shows the path back from its newest message | T-M9 (event, audit kind), T-M10 (native clients) |
+| Cloud runner: runner network does not pass the Hub's egress proxy (off unless the owner allows it, R-030); snapshots are not encrypted by Nova; agent computers stay on the mock runner; in a container, CPU is what the container reports | T-M9 |
+| Code: a cloud thread's tool scope names `/workspace/<folder>` as a Hub path, so mentions and instruction files could read a `/workspace` folder on the Hub machine (its `fs.*` stay denied); remote file operations run one helper process each; delegating to an external agent in an SSH, WSL or device session fails with "the Code session has no folder" (closed, but unclear); no test against a real sshd (`ControlMaster` reuse untested); symbols, refs, dev servers and worktrees work only on the Hub's own files | T-M9 |
+| Chat handoff: recorded and announced, but turns still run on the Hub; no UI moves a chat to another device | T-M9 |
+| Channels: Telegram files are not read or sent; email OAuth (XOAUTH2) is not built; no native app registers with the Relay; the channel relay (`/v1/relay/messages`, `/outbox`) is not built; the voice-call channel (FR-218) is not built | T-M8 (Telegram files, email OAuth), T-M10 (native apps, channel relay), T-M9-07 (voice) |
+| Web over the Relay: attachments, raw files, avatars and the terminal socket do not go through the tunnel; a paired browser's device token is usable by page script (R-031); with a Relay older than the `decided` notice the page cannot tell denied from expired | T-M9 |
+| Team: a removed member's data is kept; members configure their own providers; skills of plugins not connected to an agent still show in its catalog; a removed member's channel pollers keep polling (their turns are refused) until a restart; Tools & MCP, Notifications and Channels have no member mode in the web UI; the ordinary chat view does not show who wrote each message of a shared chat | T-M8 |
+| Flagged: no `script` origin in `tool_call`; device MCP servers expose tools only; ACP terminal environment variables are ignored | T-M8 |
+| Desktop shell: window text on macOS and Windows and screenshot redaction are not built; app identity off Linux is tested only against recorded command output (R-029); on Wayland the screenshot may be missing; the journey runs only on Linux; Electron fuses; voice in quick chat | T-M10 (macOS, Windows, fuses), T-M9 (redaction), T-M9-07 (voice) |
+| Device TLS: the Hub → `novad` management channel is still bearer tokens over plain HTTP (R-022); device certificates are not renewed; Windows has no per-user named pipe (the shell reports `no_access`); a non-root `novad` makes a socket only for itself; the per-user socket is tested only with the build user's own ids (R-034); the `local.*` methods of `contracts/hub-api.md` §4 are not built | T-M7.5 (management channel), T-M9 (renewal, cross-user runs), T-M10 (Windows) |
+| Browser: opaque tokens in URL paths are not masked; the restart limit resets with a new session; hover exists only as an agent tool (the computers-area controller has none) | T-M9 |
+| Review hardening notes left open: an OIDC identity linked from a device session survives revoking that device; the desktop shell accepts a listed leaf until it expires after the Hub stops listing it | T-M9 |
 
 ## Milestone summaries
 
@@ -483,3 +542,23 @@ two minutes.
   milestone closed. Evidence: unit and integration tests in all 16 workspaces, 143 Rust tests, the
   real `novad` joining the wired Hub, smoke and J1-J8.5 green (21/21), J8.5 three runs in a row.
   Risks added: R-023..R-027. Next: M7 (cloud, sync, multi-device and mobile).
+- **M7** (783a955, 1fac175): sync through a Hub-canonical change feed, per-field last writer wins by hybrid
+  logical clock and a merge log with restore, with sealed offline copies only on devices granted
+  one; offline changes queued with a visible status and landing once, in order
+  (`Idempotency-Key`); a self-hostable cloud runner (`services/runner`) whose environments run Code
+  sessions and Work runs while the user's computer is away, with caps and snapshots; Telegram and
+  email channels and Slack buttons; Web Push from the Hub and native push through the Relay; an
+  Approvals page and a New task sheet for phones, and deep links; Code handoff with its Git state,
+  best-of-N attempts, three-way merges, SSH environments and delegation from agents; several
+  people on one Hub with shared threads, team agents and OIDC; the flagged `script.run` and
+  external agent adapters; the desktop shell (tray, quick chat, windows, attach window, an offline
+  start with a local model through `novad`); `novad`'s TLS client and mutual TLS for devices; the
+  M6 browser gaps. The security reviews (46 findings: one critical, six high and one high/medium)
+  and the ten places the docs pass found code and spec disagreeing were fixed before the milestone
+  closed, and so were J9's seven product bugs (among them the Relay out of reach of the Hub's
+  pages, cloud commands refused on a Hub without a sandbox, two stale chat views and a dropped
+  first message); the voice-call channel
+  (FR-218) is not built. Evidence: unit and integration tests in all 18 workspaces (5,773),
+  165 Rust tests, the real `novad` over mutual TLS, smoke and J1-J9 green (25/25), J9
+  three runs in a row, the desktop shell's Electron journey. Risks added: R-028..R-035; R-023 and
+  R-035 closed, R-022 and R-026 narrowed. Next: M7.5 (boot, power and firmware).
