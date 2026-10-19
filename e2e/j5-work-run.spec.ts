@@ -153,7 +153,7 @@ async function startRun(
   extra?: (dialog: Locator) => Promise<void>,
 ) {
   await page.goto(`${hub.url}/work`);
-  await page.getByRole('button', { name: 'New run' }).click();
+  await page.getByRole('button', { name: 'New run', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'New run' });
   await dialog.getByLabel('What should the run do?').fill(f.objective);
   await dialog.getByLabel('Title (optional)').fill(f.title);
