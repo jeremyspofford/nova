@@ -173,6 +173,8 @@ describe('joining through the Relay (FR-137 client)', () => {
     open(w);
     await userEvent.click(await screen.findByRole('button', { name: 'Ask to join' }));
     await screen.findByText('123 456');
+    // The Relay link opens just after the code shows; on a slow machine it can lag.
+    await waitFor(() => expect(w.link()).toBeDefined());
     act(() => w.link().setState('closed'));
     expect(await screen.findByText('Cannot reach the Relay. Trying again…')).toBeTruthy();
     act(() => w.link().setState('open'));

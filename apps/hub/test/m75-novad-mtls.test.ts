@@ -449,10 +449,10 @@ describe.skipIf(!runnable)('the management channel to the real novad over mutual
     });
     expect(renewed.keyUsage?.sort()).toEqual([CLIENT_AUTH, SERVER_AUTH].sort());
     expect(renewed.subjectAltName).toBe(`URI:urn:nova:device:${deviceId}`);
-    expect((await channel()).renewal).toMatchObject({
-      state: 'offered',
-      reason: 'missing_server_auth',
-    });
+    // On a fast machine the device may already have presented it by the time we look.
+    const offered = (await channel()).renewal;
+    expect(offered).toMatchObject({ reason: 'missing_server_auth' });
+    expect(['offered', 'presented']).toContain(offered?.state);
 
     // A call over mutual TLS sees the renewed certificate: the old one is revoked.
     await until(async () => {

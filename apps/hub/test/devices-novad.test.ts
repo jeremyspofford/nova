@@ -181,7 +181,8 @@ describe.skipIf(!runnable)('the real novad binary', () => {
     });
     // The local runtime (a client's module, FR-128) and the browser module (FR-209, M7.5) run too
     // and are in the signed document the Hub validated against device-capability.json.
-    expect(v.capability.modules).toEqual([
+    // `firmware` is listed too where the machine has a BIOS backend (a UEFI CI runner does).
+    expect((v.capability.modules as string[]).filter((m) => m !== 'firmware')).toEqual([
       'browser',
       'compute',
       'local-runtime',
