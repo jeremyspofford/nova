@@ -38,6 +38,9 @@ import { AGENT_AUTONOMY_TEXT, AGENTS_PATH, agentPath } from './format.ts';
 import '../workspace.css';
 import '../work/work.css';
 import './agents.css';
+import { AgentPluginsSection } from '../team/AgentPlugins.tsx';
+import { ScopedSiteLevels } from '../browser/SiteLevels.tsx';
+import { OpenInWindowButton } from '../shellbridge/OpenInWindow.tsx';
 
 export const AGENT_TABS = [
   'activity',
@@ -51,12 +54,14 @@ export const AGENT_TABS = [
   'threads',
   'channels',
   'computer',
+  'plugins',
   'profile',
 ] as const;
 export type AgentTab = (typeof AGENT_TABS)[number];
 
 /** Parts of the page that refetch when an event says they changed. */
-type Part = 'agent' | 'threads' | 'channels' | Exclude<AgentTab, 'computer' | 'profile'>;
+type Part =
+  'agent' | 'threads' | 'channels' | Exclude<AgentTab, 'computer' | 'profile' | 'plugins'>;
 
 /** Which parts an event about this agent touches. */
 export function partsFor(name: string): Part[] {
@@ -414,7 +419,24 @@ export function AgentPage({ agentId }: { agentId: string }) {
         />
       ),
     },
-    { id: 'computer', label: 'Computer', panel: <AgentComputer agent={agent} /> },
+    {
+      id: 'computer',
+      label: 'Computer',
+      panel: (
+        <>
+          <AgentComputer agent={agent} />
+          {/* This agent's own site permission levels (FR-094, M7). */}
+          <ScopedSiteLevels
+            scopeKind="agent"
+            scopeRef={agent.id}
+            scopeName={agent.name}
+            headingLevel={3}
+          />
+        </>
+      ),
+    },
+    // The plugins connected to this agent: only their tools are usable (FR-045, M7).
+    { id: 'plugins', label: 'Plugins', panel: <AgentPluginsSection agentId={agentId} /> },
     {
       id: 'profile',
       label: 'Profile',
@@ -431,6 +453,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
           <div className="agent-title">
             <div className="ws-page-header">
               <h1>{agent.name}</h1>
+              <OpenInWindowButton path={agentPath(agentId)} what={agent.name} compact />
               <StatusChip
                 status={agent.derived.status}
                 reason={agent.derived.reason ?? undefined}

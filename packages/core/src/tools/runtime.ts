@@ -34,6 +34,7 @@ import {
   type ToolSearchHit,
   type WebCitation,
 } from './builtin.ts';
+import { remoteFilesFor } from './fs-remote.ts';
 import { mentionCandidates, resolveMentions } from './mentions.ts';
 import type { ToolRegistry } from './registry.ts';
 import type { PathPolicy } from './roots.ts';
@@ -148,6 +149,11 @@ export interface CallOutcome {
   origin: Origin | null;
   /** End the turn: deny and stop, or an approval that timed out (docs/12 §4.1). */
   stop: 'deny_stop' | 'approval_timeout' | null;
+  /**
+   * The signed-in user answered `ask_user` in a Nova client (FR-188): the loop gives the rest of
+   * the turn their instruction. Only the built-in tool can say so.
+   */
+  userAnswer?: boolean;
 }
 
 export interface InvokeResult {
@@ -155,6 +161,11 @@ export interface InvokeResult {
   ok: boolean;
   text: string;
   error?: { code: string; message: string };
+  /**
+   * The result's `meta` (an image's artifact, ...), redacted and bounded like the stored result
+   * (over 20,000 characters of JSON it is `{truncated: true}`); null when there is none (M7).
+   */
+  meta: unknown;
 }
 
 /** What the model sees of a stored tool result (message part `tool_result`). */
@@ -167,6 +178,8 @@ export interface StoredResult {
   content: ContentPart[];
   /** Context `tool.pre` and `tool.post` hooks added (FR-197), redacted. */
   hooks?: HookContext[];
+  /** The user's own answer to `ask_user` (FR-188): shown to the model as their words. */
+  userAnswer?: boolean;
 }
 
 /** Context a hook added, labelled with the hook as its origin (FR-197, FR-189). */
@@ -204,6 +217,9 @@ interface ExecOutput {
   error: { code: string; message: string } | null;
   origin: Origin | null;
   stop: CallOutcome['stop'];
+  userAnswer: boolean;
+  /** A successful result's redacted, bounded `meta` (`#meta`). */
+  meta?: unknown;
 }
 
 const ABORTED = Symbol('aborted');
@@ -382,7 +398,7 @@ export class ToolRuntime {
         searchTools: () => [],
       },
     }).then((r) => {
-      const out: InvokeResult = { callId: r.callId, ok: r.ok, text: r.text };
+      const out: InvokeResult = { callId: r.callId, ok: r.ok, text: r.text, meta: r.meta ?? null };
       if (r.error) out.error = r.error;
       return out;
     });
@@ -562,6 +578,7 @@ export class ToolRuntime {
         error: { code: 'server_error', message: 'the call could not be recorded' },
         origin: null,
         stop: null,
+        userAnswer: false,
       };
     }
     const correlation = this.#correlation(x, callId);
@@ -626,6 +643,16 @@ export class ToolRuntime {
       profile: x.scope.profile,
     };
     if (resource) req.resource = resource;
+    // What the approval card shows besides the arguments (a device write's diff); without it the
+    // card shows the arguments alone.
+    if (isBuiltinTool(def) && def.approvalDetail) {
+      try {
+        const detail = await def.approvalDetail(x.args, ctx);
+        if (detail) req.argsPreview = `${argsPreview}\n\n${this.#redactor.redactString(detail)}`;
+      } catch {
+        // The arguments alone.
+      }
+    }
 
     // tool.pre hooks (FR-197): a block refuses the call before anything is asked or run.
     let hooks: HookContext[] = [];
@@ -840,6 +867,14 @@ export class ToolRuntime {
       hooks.push(...this.#hookContext(await this.#hook('tool.post', x, callId, x.def, text)));
     const error = result.ok ? null : { code: result.error.code, message: result.error.message };
     const origin = result.ok || status === 'error' ? this.#originOf(x) : null;
+    // Only Nova's own `ask_user`, answered by the signed-in user, carries their words (FR-188).
+    const userAnswer =
+      result.ok &&
+      x.name === 'ask_user' &&
+      x.def !== null &&
+      isBuiltinTool(x.def) &&
+      x.def.descriptor.source === 'builtin' &&
+      result.meta?.userAnswer === true;
     view.status = status;
     view.durationMs = durationMs;
     view.resultPreview = clip(text, 300);
@@ -854,19 +889,18 @@ export class ToolRuntime {
       content,
     };
     if (hooks.length) stored.hooks = hooks;
+    if (userAnswer) stored.userAnswer = true;
     const artifact = result.ok
       ? (result.meta?.artifact as Record<string, unknown> | undefined)
       : undefined;
+    const meta = result.ok ? this.#meta(result.meta) : null;
     try {
       await this.#db.transaction(async () => {
         await this.#db.orm
           .update(toolCall)
           .set({
             status,
-            resultJson: JSON.stringify({
-              content,
-              meta: result.ok ? this.#meta(result.meta) : null,
-            }),
+            resultJson: JSON.stringify({ content, meta }),
             error: view.error,
             decision: extra.decision?.effect ?? null,
             approvalId: view.approvalId,
@@ -957,6 +991,8 @@ export class ToolRuntime {
       error,
       origin,
       stop: extra.stop ?? null,
+      userAnswer,
+      meta,
     };
   }
 
@@ -1259,7 +1295,21 @@ export class TurnTools {
       )
       .join('\n');
     const lines = ['## Tools', UNTRUSTED_RULES];
-    if (roots) lines.push(`Folders the file and command tools can use:\n${roots}`);
+    // A session on another machine has no folder on the Hub: its tools reach the folder there.
+    const remote = remoteFilesFor(
+      this.#runtime.sandbox,
+      this.#input.accountId,
+      this.#input.threadId,
+    );
+    if (remote)
+      lines.push(
+        `Folders the file and command tools can use:\n- ${remote.root} on ${remote.label} (${remote.access === 'write' ? 'read and write' : 'read only'}, relative paths start here)`,
+      );
+    else if (remote === null)
+      lines.push(
+        "The session's folder is on another machine that cannot be reached now; file and command tools will fail.",
+      );
+    else if (roots) lines.push(`Folders the file and command tools can use:\n${roots}`);
     else lines.push('No folders are available to file and command tools.');
     if (listing.summary.length)
       lines.push(
@@ -1297,7 +1347,9 @@ export class TurnTools {
       extras,
       onWaiting: input.onWaiting,
     });
-    return { callId: r.callId, status: r.status, origin: r.origin, stop: r.stop };
+    const out: CallOutcome = { callId: r.callId, status: r.status, origin: r.origin, stop: r.stop };
+    if (r.userAnswer) out.userAnswer = true;
+    return out;
   }
 
   /** Kill the turn's exec sessions (cancel, end of turn; FR-184). */

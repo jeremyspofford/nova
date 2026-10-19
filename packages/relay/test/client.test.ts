@@ -358,6 +358,40 @@ describe('Hub notices', () => {
     hubSession.closeStream(h);
     expect(await waiting).toEqual({ requestId: 'req-1', deviceId: 'dev-1' });
     expect(await client.waitForPaired()).toEqual({ requestId: 'req-1', deviceId: 'dev-1' });
+    expect(await client.waitForDecision()).toEqual({
+      decision: 'approved',
+      requestId: 'req-1',
+      deviceId: 'dev-1',
+    });
+  });
+
+  it('tells a denied client from an expired one, and keeps the first decision (M7)', async () => {
+    const { client, hubSession, hubIds } = await setup(() => new Promise(() => undefined));
+    const decision = client.waitForDecision();
+    let paired = false;
+    void client.waitForPaired().then(() => (paired = true));
+    const notice = (msg: TunnelMessage) => {
+      const h = hubIds.next();
+      hubSession.send(h, encodeTunnel(msg));
+      hubSession.closeStream(h);
+    };
+    notice({ t: 'decided', requestId: 'req-1', decision: 'denied' });
+    expect(await decision).toEqual({ decision: 'denied', requestId: 'req-1' });
+    // A denial never resolves waitForPaired, and a later notice changes no decision.
+    await vi.advanceTimersByTimeAsync(50);
+    expect(paired).toBe(false);
+    notice({ t: 'decided', requestId: null, decision: 'expired' });
+    notice({ t: 'paired', requestId: 'req-1', deviceId: 'dev-1' });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await client.waitForDecision()).toEqual({ decision: 'denied', requestId: 'req-1' });
+    const second = await setup(() => new Promise(() => undefined));
+    const h = second.hubIds.next();
+    second.hubSession.send(h, encodeTunnel({ t: 'decided', requestId: null, decision: 'expired' }));
+    second.hubSession.closeStream(h);
+    expect(await second.client.waitForDecision()).toEqual({
+      decision: 'expired',
+      requestId: null,
+    });
   });
 
   it('retries once on a fresh stream when the Hub calls a stream stale', async () => {
@@ -478,6 +512,8 @@ describe('tunnel messages', () => {
       { t: 'end' },
       { t: 'error', code: 'x', message: 'y' },
       { t: 'paired', requestId: null, deviceId: 'd' },
+      { t: 'decided', requestId: 'r', decision: 'denied' },
+      { t: 'decided', requestId: null, decision: 'expired' },
       { t: 'stale', stream: 'c1', floor: 3 },
     ];
     for (const m of ok) expect(decodeTunnel(encodeTunnel(m))).toEqual(m);
@@ -494,6 +530,8 @@ describe('tunnel messages', () => {
       '{"t":"body","data":3}',
       '{"t":"error","code":1,"message":"x"}',
       '{"t":"paired","requestId":3,"deviceId":null}',
+      '{"t":"decided","requestId":null,"decision":"approved"}',
+      '{"t":"decided","requestId":3,"decision":"denied"}',
       '{"t":"stale","stream":"c1","floor":"3"}',
       '{"t":"req","id":"has space","method":"GET","path":"/x","headers":{}}',
       '{"t":"head","id":7,"status":200,"headers":{}}',

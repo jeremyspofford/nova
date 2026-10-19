@@ -166,6 +166,20 @@ export function MessageItem({
             <Icon name="forward" /> Steering
           </span>
         ) : null}
+        {m.provenance === 'sync' ? (
+          <span className="msg-badge" data-kind="sync">
+            <Icon name="clock" /> Written offline
+          </span>
+        ) : null}
+        {m.provenance === 'offline' ? (
+          <span
+            className="msg-badge"
+            data-kind="offline"
+            title="A model on one of your devices answered while the Hub was unreachable"
+          >
+            <Icon name="server" /> Answered offline by a local model
+          </span>
+        ) : null}
         {m.status === 'incomplete' ? (
           <span className="msg-badge" data-kind="stopped">
             <Icon name="stop" /> Stopped

@@ -5,6 +5,7 @@ export * from './backend.ts';
 export * from './capability.ts';
 export * from './fake-backend.ts';
 export * from './hub-client.ts';
+export * from './hub-tls.ts';
 export * from './identity.ts';
 export * from './jobs.ts';
 export * from './node.ts';

@@ -4,6 +4,8 @@
 export {
   RELAY_STATES,
   RelayHub,
+  relayRegistrationSecret,
+  relayRegistrationTokenFor,
   type RelayClientView,
   type RelayConnectorState,
   type RelayDispatch,

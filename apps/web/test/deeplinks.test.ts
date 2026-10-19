@@ -85,7 +85,6 @@ describe('deepLinkPath (FR-007)', () => {
     'web+novas://chat',
     'nova://',
     'nova://unknown',
-    'nova://run/r1',
     'web+nova:javascript:alert(1)',
     'nova://chat/a/b',
     'nova://chat//x',

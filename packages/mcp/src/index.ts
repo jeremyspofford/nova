@@ -12,3 +12,5 @@ export * from './oauth.ts';
 export * from './oauth-service.ts';
 export * from './server.ts';
 export * from './tool-source.ts';
+export * from './stdio-launcher.ts';
+export * from './device-transport.ts';

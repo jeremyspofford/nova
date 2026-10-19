@@ -235,8 +235,9 @@ describe('sessions and validation', () => {
       headers: AUTH,
       payload: { kind: 'email', externalRef: 'me@example.com' },
     });
+    // Since M7 email is available; a binding without its mailbox's credentials is invalid.
     expect(email.statusCode).toBe(400);
-    expect(json(email).error.code).toBe('capability_missing');
+    expect(json(email).error.code).toBe('validation');
     const trig = await app.inject({
       method: 'POST',
       url: '/api/v1/triggers',
@@ -271,7 +272,7 @@ describe('Slack through the Hub (J7 step 3)', () => {
     const list = json(await app.inject({ method: 'GET', url: '/api/v1/channels', headers: AUTH }));
     expect(list.items).toHaveLength(1);
     expect(list.adapters.find((a: { kind: string }) => a.kind === 'email')).toMatchObject({
-      available: false,
+      available: true,
     });
     const on = json(
       await app.inject({ method: 'POST', url: `/api/v1/channels/${b.id}/connect`, headers: AUTH }),

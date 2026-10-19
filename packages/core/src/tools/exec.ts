@@ -22,12 +22,14 @@ import {
   type BuiltinTool,
 } from './builtin.ts';
 import { withDeny } from './fs.ts';
+import { remoteFilesFor, remoteResource, remoteUnavailable, resolveRemote } from './fs-remote.ts';
 import { PathDenied, resolveInRoots, type PathPolicy } from './roots.ts';
 import {
   DEFAULT_EXEC_SESSION_SETTINGS,
   ExecSessions,
   type ExecSessionSettings,
   type OwnedExecRequest,
+  sandboxAvailableFor,
 } from './exec-sessions.ts';
 import { CHARS_PER_TOKEN, capHeadTail } from './text.ts';
 import type { ExecResult, ToolContext, ToolResult } from './types.ts';
@@ -56,8 +58,10 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
   // one a run kept (ExecSessions.retainTurn); another thread never can.
   const owners = new Map<string, Owner>();
 
+  // The sandbox the thread's commands go to (a cloud, SSH or device session's own), not only
+  // the Hub's.
   const unavailable = async (ctx: ToolContext): Promise<ToolResult | null> => {
-    const a = await ctx.sandbox.available();
+    const a = await sandboxAvailableFor(ctx.sandbox, ctx.accountId, ctx.threadId);
     return a.ok ? null : fail('sandbox_unavailable', a.detail);
   };
   /** `exec.sessions` from the Hub's ExecSessions; the defaults elsewhere (tests, headless). */
@@ -143,6 +147,9 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
       origin: 'tool',
       resource: (args, ctx) => {
         const cwd = str(argsOf(args).cwd) ?? '.';
+        // A session folder on another machine: the working folder is a path there (M7).
+        const remote = remoteFilesFor(ctx.sandbox, ctx.accountId, ctx.threadId);
+        if (remote) return remoteResource(remote, cwd, 'read');
         try {
           return {
             kind: 'path',
@@ -156,13 +163,15 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
         const down = await unavailable(ctx);
         if (down) return down;
         const a = argsOf(args);
+        // M7: in a session folder on another machine the working folder is resolved there by
+        // name (the command runs there); the Hub's disk at that path is never a root.
+        const remote = remoteFilesFor(ctx.sandbox, ctx.accountId, ctx.threadId);
+        if (remote === null) return remoteUnavailable();
         try {
-          const cwd = resolveInRoots(
-            ctx.roots,
-            str(a.cwd) ?? '.',
-            'read',
-            withDeny(opts.paths ?? {}, ctx),
-          ).path;
+          const cwd = remote
+            ? resolveRemote(remote, str(a.cwd) ?? '.', 'read').path
+            : resolveInRoots(ctx.roots, str(a.cwd) ?? '.', 'read', withDeny(opts.paths ?? {}, ctx))
+                .path;
           const conf = await settings(ctx);
           const req: OwnedExecRequest = {
             cmd: str(a.cmd) ?? '',

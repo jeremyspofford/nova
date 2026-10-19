@@ -222,6 +222,13 @@ export class CodeSessionOps {
           ...(mode ? { permissionMode: mode } : {}),
           title,
           worktree: true,
+          // Never more than the parent has left (a delegated session's agent limits included);
+          // a bound the parent does not have takes the default.
+          budgets: Object.fromEntries(
+            Object.entries(this.#o.code.childBudgets(accountId, parent.id)).filter(
+              ([, v]) => v !== null,
+            ),
+          ),
         },
         { parentSessionId: parent.id, role: input.role, ...(head ? { base: head } : {}) },
       );

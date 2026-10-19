@@ -1,0 +1,47 @@
+/* Approvals and New task on a phone (FR-111, FR-077): one column, the cards full width. Colors,
+   spacing and type come only from design tokens. */
+.dispatch-list {
+  display: grid;
+  gap: var(--u-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dispatch-item {
+  display: grid;
+  gap: var(--u-space-2);
+  min-width: 0;
+}
+.dispatch-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1) var(--u-space-2);
+  margin: 0;
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+.dispatch-where > .nv-icon {
+  flex: none;
+  color: var(--u-text-muted);
+}
+.dispatch-item > .approval {
+  margin: 0;
+}
+.dispatch-item[data-focused] > .approval {
+  border-color: var(--u-accent);
+}
+/* On a phone the New task sheet rises from the bottom and takes the full width. */
+@media (max-width: 640px) {
+  .nv-dialog-backdrop:has(> .dispatch-sheet) {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .nv-dialog.dispatch-sheet {
+    width: 100%;
+    max-height: 92vh;
+    padding: var(--u-space-4);
+    padding-bottom: calc(var(--u-space-4) + env(safe-area-inset-bottom, 0px));
+    border-radius: var(--u-radius-lg) var(--u-radius-lg) 0 0;
+  }
+}

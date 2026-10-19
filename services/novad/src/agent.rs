@@ -1,8 +1,11 @@
 //! The running device agent: enrollment with the Hub, the management channel the Hub calls
 //! (contracts/hub-api.md §3), and the heartbeat that reports modules, events and device-side
-//! access decisions. Until certificates arrive (M6.5) both directions use bearer tokens over LAN
-//! HTTP, like compute nodes (ADR-089): the Hub presents the management token novad generated at
-//! enrollment; novad presents the device credential the Hub issued.
+//! access decisions. The Hub presents the management token novad generated at enrollment; novad
+//! presents the device credential the Hub issued (ADR-089) and, when the Hub serves HTTPS, reaches
+//! it over TLS trusted through the pinned Hub identity, presenting its device certificate (mutual
+//! TLS, FR-126, R-022, R-023; src/tls.rs). A device that enrolled over http:// moves to https://
+//! on its own once the Hub serves it, never back. Heartbeat answers carry the scopes the Hub
+//! granted (docs/22 §4.2), kept in `scopes.json` for the local runtime (FR-128).
 
 use crate::capabilities::{self, Extras, Probe, sign_document};
 use crate::crypto::constant_time_eq;
@@ -11,6 +14,7 @@ use crate::hardening::{harden_self, is_hardened};
 use crate::http::{self, Request, Response};
 use crate::state::{DataDir, DeviceState, HubConfig};
 use crate::supervisor::{Manifest, Options, Supervisor};
+use crate::tls::{HubTrust, TlsContext};
 use crate::update;
 use crate::util::{OpError, OpResult, new_token, now_iso, now_ms};
 use serde_json::{Value, json};
@@ -41,13 +45,16 @@ pub struct Agent {
     pub health: (Duration, Duration),
     /// Wake-on-LAN for other devices when this one has the wake-helper role (FR-138).
     pub wake: crate::power::WakeHelper,
+    /// How the Hub is reached over HTTPS (None: no pin, so http:// only).
+    pub tls: Mutex<Option<Arc<TlsContext>>>,
+    /// When an http:// Hub was last tried at https:// (at most once a minute).
+    upgrade_tried_ms: Mutex<u64>,
 }
 
 impl Agent {
     pub fn new(data: DataDir, exe: PathBuf, state: DeviceState, manifest: Manifest) -> Self {
         let sup = Supervisor::new(Options::new(exe.clone(), data.path().to_path_buf()), manifest);
         Agent {
-            data,
             sup,
             exe,
             state: Mutex::new(state),
@@ -55,6 +62,38 @@ impl Agent {
             restart: AtomicBool::new(false),
             health: (Duration::from_secs(10), Duration::from_secs(2)),
             wake: crate::power::WakeHelper::system(),
+            tls: Mutex::new(TlsContext::for_data(&data).map(Arc::new)),
+            upgrade_tried_ms: Mutex::new(0),
+            data,
+        }
+    }
+
+    fn tls(&self) -> Option<Arc<TlsContext>> {
+        self.tls.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// The Hub stopped answering at its http:// address: if it now serves HTTPS on the same
+    /// address and the pinned identity vouches for it, use https:// from now on (R-023). Never
+    /// the other way: a device on https:// does not fall back to plain HTTP.
+    fn try_https(&self, hub: &str) -> bool {
+        let (Some(rest), Some(tls)) = (hub.strip_prefix("http://"), self.tls()) else { return false };
+        {
+            let mut last = self.upgrade_tried_ms.lock().unwrap_or_else(|p| p.into_inner());
+            if now_ms().saturating_sub(*last) < 60_000 {
+                return false;
+            }
+            *last = now_ms();
+        }
+        let https = format!("https://{rest}");
+        match http::get_json_with(&format!("{https}/api/v1/hello"), None, HUB_TIMEOUT, Some(&tls)) {
+            Ok((200, _)) => {
+                let mut d = self.state.lock().unwrap_or_else(|p| p.into_inner());
+                d.hub_url = Some(https.clone());
+                let _ = self.data.save_device(&d);
+                eprintln!("novad: the Hub now serves HTTPS; using {https}");
+                true
+            }
+            Ok(_) | Err(_) => false,
         }
     }
 
@@ -83,12 +122,17 @@ impl Agent {
         scopes.sort();
         scopes.dedup();
         let channel = self.channel();
+        // The local runtime's models (FR-128), when the module runs and its server answers.
+        let local_models = self.sup.spec("local-runtime").and_then(|_| self.sup.call("local-runtime", "models", json!({}), Duration::from_secs(5)).ok()).map(|v| {
+            v["models"].as_array().into_iter().flatten().filter_map(|m| m.as_str().map(str::to_string)).collect::<Vec<_>>()
+        });
         let extras = Extras {
             modules: self.sup.names(),
             power: power.as_ref(),
             update_channel: &channel,
             fs_scopes: scopes,
             models_dir: Some(self.data.path().join("models").to_string_lossy().to_string()),
+            local_models,
         };
         let local = self.data.config()?.capability_overrides;
         let hub = self.data.hub_config()?.capability_overrides;
@@ -305,9 +349,18 @@ impl Agent {
                 body["power"] = p;
             }
         }
-        match http::post_json(&format!("{hub}/agent/v1/heartbeat"), Some(&cred), &body, HUB_TIMEOUT) {
+        let tls = self.tls();
+        match http::post_json_with(&format!("{hub}/agent/v1/heartbeat"), Some(&cred), &body, HUB_TIMEOUT, tls.as_deref()) {
             Ok((200, resp)) => {
                 pending_events.clear();
+                // What the Hub grants this device (docs/22 §4.2): the local runtime refuses
+                // without `local-runtime` (FR-128).
+                if let Some(list) = resp["scopes"].as_array() {
+                    let scopes: Vec<String> = list.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                    if let Err(e) = self.data.save_granted_scopes(&scopes) {
+                        eprintln!("novad: cannot save the granted scopes: {e}");
+                    }
+                }
                 let ids: Vec<String> = decisions.as_array().into_iter().flatten().filter_map(|r| r["id"].as_str().map(str::to_string)).collect();
                 if !ids.is_empty() {
                     let _ = self.sup.call("storage", "fs.markReported", json!({ "ids": ids }), Duration::from_secs(5));
@@ -327,12 +380,22 @@ impl Agent {
                 self.revoked();
                 false
             }
+            Ok((403, resp)) if resp["error"]["details"]["reason"].as_str().is_some_and(|r| r.starts_with("certificate_")) => {
+                // Mutual TLS (FR-126): the Hub wants this device's certificate, or refused it.
+                eprintln!(
+                    "novad: the Hub refused this device over HTTPS ({}): {}",
+                    resp["error"]["details"]["reason"].as_str().unwrap_or_default(),
+                    resp["error"]["message"].as_str().unwrap_or("add the device again")
+                );
+                true
+            }
             Ok((status, _)) => {
                 eprintln!("novad: heartbeat refused with {status}");
                 true
             }
             Err(e) => {
                 eprintln!("novad: heartbeat failed: {e}");
+                self.try_https(&hub);
                 true
             }
         }
@@ -343,7 +406,7 @@ impl Agent {
         let (Some(hub), Some(cred)) = (d.hub_url, d.credential) else { return };
         if let Ok((capability, signature)) = self.capability() {
             let body = json!({ "capability": capability, "signature": signature, "novadVersion": VERSION });
-            if let Err(e) = http::post_json(&format!("{hub}/agent/v1/capabilities"), Some(&cred), &body, HUB_TIMEOUT) {
+            if let Err(e) = http::post_json_with(&format!("{hub}/agent/v1/capabilities"), Some(&cred), &body, HUB_TIMEOUT, self.tls().as_deref()) {
                 eprintln!("novad: capability update failed: {e}");
             }
         }
@@ -368,12 +431,37 @@ pub fn enroll(a: &crate::cli::EnrollArgs, exe: PathBuf) -> Result<Value, String>
     data.ensure().map_err(|e| e.to_string())?;
     // Every enrollment is a new identity: the Hub pins the key once and keeps a revoked key
     // burned, so re-adding a device (docs/23 §10) needs a fresh one.
-    match std::fs::remove_file(data.seed_path()) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("cannot rotate the device key: {e}")),
+    // A certificate or Hub trust from an earlier enrollment belongs to that key and Hub.
+    for path in [data.seed_path(), data.path().join(crate::tls::DEVICE_CERT_FILE), data.path().join(crate::tls::TRUST_FILE)] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("cannot rotate the device key ({}): {e}", path.display())),
+        }
     }
     register(&data, a, exe)
+}
+
+/// The Hub trust for registering (FR-134): the pin is kept in `hub-trust.json` with what the
+/// install's verified connections vouched for; over http:// the Hub local CA is learned from the
+/// Hub's signed identity statement, so the device can use HTTPS once the Hub serves it. Without
+/// a pin there is no TLS context (http:// only).
+fn prepare_trust(data: &DataDir, a: &crate::cli::EnrollArgs) -> Result<Option<TlsContext>, String> {
+    let path = data.path().join(crate::tls::TRUST_FILE);
+    if let Some(pin) = &a.pin {
+        let kept = HubTrust::load(&path).filter(|t| t.pin.as_deref() == Some(pin.as_str()));
+        kept.unwrap_or_else(|| HubTrust::pinned(pin)).save(&path).map_err(|e| format!("cannot save {}: {e}", path.display()))?;
+    }
+    let Some(ctx) = TlsContext::for_data(data) else { return Ok(None) };
+    if !http::is_https(&a.hub) {
+        match crate::tls::learn_ca_over_http(a.hub.trim_end_matches('/'), &ctx, HUB_TIMEOUT) {
+            Ok(true) => eprintln!("novad: learned the Hub local CA from its signed identity"),
+            Ok(false) => {}
+            // Not fatal over http://: the pin still protects a later move to HTTPS.
+            Err(e) => eprintln!("novad: the Hub local CA was not learned: {e}"),
+        }
+    }
+    Ok(Some(ctx))
 }
 
 /// Register with the Hub (`POST /agent/v1/register`) with the device key already in `data`
@@ -405,7 +493,22 @@ pub fn register(data: &DataDir, a: &crate::cli::EnrollArgs, exe: PathBuf) -> Res
         "novadVersion": VERSION,
         "protocolVersions": PROTOCOL_VERSIONS,
     });
-    let (status, resp) = http::post_json(&format!("{}/agent/v1/register", a.hub.trim_end_matches('/')), None, &body, HUB_TIMEOUT)?;
+    // A new enrollment starts with no grant: the old scopes (`local-runtime`) belong to the device
+    // the Hub knew before; the first heartbeat answer brings this one's.
+    match std::fs::remove_file(data.scopes_path()) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("cannot clear the old scopes: {e}")),
+    }
+    // Users who get their own local runtime socket (FR-128): the owner's setting, kept on re-enroll
+    // unless --user names others.
+    if !a.users.is_empty() {
+        let mut cfg = data.config().map_err(|e| e.to_string())?;
+        cfg.local_runtime.users = a.users.clone();
+        crate::util::write_json(&data.config_path(), &cfg, false).map_err(|e| e.to_string())?;
+    }
+    let tls = prepare_trust(data, a)?;
+    let (status, resp) = http::post_json_with(&format!("{}/agent/v1/register", a.hub.trim_end_matches('/')), None, &body, HUB_TIMEOUT, tls.as_ref())?;
     if status != 201 {
         return Err(format!("the Hub refused the enrollment ({status}): {}", resp["error"]["message"].as_str().unwrap_or("unknown error")));
     }
@@ -597,6 +700,44 @@ mod tests {
         assert_eq!(a.sup.status("compute").unwrap()["state"], "stopped");
         let bad = a.handle(req("/agent/v1/config", Some("nvdm_test"), json!({ "capabilityOverrides": { "hardware": { "cores": 1 } } })));
         assert_eq!(bad.status, 400);
+        a.sup.stop_all();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn heartbeats_keep_the_granted_scopes_and_move_to_https() {
+        use crate::tls::tests::{Pki, hello, hub_pin, statement, test_hub, HUB_SEED};
+        let dir = tmp("agent-hb");
+        let a = agent(&dir);
+        a.state.lock().unwrap().credential = Some("nvc_test".into());
+        let server = http::serve(
+            std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
+            1 << 20,
+            Arc::new(|req: Request| {
+                assert_eq!(req.bearer(), Some("nvc_test"));
+                Response::json(200, &json!({ "ok": true, "heartbeatIntervalMs": 10_000, "capabilityRequested": false, "scopes": ["local-runtime", "files"] }))
+            }),
+        );
+        a.state.lock().unwrap().hub_url = Some(format!("http://{}", server.local_addr()));
+        assert!(a.heartbeat(&mut vec![], 1));
+        assert_eq!(a.data.granted_scopes(), vec!["files".to_string(), "local-runtime".to_string()]);
+        server.stop();
+        // The Hub restarted with HTTPS on its address: the plain heartbeat fails, the pinned
+        // identity vouches for the certificate, and the device uses https:// from then on.
+        let pki = Pki::new("Nova Hub CA");
+        let (leaf, key) = pki.leaf(&["127.0.0.1"]);
+        let (ca, l) = (pki.ca_der.clone(), leaf.clone());
+        let tls_hub = test_hub(vec![leaf, pki.ca_der.clone()], key, None, Arc::new(move |n| statement(&HUB_SEED, n, &[("ca", &ca), ("leaf", &l)])), Arc::new(hello));
+        a.state.lock().unwrap().hub_url = Some(format!("http://127.0.0.1:{}", tls_hub.port));
+        assert!(a.heartbeat(&mut vec![], 1), "no 401: still enrolled");
+        assert_eq!(a.device().hub_url, Some(format!("http://127.0.0.1:{}", tls_hub.port)), "no pin, no move");
+        *a.tls.lock().unwrap() = Some(Arc::new(TlsContext::new(HubTrust::pinned(&hub_pin()))));
+        assert!(a.heartbeat(&mut vec![], 1));
+        assert_eq!(a.device().hub_url, Some(format!("https://127.0.0.1:{}", tls_hub.port)));
+        assert_eq!(a.data.device().unwrap().unwrap().hub_url, a.device().hub_url, "saved");
+        // At most one attempt a minute.
+        a.state.lock().unwrap().hub_url = Some(format!("http://127.0.0.1:{}", tls_hub.port));
+        assert!(!a.try_https(&format!("http://127.0.0.1:{}", tls_hub.port)));
         a.sup.stop_all();
         std::fs::remove_dir_all(&dir).unwrap();
     }

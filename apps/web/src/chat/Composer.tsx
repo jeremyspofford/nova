@@ -118,6 +118,11 @@ export interface ComposerProps {
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   /** Shown instead of the input's placeholder while no model is available. */
   noModelHint?: string;
+  /**
+   * The model list is still loading: a send made now waits, visibly, and goes once a model is
+   * known (pressing Enter never drops typed text silently).
+   */
+  modelLoading?: boolean;
   /** Looks up `@`-mention candidates (FR-022); without it, `@` is plain text. */
   mentionSource?: (query: string) => Promise<MentionCandidate[]>;
   /** Lists the slash commands (FR-046); without it, `/` is plain text. */
@@ -128,6 +133,8 @@ export interface ComposerProps {
   onTurnOffSuggestions?: () => void;
   /** M5: an extra control before Stop and Send, e.g. a Code session's permission mode. */
   accessory?: ReactNode;
+  /** M7: more actions in the left cluster, e.g. Generate image (FR-030). */
+  actions?: ReactNode;
   /** M5: prefix of the box's element ids, so an embedded chat does not reuse the main one's. */
   idBase?: string;
 }
@@ -156,20 +163,26 @@ export function Composer({
   onReasoningChange,
   inputRef,
   noModelHint,
+  modelLoading = false,
   mentionSource,
   slashSource,
   suggestions = [],
   onTurnOffSuggestions,
   accessory,
+  actions,
   idBase = 'composer',
 }: ComposerProps) {
   const own = useRef<HTMLTextAreaElement>(null);
   const textarea = inputRef ?? own;
   const fileInput = useRef<HTMLInputElement>(null);
   const mentions = draft.mentions ?? [];
-  const canSend =
-    (draft.text.trim().length > 0 || draft.attachments.length > 0 || mentions.length > 0) &&
-    !!model;
+  const hasContent =
+    draft.text.trim().length > 0 || draft.attachments.length > 0 || mentions.length > 0;
+  const canSend = hasContent && (!!model || modelLoading);
+  /** A send made before any model was known, waiting for the model list. */
+  const [held, setHeld] = useState<{ alternate: boolean } | null>(null);
+  /** A send pressed with no model at all: say why instead of ignoring it. */
+  const [noModelTried, setNoModelTried] = useState(false);
 
   useLayoutEffect(() => {
     const el = textarea.current;
@@ -191,11 +204,39 @@ export function Composer({
     });
   };
 
-  const send = (alternate = false) => {
-    if (!canSend) return;
+  const deliver = (alternate: boolean) => {
     if (streaming) onSend(draft, alternate ? otherMode(followUp) : followUp);
     else onSend(draft);
   };
+  const send = (alternate = false) => {
+    if (!hasContent) return;
+    if (!model) {
+      if (modelLoading) setHeld({ alternate });
+      else setNoModelTried(true);
+      return;
+    }
+    setHeld(null);
+    setNoModelTried(false);
+    deliver(alternate);
+  };
+  const deliverRef = useRef({ deliver, hasContent });
+  useLayoutEffect(() => {
+    deliverRef.current = { deliver, hasContent };
+  });
+  // The model list arrived: a held send goes now, with what the box holds; when it ended with no
+  // model at all, the send is released and the reason shown instead.
+  useEffect(() => {
+    if (!held) return;
+    if (model) {
+      // Sent once, as the user asked before the list arrived; the prop change is the trigger.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHeld(null);
+      if (deliverRef.current.hasContent) deliverRef.current.deliver(held.alternate);
+    } else if (!modelLoading) {
+      setHeld(null);
+      setNoModelTried(true);
+    }
+  }, [held, model, modelLoading]);
 
   const sendKey = enterToSend === 'enter' ? 'Enter' : bindingText('mod+enter', mac);
   const altKey =
@@ -222,6 +263,20 @@ export function Composer({
       {sendError ? (
         <p className="composer-error" role="alert">
           <Icon name="alert" /> {sendError}
+        </p>
+      ) : null}
+      {held && !model ? (
+        <p className="composer-note composer-held" role="status">
+          <Spinner /> Waiting for the model list. Your message sends as soon as it has loaded.{' '}
+          <button type="button" className="link" onClick={() => setHeld(null)}>
+            Don&apos;t send
+          </button>
+        </p>
+      ) : null}
+      {noModelTried && !model && !held ? (
+        <p className="composer-error" role="alert">
+          <Icon name="alert" /> No model is available, so this cannot be sent yet. Connect a model
+          provider in Settings → Accounts; your message stays here.
         </p>
       ) : null}
       {attachmentErrors.length ? (
@@ -432,6 +487,7 @@ export function Composer({
             onClick={slash.insertSlash}
           />
         ) : null}
+        {actions}
         <span className="composer-spacer" />
         {presets.length ? (
           <PresetScale

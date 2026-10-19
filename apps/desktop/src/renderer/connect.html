@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connect to your Hub</title>
+    <link rel="stylesheet" href="shell.css" />
+    <script src="connect.js" defer></script>
+  </head>
+  <body>
+    <main aria-labelledby="title">
+      <div class="stack">
+        <h1 id="title">Connect to your Hub</h1>
+        <p class="muted">
+          Nova checks that it is talking to your own Hub before it sends anything to it.
+        </p>
+      </div>
+
+      <p id="current" class="muted" hidden></p>
+      <div id="problem" class="error" role="alert" hidden></div>
+
+      <section id="replace" class="panel" aria-labelledby="replace-h" hidden>
+        <h2 id="replace-h">Replace your Hub?</h2>
+        <p id="replace-text"></p>
+        <div class="actions end">
+          <button id="replace-cancel" type="button">Keep the current Hub</button>
+          <button id="replace-confirm" type="button" class="primary"></button>
+        </div>
+      </section>
+
+      <form id="link-form" class="panel" aria-labelledby="link-h" novalidate>
+        <h2 id="link-h">Add this computer</h2>
+        <p class="hint">
+          On the Hub, open Devices, choose Add a device and Client, then paste the link it shows.
+        </p>
+        <label for="link">Add Device link</label>
+        <textarea id="link" rows="3" spellcheck="false" autocomplete="off"></textarea>
+        <div class="actions end">
+          <button type="submit" class="primary">Connect</button>
+        </div>
+      </form>
+
+      <p class="or">or</p>
+
+      <form id="manual-form" class="panel" aria-labelledby="manual-h" novalidate>
+        <h2 id="manual-h">Enter the address and fingerprint</h2>
+        <div class="stack">
+          <label for="url">Hub address</label>
+          <input
+            id="url"
+            type="text"
+            inputmode="url"
+            placeholder="https://hub.local:7443"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+        <div class="stack">
+          <label for="pin">Hub fingerprint</label>
+          <input
+            id="pin"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="pin-hint"
+          />
+          <p id="pin-hint" class="hint">
+            The Hub shows it under Network, Trust: 43 letters, digits, - and _.
+          </p>
+        </div>
+        <div class="actions end">
+          <button type="submit">Connect</button>
+        </div>
+      </form>
+
+      <p id="status" role="status" aria-live="polite" class="muted"></p>
+    </main>
+  </body>
+</html>

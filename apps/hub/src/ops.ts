@@ -35,6 +35,7 @@ import {
   type NotificationRouting,
   type SandboxClient,
   type VolumeEncryption,
+  hubOwnerId,
 } from '@nova/core';
 import { defaultRedactor, realpathLenient } from '@nova/security';
 import { RingSink } from '@nova/telemetry';
@@ -152,13 +153,8 @@ export async function setupOps(
   if (!existing) ctx.log.addSink(ring);
 
   // System events without an account are filed under the owner (single-owner Hub, docs/21).
-  const ownerAccount = (): Promise<string | null> =>
-    Promise.resolve(
-      lookup(
-        ctx,
-        "SELECT id AS v FROM account WHERE kind = 'local' AND deleted_at IS NULL ORDER BY created_at LIMIT 1",
-      ),
-    );
+  // The recorded owner (M7): members and team agents' identities are never taken for it.
+  const ownerAccount = (): Promise<string | null> => Promise.resolve(hubOwnerId(ctx.db));
   const subscriptions = [
     auditSecurityEvents({ bus: ctx.events.bus, audit, ownerAccount, log }),
     notifyOnEvents({

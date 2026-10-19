@@ -41,6 +41,14 @@ services) do real work. `compute`, `browser`, `screen` and `capture` are placeho
 only `ping` and `status`. Modules run as `novad`'s user with resource limits only: there is no
 separate unprivileged module user and no per-module filesystem or network sandbox yet.
 
+*As built in M7 (ADR-095).* The default manifest also has `local-runtime` on client-role devices
+(§4.3), so a client runs three module processes (`management`, `storage`, `local-runtime`) and a
+device that is both client and compute runs four. `novad` gained a TLS client: `rustls` 0.23.45
+(Apache-2.0 OR ISC OR MIT) with the `ring` 0.17.14 provider (Apache-2.0 AND ISC; it builds with the C
+compiler of the Rust image, where aws-lc would need cmake), whose certificate checks are
+`rustls-webpki`; the tests make their certificates with `rcgen` 0.14.10 (MIT OR Apache-2.0), a dev
+dependency only, so no key material is committed.
+
 ## 2. Install & bootstrap
 
 - The Hub serves signed, per-arch builds at `/api/v1/agent/dist/novad-<os>-<arch>`.
@@ -101,11 +109,46 @@ novad install --hub http://<hub> --code - --pin <hub fingerprint> [--pairing <id
   `launchctl load -w` on macOS, `sc.exe create`, `failure` and `start` on Windows. Installing the
   service needs root (checked first); `--no-service` skips it.
 
-**Known limitations.** The install runs over plain HTTP: `novad` has no TLS client and refuses an
-`https://` Hub, so the pin, the signed manifest and the Hub-signed confirmation carry its integrity
-while the code and the granted token are visible on the LAN, as for `enroll`. The Windows command is
-generated but untested and key generation reads `/dev/urandom`, so install fails there; the macOS
-service setup is untested. `novad uninstall` is still not built.
+**Known limitations (M6.5).** The install ran over plain HTTP only: `novad` had no TLS client and
+refused an `https://` Hub (M7 below). The Windows command is generated but untested and key
+generation reads `/dev/urandom`, so install fails there; the macOS service setup is untested.
+`novad uninstall` is still not built.
+
+*As built in M7 (ADR-095; `services/novad/src/{tls,install,cli,agent}.rs`).*
+
+```bash
+novad install --hub http(s)://<hub> --code - --pin <hub fingerprint> [--pairing <id>] \
+  [--role …]… [--name N] [--listen ADDR] [--endpoint http://…] [--user NAME]… \
+  [--no-service] [--dry-run] [--data-dir D]
+novad enroll --hub http(s)://<hub> --token nvd_… [--pin <hub fingerprint>] [--user NAME]… …
+```
+
+- **Over HTTPS with the pin.** `install` and `enroll` take an `https://` Hub; `enroll` then needs
+  `--pin` (for `install` it is always required). The first connection checks the Hub's signed
+  identity statement on the connection itself before anything is sent, and later connections trust
+  what it vouched for (`docs/22` §5), so the code and the tokens no longer cross the network in the
+  clear. The pin and what verified statements vouched for are kept in `hub-trust.json` (0600);
+  `novad enroll` deletes it, the key and `device-cert.pem` and starts again. The bootstrap command
+  downloads from an `https://` Hub without checking its certificate (`curl -fsSLk`, `wget
+  --no-check-certificate`), because the SHA-256 in the command carries the download's integrity and
+  `novad` then verifies the Hub by its pin (`docs/22` §4.3).
+- **Over HTTP with a pin**, `novad` reads the statement over plain HTTP, checks its signature and
+  nonce against the pin, and keeps the Hub local CA it lists (`GET /api/v1/trust/ca.pem` must hash
+  to the listed SHA-256). When a heartbeat later cannot reach the Hub, it tries `https://` on the
+  same address (at most once a minute) and switches for good once the pinned identity vouches for
+  the certificate there; it never moves back to plain HTTP. Without a pin there is no TLS: `novad`
+  has no platform trust store, and an `https://` URL without one is refused.
+- **The device certificate** (`device-cert.pem`, issued in `local-ca` mode) is presented on every
+  trusted connection, from registration on, signed with the device key; a connection not yet
+  verified never carries it (it names the device), so `novad` reconnects with it after the check.
+  A certificate that does not match the device key is not used. A Hub that refuses it answers 403
+  `certificate_<why>`, which `novad` logs; it keeps its credentials (`docs/22` §5).
+- **`--user NAME`** (repeatable) names the users who get a local runtime socket of their own (§4.3).
+  Without it, the user who ran `sudo` (`SUDO_USER`) is used, never `root`; a name other than
+  letters, digits, `_`, `.` and `-` (not starting with `-` or `.`, at most 64) is refused. The list
+  is stored as `config.json` `localRuntime.users`; an enrollment that names nobody (no `--user`, not
+  run through `sudo` by a user) keeps the existing list.
+- `--endpoint`, the address the Hub calls for the management channel, stays `http://`.
 
 ## 3. Capability declaration
 
@@ -256,6 +299,53 @@ with its thread, turn and call.
   and SHA-256 at the target.
 - `novad` restarts the helper on crash with backoff, pauses it with the global pause and the
   resource governor (FR-156), and records any gap.
+
+### 4.3 Local runtime (FR-128)
+
+*As built in M7 (ADR-095; `services/novad/src/{local_runtime,user_socket}.rs`).*
+On client-role devices the `local-runtime` module proxies an OpenAI-compatible model server on the
+device (`config.json` `localRuntime.upstream`, `http://` only, default
+`http://127.0.0.1:11434/v1`) to local clients, so the desktop app can answer with local models while
+the Hub is unreachable (`docs/21` §9).
+
+- **Where it listens.** `<data>/local-runtime/runtime.sock`, mode 0600 in a 0700 folder: the file
+  mode is the authentication. When the owner sets `localRuntime.listen` to a loopback `HOST:PORT`
+  (any other address is refused), also there: a request on it needs the bearer token in
+  `<data>/local-runtime/token` (0600, `nvlr_…`, made on first use, else 401 `token_required`), must
+  name this loopback address as its Host (`host_not_allowed`, against DNS rebinding) and carry no
+  `Origin` unless `localRuntime.allowedOrigins` lists it (`origin_not_allowed`). Loopback alone is
+  never authorization (FR-192).
+- **Per-user sockets.** `novad` runs as root, so its own socket is out of reach of the desktop app
+  in a user's session. For each user in `localRuntime.users` (`--user`, §2) the module also binds a
+  socket in that user's runtime folder: `/run/user/<uid>/nova/runtime.sock` on Linux (the desktop
+  app looks in `$XDG_RUNTIME_DIR/nova/`), `/Users/<name>/Library/Application
+  Support/Nova/run/runtime.sock` on macOS. The folder is 0700 and the socket 0600, both owned by the
+  user, with the same admission as the root socket. Users are looked up with `id`, so directory
+  accounts resolve too. The module checks every 30 s: it binds once the user's folder exists
+  (login), stops serving once the socket is gone or replaced (logout) and binds again at the next
+  login. Nothing in the user's folder is followed: the user's folder must be a real directory owned
+  by that uid, `novad`'s folder in it a real directory owned by the user or root, and the socket
+  path empty or an old socket; a link or any other file there is refused (`unsafe_path`), and
+  ownership changes use `lchown`. The module's `status` lists each user's socket or why there is
+  none.
+- **Only with the Hub's grant.** Every request answers 403 `policy_denied` `scope_missing` unless the
+  last heartbeat answer granted `local-runtime`. The heartbeat answer carries the device's `scopes`
+  (`docs/22` §4.2); `novad` keeps them in `scopes.json`, so the grant holds while the Hub is down,
+  and before any answer there is no grant.
+- **Only the model routes.** `GET /v1/models`, `POST /v1/chat/completions`, `/v1/completions` and
+  `/v1/embeddings` (anything else is 404). Only `content-type` and `accept` are passed on, and the
+  answer comes back byte for byte as the server sends it, so a streamed answer stays a stream.
+  Limits: 16 MiB per request, 256 MiB per answer, 32 connections at once, 300 s of silence from the
+  model server; a server that does not answer is 502 `node_unavailable`.
+- **Capability document.** The models the server lists appear as
+  `services.computeBackends: ["local-runtime"]` and `services.modelsPresent`. The module itself
+  stays out of `modules` (`DOCUMENT_MODULES` in `src/capabilities.rs`), although
+  `contracts/schemas/device-capability.json` now lists `local-runtime` in its enum.
+- **Not built.** No peer-credential check on the sockets (the file mode is the authentication). A
+  `novad` that does not run as root can make a socket only for its own user (for anyone else the
+  `lchown` fails, and `status` says so). Windows has no per-user named pipe. Binding for another
+  real user as root, and the macOS path on a Mac, have not been tried: the tests bind for the test's
+  own user.
 
 ## 5. Boot & power
 
@@ -411,8 +501,19 @@ audited on the Hub (kind `device`). The local socket for the native shell
 
 *As built in M6.5 (ADR-094).* The management channel is still bearer tokens over LAN HTTP. A
 device added with Add Device may hold a device certificate (`device-cert.pem`, issued in the
-`local-ca` trust mode), which nothing checks yet: mutual TLS is M7. Revoking a device now also
-blocks its key and refuses an enrollment token still bound to it (`docs/22` §4.5).
+`local-ca` trust mode), which nothing checked yet (mutual TLS came in M7, below). Revoking a device
+now also blocks its key and refuses an enrollment token still bound to it (`docs/22` §4.5).
+
+*As built in M7 (ADR-095).* `novad`'s calls to the Hub (register, heartbeat, capabilities) go over
+HTTPS when the Hub serves it, trusted only through the pinned Hub identity (§2), and present
+`device-cert.pem` as the client certificate (mutual TLS); the Hub checks it on those routes, while
+`devices.tls.allowWithoutCertificate` (on for one release) still accepts a device without one
+(`docs/22` §5). The management channel the Hub calls on the device is still bearer tokens over
+plain HTTP (`--endpoint` must be `http://`; R-022, narrowed to this channel). The first local
+socket is the local runtime's (§4.3): 0600 Unix sockets, its own and one per listed user, or a
+loopback address that needs its token, serving only the model routes after the Hub's grant. The
+`local.*` methods of `contracts/hub-api.md` §4 and the local token they use are not built. Device
+certificates are not renewed.
 
 ## 10. Failure & recovery
 

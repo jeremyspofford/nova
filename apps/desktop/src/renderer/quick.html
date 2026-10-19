@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Quick chat</title>
+    <link rel="stylesheet" href="shell.css" />
+    <script src="quick.js" defer></script>
+  </head>
+  <body>
+    <main class="quick" aria-label="Quick chat">
+      <form id="ask" class="ask" novalidate>
+        <label for="text" class="sr-only">Message</label>
+        <textarea id="text" rows="2" placeholder="Ask Nova…"></textarea>
+        <button type="submit" class="primary">Send</button>
+      </form>
+      <fieldset>
+        <legend class="sr-only">Send to</legend>
+        <label id="current-option"
+          ><input type="radio" name="target" value="current" /> The chat open in Nova</label
+        >
+        <label><input type="radio" name="target" value="new" checked /> A new chat</label>
+      </fieldset>
+      <div id="sent" role="status" aria-live="polite" class="hint"></div>
+      <div id="error" class="error" role="alert" hidden></div>
+
+      <section aria-labelledby="status-h" class="stack">
+        <h2 id="status-h">Status</h2>
+        <ul id="status-list" class="status-list" aria-labelledby="status-h"></ul>
+      </section>
+
+      <div class="actions">
+        <button id="new-task" type="button">New task</button>
+        <button id="attach" type="button">Attach window</button>
+        <button id="open" type="button">Open Nova</button>
+      </div>
+      <ul id="problems" class="hint"></ul>
+    </main>
+  </body>
+</html>

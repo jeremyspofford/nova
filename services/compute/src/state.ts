@@ -8,6 +8,8 @@ import { BACKEND_KINDS } from './backend.ts';
 
 export const STATE_FILE = 'node.json';
 
+const listedSchema = z.object({ sha256: z.string(), notAfter: z.string() });
+
 const stateSchema = z.object({
   version: z.literal(1),
   /** Stable random id for the capability document; kept across re-enrollment. */
@@ -31,9 +33,23 @@ const stateSchema = z.object({
       heartbeatIntervalMs: z.number().int().min(100),
       protocolVersion: z.number().int(),
       enrolledAt: z.string(),
+      /** The device certificate Add Device granted (local-CA mode): mutual TLS (FR-126). */
+      certificatePem: z.string().nullable().default(null),
     })
     .nullable(),
   revokedAt: z.string().nullable().default(null),
+  /**
+   * The pinned Hub fingerprint and what its verified identity statements vouched for (the Hub
+   * local CA, its listed certificates): how an https:// Hub is trusted (hub-tls.ts).
+   */
+  hubTrust: z
+    .object({
+      pin: z.string().nullable(),
+      caPem: z.string().nullable(),
+      listed: z.array(listedSchema),
+    })
+    .nullable()
+    .default(null),
 });
 export type NodeState = z.infer<typeof stateSchema>;
 export type Enrollment = NonNullable<NodeState['enrollment']>;

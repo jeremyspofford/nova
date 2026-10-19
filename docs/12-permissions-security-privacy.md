@@ -22,6 +22,59 @@ The design assumption is **zero trust in everything that is not the user or the 
 process**: renderer, plugins, MCP servers, tool output, other agents and remote content are all
 untrusted.
 
+*As built in M7 (ADR-095).* The sync channel is Hub-canonical (`docs/13` §2): there is no
+account master key; the Relay carries replica traffic sealed end to end (`docs/22` §3.1) and the
+web replica is sealed under a non-extractable key on the device. Two assets join the table:
+
+| Asset | Threat | Mitigation |
+| --- | --- | --- |
+| One person's data on a shared Hub | A member, a removed member or a team agent reaches the owner's files, memory, connectors or machine | Account scoping on every route, an owner-only route list, a folder of its own for every non-owner account, public addresses only for non-owners, narrowing-only allow lists (§1.1) |
+| Work on a cloud runner | A compromised runner lies to the Hub; a command escapes to the runner host or other tenants | The Hub trusts no path the runner reports and reads bounded answers; the runner sandboxes every command with process, memory, CPU, wall and disk limits, per-token command shares and no network by default (§7.4) |
+
+### 1.1 Several people on one Hub (M7)
+
+*As built in M7 (decision 5 of ADR-095; `packages/core/src/team`, `apps/hub/src/team.ts`).* A Hub
+has one owner (the recorded owner row, the one test used everywhere: auth, sync, trust, operations
+and consolidation) and may have members and team agents' identity accounts. Every
+account-scoped route shows a caller only its own account's data; on top of that:
+
+- **Owner-only routes.** A preHandler refuses any account that is not the owner, with 403
+  `policy_denied` `{reason: owner_only}`, on the routes that administer the Hub or reach its
+  machine (`OWNER_ONLY_ROUTES`; the list is in `contracts/hub-api.md` §1): settings, trust,
+  network, Relay, devices, nodes, diagnostics, plugins and hooks installed for everyone, files,
+  terminals, host folders, imports, Code environments, the cloud runner, external agent adapters,
+  MCP bundles and the shared publish folder. A member may add remote MCP servers but never a stdio
+  one. Members keep their own appearance, keyboard and onboarding preferences; `instructions.md`
+  is the owner's alone. New Hub-administration routes must join the list: a route missing from
+  it is open to members (scoped to their own account), so a review of each new area checks it.
+- **Folders.** Every non-owner account's chats, runs and tools work in
+  `<dataDir>/members/<id>/workspace`, never the Hub's workspace or configured roots, including tool
+  calls with no thread (the policy sources are asked with thread id `''`). The browser's fallback
+  profile and files folders and plugin drafts are per account.
+- **Addresses.** A non-owner's provider base URLs and provider tests, MCP servers over http or SSE,
+  MCP OAuth discovery and email servers are resolved, checked and pinned for the connection; a
+  private, loopback or otherwise non-public address is refused (`private_address`;
+  `packages/core/src/team/public-net.ts`; email keeps the TLS server name). `browser.allowLocalSites`
+  is ignored for them.
+- **Allow lists only narrow.** A non-owner's egress scope allow lists and browser site allow rows
+  are intersected with `network.egressAllow`, so they can never add a host the owner did not allow.
+- **Removal.** Removing a member revokes their sessions, closes their open sockets (4401
+  `account_closed`) and event streams, disables their schedules, triggers, channel bindings and
+  MCP servers, ends their MCP event and push subscriptions and stops their agents; turns, runs,
+  triggers and sign-ins of a closed account are refused (`account_closed`).
+- **Events.** Account-less system events (network, trust, Relay) go only to the owner's streams.
+- **Shared threads** use an allow-list of built-in tools, not tainting (`docs/13` §7): nothing in
+  them reaches the host, and another participant's words never run under the caller's authority
+  (a message written offline is never answered in a shared thread, `docs/13` §2.3).
+- **Team agents** run in their own identity account with credentials bound to it; each task runs
+  in its own thread labelled by the requesting account (display names cut to one line), so tasks
+  of different people never share history.
+- **Bounded shares.** A non-owner may use at most half of the browser's slots and evicts only its
+  own idle sessions; pending OIDC sign-ins are capped at 10 per address and 1,000 in all.
+- **OIDC** binds the callback to the browser that started (`nova_oidc_binding`, HttpOnly,
+  SameSite=Lax, 10 minutes, compared by hash in constant time), so a link or sign-in URL another
+  person completes, or that leaks, is refused (`browser_mismatch`).
+
 ## 2. Policy engine (FR-099)
 
 Location: `packages/policy`. Pure, deterministic, unit-testable.
@@ -231,6 +284,23 @@ An `allow` never changes the permission profile: the action still runs in the sa
 sandbox blocks a command, the failure returns to the agent. The agent may request a wider
 profile for that one invocation, which is an `ask` like any other. Nova never retries a command
 outside the sandbox on its own (ADR-059).
+
+*As built in M7 (ADR-095).* Three seams joined the evaluation:
+
+- **Tool limits per thread** run before the steps above and only deny: a sub-agent with a tool
+  list is held to it plus `run.complete`, `tool.search`, `context.remaining` and `context.fresh`
+  (FR-053); a shared thread offers only its allow-list; tools of plugins not connected to an agent
+  are denied for that agent and the Code sessions it delegated; a delegated Code session keeps its
+  agent's rules (a delegation whose rules are gone denies everything) and a paused agent's
+  delegated work is denied until it resumes; in a cloud thread the Hub's own `fs.*` tools are
+  denied (and so hidden).
+- **`ruleTool`.** A request may carry a separate name that only the engine's rule matching reads.
+  Browser site levels per project or agent use it (`browser.act:<kind>:<ref>`, `docs/11` §4.4)
+  behind a policy preview, while hooks, tool limits, the approval card, audit and events still see
+  `browser.act`; the auto-review escalation drops it, so a scoped "Always allow" never answers one.
+- **The thread's own substrate.** The gate asks the sandbox router for the substrate of the
+  request's own thread (`useSubstrate(accountId, threadId)`), so a cloud thread reports `cloud`,
+  which is not isolated, and the isolation-dependent choices (Bypass) are not offered there.
 
 Every decision carries a human-readable reason, the tier, its source and, where applicable, a
 rule id. This is the "why" shown on approval cards, and it is written to the audit event with
@@ -491,6 +561,28 @@ every grant.
   hashed in its own domain like the M2 and M6 ones. Mesh CLIs get secrets on standard input, in
   their environment or from a 0600 file (`docs/22` §6), never as arguments. A device keeps its own
   private keys: the Hub stores only its public key and certificate.
+- **As shipped in M7** (ADR-095). New vault entries, with rows holding only references: the cloud
+  runner token (`secret://cloud/runner/token`), the Web Push VAPID key (`secret://push/vapid`) and
+  each browser subscription's auth secret, the approval-link key, the Relay registration token
+  (`secret://relay/registration/token`; the setting accepts only `secret://relay/registration/…`, so
+  it can never name another secret the connector would send), OIDC client secrets, team agents'
+  provider and egress credentials, Telegram bot tokens, email passwords and Telegram webhook
+  secrets (`secret://channel/…`), MCP `auth` values, schedule webhook signing secrets (shown once,
+  never returned again) and external agent adapters' environment values (only
+  `secret://agent-adapter/<id>/…`; any other reference is refused, `foreign_secret`, so an adapter
+  cannot read another secret). Invitation tokens and the OIDC browser binding are stored only as
+  hashes. **The idempotency store** (`docs/13` §2.3) never keeps an answer marked `no-store`,
+  larger than 256 KiB or carrying a credential (a Nova token, a token-shaped string, a value under a
+  key named like a credential), whatever the route says, and replay is opt-in per route; routes
+  that hand out tokens send `no-store`. The SSH private key is copied only into a temporary private
+  folder for the ssh client, and copies a crash left are removed at start.
+- **Redactor bounds (M7).** The redactor runs in the Hub's and the shell's event loops, so its
+  rules are bounded: the `pem` body cannot cross another BEGIN marker and is capped at 16 KiB,
+  `url-credentials` is anchored on `://` with a scheme of at most 32 characters, `jwt` starts only
+  at the beginning of a token run, and literals apply longest first. Every rule finishes in under
+  50 ms on 2 MB of hostile input (`packages/security/test/redact-timing.test.ts`). Callers that
+  redact page-supplied text clip it to twice its cap first (`docs/11` §4). Opaque tokens in URL
+  paths (reset and magic links) are still not masked.
 
 ## 6. Prompt-injection defense (FR-103)
 
@@ -698,6 +790,40 @@ allowed; hidden offline and online sandbox users created by a one-time elevated 
 private desktop per launch; firewall rules installed broad-then-narrowed so a mode change never
 fails open; an optional OS container mode; kill-on-close job objects. AppContainer is not used.
 
+### 7.4 Cloud runner, scripts and external agents (M7)
+
+*As built in M7 (ADR-095).*
+
+- **The cloud runner** (`services/runner`, `contracts/rest-api.md` §5) sandboxes every command
+  itself: bubblewrap (new namespaces, every capability dropped, a seccomp filter, system folders
+  read-only, only the environment's own folders mounted; it refuses to run as root), else docker
+  or podman (a non-root user, no capabilities, `--network none`, pids and memory limits, the program
+  as the entrypoint so an image's own ENTRYPOINT never runs), else refusal. Per command
+  RLIMIT_DATA, RLIMIT_CPU and RLIMIT_FSIZE; per sandbox a process limit and, where
+  `systemd-run --user --scope` works, a cgroup with pids and memory limits; per Hub token 16 of the
+  runner's 64 command slots. The Hub's state on the runner (`/nova`: shadow repositories, handoff
+  bundles) is mounted only for the Hub's own programs, never for a command, so a command cannot
+  rewrite its session's review baseline. Clones run inside the sandbox; repository URLs never carry
+  credentials (refused by the Hub and the runner) and never name private or local hosts. The Hub,
+  in turn, trusts no path the runner reports (only `/workspace` and below), hides its own file
+  tools in cloud threads and reads bounded answers (96 MiB per answer, 5 MiB per artifact, 1 MiB per
+  event).
+- **Scripts** (`script.run`, FR-202, off by default) run in a QuickJS engine of their own, one per
+  run, in a worker thread with heap and stack limits, an empty environment and a watchdog; there
+  are no host globals and no module import. Every nested tool call goes through the tool runtime
+  and the gate like a direct call, carries no user instruction (so a consequential call asks unless
+  a rule or grant allows it) and inherits taint; `script.run` is never served to MCP clients.
+- **External agents** (FR-203, off by default) run in the Code session's own sandbox with the
+  folder read-only; a session whose sandbox has no substrate (an SSH, WSL or device session without
+  one) is refused (`no_substrate`). Every file read, write and command the agent asks for runs as an
+  `fs.*` or `exec.*` call through the gate with the `external_agent` taint; Nova never picks the
+  agent's "always allow"; terminals are capped (8, 1 MiB each) and killed when the delegation
+  ends, without waiting on an approval; turning the flag off stops running delegations and the
+  host re-checks the flag before every request.
+- **SSH environments** (FR-062, off by default): pinned host keys (a change needs the reset route),
+  a helper checked by SHA-256 before every start and run by that absolute path, `--` before the
+  host, quoted options, and remote writes that never follow a symlink (`docs/10` §2).
+
 ## 8. Egress control (FR-102, FR-193)
 
 Every sandbox, container and VM reaches the network only through the egress proxy. The proxy
@@ -765,6 +891,21 @@ clients; the substrate blocks every other route (`docs/11` §7).
   stored list that fails them resolves to the default (none) instead of breaking every session.
 - Gaps: the agent browser's session follows `network.egressMode` but no scope policy; SOCKS5 is
   not built; MCP servers and `web.fetch` bypass the proxy.
+
+**As shipped in M7** (ADR-095):
+
+- **Non-owners** (§1.1): their allow lists can only narrow `network.egressAllow`, and the Hub's own
+  connections on their behalf (providers, MCP, OAuth discovery, email) reach public addresses only,
+  pinned after resolution.
+- **External agents** (FR-203, `docs/08`): the agent's process gets a policy built only from its
+  adapter's declared hosts (the global mode and deny list still apply; session grants, the global
+  allow list, credentials, hooks and local binding do not), and network is refused on a sandbox
+  the proxy cannot enforce (`no_egress_proxy`).
+- **The cloud runner does not pass the proxy.** Its commands run with network off unless the owner
+  turns on `cloud.runner.unrestrictedNetwork` (and the turn's own mode is not `off`); with it on, a
+  cloud command reaches the network directly from the runner host, with no allowlist, no
+  private-address block and no egress audit. Proxying runner traffic through the Hub is not built.
+- **Push** goes only to https endpoints on `push.webPushHosts` (instead of DNS pinning).
 
 ## 9. Data controls & privacy (FR-105)
 
@@ -878,6 +1019,13 @@ administrator can write it, or as a signed remote policy:
   `denied`, `expired` or `refused` and its reason, `relay.revoke`). No code, nonce, token or key is
   ever in an entry; trust actions the Hub takes on its own are attributed to the owner account
   (none is written before setup).
+- **As shipped in M7** (ADR-095). The M7 actions (sync, the cloud runner, channels and push, Code
+  handoffs, merges, attempts, SSH host keys and delegation, members, OIDC and team agents, scripts
+  and external agents, device TLS and the Relay registration token, browser levels and crashes)
+  are listed in `docs/06` §2. No audit kind was added: sync uses `device`, the cloud runner
+  `settings`, `code` and `run`, members and OIDC `auth`, team agents `agent`. Device TLS refusals
+  are audited at most once an hour per device and reason. Team agents' actions carry the actor
+  `agent:<id>`.
 - Sensitive raw inputs can be recorded only if the user opts in; defaults store hashes.
 
 ## 12. Security testing (FR-123)
@@ -1016,9 +1164,47 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
 - **Known limitations (M6.5).** `novad` and compute nodes still talk to the Hub with bearer
   tokens over plain HTTP, so Add Device codes and granted tokens are visible on the LAN (the pin,
   the signed manifest and the Hub-signed confirmation protect integrity); device certificates are
-  issued but nothing checks them (mutual TLS is M7). A device session from Add Device is a full
+  issued but nothing checks them (mutual TLS is M7; built, below). A device session from Add Device is a full
   owner session: its scopes are recorded, not enforced. The Relay has no forward secrecy (static
   X25519 keys per pairing; `docs/22` §3.1) and accepts any push token. The identity key cannot be
   rotated, the CA is replaced only on the owner's explicit request, and device certificates are
   not renewed. Network setup has no elevation and was exercised only
   against fake CLIs.
+- **Public routes as shipped in M7** (ADR-095; same list). The signed one-use approval link of an
+  approval email (GET shows, POST answers once; `no-store`, `no-referrer`, a strict CSP and no
+  framing), the invitation join and preview (the one-use token; 10 a minute per address), the OIDC
+  providers list, start and callback (the single-use state, the browser-binding cookie, then the
+  ID token's checks; redirects only to fixed paths) and public profile cards (only opted-in cards
+  while `team.publicProfiles` is on; 60 a minute per address). Telegram webhooks use the existing
+  inbound route with the secret-token header the Hub generated.
+- **Mutual TLS** (M7, FR-126). Over HTTPS the Hub asks every client for a certificate of its local
+  CA without requiring one; the `novad` and compute-node routes check it and that it belongs to
+  the caller (`certificate_*` refusals); `devices.tls.allowWithoutCertificate` (on for one release)
+  decides whether a device without one is accepted. `novad` and compute nodes verify the Hub by
+  its pinned identity statement on the same connection before they send anything, and present
+  their certificate only after that check (`docs/22` §5). The Hub → `novad` management channel is
+  still bearer tokens over plain HTTP (R-022).
+- **Local runtime sockets** (M7, FR-128). `novad`'s local runtime listens on a 0600 Unix socket in
+  a 0700 folder, and per user on `/run/user/<uid>/nova/runtime.sock` owned by that user (links and
+  foreign files refused, never followed; `lchown`); a loopback address, when the owner opens one,
+  needs a token, a loopback Host and no Origin unless allowed. It serves only the model routes and
+  only while the Hub granted `local-runtime` (`contracts/hub-api.md` §4).
+- **The desktop shell** (M7) runs its windows with context isolation, the sandbox, no Node and no
+  webview; navigation stays on the Hub origin, web links open in the system browser, and every IPC
+  payload is validated in the main process with the sender checked (`contracts/ipc-channels.md`).
+  It pins the Hub before sending any credential and clears stored cookies when the identity
+  changes; plain HTTP only to a Hub on the same computer.
+- **Known limitations (M7).** The desktop shell's sender check compares the frame's URL rather
+  than its real origin, so a Hub page served in a sandboxed opaque origin and opened top-level
+  (a site preview or an MCP app UI) would get the bridge, and `setShortcut` accepts editing and
+  system keys; excluded apps match only on the Linux AT-SPI path and a screenshot can fall back to a
+  window whose title only contains the captured one; the shell clears stored Hub data only when a
+  previous Hub is on record, and an Add Device link for another Hub replaces the current one after
+  a generic Connect. A browser paired through the Relay holds its device token where page script
+  can use it (sealed in IndexedDB, but weaker than an HttpOnly cookie). Cloud runner network, when
+  the owner allows it, bypasses the egress proxy. The `fs.*` path fix covers cloud threads only:
+  SSH, WSL and device sessions still use the remote folder as roots. A removed member's running
+  channel pollers keep polling (their turns are refused) until a restart. The Relay still has no
+  forward secrecy; device certificates are not renewed. A device session is still an owner
+  session apart from its scopes: `offline-replica` and `local-runtime` are now enforced, the other
+  scopes are recorded only.

@@ -14,6 +14,7 @@ small; large recordings go in the release assets, not the repo.
 | M5 | [Work runs, budgets, schedules, chat escalation and a Code session](M5.md) |
 | M6 | [An agent books a meeting and asks before sending; research, Slack, events, browser, takeover](M6.md) |
 | M6.5 | [Add a computer and a phone with a code; turn the LAN off and the Relay takes over](M6.5.md) |
+| M7 | [A phone starts a task through the Relay and the desktop approves it; two devices sync and restore a conflict; offline changes; a cloud run](M7.md) |
 
 ## Template
 

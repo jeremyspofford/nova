@@ -4,6 +4,7 @@
 // without, or whose thread has no sandbox of its own, goes to the base. Each running session
 // remembers the sandbox it started in, so polls, writes and kills reach the same machine.
 import type { ExecOwner } from './exec-sessions.ts';
+import type { RemoteFiles } from './fs-remote.ts';
 import type { ExecRequestExtras } from './sandbox-process.ts';
 import type { ExecRequest, ExecResult, SandboxClient } from './types.ts';
 
@@ -12,7 +13,29 @@ type RoutedRequest = ExecRequest & ExecRequestExtras & { owner?: ExecOwner };
 /** The sandbox a thread's commands use; null for the base. */
 export type ThreadSandboxPick = (accountId: string, threadId: string) => SandboxClient | null;
 
-export function threadSandboxRouter(base: SandboxClient, pick: ThreadSandboxPick): SandboxClient {
+/**
+ * The router, which also says where a thread's commands go (M7): `substrate` is the base's, so
+ * the gate's isolation checks for a thread read `substrateFor` (a cloud environment's sandbox is
+ * `cloud`, another machine's helper none), and availability checks read `availableFor`.
+ */
+export interface ThreadSandboxRouter extends SandboxClient {
+  substrateFor(accountId: string | null, threadId: string | null): SandboxClient['substrate'];
+  availableFor(
+    accountId: string | null,
+    threadId: string | null,
+  ): Promise<{ ok: boolean; detail: string }>;
+  /**
+   * Where a thread's files are (M7, fs-remote.ts): undefined for the Hub's own disk, the remote
+   * folder of a session on another machine, null when that machine cannot be reached now.
+   */
+  filesFor(accountId: string, threadId: string): RemoteFiles | null | undefined;
+  killAll?: () => Promise<void>;
+}
+
+export function threadSandboxRouter(
+  base: SandboxClient,
+  pick: ThreadSandboxPick,
+): ThreadSandboxRouter {
   const bySession = new Map<string, SandboxClient>();
   const byTurn = new Map<string, Set<SandboxClient>>();
   const target = (req: RoutedRequest): SandboxClient => {
@@ -24,9 +47,17 @@ export function threadSandboxRouter(base: SandboxClient, pick: ThreadSandboxPick
   const forget = (sessionId: string, r: ExecResult) => {
     if (r.status === 'exited') bySession.delete(sessionId);
   };
-  const router: SandboxClient & { killAll?: () => Promise<void> } = {
+  const routed = (accountId: string | null, threadId: string | null): SandboxClient =>
+    accountId && threadId ? (pick(accountId, threadId) ?? base) : base;
+  const router: ThreadSandboxRouter = {
     get substrate() {
       return base.substrate;
+    },
+    substrateFor: (accountId, threadId) => routed(accountId, threadId).substrate,
+    availableFor: (accountId, threadId) => routed(accountId, threadId).available(),
+    filesFor: (accountId, threadId) => {
+      const picked = accountId && threadId ? pick(accountId, threadId) : null;
+      return picked ? (picked as { files?: RemoteFiles | null }).files : undefined;
     },
     available: () => base.available(),
     exec: async (req: RoutedRequest) => {

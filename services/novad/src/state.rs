@@ -84,6 +84,8 @@ pub struct Config {
     pub services: Vec<ServiceSpec>,
     pub power: PowerConfig,
     pub mcp_servers: Vec<McpServer>,
+    /// The local runtime module (FR-128): the model server it proxies and where it listens.
+    pub local_runtime: crate::local_runtime::LocalRuntimeConfig,
 }
 
 impl Default for Config {
@@ -93,8 +95,17 @@ impl Default for Config {
             services: vec![ServiceSpec { name: "compute".into(), kind: "module".into(), module: Some("compute".into()), unit: None }],
             power: PowerConfig::default(),
             mcp_servers: vec![],
+            local_runtime: Default::default(),
         }
     }
+}
+
+/// `scopes.json`: what the Hub's heartbeat answers granted (docs/22 §4.2), e.g. `local-runtime`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GrantedScopes {
+    pub scopes: Vec<String>,
+    pub updated_at: String,
 }
 
 /// Per-device policy from the Hub (FR-150).
@@ -145,6 +156,29 @@ impl DataDir {
     }
     pub fn manifest_path(&self) -> PathBuf {
         self.0.join("modules.json")
+    }
+    /// The scopes the Hub granted this device (`scopes.json`, from every heartbeat answer): the
+    /// local runtime module reads it (FR-128), so it works offline with the last grant.
+    pub fn scopes_path(&self) -> PathBuf {
+        self.0.join("scopes.json")
+    }
+
+    /// The Hub's last granted scopes; none before the first answer (fail closed).
+    pub fn granted_scopes(&self) -> Vec<String> {
+        read_json_or::<GrantedScopes>(&self.scopes_path(), GrantedScopes::default()).map(|g| g.scopes).unwrap_or_default()
+    }
+
+    /// Keep the Hub's grant when it changed; returns whether it did.
+    pub fn save_granted_scopes(&self, scopes: &[String]) -> OpResult<bool> {
+        let mut next: Vec<String> = scopes.to_vec();
+        next.sort();
+        next.dedup();
+        let path = self.scopes_path();
+        if path.exists() && self.granted_scopes() == next {
+            return Ok(false);
+        }
+        write_json(&path, &GrantedScopes { scopes: next, updated_at: crate::util::now_iso() }, false)?;
+        Ok(true)
     }
 
     /// Create the folder, private to novad's user.
@@ -256,6 +290,13 @@ mod tests {
         let c = d.config().unwrap();
         assert_eq!(c.services[0].name, "compute");
         assert_eq!(d.hub_config().unwrap().revision, 0);
+        // No grant before the Hub answers; a changed grant is saved, an unchanged one is not.
+        assert!(d.granted_scopes().is_empty());
+        assert!(d.save_granted_scopes(&["local-runtime".into(), "files".into(), "files".into()]).unwrap());
+        assert_eq!(d.granted_scopes(), vec!["files".to_string(), "local-runtime".to_string()]);
+        assert!(!d.save_granted_scopes(&["local-runtime".into(), "files".into()]).unwrap());
+        assert!(d.save_granted_scopes(&[]).unwrap());
+        assert!(d.granted_scopes().is_empty());
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

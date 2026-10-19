@@ -18,6 +18,16 @@ export interface SandboxEgressContext {
   network: 'allowlist' | 'limited';
   /** The scope the network policy belongs to, when the caller knows it (an agent's computer). */
   scope: { kind: 'run' | 'session' | 'agent' | 'sandbox'; id: string } | null;
+  /** An explicit policy replacing the scopes' (ExecRequestExtras `egress.policy`). */
+  policy?: EgressPolicyOverride;
+}
+
+/**
+ * A command's own network policy (an external agent, FR-203): it may reach only `allow`; the
+ * global mode and deny list still apply, and no credential is ever injected.
+ */
+export interface EgressPolicyOverride {
+  allow: string[];
 }
 
 /** One proxy session, as a substrate mounts it. */
@@ -151,7 +161,14 @@ export function egressContext(req: SandboxExecRequest): SandboxEgressContext | n
     req.egress?.accountId ?? (typeof owner?.accountId === 'string' ? owner.accountId : null);
   const threadId =
     req.egress?.threadId ?? (typeof owner?.threadId === 'string' ? owner.threadId : null);
-  return { accountId, threadId, network: req.network, scope: req.egress?.scope ?? null };
+  const ctx: SandboxEgressContext = {
+    accountId,
+    threadId,
+    network: req.network,
+    scope: req.egress?.scope ?? null,
+  };
+  if (req.egress?.policy) ctx.policy = { allow: [...req.egress.policy.allow] };
+  return ctx;
 }
 
 /** Open the request's proxy session; a failure is a note and no network (fail closed). */

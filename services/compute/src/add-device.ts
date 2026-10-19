@@ -5,7 +5,9 @@
 // node checks that the Hub's public key from hello hashes to the pin and that the signature
 // verifies; it always computes the confirmation itself and stops on any mismatch. Then it polls
 // its status and, once the owner approves on the Hub, registers with the one-use `nve_` token it
-// was granted, which the Hub bound to that same key.
+// was granted, which the Hub bound to that same key, presenting the device certificate the grant
+// carries (local-CA mode). An https:// Hub is trusted through the pin (hub-tls.ts: its signed
+// identity statement on the connection itself, before anything is sent).
 import {
   createHash,
   createPrivateKey,
@@ -17,6 +19,7 @@ import {
 import { hostname } from 'node:os';
 import { Backend, guardedFetch } from './backend.ts';
 import { HubClient, HubError } from './hub-client.ts';
+import { HubTls } from './hub-tls.ts';
 import { generateKeys } from './identity.ts';
 import { enroll, plainHttpUrl, type EnrollOptions } from './node.ts';
 import { loadState, statePath, type NodeState } from './state.ts';
@@ -144,7 +147,10 @@ function platformName(): string {
   return process.platform;
 }
 
-export interface JoinOptions extends Omit<EnrollOptions, 'token' | 'keys'> {
+export interface JoinOptions extends Omit<
+  EnrollOptions,
+  'token' | 'keys' | 'pin' | 'trust' | 'certificatePem'
+> {
   /** The pairing code the Hub shows (`ABCD-EFGH`). */
   code: string;
   /** From the QR payload or the install command (`--pairing`); a typed code finds its own. */
@@ -192,7 +198,15 @@ export async function joinWithCode(opts: JoinOptions): Promise<NodeState> {
       { cause: err },
     );
   }
-  const hub = new HubClient({ hubUrl, fetch: guardedFetch([hubUrl], opts.fetch) });
+  // Over https:// the pin decides which certificates to trust; without one, the system's roots.
+  const tls =
+    opts.pin !== undefined
+      ? new HubTls({ trust: { pin: opts.pin, caPem: null, listed: [] } })
+      : null;
+  const hub = new HubClient({
+    hubUrl,
+    fetch: guardedFetch([hubUrl], tls ? tls.fetch(opts.fetch) : opts.fetch),
+  });
   const hello = await hub.hello();
   const hubPublicKey = typeof hello.hubPublicKey === 'string' ? hello.hubPublicKey : null;
   let hubFingerprint = typeof hello.hubFingerprint === 'string' ? hello.hubFingerprint : '';
@@ -254,6 +268,7 @@ export async function joinWithCode(opts: JoinOptions): Promise<NodeState> {
   const interval = Math.max(1, opts.pollIntervalMs ?? 2000);
   let last = 0;
   let token: string | null = null;
+  let certificatePem: string | null = null;
   while (!token) {
     if (now() > deadline) throw new Error('nobody approved this node on the Hub in time');
     const t = Math.floor(now() / 1000);
@@ -271,6 +286,11 @@ export async function joinWithCode(opts: JoinOptions): Promise<NodeState> {
           if (s.grant?.type !== 'compute' || !s.grant.enrollToken)
             throw new Error('the Hub approved this node but sent no enrollment token');
           token = s.grant.enrollToken;
+          certificatePem =
+            typeof s.grant.certificatePem === 'string' &&
+            s.grant.certificatePem.startsWith('-----BEGIN CERTIFICATE-----')
+              ? s.grant.certificatePem
+              : null;
           break;
         }
       } catch (err) {
@@ -280,5 +300,11 @@ export async function joinWithCode(opts: JoinOptions): Promise<NodeState> {
     }
     await sleep(interval);
   }
-  return enroll({ ...opts, token, keys });
+  return enroll({
+    ...opts,
+    token,
+    keys,
+    certificatePem,
+    ...(tls ? { trust: tls.trust } : {}),
+  });
 }

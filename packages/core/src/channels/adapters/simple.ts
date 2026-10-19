@@ -1,6 +1,5 @@
-// The in-app channel (the agent's own thread: replies are already there) and email, which is
-// modelled but not configured: reading a mailbox and sending through SMTP arrive with the email
-// connector, so email bindings cannot be created yet and the adapter refuses both directions.
+// The in-app channel: the agent's own thread, where replies already are. (Email, a stub here in
+// M6, is a real adapter since M7: adapters/email.ts.)
 import { NovaError, uuidv7 } from '@nova/shared';
 import type { ChannelReceipt, InboundMessage } from '../types.ts';
 import type { NovaChannelAdapter } from './common.ts';
@@ -23,24 +22,5 @@ export class InAppAdapter implements NovaChannelAdapter {
   send(): Promise<ChannelReceipt> {
     // The reply is a message of the thread already.
     return Promise.resolve({ id: `inapp:${uuidv7()}`, at: this.#now().toISOString() });
-  }
-}
-
-export const EMAIL_UNAVAILABLE =
-  'email channels are not available yet: they need a connected mailbox (IMAP and SMTP)';
-
-export class EmailAdapter implements NovaChannelAdapter {
-  readonly kind = 'email' as const;
-
-  availability(): { available: boolean; detail: string | null } {
-    return { available: false, detail: EMAIL_UNAVAILABLE };
-  }
-
-  parse(): Promise<InboundMessage | null> {
-    return Promise.reject(new NovaError('capability_missing', EMAIL_UNAVAILABLE));
-  }
-
-  send(): Promise<ChannelReceipt> {
-    return Promise.reject(new NovaError('capability_missing', EMAIL_UNAVAILABLE));
   }
 }

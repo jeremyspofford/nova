@@ -270,15 +270,28 @@ pub struct Extras<'a> {
     pub update_channel: &'a str,
     pub fs_scopes: Vec<String>,
     pub models_dir: Option<String>,
+    /// The models the local runtime serves (FR-128), when it runs and its server answered.
+    pub local_models: Option<Vec<String>>,
 }
+
+/// The module names the capability schema knows (`modules` in contracts/schemas/
+/// device-capability.json, `local-runtime` included since M7). Any other name stays out of
+/// the document so the Hub's validation accepts it; the local runtime's models show as a backend.
+pub const DOCUMENT_MODULES: &[&str] = &["management", "compute", "browser", "screen", "storage", "capture", "firmware", "local-runtime"];
 
 /// The full document: detected facts, defaults, then the owner's and the Hub's overrides.
 pub fn build(base: &CapabilityDocument, extras: &Extras, local: &Value, hub: &Value) -> Value {
     let mut doc = serde_json::to_value(base).unwrap_or_else(|_| json!({}));
-    let mut modules = extras.modules.clone();
+    let mut modules: Vec<String> = extras.modules.iter().filter(|m| DOCUMENT_MODULES.contains(&m.as_str())).cloned().collect();
     modules.sort();
     modules.dedup();
     doc["modules"] = json!(modules);
+    if let Some(models) = &extras.local_models {
+        let mut ids = models.clone();
+        ids.sort();
+        ids.dedup();
+        doc["services"] = json!({ "computeBackends": ["local-runtime"], "modelsPresent": ids.iter().map(|id| json!({ "id": id })).collect::<Vec<_>>() });
+    }
     if let Some(p) = extras.power {
         doc["hardware"]["nic"] = json!({ "wol": p["wakeable"].as_bool().unwrap_or(false), "macs": p["macs"].clone() });
         let mut power = json!({ "wakeable": p["wakeable"].as_bool().unwrap_or(false) });
@@ -377,9 +390,10 @@ mod tests {
         assert!(validate_overrides(&json!({"models": {"storagePaths": ["rel"]}})).is_err());
         let base = detect("dev", &["client", "compute"], &probe());
         let power = json!({"wakeable": true, "macs": ["aa:bb:cc:dd:ee:ff"], "ac": true});
-        let extras = Extras { modules: vec!["storage".into(), "management".into(), "compute".into()], power: Some(&power), update_channel: "beta", fs_scopes: vec!["/p".into()], models_dir: Some("/var/lib/nova/models".into()) };
+        let extras = Extras { modules: vec!["storage".into(), "management".into(), "compute".into(), "local-runtime".into(), "kernel".into()], power: Some(&power), update_channel: "beta", fs_scopes: vec!["/p".into()], models_dir: Some("/var/lib/nova/models".into()), local_models: None };
         let doc = build(&base, &extras, &json!({"computePolicy": {"maxConcurrentJobs": 3}}), &ok);
-        assert_eq!(doc["modules"], json!(["compute", "management", "storage"]));
+        assert_eq!(doc["modules"], json!(["compute", "local-runtime", "management", "storage"]), "only modules the schema knows");
+        assert!(doc.get("services").is_none());
         assert_eq!(doc["hardware"]["nic"]["wol"], true);
         assert_eq!(doc["power"]["wakeable"], true);
         assert_eq!(doc["data"]["updateChannel"], "beta");
@@ -392,5 +406,9 @@ mod tests {
         // A client without the compute role gets no compute policy.
         let client = build(&detect("d", &["client"], &probe()), &extras, &json!({}), &json!({}));
         assert!(client.get("computePolicy").is_none());
+        // The local runtime's models are reported as a backend (FR-128).
+        let local = Extras { local_models: Some(vec!["qwen3:8b".into(), "llama3.2".into(), "qwen3:8b".into()]), ..extras };
+        let doc = build(&detect("d", &["client"], &probe()), &local, &json!({}), &json!({}));
+        assert_eq!(doc["services"], json!({ "computeBackends": ["local-runtime"], "modelsPresent": [{ "id": "llama3.2" }, { "id": "qwen3:8b" }] }));
     }
 }

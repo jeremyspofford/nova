@@ -6,8 +6,12 @@
 // addresses, sites not allowed yet), and all traffic goes through the egress proxy the service
 // opened (docs/12 §8). Element refs are `data-nova-ref` attributes set by each read; the scripts
 // that read the page are sent whole with every call, so the page cannot replace them.
+// M7: the page's console and network activity are reported to the session (capture.ts redacts
+// them; request bodies are never read, response bodies only for text types under the cap), and
+// a crashed page or browser is reported so the session can restart it (docs/11 §10).
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { bodyPolicy } from './capture.ts';
 import type {
   BrowserDriver,
   DriverLaunchOptions,
@@ -29,6 +33,8 @@ type PwContextOptions = NonNullable<Parameters<PwBrowser['newContext']>[0]>;
 type PwStorageState = Exclude<PwContextOptions['storageState'], string | undefined>;
 
 const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+/** Response bodies read at the same time; more are reported as not available. */
+const MAX_BODY_READS = 6;
 const REF = /^e\d{1,5}$/;
 const KEY = /^[A-Za-z0-9+_ -]{1,40}$/;
 
@@ -178,15 +184,37 @@ async function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 class PlaywrightSession implements DriverSession {
   readonly #browser: PwBrowser;
   readonly #context: PwContext;
+  readonly #opts: DriverLaunchOptions;
   #page: PwPage;
   /** Main-frame navigations in flight (a click or a key may start one). */
   readonly #navigations = new Set<PwRequest>();
   #navigationsDone: (() => void)[] = [];
+  /** Our own close: the browser going away then is not a crash. */
+  #closing = false;
+  /** Capture ids of the page's requests (M7). */
+  readonly #ids = new WeakMap<PwRequest, string>();
+  /** Text responses without a declared length: read once finished, if their size allows. */
+  readonly #pendingBodies = new WeakMap<PwRequest, { id: string; res: Playwright.Response }>();
+  #seq = 0;
+  #bodyReads = 0;
+  /** The current page crashed (its `crash` event); cleared when `recover` replaces it. */
+  #pageCrashed = false;
 
-  constructor(browser: PwBrowser, context: PwContext, page: PwPage) {
+  constructor(browser: PwBrowser, context: PwContext, page: PwPage, opts: DriverLaunchOptions) {
     this.#browser = browser;
     this.#context = context;
     this.#page = page;
+    this.#opts = opts;
+    browser.on('disconnected', () => {
+      if (!this.#closing) opts.onCrash?.('the browser process exited');
+    });
+    this.#attach(page);
+  }
+
+  /** The page's listeners; a page that replaced a crashed one gets them again. */
+  #attach(page: PwPage): void {
+    const opts = this.#opts;
+    const current = () => page === this.#page;
     const main = (r: PwRequest) => {
       try {
         return r.isNavigationRequest() && r.frame().parentFrame() === null;
@@ -199,10 +227,131 @@ class PlaywrightSession implements DriverSession {
       for (const fn of this.#navigationsDone.splice(0)) fn();
     };
     page.on('request', (r) => {
+      if (!current()) return;
       if (main(r)) this.#navigations.add(r);
+      this.#request(r, main(r));
     });
-    page.on('requestfinished', done);
-    page.on('requestfailed', done);
+    page.on('requestfinished', (r) => {
+      done(r);
+      this.#done(r, null);
+      const pending = this.#pendingBodies.get(r);
+      if (pending) {
+        this.#pendingBodies.delete(r);
+        this.#readBody(pending.id, pending.res, r);
+      }
+    });
+    page.on('requestfailed', (r) => {
+      done(r);
+      this.#done(r, r.failure()?.errorText ?? 'the request failed');
+    });
+    page.on('response', (res) => {
+      if (current()) this.#response(res);
+    });
+    page.on('console', (m) => {
+      if (!current() || !opts.onConsole) return;
+      const loc = m.location();
+      opts.onConsole({
+        level: m.type(),
+        text: m.text(),
+        source: 'console',
+        url: loc.url || null,
+        line: typeof loc.lineNumber === 'number' ? loc.lineNumber : null,
+      });
+    });
+    page.on('pageerror', (err) => {
+      if (current())
+        opts.onConsole?.({
+          level: 'error',
+          text: `${err.name ? `${err.name}: ` : ''}${err.message}`,
+          source: 'pageerror',
+        });
+    });
+    page.on('crash', () => {
+      if (!current()) return;
+      this.#pageCrashed = true;
+      opts.onCrash?.('the page crashed');
+    });
+    page.on('framenavigated', (frame) => {
+      if (current() && frame === page.mainFrame()) opts.onNavigated?.(frame.url());
+    });
+    page.on('popup', (popup) => {
+      const u = popup.url();
+      void popup.close().catch(() => undefined);
+      opts.onPopup?.(u);
+    });
+  }
+
+  #request(r: PwRequest, navigation: boolean): void {
+    const onNetwork = this.#opts.onNetwork;
+    const url = r.url();
+    if (!onNetwork || !/^https?:/i.test(url)) return;
+    const id = `r${++this.#seq}`;
+    this.#ids.set(r, id);
+    onNetwork({
+      phase: 'request',
+      id,
+      method: r.method(),
+      url,
+      resourceType: r.resourceType(),
+      navigation,
+      // `headers()` leaves out cookie headers; capture.ts masks what is left anyway.
+      headers: r.headers(),
+    });
+  }
+
+  #response(res: Playwright.Response): void {
+    const onNetwork = this.#opts.onNetwork;
+    const id = this.#ids.get(res.request());
+    if (!onNetwork || !id) return;
+    const status = res.status();
+    const headers = res.headers();
+    onNetwork({ phase: 'response', id, status, statusText: res.statusText(), headers });
+    const policy = bodyPolicy(status, headers, this.#opts.captureBodyMaxBytes ?? 0);
+    if (!policy.read) {
+      onNetwork({ phase: 'body', id, body: null, omitted: policy.omitted });
+      return;
+    }
+    // Without a declared length the body is read only after the request finished, and only when
+    // the size it arrived with is under the cap: `body()` would buffer all of it (review note).
+    if (!policy.declared) {
+      this.#pendingBodies.set(res.request(), { id, res });
+      return;
+    }
+    this.#readBody(id, res, null);
+  }
+
+  #readBody(id: string, res: Playwright.Response, finished: PwRequest | null): void {
+    const onNetwork = this.#opts.onNetwork;
+    if (!onNetwork) return;
+    if (this.#bodyReads >= MAX_BODY_READS) {
+      onNetwork({ phase: 'body', id, body: null, omitted: 'unavailable' });
+      return;
+    }
+    const cap = this.#opts.captureBodyMaxBytes ?? 0;
+    this.#bodyReads++;
+    void (async () => {
+      if (finished) {
+        const sizes = await within(finished.sizes(), 5_000, 'the response size').catch(() => null);
+        if (!sizes || sizes.responseBodySize > cap) {
+          onNetwork({
+            phase: 'body',
+            id,
+            body: null,
+            omitted: sizes ? 'too_large' : 'unavailable',
+          });
+          return;
+        }
+      }
+      const b = await within(res.body(), 10_000, 'reading the response');
+      onNetwork({ phase: 'body', id, body: new Uint8Array(b) });
+    })()
+      .catch(() => onNetwork({ phase: 'body', id, body: null, omitted: 'unavailable' }))
+      .finally(() => this.#bodyReads--);
+  }
+
+  #done(r: PwRequest, failure: string | null): void {
+    const id = this.#ids.get(r);
+    if (id) this.#opts.onNetwork?.({ phase: 'done', id, failure });
   }
 
   #at(ref: string) {
@@ -283,6 +432,10 @@ class PlaywrightSession implements DriverSession {
     await this.#settle();
   }
 
+  async hover(ref: string, timeoutMs: number): Promise<void> {
+    await this.#at(ref).hover({ timeout: timeoutMs });
+  }
+
   async fill(ref: string, text: string, timeoutMs: number): Promise<void> {
     await this.#at(ref).fill(text, { timeout: timeoutMs });
   }
@@ -326,6 +479,10 @@ class PlaywrightSession implements DriverSession {
 
   async screenshot(fullPage: boolean): Promise<Uint8Array> {
     return await this.#page.screenshot({ fullPage, type: 'png', timeout: 10_000 });
+  }
+
+  async screenshotElement(ref: string): Promise<Uint8Array> {
+    return await this.#at(ref).screenshot({ type: 'png', timeout: 10_000 });
   }
 
   async download(
@@ -382,7 +539,50 @@ class PlaywrightSession implements DriverSession {
     return await this.#context.storageState();
   }
 
+  async cookies(): Promise<Record<string, unknown>[]> {
+    return (await this.#context.cookies()) as unknown as Record<string, unknown>[];
+  }
+
+  crashState(): Promise<string | null> {
+    if (this.#closing) return Promise.resolve(null);
+    if (!this.#browser.isConnected()) return Promise.resolve('the browser process exited');
+    return Promise.resolve(this.#pageCrashed ? 'the page crashed' : null);
+  }
+
+  async focusedSecret(): Promise<boolean> {
+    // Playwright's selector engine and attribute reads run apart from the page's own scripts.
+    const field = this.#page.locator('input:focus');
+    if ((await field.count().catch(() => 0)) !== 1) return false;
+    const [type, ac] = await Promise.all(
+      ['type', 'autocomplete'].map((a) =>
+        field.getAttribute(a, { timeout: 1_000 }).catch(() => null),
+      ),
+    );
+    return (
+      (type ?? '').toLowerCase() === 'password' ||
+      /(?:current|new)-password|one-time-code/i.test(ac ?? '')
+    );
+  }
+
+  async recover(): Promise<boolean> {
+    if (!this.#browser.isConnected()) return false;
+    const old = this.#page;
+    try {
+      const page = await this.#context.newPage();
+      this.#page = page;
+      this.#pageCrashed = false;
+      this.#navigations.clear();
+      for (const fn of this.#navigationsDone.splice(0)) fn();
+      this.#attach(page);
+    } catch {
+      return false;
+    }
+    await old.close().catch(() => undefined);
+    return true;
+  }
+
   async close(): Promise<void> {
+    this.#closing = true;
     await this.#browser.close().catch(() => undefined);
   }
 }
@@ -511,15 +711,7 @@ export class PlaywrightDriver implements BrowserDriver {
         // show an error page; a 204 leaves Playwright waiting for the navigation).
         return route.abort('aborted');
       });
-      page.on('framenavigated', (frame) => {
-        if (frame === page.mainFrame()) opts.onNavigated?.(frame.url());
-      });
-      page.on('popup', (popup) => {
-        const u = popup.url();
-        void popup.close().catch(() => undefined);
-        opts.onPopup?.(u);
-      });
-      return new PlaywrightSession(browser, context, page);
+      return new PlaywrightSession(browser, context, page, opts);
     } catch (err) {
       await browser.close().catch(() => undefined);
       throw err;

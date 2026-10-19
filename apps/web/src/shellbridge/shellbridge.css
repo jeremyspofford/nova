@@ -1,0 +1,33 @@
+/* Desktop-app features of the web UI: global shortcuts and the notifications note (FR-008,
+   FR-009). Colors come only from design tokens; rows wrap to one column at phone width. */
+.shb-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.shb-row > .ws-source-main {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.shb-row > .ws-row-actions {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.shb-key {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.shb-note {
+  display: block;
+}
+.shb-note-line {
+  display: flex;
+  gap: var(--u-space-2);
+  align-items: flex-start;
+}
+.shb-note-line > .nv-icon {
+  flex: none;
+  margin-top: 3px;
+}

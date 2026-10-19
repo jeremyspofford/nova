@@ -28,6 +28,11 @@ tests in `docs/16`.
 | FR-015 | P0 | M1 | Accessibility baseline: all interactive elements reachable by keyboard, visible focus rings, ARIA labels, `prefers-reduced-motion` honored, WCAG 2.2 AA contrast. |
 | FR-016 | P1 | M8 | UI strings are externalized for localization; layout supports RTL. |
 
+*FR-008, FR-009 note (ADR-095).* Built in M7 by the desktop shell (`apps/desktop`): tray, quick
+overlay (Ctrl+Alt+N, current or new chat, New task, the status list, Quit) and windows of their own
+for app routes. Voice in quick chat waits for FR-216/FR-031, and panes without a route (the editor,
+the terminal) cannot be detached yet.
+
 ## B. Conversation (Chat mode)
 
 | ID | Pri | Ms | Requirement / Acceptance |
@@ -169,6 +174,13 @@ tests in `docs/16`.
 | FR-111 | P2 | M7 | Mobile dispatch via relay: send a task and receive approvals/notifications; deep links open the desktop app or a web view. |
 | FR-112 | P1 | M7 | Offline behavior: local features work offline; outbound operations queue with visible status and retry with backoff. |
 
+*Section J notes (ADR-095).* FR-109: the Hub is canonical and plays the sync service; only the web
+app keeps a replica so far (`docs/13` §2). FR-108, FR-071: built with `services/runner`; agent
+computers stay on the mock runner, and runner network is off unless the owner allows it
+unrestricted (`docs/13` §3). FR-110: Telegram and email are built; Telegram files, email OAuth and
+the channel relay through the Relay are not (`docs/13` §4). FR-111: Web Push from the Hub and
+native push through the Relay; no shipped native app registers yet.
+
 ## K. Account, profile, usage
 
 | ID | Pri | Ms | Requirement / Acceptance |
@@ -177,6 +189,10 @@ tests in `docs/16`.
 | FR-114 | P1 | M4 | Usage insights: tokens by provider/model, cost estimate, active days/streak, longest task, per-project breakdown; local-only. |
 | FR-115 | P0 | M4 | Multiple provider accounts supported; a single active account per provider with quick switching; entitlements/limits surfaced. |
 | FR-116 | P2 | M8 | Spend caps and warnings per provider; hard stop when cap reached (configurable). |
+
+*Section K notes (ADR-095).* FR-113: M7 added OIDC sign-in and linking and the opt-in public profile
+card (`docs/13` §7). FR-116 stays in M8 for provider spend caps; M7 built the cloud runner's own
+caps (CPU, wall time and disk, a warning at 80 % and a hard stop, `cloud.runner.caps`).
 
 ## L. Extensibility, diagnostics, quality
 
@@ -218,6 +234,16 @@ Relay, the Hub's connector, the API tunnel and the client library, and listing a
 clients (`docs/22` §3.1). Still M7, where FR-137 stays: real push adapters (APNs and FCM; the
 Relay has a recording mock), the channel relay (`/v1/relay/messages` and `/v1/relay/outbox`
 answer 501), and clients that pair through the Relay (native apps).
+
+*M7 notes (ADR-095).* FR-137: the real APNs and FCM senders are built in the Relay only, off unless
+its operator configures them (`NOVA_RELAY_APNS_*`, `NOVA_RELAY_FCM_SERVICE_ACCOUNT_FILE`); the Hub
+asks the Relay to push to native clients and sends Web Push itself. The web app pairs through the
+Relay and reaches the Hub through it; the Hub sends a registration token to a private Relay. The
+channel relay is still not built, and no native app pairs yet. FR-126: M7 added mutual TLS on the
+node and `novad` routes (`docs/22` §5). FR-128: partly built: a local model answers a waiting chat
+message in the desktop app through `novad`'s local runtime, with the device's `local-runtime`
+scope, and the answer is queued for the Hub; local agents and tools are not. FR-129: built for the
+web app's replica (`docs/13` §2).
 
 ## N. Device agent & firmware
 
@@ -365,6 +391,14 @@ Added by `docs/external/RECONCILIATION.md`. Grouped by area; IDs continue the se
 | FR-216 | P1 | M5 | **Dictation**: speech-to-text into the composer with punctuation cleanup and a user dictionary; local engines by default; audio is not stored. |
 | FR-217 | P2 | M7 | **Shared threads**: several authenticated users of one Hub can share a thread. Each user's personal memory and private connectors are never injected into it; actions in a shared thread run under the acting user's permissions. |
 | FR-218 | P2 | M7 | **Voice-call channel**: users can call an agent (in-app, or through a telephony connector) with streaming speech both ways. Calls started by an agent are out of scope for v1. |
+
+*M7 notes (ADR-095).* FR-218 is not built in M7: there is no voice-call channel, in-app or by
+telephony; it waits on the voice pipeline (FR-031, FR-216). FR-213: Code sessions move with their
+Git state; a chat's handoff to a device is recorded and announced, but its turns still run on the
+Hub, and no UI moves a chat yet. FR-214: the window's text is read on Linux only (AT-SPI); excluded
+apps match only there, the screenshot is not redacted, and capture starts only from the shell's
+own gestures, not from the composer. FR-217: built; the ordinary chat view does not yet show who
+wrote each message (the shared view does).
 
 ### T8. Outputs & models
 

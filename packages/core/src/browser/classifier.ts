@@ -9,7 +9,7 @@ import type { ActionEffectClass } from '@nova/shared';
 import type { PageElement } from './types.ts';
 
 export type PageActionKind =
-  'click' | 'type' | 'select' | 'press' | 'upload' | 'download' | 'evaluate';
+  'click' | 'type' | 'select' | 'press' | 'hover' | 'upload' | 'download' | 'evaluate';
 
 export interface PageActionInput {
   kind: PageActionKind;
@@ -266,6 +266,10 @@ export function classifyPageAction(input: PageActionInput): PageActionClassifica
       }
       return b.result(false);
     }
+    case 'hover':
+      // Moving the pointer changes nothing on the site (M7); a CAPTCHA widget (above) is still
+      // the user's, since such widgets watch the pointer.
+      return b.result(true);
     case 'upload': {
       b.add('external_communication', `uploading a file sends it to ${input.page.host}`);
       b.transmits = true;
@@ -315,6 +319,8 @@ export function actionTitle(
   switch (kind) {
     case 'click':
       return `Click${target}`;
+    case 'hover':
+      return `Hover over${target}`;
     case 'type':
       return `Type into${target}`;
     case 'select':

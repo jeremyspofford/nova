@@ -1,9 +1,10 @@
 // The agent browser of one computer (FR-092, FR-096, FR-098, FR-086, FR-087, FR-208, FR-194;
-// docs/11 §4): the open page (title, address, session state, the tools the page registered), its
-// latest frame from the Hub, pending private sign-ins, the recorded actions with before/after
-// screenshots, taking over the page (the agent waits until control is returned) and closing the
-// session. Page titles and addresses come from the web: shown as text, never as links or HTML.
-// Mounted on a computer's page.
+// docs/11 §4, §10): the open page (title, address, session state, the tools the page registered),
+// a crash and how often it restarted, its latest frame from the Hub, pending private sign-ins, what
+// the page logged (console and network), the recorded actions with before/after screenshots,
+// taking over the page (the agent waits until control is returned) and closing the session. Page
+// titles and addresses come from the web: shown as text, never as links or HTML. Mounted on a
+// computer's page.
 import { useEffect, useId, useState } from 'react';
 import type { BrowserSessionView, BrowserStatusView, ScreenTakeoverView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
@@ -15,7 +16,9 @@ import { useAnnounce } from '../services.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
 import { useBrowserApi } from './api.ts';
+import { useHasBrowserCapture } from './api-m7.ts';
 import { BrowserTrace } from './BrowserTrace.tsx';
+import { PageCapture } from './PageCapture.tsx';
 import { BROWSER_PAGE_EVENTS, eventComputerId, useHubEvents } from './events.ts';
 import { SESSION_CHIP } from './format.ts';
 import { PendingSignins } from './PendingSignins.tsx';
@@ -37,6 +40,7 @@ export function BrowserSessionChip({ session }: { session: BrowserSessionView | 
 
 export function BrowserPanel({ computerId }: { computerId: string }) {
   const api = useBrowserApi();
+  const hasCapture = useHasBrowserCapture();
   const screenApi = useScreenApi();
   const toast = useToast();
   const announce = useAnnounce();
@@ -180,7 +184,24 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
                   : 'Cookies are cleared when it closes'}
               </span>
               <span>Last action {formatWhen(session.lastActionAt)}</span>
+              {session.restarts > 0 ? (
+                <span>
+                  Restarted after a crash{' '}
+                  {session.restarts === 1 ? 'once' : `${session.restarts} times`}
+                </span>
+              ) : null}
             </p>
+            {session.crash ? (
+              <p className="ws-warning brw-crash" role="status">
+                <Icon name="alert" />
+                <span>
+                  The browser crashed {formatWhen(session.crash.at)}:{' '}
+                  {sentence(session.crash.reason)} It restarts on the agent’s next action and
+                  reopens the page if the site is still allowed. Steps on page elements are not
+                  repeated.
+                </span>
+              </p>
+            ) : null}
             {session.pageTools.length ? (
               <div className="brw-page-tools">
                 <p className="ws-flush">
@@ -257,6 +278,7 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
           }
         />
       )}
+      {session && hasCapture ? <PageCapture computerId={computerId} /> : null}
       <BrowserTrace computerId={computerId} />
       <Dialog
         open={confirmClose}

@@ -1,6 +1,9 @@
 // Shared lists the sidebar and views both read: chat threads (FR-017) and models with presets
-// (FR-023, FR-221). The Hub is the source of truth; these mirror it and refetch after changes.
-// Side chats never enter the thread list (FR-026).
+// (FR-023, FR-221). The Hub is the source of truth; these mirror it and refetch after changes,
+// including changes made on other devices: the chat list follows `thread.created`, `.updated` and
+// `.deleted` on the shared event stream and lists again whenever the stream reconnects (offline,
+// the list then comes from this device's offline copy, src/offline/). Side chats never enter the
+// thread list (FR-026).
 import {
   createContext,
   useCallback,
@@ -13,6 +16,7 @@ import {
 } from 'react';
 import type { ModelView, Preset, ThreadView, UpdateThreadRequest } from '@nova/shared';
 import { errorMessage, type Api } from './api.ts';
+import { useHubStream } from './hub-events.ts';
 
 export interface ThreadsStore {
   threads: ThreadView[];
@@ -27,7 +31,13 @@ export interface ThreadsStore {
   remove: (id: string) => Promise<void>;
   /** Merge a fresher view (from a thread page or stream) without refetching. */
   upsertLocal: (view: Partial<ThreadView> & { id: string }) => void;
+  /** List again shortly; calls close together list once (events from another device). */
+  refreshSoon: () => void;
 }
+
+/** Chat list changes a client hears about (ephemeral, from any device of the account). */
+export const THREAD_LIST_EVENTS = ['thread.created', 'thread.updated', 'thread.deleted'] as const;
+const REFRESH_SOON_MS = 150;
 
 const ThreadsCtx = createContext<ThreadsStore | null>(null);
 
@@ -91,6 +101,37 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
     void refresh();
   }, [refresh]);
 
+  const soon = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshSoon = useCallback(() => {
+    if (soon.current) return;
+    soon.current = setTimeout(() => {
+      soon.current = null;
+      void refresh();
+    }, REFRESH_SOON_MS);
+  }, [refresh]);
+  useEffect(
+    () => () => {
+      if (soon.current) clearTimeout(soon.current);
+    },
+    [],
+  );
+  // Chats made, renamed or deleted elsewhere (another device, an agent) show up here without a
+  // reload. Every connection lists again: events sent before it opened or while it was down
+  // (an outage, a laptop asleep) are not replayed.
+  useHubStream(
+    THREAD_LIST_EVENTS,
+    (env) => {
+      const id = typeof env.payload.threadId === 'string' ? env.payload.threadId : null;
+      if (env.name === 'thread.deleted' && id) {
+        setThreads((list) => list.filter((t) => t.id !== id));
+        setArchived((list) => list?.filter((t) => t.id !== id) ?? null);
+        return;
+      }
+      refreshSoon();
+    },
+    refreshSoon,
+  );
+
   const upsertLocal = useCallback((view: Partial<ThreadView> & { id: string }) => {
     // Side chats, Work runs and Code sessions live in their own lists, never in Recent.
     if (view.side) return;
@@ -150,6 +191,7 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
       update,
       remove,
       upsertLocal,
+      refreshSoon,
     }),
     [
       threads,
@@ -163,6 +205,7 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
       update,
       remove,
       upsertLocal,
+      refreshSoon,
     ],
   );
   return <ThreadsCtx.Provider value={store}>{children}</ThreadsCtx.Provider>;

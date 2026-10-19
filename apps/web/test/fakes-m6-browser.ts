@@ -7,7 +7,9 @@
 // `request_expired`, a saved login for another site 400, granting an app Nova never controls 403
 // `policy_denied`, renewing a revoked grant 409, a second takeover 409, input or ending without a
 // takeover 409, and seeing a computer without a controlled desktop (or browser) 409. Unknown
-// computers answer 404. Views handed out are copies and never mutated.
+// computers answer 404. Views handed out are copies and never mutated. Since M7 the trace is
+// newest first with an opaque cursor (a forged one is 400), and a site keeps its levels per
+// project or agent until it is blocked or removed (their routes are in fakes-m7-misc.ts).
 //
 // Wiring into test/fakes.ts (done by the lead): `HubState` gets `m6browser: M6BrowserState`,
 // `createHub` defaults it to `m6BrowserState()`, and `impl` spreads
@@ -78,6 +80,7 @@ export function siteView(over: Partial<BrowserSiteView> = {}): BrowserSiteView {
     access: 'allow',
     level: 'always_ask',
     devProtocol: false,
+    scopedLevels: [],
     createdAt: T0,
     updatedAt: T0,
     ...over,
@@ -96,6 +99,8 @@ export function sessionView(over: Partial<BrowserSessionView> = {}): BrowserSess
     startedAt: T0,
     lastActionAt: T0,
     persistCookies: false,
+    crash: null,
+    restarts: 0,
     ...over,
   };
 }
@@ -394,6 +399,8 @@ export function m6BrowserImpl(
       access: b.access,
       level,
       devProtocol,
+      // A scoped level survives a change of the account level; blocking the site removes it.
+      scopedLevels: b.access === 'block' ? [] : (prev?.scopedLevels ?? []),
       createdAt: prev?.createdAt ?? at,
       updatedAt: at,
     });
@@ -525,18 +532,42 @@ export function m6BrowserImpl(
       st.sessions = st.sessions.filter((s) => s.computerId !== cid);
       return { ok: true };
     },
+    // Newest first; the cursor is the last row's (createdAt, id), opaque to the client (M7).
     listBrowserActions: async (q = {}) => {
       maybeFail('listBrowserActions');
-      const items = st.actions
+      let after: [string, string] | null = null;
+      if (q.cursor) {
+        try {
+          const v = JSON.parse(atob(q.cursor)) as unknown;
+          if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'string'))
+            throw new Error('shape');
+          after = [v[0] as string, v[1] as string];
+        } catch {
+          throw err(400, 'validation', 'that cursor is not one the Hub made');
+        }
+      }
+      const limit = q.limit ?? 100;
+      const sorted = st.actions
         .filter(
           (a) =>
             (!q.computerId || a.computerId === q.computerId) &&
             (!q.threadId || a.threadId === q.threadId) &&
             (!q.callId || a.callId === q.callId),
         )
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-        .slice(0, q.limit ?? 100);
-      return { items: items.map((a) => ({ ...a })) };
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+        .filter(
+          (a) =>
+            !after ||
+            a.createdAt < after[0] ||
+            (a.createdAt === after[0] && a.id.localeCompare(after[1]) < 0),
+        );
+      const items = sorted.slice(0, limit);
+      const last = items.at(-1);
+      return {
+        items: items.map((a) => ({ ...a })),
+        nextCursor:
+          sorted.length > limit && last ? btoa(JSON.stringify([last.createdAt, last.id])) : null,
+      };
     },
     browserShotUrl: (aid, which) => `/api/v1/browser/actions/${aid}/screenshots/${which}`,
 

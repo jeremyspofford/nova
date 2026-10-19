@@ -294,7 +294,10 @@ export class ConsolidationService {
       const settings = await this.#settings();
       if (!settings.enabled) return 0;
       let ran = 0;
-      const accounts = this.#db.raw.prepare('SELECT id FROM account ORDER BY id').all() as {
+      // A closed account (a removed member) has no background work (decision 5).
+      const accounts = this.#db.raw
+        .prepare('SELECT id FROM account WHERE deleted_at IS NULL ORDER BY id')
+        .all() as {
         id: string;
       }[];
       for (const { id: accountId } of accounts) {

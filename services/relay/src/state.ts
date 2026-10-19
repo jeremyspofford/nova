@@ -245,6 +245,12 @@ export class RelayState {
     this.#changed(true);
   }
 
+  /** Drop a registration the push service refused as unknown (M7). */
+  clearPush(route: ClientRoute): void {
+    route.push = null;
+    this.#changed(true);
+  }
+
   touch(route: { lastSeenAt: string | null }, now: string): void {
     route.lastSeenAt = now;
     this.#touched = true;

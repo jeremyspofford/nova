@@ -21,6 +21,7 @@ import { useModels } from '../stores.tsx';
 import { MANAGED } from './common.ts';
 import { SwitchField } from './controls.tsx';
 import '../workspace.css';
+import { CodeM7Settings } from '../code/CodeM7Settings.tsx';
 
 /** Modes a new session can start in; Plan is chosen per session (docs/10 §3). */
 const DEFAULT_MODES = ['manual', 'accept_edits', 'auto', 'bypass'] as const;
@@ -103,6 +104,7 @@ export function CodePage() {
       <BudgetsSection onError={fail} />
       <PullRequestsSection onError={fail} />
       <WorktreeSection onError={fail} />
+      <CodeM7Settings />
     </div>
   );
 }

@@ -182,7 +182,11 @@ describe('tool routes', () => {
       payload: { args: { path: 'hello.txt' } },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, text: 'hi there' });
+    expect(res.json()).toEqual({
+      ok: true,
+      text: 'hi there',
+      meta: { path: 'hello.txt', sha256: expect.any(String), size: 8, truncated: false },
+    });
     expect(e.audit[0]).toMatchObject({ actor: 'user', action: 'fs.read', result: 'ok' });
     const fail = await e.app.inject({
       method: 'POST',
@@ -205,6 +209,40 @@ describe('tool routes', () => {
       payload: { args: {}, threadId: 'nope' },
     });
     expect(badThread.statusCode).toBe(404);
+  });
+
+  it("returns the result's meta, redacted, with the text (M7)", async () => {
+    e = await areaEnv();
+    const thread = await e.threads.create(ACCOUNT, {});
+    const key = 'AKIAABCDEFGHIJKLMNOP';
+    const res = await e.app.inject({
+      method: 'POST',
+      url: '/api/v1/tools/artifact.create/invoke',
+      headers: AUTH,
+      payload: {
+        args: { kind: 'markdown', title: `Keys ${key}`, content: '# hi' },
+        threadId: thread.id,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{
+      ok: boolean;
+      text: string;
+      meta: { artifact: Record<string, unknown> };
+    }>();
+    expect(body.ok).toBe(true);
+    expect(body.meta.artifact).toMatchObject({ kind: 'markdown', version: 1 });
+    expect(body.text).toContain(String(body.meta.artifact.id));
+    expect(JSON.stringify(body)).not.toContain(key);
+    expect(body.meta.artifact.title).toContain('[REDACTED]');
+    // A failed call has no meta.
+    const fail = await e.app.inject({
+      method: 'POST',
+      url: '/api/v1/tools/artifact.create/invoke',
+      headers: AUTH,
+      payload: { args: { kind: 'nope', title: 'x', content: 'y' }, threadId: thread.id },
+    });
+    expect(fail.json()).toMatchObject({ ok: false, meta: null });
   });
 
   it('answers 202 with the approval while the gate waits', async () => {

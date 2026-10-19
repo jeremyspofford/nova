@@ -30,6 +30,7 @@ import {
 } from '@nova/shared';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
+import type { ThreadToolLimits, ToolLimitSource } from '../approvals/limits.ts';
 import type { EventSink } from '../events.ts';
 import type {
   BoundHit,
@@ -237,6 +238,8 @@ interface TurnPlan {
 
 const ACTIVE_STATUSES: RunStatus[] = ['planning', 'running', 'waiting_approval', 'paused'];
 const LIVE: ReadonlySet<RunStatus> = new Set(['running', 'waiting_approval']);
+/** Tools a sub-agent with a tool list keeps (FR-053): its report and the loop's own tools. */
+const CHILD_TOOLS = ['run.complete', 'tool.search', 'context.remaining', 'context.fresh'];
 const ORIGINS: ReadonlySet<string> = new Set<Origin>([
   'user',
   'tool',
@@ -311,6 +314,8 @@ export class RunService implements RunToolHost {
   readonly status: ThreadStatusSource;
   /** A run's autonomy as an approval policy for the gate (docs/09 §10). */
   readonly policy: ThreadPolicySource;
+  /** A sub-agent's tool list, enforced at the gate (FR-053): `gate.useToolLimits`. */
+  readonly toolLimits: ToolLimitSource;
   /**
    * Every run tool as one source. The handlers refuse calls outside their threads, so this works
    * without per-turn tools; with them, `extension` offers each thread only its own.
@@ -350,6 +355,7 @@ export class RunService implements RunToolHost {
       },
     };
     this.policy = { forThread: (accountId, threadId) => this.#threadPolicy(accountId, threadId) };
+    this.toolLimits = { forThread: (accountId, threadId) => this.#toolLimits(accountId, threadId) };
     const all = this.#tools.all;
     this.toolSource = {
       source: 'builtin',
@@ -2505,6 +2511,15 @@ export class RunService implements RunToolHost {
   // ---- create ------------------------------------------------------------------------------
 
   async #create(input: CreateRunOptions): Promise<RunRow> {
+    // A closed account (a removed member) starts no run: not from a schedule, a trigger or a
+    // channel either (decision 5).
+    const closed = this.#db.raw
+      .prepare('SELECT deleted_at FROM account WHERE id = ?')
+      .get(input.accountId) as { deleted_at: string | null } | undefined;
+    if (closed?.deleted_at)
+      throw new NovaError('auth_missing', 'this account is closed', {
+        details: { reason: 'account_closed' },
+      });
     const objective = input.objective.trim();
     if (!objective) throw new NovaError('validation', 'an objective is required');
     const projectId = input.projectId ?? null;
@@ -2642,7 +2657,26 @@ export class RunService implements RunToolHost {
       goalId: goal?.id ?? null,
       derived: await this.#derivedView(row, goal),
       used: this.#meters.get(row.id)?.used ?? null,
+      environmentId: this.#cloudEnvironmentOf(row),
     });
+  }
+
+  /**
+   * The cloud environment a Work run's commands go to (M7): the cloud runner area binds the
+   * run's thread to it (`cloud_work_binding`). Null for a run on the Hub.
+   */
+  #cloudEnvironmentOf(row: RunRow): string | null {
+    try {
+      const r = this.#db.raw
+        .prepare(
+          'SELECT environment_id FROM cloud_work_binding WHERE thread_id = ? AND account_id = ?',
+        )
+        .get(row.threadId, row.accountId) as { environment_id: string } | undefined;
+      return r?.environment_id ?? null;
+    } catch (err) {
+      this.#log.warn('cloud environment lookup failed', { err, runId: row.id });
+      return null;
+    }
   }
 
   #goalView(g: GoalRow): GoalView {
@@ -2715,6 +2749,21 @@ export class RunService implements RunToolHost {
       roots: null,
       permissionMode: null,
       autoAcceptEdits: false,
+    };
+  }
+
+  /**
+   * A sub-agent given a tool list calls only those tools (FR-053), plus what every child needs:
+   * reporting back and the loop's own context and tool-search tools. Its listing shows no other.
+   */
+  async #toolLimits(accountId: string, threadId: string): Promise<ThreadToolLimits | null> {
+    const kind = await this.#kindOf(threadId, accountId);
+    if (kind?.kind !== 'child') return null;
+    const allow = parseJson<string[]>(kind.sub.toolsJson);
+    if (!allow) return null;
+    return {
+      allow: [...allow, ...CHILD_TOOLS],
+      reason: "the tool is not in this sub-agent's tool list",
     };
   }
 

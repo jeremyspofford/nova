@@ -83,8 +83,9 @@ default. Kinds:
   on the Hub folder and its commands run in the image.
 - **ssh**: a host where Nova reaches the `novad` helper; the key or password goes to the keychain
   (`secret://code/environment/<id>/credential`), never into a row or a response; a change of host,
-  user or auth method needs a new credential. The M6 Hub binds no SSH transport, so SSH
-  environments check `down` and answer `capability_missing` `{reason: no_ssh_transport}`.
+  user or auth method needs a new credential. The M6 Hub bound no SSH transport, so SSH
+  environments checked `down` and answered `capability_missing` `{reason: no_ssh_transport}`; M7
+  adds the transport (below).
 - **wsl**: a distro on a Windows device. The device connection has no WSL operations yet, so every
   device answers `not_windows`.
 - **device**: a machine running `novad` (`docs/23`); the session reaches its files and processes
@@ -94,14 +95,79 @@ default. Kinds:
 Commands of SSH, WSL and device sessions run on that machine under its user, not in a container
 (their sandbox reports no substrate). `novad` owns their processes and buffers the newest 1 MiB of
 output, so a dropped connection is reattached from the stored offset
-(`/environments/:id/processes/:processId/output?offset=`). These sessions have no Hub-side change
-capture yet: changes list empty and review, commit, branch, push, symbols, refs and the `git.*`
-tools answer `capability_missing` `{reason: remote_environment}`; auto-verify runs only on request
+(`/environments/:id/processes/:processId/output?offset=`). In M6 these sessions had no Hub-side
+change capture: changes listed empty and review, commit, branch, push, symbols, refs and the
+`git.*` tools answered `capability_missing` `{reason: remote_environment}` (M7 adds capture,
+review, commits, branches and the read-only `git.*` tools, below); auto-verify runs only on request
 there. Mode checks read the sandbox the session's commands run in: Bypass is never available on
 another machine (SSH, WSL, device); a container environment uses its own sandbox, a local one the
 Hub's. Container environments' sandboxes reach the network only through the egress proxy (none
-without it); `NOVA_SANDBOX_NETWORK=open` does not apply to them. Cloud and VM environments are not
-offered.
+without it); `NOVA_SANDBOX_NETWORK=open` does not apply to them. VM environments are not offered;
+cloud environments came in M7 (§12).
+
+*As shipped in M7 (ADR-095).*
+
+- **SSH (FR-062).** Off by default: the security setting `code.ssh.enabled` (Settings → Code asks
+  before turning it on) must be on, else a connection answers `capability_missing`
+  `{reason: ssh_disabled}`. The Hub runs the system's OpenSSH client (`no_ssh_client` without one)
+  and never uses the user's own SSH config, agent or known hosts (`-F /dev/null`,
+  `IdentitiesOnly`, no forwarding). For each connection the credential is read from the vault and
+  written only into a new 0700 folder under `<dataDir>/code/ssh`: a key as a 0600 file, a password
+  or passphrase through `SSH_ASKPASS` for that one client process. The folder is removed when the
+  connection closes, and folders a crashed Hub left behind are removed when the transport starts.
+  Calls share one connection (kept 120 s after the last use); connecting times out after 15 s.
+- **Host keys.** The first connection accepts the key the host presents and pins it in the
+  environment (audited as `environment.hostkey.pinned`, announced as `environment.updated`
+  `{change: hostkey_pinned}`); after that only that key is accepted. A different key is refused
+  before anything is sent (`policy_denied` `{reason: host_key_mismatch}`) and audited as
+  `environment.hostkey.mismatch`. When two first connections race, the second one's key must
+  match the one the first pinned. A pinned key cannot be changed or cleared through
+  `PATCH /api/v1/environments/:id` (409 `repin_required`);
+  `POST /api/v1/environments/:id/hostkey/reset` (**Forget the pinned key…** on the environment)
+  forgets it on purpose, audited as `environment.hostkey.reset` and announced with
+  `change: hostkey_reset`, and the next connection pins anew. Changing the host or port drops the
+  pin, audited the same way.
+- **The helper.** `novad` has no helper mode yet, so the SSH helper is a small POSIX shell program,
+  and no socket is forwarded. The Hub uploads it to `~/.nova/remote/helper.sh` (folders 0700),
+  checks its SHA-256 on the host before every connection starts, replaces it when it differs, and
+  runs it by the absolute path it checked. A helper that fails the check never runs: the
+  environment checks `down`, and commands, Hub-side Git and file operations answer
+  `capability_missing` `{reason: helper_unverified}`. The helper starts each command detached in
+  its own process group with its output in a file, so it keeps running while the Hub is away; the
+  folders of commands that finished more than a day ago are removed.
+- **Argument safety.** A host or user that starts with `-` is refused by the schema and again by
+  the transport, every ssh call puts `--` before the host, option values are quoted, and a run
+  folder containing `"`, `%` or a newline is refused. Tests drive the real transport and helper
+  through a stand-in ssh client; nothing has run against a real SSH server yet, so connection
+  reuse is untested.
+- **Remote sessions.** Sessions on another machine (SSH, WSL, device, cloud) now get Hub-side
+  change capture, the Diff pane, review, commits, branches and the read-only `git.*` tools. Their
+  Git runs through the environment's transport (one helper process per call over SSH and on
+  devices, the runner for cloud) with hooks off, and their shadow repository lives in Nova's state
+  folder on that machine (`~/.nova/remote/state`), never in the repository. A session takes its
+  baseline before its first tool call. Remote file writes check each parent folder in turn and
+  never follow a symbolic link, not even to create a folder behind it; a removal deletes a link,
+  never its target. Symbols, refs, dev servers, worktrees, workers (`task.spawn`), best-of-N,
+  merging another session's work and pushes stay Hub-only (`capability_missing`
+  `{reason: remote_environment}`); auto-verify still runs only on request there, with the
+  `code.autoVerify.commands`. WSL environments still answer `not_windows`, so in practice this
+  covers SSH, device and cloud sessions.
+- **File tools on the other machine.** In SSH, WSL and device sessions `fs.read`, `fs.list`,
+  `fs.write`, `fs.edit` and `fs.delete` act on the session folder on that machine, through the
+  same helper (or device provider) as its Git, never on the Hub's disk at the same path. They keep
+  the Hub's path rules: nothing outside the folder (a target's parent folder, resolved there, must
+  stay inside it), credential files never, protected paths (`.git`, `.nova`, `.agents`, …) read-only,
+  and symbolic links never followed (reading or writing through one is `path_denied`; deleting
+  removes the link). `exec.run`'s `cwd` resolves in that folder too. `fs.search`,
+  `document.read` and `document.create` only work on the Hub's disk, so they are hidden there (a
+  deny rule). The thread has no folder on the Hub at all: the gate's only root is the folder on
+  that machine, so a path outside it is refused and a path inside it names a file there, and the
+  tool scope (mentions, instruction files, the file browser, hooks' working folder) has no root on
+  the Hub. When the machine cannot be reached, the file tools fail
+  with `remote_unavailable` and commands with `sandbox_unavailable`; nothing falls back to the
+  Hub. Terminals open on the Hub's disk, so they are refused (`capability_missing`
+  `{reason: remote_environment}`) for every session on another machine, cloud included. Cloud
+  threads still hide all `fs.*` tools (§12) and change files with commands.
 
 ## 3. Permission modes (FR-063)
 
@@ -239,7 +305,9 @@ the session folder (409 `sandbox_unavailable` without a sandbox), streamed on
 `/terminals/:id/ws`. Commands typed there are confined by the sandbox, not checked one by one.
 The agent's exec sessions (FR-184) are listed with an "agent" chip, the tool call id and a
 **Kill** button (`GET /exec/sessions?threadId=`, `DELETE /exec/sessions/:id`). A running
-`test.run` is not listed there yet.
+`test.run` is not listed there yet. Since M7 a session on another machine (SSH, WSL, device,
+cloud) opens no terminal (`capability_missing` `{reason: remote_environment}`): terminals run on
+the Hub's disk, and the session's path names a folder elsewhere (§2).
 
 ## 7. Browser pane & auto-verify (FR-067/068)
 
@@ -382,8 +450,61 @@ worktree; removing one is refused while it is leased and needs `force` when it i
 clean worktree; dirty ones are always kept. `task.spawn` starts a worker as its own Code session
 in a new worktree from the parent's HEAD, with the parent's environment, model and mode (Manual
 when that mode cannot be used), at most 4 at once; `task.wait` waits for them. Both are listed
-only in Code threads and count as read-only; each worker's actions pass the gate. Not in M6:
-session handoff, three-way merging and best-of-N.
+only in Code threads and count as read-only; each worker's actions pass the gate. Session handoff,
+three-way merging and best-of-N came in M7 (below).
+
+*As shipped in M7 (ADR-095).*
+
+- **Handoff between the main checkout and a worktree (FR-213).** A session with a folder on the
+  Hub can move to a new worktree, to an unleased registry worktree of the same repository, or back
+  to the main checkout, with its Git state (§15). The worktree it leaves is released with
+  `worktree.released` `{reason: handoff}`.
+- **Three-way merges (FR-073).** `POST …/merge` (201) merges work onto the session's folder, either
+  another session's (`{from: {sessionId}}`: a worker or an attempt, both folders on the Hub, in the
+  same repository and the same folder of it; otherwise 400 `same_session`, `other_repository` or
+  `other_folder`, and `capability_missing` `remote_environment`) or a patch (`{from: {patch, base?}}`:
+  `git diff --binary --full-index` output up to 16 MiB, made against `base`, by default HEAD; the
+  session may be on any machine; `missing_base`, `patch_mismatch`). For a session the base is the
+  merge base of the two HEADs, and "theirs" is the other session's working state, uncommitted
+  changes included. Each changed file is merged from the base, ours (the folder now, uncommitted
+  edits included) and theirs: a side that did not change takes the other, and when both changed
+  `git merge-file --diff3` merges the text on the Hub. Binary files and symbolic links always
+  conflict as a whole (`binary_conflict`), and so does a deletion against a change. With
+  `onConflict: 'refuse'` (the default) nothing is written when any file conflicts: the answer is
+  409 `merge_conflict` with the paths, and the merge is kept as `refused` with each conflicting
+  file's three sides (redacted, at most 24,000 characters a side and 50 files) for the **Merges**
+  tab. With `'markers'` the merged files are written with diff3 conflict markers (binary conflicts
+  are left for the user) and the merge stays `conflicted`: `POST …/merges/:mergeId/resolve` answers
+  409 `merge_conflicts` while a marker is left, and so does every commit; once no marker is left,
+  the next commit counts the merge as resolved. `POST …/merges/:mergeId/abort` puts the files a
+  conflicted or applied merge wrote back from the copy it kept under the data folder. A merge
+  handles at most 256 MiB. Audited as `code.merge`, `code.merge.resolved` and `code.merge.aborted`;
+  announced as `code.merge.completed`. Merging is the user's action: the agent proposes no
+  integration order, and there is no merge sub-agent.
+- **Best-of-N (FR-212).** **Best of N…** in the session header (`POST …/attempts`, 201) runs one
+  objective as 2 to 4 attempts (default `code.attempts.count`, 2). Each attempt is a Code session
+  of its own in a new worktree on a `nova/<slug>` branch from the session's last commit (the
+  session's uncommitted changes are not there), with the session's environment, mode (Manual when
+  an attempt cannot use it) and model, or the model the request names for that attempt. Each gets
+  the request's budgets or `code.attempts.budgets` (default 30 minutes, no token or cost limit),
+  never more than the parent session has left. The attempts start at once, with the user's
+  authority when the user started them, and are told not to commit. When an attempt's turn ends
+  its checks run in its worktree, only while `code.autoVerify` is on (the auto-verify run if one
+  started, else one run); with auto-verify off, attempts run no checks. The comparison
+  (`GET /api/v1/code/attempts/:setId`, the **Attempts** tab) shows for each attempt the files it
+  changed against the base (kind, + and − counts, binary), its redacted patch (commits and
+  uncommitted work together, at most 256 KiB), its newest check run, its budget use (time, tokens,
+  cost) and its last reply (untrusted, at most 4,000 characters).
+  `POST /api/v1/code/attempts/:setId/apply {attemptId, onConflict?}` stops the attempts still
+  running and merges the chosen one three-way onto the session's folder (above). A refused merge
+  changes nothing and keeps the attempts; otherwise every attempt session is archived, its
+  worktree removed and its branch deleted when it has no commits. `…/discard` stops, archives and
+  removes them all. Attempts need a folder on the Hub with a commit (`remote_environment`,
+  `no_commits`).
+  Audited as `code.attempts.started`, `code.attempt.applied` and `code.attempts.discarded`;
+  announced as `code.attempts.updated`.
+- **Worker budgets.** A `task.spawn` worker, like an attempt, gets at most what its parent session
+  has left of each budget; a bound the parent does not have takes the default.
 
 ## 10. Cross-session operations (FR-072)
 
@@ -400,6 +521,35 @@ with `sessions.archive`, is a write the gate asks about by default. A side quest
 messages (≤ 24,000 characters, as data), at most 2,048 output tokens and 120 s; nothing is added to
 the thread. Code sessions also get budgets (time, tokens, cost; `docs/09` §2) from `code.budgets`
 or the session, checked before each model step and extended with `POST …/budget/extend`.
+
+*As shipped in M7 (ADR-095).*
+
+- **Delegation from an agent.** Agent threads get `code.delegate`
+  `{projectId, objective, folder?, title?, mode?}`. It starts a Code session on this Hub in one of
+  the account's projects, in the project's first folder or a folder inside one of its folders
+  (`outside_project` otherwise, `no_project_folder` when it has none), and returns at once. The
+  session runs in Manual mode, or Plan to only read, never broader, and the mode is not remembered
+  for the folder. It takes the agent's budgets (`code.budgets` when the agent has none) and has no
+  user authority: its first message is the agent's text. The agent's rules apply in the session
+  and in every worker and attempt it starts (found through the session's parent chain), and so do
+  the agent's plugin limits (FR-045). When the session's turn ends, its last reply (at most 4,000
+  characters, as data) goes to the agent's main thread as a turn without the user's authority.
+  Delegation is refused from proactive threads (`proactive_read_only`) and from threads shared with
+  other people (`shared_thread`). Pausing or stopping the agent cancels the running turns of the
+  sessions it started, and the gate denies their actions until it resumes; deleting the agent
+  cancels them, archives those sessions and their workers and marks running delegations failed
+  (audited as `code.delegation.held` and `code.delegation.cancelled`). A delegation whose agent's
+  rules are gone is denied everything. Audited as `code.delegate` with actor `agent:<id>`;
+  announced as `code.delegation.started` and `code.delegation.completed`.
+- **External agents (FR-203).** While the security setting `externalAgents.enabled` is on (off by
+  default), the user can delegate from a Code session to an external coding agent
+  (`POST /api/v1/code/sessions/:id/delegations`, the session's **Agents** tab); a model tool never
+  starts one. The agent runs in the session's sandbox with the folder read-only and no network, or
+  only the hosts its adapter declares. Every file read, write and command it asks for runs as an
+  `fs.*` or `exec.*` call through the gate, so its edits show as the session's diffs. It is refused
+  in SSH, WSL and device sessions, whose commands have no sandbox (`no_substrate`), and cannot
+  have network in a cloud session (`no_egress_proxy`). Adapters, permission routing, limits and
+  events are in `docs/08` §1.6.
 
 ## 11. Context engineering for code
 
@@ -434,6 +584,55 @@ search and mention chips for symbols are not in M5.
 - Console/log access is available; costs are shown per session when the provider meters.
 - Self-hosting the cloud runner is P2 (same `Computer` interface over gRPC).
 
+*As shipped in M7 (ADR-095).* A `cloud` environment runs on the cloud runner (`services/runner`;
+the runner, its sandbox and its API are in `docs/13` §3 and `contracts/rest-api.md` §5). The Hub
+keeps the agent loop, the model calls and the policy gate; the runner holds the environment, runs
+its commands and file operations, streams their output and keeps snapshots (FR-108). Commands keep
+running there while the user's client is offline (FR-071), and output is read by offset, so
+reattaching shows what was missed.
+
+- **Runner.** Settings → Cloud registers one runner per Hub: its URL (`cloud.runner.url`: https,
+  or http only to this machine) and its token, which goes to the vault
+  (`secret://cloud/runner/token`). `cloud.runner.enabled` is off by default. Without a working
+  runner, cloud commands are refused (`no_cloud_runner`, `runner_unconfigured`, `runner_disabled`)
+  and never run on the Hub.
+- **Environments** (kind `cloud`, created through `POST /api/v1/environments`). The connection
+  holds `repoUrls` (at most 10, cloned side by side under `/workspace`: `https://` with an optional
+  `#branch`, or `file://` only from folders the runner allows; a URL with a user name or password
+  is refused, `credentials_in_url`), `setupScript` (run once, at most 20,000 characters),
+  `baseImage`, `caches` (at most 8 named caches kept between runs), `network` (`off` by default,
+  `setup` for the setup script only, or `on`), `diskMb` (at most, and by default, the disk cap) and
+  `folder` (where sessions and runs work: under `/workspace`, by default the first repository).
+  `setup` and `on` are refused (`cloud_network_off`) unless the security setting
+  `cloud.runner.unrestrictedNetwork` is on, because the runner's network does not go through the
+  Hub's egress proxy: no allowlist, no blocking of private addresses, no egress audit. Even then a
+  command gets network only when the turn's own network mode is not off and the environment allows
+  it. Rebuilds are explicit (`POST /api/v1/cloud/environments/:id/rebuild`).
+- **Code sessions** in a cloud environment work in a folder under `/workspace`
+  (`outside_workspace` otherwise), and their commands run on the runner. The Hub's `fs.*` tools
+  are hidden in cloud threads (a deny rule, so the tool runtime leaves them out); files are read
+  and changed with commands there. Change capture, the Diff pane, review and commits run their Git
+  through the runner (§2). Bypass is not offered: the commands run on another machine. Terminals
+  are refused (`capability_missing` `{reason: remote_environment}`): they would open on the Hub's
+  disk at the session's path. Under its
+  budget the session shows its cloud run's usage against the caps, live, with **Raise caps** and
+  **Cancel**.
+- **Work runs** on a cloud environment (`POST /api/v1/cloud/work`): the environment must be ready,
+  a snapshot is taken first unless `snapshot: false`, the run's commands go to the runner and its
+  folder there is its only write root. A folder the runner reports outside `/workspace` is refused
+  (`runner_path`). Snapshots are otherwise taken and restored on request.
+- **Leases and caps (FR-116).** Each thread holds one lease (a runner run) with CPU and wall-time
+  caps from `cloud.runner.caps`: 3,600 s of CPU and 14,400 s of wall time per run, 10,240 MB of
+  disk per environment, and a warning at 80 % of a cap. The Hub's own Git and file calls use a
+  separate lease per environment. Wall time counts only while a command runs. At a cap the
+  commands stop, and new ones answer `budget_exhausted` `{reason: cap_reached}` until the caps are
+  raised (`PATCH /api/v1/cloud/runs/:id`). A lease ends when its session is archived or its Work
+  run ends.
+- **Not built.** Egress through the Hub's proxy (so cloud network stays off unless the owner turns
+  on unrestricted network), encrypted snapshots (they are plain files on the runner), agent
+  computers on this runner (they stay on the mock cloud runner), and costs per session. The runner
+  speaks HTTP (`contracts/rest-api.md` §5), not the `Computer` interface over gRPC.
+
 ## 13. Mobile dispatch (FR-077, P2)
 
 - Every client drives sessions through the Hub, so a phone can start a task, steer it, or
@@ -455,6 +654,14 @@ search and mention chips for symbols are not in M5.
 | Concurrent edit conflict (user + agent) | Detect mtime/hash change; ask before overwrite |
 | Handoff target dirty or unreachable | Refuse the handoff; the session stays where it was |
 
+*As shipped in M7 (ADR-095).* A merge conflict is never resolved silently: by default the merge
+writes nothing and keeps the three sides to show; with markers, commits wait until no marker is
+left (§9). There is no merge sub-agent. An SSH helper whose SHA-256 differs is replaced before it
+starts, and one that still fails the check never runs (§2). A handoff whose target is dirty,
+unreachable or fails any check is refused with its reason, the target is put back as it was and
+the session stays where it was (§15). A cloud command that dropped its connection keeps running on
+the runner and is read on from its offset (§12).
+
 ## 15. Session handoff & CLI (FR-213)
 
 - **Handoff**: a Code session or chat can move to another device or environment with its Git
@@ -470,3 +677,72 @@ search and mention chips for symbols are not in M5.
   token. It can start headless sessions with machine-readable output for scripts, and hand a
   terminal session to the desktop or web UI and back. The CLI is a client only; the Hub runs
   the loop (ADR-076).
+
+*As shipped in M7 (ADR-095).*
+
+- **Targets.** **Hand off…** in the session header (`POST /api/v1/code/sessions/:id/handoff`, 202)
+  moves a session to another saved environment and the repository folder there
+  (`{to: {environmentId, folder}}`, the folder as its full path: this Hub, an SSH host, a device or
+  a cloud environment) or, for a session with a folder on the Hub, to a worktree of the same
+  repository (`{to: {worktree}}`: `'new'` creates one on a `nova/<slug>` branch from the session's
+  HEAD and the session continues on that branch, an id binds an unleased registry worktree, and
+  `'main'` goes back to the main checkout, which takes over the session's branch). A request that
+  names the place the session already is (409 `same_location`), an archived session, an unknown
+  environment, or a second handoff while one runs (409 `handoff_running`) is answered at once and
+  not recorded. Worktree targets need a folder on the Hub (`worktree_unavailable`) and the same
+  repository (`worktree_repo`).
+- **What travels.** The branch and HEAD; the local commits no remote has, as a Git bundle through
+  the Hub; every uncommitted change, tracked or new, text or binary, as one binary-safe patch
+  (`--binary --full-index`) made in a short-lived shadow that borrows the repository's objects, so
+  no filter, hook or attribute of the repository runs; and the worktree identity. The record shows
+  the patch's SHA-256 and size, the number of files, the bundle's SHA-256 and commit count, and the
+  state hash: SHA-256 over HEAD and the tree of the whole working state, which the target must
+  confirm. The patch may be up to 256 MiB and the bundle up to 512 MiB (`too_large`).
+- **The target's checks.** The named folder must pass the environment's folder check and be in a
+  Git repository there. The session lands in the same subfolder of that repository as at the
+  source, and that folder must stay inside the repository and pass the same checks as a new
+  session's folder (the Hub's folder rules on the Hub, the path rules elsewhere; for a worktree,
+  its main checkout's folder). The target repository must have no uncommitted changes (Nova's own
+  `.nova/` worktrees aside) and have the session's commits, from the bundle or already, and its
+  copy of the branch must have no commits the session lacks; the branch is then moved forward to
+  the session's HEAD and checked out. The patch is applied, and the target must show the same HEAD
+  and working-state tree. Only then does the session move: its environment, folder, worktree and
+  branch change, and its review restarts at the target with every traveled change pending
+  (earlier change rows are hidden, their comments kept). A mode the target cannot offer (Bypass
+  on another machine) becomes Manual, audited as `code.mode.changed`.
+- **Refusals.** A failed check puts the target back as it was, and the session stays where it
+  was. The handoff is recorded as `refused` or `failed` with a reason (`HandoffReason`):
+  `turn_running` (still running after the wait), `same_location`, `not_a_repository`,
+  `no_commits`, `detached_head`, `target_dirty`, `target_missing` (the named folder fails its
+  check, the target repository cannot be read, or the worktree cap is reached),
+  `target_unreachable`, `protected_folder` (the landing folder is outside the repository or fails
+  the folder rules), `other_repository`, `missing_commits`, `branch_diverged`, `branch_in_use`
+  (the target cannot check out the branch), `conflicts` (the patch does not apply),
+  `verify_failed` (HEAD or tree differ), `too_large`, `remote_state_unavailable` (Nova has no
+  state folder on that machine), `environment_unavailable` and `failed` (anything else, such as a
+  branch name that looks like an option). `same_location` comes back as a request error.
+  `detached_head`: the session is not on a branch (commits made at the target would belong to no
+  branch), so create one first. `other_repository`: the target folder's repository has commits but
+  none of the session HEAD's root commits; an empty repository and a shallow clone are not judged
+  by this check (the commit checks still apply).
+- **The source.** Until the target confirms, the source working tree is untouched. Then it is kept
+  or cleaned as the request's `source` says, else as `code.handoffSource` (Settings → Code; `keep`
+  by default). When uncommitted changes traveled, `clean` puts those files back to HEAD and removes
+  the worktree the session left, if it came from one.
+- **Turns (FR-127).** A handoff waits up to 30 minutes for the session's running turn to end, or
+  interrupts it with `interrupt: true`, and holds the session's next turns until it is done: a turn
+  that starts meanwhile runs where the session lands.
+- **Files and history.** The patch and the bundle are kept under `<dataDir>/code/handoffs/<id>`
+  (mode 0600). The bundle is deleted when the handoff completes; the code area's 5-minute sweep
+  removes the rest once the handoff is 7 days old. Every move is a `session_handoff` row
+  (`GET …/handoffs`, newest first, and the session's **Moves** tab; `GET /api/v1/handoffs/:id`),
+  announced as `session.handedOff`
+  `{handoffId, threadId, sessionId?, from, to, branch?, status, reason?}` when it is pending,
+  running and settled, and audited as `code.handoff.requested`, `code.handoff.completed`,
+  `code.handoff.refused` or `code.handoff.failed`.
+- **Chats.** `POST /api/v1/threads/:id/handoff {to: {deviceId}, interrupt?}` moves a chat (not a
+  Code thread: `code_thread`) to one of the account's devices that is not revoked. The move is
+  recorded as completed at once, announced so that device's client can open the chat, and audited
+  as `thread.handoff`; `interrupt` cancels a running turn. The chat's turns still run on the Hub,
+  so the move changes where it is shown, not where it runs. The web app has no control for it yet.
+- **Not built.** The `nova` CLI.

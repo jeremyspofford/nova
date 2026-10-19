@@ -10,6 +10,9 @@ import { osPermission, requestOsPermission, type OsPermission } from '../notific
 import { useSettings } from '../settings.tsx';
 import { SwitchField } from './controls.tsx';
 import '../workspace.css';
+import { PushSection } from '../push/PushSection.tsx';
+import { ShellNotificationsNote } from '../shellbridge/NotificationsNote.tsx';
+import { useShell } from '../shellbridge/bridge.ts';
 
 export const CATEGORY_TEXT: Record<NotificationKind, { label: string; description: string }> = {
   approval: {
@@ -43,6 +46,7 @@ const PERMISSION_TEXT: Record<OsPermission, string> = {
 };
 
 export function NotificationsPage() {
+  const shell = useShell();
   const settings = useSettings();
   const toast = useToast();
   const cats = settings.get('notifications.categories');
@@ -82,8 +86,10 @@ export function NotificationsPage() {
           />
         ))}
       </section>
-      <section className="settings-section" aria-labelledby="notif-device">
-        <h3 id="notif-device">This device</h3>
+      {/* In the desktop app it shows OS notifications itself (FR-008, M7). */}
+      {shell ? <ShellNotificationsNote /> : null}
+      <section className="settings-section" aria-labelledby="notif-device" hidden={!!shell}>
+        <h3 id="notif-device">While Nova is open</h3>
         <p className="muted">
           When Nova is in the background, notifications can also appear on this device.
         </p>
@@ -98,6 +104,8 @@ export function NotificationsPage() {
           </div>
         ) : null}
       </section>
+      {/* Push to this device while Nova is closed (FR-111, M7); the desktop app shows its own. */}
+      {shell ? null : <PushSection />}
       <NotificationRoutingSection />
     </div>
   );

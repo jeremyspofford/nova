@@ -1,4 +1,6 @@
-//! Minimal HTTP/1.1 for novad's management channel (contracts/hub-api.md §3) without external crates: a threaded server for JSON requests and a client for plain http:// URLs. There is no TLS client yet: installs rely on the pinned Hub key and signed manifests (FR-133, ADR-094).
+//! Minimal HTTP/1.1 for novad's management channel (contracts/hub-api.md §3): a threaded server
+//! for JSON requests and a client for http:// URLs and, with a `TlsContext` (src/tls.rs: the
+//! pinned Hub identity, its CA and the device certificate), https:// ones (R-023, FR-126).
 #![allow(dead_code)]
 
 use serde_json::{Value, json};
@@ -236,6 +238,22 @@ fn handle_connection(stream: TcpStream, max_body: usize, handler: &Handler) {
     if write_response(&mut writer, &response, head_only).is_ok() {
         linger_close(&mut reader, &stream);
     }
+}
+
+/// One request from a reader (no 100 Continue: the client sends its body after a short wait).
+pub(crate) fn read_one_request<R: BufRead>(r: &mut R, max_body: usize) -> Result<Request, String> {
+    read_request(r, &mut io::sink(), max_body, None).map_err(|e| match e {
+        ReadError::Closed => "closed".to_string(),
+        ReadError::Io(e) => e.to_string(),
+        ReadError::Malformed(m) => m,
+        ReadError::HeadTooLarge => "the request head is too large".into(),
+        ReadError::BodyTooLarge => "the request body is too large".into(),
+    })
+}
+
+/// Write one response; `keep_alive` answers `Connection: keep-alive` instead of `close`.
+pub(crate) fn write_one_response<W: Write>(w: &mut W, response: &Response, keep_alive: bool) -> io::Result<()> {
+    write_response_with(w, response, false, keep_alive)
 }
 
 fn call_handler(handler: &Handler, request: Request) -> Response {
@@ -589,6 +607,10 @@ fn read_chunked<R: BufRead>(r: &mut R, max: usize) -> Result<Vec<u8>, ReadError>
 }
 
 fn write_response<W: Write>(w: &mut W, response: &Response, head_only: bool) -> io::Result<()> {
+    write_response_with(w, response, head_only, false)
+}
+
+fn write_response_with<W: Write>(w: &mut W, response: &Response, head_only: bool, keep_alive: bool) -> io::Result<()> {
     // Interim and out-of-range codes are not valid final responses.
     let status = if (200..=999).contains(&response.status) {
         response.status
@@ -614,7 +636,7 @@ fn write_response<W: Write>(w: &mut W, response: &Response, head_only: bool) -> 
     if !bodyless {
         head.push_str(&format!("Content-Length: {}\r\n", response.body.len()));
     }
-    head.push_str("Connection: close\r\n\r\n");
+    head.push_str(if keep_alive { "Connection: keep-alive\r\n\r\n" } else { "Connection: close\r\n\r\n" });
     let mut out = head.into_bytes();
     if !bodyless && !head_only {
         out.extend_from_slice(&response.body);
@@ -660,7 +682,7 @@ fn is_timeout(e: &io::Error) -> bool {
     )
 }
 
-fn time_left(deadline: Instant) -> Option<Duration> {
+pub(crate) fn time_left(deadline: Instant) -> Option<Duration> {
     let left = deadline.saturating_duration_since(Instant::now());
     (!left.is_zero()).then_some(left)
 }
@@ -675,10 +697,11 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 // Client
 // ---------------------------------------------------------------------------------------------
 
-/// What an https:// URL gets: novad has no TLS client yet (ADR-094).
-pub const HTTPS_UNSUPPORTED: &str = "novad has no TLS client yet: use the Hub's http:// address";
+/// What an https:// URL gets without a TLS context: novad trusts a Hub's certificate only through
+/// the fingerprint pinned at Add Device (src/tls.rs).
+pub const HTTPS_NEEDS_PIN: &str = "an https:// Hub needs its pinned fingerprint (--pin), which this command does not have";
 
-/// POST a JSON body to an http:// URL (https:// -> Err(HTTPS_UNSUPPORTED)).
+/// POST a JSON body to an http:// URL (https:// -> Err(HTTPS_NEEDS_PIN); see `post_json_with`).
 /// Sends Content-Length, `Connection: close`, `Authorization: Bearer` when given, and the Host
 /// header with the port. Reads a Content-Length, chunked or read-to-EOF response body (max 16 MiB).
 /// Returns the status and the parsed JSON body (Value::Null when the body is empty; Err when the
@@ -703,9 +726,35 @@ pub fn get_json(
     exchange("GET", url, bearer, None, timeout)
 }
 
-/// A parsed http:// URL.
+/// `post_json` that can reach an https:// Hub through `tls` (the pinned identity, its CA and the
+/// device certificate).
+pub fn post_json_with(
+    url: &str,
+    bearer: Option<&str>,
+    body: &Value,
+    timeout: Duration,
+    tls: Option<&crate::tls::TlsContext>,
+) -> Result<(u16, Value), String> {
+    let payload =
+        serde_json::to_vec(body).map_err(|e| format!("cannot encode the request body: {e}"))?;
+    exchange_with("POST", url, bearer, Some(&payload), timeout, tls)
+}
+
+/// `get_json` that can reach an https:// Hub through `tls`.
+pub fn get_json_with(
+    url: &str,
+    bearer: Option<&str>,
+    timeout: Duration,
+    tls: Option<&crate::tls::TlsContext>,
+) -> Result<(u16, Value), String> {
+    exchange_with("GET", url, bearer, None, timeout, tls)
+}
+
+/// A parsed http:// or https:// URL.
 #[derive(Debug, PartialEq, Eq)]
 struct Target {
+    /// https: the connection goes through a `TlsContext`.
+    tls: bool,
     /// Name or address to connect to; an IPv6 literal without brackets.
     host: String,
     port: u16,
@@ -716,19 +765,18 @@ struct Target {
 }
 
 fn parse_url(url: &str) -> Result<Target, String> {
-    if strip_prefix_ci(url, "https://").is_some() {
-        // The pin and signed manifests protect installs (FR-133); TLS is ADR-094's follow-up.
-        return Err(HTTPS_UNSUPPORTED.into());
-    }
-    let rest = strip_prefix_ci(url, "http://")
-        .ok_or("unsupported URL: only http:// and https:// are understood")?;
+    let (tls, rest) = match (strip_prefix_ci(url, "https://"), strip_prefix_ci(url, "http://")) {
+        (Some(rest), _) => (true, rest),
+        (None, Some(rest)) => (false, rest),
+        _ => return Err("unsupported URL: only http:// and https:// are understood".into()),
+    };
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, tail) = rest.split_at(end);
     // Credentials in a URL leak into logs; tokens travel in the Authorization header.
     if authority.contains('@') {
         return Err("credentials in the URL (user@host) are not supported".into());
     }
-    let (host, port) = split_host_port(authority)?;
+    let (host, port) = split_host_port(authority, if tls { 443 } else { 80 })?;
     let tail = tail.split('#').next().unwrap_or_default();
     let path = if tail.starts_with('/') {
         tail.to_string()
@@ -744,6 +792,7 @@ fn parse_url(url: &str) -> Result<Target, String> {
         format!("{host}:{port}")
     };
     Ok(Target {
+        tls,
         host,
         port,
         authority,
@@ -751,12 +800,17 @@ fn parse_url(url: &str) -> Result<Target, String> {
     })
 }
 
-/// The host and port of an http:// URL (Err for anything the client would refuse).
+/// Whether a URL is https:// (the client then needs a `TlsContext`).
+pub fn is_https(url: &str) -> bool {
+    strip_prefix_ci(url, "https://").is_some()
+}
+
+/// The host and port of an http(s):// URL (Err for anything the client would refuse).
 pub fn host_port(url: &str) -> Result<(String, u16), String> {
     parse_url(url).map(|t| (t.host, t.port))
 }
 
-fn split_host_port(authority: &str) -> Result<(String, u16), String> {
+fn split_host_port(authority: &str, default_port: u16) -> Result<(String, u16), String> {
     let (host, port) = if let Some(inner) = authority.strip_prefix('[') {
         let (ip, after) = inner
             .split_once(']')
@@ -792,7 +846,7 @@ fn split_host_port(authority: &str) -> Result<(String, u16), String> {
         return Err("the URL has an invalid host".into());
     }
     let port = match port {
-        None | Some("") => 80,
+        None | Some("") => default_port,
         Some(p) if p.bytes().all(|b| b.is_ascii_digit()) => p
             .parse::<u16>()
             .ok()
@@ -810,6 +864,17 @@ fn exchange(
     body: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<(u16, Value), String> {
+    exchange_with(method, url, bearer, body, timeout, None)
+}
+
+fn exchange_with(
+    method: &str,
+    url: &str,
+    bearer: Option<&str>,
+    body: Option<&[u8]>,
+    timeout: Duration,
+    tls: Option<&crate::tls::TlsContext>,
+) -> Result<(u16, Value), String> {
     let mut headers = Vec::new();
     let auth;
     if let Some(token) = bearer {
@@ -819,7 +884,7 @@ fn exchange(
         auth = format!("Bearer {token}");
         headers.push(("Authorization", auth.as_str()));
     }
-    let r = request(method, url, &headers, body, timeout)?;
+    let r = request_with(method, url, &headers, body, timeout, tls)?;
     decode_json(r.status, &r.body)
 }
 
@@ -856,6 +921,19 @@ pub fn request(
     body: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<RawResponse, String> {
+    request_with(method, url, headers, body, timeout, None)
+}
+
+/// `request` that reaches an https:// URL through `tls`: the connection is trusted (and the
+/// device certificate presented) before anything is sent on it.
+pub fn request_with(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+    timeout: Duration,
+    tls: Option<&crate::tls::TlsContext>,
+) -> Result<RawResponse, String> {
     let target = parse_url(url)?;
     for (name, value) in headers {
         if name.is_empty()
@@ -868,12 +946,57 @@ pub fn request(
     let deadline = Instant::now()
         .checked_add(timeout)
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(365 * 24 * 3600));
-    let stream = connect(&target, deadline, timeout)?;
-    let _ = stream.set_nodelay(true);
+    let dial = || {
+        let stream = connect(&target, deadline, timeout)?;
+        let _ = stream.set_nodelay(true);
+        Ok(stream)
+    };
+    if target.tls {
+        let ctx = tls.ok_or(HTTPS_NEEDS_PIN)?;
+        let mut stream = ctx.connect(&dial, &target.host, &target.authority, deadline)?;
+        return exchange_on(&mut stream, method, &target.authority, &target.path, headers, body, false, deadline)
+            .map_err(|e| if e == TIMED_OUT { timed_out(timeout) } else { e });
+    }
+    let mut stream = dial()?;
+    exchange_on(&mut stream, method, &target.authority, &target.path, headers, body, false, deadline)
+        .map_err(|e| if e == TIMED_OUT { timed_out(timeout) } else { e })
+}
 
+/// A stream whose socket timeouts can be set: plain TCP or TLS over TCP.
+pub trait Timed: Read + Write {
+    fn tcp(&self) -> &TcpStream;
+}
+
+impl Timed for TcpStream {
+    fn tcp(&self) -> &TcpStream {
+        self
+    }
+}
+
+impl Timed for crate::tls::TlsStream {
+    fn tcp(&self) -> &TcpStream {
+        &self.sock
+    }
+}
+
+const TIMED_OUT: &str = "timed out";
+
+/// Send one request on an open connection and read its response. `keep_alive` asks the server to
+/// keep the connection for another request (the identity statement before the real request,
+/// docs/22 §5); then nothing may follow the response on the wire.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn exchange_on<S: Timed>(
+    stream: &mut S,
+    method: &str,
+    authority: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+    keep_alive: bool,
+    deadline: Instant,
+) -> Result<RawResponse, String> {
     let mut head = format!(
-        "{method} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: novad\r\nAccept: application/json\r\n",
-        target.path, target.authority
+        "{method} {path} HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: novad\r\nAccept: application/json\r\n"
     );
     for (name, value) in headers {
         head.push_str(&format!("{name}: {value}\r\n"));
@@ -884,35 +1007,39 @@ pub fn request(
             body.len()
         ));
     }
-    head.push_str("Connection: close\r\n\r\n");
+    head.push_str(if keep_alive { "Connection: keep-alive\r\n\r\n" } else { "Connection: close\r\n\r\n" });
     let mut message = head.into_bytes();
     if let Some(body) = body {
         message.extend_from_slice(body);
     }
 
-    let mut io = Deadlined {
-        stream: &stream,
-        deadline,
-    };
+    let mut io = Deadlined { stream, deadline };
     // A server may answer early (413) and stop reading; its reply is still worth reading.
-    let sent = io.write_all(&message);
+    let sent = io.write_all(&message).and_then(|()| io.flush());
     if let Err(e) = &sent
         && is_timeout(e)
     {
-        return Err(timed_out(timeout));
+        return Err(TIMED_OUT.into());
     }
     let mut reader = BufReader::new(io);
     let received = read_response_head(&mut reader).and_then(|(status, headers)| {
         read_response_body(&mut reader, status, &headers).map(|body| (status, headers, body))
     });
+    if keep_alive && !reader.buffer().is_empty() {
+        return Err("the server sent more than one response".into());
+    }
     match (received, sent) {
         (Ok((status, headers, body)), _) => Ok(RawResponse {
             status,
             headers,
             body,
         }),
-        (Err(_), Err(e)) => Err(format!("sending the request failed: {e}")),
-        (Err(e), Ok(())) => Err(describe(e, timeout)),
+        (Err(_), Err(e)) => Err(match crate::tls::explain(&e) {
+            Some(why) => why,
+            None => format!("sending the request failed: {e}"),
+        }),
+        (Err(ReadError::Io(e)), Ok(())) if is_timeout(&e) => Err(TIMED_OUT.into()),
+        (Err(e), Ok(())) => Err(describe(e, Duration::ZERO)),
     }
 }
 
@@ -942,34 +1069,37 @@ fn connect(target: &Target, deadline: Instant, timeout: Duration) -> Result<TcpS
 }
 
 /// Socket I/O bounded by one overall deadline rather than a per-call timeout.
-struct Deadlined<'a> {
-    stream: &'a TcpStream,
+struct Deadlined<'a, S: Timed> {
+    stream: &'a mut S,
     deadline: Instant,
 }
 
-impl Deadlined<'_> {
+impl<S: Timed> Deadlined<'_, S> {
     fn left(&self) -> io::Result<Duration> {
         time_left(self.deadline).ok_or_else(|| io::Error::from(io::ErrorKind::TimedOut))
     }
 }
 
-impl Read for Deadlined<'_> {
+impl<S: Timed> Read for Deadlined<'_, S> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.stream.set_read_timeout(Some(self.left()?))?;
-        let mut stream = self.stream;
-        stream.read(buf)
+        let left = self.left()?;
+        self.stream.tcp().set_read_timeout(Some(left))?;
+        self.stream.read(buf)
     }
 }
 
-impl Write for Deadlined<'_> {
+impl<S: Timed> Write for Deadlined<'_, S> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.stream.set_write_timeout(Some(self.left()?))?;
-        let mut stream = self.stream;
-        stream.write(buf)
+        let left = self.left()?;
+        self.stream.tcp().set_write_timeout(Some(left))?;
+        self.stream.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        // TLS buffers records until flushed; TCP has nothing to flush.
+        let left = self.left()?;
+        self.stream.tcp().set_write_timeout(Some(left))?;
+        self.stream.flush()
     }
 }
 
@@ -1042,7 +1172,10 @@ fn decode_json(status: u16, body: &[u8]) -> Result<(u16, Value), String> {
 fn describe(err: ReadError, timeout: Duration) -> String {
     match err {
         ReadError::Io(e) if is_timeout(&e) => timed_out(timeout),
-        ReadError::Io(e) => format!("reading the response failed: {e}"),
+        ReadError::Io(e) => match crate::tls::explain(&e) {
+            Some(why) => why,
+            None => format!("reading the response failed: {e}"),
+        },
         ReadError::Closed => "the server closed the connection without a response".into(),
         ReadError::Malformed(message) => format!("malformed response: {message}"),
         ReadError::HeadTooLarge => "the response head is too large".into(),
@@ -1412,11 +1545,13 @@ mod tests {
     }
 
     #[test]
-    fn https_urls_are_refused() {
+    fn https_urls_need_a_tls_context() {
         let err = get_json("https://127.0.0.1:1/x", None, WAIT).unwrap_err();
-        assert_eq!(err, HTTPS_UNSUPPORTED);
+        assert_eq!(err, HTTPS_NEEDS_PIN);
         let err = post_json("HTTPS://hub.local/x", None, &json!({}), WAIT).unwrap_err();
-        assert_eq!(err, HTTPS_UNSUPPORTED);
+        assert_eq!(err, HTTPS_NEEDS_PIN);
+        assert!(is_https("HTTPS://hub.local") && !is_https("http://hub.local"));
+        assert_eq!(host_port("https://hub.local/x").unwrap(), ("hub.local".to_string(), 443));
     }
 
     #[test]
@@ -1469,6 +1604,7 @@ mod tests {
         assert_eq!(
             t,
             Target {
+                tls: false,
                 host: "::1".into(),
                 port: 8080,
                 authority: "[::1]:8080".into(),

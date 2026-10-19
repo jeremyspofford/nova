@@ -57,7 +57,7 @@ export interface PolicyAreaFull extends PolicyArea {
   /** Tool descriptors for POST /policy/evaluate, from the tools area. */
   useToolCatalog(fn: ToolCatalog): void;
   /** The sandbox substrate (the `full` profile needs a VM or container). */
-  useSubstrate(fn: () => Substrate | null): void;
+  useSubstrate(fn: (accountId: string | null, threadId: string | null) => Substrate | null): void;
   /** `permission.request` hooks, from the hooks area (FR-197). */
   useHooks(dispatcher: HookDispatcher): void;
   /** Confirmed plugin permissions, from the plugins area (FR-045). */
@@ -205,7 +205,12 @@ export async function setupPolicy(
     dataDir: ctx.dataDir,
     // Agents' computers are folders in the data directory (FR-080): their threads' only root.
     // Local computers live in `computers/`, the mock cloud's in `cloud-mock/`.
-    dataDirAllow: [join(ctx.dataDir, 'computers'), join(ctx.dataDir, 'cloud-mock')],
+    dataDirAllow: [
+      join(ctx.dataDir, 'computers'),
+      join(ctx.dataDir, 'cloud-mock'),
+      // Members' own folders (M7, decision 5).
+      join(ctx.dataDir, 'members'),
+    ],
     log,
     projectFolders: projectFolderSource(ctx.db),
     ...(opts.home ? { home: opts.home } : {}),

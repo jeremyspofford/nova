@@ -10,6 +10,7 @@ import { bindingText, eventToBinding, formatBinding } from '../keys.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { MANAGED } from './common.ts';
+import { GlobalShortcutsSection } from '../shellbridge/GlobalShortcuts.tsx';
 
 export function KeyboardPage() {
   const { registry } = useServices();
@@ -234,6 +235,8 @@ export function KeyboardPage() {
           {keyFilter ? `No command uses ${bindingText(keyFilter, mac)}.` : 'No matching commands.'}
         </p>
       ) : null}
+      {/* System-wide shortcuts of the desktop app (FR-008, FR-214, M7). */}
+      <GlobalShortcutsSection />
 
       <Dialog
         open={confirmReset}

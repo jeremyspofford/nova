@@ -462,9 +462,10 @@ describe('approval links (?approval=)', () => {
     expect(hub.api.getApproval).toHaveBeenCalledWith('ap1');
   });
 
-  it('falls back to the chat list for an unknown /approvals/<id>', async () => {
+  it('falls back to the approvals page for an unknown /approvals/<id>', async () => {
     const { hub } = await renderApp({ path: '/approvals/missing' });
-    await waitFor(() => expect(window.location.pathname).toBe('/chat'));
+    await waitFor(() => expect(window.location.pathname).toBe('/approvals'));
+    expect(window.location.search).toBe('?focus=missing');
     expect(hub.api.getApproval).toHaveBeenCalledWith('missing');
   });
 });

@@ -74,6 +74,8 @@ export const DEVICE_READ_MAX_BYTES = 8 * 1024 * 1024;
 export const DEVICE_STAGE_MAX_CHARS = 10 * 1024 * 1024;
 /** The diff a staging result shows; the full diff is on the device page. */
 const DIFF_CHARS = 8_000;
+/** The diff a commit's approval card shows (the gate keeps 2,000 characters of the preview). */
+const APPROVAL_DIFF_CHARS = 1_500;
 /** Device calls answer within 30 s; a little more for the round trip. */
 const TIMEOUT_MS = 60_000;
 
@@ -506,6 +508,17 @@ export function deviceFileTools(opts: DeviceToolsOptions): BuiltinTool[] {
       effects: ['file_write'],
     }),
     origin: null,
+    // M7: the approval card shows the staged diff, not only its id (redacted and bounded by the
+    // gate, and clipped here so the arguments still fit).
+    approvalDetail: async (args, ctx) => {
+      const resolve = opts.agentOf?.() ?? null;
+      const link = resolve ? await resolve(ctx.accountId, ctx.threadId) : null;
+      if (!link) return null;
+      const s = await service.stagedWrite(ctx.accountId, str(argsOf(args).stagedId) ?? '');
+      if (s.grantee.kind !== 'agent' || s.grantee.id !== link.agentId) return null;
+      const counts = s.binary ? 'binary' : `+${s.additions} -${s.deletions}`;
+      return `Diff of ${s.path} (${counts}):\n${clip(s.diff, APPROVAL_DIFF_CHARS)}`;
+    },
     handler: async (args, ctx) => {
       const t = await target(ctx, 'device.files.commit', 'staged_writes');
       if (!('agentId' in t)) return t;

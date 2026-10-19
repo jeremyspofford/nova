@@ -123,5 +123,6 @@ export {
   type PairWithRelayResult,
   type PairedClient,
   type RelayClientOptions,
+  type RelayPairingDecision,
   type TunnelFetchInit,
 } from './client.ts';

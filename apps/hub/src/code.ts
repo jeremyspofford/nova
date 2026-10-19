@@ -15,6 +15,13 @@
 // operations and side questions (FR-072), workers (`task.spawn` with a worktree) and session
 // budgets (docs/09 §2). `sandboxForThread` names the sandbox a session's commands use, for the
 // tool runtime.
+//
+// M7 (docs/10 §2, §9, §15; FR-212, FR-213): session handoff (and a chat's move to another device),
+// three-way merges with their conflicts, best-of-N attempts, Hub-side diff, review and commit for
+// sessions on other machines, the SSH transport with host keys pinned on first use (behind
+// `code.ssh.enabled`), delegation from agents (`code.delegate`, the agent's rules applied through
+// `delegatedRules`), and the transport seam the cloud runner registers (`useEnvironmentTransport`).
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
@@ -39,13 +46,23 @@ import {
   updateCodeSessionSchema,
   updateEnvironmentSchema,
   worktreeListQuery,
+  applyAttemptSchema,
+  mergeSchema,
+  sessionHandoffSchema,
+  startAttemptsSchema,
+  threadHandoffSchema,
   type CodeSessionExtrasView,
   type PermissionMode,
 } from '@nova/shared';
 import {
+  AttemptService,
   AutoVerifier,
+  CodeDelegations,
   CodeService,
   CodeSessionOps,
+  HandoffService,
+  MergeService,
+  OpenSshTransport,
   DevServerManager,
   GitHostService,
   PullRequestService,
@@ -55,8 +72,12 @@ import {
   detectSandbox,
   noopAudit,
   type AuditSink,
+  type AgentRuleSource,
+  type CodeAgentHost,
   type DevServerGrant,
   type DevServerOpener,
+  type EnvironmentTransportProvider,
+  type ToolLimitSource,
   type EnvDeviceProvider,
   type EnvSshTransport,
   type GitHostClient,
@@ -85,8 +106,35 @@ export interface CodeArea extends HubArea {
   verifier: AutoVerifier;
   /** Cross-session operations and workers (FR-072, FR-073). */
   ops: CodeSessionOps;
-  /** A Code session's permission mode as approval policy, profile and roots (gate, tool scope). */
+  /** Session handoffs and chat moves (FR-213). */
+  handoffs: HandoffService;
+  /** Three-way merges onto a session (FR-073). */
+  merges: MergeService;
+  /** Best-of-N attempts (FR-212). */
+  attempts: AttemptService;
+  /** Code sessions agents start (`code.delegate`). */
+  delegations: CodeDelegations;
+  /** The agents area's thread links, main threads and budgets (late-bound; delegation). */
+  useAgents(host: CodeAgentHost): void;
+  /**
+   * The gate's agent rules with delegated Code sessions included: wire it as
+   * `policy.useAgentPolicy(code.delegatedRules(agents.agentPolicy))`.
+   */
+  delegatedRules(inner: AgentRuleSource): AgentRuleSource;
+  /**
+   * The agent's connected plugins for the sessions it started and their workers: wire it as
+   * `policy.gate.useToolLimits(code.delegatedToolLimits(agents.service.toolLimits))`.
+   */
+  delegatedToolLimits(inner: ToolLimitSource): ToolLimitSource;
+  /** The transport of sessions in an environment kind another area runs (cloud runner). */
+  useEnvironmentTransport(kind: 'cloud', provider: EnvironmentTransportProvider): void;
+  /** A Code session's permission mode as approval policy, profile and roots (the gate). */
   policy: ThreadPolicySource;
+  /**
+   * The same for the tool scope (M7): a session on another machine (SSH, WSL, a device) gets no
+   * root on the Hub. Wire it as `tools.useThreadPolicy(code.toolPolicy)`.
+   */
+  toolPolicy: ThreadPolicySource;
   /** The Environment block and the change refresh for each turn of a code thread. */
   extension: TurnExtension;
   /** git.status, git.diff, git.log, test.run, code.symbols, code.refs (source `builtin`). */
@@ -143,6 +191,10 @@ export interface CodeDeps {
   ciTickMs?: number;
   /** How long a dev server start waits for an early exit (default 3 s). */
   devServerYieldMs?: number;
+  /** How long a handoff waits for a running turn (default 30 min). */
+  handoffTurnWaitMs?: number;
+  /** The ssh client the default SSH transport runs (tests point it at a stand-in). */
+  sshClient?: { bin: string; env?: Record<string, string>; multiplex?: boolean };
 }
 
 /** Tools that never write files: no refresh after them. */
@@ -177,6 +229,8 @@ const processParams = z.object({ id: idSchema, processId: z.string().min(1).max(
 const serverParams = z.object({ id: idSchema, serverId: idSchema });
 const verifyParams = z.object({ id: idSchema, verifyId: idSchema });
 const wslQuery = z.object({ deviceId: idSchema });
+const mergeParams = z.object({ id: idSchema, mergeId: idSchema });
+const setParams = z.object({ setId: idSchema });
 const branchBody = z.object({ name: z.string().trim().min(1).max(200) }).strict();
 
 export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
@@ -207,7 +261,23 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
           ...(egress ? { egress } : {}),
         });
       }),
-    sshTransport: ctx.sshTransport ?? null,
+    // The system's OpenSSH client, off until `code.ssh.enabled` (M7, docs/10 §2).
+    sshTransport:
+      ctx.sshTransport ??
+      new OpenSshTransport({
+        runDir: join(ctx.dataDir, 'code', 'ssh'),
+        enabled: () => ctx.setting('code.ssh.enabled'),
+        ...(ctx.sshClient
+          ? {
+              sshBin: ctx.sshClient.bin,
+              ...(ctx.sshClient.env ? { env: ctx.sshClient.env } : {}),
+              ...(ctx.sshClient.multiplex !== undefined
+                ? { multiplex: ctx.sshClient.multiplex }
+                : {}),
+            }
+          : {}),
+        log,
+      }),
     log,
   });
   if (ctx.terminals) service.useTerminals(ctx.terminals);
@@ -240,8 +310,47 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
     router: ctx.router,
     audit,
   });
+  const merges = new MergeService({
+    db: ctx.db,
+    code: service,
+    events: ctx.events,
+    audit,
+    dataDir: ctx.dataDir,
+    log,
+  });
+  service.useCommitGuard(merges.commitGuard);
+  const handoffs = new HandoffService({
+    db: ctx.db,
+    code: service,
+    threads: ctx.threads,
+    events: ctx.events,
+    audit,
+    dataDir: ctx.dataDir,
+    setting: ctx.setting,
+    ...(ctx.handoffTurnWaitMs !== undefined ? { turnWaitMs: ctx.handoffTurnWaitMs } : {}),
+    log,
+  });
+  const attempts = new AttemptService({
+    db: ctx.db,
+    code: service,
+    merges,
+    verifier,
+    audit,
+    setting: ctx.setting,
+    log,
+  });
+  const delegations = new CodeDelegations({
+    db: ctx.db,
+    code: service,
+    audit,
+    setting: ctx.setting,
+    log,
+  });
   const tools = codeToolSource(service);
-  const toolsM6 = codeAreaToolSource([], codeM6Tools({ code: service, prs, devServers, ops }));
+  const toolsM6 = codeAreaToolSource([], {
+    ...codeM6Tools({ code: service, prs, devServers, ops }),
+    agent: [delegations.tool()],
+  });
 
   // A tool call on a code thread may have changed files: capture them with its call id.
   const off = ctx.events.bus.subscribe('tool.call.completed', (e) => {
@@ -258,12 +367,29 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
       .refreshThread(e.accountId, p.threadId, p.callId)
       .catch((err: unknown) => log.warn('refreshing code changes failed', { err }));
   });
+  // An agent paused, resumed or deleted: its delegated work is held, released or cancelled.
+  const offAgentStatus = ctx.events.bus.subscribe('agent.status.changed', (e) => {
+    const p = e.payload as { agentId?: unknown; to?: unknown };
+    if (!e.accountId || typeof p.agentId !== 'string') return;
+    delegations
+      .agentChanged(e.accountId, p.agentId, p.to === 'active' ? 'active' : 'paused')
+      .catch((err: unknown) => log.warn('holding delegated work failed', { err }));
+  });
+  const offAgentDeleted = ctx.events.bus.subscribe('agent.deleted', (e) => {
+    const p = e.payload as { agentId?: unknown };
+    if (!e.accountId || typeof p.agentId !== 'string') return;
+    delegations
+      .agentChanged(e.accountId, p.agentId, 'deleted')
+      .catch((err: unknown) => log.warn('cancelling delegated work failed', { err }));
+  });
   const sweep = async () => {
     await service.sweepArchived();
     await service.worktrees.sweepExpired();
     const active = new Set(service.activeSessionIds());
     await devServers.stopInactive((id) => active.has(id));
     await service.envs.checkInUse();
+    // Handoff patches and bundles expire (M7).
+    await handoffs.sweepFiles();
   };
   const sweeper = setInterval(
     () => {
@@ -285,7 +411,16 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
     devServers,
     verifier,
     ops,
+    handoffs,
+    merges,
+    attempts,
+    delegations,
+    useAgents: (host) => delegations.useAgents(host),
+    delegatedRules: (inner) => delegations.delegatedRules(inner),
+    delegatedToolLimits: (inner) => delegations.delegatedToolLimits(inner),
+    useEnvironmentTransport: (kind, provider) => service.useEnvironmentTransport(kind, provider),
     policy: service.policy,
+    toolPolicy: service.toolPolicy,
     extension: service.extension,
     tools,
     toolsM6,
@@ -337,6 +472,12 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
       app.post('/api/v1/environments/:id/check', async (req) => {
         const accountId = await ctx.accountOf(req);
         return service.envs.check(accountId, idParams.parse(req.params).id);
+      });
+
+      // M7: forget a pinned SSH host key on purpose (the next connection pins anew).
+      app.post('/api/v1/environments/:id/hostkey/reset', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return service.envs.resetHostKey(accountId, idParams.parse(req.params).id);
       });
 
       app.get('/api/v1/environments/:id/processes', async (req) => {
@@ -646,6 +787,108 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
         return ops.ask(accountId, id, sideQuestionSchema.parse(req.body).question);
       });
 
+      // ---- M7: handoff (FR-213) -------------------------------------------------------------
+      app.post('/api/v1/code/sessions/:id/handoff', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        const { view, done } = await handoffs.start(
+          accountId,
+          id,
+          sessionHandoffSchema.parse(req.body),
+        );
+        done.catch((err: unknown) => log.warn('handoff failed', { err }));
+        void reply.status(202);
+        return view;
+      });
+
+      app.get('/api/v1/code/sessions/:id/handoffs', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return { items: handoffs.list(accountId, idParams.parse(req.params).id) };
+      });
+
+      app.get('/api/v1/handoffs/:id', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return handoffs.get(accountId, idParams.parse(req.params).id);
+      });
+
+      app.post('/api/v1/threads/:id/handoff', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        return handoffs.startChat(accountId, id, threadHandoffSchema.parse(req.body));
+      });
+
+      // ---- M7: three-way merges (FR-073) ------------------------------------------------------
+      app.post('/api/v1/code/sessions/:id/merge', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        const body = mergeSchema.parse(req.body);
+        const view =
+          'sessionId' in body.from
+            ? await merges.mergeSession(accountId, id, body.from.sessionId, body.onConflict)
+            : await merges.mergePatch(
+                accountId,
+                id,
+                body.from.patch,
+                body.from.base,
+                body.onConflict,
+              );
+        void reply.status(201);
+        return view;
+      });
+
+      app.get('/api/v1/code/sessions/:id/merges', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return { items: merges.list(accountId, idParams.parse(req.params).id) };
+      });
+
+      app.get('/api/v1/code/sessions/:id/merges/:mergeId', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const p = mergeParams.parse(req.params);
+        return merges.get(accountId, p.id, p.mergeId);
+      });
+
+      app.post('/api/v1/code/sessions/:id/merges/:mergeId/resolve', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const p = mergeParams.parse(req.params);
+        return merges.resolve(accountId, p.id, p.mergeId);
+      });
+
+      app.post('/api/v1/code/sessions/:id/merges/:mergeId/abort', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const p = mergeParams.parse(req.params);
+        return merges.abort(accountId, p.id, p.mergeId);
+      });
+
+      // ---- M7: best-of-N attempts (FR-212) ----------------------------------------------------
+      app.post('/api/v1/code/sessions/:id/attempts', async (req, reply) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = idParams.parse(req.params);
+        const view = await attempts.start(accountId, id, startAttemptsSchema.parse(req.body));
+        void reply.status(201);
+        return view;
+      });
+
+      app.get('/api/v1/code/sessions/:id/attempts', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return { items: await attempts.list(accountId, idParams.parse(req.params).id) };
+      });
+
+      app.get('/api/v1/code/attempts/:setId', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return attempts.get(accountId, setParams.parse(req.params).setId);
+      });
+
+      app.post('/api/v1/code/attempts/:setId/apply', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { setId } = setParams.parse(req.params);
+        return attempts.apply(accountId, setId, applyAttemptSchema.parse(req.body));
+      });
+
+      app.post('/api/v1/code/attempts/:setId/discard', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        return attempts.discard(accountId, setParams.parse(req.params).setId);
+      });
+
       // ---- terminal (FR-066) -------------------------------------------------------------
       app.post('/api/v1/code/sessions/:id/terminal', async (req, reply) => {
         const accountId = await ctx.accountOf(req);
@@ -665,8 +908,13 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
     },
     async close() {
       off();
+      offAgentStatus();
+      offAgentDeleted();
       clearInterval(sweeper);
       clearInterval(ciTicker);
+      await handoffs.close();
+      await attempts.close();
+      await delegations.close();
       await devServers.close();
       await verifier.close();
       await service.close();

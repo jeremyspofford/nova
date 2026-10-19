@@ -114,6 +114,11 @@ export class AutoVerifier {
     return { view: this.get(accountId, sessionId, id), done };
   }
 
+  /** Settles once no check run of the session is going (best-of-N waits for its attempts). */
+  async idle(sessionId: string): Promise<void> {
+    await this.#running.get(sessionId)?.catch(() => undefined);
+  }
+
   list(accountId: string, sessionId: string, limit = 20): VerifyRunView[] {
     const s = this.#o.code.info(accountId, sessionId);
     const rows = this.#o.db.raw

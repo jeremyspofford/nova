@@ -123,7 +123,7 @@ describe('bindings and credentials', () => {
     expect(env.events.names()).toContain('channel.binding.changed');
   });
 
-  it('shares an app between bindings; refuses a duplicate conversation and email', async () => {
+  it('shares an app between bindings; refuses a duplicate conversation and an email binding without a mailbox', async () => {
     const c = await channel();
     const d = await dm(c.id);
     expect(d.sharesCredentialsWith).toBe(c.id);
@@ -134,7 +134,7 @@ describe('bindings and credentials', () => {
     ).rejects.toMatchObject({ code: 'validation' });
     await expect(
       env.service.create(ACCOUNT, { kind: 'email', externalRef: 'me@example.com' }),
-    ).rejects.toMatchObject({ code: 'capability_missing' });
+    ).rejects.toMatchObject({ code: 'validation' });
     await expect(
       env.service.create(ACCOUNT, {
         kind: 'slack',

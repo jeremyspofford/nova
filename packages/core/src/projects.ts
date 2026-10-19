@@ -12,6 +12,7 @@ import {
   type updateProjectSchema,
 } from '@nova/shared';
 import { schema, type NovaDatabase } from '@nova/storage';
+import type { EventSink } from './events.ts';
 
 const { project } = schema;
 
@@ -22,15 +23,19 @@ export type UpdateProjectRequest = z.infer<typeof updateProjectSchema>;
 export interface ProjectServiceOptions {
   db: NovaDatabase;
   now?: () => Date;
+  /** `project.created`, `.updated`, `.deleted` (contracts/events.md); sync's change feed listens. */
+  events?: EventSink;
 }
 
 export class ProjectService {
   readonly #db: NovaDatabase;
   readonly #now: () => Date;
+  readonly #events: EventSink | undefined;
 
   constructor(opts: ProjectServiceOptions) {
     this.#db = opts.db;
     this.#now = opts.now ?? (() => new Date());
+    this.#events = opts.events;
   }
 
   async list(accountId: string): Promise<ProjectView[]> {
@@ -73,6 +78,7 @@ export class ProjectService {
       deletedAt: null,
     };
     await this.#db.transaction(() => this.#db.orm.insert(project).values(row));
+    await this.#changed('project.created', accountId, row.id);
     return this.#view(row);
   }
 
@@ -84,6 +90,7 @@ export class ProjectService {
     await this.#db.transaction(() =>
       this.#db.orm.update(project).set(set).where(eq(project.id, id)),
     );
+    await this.#changed('project.updated', accountId, id);
     return this.get(accountId, id);
   }
 
@@ -109,6 +116,11 @@ export class ProjectService {
         .run(now, now, id);
       raw.prepare('UPDATE thread SET project_id = NULL WHERE project_id = ?').run(id);
     });
+    await this.#changed('project.deleted', accountId, id);
+  }
+
+  async #changed(name: string, accountId: string, projectId: string): Promise<void> {
+    await this.#events?.emit({ name, actor: 'system', accountId, payload: { projectId } });
   }
 
   #view(r: ProjectRow): ProjectView {

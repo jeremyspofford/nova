@@ -805,7 +805,10 @@ export class PolicyStore {
   }
 
   async getApproval(accountId: string, id: string): Promise<ApprovalView> {
-    return approvalView(await this.approvalRow(accountId, id));
+    const [view] = this.#withOrigin(accountId, [
+      approvalView(await this.approvalRow(accountId, id)),
+    ]);
+    return view!;
   }
 
   async listApprovals(
@@ -821,7 +824,48 @@ export class PolicyStore {
       .where(and(...where))
       .orderBy(desc(approval.createdAt), desc(approval.id))
       .limit(200);
-    return rows.map(approvalView);
+    return this.#withOrigin(accountId, rows.map(approvalView));
+  }
+
+  /**
+   * Where each approval comes from (M7): its thread's title and the Work run or Code session
+   * that thread belongs to, in one query, so a client never lists threads to say so.
+   */
+  #withOrigin(accountId: string, views: ApprovalView[]): ApprovalView[] {
+    const ids = [...new Set(views.flatMap((v) => (v.threadId ? [v.threadId] : [])))];
+    const origin = new Map<
+      string,
+      { title: string | null; run_id: string | null; session_id: string | null }
+    >();
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      const rows = this.#db.raw
+        .prepare(
+          `SELECT t.id AS id, t.title AS title,
+             (SELECT r.id FROM run r WHERE r.thread_id = t.id AND r.account_id = t.account_id)
+               AS run_id,
+             (SELECT c.id FROM code_session c
+              WHERE c.thread_id = t.id AND c.account_id = t.account_id) AS session_id
+           FROM thread t
+           WHERE t.account_id = ? AND t.deleted_at IS NULL AND t.id IN (${chunk.map(() => '?').join(', ')})`,
+        )
+        .all(accountId, ...chunk) as unknown as {
+        id: string;
+        title: string | null;
+        run_id: string | null;
+        session_id: string | null;
+      }[];
+      for (const r of rows) origin.set(r.id, r);
+    }
+    return views.map((v) => {
+      const o = v.threadId ? origin.get(v.threadId) : undefined;
+      return {
+        ...v,
+        runId: v.runId ?? o?.run_id ?? null,
+        codeSessionId: o?.session_id ?? null,
+        threadTitle: o?.title ?? null,
+      };
+    });
   }
 
   /** The reason the user gave when they denied an identical call in this thread, if they did. */
@@ -1028,5 +1072,9 @@ export function approvalView(r: ApprovalRow): ApprovalView {
     createdAt: r.createdAt,
     expiresAt: r.expiresAt ?? r.createdAt,
     decidedAt: r.decidedAt,
+    // The store adds the thread's run, Code session and title (`#withOrigin`).
+    runId: r.runId,
+    codeSessionId: null,
+    threadTitle: null,
   };
 }

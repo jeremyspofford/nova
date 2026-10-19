@@ -373,12 +373,15 @@ describe('A session on another machine (FR-062, FR-078)', () => {
     const note = await within(view).findByRole('note');
     expect(note.textContent).toMatch(/This session runs on Build box \(SSH host\)/);
     expect(note.textContent).toMatch(/work only for folders on the Hub/);
-    for (const name of ['Review', 'Commit…', 'Branch…', 'Push…', 'Pull request…'])
+    // M7: the Hub captures the diff, review, commits and branches of remote sessions too.
+    for (const name of ['Push…', 'Pull request…'])
       expect(within(view).getByRole('button', { name })).toHaveProperty('disabled', true);
+    for (const name of ['Review', 'Commit…', 'Branch…'])
+      expect(within(view).getByRole('button', { name })).toHaveProperty('disabled', false);
     expect(within(view).queryByRole('combobox', { name: /symbol/i })).toBeNull();
     expect(
-      within(view).getByRole('heading', { name: 'The diff is not available for this session' }),
-    ).toBeTruthy();
+      within(view).queryByRole('heading', { name: 'The diff is not available for this session' }),
+    ).toBeNull();
     await userEvent.click(tab('Dev servers'));
     expect(
       within(view).getByRole('heading', { name: 'Dev servers are not available here' }),

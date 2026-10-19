@@ -141,6 +141,42 @@ export function deviceSecretHash(token: string): string {
   return createHash('sha256').update('nova-novad\0').update(token, 'utf8').digest('hex');
 }
 
+/**
+ * The novad device a credential (`nvc_…`) belongs to, or null (unknown, revoked or deleted). The
+ * credential check every /agent/v1 route makes; the device-trust area also uses it to tie a
+ * client certificate to the credential presented with it (FR-126).
+ */
+export async function novadDeviceForCredential(
+  db: NovaDatabase,
+  credential: string,
+): Promise<DeviceRow | null> {
+  if (!credential.startsWith(DEVICE_CREDENTIAL_PREFIX) || credential.length > 200) return null;
+  const rows = await db.orm
+    .select({ device })
+    .from(authToken)
+    .innerJoin(device, eq(device.credentialTokenId, authToken.id))
+    .where(
+      and(
+        eq(authToken.tokenHash, deviceSecretHash(credential)),
+        eq(authToken.kind, 'device'),
+        isNull(authToken.revokedAt),
+        ne(device.status, 'revoked'),
+      ),
+    )
+    .limit(1);
+  return rows[0]?.device ?? null;
+}
+
+/** The scopes the owner granted a device (docs/22 §4.2), from its row. */
+function grantedScopes(d: DeviceRow): string[] {
+  const list = parseJson<unknown>(d.scopes, []);
+  const scopes = Array.isArray(list) ? list.filter((s): s is string => typeof s === 'string') : [];
+  // The capability flags follow the scopes (pairing `setScopes`); either one grants.
+  if (d.localRuntime && !scopes.includes('local-runtime')) scopes.push('local-runtime');
+  if (d.offlineReplica && !scopes.includes('offline-replica')) scopes.push('offline-replica');
+  return scopes.sort();
+}
+
 function sha256Hex(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex');
 }
@@ -725,22 +761,8 @@ export class DeviceService {
   }
 
   /** The novad device a credential belongs to, or null. */
-  async authenticate(credential: string): Promise<DeviceRow | null> {
-    if (!credential.startsWith(DEVICE_CREDENTIAL_PREFIX) || credential.length > 200) return null;
-    const rows = await this.#db.orm
-      .select({ device })
-      .from(authToken)
-      .innerJoin(device, eq(device.credentialTokenId, authToken.id))
-      .where(
-        and(
-          eq(authToken.tokenHash, deviceSecretHash(credential)),
-          eq(authToken.kind, 'device'),
-          isNull(authToken.revokedAt),
-          ne(device.status, 'revoked'),
-        ),
-      )
-      .limit(1);
-    return rows[0]?.device ?? null;
+  authenticate(credential: string): Promise<DeviceRow | null> {
+    return novadDeviceForCredential(this.#db, credential);
   }
 
   async #requireDevice(credential: string): Promise<DeviceRow> {
@@ -753,11 +775,20 @@ export class DeviceService {
     return d;
   }
 
-  /** `POST /agent/v1/heartbeat`: liveness, module reports, events, device-side decisions. */
+  /**
+   * `POST /agent/v1/heartbeat`: liveness, module reports, events, device-side decisions. The
+   * answer carries the scopes the owner granted (docs/22 §4.2), so novad's local runtime knows
+   * whether it may serve (FR-128) and keeps that grant while the Hub is unreachable.
+   */
   async heartbeat(
     credential: string,
     input: unknown,
-  ): Promise<{ ok: true; heartbeatIntervalMs: number; capabilityRequested: boolean }> {
+  ): Promise<{
+    ok: true;
+    heartbeatIntervalMs: number;
+    capabilityRequested: boolean;
+    scopes: string[];
+  }> {
     const d = await this.#requireDevice(credential);
     const body = deviceHeartbeatSchema.parse(input);
     const nowIso = this.#iso();
@@ -803,6 +834,7 @@ export class DeviceService {
       ok: true,
       heartbeatIntervalMs: this.heartbeatIntervalMs,
       capabilityRequested: d.novadVersion !== body.novadVersion,
+      scopes: grantedScopes(d),
     };
   }
 

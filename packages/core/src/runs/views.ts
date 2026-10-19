@@ -64,6 +64,8 @@ export function toRunView(input: {
   goalId: string | null;
   derived: StatusView;
   used?: Usage | null;
+  /** The cloud environment of a cloud Work run (M7). */
+  environmentId?: string | null;
 }): RunView {
   const r = input.row;
   const used = input.used ?? { timeMs: r.timeUsedMs, tokens: r.tokensUsed, costUsd: r.costUsedUsd };
@@ -98,6 +100,7 @@ export function toRunView(input: {
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     endedAt: r.endedAt,
+    environmentId: input.environmentId ?? null,
   };
 }
 

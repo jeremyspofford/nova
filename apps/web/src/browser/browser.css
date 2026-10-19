@@ -133,3 +133,150 @@
   font-family: var(--u-font-code);
   font-size: var(--u-text-sm);
 }
+
+/* ---- M7: crashes, page capture and site levels per scope --------------------------------- */
+.brw-crash {
+  display: flex;
+  gap: var(--u-space-2);
+  align-items: flex-start;
+  margin: 0;
+}
+.brw-crash > .nv-icon {
+  flex: none;
+  margin-top: 3px;
+}
+.brw-trace-list > [data-kind='lifecycle'] .activity-title {
+  font-style: italic;
+}
+.brw-trace-list > [data-kind='lifecycle'] .activity-title > .nv-icon {
+  margin-right: var(--u-space-1);
+  vertical-align: -0.125em;
+}
+.brw-capture-body {
+  min-width: 0;
+}
+.brw-log {
+  max-height: 32rem;
+  overflow-y: auto;
+}
+.brw-log-row {
+  display: grid;
+  gap: var(--u-space-1);
+  justify-items: stretch;
+  min-width: 0;
+}
+.brw-log-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.brw-log-text {
+  margin: 0;
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+.brw-log-row[data-level='error'],
+.brw-log-row[data-failed='true'] {
+  border-left: 3px solid var(--u-danger);
+}
+.brw-log-row[data-level='warning'] {
+  border-left: 3px solid var(--u-warn);
+}
+.brw-net-summary {
+  display: grid;
+  gap: var(--u-space-1);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.brw-net-summary:focus-visible {
+  outline: 2px solid var(--u-accent);
+  outline-offset: 2px;
+}
+.brw-net-detail {
+  min-width: 0;
+}
+.brw-net-detail dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.brw-headers {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-xs);
+}
+.brw-headers > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-2);
+}
+.brw-headers dt {
+  color: var(--u-text-muted);
+}
+.brw-headers dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.brw-net-filters {
+  align-items: flex-end;
+}
+.brw-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  min-height: 2.25rem;
+}
+.brw-site {
+  flex-wrap: wrap;
+}
+.brw-scoped {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.brw-scoped > .ws-list,
+.brw-scoped > p,
+.brw-scoped > form {
+  margin-top: var(--u-space-2);
+}
+.brw-scoped-row {
+  flex-wrap: wrap;
+}
+.brw-scoped-add {
+  align-items: flex-end;
+}
+.brw-scope-levels .brw-site > .ws-source-main,
+.brw-scoped-row > .ws-source-main {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.brw-scope-levels .brw-site > .nv-field {
+  flex: 0 1 240px;
+  min-width: 0;
+}
+.brw-scoped-row > .brw-site-controls {
+  flex: 0 1 auto;
+}
+/* A select never grows past its column because of a long option. */
+.brw-scope-levels .nv-select,
+.brw-scoped .nv-select,
+.brw-capture-body .nv-select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.brw-capture-body .ws-toolbar > .nv-field:first-child {
+  flex: 0 1 320px;
+}

@@ -8,16 +8,25 @@
 // area; the policy gate is required (without it every page write and new site is denied);
 // computers (egress proxy, profile folders), agents (the thread's computer, the external-agent
 // guard), devices (local fallback) and screen (pause/resume) bind late through `use*`.
+// M7: site levels per project or agent (`/browser/sites/:pattern/levels/...`,
+// `/browser/site-levels`), the trace newest first with a cursor, and the owner's view of a
+// browser's console and network capture (redacted like what the agent reads). Deleting a project
+// or an agent removes its levels: the area hears `project.deleted` and `agent.deleted` on the bus.
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
   NovaError,
   browserActionsQuerySchema,
+  browserCaptureQuerySchema,
+  browserSiteLevelsQuerySchema,
   browserSitePatternSchema,
+  browserSiteScopeParamsSchema,
   patchBrowserSiteSchema,
   putBrowserDomainsSchema,
+  putBrowserSiteLevelSchema,
   putBrowserSiteSchema,
   submitBrowserSigninSchema,
+  type BrowserSiteScopeKind,
 } from '@nova/shared';
 import {
   BrowserService,
@@ -28,6 +37,7 @@ import {
   type ArtifactService,
   type AuditSink,
   type BrowserDriver,
+  type BrowserScopeResolver,
   type ComputerProvider,
   type ComputerResolver,
   type EgressProxy,
@@ -66,6 +76,8 @@ export interface BrowserArea extends HubArea {
   useEgress(egress: EgressProxy): void;
   useComputers(computers: ComputerProvider): void;
   useComputerResolver(fn: ComputerResolver): void;
+  /** Which project and agent a thread belongs to (defaults to the thread and agent tables). */
+  useScopeResolver(fn: BrowserScopeResolver): void;
   useExternalAgentGuard(guard: ExternalAgentGuard): void;
   useLocalFallback(fallback: LocalBrowserFallback): void;
   useArtifacts(artifacts: ArtifactService): void;
@@ -127,11 +139,37 @@ export function setupBrowser(ctx: HubContext, deps: BrowserAreaDeps = {}): Promi
     action: string,
     resource: string | null,
     detail: Record<string, unknown> = {},
+    actor: 'user' | 'system' = 'user',
   ) => {
     await audit
-      ?.append({ accountId, actor: 'user', kind: 'browser', action, resource, detail })
+      ?.append({ accountId, actor, kind: 'browser', action, resource, detail })
       .catch((err: unknown) => log.warn('browser audit failed', { err }));
   };
+  // A deleted project's or agent's site levels go with it (docs/11 §4.4), audited as Nova's.
+  const dropScope = (accountId: string, scopeKind: BrowserSiteScopeKind, scopeRef: string) =>
+    service.sites
+      .removeScope(accountId, scopeKind, scopeRef)
+      .then(async (count) => {
+        if (count)
+          await record(
+            accountId,
+            'browser.site.level.removed',
+            null,
+            { scopeKind, scopeRef, count, reason: `${scopeKind}_deleted` },
+            'system',
+          );
+      })
+      .catch((err: unknown) => log.warn('removing site levels failed', { err, scopeKind }));
+  const offProjectDeleted = ctx.events.bus.subscribe('project.deleted', (e) => {
+    const p = e.payload as { projectId?: unknown };
+    if (e.accountId && typeof p.projectId === 'string')
+      void dropScope(e.accountId, 'project', p.projectId);
+  });
+  const offAgentDeleted = ctx.events.bus.subscribe('agent.deleted', (e) => {
+    const p = e.payload as { agentId?: unknown };
+    if (e.accountId && typeof p.agentId === 'string')
+      void dropScope(e.accountId, 'agent', p.agentId);
+  });
   const sweep = () =>
     void service.sweep().then(
       (n) => {
@@ -194,6 +232,34 @@ export function setupBrowser(ctx: HubContext, deps: BrowserAreaDeps = {}): Promi
       await record(accountId, 'browser.site.removed', pattern);
       return { ok: true };
     });
+    // ---- levels per project or agent (M7, docs/11 §4.4: the narrower scope wins) ---------------
+    app.get('/api/v1/browser/site-levels', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const q = browserSiteLevelsQuerySchema.parse(req.query);
+      return { items: service.sites.scopedLevels(accountId, q) };
+    });
+    app.put('/api/v1/browser/sites/:pattern/levels/:scopeKind/:scopeRef', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const p = browserSiteScopeParamsSchema.parse(req.params);
+      const { level } = putBrowserSiteLevelSchema.parse(req.body);
+      const view = await service.sites.putScoped(accountId, { ...p, level });
+      await record(accountId, 'browser.site.level.set', view.pattern, {
+        scopeKind: view.scopeKind,
+        scopeRef: view.scopeRef,
+        level: view.level,
+      });
+      return view;
+    });
+    app.delete('/api/v1/browser/sites/:pattern/levels/:scopeKind/:scopeRef', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const p = browserSiteScopeParamsSchema.parse(req.params);
+      await service.sites.removeScoped(accountId, p);
+      await record(accountId, 'browser.site.level.removed', p.pattern, {
+        scopeKind: p.scopeKind,
+        scopeRef: p.scopeRef,
+      });
+      return { ok: true };
+    });
     app.get('/api/v1/browser/domains', async (req) => {
       const accountId = await ctx.accountOf(req);
       return service.sites.domains(accountId);
@@ -221,10 +287,28 @@ export function setupBrowser(ctx: HubContext, deps: BrowserAreaDeps = {}): Promi
         throw new NovaError('not_found', 'no open browser for that computer');
       return { ok: true };
     });
+    // Newest first; `nextCursor` continues the list (M7).
     app.get('/api/v1/browser/actions', async (req) => {
       const accountId = await ctx.accountOf(req);
       const q = browserActionsQuerySchema.parse(req.query);
-      return { items: service.recorder.list(accountId, q) };
+      return service.recorder.page(accountId, q);
+    });
+    // What the browser captured (M7): the owner's view, redacted like the agent's.
+    app.get('/api/v1/browser/sessions/:computerId/console', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { computerId } = computerParam.parse(req.params);
+      const { limit } = browserCaptureQuerySchema.parse(req.query);
+      const view = service.consoleOf(accountId, computerId, limit);
+      if (!view) throw new NovaError('not_found', 'no open browser for that computer');
+      return view;
+    });
+    app.get('/api/v1/browser/sessions/:computerId/network', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { computerId } = computerParam.parse(req.params);
+      const { limit } = browserCaptureQuerySchema.parse(req.query);
+      const view = service.networkOf(accountId, computerId, limit);
+      if (!view) throw new NovaError('not_found', 'no open browser for that computer');
+      return view;
     });
     app.get('/api/v1/browser/actions/:id/screenshots/:which', async (req, reply) => {
       const accountId = await ctx.accountOf(req);
@@ -283,6 +367,7 @@ export function setupBrowser(ctx: HubContext, deps: BrowserAreaDeps = {}): Promi
     useEgress: (egress) => service.useEgress(egress),
     useComputers: (computers) => service.useComputers(computers),
     useComputerResolver: (fn) => service.useComputerResolver(fn),
+    useScopeResolver: (fn) => service.useScopeResolver(fn),
     useExternalAgentGuard: (guard) => service.useExternalAgentGuard(guard),
     useLocalFallback: (fallback) => service.useLocalFallback(fallback),
     useArtifacts: (artifacts) => service.useArtifacts(artifacts),
@@ -290,6 +375,8 @@ export function setupBrowser(ctx: HubContext, deps: BrowserAreaDeps = {}): Promi
     controllerFor: (accountId, computerId) => service.controllerFor(accountId, computerId),
     close: async () => {
       stopSweep();
+      offProjectDeleted();
+      offAgentDeleted();
       await service.close();
     },
   });

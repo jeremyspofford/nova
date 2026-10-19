@@ -2,10 +2,12 @@
 // connect out to, so phones reach the Hub from anywhere. On or off, your own Relay or the hosted
 // one, its address, the connection's state and latency, a test, and the clients paired through it
 // (device name, platform, relay client id, last seen, status) with Revoke, which asks first.
-// Turning the Relay on connects the Hub out, so it asks first too.
+// Turning the Relay on connects the Hub out, so it asks first too. M7: the registration token a
+// private Relay may ask for, write-only (set or not set, replace, remove after asking).
 import { useId, useState } from 'react';
 import {
   RELAY_HOSTED_URL,
+  relayRegistrationTokenSchema,
   relayUrlSchema,
   type RelayConfigView,
   type RelayPairedClientView,
@@ -18,6 +20,7 @@ import { navigate } from '../router.ts';
 import { useAnnounce } from '../services.tsx';
 import { useDebounced } from '../work/events.ts';
 import { useNetworkSurfaceApi, type RelayPatchBody } from './api.ts';
+import { useRelayTokenApi } from './api-m7.ts';
 import { RELAY_EVENTS, useNetworkEvents } from './events.ts';
 import {
   ADD_DEVICE_PATH,
@@ -68,6 +71,7 @@ export function RelaySection() {
       </p>
       <Status r={r} onChanged={(next) => relay.setData(() => next)} />
       <RelaySettings r={r} onSaved={(next) => relay.setData(() => next)} />
+      <RegistrationToken r={r} onSaved={(next) => relay.setData(() => next)} />
       <Clients
         items={clients.data}
         error={clients.error}
@@ -311,6 +315,137 @@ function RelaySettings({
         onConfirm={async () => {
           await save();
           setConfirming(false);
+        }}
+      />
+    </section>
+  );
+}
+
+/**
+ * The token a private Relay asks Hubs for when they register (its `NOVA_RELAY_REGISTRATION_TOKEN`).
+ * Write-only: the Hub keeps it in its vault and only says whether one is set.
+ */
+function RegistrationToken({
+  r,
+  onSaved,
+}: {
+  r: RelayConfigView;
+  onSaved: (r: RelayConfigView) => void;
+}) {
+  const api = useRelayTokenApi();
+  const toast = useToast();
+  const announce = useAnnounce();
+  const headingId = useId();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const [error, setError] = useState<string | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const isSet = r.registrationToken === true;
+
+  const save = async () => {
+    if (!relayRegistrationTokenSchema.safeParse({ token: value }).success) {
+      setError('Use 8 to 512 characters, without spaces.');
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      const next = await api.setRelayRegistrationToken(value);
+      onSaved(next);
+      setValue('');
+      setEditing(false);
+      toast.show('Registration token saved. The Hub registers with the Relay again.', {
+        tone: 'success',
+      });
+      announce('Registration token saved.');
+    } catch (err) {
+      setError(netErrorMessage(err, 'Could not save the token.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="ws-section" aria-labelledby={headingId}>
+      <h2 id={headingId}>Registration token</h2>
+      <p className="muted ws-flush">
+        Only for your own Relay, when it asks Hubs for a token before they register (its{' '}
+        <code className="ws-code-inline">NOVA_RELAY_REGISTRATION_TOKEN</code>). The hosted Relay
+        needs none. The token is kept in the Hub’s vault and never shown again.
+      </p>
+      <p className="ws-flush">
+        <Chip
+          spec={
+            isSet
+              ? { text: 'Set', icon: 'check', tone: 'ready' }
+              : { text: 'Not set', icon: 'slash', tone: 'neutral' }
+          }
+        />
+      </p>
+      {editing ? (
+        <form
+          className="stack net-form"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
+          <TextField
+            label={isSet ? 'New registration token' : 'Registration token'}
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            value={value}
+            autoFocus
+            maxLength={512}
+            error={error}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setError(undefined);
+            }}
+          />
+          <div className="row">
+            <Button type="submit" variant="primary" disabled={busy || !value}>
+              {busy ? <Spinner /> : null} Save token
+            </Button>
+            <Button
+              onClick={() => {
+                setEditing(false);
+                setValue('');
+                setError(undefined);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <div className="row">
+          <Button onClick={() => setEditing(true)}>
+            {isSet ? 'Replace token' : 'Set a token'}
+          </Button>
+          {isSet ? (
+            <Button variant="danger" onClick={() => setRemoving(true)}>
+              Remove token
+            </Button>
+          ) : null}
+        </div>
+      )}
+      <ConfirmDialog
+        open={removing}
+        title="Remove the registration token?"
+        description="A Relay that asks for a token refuses this Hub until you set one again, so phones away from home lose their path to the Hub."
+        confirmLabel="Remove"
+        danger
+        onClose={() => setRemoving(false)}
+        onConfirm={async () => {
+          const next = await api.setRelayRegistrationToken(null);
+          setRemoving(false);
+          onSaved(next);
+          toast.show('Registration token removed.', { tone: 'success' });
+          announce('Registration token removed.');
         }}
       />
     </section>

@@ -50,6 +50,39 @@ durations, feature adoption flags. A local dashboard mirrors what would be sent.
 - Sandbox broker with a stub executor on Linux; real bwrap in a dedicated CI job.
 - Sync engine with two simulated devices: conflict, offline, tamper.
 
+*As built in M7 (ADR-095).* The M7 areas add these layers:
+
+- **Sync with two devices** (`apps/hub/test/sync.test.ts`): device A pushes a chat written offline
+  and device B pulls it, as changes and in a snapshot; concurrent page edits keep the loser in the
+  merge log and a restore reaches both replicas; a push for another device is refused.
+  `packages/core/test/sync-service.test.ts` also refuses a pushed clock too far ahead, and
+  `sync-idempotency.test.ts` (core and Hub) resends queued requests with their `Idempotency-Key`.
+- **Cloud runner.** The `services/runner` tests run real sandboxes under bubblewrap and skip them,
+  with the reason, where bubblewrap is missing or cannot run. The Hub-side tests
+  (`packages/core/test/cloudrun.test.ts`) use bubblewrap where it works and otherwise the host
+  test double `services/runner/test/host-substrate.ts`, which runs programs directly on the
+  machine with the sandbox's mount targets mapped to host folders and isolates nothing;
+  `NOVA_TEST_RUNNER_HOST=1` forces the double. `apps/hub/test/cloudrun.test.ts` runs a Code
+  session's command on a real runner on loopback under bubblewrap (skipped where it is missing)
+  and always with the double.
+- **Browser.** `packages/core/test/browser-chromium.test.ts` drives a real Chromium against the
+  local test site, including a real renderer crash, and is skipped with the reason where Chromium
+  cannot start. On a host without Chromium's system libraries it runs in the Playwright container
+  `mcr.microsoft.com/playwright:v1.64.1-noble` (the image `scripts/e2e-docker.sh` uses). The other
+  browser tests run on the fake driver (`browser-env.ts`).
+- **`novad` over TLS** (`apps/hub/test/m7-novad-tls.test.ts`): against the fully wired Hub
+  serving HTTPS from its local CA, the real `novad` binary installs over https with only the pin,
+  heartbeats over mutual TLS, keeps a granted `local-runtime` scope in `scopes.json`, and is
+  refused once its certificate is revoked. It runs on Linux (x64, arm64) when a debug build with
+  the TLS client exists (`node scripts/cargo.mjs build`, or `NOVA_NOVAD_BIN`) and is skipped
+  otherwise. The CI `checks` job builds no `novad`, so the `novad` job runs this test and the other
+  three that use the real binary (`devices-novad`, `agent-dist-novad`, `m65-integration`) against
+  its release build with `NOVA_REQUIRE_NOVAD=1`, which turns a missing or outdated binary into a
+  failure instead of a skip.
+- **Web offline layer.** The replica, queue and Settings → Sync tests run in jsdom against the
+  fake Hub (`apps/web/test/fakes-m7-sync.ts`); the sealed store runs on an in-memory backend
+  there, so the IndexedDB backend itself is not under test.
+
 ### 3.3 E2E (Playwright against the Hub-served web UI)
 
 For M0–M6, E2E tests start a real Hub (temp data directory, mock providers, test MCP server)
@@ -58,6 +91,43 @@ nightly). No Electron is involved (ADR-081). From M7, native-shell journeys (tra
 overlay, global shortcuts, attach window, multi-window, shell update) run with Playwright's
 Electron support per OS. Device behaviour that needs `novad` uses a `novad` test build with
 mock OS backends.
+
+*As built in M7 (ADR-095; `apps/desktop/e2e`).* The native-shell journey is
+`apps/desktop/e2e/shell.spec.ts` (Playwright's Electron support, one worker, 120 s per test, one
+retry under `CI`). `e2e/support.ts` starts a real Hub over HTTPS with its local CA, set up through
+its own API and restarted as an owner would, and launches the shell into a fresh data folder
+(`NOVA_SHELL_DATA_DIR`). Three tests:
+
+1. A Hub whose identity does not match the pinned fingerprint is refused before anything is sent.
+2. The shell joins through an Add Device link once the owner approves; the web UI loads; the
+   `novaShell` bridge offers exactly `version`, `platform`, `openWindow`, `shortcuts`,
+   `setShortcut` and `localRuntime`; a thread opens in a window of its own and only app routes
+   open; quick chat sends to a new chat; a restart keeps the shell signed in; a `nova://` link
+   from a second launch reaches the running shell's window.
+3. With the Hub stopped, the web UI opens from its offline copy and `novaShell.localRuntime`
+   streams an answer from a fake `novad` local-runtime socket; once the grant is withdrawn it
+   refuses with `scope_missing` and says why.
+
+It has run only on Linux. Attach window and shell updates are not in it: the container has no
+accessibility bus (unit tests drive capture through a fake `gdbus`), and shell updates are not
+built. Global shortcuts are covered by unit tests only.
+
+The CI job `e2e-shell` (§9) runs it in the Playwright image; to run it the same way by hand:
+
+```bash
+# in mcr.microsoft.com/playwright:v1.64.1-noble, run with --ipc=host
+npm ci
+node node_modules/electron/install.js   # npm ci does not fetch the Electron binary
+npm run build -w apps/web               # the Hub serves the built web UI
+npm run test:shell -w apps/desktop
+```
+
+On Linux without `DISPLAY` or `WAYLAND_DISPLAY`, `scripts/test-shell.mjs` wraps the run in
+`xvfb-run -a` (screen 1600×1000×24). Containers have no user namespaces for Chromium's OS sandbox,
+so the journey passes `--no-sandbox` only inside a container (`/.dockerenv`, `/run/.containerenv`, or
+`NOVA_SHELL_IN_CONTAINER=1` to force it); the windows
+keep `sandbox: true`, context isolation and no Node. `NOVA_SHELL_E2E_HUB_ROOT` points the journey
+at another checkout's Hub (a known-good build while the tree's own Hub does not start).
 
 The golden journeys are the scripts in `docs/18` §3:
 
@@ -86,12 +156,33 @@ against live providers behind secrets.
 - `packages/mcp` ships a `TestMcpServer` exposing predictable tools/resources/prompts.
 - Network is disabled in tests except explicit localhost; MSW intercepts any HTTP.
 
+*As built in M7 (ADR-095).* The M7 test doubles, all offline:
+
+| Double | Where | Stands in for |
+| --- | --- | --- |
+| Fake OIDC provider | `packages/core/test/fixtures/team/fake-oidc.ts` | An OpenID provider behind an injected fetch: discovery, a key set, an authorization step that records the request, a token endpoint that checks PKCE and the client credentials; every claim and the signing key can be overridden to make a bad token |
+| Fake mail servers | `packages/core/test/fixtures/channels/mail-servers.ts` | An IMAP4rev1 server (what the IMAP client uses, IDLE included) over one folder and an SMTP server that records what it was sent, on 127.0.0.1 over plain sockets |
+| Mock Telegram | `packages/core/test/fixtures/channels/mock-telegram.ts` | The Bot API on 127.0.0.1 (`getMe`, `sendMessage`, `setWebhook`, `deleteWebhook`, a `getUpdates` queue, `answerCallbackQuery`, `editMessageText`), recording every call; the Hub reaches such a server through `NOVA_TELEGRAM_API_BASE` |
+| Web Push browser | `packages/core/test/fixtures/channels/webpush-browser.ts` | A subscription's key pair and auth secret, and decryption of an `aes128gcm` body; `channels-webpush.test.ts` reproduces the RFC 8291 example byte for byte |
+| APNs and FCM | `services/relay/test/push.test.ts` | Local APNs over HTTP/2 (h2c) and FCM HTTP v1 servers that verify the ES256 provider token and the RS256 service-account assertion |
+| SSH client | `packages/core/test/fixtures/fake-ssh.mjs` | The OpenSSH client: checks the host key against `known_hosts`, the key file or the password, then runs the remote command in a fake remote home on this machine (there is no test against a real sshd) |
+| External coding agent | `packages/core/test/fixtures/fake-acp-agent.mjs` | An agent speaking the Agent Client Protocol on stdio; the prompt's first word picks what it does (ask then edit, write without asking, read, fetch, think, run a command, hang, crash, offer only `allow_always`) |
+| Runner substrate | `services/runner/test/host-substrate.ts` | A sandbox that runs programs directly, without isolation (§3.2) |
+| `novad` local runtime | `apps/desktop/e2e/support.ts` | A local-runtime socket that streams an answer or refuses with `scope_missing` |
+| Fake Hub (web) | `apps/web/test/fakes-m7-*.ts` | The M7 routes for the web UI tests (sync, push, cloud runner, Code, flagged features, team, channels, browser, devices) |
+
 ## 5. Security testing (FR-123)
 
 A dedicated suite (see `docs/12` §12) runs on every PR touching policy, sandbox, secrets, or
 network. It asserts **fail-closed** behavior and that every denial is audited. Fuzzing is
 applied to the policy input parser, the command prefix-rule matcher, the redaction scrubber
 and the Relay envelope parser.
+
+*As built in M7 (ADR-095).* Redaction runs on the Hub's event loop over untrusted text (a page's
+console, URLs, headers and bodies), so `packages/security/test/redact-timing.test.ts` times every
+default rule alone over 29 kinds of input built to defeat it, at 2,000, 4,000, 16,384, 1,000,000
+and 2,000,000 characters; the better of two runs must stay under 50 ms, and a last case checks the
+bounded rules still mask what they are for.
 
 ### 5.1 Persistence safety evals (FR-224)
 
@@ -174,6 +265,23 @@ tracked over time.
 
 Failures block merges; flaky tests are quarantined with a linked ledger task and a 14-day SLA
 to fix or delete.
+
+*As built in M7 (ADR-095; `.github/workflows/ci.yml`).* The workflow runs four jobs on every push
+to `main` and every pull request, on Linux only:
+
+- `checks`: `npm ci`, the secret scan, `npm run lint`, `npm run typecheck`, `npm test`,
+  `npm run build`, `node scripts/check-spec.mjs`, the notices check and
+  `npm audit --omit=dev --audit-level=high`.
+- `novad`: `cargo test` and a release build, then the capability-document contract test and the
+  Hub's four tests against the real binary (`NOVA_REQUIRE_NOVAD=1`: a missing binary fails).
+- `e2e`: a build, a release `novad`, Playwright's Chromium and `npm run test:e2e`.
+- `e2e-shell`: the desktop shell's journey in the Playwright image (§3.3).
+
+`lint-typecheck`, `spec-check`, `unit` and `integration` run inside `checks`; the other rows are
+not in the workflow yet. `npm run lint` is
+`node --max-old-space-size=8192 node_modules/eslint/bin/eslint.js . && prettier --check .`: ESLint
+runs its type-aware rules (`projectService`) over the whole repository in one process with an
+8 GiB V8 heap, then Prettier checks formatting.
 
 ## 10. Definition of test-complete
 

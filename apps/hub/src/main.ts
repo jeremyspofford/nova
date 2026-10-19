@@ -3,8 +3,11 @@
 //   node apps/hub/src/main.ts [--port N] [--host H] [--data-dir D]   start the Hub
 //   node apps/hub/src/main.ts code [--data-dir D]                     print a new setup code
 // NOVA_TLS_CERT and NOVA_TLS_KEY (PEM files) serve HTTPS; without them the trust mode decides
-// (FR-134: the Hub local CA's certificate, or plain HTTP). NOVA_SECRETS=keychain keeps secrets in
-// the OS keychain (default: the encrypted vault).
+// (FR-134: the Hub local CA's certificate, or plain HTTP). Over HTTPS the listener asks clients for
+// a device certificate of the Hub local CA without requiring one (FR-126: novad devices and compute
+// nodes present theirs; browsers are not asked for anything they hold), and the device-trust area
+// checks it on the device routes. NOVA_SECRETS=keychain keeps secrets in the OS keychain (default:
+// the encrypted vault).
 import { readFileSync } from 'node:fs';
 import { createServer as createTlsServer, type Server as TlsServer } from 'node:https';
 import { join } from 'node:path';
@@ -79,7 +82,14 @@ export async function start(
     }
   }
   const host = trustFailure ? '127.0.0.1' : config.host;
-  const material = tls ? { cert: tls.cert, key: tls.key, sni: [] } : trustMaterial;
+  // Client certificates are requested from the Hub local CA's devices whenever one exists, also
+  // with an explicit certificate (mutual TLS, FR-126).
+  const clientCa = () => hub.trust.service.caCertificate();
+  const material = tls
+    ? { cert: tls.cert, key: tls.key, sni: [], clientCa: clientCa() }
+    : trustMaterial
+      ? { ...trustMaterial, clientCa: clientCa() }
+      : null;
   const listener = material ? await tlsListener(app, material) : null;
   const port = await listenWithFallback(config, log, (p) =>
     listener ? listener.listen(p, host) : plainListen(app, p, host),
@@ -92,7 +102,14 @@ export async function start(
     fallbackReason: trustFailure,
   });
   // Renewed certificates reach the running listener; a new trust mode waits for a restart.
-  const offTls = trust && listener ? watchTrust(trust, listener, log) : null;
+  const offTls =
+    trust && listener
+      ? watchTrust(
+          trust,
+          { update: (next) => listener.update({ ...next, clientCa: clientCa() }) },
+          log,
+        )
+      : null;
   // The endpoints are checked against the real listener before any is advertised (FR-135).
   await hub.network
     .listening({ host, port, protocol: scheme })
@@ -138,6 +155,11 @@ export interface ListenerTls {
   cert: string | Buffer;
   key: string | Buffer;
   sni: { host: string; cert: string; key: string }[];
+  /**
+   * The Hub local CA (PEM): clients are asked for a certificate it issued (mutual TLS, FR-126),
+   * never required to send one; the device-trust area checks what they send. None: not asked.
+   */
+  clientCa?: string | null;
 }
 
 /**
@@ -166,7 +188,12 @@ function sniContexts(tls: ListenerTls): Map<string, SecureContext> {
   return new Map(
     tls.sni.map((s) => [
       s.host.toLowerCase(),
-      createSecureContext({ cert: s.cert, key: s.key, minVersion: 'TLSv1.2' }),
+      createSecureContext({
+        cert: s.cert,
+        key: s.key,
+        minVersion: 'TLSv1.2',
+        ...(tls.clientCa ? { ca: tls.clientCa } : {}),
+      }),
     ]),
   );
 }
@@ -176,8 +203,11 @@ function sniContexts(tls: ListenerTls): Map<string, SecureContext> {
  * are configured; FR-134: the trust mode's certificates). Requests and WebSocket upgrades go
  * through the same routes and hooks, so authentication and Host/Origin checks are identical to
  * plain HTTP. A client that names a host with its own certificate (a mesh name) gets that one.
+ * With `clientCa` the handshake asks for a client certificate issued by it; one that is missing
+ * or does not verify still connects (`rejectUnauthorized: false`), so browsers keep working, and
+ * the device-trust area decides on the device routes (FR-126).
  */
-async function tlsListener(
+export async function tlsListener(
   app: App,
   tls: ListenerTls,
 ): Promise<{
@@ -193,6 +223,10 @@ async function tlsListener(
       cert: tls.cert,
       key: tls.key,
       minVersion: 'TLSv1.2',
+      // Asked, never required: the check is the device-trust area's, on the device routes only.
+      requestCert: Boolean(tls.clientCa),
+      rejectUnauthorized: false,
+      ...(tls.clientCa ? { ca: tls.clientCa } : {}),
       // No match (or no name, as for an address) uses the default certificate.
       SNICallback: (name, cb) => cb(null, byName.get(name.toLowerCase())),
     },
@@ -201,7 +235,12 @@ async function tlsListener(
   server.on('upgrade', (req, socket, head) => app.server.emit('upgrade', req, socket, head));
   return {
     update: (next) => {
-      server.setSecureContext({ cert: next.cert, key: next.key, minVersion: 'TLSv1.2' });
+      server.setSecureContext({
+        cert: next.cert,
+        key: next.key,
+        minVersion: 'TLSv1.2',
+        ...(next.clientCa ? { ca: next.clientCa } : {}),
+      });
       byName = sniContexts(next);
     },
     listen: (port, host) =>

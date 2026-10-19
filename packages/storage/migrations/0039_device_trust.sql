@@ -1,0 +1,4 @@
+-- 0039 — M7 device_trust: no tables. Mutual TLS for novad devices and compute nodes (FR-126)
+-- checks the device certificates of 0031_trust (`trust_certificate`, kind `device`) through the
+-- trust area; what each device last presented over HTTPS is kept in memory and rebuilt by its next
+-- heartbeat, and refusals are audited (`device.tls.refuse`).

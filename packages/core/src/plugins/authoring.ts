@@ -185,10 +185,13 @@ export function pluginFiles(req: ScaffoldRequest): { id: string; files: [string,
 export function scaffoldPlugin(
   dataDir: string,
   req: ScaffoldRequest,
-  opts: { novaVersion?: string } = {},
+  opts: { novaVersion?: string; accountId?: string } = {},
 ): ScaffoldResult {
   const { id, files } = pluginFiles(req);
-  const drafts = join(dataDir, PLUGIN_DRAFTS_DIR);
+  // Drafts made by a tool live per account: one person never replaces another's (decision 5).
+  const drafts = opts.accountId
+    ? join(dataDir, PLUGIN_DRAFTS_DIR, opts.accountId.replace(/[^A-Za-z0-9_-]/g, '_'))
+    : join(dataDir, PLUGIN_DRAFTS_DIR);
   mkdirSync(drafts, { recursive: true, mode: 0o700 });
   const target = join(drafts, id);
   const tmp = join(drafts, `.tmp-${uuidv7()}`);
@@ -291,13 +294,12 @@ export function pluginScaffoldTool(opts: PluginScaffoldToolOptions): BuiltinTool
       timeoutMs: 30_000,
     }),
     origin: null,
-    handler: (args) => {
+    handler: (args, ctx) => {
       try {
-        const r = scaffoldPlugin(
-          opts.dataDir,
-          argsOf(args) as ScaffoldRequest,
-          opts.novaVersion ? { novaVersion: opts.novaVersion } : {},
-        );
+        const r = scaffoldPlugin(opts.dataDir, argsOf(args) as ScaffoldRequest, {
+          accountId: ctx.accountId,
+          ...(opts.novaVersion ? { novaVersion: opts.novaVersion } : {}),
+        });
         const meta = { ...r };
         if (!r.valid)
           return Promise.resolve(

@@ -7,14 +7,18 @@
 //! `reveal` of the nonce, the Hub's signed confirmation checked against the pinned key and this
 //! device's own computation before the code is shown, then signed status polls. It registers
 //! with the granted `nvd_` token and the same key, and installs and starts the service unless
-//! `--no-service`. novad has no TLS client: the pin, the signed manifest and the signed
-//! confirmation carry the integrity over LAN HTTP (ADR-094).
+//! `--no-service`. An https:// Hub is trusted through the pin (src/tls.rs: the Hub's signed
+//! identity statement on the connection itself, R-023), and the device certificate the owner's
+//! approval grants is presented from registration on (FR-126). Over http:// the pin, the signed
+//! manifest and the signed confirmation carry the integrity (ADR-094), and the Hub local CA is
+//! learned from the signed statement for later HTTPS.
 
 use crate::cli::{EnrollArgs, InstallArgs};
 use crate::crypto::{self, Sha256, SigningKey, b64_decode, b64url_decode, b64url_encode, hex, sha256};
 use crate::http;
 use crate::power::{Runner, SystemRunner};
 use crate::state::DataDir;
+use crate::tls::{HubTrust, TlsContext};
 use crate::util::{now_ms, parse_iso};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -125,8 +129,8 @@ pub fn reveal_statement(request_id: &str, pairing_id: &str, public_key: &str, co
 }
 
 /// Step 1: the Hub's public key must hash to the pin.
-pub fn verify_hub(hub: &str, pin: &str) -> Result<HubIdentity, String> {
-    let r = http::request("GET", &format!("{hub}/api/v1/hello"), &[], None, TIMEOUT).map_err(|e| format!("cannot reach the Hub at {hub}: {e}"))?;
+pub fn verify_hub(hub: &str, pin: &str, tls: &TlsContext) -> Result<HubIdentity, String> {
+    let r = http::request_with("GET", &format!("{hub}/api/v1/hello"), &[], None, TIMEOUT, Some(tls)).map_err(|e| format!("cannot reach the Hub at {hub}: {e}"))?;
     if r.status != 200 {
         return Err(format!("the Hub answered {} to /api/v1/hello", r.status));
     }
@@ -160,9 +164,9 @@ pub fn verify_manifest(bytes: &[u8], signature: &str, key: &[u8; 32], pin: &str)
     Ok(m)
 }
 
-pub fn fetch_manifest(hub: &str, id: &HubIdentity, pin: &str) -> Result<DistManifest, String> {
+pub fn fetch_manifest(hub: &str, id: &HubIdentity, pin: &str, tls: &TlsContext) -> Result<DistManifest, String> {
     let get = |name: &str| -> Result<Vec<u8>, String> {
-        let r = http::request("GET", &format!("{hub}/api/v1/agent/dist/{name}"), &[], None, TIMEOUT)?;
+        let r = http::request_with("GET", &format!("{hub}/api/v1/agent/dist/{name}"), &[], None, TIMEOUT, Some(tls))?;
         if r.status != 200 {
             return Err(format!("the Hub answered {} for {name}: it serves no signed builds", r.status));
         }
@@ -257,7 +261,7 @@ pub fn new_nonce() -> Result<String, String> {
 /// Step 4: send the code, this device's public key and a commitment to `device_nonce`
 /// (`POST /api/v1/devices/add/complete`). Without --pairing the Hub finds the pairing by the
 /// code and names it in its answer.
-pub fn complete(a: &InstallArgs, key: &SigningKey, device_nonce: &str, name: &str, platform: &str) -> Result<Committed, String> {
+pub fn complete(a: &InstallArgs, key: &SigningKey, device_nonce: &str, name: &str, platform: &str, tls: &TlsContext) -> Result<Committed, String> {
     let public_key = b64url_encode(&key.public_key());
     let mut body = json!({
         "code": display_code(&a.code),
@@ -270,7 +274,7 @@ pub fn complete(a: &InstallArgs, key: &SigningKey, device_nonce: &str, name: &st
     if let Some(p) = &a.pairing {
         body["pairingId"] = json!(p);
     }
-    let (status, resp) = http::post_json(&format!("{}/api/v1/devices/add/complete", a.hub), None, &body, TIMEOUT).map_err(|e| format!("cannot reach the Hub: {e}"))?;
+    let (status, resp) = http::post_json_with(&format!("{}/api/v1/devices/add/complete", a.hub), None, &body, TIMEOUT, Some(tls)).map_err(|e| format!("cannot reach the Hub: {e}"))?;
     let message = resp["error"]["message"].as_str().unwrap_or("unknown error").to_string();
     match status {
         200..=299 => {}
@@ -298,17 +302,18 @@ pub fn complete(a: &InstallArgs, key: &SigningKey, device_nonce: &str, name: &st
 /// own computation, and `hubSignature` must verify with the pinned Hub key over the request,
 /// pairing, this device's key and that confirmation. Returns the confirmation and the Hub time
 /// the reveal was signed at (status polls must be newer).
-pub fn reveal(a: &InstallArgs, c: &Committed, key: &SigningKey, device_nonce: &str, id: &HubIdentity) -> Result<(String, i64), String> {
+pub fn reveal(a: &InstallArgs, c: &Committed, key: &SigningKey, device_nonce: &str, id: &HubIdentity, tls: &TlsContext) -> Result<(String, i64), String> {
     let public_key = b64url_encode(&key.public_key());
     let time = now_secs() + id.clock_offset;
     let signature = b64url_encode(&key.sign(format!("nova-add-device-reveal-v1.{}.{time}", c.request_id).as_bytes()));
     let body = serde_json::to_vec(&json!({ "requestId": c.request_id, "nonce": device_nonce })).map_err(|e| e.to_string())?;
-    let r = http::request(
+    let r = http::request_with(
         "POST",
         &format!("{}/api/v1/devices/add/reveal", a.hub),
         &[("x-nova-device-time", &time.to_string()), ("x-nova-device-signature", &signature)],
         Some(&body),
         TIMEOUT,
+        Some(tls),
     )
     .map_err(|e| format!("cannot reach the Hub: {e}"))?;
     let resp = r.json().unwrap_or(Value::Null);
@@ -376,7 +381,7 @@ pub fn approval_deadline(commit_expires_at: Option<i64>, revealed_at: i64) -> i6
     commit_expires_at.unwrap_or(0).max(revealed_at + DEFAULT_WAIT_SECS)
 }
 
-pub fn wait_for_approval(hub: &str, request_id: &str, key: &SigningKey, id: &HubIdentity, after: i64, deadline: i64, poll: Poll, sleep: &dyn Fn(Duration)) -> Result<Grant, String> {
+pub fn wait_for_approval(hub: &str, request_id: &str, key: &SigningKey, id: &HubIdentity, after: i64, deadline: i64, poll: Poll, sleep: &dyn Fn(Duration), tls: &TlsContext) -> Result<Grant, String> {
     let url = format!("{hub}/api/v1/devices/add/status/{request_id}");
     let mut wait = poll.start;
     let mut last = after;
@@ -394,7 +399,7 @@ pub fn wait_for_approval(hub: &str, request_id: &str, key: &SigningKey, id: &Hub
         last = now;
         let time = now.to_string();
         let signature = b64url_encode(&key.sign(format!("nova-add-device-status-v1.{request_id}.{time}").as_bytes()));
-        match http::request("GET", &url, &[("x-nova-device-time", &time), ("x-nova-device-signature", &signature)], None, TIMEOUT) {
+        match http::request_with("GET", &url, &[("x-nova-device-time", &time), ("x-nova-device-signature", &signature)], None, TIMEOUT, Some(tls)) {
             Ok(r) if r.status == 200 => {
                 let v = r.json()?;
                 match v["status"].as_str() {
@@ -547,9 +552,12 @@ pub fn run(a: &InstallArgs, env: &Env) -> Result<Value, String> {
             data.device_path().display()
         ));
     }
-    let id = verify_hub(&a.hub, &a.pin)?;
+    // Over https:// the first connection checks the Hub's signed statement against the pin
+    // before anything is sent; later ones trust what it vouched for (src/tls.rs).
+    let tls = TlsContext::new(HubTrust::pinned(&a.pin));
+    let id = verify_hub(&a.hub, &a.pin, &tls)?;
     println!("Hub identity verified: {}", a.pin);
-    let manifest = fetch_manifest(&a.hub, &id, &a.pin)?;
+    let manifest = fetch_manifest(&a.hub, &id, &a.pin, &tls)?;
     println!("Signed build manifest verified (novad {}, {} builds)", manifest.version.as_deref().unwrap_or("unknown"), manifest.files.len());
     let binary = read_binary(&env.exe)?;
     let build = check_binary(&manifest, &binary, &env.exe, env.os, env.arch)?;
@@ -567,13 +575,13 @@ pub fn run(a: &InstallArgs, env: &Env) -> Result<Value, String> {
     let key = SigningKey::from_seed(&seed);
     let approved = (|| {
         let device_nonce = new_nonce()?;
-        let committed = complete(a, &key, &device_nonce, &name, env.os)?;
+        let committed = complete(a, &key, &device_nonce, &name, env.os, &tls)?;
         // Every check on the answer passes before the code is shown (a mismatch is a hard stop).
-        let (confirmation, revealed_at) = reveal(a, &committed, &key, &device_nonce, &id)?;
+        let (confirmation, revealed_at) = reveal(a, &committed, &key, &device_nonce, &id, &tls)?;
         println!("Confirm this code on the Hub: {} {}", &confirmation[..3], &confirmation[3..]);
         println!("Waiting for the owner to approve this device on the Hub...");
         let deadline = approval_deadline(committed.expires_at, revealed_at);
-        wait_for_approval(&a.hub, &committed.request_id, &key, &id, revealed_at, deadline, env.poll, env.sleep.as_ref())
+        wait_for_approval(&a.hub, &committed.request_id, &key, &id, revealed_at, deadline, env.poll, env.sleep.as_ref(), &tls)
     })();
     let grant = match approved {
         Ok(g) => g,
@@ -598,13 +606,17 @@ pub fn run(a: &InstallArgs, env: &Env) -> Result<Value, String> {
         endpoint: endpoint.clone(),
         channel: "stable".into(),
         update_key: None,
+        pin: Some(a.pin.clone()),
+        users: a.users.clone(),
         data_dir: a.data_dir.clone(),
     };
-    let registered = crate::agent::register(&data, &enroll, env.exe.clone())?;
+    // The certificate the approval granted (local-CA mode) is presented from registration on
+    // (mutual TLS, FR-126); the pin and what the statement vouched for are kept for HTTPS.
     if let Some(pem) = &grant.certificate_pem {
-        // Kept for mutual TLS once novad has a TLS client (FR-134).
-        crate::util::write_atomic(&data.path().join("device-cert.pem"), pem.as_bytes(), false).map_err(|e| e.to_string())?;
+        crate::util::write_atomic(&data.path().join(crate::tls::DEVICE_CERT_FILE), pem.as_bytes(), false).map_err(|e| e.to_string())?;
     }
+    tls.trust().save(&data.path().join(crate::tls::TRUST_FILE)).map_err(|e| e.to_string())?;
+    let registered = crate::agent::register(&data, &enroll, env.exe.clone())?;
     println!("Registered as device {} ({endpoint})", registered["deviceId"].as_str().unwrap_or("?"));
     let mut out = json!({ "deviceId": registered["deviceId"], "name": name, "endpoint": endpoint, "service": Value::Null });
     if !a.no_service {
@@ -844,6 +856,12 @@ mod tests {
         fingerprint(&SigningKey::from_seed(&[42u8; 32]).public_key())
     }
 
+    /// Over http:// the context is not used; the TLS install path is tested in src/tls.rs and
+    /// with the real Hub (apps/hub/test/m7-novad-tls.test.ts).
+    fn tls() -> TlsContext {
+        TlsContext::new(HubTrust::pinned(&pin()))
+    }
+
     fn args(hub: &FakeHub, data: &Path) -> InstallArgs {
         InstallArgs {
             hub: hub.url.clone(),
@@ -856,6 +874,7 @@ mod tests {
             endpoint: None,
             no_service: true,
             dry_run: false,
+            users: vec!["alice".into()],
             data_dir: data.to_string_lossy().to_string(),
         }
     }
@@ -885,7 +904,12 @@ mod tests {
         let base = tmp("install");
         let hub = fake_hub(&sha(BINARY));
         let data = base.join("data");
+        // A grant left by an earlier enrollment in this folder does not carry over.
+        DataDir(data.clone()).ensure().unwrap();
+        DataDir(data.clone()).save_granted_scopes(&["local-runtime".into()]).unwrap();
         let out = run(&args(&hub, &data), &env(&base, BINARY, FakeRunner::default())).unwrap();
+        assert!(DataDir(data.clone()).granted_scopes().is_empty());
+        assert!(!data.join("scopes.json").exists());
         assert_eq!(out["deviceId"], "dev-1");
         assert_eq!(out["endpoint"], "http://127.0.0.1:7499");
         let st = hub.state.lock().unwrap();
@@ -901,6 +925,8 @@ mod tests {
         assert_eq!(d.public_key().unwrap(), st.device_key.clone().unwrap());
         let dev = d.device().unwrap().unwrap();
         assert_eq!((dev.device_id.as_deref(), dev.credential.as_deref()), (Some("dev-1"), Some("nvc_cred")));
+        // The user named with --user (or sudo's) gets a local runtime socket of their own.
+        assert_eq!(d.config().unwrap().local_runtime.users, vec!["alice".to_string()]);
         assert_eq!(dev.roles, vec!["compute".to_string(), "wake-helper".to_string()]);
         assert!(std::fs::read_to_string(data.join("device-cert.pem")).unwrap().starts_with("-----BEGIN CERTIFICATE-----"));
         drop(st);
@@ -938,11 +964,11 @@ mod tests {
         fails_without_writing(&hub, BINARY, "not a 32-byte");
         // The right key passes.
         hub.state.lock().unwrap().hello_key = None;
-        let id = verify_hub(&hub.url, &pin()).unwrap();
+        let id = verify_hub(&hub.url, &pin(), &tls()).unwrap();
         assert_eq!(id.public_key, SigningKey::from_seed(&[42u8; 32]).public_key());
         assert!((id.clock_offset - 120).abs() <= 2, "{}", id.clock_offset);
-        assert!(verify_hub(&hub.url, &fingerprint(&[1u8; 32])).unwrap_err().contains("pinned"));
-        assert!(verify_hub("http://127.0.0.1:1", &pin()).unwrap_err().contains("cannot reach"));
+        assert!(verify_hub(&hub.url, &fingerprint(&[1u8; 32]), &tls()).unwrap_err().contains("pinned"));
+        assert!(verify_hub("http://127.0.0.1:1", &pin(), &tls()).unwrap_err().contains("cannot reach"));
     }
 
     #[test]
@@ -1041,29 +1067,29 @@ mod tests {
     #[test]
     fn commits_before_it_reveals() {
         let hub = fake_hub(&sha(BINARY));
-        let id = verify_hub(&hub.url, &pin()).unwrap();
+        let id = verify_hub(&hub.url, &pin(), &tls()).unwrap();
         let key = SigningKey::from_seed(&[5u8; 32]);
         let a = args(&hub, Path::new("/nonexistent"));
         let nonce = new_nonce().unwrap();
         assert_ne!(nonce, new_nonce().unwrap());
-        let c = complete(&a, &key, &nonce, "box", "linux").unwrap();
+        let c = complete(&a, &key, &nonce, "box", "linux", &tls()).unwrap();
         assert_eq!((c.request_id.as_str(), c.pairing_id.as_str()), ("req-1", PAIRING));
         // The Hub has only the commitment; the nonce leaves the device after the Hub's is fixed.
         let pk = b64url_encode(&key.public_key());
         assert_eq!(hub.state.lock().unwrap().commitment.as_deref(), Some(commitment(&pk, &nonce).as_str()));
         // Revealing another nonce is refused by the Hub (it burns the request).
-        let err = reveal(&a, &c, &key, &new_nonce().unwrap(), &id).unwrap_err();
+        let err = reveal(&a, &c, &key, &new_nonce().unwrap(), &id, &tls()).unwrap_err();
         assert!(err.contains("bad_reveal"), "{err}");
-        let c = complete(&a, &key, &nonce, "box", "linux").unwrap();
-        let (conf, at) = reveal(&a, &c, &key, &nonce, &id).unwrap();
+        let c = complete(&a, &key, &nonce, "box", "linux", &tls()).unwrap();
+        let (conf, at) = reveal(&a, &c, &key, &nonce, &id, &tls()).unwrap();
         assert_eq!(conf, confirmation(&pin(), PAIRING, &pk, CODE, &nonce, &c.hub_nonce));
         assert!((at - (now_secs() + 120)).abs() <= 2, "signed at the Hub's time");
         std::thread::sleep(Duration::from_millis(1100));
-        let err = reveal(&a, &c, &key, &nonce, &id).unwrap_err();
+        let err = reveal(&a, &c, &key, &nonce, &id, &tls()).unwrap_err();
         assert!(err.contains("already_revealed"), "{err}");
         // A Hub that does not speak v2 (no nonce in its answer) is refused.
         hub.state.lock().unwrap().hub_nonce = "short".into();
-        assert!(complete(&a, &key, &nonce, "box", "linux").unwrap_err().contains("hubNonce"));
+        assert!(complete(&a, &key, &nonce, "box", "linux", &tls()).unwrap_err().contains("hubNonce"));
     }
 
     #[test]
@@ -1080,7 +1106,7 @@ mod tests {
     fn gives_up_at_the_deadline_and_retries_server_errors() {
         let hub = fake_hub(&sha(BINARY));
         hub.state.lock().unwrap().decision = "busy";
-        let id = verify_hub(&hub.url, &pin()).unwrap();
+        let id = verify_hub(&hub.url, &pin(), &tls()).unwrap();
         let key = SigningKey::from_seed(&[5u8; 32]);
         hub.state.lock().unwrap().device_key = Some(b64url_encode(&key.public_key()));
         {
@@ -1089,13 +1115,13 @@ mod tests {
         }
         let deadline = now_secs() + id.clock_offset + 3;
         let t0 = std::time::Instant::now();
-        let err = wait_for_approval(&hub.url, "req-1", &key, &id, 0, deadline, Poll { start: Duration::from_millis(20), max: Duration::from_millis(50) }, &std::thread::sleep).unwrap_err();
+        let err = wait_for_approval(&hub.url, "req-1", &key, &id, 0, deadline, Poll { start: Duration::from_millis(20), max: Duration::from_millis(50) }, &std::thread::sleep, &tls()).unwrap_err();
         assert!(err.contains("not approved in time"), "{err}");
         assert!(t0.elapsed() < Duration::from_secs(5));
         assert!(hub.state.lock().unwrap().polls >= 3, "503s are retried, one poll per second at most");
         // A refused signature is not retried.
         let wrong = SigningKey::from_seed(&[6u8; 32]);
-        let err = wait_for_approval(&hub.url, "req-1", &wrong, &id, 0, deadline + 60, Poll { start: Duration::from_millis(1), max: Duration::from_millis(1) }, &|_| {}).unwrap_err();
+        let err = wait_for_approval(&hub.url, "req-1", &wrong, &id, 0, deadline + 60, Poll { start: Duration::from_millis(1), max: Duration::from_millis(1) }, &|_| {}, &tls()).unwrap_err();
         assert!(err.contains("refused the status check (401)"), "{err}");
     }
 

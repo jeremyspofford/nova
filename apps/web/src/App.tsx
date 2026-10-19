@@ -1,6 +1,8 @@
 // Application root: connects to the Hub, handles first-run setup and sign-in, then mounts the
 // signed-in workspace with its stores. Until settings load, the cached theme paints the page.
-// `/add-device` is the joining device's page instead, which needs no session (FR-132).
+// `/add-device` is the joining device's page instead, which needs no session (FR-132); so are the
+// team's `/join` (joining with an invitation) and `/profile/<handle>` (a public card), and the
+// sign-in screen offers the Hub's OIDC providers (FR-113, decision 5).
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, TextField, ToastProvider, applyTheme, resolveTheme } from '@nova/ui';
 import {
@@ -15,10 +17,16 @@ import { readCachedTheme } from './appearance.ts';
 import { CommandRegistry } from './commands.ts';
 import { AnnouncerProvider, ServicesProvider } from './services.tsx';
 import { SettingsProvider } from './settings.tsx';
-import { browserEventSource, type EventSourceFactory } from './sse.ts';
+import { type EventSourceFactory } from './sse.ts';
+import { hubTransport } from './relaytransport/transport.ts';
+import { OfflineProvider } from './offline/context.tsx';
+import type { OfflineRuntime } from './offline/runtime.ts';
+import { TeamRoleProvider, loadHubSettings, memberSettingsApi } from './team/role.tsx';
 import { ModelsProvider, ThreadsProvider } from './stores.tsx';
 import { Workspace } from './shell/Workspace.tsx';
 import { JoinPage, isJoinPath } from './join/JoinPage.tsx';
+import { MemberPublicPageView, memberPublicPage } from './joinmember/pages.tsx';
+import { SignInOptions } from './joinmember/SignInOptions.tsx';
 import type { TerminalScreenFactory, WebSocketFactory } from './terminal/session.ts';
 import { TerminalsProvider } from './terminal/TerminalPanel.tsx';
 
@@ -26,7 +34,14 @@ type State =
   | { kind: 'loading' }
   | { kind: 'offline'; message: string }
   | { kind: 'signed-out'; hello: Hello; setupCode: string | null }
-  | { kind: 'ready'; hello: Hello; session: Session; settings: ResolvedSetting[] };
+  | {
+      kind: 'ready';
+      hello: Hello;
+      session: Session;
+      settings: ResolvedSetting[];
+      /** A member's own settings, not the Hub's (M7, decision 5). */
+      member: boolean;
+    };
 
 export interface AppProps {
   api: Api;
@@ -39,6 +54,8 @@ export interface AppProps {
   /** Terminal socket and screen (FR-006); the browser's WebSocket and xterm.js by default. */
   webSocket?: WebSocketFactory;
   terminalScreen?: TerminalScreenFactory;
+  /** The offline layer `createApi` was given (FR-112, FR-129); without it the app is online-only. */
+  offline?: OfflineRuntime;
 }
 
 export function takeSetupCodeFromLocation(): string | null {
@@ -54,17 +71,22 @@ export function takeSetupCodeFromLocation(): string | null {
  */
 export function App(props: AppProps) {
   const [joining] = useState(() => isJoinPath(window.location.pathname));
-  return joining ? <JoinPage /> : <HubApp {...props} />;
+  const [memberPage] = useState(() => memberPublicPage(window.location.pathname));
+  if (joining) return <JoinPage />;
+  if (memberPage) return <MemberPublicPageView page={memberPage} />;
+  return <HubApp {...props} />;
 }
 
 function HubApp({
   api,
   registry: given,
-  eventSource = browserEventSource,
+  // The event stream follows the Hub's path: direct, or through the Relay (FR-137).
+  eventSource = hubTransport.eventSource,
   takeSetupCode = takeSetupCodeFromLocation,
   announceEveryMs,
   webSocket,
   terminalScreen,
+  offline,
 }: AppProps) {
   const registry = useMemo(() => given ?? new CommandRegistry(), [given]);
   const [state, setState] = useState<State>({ kind: 'loading' });
@@ -76,9 +98,10 @@ function HubApp({
       const hello = await api.hello();
       try {
         const session = await api.session();
-        const { settings } = await api.settings();
+        // A member gets their own settings: the Hub refuses its settings to them (owner_only).
+        const { settings, member } = await loadHubSettings(api);
         setDisplayName(session.displayName);
-        setState({ kind: 'ready', hello, session, settings });
+        setState({ kind: 'ready', hello, session, settings, member });
       } catch (err) {
         if (err instanceof ApiError && err.status === 401)
           setState({ kind: 'signed-out', hello, setupCode });
@@ -110,32 +133,19 @@ function HubApp({
 
   if (state.kind === 'ready') {
     return (
-      <ServicesProvider
+      <ReadyApp
         api={api}
+        state={state}
         eventSource={eventSource}
         registry={registry}
         webSocket={webSocket}
         terminalScreen={terminalScreen}
-      >
-        <SettingsProvider api={api} initial={state.settings}>
-          <ToastProvider>
-            <AnnouncerProvider>
-              <ThreadsProvider api={api}>
-                <ModelsProvider api={api}>
-                  <TerminalsProvider>
-                    <Workspace
-                      displayName={displayName}
-                      onDisplayName={setDisplayName}
-                      onSignOut={signOut}
-                      announceEveryMs={announceEveryMs}
-                    />
-                  </TerminalsProvider>
-                </ModelsProvider>
-              </ThreadsProvider>
-            </AnnouncerProvider>
-          </ToastProvider>
-        </SettingsProvider>
-      </ServicesProvider>
+        offline={offline}
+        displayName={displayName}
+        setDisplayName={setDisplayName}
+        signOut={signOut}
+        announceEveryMs={announceEveryMs}
+      />
     );
   }
 
@@ -154,11 +164,80 @@ function HubApp({
           </section>
         ) : null}
         {state.kind === 'signed-out' ? (
-          <SetupPanel api={api} code={state.setupCode} onDone={() => void load()} />
+          <>
+            <SignInOptions />
+            <SetupPanel api={api} code={state.setupCode} onDone={() => void load()} />
+          </>
         ) : null}
       </main>
     </div>
   );
+}
+
+/** The signed-in app: services, the offline layer, settings (the member's own for a member). */
+function ReadyApp({
+  api,
+  state,
+  eventSource,
+  registry,
+  webSocket,
+  terminalScreen,
+  offline,
+  displayName,
+  setDisplayName,
+  signOut,
+  announceEveryMs,
+}: {
+  api: Api;
+  state: Extract<State, { kind: 'ready' }>;
+  eventSource: EventSourceFactory;
+  registry: CommandRegistry;
+  webSocket: WebSocketFactory | undefined;
+  terminalScreen: TerminalScreenFactory | undefined;
+  offline: OfflineRuntime | undefined;
+  displayName: string | null;
+  setDisplayName: (name: string | null) => void;
+  signOut: () => void;
+  announceEveryMs: number | undefined;
+}) {
+  const settingsApi = useMemo(
+    () => (state.member ? memberSettingsApi(api) : api),
+    [api, state.member],
+  );
+  {
+    return (
+      <ServicesProvider
+        api={api}
+        eventSource={eventSource}
+        registry={registry}
+        webSocket={webSocket}
+        terminalScreen={terminalScreen}
+      >
+        <OfflineProvider runtime={offline}>
+          <SettingsProvider api={settingsApi} initial={state.settings}>
+            <ToastProvider>
+              <AnnouncerProvider>
+                <ThreadsProvider api={api}>
+                  <ModelsProvider api={api}>
+                    <TerminalsProvider>
+                      <TeamRoleProvider role={state.session.role ?? null}>
+                        <Workspace
+                          displayName={displayName}
+                          onDisplayName={setDisplayName}
+                          onSignOut={signOut}
+                          announceEveryMs={announceEveryMs}
+                        />
+                      </TeamRoleProvider>
+                    </TerminalsProvider>
+                  </ModelsProvider>
+                </ThreadsProvider>
+              </AnnouncerProvider>
+            </ToastProvider>
+          </SettingsProvider>
+        </OfflineProvider>
+      </ServicesProvider>
+    );
+  }
 }
 
 function SetupPanel({ api, code, onDone }: { api: Api; code: string | null; onDone: () => void }) {

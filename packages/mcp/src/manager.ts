@@ -19,6 +19,7 @@ import {
   type TransportFactory,
 } from './connection.ts';
 import type { McpToolResult } from './content.ts';
+import type { DeviceMcpBridge } from './device-transport.ts';
 
 export interface McpManagerOptions {
   /** Resolve a `secret://` reference at launch (FR-101); null when it does not exist. */
@@ -34,6 +35,13 @@ export interface McpManagerOptions {
   createTransport?: TransportFactory;
   /** Bearer tokens for sse/http servers authorized with OAuth (FR-047), asked before each request. */
   authFor?: (config: McpServerConfig) => AuthProvider | null;
+  /**
+   * The fetch an sse/http server's requests go through; null for the default. The Hub pins a
+   * non-owner's servers to checked public addresses (decision 5).
+   */
+  fetchFor?: (config: McpServerConfig) => typeof fetch | null;
+  /** How servers with a `deviceId` are reached (FR-042); also `useDeviceBridge`. */
+  deviceBridge?: DeviceMcpBridge;
   onStatus?: (state: McpServerState) => void;
   /** A server's tool list (or what its lists expose) changed; rebuild tool indexes. */
   onToolsChanged?: (serverId: string) => void;
@@ -46,11 +54,21 @@ export class McpManager {
   readonly #backoff: BackoffOptions;
   readonly #redactor: Redactor;
   #closed = false;
+  #deviceBridge: DeviceMcpBridge | null;
 
   constructor(opts: McpManagerOptions) {
     this.#opts = opts;
     this.#backoff = { ...DEFAULT_BACKOFF, ...opts.backoff };
     this.#redactor = opts.redactor ?? defaultRedactor;
+    this.#deviceBridge = opts.deviceBridge ?? null;
+  }
+
+  /**
+   * Wire how device-hosted servers are reached (FR-042, FR-210). Servers already waiting for it
+   * connect on their next restart.
+   */
+  useDeviceBridge(bridge: DeviceMcpBridge): void {
+    this.#deviceBridge = bridge;
   }
 
   /** Register a server and connect it when enabled. Resolves when the first attempt settles. */
@@ -69,6 +87,8 @@ export class McpManager {
       listChangedDebounceMs: this.#opts.listChangedDebounceMs ?? 300,
       ...(this.#opts.createTransport ? { createTransport: this.#opts.createTransport } : {}),
       ...(this.#opts.authFor ? { authFor: this.#opts.authFor } : {}),
+      ...(this.#opts.fetchFor ? { fetchFor: this.#opts.fetchFor } : {}),
+      deviceBridge: () => this.#deviceBridge,
       // Removed servers and a closing manager report nothing more.
       onStatus: (s) => {
         if (!this.#closed && this.#conns.get(s.id) === conn) this.#opts.onStatus?.(s);

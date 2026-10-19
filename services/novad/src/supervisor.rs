@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-pub const MODULES: &[&str] = &["management", "compute", "browser", "screen", "storage", "capture"];
+pub const MODULES: &[&str] = &["management", "compute", "browser", "screen", "storage", "capture", "local-runtime"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -64,11 +64,15 @@ pub struct Manifest {
 
 impl Manifest {
     /// What a device installs by role (docs/23 §4): management and storage everywhere, compute on
-    /// compute nodes. Browser, screen and capture are installed only when asked for.
+    /// compute nodes, the local runtime on clients (it refuses every request until the Hub grants
+    /// `local-runtime`, FR-128). Browser, screen and capture are installed only when asked for.
     pub fn default_for(roles: &[String]) -> Self {
         let mut modules = vec![ModuleSpec::builtin("management", true), ModuleSpec::builtin("storage", true)];
         if roles.iter().any(|r| r == "compute") {
             modules.push(ModuleSpec::builtin("compute", true));
+        }
+        if roles.iter().any(|r| r == "client") {
+            modules.push(ModuleSpec::builtin(crate::local_runtime::MODULE, true));
         }
         Manifest { modules }
     }
@@ -713,6 +717,8 @@ pub mod tests {
     #[test]
     fn default_manifest_follows_roles() {
         let m = Manifest::default_for(&["client".into()]);
+        assert_eq!(m.modules.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["management", "storage", "local-runtime"]);
+        let m = Manifest::default_for(&["wake-helper".into()]);
         assert_eq!(m.modules.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["management", "storage"]);
         let m = Manifest::default_for(&["compute".into()]);
         assert!(m.modules.iter().any(|s| s.name == "compute"));

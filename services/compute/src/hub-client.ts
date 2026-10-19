@@ -1,6 +1,7 @@
 // Calls from the node to its Hub (contracts/hub-api.md §1, §2): Add Device v2 (hello, complete with
 // a commitment, the signed reveal and status poll), register, heartbeat, model sync. The node never contacts anything else but
-// its backend (FR-126); redirects are refused.
+// its backend (FR-126); redirects are refused. An https:// Hub is reached through `HubTls`
+// (hub-tls.ts: the pinned identity and the device certificate) as the `fetch` passed in.
 import type { HeartbeatBody, RegisterBody, RegisterResult, SyncBody } from './protocol.ts';
 
 /** `POST /api/v1/devices/add/complete` as a compute node sends it (Add Device v2). */
@@ -40,11 +41,14 @@ export interface AddDeviceStatusResult {
 export class HubError extends Error {
   readonly status: number;
   readonly code: string;
-  constructor(status: number, code: string, message: string) {
+  /** `details.reason` of the Hub's error (`certificate_revoked`, …), when it gave one. */
+  readonly reason: string | null;
+  constructor(status: number, code: string, message: string, reason: string | null = null) {
     super(message);
     this.name = 'HubError';
     this.status = status;
     this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -145,8 +149,10 @@ export class HubClient {
         redirect: 'error',
         signal: AbortSignal.timeout(this.#timeoutMs),
       });
-    } catch {
-      throw new HubError(0, 'network', `could not reach the Hub at ${this.hubUrl}`);
+    } catch (err) {
+      // A refused Hub certificate says so (hub-tls.ts); other failures are the network.
+      const why = err instanceof Error && err.name === 'HubTrustError' ? `: ${err.message}` : '';
+      throw new HubError(0, 'network', `could not reach the Hub at ${this.hubUrl}${why}`);
     }
     let parsed: unknown = null;
     try {
@@ -155,11 +161,16 @@ export class HubClient {
       // handled below
     }
     if (!res.ok) {
-      const e = (parsed as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+      const e = (
+        parsed as {
+          error?: { code?: unknown; message?: unknown; details?: { reason?: unknown } };
+        } | null
+      )?.error;
       throw new HubError(
         res.status,
         typeof e?.code === 'string' ? e.code : 'server_error',
         typeof e?.message === 'string' ? e.message : `the Hub answered ${res.status}`,
+        typeof e?.details?.reason === 'string' ? e.details.reason : null,
       );
     }
     return parsed as T;

@@ -81,6 +81,39 @@ BSD-1-Clause). `fiat-crypto` and `libc` are in the lockfile but are not compiled
 (`memchr` Unlicense OR MIT, `zmij` MIT, `unicode-ident` also Unicode-3.0). No GPL or AGPL
 dependency was added.
 
+### 3.2 M7: the permissive server packages and new dependencies (ADR-023, ADR-095)
+
+ADR-023 is applied: the components that run on someone else's server are separate, permissively
+licensed packages, each with its own `LICENSE` file, and they import no AGPL package. The rest of
+the repository stays AGPL-3.0-or-later (ADR-022).
+
+| Package | License | Notes |
+| --- | --- | --- |
+| `services/relay` (`@nova/relay-service`) | Apache-2.0 | The self-hostable Relay. It now logs with its own small JSON-lines logger instead of `@nova/telemetry` (AGPL), and holds the APNs and FCM senders |
+| `packages/relay` (`@nova/relay`) | Apache-2.0 | The Relay protocol library shared by the Hub, the Relay and clients |
+| `services/runner` (`@nova/runner-service`) | Apache-2.0 | The self-hostable cloud runner; its only dependencies are `fastify` and `zod`, with a redactor of its own |
+
+Dependencies added in M7, all pinned:
+
+| Dependency | Version (pinned) | License | Where and why |
+| --- | --- | --- | --- |
+| `quickjs-emscripten` | 0.32.0 | MIT | `@nova/core`, the isolated engine of `script.run` (FR-202) |
+| `@jitl/quickjs-wasmfile-release-sync` | 0.32.0 | MIT | The QuickJS WebAssembly build it loads (`RELEASE_SYNC`) |
+| `imapflow` | 2.2.2 | MIT | `@nova/core`, reading email bindings' mailboxes (IMAP, IDLE; FR-110) |
+| `mailparser` | 3.9.32 | MIT | `@nova/core`, parsing inbound mail |
+| `nodemailer` | 10.0.13 | MIT-0 | `@nova/core`, sending mail over SMTP |
+| `electron` | 44.5.1 | MIT | `apps/desktop`, the desktop shell (dev dependency; an installed build bundles it) |
+| `rustls` | =0.23.45 | Apache-2.0 OR ISC OR MIT | `novad`, TLS to the Hub (R-023, FR-126); TLS 1.3 and 1.2, no logging |
+| `ring` | 0.17.14 | Apache-2.0 AND ISC | `novad`, the rustls crypto provider (builds with the Rust image's C compiler; aws-lc would need cmake) |
+| `rcgen` | =0.14.10 | MIT OR Apache-2.0 | `novad` tests only: certificates are made when the tests run, so no key material is committed |
+
+They pull in `rustls-webpki` 0.103.15 (ISC), `rustls-pki-types` 1.15.1 (MIT OR Apache-2.0),
+`untrusted` 0.9.0 (ISC), `getrandom` 0.2.17 and `cc` 1.8.0 (MIT OR Apache-2.0), and, for `rcgen`
+in tests only, the ASN.1, parsing and time crates in the lockfile, all permissive (MIT,
+Apache-2.0, or both). Web Push (RFC 8291,
+RFC 8292), the OIDC token checks and the APNs and FCM senders use `node:crypto` only. No GPL or
+AGPL dependency was added.
+
 ## 4. Privacy & data protection
 
 - **No training on user data**, ever. The product states this plainly.

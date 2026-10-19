@@ -448,7 +448,115 @@ function readTarget(
 ): { raw: Buffer; lines: string[]; eol: string; finalNewline: boolean } {
   if (!existsSync(abs) || !statSync(abs).isFile())
     throw new PatchError('patch.file_missing', `${path} does not exist`, { line, path });
-  const raw = readFileSync(abs);
+  return textOf(readFileSync(abs), path, line);
+}
+
+/** How `planPatch` reads files (a Code session's folder on another machine, M7). */
+export interface PatchIO {
+  /** Whether something exists at the path. */
+  exists(abs: string): Promise<boolean>;
+  /** A regular file's bytes; null when it is missing or not a file. */
+  read(abs: string): Promise<Buffer | null>;
+}
+
+/**
+ * The same patch planned against files read through `io`: every file's new content is computed
+ * first and nothing is written; the caller writes the plan (paths are what `resolve` returned).
+ */
+export async function planPatch(
+  sections: FileSection[],
+  resolve: PatchResolver,
+  io: PatchIO,
+): Promise<{ results: PatchFileResult[]; writes: { abs: string; content: string | null }[] }> {
+  const results: PatchFileResult[] = [];
+  const writes: PlannedWrite[] = [];
+  const touched = new Set<string>();
+  const resolveOrDeny = (p: string, line: number): string => {
+    let abs: string;
+    try {
+      abs = resolve(p);
+    } catch (err) {
+      throw new PatchError(
+        'patch.path_denied',
+        err instanceof Error ? err.message : 'path not allowed',
+        { line, path: p },
+      );
+    }
+    if (touched.has(abs))
+      throw new PatchError('patch.syntax', 'a file appears twice in the patch', { line, path: p });
+    touched.add(abs);
+    return abs;
+  };
+  const target = async (abs: string, path: string, line: number) => {
+    const raw = await io.read(abs);
+    if (!raw) throw new PatchError('patch.file_missing', `${path} does not exist`, { line, path });
+    return textOf(raw, path, line);
+  };
+  for (const s of sections) {
+    const abs = resolveOrDeny(s.path, s.line);
+    if (s.op === 'add') {
+      if (await io.exists(abs))
+        throw new PatchError('patch.file_exists', `${s.path} already exists`, {
+          line: s.line,
+          path: s.path,
+        });
+      const content = s.lines.length ? `${s.lines.join('\n')}\n` : '';
+      writes.push({ abs, content });
+      results.push({
+        op: 'add',
+        path: s.path,
+        added: s.lines.length,
+        removed: 0,
+        sha256Before: null,
+        sha256After: sha256(content),
+      });
+      continue;
+    }
+    const before = await target(abs, s.path, s.line);
+    if (s.op === 'delete') {
+      writes.push({ abs, content: null });
+      results.push({
+        op: 'delete',
+        path: s.path,
+        added: 0,
+        removed: before.lines.length,
+        sha256Before: sha256(before.raw),
+        sha256After: null,
+      });
+      continue;
+    }
+    const after = applyHunks(before.lines, s);
+    const content = after.lines.join(before.eol) + (before.finalNewline ? before.eol : '');
+    let to = abs;
+    if (s.moveTo !== null) {
+      to = resolveOrDeny(s.moveTo, s.line);
+      if (await io.exists(to))
+        throw new PatchError('patch.file_exists', `${s.moveTo} already exists`, {
+          line: s.line,
+          path: s.moveTo,
+        });
+      writes.push({ abs, content: null });
+    }
+    writes.push({ abs: to, content });
+    const r: PatchFileResult = {
+      op: s.moveTo !== null ? 'move' : 'update',
+      path: s.path,
+      added: after.added,
+      removed: after.removed,
+      sha256Before: sha256(before.raw),
+      sha256After: sha256(content),
+    };
+    if (s.moveTo !== null) r.movedTo = s.moveTo;
+    results.push(r);
+  }
+  return { results, writes };
+}
+
+function textOf(
+  raw: Buffer,
+  path: string,
+  line: number,
+): { raw: Buffer; lines: string[]; eol: string; finalNewline: boolean } {
   if (raw.includes(0))
     throw new PatchError('patch.binary', `${path} is a binary file`, { line, path });
   const text = raw.toString('utf8');

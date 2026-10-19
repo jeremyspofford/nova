@@ -590,6 +590,32 @@ describe('review breaker and shared status (FR-085, FR-215)', () => {
     });
     expect((await e.runs.get(ACCOUNT, v.id)).derived.status).toBe('ready');
   });
+
+  it('names the cloud environment a cloud Work run uses (M7)', async () => {
+    const local = await create({ start: false });
+    const cloud = await create({ start: false });
+    expect(local.environmentId).toBeNull();
+    const now = new Date().toISOString();
+    e.env.db.raw
+      .prepare(
+        `INSERT INTO environment (id, account_id, kind, label, created_at, updated_at)
+         VALUES ('env-cloud', ?, 'cloud', 'Cloud', ?, ?)`,
+      )
+      .run(ACCOUNT, now, now);
+    e.env.db.raw
+      .prepare(
+        `INSERT INTO cloud_work_binding (thread_id, account_id, environment_id, work_run_id, folder, created_at)
+         VALUES (?, ?, 'env-cloud', ?, '/workspace', ?)`,
+      )
+      .run(cloud.threadId, ACCOUNT, cloud.id, now);
+    expect((await e.runs.get(ACCOUNT, cloud.id)).environmentId).toBe('env-cloud');
+    expect((await e.runs.get(ACCOUNT, local.id)).environmentId).toBeNull();
+    const listed = await e.runs.list(ACCOUNT, { status: 'all' });
+    expect(Object.fromEntries(listed.items.map((r) => [r.id, r.environmentId]))).toEqual({
+      [cloud.id]: 'env-cloud',
+      [local.id]: null,
+    });
+  });
 });
 
 describe('restart (FR-052)', () => {

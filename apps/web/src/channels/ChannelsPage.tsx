@@ -1,11 +1,12 @@
 // Settings → Channels (FR-088, FR-110, FR-100; docs/13 §4, docs/18 J7 step 3): the channels
-// agents can be messaged from, with kind, audience, agent, status and last message; add one per
-// kind the Hub offers; send a test, connect or disconnect at once, open its thread, change its
-// settings and credentials (write-only), delete it. Also the share decisions waiting on the owner,
-// the people agents answer, the private-to-shared policy and the public address external
-// services reach the Hub at. Live through channel events.
+// agents can be messaged from (Slack, Teams, Telegram, email, webhooks, in-app), with kind,
+// audience, agent, status and last message; add one per kind the Hub offers; send a test, connect
+// or disconnect at once, open its thread, read its message log, change its settings and
+// credentials (write-only), delete it. Also the share decisions waiting on the owner, the people
+// agents answer, the private-to-shared policy and the public address external services reach the
+// Hub at. Live through channel events.
 import { useCallback, useEffect, useId, useState } from 'react';
-import type { AgentView, ChannelAdapterView, ChannelBindingView } from '@nova/shared';
+import type { AgentView, ChannelAdapterViewM7, ChannelBindingViewM7 } from '@nova/shared';
 import {
   Button,
   Dialog,
@@ -25,6 +26,7 @@ import { useChannelsApi } from './api.ts';
 import { BindingSettings } from './BindingSettings.tsx';
 import { CHANNEL_EVENTS, useChannelEvents, useDebouncedCallback } from './events.ts';
 import { BINDING_STATUS, KIND_TEXT, publicBase } from './format.ts';
+import { MessageLog } from './MessageLog.tsx';
 import { Chip } from './parts.tsx';
 import { PeopleSection } from './PeopleSection.tsx';
 import { ChannelShareAsks } from './ShareAsks.tsx';
@@ -42,16 +44,17 @@ export function ChannelsPage() {
   const settings = useSettings();
   const publicUrl = settings.get('channels.publicUrl').value;
   const [data, setData] = useState<{
-    items: ChannelBindingView[];
-    adapters: ChannelAdapterView[];
+    items: ChannelBindingViewM7[];
+    adapters: ChannelAdapterViewM7[];
   } | null>(null);
   const [agents, setAgents] = useState<AgentView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
-  const [deleting, setDeleting] = useState<ChannelBindingView | null>(null);
-  const [testing, setTesting] = useState<ChannelBindingView | null>(null);
+  const [logs, setLogs] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState<ChannelBindingViewM7 | null>(null);
+  const [testing, setTesting] = useState<ChannelBindingViewM7 | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -88,7 +91,7 @@ export function ChannelsPage() {
     reload,
   );
 
-  const replace = (b: ChannelBindingView) =>
+  const replace = (b: ChannelBindingViewM7) =>
     setData((d) =>
       d
         ? {
@@ -108,7 +111,7 @@ export function ChannelsPage() {
       return next;
     });
 
-  const toggleConnected = async (b: ChannelBindingView) => {
+  const toggleConnected = async (b: ChannelBindingViewM7) => {
     const connect = b.status === 'disconnected';
     mark(b.id, true);
     try {
@@ -131,7 +134,7 @@ export function ChannelsPage() {
     }
   };
 
-  const remove = async (b: ChannelBindingView) => {
+  const remove = async (b: ChannelBindingViewM7) => {
     setDeleting(null);
     try {
       await api.deleteChannel(b.id);
@@ -153,9 +156,9 @@ export function ChannelsPage() {
     <div className="settings-page">
       <h2>Channels</h2>
       <p className="muted ws-flush">
-        Message your agents from Slack, Teams, a webhook or Nova itself. Each channel keeps its own
-        thread; an agent&apos;s memory is shared across its channels. Messages from channels are
-        never treated as your instructions.
+        Message your agents from Slack, Teams, Telegram, email, a webhook or Nova itself. Each
+        channel keeps its own thread; an agent&apos;s memory is shared across its channels. Messages
+        from channels are never treated as your instructions.
       </p>
       {data ? <ChannelShareAsks bindings={data.items} /> : null}
       <section className="settings-section" aria-labelledby="ch-list">
@@ -177,7 +180,7 @@ export function ChannelsPage() {
             level={3}
             icon="chat"
             title="No channels yet"
-            description="Add Slack, Teams or a webhook to message an agent from there."
+            description="Add Slack, Teams, Telegram, email or a webhook to message an agent from there."
             action={
               <Button variant="primary" onClick={() => setAdding(true)}>
                 Add channel
@@ -190,6 +193,8 @@ export function ChannelsPage() {
             {data.items.map((b) => {
               const expanded = open.has(b.id);
               const panelId = `ch-panel-${b.id}`;
+              const logOpen = logs.has(b.id);
+              const logId = `ch-log-${b.id}`;
               return (
                 <li key={b.id} className="ws-list-row ch-binding" aria-label={b.label}>
                   <div className="ws-source-main">
@@ -246,6 +251,24 @@ export function ChannelsPage() {
                     >
                       {b.status === 'disconnected' ? 'Connect' : 'Disconnect'}
                     </Button>
+                    {b.kind !== 'inapp' ? (
+                      <Button
+                        variant="ghost"
+                        aria-expanded={logOpen}
+                        aria-controls={logId}
+                        aria-label={`Messages of ${b.label}`}
+                        onClick={() =>
+                          setLogs((s) => {
+                            const next = new Set(s);
+                            if (logOpen) next.delete(b.id);
+                            else next.add(b.id);
+                            return next;
+                          })
+                        }
+                      >
+                        Messages
+                      </Button>
+                    ) : null}
                     <Button
                       variant="ghost"
                       aria-expanded={expanded}
@@ -270,6 +293,11 @@ export function ChannelsPage() {
                       Delete
                     </Button>
                   </div>
+                  {logOpen ? (
+                    <div id={logId} className="ch-panel">
+                      <MessageLog binding={b} />
+                    </div>
+                  ) : null}
                   {expanded ? (
                     <div id={panelId} className="ch-panel">
                       <BindingSettings
@@ -334,7 +362,7 @@ export function ChannelsPage() {
 }
 
 /** Send a test message: it goes to the external conversation, so it is confirmed first. */
-function TestDialog({ binding, onClose }: { binding: ChannelBindingView; onClose: () => void }) {
+function TestDialog({ binding, onClose }: { binding: ChannelBindingViewM7; onClose: () => void }) {
   const api = useChannelsApi();
   const toast = useToast();
   const [text, setText] = useState('Nova is connected to this conversation.');
@@ -363,9 +391,11 @@ function TestDialog({ binding, onClose }: { binding: ChannelBindingView; onClose
       open
       title={`Send a test to ${binding.label}?`}
       description={
-        binding.audience === 'shared'
-          ? 'Everyone in this conversation will see it.'
-          : 'It is posted to this conversation.'
+        binding.kind === 'email'
+          ? `It is emailed to ${binding.externalRef}.`
+          : binding.audience === 'shared'
+            ? 'Everyone in this conversation will see it.'
+            : 'It is posted to this conversation.'
       }
       onClose={onClose}
       footer={
@@ -470,8 +500,9 @@ function PublicAddressSection() {
     <section className="settings-section" aria-labelledby={`${id}-h`}>
       <h3 id={`${id}-h`}>Public address</h3>
       <p className="muted">
-        The address Slack, Teams, webhooks and MCP servers use to reach this Hub. Inbound addresses
-        are shown with it. Now: <code className="ws-code-inline">{publicBase(entry.value)}</code>
+        The address Slack, Teams, Telegram (in webhook mode), webhooks and MCP servers use to reach
+        this Hub. Inbound addresses are shown with it. Now:{' '}
+        <code className="ws-code-inline">{publicBase(entry.value)}</code>
       </p>
       <form
         className="stack ch-address"

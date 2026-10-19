@@ -21,6 +21,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import type { McpStatus, McpTransport, ToolDescriptor } from '@nova/shared';
 import type { Logger } from '@nova/telemetry';
 import { mapBlock, mapCallError, mapCallResult, type McpToolResult } from './content.ts';
+import { deviceTransport, type DeviceMcpBridge } from './device-transport.ts';
 import { LineSplitter, LogRing } from './log-ring.ts';
 import { canonicalNames, listNames, toDescriptor, toolExposed, type McpToolInfo } from './names.ts';
 
@@ -68,6 +69,11 @@ export interface McpServerConfig {
    * hints or a plugin's manifest.
    */
   readOnlyTools?: string[];
+  /**
+   * The device a `stdio` server runs on (FR-042, FR-210): reached through `novad`, never spawned
+   * on the Hub; `command` then names the server as the device lists it. Null or absent: the Hub.
+   */
+  deviceId?: string | null;
 }
 
 export interface BackoffOptions {
@@ -162,6 +168,10 @@ export interface ConnectionDeps {
   createTransport?: TransportFactory;
   /** Bearer tokens for sse/http servers authorized with OAuth (FR-047); null for none. */
   authFor?: (config: McpServerConfig) => AuthProvider | null;
+  /** The fetch an sse/http server's requests go through; null for the default. */
+  fetchFor?: (config: McpServerConfig) => typeof fetch | null;
+  /** How device-hosted servers are reached (FR-042); null until the devices area is wired. */
+  deviceBridge?: () => DeviceMcpBridge | null;
   onStatus: (state: McpServerState) => void;
   onToolsChanged: (serverId: string) => void;
   now: () => number;
@@ -174,6 +184,7 @@ const isRef = (v: string) => v.startsWith('secret://');
 function launchKey(c: McpServerConfig): string {
   return JSON.stringify([
     c.transport,
+    c.deviceId ?? null,
     c.command,
     c.args,
     c.url,
@@ -688,8 +699,23 @@ export class McpConnection {
     if (cwd) mkdirSync(cwd, { recursive: true, mode: 0o700 });
     const custom = this.#deps.createTransport?.(cfg, { env, headers, cwd });
     if (custom) return custom;
+    if (cfg.transport === 'stdio' && cfg.deviceId) {
+      const bridge = this.#deps.deviceBridge?.() ?? null;
+      if (!bridge) throw new StartError('this server runs on a device the Hub cannot reach yet');
+      if (!cfg.command) throw new StartError('a device server needs the name the device lists');
+      return deviceTransport(bridge, {
+        accountId: cfg.accountId,
+        deviceId: cfg.deviceId,
+        server: cfg.command,
+      });
+    }
     const authProvider = cfg.transport === 'stdio' ? null : (this.#deps.authFor?.(cfg) ?? null);
-    const remote = { requestInit: { headers }, ...(authProvider ? { authProvider } : {}) };
+    const fetchFn = cfg.transport === 'stdio' ? null : (this.#deps.fetchFor?.(cfg) ?? null);
+    const remote = {
+      requestInit: { headers },
+      ...(authProvider ? { authProvider } : {}),
+      ...(fetchFn ? { fetch: fetchFn } : {}),
+    };
     switch (cfg.transport) {
       case 'stdio': {
         if (!cfg.command) throw new StartError('a stdio server needs a command');

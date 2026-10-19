@@ -117,8 +117,20 @@ import { codeM6Api } from './code/api-m6.ts';
 import { computersApi } from './computers/api.ts';
 import { addDeviceApi, devicesApi } from './devices/api.ts';
 import { networkSurfaceApi } from './netsurface/api.ts';
+import { hubFetch } from './relaytransport/transport.ts';
 import { screenApi } from './screen/api.ts';
 import { spacesApi } from './spaces/api.ts';
+import { teamApi } from './team/api.ts';
+import { pushApi } from './push/api.ts';
+import { syncApi } from './replica/api.ts';
+import { channelsM7Api } from './channels/api-m7.ts';
+import { browserM7Api } from './browser/api-m7.ts';
+import { deviceTlsApi } from './devices/api-m7.ts';
+import { relayTokenApi } from './netsurface/api-m7.ts';
+import { cloudApi } from './cloud/api.ts';
+import { codeM7Api } from './code/api-m7.ts';
+import { flaggedApi } from './flagged/api.ts';
+import { imagesApi } from './images/api.ts';
 
 export type CreateProjectRequest = z.input<typeof createProjectSchema>;
 export type UpdateProjectRequest = z.input<typeof updateProjectSchema>;
@@ -205,6 +217,11 @@ export interface Hello {
 export interface Session {
   accountId: string | null;
   displayName: string | null;
+  /** A device session's device and scopes (Add Device); null for the owner's own browser. */
+  deviceId?: string | null;
+  scopes?: string[] | null;
+  /** The person's role on this Hub (M7, decision 5). */
+  role?: 'owner' | 'member' | null;
 }
 
 export interface ListThreadsQuery {
@@ -218,6 +235,44 @@ export interface ListThreadsQuery {
 
 type Fetch = typeof fetch;
 
+/** Per-request options of the low-level `call` (FR-112). */
+export interface CallOptions {
+  /** Sent as `Idempotency-Key`; a resend of queued work reuses it so the Hub applies it once. */
+  idempotencyKey?: string;
+  /** False: the offline layer never answers or takes over this request (its own resends). */
+  offline?: boolean;
+}
+
+/** A request as the offline layer sees it. */
+export interface HubRequest {
+  method: string;
+  path: string;
+  body?: unknown;
+  options: CallOptions;
+}
+
+/**
+ * The offline layer (src/offline/, FR-112, FR-128, FR-129). It gets the request function, hears
+ * every answer, and may answer a request the Hub could not be reached for: a read from this
+ * device's offline copy, or a write it queues. Null lets the request fail as before; a rejection
+ * fails it with that error instead.
+ */
+export interface OfflineHandler {
+  attach(call: LowLevelCall): void;
+  answered(req: HubRequest, status: number, data: unknown): void;
+  unreachable(req: HubRequest, err: unknown): Promise<{ data: unknown } | null>;
+}
+
+export type LowLevelCall = <T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  options?: CallOptions,
+) => Promise<T>;
+
+/** Proxy answers that mean the Hub behind it is down, when they carry no Hub error body. */
+const GATEWAY_DOWN = new Set([502, 503, 504]);
+
 const V1 = '/api/v1';
 
 function query(params: Record<string, string | number | boolean | undefined>): string {
@@ -229,19 +284,40 @@ function query(params: Record<string, string | number | boolean | undefined>): s
 
 const enc = encodeURIComponent;
 
-export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
-  async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const init: RequestInit = {
-      method,
-      credentials: 'same-origin',
-      headers: { accept: 'application/json' },
-    };
+// By default every call goes through the app's transport: the page's origin, or the Relay tunnel
+// when this browser is paired through one and the origin does not answer (FR-137 client).
+export function createApi(fetchImpl: Fetch = hubFetch, opts: { offline?: OfflineHandler } = {}) {
+  const { offline } = opts;
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options: CallOptions = {},
+  ): Promise<T> {
+    const headers: Record<string, string> = { accept: 'application/json' };
+    if (options.idempotencyKey) headers['idempotency-key'] = options.idempotencyKey;
+    const init: RequestInit = { method, credentials: 'same-origin', headers };
     if (body !== undefined) {
       init.body = JSON.stringify(body);
-      init.headers = { ...init.headers, 'content-type': 'application/json' };
+      headers['content-type'] = 'application/json';
     }
-    const res = await fetchImpl(path, init);
+    const req: HubRequest = { method, path, ...(body !== undefined ? { body } : {}), options };
+    // The Hub cannot be reached: the offline layer may answer from this device or queue it.
+    const local = async (err: unknown): Promise<T> => {
+      const answer = offline ? await offline.unreachable(req, err) : null;
+      if (answer) return answer.data as T;
+      throw err;
+    };
+    let res: Response;
+    try {
+      res = await fetchImpl(path, init);
+    } catch (err) {
+      return local(err);
+    }
     const data = (await res.json().catch(() => ({}))) as { error?: ApiErrorBody } & T;
+    if (!res.ok && !data.error && GATEWAY_DOWN.has(res.status))
+      return local(new TypeError(`Failed to fetch (${res.status})`));
+    offline?.answered(req, res.status, data);
     if (!res.ok) {
       throw new ApiError(
         res.status,
@@ -250,6 +326,7 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
     }
     return data;
   }
+  offline?.attach(call);
 
   return {
     hello: () => call<Hello>('GET', `${V1}/hello`),
@@ -686,6 +763,18 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
     ...channelsApi(call),
     ...browserApi(call),
     ...screenApi(call),
+    // M7: members and teams, push, the sync replica, channels, browser, device TLS, Relay token.
+    ...teamApi(call),
+    ...pushApi(call),
+    ...syncApi(call),
+    ...channelsM7Api(call),
+    ...browserM7Api(call),
+    ...deviceTlsApi(call),
+    ...relayTokenApi(call),
+    ...cloudApi(call),
+    ...codeM7Api(call),
+    ...flaggedApi(call),
+    ...imagesApi(call),
   };
 }
 

@@ -1,6 +1,6 @@
 // Channel adapters (FR-088, docs/13 §4): Slack signing-secret verification with the replay window,
 // DMs vs channels, mentions and bot messages; Teams bearer tokens checked against the mock's
-// signing keys; webhook token and signature; email modelled but not configured; the approval
+// signing keys; webhook token and signature; email has no inbound endpoint; the approval
 // reply grammar.
 import { generateKeyPairSync } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -413,11 +413,12 @@ describe('webhook adapter', () => {
 });
 
 describe('email and in-app', () => {
-  it('email is modelled but not configured', async () => {
-    const e = new EmailAdapter();
-    expect(e.availability().available).toBe(false);
-    await expect(e.send()).rejects.toMatchObject({ code: 'capability_missing' });
-    await expect(e.parse()).rejects.toMatchObject({ code: 'capability_missing' });
+  it('email arrives through its mailbox only, and a binding without one cannot send', async () => {
+    const e = new EmailAdapter({ credentials: creds({}) });
+    await expect(e.parse()).rejects.toMatchObject({ code: 'not_found' });
+    await expect(e.send('b', { conversation: 'x@y.z', text: 'y' }, signal())).rejects.toMatchObject(
+      { code: 'capability_missing' },
+    );
   });
 
   it('in-app replies are already in the thread; nothing arrives through it', async () => {

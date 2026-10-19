@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 // nova-compute: the compute node CLI (FR-126, FR-132). Usage:
-//   nova-compute enroll --hub <url> (--token <nve_...> | --code <ABCD-EFGH> [--pairing <id>]
-//                       [--pin <fingerprint>]) --backend <url>
+//   nova-compute enroll --hub <url> (--token <nve_...> | --code <ABCD-EFGH> [--pairing <id>])
+//                       [--pin <fingerprint>] --backend <url>
 //                       [--backend-kind ollama|llamacpp|openai_compatible] [--name <n>]
 //                       [--listen <host:port>] [--advertise <url>] [--max-jobs <n>]
 //                       [--data-dir <dir>]
 //   nova-compute run [--data-dir <dir>]
 // With --code the node joins through Add Device: it prints the confirmation to compare with the
-// Hub's screen and waits for the owner to approve it there.
+// Hub's screen and waits for the owner to approve it there. --pin (the Hub fingerprint) makes an
+// https:// Hub trusted through its signed identity, and the node presents the device certificate
+// it was granted (mutual TLS, FR-126).
 // Secrets (keys, credential, job token) stay in the 0600 state file and are never printed.
 import { parseArgs } from 'node:util';
 import { formatConfirmation, joinWithCode } from './add-device.ts';
@@ -16,8 +18,8 @@ import { ComputeNode, enroll } from './node.ts';
 import { defaultDataDir, statePath } from './state.ts';
 
 const USAGE = `Usage:
-  nova-compute enroll --hub <url> (--token <nve_...> | --code <ABCD-EFGH> [--pairing <id>]
-                      [--pin <fingerprint>]) --backend <url>
+  nova-compute enroll --hub <url> (--token <nve_...> | --code <ABCD-EFGH> [--pairing <id>])
+                      [--pin <fingerprint>] --backend <url>
                       [--backend-kind ollama|llamacpp|openai_compatible] [--name <name>]
                       [--listen <host:port>] [--advertise <url>] [--max-jobs <n>]
                       [--data-dir <dir>]
@@ -79,7 +81,11 @@ async function main(argv: string[]): Promise<number> {
             out('Waiting for the owner to approve this node...');
           },
         })
-      : await enroll({ ...common, token: values.token! });
+      : await enroll({
+          ...common,
+          token: values.token!,
+          ...(values.pin !== undefined ? { pin: values.pin } : {}),
+        });
     out(`Enrolled "${state.name}" as node ${state.enrollment?.nodeId ?? '?'}.`);
     out(`The Hub will call this node at ${state.endpoint}.`);
     out(`State: ${statePath(dataDir)} (keep it private).`);

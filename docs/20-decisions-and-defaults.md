@@ -103,6 +103,7 @@ silently.
 | ADR-092 | M5 implementation choices | One runtime through turn seams, per-thread policy and tool scope, runs, goals, sub-agents, schedules, Code sessions, auto-review denies without a reviewer model (supersedes part of ADR-090), requests, compaction, documents in-process |
 | ADR-093 | M6 implementation choices | Agents in the one loop with rules in the user layer, channel text never authority (amends ADR-083), egress proxy with HTTPS inspection (amends ADR-063), bubblewrap and container substrates (supersedes ADR-090 "Sandbox until M6"), protected paths mounted in sandboxes, computers as folders, Playwright browser with per-action checks, screen tiers and kill key, `novad` over bearer tokens (extends ADR-089), Code environments, PRs and worktrees, spaces and sites |
 | ADR-094 | M6.5 implementation choices | Add Device commit-then-reveal with a Hub-signed confirmation (the Relay keeps v1), code-only guess budget, grants bound to the device key, approved roles only, signed `novad` manifest with a domain tag and `novad install` over HTTP with a pinned identity (extends ADR-089), Hub identity and CA never replaced silently, name constraints without single labels, nonce-bound identity statement, real hello probes, Wake Helper routing, consent bound to the exact text, lock-out guard, Relay sealing and PBKDF2-stretched pairing codes (extends ADR-071) |
+| ADR-095 | M7 implementation choices | The Hub plays the sync service with per-field LWW, a merge log and offline replicas only with `offline-replica` (amends `rest-api.md` §2), opt-in idempotent replay that never stores a credential, the cloud runner as a remote sandbox with network off unless the owner opts in (amends `rest-api.md` §5), native push only through the Relay, email approvals by signed link only, Code handoff, attempts, Hub-side merges and pinned SSH, members with an owner-only route list and their own folders, shared threads with a tool allow-list, team agents under their own identity, OIDC bound to the browser, scripts and external agents off by default and gated, the desktop shell with pinned TLS and a local-runtime bridge, mutual TLS and `novad`'s TLS client, per-user local runtime sockets, scoped browser site levels through `ruleTool`, bounded redactor rules, Apache-2.0 Relay and runner (applies ADR-023) |
 
 ## Details & rationale
 
@@ -1461,7 +1462,7 @@ which lists every decision with the known limitations).
 - *Signed builds and install (FR-133).* The Hub identity signs `novad-manifest.json` behind a
   domain tag; `novad install` checks the pinned key, the signature and its own hash before writing
   anything, takes the code on standard input and installs exactly the bytes it hashed. It runs over
-  plain HTTP: `novad` has no TLS client yet.
+  plain HTTP: `novad` has no TLS client yet (M7 added one, ADR-095).
 - *Trust (FR-134).* An identity key and a local CA that are never replaced on their own, name
   constraints without single-label names, a nonce-bound identity statement for pinning, and a
   loopback-only fallback when certificates cannot be read.
@@ -1473,7 +1474,43 @@ which lists every decision with the known limitations).
 - *Relay (FR-137).* X25519 per side signed by Ed25519, per-direction HKDF keys,
   XChaCha20-Poly1305 with the routing fields as associated data, PBKDF2-stretched pairing codes,
   persisted stream floors, an `/api/v1`-only tunnel and bounded Relay resources; no forward
-  secrecy yet. Built in M6.5; real push senders and the channel relay stay in M7.
+  secrecy yet. Built in M6.5; real push senders arrived in M7 (ADR-095); the channel relay is
+  still not built.
+
+**ADR-095 — M7 implementation choices** (extends ADR-010, ADR-023, ADR-033, ADR-036, ADR-071 and
+ADR-094; amends `contracts/rest-api.md` §2 and §5; see `docs/adr/0095-m7-implementation-choices.md`,
+which lists every decision with the known limitations).
+- *Sync (FR-109, FR-112, FR-129).* The Hub is canonical and plays the sync service itself, over
+  LAN, Mesh or the Relay tunnel: a paged snapshot, a change feed and pushed field ops merged
+  last-writer-wins by hybrid logical clock, with every overwritten value in a restorable merge log.
+  Only a device session with `offline-replica` keeps a replica (sealed in the browser under a
+  non-extractable key). Offline writes carry `Idempotency-Key`; replay is opt-in per route and an
+  answer carrying a credential is never stored. A device with `local-runtime` may bring back its
+  local model's answers.
+- *Cloud runner (FR-108, FR-071, FR-116).* `services/runner` holds environments, runs commands in
+  bubblewrap or a container, streams output, keeps snapshots and enforces caps; the Hub keeps the
+  loop and the gate, trusts no path the runner reports and gives cloud commands no network unless
+  the owner turns on `cloud.runner.unrestrictedNetwork`.
+- *Channels and push (FR-110, FR-111).* Telegram (polling by default) and email (IMAP and SMTP,
+  DMARC-checked senders); email approvals only by signed one-use link; Web Push from the Hub and
+  native push only through the Relay, always with ids and redacted titles.
+- *Code (FR-213, FR-212, FR-073, FR-062).* Handoff with a bundle, a binary-safe patch and a
+  confirmed state hash; best-of-N attempts in worktrees; Hub-side three-way merges that never
+  resolve a conflict silently; SSH off by default with pinned host keys and a hash-checked helper;
+  agents delegate Code sessions under their own rules.
+- *Members and teams (FR-217, FR-091, FR-113).* The recorded owner row, an owner-only route list,
+  a folder of its own for every non-owner account, public addresses only for non-owners, shared
+  threads with a tool allow-list, team agents under their own identity, OIDC with PKCE, a nonce
+  and a browser-binding cookie.
+- *Flagged (FR-202, FR-203).* `script.run` in QuickJS with every nested call through the gate,
+  external agents over ACP in the session's sandbox with Nova deciding every permission; both off
+  by default.
+- *Desktop and devices (FR-008, FR-009, FR-214, FR-126, FR-128).* The Electron shell pins the Hub
+  over TLS, owns OS notifications and global shortcuts, captures windows only from its own
+  gestures and bridges `novad`'s local runtime; `novad` and compute nodes verify the Hub over TLS
+  and present device certificates; per-user local runtime sockets.
+- *Browser (FR-092, FR-094, FR-098).* Scoped site levels through the policy engine's `ruleTool`,
+  redacted console and network capture, crash restarts that replay only a GET navigation.
 
 ## Defaults for common ambiguities
 

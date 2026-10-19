@@ -1,8 +1,9 @@
 // Hub client calls for the agent browser (FR-086, FR-092, FR-094, FR-096, FR-098; docs/11 §4), in
 // the conventions of src/api.ts. `createApi` spreads `browserApi(call)` into the client, so `Api`
-// includes these; until then `useBrowserApi` reads them from the same services object.
+// includes these; until then `useBrowserApi` reads them from the same services object. Since M7
+// the trace is newest first with a cursor; the other M7 calls are in api-m7.ts.
 import type {
-  BrowserActionView,
+  BrowserActionsPageView,
   BrowserDomainsView,
   BrowserLoginView,
   BrowserSessionView,
@@ -61,10 +62,19 @@ export function browserApi(call: HubCall) {
     /** 404 when no browser is open for the computer. */
     closeBrowserSession: (computerId: string) =>
       call<{ ok: true }>('DELETE', `${V1}/browser/sessions/${enc(computerId)}`),
-    /** Oldest first, at most `limit` (1..500). */
+    /**
+     * Newest first, at most `limit` (1..500); `cursor` is the previous page's `nextCursor` (null on
+     * the last page). A cursor the Hub did not make answers 400.
+     */
     listBrowserActions: (
-      q: { computerId?: string; threadId?: string; callId?: string; limit?: number } = {},
-    ) => call<{ items: BrowserActionView[] }>('GET', `${V1}/browser/actions${query({ ...q })}`),
+      q: {
+        computerId?: string;
+        threadId?: string;
+        callId?: string;
+        limit?: number;
+        cursor?: string;
+      } = {},
+    ) => call<BrowserActionsPageView>('GET', `${V1}/browser/actions${query({ ...q })}`),
     /** A recorded action's screenshot (PNG, served by the Hub). */
     browserShotUrl: (actionId: string, which: 'before' | 'after') =>
       `${V1}/browser/actions/${enc(actionId)}/screenshots/${which}`,

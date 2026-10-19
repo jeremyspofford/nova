@@ -30,6 +30,7 @@ import {
   type HubIdentityHandle,
   type MeshCertSource,
   type TlsMaterial,
+  hubOwnerId,
 } from '@nova/core';
 import { schema } from '@nova/storage';
 import type { HubConfig } from './config.ts';
@@ -160,12 +161,8 @@ function sameState(a: TrustState, b: TrustState): boolean {
 export async function setupTrust(ctx: HubContext, deps: TrustDeps = {}): Promise<TrustArea> {
   let extraNames: (() => Promise<string[]>) | null = null;
   let changeLog: TrustChangeLog | null = null;
-  const ownerAccount = (): Promise<string | null> => {
-    const row = ctx.db.raw
-      .prepare("SELECT id FROM account WHERE kind = 'local' AND deleted_at IS NULL LIMIT 1")
-      .get() as { id: string } | undefined;
-    return Promise.resolve(row?.id ?? null);
-  };
+  // The recorded owner (M7): members and team agents' identities are never taken for it.
+  const ownerAccount = (): Promise<string | null> => Promise.resolve(hubOwnerId(ctx.db));
   const service = new TrustService({
     db: ctx.db,
     secrets: ctx.secrets,

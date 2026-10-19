@@ -1,4 +1,4 @@
-// Slack and Teams as schedule delivery targets (FR-055, FR-187): the scheduler's
+// Slack, Teams and (since M7) email as schedule delivery targets (FR-055, FR-187): the scheduler's
 // `useChannel(kind, channel)` takes these. A target's `ref` is a channel binding id; the receipt
 // is the message id the service returned, so a delivery counts only when the message was posted.
 import type { DeliveryChannel } from '../scheduler/delivery.ts';
@@ -15,7 +15,10 @@ export interface DeliverySender {
 
 const MAX_TEXT = 3500;
 
-export function channelDelivery(sender: DeliverySender, kind: 'slack' | 'teams'): DeliveryChannel {
+export function channelDelivery(
+  sender: DeliverySender,
+  kind: 'slack' | 'teams' | 'email',
+): DeliveryChannel {
   return {
     async deliver(req, target) {
       if (!target.ref)

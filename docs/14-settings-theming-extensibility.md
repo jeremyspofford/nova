@@ -41,7 +41,11 @@ ignored, and Diagnostics shows a warning naming the key and the project.
 | **Workspace** (no page) | `workspace.layout`: the pane layout per mode, written by the workspace and restored on start (FR-005, `docs/04` §4.3) |
 | **Network** | egress allowlist, proxy mode (`allowlist` \| `limited`, FR-193), SOCKS5 for non-HTTP clients, private-IP access, dev-server ports |
 | **Data** | retention overrides, export, delete, storage usage, backup folder, import ledger (FR-200) |
-| **Sync** | enable, devices, passphrase, history/merge log, E2EE status |
+| **Sync** | enable, devices, passphrase, history/merge log, E2EE status (as built in M7: this device's copy, changes waiting to send, devices with a copy, History with Restore; no passphrase, `docs/13` §2) |
+| **Account** (M7) | linked OIDC identities (link and unlink), the public profile card and its preview (`docs/13` §7) |
+| **Members** (M7) | people and roles; for the owner, invitations (one-use link shown once, chosen expiry, withdraw), removing a member, OIDC providers (`docs/13` §7) |
+| **Cloud runner** (M7) | the runner's URL, a write-only token, test, on/off, forget, caps, unrestricted network; cloud environments, their runs and snapshots (`docs/13` §3) |
+| **Experimental** (M7) | `script.run` and its limits, external agent adapters (FR-202, FR-203) |
 | **Advanced** | feature flags with their stage (ADR-082: `experimental` off and hidden outside developer mode, `beta` off and listed, `stable` on, `deprecated` still honoured with a warning, `removed` rejected at load), log level, developer mode, diagnostics, telemetry export over OTLP (endpoint, signals, include content; off by default, FR-223), reset |
 
 *As shipped in M5* (ADR-092): the Work keys live in Settings → General → **Work runs**, and the
@@ -143,6 +147,51 @@ A change through `PATCH /api/v1/settings` applies at once too.
 | `relay.enabled` | `false` | yes | Connect out to a Relay; nothing is contacted while it is off (FR-137) |
 | `relay.url` | `''` | yes | The Relay: `wss://` or `https://` (`ws://` or `http://` only to this machine), no credentials, query or fragment; empty for none |
 | `relay.selfHosted` | `true` | yes | The Relay is your own; off with no URL uses the hosted `wss://relay.arialabs.ai` |
+
+*Added in M7* (ADR-095). The keys are in `packages/shared/src/settings.ts` (the `// ---- M7`
+blocks). Where each one is shown: Settings → Sync (the `sync.*` keys), Settings → Cloud runner
+(the `cloud.runner.*` keys, written through `PUT/PATCH /api/v1/cloud/runner`; the network switch
+asks first and shows the setting's own description), Settings → Code (`code.ssh.enabled`, which
+asks first, `code.handoffSource`, `code.attempts`), Settings → Channels and the notification
+routing (`channels.email.pollSeconds`, `channels.approvalLinkMinutes`), Settings → Notifications
+under "For every device" (`push.enabled`, `push.detail`), Settings → Members and Account
+(`team.invitationHours`; `team.publicProfiles` asks before turning on), Settings → Experimental
+(`scripts.*`, `externalAgents.enabled`, each asking before turning on), Devices → Device
+certificates (`devices.tls.allowWithoutCertificate`, shown inverted as "Require a device
+certificate", naming the devices that would be refused first) and Network → Relay (the
+registration token, written through `PUT /api/v1/relay/registration-token`). Members cannot read
+or write any Hub setting; they keep their own `appearance.*`, `keyboard.*` and `onboarding.*`
+keys through `/api/v1/team/me/settings` (`docs/13` §7). Security settings never sync to a device
+(`docs/13` §2.1).
+
+| Key | Default | Security | Notes |
+| --- | --- | --- | --- |
+| `sync.enabled` | `true` | yes | Devices granted an offline replica may sync it; off refuses every replica sync call, the merge log and restore (FR-109, FR-129) |
+| `sync.maxSkewSeconds` | `300` | yes | How far ahead of the Hub a pushed change may be clocked (10 to 3,600 s); later ones are refused (`clock_skew`) so a fast clock cannot win forever |
+| `sync.mergeLogDays` | `90` | no | How long overwritten values stay in the merge log for restore (1 to 3,650 days) |
+| `sync.offlineAfterMinutes` | `10` | no | A replica that has not pulled or pushed for this long shows as offline (1 to 1,440) |
+| `cloud.runner.enabled` | `false` | yes | Run cloud environments' commands and files on the configured runner (FR-108, FR-071) |
+| `cloud.runner.url` | `''` | yes | The runner: `https://`, or `http://` only to this machine, no credentials, query or fragment; empty for none |
+| `cloud.runner.token` | `''` | yes | Only the vault reference `secret://cloud/runner/token` (`PUT /api/v1/cloud/runner` stores the token); never the token |
+| `cloud.runner.caps` | `{cpuSeconds: 3600, wallSeconds: 14400, diskMb: 10240, warnAt: 0.8}` | yes | Caps per cloud run (CPU and wall time, 60 s to 7 days) and per environment (disk, 16 MiB to 1 TiB), with a warning at `warnAt` (0.5 to 0.99) and a hard stop at the cap (FR-116) |
+| `cloud.runner.unrestrictedNetwork` | `false` | yes | Let cloud environments reach the network directly from the runner, without the Hub's egress proxy (no allowlist, no private-address block, no egress audit); off, cloud commands get no network and environments can be made only with network off |
+| `code.handoffSource` | `keep` | no | After a session handoff is confirmed: `keep` or `clean` the uncommitted changes in the source (FR-213) |
+| `code.attempts` | `{count: 2, budgets: {timeSeconds: 1800, tokens: null, costUsd: null}}` | no | Best-of-N: attempts per task (2 to 4) and each attempt's budget (FR-212) |
+| `code.ssh.enabled` | `false` | yes | Reach SSH environments with this machine's ssh client and install Nova's helper under `~/.nova/remote` on the host (FR-062) |
+| `channels.email.pollSeconds` | `60` | no | How often email bindings in polling mode check their mailbox, and how soon a dropped IDLE connection is opened again (15 to 3,600 s; FR-110) |
+| `channels.approvalLinkMinutes` | `60` | yes | How long the signed one-use link in an approval email works (5 to 1,440), never past the approval itself |
+| `push.enabled` | `true` | yes | Send OS notifications as push to subscribed browsers and, through the Relay, native apps (FR-111) |
+| `push.detail` | `redacted` | yes | What a push says: `none` ("Nova"), `redacted` (a title per category) or `titles` (the notification title, encrypted to the browser); native pushes always get the redacted title |
+| `push.webPushHosts` | `fcm.googleapis.com`, `updates.push.services.mozilla.com`, `*.push.apple.com`, `*.notify.windows.com` | yes | The push services a browser subscription may point at (https only, 1 to 50 host patterns) |
+| `push.vapidSubject` | `null` | no | The contact push services see in the VAPID token (`mailto:` or `https:`); unset uses the public Hub address |
+| `scripts.enabled` | `false` | yes | Offer `script.run` (FR-202) |
+| `scripts.limits` | `{cpuMs: 5000, memoryMb: 32, maxCalls: 20, logChars: 20000}` | yes | One script's CPU time (100 ms to 30 s), engine memory (8 to 128 MiB), nested tool calls (1 to 100) and console output (1,000 to 100,000 characters) |
+| `externalAgents.enabled` | `false` | yes | Let Code sessions delegate to external coding agents over ACP (FR-203); turning it off stops running delegations |
+| `devices.tls.allowWithoutCertificate` | `true` | yes | Over HTTPS, still accept `novad` devices and compute nodes that present no device certificate (a diagnostics problem); off, they are refused. On for one release (FR-126) |
+| `relay.registrationTokenRef` | `''` | yes | The vault entry holding a private Relay's registration token; only `secret://relay/registration/…` is accepted (FR-137) |
+| `team.invitationHours` | `72` | yes | How long a new invitation link is valid (1 to 720 hours); each works once |
+| `team.publicProfiles` | `false` | yes | People of this Hub may publish a read-only public profile card (FR-113) |
+| `agents.usageRetryMinutes` | `15` | no | How long an agent's goal stopped by a provider usage limit waits before trying again (1 to 1,440); each failed retry doubles the wait, up to 4 hours (FR-181) |
 
 ### 1.2 Settings UI
 

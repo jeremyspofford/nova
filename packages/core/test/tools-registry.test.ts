@@ -556,7 +556,13 @@ describe('ToolRuntime (UI side)', () => {
       initiator: 'user',
     });
     const r = await done;
-    expect(r).toEqual({ callId, ok: true, text: 'note' });
+    // The result's meta comes back too, redacted and bounded like the stored result (M7).
+    expect(r).toEqual({
+      callId,
+      ok: true,
+      text: 'note',
+      meta: { path: 'n.txt', sha256: expect.any(String), size: 4, truncated: false },
+    });
     expect(seen).toEqual(['fs.read:true']);
     // A call an MCP App makes on its own (the default) carries no user instruction (FR-189).
     const app = await env.runtime.invoke({
@@ -576,7 +582,7 @@ describe('ToolRuntime (UI side)', () => {
     const bad = await (
       await env.runtime.invoke({ accountId: ACCOUNT, name: 'fs.read', args: {} })
     ).done;
-    expect(bad).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } });
+    expect(bad).toMatchObject({ ok: false, error: { code: 'invalid_arguments' }, meta: null });
     await expect(
       env.runtime.invoke({ accountId: ACCOUNT, name: 'zz.top', args: {} }),
     ).rejects.toMatchObject({

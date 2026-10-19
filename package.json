@@ -12,10 +12,11 @@
     "apps/*",
     "packages/*",
     "services/compute",
-    "services/relay"
+    "services/relay",
+    "services/runner"
   ],
   "scripts": {
-    "lint": "eslint . && prettier --check .",
+    "lint": "node --max-old-space-size=8192 node_modules/eslint/bin/eslint.js . && prettier --check .",
     "format": "prettier --write .",
     "typecheck": "turbo run typecheck && tsc --noEmit -p tsconfig.json",
     "test": "turbo run test --concurrency=4",

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Chunked</title>
+  </head>
+  <body>
+    <h1>Chunked</h1>
+    <p>Responses without a Content-Length (M7 review).</p>
+    <script>
+      fetch('/chunked.json')
+        .then((r) => r.text())
+        .then(() => fetch('/chunked-big.txt'))
+        .then((r) => r.text())
+        .then(() => console.log('chunked done'));
+    </script>
+  </body>
+</html>

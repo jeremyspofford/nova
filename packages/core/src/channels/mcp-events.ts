@@ -328,6 +328,32 @@ export class McpEventService implements TriggerSubscriptions {
   }
 
   /**
+   * POST /api/v1/mcp/subscriptions/:id/refresh (M7): renew now instead of waiting for the tick.
+   * An active one is refreshed (`nova/events/refresh`); a pending, lapsed or failed one is
+   * subscribed again (a failed one gets a new try, e.g. after the server gained the event).
+   */
+  async refreshNow(accountId: string, id: string): Promise<McpSubscriptionView> {
+    const row = this.#rowById(id);
+    if (!row || row.account_id !== accountId)
+      throw new NovaError('not_found', 'subscription not found');
+    if (row.status === 'removed')
+      throw new NovaError('conflict', 'the subscription was removed', {
+        details: { status: 'removed' },
+      });
+    if (row.status === 'active' || row.status === 'refreshing') await this.#refresh(row);
+    else await this.#activate(row);
+    await this.#o.audit?.append({
+      accountId,
+      actor: 'user',
+      kind: 'mcp',
+      action: 'mcp.subscription.refresh',
+      resource: `mcp_server:${row.mcp_server_id}`,
+      detail: { subscriptionId: id, was: row.status },
+    });
+    return this.#view(this.#rowById(id)!);
+  }
+
+  /**
    * Before an MCP server is removed (the MCP area calls this while the connection still exists):
    * unsubscribe its subscriptions. The rows then go with the server (ON DELETE CASCADE).
    */

@@ -5,19 +5,23 @@
 // say whether one is stored.
 import { z } from 'zod';
 import { createCodeSessionSchema, idSchema, type EnvironmentView } from '../api.ts';
+import type { CloudConnectionView } from '../m7/runner.ts';
 
 // ---- environments (FR-062, FR-078) -------------------------------------------------------------
 
 export const ENVIRONMENT_KINDS_M6 = ['container', 'ssh', 'wsl', 'device'] as const;
 export type SavedEnvironmentKind = (typeof ENVIRONMENT_KINDS_M6)[number];
 
-/** A host name or address: letters, digits, dots, hyphens, colons (IPv6) and brackets. */
+/**
+ * A host name or address: letters, digits, dots, hyphens, colons (IPv6) and brackets. Never a
+ * leading hyphen, which the ssh client would read as an option (M7 security review).
+ */
 const hostSchema = z
   .string()
   .trim()
   .min(1)
   .max(253)
-  .regex(/^[A-Za-z0-9.:[\]-]+$/, 'a host name or address');
+  .regex(/^[A-Za-z0-9.:[\]][A-Za-z0-9.:[\]-]*$/, 'a host name or address');
 /** A user name on the remote host. */
 const userSchema = z
   .string()
@@ -152,7 +156,9 @@ export type EnvironmentConnectionView =
       hasCredential: boolean;
     }
   | { kind: 'wsl'; deviceId: string; distro: string }
-  | { kind: 'device'; deviceId: string; root: string | null };
+  | { kind: 'device'; deviceId: string; root: string | null }
+  /** M7: a cloud environment on the runner (FR-071). */
+  | CloudConnectionView;
 
 /** EnvironmentView plus what Settings shows of a saved environment. */
 export interface SavedEnvironmentView extends EnvironmentView {

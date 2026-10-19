@@ -32,6 +32,11 @@ import { m6ComputersImpl, m6ComputersState, type M6ComputersState } from './fake
 import { m6DevicesImpl, m6DevicesState, type M6DevicesState } from './fakes-m6-devices.ts';
 import { m65DevicesImpl, m65DevicesState, type M65DevicesState } from './fakes-m65-devices.ts';
 import { m65NetworkImpl, m65NetworkState, type M65NetworkState } from './fakes-m65-network.ts';
+import { m7TeamImpl, m7TeamState, type M7TeamState } from './fakes-m7-team.ts';
+import { m7PushImpl, m7PushState, type M7PushState } from './fakes-m7-push.ts';
+import { m7MiscImpl, m7MiscState, type M7MiscState } from './fakes-m7-misc.ts';
+import { FakeSyncHub } from './fakes-m7-sync.ts';
+import { m7WorkImpl, m7WorkState, type M7WorkState } from './fakes-m7-work.ts';
 import { m6SpacesImpl, m6SpacesState, type M6SpacesState } from './fakes-m6-spaces.ts';
 import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
 
@@ -132,6 +137,10 @@ export interface HubState {
   m6devices: M6DevicesState;
   m65devices: M65DevicesState;
   m65network: M65NetworkState;
+  m7team: M7TeamState;
+  m7push: M7PushState;
+  m7misc: M7MiscState;
+  m7work: M7WorkState;
   m6code: M6CodeState;
   /** Code sessions, changes, comments and reviews (test/fakes-m5-code.ts). */
   m5code: M5CodeState;
@@ -167,6 +176,10 @@ export function createHub(init: Partial<HubState> = {}) {
     m6devices: m6DevicesState(),
     m65devices: m65DevicesState(),
     m65network: m65NetworkState(),
+    m7team: m7TeamState(),
+    m7push: m7PushState(),
+    m7misc: m7MiscState(),
+    m7work: m7WorkState(),
     m6code: m6CodeState(),
     ...init,
   };
@@ -569,6 +582,32 @@ export function createHub(init: Partial<HubState> = {}) {
       maybeFail,
       setting: (k) => resolveSetting(k, layers()).value,
     }),
+    // M7: members and teams, push, sync, and the channels/browser/device-TLS/Relay-token parts.
+    ...m7TeamImpl(state.m7team, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      threads: () => state.threads,
+      setting: (k) => resolveSetting(k, layers()).value,
+      plugins: () => state.m4.plugins.map((p) => p.id),
+    }),
+    ...m7PushImpl(state.m7push, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      setting: (k) => resolveSetting(k, layers()).value,
+    }),
+    ...new FakeSyncHub().api,
+    ...m7WorkImpl(state.m7work, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      setting: (k) => resolveSetting(k, layers()).value,
+      sessions: () => state.m5code.sessions,
+      addArtifact: (a) => {
+        state.m3.artifacts = [...state.m3.artifacts, a];
+      },
+    }),
     ...m6AgentsImpl(state.m6agents, {
       id,
       ts: () => ts(),
@@ -576,6 +615,16 @@ export function createHub(init: Partial<HubState> = {}) {
       settings: () => state.settings,
     }),
     ...m6BrowserImpl(state.m6browser, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      setting: (k) => resolveSetting(k, layers()).value,
+    }),
+    // After the M6 channels, M6.5 network and M6 browser parts it extends.
+    ...m7MiscImpl(state.m7misc, {
+      m6channels: state.m6channels,
+      m6browser: state.m6browser,
+      m65network: state.m65network,
       id,
       ts: () => ts(),
       maybeFail,

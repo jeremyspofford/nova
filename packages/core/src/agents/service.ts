@@ -56,6 +56,7 @@ import type { PolicyRule } from '@nova/policy';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 import { createHash } from 'node:crypto';
+import type { ThreadToolLimits, ToolLimitSource } from '../approvals/limits.ts';
 import { readAttachmentBlob, writeAttachmentBlob } from '../attachments.ts';
 import type { EventSink } from '../events.ts';
 import { extractFacts, memoryKey } from '../memory.ts';
@@ -89,6 +90,7 @@ import type {
   TurnStarter,
   TurnTrigger,
 } from '../runtime/types.ts';
+import type { ThreadStatusLinks } from '../requests/status.ts';
 import type { AgentFireInput, AgentFireTarget, ScheduleInput } from '../scheduler/service.ts';
 import type { ThreadService } from '../threads.ts';
 import type { AuditRecord, AuditSink, Notifier, ToolSourceProvider } from '../tools/types.ts';
@@ -186,7 +188,16 @@ export interface AgentServiceOptions {
   goalDebounceMs?: number;
   /** How often idle agents are checked for proactive research: 60 s. */
   proactiveCheckMs?: number;
+  /**
+   * The first wait before a goal stopped by a provider usage limit tries again (docs/09 §12);
+   * each failed retry doubles it, up to `usageRetryMaxMs`. Defaults 15 minutes and 4 hours.
+   */
+  usageRetryMs?: () => Promise<number>;
+  usageRetryMaxMs?: number;
 }
+
+/** How many plugins may be connected to one agent. */
+export const MAX_AGENT_PLUGINS = 100;
 
 /** The derived status of threads, from the shared thread status service (FR-215). */
 export type AgentStatusLookup = (
@@ -474,6 +485,11 @@ export class AgentService implements AgentToolHost {
   readonly #timers: AgentTimers;
   readonly #debounceMs: number;
   readonly #checkMs: number;
+  readonly #usageRetryMs: () => Promise<number>;
+  readonly #usageRetryMaxMs: number;
+  /** Goals waiting out a usage limit: the timer and how many retries failed (FR-181). */
+  readonly #usageRetries = new Map<string, { handle: unknown; attempt: number }>();
+  #pluginScopeTable: boolean | null = null;
   #turns: TurnStarter | null = null;
   #runs: AgentRuns | null = null;
   #scheduler: AgentScheduler | null = null;
@@ -503,6 +519,10 @@ export class AgentService implements AgentToolHost {
   readonly policy: ThreadPolicySource;
   readonly agentPolicy: AgentPolicySource;
   readonly status: ThreadStatusSource;
+  /** Agent events and threads that count toward an agent's main thread (FR-215). */
+  readonly statusLinks: ThreadStatusLinks;
+  /** The plugins connected to an agent, enforced at the gate (FR-045): `gate.useToolLimits`. */
+  readonly toolLimits: ToolLimitSource;
   readonly toolSource: ToolSourceProvider;
   readonly scheduleTarget: AgentFireTarget;
   readonly externalAgentGuard: ExternalAgentGuard;
@@ -529,6 +549,8 @@ export class AgentService implements AgentToolHost {
     this.#timers = opts.timers ?? realTimers;
     this.#debounceMs = opts.goalDebounceMs ?? 5_000;
     this.#checkMs = opts.proactiveCheckMs ?? 60_000;
+    this.#usageRetryMs = opts.usageRetryMs ?? (() => Promise.resolve(15 * 60_000));
+    this.#usageRetryMaxMs = opts.usageRetryMaxMs ?? 4 * 3_600_000;
     this.extension = { forTurn: (input) => this.#forTurn(input) };
     this.policy = { forThread: (accountId, threadId) => this.#threadPolicy(accountId, threadId) };
     this.agentPolicy = {
@@ -537,6 +559,13 @@ export class AgentService implements AgentToolHost {
     this.status = {
       blocked: (accountId, threadIds) => this.#blockedThreads(accountId, threadIds),
       children: (accountId, threadId) => this.#childThreads(accountId, threadId),
+    };
+    this.statusLinks = {
+      parentsOf: (accountId, threadId) => Promise.resolve(this.#parentThreads(accountId, threadId)),
+      threadsOf: (e) => this.#eventThreads(e),
+    };
+    this.toolLimits = {
+      forThread: (accountId, threadId) => Promise.resolve(this.#pluginLimits(accountId, threadId)),
     };
     const tools = agentTools(this);
     this.toolSource = {
@@ -604,6 +633,12 @@ export class AgentService implements AgentToolHost {
     if (this.#started || this.#closed) return;
     this.#started = true;
     this.#armProactive();
+    // Goals a usage limit stopped before a restart try again later, as they would have.
+    this.#track(
+      this.#rearmUsageRetries().catch((err: unknown) => {
+        this.#log.warn('could not re-arm usage-limit retries', { err });
+      }),
+    );
   }
 
   async close(): Promise<void> {
@@ -612,6 +647,8 @@ export class AgentService implements AgentToolHost {
     this.#proactiveTimer = null;
     for (const h of this.#goalTimers.values()) this.#timers.clear(h);
     this.#goalTimers.clear();
+    for (const r of this.#usageRetries.values()) this.#timers.clear(r.handle);
+    this.#usageRetries.clear();
     await Promise.allSettled([...this.#background, ...this.#writes.values()]);
   }
 
@@ -1934,6 +1971,8 @@ export class AgentService implements AgentToolHost {
     if (to === 'budget_limited')
       await this.#notify(row, 'attention', `${row.name}: goal budget reached`, reason ?? '');
     if (to !== 'active') this.#clearGoalTimer(row.id);
+    // Someone else decided about the goal: the usage-limit retry is no longer wanted.
+    if (to !== 'usage_limited' && (to !== 'active' || by === 'user')) this.#clearUsageRetry(row.id);
     return next;
   }
 
@@ -3259,10 +3298,80 @@ export class AgentService implements AgentToolHost {
       const code = o.error?.code ?? '';
       if (code === 'rate_limited' || code === 'over_budget') {
         await this.#goalStatus(row, g, 'usage_limited', 'system', o.error?.message ?? code);
+        // The limit may reset: try again later, waiting longer after each failed retry.
+        await this.#scheduleUsageRetry(row.id);
         return;
       }
     }
+    // A goal turn that got past the limit resets the backoff.
+    if (o.stop !== 'error') this.#clearUsageRetry(row.id);
     if (o.stop === 'end') await this.#kickGoal(row);
+  }
+
+  // ---- usage-limit retries (FR-181, docs/09 §12) ----------------------------------------------
+
+  async #scheduleUsageRetry(agentId: string): Promise<void> {
+    if (this.#closed) return;
+    const prev = this.#usageRetries.get(agentId);
+    if (prev) this.#timers.clear(prev.handle);
+    const attempt = (prev?.attempt ?? 0) + 1;
+    let base = 15 * 60_000;
+    try {
+      base = await this.#usageRetryMs();
+    } catch {
+      // the default
+    }
+    const ms = Math.min(base * 2 ** (attempt - 1), this.#usageRetryMaxMs);
+    const handle = this.#timers.set(() => {
+      this.#track(
+        this.#retryUsage(agentId).catch((err: unknown) => {
+          this.#log.warn('usage-limit retry failed', { err, agentId });
+        }),
+      );
+    }, ms);
+    this.#usageRetries.set(agentId, { handle, attempt });
+  }
+
+  /** Forget a goal's usage-limit retry and how many failed. */
+  #clearUsageRetry(agentId: string): void {
+    const r = this.#usageRetries.get(agentId);
+    if (!r) return;
+    this.#timers.clear(r.handle);
+    this.#usageRetries.delete(agentId);
+  }
+
+  /** The limit may have reset: the goal is active again and continues (if nothing else changed). */
+  async #retryUsage(agentId: string): Promise<void> {
+    const entry = this.#usageRetries.get(agentId);
+    if (this.#closed || !entry) return;
+    const row = await this.#rowById(agentId);
+    const g = row ? await this.#openGoal(agentId) : null;
+    if (!row || g?.status !== 'usage_limited') {
+      this.#usageRetries.delete(agentId);
+      return;
+    }
+    if (row.status !== 'active') {
+      // Paused or stopped meanwhile: look again after the same wait.
+      this.#usageRetries.set(agentId, { ...entry, attempt: entry.attempt - 1 });
+      await this.#scheduleUsageRetry(agentId);
+      return;
+    }
+    await this.#goalStatus(row, g, 'active', 'system', 'trying again after the usage limit');
+    await this.#auditAgent(row, 'system', 'goal.usage_retry', {
+      goalId: g.id,
+      attempt: entry.attempt,
+    });
+    await this.#continueGoal(agentId);
+  }
+
+  async #rearmUsageRetries(): Promise<void> {
+    const rows = await this.#db.orm
+      .select({ agentId: goalT.agentId })
+      .from(goalT)
+      .where(eq(goalT.status, 'usage_limited'));
+    for (const r of rows)
+      if (r.agentId && !this.#usageRetries.has(r.agentId))
+        await this.#scheduleUsageRetry(r.agentId);
   }
 
   // ---- policy and status sources ----------------------------------------------------------------
@@ -3330,6 +3439,121 @@ export class AgentService implements AgentToolHost {
       else if (g?.status === 'usage_limited') out.set(l.threadId, 'Usage limit reached');
     }
     return out;
+  }
+
+  /** A research or background thread counts toward its agent's main thread (FR-215). */
+  #parentThreads(accountId: string, threadId: string): string[] {
+    const l = this.#link(threadId);
+    if (!l || l.accountId !== accountId || (l.kind !== 'proactive' && l.kind !== 'background'))
+      return [];
+    const main = this.#db.raw
+      .prepare("SELECT thread_id FROM agent_thread WHERE agent_id = ? AND kind = 'main'")
+      .all(l.agentId) as { thread_id: string }[];
+    return main.map((m) => m.thread_id);
+  }
+
+  /** The threads an agent event without a thread is about (a pause, a resume): all of them. */
+  async #eventThreads(e: EventEnvelope): Promise<string[]> {
+    const c = e.correlation as { agentId?: unknown } | undefined;
+    const agentId =
+      typeof c?.agentId === 'string'
+        ? c.agentId
+        : typeof e.payload.agentId === 'string'
+          ? e.payload.agentId
+          : null;
+    if (!agentId || !e.name.startsWith('agent.')) return [];
+    const row = await this.#rowById(agentId);
+    if (!row || row.accountId !== e.accountId) return [];
+    return (await this.#links(agentId))
+      .filter((l) => l.kind !== 'background')
+      .map((l) => l.threadId);
+  }
+
+  // ---- plugins per agent (FR-045, docs/04 §2.5) -------------------------------------------------
+
+  #hasPluginScope(): boolean {
+    if (this.#pluginScopeTable === null) {
+      // Before migration 0037 there is no table: agents use every enabled plugin, as before.
+      const t = this.#db.raw
+        .prepare(
+          "SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'agent_plugin_scope'",
+        )
+        .get();
+      this.#pluginScopeTable = t !== undefined;
+    }
+    return this.#pluginScopeTable;
+  }
+
+  #pluginIds(agentId: string): string[] | null {
+    if (!this.#hasPluginScope()) return null;
+    const r = this.#db.raw
+      .prepare('SELECT plugin_ids_json FROM agent_plugin_scope WHERE agent_id = ?')
+      .get(agentId) as { plugin_ids_json: string } | undefined;
+    if (!r) return null;
+    const ids = JSON.parse(r.plugin_ids_json) as unknown;
+    // An unreadable list connects nothing (fail closed).
+    return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : [];
+  }
+
+  /** The plugins connected to the agent; null: every plugin the account enabled. */
+  async plugins(accountId: string, id: string): Promise<string[] | null> {
+    await this.#row(accountId, id);
+    return this.#pluginIds(id);
+  }
+
+  /** Connect plugins to the agent (its threads use only their tools); null connects all. */
+  async setPlugins(
+    accountId: string,
+    id: string,
+    ids: readonly string[] | null,
+  ): Promise<string[] | null> {
+    const row = await this.#row(accountId, id);
+    if (!this.#hasPluginScope())
+      throw new NovaError('capability_missing', 'plugins per agent need migration 0037');
+    const list = ids === null ? null : [...new Set(ids)].slice(0, MAX_AGENT_PLUGINS);
+    if (list?.length) {
+      const known = new Set(
+        (
+          this.#db.raw
+            .prepare(
+              `SELECT plugin_id FROM plugin_install WHERE account_id = ? AND plugin_id IN (${list
+                .map(() => '?')
+                .join(', ')})`,
+            )
+            .all(accountId, ...list) as { plugin_id: string }[]
+        ).map((r) => r.plugin_id),
+      );
+      const missing = list.filter((p) => !known.has(p));
+      if (missing.length)
+        throw new NovaError('validation', `plugins that are not installed: ${missing.join(', ')}`, {
+          details: { reason: 'unknown_plugin', plugins: missing },
+        });
+    }
+    const at = this.#iso();
+    await this.#db.transaction(() => {
+      if (list === null)
+        this.#db.raw.prepare('DELETE FROM agent_plugin_scope WHERE agent_id = ?').run(id);
+      else
+        this.#db.raw
+          .prepare(
+            `INSERT INTO agent_plugin_scope (agent_id, plugin_ids_json, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT (agent_id) DO UPDATE SET plugin_ids_json = excluded.plugin_ids_json,
+               updated_at = excluded.updated_at`,
+          )
+          .run(id, JSON.stringify(list), at);
+    });
+    await this.#emit('agent.updated', row, { agentId: id, changed: ['plugins'] }, 'user');
+    await this.#auditAgent(row, 'user', 'agent.plugins', { plugins: list });
+    return list;
+  }
+
+  /** An agent with connected plugins: its threads may use only those plugins' tools. */
+  #pluginLimits(accountId: string, threadId: string): ThreadToolLimits | null {
+    const l = this.#link(threadId);
+    if (!l || l.accountId !== accountId) return null;
+    const ids = this.#pluginIds(l.agentId);
+    if (ids === null) return null;
+    return { plugins: ids, reason: 'the plugin is not connected to this agent' };
   }
 
   async #childThreads(accountId: string, threadId: string): Promise<string[]> {

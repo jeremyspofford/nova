@@ -445,6 +445,63 @@ describe('the bootstrap command', () => {
     ).toContain('no identity');
   });
 
+  it('builds the command for an https Hub, checking the hash instead of the certificate', async () => {
+    const r = await area.bootstrap(
+      'compute',
+      'ABCD-EFGH',
+      'https://hub.lan:7443',
+      FINGERPRINT,
+      PAIRING,
+    );
+    expect(r.why).toBeNull();
+    // novad gets the https Hub to verify by its pin; the download skips only the certificate check.
+    expect(r.command).toContain("'https://hub.lan:7443/api/v1/agent/dist/novad-'");
+    expect(r.command).toContain('curl -fsSLk');
+    expect(r.command).toContain('wget --no-check-certificate -qO');
+    expect(r.command).toContain('the download is not the Hub');
+    expect(r.command).toContain('--hub');
+    // A plain http Hub keeps the certificate checks off the table entirely (nothing to skip).
+    const plain = await area.bootstrap(
+      'compute',
+      'ABCD-EFGH',
+      'http://hub.lan',
+      FINGERPRINT,
+      PAIRING,
+    );
+    expect(plain.command).not.toContain('-fsSLk');
+    expect(plain.powershell ?? '').not.toContain('ServerCertificateValidationCallback');
+  });
+
+  it('puts PowerShell 5.1’s certificate callback back after the https download', async () => {
+    const r = await area.bootstrap(
+      'compute',
+      'ABCD-EFGH',
+      'https://hub.lan:7443',
+      FINGERPRINT,
+      PAIRING,
+    );
+    const ps = r.powershell!;
+    const at = (s: string) => {
+      const i = ps.indexOf(s);
+      expect(i, s).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    // Saved first, switched off only inside try, around the download, restored in finally.
+    const save = at('$cb = [Net.ServicePointManager]::ServerCertificateValidationCallback');
+    const tryAt = at(
+      'try { if ($set) { [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true } }',
+    );
+    const download = at('Invoke-WebRequest @k');
+    const restore = at(
+      'finally { if ($set) { [Net.ServicePointManager]::ServerCertificateValidationCallback = $cb } }',
+    );
+    expect(save < tryAt && tryAt < download && download < restore).toBe(true);
+    // Nowhere else is it set, and the hash check comes after the restore.
+    expect(ps.split('ServerCertificateValidationCallback = { $true }')).toHaveLength(2);
+    expect(at('Get-FileHash -Algorithm SHA256')).toBeGreaterThan(restore);
+    expect(ps).toContain('SkipCertificateCheck = $true');
+  });
+
   it('is null with the reason when it cannot work', async () => {
     const why = async (...a: Parameters<AgentDistArea['bootstrap']>) => {
       const r = await area.bootstrap(...a);
@@ -452,8 +509,8 @@ describe('the bootstrap command', () => {
       expect(r.powershell).toBeNull();
       return r.why ?? '';
     };
-    expect(await why('compute', 'ABCD-EFGH', 'https://hub.lan', FINGERPRINT, PAIRING)).toContain(
-      'TLS',
+    expect(await why('compute', 'ABCD-EFGH', 'ftp://hub.lan', FINGERPRINT, PAIRING)).toContain(
+      'https://',
     );
     expect(
       await why('compute', 'ABCD-EFGH', 'http://127.0.0.1:7419', FINGERPRINT, PAIRING),

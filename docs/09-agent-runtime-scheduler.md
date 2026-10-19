@@ -4,7 +4,7 @@ The agent runtime powers **Chat**, **Work** runs, **Code** sessions and **Agents
 runtime and one policy engine for every mode (ADR-076): Chat uses the same loop with chat
 defaults and can escalate into an inline Work run (§13); Code adds a coding toolset and an
 environment binding (`docs/10`). No third-party agent engine is embedded; external agents are
-reachable only through policy-routed adapters (FR-203, P2).
+reachable only through policy-routed adapters (FR-203, P2; off by default, `docs/08` §1.6).
 
 ## 1. Runtime model
 
@@ -113,6 +113,16 @@ approval waits and waits for the user's answer to `ask_user` are left out. A chi
 and usage count against its parent. After 3 failed turns in a row a run ends `failed`; a provider
 `rate_limited` or `over_budget` error pauses it with `usage_limit` and retries after 15 minutes.
 
+*As shipped in M7 (ADR-095).* **Shared threads (FR-217).** A thread its owner shares with other
+people of the Hub stays in the owner's account, but each turn runs under the account of whoever
+wrote the message: their providers, policy, approvals and audit. Nobody's memory, past chats,
+skills, user instructions, instruction files, app context or project joins the thread, and
+nothing said there becomes anyone's memory. Other participants' messages are not the acting
+person's instructions, so only a built-in allow-list of tools is offered: `web.search`,
+`artifact.create`, `document.create`, `visualize.create`, `image.generate`, `tool.search`,
+`context.remaining` and `context.fresh`. Every other tool is denied at the gate and left out of
+the listing. Members and sharing are in `docs/13` §7.
+
 ### 2.1 Goals (FR-181)
 
 A run or an agent may hold one **goal**: an objective (at most 4,000 characters) plus optional
@@ -157,8 +167,15 @@ deletes it. Quiet hours do not yet defer goal continuations. Routes: `GET`, `PUT
 one open goal per agent, optionally attached to one responsibility; `PUT` replaces the budgets, so
 omitted ones are cleared. An agent's goal runs on its main thread; continuation waits 5 s of idle
 time and the end of quiet hours, without the user's authority. A provider usage limit makes it
-`usage_limited` with no automatic retry. `GET /goals` lists runs' and agents' goals, and the
-status routes work on both. Run goals still ignore quiet hours.
+`usage_limited` with no automatic retry in M6 (M7 adds one, below). `GET /goals` lists runs' and
+agents' goals, and the status routes work on both. Run goals still ignore quiet hours.
+
+*As shipped in M7 (ADR-095).* An agent's goal stopped by a provider usage limit is retried. After
+`agents.usageRetryMinutes` (default 15, 1 to 1,440) the goal becomes `active` again and
+continues; each failed retry doubles the wait, up to 4 hours, and a goal turn that gets past the
+limit resets it. A retry that finds the agent paused or stopped looks again after the same wait.
+When the Hub starts, a retry is armed again for every `usage_limited` goal. Each retry is audited
+as `goal.usage_retry`.
 
 ## 3. Planning
 
@@ -215,6 +232,12 @@ pause and cancel with their parent; `GET /runs/:id/subagents` lists them with li
 threads. Delegation to Code sessions and agent-made schedules (`schedule.create`) are not in M5;
 `RunStarter` already lets the scheduler and chat escalation start runs, and a child run is capped
 by its parent.
+
+*As shipped in M7 (ADR-095).* A sub-agent given a tool list is held to it at the gate (FR-053):
+it may call only the listed tools (exact names or `prefix.*`) plus `run.complete`, `tool.search`,
+`context.remaining` and `context.fresh`. Any other tool is denied ("the tool is not in this
+sub-agent's tool list") and left out of its listing; calls a script makes inside the child pass
+the same limit. A list of reading tools only still selects the `read-only` profile.
 
 ## 5. Memory
 
@@ -475,8 +498,8 @@ and audited.
   plugin tools never do, and the owner's `ask` default for a server still stops research.
 - **Background threads.** `agent.delegate` starts a Work run (origin `delegation`, the agent's
   autonomy and budgets, no authority, `run.agent_id`); its result comes back as a turn in the main
-  thread unless the agent is paused. `agent.background` lists them. Delegating to a Code session is
-  not built.
+  thread unless the agent is paused. `agent.background` lists them. Delegating to a Code session
+  arrives in M7 (below).
 - **Memory (FR-089).** Notes the agent writes are untrusted and join only turns it starts itself;
   conversation memory is `memory_item` rows with scope `agent`; a shared thread sees only
   shared-origin items; turning memory off purges what the agent derived.
@@ -493,9 +516,64 @@ and audited.
   `schedule.*`, `sessions.*` and the agent `goal.*` tools are offered only in an agent's threads;
   the research thread gets only the reading ones. Tools that change only the agent's own state
   count as read-only for the gate.
-- **Not in M6.** `thread.status.changed` with `ref.kind: agent` (an agent's status is derived when
-  read), automatic retry of a goal after a usage limit, delegation to Code, and a read-only
-  declaration for plugin tools.
+- **Not in M6.** `thread.status.changed` for agent threads, automatic retry of a goal after a
+  usage limit and delegation to Code (all three arrive in M7, below), and a read-only declaration
+  for plugin tools (still not built).
+
+*As shipped in M7 (ADR-095).*
+
+- **Thread status.** `thread.status.changed` now fires for an agent's threads (`ref.kind:
+  'thread'`, §9). Pausing or resuming an agent recomputes its threads, and its research and
+  background threads count toward its main thread.
+- **Goal retry** after a provider usage limit: see §2.1.
+- **Plugins per agent** (FR-045). `GET` and `PUT /api/v1/agents/:id/plugins {pluginIds}` connect
+  up to 100 installed plugins to an agent; `null` (the default) connects every plugin the account
+  enabled, and an id that is not installed is refused with `unknown_plugin`. With a list, the gate
+  refuses in the agent's threads any tool another plugin owns (its own tools and its MCP servers'
+  tools) with "the plugin is not connected to this agent"; the limit also holds in Code sessions
+  the agent delegates. Skills of plugins that are not connected still appear in the agent's skill
+  catalog; only their tools are blocked. A change emits `agent.updated` with `changed:
+  ['plugins']` and is audited as `agent.plugins`.
+- **Delegation to Code.** `code.delegate` lets an agent start a Code session in one of the
+  account's projects, in Manual or Plan mode, under the agent's rules, budgets and plugin limits
+  and without the user's authority; the session's result returns to the agent's main thread as a
+  turn without authority. It is refused from the research thread and from shared agent threads,
+  and pausing or deleting the agent holds or archives the delegated work. See `docs/10` §10.
+
+### Team agents (FR-091)
+
+The owner can provision a specialist agent with its own identity, scoped credentials and
+responsibilities. Tasks given to it run under that agent's identity, not under a person's account.
+
+*As shipped in M7 (ADR-095; `packages/core/src/team/agents.ts`, `apps/hub/src/team.ts`).* Routes
+are under `/api/v1/team/agents` and `/api/v1/team/tasks` (`contracts/hub-api.md`).
+
+- **Identity.** Provisioning (`POST /api/v1/team/agents`, owner only) creates an account of the
+  agent's own, which never signs in, and the agent inside it. Its memory, connectors, provider
+  accounts, policy, approvals and audit belong to that identity and to no person. It starts on the
+  offline mock provider, with proactive research and conversation memory off.
+- **Credentials.** The owner binds credentials to the identity (`POST /:id/credentials`): a
+  provider account, or an egress credential the proxy injects only for this agent's computer
+  (scope `agent`). Values go to the vault; only `secret://` references are stored and shown.
+- **Tasks.** Any person of the Hub may give the agent a task (`POST /:id/tasks`, at most 8,000
+  characters). Each task runs in its own shared thread of the agent, so no requester reads
+  another's task, tools or result. The text is labelled with the requester's account id and role
+  ("A task from Hub account <id> (the member)"), never with a display name. The turn runs under
+  the agent's identity with the requester's authority (`team-task:<id>`). Task threads cannot use
+  `sessions.*`, `agent.note`, `agent.notes`, `agent.background` or `agent.delegate`. Cancelling a
+  task (`POST /api/v1/team/tasks/:id/cancel`) cancels only that task's thread. The requester gets
+  `team.task.updated` when the task starts and when it ends; a person sees their own tasks, the
+  owner sees every task.
+- **Audit.** Task starts and ends are audited in the identity's trail with actor `agent:<id>`,
+  resource `team-task:<id>` and who asked. Provisioning and credentials are audited in the owner's
+  trail and in the agent's (actor `owner:<id>`). The owner reads the agent's trail at
+  `GET /:id/audit`.
+- **Approvals and events.** The owner answers the agent's approvals through `GET /:id/approvals`
+  and `POST /:id/approvals/:approvalId`. Every event of the identity account is also copied to
+  the owner's account with `payload.teamAgent = {agentId, identityAccountId}`.
+- **Known limits.** The agent's notifications go to the identity account, which nobody watches;
+  when an approval request is copied to the owner, announcing it logs a warning, and the owner
+  answers it through the team routes.
 
 ## 9. Activity & audit
 
@@ -546,8 +624,17 @@ authenticated Nova client, never from a channel.
 - **Questions.** `ask_user {question, choices?, multiline?}` asks the user from a Work run or
   a Code session; it waits up to `policy.approvalTimeoutMinutes` (24 h). Unanswered, it ends the
   turn with stop `approval_timeout` and the run pauses; a cancelled turn withdraws the question.
-  The answer reaches the model as an ordinary, untrusted tool result: it does not yet carry the
-  user's authority for the rest of the turn.
+  In M5 the answer reached the model as an ordinary, untrusted tool result and did not carry the
+  user's authority for the rest of the turn; M7 changes this (below).
+
+*As shipped in M7 (ADR-095).*
+
+- **Answers carry authority (FR-188).** When the signed-in user answers `ask_user` from a Nova
+  client (REST or the WebSocket), the rest of that turn carries their instruction, recorded as
+  `answer:<callId>`, even in a turn that started without it. The answer reaches the model as the
+  user's own words, not inside the untrusted envelope. An answer that did not come from a Nova
+  client gives nothing.
+- **Agent threads.** `thread.status.changed` now fires for an agent's threads too (§8).
 
 ## 10. Autonomy & safety integration
 
@@ -582,6 +669,12 @@ carry the thread: run tools appear only in run threads, `work.start` only in cha
 only in Code threads, and every handler refuses calls outside its threads. Auto-review fails
 closed: under `review` with no `review.model` set, every consequential action is denied, so an
 autonomous run needs a reviewer model. The review breaker pauses the run with `review_breaker`.
+
+*As shipped in M7 (ADR-095; `packages/core/src/approvals/limits.ts`).* The gate also applies
+per-thread tool limits from every area that knows the thread: a sub-agent's tool list (§4), the
+plugins connected to an agent and a team task's thread (§8), and a shared thread's allow-list
+(§2). A limit only narrows: a tool any source refuses is denied outright, whatever rules or
+grants say, and hidden from the turn's listing, and a source that fails denies.
 
 ## 11. Context assembly
 

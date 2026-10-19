@@ -95,6 +95,7 @@ function makeHub(over: Partial<RelayHubOptions> = {}): RelayHub {
     backoff: { initialMs: 40, maxMs: 150, jitter: 0 },
     retransmitMs: 200,
     kdfIterations: ITER,
+    decidedGraceMs: 100,
     ...over,
   });
   seam = new Seam();
@@ -371,6 +372,46 @@ describe('RelayHub', () => {
     // revokeDevice on an already revoked device is a no-op.
     await hub.revokeDevice(ACCOUNT, 'dev-2');
     expect(audit.filter((a) => a.action === 'relay.revoke')).toHaveLength(1);
+  });
+
+  it('tells a pending client it was denied or expired, then drops its route (M7)', async () => {
+    await hub.start();
+    await until(() => hub.status().state === 'connected');
+    const first = await pair();
+    await until(() => seam.claims.length === 1);
+    const c1 = start(first.paired);
+    await until(() => c1.state === 'open');
+    await seam.decide(0, 'denied', null);
+    expect(await c1.waitForDecision()).toEqual({ decision: 'denied', requestId: 'req-1' });
+    // The route goes after the grace, and the client sees it revoked.
+    await until(() => !relay.state.routes.has(first.paired.clientRoute));
+    await until(() => c1.state === 'revoked');
+    const second = await pair('JKMN-PQRS');
+    await until(() => seam.claims.length === 2);
+    const c2 = start(second.paired);
+    await until(() => c2.state === 'open');
+    await seam.decide(1, 'expired', null);
+    expect(await c2.waitForDecision()).toEqual({ decision: 'expired', requestId: 'req-2' });
+    await until(() => !relay.state.routes.has(second.paired.clientRoute));
+    expect(rows().map((r) => r.status)).toEqual(['denied', 'expired']);
+  });
+
+  it('tells a refused claim it was denied, and deletes declined routes when it stops', async () => {
+    await hub.stop();
+    // A grace long enough for a client that connects right after its claim.
+    hub = makeHub({ decidedGraceMs: 60_000 });
+    await hub.start();
+    await until(() => hub.status().state === 'connected');
+    const revoked = await generateEd25519();
+    seam.revokedKeys.add(revoked.publicKey);
+    const out = await pair('QRST-2345', revoked);
+    const c = start(out.paired);
+    expect(await c.waitForDecision()).toEqual({ decision: 'denied', requestId: null });
+    expect(seam.claims).toHaveLength(0);
+    // Still in its grace: stopping deletes it at once.
+    expect(relay.state.routes.has(out.paired.clientRoute)).toBe(true);
+    await hub.stop();
+    expect(relay.state.routes.has(out.paired.clientRoute)).toBe(false);
   });
 
   it('tells the Relay what it missed when it reconnects', async () => {

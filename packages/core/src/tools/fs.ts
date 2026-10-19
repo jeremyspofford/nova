@@ -28,6 +28,16 @@ import {
   str,
   type BuiltinTool,
 } from './builtin.ts';
+import {
+  remoteDelete,
+  remoteEdit,
+  remoteFilesFor,
+  remoteList,
+  remoteRead,
+  remoteResource,
+  remoteUnavailable,
+  remoteWrite,
+} from './fs-remote.ts';
 import { PatchError, applyPatch, parsePatch } from './patch.ts';
 import {
   PathDenied,
@@ -64,10 +74,15 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
   const base = opts.paths ?? {};
   const resolve = (ctx: ToolContext, p: string, need: 'read' | 'write') =>
     resolveInRoots(ctx.roots, p, need, withDeny(base, ctx));
+  // M7: a thread whose folder is on another machine (an SSH, WSL or device session) acts there,
+  // through its transport, never on the Hub's disk at the same path (fs-remote.ts).
+  const remoteOf = (ctx: ToolContext) => remoteFilesFor(ctx.sandbox, ctx.accountId, ctx.threadId);
   const pathResource =
     (key: string, need: 'read' | 'write') =>
     (args: unknown, ctx: ToolContext): GateRequest['resource'] => {
       const p = str(argsOf(args)[key]) ?? '.';
+      const remote = remoteOf(ctx);
+      if (remote) return remoteResource(remote, p, need);
       try {
         return { kind: 'path', value: resolve(ctx, p, need).path };
       } catch {
@@ -97,12 +112,21 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
       }),
       origin: 'file',
       resource: pathResource('path', 'read'),
-      handler: (args, ctx) =>
-        guard(() => {
-          const a = argsOf(args);
+      handler: (args, ctx) => {
+        const remote = remoteOf(ctx);
+        if (remote === null) return Promise.resolve(remoteUnavailable());
+        const a = argsOf(args);
+        if (remote)
+          return remoteRead(
+            remote,
+            { path: str(a.path) ?? '', startLine: num(a.startLine), endLine: num(a.endLine) },
+            { maxBytes: MAX_READ_BYTES, maxChars: MAX_READ_CHARS },
+          );
+        return guard(() => {
           const p = resolve(ctx, str(a.path) ?? '', 'read');
           return readText(ctx.roots, p, num(a.startLine), num(a.endLine));
-        }),
+        });
+      },
     },
     {
       descriptor: builtinDescriptor({
@@ -123,12 +147,21 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
       }),
       origin: 'file',
       resource: pathResource('path', 'read'),
-      handler: (args, ctx) =>
-        guard(() => {
-          const a = argsOf(args);
+      handler: (args, ctx) => {
+        const remote = remoteOf(ctx);
+        if (remote === null) return Promise.resolve(remoteUnavailable());
+        const a = argsOf(args);
+        if (remote)
+          return remoteList(
+            remote,
+            { path: str(a.path) ?? '.', depth: Math.min(Math.max(num(a.depth) ?? 1, 1), 3) },
+            MAX_LIST_ENTRIES,
+          );
+        return guard(() => {
           const p = resolve(ctx, str(a.path) ?? '.', 'read');
           return listFolder(ctx.roots, p, num(a.depth) ?? 1);
-        }),
+        });
+      },
     },
     {
       descriptor: builtinDescriptor({
@@ -154,8 +187,16 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
       }),
       origin: 'file',
       resource: pathResource('path', 'read'),
-      handler: (args, ctx) =>
-        guard(() => {
+      handler: (args, ctx) => {
+        // Not routed to another machine: the gate hides it there; exec.run with grep searches.
+        if (remoteOf(ctx) !== undefined)
+          return Promise.resolve(
+            fail(
+              'not_available',
+              'fs.search does not reach a session folder on another machine; use exec.run with grep',
+            ),
+          );
+        return guard(() => {
           const a = argsOf(args);
           const start = str(a.path);
           const bases = start
@@ -168,7 +209,8 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
             glob: str(a.glob) ?? null,
             max: num(a.maxResults) ?? 50,
           });
-        }),
+        });
+      },
     },
     {
       descriptor: builtinDescriptor({
@@ -191,8 +233,18 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
       }),
       origin: 'tool',
       resource: pathResource('path', 'write'),
-      handler: (args, ctx) =>
-        guard(() => {
+      handler: (args, ctx) => {
+        const remote = remoteOf(ctx);
+        if (remote === null) return Promise.resolve(remoteUnavailable());
+        if (remote) {
+          const a = argsOf(args);
+          return remoteWrite(
+            remote,
+            { path: str(a.path) ?? '', content: str(a.content) ?? '' },
+            MAX_WRITE_BYTES,
+          );
+        }
+        return guard(() => {
           const a = argsOf(args);
           const content = str(a.content) ?? '';
           if (Buffer.byteLength(content) > MAX_WRITE_BYTES)
@@ -216,7 +268,8 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
             sha256Before: before,
             sha256After: sha256(content),
           });
-        }),
+        });
+      },
     },
     {
       descriptor: builtinDescriptor({
@@ -245,13 +298,18 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
         try {
           const first = parsePatch(str(argsOf(args).patch) ?? '')[0];
           if (!first) return undefined;
+          const remote = remoteOf(ctx);
+          if (remote) return remoteResource(remote, first.path, 'write');
           return { kind: 'path', value: resolve(ctx, first.path, 'write').path };
         } catch {
           return undefined;
         }
       },
-      handler: (args, ctx) =>
-        guard(() => {
+      handler: (args, ctx) => {
+        const remote = remoteOf(ctx);
+        if (remote === null) return Promise.resolve(remoteUnavailable());
+        if (remote) return remoteEdit(remote, str(argsOf(args).patch) ?? '', MAX_WRITE_BYTES);
+        return guard(() => {
           try {
             const sections = parsePatch(str(argsOf(args).patch) ?? '');
             const files = applyPatch(sections, (p) => resolve(ctx, p, 'write').path);
@@ -267,7 +325,8 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
             if (err instanceof PatchError) return fail(err.code, err.message, err.details);
             throw err;
           }
-        }),
+        });
+      },
     },
     {
       descriptor: builtinDescriptor({
@@ -290,9 +349,13 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
       }),
       origin: 'tool',
       resource: pathResource('path', 'write'),
-      handler: (args, ctx) =>
-        guard(() => {
-          const a = argsOf(args);
+      handler: (args, ctx) => {
+        const remote = remoteOf(ctx);
+        if (remote === null) return Promise.resolve(remoteUnavailable());
+        const a = argsOf(args);
+        if (remote)
+          return remoteDelete(remote, { path: str(a.path) ?? '', recursive: a.recursive === true });
+        return guard(() => {
           const p = resolve(ctx, str(a.path) ?? '', 'write');
           const shown = displayPath(ctx.roots, p);
           if (!p.rel) return fail('invalid_path', 'an allowed folder itself cannot be deleted');
@@ -307,7 +370,8 @@ export function fsTools(opts: FsToolOptions = {}): BuiltinTool[] {
           }
           rmSync(p.path, { recursive: st.isDirectory(), force: true });
           return ok(`Deleted ${shown}.`, { path: shown, folder: st.isDirectory() });
-        }),
+        });
+      },
     },
   ];
 }

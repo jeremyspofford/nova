@@ -11,6 +11,7 @@ import {
   MemoryEventSink,
   SlackAdapter,
   TeamsAdapter,
+  TelegramAdapter,
   WebhookAdapter,
   type AuditRecord,
   type ChannelServiceOptions,
@@ -173,6 +174,10 @@ export interface ServiceEnv {
 
 export interface ServiceEnvOptions {
   slackApi?: string;
+  /** M7: the mock Telegram Bot API, the public address approval links use, attachments' home. */
+  telegramApi?: string;
+  publicBase?: string;
+  dataDir?: string;
   teams?: { verifier: TeamsTokenVerifier; tokenUrl: string };
   webhookTransport?: WebhookTransport;
   extra?: Partial<ChannelServiceOptions>;
@@ -220,9 +225,24 @@ export async function serviceEnv(opts: ServiceEnvOptions = {}): Promise<ServiceE
         ...(opts.webhookTransport ? { transport: opts.webhookTransport } : {}),
         now: clock.now,
       }),
-      email: new EmailAdapter(),
+      email: new EmailAdapter({ credentials, now: clock.now }),
+      ...(opts.telegramApi
+        ? {
+            telegram: new TelegramAdapter({
+              credentials,
+              apiBase: opts.telegramApi,
+              now: clock.now,
+              webhookUrl: (id) =>
+                Promise.resolve(
+                  opts.publicBase ? `${opts.publicBase}/api/v1/channels/${id}/inbound` : null,
+                ),
+            }),
+          }
+        : {}),
       inapp: new InAppAdapter({ now: clock.now }),
     }),
+    ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
+    ...(opts.publicBase ? { publicBase: () => Promise.resolve(opts.publicBase!) } : {}),
     ...opts.extra,
   });
   const turns = new FakeTurns();

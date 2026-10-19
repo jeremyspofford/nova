@@ -33,6 +33,7 @@ import {
   browserDevServerGrant,
   browserDevServerOpener,
   detectLocalServers,
+  isHubOwner,
   threadSandboxRouter,
   type ChatServiceOptions,
   type ModelRouter,
@@ -69,6 +70,12 @@ import { setupAgentDist } from './agent-dist.ts';
 import { setupNetwork, type NetworkArea } from './network.ts';
 import { setupNetworkSetup } from './network-setup.ts';
 import { setupRelay, type RelayArea, type RelayDeps } from './relay.ts';
+import { setupSync } from './sync.ts';
+import { setupCloudRun } from './cloudrun.ts';
+import { setupPush } from './push.ts';
+import { setupTeam, type TeamArea, type TeamDeps } from './team.ts';
+import { setupFlagged } from './flagged.ts';
+import { setupDeviceTrust } from './device-trust.ts';
 import { setupTrust, type TrustArea } from './trust.ts';
 import { setupScreen } from './screen.ts';
 import { setupSpaces } from './spaces.ts';
@@ -76,7 +83,7 @@ import { setupRequests } from './requests.ts';
 import { setupRuns } from './runs.ts';
 import { setupSchedules } from './schedules.ts';
 import { DiagnosticsRegistry, type HubContext } from './hub-context.ts';
-import { setupMcp } from './mcp.ts';
+import { deviceBridgeFrom, setupMcp } from './mcp.ts';
 import { registerNodeRoutes } from './node-routes.ts';
 import { setupOps } from './ops.ts';
 import { setupPolicy } from './policy.ts';
@@ -113,6 +120,8 @@ export interface HubDeps {
   sweepIntervalMs?: number;
   /** Relay connector timings and the pairing key-derivation cost (tests shorten them). */
   relay?: Pick<RelayDeps, 'backoff' | 'retransmitMs' | 'pingIntervalMs' | 'kdfIterations'>;
+  /** Members' rate limits, the OIDC provider's fetch and a clock (tests). */
+  team?: Pick<TeamDeps, 'fetch' | 'now' | 'limits'>;
   /** Replace the model router (tests); the default is the full Router (docs/07 §8-§9). */
   router?: (registry: ProviderRegistry) => ModelRouter;
   /** Probe for local model servers (tests replace it; docs/07 §12). */
@@ -139,22 +148,27 @@ export interface Hub {
   network: NetworkArea;
   /** M6.5 Relay connector (FR-137). */
   relay: RelayArea;
+  /** M7 members, shared threads and team agents (FR-217, FR-091). */
+  team: TeamArea;
 }
 
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self'",
-  "img-src 'self' data: blob:",
-  "font-src 'self'",
-  "connect-src 'self'",
-  "worker-src 'self'",
-  "manifest-src 'self'",
-  "frame-ancestors 'none'",
-  "base-uri 'none'",
-  "form-action 'self'",
-  "object-src 'none'",
-].join('; ');
+/** The web app's policy; `connect` adds the Relay's origins when it is on (docs/22 §3). */
+function contentSecurityPolicy(connect: readonly string[]): string {
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self' data: blob:",
+    "font-src 'self'",
+    ["connect-src 'self'", ...connect].join(' '),
+    "worker-src 'self'",
+    "manifest-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ].join('; ');
+}
 
 export async function buildHub(deps: HubDeps): Promise<Hub> {
   const { config, db, log } = deps;
@@ -203,7 +217,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     events,
     defaultModel: () => setting('chat.defaultModel'),
   });
-  const projects = new ProjectService({ db });
+  const projects = new ProjectService({ db, events });
   const sources = new SourceService({ db, events, dataDir, log: log.child('sources') });
   const memory = new MemoryService({
     db,
@@ -290,6 +304,10 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     audit: ops.audit,
     // A Slack-compatible API elsewhere (a test double, a proxy); Slack's own API otherwise.
     ...(process.env.NOVA_SLACK_API_BASE ? { slackApiBase: process.env.NOVA_SLACK_API_BASE } : {}),
+    // The Telegram Bot API elsewhere (a test double); Telegram's own API otherwise (M7).
+    ...(process.env.NOVA_TELEGRAM_API_BASE
+      ? { telegramApiBase: process.env.NOVA_TELEGRAM_API_BASE }
+      : {}),
   });
   const agents = await setupAgents({ ...ctx, audit: ops.audit, notifier: ops.notifier });
   const browser = await setupBrowser(ctx, {
@@ -393,11 +411,31 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       await writeSetting(null, { key: 'relay.enabled', value: enabled, scope: 'global' });
     },
   });
+  // M7 push (FR-111): Web Push from the Hub, native apps through the Relay; the notification
+  // routing's OS leg sends redacted payloads (docs/13 §6).
+  const push = await setupPush(ctx, { audit: ops.audit });
+  push.useRelay(relay.hub);
+  channels.usePush(push.leg);
+  channels.useNotifier(ops.notifier);
+  // M7 device trust (FR-126): device and node routes check the certificate a device presents.
+  const deviceTrust = await setupDeviceTrust(ctx, {
+    verifyDeviceCertificate: (pem) => trust.verifyDeviceCertificate(pem),
+    audit: ops.audit,
+  });
+  // M7 cloud runner (FR-108, FR-071): a cloud environment's commands and files run on the runner.
+  const cloudrun = await setupCloudRun(ctx, { audit: ops.audit, notifier: ops.notifier });
+  code.service.envs.useCloud(cloudrun.provider);
+  code.service.useEnvironmentTransport('cloud', cloudrun.transportFor);
+  cloudrun.useRuns(runs.service);
+  // M7 flagged features (FR-202, FR-203): off by default; their tools join the tools area.
+  const flagged = await setupFlagged(ctx, { audit: ops.audit });
   const spaces = await setupSpaces(ctx, { audit: ops.audit });
   // A Code session on another machine runs its commands there (FR-062); every other command
   // goes through the computers area's router.
-  const sandbox = threadSandboxRouter(computers.router(computers.sandbox), (accountId, threadId) =>
-    code.sandboxForThread(accountId, threadId),
+  const sandbox = threadSandboxRouter(
+    computers.router(computers.sandbox),
+    (accountId, threadId) =>
+      code.sandboxForThread(accountId, threadId) ?? cloudrun.sandboxForThread(accountId, threadId),
   );
   // The apps area exists after the tools; the chat loop reads its model context late-bound.
   let mcpApps: Awaited<ReturnType<typeof setupMcpApps>> | null = null;
@@ -419,6 +457,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       // An agent's tools for the files of its connected computer (FR-081, FR-210).
       devices.tools,
       browser.tools,
+      flagged.tools,
       // Computer use goes last (its tools defer to the browser's and the shell's).
       screen.tools,
     ],
@@ -442,12 +481,70 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       return c?.roots ? { ...p, roots: c.roots } : p;
     },
   };
-  for (const source of [code.policy, runs.policy, agentThreads]) {
-    policy.useThreadPolicy(source);
-    tools.useThreadPolicy(source);
+  // M7 members and team agents (FR-217, FR-091): each source is scoped to the thread's people,
+  // and the team's own fallback goes last. A cloud Work run's policy wraps the runs' one.
+  const team = await setupTeam(ctx, {
+    auth,
+    audit: ops.audit,
+    sessionCookie: SESSION_COOKIE,
+    approvals: policy.approvals,
+    ...deps.team,
+  });
+  // A removed member's live connections end at once (decision 5): their open sockets and event
+  // streams close, and their MCP servers disconnect.
+  const liveByAccount = new Map<string, Set<() => void>>();
+  const holdLive = (accountId: string, end: () => void) => {
+    const set = liveByAccount.get(accountId) ?? new Set<() => void>();
+    set.add(end);
+    liveByAccount.set(accountId, set);
+    return () => {
+      set.delete(end);
+      if (!set.size) liveByAccount.delete(accountId);
+    };
+  };
+  team.onMemberRemoved(async (accountId) => {
+    for (const end of [...(liveByAccount.get(accountId) ?? [])]) end();
+    for (const st of mcp.manager.states(accountId)) await mcp.manager.remove(st.id);
+  });
+  // A Code session on another machine gives the tool runtime no root on the Hub's disk (mentions,
+  // instruction files, hooks and the file browser), while the gate keeps the remote folder as its
+  // root: its file tools reach that folder through the session's helper (ADR-095).
+  for (const source of [code.policy, cloudrun.workPolicy(runs.policy), agentThreads]) {
+    policy.useThreadPolicy(team.scoped(source));
+    tools.useThreadPolicy(team.scoped(source === code.policy ? code.toolPolicy : source));
   }
+  const fallback = team.scoped();
+  policy.useThreadPolicy(fallback);
+  tools.useThreadPolicy(fallback);
+  policy.gate.useToolLimits(team.toolLimits);
+  policy.gate.useToolLimits(runs.service.toolLimits);
+  policy.gate.useToolLimits(agents.service.toolLimits);
+  // An agent's plugin limits follow it into the Code sessions it delegated (M7).
+  policy.gate.useToolLimits(code.delegatedToolLimits(agents.service.toolLimits));
+  requests.status.useLinks(agents.service.statusLinks);
+  team.useAgents(agents.service);
+  flagged.useRuntime(tools.runtime);
+  flagged.useGate(policy.gate);
+  // An external agent runs in the session's own sandbox (refused where it has none, M7).
+  flagged.useSandbox(
+    () => sandbox,
+    (accountId, threadId) => code.sandboxForThread(accountId, threadId),
+  );
+  // MCP servers hosted on a device run there, through novad (FR-042).
+  mcp.useDeviceBridge(deviceBridgeFrom(devices.service));
   // An agent's rules join the policy set of its threads (FR-084).
-  policy.useAgentPolicy(agents.agentPolicy);
+  // A Code session an agent delegated keeps the agent's rules (M7).
+  // The cloud runner adds its rules (no Hub file tools in cloud threads, M7).
+  policy.useAgentPolicy(cloudrun.toolRules(code.delegatedRules(agents.agentPolicy)));
+  code.useAgents({
+    agentOf: async (accountId, threadId) => {
+      const l = await agents.service.agentOfThread(accountId, threadId);
+      return l ? { agentId: l.agentId, kind: l.kind, audience: l.audience } : null;
+    },
+    mainThread: (accountId, agentId) => agents.service.mainThreadOf(accountId, agentId),
+    budgets: async (accountId, agentId) => (await agents.service.get(accountId, agentId)).budgets,
+    isActive: (accountId, agentId) => agents.service.isActive(accountId, agentId),
+  });
   requests.useStatusSources(runs.status, code.status, agents.status);
   agents.useStatus((accountId, ids) => requests.status.statusOf(accountId, ids));
   runs.useStatus((accountId, ids) => requests.status.statusOf(accountId, ids));
@@ -460,14 +557,24 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   ops.useDiagnosticTests({ mcp: mcp.manager, sandbox: () => tools.sandbox });
   // The gate previews and classifies with the tools' own descriptors and the sandbox in use.
   policy.useToolCatalog(tools.catalog);
-  policy.useSubstrate(() => tools.substrate());
+  // A thread's own sandbox decides its isolation (a cloud thread's is the runner's, M7).
+  policy.useSubstrate((accountId, threadId) => sandbox.substrateFor(accountId, threadId));
   hooks.useSandbox(tools.sandbox);
   hooks.useMcp(mcp.manager);
   const scope: ToolRuntimeOptions['scope'] = (input) =>
     tools.runtime.scopeFor(input.accountId, input.threadId, input.projectId);
   hooks.useScope(scope);
   const consolidation = await setupConsolidation({ ...ctx, memory });
-  const mcpServer = await setupMcpServer({ ...ctx, audit: ops.audit, gate: policy.gate, tools });
+  const mcpServer = await setupMcpServer({
+    ...ctx,
+    audit: ops.audit,
+    gate: policy.gate,
+    tools,
+    skills: {
+      list: (accountId) => plugins.index.list(accountId, null),
+      resolve: (accountId, name) => plugins.skills.resolve(accountId, null, name),
+    },
+  });
   const apps = await setupMcpApps({ ...ctx, mcp });
   mcpApps = apps;
   apps.usePlugins({
@@ -536,6 +643,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   );
   schedules.useChannel('slack', channels.delivery.slack);
   schedules.useChannel('teams', channels.delivery.teams);
+  schedules.useChannel('email', channels.delivery.email);
   ops.useNotificationRouting(channels.routing);
   // Computers: the browser and the desktop of each computer, and devices as local hosts.
   computers.useBrowser(browser.service.browserFactory());
@@ -622,7 +730,24 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     },
   });
   spaces.useAudit(ops.audit);
+  // M7 sync (FR-109, FR-129): the Hub's change feed for device replicas, and idempotent writes.
+  const sync = await setupSync(ctx, {
+    audit: ops.audit,
+    services: {
+      projects,
+      memory,
+      spaces: spaces.spaces,
+      schedules: schedules.service,
+      setting: (accountId, key, value) => writeSetting(accountId, { key, value, scope: 'global' }),
+    },
+  });
   const areas = [
+    sync,
+    cloudrun,
+    push,
+    team,
+    flagged,
+    deviceTrust,
     trust,
     network,
     networkSetup,
@@ -669,7 +794,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     ...tools.chatOptions,
     ...tools.loopOptions,
     // Runs, Code sessions and agents shape each turn on their threads (docs/09 §2, §8, §11).
-    extensions: [runs.extension, code.extension, agents.extension],
+    extensions: [runs.extension, code.extension, agents.extension, cloudrun.extension],
     ...deps.chat,
   });
   // Runs, Code sessions, agents, channels and schedules start turns through the same loop
@@ -678,6 +803,10 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   code.useTurns(chat.turnStarter);
   agents.useTurns(chat.turnStarter);
   channels.useTurns(chat.turnStarter);
+  chat.useAccess(team.access);
+  team.useChat(chat);
+  // Offline user messages can ask for their reply once the device is back (FR-112, M7).
+  sync.useChat(chat);
   // Time spent waiting for the user's answer does not count against a run's time budget.
   events.bus.subscribe('request.*', (e) => {
     const threadId = e.correlation?.threadId;
@@ -769,10 +898,15 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Cross-Origin-Opener-Policy', 'same-origin');
     reply.header('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(), usb=()');
-    reply.header('Content-Security-Policy', CSP);
+    reply.header('Content-Security-Policy', contentSecurityPolicy(relay.connectOrigins()));
     guardHostAndOrigin(req, config, publicHosts);
     req.principal = await authenticate(req, auth);
   });
+  // A request queued offline and sent again carries the same Idempotency-Key: its first answer is
+  // replayed and its effect never repeated (FR-112, ADR-095).
+  app.addHook('preHandler', sync.idempotency.preHandler);
+  app.addHook('onSend', sync.idempotency.onSend);
+  app.addHook('onResponse', sync.idempotency.onResponse);
 
   app.addHook('onResponse', (req, reply, done) => {
     log.info('request', {
@@ -888,8 +1022,16 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
 
   app.get('/api/v1/session', async (req) => {
     const p = requireAuth(req);
-    const owner = await auth.ownerAccount();
-    return { accountId: p.accountId, displayName: owner?.displayName ?? null, kind: p.kind };
+    const account = p.accountId ? await auth.account(p.accountId) : null;
+    return {
+      accountId: p.accountId,
+      displayName: account?.displayName ?? null,
+      kind: p.kind,
+      // A device session (Add Device) names its device and scopes; the owner's own browser not.
+      deviceId: p.deviceId ?? null,
+      scopes: p.scopes ?? null,
+      role: p.accountId ? team.roleOf(p.accountId) : null,
+    };
   });
 
   // ---- settings (docs/14 §1) --------------------------------------------------------------
@@ -969,7 +1111,13 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
         limit: z.coerce.number().int().min(1).max(500).default(100),
       })
       .parse(req.query);
-    return { events: await events.since(q.after ?? null, q.limit, { accountId }) };
+    // Account-less (system) events are the owner's (M7 identity review, finding 9).
+    return {
+      events: await events.since(q.after ?? null, q.limit, {
+        accountId,
+        systemEvents: isHubOwner(db, accountId),
+      }),
+    };
   });
 
   app.get('/api/v1/events/stream', async (req, reply) => {
@@ -979,19 +1127,31 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       (req.headers['last-event-id'] as string | undefined) ??
       (req.query as { after?: string }).after ??
       null;
+    const owner = isHubOwner(db, accountId);
     return openStream(
       req,
       reply,
-      { events, trackStream },
-      // Only this account's events (and account-less system events) reach the client.
-      (e) => !e.accountId || e.accountId === accountId,
+      {
+        events,
+        // Closed with the account when its member is removed.
+        trackStream: (end) => {
+          const a = trackStream(end);
+          const b = holdLive(accountId, end);
+          return () => {
+            a();
+            b();
+          };
+        },
+      },
+      // Only this account's events reach the client; account-less system events only the owner.
+      (e) => e.accountId === accountId || (!e.accountId && owner),
       // Like the thread stream: replay only after a cursor; without one, live events only
       // (contracts/hub-api.md §5), so a fresh client never receives old history.
       async (send) => {
         if (!lastId) return;
         let cursor: string = lastId;
         for (;;) {
-          const page = await events.since(cursor, 500, { accountId });
+          const page = await events.since(cursor, 500, { accountId, systemEvents: owner });
           for (const e of page) send(e);
           if (page.length < 500) break;
           cursor = page.at(-1)!.id;
@@ -1046,10 +1206,13 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       }
       socket.send(JSON.stringify({ type: 'hello', version: config.version }));
       const send = (frame: Record<string, unknown>) => socket.send(JSON.stringify(frame));
-      // Only this account's events (and account-less system events) reach the socket.
+      const owner = isHubOwner(db, accountId);
+      // Only this account's events reach the socket; account-less system events only the owner.
       const off = events.bus.subscribe('*', (e) => {
-        if (!e.accountId || e.accountId === accountId) send({ type: 'event', event: e });
+        if (e.accountId === accountId || (!e.accountId && owner)) send({ type: 'event', event: e });
       });
+      // A removed member's socket closes at once.
+      const release = holdLive(accountId, () => socket.close(4401, 'account_closed'));
       // Server-to-client requests for the kinds the client declared (FR-188).
       const q = req.query as { clientSessionId?: string };
       const conn = requests.attachClient({
@@ -1072,6 +1235,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       });
       socket.on('close', () => {
         off();
+        release();
         conn.detach();
       });
     });
@@ -1118,6 +1282,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     trust,
     network,
     relay,
+    team,
   };
 }
 

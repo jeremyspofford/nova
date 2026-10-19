@@ -39,6 +39,7 @@
     "@nova/compute": "^0.0.0",
     "@nova/relay": "^0.0.0",
     "@nova/relay-service": "^0.0.0",
+    "@nova/runner-service": "^0.0.0",
     "@types/ws": "^8.18.2"
   }
 }

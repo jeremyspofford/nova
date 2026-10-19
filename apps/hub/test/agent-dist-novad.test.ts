@@ -175,6 +175,12 @@ function install(
   });
 }
 
+// CI sets NOVA_REQUIRE_NOVAD=1 so a missing or outdated binary fails the run instead of
+// skipping these tests unnoticed.
+it.runIf(process.env.NOVA_REQUIRE_NOVAD === '1')('has a runnable novad binary', () => {
+  expect(runnable, BIN).toBe(true);
+});
+
 describe.skipIf(!runnable)('novad install from the signed dist folder', () => {
   beforeAll(async () => {
     dir = realpathSync(mkdtempSync(join(tmpdir(), 'nova-novad-install-')));

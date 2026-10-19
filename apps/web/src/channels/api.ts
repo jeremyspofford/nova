@@ -1,14 +1,15 @@
-// Hub client calls for channels (FR-088, docs/13 §4), event triggers (FR-056, docs/09 §7), MCP
-// event subscriptions (FR-201) and notification routing with quiet hours (FR-060), in the
+// Hub client calls for channels (FR-088, FR-110, docs/13 §4), event triggers (FR-056, docs/09
+// §7), MCP event subscriptions (FR-201) and notification routing with quiet hours (FR-060), in the
 // conventions of src/api.ts. `createApi` spreads `channelsApi(call)` into the client, so `Api`
 // includes these; until then `useChannelsApi` reads them from the same services object. Secrets
-// are write-only: requests carry them, views only say whether one is set.
+// are write-only: requests carry them, views only say whether one is set. Since M7 the bindings
+// may be Telegram or email (FR-110); the M7 calls are in api-m7.ts.
 import type { z } from 'zod';
 import type {
   AgentView,
-  ChannelAdapterView,
-  ChannelBindingView,
-  ChannelIdentityView,
+  ChannelAdapterViewM7,
+  ChannelBindingViewM7,
+  ChannelIdentityViewM7,
   McpEventSourceView,
   McpSubscriptionView,
   NotificationKind,
@@ -16,9 +17,10 @@ import type {
   QuietHoursView,
   TriggerEventView,
   TriggerView,
-  channelIdentitySchema,
+  channelIdentityM7Schema,
   channelTestSchema,
-  createChannelBindingSchema,
+  channelUpdateConfirmSchema,
+  createChannelBindingM7Schema,
   createMcpSubscriptionSchema,
   createTriggerSchema,
   notificationRuleSchema,
@@ -47,31 +49,41 @@ export function channelsApi(call: HubCall) {
     // ---- M6: channel bindings (FR-088) ---------------------------------------------------------
     /** Bindings plus which kinds this Hub can bind (`adapters`). */
     listChannels: (q: { agentId?: string } = {}) =>
-      call<{ items: ChannelBindingView[]; adapters: ChannelAdapterView[] }>(
+      call<{ items: ChannelBindingViewM7[]; adapters: ChannelAdapterViewM7[] }>(
         'GET',
         `${V1}/channels${q.agentId ? `?agentId=${enc(q.agentId)}` : ''}`,
       ),
-    /** 409 `conflict` when the conversation is already bound; 400 when a kind is unavailable. */
-    createChannel: (body: z.input<typeof createChannelBindingSchema>) =>
-      call<ChannelBindingView>('POST', `${V1}/channels`, body),
-    getChannel: (id: string) => call<ChannelBindingView>('GET', channel(id)),
-    /** Credentials are replaced by name; values are never returned. */
-    updateChannel: (id: string, body: z.input<typeof updateChannelBindingSchema>) =>
-      call<ChannelBindingView>('PATCH', channel(id), body),
+    /**
+     * 409 `conflict` when the conversation is already bound; 400 when a kind is unavailable, an
+     * email binding lacks its mailbox, or a mailbox server would be reached without TLS.
+     */
+    createChannel: (body: z.input<typeof createChannelBindingM7Schema>) =>
+      call<ChannelBindingViewM7>('POST', `${V1}/channels`, body),
+    getChannel: (id: string) => call<ChannelBindingViewM7>('GET', channel(id)),
+    /**
+     * Credentials are replaced by name; values are never returned. Turning an email binding's
+     * sender check off (`config.senderCheck: none`) needs `confirmSenderCheckNone: true`, else
+     * 400 `validation` with reason `confirm_required`.
+     */
+    updateChannel: (
+      id: string,
+      body: z.input<typeof updateChannelBindingSchema> & z.input<typeof channelUpdateConfirmSchema>,
+    ) => call<ChannelBindingViewM7>('PATCH', channel(id), body),
     deleteChannel: (id: string) => call<{ ok: true }>('DELETE', channel(id)),
     /** Connecting probes the credentials; a problem shows as `statusDetail`. */
-    connectChannel: (id: string) => call<ChannelBindingView>('POST', `${channel(id)}/connect`, {}),
+    connectChannel: (id: string) =>
+      call<ChannelBindingViewM7>('POST', `${channel(id)}/connect`, {}),
     /** Stops messages both ways at once and cancels the turns the channel started. */
     disconnectChannel: (id: string) =>
-      call<ChannelBindingView>('POST', `${channel(id)}/disconnect`, {}),
+      call<ChannelBindingViewM7>('POST', `${channel(id)}/disconnect`, {}),
     /** Sends a test message to the conversation; 409 `conflict` while disconnected. */
     testChannel: (id: string, body: z.input<typeof channelTestSchema> = {}) =>
       call<{ receipt: ChannelReceiptView }>('POST', `${channel(id)}/test`, body),
     listChannelIdentities: () =>
-      call<{ items: ChannelIdentityView[] }>('GET', `${V1}/channel-identities`),
+      call<{ items: ChannelIdentityViewM7[] }>('GET', `${V1}/channel-identities`),
     /** Adds or updates (same kind and external id) a mapped person. */
-    addChannelIdentity: (body: z.input<typeof channelIdentitySchema>) =>
-      call<ChannelIdentityView>('POST', `${V1}/channel-identities`, body),
+    addChannelIdentity: (body: z.input<typeof channelIdentityM7Schema>) =>
+      call<ChannelIdentityViewM7>('POST', `${V1}/channel-identities`, body),
     removeChannelIdentity: (id: string) =>
       call<{ ok: true }>('DELETE', `${V1}/channel-identities/${enc(id)}`),
     /** The agents a binding or trigger can belong to (GET /agents). */

@@ -1,0 +1,197 @@
+/* M7 Code: handoff moves, merges with their three sides, best-of-N attempts side by side, SSH host
+   keys (docs/10 §9, §15; docs/04 §4, §4.3). Colors, spacing and type come only from design
+   tokens. */
+.cm7-pane {
+  display: grid;
+  align-content: start;
+  gap: var(--u-space-3);
+  padding: var(--u-space-3);
+  min-width: 0;
+}
+.cm7-pane-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--u-space-2) var(--u-space-3);
+}
+.cm7-pane-head > p {
+  flex: 1 1 18rem;
+}
+.cm7-list {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cm7-row {
+  display: grid;
+  gap: var(--u-space-1);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+  min-width: 0;
+}
+.cm7-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1) var(--u-space-2);
+  min-width: 0;
+}
+.cm7-move {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1);
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.cm7-why {
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+.cm7-form {
+  min-width: 0;
+}
+.cm7-detail {
+  display: grid;
+  gap: var(--u-space-3);
+  margin-top: var(--u-space-2);
+  min-width: 0;
+}
+
+/* merges */
+.cm7-files {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--u-text-sm);
+}
+.cm7-files > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1) var(--u-space-2);
+}
+.cm7-files > li[data-conflict] .nv-icon {
+  color: var(--u-danger);
+}
+.cm7-threeway {
+  display: grid;
+  gap: var(--u-space-2);
+  padding-top: var(--u-space-2);
+  border-top: 1px solid var(--u-border);
+}
+.cm7-file-title {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.cm7-sides {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--u-space-2);
+}
+.cm7-side {
+  display: grid;
+  align-content: start;
+  gap: var(--u-space-1);
+  min-width: 0;
+}
+.cm7-side-label {
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cm7-side .cl-pre {
+  max-height: 14rem;
+}
+
+/* attempts, side by side; scrolls sideways inside its box instead of widening the pane */
+.cm7-compare {
+  display: grid;
+  grid-template-columns: repeat(var(--cm7-n, 2), minmax(220px, 1fr));
+  gap: var(--u-space-2);
+  overflow-x: auto;
+  padding-bottom: var(--u-space-1);
+}
+.cm7-attempt {
+  display: grid;
+  align-content: start;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface-2);
+  min-width: 0;
+}
+.cm7-attempt[data-chosen] {
+  border: 2px solid var(--u-success);
+}
+.cm7-attempt-title {
+  margin: 0;
+  font-size: var(--u-text-md);
+}
+.cm7-attempt-facts {
+  display: grid;
+  gap: var(--u-space-1);
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.cm7-attempt-facts > div {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: var(--u-space-2);
+}
+.cm7-attempt-facts dt {
+  color: var(--u-text-muted);
+}
+.cm7-attempt-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cm7-attempt-files {
+  display: grid;
+  gap: 2px;
+  max-height: 10rem;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  font-size: var(--u-text-sm);
+  list-style: none;
+}
+
+/* SSH host keys in an environment row */
+.cm7-hostkey {
+  display: grid;
+  gap: var(--u-space-1);
+  flex-basis: 100%;
+  min-width: 0;
+}
+.cm7-hostkey-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--u-space-1);
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+
+@media (max-width: 640px) {
+  .cm7-sides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cm7-compare {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.cm7-attempt > .code-badge {
+  justify-self: start;
+}

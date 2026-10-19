@@ -39,6 +39,11 @@ export interface BuiltinTool extends ToolDefinition {
   origin: Origin | null;
   /** The resource a call touches, for the gate (paths, hosts). */
   resource?: (args: unknown, ctx: ToolContext) => GateRequest['resource'] | undefined;
+  /**
+   * What an approval card shows besides the arguments (M7: a staged device write's diff). The
+   * runtime adds it to the gate's preview, which the gate redacts and bounds.
+   */
+  approvalDetail?: (args: unknown, ctx: ToolContext) => Promise<string | null>;
 }
 
 export function isBuiltinTool(t: ToolDefinition): t is BuiltinTool {

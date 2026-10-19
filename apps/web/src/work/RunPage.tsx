@@ -31,6 +31,8 @@ import { ResultCard, SubagentList } from './ResultCard.tsx';
 import { RunConversation } from './RunConversation.tsx';
 import '../workspace.css';
 import './work.css';
+import { OpenInWindowButton } from '../shellbridge/OpenInWindow.tsx';
+import { ThreadCloudRun } from '../cloud/ThreadCloudRun.tsx';
 
 /** Events after which the trace has new lines. */
 const TRACE_ON = /^(run\.(step|status|completed|budget\.reached|subagent)|approval\.|request\.)/;
@@ -224,6 +226,11 @@ export function RunPage({ runId }: { runId: string }) {
       <header className="work-run-header">
         <div className="ws-page-header">
           <h1>{run.title}</h1>
+          <OpenInWindowButton
+            path={`/work/${encodeURIComponent(run.id)}`}
+            what={run.title}
+            compact
+          />
           <StatusChip status={run.derived.status} reason={run.derived.reason ?? undefined} />
         </div>
         <p className="muted ws-row-meta">
@@ -384,6 +391,8 @@ export function RunPage({ runId }: { runId: string }) {
         />
       ) : null}
 
+      {/* A run on a cloud environment shows its runner usage and caps (FR-108, M7). */}
+      <ThreadCloudRun threadId={run.threadId} environmentId={run.environmentId ?? null} />
       <RunConversation threadId={run.threadId} />
 
       <ActivityTrace refId={run.threadId} version={traceVersion} />

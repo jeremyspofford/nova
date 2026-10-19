@@ -142,7 +142,8 @@ M5 (decisions in `docs/20` ADR-092):
   `documentTools` (`document.create`, `document.read`) and `artifactDocumentPreview` for the
   Hub-side preview. Nothing in it imports the network.
 - Images (`src/tools/images.ts`) — `imageToolSource` and `providerImageGenerator` (FR-030):
-  `image.generate` is listed only while a provider adapter can make images; none can yet.
+  `image.generate` is listed only while a provider adapter can make images (since M7 the
+  OpenAI-compatible adapter's `generateImage`, for models recognised as image models).
 - Plugin drafts (`src/plugins/authoring.ts`) — `pluginScaffoldTool` (`plugin.scaffold`, FR-050):
   writes a draft under `<dataDir>/plugins-drafts/` and checks it with the installer's loader;
   never installs.
@@ -164,7 +165,7 @@ M6 (decisions in `docs/20` ADR-093):
   `createForAgent`, `listForAgent` and `useAgents`: an agent's schedule fires a turn on its main
   thread, not a run.
 - Channels (`src/channels/`) — `ChannelService` (FR-088, ADR-070): adapters for Slack, Teams
-  (with a JWT verifier), webhook, email (refused: no connector yet) and in-app (`adapters/`);
+  (with a JWT verifier), webhook, email (refused in M6; built in M7, below) and in-app (`adapters/`);
   bindings, identities, loop prevention, dedupe and rate caps; channel turns carry no authority.
   `answers.ts` answers pre-approvable approvals from a channel; `privacy.ts` is the
   private-to-shared check; `delivery.ts` makes Slack and Teams schedule delivery targets;
@@ -263,3 +264,67 @@ M6.5 (decisions in `docs/20` ADR-094):
   Device and claims handed to it, the paired-client registry with revocation, persisted stream
   floors, and the tunnel that dispatches clients' requests into the Hub. The protocol itself is
   `@nova/relay` (`packages/relay`).
+
+M7 (decisions in `docs/20` ADR-095):
+
+- Sync (`src/sync/`) — `SyncService` (FR-109, FR-129, FR-128): the Hub-canonical change feed (one
+  row per field with a cursor and a hybrid logical clock, `hlc.ts`), fed by the bus and a 5-minute
+  sweep; paged snapshots; pushed field ops merged per field, last writer wins, with the merge log
+  and restore; replica bookkeeping, reset and revocation. `entities.ts` reads the synced kinds
+  (threads, messages, projects, memory items, spaces, pages, schedules, the owner's non-security
+  settings); `writers.ts` writes pushed ops through the owning services (`serviceWriters`), a
+  message as an append, and a local model's answer only for a device with `local-runtime`.
+  `IdempotencyStore` (`idempotency.ts`, FR-112): keys per principal, method and path for 24 hours,
+  first answers kept only for routes that opt in, never an answer that carries a credential
+  (`carriesCredential`) or is `no-store` or over 256 KiB. `ChatService.answer` answers a message a
+  replica wrote offline through the normal turn.
+- Cloud runner (`src/cloudrun/`) — `CloudRunService` (FR-108, FR-071, FR-116): the runner's
+  registration (token in the vault), cloud environments for `EnvironmentService.useCloud`
+  (`provider`), leases with metering and caps followed over the runner's event stream, snapshots,
+  artifacts copied into the thread, Work runs on a cloud environment, the sweep and reconcile;
+  `client.ts` (`RunnerClient`, bounded reads), `sandbox.ts` (a cloud thread's `SandboxClient`,
+  network off unless `cloud.runner.unrestrictedNetwork`), `transport.ts` (the
+  `EnvironmentTransport` for Hub-side Git and files). `toolRules` hides the Hub's `fs.*` tools in
+  cloud threads; `workPolicy` makes the cloud folder the root of bound Work threads.
+- Channels M7 (`src/channels/`) — Telegram (`adapters/telegram.ts`: long polling or webhook,
+  inline-keyboard approvals) and email (`adapters/email.ts`, `adapters/mail/`: IMAP over
+  `imapflow`, SMTP over `nodemailer`, parsing over `mailparser`, the DMARC sender check, loop
+  guards), the pollers that run polling bindings (`pollers.ts`), signed one-use approval links
+  (`approval-links.ts`), Slack buttons, the message log, and Web Push (`push/`: `webpush.ts`, RFC
+  8291 encryption and RFC 8292 VAPID on `node:crypto`; `PushService`, the OS leg of notification
+  routing, Web Push to browsers and native pushes through the Relay connector's `pushNotify`).
+- Code M7 (`src/code/`) — handoff (`handoff.ts`, FR-213: the Git state as a bundle and a
+  binary-safe patch, target checks, keep or clean, chat handoff), three-way merges (`merge.ts`,
+  FR-073, `git merge-file`), best-of-N attempts (`attempts.ts`, FR-212), the environment transport
+  that lets remote sessions (SSH, WSL, device, cloud) get Hub-side diff, review and commit
+  (`transport.ts`), SSH environments over the system OpenSSH client with pinned host keys and a
+  hash-checked helper (`ssh.ts`, FR-062), and delegation from an agent (`delegation.ts`,
+  `code.delegate`, `delegatedRules`, `delegatedToolLimits`).
+- Team (`src/team/`) — `TeamService` (`members.ts`: the recorded owner, invitations, joining,
+  removing a member, members' own preferences), `access.ts` (`OWNER_ONLY_ROUTES`,
+  `memberScoped`: a folder of its own for every non-owner account), `owner.ts` (`hubOwnerId`,
+  `isHubOwner`), `public-net.ts` (public addresses only for non-owners, pinned),
+  `SharedThreadService` (`shared.ts`, FR-217), `TeamAgentService` (`agents.ts`, FR-091),
+  `OidcService` (`oidc-service.ts`, `oidc.ts`: the code flow with PKCE and the ID-token checks on
+  `node:crypto`, FR-113) and `ProfileCardService` (`card.ts`). `approvals/limits.ts` holds the
+  per-thread tool limits the gate applies (`useToolLimits`): shared threads, sub-agent tool lists
+  (FR-053), plugins per agent.
+- Scripts (`src/scripts/`) — `script.run` (FR-202, flagged): one QuickJS engine per run in a worker
+  thread (`vm.ts`, `worker.ts`) with CPU, memory, stack, call and log limits; nested tool calls
+  through the tool runtime (`runner.ts`, `tool.ts`); views of runs and their nested calls.
+- External agents (`src/acp/`) — `ExternalAgentService` (FR-203, flagged): a JSON-RPC Agent Client
+  Protocol client (`jsonrpc.ts`, `protocol.ts`, `client.ts`), the host side that turns the agent's
+  file, terminal and permission requests into gated `fs.*` and `exec.*` calls (`host.ts`), the
+  sandboxed launcher (`launcher.ts`) and adapters and delegations with coalesced progress events
+  (`service.ts`).
+- Browser M7 (`src/browser/`) — console and network capture with redaction (`capture.ts`),
+  `browser.hover`, element screenshots, `browser.console` and `browser.network`, crash restarts,
+  site levels per project or agent (`sites.ts`, through the policy engine's `ruleTool`) and the
+  trace newest first with a cursor.
+- Devices M7 — `novadDeviceForCredential` and `computeNodeForCredential` (the credential check the
+  Hub's device-trust area ties a client certificate to), the heartbeat answer's granted `scopes`,
+  and the Relay connector's registration token and `pushNotify`.
+- Elsewhere — `ThreadService` and `ProjectService` emit the events sync's change feed follows;
+  the gate takes the thread's own substrate (`useSubstrate(accountId, threadId)`) and `ruleTool`;
+  `ask_user` answers carry the user's authority for the rest of the turn (FR-188); the tool runtime
+  adds a redacted `approvalDetail` to approval cards (a device commit's staged diff).

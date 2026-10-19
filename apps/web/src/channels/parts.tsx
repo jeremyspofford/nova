@@ -3,7 +3,7 @@
 // secret once.
 import { useId, useRef } from 'react';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
-import { copyText, type ChipSpec } from './format.ts';
+import { SENDER_CHECK_OFF_TEXT, copyText, type ChipSpec } from './format.ts';
 
 export function Chip({ spec, detail }: { spec: ChipSpec; detail?: string | null }) {
   return (
@@ -174,5 +174,51 @@ export function SigningHelp({ eventId }: { eventId?: boolean }) {
         )}
       </ul>
     </details>
+  );
+}
+
+/**
+ * The confirmation turning an email binding's sender check off needs (the Hub refuses it
+ * unconfirmed). Inline, so it works inside the Add channel dialog; Keep checking is focused.
+ */
+export function SenderCheckOffConfirm({
+  onConfirm,
+  onCancel,
+}: {
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const id = useId();
+  return (
+    <div
+      className="ws-callout ch-confirm"
+      role="group"
+      aria-labelledby={`${id}-q`}
+      aria-describedby={`${id}-d`}
+    >
+      <p id={`${id}-q`} className="ws-flush">
+        <strong>Trust the From address?</strong>
+      </p>
+      <p id={`${id}-d`} className="ws-flush">
+        {SENDER_CHECK_OFF_TEXT}
+      </p>
+      <div className="row">
+        <Button autoFocus onClick={onCancel}>
+          Keep checking senders
+        </Button>
+        <Button variant="danger" onClick={onConfirm}>
+          Trust the From address
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Shown while an email binding's sender check is (to be) off. */
+export function SenderCheckOffNotice() {
+  return (
+    <p className="ws-warning ch-check-off" role="note">
+      <Icon name="alert" /> The sender check is off: anyone can write as a known sender.
+    </p>
   );
 }

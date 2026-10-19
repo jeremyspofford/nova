@@ -18,6 +18,18 @@ Tooling: the Hub, Relay, catalog and sync images are built with Docker (OCI) and
 unit ships with the Hub package; **electron-builder** and **electron-updater** apply to the
 desktop shell only; `novad` is built with cargo per target and signed.
 
+*As built in M7* (ADR-095; `apps/desktop`). The desktop shell exists as `apps/desktop` (Electron
+44.5.1, entry `src/main.ts`). `npm start -w apps/desktop` runs it against a Hub, and
+`npm run test:shell -w apps/desktop` runs its Playwright Electron journey (`docs/16` §3.3). Some
+choices for a packaged build are already in the code: `nova://` is registered with the OS only by
+an installed build (`app.isPackaged`), so a development or test run never changes the computer's
+link handlers; developer tools open only in an unpackaged run; browser component updates are off
+in every build (`disable-component-update`), so Chromium downloads nothing in the background.
+Electron fuses (running as Node, `NODE_OPTIONS`, inspect flags, asar integrity) are not set yet;
+that belongs to packaging. Not built: installers and the formats above, electron-builder
+configuration, code signing and notarization, auto-update of the shell (§4), and a shell build or
+journey in CI (`docs/16` §9).
+
 ## 2. Packaging pipeline
 
 ```
@@ -122,6 +134,11 @@ Desktop shell:
 - Portable mode: a `--portable` flag keeps all data next to the binary (no keychain; uses the
   encrypted vault with a passphrase).
 - A `--profile <name>` flag supports isolated profiles for testing.
+
+*As built in M7* (ADR-095). The desktop shell keeps its settings (`shell.json`) and the Hub
+session's cookies in Electron's per-user data folder for "Nova" (on Linux `~/.config/Nova/`), or
+in `NOVA_SHELL_DATA_DIR` when that is set; one shell runs per data folder. The `--data-dir`,
+`--portable` and `--profile` flags are not built for the shell.
 
 ### 5.1 Port conflicts
 

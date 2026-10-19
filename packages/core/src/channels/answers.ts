@@ -78,6 +78,24 @@ export function approvalPrompt(
   return `${head}${why}\nReply ${replies.join(', ')}.`;
 }
 
+/**
+ * The approval email's text (the adapter adds the signed link when there is one). Without a link
+ * (a shared conversation, a sender who is not the owner) it says to open Nova.
+ */
+export function approvalEmailText(
+  a: Pick<ApprovalView, 'id' | 'action' | 'reason'>,
+  opts: { shared?: boolean; link: boolean },
+): string {
+  const code = approvalCode(a.id);
+  const head = opts.shared
+    ? `Approval needed for an action (${code}); the details are in Nova.`
+    : `Approval needed: ${a.action}`;
+  const why = a.reason && !opts.shared ? `\n${a.reason}` : '';
+  return opts.link
+    ? `${head}${why}`
+    : `${head}${why}\nThis one can only be answered in Nova: open the app to decide.`;
+}
+
 export function answeredText(decision: ChannelDecision): string {
   switch (decision) {
     case 'allow_once':

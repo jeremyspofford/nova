@@ -1,7 +1,8 @@
 // A mock Slack for the channel tests and the J7 journey (offline): an in-process Web API that
 // answers `auth.test` and `chat.postMessage` for one bot token and records what was posted, and
 // signed Events API deliveries (`v0=` HMAC-SHA256 of `v0:<ts>:<body>` with the signing secret)
-// for the Hub's inbound endpoint.
+// for the Hub's inbound endpoint. Since M7 it also answers `chat.update` and `chat.postEphemeral`,
+// keeps the blocks of a post, and builds signed interaction payloads (button presses).
 import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -11,12 +12,16 @@ export interface SlackPost {
   text: string;
   thread_ts?: string;
   ts: string;
+  blocks?: unknown[];
 }
 
 export interface MockSlack {
   /** The Web API base, e.g. http://127.0.0.1:1234/api */
   api: string;
   posts: SlackPost[];
+  /** `chat.update` and `chat.postEphemeral` calls. */
+  updates: Record<string, unknown>[];
+  ephemerals: Record<string, unknown>[];
   botToken: string;
   signingSecret: string;
   botUserId: string;
@@ -43,6 +48,11 @@ export interface MockSlack {
     headers: Record<string, string>;
     rawBody: Uint8Array;
   };
+  /** A signed interaction delivery: a button press (`block_actions`) on a posted message. */
+  interaction(
+    i: { user: string; channel: string; ts: string; value: string; text?: string },
+    opts?: { secret?: string; timestamp?: number },
+  ): { headers: Record<string, string>; rawBody: Uint8Array };
   close(): Promise<void>;
 }
 
@@ -56,6 +66,8 @@ export async function startMockSlack(
   const botUserId = opts.botUserId ?? 'UBOT';
   const now = opts.now ?? (() => Date.now());
   const posts: SlackPost[] = [];
+  const updates: Record<string, unknown>[] = [];
+  const ephemerals: Record<string, unknown>[] = [];
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
@@ -77,22 +89,35 @@ export async function startMockSlack(
         const ts = `${Math.floor(now() / 1000)}.${String(++seq).padStart(6, '0')}`;
         const post: SlackPost = { channel: body.channel, text: body.text, ts };
         if (typeof body.thread_ts === 'string') post.thread_ts = body.thread_ts;
+        if (Array.isArray(body.blocks)) post.blocks = body.blocks;
         posts.push(post);
         return send({ ok: true, channel: body.channel, ts });
+      }
+      if (req.url === '/api/chat.update') {
+        updates.push(body);
+        return send({ ok: true, channel: body.channel, ts: body.ts });
+      }
+      if (req.url === '/api/chat.postEphemeral') {
+        ephemerals.push(body);
+        return send({ ok: true, message_ts: '1.1' });
       }
       send({ ok: false, error: 'unknown_method' });
     });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
-  const sign = (body: string, o: { secret?: string; timestamp?: number } = {}) => {
+  const sign = (
+    body: string,
+    o: { secret?: string; timestamp?: number } = {},
+    contentType = 'application/json',
+  ) => {
     const ts = String(o.timestamp ?? Math.floor(now() / 1000));
     const sig = `v0=${createHmac('sha256', o.secret ?? signingSecret)
       .update(`v0:${ts}:${body}`)
       .digest('hex')}`;
     return {
       headers: {
-        'content-type': 'application/json',
+        'content-type': contentType,
         'x-slack-request-timestamp': ts,
         'x-slack-signature': sig,
       },
@@ -102,10 +127,33 @@ export async function startMockSlack(
   return {
     api: `http://127.0.0.1:${port}/api`,
     posts,
+    updates,
+    ephemerals,
     botToken,
     signingSecret,
     botUserId,
-    sign,
+    sign: (body, o) => sign(body, o),
+    interaction: (i, o) => {
+      const payload = {
+        type: 'block_actions',
+        user: { id: i.user, name: 'someone' },
+        channel: { id: i.channel },
+        container: { type: 'message', channel_id: i.channel, message_ts: i.ts },
+        message: { ts: i.ts, text: i.text ?? 'Approval needed' },
+        actions: [
+          {
+            action_id: 'nova_approval_o',
+            value: i.value,
+            action_ts: `${Math.floor(now() / 1000)}.${String(++seq).padStart(6, '0')}`,
+          },
+        ],
+      };
+      return sign(
+        new URLSearchParams({ payload: JSON.stringify(payload) }).toString(),
+        o,
+        'application/x-www-form-urlencoded',
+      );
+    },
     message: (m, o) => {
       const ts = m.ts ?? `${Math.floor(now() / 1000)}.${String(++seq).padStart(6, '0')}`;
       const event: Record<string, unknown> = {

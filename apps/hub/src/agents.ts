@@ -117,6 +117,8 @@ export function setupAgents(ctx: HubContext & AgentsDeps): Promise<AgentsArea> {
       wakes: () => ctx.setting('agents.wakes'),
       reviewModel: () => ctx.setting('review.model'),
     },
+    // A goal stopped by a usage limit is retried after this long, doubling (M7).
+    usageRetryMs: async () => (await ctx.setting('agents.usageRetryMinutes')) * 60_000,
     log,
     ...(ctx.audit ? { audit: ctx.audit } : {}),
     ...(ctx.notifier ? { notifier: ctx.notifier } : {}),

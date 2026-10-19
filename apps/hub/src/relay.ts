@@ -5,18 +5,25 @@
 // it are dispatched into this Hub with Fastify's `inject`, carrying the client's own Authorization
 // header, so the Hub authenticates them exactly like direct requests (the Relay's route token never
 // authorizes anything here). Only /api/v1 routes are reachable that way, and not the WebSocket.
+// A private Relay's registration token (M7) goes into the vault with
+// `PUT /api/v1/relay/registration-token`; `relay.registrationTokenRef` names it and the connector
+// sends it only when it registers.
 import type { FastifyInstance } from 'fastify';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   NovaError,
+  RELAY_REGISTRATION_TOKEN_REF,
   SETTINGS,
   effectiveRelayUrl,
   patchRelaySchema,
+  relayRegistrationTokenSchema,
   type RelayConfigView,
+  type RelayRegistrationTokenView,
 } from '@nova/shared';
 import {
   RelayHub,
+  relayRegistrationSecret,
   type AuditSink,
   type RelayDispatch,
   type RelayHubIdentity,
@@ -42,6 +49,11 @@ export interface RelayArea extends HubArea {
   useAudit(audit: AuditSink): void;
   /** The Add Device service (`requestFromRelay`, `onDecided`). */
   usePairing(seam: RelayPairingSeam): void;
+  /**
+   * The Relay's origins for the web app's `connect-src` (the join page and the Relay transport
+   * reach it from the browser); empty while the Relay is off.
+   */
+  connectOrigins(): string[];
   useHubIdentity(fn: () => RelayHubIdentity | null): void;
   /** The Hub app tunneled requests are dispatched into (the lead passes the Hub instance). */
   useInject(app: FastifyInstance): void;
@@ -74,6 +86,8 @@ const params = z.object({ id: z.string().min(1).max(64) });
 /** Request headers a tunneled request may carry into the Hub; everything else is dropped. */
 const INNER_HEADERS = new Set([
   'authorization',
+  // A request queued offline carries its key through the tunnel too (FR-112).
+  'idempotency-key',
   'content-type',
   'accept',
   'accept-language',
@@ -168,12 +182,13 @@ export async function setupRelay(ctx: HubContext, deps: RelayDeps = {}): Promise
   const log = ctx.log.child('relay');
   let target: FastifyInstance | null = deps.app ?? null;
   const settings = async () => {
-    const [enabled, url, selfHosted] = await Promise.all([
+    const [enabled, url, selfHosted, registrationTokenRef] = await Promise.all([
       ctx.setting('relay.enabled'),
       ctx.setting('relay.url'),
       ctx.setting('relay.selfHosted'),
+      ctx.setting('relay.registrationTokenRef'),
     ]);
-    return { enabled, url: effectiveRelayUrl({ url, selfHosted }) };
+    return { enabled, url: effectiveRelayUrl({ url, selfHosted }), registrationTokenRef };
   };
   const hub = new RelayHub({
     db: ctx.db,
@@ -194,11 +209,21 @@ export async function setupRelay(ctx: HubContext, deps: RelayDeps = {}): Promise
   let audit: AuditSink | null = deps.audit ?? null;
   hub.useDispatch(injectDispatch(() => target, deps.hostHeader));
 
+  // The Relay's origins for the Content-Security-Policy, kept current with its settings.
+  let origins: string[] = [];
+  const refreshOrigins = async () => {
+    const s = await settings();
+    origins = s.enabled ? relayConnectOrigins(s.url) : [];
+  };
+  await refreshOrigins();
+
   // A change to any relay.* setting, here or through PATCH /api/v1/settings, applies at once.
   const off = ctx.events.bus.subscribe('settings.changed', (e) => {
     const key = e.payload.key;
-    if (typeof key === 'string' && key.startsWith('relay.'))
+    if (typeof key === 'string' && key.startsWith('relay.')) {
       hub.reconfigure().catch((err: unknown) => log.warn('relay reconfigure failed', { err }));
+      refreshOrigins().catch((err: unknown) => log.warn('relay origins refresh failed', { err }));
+    }
   });
   // A device revoked anywhere (Add Device, Devices, compute nodes) loses its Relay route.
   const offRevoked = ctx.events.bus.subscribe('device.status.changed', (e) => {
@@ -221,11 +246,12 @@ export async function setupRelay(ctx: HubContext, deps: RelayDeps = {}): Promise
     return { active: by.active ?? 0, pending: by.pending ?? 0 };
   };
 
-  const view = async (accountId: string): Promise<RelayConfigView> => {
-    const [enabled, url, selfHosted] = await Promise.all([
+  const view = async (accountId: string): Promise<RelayConfigView & RelayRegistrationTokenView> => {
+    const [enabled, url, selfHosted, tokenRef] = await Promise.all([
       ctx.setting('relay.enabled'),
       ctx.setting('relay.url'),
       ctx.setting('relay.selfHosted'),
+      ctx.setting('relay.registrationTokenRef'),
     ]);
     return {
       enabled,
@@ -234,6 +260,7 @@ export async function setupRelay(ctx: HubContext, deps: RelayDeps = {}): Promise
       effectiveUrl: effectiveRelayUrl({ url, selfHosted }),
       status: hub.status(),
       clients: counts(accountId),
+      registrationToken: tokenRef !== '',
     };
   };
 
@@ -254,7 +281,7 @@ export async function setupRelay(ctx: HubContext, deps: RelayDeps = {}): Promise
   /** Store one global setting; a managed lock wins and the write is refused (docs/14 §1). */
   async function writeSetting(
     accountId: string,
-    key: 'relay.enabled' | 'relay.url' | 'relay.selfHosted',
+    key: 'relay.enabled' | 'relay.url' | 'relay.selfHosted' | 'relay.registrationTokenRef',
     value: unknown,
   ): Promise<void> {
     const parsed: unknown = SETTINGS[key].schema.parse(value);
@@ -329,6 +356,44 @@ export async function setupRelay(ctx: HubContext, deps: RelayDeps = {}): Promise
       return view(accountId);
     });
 
+    // The token a private Relay asks for (M7): into the vault, never answered back; the setting
+    // names the entry and the connector registers again with it if it was refused.
+    app.put('/api/v1/relay/registration-token', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { token } = relayRegistrationTokenSchema.parse(req.body ?? {});
+      const before = await ctx.setting('relay.registrationTokenRef');
+      // The token is for the Relay in use now: stored with its URL, sent to no other Relay.
+      const relayUrl = (await settings()).url.trim();
+      if (token !== null && !relayUrl)
+        throw new NovaError('conflict', 'set the Relay URL before its registration token', {
+          details: { reason: 'relay_url_missing' },
+        });
+      if (token === null) {
+        if (before) await writeSetting(accountId, 'relay.registrationTokenRef', '');
+        await ctx.secrets.delete(RELAY_REGISTRATION_TOKEN_REF).catch(() => false);
+      } else {
+        await ctx.secrets.put(
+          RELAY_REGISTRATION_TOKEN_REF,
+          relayRegistrationSecret(token, relayUrl),
+        );
+        if (before !== RELAY_REGISTRATION_TOKEN_REF)
+          await writeSetting(accountId, 'relay.registrationTokenRef', RELAY_REGISTRATION_TOKEN_REF);
+      }
+      await audit
+        ?.append({
+          accountId,
+          actor: 'user',
+          kind: 'network',
+          action: token === null ? 'relay.registrationToken.clear' : 'relay.registrationToken.set',
+          resource: 'relay',
+          detail: token === null ? { ref: null } : { ref: RELAY_REGISTRATION_TOKEN_REF, relayUrl },
+        })
+        .catch((err: unknown) => log.warn('relay audit failed', { err }));
+      // A registration the Relay refused for want of the token is tried again now.
+      await hub.reconfigure();
+      return view(accountId);
+    });
+
     app.post('/api/v1/relay/test', async (req) => {
       await ctx.accountOf(req);
       return hub.test();
@@ -352,6 +417,7 @@ export async function setupRelay(ctx: HubContext, deps: RelayDeps = {}): Promise
     openPairing: (input) => hub.openPairing(input),
     endpointSource: hub.endpointSource(),
     status: () => hub.status(),
+    connectOrigins: () => origins,
     useAudit: (a) => {
       audit = a;
       hub.useAudit(a);
@@ -370,4 +436,21 @@ export async function setupRelay(ctx: HubContext, deps: RelayDeps = {}): Promise
       await hub.stop();
     },
   });
+}
+
+/**
+ * `connect-src` sources for a Relay URL, given as http(s) or ws(s) (the settings suggest wss):
+ * its HTTP origin for pairing and health, and its WebSocket origin for the connection (TLS for
+ * https and wss, plain for http and ws). Anything else, or a URL that does not parse, gives none.
+ */
+export function relayConnectOrigins(url: string): string[] {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return [];
+  }
+  const tls = u.protocol === 'https:' || u.protocol === 'wss:';
+  if (!tls && u.protocol !== 'http:' && u.protocol !== 'ws:') return [];
+  return tls ? [`https://${u.host}`, `wss://${u.host}`] : [`http://${u.host}`, `ws://${u.host}`];
 }

@@ -72,9 +72,28 @@ is advertised or withdrawn immediately rather than at the next scheduled check.
 
 The client side of the selection order is `selectEndpoint` in `@nova/shared`: candidates in priority
 order, the next one started after the 300 ms budget or at once when one fails, the first success
-wins and the others are cancelled, 5 s at most per attempt, with an attempts log. **Known
-limitation:** no shipped client calls it yet; the web app talks to the origin it was loaded from,
-and `RelayClient` (`packages/relay`) is the Relay half for native clients (M7).
+wins and the others are cancelled, 5 s at most per attempt, with an attempts log.
+
+*As built in M7 (ADR-095; `apps/web/src/relaytransport`).* The web app calls `selectEndpoint` once
+the browser is paired through the Relay (§4.4); a browser that is not passes every request straight
+to the origin it was loaded from with its session cookie, as before. A paired browser has two
+candidates: the page's own origin (labelled LAN, Mesh or Direct from the endpoint the Hub advertises
+at that address, else guessed from the address) and the Relay, tried in priority order (normally the
+origin first and the Relay 300 ms later or as soon as the origin fails); each passes only when `GET
+/api/v1/hello` answers as a Nova Hub with the pinned fingerprint. Other advertised endpoints only
+name the transport: the Hub sends no CORS headers and the session belongs to one origin, so the
+browser never calls another address. On either path the device session token goes as a bearer header
+(cookies the Hub sets do not come back through the tunnel). When the origin stops answering, only a
+read (GET or HEAD) or a write carrying an `Idempotency-Key` is sent again through the tunnel;
+anything else fails back to the caller (the offline queue, `docs/21` §9). While on the Relay the
+browser tries the origin again every 60 s and on the browser's `online` event. The event stream
+follows the path (a fetch-based reader with the token, since `EventSource` cannot send one). The
+account menu names the path in use (LAN, Mesh, Relay or Direct). **Known limitations:** over the
+Relay, resources the app loads by address (attachment and raw file URLs, artifact content, avatars)
+and the terminal WebSocket do not go through the tunnel, so images, attachments and terminals do not
+load; fetching an attachment through the API works. The device token is sealed in IndexedDB but page
+script can use it, which is weaker than an HttpOnly cookie. No native app calls `selectEndpoint`
+yet.
 
 **mDNS.** The Hub announces `_nova._tcp` (instance `<name>._nova._tcp.local`) with its port, a TXT
 record holding only `v=1` and `fp=<hub fingerprint>`, and `A`/`AAAA` records of its healthy LAN
@@ -198,6 +217,14 @@ Ed25519, HKDF-SHA256, PBKDF2-SHA256, SHA-256) and the MIT-licensed `@noble/ciphe
   a revoked key, and hands it to Add Device as a request with the v1 confirmation (§4.1). On
   approval the Hub confirms the route at the Relay and sends the client a sealed `paired` notice;
   the client then polls its Add Device status through the tunnel and gets its device session.
+  *M7 (ADR-095):* a declined client learns why. When the owner denies the request, it expires, or
+  the Hub refuses the claim (sent as `denied`), the Hub sends a sealed `decided` notice
+  `{requestId, decision: denied|expired}` on a Hub-opened stream; the Relay passes the Hub's data
+  frames on Hub-opened streams to a pending route (nothing goes back until the route is
+  confirmed). The client cannot acknowledge it, so the Hub deletes the route after a grace period
+  (2 s by default; sooner when it reconnects or stops). The client library's `waitForDecision()`
+  resolves to approved, denied or expired, the first decision standing; a Relay that predates the
+  notice drops it and the client sees its route revoked, as before.
 - **Stream ids and floors.** A stream id is a side prefix (`c` client-opened, `h` Hub-opened) and a
   base36 counter that only grows (max(previous + 1, now in ms × 1024)). The Hub stores the highest
   client counter per client (`relay_client.stream_floor`) before the stream's first message is
@@ -211,15 +238,15 @@ Ed25519, HKDF-SHA256, PBKDF2-SHA256, SHA-256) and the MIT-licensed `@noble/ciphe
   `inject`: the path is normalised with `new URL` and must start with `/api/v1/` and not be
   `/api/v1/ws`; `%2e`, `%2f`, `%5c`, backslashes and `//` are refused in the path part (a query may
   carry them). Only an allowlist of request headers passes (`authorization`, `content-type`,
-  `accept`, `accept-language`, `last-event-id`, `if-*`, `range`, and `x-nova-*` except
-  `x-nova-relay-client`), with `Host: localhost` and the address `relay:<clientId>`, so per-address
-  limits apply per client and Network setup knows the request came over the Relay; `set-cookie` and
-  hop-by-hop headers do not come back. The client's own `Authorization` header (its device session)
-  authenticates the request exactly like a direct one; the route token authorizes nothing on the
-  Hub. A response body pauses at 4 MiB unacked and the stream is dropped at 16 MiB; a session holds
-  at most 32 MiB for reassembly or out-of-order delivery. Failures reach the client as a generic
-  `server_error` (the detail goes to the Hub log). The event stream (SSE) works through the tunnel;
-  the WebSocket does not.
+  `accept`, `accept-language`, `last-event-id`, `if-*`, `range`, since M7 `idempotency-key`, and
+  `x-nova-*` except `x-nova-relay-client`), with `Host: localhost` and the address
+  `relay:<clientId>`, so per-address limits apply per client and Network setup knows the request
+  came over the Relay; `set-cookie` and hop-by-hop headers do not come back. The client's own
+  `Authorization` header (its device session) authenticates the request exactly like a direct one;
+  the route token authorizes nothing on the Hub. A response body pauses at 4 MiB unacked and the
+  stream is dropped at 16 MiB; a session holds at most 32 MiB for reassembly or out-of-order
+  delivery. Failures reach the client as a generic `server_error` (the detail goes to the Hub log).
+  The event stream (SSE) works through the tunnel; the WebSocket does not.
 - **Revocation.** Revoking a paired client deletes its route at the Relay (open connections close
   with `revoked`), drops its envelopes on the Hub, keeps its key refused and revokes its device;
   revoking the device anywhere revokes the client. Only a revoked key is refused when pairing again:
@@ -228,11 +255,39 @@ Ed25519, HKDF-SHA256, PBKDF2-SHA256, SHA-256) and the MIT-licensed `@noble/ciphe
 **Known limitations (M6.5).** There is **no forward secrecy**: session keys are static for the life
 of a pairing (X25519 static-static), so a later leak of either side's X25519 private key exposes
 recorded traffic of that pairing; pairing again changes the keys. Two tabs sharing one paired record
-get Hub replies only on the newest connection. The Relay accepts any push token (it matters once
-real APNs/FCM senders exist, M7). The Hub's connector sends no registration token, so it cannot
-register with a Relay that requires one. No shipped client pairs through the Relay yet: the web join
-page (§4.4) joins directly, and `pairWithRelay`/`RelayClient` are the library native apps will use
-(M7). The Hub sends no notification pushes of its own yet.
+get Hub replies only on the newest connection.
+
+*As built in M7 (ADR-095; `services/relay/src/push.ts`, `apps/hub/src/relay.ts`,
+`apps/web/src/join/relay.ts`).*
+
+- **Registration token.** A private Relay can require a token from Hubs that register
+  (`NOVA_RELAY_REGISTRATION_TOKEN`). The owner stores it with `PUT /api/v1/relay/registration-token
+  {token}` (8 to 512 printable characters; `null` removes it): it goes into the vault at
+  `secret://relay/registration/token`, is never answered back (the Relay view says only
+  `registrationToken: true`), and the connector registers again at once. The setting
+  `relay.registrationTokenRef` names the vault entry and accepts only
+  `secret://relay/registration/…`, so it can never name another secret the connector would then
+  send. The token goes to the Relay only when the Hub registers. Setting and clearing it are audited
+  (`relay.registrationToken.set`, `.clear`, kind `network`). A Relay that refuses the registration
+  says whether a token is missing or wrong.
+- **Push through the Relay** (FR-111; `docs/13` §6). The Hub sends Web Push to browsers itself; for
+  native apps it calls `POST /v1/relay/push/notify` with its route token, the route ids of the
+  account's active native clients (at most 50) and `{id, category, title, link}`, nothing else: the
+  title is the redacted one of at most 80 characters, whatever `push.detail` says, and the link is a
+  `nova://run|code|approval|chat/<id>` or none. The Relay allows 30 a minute per route and pushes to
+  the routes that registered an APNs or FCM token. Tokens are checked for shape at
+  `/v1/relay/push/register` (hex for APNs, the FCM character set and length; a topic only for APNs),
+  and a token APNs answers 410 or FCM 404 is dropped. The real senders are off until the operator
+  configures them: APNs (HTTP/2 with an ES256 provider token) with `NOVA_RELAY_APNS_KEY_FILE`,
+  `_KEY_ID`, `_TEAM_ID`, `_TOPICS` and `_SANDBOX=1`, FCM (HTTP v1) with
+  `NOVA_RELAY_FCM_SERVICE_ACCOUNT_FILE`; without them the Relay records pushes with a mock.
+- **Licence and logging.** `services/relay` and `packages/relay` are Apache-2.0 and import no AGPL
+  package (ADR-023); the Relay writes its own JSON lines to stderr, with values under secret-looking
+  keys (tokens, authorization, passwords) replaced by `[redacted]`.
+- **The web join page pairs through the Relay** when the QR carries `r` and `rp` (§4.4).
+
+**Known limitations (M7).** No forward secrecy (above). No shipped native app registers a push
+token with the Relay yet: the notify path is tested with routes set up in an in-process Relay.
 
 ### 3.2 Per-platform reachability
 
@@ -345,6 +400,12 @@ show on the success screen and are edited on the device page (`PUT /api/v1/devic
 device's capability flags; the other scopes are recorded and shown, not yet enforced, and a
 browser's or app's device session is an owner session that scopes do not narrow.
 
+*As built in M7 (ADR-095).* `GET /api/v1/session` answers the device session's `deviceId` and
+`scopes`. `offline-replica` gates the replica routes of `/api/v1/sync` (removing it ends the replica
+with `sync.replica.revoked`; `docs/21` §9). `local-runtime` reaches a `novad` device in every
+heartbeat answer (`scopes`, kept in `scopes.json`; `docs/23` §4.3) and lets a replica push answers
+its local model wrote. The other scopes are still not enforced.
+
 ### 4.3 Bootstrap command (headless)
 
 The Hub serves per-arch, **signed** `novad` binaries at `/api/v1/agent/dist/`. A typical
@@ -402,19 +463,26 @@ d=$(mktemp -d) && case "$(uname -s)-$(uname -m)" in \
   Administrator): it downloads `novad-windows-<arch>.exe`, checks its SHA-256 with `Get-FileHash`,
   sets `NOVA_ADD_CODE` and removes it again in `finally`.
 - There is no command, with the reason in `bootstrap.why`, when the Hub has no builds
-  (`NOVA_NOVAD_DIST` unset or empty), when the Hub was opened at an `https://` address (`novad` has
-  no TLS client yet) or a loopback address, when the Hub has no identity yet, when the manifest is
-  not signed by this identity, or without a pairing id.
+  (`NOVA_NOVAD_DIST` unset or empty), when the Hub was opened at a loopback address, when the Hub
+  has no identity yet, when the manifest is not signed by this identity, or without a pairing id.
+- *Since M7 (ADR-095)* the command works for a Hub opened at an `https://` address. Its download
+  skips the certificate check (`curl -fsSLk`, `wget --no-check-certificate`; in PowerShell
+  `-SkipCertificateCheck` on 6 and later, a validation callback on 5.1), since a Hub on its own local
+  CA is not yet trusted by that machine and the SHA-256 in the command, from the owner's screen,
+  carries the download's integrity. `novad` then verifies the Hub through the pinned identity before
+  it sends anything (§5). The command passes no `--user`, so the user who ran `sudo` gets the
+  local runtime's socket (`docs/23` §2).
 
 `novad install` then checks, before it writes anything, that the Hub's identity key
 (`GET /api/v1/hello` `hubPublicKey`) hashes to `--pin`, that `novad-manifest.sig` verifies with that
 key over `nova-novad-manifest-v1\n` followed by the exact bytes of `novad-manifest.json`, and that
 its own binary's SHA-256 is the manifest's entry for its OS and architecture. It reads the binary
 once and installs exactly the bytes it hashed. It then runs Add Device v2 as `kind: novad` (§4.1)
-and registers with the granted token (`docs/23` §2). These checks replace TLS pinning for now: the
-install runs over plain LAN HTTP, so the pin, the signed manifest and the Hub-signed confirmation
-carry its integrity, while the code and the tokens are visible on the LAN (a known limitation until
-`novad` has a TLS client).
+and registers with the granted token (`docs/23` §2). Over plain LAN HTTP the pin, the signed
+manifest and the Hub-signed confirmation carry the install's integrity, while the code and the
+tokens are visible on the LAN. Since M7 an `https://` Hub is trusted through the pin on the
+connection itself (§5), so nothing crosses the network in the clear; over `http://` `novad` learns
+the Hub local CA from the signed identity statement and moves to HTTPS once the Hub serves it.
 
 ### 4.4 Mobile behavior
 
@@ -442,8 +510,23 @@ validate. The page needs a secure context: browsers give Web Crypto only to HTTP
 computer itself), so on a Hub serving plain HTTP at a network address (trust mode `none`, the
 default) it says so ("This page needs a secure connection": turn on HTTPS in Network → Trust or use
 the Nova app) and sends nothing, and Add a device warns the owner when it makes a Client code on
-such a Hub. Not built: store listings, the native app (M7) and pairing over the Relay from this page
-(it joins directly).
+such a Hub. Not built: store listings and the native mobile apps.
+
+*As built in M7 (ADR-095; `apps/web/src/join/relay.ts`, `apps/web/src/relaytransport/store.ts`).*
+When the QR link carries a Relay (`r`, `rp`; only an `https://` or `wss://` Relay, or one on
+loopback, else the page joins directly), the page pairs through it (FR-137): it makes a
+non-extractable device key, claims the Relay's pairing slot with `pairWithRelay` as kind `browser`
+(the code never reaches the Relay, §3.1), checks the Hub's sealed offer against the pin and shows
+the v1 confirmation. It skips the direct `GET /api/v1/hello`, since the offer carries the Hub's
+signed key. It then waits for the Hub's sealed `paired` notice, polls its Add Device status through
+the tunnel with signed requests and receives a device session token. The pairing (the Relay record
+with its session keys, the token and a join still waiting) is kept in IndexedDB sealed with AES-GCM
+under a non-extractable key, so a reload keeps waiting and the app can later reach the Hub through
+the Relay (§2); without IndexedDB it is kept in memory only. The page waits for the owner's
+decision with `waitForDecision()` (§3.1, "Pairing") and says "Not approved" or "expired"
+accordingly; only with a Relay too old to pass the Hub's `decided` notice does a dropped route
+leave it unable to tell which. A Relay that reports the device revoked ends the pairing. The desktop shell
+joins through this same page as a `browser` device and then uses that session's cookie.
 
 ### 4.5 Revocation and re-adding
 
@@ -521,8 +604,8 @@ A device may use more than one path (e.g., LAN via local CA, remote via Mesh cer
 - **Device certificates.** Issued only in `local-ca` mode, with the Add Device grant: the device's
   own Ed25519 key signed by the CA, valid 365 days, client authentication only, OU = the role and
   the SAN `urn:nova:device:<id>`. Revoking the device revokes them, and `verifyDeviceCertificate`
-  checks issuer, signature, validity, the recorded serial and revocation. No route checks them yet
-  (mutual TLS is M7) and there is no renewal.
+  checks issuer, signature, validity, the recorded serial and revocation. Since M7 the device and
+  node routes check them (mutual TLS, below); there is no renewal.
 - **Mesh certificates.** Requested from the mesh through the Network Setup area (`tailscale cert`),
   checked to cover the host and match their key, stored with the key in the vault
   (`secret://hub/tls/mesh/<id>/key`), renewed at two thirds of their life and served by name.
@@ -535,7 +618,9 @@ A device may use more than one path (e.g., LAN via local CA, remote via Mesh cer
   it.
 
 **Native-shell pinning procedure** (FR-134; `checkHubIdentity` in `@nova/core` is the reference,
-`hubIdentityStatementBytes` in `@nova/shared` gives the signed bytes):
+`hubIdentityStatementBytes` in `@nova/shared` gives the signed bytes; the desktop shell's copy is
+`apps/desktop/src/pinning.ts`, `novad`'s `services/novad/src/tls.rs` and the compute node's
+`services/compute/src/hub-tls.ts`):
 
 1. Take the pin (`hubFingerprint`) only from Add Device: the QR code, the deep link, or `--pin`.
 2. Open TLS to the Hub, keep the presented chain (leaf first), and send no credential yet.
@@ -560,9 +645,57 @@ A device may use more than one path (e.g., LAN via local CA, remote via Mesh cer
 7. Cache the verified CA hash. When a later connection shows an unknown leaf, repeat steps 3–6 with
    a new nonce.
 
-`novad` and `nova-compute` have no TLS client yet: they pin the identity key through
-`GET /api/v1/hello` and check the Hub's signatures (the manifest, the Add Device reveal) instead.
 The Hub's own reachability probe runs the same statement check against its endpoints (§2).
+
+*As built in M7 (ADR-095; `apps/desktop/src/pinning.ts`, `services/novad/src/tls.rs`,
+`services/compute/src/hub-tls.ts`, `apps/hub/src/device-trust.ts`).*
+
+- **Desktop shell.** `apps/desktop/src/pinning.ts` follows the procedure with a fresh 192-bit
+  nonce, on the same TLS connection, before any credential, code or cookie is sent; afterwards
+  Chromium's certificate check accepts only what the statement vouched for, and an unknown leaf
+  repeats the check with a new nonce. A statement with `pinning: off` hands the check to the
+  platform's trust store (step 5). Plain HTTP is allowed only to a Hub on the same computer
+  (loopback). A Hub with a different identity clears the stored cookies and site data before
+  anything loads, but only when a previous Hub is on record.
+- **`novad` and compute nodes** (FR-134, R-023). Both keep the pin from Add Device (`--pin`) with
+  what verified statements vouched for (`novad`: `hub-trust.json`, 0600; the node: `hubTrust` in its
+  state file). A certificate the cached Hub local CA issued for the host dialed (issuer, signature,
+  validity, serverAuth, a SAN for the host; for `novad`, whose checks are `rustls-webpki`, also the
+  CA's name constraints), or one whose SHA-256 a statement listed and still within its validity, is
+  trusted at once. Otherwise the connection is provisional: on it, before anything else, the client
+  asks for the statement with a fresh nonce and checks steps 4 and 6 (device certificates and CAs
+  never pass as the server); anything else stops with "This is not your Hub" and nothing is sent.
+  Once pinned, neither uses the platform's trust store, so `pinning: off` changes nothing for them
+  (stricter, never weaker); `novad` has no platform trust store at all and refuses an `https://` Hub
+  without a pin, while an unpinned compute node checks an `https://` Hub against the system's roots.
+  A device certificate is never presented on a provisional connection: the client reconnects with it
+  after the check. Over `http://` with a pin, both learn the Hub local CA from the signed statement
+  (it lists the CA's SHA-256, which must match `GET /api/v1/trust/ca.pem`) and move to `https://` on
+  the same address the first time the Hub stops answering plain HTTP and the pinned identity vouches
+  for it (at most one try a minute), never back. `novad` is `rustls` 0.23.45 with the `ring`
+  provider (TLS 1.3 and 1.2); the node uses `node:tls`.
+- **Mutual TLS** (FR-126). When the Hub serves HTTPS and has a local CA, its listener asks every
+  client for a certificate of that CA without requiring one (`requestCert`, `rejectUnauthorized:
+  false`), so browsers keep working; this holds with `NOVA_TLS_CERT` too. `novad` and compute nodes
+  present the device certificate Add Device granted in `local-ca` mode, signed with their own
+  Ed25519 key. The device and node routes (`/agent/v1/register`, `heartbeat`, `capabilities`,
+  `/node/v1/register`, `heartbeat`, `models/sync`) check a presented certificate with
+  `verifyDeviceCertificate` and that it belongs to the caller: the device the bearer credential
+  names (its id and key) or, on registration, the key in the body. Without one,
+  `devices.tls.allowWithoutCertificate` decides (security setting, on by default for one release so
+  devices added before M7 keep working, with a diagnostics problem); off, the call is refused. A
+  refusal is 403 `policy_denied` with `details.reason` `certificate_<why>`: `required`, `mismatch`
+  (another device's certificate), or the trust check's `revoked`, `expired`, `not_yet_valid`,
+  `unknown_issuer`, `unknown_serial`, `bad_signature`, `malformed` or `no_ca`. `novad` and the node
+  log the reason and keep their credentials. Plain HTTP and requests tunnelled through the Relay are
+  not affected. `GET /api/v1/devices/tls` (session) lists what each device last presented over HTTPS
+  (`verified`, `missing` or `refused`, the reason and serial) with `requireCertificate` and the
+  problems; the Hub's diagnostics (`deviceTls`) report the counts and problems. The state is kept in
+  memory and rebuilt by the next heartbeat (migration 0039 is comment-only); a change emits
+  `device.tls.changed`, a refusal is audited as `device.tls.refuse` (kind `device`) at most once an
+  hour per device and reason, and a revoked device is forgotten.
+- **Not built.** Device certificates are not renewed. The Hub → `novad` management channel (§9 item
+  1) is still bearer tokens over plain HTTP.
 
 ## 6. Network Setup (assistant)
 
@@ -758,6 +891,10 @@ generic settings route works too), so managed policy can lock any of them, for e
 `relay.enabled: false` to force the Relay off or `network.transports` to restrict transports.
 Requiring a specific mesh provider is not enforced yet.
 
+M7 adds two security settings (the `// ---- M7 devices` block): `devices.tls.allowWithoutCertificate`
+(`true`: over HTTPS a device or compute node without a device certificate is still accepted, §5)
+and `relay.registrationTokenRef` (`""`, or a `secret://relay/registration/…` reference, §3.1).
+
 ## 9. Security requirements
 
 1. Every transport is authenticated with device keys; no anonymous access.
@@ -780,9 +917,12 @@ Requiring a specific mesh provider is not enforced yet.
 
 1. Every Hub route needs a session or a credential of its own; the public Add Device routes
    authenticate by the code, then by the device key's signatures, and the only routes that answer
-   anyone hand out public information (`contracts/hub-api.md` §1). **Gap:** `novad` and compute
-   nodes still use bearer tokens over plain HTTP; device certificates are issued but not checked
-   (mutual TLS is M7).
+   anyone hand out public information (`contracts/hub-api.md` §1). Since M7 `novad` and compute
+   nodes reach an HTTPS Hub through the pinned identity and present their device certificate, which
+   the device and node routes check (mutual TLS, §5). **Gap (R-022, narrowed in M7):** the Hub →
+   `novad` management channel is still bearer tokens over plain HTTP, and so is a device or node
+   whose Hub serves plain HTTP; `devices.tls.allowWithoutCertificate` still accepts a device without
+   a certificate over HTTPS.
 2. Relay payloads are sealed end to end with per-direction keys derived from the two sides' X25519
    keys (§3.1); the Relay sees routing ids, kinds, sequence numbers and sizes, never the pairing
    code. **Gap:** no forward secrecy (§3.1).
@@ -800,7 +940,9 @@ Requiring a specific mesh provider is not enforced yet.
    fingerprint) before it is advertised, and one failure withdraws it (§2).
 8. Listener hygiene: the M6 rules hold; mDNS carries only `v=1` and the fingerprint; the Hub answers
    to its mDNS name and its direct public host only while they are in use; a failed certificate read
-   at start serves plain HTTP on loopback only (§5).
+   at start serves plain HTTP on loopback only (§5). Since M7 `novad`'s local runtime listens only on
+   0600 Unix sockets (its own, and one per listed user) or, if the owner sets one, a loopback address
+   that needs a token and checks Host and Origin (`docs/23` §4.3).
 9. Envelopes from unknown, pending or revoked clients are dropped and logged; segments carry client,
    stream, seq and seg as associated data, and stream floors that survive a restart refuse replayed
    streams (§3.1).

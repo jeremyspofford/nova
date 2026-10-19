@@ -5,6 +5,8 @@
 // this router decides the rest and delivers channel copies, keeping deferred ones in
 // `notification_delivery` so a restart does not lose them. `quietHours(accountId)` is what the
 // agents area and the scheduler read (proactive research, goal continuations, self-set wakes).
+// Since M7 the OS leg also pushes (FR-111, docs/13 §6): when the rule raises it on the OS and quiet
+// hours do not hold it, the push leg sends it to subscribed browsers and native apps (redacted).
 import {
   NOTIFICATION_KINDS,
   NovaError,
@@ -43,6 +45,17 @@ export interface NotificationSender {
    * follows the private-to-shared policy (docs/13 §4), and nothing private goes there unasked.
    */
   mayNotify?(accountId: string, bindingId: string): Promise<boolean>;
+}
+
+/** The OS leg's push (the push area's PushService.notify); failures never block channels. */
+export interface PushLeg {
+  notify(n: {
+    accountId: string;
+    notificationId: string;
+    kind: NotificationKind;
+    title: string;
+    href: string | null;
+  }): Promise<unknown>;
 }
 
 export interface NotificationRouterOptions {
@@ -94,7 +107,7 @@ const DEFAULT_QUIET = {
 };
 /** Delivered during quiet hours unless the user's rule says otherwise. */
 const URGENT: ReadonlySet<NotificationKind> = new Set(['approval']);
-const CHANNEL_KINDS = ['slack', 'teams', 'webhook'];
+const CHANNEL_KINDS = ['slack', 'teams', 'webhook', 'telegram', 'email'];
 
 function minutesOf(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
@@ -147,6 +160,7 @@ export class NotificationRouter {
   readonly #db: NovaDatabase;
   readonly #now: () => Date;
   #sender: NotificationSender | null = null;
+  #push: PushLeg | null = null;
   #timer: unknown = null;
   #running = false;
   #flushing: Promise<void> | null = null;
@@ -159,6 +173,11 @@ export class NotificationRouter {
 
   useSender(sender: NotificationSender): void {
     this.#sender = sender;
+  }
+
+  /** The push leg of OS delivery (FR-111). */
+  usePush(push: PushLeg | null): void {
+    this.#push = push;
   }
 
   // ---- rules --------------------------------------------------------------------------------
@@ -209,9 +228,13 @@ export class NotificationRouter {
         .prepare('SELECT kind FROM channel_binding WHERE id = ? AND account_id = ?')
         .get(id, accountId) as { kind: string } | undefined;
       if (!b || !CHANNEL_KINDS.includes(b.kind))
-        throw new NovaError('validation', 'notifications go to Slack, Teams or webhook channels', {
-          details: { field: `channels.${i}` },
-        });
+        throw new NovaError(
+          'validation',
+          'notifications go to Slack, Teams, Telegram, email or webhook channels',
+          {
+            details: { field: `channels.${i}` },
+          },
+        );
     }
     const now = this.#now().toISOString();
     await this.#db.transaction(() => {
@@ -403,8 +426,8 @@ export class NotificationRouter {
   }
 
   /**
-   * A notification was recorded (`notification.created`): queue its channel copies, now or at the
-   * end of quiet hours.
+   * A notification was recorded (`notification.created`): push it when it may be raised on the OS
+   * now (`os` is the event's flag), and queue its channel copies, now or at the end of quiet hours.
    */
   async onNotification(n: {
     accountId: string;
@@ -412,16 +435,27 @@ export class NotificationRouter {
     kind: NotificationKind;
     title: string;
     body?: string | null;
+    os?: boolean;
   }): Promise<number> {
     const decision = this.route(n.accountId, n.kind);
+    if (!decision.channels.length && !(this.#push && decision.os)) return 0;
+    const stored = this.#db.raw
+      .prepare('SELECT body, href FROM notification WHERE id = ?')
+      .get(n.notificationId) as { body: string | null; href: string | null } | undefined;
+    // Quiet hours suppress the OS leg (not deferred), so push follows the same rule.
+    if (this.#push && decision.os && n.os !== false) {
+      await this.#push
+        .notify({
+          accountId: n.accountId,
+          notificationId: n.notificationId,
+          kind: n.kind,
+          title: n.title,
+          href: stored?.href ?? null,
+        })
+        .catch((err: unknown) => this.#o.log?.warn('push failed', { err }));
+    }
     if (!decision.channels.length) return 0;
-    const body =
-      n.body ??
-      (
-        this.#db.raw.prepare('SELECT body FROM notification WHERE id = ?').get(n.notificationId) as
-          { body: string | null } | undefined
-      )?.body ??
-      null;
+    const body = n.body ?? stored?.body ?? null;
     const now = this.#now().toISOString();
     const due = decision.deferUntil ?? now;
     await this.#db.transaction(() => {

@@ -103,7 +103,8 @@ export function userAskTool(opts: UserAskToolOptions): BuiltinTool {
             typeof answer.choice === 'string'
               ? `The user chose: ${answer.choice}`
               : `The user answered: ${typeof answer.text === 'string' ? answer.text : ''}`;
-          return ok(text, { answeredBy: r.by, userAnswer: true });
+          // Only an answer from a signed-in Nova client carries the user's words (FR-188).
+          return ok(text, { answeredBy: r.by, userAnswer: r.by === 'user' });
         }
         case 'expired':
           // Like an unanswered approval (docs/09 §12): the run pauses until the user returns.

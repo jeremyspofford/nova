@@ -227,7 +227,8 @@ export function setupDevices(ctx: HubContext, deps: DevicesDeps = {}): Promise<D
       const accountId = await ctx.accountOf(req);
       const body = enrollDeviceSchema.parse(req.body ?? {});
       const out = await service.createEnrollToken(accountId, body.roles, hubUrlOf(req));
-      void reply.status(201);
+      // A one-use credential: no cache and no idempotent replay may keep it.
+      void reply.header('cache-control', 'no-store').status(201);
       return out;
     });
 

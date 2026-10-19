@@ -536,6 +536,8 @@ describe('M6 code routes', () => {
       'sessions.message',
       'sessions.archive',
       'sessions.ask',
+      // M7: an agent can start a Code session.
+      'code.delegate',
     ]);
     expect(await names('chat')).toEqual([]);
     // Late-bound hooks of other areas.

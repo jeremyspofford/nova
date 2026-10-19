@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type {
   AgentView,
-  ChannelBindingView,
+  ChannelBindingViewM7,
   McpEventSourceView,
   McpServerView,
   ProjectView,
@@ -58,7 +58,7 @@ export function TriggersPage() {
   const [version, setVersion] = useState(0);
   const [sources, setSources] = useState<McpEventSourceView[] | null>(null);
   const [servers, setServers] = useState<McpServerView[]>([]);
-  const [bindings, setBindings] = useState<ChannelBindingView[]>([]);
+  const [bindings, setBindings] = useState<ChannelBindingViewM7[]>([]);
   const [agents, setAgents] = useState<AgentView[] | null>(null);
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [creating, setCreating] = useState<NewTriggerKind | null>(null);

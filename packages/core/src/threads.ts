@@ -81,7 +81,12 @@ export class ThreadService {
     return this.#router.firstModel(accountId);
   }
 
-  async create(accountId: string, req: CreateThreadRequest): Promise<ThreadView> {
+  /** `opts.id`: a client-chosen id (a chat a sync replica created offline, FR-109). */
+  async create(
+    accountId: string,
+    req: CreateThreadRequest,
+    opts: { id?: string } = {},
+  ): Promise<ThreadView> {
     if (req.projectId) await this.#assertProject(accountId, req.projectId);
     if (req.model !== undefined) await this.#assertModel(accountId, req.model);
     const model = req.model ?? (await this.defaultModel(accountId));
@@ -93,8 +98,10 @@ export class ThreadService {
       memoryOptOut: req.memoryOptOut ?? false,
       modelId: model,
       reasoningLevel: req.reasoningLevel ?? null,
+      ...(opts.id ? { id: opts.id } : {}),
     });
     await this.#db.transaction(() => this.#db.orm.insert(thread).values(row));
+    await this.#changed('thread.created', accountId, row.id);
     return toThreadView(row);
   }
 
@@ -203,6 +210,7 @@ export class ThreadService {
       citesBy.set(c.messageId, list);
     }
     const groups = siblingGroups(this.#db, viewThreadId);
+    const synced = syncedFromDevice(this.#db, ids);
     return rows.map((m) => {
       const v = toMessageView(m, byMessage.get(m.id) ?? []);
       v.parentId = m.parentId;
@@ -213,11 +221,11 @@ export class ThreadService {
       const cs = citesBy.get(m.id);
       if (cs?.length) v.citations = cs.map(toCitationView);
       if (m.role === 'user') {
-        const label = provenanceOf(m);
+        const label = synced.has(m.id) ? 'sync' : provenanceOf(m);
         if (label) v.provenance = label;
         const mentions = mentionsOf(byMessage.get(m.id) ?? []);
         if (mentions.length) v.mentions = mentions;
-      }
+      } else if (m.authorKind === 'offline') v.provenance = 'offline';
       return v;
     });
   }
@@ -242,6 +250,7 @@ export class ThreadService {
       await this.#db.transaction(() =>
         this.#db.orm.update(thread).set(set).where(eq(thread.id, id)),
       );
+      await this.#changed('thread.updated', accountId, id);
     }
     return this.view(accountId, id);
   }
@@ -264,6 +273,23 @@ export class ThreadService {
         .set({ deletedAt: now })
         .where(and(inArray(message.threadId, ids), isNull(message.deletedAt)));
     });
+    await this.#changed('thread.deleted', accountId, id);
+  }
+
+  /**
+   * Create, update and delete have no other event; sync's change feed listens for these
+   * (FR-109). Flag toggles do not move `updated_at`, so the event is the only trace of them. A
+   * hint, not history: published, not persisted.
+   */
+  #changed(name: string, accountId: string, threadId: string): Promise<void> {
+    this.#events?.emitEphemeral({
+      name,
+      actor: 'system',
+      accountId,
+      correlation: { threadId },
+      payload: { threadId },
+    });
+    return Promise.resolve();
   }
 
   // ---- versions, branches, side chats (FR-020, FR-026, FR-033) ---------------------------
@@ -585,7 +611,7 @@ export function ftsQuery(input: string): string | null {
 
 // ---- cursors ----------------------------------------------------------------------------
 
-interface Cursor {
+interface PageCursor {
   pinned: number;
   updatedAt: string;
   id: string;
@@ -595,7 +621,7 @@ function encodeCursor(r: ThreadRow): string {
   return Buffer.from(JSON.stringify([r.pinned ? 1 : 0, r.updatedAt, r.id])).toString('base64url');
 }
 
-function decodeCursor(cursor: string): Cursor {
+function decodeCursor(cursor: string): PageCursor {
   try {
     const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
     const v = Array.isArray(parsed) ? (parsed as unknown[]) : null;
@@ -740,6 +766,25 @@ export function toPartView(p: PartRow): PartView | null {
  * (FR-019), a hook's continuation (FR-197), or M5's run objective, schedule fire, goal
  * continuation and sub-agent task (TurnStarter), or a message Nova itself started (`system`).
  */
+/**
+ * Messages a device appended through sync (FR-112, M7): the change feed records the device whose
+ * op wrote each message body. Such a user message keeps author `user`, so the label comes from here.
+ */
+function syncedFromDevice(db: NovaDatabase, ids: string[]): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const rows = db.raw
+      .prepare(
+        `SELECT entity_id FROM sync_field WHERE kind = 'message' AND field = 'body'
+         AND device_id IS NOT NULL AND entity_id IN (${chunk.map(() => '?').join(',')})`,
+      )
+      .all(...chunk) as { entity_id: string }[];
+    for (const r of rows) out.add(r.entity_id);
+  }
+  return out;
+}
+
 function provenanceOf(m: MessageRow): MessageView['provenance'] | null {
   switch (m.authorKind) {
     case 'hook':

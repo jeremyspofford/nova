@@ -21,7 +21,9 @@ Account ──1:N── ProviderAccount ──1:N── ModelPref
    │           │             │              │              └──1:N── Citation
    │           │             │              └──1:N── ServerRequest ──0:1── Approval
    │           │             ├──1:N── Artifact
-   │           │             └──0:1── SessionHandoff
+   │           │             ├──1:N── ThreadShare / SharedMessage (a shared thread, M7)
+   │           │             ├──1:N── ScriptRun (script.run, M7)
+   │           │             └──1:N── SessionHandoff
    │           ├──1:N── Source ──1:N── SourceChunk
    │           └──1:N── ProjectFolder ──1:N── ProjectFolderFile ──1:1── Source
    │
@@ -34,11 +36,15 @@ Account ──1:N── ProviderAccount ──1:N── ModelPref
    │
    ├──1:N── CodeSession ──1:N── CodeChange ──1:N── DiffComment
    │            ├──1:N── CodeReview ──1:N── DiffComment (findings)
-   │            ├──N:1── Environment
+   │            ├──N:1── Environment ──1:N── CloudRun / CloudSnapshot / CloudWorkBinding (cloud, M7)
    │            ├──0:1── Worktree (lease)
    │            ├──0:1── CodeSessionState (budgets, setup, task.spawn parent)
    │            ├──1:N── CodePullRequest ──N:1── GitHost
    │            ├──1:N── CodeVerifyRun
+   │            ├──1:N── CodeAttemptSet ──1:N── CodeAttempt (each its own CodeSession, M7)
+   │            ├──1:N── CodeMerge (M7)
+   │            ├──0:1── CodeDelegation (an Agent started it, M7)
+   │            ├──1:N── AgentDelegation (by its thread) ──N:1── AgentAdapter (M7)
    │            └──1:N── SessionHandoff
    │
    ├──1:N── Agent ──1:N── AgentThread (main, proactive, binding, background)
@@ -48,9 +54,18 @@ Account ──1:N── ProviderAccount ──1:N── ModelPref
    │            ├──1:N── AgentWake
    │            ├──0:1── Goal (open)
    │            ├──1:N── ChannelBinding ──1:1── Thread (per channel, ADR-070)
+   │            │            └──0:1── ChannelReadPosition, 1:N── ChannelApprovalLink (M7)
    │            ├──0:1── Computer (its own) ──1:N── ComputerSnapshot
-   │            └──0:1── AgentDeviceConnection (active) ──N:1── Device
+   │            ├──0:1── AgentDeviceConnection (active) ──N:1── Device
+   │            ├──0:1── AgentPluginScope (M7)
+   │            └──0:1── TeamAgent (own identity Account) ──1:N── TeamAgentCredential / TeamTask (M7)
+   ├──0:1── TeamMember / ProfileCard (M7)
+   ├──1:N── MemberSetting (M7)
+   ├──1:N── TeamInvitation / OidcProvider (created by the owner, M7)
+   ├──1:N── OidcIdentity ──N:1── OidcProvider (M7)
    ├──1:N── ExternalAgent / ChannelIdentity / NotificationRule / NotificationDelivery
+   ├──1:N── PushSubscription / PushDelivery (M7)
+   ├──1:N── SyncField (change feed) / SyncMergeEntry / IdempotencyKey (M7)
    ├──0:1── QuietHours
    ├──1:N── Computer ──1:N── ScreenGrant / ScreenAction / ScreenTakeover / ScreenAppshot
    │            └──0:1── ScreenControl
@@ -71,7 +86,8 @@ Account ──1:N── ProviderAccount ──1:N── ModelPref
    ├──1:N── UsageEvent
    ├──1:N── Notification
    ├──1:N── Setting / FeatureFlag            (themes and keybindings are files, §3)
-   ├──1:N── Device (§7) ──1:N── SyncState / TransportEndpoint / StagedWrite / Worktree
+   ├──1:N── Device (§7) ──1:N── TransportEndpoint / StagedWrite / Worktree
+   │            ├──0:1── SyncReplica (M7)
    │            ├──0:1── DeviceManagement (novad devices)
    │            └──1:N── DeviceGrant / DeviceUpdate / WakeRequest
    └──1:N── Automation / SmartEntity (§8)
@@ -225,7 +241,8 @@ CREATE INDEX idx_turn_started ON turn(started_at); -- usage insights: the longes
 CREATE TABLE message (
   id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL REFERENCES thread(id),
-  turn_id TEXT REFERENCES turn(id), -- NULL only for messages imported without turns (FR-200)
+  turn_id TEXT REFERENCES turn(id), -- NULL only for messages imported without turns (FR-200) and
+                                   -- messages a device replica pushed (M7, FR-112)
   role TEXT NOT NULL,              -- system|user|assistant|tool|summary (summary: a compaction, below)
   author_kind TEXT,                -- who wrote it (table below)
   provenance TEXT NOT NULL DEFAULT 'typed', -- typed|pasted|tool|channel|capture|import (FR-189)
@@ -304,6 +321,15 @@ authority (FR-189); every other user-role message gets `provenance = 'tool'`:
 | `goal` | user | a goal continuation (FR-181); never the user's authority |
 | `subagent` | user | a sub-agent's task, written by the parent model; never the user's authority |
 | `system` | summary | a compaction summary |
+| `offline` | assistant | an answer a device's local model wrote while the Hub was unreachable, pushed by its replica (M7, FR-128) |
+
+*As built in M7 (ADR-095; `packages/core/src/sync`).* `message.provenance` is unchanged: its
+CHECK (0002) still allows only the six values above. A message a device replica pushed is stored
+with `provenance = 'typed'` and `turn_id` NULL. An offline user message keeps `author_kind =
+'user'`, so memory extraction and intent checks treat it as the user's own words. The labels the
+message view shows are derived when a thread is read: `offline` from `author_kind = 'offline'`,
+and `sync` for a user message whose change-feed row (`sync_field`, field `body`) names the device
+that wrote it.
 
 Thread status (FR-215: Running, Needs input, Ready, Blocked) is **derived** from `thread.state`,
 open `turn` rows, pending `server_request` rows, `goal.status` and child runs (`docs/09` §9);
@@ -675,6 +701,53 @@ Audit actions added in M6.5 (ADR-094; `kind` / `action`; no new kind):
 No entry holds a code, nonce, token or key. Trust actions the Hub takes on its own are attributed
 to the owner account and not written before setup.
 
+Audit actions added in M7 (ADR-095; `kind` / `action`; no new kind: sync uses `device`, the cloud
+runner `settings`, `code` and `run`):
+
+| Kind | Action | Resource | Written for |
+| --- | --- | --- | --- |
+| `device` | `sync.restore` | `sync:<kind>:<entityId>` | restoring a merge-log entry (FR-109): detail `{entryId, kind, entityId, field, deviceId}` (the device of a device session, else null) |
+| `device` | `sync.replica.reset` | `device:<id>` | the owner resets a device's replica; it must load a snapshot again |
+| `settings` | `cloud.runner.change`, `cloud.runner.remove` | `cloud.runner` | the cloud runner's URL, token and switch (FR-108): `{url, urlChanged, token: replaced\|kept, enabled, test}`; never the token |
+| `code` | `cloud.environment.rebuild`, `cloud.environment.remove`, `cloud.snapshot.create`, `cloud.snapshot.restore`, `cloud.snapshot.delete` | the environment or snapshot id | cloud environments (FR-071) and their snapshots; creating a cloud environment writes the M6 `environment.created` with `detail.kind: cloud` |
+| `run` | `cloud.run.start`, `cloud.run.cancel`, `cloud.run.caps`, `cloud.run.capped`, `cloud.artifact.import`, `cloud.work.start` | the cloud run id (`cloud.work.start`: the Work run id) | leases on a cloud environment and their caps (FR-108, FR-116); `cloud.run.capped` (actor `system`) has `{resource, used, limit}`; an imported artifact has its size and SHA-256 |
+| `settings` | `push.subscribe`, `push.unsubscribe`, `push.subscription.gone`, `push.test`, `push.vapid.create` | `push_subscription:<id>` (`push.test` without one: `push`; `push.vapid.create`: `push:vapid`) | Web Push (FR-111): the endpoint's origin, never its keys; `push.subscription.gone` (actor `system`, `detail: {reason, deviceId?}`) when the push service drops an endpoint (`reason`: the push service's answer) or its device is revoked (`reason: device_revoked`, which also deletes its keys from the vault); the VAPID key made on first use (actor `system`) |
+| `settings` | `notification.test` | `notification_rule:<category>` | a test notification from Settings (FR-060) |
+| `schedule` | `schedule.webhook_secret.rotate` | `schedule:<id>` | a webhook signing secret rotated (FR-055); the secret is shown once and never audited |
+| `mcp` | `mcp.subscription.refresh` | `mcp_server:<id>` | refreshing an MCP event subscription by hand (FR-201) |
+| `channel` | `channel.approval.answered`, `channel.approval.refused` | `approval:<id>` | M7 adds `detail.via: button\|link` (a button press or the signed email link; a text answer has none) and the refusal reasons `unknown`, `other_conversation`, `already_decided`, `link_required`, `unavailable`; `channel.message.dropped` gains the reason `unverified_sender`; `channel.email.sender_check_off` when an email binding's `senderCheck` is set to `none` (after the explicit confirmation) |
+| `code` | `code.handoff.requested`, `code.handoff.completed`, `code.handoff.refused`, `code.handoff.failed`, `thread.handoff` | the target folder, else the target ref | handoffs (FR-213): `{handoffId, sessionId?, from, …}`; `thread.handoff` moves a chat |
+| `code` | `code.merge`, `code.merge.resolved`, `code.merge.aborted` | the session folder | three-way merges (FR-073); `code.merge` has `result` `ok`, `conflict` or `denied` |
+| `code` | `code.attempts.started`, `code.attempt.applied`, `code.attempts.discarded` | the parent session's folder | best-of-N (FR-212); `code.attempt.applied` has `result: conflict` when its merge conflicted |
+| `code` | `code.delegate`, `code.delegation.held`, `code.delegation.cancelled` | the session folder (`held`, `cancelled`: the session id) | a session an agent started (actor `agent:<id>`); `held` when the agent pauses or stops, `cancelled` when it is deleted (actor `system`) |
+| `code` | `environment.hostkey.pinned`, `environment.hostkey.mismatch`, `environment.hostkey.reset` | the environment id | SSH host keys (FR-062): pinned on first use (actor `system`) or by an update; a different key refused (`result: denied`, actor `system`); reset on purpose, or when the host changed (`reason: host_changed`) |
+| `code` | `code.mode.changed` | the session folder | M7 also writes it (actor `system`, `detail.reason: handoff`) when a handoff target cannot offer the session's mode |
+| `tool_call` | `script.call` | the nested tool's name | each call a `script.run` script made (FR-202), besides the call's own entry: `{scriptCallId, callId, tool, index}`, `decision` and `result` its status; actor `system` |
+| `code` | `agent_adapter.create`, `agent_adapter.update`, `agent_adapter.delete`, `agent_adapter.check` | the adapter id | external agent adapters (FR-203); `check` records the handshake's `{ok, reason}` |
+| `code` | `delegation.start`, `delegation.permission`, `delegation.cancel`, `delegation.finish` | the delegation id | a Code session's delegation to an adapter: the prompt's SHA-256 only; each permission request the agent made (actor `system`, `decision` the answer); a cancel (actor `user`), also when turning the flag off stopped it (actor `system`, `detail.reason`); the end with `{status, stopReason, permissionRequests, operations}` |
+| `policy` | `acp.fetch`, `acp.think`, `acp.action` | the resource, if any | the gate's decisions on an external agent's own permission requests (the gate audits every decision under the tool's name) |
+| `mcp` | `add` | `mcp_server:<id>` | M7 records `deviceId` (a server on a device), `auth: true` (a stored Authorization header, never its value) and the `oauth` settings (FR-042) |
+| `mcp` | `client.call` | `app_authorization:<id>` | M7 also writes it for MCP clients' resource and prompt reads and listings (FR-044) |
+| `auth` | `team.invite`, `team.invite.revoke` | `invitation:<id>` | the owner's invitation links for the people of the Hub (ADR-095) |
+| `auth` | `team.join`, `team.member.remove` | `account:<id>` | a member joining (`detail.via` `local` or `oidc`) and the owner removing one |
+| `auth` | `oidc.provider.create`, `oidc.provider.update`, `oidc.provider.delete`, `oidc.provider.test` | `oidc:<id>` | OIDC providers (FR-113) |
+| `auth` | `oidc.link`, `oidc.sign_in`, `oidc.refused`, `oidc.unlink` | `oidc:<providerId>` (`oidc.unlink`: `oidc-identity:<id>`) | OIDC sign-in; `oidc.refused` (actor `system`) has `{reason, flow}` and goes to the account that started it, else the owner's |
+| `auth` | `profile.card` | `account:<id>` | the public profile card's switch and handle (FR-113) |
+| `auth` | `thread.share`, `thread.unshare` | `thread:<id>` | shared threads (FR-217) |
+| `agent` | `team_agent.provision`, `team_agent.remove`, `team_agent.credential.add`, `team_agent.credential.remove` | `agent:<id>` | team agents (FR-091), written twice: in the owner's trail (actor `user`) and the identity account's (actor `owner:<accountId>`) |
+| `agent` | `team_task.start`, `team_task.end` | `team-task:<id>` | a task given to a team agent, in its identity account's trail (actor `agent:<id>`) |
+| `agent` | `goal.usage_retry`, `agent.plugins` | `agent:<id>` | a goal tried again after a usage limit (actor `system`); the plugins connected to an agent (FR-045) |
+| `device` | `device.tls.refuse` | the device id | a `novad` device or compute node refused at mutual TLS (FR-126): `{kind, reason, serial}`, at most once an hour per device and reason; actor `system` |
+| `network` | `relay.registrationToken.set`, `relay.registrationToken.clear` | `relay` | the Relay registration token; detail holds only its `secret://` reference |
+| `browser` | `browser.session.crashed`, `browser.session.restarted`, `browser.session.restart_failed` | the host | a crashed page or browser and its restart (docs/11 §10); actor `system`; after 3 restarts in 10 minutes the session closes with `restart_failed` |
+| `browser` | `browser.site.level.set`, `browser.site.level.removed` | the site pattern (none when a deletion removed them) | a site's level for one project or agent (FR-094): `{scopeKind, scopeRef, level}`; when deleting the project or agent removed its levels, actor `system` and `{scopeKind, scopeRef, count, reason: project_deleted\|agent_deleted}` |
+| `browser` | `browser.injection_suspected` | the host | M7 also writes it for console and network capture (`detail.source` `console` or `network`), once per set of findings |
+
+No entry holds a runner token, push key, invitation token, OIDC code or secret, adapter secret
+value or script code. Sync pushes and their merges are not audited (the merge log keeps every
+overwritten value), nor are push deliveries (`push_delivery` keeps how each ended) or idempotent
+replays.
+
 ### work runs, goals, schedules, triggers
 
 ```sql
@@ -920,8 +993,9 @@ CREATE TABLE environment (
 );
 CREATE UNIQUE INDEX idx_environment_local ON environment(account_id) WHERE kind = 'local';
 -- M5 has one built-in `local` environment per account (the Hub host); it is `ok` or `degraded`,
--- never `down`. M6 saves container, ssh, wsl and device environments (FR-062, FR-078); cloud and
--- vm are not offered yet.
+-- never `down`. M6 saves container, ssh, wsl and device environments (FR-062, FR-078). M7 adds
+-- `cloud` (the cloud runner, below); `vm` is not offered. An SSH environment's host key, pinned on
+-- first use, is `config_json.hostKey` (M7).
 
 CREATE TABLE code_session (
   id TEXT PRIMARY KEY,
@@ -963,15 +1037,25 @@ CREATE INDEX idx_worktree_repo ON worktree(device_id, repo_path, status);
 CREATE UNIQUE INDEX idx_worktree_hub_path ON worktree(path) WHERE device_id IS NULL;
 -- An archived session releases its lease: a clean worktree is removed, a dirty one is kept.
 
-CREATE TABLE session_handoff (      -- FR-213; recorded in the session history
-  id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+CREATE TABLE session_handoff (      -- 0036 (M7): a move of a Code session, or of a chat, to another
+  id TEXT PRIMARY KEY,             -- device, environment or worktree (FR-213); the session history
+  account_id TEXT NOT NULL REFERENCES account(id),
   thread_id TEXT NOT NULL REFERENCES thread(id),
   code_session_id TEXT REFERENCES code_session(id), -- NULL for a chat handoff
-  from_ref TEXT NOT NULL, to_ref TEXT NOT NULL, -- 'device:<id>' | 'environment:<id>'
-  git_state_json TEXT,             -- {branch, baseSha, worktreeId?, patchBlobPath?, patchSha256?}
-  status TEXT NOT NULL DEFAULT 'pending', -- pending|completed|failed
+  from_ref TEXT NOT NULL, to_ref TEXT NOT NULL, -- 'environment:<id>' | 'worktree:<id>' |
+                                   -- 'device:<id>' | 'hub'
+  from_label TEXT NOT NULL, to_label TEXT NOT NULL,
+  target_folder TEXT,              -- where the session lands
+  source_action TEXT NOT NULL DEFAULT 'keep', -- keep|clean: what happens to the source
+  git_state_json TEXT,             -- branch, HEAD, the working-state tree and the hashes of the patch
+                                   -- and bundle; the files are under code/handoffs/<id>/ (§3)
+  status TEXT NOT NULL DEFAULT 'pending', -- pending|running|completed|refused|failed
+  reason TEXT,                     -- why it was refused or failed, e.g. target_dirty,
+                                   -- branch_diverged, protected_folder
   error TEXT, created_at TEXT NOT NULL, completed_at TEXT
 );
+CREATE INDEX idx_session_handoff_thread ON session_handoff(thread_id, created_at DESC);
+CREATE INDEX idx_session_handoff_session ON session_handoff(code_session_id, created_at DESC);
 
 CREATE TABLE code_change (          -- one changed file (FR-064, FR-065), relative to the session folder
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES code_session(id),
@@ -1073,6 +1157,184 @@ M6 mirrors the latest pull request's URL and CI status onto `code_session.pull_r
 `ci_status` for the session view; the pull requests themselves live in `code_pull_request`. Dev
 servers (FR-097) and the processes of an environment are not stored:
 they are exec sessions in Hub memory, and `novad` buffers a remote environment's process output.
+
+Migration 0036 (M7; FR-212, FR-213, FR-073; ADR-095) creates `session_handoff` as shown above
+and adds best-of-N attempts, three-way merges and Code sessions an agent starts. Agent ids are
+plain TEXT: removing an agent never waits on its delegations.
+
+```sql
+CREATE TABLE code_attempt_set (     -- a best-of-N task (FR-212): N attempts of one objective
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  session_id TEXT NOT NULL REFERENCES code_session(id),
+  objective TEXT NOT NULL,
+  base_sha TEXT NOT NULL,          -- the session's HEAD; every attempt starts there
+  status TEXT NOT NULL DEFAULT 'running', -- running|ready|applied|discarded
+  applied_attempt_id TEXT, merge_id TEXT, -- set when the user applied one (plain TEXT)
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_code_attempt_set_session ON code_attempt_set(session_id, created_at DESC);
+
+CREATE TABLE code_attempt (         -- one attempt (2 to 4 per set): its own Code session in its own
+  id TEXT PRIMARY KEY,             -- worktree, with its budgets in code_session_state
+  set_id TEXT NOT NULL REFERENCES code_attempt_set(id),
+  idx INTEGER NOT NULL,
+  session_id TEXT NOT NULL REFERENCES code_session(id),
+  model_id TEXT,
+  status TEXT NOT NULL DEFAULT 'running', -- running|done|failed|applied|discarded
+  reply TEXT,                      -- its last reply: the model's words, untrusted
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE (set_id, idx)
+);
+CREATE INDEX idx_code_attempt_session ON code_attempt(session_id);
+
+CREATE TABLE code_merge (           -- a three-way merge onto a session's folder (docs/10 §9, §14)
+  id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES code_session(id),
+  source_kind TEXT NOT NULL,       -- session (another session's work)|attempt|patch
+  source_ref TEXT, base_sha TEXT,
+  status TEXT NOT NULL,            -- applied|conflicted|resolved|refused|aborted
+  files_json TEXT NOT NULL DEFAULT '[]',     -- MergeFileView[]
+  conflicts_json TEXT NOT NULL DEFAULT '[]', -- MergeConflictView[], bounded and redacted
+  backup_path TEXT,                -- code/<session-id>/merges/<id>.json: the files as they were,
+                                   -- for an abort; NULL when nothing was written
+  created_at TEXT NOT NULL, resolved_at TEXT
+);
+CREATE INDEX idx_code_merge_session ON code_merge(session_id, created_at DESC);
+
+CREATE TABLE code_delegation (      -- a Code session an agent started with code.delegate (docs/09 §4)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  agent_id TEXT NOT NULL, agent_thread_id TEXT NOT NULL, -- plain TEXT
+  session_id TEXT NOT NULL REFERENCES code_session(id),
+  thread_id TEXT NOT NULL,         -- the session's thread: the agent's rules apply there, and the
+                                   -- result returns to the agent
+  status TEXT NOT NULL DEFAULT 'running', -- running|done|failed
+  created_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE UNIQUE INDEX idx_code_delegation_thread ON code_delegation(thread_id);
+CREATE INDEX idx_code_delegation_agent ON code_delegation(agent_id, created_at DESC);
+```
+
+By default a merge with conflicts is refused (`refused`, with each conflict's three sides). When
+the user asks for markers it is written as `conflicted`, and the markers block commits until the
+merge is resolved or aborted; binary conflicts are never merged. Handoff bundles are deleted when
+the handoff completes, and the handoff folders expire after 7 days.
+
+### cloud runner
+
+Migration 0034 (M7; FR-108, FR-071, FR-116; ADR-095). A cloud environment is an `environment` row
+of kind `cloud`. Its `config_json` holds the runner's environment id and the spec: repository URLs
+without user information, setup script, base image, caches, network, disk cap. The Hub keeps the
+agent loop, the model calls and the policy gate; the runner keeps the environments, runs their
+commands and holds the snapshot files. The runner token is a vault entry
+(`secret://cloud/runner/token`), never a row. Thread and Work run ids are plain TEXT: threads can
+be purged, and runs belong to the runs area.
+
+```sql
+CREATE TABLE cloud_run (            -- a Code session's or Work run's lease on a cloud environment
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  environment_id TEXT NOT NULL REFERENCES environment(id),
+  thread_id TEXT,
+  kind TEXT NOT NULL,              -- code|work|system (a lease with no thread)
+  work_run_id TEXT,
+  runner_run_id TEXT NOT NULL,     -- the run on the runner
+  status TEXT NOT NULL DEFAULT 'active', -- active|completed|cancelled|capped|failed|lost (the runner
+                                   -- no longer knows it)
+  reason TEXT,
+  cpu_cap_s INTEGER NOT NULL, wall_cap_s INTEGER NOT NULL, -- from cloud.runner.caps: 3,600 s CPU and
+                                   -- 14,400 s wall by default; raisable (FR-116)
+  cpu_used_s REAL NOT NULL DEFAULT 0, wall_used_s REAL NOT NULL DEFAULT 0, -- metered by the runner;
+                                   -- wall time counts only while a command runs
+  commands INTEGER NOT NULL DEFAULT 0,
+  warnings_json TEXT NOT NULL DEFAULT '[]', -- resources past the warning point (0.8 of a cap)
+  last_event_id INTEGER NOT NULL DEFAULT 0, -- where the Hub's event stream from the runner resumes
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ended_at TEXT
+);
+CREATE INDEX idx_cloud_run_thread ON cloud_run(account_id, thread_id, status);
+CREATE INDEX idx_cloud_run_environment ON cloud_run(environment_id, status);
+CREATE UNIQUE INDEX idx_cloud_run_runner ON cloud_run(runner_run_id);
+
+CREATE TABLE cloud_work_binding (   -- a Work run whose commands and files go to a cloud environment
+  thread_id TEXT PRIMARY KEY,      -- the run's thread
+  account_id TEXT NOT NULL REFERENCES account(id),
+  environment_id TEXT NOT NULL REFERENCES environment(id),
+  work_run_id TEXT NOT NULL,
+  folder TEXT NOT NULL,            -- the run's working folder on the runner
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_cloud_work_binding_environment ON cloud_work_binding(environment_id);
+
+CREATE TABLE cloud_snapshot (       -- the Hub's index of a cloud environment's snapshots; the tar
+  id TEXT PRIMARY KEY,             -- itself stays on the runner
+  account_id TEXT NOT NULL REFERENCES account(id),
+  environment_id TEXT NOT NULL REFERENCES environment(id),
+  runner_snapshot_id TEXT NOT NULL,
+  label TEXT,
+  reason TEXT NOT NULL,            -- manual|run_start|before_restore
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, restored_at TEXT
+);
+CREATE INDEX idx_cloud_snapshot_environment ON cloud_snapshot(environment_id, created_at DESC);
+```
+
+Nova does not encrypt the snapshot tar files; encryption at rest on the runner is its operator's.
+Agents' own `cloud` computers still use the M6 mock runner on the Hub, not these tables.
+
+### scripts and external agents (flagged)
+
+Migration 0038 (M7; FR-202, FR-203). Both features are off by default (`scripts.enabled`,
+`externalAgents.enabled`); while a flag is off its routes answer 404.
+
+```sql
+CREATE TABLE script_run (           -- one script.run call (FR-202); its id is the tool call's
+  id TEXT PRIMARY KEY,             -- (tool_call.id), and its nested calls are the tool calls whose
+                                   -- parent_call_id names it
+  account_id TEXT NOT NULL REFERENCES account(id),
+  thread_id TEXT REFERENCES thread(id), turn_id TEXT,
+  code_sha256 TEXT NOT NULL,       -- the code's hash only, never the code or its output (the
+                                   -- tool_call row holds the redacted arguments and result)
+  status TEXT NOT NULL,            -- running|ok|error|cancelled
+  error_code TEXT,
+  calls INTEGER NOT NULL DEFAULT 0, -- nested calls; scripts.limits.maxCalls is 20 by default
+  cpu_ms INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, ended_at TEXT
+);
+CREATE INDEX idx_script_run_thread ON script_run(thread_id, created_at);
+
+CREATE TABLE agent_adapter (        -- an external coding agent the owner registered (FR-203): a
+  id TEXT PRIMARY KEY,             -- command that speaks an open agent protocol on stdio
+  account_id TEXT NOT NULL REFERENCES account(id),
+  name TEXT NOT NULL, command TEXT NOT NULL,
+  args_json TEXT NOT NULL DEFAULT '[]',
+  env_json TEXT NOT NULL DEFAULT '{}', -- secret:// references only, under the adapter's own
+                                   -- secret://agent-adapter/<id>/; any other is refused
+  network_json TEXT NOT NULL DEFAULT '[]', -- hosts its process may reach through the egress proxy;
+                                   -- none by default
+  permission_routing TEXT NOT NULL CHECK (permission_routing IN ('client')), -- the only mode: every
+                                   -- file read, write and command goes through Nova's gate
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_check_json TEXT,            -- the last handshake: agent name and version, protocol version,
+                                   -- or why it was refused
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE UNIQUE INDEX idx_agent_adapter_name ON agent_adapter(account_id, name)
+  WHERE deleted_at IS NULL;
+
+CREATE TABLE agent_delegation (     -- one task a Code session delegated to an adapter
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  thread_id TEXT NOT NULL REFERENCES thread(id), -- the session's thread
+  adapter_id TEXT NOT NULL REFERENCES agent_adapter(id),
+  status TEXT NOT NULL,            -- starting|running|completed|failed|cancelled
+  prompt TEXT NOT NULL,            -- the user's
+  output TEXT,                     -- the agent's reply text, redacted and capped
+  stop_reason TEXT, error TEXT,
+  agent_json TEXT,                 -- the agent's name and version as it reported them, redacted
+  permission_requests INTEGER NOT NULL DEFAULT 0, operations INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, ended_at TEXT
+);
+CREATE INDEX idx_agent_delegation_thread ON agent_delegation(thread_id, created_at);
+```
+
+A delegation's file changes are the session's own diffs; the agent's progress is an event stream,
+not stored.
 
 ### agents & computers
 
@@ -1240,6 +1502,133 @@ CREATE TABLE egress_credential (    -- a credential the proxy injects for its ho
 Every egress decision is an audit entry (kind `network`), not a table row; `GET
 /egress/decisions` reads them back.
 
+### people, shared threads and team agents
+
+Migration 0037 (M7; FR-217, FR-091, FR-113, FR-045; ADR-095). Several people can use one Hub.
+Each member has their own `account` row (kind `local`), with their own memory, connectors and
+sessions; a team agent works under an identity account of its own that nobody signs in to.
+Removing a member sets `account.deleted_at` (the account is closed) and keeps their data. The
+OIDC client secret and team agents' credentials are vault entries; rows hold only `secret://`
+references.
+
+```sql
+CREATE TABLE team_member (          -- the people of the Hub; the owner's row is recorded at setup
+  account_id TEXT PRIMARY KEY REFERENCES account(id), -- (or when an older Hub first starts M7)
+  role TEXT NOT NULL,              -- owner|member; the owner row decides who the owner is
+  invitation_id TEXT,
+  invited_by TEXT REFERENCES account(id),
+  joined_at TEXT NOT NULL,
+  removed_at TEXT, removed_by TEXT -- a removed member's sessions end and their account is closed
+);
+CREATE UNIQUE INDEX uq_team_member_owner ON team_member(role) WHERE role = 'owner';
+
+CREATE TABLE team_invitation (      -- one-use invitation links; only the token's SHA-256 is stored
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL DEFAULT 'member' CHECK (role = 'member'),
+  label TEXT CHECK (label IS NULL OR length(label) <= 100),
+  created_by TEXT NOT NULL REFERENCES account(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,        -- team.invitationHours: 72 by default, at most 720
+  redeemed_at TEXT, redeemed_by TEXT REFERENCES account(id), revoked_at TEXT
+);
+CREATE INDEX idx_team_invitation_created ON team_invitation(created_at);
+
+CREATE TABLE oidc_provider (        -- an OIDC provider the owner configured (FR-113, docs/13 §7)
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 100),
+  issuer TEXT NOT NULL UNIQUE,
+  client_id TEXT NOT NULL,
+  client_secret_ref TEXT,          -- secret://team/oidc/<id>; NULL for a public client (PKCE alone)
+  scopes TEXT NOT NULL DEFAULT 'openid profile email',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL REFERENCES account(id),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE oidc_identity (        -- an account linked to an OIDC identity (issuer + subject)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  provider_id TEXT NOT NULL REFERENCES oidc_provider(id) ON DELETE CASCADE,
+  subject TEXT NOT NULL, email TEXT,
+  linked_at TEXT NOT NULL, last_sign_in_at TEXT,
+  UNIQUE (provider_id, subject),
+  UNIQUE (account_id, provider_id) -- one identity per provider per account
+);
+
+CREATE TABLE profile_card (         -- the opt-in public profile card (FR-113): read-only, the display
+  account_id TEXT PRIMARY KEY REFERENCES account(id), -- name and, optionally, the avatar
+  handle TEXT NOT NULL UNIQUE CHECK (length(handle) BETWEEN 3 AND 40),
+  enabled INTEGER NOT NULL DEFAULT 0, -- served only while team.publicProfiles is on as well
+  show_avatar INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE thread_share (         -- a participant of a shared thread other than its owner (FR-217)
+  thread_id TEXT NOT NULL REFERENCES thread(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES account(id),
+  owner_account_id TEXT NOT NULL REFERENCES account(id),
+  shared_by TEXT NOT NULL REFERENCES account(id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (thread_id, account_id)
+);
+CREATE INDEX idx_thread_share_account ON thread_share(account_id, created_at);
+
+CREATE TABLE shared_message (       -- who wrote each user message of a shared thread
+  message_id TEXT PRIMARY KEY,     -- plain TEXT: a queued message keeps its queue id
+  thread_id TEXT NOT NULL REFERENCES thread(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES account(id),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_shared_message_thread ON shared_message(thread_id, created_at);
+
+CREATE TABLE team_agent (           -- a specialist/team agent (FR-091): an always-on agent that lives
+  agent_id TEXT PRIMARY KEY REFERENCES agent(id) ON DELETE CASCADE, -- in its own identity account
+  identity_account_id TEXT NOT NULL UNIQUE REFERENCES account(id), -- its memory, connectors,
+                                   -- credentials, policy and audit
+  created_by TEXT NOT NULL REFERENCES account(id),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE team_agent_credential ( -- bookkeeping for the admin's list: a provider_account or
+  id TEXT PRIMARY KEY,             -- egress_credential row of the identity account
+  agent_id TEXT NOT NULL REFERENCES team_agent(agent_id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,              -- provider|egress
+  ref_id TEXT NOT NULL,            -- that row's id; its value is a vault entry
+  label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 100),
+  created_by TEXT NOT NULL REFERENCES account(id),
+  created_at TEXT NOT NULL,
+  UNIQUE (agent_id, kind, ref_id)
+);
+
+CREATE TABLE team_task (            -- a task a person gave a team agent; it runs under the agent's
+  id TEXT PRIMARY KEY,             -- identity, in a thread of its own
+  agent_id TEXT NOT NULL REFERENCES team_agent(agent_id) ON DELETE CASCADE,
+  requested_by TEXT NOT NULL REFERENCES account(id),
+  text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 8000),
+  thread_id TEXT, turn_id TEXT,
+  status TEXT NOT NULL,            -- queued|running|done|failed|cancelled
+  result TEXT, error TEXT,
+  created_at TEXT NOT NULL, started_at TEXT, ended_at TEXT
+);
+CREATE INDEX idx_team_task_agent ON team_task(agent_id, created_at);
+CREATE INDEX idx_team_task_requester ON team_task(requested_by, created_at);
+
+CREATE TABLE agent_plugin_scope (   -- the plugins connected to an agent (FR-045): its threads may use
+  agent_id TEXT PRIMARY KEY REFERENCES agent(id) ON DELETE CASCADE, -- only their tools; no row:
+  plugin_ids_json TEXT NOT NULL,   -- every plugin the account enabled
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE member_setting (       -- a member's own preferences (appearance, keyboard, onboarding);
+  account_id TEXT NOT NULL REFERENCES account(id), -- Hub settings stay the owner's
+  key TEXT NOT NULL, value_json TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, key)
+);
+```
+
+A shared thread stays in its owner's account and is memory opt-out: nobody's memory joins its
+turns, and each turn runs under whoever wrote it.
+
 ### channels & notification routing
 
 Migration 0021 (FR-088, FR-056, FR-201, FR-060). Bot tokens, signing secrets and webhook tokens
@@ -1327,6 +1716,61 @@ CREATE TABLE notification_delivery ( -- channel copies of notifications; deferre
 
 Quiet hours are a table, not a setting, because areas cannot write settings.
 
+Migration 0035 (M7; FR-110, FR-111, FR-060) adds what Telegram and email bindings, signed approval
+links and push need. Bot tokens, mailbox passwords, the approval-link key
+(`secret://channels/approval-link-key`), the VAPID key (`secret://push/vapid`) and Web Push auth
+secrets are vault entries. Device, notification and approval ids are plain TEXT, so history rows
+outlive what they name.
+
+```sql
+CREATE TABLE channel_cursor (       -- where a poller left off for one credential group, keyed by the
+  binding_id TEXT PRIMARY KEY REFERENCES channel_binding(id) ON DELETE CASCADE, -- group's first
+  cursor TEXT NOT NULL,            -- binding: a Telegram update offset, or an email folder's
+  updated_at TEXT NOT NULL         -- UIDVALIDITY and last UID
+);
+
+CREATE TABLE channel_approval_link ( -- a signed one-use approval link sent by email (docs/13 §4);
+  id TEXT PRIMARY KEY,             -- the link carries it with an HMAC under the link key
+  account_id TEXT NOT NULL REFERENCES account(id),
+  binding_id TEXT NOT NULL REFERENCES channel_binding(id) ON DELETE CASCADE,
+  approval_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL,        -- the approval's expiry or channels.approvalLinkMinutes (60),
+                                   -- whichever comes first
+  used_at TEXT, decision TEXT,     -- set when the link answered, or was spent by a refused answer
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_channel_approval_link_approval ON channel_approval_link(approval_id);
+
+CREATE TABLE push_subscription (    -- a browser's Web Push subscription (FR-111, RFC 8030/8291)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT,
+  endpoint TEXT NOT NULL,          -- https, on a host push.webPushHosts lists
+  p256dh TEXT NOT NULL,            -- the browser's public key
+  auth_ref TEXT NOT NULL,          -- secret://push/<id>/auth: the auth secret
+  label TEXT,
+  status TEXT NOT NULL DEFAULT 'active', -- active|failing|gone
+  failures INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT, last_success_at TEXT, last_error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE (account_id, endpoint)
+);
+
+CREATE TABLE push_delivery (        -- each push sent: where it went and how it ended, never what it
+  id TEXT PRIMARY KEY,             -- said; kept 7 days
+  account_id TEXT NOT NULL REFERENCES account(id),
+  notification_id TEXT,
+  target_kind TEXT NOT NULL,       -- webpush (a push_subscription) | relay (the account's native
+                                   -- clients through the Relay)
+  target_ref TEXT,
+  status TEXT NOT NULL,            -- sent|failed|gone|skipped
+  detail TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX idx_push_delivery_created ON push_delivery(account_id, created_at);
+```
+
+Plain email text never answers an approval; only the signed link does. Telegram and email messages
+use the M6 `channel_message` rows (a Telegram receipt is `tg:<chat>:<id>`).
+
 ### browser & screen
 
 Migrations 0023 (browser) and 0027 (screen). Computer, thread, turn and call ids are plain
@@ -1335,7 +1779,9 @@ TEXT: the computer table belongs to another area, and purges never block on a tr
 ```sql
 CREATE TABLE browser_site (         -- the allow and block lists with per-site levels (FR-094)
   account_id TEXT NOT NULL REFERENCES account(id),
-  pattern TEXT NOT NULL,
+  pattern TEXT NOT NULL,           -- M7: a level for one project or agent is its own allow row keyed
+                                   -- <pattern>|project:<id> or <pattern>|agent:<id>, with its own
+                                   -- rule (no migration)
   access TEXT NOT NULL,            -- allow|block
   level TEXT,                      -- always_ask|auto_review|always_allow (allow only)
   dev_protocol INTEGER NOT NULL DEFAULT 0, -- developer-protocol mode (allow only)
@@ -1764,14 +2210,96 @@ CREATE TABLE setting (
 );
 
 -- `device` is defined once, in §7.
-
-CREATE TABLE sync_state (
-  id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES device(id),
-  entity_kind TEXT NOT NULL, entity_id TEXT NOT NULL,
-  revision INTEGER NOT NULL, vector_json TEXT,  -- opaque version vector
-  synced_at TEXT
-);
 ```
+
+Sync is migration 0033 (M7; FR-109, FR-112, FR-129; ADR-010, ADR-036, ADR-095). The Hub is
+canonical. Every synced field has one row in `sync_field` with its current value, its hybrid
+logical clock and the change-feed cursor of its last change; a replica pulls the rows after its
+cursor. The feed is filled from the areas' events and a sweep every 5 minutes. A merge is per
+field, last writer wins; the value that lost goes to `sync_merge_entry`, and restoring writes it
+back as a new change. Deletes are tombstones (field `_deleted`); a tombstone drops the entity's
+other rows and its merge-log entries, and tombstones are kept. A device keeps a replica only while
+its device session has the `offline-replica` scope. There is no per-entity `sync_state` table: a
+replica's progress is one cursor in `sync_replica`.
+
+What syncs (replicas may write the fields named; others are read-only): threads (title, pinned,
+archived, project), messages (one immutable body; finished user and assistant messages of
+non-temporary, non-side chats), projects (name, instructions), memory items of global and project
+scope (content, status), spaces (name), pages (title, content), schedules (enabled; not agents'
+self-set wakes) and the owner's non-security global settings. Replicas may create only threads and
+messages, and delete only threads, projects, memory items and pages.
+
+```sql
+CREATE TABLE sync_meta (            -- the Hub's clock and counters: hlc (the last clock issued, so it
+  key TEXT PRIMARY KEY,            -- never goes back across restarts), cursor (the last change-feed
+  value TEXT NOT NULL              -- cursor), message_watermark (the sweep's progress)
+);
+
+CREATE TABLE sync_field (           -- the change feed: one row per synced field, its current value
+  kind TEXT NOT NULL,              -- thread|message|project|memory|space|page|schedule|setting
+  entity_id TEXT NOT NULL,         -- the entity's own id (a setting's key)
+  field TEXT NOT NULL,             -- `_deleted` for a tombstone
+  account_id TEXT NOT NULL REFERENCES account(id),
+  parent_id TEXT,                  -- a message's thread, so a thread's tombstone drops its messages
+  value_json TEXT NOT NULL,        -- JSON, `null` included
+  hlc TEXT NOT NULL,               -- <15-digit ms>-<4 hex>-<node>: fixed width, sorts in clock order
+  device_id TEXT,                  -- the device whose op set it (plain TEXT); NULL for a Hub change
+  cursor INTEGER NOT NULL,         -- unique and only grows
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (kind, entity_id, field)
+);
+CREATE UNIQUE INDEX idx_sync_field_cursor ON sync_field(cursor);
+CREATE INDEX idx_sync_field_account ON sync_field(account_id, cursor);
+CREATE INDEX idx_sync_field_parent ON sync_field(kind, parent_id);
+
+CREATE TABLE sync_merge_entry (     -- the merge log (Settings → Sync → History); kept
+  id TEXT PRIMARY KEY,             -- sync.mergeLogDays (90)
+  account_id TEXT NOT NULL REFERENCES account(id),
+  kind TEXT NOT NULL,              -- as sync_field.kind
+  entity_id TEXT NOT NULL, field TEXT NOT NULL,
+  reason TEXT NOT NULL,            -- concurrent (a newer op replaced a value its device had not seen)|
+                                   -- stale (an op lost to a newer value)|restore (a restore replaced it)
+  lost_value_json TEXT NOT NULL, lost_hlc TEXT NOT NULL, lost_device_id TEXT,
+  winner_value_json TEXT NOT NULL, winner_hlc TEXT NOT NULL, winner_device_id TEXT,
+  status TEXT NOT NULL DEFAULT 'open', -- open|restored
+  restored_at TEXT, restored_hlc TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_sync_merge_account ON sync_merge_entry(account_id, created_at);
+CREATE INDEX idx_sync_merge_entity ON sync_merge_entry(kind, entity_id);
+
+CREATE TABLE sync_replica (         -- a device's replica and its progress
+  device_id TEXT PRIMARY KEY REFERENCES device(id),
+  account_id TEXT NOT NULL REFERENCES account(id),
+  cursor INTEGER NOT NULL DEFAULT 0, -- what it pulled last
+  last_pull_at TEXT, last_push_at TEXT,
+  last_error TEXT, last_error_at TEXT,
+  reset_at TEXT,                   -- the owner reset it: it must load a snapshot again
+  revoked_at TEXT,                 -- the device was revoked or lost the offline-replica scope
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_sync_replica_account ON sync_replica(account_id);
+
+CREATE TABLE idempotency_key (      -- the first answer to a request with an Idempotency-Key (FR-112)
+  principal TEXT NOT NULL,         -- device:<id> for a device session, else token:<id>
+  key TEXT NOT NULL,               -- 1-200 visible ASCII characters
+  method TEXT NOT NULL, path TEXT NOT NULL,
+  account_id TEXT,
+  body_hash TEXT NOT NULL,         -- hex SHA-256 of the body; another body with the key is refused
+  status INTEGER,                  -- NULL while the first request runs
+  response TEXT, content_type TEXT,
+  replayable INTEGER NOT NULL DEFAULT 1, -- 0: the key is kept, the answer is not
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,        -- 24 hours after the first request
+  PRIMARY KEY (principal, key, method, path)
+);
+CREATE INDEX idx_idempotency_key_expires ON idempotency_key(expires_at);
+```
+
+Only the writes a client queues offline keep their answer (`REPLAYABLE_ROUTES` in
+`apps/hub/src/sync.ts`); on every other route a repeated key gets 409 `idempotency_not_replayable`,
+so the effect still never happens twice. An answer marked `no-store`, larger than 256 KiB or
+carrying a credential is never written. A 5xx or 429 answer forgets the key, so a retry runs.
 
 ## 3. Blob storage layout
 
@@ -1782,7 +2310,6 @@ CREATE TABLE sync_state (
 ├── blobs/
 │   ├── attachments/<sha256>         # also the account avatar (account.avatar_path)
 │   ├── artifacts/<artifact-id>/v<N>/<file>
-│   ├── patches/<sha256>             # handoff patches (FR-213)
 │   ├── staged/<staged-write-id>     # two-phase device writes (FR-210); M6 stages on the device
 │   ├── snapshots/<computer-id>/<snapshot-id>/  # a folder copy of the computer (M6)
 │   ├── screenshots/<yyyymmdd>/<id>-<before|after>.png  # browser actions, sealed with the data
@@ -1798,6 +2325,9 @@ CREATE TABLE sync_state (
 │                                   # reads it as "User instructions" (FR-185)
 ├── code/<session-id>/shadow.git    # a Code session's shadow repository (refs/nova/baseline, start)
 ├── code/<session-id>/patches/<change-id>.patch  # a change's pending part (FR-064)
+├── code/<session-id>/merges/<merge-id>.json  # files before a merge, for an abort (M7, FR-073)
+├── code/handoffs/<handoff-id>/     # changes.patch and state.bundle of a handoff (M7, FR-213);
+│                                   # the bundle goes when it completes, the folder after 7 days
 ├── code/no-hooks/                  # the empty hooks folder Nova's own Git calls use (FR-211)
 ├── computers/<computer-id>/{home,browser}/  # an agent's computer (M6, FR-080)
 ├── cloud-mock/                     # the mock cloud runner's computers (M6)
@@ -1837,7 +2367,9 @@ CREATE TABLE sync_state (
   pixels 48 h (FR-154). All configurable; user can disable pruning. M6 applies the screenshot
   default through `browser.screenshotRetentionDays` (swept every 6 hours) and
   `screen.screenshotRetentionDays` (pruned daily); device stages expire after 24 h. Snapshot
-  expiry is not enforced yet.
+  expiry is not enforced yet. M7 keeps `push_delivery` rows 7 days, `idempotency_key` rows 24 h,
+  merge-log entries `sync.mergeLogDays` (90) and handoff files 7 days; change-feed tombstones are
+  kept.
 - Export: a single `.nova` archive (SQLite + blobs + manifest) plus a JSONL audit export.
   Uncertified ambient rows are never exported (FR-227).
 - Delete: cascading soft-delete then hard-delete job with a 30-day recovery window.
@@ -2198,6 +2730,16 @@ other areas' rows are plain TEXT here (`relay_client.device_id`, `network_setup_
 `add_device_request` row whose `scopes` JSON carries `bind: {publicKey, deviceId}`; registration
 must present that key and activates that pending `device` row. Only a `revoked` Relay client's key
 is refused when it pairs again; `denied` and `expired` rows are kept.
+
+### Device TLS (M7)
+
+Migration 0039 (M7, FR-126; ADR-095) adds no table: the file holds only a comment. Mutual TLS for
+`novad` devices and compute nodes checks the device certificates of 0031 (`trust_certificate`,
+kind `device`). What each device last presented over HTTPS is kept in Hub memory and rebuilt by its
+next heartbeat; a refusal is audited as `device.tls.refuse` (§2). The Relay registration token is a
+vault entry (`secret://relay/registration/token`) named by the `relay.registrationTokenRef`
+setting, not a `relay_registration` column. A device's offline replica is a `sync_replica` row
+(§2, migration 0033).
 
 ## 8. Automations, smart home & ambient (added)
 

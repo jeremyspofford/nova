@@ -2,13 +2,18 @@
 // its kind, where it connects, its health and when it was checked, and the sessions using it.
 // New environment, Check, Edit and Delete (refused while active sessions use it); This Hub is
 // built in. Environments whose helper runs commands (SSH, WSL, device) list their processes with
-// the output buffered while the app was away. Health follows `environment.*` events.
+// the output buffered while the app was away. Health follows `environment.*` events. M7: an SSH
+// row shows its pinned host key with its fingerprint and explains a mismatch; cloud environments
+// are created here or in Settings → Cloud runner and managed on their own page there.
 import { useCallback, useEffect, useState } from 'react';
 import type { DeviceView, SavedEnvironmentView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useAnnounce } from '../services.tsx';
 import { formatWhen, plural } from '../settings/common.ts';
+import { NewCloudEnvironmentButton } from '../cloud/NewCloudEnvironment.tsx';
+import { cloudEnvPath } from '../cloud/format.ts';
+import { navigate } from '../router.ts';
 import { useCodeM6Api } from './api-m6.ts';
 import { CodeNav } from './CodeNav.tsx';
 import { EnvironmentDialog } from './EnvironmentDialog.tsx';
@@ -23,6 +28,7 @@ import {
 } from './m6-format.ts';
 import { Badge, ConfirmDialog, ErrorBanner } from './parts.tsx';
 import { ProcessesPanel } from './ProcessesPanel.tsx';
+import { SshHostKey } from './SshHostKey.tsx';
 import '../workspace.css';
 
 type DialogState = { editing: SavedEnvironmentView | null } | null;
@@ -128,14 +134,17 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
     <div className="ws-page code-m6-page">
       <header className="ws-page-header">
         <h1>Environments</h1>
-        <Button variant="primary" onClick={() => setDialog({ editing: null })}>
-          <Icon name="plus" /> New environment
-        </Button>
+        <span className="ws-row-actions code-actions">
+          <NewCloudEnvironmentButton />
+          <Button variant="primary" onClick={() => setDialog({ editing: null })}>
+            <Icon name="plus" /> New environment
+          </Button>
+        </span>
       </header>
       <CodeNav current="environments" />
       <p className="muted">
-        Where Code sessions run: the Hub itself, a container image, an SSH host, a WSL distro or a
-        device with the Nova device agent. Pick one when you start a session.
+        Where Code sessions run: the Hub itself, a container image, an SSH host, a WSL distro, a
+        device with the Nova device agent, or the cloud runner. Pick one when you start a session.
       </p>
       {error ? <ErrorBanner message={error} onRetry={reload} /> : null}
       {items === null && !error ? <Spinner label="Loading the environments" /> : null}
@@ -178,6 +187,7 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
                     ) : null}
                     {c.kind === 'ssh' && c.hostKey ? <span>Host key pinned</span> : null}
                   </span>
+                  {c.kind === 'ssh' ? <SshHostKey env={e} onChanged={replace} /> : null}
                 </div>
                 <div className="ws-row-actions code-actions">
                   <Button disabled={busy} onClick={() => void check(e)}>
@@ -191,9 +201,15 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
                   ) : null}
                   {e.builtIn ? null : (
                     <>
-                      <Button onClick={() => setDialog({ editing: e })}>
-                        <Icon name="edit" /> Edit…
-                      </Button>
+                      {e.kind === 'cloud' ? (
+                        <Button onClick={() => navigate(cloudEnvPath(e.id))}>
+                          <Icon name="settings" /> Manage
+                        </Button>
+                      ) : (
+                        <Button onClick={() => setDialog({ editing: e })}>
+                          <Icon name="edit" /> Edit…
+                        </Button>
+                      )}
                       <Button
                         variant="danger"
                         onClick={() => {
@@ -235,7 +251,11 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
       <ConfirmDialog
         open={deleting !== null}
         title={`Delete ${deleting?.label ?? 'this environment'}?`}
-        description="Sessions that used it keep their history. Its stored key or password is removed from the keychain."
+        description={
+          deleting?.kind === 'cloud'
+            ? 'Sessions that used it keep their history. It is removed from the cloud runner with its files and snapshots.'
+            : 'Sessions that used it keep their history. Its stored key or password is removed from the keychain.'
+        }
         confirmLabel="Delete"
         danger
         busy={deleteBusy}

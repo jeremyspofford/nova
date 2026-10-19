@@ -7,16 +7,23 @@
 // posted to the channel and can be answered there by the owner's mapped identity, except
 // `confirm_at_action` and `handoff_required`, which need an authenticated Nova client. Secrets
 // live in the secret store under the binding's `secret_ref` prefix; bindings of one app share it.
+// M7 (FR-110): Telegram (webhook or long polling) and email (IMAP and SMTP) bindings; approval
+// prompts with buttons (Slack, Telegram) answered by the presser's mapped identity, and signed
+// one-use links for email (never reply text); email attachments become thread attachments; and
+// the message log (`messages`). Pollers (pollers.ts) feed `receiveFrom` with verified messages.
 import {
   NovaError,
   uuidv7,
   type ApprovalView,
-  type ChannelAdapterView,
-  type ChannelBindingKind,
-  type ChannelBindingView,
-  type ChannelIdentityView,
+  type ChannelAdapterViewM7,
+  type ChannelBindingViewM7,
+  type ChannelIdentityViewM7,
+  type ChannelKindM7,
+  type ChannelMessageView,
+  type ChannelMessagesPageView,
+  type ChannelMessagesQuery,
   type ChannelRole,
-  type CreateChannelBindingRequest,
+  type CreateChannelBindingM7Request,
   type SettingKey,
   type SettingValue,
   type UpdateChannelBindingRequest,
@@ -28,25 +35,32 @@ import type { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
 import type { ApprovalRequests } from '../requests/broker.ts';
 import type { StartedTurn, TurnOutcome, TurnStarter } from '../runtime/types.ts';
+import { prepareAttachments, writeAttachmentBlob } from '../attachments.ts';
 import { webhookUrlProblem } from '../scheduler/delivery.ts';
+import { afterTimeCursor, encodeTimeCursor } from '../time-cursor.ts';
 import type { AuditSink } from '../tools/types.ts';
 import {
   answerableFromChannel,
   answeredText,
   approvalCode,
+  approvalEmailText,
   approvalPrompt,
   parseAnswer,
 } from './answers.ts';
-import type { BindingCredentials, NovaChannelAdapter } from './adapters/common.ts';
+import type {
+  BindingCredentials,
+  ChannelAction,
+  InboundAttachment,
+  NovaChannelAdapter,
+  NovaInboundMessage,
+  NovaOutboundMessage,
+  OutboundApproval,
+} from './adapters/common.ts';
+import { assertSecure } from './adapters/mail/imap.ts';
+import { ApprovalLinks } from './approval-links.ts';
 import { overlapPrivacyCheck, type PrivateOriginCheck, type PrivateSource } from './privacy.ts';
 import { sha256Hex, type Headers } from './signing.ts';
-import type {
-  ChannelKind,
-  ChannelReceipt,
-  ChannelSender,
-  InboundMessage,
-  OutboundMessage,
-} from './types.ts';
+import type { ChannelKind, ChannelReceipt, ChannelSender, InboundMessage } from './types.ts';
 
 export interface BindingRow {
   id: string;
@@ -147,6 +161,10 @@ export interface ChannelServiceOptions {
   sendTimeoutMs?: number;
   /** Secrets are redacted from everything sent out (default redactor). */
   redactor?: Redactor;
+  /** Where inbound attachments are stored (the Hub data directory); none: they are dropped. */
+  dataDir?: string;
+  /** The public Hub address approval links point at (`channels.publicUrl`, else the Hub's). */
+  publicBase?: () => Promise<string>;
 }
 
 export interface ReceiveOutcome {
@@ -168,7 +186,15 @@ interface TurnContext {
   conversation: string;
   threadRef: string | null;
   visibility: 'private' | 'shared';
+  /** Email: the message the reply answers, and its subject. */
+  replyTo?: string | null;
+  subject?: string | null;
+  /** Who wrote the message that started the turn (approval links go to the owner only). */
+  role?: ChannelRole | 'guest';
 }
+
+/** The decisions a channel can carry (the card's others need a Nova client). */
+const CHANNEL_DECISIONS = new Set(['allow_once', 'allow_session', 'deny_continue', 'deny_stop']);
 
 const KIND_LABEL: Record<ChannelKind, string> = {
   inapp: 'Nova',
@@ -186,8 +212,11 @@ const CONFIG_KEYS: Partial<Record<ChannelKind, readonly string[]>> = {
   webhook: ['callbackUrl'],
 };
 const REMEMBERED = new Set(['serviceUrl']);
-const INBOUND_KINDS = new Set<ChannelKind>(['slack', 'teams', 'webhook']);
-const SHARED_SECRET_KINDS = new Set<ChannelKind>(['slack', 'teams']);
+/** Kinds whose deliveries are posted to `/api/v1/channels/:id/inbound`. */
+const INBOUND_KINDS = new Set<ChannelKind>(['slack', 'teams', 'webhook', 'telegram']);
+/** Kinds whose bindings share one app's (bot's, mailbox's) credentials. */
+const SHARED_SECRET_KINDS = new Set<ChannelKind>(['slack', 'teams', 'telegram', 'email']);
+const ADAPTER_KINDS: ChannelKindM7[] = ['inapp', 'slack', 'teams', 'email', 'webhook', 'telegram'];
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -224,6 +253,8 @@ export class ChannelService implements ChannelSender {
   #ask: ShareAsk | null = null;
   #connector: ConnectorListener | null = null;
   #guard: ChannelInboundGuard | null = null;
+  readonly #links: ApprovalLinks;
+  readonly #listeners = new Set<(change: { bindingId: string; kind: ChannelKind }) => void>();
 
   constructor(opts: ChannelServiceOptions) {
     this.#o = opts;
@@ -231,6 +262,18 @@ export class ChannelService implements ChannelSender {
     this.#now = opts.now ?? (() => new Date());
     this.#privacy = overlapPrivacyCheck(opts.db);
     this.#adapters = opts.adapters(this.credentials);
+    this.#links = new ApprovalLinks({ db: opts.db, secrets: opts.secrets, now: this.#now });
+  }
+
+  /** Binding changes, for the pollers (pollers.ts). */
+  onBindingChange(fn: (change: { bindingId: string; kind: ChannelKind }) => void): () => void {
+    this.#listeners.add(fn);
+    return () => this.#listeners.delete(fn);
+  }
+
+  /** An adapter by kind, for the pollers. */
+  adapterOf(kind: ChannelKind): NovaChannelAdapter | null {
+    return this.#adapters[kind] ?? null;
   }
 
   // ---- late-bound collaborators -------------------------------------------------------------
@@ -308,9 +351,8 @@ export class ChannelService implements ChannelSender {
 
   // ---- adapters -------------------------------------------------------------------------------
 
-  adapterViews(): ChannelAdapterView[] {
-    const kinds: ChannelBindingKind[] = ['inapp', 'slack', 'teams', 'email', 'webhook'];
-    return kinds.map((kind) => {
+  adapterViews(): ChannelAdapterViewM7[] {
+    return ADAPTER_KINDS.map((kind) => {
       const a = this.#adapters[kind];
       if (!a) return { kind, available: false, detail: `${KIND_LABEL[kind]} is not set up` };
       const av = a.availability?.() ?? { available: true, detail: null };
@@ -341,7 +383,7 @@ export class ChannelService implements ChannelSender {
     return row;
   }
 
-  async list(accountId: string, opts: { agentId?: string } = {}): Promise<ChannelBindingView[]> {
+  async list(accountId: string, opts: { agentId?: string } = {}): Promise<ChannelBindingViewM7[]> {
     const rows = (opts.agentId
       ? this.#db.raw
           .prepare(
@@ -351,12 +393,12 @@ export class ChannelService implements ChannelSender {
       : this.#db.raw
           .prepare('SELECT * FROM channel_binding WHERE account_id = ? ORDER BY created_at, id')
           .all(accountId)) as unknown as BindingRow[];
-    const out: ChannelBindingView[] = [];
+    const out: ChannelBindingViewM7[] = [];
     for (const r of rows) out.push(await this.#view(r));
     return out;
   }
 
-  async get(accountId: string, id: string): Promise<ChannelBindingView> {
+  async get(accountId: string, id: string): Promise<ChannelBindingViewM7> {
     return this.#view(this.#row(accountId, id));
   }
 
@@ -377,7 +419,7 @@ export class ChannelService implements ChannelSender {
     return rows.map(info);
   }
 
-  async #view(r: BindingRow): Promise<ChannelBindingView> {
+  async #view(r: BindingRow): Promise<ChannelBindingViewM7> {
     const adapter = this.#adapters[r.kind];
     const names = adapter?.credentialNames ?? [];
     const credentials: { name: string; set: boolean }[] = [];
@@ -392,7 +434,7 @@ export class ChannelService implements ChannelSender {
     return {
       id: r.id,
       agentId: r.agent_id,
-      kind: r.kind as ChannelBindingKind,
+      kind: r.kind,
       label: r.label,
       externalRef: r.external_ref,
       audience: r.audience,
@@ -408,32 +450,46 @@ export class ChannelService implements ChannelSender {
         r.secret_ref && r.secret_ref !== own
           ? r.secret_ref.slice('secret://channel/'.length)
           : null,
-      inboundPath: INBOUND_KINDS.has(r.kind) ? `/api/v1/channels/${r.id}/inbound` : null,
+      inboundPath:
+        INBOUND_KINDS.has(r.kind) &&
+        (r.kind !== 'telegram' || parseConfig(r.config_json).mode === 'webhook')
+          ? `/api/v1/channels/${r.id}/inbound`
+          : null,
       lastMessageAt: r.last_message_at,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
   }
 
-  async create(accountId: string, req: CreateChannelBindingRequest): Promise<ChannelBindingView> {
-    if (req.kind === 'email') {
-      const a = this.#adapter('email');
+  async create(
+    accountId: string,
+    req: CreateChannelBindingM7Request,
+  ): Promise<ChannelBindingViewM7> {
+    const adapter = this.#adapter(req.kind);
+    const av = adapter.availability?.();
+    if (av && !av.available)
       throw new NovaError(
         'capability_missing',
-        a.availability?.().detail ?? 'email channels are not available',
+        av.detail ?? `${KIND_LABEL[req.kind]} channels are not available`,
       );
-    }
-    this.#adapter(req.kind);
     const id = uuidv7();
     const now = this.#now().toISOString();
     const audience = req.kind === 'inapp' ? 'private' : (req.audience ?? 'shared');
     if (req.sharePrimaryThread && audience !== 'private')
       throw fieldError('sharePrimaryThread', 'only a private binding can share the primary thread');
-    const externalRef =
+    const ref =
       req.externalRef ?? (req.kind === 'inapp' ? `agent:${req.agentId ?? 'default'}` : '');
+    // Email addresses compare in lower case (mail is matched to bindings by its sender).
+    const externalRef = req.kind === 'email' ? ref.trim().toLowerCase() : ref;
     let secretRef: string | null = null;
     let credentials: Record<string, string> = {};
-    if (req.kind === 'slack' || req.kind === 'teams') {
+    let inherited: Record<string, string | null> = {};
+    if (
+      req.kind === 'slack' ||
+      req.kind === 'teams' ||
+      req.kind === 'telegram' ||
+      req.kind === 'email'
+    ) {
       if (req.shareCredentialsWith) {
         if (req.credentials)
           throw fieldError('credentials', 'give credentials or shareCredentialsWith, not both');
@@ -441,17 +497,33 @@ export class ChannelService implements ChannelSender {
         if (other.kind !== req.kind || !other.secret_ref)
           throw fieldError('shareCredentialsWith', `that binding is not a ${req.kind} binding`);
         secretRef = other.secret_ref;
+        // A bot or mailbox shared is shared with its settings (mode, mailbox servers, bot ids).
+        if (req.kind === 'telegram' || req.kind === 'email')
+          inherited = parseConfig(other.config_json);
       } else if (req.credentials) {
         secretRef = `secret://channel/${id}`;
         credentials = { ...req.credentials };
+        // The Hub makes these secrets (Telegram's webhook secret); a client never sets them.
+        for (const [name, make] of Object.entries(adapter.generatedCredentials ?? {})) {
+          if (name in credentials)
+            throw fieldError(`credentials.${name}`, `the Hub makes the ${name} itself`);
+          credentials[name] = make();
+        }
       } else throw fieldError('credentials', `a ${KIND_LABEL[req.kind]} binding needs credentials`);
     } else if (req.kind === 'webhook') {
       secretRef = `secret://channel/${id}`;
       credentials = { ...req.credentials };
     }
     const config: Record<string, string> = {};
+    for (const [k, v] of Object.entries(inherited)) if (typeof v === 'string') config[k] = v;
     if ('config' in req && req.config)
-      for (const [k, v] of Object.entries(req.config)) if (typeof v === 'string') config[k] = v;
+      for (const [k, v] of Object.entries(req.config as Record<string, unknown>))
+        if (typeof v === 'string') config[k] = v;
+        else if (typeof v === 'number' && Number.isFinite(v)) config[k] = String(v);
+    if (req.kind === 'email') {
+      mailboxCheck(config);
+      if (config.senderCheck === 'none' && !req.confirmSenderCheckNone) throw senderCheckOff();
+    }
     if (req.kind === 'teams' && !config.appId) {
       // Sharing an app's credentials shares its app id.
       const sibling = secretRef ? this.#sibling(accountId, secretRef) : null;
@@ -526,6 +598,10 @@ export class ChannelService implements ChannelSender {
       audience: row.audience,
       sharesCredentials: 'shareCredentialsWith' in req && !!req.shareCredentialsWith,
     });
+    if (row.kind === 'email' && config.senderCheck === 'none')
+      await this.#audit(accountId, 'user', 'channel.email.sender_check_off', row, {
+        address: config.address ?? null,
+      });
     await this.#changed(row, 'created');
     return this.#view(row);
   }
@@ -560,7 +636,8 @@ export class ChannelService implements ChannelSender {
     accountId: string,
     id: string,
     patch: UpdateChannelBindingRequest,
-  ): Promise<ChannelBindingView> {
+    opts: { confirmSenderCheckNone?: boolean } = {},
+  ): Promise<ChannelBindingViewM7> {
     const row = this.#row(accountId, id);
     const audience = patch.audience ?? row.audience;
     const share =
@@ -571,7 +648,7 @@ export class ChannelService implements ChannelSender {
       throw fieldError('audience', 'the in-app channel is private');
     const config = parseConfig(row.config_json);
     if (patch.config) {
-      const allowed = CONFIG_KEYS[row.kind] ?? [];
+      const allowed = this.#adapters[row.kind]?.configKeys ?? CONFIG_KEYS[row.kind] ?? [];
       for (const [k, v] of Object.entries(patch.config)) {
         if (!allowed.includes(k)) throw fieldError(`config.${k}`, `unknown setting ${k}`);
         if (k === 'callbackUrl' && v) {
@@ -581,13 +658,25 @@ export class ChannelService implements ChannelSender {
         if (v === null) delete config[k];
         else config[k] = v;
       }
+      if (row.kind === 'email') mailboxCheck(config);
     }
+    // Turning the email sender check off must be confirmed, and is audited.
+    const checkOff =
+      row.kind === 'email' &&
+      config.senderCheck === 'none' &&
+      parseConfig(row.config_json).senderCheck !== 'none';
+    if (checkOff && !opts.confirmSenderCheckNone) throw senderCheckOff();
     if (patch.credentials) {
-      const names = this.#adapters[row.kind]?.credentialNames ?? [];
+      const adapter = this.#adapters[row.kind];
+      const names = adapter?.credentialNames ?? [];
       if (!row.secret_ref) throw fieldError('credentials', 'this binding has no credentials');
-      for (const name of Object.keys(patch.credentials))
+      for (const name of Object.keys(patch.credentials)) {
         if (!names.includes(name))
           throw fieldError(`credentials.${name}`, `unknown credential ${name}`);
+        // A secret the Hub made (Telegram's webhook secret) is never replaced by hand.
+        if (adapter?.generatedCredentials && name in adapter.generatedCredentials)
+          throw fieldError(`credentials.${name}`, `the Hub makes the ${name} itself`);
+      }
       for (const [name, value] of Object.entries(patch.credentials))
         await this.#o.secrets.put(`${row.secret_ref}/${name}`, value);
     }
@@ -615,6 +704,10 @@ export class ChannelService implements ChannelSender {
     await this.#audit(accountId, 'user', 'channel.update', next, {
       changed: Object.keys(patch),
     });
+    if (checkOff)
+      await this.#audit(accountId, 'user', 'channel.email.sender_check_off', next, {
+        address: config.address ?? null,
+      });
     await this.#changed(next, 'updated');
     return this.#view(next);
   }
@@ -623,7 +716,7 @@ export class ChannelService implements ChannelSender {
    * Connect or disconnect at once (docs/13 §4). Disconnecting stops inbound turns and outbound
    * messages and cancels the turns this binding started. Connecting probes the credentials.
    */
-  async setEnabled(accountId: string, id: string, enabled: boolean): Promise<ChannelBindingView> {
+  async setEnabled(accountId: string, id: string, enabled: boolean): Promise<ChannelBindingViewM7> {
     const row = this.#row(accountId, id);
     let detail: string | null = null;
     let learned: Record<string, string> = {};
@@ -706,7 +799,7 @@ export class ChannelService implements ChannelSender {
 
   // ---- identities ---------------------------------------------------------------------------
 
-  listIdentities(accountId: string): ChannelIdentityView[] {
+  listIdentities(accountId: string): ChannelIdentityViewM7[] {
     const rows = this.#db.raw
       .prepare('SELECT * FROM channel_identity WHERE account_id = ? ORDER BY kind, external_id')
       .all(accountId) as unknown as IdentityRow[];
@@ -716,14 +809,17 @@ export class ChannelService implements ChannelSender {
   async addIdentity(
     accountId: string,
     input: {
-      kind: ChannelBindingKind;
+      kind: ChannelKindM7;
       externalId: string;
       displayName?: string;
       role: ChannelRole;
     },
-  ): Promise<ChannelIdentityView> {
+  ): Promise<ChannelIdentityViewM7> {
     const now = this.#now().toISOString();
     const id = uuidv7();
+    // Email addresses compare in lower case (the parser lowers the sender too).
+    const externalId =
+      input.kind === 'email' ? input.externalId.trim().toLowerCase() : input.externalId;
     await this.#db.transaction(() => {
       this.#db.raw
         .prepare(
@@ -732,27 +828,19 @@ export class ChannelService implements ChannelSender {
            ON CONFLICT (account_id, kind, external_id)
            DO UPDATE SET display_name = excluded.display_name, role = excluded.role`,
         )
-        .run(
-          id,
-          accountId,
-          input.kind,
-          input.externalId,
-          input.displayName ?? null,
-          input.role,
-          now,
-        );
+        .run(id, accountId, input.kind, externalId, input.displayName ?? null, input.role, now);
     });
     const row = this.#db.raw
       .prepare(
         'SELECT * FROM channel_identity WHERE account_id = ? AND kind = ? AND external_id = ?',
       )
-      .get(accountId, input.kind, input.externalId) as unknown as IdentityRow;
+      .get(accountId, input.kind, externalId) as unknown as IdentityRow;
     await this.#o.audit?.append({
       accountId,
       actor: 'user',
       kind: 'channel',
       action: 'channel.identity.set',
-      resource: `${input.kind}:${input.externalId}`,
+      resource: `${input.kind}:${externalId}`,
       detail: { role: input.role },
     });
     return identityView(row);
@@ -802,13 +890,31 @@ export class ChannelService implements ChannelSender {
     const headers: Record<string, string | undefined> = {};
     for (const [k, v] of Object.entries(req.headers))
       headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
-    const msg = await adapter.parse({ bindingId: via.id, headers, rawBody: req.rawBody });
+    const msg: NovaInboundMessage | null = await adapter.parse({
+      bindingId: via.id,
+      headers,
+      rawBody: req.rawBody,
+    });
     if (!msg) {
       const reply = adapter.handshake?.(req.rawBody) ?? null;
       return reply
         ? { status: 'ignored', reason: 'handshake', reply }
         : { status: 'ignored', reason: 'not_a_message' };
     }
+    return this.#handle(via, msg);
+  }
+
+  /**
+   * A message a poller read with the binding's own credentials (Telegram `getUpdates`, the email
+   * mailbox): authenticated by that call, then handled like a verified delivery.
+   */
+  async receiveFrom(bindingId: string, msg: NovaInboundMessage): Promise<ReceiveOutcome> {
+    const via = this.#rowById(bindingId);
+    if (!via) throw new NovaError('not_found', 'channel binding not found');
+    return this.#handle(via, msg);
+  }
+
+  async #handle(via: BindingRow, msg: NovaInboundMessage): Promise<ReceiveOutcome> {
     // Route to the binding of the conversation among bindings of the same app.
     const target =
       msg.conversation === via.external_ref
@@ -851,13 +957,31 @@ export class ChannelService implements ChannelSender {
     });
     if (!inserted) return { status: 'duplicate', bindingId: target.id };
 
-    const identity = this.#identity(target.account_id, target.kind, msg.sender.externalId);
+    const mapped = this.#identity(target.account_id, target.kind, msg.sender.externalId);
+    // An email sender whose address the receiving server could not authenticate is not the
+    // identity it claims (a From address is easy to forge).
+    const identity = msg.senderVerified === false ? null : mapped;
     const role: ChannelRole | 'guest' | null = identity
       ? identity.role
       : target.allow_unknown
         ? 'guest'
         : null;
-    if (!role) return this.#settle(target, logId, msg, 'ignored', 'unknown_sender');
+    if (!role) {
+      if (msg.action)
+        await this.#refuseAction(target, msg.action, 'You cannot answer approvals here.');
+      return this.#settle(
+        target,
+        logId,
+        msg,
+        'ignored',
+        mapped && !identity ? 'unverified_sender' : 'unknown_sender',
+      );
+    }
+    if (msg.action) {
+      const outcome = await this.#answerAction(target, msg, msg.action, role);
+      await this.#settleRow(logId, 'answered', outcome);
+      return { status: 'answered', reason: outcome, bindingId: target.id };
+    }
     if (target.audience === 'private' && role !== 'owner')
       return this.#settle(target, logId, msg, 'ignored', 'not_owner');
     if (!msg.addressed) return this.#settle(target, logId, msg, 'ignored', 'not_addressed');
@@ -894,17 +1018,21 @@ export class ChannelService implements ChannelSender {
       .trim()
       .slice(0, 80);
     const visibility = effectiveVisibility(target, msg.visibility);
+    const files = await this.#storeAttachments(target.account_id, threadId, msg.attachments);
+    let text = framed(target, msg, who, role, visibility);
+    if (files.skipped.length) text += `\n[Attachments not accepted: ${files.skipped.join('; ')}]`;
     let started: StartedTurn;
     try {
       started = await this.#starter.startTurn({
         accountId: target.account_id,
         threadId,
-        text: framed(target, msg, who, role, visibility),
+        text,
         trigger: 'channel',
         triggerRef: target.id,
         // Channel content never carries the user's authority, even from the owner (FR-189).
         authority: { kind: 'none', origin: 'channel' },
         authorKind: 'user',
+        ...(files.ids.length ? { attachmentIds: files.ids } : {}),
       });
     } catch (err) {
       this.#o.log?.warn('channel turn did not start', { err, bindingId: target.id });
@@ -918,16 +1046,20 @@ export class ChannelService implements ChannelSender {
       conversation: msg.conversation,
       threadRef: msg.threadRef,
       visibility,
+      replyTo: msg.messageId,
+      subject: msg.subject ?? null,
+      role,
     };
     this.#turns.set(started.turnId, ctx);
     const now = this.#now().toISOString();
     await this.#db.transaction(() => {
       this.#db.raw
         .prepare(
-          `UPDATE channel_message SET status = 'started', reason = NULL, thread_id = ?, turn_id = ?
+          `UPDATE channel_message SET status = 'started', reason = ?, thread_id = ?, turn_id = ?
            WHERE id = ?`,
         )
-        .run(threadId, started.turnId, logId);
+        // A message from a binding that skips the sender check says so in the log.
+        .run(msg.senderUnchecked ? 'sender_unchecked' : null, threadId, started.turnId, logId);
       this.#db.raw
         .prepare('UPDATE channel_binding SET last_message_at = ? WHERE id = ?')
         .run(now, target.id);
@@ -957,6 +1089,142 @@ export class ChannelService implements ChannelSender {
       )
       .get(row.account_id, msg.messageId.split(':').at(-1) ?? msg.messageId);
     return !!sent;
+  }
+
+  /** Inbound files become attachments of the thread (validated like uploads, FR-021). */
+  async #storeAttachments(
+    accountId: string,
+    threadId: string,
+    list: InboundAttachment[] | undefined,
+  ): Promise<{ ids: string[]; skipped: string[] }> {
+    const out = { ids: [] as string[], skipped: [] as string[] };
+    if (!list?.length) return out;
+    const dataDir = this.#o.dataDir;
+    for (const a of list) {
+      if (!dataDir) {
+        out.skipped.push(`${a.name} (files are not kept here)`);
+        continue;
+      }
+      try {
+        const [p] = prepareAttachments([
+          { name: a.name, mime: a.mime, data: a.bytes.toString('base64') },
+        ]);
+        const blob = writeAttachmentBlob(dataDir, p!.bytes);
+        const id = uuidv7();
+        await this.#db.transaction(() => {
+          this.#db.raw
+            .prepare(
+              `INSERT INTO attachment (id, message_id, thread_id, name, mime, size, sha256, origin,
+                 blob_path, extracted_text_path, created_at)
+               VALUES (?, NULL, ?, ?, ?, ?, ?, 'import', ?, NULL, ?)`,
+            )
+            .run(
+              id,
+              threadId,
+              p!.name,
+              p!.mime,
+              p!.bytes.length,
+              blob.sha256,
+              blob.blobPath,
+              this.#now().toISOString(),
+            );
+        });
+        out.ids.push(id);
+      } catch (err) {
+        out.skipped.push(`${a.name.slice(0, 80)} (${errText(err).slice(0, 120)})`);
+      }
+    }
+    void accountId;
+    return out;
+  }
+
+  async #refuseAction(row: BindingRow, action: ChannelAction, text: string): Promise<void> {
+    await this.#adapters[row.kind]
+      ?.refuse?.(row.id, action, text, AbortSignal.timeout(this.#o.sendTimeoutMs ?? 30_000))
+      .catch(() => undefined);
+  }
+
+  /**
+   * A button answer (Slack, Telegram): the same rules as a reply (the owner's mapped identity,
+   * pre-approvable only, an offered choice), and the approval must belong to this binding's
+   * conversation. The prompt is then updated with the outcome.
+   */
+  async #answerAction(
+    row: BindingRow,
+    msg: NovaInboundMessage,
+    action: ChannelAction,
+    role: ChannelRole | 'guest',
+  ): Promise<string> {
+    const refuse = async (reason: string, text: string, approval?: ApprovalView) => {
+      await this.#o.audit?.append({
+        accountId: row.account_id,
+        actor: `channel:${row.id}`,
+        kind: 'channel',
+        action: 'channel.approval.refused',
+        resource: `approval:${action.approvalId}`,
+        decision: action.decision,
+        threadId: approval?.threadId ?? row.thread_id,
+        turnId: approval?.turnId ?? null,
+        detail: {
+          reason,
+          via: 'button',
+          tier: approval?.tier ?? null,
+          sender: msg.sender.externalId,
+        },
+      });
+      await this.#refuseAction(row, action, text);
+      return `refused:${reason}`;
+    };
+    if (!this.#approvals) return refuse('unavailable', 'Approvals cannot be answered right now.');
+    let approval: ApprovalView;
+    try {
+      approval = await this.#approvals.get(row.account_id, action.approvalId);
+    } catch {
+      return refuse('unknown', 'That approval is not known.');
+    }
+    if (!row.thread_id || approval.threadId !== row.thread_id)
+      return refuse(
+        'other_conversation',
+        'That approval belongs to another conversation.',
+        approval,
+      );
+    if (approval.status !== 'pending' || approval.decision !== null)
+      return refuse('already_decided', 'That approval was already answered.', approval);
+    if (role !== 'owner')
+      return refuse('not_owner', 'Only the owner can answer approvals.', approval);
+    if (!answerableFromChannel(approval.tier))
+      return refuse('native_client_only', 'This approval can only be answered in Nova.', approval);
+    if (!approval.options.includes(action.decision))
+      return refuse('not_offered', 'That choice is not offered for this approval.', approval);
+    try {
+      await this.#approvals.decide(
+        row.account_id,
+        { approvalId: approval.id, decision: action.decision },
+        `channel:${row.id}`,
+      );
+    } catch (err) {
+      return refuse('rejected', `The answer was not accepted: ${errText(err)}`, approval);
+    }
+    await this.#o.audit?.append({
+      accountId: row.account_id,
+      actor: `channel:${row.id}`,
+      kind: 'channel',
+      action: 'channel.approval.answered',
+      resource: `approval:${approval.id}`,
+      decision: action.decision,
+      threadId: approval.threadId,
+      turnId: approval.turnId,
+      detail: { tier: approval.tier, sender: msg.sender.externalId, via: 'button' },
+    });
+    await this.#adapters[row.kind]
+      ?.settle?.(
+        row.id,
+        action,
+        answeredText(action.decision),
+        AbortSignal.timeout(this.#o.sendTimeoutMs ?? 30_000),
+      )
+      .catch(() => undefined);
+    return action.decision;
   }
 
   async #drop(row: BindingRow, msg: InboundMessage, reason: string): Promise<ReceiveOutcome> {
@@ -1096,11 +1364,13 @@ export class ChannelService implements ChannelSender {
     // Continue in the conversation (and reply thread) of the last message received there.
     const last = this.#db.raw
       .prepare(
-        `SELECT conversation, thread_ref FROM channel_message
+        `SELECT conversation, thread_ref, external_id FROM channel_message
          WHERE binding_id = ? AND direction = 'in' AND status = 'started'
          ORDER BY created_at DESC LIMIT 1`,
       )
-      .get(row.id) as { conversation: string | null; thread_ref: string | null } | undefined;
+      .get(row.id) as
+      | { conversation: string | null; thread_ref: string | null; external_id: string | null }
+      | undefined;
     return this.#reply(
       {
         accountId,
@@ -1110,6 +1380,7 @@ export class ChannelService implements ChannelSender {
         conversation: last?.conversation ?? row.external_ref,
         threadRef: last?.thread_ref ?? null,
         visibility: effectiveVisibility(row, 'private'),
+        replyTo: row.kind === 'email' ? (last?.external_id ?? null) : null,
       },
       text,
       null,
@@ -1251,7 +1522,13 @@ export class ChannelService implements ChannelSender {
     try {
       return await this.#send(
         row,
-        { conversation: ctx.conversation, threadRef: ctx.threadRef, text },
+        {
+          conversation: ctx.conversation,
+          threadRef: ctx.threadRef,
+          text,
+          inReplyTo: ctx.replyTo ?? null,
+          subject: ctx.subject ?? null,
+        },
         ctx.threadId,
       );
     } catch (err) {
@@ -1333,7 +1610,7 @@ export class ChannelService implements ChannelSender {
 
   async #send(
     row: BindingRow,
-    message: OutboundMessage,
+    message: NovaOutboundMessage,
     threadId: string | null,
   ): Promise<ChannelReceipt> {
     const adapter = this.#adapter(row.kind);
@@ -1456,15 +1733,230 @@ export class ChannelService implements ChannelSender {
     } catch {
       return;
     }
-    await this.#send(
-      row,
-      {
-        conversation: ctx.conversation,
-        threadRef: ctx.threadRef,
-        text: approvalPrompt(approval, { shared: ctx.visibility === 'shared' }),
-      },
-      ctx.threadId,
-    ).catch((err: unknown) => this.#o.log?.warn('approval prompt not delivered', { err }));
+    const adapter = this.#adapter(row.kind);
+    const shared = ctx.visibility === 'shared';
+    const answerable = answerableFromChannel(approval.tier);
+    const options = approval.options.filter((o): o is ChannelAction['decision'] =>
+      CHANNEL_DECISIONS.has(o),
+    );
+    const base = { conversation: ctx.conversation, threadRef: ctx.threadRef };
+    let message: NovaOutboundMessage;
+    if (adapter.textAnswers === false) {
+      // Email: a signed one-use link, and only to the owner's own private conversation (a link
+      // is a capability; a shared mailbox or list must never get one).
+      const link =
+        answerable &&
+        options.length &&
+        !shared &&
+        row.audience === 'private' &&
+        ctx.role === 'owner'
+          ? await this.#approvalLink(row, approval).catch((err: unknown) => {
+              this.#o.log?.warn('approval link not made', { err });
+              return null;
+            })
+          : null;
+      message = {
+        ...base,
+        text: approvalEmailText(approval, { shared, link: !!link }),
+        inReplyTo: ctx.replyTo ?? null,
+        subject: ctx.subject ?? null,
+        ...(link
+          ? { approval: { id: approval.id, code: approvalCode(approval.id), options, link } }
+          : {}),
+      };
+    } else {
+      const buttons: OutboundApproval | null =
+        answerable && options.length && adapter.settle
+          ? { id: approval.id, code: approvalCode(approval.id), options }
+          : null;
+      message = {
+        ...base,
+        text: approvalPrompt(approval, { shared }),
+        ...(buttons ? { approval: buttons } : {}),
+      };
+    }
+    await this.#send(row, message, ctx.threadId).catch((err: unknown) =>
+      this.#o.log?.warn('approval prompt not delivered', { err }),
+    );
+  }
+
+  /** A signed approval link at the public Hub address, valid until the approval or the setting ends. */
+  async #approvalLink(row: BindingRow, approval: ApprovalView): Promise<string | null> {
+    if (!this.#o.publicBase) return null;
+    const minutes = await this.#o.setting('channels.approvalLinkMinutes');
+    const until = Math.min(
+      Date.parse(approval.expiresAt) || Infinity,
+      this.#now().getTime() + minutes * 60_000,
+    );
+    const token = await this.#links.create({
+      accountId: row.account_id,
+      bindingId: row.id,
+      approvalId: approval.id,
+      expiresAt: new Date(until),
+    });
+    const base = (await this.#o.publicBase()).replace(/\/+$/, '');
+    return `${base}/api/v1/channels/approval-links/${token}`;
+  }
+
+  /**
+   * What a signed approval link would answer (its GET page; nothing changes). Any problem is
+   * `not_found`, so a guessed or spent link learns nothing.
+   */
+  async approvalLinkView(token: string): Promise<{
+    action: string;
+    reason: string | null;
+    label: string;
+    options: ChannelAction['decision'][];
+    expiresAt: string;
+  }> {
+    const { approval, row, link } = await this.#openLink(token);
+    return {
+      action: approval.action,
+      reason: approval.reason || null,
+      label: row.label,
+      options: approval.options.filter((o): o is ChannelAction['decision'] =>
+        CHANNEL_DECISIONS.has(o),
+      ),
+      expiresAt: link.expires_at,
+    };
+  }
+
+  async #openLink(token: string) {
+    const gone = () => new NovaError('not_found', 'this approval link is not valid any more');
+    const link = await this.#links.open(token);
+    const row = this.#rowById(link.binding_id);
+    if (!row?.enabled || row.audience !== 'private' || !this.#approvals) throw gone();
+    let approval: ApprovalView;
+    try {
+      approval = await this.#approvals.get(link.account_id, link.approval_id);
+    } catch {
+      throw gone();
+    }
+    if (approval.status !== 'pending' || approval.decision !== null) throw gone();
+    if (!answerableFromChannel(approval.tier)) throw gone();
+    return { link, row, approval };
+  }
+
+  /** Answer an approval with its signed link (once): the POST from the link's page. */
+  async answerByLink(token: string, decision: string): Promise<{ decision: string; text: string }> {
+    const { link, row, approval } = await this.#openLink(token);
+    if (!CHANNEL_DECISIONS.has(decision) || !approval.options.includes(decision as never))
+      throw new NovaError('validation', 'that choice is not offered for this approval', {
+        details: { field: 'decision' },
+      });
+    const choice = decision as ChannelAction['decision'];
+    // Spent before deciding, so two posts of one link cannot both answer.
+    if (!(await this.#links.spend(link.id, choice)))
+      throw new NovaError('not_found', 'this approval link is not valid any more');
+    try {
+      await this.#approvals!.decide(
+        row.account_id,
+        { approvalId: approval.id, decision: choice },
+        `channel:${row.id}`,
+      );
+    } catch (err) {
+      await this.#o.audit?.append({
+        accountId: row.account_id,
+        actor: `channel:${row.id}`,
+        kind: 'channel',
+        action: 'channel.approval.refused',
+        resource: `approval:${approval.id}`,
+        decision: choice,
+        threadId: approval.threadId,
+        turnId: approval.turnId,
+        detail: { reason: 'rejected', via: 'link', tier: approval.tier },
+      });
+      throw err;
+    }
+    await this.#o.audit?.append({
+      accountId: row.account_id,
+      actor: `channel:${row.id}`,
+      kind: 'channel',
+      action: 'channel.approval.answered',
+      resource: `approval:${approval.id}`,
+      decision: choice,
+      threadId: approval.threadId,
+      turnId: approval.turnId,
+      detail: { tier: approval.tier, via: 'link' },
+    });
+    return { decision: choice, text: answeredText(choice) };
+  }
+
+  // ---- message log (M6 known gap) -------------------------------------------------------------
+
+  /** A binding's messages, newest first. The log holds no text (the thread has it). */
+  messages(accountId: string, bindingId: string, q: ChannelMessagesQuery): ChannelMessageView[] {
+    return this.messagesPage(accountId, bindingId, q).items;
+  }
+
+  /**
+   * A page of a binding's messages, newest first (M7): `nextCursor` names the position after the
+   * last one (its time and id), so messages sharing a timestamp at a page boundary are never
+   * skipped, which `before` (strictly older) can do.
+   */
+  messagesPage(
+    accountId: string,
+    bindingId: string,
+    q: ChannelMessagesQuery,
+  ): ChannelMessagesPageView {
+    this.#row(accountId, bindingId);
+    const where = ['binding_id = ?'];
+    const params: (string | number)[] = [bindingId];
+    if (q.direction) {
+      where.push('direction = ?');
+      params.push(q.direction);
+    }
+    if (q.status) {
+      where.push('status = ?');
+      params.push(q.status);
+    }
+    if (q.before) {
+      where.push('created_at < ?');
+      params.push(new Date(q.before).toISOString());
+    }
+    if (q.cursor) {
+      const after = afterTimeCursor(q.cursor);
+      where.push(after.sql);
+      params.push(...after.args);
+    }
+    const rows = this.#db.raw
+      .prepare(
+        `SELECT * FROM channel_message WHERE ${where.join(' AND ')}
+         ORDER BY created_at DESC, id DESC LIMIT ?`,
+      )
+      .all(...params, q.limit + 1) as {
+      id: string;
+      binding_id: string;
+      direction: 'in' | 'out';
+      external_id: string | null;
+      conversation: string | null;
+      thread_ref: string | null;
+      sender: string | null;
+      thread_id: string | null;
+      turn_id: string | null;
+      status: ChannelMessageView['status'];
+      reason: string | null;
+      created_at: string;
+    }[];
+    const items = rows.slice(0, q.limit);
+    const last = items.at(-1);
+    return {
+      items: items.map((r) => ({
+        id: r.id,
+        bindingId: r.binding_id,
+        direction: r.direction,
+        externalId: r.external_id,
+        conversation: r.conversation,
+        threadRef: r.thread_ref,
+        sender: r.sender,
+        threadId: r.thread_id,
+        turnId: r.turn_id,
+        status: r.status,
+        reason: r.reason,
+        createdAt: r.created_at,
+      })),
+      nextCursor: rows.length > q.limit && last ? encodeTimeCursor(last.created_at, last.id) : null,
+    };
   }
 
   /** A reply that answers a pending approval of the binding's thread; the outcome, or null. */
@@ -1506,6 +1998,12 @@ export class ChannelService implements ChannelSender {
       await respond(text);
       return `refused:${reason}`;
     };
+    // Email: reply text never answers (a From address is easy to forge); the signed link does.
+    if (this.#adapters[row.kind]?.textAnswers === false)
+      return refuse(
+        'link_required',
+        'Approvals sent by email are answered with the link in the approval email.',
+      );
     if (role !== 'owner') return refuse('not_owner', 'Only the owner can answer approvals.');
     if (!answerableFromChannel(approval.tier))
       return refuse('native_client_only', 'This approval can only be answered in Nova.');
@@ -1576,6 +2074,13 @@ export class ChannelService implements ChannelSender {
   }
 
   async #changed(row: BindingRow, change: string): Promise<void> {
+    for (const l of this.#listeners) {
+      try {
+        l({ bindingId: row.id, kind: row.kind });
+      } catch (err) {
+        this.#o.log?.warn('binding listener failed', { err });
+      }
+    }
     await this.#o.events.emit({
       name: 'channel.binding.changed',
       accountId: row.account_id,
@@ -1589,14 +2094,14 @@ export class ChannelService implements ChannelSender {
 interface IdentityRow {
   id: string;
   account_id: string;
-  kind: ChannelBindingKind;
+  kind: ChannelKindM7;
   external_id: string;
   display_name: string | null;
   role: ChannelRole;
   created_at: string;
 }
 
-function identityView(r: IdentityRow): ChannelIdentityView {
+function identityView(r: IdentityRow): ChannelIdentityViewM7 {
   return {
     id: r.id,
     kind: r.kind,
@@ -1645,4 +2150,28 @@ function defaultLabel(kind: ChannelKind, externalRef: string): string {
 
 function fieldError(field: string, message: string): NovaError {
   return new NovaError('validation', message, { details: { field } });
+}
+
+/** An email binding's mailbox settings: both servers, and TLS unless on this machine. */
+function mailboxCheck(config: Record<string, string | null | undefined>): void {
+  if (!config.address || !config.imapHost || !config.smtpHost)
+    throw fieldError(
+      'config',
+      'an email binding needs its mailbox: address, imapHost and smtpHost',
+    );
+  const sec = (v: string | null | undefined) =>
+    v === 'starttls' || v === 'none' ? v : ('tls' as 'tls' | 'starttls' | 'none');
+  assertSecure({ host: config.imapHost, security: sec(config.imapSecurity) }, 'IMAP');
+  assertSecure({ host: config.smtpHost, security: sec(config.smtpSecurity) }, 'SMTP');
+  if (config.authservId && !/^[a-z0-9.-]{1,253}$/i.test(config.authservId))
+    throw fieldError('config.authservId', 'the authserv-id is a host name');
+}
+
+/** `senderCheck: none` takes every From address as it says: it must be confirmed. */
+function senderCheckOff(): NovaError {
+  return new NovaError(
+    'validation',
+    'turning the sender check off trusts every From address; confirm it with confirmSenderCheckNone',
+    { details: { field: 'confirmSenderCheckNone', reason: 'confirm_required' } },
+  );
 }

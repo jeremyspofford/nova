@@ -10,13 +10,17 @@
 // caches, excluded by pathspec magic so an in-tree negation cannot bring them back. The shadow
 // ignores the user's global and system config and neutralizes attributes (no filters, no EOL
 // conversion), so snapshots are byte-exact and no configured program ever runs.
-import { lstat, mkdir, readFile, realpath, rm, unlink, writeFile } from 'node:fs/promises';
+//
+// M7: the shadow works in any environment. Its Git and files come from a `CodeWorkspace`
+// (transport.ts): this Hub's own (the default), or another machine's through its transport, where
+// the shadow lives in Nova's state folder there, never inside the user's repository.
+import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, join, sep } from 'node:path';
+import { join } from 'node:path';
 import { NovaError, uuidv7 } from '@nova/shared';
-import { isWithin } from '@nova/security';
 import { parseDiff, parseRawDiff, type ParsedDiffFile } from './diff.ts';
 import type { GitRunOptions, HookFreeGit } from './git.ts';
+import { nodeWorkFs, type WorkFs } from './transport.ts';
 
 /** Never captured, at any depth (docs/12 §7.2) — plus dependency and tool caches. */
 export const UNCAPTURED_PATHS: readonly string[] = [
@@ -88,11 +92,13 @@ export class ShadowRepo {
   readonly gitDir: string;
   readonly workTree: string;
   readonly #git: HookFreeGit;
+  readonly #fs: WorkFs;
 
-  constructor(opts: { git: HookFreeGit; gitDir: string; workTree: string }) {
+  constructor(opts: { git: HookFreeGit; gitDir: string; workTree: string; fs?: WorkFs }) {
     this.#git = opts.git;
     this.gitDir = opts.gitDir;
     this.workTree = opts.workTree;
+    this.#fs = opts.fs ?? nodeWorkFs;
   }
 
   #opts(extra: Partial<GitRunOptions> = {}): GitRunOptions {
@@ -114,18 +120,24 @@ export class ShadowRepo {
     return (await this.#run(args, extra)).stdout.toString('utf8').trim();
   }
 
+  /** Whether the shadow exists (this Hub's files only; `initialized` works everywhere). */
   get exists(): boolean {
     return existsSync(join(this.gitDir, 'HEAD'));
+  }
+
+  async initialized(): Promise<boolean> {
+    return (await this.#fs.stat(join(this.gitDir, 'HEAD')))?.kind === 'file';
   }
 
   /**
    * Create the shadow repository (idempotent). `userExclude` is the folder repository's own
    * `info/exclude`, so files the user keeps out of Git stay out of the session's changes.
+   * `alternates` lends it a repository's objects (a short-lived handoff shadow reads HEAD's tree).
    */
-  async init(userExclude = ''): Promise<void> {
+  async init(userExclude = '', opts: { alternates?: string } = {}): Promise<void> {
     await this.#assertFolder();
-    if (!this.exists) {
-      await mkdir(this.gitDir, { recursive: true, mode: 0o700 });
+    if (!(await this.initialized())) {
+      await this.#fs.mkdir(this.gitDir);
       await this.#run(['init', '--quiet']);
       for (const [k, v] of [
         ['core.autocrlf', 'false'],
@@ -137,23 +149,23 @@ export class ShadowRepo {
       ] as const)
         await this.#run(['config', k, v]);
     }
-    await mkdir(join(this.gitDir, 'info'), { recursive: true });
-    await writeFile(join(this.gitDir, 'info', 'attributes'), ATTRIBUTES);
-    await writeFile(
+    await this.#fs.writeFile(join(this.gitDir, 'info', 'attributes'), ATTRIBUTES);
+    await this.#fs.writeFile(
       join(this.gitDir, 'info', 'exclude'),
       `${UNCAPTURED_PATHS.map((p) => `${p}\n`).join('')}${userExclude ? `${userExclude.trim()}\n` : ''}`,
     );
+    if (opts.alternates)
+      await this.#fs.writeFile(
+        join(this.gitDir, 'objects', 'info', 'alternates'),
+        `${opts.alternates}\n`,
+      );
   }
 
   async #assertFolder(): Promise<void> {
-    try {
-      const s = await lstat(this.workTree);
-      if (!s.isDirectory()) throw new Error('not a folder');
-    } catch {
+    if ((await this.#fs.stat(this.workTree))?.kind !== 'dir')
       throw new NovaError('conflict', `the session folder is missing: ${this.workTree}`, {
         details: { reason: 'folder_missing' },
       });
-    }
   }
 
   /** Record the folder's state; returns the tree id. */
@@ -167,6 +179,68 @@ export class ShadowRepo {
         throw new NovaError('server_error', `capturing changes failed: ${r.stderr.slice(0, 500)}`);
     });
     return this.#text(['write-tree']);
+  }
+
+  /** Run Git in the shadow's context: its GIT_DIR, the folder as the work tree (M7). */
+  git(args: string[], extra: Partial<GitRunOptions> = {}) {
+    return this.#run(args, extra);
+  }
+
+  /** Load a tree or commit into the shadow's index (its objects must be reachable). */
+  async readTree(treeish: string): Promise<void> {
+    await this.#run(['read-tree', treeish]);
+  }
+
+  /** A binary-safe patch between two trees (`--binary --full-index`, FR-213). */
+  async binaryPatch(from: string, to: string): Promise<Buffer> {
+    const r = await this.#run([
+      'diff-tree',
+      '-r',
+      '-p',
+      '--binary',
+      '--full-index',
+      '--no-renames',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--no-color',
+      '--src-prefix=a/',
+      '--dst-prefix=b/',
+      from,
+      to,
+    ]);
+    return r.stdout;
+  }
+
+  /** The paths that differ between two trees. */
+  async changedPaths(from: string, to: string): Promise<string[]> {
+    const r = await this.#run(['diff-tree', '-r', '-z', '--name-only', '--no-renames', from, to]);
+    return r.stdout
+      .toString('utf8')
+      .split('\0')
+      .filter((p) => p.length > 0);
+  }
+
+  /** Apply a patch to the work tree with neutral attributes; false (and why) when it does not. */
+  async applyToWorkTree(patch: Buffer | string): Promise<{ ok: boolean; stderr: string }> {
+    const r = await this.#run(['apply', '--binary', '--whitespace=nowarn', '-'], {
+      input: patch,
+      allowFail: true,
+    });
+    return { ok: r.code === 0, stderr: r.stderr };
+  }
+
+  /**
+   * Put paths of the work tree back to a commit's content (its objects reachable through the
+   * shadow's alternates); paths absent there are removed. Writes never follow a symlink out.
+   */
+  async restoreFrom(commit: string, paths: readonly string[]): Promise<void> {
+    const present: string[] = [];
+    for (const p of paths) {
+      if (await this.entry(commit, p)) present.push(p);
+      else await this.#removeFile(p);
+    }
+    for (let i = 0; i < present.length; i += 200)
+      await this.#run(['checkout', commit, '--', ...present.slice(i, i + 200)]);
   }
 
   /** The tree a named ref (`baseline`, `start`) points at, or null. */
@@ -279,7 +353,7 @@ export class ShadowRepo {
       await fn(opts);
       return await this.#text(['write-tree'], opts);
     } finally {
-      await rm(indexFile, { force: true });
+      await this.#fs.remove(indexFile);
     }
   }
 
@@ -314,18 +388,7 @@ export class ShadowRepo {
   }
 
   async #removeFile(rel: string): Promise<void> {
-    const abs = join(this.workTree, rel);
-    const root = await realpath(this.workTree);
-    const parent = await realpath(dirname(abs)).catch(() => null);
-    if (!parent || !isWithin(root, parent)) return;
-    const target = join(parent, abs.slice(abs.lastIndexOf(sep) + 1));
-    try {
-      const s = await lstat(target);
-      if (s.isDirectory()) return;
-      await unlink(target);
-    } catch {
-      // Already gone.
-    }
+    await this.#fs.removeWithin(this.workTree, rel);
   }
 
   /** Files Git sees in the folder (tracked and untracked, ignores honoured), for the index. */
@@ -339,20 +402,26 @@ export class ShadowRepo {
   }
 
   async remove(): Promise<void> {
-    await rm(this.gitDir, { recursive: true, force: true });
+    await this.#fs.remove(this.gitDir, true);
   }
 }
 
 /** The user's `info/exclude` of the repository a folder is in, if any (best effort). */
-export async function repoUserExcludes(git: HookFreeGit, folder: string): Promise<string> {
+export async function repoUserExcludes(
+  git: HookFreeGit,
+  folder: string,
+  fs: WorkFs = nodeWorkFs,
+): Promise<string> {
   const r = await git.run(['rev-parse', '--git-path', 'info/exclude'], {
     cwd: folder,
     allowFail: true,
   });
   if (r.code !== 0) return '';
   const p = r.stdout.toString('utf8').trim();
+  const path = p.startsWith('/') || /^[A-Za-z]:/.test(p) ? p : join(folder, p);
   try {
-    return await readFile(p.startsWith('/') || /^[A-Za-z]:/.test(p) ? p : join(folder, p), 'utf8');
+    if (fs === nodeWorkFs) return await readFile(path, 'utf8');
+    return (await fs.readFile(path, 1024 * 1024)).toString('utf8');
   } catch {
     return '';
   }

@@ -3,13 +3,18 @@
 // page-registered tools of the current origin (FR-208) and the takeover hooks the screen area
 // uses (FR-087): pause/resume, user input while paused and a rate-capped live frame stream.
 // Policy (site lists, approvals, the classifier) lives in BrowserService; this class only runs
-// the browser and keeps its state.
+// the browser and keeps its state. M7: the console and network capture buffers (capture.ts), and
+// the restart after a crash (docs/11 §10): a crashed page is replaced in the same browser, a
+// browser that died is launched again with the same profile (the cookies it had at the last
+// checkpoint), and the page it was on is opened again when the guards still allow it.
 import { X509Certificate, createHash } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserSessionState, BrowserSessionView } from '@nova/shared';
+import { DEFAULT_RULES, Redactor, defaultRedactor } from '@nova/security';
 import { readSealedFile, writeSealedFile } from '../attachments.ts';
 import type { Logger } from '@nova/telemetry';
+import { CAPTURE_BODY_MAX_BYTES, ConsoleLog, NetworkLog } from './capture.ts';
 import type { EgressPolicy, EgressProxy, EgressSession } from '../computers/types.ts';
 import type {
   BrowserDriver,
@@ -31,6 +36,9 @@ import {
 /** The screenshot rate cap of the live stream (docs/11 §8: 1 per 2 s). */
 export const BROWSER_FRAME_INTERVAL_MS = 2_000;
 const MAX_PAGE_TOOLS = 20;
+/** Cookies a crash checkpoint keeps at most (as JSON characters); more are not carried. */
+const MAX_CHECKPOINT_CHARS = 2_000_000;
+const RESTORE_TIMEOUT_MS = 30_000;
 
 export function hostOf(url: string): string | null {
   try {
@@ -86,6 +94,8 @@ export interface BrowserSessionOptions {
   timers: SessionTimers;
   log: Logger;
   now: () => Date;
+  /** The page or the browser crashed (called once per crash; the service records it). */
+  onCrash?: (session: BrowserSession, reason: string) => void;
 }
 
 /** Hosts the proxy session allows: each exact host also covers its subdomains. */
@@ -122,7 +132,28 @@ export class BrowserSession {
   busy = 0;
   /** What the guards allow; the service refreshes it before every action. */
   permissions: SitePermissions = { allow: [], deny: [], allowLocal: false };
+  /**
+   * Masks captured text: the default secret patterns plus the secrets this session filled into
+   * pages (a password from the private sign-in form), so a page cannot echo them to the agent.
+   */
+  readonly redactor = new Redactor(DEFAULT_RULES, { literalsFrom: defaultRedactor });
+  readonly console: ConsoleLog;
+  readonly network: NetworkLog;
+  /** Set when the page or the browser crashed; cleared by `restart`. */
+  crash: { at: string; reason: string } | null = null;
+  /** When each crash restart happened (ISO), oldest first. */
+  readonly restarts: string[] = [];
+  /** Notes for the agent's next result (a restart after a crash). */
+  readonly notes: string[] = [];
+  /** The thread that acted last (the trace row of a crash goes there). */
+  lastCall: { threadId: string | null; turnId: string | null; callId: string } | null = null;
   readonly #o: BrowserSessionOptions;
+  /** Cookies at the last checkpoint: what a browser that died starts again with. */
+  #cookies: Record<string, unknown>[] | null = null;
+  /** The method of the main-frame request that loaded the current page (null: unknown). */
+  #navMethod: string | null = null;
+  /** What the user typed into a password field during this takeover (masked once 4+ long). */
+  #typedSecret = '';
   #driver: DriverSession | null = null;
   #egress: EgressSession | null = null;
   #proxyAllow: string[] = [];
@@ -139,6 +170,8 @@ export class BrowserSession {
     this.accountId = opts.accountId;
     this.computerId = opts.computerId;
     this.startedAt = opts.now().toISOString();
+    this.console = new ConsoleLog({ now: opts.now, redactor: this.redactor });
+    this.network = new NetworkLog({ now: opts.now, redactor: this.redactor });
   }
 
   get url(): string {
@@ -251,6 +284,14 @@ export class BrowserSession {
         onPopup: (url) => {
           if (this.popups.length < 10) this.popups.push(url);
         },
+        onConsole: (event) => this.console.push(event, this.#url),
+        onNetwork: (event) => {
+          if (event.phase === 'request' && event.navigation)
+            this.#navMethod = String(event.method).slice(0, 10).toUpperCase();
+          this.network.apply(event);
+        },
+        captureBodyMaxBytes: CAPTURE_BODY_MAX_BYTES,
+        onCrash: (reason) => this.markCrashed(reason),
       });
     } catch (err) {
       await this.#egress?.close().catch(() => undefined);
@@ -317,6 +358,110 @@ export class BrowserSession {
     this.#egress = null;
     await this.launch(carry);
     this.#url = url === 'about:blank' ? this.#url : url;
+  }
+
+  /**
+   * Mask a secret this session put into a page (a password from the private sign-in form, or one
+   * the user typed during a takeover) in everything it captures, in the forms a page would echo
+   * it in: as is, URL- and form-encoded, JSON- and HTML-escaped, and base64. Short values too.
+   */
+  registerSecret(value: string): void {
+    if (!value) return;
+    const forms = new Set<string>([value, encodeURIComponent(value)]);
+    forms.add(new URLSearchParams({ v: value }).toString().slice(2));
+    const json = JSON.stringify(value).slice(1, -1);
+    forms.add(json);
+    forms.add(json.replace(/\//g, '\\/'));
+    forms.add(
+      json.replace(
+        /[\u007f-\uffff]/g,
+        (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+      ),
+    );
+    const html: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
+    forms.add(value.replace(/[&<>"']/g, (c) => html[c]!));
+    forms.add(
+      value.replace(/[&<>"']/g, (c) => (c === '"' ? '&#34;' : c === "'" ? '&#x27;' : html[c]!)),
+    );
+    const b64 = Buffer.from(value, 'utf8').toString('base64');
+    forms.add(b64);
+    forms.add(b64.replace(/=+$/, ''));
+    forms.add(Buffer.from(value, 'utf8').toString('base64url'));
+    for (const f of forms) this.redactor.addLiteral(f, { minLength: 1 });
+  }
+
+  // ---- crashes (docs/11 §10) -----------------------------------------------------------------
+
+  /** The page or the browser crashed: actions fail until `restart` (first report wins). */
+  markCrashed(reason: string): void {
+    if (this.state === 'closed' || this.crash) return;
+    this.crash = { at: this.#o.now().toISOString(), reason };
+    this.state = 'error';
+    try {
+      this.#o.onCrash?.(this, reason);
+    } catch (err) {
+      this.#o.log.warn('browser crash hook failed', { err });
+    }
+  }
+
+  /** Keep the cookies as they are now, for a restart after the browser dies. */
+  async checkpoint(): Promise<void> {
+    if (!this.#driver || this.crash) return;
+    try {
+      const cookies = await this.#driver.cookies();
+      this.#cookies = JSON.stringify(cookies).length <= MAX_CHECKPOINT_CHARS ? cookies : null;
+    } catch {
+      // A checkpoint is best effort; the last one stays.
+    }
+  }
+
+  /**
+   * Restart after a crash: a new page in the same browser when it still runs (its cookies
+   * stay), otherwise the browser again with the same profile (the checkpoint's cookies, or the
+   * saved state). The page it was on is opened again where the guards still allow it.
+   */
+  async restart(): Promise<{ mode: 'page' | 'browser'; url: string | null }> {
+    // Only a page a GET loaded is opened again: loading it repeats nothing (docs/11 §10); a page
+    // a form posted to, or one of unknown origin, stays closed.
+    const idempotent = this.#navMethod === 'GET' || this.#navMethod === 'HEAD';
+    const last = idempotent && this.#url !== 'about:blank' && hostOf(this.#url) ? this.#url : null;
+    this.restarts.push(this.#o.now().toISOString());
+    let mode: 'page' | 'browser' = 'page';
+    const recovered = this.#driver ? await this.#driver.recover().catch(() => false) : false;
+    if (!recovered) {
+      mode = 'browser';
+      await this.#driver?.close().catch(() => undefined);
+      await this.#egress?.close().catch(() => undefined);
+      this.#driver = null;
+      this.#egress = null;
+      this.crash = null;
+      await this.launch(this.#cookies ? { cookies: this.#cookies, origins: [] } : null);
+    }
+    this.crash = null;
+    this.state = this.paused ? 'paused' : 'running';
+    // Page tools and refs belonged to the page that crashed.
+    this.#pageTools.clear();
+    this.snapshot = null;
+    this.lastTyped = null;
+    this.#url = this.#driver?.url() ?? 'about:blank';
+    let url: string | null = null;
+    if (last && this.allowsNavigation(last)) {
+      try {
+        await this.driver.goto(last, RESTORE_TIMEOUT_MS);
+        this.sync();
+        url = this.#url === 'about:blank' ? null : this.#url;
+      } catch (err) {
+        this.#o.log.info('could not reopen the page after a restart', { err });
+        this.sync();
+      }
+    }
+    return { mode, url };
   }
 
   #navigated(url: string): void {
@@ -435,6 +580,15 @@ export class BrowserSession {
   /** The user's own input while they have control; refused otherwise. */
   async input(event: BrowserTakeoverInput): Promise<void> {
     if (!this.pausedBy) throw new Error('input is accepted only while the user has control');
+    // Text the user types into a password or code field is masked in what the page captures
+    // (M7 review): the page could echo it to its console or a response.
+    if (event.kind === 'type') {
+      if (await this.driver.focusedSecret().catch(() => true)) {
+        this.#typedSecret = `${this.#typedSecret}${event.text}`.slice(-1_000);
+        if (this.#typedSecret.length >= 4) this.registerSecret(this.#typedSecret);
+        if (event.text.length >= 4) this.registerSecret(event.text);
+      } else this.#typedSecret = '';
+    } else if (event.kind !== 'scroll') this.#typedSecret = '';
     await this.driver.input(event);
     this.sync();
   }
@@ -504,6 +658,8 @@ export class BrowserSession {
       startedAt: this.startedAt,
       lastActionAt: this.lastActionAt,
       persistCookies: this.#o.persistCookies,
+      crash: this.crash,
+      restarts: this.restarts.length,
     };
   }
 }

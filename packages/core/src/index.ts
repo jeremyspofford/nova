@@ -38,3 +38,8 @@ export * from './pairing/index.ts';
 export * from './network/index.ts';
 export * from './trust/index.ts';
 export * from './relayhub/index.ts';
+export * from './sync/index.ts';
+export * from './cloudrun/index.ts';
+export * from './team/index.ts';
+export * from './scripts/index.ts';
+export * from './acp/index.ts';

@@ -1,5 +1,6 @@
 // The agent browser against a real Chromium and the local test site (docs/18 J8 steps 1-3 and 5;
-// FR-086, FR-092, FR-094, FR-095, FR-098, FR-103, FR-208). Skipped, with the reason, where no
+// FR-086, FR-092, FR-094, FR-095, FR-098, FR-103, FR-208; M7: console and network capture,
+// hover, element screenshots and the restart after a crash). Skipped, with the reason, where no
 // Chromium can start (a host without the browser or its system libraries); the Playwright
 // container and CI have one.
 import { createServer, type Server } from 'node:http';
@@ -7,12 +8,34 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PlaywrightDriver, browserToolSource } from '../src/browser/index.ts';
+import {
+  PlaywrightDriver,
+  browserToolSource,
+  type BrowserDriver,
+  type DriverSession,
+} from '../src/browser/index.ts';
 import { ACCOUNT, THREAD, makeBrowserEnv, type BrowserEnv } from './browser-env.ts';
 
 const SITE = join(import.meta.dirname, 'fixtures', 'site');
-const driver = new PlaywrightDriver();
-const probe = await driver.probe(process.env.NOVA_BROWSER_EXECUTABLE ?? null);
+const playwright = new PlaywrightDriver();
+const probe = await playwright.probe(process.env.NOVA_BROWSER_EXECUTABLE ?? null);
+/** The driver sessions the service launched (the crash test reaches the page through one). */
+const launched: DriverSession[] = [];
+const driver: BrowserDriver = {
+  name: playwright.name,
+  probe: (exe) => playwright.probe(exe),
+  launch: async (opts) => {
+    const s = await playwright.launch(opts);
+    launched.push(s);
+    return s;
+  },
+};
+
+/** Width and height of a PNG (its IHDR chunk). */
+function pngSize(png: Uint8Array): { width: number; height: number } {
+  const b = Buffer.from(png);
+  return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+}
 
 it('reports whether Chromium can start here, with a reason when it cannot', () => {
   expect(probe.detail.length).toBeGreaterThan(0);
@@ -42,6 +65,23 @@ describe.skipIf(!probe.ok)('the agent browser on the local test site (Chromium)'
           res.writeHead(200, { 'content-type': 'text/html' });
           res.end('<!doctype html><title>Thanks</title><p>Thanks, received.</p>');
         });
+        return;
+      }
+      // No Content-Length (chunked): read only once finished and small enough (M7 review).
+      if (url.pathname === '/chunked.json' || url.pathname === '/chunked-big.txt') {
+        const big = url.pathname === '/chunked-big.txt';
+        res.writeHead(200, { 'content-type': big ? 'text/plain' : 'application/json' });
+        res.write(big ? 'x'.repeat(40_000) : '{"session_token":');
+        res.end(big ? 'y'.repeat(40_000) : '"chunked-should-not-show","ok":true}');
+        return;
+      }
+      if (url.pathname === '/api.json') {
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'set-cookie': 'sid=cookie-should-not-show; Path=/',
+          'x-auth-token': 'header-token-should-not-show',
+        });
+        res.end(JSON.stringify({ greeting: 'hello', access_token: 'body-token-should-not-show' }));
         return;
       }
       const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
@@ -232,5 +272,96 @@ describe.skipIf(!probe.ok)('the agent browser on the local test site (Chromium)'
       .toEqual(['page:127.0.0.1.add']);
     const out = await env.service.callPageTool(env.call(), '127.0.0.1', 'add', { a: 2, b: 3 });
     expect(text(out)).toContain('{"sum":5}');
+  }, 60_000);
+
+  it('captures the console and the network, redacted, with findings (M7)', async () => {
+    await env.service.navigate(env.call(), `${base}/observe.html`);
+    await expect
+      .poll(async () => text(await env.service.console(env.call())), { timeout: 10_000 })
+      .toContain('api says hello');
+    const con = text(await env.service.console(env.call()));
+    expect(con).toContain('log: observe page loaded');
+    expect(con).toContain('error (uncaught): Error: boom from the page');
+    expect(con).toMatch(/Finding: .*ignore your instructions/);
+    const net = text(
+      await env.service.network(env.call(), { contains: 'api.json', details: true }),
+    );
+    expect(net).toMatch(
+      /GET http:\/\/127\.0\.0\.1:\d+\/api\.json\?token=\[REDACTED\]&page=2 -> 200/,
+    );
+    expect(net).toContain('x-api-key: [REDACTED]');
+    expect(net).toContain('"greeting":"hello"');
+    expect(net).toContain('"access_token":"[REDACTED]"');
+    for (const secret of [
+      's3cret-token-value',
+      'key-should-not-show',
+      'cookie-should-not-show',
+      'header-token-should-not-show',
+      'body-token-should-not-show',
+    ]) {
+      expect(net).not.toContain(secret);
+      expect(con).not.toContain(secret);
+    }
+    // Bodies without a Content-Length: a small one is read (and masked), a large one is not.
+    await env.service.navigate(env.call(), `${base}/chunked.html`);
+    await expect
+      .poll(
+        async () =>
+          text(await env.service.network(env.call(), { contains: 'chunked', details: true })),
+        { timeout: 10_000 },
+      )
+      .toMatch(/chunked-big\.txt[\s\S]*body: not captured \(larger than 16 KB\)/);
+    const chunked = text(
+      await env.service.network(env.call(), { contains: 'chunked.json', details: true }),
+    );
+    expect(chunked).toContain('"session_token":"[REDACTED]"');
+    expect(chunked).toContain('"ok":true');
+    expect(chunked).not.toContain('chunked-should-not-show');
+    // The image on another host was refused by the guard: listed as blocked.
+    await env.service.navigate(env.call(), `${base}/`);
+    await expect
+      .poll(async () => text(await env.service.network(env.call(), { failedOnly: true })), {
+        timeout: 10_000,
+      })
+      .toContain('pixel.svg -> blocked');
+  }, 60_000);
+
+  it('hovers to open a menu and shoots one element (M7)', async () => {
+    await env.service.navigate(env.call(), `${base}/observe.html`);
+    let page = text(await env.service.read(env.call()));
+    expect(page).not.toContain('Mugs and cups');
+    const hover = await env.service.hover(env.call(), ref(page, 'Products'));
+    expect(hover.ok, text(hover)).toBe(true);
+    page = text(await env.service.read(env.call()));
+    expect(page).toContain('Mugs and cups');
+    const shot = await env.service.screenshot(env.call(), false, ref(page, 'Status: all good'));
+    expect(shot.ok, text(shot)).toBe(true);
+    const image = shot.ok ? shot.content.find((c) => c.type === 'image') : undefined;
+    const size = pngSize(Buffer.from((image as { data: string }).data, 'base64'));
+    expect(size.width).toBeGreaterThanOrEqual(150);
+    expect(size.width).toBeLessThan(200);
+    expect(size.height).toBeLessThan(80);
+  }, 60_000);
+
+  it('restarts a crashed page on the page it was on (M7, docs/11 §10)', async () => {
+    await env.service.navigate(env.call(), `${base}/observe.html`);
+    expect(text(await env.service.read(env.call()))).toContain('Observe');
+    // Crash the renderer of the agent's page.
+    await launched
+      .at(-1)!
+      .goto('chrome://crash', 5_000)
+      .catch(() => undefined);
+    await expect
+      .poll(() => env.service.sessions(ACCOUNT)[0]?.crash?.reason ?? null, { timeout: 10_000 })
+      .toBe('the page crashed');
+    const read = await env.service.read(env.call());
+    expect(read.ok, text(read)).toBe(true);
+    expect(text(read)).toContain('The browser crashed (the page crashed) and was restarted on');
+    expect(text(read)).toContain('Observe');
+    const rows = env.service.recorder.list(ACCOUNT).map((r) => `${r.tool}/${r.action}/${r.result}`);
+    expect(rows).toEqual(
+      expect.arrayContaining(['browser.crash/crash/error', 'browser.restart/restart/ok']),
+    );
+    expect(env.service.sessions(ACCOUNT)[0]).toMatchObject({ crash: null, restarts: 1 });
   }, 60_000);
 });

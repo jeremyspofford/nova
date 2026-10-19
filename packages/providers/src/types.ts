@@ -103,6 +103,26 @@ export interface CallContext {
   requestId: string;
 }
 
+/** One image to generate (FR-030, docs/07 §2). `size` is `<width>x<height>`. */
+export interface ImageRequest {
+  model: string;
+  prompt: string;
+  size: string;
+  signal: AbortSignal;
+}
+
+/** A generated image as base64, with the prompt as the provider rewrote it when it did. */
+export interface GeneratedImageData {
+  data: string;
+  mime?: string;
+  revisedPrompt?: string;
+}
+
+export interface ImageResponse {
+  model: string;
+  images: GeneratedImageData[];
+}
+
 export interface Provider {
   readonly id: string;
   readonly capabilities: ProviderCapabilities;
@@ -110,4 +130,9 @@ export interface Provider {
   /** Main streaming entry point: an async iterator of normalized events ending with `stop`. */
   stream(req: ChatRequest, ctx: CallContext): AsyncIterable<StreamEvent>;
   countTokens?(req: ChatRequest): Promise<number>;
+  /**
+   * Optional: image generation (FR-030). Present only on adapters with an images call; the
+   * provider's `imageGeneration` capability and the model's say whether it can be used.
+   */
+  generateImage?(req: ImageRequest, ctx: CallContext): Promise<ImageResponse>;
 }

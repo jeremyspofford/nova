@@ -52,7 +52,26 @@ const PUBLIC: Record<string, string> = {
   // Signed novad builds for the one-line install (FR-133, docs/22 §4.3): not secret; integrity
   // comes from the manifest's Ed25519 signature and each build's SHA-256.
   'GET /api/v1/agent/dist/:file': 'none: public builds, verified by the signed manifest',
+  // M7 channels (FR-110): an email approval is answered only through a signed one-use link (HMAC
+  // with the Hub's link key, short-lived); GET shows the choices, POST answers once.
+  'GET /api/v1/channels/approval-links/:token':
+    'a signed one-use approval link; shows the choices, changes nothing',
+  'POST /api/v1/channels/approval-links/:token': 'the same signed one-use link; answers once',
+  // M7 members (decision 5) and OIDC sign-in (FR-113): a new member has no session yet.
+  'POST /api/v1/team/join/preview': 'a one-use invitation token in the body; rate-limited',
+  'POST /api/v1/team/join': 'a one-use invitation token in the body; rate-limited',
+  'GET /api/v1/auth/oidc/providers': "none: the enabled providers' labels only",
+  'POST /api/v1/auth/oidc/start':
+    'none to sign in (only the provider URL is returned); join needs an invitation, link a session',
+  'GET /api/v1/auth/oidc/callback':
+    'single-use 10-minute state, then the ID token checks; redirects to fixed paths only',
+  // A public profile card exists only when the owner allows cards and the person opted in.
+  'GET /api/v1/profiles/:handle': 'none: opted-in public cards only; rate-limited',
+  'GET /api/v1/profiles/:handle/avatar': 'none: opted-in public cards only; rate-limited',
 };
+
+/** Browser flows that refuse by redirecting to the sign-in page (no session, a fixed path). */
+const REFUSES_BY_REDIRECT = new Set(['GET /api/v1/auth/oidc/callback']);
 
 /** Public routes that take no credential at all: they may answer anyone. */
 const OPEN = new Set([
@@ -62,6 +81,9 @@ const OPEN = new Set([
   'GET /api/v1/trust/ca.crt',
   'GET /api/v1/trust/identity',
   'GET /api/v1/agent/dist/:file',
+  'GET /api/v1/auth/oidc/providers',
+  'GET /api/v1/profiles/:handle',
+  'GET /api/v1/profiles/:handle/avatar',
 ]);
 
 let dir: string;
@@ -165,6 +187,14 @@ describe('HTTP routes', () => {
   it('never lets an unauthenticated call succeed on the public routes that take credentials', async () => {
     for (const key of Object.keys(PUBLIC).filter((k) => !OPEN.has(k))) {
       const [method, path] = key.split(' ') as [string, string];
+      if (REFUSES_BY_REDIRECT.has(key)) {
+        // A browser flow refuses by sending the browser back to sign-in: never a session.
+        const res = await hub.app.inject({ method: 'GET', url: path, headers: { host: HOST } });
+        expect(res.statusCode, key).toBe(302);
+        expect(res.headers.location, key).toMatch(/^\/sign-in\?/);
+        expect(res.headers['set-cookie'], key).toBeUndefined();
+        continue;
+      }
       const res = await call(method, path);
       expect(res.status, key).toBeGreaterThanOrEqual(400);
       expect(res.status, key).toBeLessThan(500);

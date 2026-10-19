@@ -1,0 +1,281 @@
+/* The team area (FR-217, FR-091, FR-113; decision 5): Settings → Members and Account, the Team
+   surface (shared chats, team agents) and the share dialog. Colors, spacing and type come only
+   from design tokens, so light, dark and high-contrast themes follow. */
+.team-page > * {
+  min-width: 0;
+}
+.team-strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.team-small {
+  font-size: var(--u-text-sm);
+}
+.team-break {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  white-space: normal;
+}
+.team-grow {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.team-pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.team-clamp {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+.team-actions {
+  flex-wrap: wrap;
+  gap: var(--u-space-2);
+}
+.team-subhead {
+  margin: 0;
+  font-size: var(--u-text-sm);
+  font-weight: 600;
+}
+.team-person-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.ws-callout.team-owner-only {
+  border-left-color: var(--u-info);
+}
+.ws-callout.team-owner-only > svg {
+  color: var(--u-info);
+}
+.team-page a.nv-btn {
+  text-decoration: none;
+}
+.team-in-chat .ws-list-row {
+  min-height: 3.5rem;
+}
+
+/* tabs and the phone menu */
+.team-tabs .nv-tablist {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.team-tabs .nv-tab {
+  flex: none;
+  white-space: nowrap;
+}
+.team-tabs .nv-tabpanel {
+  min-width: 0;
+}
+.team-section > * {
+  min-width: 0;
+}
+.team-menu {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.team-menu a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-3);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+  color: var(--u-text);
+  text-decoration: none;
+}
+.team-menu-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* notices */
+.team-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-left: 4px solid var(--u-info);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+  overflow-wrap: anywhere;
+}
+.team-notice > svg {
+  flex: none;
+  margin-top: 3px;
+}
+.team-notice[data-tone='ok'] {
+  border-left-color: var(--u-success);
+}
+.team-notice[data-tone='ok'] > svg {
+  color: var(--u-success);
+}
+.team-notice[data-tone='bad'] {
+  border-left-color: var(--u-danger);
+}
+.team-notice[data-tone='bad'] > svg {
+  color: var(--u-danger);
+}
+
+/* the invitation link, shown once; the card address */
+.team-link-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface-2);
+}
+.team-link-box > code {
+  flex: 1 1 240px;
+  min-width: 0;
+  user-select: all;
+}
+
+/* the profile card preview */
+.team-preview {
+  display: grid;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3);
+  border: 1px dashed var(--u-border);
+  border-radius: var(--u-radius-md);
+}
+.team-preview-title {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.team-card {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-3);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.team-card-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* the share dialog's "what is not shared" */
+.team-not-shared {
+  display: grid;
+  gap: var(--u-space-2);
+  margin-top: var(--u-space-3);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-left: 4px solid var(--u-info);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+}
+.team-not-shared .team-strong {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-1);
+}
+
+/* a shared chat */
+.team-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.team-chip-x {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--u-space-1);
+  padding: 2px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--u-text-muted);
+  cursor: pointer;
+}
+.team-chip-x:hover {
+  color: var(--u-text);
+}
+.team-chip-x:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 1px;
+}
+.team-messages {
+  display: grid;
+  gap: var(--u-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.team-msg {
+  display: grid;
+  gap: var(--u-space-1);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.team-msg[data-role='user'] {
+  background: var(--u-surface-2);
+}
+.team-msg-author {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.team-msg-body {
+  margin: 0;
+  min-width: 0;
+}
+.team-composer {
+  display: grid;
+  gap: var(--u-space-2);
+  padding-top: var(--u-space-3);
+  border-top: 1px solid var(--u-border);
+}
+.team-composer .row {
+  justify-content: flex-end;
+}
+
+/* team agents */
+.team-duty {
+  padding-bottom: var(--u-space-3);
+  border-bottom: 1px solid var(--u-border);
+}
+.team-args {
+  max-height: 200px;
+  margin: 0;
+  padding: var(--u-space-2);
+  overflow: auto;
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.team-task details > summary {
+  cursor: pointer;
+}
+.team-table-wrap {
+  overflow-x: auto;
+}
+
+.app[data-layout='phone'] .team-actions > .nv-btn,
+.app[data-layout='phone'] .team-composer .row > .nv-btn {
+  flex: 1;
+}

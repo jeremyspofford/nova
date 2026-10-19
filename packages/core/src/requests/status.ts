@@ -7,8 +7,10 @@
 //   3. running: a turn is in progress for the thread or any child thread;
 //   4. ready.
 // Child threads (sub-agents) come from the registered sources. The service recomputes a thread
-// when an approval, request, turn, run, goal or Code event names it (and its parent thread), and
-// emits `thread.status.changed` when the status changed.
+// when an approval, request, turn, run, goal, Code or agent event names it (and its parent
+// threads), and emits `thread.status.changed` when the status changed. M7: links name the threads
+// of an event that carries none (an agent paused or resumed) and parents that are not
+// `parent_thread_id` (an agent's research and background threads count toward its main thread).
 import type { DerivedStatus, EventEnvelope, EventHandler, StatusView } from '@nova/shared';
 import type { NovaDatabase } from '@nova/storage';
 import type { Logger } from '@nova/telemetry';
@@ -23,12 +25,21 @@ export const STATUS_EVENTS = [
   'run.*',
   'goal.*',
   'code.*',
+  'agent.*',
   'review.breaker.tripped',
 ] as const;
 
 const MAX_THREADS = 500;
 const MAX_DEPTH = 3;
 const MAX_CACHED = 5000;
+
+/** What a mode knows about which threads an event concerns (agents, FR-215). */
+export interface ThreadStatusLinks {
+  /** Threads whose status counts this one's, besides its `parent_thread_id`. */
+  parentsOf?(accountId: string, threadId: string): Promise<string[]>;
+  /** The threads an event that names no thread is about. */
+  threadsOf?(e: EventEnvelope): Promise<string[]>;
+}
 
 export interface StatusEventSource {
   subscribe(pattern: string, handler: EventHandler): () => void;
@@ -48,6 +59,7 @@ function placeholders(n: number): string {
 export class ThreadStatusService {
   readonly #o: ThreadStatusServiceOptions;
   readonly #sources: ThreadStatusSource[] = [];
+  readonly #links: ThreadStatusLinks[] = [];
   readonly #known = new Map<string, DerivedStatus>();
   #chain: Promise<void> = Promise.resolve();
   #offs: (() => void)[] = [];
@@ -60,6 +72,11 @@ export class ThreadStatusService {
   /** Register what modes know about blocked work and child threads (runs, Code sessions). */
   useSources(...sources: ThreadStatusSource[]): void {
     this.#sources.push(...sources);
+  }
+
+  /** Register which threads events concern beyond their correlation (agents). */
+  useLinks(...links: ThreadStatusLinks[]): void {
+    this.#links.push(...links);
   }
 
   /** The status of each thread (of this account); threads it does not know are `ready`. */
@@ -226,10 +243,42 @@ export class ThreadStatusService {
   async #onEvent(e: EventEnvelope): Promise<void> {
     const accountId = e.accountId;
     if (!accountId) return;
-    const threadId = this.#threadOf(e);
-    if (!threadId) return;
-    const parent = this.#parentOf(threadId);
-    await this.refresh(accountId, parent ? [threadId, parent] : [threadId]);
+    const own = this.#threadOf(e);
+    const threads = own ? [own] : await this.#linkedThreads(e);
+    if (!threads.length) return;
+    const all = new Set(threads);
+    for (const t of threads) {
+      const parent = this.#parentOf(t);
+      if (parent) all.add(parent);
+      for (const p of await this.#linkedParents(accountId, t)) all.add(p);
+    }
+    await this.refresh(accountId, [...all]);
+  }
+
+  async #linkedThreads(e: EventEnvelope): Promise<string[]> {
+    const out: string[] = [];
+    for (const l of this.#links) {
+      if (!l.threadsOf) continue;
+      try {
+        out.push(...(await l.threadsOf(e)));
+      } catch (err) {
+        this.#o.log?.warn('thread status links failed', { err, event: e.name });
+      }
+    }
+    return [...new Set(out)].slice(0, MAX_THREADS);
+  }
+
+  async #linkedParents(accountId: string, threadId: string): Promise<string[]> {
+    const out: string[] = [];
+    for (const l of this.#links) {
+      if (!l.parentsOf) continue;
+      try {
+        out.push(...(await l.parentsOf(accountId, threadId)));
+      } catch (err) {
+        this.#o.log?.warn('thread status links failed', { err, threadId });
+      }
+    }
+    return out;
   }
 
   /**

@@ -2,9 +2,10 @@
 //!   novad version
 //!   novad capabilities [--device-id ID] [--role R]... [--data-dir D] [--sign]
 //!   novad install --hub URL --code CODE --pin FINGERPRINT [--pairing ID] [--role R]... [--name N]
-//!                 [--listen ADDR] [--endpoint URL] [--no-service] [--dry-run] [--data-dir D]
-//!   novad enroll --hub URL --token TOKEN [--name N] [--role R]... [--listen ADDR] [--endpoint URL]
-//!                [--channel C] [--update-key KEY] [--data-dir D]
+//!                 [--listen ADDR] [--endpoint URL] [--user NAME]... [--no-service] [--dry-run]
+//!                 [--data-dir D]
+//!   novad enroll --hub URL --token TOKEN [--pin FINGERPRINT] [--name N] [--role R]... [--listen ADDR]
+//!                [--endpoint URL] [--user NAME]... [--channel C] [--update-key KEY] [--data-dir D]
 //!   novad run [--data-dir D]
 //!   novad module NAME [--data-dir D]
 //!   novad access list|approve ID|deny ID [--data-dir D]
@@ -38,13 +39,18 @@ pub struct EnrollArgs {
     pub endpoint: String,
     pub channel: String,
     pub update_key: Option<String>,
+    /// The Hub fingerprint (FR-134): required for an https:// Hub; over http:// it lets novad
+    /// learn the Hub local CA from the signed identity statement for later HTTPS.
+    pub pin: Option<String>,
+    /// Users who get their own local runtime socket (`config.json` `localRuntime.users`).
+    pub users: Vec<String>,
     pub data_dir: String,
 }
 
 /// `novad install` (FR-133, docs/22 §4.3): join a Hub with an Add Device code.
 #[derive(Debug, PartialEq, Clone)]
 pub struct InstallArgs {
-    /// The Hub's http:// address, without a trailing slash.
+    /// The Hub's http:// or https:// address, without a trailing slash.
     pub hub: String,
     /// The Add Device code, normalized to its 8 characters (`ABCDEFGH`).
     pub code: String,
@@ -60,6 +66,8 @@ pub struct InstallArgs {
     pub endpoint: Option<String>,
     pub no_service: bool,
     pub dry_run: bool,
+    /// Users who get their own local runtime socket; `$SUDO_USER` by default.
+    pub users: Vec<String>,
     pub data_dir: String,
 }
 
@@ -151,6 +159,18 @@ pub fn parse_with(args: &[String], env: &dyn Fn(&str) -> Option<String>, stdin_l
     let check_role = |r: &str| {
         if ROLES.contains(&r) { Ok(()) } else { Err(format!("unknown role: {r}")) }
     };
+    // The local runtime's per-user sockets (FR-128): `--user`, else the user who ran sudo.
+    let users = || -> Result<Vec<String>, String> {
+        let mut list = all("--user");
+        if list.is_empty() {
+            list.extend(env("SUDO_USER").filter(|u| u != "root" && crate::local_runtime::valid_user(u)));
+        }
+        if let Some(bad) = list.iter().find(|u| !crate::local_runtime::valid_user(u)) {
+            return Err(format!("--user: {bad:?} is not a user name"));
+        }
+        list.dedup();
+        Ok(list)
+    };
     match cmd.as_str() {
         "version" | "--version" | "-V" => Ok(Command::Version),
         "help" | "--help" | "-h" => Ok(Command::Help),
@@ -167,12 +187,9 @@ pub fn parse_with(args: &[String], env: &dyn Fn(&str) -> Option<String>, stdin_l
             })
         }
         "install" => {
-            // novad has no TLS client yet: the pin and the signed manifest protect the install
-            // over LAN HTTP (FR-133, ADR-094).
+            // An https:// Hub is trusted through the pin (src/tls.rs, R-023); over http:// the pin,
+            // the signed manifest and the signed confirmation protect the install (FR-133).
             let hub = value("--hub").ok_or("--hub is required")?.trim_end_matches('/').to_string();
-            if hub.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("https://")) {
-                return Err(format!("--hub: {}", crate::http::HTTPS_UNSUPPORTED));
-            }
             crate::http::host_port(&hub).map_err(|e| format!("--hub: {e}"))?;
             // `--code -` reads it from standard input (the bootstrap command pipes it in, which
             // survives sudo); without --code it comes from NOVA_ADD_CODE.
@@ -218,15 +235,20 @@ pub fn parse_with(args: &[String], env: &dyn Fn(&str) -> Option<String>, stdin_l
                 endpoint,
                 no_service: flag("--no-service"),
                 dry_run: flag("--dry-run"),
+                users: users()?,
                 data_dir: data_dir(),
             }))
         }
         "enroll" => {
-            // Until certificates arrive (M6.5), devices enroll over LAN HTTP with a one-use token,
-            // like compute nodes (ADR-089).
-            let hub = value("--hub").ok_or("--hub is required")?;
-            if !hub.starts_with("http://") {
-                return Err("--hub must be an http:// LAN address (novad has no TLS client yet)".into());
+            // A one-use token, like compute nodes (ADR-089); an https:// Hub needs its pin (R-023).
+            let hub = value("--hub").ok_or("--hub is required")?.trim_end_matches('/').to_string();
+            crate::http::host_port(&hub).map_err(|e| format!("--hub: {e}"))?;
+            let pin = value("--pin");
+            if pin.as_ref().is_some_and(|p| !valid_pin(p)) {
+                return Err("--pin must be the Hub's 43-character fingerprint".into());
+            }
+            if crate::http::is_https(&hub) && pin.is_none() {
+                return Err("--pin is required for an https:// Hub (the Hub fingerprint shown in Settings → Devices)".into());
             }
             let token = value("--token").ok_or("--token is required")?;
             if !token.starts_with("nvd_") || token.len() < 20 {
@@ -261,6 +283,8 @@ pub fn parse_with(args: &[String], env: &dyn Fn(&str) -> Option<String>, stdin_l
                 endpoint,
                 channel,
                 update_key: value("--update-key"),
+                pin,
+                users: users()?,
                 data_dir: data_dir(),
             }))
         }
@@ -423,7 +447,9 @@ mod tests {
         }
         let err = |a: &[&str]| parse_with(&args(a), &|_| None, &|| None).unwrap_err();
         assert!(err(&["install", "--code", "ABCD-EFGH"]).contains("--hub"));
-        assert!(err(&["install", "--hub", "https://hub.lan", "--code", "ABCD-EFGH"]).contains("TLS"));
+        // An https:// Hub is trusted through the pin (R-023).
+        let Command::Install(tls) = parse(&args(&["install", "--hub", "https://hub.lan:7419/", "--code", "ABCD-EFGH", "--pin", PIN])).unwrap() else { panic!("install") };
+        assert_eq!(tls.hub, "https://hub.lan:7419");
         assert!(err(&["install", "--hub", "http://user@hub.lan", "--code", "ABCD-EFGH"]).contains("--hub"));
         assert!(err(&["install", "--hub", "http://hub.lan"]).contains("--code"));
         assert!(err(&["install", "--hub", "http://hub.lan", "--code", "1"]).contains("8-character"));
@@ -441,6 +467,27 @@ mod tests {
         assert!(install(&["--name", "a\nb"]).unwrap_err().contains("--name"));
         assert!(parse(&args(&["capabilities", "--role", "x"])).is_err());
         assert!(parse(&args(&["frobnicate"])).unwrap_err().contains("unknown command"));
+    }
+
+    #[test]
+    fn takes_local_runtime_users_or_the_sudo_user() {
+        let with_env = |extra: &[&str], sudo: Option<&str>| {
+            let mut a = vec!["install", "--hub", "http://hub.lan", "--code", "ABCD-EFGH", "--pin", PIN];
+            a.extend_from_slice(extra);
+            let sudo = sudo.map(str::to_string);
+            parse_with(&args(&a), &|k| if k == "SUDO_USER" { sudo.clone() } else { None }, &|| None).map(|c| match c {
+                Command::Install(i) => i.users,
+                _ => vec![],
+            })
+        };
+        assert_eq!(with_env(&[], None).unwrap(), Vec::<String>::new());
+        assert_eq!(with_env(&[], Some("alice")).unwrap(), vec!["alice".to_string()]);
+        assert_eq!(with_env(&[], Some("root")).unwrap(), Vec::<String>::new(), "sudo from root names nobody");
+        assert_eq!(with_env(&["--user", "bob", "--user=carol"], Some("alice")).unwrap(), vec!["bob".to_string(), "carol".to_string()]);
+        assert!(with_env(&["--user", "../etc"], None).unwrap_err().contains("--user"));
+        let token = "nvd_0123456789abcdefghij";
+        let Command::Enroll(e) = parse_with(&args(&["enroll", "--hub", "http://h", "--token", token, "--endpoint", "http://d:1", "--user", "dana"]), &|_| None, &|| None).unwrap() else { panic!("enroll") };
+        assert_eq!(e.users, vec!["dana".to_string()]);
     }
 
     /// The code can stay off argv: from standard input (`--code -`) or NOVA_ADD_CODE.
@@ -476,7 +523,11 @@ mod tests {
         assert_eq!(e.roles, vec!["compute".to_string()]);
         assert_eq!(e.channel, "stable");
         assert!(parse(&args(&["enroll", "--hub", "http://h", "--token", token])).unwrap_err().contains("--endpoint"));
-        assert!(parse(&args(&["enroll", "--hub", "https://h", "--token", token])).unwrap_err().contains("http://"));
+        assert!(parse(&args(&["enroll", "--hub", "https://h", "--token", token, "--endpoint", "http://d:1"])).unwrap_err().contains("--pin"));
+        let Command::Enroll(t) = parse(&args(&["enroll", "--hub", "https://h:7419/", "--token", token, "--endpoint", "http://d:1", "--pin", PIN])).unwrap() else { panic!("enroll") };
+        assert_eq!((t.hub.as_str(), t.pin.as_deref()), ("https://h:7419", Some(PIN)));
+        assert!(parse(&args(&["enroll", "--hub", "http://h", "--token", token, "--endpoint", "http://d:1", "--pin", "bad"])).unwrap_err().contains("fingerprint"));
+        assert!(parse(&args(&["enroll", "--hub", "ftp://h", "--token", token, "--endpoint", "http://d:1"])).unwrap_err().contains("--hub"));
         assert!(parse(&args(&["enroll", "--hub", "http://h", "--token", "nve_compute_token_xx"])).unwrap_err().contains("nvd_"));
         assert!(parse(&args(&["enroll", "--hub", "http://h", "--token", token, "--listen", "nope"])).is_err());
         assert!(parse(&args(&["enroll", "--hub", "http://h", "--token", token, "--listen", "127.0.0.1:1", "--channel", "edge"])).is_err());

@@ -1,6 +1,6 @@
 // New Code session (FR-061, FR-062, FR-063, FR-073; docs/04 §2.4, docs/09 §2): a folder (a
 // project folder, or a path typed for the Hub or for the chosen machine), the environment with
-// its health (This Hub by default; saved container, SSH, WSL and device environments), the model,
+// its health (This Hub by default; saved container, SSH, WSL, device and cloud environments), the model,
 // the permission mode, a new Git worktree or an existing unleased one from the registry, and
 // optional time, token and cost budgets. The mode starts as the one last used in that folder,
 // else the default from Settings → Code; unavailable modes are listed with the reason.
@@ -322,7 +322,18 @@ function NewSessionForm({
               required
               autoComplete="off"
               spellCheck={false}
-              placeholder={remote ? '/home/me/src/app' : '/home/me/projects/app'}
+              placeholder={
+                environment?.kind === 'cloud'
+                  ? '/workspace/app'
+                  : remote
+                    ? '/home/me/src/app'
+                    : '/home/me/projects/app'
+              }
+              hint={
+                environment?.kind === 'cloud'
+                  ? 'Cloud environments keep their repositories under /workspace. The session keeps running there while your devices are off.'
+                  : undefined
+              }
               onChange={(e) => setTypedPath(e.target.value)}
             />
           )}

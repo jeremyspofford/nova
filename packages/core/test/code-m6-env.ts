@@ -3,7 +3,7 @@
 // a recording TurnStarter, and an SSH helper test double whose processes outlive the connection
 // and keep their output buffered (FR-078).
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NovaError, SETTINGS, type SettingKey } from '@nova/shared';
 import { MemorySecretStore } from '@nova/secrets';
@@ -50,6 +50,13 @@ interface FakeProc {
 /** A remote host running `novad`: it owns its processes, whatever happens to connections. */
 export class FakeHelperHost {
   readonly procs = new Map<string, FakeProc>();
+  /** The remote user's home (M7: Nova's state folder lives under it). */
+  home: string | null = null;
+  /**
+   * The remote machine's own filesystem (M7 tests): paths in commands, folders and variables are
+   * rewritten, so the same path names a different place than on the Hub.
+   */
+  map: ((s: string) => string) | null = null;
   readonly connections: FakeHelperConnection[] = [];
   hello: EnvHelperHello = {
     version: '0.6.0',
@@ -65,11 +72,28 @@ export class FakeHelperHost {
   #next = 0;
 
   spawn(spec: EnvHelperSpawn): { id: string } {
+    if (this.map) {
+      const m = this.map;
+      spec = {
+        ...spec,
+        cmd: m(spec.cmd),
+        cwd: m(spec.cwd),
+        ...(spec.env
+          ? { env: Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, m(v)])) }
+          : {}),
+      };
+    }
+    // Like novad: a missing working folder fails the spawn.
+    if (!existsSync(spec.cwd)) throw new NovaError('not_found', `no folder ${spec.cwd}`);
     const id = `p${++this.#next}`;
     // Its own process group, so a terminate reaches the command's children too.
     const child = spawn('sh', ['-c', spec.cmd], {
       cwd: spec.cwd,
-      env: { ...gitEnv({ cwd: spec.cwd }), ...spec.env },
+      env: {
+        ...gitEnv({ cwd: spec.cwd }),
+        ...(this.home ? { HOME: this.home } : {}),
+        ...spec.env,
+      },
       detached: true,
     });
     const proc: FakeProc = {
@@ -122,6 +146,14 @@ export class FakeHelperHost {
     };
   }
 
+  /** Standard input of a process (M7: the transport sends bytes base64-encoded). */
+  input(id: string, text: string | undefined, close: boolean | undefined): void {
+    const p = this.procs.get(id);
+    if (!p) throw new NovaError('not_found', 'no such process');
+    if (text) p.child.stdin?.write(text);
+    if (close) p.child.stdin?.end();
+  }
+
   kill(id: string, signal: NodeJS.Signals = 'SIGTERM'): void {
     const pid = this.procs.get(id)?.child.pid;
     if (pid === undefined) return;
@@ -172,7 +204,7 @@ export class FakeHelperConnection implements EnvHelperConnection {
   stat(path: string) {
     this.#live();
     try {
-      const st = statSync(path);
+      const st = statSync(this.host.map ? this.host.map(path) : path);
       return Promise.resolve({ kind: st.isDirectory() ? ('dir' as const) : ('file' as const) });
     } catch {
       return Promise.resolve(null);
@@ -180,14 +212,22 @@ export class FakeHelperConnection implements EnvHelperConnection {
   }
   spawn(spec: EnvHelperSpawn) {
     this.#live();
-    return Promise.resolve(this.host.spawn(spec));
+    try {
+      return Promise.resolve(this.host.spawn(spec));
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
   }
   read(id: string, offset: number, waitMs: number) {
     this.#live();
     return this.host.read(id, offset, waitMs);
   }
-  write(id: string, input: { signal?: 'interrupt' | 'terminate' }) {
+  write(
+    id: string,
+    input: { text?: string; closeStdin?: boolean; signal?: 'interrupt' | 'terminate' },
+  ) {
     this.#live();
+    this.host.input(id, input.text, input.closeStdin);
     if (input.signal) this.host.kill(id);
     return Promise.resolve();
   }
@@ -383,6 +423,8 @@ export async function makeCodeM6Env(opts: CodeM6EnvOptions = {}): Promise<CodeM6
   const sandbox = { current: opts.sandbox === undefined ? new HostSandbox() : opts.sandbox };
   const secrets = new MemorySecretStore();
   const ssh = new FakeSshTransport();
+  ssh.host.home = join(env.dir, 'remote-home');
+  mkdirSync(ssh.host.home, { recursive: true });
   const setting = ((key: SettingKey) =>
     Promise.resolve(key in values ? values[key] : SETTINGS[key].default)) as never;
   const auditSink = { append: (r: AuditRecord) => Promise.resolve(void audit.push(r)) };

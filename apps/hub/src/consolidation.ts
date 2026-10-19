@@ -5,7 +5,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { idSchema, memoryTopicSchema } from '@nova/shared';
-import { CONSOLIDATION_INTERVAL_MS, ConsolidationService, type MemoryService } from '@nova/core';
+import {
+  CONSOLIDATION_INTERVAL_MS,
+  ConsolidationService,
+  hubOwnerId,
+  type MemoryService,
+} from '@nova/core';
 import type { HubArea, HubContext } from './hub-context.ts';
 
 export interface ConsolidationArea extends HubArea {
@@ -60,9 +65,8 @@ export async function setupConsolidation(
   timer.unref();
 
   ctx.diagnostics.add('memoryConsolidation', async () => {
-    const owner = ctx.db.raw.prepare('SELECT id FROM account ORDER BY created_at LIMIT 1').get() as
-      { id: string } | undefined;
-    const last = owner ? service.runs(owner.id, 1)[0] : undefined;
+    const owner = hubOwnerId(ctx.db);
+    const last = owner ? service.runs(owner, 1)[0] : undefined;
     return {
       settings: await ctx.setting('memory.consolidation'),
       referencePastChats: await ctx.setting('memory.referencePastChats'),

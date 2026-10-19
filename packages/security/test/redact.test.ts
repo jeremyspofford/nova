@@ -66,6 +66,34 @@ describe('redactString', () => {
     expect(red.redactString('ab')).toBe('ab');
   });
 
+  it('masks short literals when allowed, the longest first, and inherits literals', () => {
+    const parent = new Redactor([]);
+    parent.addLiteral('global-secret-1');
+    const red = new Redactor([], { literalsFrom: parent });
+    red.addLiteral('ab', { minLength: 1 });
+    red.addLiteral('ab', { minLength: 1 }); // registered once
+    red.addLiteral('', { minLength: 0 }); // never an empty literal
+    red.addLiteral('ab%21cd', { minLength: 1 });
+    expect(red.redactString('x ab y ab%21cd z global-secret-1')).toBe(
+      `x ${REDACTED} y ${REDACTED} z ${REDACTED}`,
+    );
+    // A literal added to the parent later still applies.
+    parent.addLiteral('later-secret');
+    expect(red.redactString('later-secret')).toBe(REDACTED);
+    // Literals only: the patterns are not run again over already-masked text.
+    expect(red.redactLiterals('token=[REDACTED]&page=2 later-secret')).toBe(
+      `token=[REDACTED]&page=2 ${REDACTED}`,
+    );
+    expect(parent.redactString('ab')).toBe('ab');
+  });
+
+  it('keeps a custom secret rule without a pre group on the callback path', () => {
+    const red = new Redactor([{ id: 'pin', pattern: /pin (?<secret>\d{4})/g, group: 'secret' }]);
+    expect(red.redactString('pin 1234 ok')).toBe(`pin ${REDACTED} ok`);
+    const empty = new Redactor([{ id: 'opt', pattern: /x(?<secret>\d)?/g, group: 'secret' }]);
+    expect(empty.redactString('ax')).toBe(`a${REDACTED}`);
+  });
+
   it('rejects non-global custom rules', () => {
     expect(() => new Redactor([{ id: 'x', pattern: /x/ }])).toThrow(/g flag/);
     expect(() => new Redactor().addRule({ id: 'y', pattern: /y/ })).toThrow(/g flag/);

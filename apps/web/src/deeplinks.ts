@@ -4,6 +4,9 @@
 //   nova://settings[/<section>]   → /settings/<section> (unknown or missing section: general)
 //   nova://chat[/<id>][?m=<msg>]  → /chat, /chat/<id>
 //   nova://code[/<id>]            → /code, /code/<id>
+//   nova://run[/<id>]             → /work, /work/<id> (alias `work`; M7, decision 7)
+//   nova://approval[/<id>]        → /approvals, /approvals/<id> (alias `approvals`): the approval
+//                                    in its thread, or the approvals page when it has none (M7)
 //   nova://agent[/<id>]           → /agents, /agents/<id>
 //   nova://computer[/<id>]        → /computers, /computers/<id> (M6)
 //   nova://device[/<id>]          → /devices, /devices/<id> (M6)
@@ -104,6 +107,12 @@ export function deepLinkPath(url: string): string | null {
     }
     case 'code':
       return arg ? `/code/${encodeURIComponent(arg)}` : '/code';
+    case 'run':
+    case 'work':
+      return arg ? `/work/${encodeURIComponent(arg)}` : '/work';
+    case 'approval':
+    case 'approvals':
+      return arg ? `/approvals/${encodeURIComponent(arg)}` : '/approvals';
     case 'agent':
     case 'agents':
       return arg ? `/agents/${encodeURIComponent(arg)}` : '/agents';

@@ -19,4 +19,31 @@ export {
   type PushRegistration,
   type RevokedRoute,
 } from './state.ts';
-export { MockPushSender, type PushMessage, type PushSender } from './push.ts';
+export {
+  APNS_ORIGIN,
+  APNS_SANDBOX_ORIGIN,
+  ApnsSender,
+  FCM_API,
+  FcmSender,
+  GOOGLE_TOKEN_URL,
+  MockPushSender,
+  PUSH_TOPIC,
+  PlatformPushSender,
+  pushSenderFromEnv,
+  pushTokenProblem,
+  type ApnsOptions,
+  type FcmOptions,
+  type FcmServiceAccount,
+  type PushMessage,
+  type PushNotice,
+  type PushOutcome,
+  type PushSender,
+} from './push.ts';
+export {
+  MemoryLog,
+  silentLog,
+  streamLog,
+  type RelayLog,
+  type RelayLogLevel,
+  type RelayLogRecord,
+} from './log.ts';

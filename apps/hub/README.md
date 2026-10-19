@@ -135,6 +135,36 @@ area, which starts the endpoint checks and mDNS.
 add-device area knows. `devices.ts` keeps `POST /devices/novad/enroll` for scripted `novad`
 enrollment, and its wake route goes through the network area's Wake Helper router.
 
+M7 adds six areas and extends others (decisions in ADR-095; routes in `contracts/hub-api.md`).
+`app.ts` sets up, after the relay: push → device trust → cloud runner → flagged → spaces → tools →
+team, then consolidation, the MCP server, MCP apps, workspace and profile, the `ChatService`, and
+sync last (it needs the services the others built). The idempotency hooks (`preHandler`,
+`onSend`, `onResponse`) run right after authentication on every request. `GET /api/v1/session`
+adds `deviceId`, `scopes` and `role`; account-less system events go to the owner only; a removed
+member's sockets and event streams close at once. The tools' sandbox router also asks the cloud
+area for a cloud thread's sandbox; the gate takes each thread's own substrate.
+
+| File | Area | Routes |
+| --- | --- | --- |
+| `sync.ts` | Sync (FR-109, FR-112, FR-129): the change feed from the event bus, replicas, the merge log, and the `Idempotency-Key` store and hooks every mutating route shares (`REPLAYABLE_ROUTES`); the `sync` probe | `GET /sync/snapshot`, `GET /sync/changes`, `POST /sync/push` (replica routes: a device session with `offline-replica`), `GET /sync/merge-log`, `POST /sync/merge-log/:id/restore`, `GET /sync/devices`, `POST /sync/devices/:id/reset`, `POST /threads/:id/messages/:mid/answer` |
+| `cloudrun.ts` | The cloud runner (FR-108, FR-071, FR-116): registration, environments, leases with caps, snapshots, artifacts, Work runs on a cloud environment; the cloud sandbox, environment transport, Work policy and tool rules for the other areas; the `cloudRunner` probe | under `/cloud`: `GET`/`PUT`/`PATCH`/`DELETE /cloud/runner`, `POST /cloud/runner/test`, `GET /cloud/environments[/:id]`, `POST …/:id/rebuild`, `GET …/:id/files`, `GET`/`POST …/:id/snapshots`, `POST /cloud/snapshots/:id/restore`, `DELETE /cloud/snapshots/:id`, `GET /cloud/runs[/:id]`, `PATCH /cloud/runs/:id`, `POST /cloud/runs/:id/{cancel,artifacts}`, `POST /cloud/work` |
+| `push.ts` | Web Push subscriptions and the OS/push leg of notification routing; native pushes through the Relay connector (FR-111, FR-060); the `push` probe | `GET /push/vapid-key`, `GET`/`POST /push/subscriptions`, `DELETE /push/subscriptions/:id`, `POST /push/test` |
+| `team.ts` | Members, invitations, the owner-only guard (`preHandler`), members' folders, OIDC, profile cards, shared threads, team agents, plugins per agent (decision 5, FR-217, FR-091, FR-113, FR-045); the `team` probe | under `/team`: `me`, `members`, `invitations`, `me/settings`, `me/card`, `oidc` (with `…/test`), `me/identities/:id`, `threads` (share, messages, cancel, stream), `agents` (credentials, tasks, audit, approvals), `tasks`; `GET`/`PUT /agents/:id/plugins`; and the public `POST /team/join/preview`, `POST /team/join`, `GET /auth/oidc/providers`, `POST /auth/oidc/start`, `GET /auth/oidc/callback`, `GET /profiles/:handle[/avatar]` |
+| `flagged.ts` | `script.run` and external agent adapters (FR-202, FR-203), off by default; the `flagged` probe | `GET /scripts/runs`, `GET /scripts/runs/:id`, `GET`/`POST /agent-adapters`, `GET`/`PATCH`/`DELETE /agent-adapters/:id`, `POST /agent-adapters/:id/check`, `GET`/`POST /code/sessions/:id/delegations`, `GET /delegations/:id`, `POST /delegations/:id/cancel` |
+| `device-trust.ts` | Mutual TLS for `novad` devices and compute nodes (FR-126): checks the client certificate on the `/agent/v1` and `/node/v1` routes over HTTPS; the `deviceTls` probe | `GET /devices/tls` |
+
+Extended areas: `channels.ts` (Telegram and email bindings run by pollers, Slack buttons, the
+public approval-link routes `GET`/`POST /channels/approval-links/:token`, `GET /channels/:id/messages`,
+`POST /mcp/subscriptions/:id/refresh`, `POST /notification-rules/:category/test`,
+`POST /schedules/:id/webhook-secret`); `code.ts` (handoff, merges, attempts, SSH with
+`POST /environments/:id/hostkey/reset`, delegation from agents, handoff files swept after 7 days);
+`browser.ts` (site levels per project or agent, console and network capture, the trace newest
+first with a cursor); `relay.ts` (`PUT /relay/registration-token`; `idempotency-key` passes the
+tunnel); `mcp.ts` and `mcp-server.ts` (device MCP servers through `novad`, `auth` and `oauth`;
+resources and prompts on `/mcp`); `agent-dist.ts` (the install command for an https Hub fetches
+with `curl -fsSLk` and checks the SHA-256 it carries). `main.ts` asks HTTPS clients for a
+certificate of the Hub local CA without requiring one.
+
 More options: `NOVA_SECRETS=keychain|vault`, `NOVA_TLS_CERT` / `NOVA_TLS_KEY` (HTTPS),
 `NOVA_SANDBOX=auto|docker|podman|bwrap|microvm|off` (M6 adds bubblewrap and the micro-VM stub;
 `auto` tries a container engine, then bubblewrap), `NOVA_SANDBOX_IMAGE` (terminals and command hooks
@@ -145,4 +175,6 @@ file the Hub signs and serves; without it the install command is unavailable) an
 `NOVA_NETWORK_TOOLS_FILE` (M6.5: a JSON file `{bins: {<cli>: [absolute argv prefix]}, baseEnv: {…}}`
 naming the programs Network Setup runs for each mesh, firewall or package CLI instead of looking in
 the system folders; the E2E journeys point it at fakes. Only whoever starts the Hub can set it, the
-Hub logs a warning when it is set, and a file that cannot be read or parsed stops the start).
+Hub logs a warning when it is set, and a file that cannot be read or parsed stops the start), and
+`NOVA_TELEGRAM_API_BASE` (M7: a Telegram-compatible Bot API address instead of Telegram's own, for
+a test double).

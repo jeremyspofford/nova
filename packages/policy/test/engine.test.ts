@@ -774,3 +774,50 @@ describe('tighten (hooks and reviewer extension points)', () => {
     expect(tighten(denied, { effect: 'allow', reason: 'x', source: 'hook' }).effect).toBe('deny');
   });
 });
+
+describe('ruleTool: the name rules match (M7 browser site levels per scope)', () => {
+  const act: ToolDescriptor = {
+    name: 'browser.act',
+    source: 'browser',
+    annotations: { action: 'write' },
+  };
+  const site = { kind: 'host' as const, value: 'notes.example' };
+  const account = rule({
+    id: 'account',
+    effect: 'ask',
+    scope: { kind: 'site', ref: 'notes.example' },
+    match: { tool: ['browser.act'] },
+  });
+  const scoped = rule({
+    id: 'scoped',
+    effect: 'allow',
+    scope: { kind: 'site', ref: 'notes.example' },
+    match: { tool: ['browser.act:project:p1'] },
+  });
+
+  it('matches rules by ruleTool when set, and by the tool name otherwise', () => {
+    const plain = evaluate(ctx({ tool: act, resource: site }), { rules: [account, scoped] });
+    expect(plain).toMatchObject({ effect: 'ask', ruleId: 'account' });
+    const narrow = evaluate(
+      ctx({ tool: act, resource: site, ruleTool: 'browser.act:project:p1' }),
+      {
+        rules: [account, scoped],
+      },
+    );
+    expect(narrow).toMatchObject({ effect: 'allow', ruleId: 'scoped' });
+    // A tool-scoped rule is matched by the same name.
+    const toolScoped = rule({
+      id: 'tool',
+      effect: 'deny',
+      scope: { kind: 'tool', ref: 'browser.act:*' },
+    });
+    expect(
+      evaluate(ctx({ tool: act, resource: site, ruleTool: 'browser.act:project:p1' }), {
+        rules: [scoped, toolScoped],
+      }).effect,
+    ).toBe('deny');
+    expect(evaluate(ctx({ tool: act, resource: site }), { rules: [toolScoped] }).effect).not.toBe(
+      'deny',
+    );
+  });
+});

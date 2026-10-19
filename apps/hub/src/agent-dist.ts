@@ -173,14 +173,11 @@ export function hubOrigin(
   } catch {
     return { why: 'The Hub address is not a valid URL.' };
   }
-  if (u.protocol === 'https:') {
-    return {
-      why: 'novad has no TLS client yet: open the Hub at its http:// LAN address to get the install command.',
-    };
-  }
-  if (u.protocol !== 'http:') return { why: 'The Hub address must be an http:// URL.' };
+  // novad verifies an https Hub by its pinned identity (M7, R-023), so either scheme works.
+  if (u.protocol !== 'http:' && u.protocol !== 'https:')
+    return { why: 'The Hub address must be an http:// or https:// URL.' };
   if (u.username || u.password || u.search || u.hash || (u.pathname !== '/' && u.pathname !== '')) {
-    return { why: 'The Hub address must be just http://host:port.' };
+    return { why: 'The Hub address must be just the scheme, host and port.' };
   }
   // Host and port only, from the URL parser; anything unusual is refused rather than quoted.
   if (!/^[A-Za-z0-9.-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](:\d{1,5})?$/.test(u.host)) {
@@ -197,7 +194,7 @@ export function hubOrigin(
       why: 'The Hub was opened at a loopback address, which other devices cannot reach: open it at its LAN address to get the install command.',
     };
   }
-  return { origin: `http://${u.host}` };
+  return { origin: `${u.protocol}//${u.host}` };
 }
 
 function base64Signature(sig: Uint8Array | string): string | null {
@@ -243,10 +240,16 @@ function shCommand(
     })
     .join(' ');
   const url = `${shQuote(`${origin}/api/v1/agent/dist/novad-`)}"$a"`;
+  // An https Hub may use its own local CA, which this machine does not trust yet: the download's
+  // integrity is the SHA-256 in this command (from the owner's screen), checked below, and novad
+  // then verifies the Hub by its pinned identity before it sends anything (M7, R-023).
+  const tls = origin.startsWith('https:');
+  const curl = tls ? 'curl -fsSLk' : 'curl -fsSL';
+  const wget = tls ? 'wget --no-check-certificate -qO' : 'wget -qO';
   return [
     `d=$(mktemp -d) && case "$(uname -s)-$(uname -m)" in ${cases} *) echo "no novad build for $(uname -s) $(uname -m)" >&2; a=;; esac`,
     `[ -n "$a" ]`,
-    `{ curl -fsSL -o "$d/novad" ${url} || wget -qO "$d/novad" ${url}; }`,
+    `{ ${curl} -o "$d/novad" ${url} || ${wget} "$d/novad" ${url}; }`,
     `x=$(sha256sum "$d/novad" 2>/dev/null || shasum -a 256 "$d/novad" 2>/dev/null)`,
     `{ [ "\${x%% *}" = "$h" ] || { echo "the download is not the Hub's signed build" >&2; false; }; }`,
     `chmod 0755 "$d/novad"`,
@@ -266,13 +269,29 @@ function psCommand(
   installArgs: string,
 ): string {
   const arches = builds.map((b) => `${psQuote(b.arch)} = ${psQuote(b.sha256)}`).join('; ');
+  // As in the POSIX command: for an https Hub the certificate is not checked for the download,
+  // whose SHA-256 is (PowerShell 6+ takes -SkipCertificateCheck; 5.1 a validation callback). The
+  // 5.1 callback is process-wide, so it is set only around the download and the previous one is
+  // put back in `finally`: an interactive (often elevated) session must not go on accepting any
+  // certificate afterwards.
+  const https = origin.startsWith('https:');
+  const tls = https
+    ? [
+        `$k = @{}; $set = $false; $cb = $null`,
+        `if ($PSVersionTable.PSVersion.Major -ge 6) { $k = @{ SkipCertificateCheck = $true } } else { $cb = [Net.ServicePointManager]::ServerCertificateValidationCallback; $set = $true }`,
+      ]
+    : [`$k = @{}`];
+  const fetch = `Invoke-WebRequest @k -UseBasicParsing -Uri (${psQuote(`${origin}/api/v1/agent/dist/novad-windows-`)} + $a + '.exe') -OutFile $f`;
   return [
     `$ErrorActionPreference = 'Stop'`,
+    ...tls,
     `$a = @{ 'AMD64' = 'amd64'; 'ARM64' = 'arm64' }[[string]$env:PROCESSOR_ARCHITECTURE]`,
     `$h = @{ ${arches} }[[string]$a]`,
     `if (-not $h) { throw "no novad build for $env:PROCESSOR_ARCHITECTURE" }`,
     `$f = Join-Path ([IO.Path]::GetTempPath()) ('novad-' + [guid]::NewGuid() + '.exe')`,
-    `Invoke-WebRequest -UseBasicParsing -Uri (${psQuote(`${origin}/api/v1/agent/dist/novad-windows-`)} + $a + '.exe') -OutFile $f`,
+    https
+      ? `try { if ($set) { [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true } }; ${fetch} } finally { if ($set) { [Net.ServicePointManager]::ServerCertificateValidationCallback = $cb } }`
+      : fetch,
     `if ((Get-FileHash -Algorithm SHA256 $f).Hash.ToLower() -ne $h) { Remove-Item $f; throw 'the download is not the Hub''s signed build' }`,
     `$env:NOVA_ADD_CODE = ${psQuote(code)}`,
     `try { & $f install ${installArgs}; $r = $LASTEXITCODE } finally { Remove-Item Env:NOVA_ADD_CODE -ErrorAction SilentlyContinue; Remove-Item $f -ErrorAction SilentlyContinue }`,

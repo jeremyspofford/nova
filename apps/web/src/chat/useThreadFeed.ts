@@ -257,31 +257,45 @@ export function useThreadFeed(
     },
     [loadApproval, refetch, refreshQueue, threadId],
   );
+  /**
+   * Catch up with the Hub: the thread, its queue and its approvals. Pending cards the Hub no longer
+   * lists were answered (or expired) elsewhere; each is fetched so its card closes.
+   */
+  const resync = useCallback(() => {
+    if (!threadId) return;
+    refetch();
+    refreshQueue();
+    const before = pendingApprovals(latest.current.state).map((a) => a.id);
+    api.listApprovals({ status: 'pending', threadId }).then(
+      ({ items }) => {
+        dispatch({ type: 'approvals', items });
+        const still = new Set(items.map((a) => a.id));
+        for (const id of before) if (!still.has(id)) loadApproval(id);
+      },
+      () => undefined,
+    );
+  }, [api, loadApproval, refetch, refreshQueue, threadId]);
+
   const onEventRef = useRef(onEvent);
-  const refetchRef = useRef(refetch);
-  const listApprovalsRef = useRef(listApprovals);
+  const resyncRef = useRef(resync);
   useLayoutEffect(() => {
     onEventRef.current = onEvent;
-    refetchRef.current = refetch;
-    listApprovalsRef.current = listApprovals;
+    resyncRef.current = resync;
   });
 
   useEffect(() => {
     if (!threadId) return;
-    // The first connection has no cursor and receives live events only, so anything the Hub
-    // emitted between the load and the connection (a new chat's first approval, say) is fetched
-    // once the stream is open. Reconnects resume from their cursor.
-    let opened = false;
+    // Every connection catches up. The first has no cursor and receives live events only, so
+    // anything emitted between the load and the connection (a new chat's first approval, say) is
+    // fetched once it opens. A reconnect after an outage may have no cursor either (no event had
+    // arrived), and what happened meanwhile (messages sent from another device or this device's
+    // offline queue, approvals answered elsewhere) is fetched again; the reducer replaces the
+    // messages by id, so none is lost or shown twice.
     const handle = openStream(
       api.threadStreamUrl(threadId),
       {
         onEvent: (e) => onEventRef.current(e),
-        onOpen: () => {
-          if (opened) return;
-          opened = true;
-          refetchRef.current();
-          void listApprovalsRef.current();
-        },
+        onOpen: () => resyncRef.current(),
       },
       { names: THREAD_EVENTS, factory: eventSource },
     );

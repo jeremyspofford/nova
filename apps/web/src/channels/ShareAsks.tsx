@@ -9,7 +9,7 @@
 // Hub gap: the request carries no marker that it is a share ask, so the Channels page finds them
 // by thread (a binding's thread) and the card's title assumes it.
 import { useCallback, useEffect, useId, useState } from 'react';
-import type { ChannelBindingView, ServerRequestView } from '@nova/shared';
+import type { ChannelBindingViewM7, ServerRequestView } from '@nova/shared';
 import { Button, StatusChip, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
@@ -155,7 +155,7 @@ function usePendingQuestions(filter: (r: ServerRequestView) => boolean): {
 }
 
 /** The Channels page's "Waiting for your decision": share asks of the account's bindings. */
-export function ChannelShareAsks({ bindings }: { bindings: ChannelBindingView[] }) {
+export function ChannelShareAsks({ bindings }: { bindings: ChannelBindingViewM7[] }) {
   const byThread = new Map(
     bindings.filter((b) => b.threadId !== null).map((b) => [b.threadId as string, b]),
   );

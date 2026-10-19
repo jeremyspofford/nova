@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { isNovaError } from '@nova/shared';
-import { EnvHelperSandbox, environmentSecretRef, type EnvDeviceProvider } from '../src/index.ts';
+import { environmentSecretRef, type EnvDeviceProvider, type SandboxClient } from '../src/index.ts';
 import { ACCOUNT } from './helpers.ts';
 import { HostSandbox } from './code-env.ts';
 import {
@@ -121,7 +121,7 @@ describe('saved environments', () => {
     expect(r.detail).toContain('credential is missing');
   });
 
-  it('binds a session to an SSH environment; Hub-side Git features say they are not there', async () => {
+  it('binds a session to an SSH environment; the symbol index says it is not there', async () => {
     e = await makeCodeM6Env();
     const v = await e.svc.envs.create(ACCOUNT, sshReq());
     const remote = join(e.dir, 'remote-project');
@@ -144,7 +144,12 @@ describe('saved environments', () => {
     expect(s).toMatchObject({ environmentId: v.id, repo: null });
     expect(s.folder.path).toBe(remote);
     expect(await e.svc.changes(ACCOUNT, s.id)).toEqual([]);
-    await expect(reason(e.svc.commit(ACCOUNT, s.id, { message: 'x' }))).resolves.toBe(
+    // M7: commits run there through the transport (this folder is no repository); the symbol
+    // index still reads only the Hub's files.
+    await expect(e.svc.commit(ACCOUNT, s.id, { message: 'x' })).rejects.toThrow(
+      'not a Git repository',
+    );
+    await expect(reason(e.svc.symbols(ACCOUNT, s.id, 'x'))).resolves.toBe(
       'capability_missing:remote_environment',
     );
     const ext = await e.svc.extension.forTurn({
@@ -165,7 +170,12 @@ describe('saved environments', () => {
       usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 },
       activeMs: 1,
     });
-    expect(e.svc.sandboxForThread(ACCOUNT, s.threadId)).toBeInstanceOf(EnvHelperSandbox);
+    // M7: the helper runs its commands, and the sandbox carries the folder there for fs.*.
+    const routed = e.svc.sandboxForThread(ACCOUNT, s.threadId) as SandboxClient & {
+      files?: { root: string } | null;
+    };
+    expect(routed.substrate).toBeNull();
+    expect(routed.files?.root).toBe(remote);
     // The session is Blocked while its environment is down.
     e.ssh.down = true;
     await e.svc.envs.check(ACCOUNT, v.id);

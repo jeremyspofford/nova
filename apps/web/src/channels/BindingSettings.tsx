@@ -1,29 +1,44 @@
-// A channel's settings, opened from its row (FR-088, docs/13 §4): name, who can read it, the
-// shared thread for private channels, unknown senders, rate limits and the kind's settings; its
-// credentials, write-only (set or not set, replaced by name, never shown); and the inbound address
-// to paste into the other service. Only the fields that changed are sent.
+// A channel's settings, opened from its row (FR-088, FR-110, docs/13 §4): name, who can read it,
+// the shared thread for private channels, unknown senders, rate limits and the kind's settings
+// (Telegram's delivery mode, an email binding's mailbox); its credentials, write-only (set or not
+// set, replaced by name, never shown; ones the Hub makes itself are only shown as set); how
+// approvals are answered there; and the inbound address to paste into the other service. Only the
+// fields that changed are sent. Turning an email binding's sender check off asks first and sends
+// the Hub's `confirmSenderCheckNone` only after the user confirmed.
 import { useId, useState } from 'react';
 import {
   updateChannelBindingSchema,
   type ChannelAudience,
-  type ChannelBindingView,
+  type ChannelBindingViewM7,
 } from '@nova/shared';
-import { Button, Dialog, Icon, RadioGroup, TextField, useToast } from '@nova/ui';
+import { Button, Dialog, Icon, RadioGroup, SelectField, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { SwitchField } from '../settings/controls.tsx';
 import { useChannelsApi } from './api.ts';
 import {
+  APPROVAL_HINT,
+  CHOICE_HINT,
+  CONFIG_CHOICES,
   CONFIG_KEYS,
   CONFIG_TEXT,
   CREDENTIAL_TEXT,
+  GENERATED_CREDENTIALS,
+  CONFIRM_REQUIRED_TEXT,
   INBOUND_HINT,
   REF_TEXT,
   absoluteUrl,
   errorField,
+  isConfirmRequired,
   issueErrors,
   randomSecret,
 } from './format.ts';
-import { CopyValue, SecretsOnce, SigningHelp } from './parts.tsx';
+import {
+  CopyValue,
+  SecretsOnce,
+  SenderCheckOffConfirm,
+  SenderCheckOffNotice,
+  SigningHelp,
+} from './parts.tsx';
 
 interface Draft {
   label: string;
@@ -33,9 +48,11 @@ interface Draft {
   perMinute: string;
   perHour: string;
   config: Record<string, string>;
+  /** The user confirmed turning the email sender check off (`senderCheck: none`). */
+  confirmNone: boolean;
 }
 
-function draftOf(b: ChannelBindingView): Draft {
+function draftOf(b: ChannelBindingViewM7): Draft {
   const config: Record<string, string> = {};
   for (const k of CONFIG_KEYS[b.kind] ?? []) config[k] = b.config[k] ?? '';
   return {
@@ -46,11 +63,12 @@ function draftOf(b: ChannelBindingView): Draft {
     perMinute: String(b.rateLimit.perMinute),
     perHour: String(b.rateLimit.perHour),
     config,
+    confirmNone: false,
   };
 }
 
 /** The PATCH body: only what differs from the binding. */
-export function settingsPatch(b: ChannelBindingView, d: Draft): Record<string, unknown> {
+export function settingsPatch(b: ChannelBindingViewM7, d: Draft): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   if (d.label.trim() !== b.label) patch.label = d.label.trim();
   if (d.audience !== b.audience) patch.audience = d.audience;
@@ -76,11 +94,11 @@ export function BindingSettings({
   sharedWithLabel,
   onSaved,
 }: {
-  binding: ChannelBindingView;
+  binding: ChannelBindingViewM7;
   publicUrl: string | null;
   /** The label of the binding whose app credentials this one uses. */
   sharedWithLabel: string | null;
-  onSaved: (b: ChannelBindingView) => void;
+  onSaved: (b: ChannelBindingViewM7) => void;
 }) {
   const api = useChannelsApi();
   const toast = useToast();
@@ -89,6 +107,7 @@ export function BindingSettings({
   const [base, setBase] = useState(binding);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [askingNone, setAskingNone] = useState(false);
   // A list refresh hands a new object for the same binding: keep the user's edits. Only a
   // binding that really changed (another save, a connect) resets a form with no edits pending.
   if (base !== binding) {
@@ -103,6 +122,12 @@ export function BindingSettings({
   const inapp = binding.kind === 'inapp';
   const ref = REF_TEXT[binding.kind];
 
+  /** This save turns the email sender check off (the Hub wants it confirmed). */
+  const turningOff =
+    binding.kind === 'email' &&
+    draft.config.senderCheck === 'none' &&
+    binding.config.senderCheck !== 'none';
+
   const save = async () => {
     if (!dirty || busy) return;
     const parsed = updateChannelBindingSchema.safeParse(patch);
@@ -113,18 +138,74 @@ export function BindingSettings({
     setErrors({});
     setBusy(true);
     try {
-      const next = await api.updateChannel(binding.id, parsed.data);
+      const next = await api.updateChannel(binding.id, {
+        ...parsed.data,
+        ...(turningOff && draft.confirmNone ? { confirmSenderCheckNone: true as const } : {}),
+      });
       onSaved(next);
       toast.show(`${next.label} saved.`, { tone: 'success' });
     } catch (err) {
       const field = errorField(err);
       const message = errorMessage(err, 'Could not save the channel.');
-      if (field) setErrors({ [field]: message });
+      if (isConfirmRequired(err)) setErrors({ 'config.senderCheck': CONFIRM_REQUIRED_TEXT });
+      else if (field) setErrors({ [field]: message });
       else toast.show(`Could not save: ${message}`, { tone: 'error' });
     } finally {
       setBusy(false);
     }
   };
+
+  const configFields = (CONFIG_KEYS[binding.kind] ?? []).map((k) => {
+    const choices = CONFIG_CHOICES[binding.kind]?.[k];
+    const value = draft.config[k] ?? '';
+    const label = CONFIG_TEXT[k]?.label ?? k;
+    if (choices) {
+      // A stored value the list does not know stays selectable.
+      const options = choices.some((c) => c.value === value)
+        ? choices
+        : [...choices, { value, label: value }];
+      const chosen = choices.find((c) => c.value === value)?.hint;
+      return (
+        <SelectField
+          key={k}
+          label={label}
+          value={value}
+          options={options.map((c) => ({ value: c.value, label: c.label }))}
+          hint={
+            k === 'mode' && binding.kind === 'telegram'
+              ? `${chosen ?? ''} Webhook needs an https public address (below on this page).`.trim()
+              : (CHOICE_HINT[k] ?? chosen)
+          }
+          error={errors[`config.${k}`]}
+          onChange={(v) => {
+            // Trusting the From address asks first; the value changes only once confirmed.
+            if (k === 'senderCheck' && binding.kind === 'email') {
+              if (v === 'none' && binding.config.senderCheck !== 'none' && !draft.confirmNone) {
+                setAskingNone(true);
+                return;
+              }
+              setAskingNone(false);
+              set({ config: { ...draft.config, [k]: v }, confirmNone: v === 'none' });
+              return;
+            }
+            set({ config: { ...draft.config, [k]: v } });
+          }}
+        />
+      );
+    }
+    return (
+      <TextField
+        key={k}
+        label={label}
+        hint={CONFIG_TEXT[k]?.hint || undefined}
+        value={value}
+        spellCheck={false}
+        autoComplete="off"
+        error={errors[`config.${k}`]}
+        onChange={(e) => set({ config: { ...draft.config, [k]: e.target.value } })}
+      />
+    );
+  });
 
   return (
     <div className="ch-settings stack" id={`${id}-settings`}>
@@ -213,18 +294,38 @@ export function BindingSettings({
             </div>
           </fieldset>
         ) : null}
-        {(CONFIG_KEYS[binding.kind] ?? []).map((k) => (
-          <TextField
-            key={k}
-            label={CONFIG_TEXT[k]?.label ?? k}
-            hint={CONFIG_TEXT[k]?.hint}
-            value={draft.config[k] ?? ''}
-            spellCheck={false}
-            autoComplete="off"
-            error={errors[`config.${k}`]}
-            onChange={(e) => set({ config: { ...draft.config, [k]: e.target.value } })}
-          />
-        ))}
+        {binding.kind === 'telegram' && binding.config.botUsername ? (
+          <p className="ws-flush">
+            <span className="muted">Bot: </span>
+            <code className="ws-code-inline">@{binding.config.botUsername}</code>
+          </p>
+        ) : null}
+        {binding.kind === 'email' ? (
+          <fieldset className="ws-fieldset">
+            <legend>Mailbox</legend>
+            <p className="nv-field-hint ws-flush">
+              The mailbox the agent reads and answers from. Mail already in it is never read.
+            </p>
+            <div className="ch-mail-grid">{configFields}</div>
+            {askingNone ? (
+              <SenderCheckOffConfirm
+                onCancel={() => setAskingNone(false)}
+                onConfirm={() => {
+                  setAskingNone(false);
+                  set({ config: { ...draft.config, senderCheck: 'none' }, confirmNone: true });
+                }}
+              />
+            ) : null}
+            {draft.config.senderCheck === 'none' ? <SenderCheckOffNotice /> : null}
+          </fieldset>
+        ) : (
+          configFields
+        )}
+        {errors.config ? (
+          <p role="alert" className="nv-field-error">
+            {errors.config}
+          </p>
+        ) : null}
         <div className="row">
           <Button type="submit" variant="primary" disabled={!dirty || busy}>
             {busy ? 'Saving…' : 'Save changes'}
@@ -234,6 +335,7 @@ export function BindingSettings({
               onClick={() => {
                 setDraft(draftOf(binding));
                 setErrors({});
+                setAskingNone(false);
               }}
             >
               Discard
@@ -243,6 +345,11 @@ export function BindingSettings({
       </form>
       {binding.credentials.length ? (
         <Credentials binding={binding} sharedWithLabel={sharedWithLabel} onSaved={onSaved} />
+      ) : null}
+      {APPROVAL_HINT[binding.kind] ? (
+        <p className="muted ws-flush">
+          <Icon name="shield" /> {APPROVAL_HINT[binding.kind]}
+        </p>
       ) : null}
       {binding.inboundPath ? (
         <div className="stack">
@@ -264,9 +371,9 @@ function Credentials({
   sharedWithLabel,
   onSaved,
 }: {
-  binding: ChannelBindingView;
+  binding: ChannelBindingViewM7;
   sharedWithLabel: string | null;
-  onSaved: (b: ChannelBindingView) => void;
+  onSaved: (b: ChannelBindingViewM7) => void;
 }) {
   const api = useChannelsApi();
   const toast = useToast();
@@ -315,7 +422,7 @@ function Credentials({
       <legend>Credentials</legend>
       <p className="nv-field-hint ws-flush">
         {sharedWithLabel
-          ? `Uses the app of ${sharedWithLabel}. Replacing one changes it for every channel of that app.`
+          ? `Uses the ${binding.kind === 'email' ? 'mailbox' : binding.kind === 'telegram' ? 'bot' : 'app'} of ${sharedWithLabel}. Replacing one changes it for every channel that uses it.`
           : 'Kept in the Hub’s secret store; values are never shown.'}
       </p>
       <ul className="ws-list" aria-label="Credentials">
@@ -337,7 +444,9 @@ function Credentials({
                   )}
                 </span>
               </div>
-              {binding.kind !== 'webhook' && editing !== c.name ? (
+              {(GENERATED_CREDENTIALS[binding.kind] ?? []).includes(c.name) ? (
+                <span className="muted">Made by Nova</span>
+              ) : binding.kind !== 'webhook' && editing !== c.name ? (
                 <Button
                   variant="ghost"
                   aria-label={`Replace ${label.toLowerCase()}`}

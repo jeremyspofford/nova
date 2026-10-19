@@ -19,7 +19,8 @@ import {
 import type { SecretStore } from '@nova/secrets';
 import type { NovaDatabase } from '@nova/storage';
 import type { SandboxEgress, SandboxEgressContext } from '../tools/sandbox-egress.ts';
-import { narrowMode } from './egress-policy.ts';
+import { isHubOwner } from '../team/owner.ts';
+import { narrowMode, patternCovered } from './egress-policy.ts';
 import type {
   EgressCredential,
   EgressProxyService,
@@ -104,6 +105,11 @@ export function effectivePolicy(input: {
   network: 'allowlist' | 'limited';
   profile?: { allow?: string[]; deny?: string[] };
   credentials: string[];
+  /**
+   * The command is not the Hub owner's (decision 5): its scopes may narrow the global allow
+   * list, never widen it, and never open local binding.
+   */
+  narrowOnly?: boolean;
 }): ProxyPolicy {
   let mode = narrowMode(input.global.mode, input.network);
   for (const s of input.scopes) if (s.mode) mode = narrowMode(mode, s.mode);
@@ -112,10 +118,11 @@ export function effectivePolicy(input: {
   const hooks: EgressHook[] = [];
   let local = false;
   for (const s of input.scopes) {
-    for (const h of s.allow) allow.add(h);
+    for (const h of s.allow)
+      if (!input.narrowOnly || patternCovered(input.global.allow, h)) allow.add(h);
     for (const h of s.deny) deny.add(h);
     hooks.push(...s.hooks);
-    local ||= s.allowLocalBinding;
+    local ||= !input.narrowOnly && s.allowLocalBinding;
   }
   return {
     mode,
@@ -413,6 +420,29 @@ export function proxyEgress(o: ProxyEgressOptions): ProxySandboxEgress {
           'policy_denied',
           'the command has no owner, so no network policy applies',
         );
+      // An explicit policy (an external agent's own hosts, FR-203) replaces the scopes, the global
+      // allow list and the credentials; the global mode and deny list still apply.
+      // Someone who is not the Hub owner may narrow its allow list, never widen it (decision 5).
+      const narrowOnly = !isHubOwner(o.db, ctx.accountId);
+      if (ctx.policy) {
+        const global = await o.global();
+        const policy: ProxyPolicy = {
+          mode: narrowMode(global.mode, ctx.network),
+          allow: ctx.policy.allow.filter(
+            (h) => h !== '*' && (!narrowOnly || patternCovered(global.allow, h)),
+          ),
+          deny: [...global.deny],
+          credentials: [],
+          allowLocalBinding: false,
+          hooks: [],
+        };
+        if (policy.mode === 'off' || !policy.allow.length) return null;
+        return o.proxy.open({
+          accountId: ctx.accountId,
+          scope: ctx.scope ?? { kind: 'sandbox', id: ctx.threadId ?? uuidv7() },
+          policy,
+        });
+      }
       const scopes: { kind: 'run' | 'session' | 'agent' | 'sandbox'; id: string }[] = [];
       if (ctx.scope) scopes.push(ctx.scope);
       if (ctx.threadId)
@@ -426,6 +456,7 @@ export function proxyEgress(o: ProxyEgressOptions): ProxySandboxEgress {
         scopes: rows,
         network: ctx.network,
         credentials: o.store.credentialIdsFor(ctx.accountId, scopes),
+        narrowOnly,
       });
       if (policy.mode === 'off') return null;
       // The audit names the most specific owner: the agent, else the run, the session, the thread.

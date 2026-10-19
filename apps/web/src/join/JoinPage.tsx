@@ -9,7 +9,11 @@
 // confirmation must verify, and the Hub's confirmation must equal the page's own; anything else
 // stops the page. It then polls the signed status until the owner decides; approved, the Hub sets
 // this browser's session cookie and the page offers to open and install the app. Without a code
-// in the link it asks for the one shown on the Hub. Phone width first.
+// in the link it asks for the one shown on the Hub. Phone width first. When the QR carries a Relay
+// (`r`, `rp`: the owner chose to pair through it), the page pairs through the Relay instead
+// (./relay.ts, FR-137): it needs no direct answer from the Hub, shows the same six digits as the
+// Hub, waits for the Hub's sealed notice, and keeps the pairing so the app can reach the Hub through
+// the Relay from anywhere.
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Button, Icon, Spinner, TextField, applyTheme, resolveTheme } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
@@ -32,6 +36,15 @@ import {
 } from './crypto.ts';
 import { detectPlatform, installWay, type JoinPlatform } from './platform.ts';
 import { pollStatus, type PollDeps } from './poll.ts';
+import {
+  browserRelayJoin,
+  relayJoinError,
+  relayParams,
+  startRelayJoin,
+  waitForRelayApproval,
+  type PendingJoin,
+  type RelayJoinDeps,
+} from './relay.ts';
 import {
   browserJoinStore,
   pageNav,
@@ -56,6 +69,8 @@ export interface JoinParams {
   code: string | null;
   /** A fragment code that is not a code. */
   badCode: boolean;
+  /** The Relay to pair through (`r`, `rp`), when the link names a safe one. */
+  relay: { relayUrl: string; relayPairingId: string } | null;
 }
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -80,6 +95,7 @@ export function readJoinParams(search: string, hash: string): JoinParams {
     fingerprint: fp || null,
     code,
     badCode: raw !== null && code === null,
+    relay: relayParams(q),
   };
 }
 
@@ -90,8 +106,9 @@ type Phase =
   | { kind: 'wrong-hub' }
   | { kind: 'form' }
   | { kind: 'waiting'; record: JoinRecord; offline: boolean }
+  | { kind: 'relay-waiting'; pending: PendingJoin; offline: boolean }
   | { kind: 'mismatch' }
-  | { kind: 'approved'; deviceId: string | null }
+  | { kind: 'approved'; deviceId: string | null; via: 'direct' | 'relay' }
   | { kind: 'denied' }
   | { kind: 'expired' }
   | { kind: 'failed'; error: unknown };
@@ -111,6 +128,8 @@ export interface JoinPageProps {
   userAgent?: string;
   /** Tests: the poll clock and waits. */
   poll?: Pick<PollDeps, 'now' | 'wait' | 'minGapMs'>;
+  /** Pairing through the Relay (tests pass fakes). */
+  relay?: RelayJoinDeps;
 }
 
 /** A refusal of `add/complete` or the status poll, in plain words. */
@@ -176,8 +195,10 @@ export function JoinPage({
   hash,
   userAgent,
   poll,
+  relay,
 }: JoinPageProps) {
   const [client] = useState<JoinClient>(() => joinClient(fetchImpl));
+  const [relayDeps] = useState<RelayJoinDeps>(() => relay ?? browserRelayJoin());
   const [pollOpts] = useState(poll);
   const [store] = useState<JoinStore>(() => givenStore ?? browserJoinStore());
   const [params] = useState<JoinParams>(() =>
@@ -195,6 +216,8 @@ export function JoinPage({
   // The pairing a typed code belongs to: the link's, until the link's code stops working.
   const [pairingId, setPairingId] = useState(params.pairingId);
   const [linkCode, setLinkCode] = useState(params.code);
+  // The Relay of the link, until its code stops working (a typed code joins directly).
+  const [linkRelay, setLinkRelay] = useState(params.relay);
   const [codeText, setCodeText] = useState('');
   const [name, setName] = useState(platform.name);
   const [busy, setBusy] = useState(false);
@@ -247,6 +270,22 @@ export function JoinPage({
         setPhase({ kind: 'insecure' });
         return;
       }
+      const pendingRelay = await relayDeps.store.loadPending().catch(() => null);
+      if (!alive) return;
+      if (pendingRelay) {
+        const same = !params.pairingId || pendingRelay.join.addPairingId === params.pairingId;
+        if (same && Date.parse(pendingRelay.join.expiresAt) > Date.now()) {
+          setPhase({ kind: 'relay-waiting', pending: pendingRelay, offline: false });
+          return;
+        }
+        await relayDeps.store.clearPending().catch(() => undefined);
+      }
+      // Through the Relay the Hub's own address need not answer: the sealed offer carries the
+      // Hub's signed key, checked against the pin.
+      if (params.relay) {
+        setPhase({ kind: 'form' });
+        return;
+      }
       const saved = await store.load().catch(() => null);
       if (!alive) return;
       if (saved) {
@@ -281,7 +320,7 @@ export function JoinPage({
     return () => {
       alive = false;
     };
-  }, [client, store, params, attempt]);
+  }, [client, store, relayDeps, params, attempt]);
 
   // Poll while waiting for the owner.
   const waitingRecord = phase.kind === 'waiting' ? phase.record : null;
@@ -309,12 +348,34 @@ export function JoinPage({
       if (out.status === 'approved') {
         const deviceId = out.view.deviceId ?? null;
         if (deviceId) rememberThisDevice(deviceId);
-        setPhase({ kind: 'approved', deviceId });
+        setPhase({ kind: 'approved', deviceId, via: 'direct' });
       } else if (out.status === 'failed') setPhase({ kind: 'failed', error: out.error });
       else setPhase({ kind: out.status });
     });
     return () => ctl.abort();
   }, [waitingRecord, client, store, pollOpts]);
+
+  // Through the Relay: wait for the Hub's notice, then fetch the session through the tunnel.
+  const relayPending = phase.kind === 'relay-waiting' ? phase.pending : null;
+  useEffect(() => {
+    if (!relayPending) return;
+    const ctl = new AbortController();
+    void waitForRelayApproval(relayPending, relayDeps, ctl.signal, {
+      ...(pollOpts ? { poll: pollOpts } : {}),
+      onOffline: (offline) =>
+        setPhase((p) =>
+          p.kind === 'relay-waiting' && p.offline !== offline ? { ...p, offline } : p,
+        ),
+    }).then((out) => {
+      if (out.status === 'stopped' || ctl.signal.aborted) return;
+      if (out.status === 'approved') {
+        if (out.deviceId) rememberThisDevice(out.deviceId);
+        setPhase({ kind: 'approved', deviceId: out.deviceId, via: 'relay' });
+      } else if (out.status === 'failed') setPhase({ kind: 'failed', error: out.error });
+      else setPhase({ kind: out.status });
+    });
+    return () => ctl.abort();
+  }, [relayPending, relayDeps, pollOpts]);
 
   useEffect(() => {
     if (phase.kind !== 'form' && phase.kind !== 'checking') headingRef.current?.focus();
@@ -333,6 +394,34 @@ export function JoinPage({
     setCodeError(null);
     setFormError(null);
     setBusy(true);
+    if (linkRelay) {
+      try {
+        const pending = await startRelayJoin(
+          {
+            ...linkRelay,
+            code,
+            name: deviceName,
+            platform: platform.platform,
+            fingerprint: params.fingerprint,
+          },
+          relayDeps,
+        );
+        setPhase({ kind: 'relay-waiting', pending, offline: false });
+      } catch (err) {
+        const why = relayJoinError(err);
+        if (why.wrongHub) setPhase({ kind: 'wrong-hub' });
+        else setFormError(why.message);
+        if (why.gone) {
+          setLinkCode(null);
+          setLinkRelay(null);
+          setPairingId(null);
+          setCodeText('');
+        }
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     try {
       // A commit whose reveal did not get through is revealed again (the code is used up).
       let c = committed.current;
@@ -436,8 +525,10 @@ export function JoinPage({
   const startOver = () => {
     committed.current = null;
     void store.clear().catch(() => undefined);
+    void relayDeps.store.clearPending().catch(() => undefined);
     history.replaceState(null, '', JOIN_PATH);
     setLinkCode(null);
+    setLinkRelay(null);
     setPairingId(null);
     setCodeText('');
     setFormError(null);
@@ -534,6 +625,9 @@ export function JoinPage({
               <p className="muted join-flush">
                 This asks the Hub to add this device. Nothing is shared until the owner approves it
                 on the Hub.
+                {linkRelay
+                  ? ' It pairs through the Relay, so this device can reach the Hub from anywhere.'
+                  : ''}
               </p>
               <form className="stack" onSubmit={(e) => void submit(e)} noValidate>
                 {linkCode ? (
@@ -608,6 +702,39 @@ export function JoinPage({
             </>
           ) : null}
 
+          {phase.kind === 'relay-waiting' ? (
+            <>
+              <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
+                Approve on the Hub
+              </h1>
+              <p className="join-flush">
+                On the Hub, type this code to approve {phase.pending.join.name}. Check that it is
+                the same on both screens.
+              </p>
+              <p className="join-confirmation">
+                {displayConfirmation(phase.pending.join.confirmation)}
+              </p>
+              <div className="join-waiting" role="status">
+                {phase.offline ? (
+                  <>
+                    <Icon name="alert" />
+                    <span>Cannot reach the Relay. Trying again…</span>
+                  </>
+                ) : (
+                  <>
+                    <Spinner />
+                    <span>Waiting for the owner to approve this device, through the Relay.</span>
+                  </>
+                )}
+              </div>
+              <div className="row">
+                <Button variant="ghost" onClick={startOver}>
+                  Start over
+                </Button>
+              </div>
+            </>
+          ) : null}
+
           {phase.kind === 'mismatch' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
@@ -635,7 +762,11 @@ export function JoinPage({
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1} className="join-done">
                 <Icon name="check" /> This device is added
               </h1>
-              <p className="join-flush">You are signed in to Nova here.</p>
+              <p className="join-flush">
+                {phase.via === 'relay'
+                  ? 'You are signed in to Nova here. When the Hub’s own address does not answer, Nova reaches it through the Relay, which forwards sealed messages it cannot read.'
+                  : 'You are signed in to Nova here.'}
+              </p>
               <div className="row">
                 <Button variant="primary" onClick={() => pageNav.assign('/')}>
                   Open Nova

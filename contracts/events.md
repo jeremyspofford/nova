@@ -39,7 +39,7 @@ Rules:
 
 | Name | Persisted | Payload |
 | --- | --- | --- |
-| `chat.message.created` | yes | `{threadId,messageId,turnId,role,status,provenance?}` (`complete` for the user message, `streaming` for the assistant; `provenance: steer\|queued` for a follow-up, FR-019; `hook` for a `stop` hook's continuation prompt, FR-197; M5: `run\|schedule\|goal\|subagent` for a user-role message a Work run, a schedule, a goal continuation or a sub-agent task started). Role `summary` with status `complete` is a compaction (FR-183) |
+| `chat.message.created` | yes | `{threadId,messageId,turnId,role,status,provenance?}` (`complete` for the user message, `streaming` for the assistant; `provenance: steer\|queued` for a follow-up, FR-019; `hook` for a `stop` hook's continuation prompt, FR-197; M5: `run\|schedule\|goal\|subagent` for a user-role message a Work run, a schedule, a goal continuation or a sub-agent task started). Role `summary` with status `complete` is a compaction (FR-183). M7: a message a replica pushed has `turnId: null` and `provenance: sync` (a user message written offline; actor `user`) or `offline` (an answer the device's local model wrote; actor `system`) |
 | `chat.delta` | no | `{threadId,messageId,type: text_delta\|reasoning_delta,text}` (`ChatDeltaPayload` in `packages/shared/src/api.ts`); at most 60 per second per stream |
 | `chat.message.completed` | yes | `{threadId,messageId,status,usage}` |
 | `chat.message.updated` | yes | `{threadId,messageId,reason}` |
@@ -48,7 +48,8 @@ Rules:
 | `chat.followup.queued` | yes | `{threadId,queuedId,position}` (FR-019) |
 | `chat.followup.started` | yes | `{threadId,queuedId,turnId}` |
 | `chat.followup.cancelled` | yes | `{threadId,queuedId,reason: user\|failed,error?}` |
-| `project.created` / `.updated` / `.deleted` | yes | `{projectId}` (FR-034) |
+| `project.created` / `.updated` / `.deleted` | yes | `{projectId}` (FR-034); emitted since M7 (sync's change feed listens) |
+| `thread.created` / `.updated` / `.deleted` | no | `{threadId}` (M7): a hint for sync's change feed that a thread was created, changed (flags included) or deleted; correlation `{threadId}` |
 | `source.status.changed` | yes | `{sourceId,projectId,status: pending\|indexing\|ready\|error,error?}` (FR-040) |
 | `project.folder.indexed` | yes | `{projectId,folderId,fileCount,status: ready\|error,error?}` (FR-035); a cap that stopped indexing leaves `ready` with a note on the folder |
 | `chat.search.indexed` | yes | `{threadId,count}` |
@@ -57,8 +58,9 @@ Rules:
 | `turn.interrupted` | yes | `{threadId,turnId,stopReason: cancelled\|budget\|backstop\|approval_timeout\|location_lost,steps,usage,bound?}`; `bound` `{bound: time\|tokens\|cost,used,limit}` names the run or goal budget that ended it (FR-182) |
 | `compaction.completed` | yes | `{threadId,turnId,itemId,trigger: pre_turn\|mid_turn\|post_turn\|manual,tokensBefore,tokensAfter,method: model\|extractive}` (FR-183); `itemId` is the `summary` message; `extractive` when no model wrote the summary (the mock provider, or the request failed) |
 | `context.instructions.truncated` | yes | `{threadId,turnId,messageId,root,truncated[],dropped[],message}` (FR-185): instruction files over the 32 KiB budget were cut (`truncated`) or left out (`dropped`); the reply also gets a `notice` part |
-| `thread.status.changed` | yes | `{ref:{kind: thread\|run\|session\|agent,id},from,status: running\|needs_input\|ready\|blocked,reason}` (FR-215); `reason` is a few words ("Approval needed", "Budget reached") or null. M5 emits `kind: thread` only, from the Hub's status service (the loop no longer emits it); a thread seen for the first time counts as `ready` before |
-| `session.handedOff` | yes | `{handoffId,threadId,sessionId?,from,to,branch?,status}` (FR-213) |
+| `thread.status.changed` | yes | `{ref:{kind: thread\|run\|session\|agent,id},from,status: running\|needs_input\|ready\|blocked,reason}` (FR-215); `reason` is a few words ("Approval needed", "Budget reached") or null. M5 emits `kind: thread` only, from the Hub's status service (the loop no longer emits it); a thread seen for the first time counts as `ready` before. Since M7 it also fires for agent threads (an agent's research and background threads count toward its main thread, and an agent paused or resumed refreshes its threads) |
+| `session.handedOff` | yes | `{handoffId,threadId,sessionId?,from,to,branch?,status: pending\|running\|completed\|refused\|failed,reason?}` (FR-213, M7): at pending, running and the end; `from` and `to` are `environment:<id>`, `worktree:<id>`, `device:<id>` or `hub`; `reason` on a refusal or failure (`docs/10` §15); actor `system`; correlation `{threadId,sessionId?}`. A chat handoff has no `sessionId` |
+| `thread.shared` | yes | `{threadId,ownerAccountId,participants}` (FR-217, M7): a thread was shared or someone was taken out or left; actor `user`; correlation `{threadId}` |
 
 ### tools, approvals, review & policy
 
@@ -154,10 +156,14 @@ Rules:
 | `code.verify.started` | yes | `{sessionId,verifyId,trigger: auto\|manual}` (FR-068, M6) |
 | `code.verify.completed` | yes | `{sessionId,verifyId,trigger,status: passed\|failed\|error\|skipped,checks: [{name,status: passed\|failed\|timeout\|error\|skipped,exitCode}]}` |
 | `worktree.leased` | yes | `{worktreeId,repoPath,branch,sessionId,expiresAt}` (FR-073); M5 leases until the session is archived (`expiresAt: null`). M6 also sends it for a registry worktree created with a session, each renew (`expiresAt` from `ttlMinutes`) and a session binding `worktreeId` |
-| `worktree.released` | yes | `{worktreeId,sessionId,reason: done\|expired\|handoff\|removed}`; `done` (the release route, or the session was archived) and, since M6, `expired` (the 5-minute sweep). `handoff` and `removed` are not sent; removing a worktree sends no event |
+| `worktree.released` | yes | `{worktreeId,sessionId,reason: done\|expired\|handoff\|removed}`; `done` (the release route, or the session was archived) and, since M6, `expired` (the 5-minute sweep). Since M7 `handoff` (the session moved off the worktree); `removed` is not sent; removing a worktree sends no event |
 | `code.devserver.started` | yes | `{sessionId,serverId,url,port,label}` (FR-097, M6) |
 | `code.devserver.stopped` | yes | `{sessionId,serverId,exitCode}`; `exitCode` is null when Nova stopped it |
-| `environment.updated` | yes | `{environmentId,change: created\|updated\|removed}` (FR-062, M6); actor `system`; no correlation |
+| `environment.updated` | yes | `{environmentId,change: created\|updated\|removed}` (FR-062, M6); actor `system`; no correlation. M7 adds `change: rebuilding` (a cloud environment), `hostkey_pinned` and `hostkey_reset` (an SSH host key) |
+| `code.merge.completed` | yes | `{sessionId,mergeId,status: applied\|conflicted\|refused\|resolved\|aborted,files?,conflicts?}` (FR-073, M7): a merge ran (`files` and `conflicts` are counts) or was resolved or aborted |
+| `code.attempts.updated` | yes | `{sessionId,setId,status,attemptId?}` (FR-212, M7): an attempt set started, an attempt finished, one was applied or the set was discarded |
+| `code.delegation.started` | yes | `{delegationId,agentId,sessionId,threadId}` (M7): an agent's `code.delegate` started a Code session |
+| `code.delegation.completed` | yes | `{delegationId,agentId,sessionId,status: done\|failed}`: its result went back to the agent's main thread |
 | `environment.health.changed` | yes | `{environmentId,status: ok\|degraded\|down\|unknown,detail}`: a check changed a non-local environment's status; `detail` redacted, ≤ 1,000 characters; no correlation |
 
 Code events carry `{threadId,sessionId}` in their correlation; the registry's `worktree.*`
@@ -186,7 +192,13 @@ Agent events carry `{agentId}` in their correlation (`threadId` where noted). Al
 | `agent.background.started` | yes | `{agentId,runId,threadId,title}` (FR-083): `agent.delegate` started a Work run |
 
 M6 emits no `thread.status.changed` with `ref.kind: agent`: an agent's derived status is computed
-when its view is read.
+when its view is read. Since M7 the status service refreshes an agent's threads on `agent.*`
+events and counts its research and background threads toward its main thread, so
+`thread.status.changed` (`ref.kind: thread`) follows agent threads too.
+
+A team agent (M7, FR-091) works in its own identity account; every event of that account (its
+approvals included) is also delivered to the Hub owner's account with
+`payload.teamAgent: {agentId, identityAccountId}` added.
 
 ### channels & notifications (M6)
 
@@ -209,9 +221,9 @@ when its view is read.
 | `screen.control.changed` | yes | `{computerId,from,state: disabled\|idle\|controlling\|stopped\|taken_over}` (FR-093, FR-207): enable, disable, kill, resume, a grant made, renewed or revoked, a takeover; never when a grant expires |
 | `screen.grant.changed` | yes | `{computerId,grantId,app,status: active\|revoked,expiresAt}` |
 | `screen.action` | yes | `{computerId,actionId,kind: click\|scroll\|type\|key\|drag,origin: tool\|takeover,app,status: ok\|refused\|failed\|stopped,error}` (FR-098); `error` is a code or null; actor the action's; correlation `{threadId,turnId,callId}` when known |
-| `browser.session.changed` | yes | `{computerId,state: starting\|running\|paused\|closed\|error,pausedBy}` (FR-092) |
+| `browser.session.changed` | yes | `{computerId,state: starting\|running\|paused\|closed\|error,pausedBy}` (FR-092). Since M7 also on a crash (state `error`) and a restart |
 | `browser.navigated` | yes | `{computerId,url,allowed}`; `url` without query or fragment; `allowed: false` when refused, denied, handed off or failed; correlation `{threadId?,turnId?,callId}` |
-| `browser.action` | yes | `{computerId,actionId,tool,action,target,result: ok\|error\|blocked\|denied\|handoff,before,after}`; `before` and `after` say whether a screenshot exists (M6 adds `actionId`, `action`, `before`, `after`); tool `devserver.open` is the browser pane opening a Code session's granted dev server for the user |
+| `browser.action` | yes | `{computerId,actionId,tool,action,target,result: ok\|error\|blocked\|denied\|handoff,before,after}`; `before` and `after` say whether a screenshot exists (M6 adds `actionId`, `action`, `before`, `after`); tool `devserver.open` is the browser pane opening a Code session's granted dev server for the user. Since M7 also for the trace's `browser.crash` and `browser.restart` rows and the new `browser.hover`, `browser.console` and `browser.network` tools |
 | `browser.screenshot` | no | `{computerId,actionId}` (M6: no blob path); `actionId` null when recording failed |
 | `signin.requested` | yes | `{computerId,host,signinId}` (FR-086); correlation `{callId,threadId?,turnId?}` |
 | `signin.completed` | yes | `{computerId,host,savedCredential}`; actor `user` |
@@ -244,7 +256,8 @@ device environment `{sessionId,threadId}`.
 | `device.connection.changed` | yes | `{connectionId,agentId,deviceId,status: active\|revoked}` (FR-081); correlation `{agentId}` |
 | `device.add.requested` | yes | `{requestId,role,kind,platform,name}` (M6.5, FR-132): a request is now the owner's to decide: at the reveal for a direct join (Add Device v2), at the claim for a Relay join (v1). A committed request that is never revealed emits nothing. Never carries the confirmation |
 | `device.add.decided` | yes | `{requestId,decision: approved\|denied\|expired}`; actor `user`, or `system` for `expired`. A deny that lost to an approval emits nothing |
-| `device.scopes.changed` | yes | `{deviceId,scopes}` (M6.5, `PUT /api/v1/devices/:id/scopes`); actor `user` |
+| `device.scopes.changed` | yes | `{deviceId,scopes}` (M6.5, `PUT /api/v1/devices/:id/scopes`); actor `user`. Since M7 removing `offline-replica` ends the device's replica (`sync.replica.revoked`) |
+| `device.tls.changed` | yes | `{deviceId,kind: novad\|compute,certificate: verified\|missing\|refused,reason,serial}` (FR-126, M7): what a device presented over HTTPS changed (`reason` `certificate_<why>` when refused); actor `system` |
 
 M6.5 also emits `device.status.changed` (`{deviceId,from,status: revoked}`, actor `user`) when a
 browser or app added with a code, or an approved device that never registered, is revoked.
@@ -293,6 +306,59 @@ agent as author) has actor `system` and correlation `{threadId,turnId}` when kno
 | `ambient.grant.denied` | yes | `{grantId?,granteeKind,granteeRef,reason: no_grant\|out_of_scope\|expired\|rate_limited\|query_timeout}` (FR-233) |
 | `ambient.provenance.flagged` | yes | `{turnId,kind: unsupported_claim\|verbatim_copy,callId?,recordIds[]}` (FR-232) |
 
+### sync (M7, `docs/13` §2)
+
+Per account; no correlation; actor `system` unless noted.
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `sync.changed` | no | `{cursor}` (FR-109): the change feed moved; online replicas pull `GET /api/v1/sync/changes` |
+| `sync.conflict` | yes | `{entryId,kind,id,field}`: a push overwrote a value or lost (a merge-log entry; `docs/13` §2.2). Replaces the earlier `{entityKind,entityId,resolution}` |
+| `sync.replica.revoked` | yes | `{deviceId,reason: revoked\|scope_removed}` (FR-129): the device lost its replica and must wipe its copy; its sync calls fail from now on |
+| `sync.replica.reset` | yes | `{deviceId}`: the owner made the replica load a snapshot again; actor `user` |
+
+`sync.status.changed` is not emitted; a replica's status is read from `GET /api/v1/sync/devices`.
+
+### cloud runner (M7, `docs/13` §3)
+
+Actor `system`; correlation `{threadId}` for a run bound to a thread.
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `cloud.runner.updated` | yes | `{enabled,url,state}` (FR-108): the runner was registered, turned on or off, or forgotten |
+| `cloud.run.started` | yes | `{cloudRunId,environmentId,threadId,kind: code\|work\|system}`: a lease began |
+| `cloud.run.usage` | no | `{cloudRunId,usage: {cpuSeconds,wallSeconds,commands},caps: {cpuSeconds,wallSeconds}}` (FR-116): live meters |
+| `cloud.run.cap_warning` | yes | `{cloudRunId,resource: cpu\|wall\|disk,used,limit}`: past `warnAt` of a cap; an `attention` notification goes with it |
+| `cloud.run.capped` | yes | `{cloudRunId,resource,used?,limit?}`: the hard stop at a cap |
+| `cloud.run.ended` | yes | `{cloudRunId,status: completed\|cancelled\|capped\|failed\|lost,reason}` |
+| `cloud.snapshot.created` | yes | `{snapshotId,environmentId,reason: manual\|run_start\|before_restore}` |
+| `cloud.snapshot.restored` / `.deleted` | yes | `{snapshotId,environmentId}` |
+
+A rebuild sends `environment.updated` `{change: rebuilding}` (code above).
+
+### team (M7, `docs/13` §7)
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `team.invitation.created` | yes | `{invitationId,expiresAt}` (decision 5 of ADR-095); the owner's account; actor `user` |
+| `team.invitation.revoked` | yes | `{invitationId}`; actor `user` |
+| `team.member.joined` | yes | `{accountId,invitationId,via: local\|oidc}`: to the inviting owner's account |
+| `team.member.removed` | yes | `{accountId,sessionsEnded}`; actor `user` |
+| `team.task.updated` | yes | `{taskId,agentId,status: running\|done\|failed\|cancelled}` (FR-091): to the account that gave the task, when it starts and when it ends |
+
+`thread.shared` (chat & turns above) announces sharing changes; `settings.changed` carries
+`scope: member` for a member's own preferences (system below).
+
+### external agents (M7, flagged, `docs/08`)
+
+Correlation `{threadId}` (the Code session's thread).
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `delegation.started` | yes | `{delegationId,threadId,adapterId}` (FR-203) |
+| `delegation.updated` | no | `{delegationId,message?,thought?,toolCalls?: [{title?,status?}],droppedToolCalls?,plan?}`: the agent's progress, coalesced to at most one event per 250 ms; `message` and `thought` are the text since the last event (redacted), at most 10 tool-call updates per event with the rest counted in `droppedToolCalls`, `plan: true` when the agent's plan changed. Replaces the earlier one-update-per-event `{kind,text}` shape |
+| `delegation.finished` | yes | `{delegationId,threadId,status: completed\|failed\|cancelled,stopReason}` |
+
 ### system
 
 | Name | Persisted | Payload |
@@ -300,16 +366,14 @@ agent as author) has actor `system` and correlation `{threadId,turnId}` when kno
 | `node.registered` | yes | `{nodeId,name,models}` (FR-126) |
 | `node.status.changed` | yes | `{nodeId,from,status: active\|unreachable\|revoked}` |
 | `node.models.changed` | yes | `{nodeId,models}` |
-| `sync.status.changed` | yes | `{deviceId,status,pending}` |
-| `sync.conflict` | yes | `{entityKind,entityId,resolution}` |
 | `update.available` / `.downloaded` / `.applied` / `.failed` | yes | `{version,channel}` |
 | `diagnostics.updated` | no | `{subsystem,status}` |
 | `notification.created` | yes | `{notificationId,kind,title,os}`; a repeat with the same dedupe key while unread updates the notification and emits nothing. `os` (M6) says whether a client may raise it on the OS now: false when the category's in-app or OS rule is off or quiet hours are in force (unless the rule bypasses them); clients skip the OS notification then (FR-060) |
-| `auth.session.created` / `.revoked` | yes | `{accountId}` (audited) |
+| `auth.session.created` / `.revoked` | yes | `{accountId}` (audited). M7: `.created` adds `via: invitation\|oidc\|oidc_join` when a member joins or signs in with OIDC |
 | `provider.account.created` / `.removed` | yes | `{providerAccountId,provider,secretRef}` (audited; never the key) |
 | `provider.account.activated` | yes | `{providerAccountId,provider}` (it became the active account of its kind, FR-115) |
 | `account.updated` | yes | `{accountId,fields}`; `fields` lists what changed: `displayName`, `username`, `avatar` (FR-113) |
-| `settings.changed` | yes | `{key,scope}` (security-relevant keys are audited) |
+| `settings.changed` | yes | `{key,scope}` (security-relevant keys are audited). M7: `scope: member` for a member's own preference (`/api/v1/team/me/settings`) |
 | `mcp.server.status.changed` | yes | `{serverId,name,status: disabled\|starting\|connected\|error\|stopped,error?}` (FR-043) |
 | `audit.appended` | yes | `{auditId,kind,hash}` |
 | `import.completed` | yes | `{importId,imported,duplicates,disabled,secretsMigrated}` (FR-200) |
@@ -324,8 +388,8 @@ agent as author) has actor `system` and correlation `{threadId,turnId}` when kno
 - **Activity view**: renders persisted events filtered by correlation id.
 - **Audit**: mirrors security-relevant events (approvals, `policy.*`, `review.*`, `hook.*`,
   `request.*`, `ambient.grant.denied`, `app.authorization.changed`) into `audit_event` with a
-  hash chain. Areas that act also append their own entries (the M4, M5, M6 and M6.5 actions are listed
-  in `docs/06` §2, "audit & events"). M5 writes no audit entry for `request.*` yet.
+  hash chain. Areas that act also append their own entries (the M4, M5, M6, M6.5 and M7 actions are
+  listed in `docs/06` §2, "audit & events"). M5 writes no audit entry for `request.*` yet.
 - **Scheduler**: listens for `trigger.fired`, `schedule.fired`, `mcp.event.received` and
   `turn.completed` (goal continuation, FR-181).
 - **M6.5 Hub areas**: the trust, network and relay areas listen for `settings.changed` of their
@@ -344,13 +408,27 @@ agent as author) has actor `system` and correlation `{threadId,turnId}` when kno
   on `review.breaker.tripped` and follows `thread.status.changed`; the Code area refreshes changes
   on `tool.call.completed` of a code thread; `request.*` pauses a run's time budget while it
   waits for the user; `run.completed` ends the run's exec sessions.
-- **Sync**: replicates persisted events that are marked syncable.
+- **Sync** (M7): the sync area listens on the bus for the synced entities' events (`thread.*`,
+  `chat.message.*`, `project.*`, `memory.item.*`, `space.*`, `space.page.*`, `schedule.*`,
+  `settings.changed`) and sweeps every 5 minutes; it records field changes in its change feed
+  (`docs/13` §2), not events. It also listens for `device.status.changed` and
+  `device.scopes.changed` to end replicas.
+- **Who receives what** (M7): an event goes to its own account's streams; account-less system
+  events (network, trust, Relay) go only to the Hub owner's streams (`/api/v1/events`,
+  `/events/stream`, `/ws`). Shared-thread streams deliver a thread's events to its participants,
+  checked on every event. Team agent events are copied to the owner (agents above).
+- **M7 Hub areas**: the code area listens for `agent.status.changed` and `agent.deleted` (a paused
+  agent's delegated sessions are held, a deleted agent's archived); the cloud area finishes a
+  Work run's lease on `run.completed`; the browser area removes a deleted project's or agent's
+  site levels on `project.deleted` and `agent.deleted`; the flagged area stops running delegations on
+  `settings.changed` of `externalAgents.enabled`; the device-trust area forgets a revoked device.
 - Ordering is per-correlation; global order is not guaranteed. Consumers must be idempotent.
 
 ## Backpressure
 
 - High-frequency ephemeral events (`chat.delta`, `tool.call.progress`, `browser.screenshot`,
-  `run.budget.usage`) are coalesced and rate-limited (e.g., ≤ 60/s per stream; screenshots
+  `run.budget.usage`, and since M7 `cloud.run.usage` and `delegation.updated` at most one per
+  250 ms per delegation) are coalesced and rate-limited (e.g., ≤ 60/s per stream; screenshots
   ≤ 1 per 2 s; budget meters ≤ 1/s).
 - If a consumer is slow, ephemeral events are dropped (with a warning); persisted events are
   never dropped.

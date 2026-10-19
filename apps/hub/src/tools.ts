@@ -173,7 +173,12 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
   // workspace and agents' computer folders inside it (docs/12 §7.2, FR-080).
   const paths: PathPolicy = {
     denied: [ctx.dataDir],
-    allowed: [workspace, join(ctx.dataDir, 'computers'), join(ctx.dataDir, 'cloud-mock')],
+    allowed: [
+      workspace,
+      join(ctx.dataDir, 'computers'),
+      join(ctx.dataDir, 'cloud-mock'),
+      join(ctx.dataDir, 'members'),
+    ],
   };
   // The loop and the context tools share what each running turn's context holds (FR-183).
   const turnContext = new TurnContextTracker();
@@ -299,10 +304,13 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
         ]);
         clearTimeout(timer);
         if (waited) {
-          const out: { ok: boolean; text: string; error?: { code: string; message: string } } = {
-            ok: waited.ok,
-            text: waited.text,
-          };
+          // `meta` is the result's own (an image's artifact id, ...), redacted and bounded (M7).
+          const out: {
+            ok: boolean;
+            text: string;
+            meta: unknown;
+            error?: { code: string; message: string };
+          } = { ok: waited.ok, text: waited.text, meta: waited.meta };
           if (waited.error) out.error = waited.error;
           return out;
         }
@@ -405,12 +413,13 @@ export function settingsScope(
   return async ({ accountId, threadId, projectId }): Promise<ToolScope> => {
     // A Code session's (or run's) permission mode sets the profile and roots of its thread,
     // exactly as the gate reads them (FR-063, FR-190); a source that throws fails the turn.
+    // Asked with no thread too (a tool run from the UI, an MCP client, a hook): the team's
+    // fallback gives every account that is not the owner only its own folder (decision 5).
     let policy: ThreadPolicy | null = null;
-    if (threadId)
-      for (const source of threadPolicies()) {
-        policy = await source.forThread(accountId, threadId);
-        if (policy) break;
-      }
+    for (const source of threadPolicies()) {
+      policy = await source.forThread(accountId, threadId ?? '');
+      if (policy) break;
+    }
     const id = policy?.profileId ?? (await ctx.setting('tools.permissionProfile', projectId));
     const { profile } = await loadPermissionProfile(ctx.db, accountId, id);
     // A project's folders are roots for its chats (FR-035), exactly as the gate adds them.

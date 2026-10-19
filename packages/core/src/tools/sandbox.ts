@@ -95,7 +95,11 @@ export {
   type PublishBridge,
   type PublishOptions,
 } from './sandbox-publish.ts';
-export { threadSandboxRouter, type ThreadSandboxPick } from './sandbox-router.ts';
+export {
+  threadSandboxRouter,
+  type ThreadSandboxPick,
+  type ThreadSandboxRouter,
+} from './sandbox-router.ts';
 export {
   GIT_CONTROL_FILES,
   sandboxMounts,

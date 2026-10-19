@@ -117,6 +117,11 @@ because a staged write changes nothing until it is committed. `device.files.comm
 action with the `file_write` effect, so under the default approval policy the owner approves each
 commit. The agent can only commit or discard its own staged writes on the connected device.
 
+*As shipped in M7 (ADR-095).* Agent computers still use the mock cloud runner. The cloud runner
+(`services/runner`, FR-108) serves Code sessions and Work runs whose environment is `cloud`
+(`docs/10`); moving agent computers to it needs the whole `Computer` interface over HTTP (browser
+profile, files, snapshots), which is not built.
+
 ### 2.4 Windows sandbox detail (FR-107, ADR-064)
 
 Windows support stays behind a flag until the security suite passes on it.
@@ -306,6 +311,34 @@ connects the user's own browser to the agent. It is separate from the clean agen
 At every level the site must pass the domain lists, the confirmation tiers apply (FR-189), and
 results are untrusted. Levels are per site and per scope, listed and revocable in Settings.
 
+*As shipped in M7 (ADR-095; `packages/core/src/browser/sites.ts`).* An allowed site can have its
+own level for one project or one agent besides its level for the whole account. The narrower scope
+wins: the agent's level, then the project's, then the account's. A call's project and agent are
+read from the database (the nearest along its parent threads, so a sub-agent's thread counts as its
+parent's), never from tool arguments; when they cannot be read the action is denied.
+
+- **Storage.** Each scoped level is a `browser_site` row with the composite key
+  `<pattern>|<kind>:<ref>` (no new table), with its own site-scoped policy rule on the tool name
+  `browser.act:<kind>:<ref>`. The project or agent must exist in the account.
+- **Enforcement.** Before a write under a scoped level, a policy preview runs under `browser.act`.
+  Only when nothing but the site's own account-level rule (or a built-in floor) would decide is the
+  write matched under the scoped name; a managed rule, a deny or any other rule on `browser.act`
+  keeps the normal check, so a narrower level never sets aside more than the account level. A
+  preview that fails denies the action (fail closed).
+- **What sees the scoped name.** It travels in the policy context's `ruleTool`, which only the
+  policy engine's rule matching reads (`packages/policy/src/engine.ts`). Hooks, tool limits, the
+  approval card, audit and events still see `browser.act`. On an Auto approve with review site the
+  escalation after a reviewer `ask` drops `ruleTool`, so a scoped Always allow cannot answer it.
+- **Removal.** A blocked site has no levels: blocking or removing a site, also through the domain
+  lists, removes its scoped levels. Deleting a project or an agent removes its levels and their
+  policy rules (the browser area hears `project.deleted` and `agent.deleted`), audited as
+  `browser.site.level.removed` with actor `system` and `{scopeKind, scopeRef, count, reason:
+  project_deleted|agent_deleted}`.
+- **API and UI.** `GET /api/v1/browser/site-levels` (filters `scopeKind`, `scopeRef`, `pattern`),
+  `PUT` and `DELETE /api/v1/browser/sites/:pattern/levels/:scopeKind/:scopeRef`, audited as
+  `browser.site.level.set` and `browser.site.level.removed`. Settings → Browser edits them per
+  site; a project's page and an agent's computer tab edit that scope's level for each allowed site.
+
 ### 4.5 Page-registered tools (FR-208, P2)
 
 - A page loaded in an agent browser may register tools (name, description, input schema)
@@ -350,19 +383,100 @@ its source, so purchases, sign-ups and deletions are confirmed when they happen;
 changes and verification codes hand off). Site levels (§4.4) are one user rule per site on
 `browser.act`; on `auto_review` sites an action the gate allowed without a card goes to the
 auto-reviewer, which can only tighten (`browser.act.review`); levels are per account, not per scope,
-in M6. The agent never types a password (it uses `browser.sign_in`; the private form waits 15
-minutes in Hub memory and fills the page; **Save** stores the login in the vault, and reuse needs
-the user to pick it). Data sent to a page signed by an external agent is denied unless the user
+in M6 (M7 adds levels per project and agent, §4.4). The agent never types a password (it uses
+`browser.sign_in`; the private form waits 15 minutes in Hub memory and fills the page; **Save**
+stores the login in the vault, and reuse needs the user to pick it). Data sent to a page signed by an external agent is denied unless the user
 named it (FR-194). Every action is recorded with sealed before and after screenshots (§9). Page
-tools: only the top frame, the current origin, at most 20, annotations ignored. Not built: console
-and network capture, hover, element screenshots, restart after a crash, the extension bridge (§4.3)
-and the local browser fallback (§4.6: no tool calls it in M6, and it refuses with the reason until a
-device offers a browser module).
+tools: only the top frame, the current origin, at most 20, annotations ignored. Not built in M6:
+console and network capture, hover, element screenshots and the restart after a crash (all built in
+M7, below), the extension bridge (§4.3) and the local browser fallback (§4.6: no tool calls it, and
+it refuses with the reason until a device offers a browser module). The last two are still not
+built.
 
 With `browser.allowLocalSites` on, the agent browser may open a site on the local network (a
 test site, a router page) when the owner allowed that site by its exact name: the browser's proxy
 session lists those names in `localHosts`, and the proxy lets them resolve to private or loopback
 addresses. A wildcard site never does, and every other private address stays blocked.
+
+*As shipped in M7 (ADR-095; `packages/core/src/browser`, `apps/hub/src/browser.ts`).* The browser
+gains four tools, console and network capture, levels per project or agent (§4.4) and a restart
+after a crash (§10).
+
+- **`browser.hover`** moves the pointer over an element by ref (menus and tooltips that open on
+  hover). It goes through the page-action classifier like every page action and counts as passive,
+  so it never asks; hovering a CAPTCHA widget still hands off to the user. It is recorded with
+  before and after screenshots.
+- **`browser.screenshot`** takes an optional element `ref` from the last `browser.read`. The image
+  is sealed like the trace screenshots and kept as an image artifact.
+- **`browser.console`** returns the page's console messages and uncaught errors: the newest
+  `limit` (1 to 200, default 50), oldest of them first. `levels` keeps some of `error`, `warning`,
+  `info`, `log` and `debug`; `after` skips entries up to that `#n`.
+- **`browser.network`** returns the page's requests: method, address, outcome (status, failure, or
+  blocked by the browser's guards), type, size and time. `contains` filters by address,
+  `failedOnly` keeps failures and statuses of 400 and up, `details` adds headers and captured bodies
+  (up to 4,000 characters each), `limit` is 1 to 100 (default 30), and `after` works as for the
+  console.
+- Both capture tools read the running browser and never start one; their output is at most 20,000
+  characters.
+
+**Capture.** Each browser session keeps up to 300 console entries and 300 requests, in memory only.
+The oldest are dropped first (the output says how many), nothing is stored, and the buffers go when
+the browser closes. Everything is redacted when it is recorded, before the agent or the user can
+read it:
+
+- Every page-supplied value is clipped to twice its cap before it is redacted, then clipped to the
+  cap: a console message 2,000 characters, a URL 2,000, a header value 300, status text 100,
+  failure text 200, at most 40 headers per request. The trace recorder does the same, and the
+  redactor's own patterns are bounded (`packages/security/src/redact.ts`), so a hostile page
+  cannot stall the Hub's event loop.
+- One normalised test, `isSecretName`, decides header names, query keys, JSON keys, and
+  `key=value`, `key: value` and `"key":"value"` pairs in text bodies and console messages. The
+  name is decoded, lower-cased and stripped of separators, then searched for parts such as
+  `token`, `secret`, `passw`, `session`, `csrf`, `cookie` and `authoriz`; short words such as
+  `otp`, `pin`, `code`, `key` and `sid` count only as whole words. So Cookie, Authorization and
+  Set-Cookie values never show, nor do token-like headers such as `X-CSRFToken`.
+- URL-valued headers (Location, Referer, Content-Location, Origin, Refresh, Link) are redacted as
+  URLs, and a relative Location stays relative. Every URL loses its credentials and fragment, and
+  secret-looking query values are masked one parameter at a time.
+- JSON is masked by key, also behind an anti-hijacking prefix (`)]}'`, `while(1);` and the like),
+  inside a JSONP callback, and when served as another text type. A CSRF value in a `<meta>` tag or
+  a hidden `<input>` is masked.
+- Request bodies are never captured. A response body is kept only for text types up to 16 KiB: a
+  larger declared Content-Length is not read; without a Content-Length the body is read only after
+  the request finished and only when its received size is under the cap; `text/event-stream` is
+  never read. At most 6 bodies are read at a time.
+- The session's redactor also masks the password filled through the private sign-in form (§4.1)
+  in its raw, URL-encoded, form-encoded, JSON-escaped, HTML-escaped and base64 forms, short values
+  included. Text the user types into a focused password or one-time-code field during a takeover
+  (§4.2) is registered as a secret the same way once it reaches 4 characters. The redactor
+  inherits the Hub's own literals, and the output is masked for literals once more on the way out.
+- What the agent reads is labelled page content and scanned for instructions (FR-103): console
+  text and source URLs, request URLs, status text and failure text, and with `details` the headers
+  and bodies. A finding is noted in the result and audited once (`browser.injection_suspected`,
+  `detail.source` `console` or `network`).
+
+For the user, `GET /api/v1/browser/sessions/:computerId/console` and `.../network` (`limit` 1 to
+300, default 100) return the same redacted capture as `{items, dropped}`, or 404 when no browser is
+open. The browser panel shows them as text in Console and Network tabs, with level, address and
+failed-only filters.
+
+**Trace (FR-098).** `GET /api/v1/browser/actions` lists newest first, `limit` rows at a time
+(default 100, at most 500), with an opaque `nextCursor`; a cursor the Hub did not make is refused
+with 400. The trace in the browser panel pages with "Show older" and shows the crash and restart
+rows of §10.
+
+**Other people on the Hub (FR-217).** `browser.allowLocalSites` is ignored for anyone but the Hub
+owner. A member's allowed sites reach the network only where `network.egressAllow` already covers
+them, so their site allow rows can only narrow the Hub's list. A member holds at most half of
+`browser.maxConcurrent` (at least one) and makes room only by closing their own least recently used
+idle browser; the owner may also close another account's idle browser. A browser without a computer
+from the computers area keeps its profile and files under
+`browser/{profiles,files}/<account>/<computer>`, so fallback ids (`thread-<threadId>`) of different
+people never share a folder.
+
+Known limits: opaque tokens in URL paths (password-reset and sign-in links) are not masked. The
+computers-area controller (`BrowserController` in `packages/core/src/computers/types.ts`) has no
+hover, so hover exists only as an agent tool. The capture caps are constants, not settings.
 
 ## 5. Screen / computer use (FR-093, FR-207)
 
@@ -540,3 +654,27 @@ not expired.
 | Computer-use grant expired, or input to an app above its tier | Action refused with a structured error; the agent requests a grant or uses the named tool |
 | Kill key pressed | Input stops immediately; the run pauses until the user resumes it |
 | Injection attempt via page content | Treated as untrusted; not executed as instructions (FR-103) |
+
+*As shipped in M7 (ADR-095; `packages/core/src/browser/session.ts`, `service.ts`).* The agent
+browser restarts after a crash:
+
+- **Detection.** A crash is decided only from the driver's own signals: the page's crash event, or
+  the browser process disconnecting. An error message, which a page can write, never counts. The
+  crash is recorded at once: a `browser.crash` trace row, audit `browser.session.crashed`, and
+  `browser.session.changed` with state `error`; the browser panel shows a crash notice.
+- **Restart.** The browser restarts on the next action, or right away when the crash interrupted
+  one; concurrent calls share one restart. A crashed page is replaced by a new page inside the same
+  browser, which keeps its cookies. A browser that died is launched again with the cookies of the
+  last checkpoint (taken after each action except scroll and hover); localStorage does not carry
+  over. Popups are always closed, so the one agent tab is all there is to restore.
+- **Replay.** The page it was on is opened again only when a GET (or HEAD) loaded it and the site is
+  still allowed; a page reached by posting a form stays closed. Only a navigation is replayed
+  (`browser.navigate`, `devserver.open`). An action on an element is not repeated, since it may
+  already have taken effect and its refs are stale; the agent is told to read the page again. A
+  read or a page screenshot is taken once more.
+- **Page tools.** The crashed page's tools (FR-208), refs and last read are dropped.
+- **Trace.** Each restart is a `browser.restart` row with an after screenshot (audit
+  `browser.session.restarted`); the session view counts restarts.
+- **Limit.** A crash after 3 restarts in 10 minutes closes the browser with the reason (audit
+  `browser.session.restart_failed`, tool error `browser_unavailable`); so does a restart that
+  fails. The count belongs to the session, so it starts again at zero when a new session starts.

@@ -1,12 +1,16 @@
 // Enrollment and the running node (FR-126, docs/21 §7, ADR-089). `enroll` registers this machine
 // with a Hub once, using a one-use enrollment token; `ComputeNode` serves the job API, sends a
 // heartbeat every interval and re-signs its capability document when the backend's models change.
+// An https:// Hub is trusted through the pinned fingerprint and the node presents the device
+// certificate Add Device granted (mutual TLS, hub-tls.ts); a node on http:// with a pin moves to
+// https:// once the Hub serves it, never back.
 import { hostname, networkInterfaces } from 'node:os';
 import type { FastifyInstance } from 'fastify';
 import { Logger, stderrSink } from '@nova/telemetry';
 import { Backend, guardedFetch, type BackendKind } from './backend.ts';
 import { buildCapability, type HardwareFacts, type OsFacts } from './capability.ts';
 import { HubClient, HubError } from './hub-client.ts';
+import { HubTls, learnCaOverHttp, type HubTrust } from './hub-tls.ts';
 import { generateKeys, newDeviceId, newJobToken, signDocument, type NodeKeys } from './identity.ts';
 import { JobManager } from './jobs.ts';
 import { PROTOCOL_VERSIONS } from './protocol.ts';
@@ -33,6 +37,25 @@ export interface EnrollOptions {
   os?: OsFacts;
   /** The node's key pair (Add Device approved this key); a new one by default. */
   keys?: NodeKeys;
+  /** The Hub fingerprint to pin (`--pin`): required to trust an https:// Hub's own CA. */
+  pin?: string;
+  /** What a verified identity statement already vouched for (Add Device passes it on). */
+  trust?: HubTrust;
+  /** The device certificate Add Device granted for `keys` (local-CA mode). */
+  certificatePem?: string | null;
+}
+
+/**
+ * The `fetch` for the Hub: through the pinned trust (presenting the device certificate) when
+ * there is one, else the platform's (an https:// Hub without a pin is checked against the
+ * system's roots, e.g. a mesh certificate).
+ */
+export function hubFetchFor(
+  hubUrl: string,
+  tls: HubTls | null,
+  base: typeof fetch | undefined,
+): typeof fetch {
+  return guardedFetch([hubUrl], tls ? tls.fetch(base) : base);
 }
 
 /** `host:port`, `:port` or `port`; IPv6 hosts in brackets. */
@@ -112,6 +135,19 @@ export async function enroll(opts: EnrollOptions): Promise<NodeState> {
   }
   const keys = opts.keys ?? generateKeys();
   const jobToken = newJobToken();
+  let trust: HubTrust | null =
+    opts.trust ?? (opts.pin ? { pin: opts.pin, caPem: null, listed: [] } : null);
+  const certificatePem = opts.certificatePem ?? null;
+  if (trust && new URL(hubUrl).protocol === 'http:')
+    // The Hub local CA from the signed statement, so a later move to HTTPS is trusted.
+    trust = await learnCaOverHttp(hubUrl, trust, guardedFetch([hubUrl], opts.fetch));
+  const tls = trust
+    ? new HubTls({
+        trust,
+        client: certificatePem ? { certPem: certificatePem, keyPem: keys.privateKeyPem } : null,
+        onTrust: (t) => (trust = t),
+      })
+    : null;
   const deviceId = existing?.deviceId ?? newDeviceId();
   const capability = buildCapability({
     deviceId,
@@ -122,7 +158,7 @@ export async function enroll(opts: EnrollOptions): Promise<NodeState> {
     ...(opts.hardware ? { hardware: opts.hardware } : {}),
     ...(opts.os ? { os: opts.os } : {}),
   });
-  const hub = new HubClient({ hubUrl, fetch: guardedFetch([hubUrl], opts.fetch) });
+  const hub = new HubClient({ hubUrl, fetch: hubFetchFor(hubUrl, tls, opts.fetch) });
   const result = await hub.register({
     enrollToken: opts.token,
     name,
@@ -152,8 +188,10 @@ export async function enroll(opts: EnrollOptions): Promise<NodeState> {
       heartbeatIntervalMs: result.heartbeatIntervalMs,
       protocolVersion: result.protocolVersion,
       enrolledAt: new Date().toISOString(),
+      certificatePem,
     },
     revokedAt: null,
+    hubTrust: trust,
   };
   saveState(opts.dataDir, state);
   return state;
@@ -181,10 +219,11 @@ export class ComputeNode {
   readonly jobs: JobManager;
   readonly done: Promise<StopReason>;
   readonly #opts: RunOptions;
-  readonly #state: NodeState;
+  #state: NodeState;
   #enrollment: Enrollment | null;
   readonly #backend: Backend;
-  readonly #hub: HubClient;
+  #hub: HubClient;
+  #httpsTriedAt = -Infinity;
   readonly #server: FastifyInstance;
   readonly #log: Logger;
   #synced: string[] | null = null;
@@ -204,10 +243,7 @@ export class ComputeNode {
       kind: state.backend.kind,
       ...fetchOpt(opts.fetch),
     });
-    this.#hub = new HubClient({
-      hubUrl: state.hubUrl,
-      fetch: guardedFetch([state.hubUrl], opts.fetch),
-    });
+    this.#hub = this.#hubClient(state.hubUrl);
     this.jobs = new JobManager({
       run: (req) => this.#backend.stream(req),
       maxConcurrentJobs: state.maxConcurrentJobs,
@@ -247,6 +283,52 @@ export class ComputeNode {
 
   get url(): string {
     return this.#url;
+  }
+
+  /** The Hub this node reports to now (it moves to https:// once the Hub serves it). */
+  get hubUrl(): string {
+    return this.#state.hubUrl;
+  }
+
+  #tls(): HubTls | null {
+    const trust = this.#state.hubTrust;
+    const e = this.#enrollment;
+    if (!trust) return null;
+    return new HubTls({
+      trust,
+      client: e?.certificatePem ? { certPem: e.certificatePem, keyPem: e.privateKeyPem } : null,
+      onTrust: (t) => {
+        this.#state = { ...this.#state, hubTrust: t };
+        saveState(this.#opts.dataDir, { ...this.#state, enrollment: this.#enrollment });
+      },
+    });
+  }
+
+  #hubClient(hubUrl: string): HubClient {
+    return new HubClient({ hubUrl, fetch: hubFetchFor(hubUrl, this.#tls(), this.#opts.fetch) });
+  }
+
+  /**
+   * The Hub stopped answering at its http:// address: if it now serves HTTPS there and the pinned
+   * identity vouches for it, report there from now on (at most one try a minute). Never back.
+   */
+  async #tryHttps(): Promise<void> {
+    const url = new URL(this.#state.hubUrl);
+    if (url.protocol !== 'http:' || !this.#state.hubTrust?.pin) return;
+    if (Date.now() - this.#httpsTriedAt < 60_000) return;
+    this.#httpsTriedAt = Date.now();
+    url.protocol = 'https:';
+    const https = url.href.replace(/\/+$/, '');
+    const hub = this.#hubClient(https);
+    try {
+      await hub.hello();
+    } catch {
+      return;
+    }
+    this.#hub = hub;
+    this.#state = { ...this.#state, hubUrl: https };
+    saveState(this.#opts.dataDir, { ...this.#state, enrollment: this.#enrollment });
+    this.#log.info('the Hub now serves HTTPS', { hub: https });
   }
 
   get nodeId(): string | null {
@@ -301,7 +383,13 @@ export class ComputeNode {
         await this.#revoked();
         return;
       }
+      if (err instanceof HubError && err.status === 403 && err.reason?.startsWith('certificate_')) {
+        // Mutual TLS (FR-126): the Hub wants this node's certificate, or refused it.
+        this.#log.warn('the Hub refused this node over HTTPS', { reason: err.reason });
+        return;
+      }
       this.#log.warn('heartbeat failed', { err: err instanceof Error ? err.message : String(err) });
+      if (err instanceof HubError && err.status === 0) await this.#tryHttps();
     }
   }
 

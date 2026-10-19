@@ -413,9 +413,14 @@ function appliesToTool(rule: CommandRule, tool: string): boolean {
   return tools.includes(tool) || (tool === 'exec.write' && tools.includes('exec.run'));
 }
 
+/** The name rules match: `ruleTool` when the caller set one, else the tool's name. */
+function ruleName(ctx: PolicyContext): string {
+  return ctx.ruleTool ?? ctx.tool.name;
+}
+
 function scopeApplies(scope: Scope, ctx: PolicyContext): boolean {
   if (scope.kind === 'global') return true;
-  if (scope.kind === 'tool') return scope.ref !== undefined && globMatch(scope.ref, ctx.tool.name);
+  if (scope.kind === 'tool') return scope.ref !== undefined && globMatch(scope.ref, ruleName(ctx));
   if (scope.kind === 'plugin') return scope.ref !== undefined && scope.ref === ctx.tool.pluginId;
   if (scope.kind === 'site') {
     return (
@@ -436,7 +441,7 @@ function ruleMatches(
   readOnly: boolean,
 ): boolean {
   const m = rule.match;
-  if (m.tool && !m.tool.some((t) => globMatch(t, ctx.tool.name))) return false;
+  if (m.tool && !m.tool.some((t) => globMatch(t, ruleName(ctx)))) return false;
   if (m.source && !m.source.includes(ctx.tool.source)) return false;
   if (m.readOnly !== undefined && readOnly !== m.readOnly) return false;
   if (m.effect && !m.effect.some((e) => effects.includes(e))) return false;

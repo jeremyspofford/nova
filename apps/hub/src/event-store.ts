@@ -49,13 +49,18 @@ export class EventStore {
   async since(
     afterId: string | null,
     limit = 500,
-    filter: { threadId?: string; accountId?: string } = {},
+    filter: { threadId?: string; accountId?: string; systemEvents?: boolean } = {},
   ): Promise<EventEnvelope[]> {
     const where: SQL[] = [];
     if (afterId) where.push(gt(event.id, afterId));
-    // One account's events (and account-less system events) only.
+    // One account's events, and account-less system events unless `systemEvents` is false (they
+    // are the Hub owner's: network, Relay and endpoint changes; decision 5).
     if (filter.accountId)
-      where.push(sql`(${event.accountId} IS NULL OR ${event.accountId} = ${filter.accountId})`);
+      where.push(
+        filter.systemEvents === false
+          ? sql`${event.accountId} = ${filter.accountId}`
+          : sql`(${event.accountId} IS NULL OR ${event.accountId} = ${filter.accountId})`,
+      );
     if (filter.threadId)
       where.push(sql`json_extract(${event.correlationJson}, '$.threadId') = ${filter.threadId}`);
     const rows = await this.#db.orm

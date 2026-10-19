@@ -14,16 +14,20 @@
 // The SSH helper transport and the device provider are injected (the devices area builds `novad`
 // and its connections); without one those environments are `down` and say why. Connection details
 // are stored in `environment.config_json` without any secret value.
+import { createHash } from 'node:crypto';
 import { isolatedSubstrate } from '@nova/policy';
 import {
   NovaError,
   containerConnectionSchema,
+  createCloudEnvironmentSchema,
   createEnvironmentSchema,
+  isCloudFolder,
   deviceConnectionSchema,
   sshConnectionSchema,
   sshCredentialSchema,
   uuidv7,
   wslConnectionSchema,
+  type CloudConnectionView,
   type EnvironmentConnectionView,
   type EnvironmentOutputView,
   type EnvironmentProcessView,
@@ -40,6 +44,8 @@ import type { z } from 'zod';
 import type { EventSink } from '../events.ts';
 import type { AuditSink, ExecRequest, ExecResult, SandboxClient } from '../tools/types.ts';
 import type { HookFreeGit } from './git.ts';
+import { normalizeHostKey } from './ssh.ts';
+import { TRANSPORT_TAG } from './transport.ts';
 
 // ---- the helper protocol (novad operations a Code environment uses) ----------------------------
 
@@ -115,11 +121,15 @@ export interface EnvSshTarget {
 }
 
 /**
- * Reaches `novad` over SSH: installs or upgrades the helper after a signature check, starts it and
- * forwards its 0600 socket (with its token) over the connection (docs/10 §2, FR-192).
+ * Reaches Nova's helper over SSH: installs or upgrades it after a check, starts it and talks to it
+ * over the connection (docs/10 §2). M7: the connection reports the host key the host presented
+ * (`hostKey`), which the environment pins on first use and checks after (ssh.ts).
  */
 export interface EnvSshTransport {
-  connect(target: EnvSshTarget, signal: AbortSignal): Promise<EnvHelperConnection>;
+  connect(
+    target: EnvSshTarget,
+    signal: AbortSignal,
+  ): Promise<EnvHelperConnection & { hostKey?: string | null }>;
 }
 
 /** The devices area's connections to registered devices running `novad` (late-bound). */
@@ -130,6 +140,55 @@ export interface EnvDeviceProvider {
     deviceId: string,
     signal: AbortSignal,
   ): Promise<EnvHelperConnection | null>;
+}
+
+/**
+ * The cloud runner area's side of a `cloud` environment (FR-108, FR-071; ADR-095 decision 4):
+ * the runner holds the environment and runs its commands and file operations; the Hub keeps the
+ * loop and the gate. `config` is the row's `config_json` (never a secret).
+ */
+export interface EnvCloudProvider {
+  /** Make the environment on the runner; returns the config to store. */
+  create(
+    accountId: string,
+    envId: string,
+    label: string,
+    connection: unknown,
+  ): Promise<Record<string, unknown>>;
+  /** Remove it from the runner and drop the area's own rows of it. */
+  remove(accountId: string, envId: string, config: Record<string, unknown>): Promise<void>;
+  check(
+    accountId: string,
+    envId: string,
+    config: Record<string, unknown>,
+  ): Promise<{ status: EnvironmentView['status']; detail: string }>;
+  /** novad-like operations on the runner (folder checks, process listings, FR-078). */
+  connection(
+    accountId: string,
+    envId: string,
+    config: Record<string, unknown>,
+  ): Promise<EnvHelperConnection>;
+  /** The sandbox the environment's commands run in (on the runner). */
+  sandbox(accountId: string, envId: string, config: Record<string, unknown>): SandboxClient;
+  connectionView(config: Record<string, unknown>): CloudConnectionView;
+  describe(label: string, config: Record<string, unknown>): string;
+}
+
+/** Commands of a cloud environment while no runner is wired: refused, never run on the Hub. */
+const NO_CLOUD: SandboxClient = {
+  substrate: null,
+  available: () =>
+    Promise.resolve({ ok: false, detail: 'the cloud runner is not available on this Hub' }),
+  exec: () => Promise.reject(noCloud()),
+  poll: () => Promise.reject(noCloud()),
+  write: () => Promise.reject(noCloud()),
+  killTurn: () => Promise.resolve(),
+};
+
+function noCloud(): NovaError {
+  return new NovaError('capability_missing', 'the cloud runner is not available on this Hub', {
+    details: { reason: 'no_cloud_runner' },
+  });
 }
 
 // ---- rows ----------------------------------------------------------------------------------------
@@ -192,6 +251,7 @@ export class EnvironmentService {
   readonly #containers = new Map<string, SandboxClient>();
   readonly #remotes = new Map<string, EnvHelperSandbox>();
   #devices: EnvDeviceProvider | null = null;
+  #cloud: EnvCloudProvider | null = null;
   #ssh: EnvSshTransport | null;
   #gitVersion: Promise<string | null> | null = null;
 
@@ -210,6 +270,11 @@ export class EnvironmentService {
   /** The SSH helper transport (`novad` over SSH). */
   useSsh(transport: EnvSshTransport): void {
     this.#ssh = transport;
+  }
+
+  /** The cloud runner area (cloud environments, FR-108). */
+  useCloud(provider: EnvCloudProvider): void {
+    this.#cloud = provider;
   }
 
   // ---- saved environments --------------------------------------------------------------------
@@ -273,6 +338,8 @@ export class EnvironmentService {
   }
 
   async create(accountId: string, input: unknown): Promise<SavedEnvironmentView> {
+    if ((input as { kind?: unknown } | null)?.kind === 'cloud')
+      return this.#createCloud(accountId, input);
     const req = createEnvironmentSchema.parse(input);
     const id = uuidv7();
     const now = this.#iso();
@@ -326,6 +393,41 @@ export class EnvironmentService {
     return this.#view(this.#row(accountId, id));
   }
 
+  /** A cloud environment (FR-071): made on the runner first, then saved here. */
+  async #createCloud(accountId: string, input: unknown): Promise<SavedEnvironmentView> {
+    const req = createCloudEnvironmentSchema.parse(input);
+    if (!this.#cloud) throw noCloud();
+    const id = uuidv7();
+    const now = this.#iso();
+    const config = await this.#cloud.create(accountId, id, req.label, req.connection);
+    try {
+      await this.#o.db.transaction(() => {
+        this.#o.db.raw
+          .prepare(
+            `INSERT INTO environment (id, account_id, kind, label, config_json, repo_urls,
+               setup_script, status, created_at, updated_at)
+             VALUES (?, ?, 'cloud', ?, ?, ?, ?, 'unknown', ?, ?)`,
+          )
+          .run(
+            id,
+            accountId,
+            req.label,
+            JSON.stringify(config),
+            JSON.stringify(config.repoUrls ?? []),
+            req.connection.setupScript ?? null,
+            now,
+            now,
+          );
+      });
+    } catch (err) {
+      await this.#cloud.remove(accountId, id, config).catch(() => undefined);
+      throw err;
+    }
+    await this.#audit(accountId, 'environment.created', id, { kind: 'cloud' });
+    await this.#emit(accountId, 'environment.updated', { environmentId: id, change: 'created' });
+    return this.#view(this.#row(accountId, id));
+  }
+
   async update(accountId: string, id: string, req: UpdateEnvironmentRequest) {
     const r = this.#row(accountId, id);
     if (r.kind === 'local')
@@ -334,6 +436,25 @@ export class EnvironmentService {
       });
     let config = parseConfig(r);
     if (req.connection) config = parseConnection(r.kind, { ...config, ...req.connection });
+    // A pinned host key changes only through `resetHostKey`, with its own audit (M7).
+    let hostKey: 'kept' | 'pinned' | 'reset' = 'kept';
+    if (r.kind === 'ssh' && req.connection) {
+      const before = parseConfig(r) as SshConfig;
+      const after = config as SshConfig;
+      const was = before.hostKey ? normalizeHostKey(before.hostKey) : null;
+      if ('hostKey' in req.connection) {
+        const next = after.hostKey ? normalizeHostKey(after.hostKey) : null;
+        if (was && next !== was)
+          throw new NovaError('conflict', 'a pinned host key changes only through a re-pin', {
+            details: { reason: 'repin_required' },
+          });
+        if (!was && next) hostKey = 'pinned';
+      } else if (was && (before.host !== after.host || before.port !== after.port)) {
+        // Another host: the old host's key means nothing for it; the next connection pins anew.
+        config = { ...after, hostKey: null };
+        hostKey = 'reset';
+      }
+    }
     if (req.credential) {
       if (r.kind !== 'ssh')
         throw new NovaError('validation', 'only SSH environments take a credential');
@@ -374,8 +495,57 @@ export class EnvironmentService {
     await this.#audit(accountId, 'environment.updated', id, {
       kind: r.kind,
       credential: req.credential ? 'replaced' : 'kept',
+      ...(hostKey !== 'kept' ? { hostKey } : {}),
     });
+    if (hostKey !== 'kept') {
+      const c = config as SshConfig;
+      await this.#audit(
+        accountId,
+        hostKey === 'pinned' ? 'environment.hostkey.pinned' : 'environment.hostkey.reset',
+        id,
+        {
+          host: c.host,
+          port: c.port,
+          ...(hostKey === 'pinned' && c.hostKey
+            ? { fingerprint: hostKeyFingerprint(normalizeHostKey(c.hostKey)) }
+            : { reason: 'host_changed' }),
+        },
+      );
+    }
     await this.#emit(accountId, 'environment.updated', { environmentId: id, change: 'updated' });
+    return this.#view(this.#row(accountId, id));
+  }
+
+  /**
+   * Forget an SSH environment's pinned host key on purpose (the host was reinstalled): the next
+   * connection pins the key it presents. Audited on its own (M7, docs/10 §2).
+   */
+  async resetHostKey(accountId: string, id: string): Promise<SavedEnvironmentView> {
+    const r = this.#row(accountId, id);
+    if (r.kind !== 'ssh')
+      throw new NovaError('validation', 'only SSH environments pin a host key', {
+        details: { reason: 'not_ssh' },
+      });
+    const cfg = parseConfig(r) as SshConfig;
+    const was = cfg.hostKey ? normalizeHostKey(cfg.hostKey) : null;
+    await this.#o.db.transaction(() => {
+      this.#o.db.raw
+        .prepare(
+          `UPDATE environment SET config_json = ?, status = 'unknown', status_detail = NULL,
+             updated_at = ? WHERE id = ?`,
+        )
+        .run(JSON.stringify({ ...cfg, hostKey: null }), this.#iso(), id);
+    });
+    await this.#drop(id);
+    await this.#audit(accountId, 'environment.hostkey.reset', id, {
+      host: cfg.host,
+      port: cfg.port,
+      previous: was ? hostKeyFingerprint(was) : null,
+    });
+    await this.#emit(accountId, 'environment.updated', {
+      environmentId: id,
+      change: 'hostkey_reset',
+    });
     return this.#view(this.#row(accountId, id));
   }
 
@@ -391,6 +561,8 @@ export class EnvironmentService {
       throw new NovaError('conflict', `${inUse} active Code session(s) use this environment`, {
         details: { reason: 'in_use', sessions: inUse },
       });
+    // The runner's copy goes first (its runs end, its rows of the environment go).
+    if (r.kind === 'cloud' && this.#cloud) await this.#cloud.remove(accountId, id, parseConfig(r));
     await this.#o.db.transaction(() => {
       // Archived sessions keep their history; the binding goes.
       this.#o.db.raw
@@ -506,8 +678,11 @@ export class EnvironmentService {
         }
         return { status: 'ok', detail: `novad ${hello.version} on ${where}` };
       }
-      case 'local':
       case 'cloud':
+        if (!this.#cloud)
+          return { status: 'down', detail: 'the cloud runner is not available on this Hub' };
+        return this.#cloud.check(r.accountId, r.id, parseConfig(r));
+      case 'local':
       case 'vm':
         return { status: 'unknown', detail: `${r.kind} environments are not available yet` };
     }
@@ -582,16 +757,23 @@ export class EnvironmentService {
             details: { reason: 'credential_missing' },
           });
         const credential = sshCredentialSchema.parse(JSON.parse(raw));
-        return this.#ssh.connect(
-          {
-            host: cfg.host,
-            port: cfg.port,
-            user: cfg.user,
-            hostKey: cfg.hostKey ?? null,
-            credential,
-          },
-          signal,
-        );
+        let conn: EnvHelperConnection & { hostKey?: string | null };
+        try {
+          conn = await this.#ssh.connect(
+            {
+              host: cfg.host,
+              port: cfg.port,
+              user: cfg.user,
+              hostKey: cfg.hostKey ?? null,
+              credential,
+            },
+            signal,
+          );
+        } catch (err) {
+          if (reasonOf(err) === 'host_key_mismatch') await this.#hostKeyMismatch(r, cfg);
+          throw err;
+        }
+        return this.#checkHostKey(r, cfg, conn);
       }
       case 'device':
       case 'wsl': {
@@ -613,9 +795,11 @@ export class EnvironmentService {
           });
         return conn.wsl((cfg as WslConfig).distro);
       }
+      case 'cloud':
+        if (!this.#cloud) throw noCloud();
+        return this.#cloud.connection(r.accountId, r.id, parseConfig(r));
       case 'local':
       case 'container':
-      case 'cloud':
       case 'vm':
         throw new NovaError('validation', `a ${r.kind} environment has no helper connection`);
     }
@@ -654,9 +838,11 @@ export class EnvironmentService {
     const r = this.#row(accountId, id);
     switch (r.kind) {
       case 'local':
-      case 'cloud':
       case 'vm':
         return null;
+      // On the runner; without one, refused (never the Hub's own sandbox).
+      case 'cloud':
+        return this.#cloud ? this.#cloud.sandbox(accountId, id, parseConfig(r)) : NO_CLOUD;
       case 'container':
         return this.#container((parseConfig(r) as ContainerConfig).image);
       case 'ssh':
@@ -686,6 +872,11 @@ export class EnvironmentService {
       throw new NovaError('policy_denied', 'the whole filesystem cannot be a session folder', {
         details: { reason: 'protected_folder' },
       });
+    // A cloud environment's folders are under /workspace, never a path the Hub also has.
+    if (this.#row(accountId, id).kind === 'cloud' && !isCloudFolder(p))
+      throw new NovaError('validation', 'a cloud session works in a folder under /workspace', {
+        details: { reason: 'outside_workspace' },
+      });
     const conn = await this.connection(accountId, id);
     const st = await conn.stat(p);
     if (!st)
@@ -701,7 +892,9 @@ export class EnvironmentService {
   async processes(accountId: string, id: string): Promise<EnvironmentProcessView[]> {
     const r = this.#row(accountId, id);
     const conn = await this.connection(accountId, id);
-    return (await conn.processes()).map((p) => ({
+    // Nova's own bookkeeping runs (change capture, handoffs) are not the session's commands.
+    const own = (await conn.processes()).filter((p) => p.tag !== TRANSPORT_TAG);
+    return own.map((p) => ({
       id: p.id,
       environmentId: r.id,
       sessionId: p.tag ? (p.tag.split(':')[0] ?? null) : null,
@@ -760,6 +953,9 @@ export class EnvironmentService {
       case 'device':
         return `the device environment "${r.label}"; commands run on that device through novad under its grants${state}`;
       case 'cloud':
+        return this.#cloud
+          ? `${this.#cloud.describe(r.label, parseConfig(r))}${state}`
+          : `the cloud environment "${r.label}" (the cloud runner is not available on this Hub)`;
       case 'vm':
         return `the ${r.kind} environment "${r.label}"${state}`;
     }
@@ -843,6 +1039,8 @@ export class EnvironmentService {
 
   #view(r: EnvRow): SavedEnvironmentView {
     const sandbox = r.kind === 'local' ? (this.#o.sandbox?.() ?? null) : null;
+    // What the mode checks count (FR-195): a cloud runner is another machine, so it is not
+    // isolated here and Bypass is never offered there (docs/10 §12, ADR-095 #30).
     const isolated =
       r.kind === 'local'
         ? r.status === 'ok' && isolatedSubstrate(sandbox?.substrate)
@@ -892,23 +1090,104 @@ export class EnvironmentService {
         const c = cfg as DeviceConfig;
         return { kind: 'device', deviceId: c.deviceId, root: c.root ?? null };
       }
-      case 'local':
       case 'cloud':
+        if (this.#cloud) return this.#cloud.connectionView(cfg);
+        return { kind: 'local' };
+      case 'local':
       case 'vm':
         return { kind: 'local' };
     }
   }
 
-  async #audit(accountId: string, action: string, id: string, detail: Record<string, unknown>) {
+  async #audit(
+    accountId: string,
+    action: string,
+    id: string,
+    detail: Record<string, unknown>,
+    result = 'ok',
+    actor = 'user',
+  ) {
     await this.#o.audit.append({
       accountId,
-      actor: 'user',
+      actor,
       kind: 'code',
       action,
       resource: id,
-      result: 'ok',
+      result,
       detail: { environmentId: id, ...detail },
     });
+  }
+
+  // ---- SSH host keys (M7: pinned on first use, checked after; docs/10 §2) ---------------------
+
+  async #checkHostKey(
+    r: EnvRow,
+    cfg: SshConfig,
+    conn: EnvHelperConnection & { hostKey?: string | null },
+  ): Promise<EnvHelperConnection> {
+    const seen = conn.hostKey ? normalizeHostKey(conn.hostKey) : null;
+    const pinned = cfg.hostKey ? normalizeHostKey(cfg.hostKey) : null;
+    if (pinned && seen && seen !== pinned) {
+      await conn.close().catch(() => undefined);
+      await this.#hostKeyMismatch(r, cfg);
+      throw new NovaError(
+        'policy_denied',
+        `the host key of ${cfg.host} does not match the pinned key; nothing was sent`,
+        { details: { reason: 'host_key_mismatch' } },
+      );
+    }
+    if (!pinned && seen) {
+      const next = JSON.stringify({ ...cfg, hostKey: seen });
+      let pinnedNow = false;
+      await this.#o.db.transaction(() => {
+        // Compare and set: a key pinned meanwhile is kept, never replaced.
+        const res = this.#o.db.raw
+          .prepare(
+            'UPDATE environment SET config_json = ?, updated_at = ? WHERE id = ? AND config_json IS ?',
+          )
+          .run(next, this.#iso(), r.id, r.configJson);
+        pinnedNow = Number(res.changes) > 0;
+      });
+      if (!pinnedNow) {
+        // Another first connection pinned meanwhile: this one must have seen the same key.
+        const now = parseConfig(this.#row(r.accountId, r.id)) as SshConfig;
+        if (now.hostKey && normalizeHostKey(now.hostKey) !== seen) {
+          await conn.close().catch(() => undefined);
+          await this.#hostKeyMismatch(r, cfg);
+          throw new NovaError(
+            'policy_denied',
+            `the host key of ${cfg.host} does not match the pinned key; nothing was sent`,
+            { details: { reason: 'host_key_mismatch' } },
+          );
+        }
+      }
+      if (pinnedNow) {
+        await this.#audit(
+          r.accountId,
+          'environment.hostkey.pinned',
+          r.id,
+          { host: cfg.host, port: cfg.port, fingerprint: hostKeyFingerprint(seen) },
+          'ok',
+          'system',
+        );
+        await this.#emit(r.accountId, 'environment.updated', {
+          environmentId: r.id,
+          change: 'hostkey_pinned',
+        });
+      }
+    }
+    return conn;
+  }
+
+  async #hostKeyMismatch(r: EnvRow, cfg: SshConfig): Promise<void> {
+    await this.#audit(
+      r.accountId,
+      'environment.hostkey.mismatch',
+      r.id,
+      { host: cfg.host, port: cfg.port },
+      'denied',
+      'system',
+    );
   }
 
   async #emit(accountId: string, name: string, payload: Record<string, unknown>) {
@@ -1027,6 +1306,18 @@ export class EnvHelperSandbox implements SandboxClient {
 }
 
 // ---- helpers -------------------------------------------------------------------------------------
+
+function reasonOf(err: unknown): unknown {
+  return err instanceof NovaError
+    ? (err.details as { reason?: unknown } | undefined)?.reason
+    : undefined;
+}
+
+/** OpenSSH's `SHA256:` fingerprint of a `<type> <base64>` host key. */
+export function hostKeyFingerprint(key: string): string {
+  const blob = Buffer.from(key.split(' ')[1] ?? '', 'base64');
+  return `SHA256:${createHash('sha256').update(blob).digest('base64').replace(/=+$/, '')}`;
+}
 
 function parseConfig(r: EnvRow): Record<string, unknown> {
   if (!r.configJson) return {};

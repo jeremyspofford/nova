@@ -72,6 +72,11 @@ export interface RelayConfigView {
   effectiveUrl: string;
   status: RelayStatusView;
   clients: { active: number; pending: number };
+  /**
+   * M7: whether a registration token for a private Relay is in the vault (its value never
+   * leaves it; `PUT /api/v1/relay/registration-token`). The Hub always fills it.
+   */
+  registrationToken?: boolean;
 }
 
 export const RELAY_CLIENT_STATUSES = ['pending', 'active', 'denied', 'expired', 'revoked'] as const;

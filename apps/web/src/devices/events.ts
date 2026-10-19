@@ -37,6 +37,8 @@ export const DEVICE_EVENTS = [
   'device.add.requested',
   'device.add.decided',
   'device.scopes.changed',
+  // M7: what the Hub saw of a device's certificate over HTTPS (FR-126).
+  'device.tls.changed',
 ] as const;
 
 /** Everything the Devices surface listens for on its one stream. */

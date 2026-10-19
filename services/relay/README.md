@@ -6,6 +6,11 @@ no direct path exists. It sees routing ids, frame kinds, sequence numbers and si
 content, and stores nothing beyond routing registrations and a bounded queue of ciphertext
 awaiting delivery.
 
+Apache-2.0 (ADR-023, `LICENSE`): it imports no AGPL package. Its only Nova dependency is the
+Apache-2.0 protocol library `@nova/relay`; it logs JSON lines on stderr with its own small logger
+(`src/log.ts`), which never writes values under secret-looking keys (route and registration
+tokens, authorization, secrets, passwords, cookies, credentials).
+
 ## Run it
 
 Any machine both sides can reach (a small VPS, a home server with a forwarded port, a container
@@ -25,8 +30,17 @@ node services/relay/src/main.ts --host 0.0.0.0 --port 7430 --data-dir /var/lib/n
 
 `NOVA_RELAY_REGISTRATION_TOKEN` makes Hub registration need that bearer token (a private Relay);
 without it any Hub may register (rate-limited per address). It is read from the environment only,
-never from the command line. Nova's Hub does not send a registration token yet (there is no setting for
-it), so a Hub can register only with a Relay that runs without one.
+never from the command line. Since M7 the Hub sends it: the owner stores it with
+`PUT /api/v1/relay/registration-token` (Network → Relay), it is kept in the Hub's vault, and the
+Hub's connector presents it only when it registers.
+
+**Push (M7, FR-111).** Without configuration the Relay keeps a recording mock sender. Real senders
+are switched on by the operator's environment only: APNs with `NOVA_RELAY_APNS_KEY_FILE` (the
+token-signing key, EC), `NOVA_RELAY_APNS_KEY_ID`, `NOVA_RELAY_APNS_TEAM_ID`,
+`NOVA_RELAY_APNS_TOPICS` (comma-separated bundle ids) and `NOVA_RELAY_APNS_SANDBOX=1` for the
+sandbox gateway; FCM with `NOVA_RELAY_FCM_SERVICE_ACCOUNT_FILE` (the service account JSON). These
+are the app publisher's credentials, which is why native push goes through the Relay and never
+from a Hub.
 
 Put TLS in front of it (a reverse proxy terminating HTTPS and passing WebSocket upgrades on
 `/v1/relay/connect`). Envelopes are end-to-end sealed either way; TLS keeps route tokens and
@@ -44,9 +58,10 @@ metadata off the wire. Then, on the Hub: Network → Relay, the URL
 | `POST` | `/v1/relay/pairings/:id/confirm` | Hub route token: the route becomes active |
 | `GET` | `/v1/relay/routes` | Hub route token: its client routes (no names) |
 | `DELETE` | `/v1/relay/routes/:routeId` | Hub route token: open connections close with `revoked`; reconnects are refused |
-| `POST` | `/v1/relay/push/register` | client route token: `{platform: apns\|fcm, token, topic?}` |
+| `POST` | `/v1/relay/push/register` | client route token: `{platform: apns\|fcm, token, topic?}`; the token's shape is checked (an APNs device token or an FCM registration token), and `topic` (a bundle id) only for APNs |
+| `POST` | `/v1/relay/push/notify` | Hub route token: `{routes (1–50), notification: {id, category, title (≤ 80), link: nova://run\|code\|approval\|chat/<id> \| null}}`, nothing else; pushes to the Hub's own active routes with a registration, at most 30 per route a minute; answers `{ok, sent, skipped, failed}` |
 | `GET` (WebSocket) | `/v1/relay/connect` | route token as `Authorization: Bearer` or the `bearer.<token>` subprotocol (with `nova-relay.v1`) |
-| `POST` | `/v1/relay/messages`, `GET /v1/relay/outbox` | 501 `not_implemented`: channel relay is M7 |
+| `POST` | `/v1/relay/messages`, `GET /v1/relay/outbox` | 501 `not_implemented`: the channel relay is not built (it was planned for M7 and is still missing) |
 
 ## Behaviour
 
@@ -61,7 +76,11 @@ metadata off the wire. Then, on the Hub: Network → Relay, the URL
 - The Relay answers each `ping` with a `pong` itself; pings are never forwarded.
 - Frames for an offline route wait in a delivery queue (oldest dropped first everywhere; senders
   retransmit). An offline client with a push registration gets a content-free wake-up (at most one
-  per 30 s). Real APNs/FCM senders arrive in M7; until then the `PushSender` is a recording mock.
+  per 30 s), through the real APNs or FCM sender when one is configured (above), else the recording
+  mock. A token the push service reports gone is dropped; the client registers a new one.
+- A claimed route the Hub has not confirmed gets only the Hub's data frames on Hub-opened streams
+  (its sealed `decided` notice when the request was denied or expired) and sends nothing until it is
+  confirmed.
 - Unconfirmed pairing claims are re-sent to the Hub when it connects; a claimed route that is not
   confirmed within 15 minutes is removed.
 

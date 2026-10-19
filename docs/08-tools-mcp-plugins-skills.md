@@ -161,10 +161,31 @@ skills (§4), not tools. They generate and read those formats with bundled libra
   columns per sheet, 200,000 characters) and shown in chat and on a run's result card.
 - **Image generation (FR-030).** `image.generate {prompt, size?}` is listed only while a
   configured model can make images: the first image model whose provider adapter has an images
-  call, and only local ones while `routing.allowCloud` is off. No adapter has an images call yet
-  (`Provider.generateImage` is the planned seam), so the tool is hidden everywhere. A generated
-  image is saved as an image artifact. Editing an image, a setting to choose the image model and
-  the composer's **Generate image** entry point are not in M5.
+  call, and only local ones while `routing.allowCloud` is off. No adapter had an images call in M5
+  (`Provider.generateImage` was the planned seam), so the tool was hidden everywhere; M7 adds one
+  (below). A generated image is saved as an image artifact. Editing an image, a setting to choose
+  the image model and the composer's **Generate image** entry point are not in M5.
+
+*As shipped in M7 (ADR-095).*
+
+- **Image generation (FR-030).** `OpenAICompatibleProvider.generateImage` calls the provider's
+  `/images/generations` and asks for one image as base64 (`b64_json`; `gpt-image-*` models
+  answer base64 without being asked). Sizes are `<width>x<height>`, each 64 to 4,096; the call
+  times out after 180 s and an answer over 64 MiB is refused. A provider that answers with a URL
+  instead of image data is refused ("returned a link instead of the image"): Nova does not fetch
+  from a second host. The `openai` and generic `openai_compatible` adapters have the call;
+  OpenRouter, Ollama and llama.cpp do not. Image models are recognised by name (`gpt-image*`,
+  `dall-e*`, and `stable-diffusion`, `sdxl`, `sd3` or `flux`, with or without a `vendor/`
+  prefix), so `image.generate` now appears whenever such a model is configured (still only local
+  ones while `routing.allowCloud` is off). The tool takes `1024x1024`, `1024x1536`, `1536x1024`,
+  `512x512` or `256x256`.
+- **Generate image in the composer.** A chat's composer shows an image button while the Hub
+  lists `image.generate` and the chat has a thread (availability is cached for 60 s). It offers
+  Square, Landscape and Portrait (1024 × 1024, 1536 × 1024, 1024 × 1536) and sends the request as
+  the user's own action (`POST /tools/image.generate/invoke` with `initiator: 'user'`, §6), so it
+  passes the gate like a direct call and an approval or provider error is shown. The result
+  appears from the Hub's artifact route. Editing an image and choosing the image model are still
+  not built.
 
 ### 1.2 Tool result contract
 
@@ -307,6 +328,124 @@ Large MCP and plugin catalogs crowd the context of small local models. Nova defe
   engine (§6).
 - Searches and loads appear in the Activity trace.
 
+### 1.5 Scripted tool calls (FR-202)
+
+`script.run` lets the model write a short JavaScript program that calls other tools as
+functions. The program runs in an isolated engine with no network, filesystem, timers or modules.
+Each tool it calls is a nested call that the policy engine evaluates and the audit records as its
+own tool call. The feature is off by default.
+
+*As shipped in M7 (ADR-095; `packages/core/src/scripts`, `apps/hub/src/flagged.ts`).* The
+security setting `scripts.enabled` (default off) lists `script.run`; while it is off the tool is
+not listed and the script routes answer 404.
+
+- **Engine.** Each run gets its own QuickJS engine (a fresh WebAssembly module) in its own worker
+  thread, with heap and stack limits, an empty environment and a watchdog that can terminate it.
+  The script is the body of an async function. `await tools.call("fs.read", {path: "a.txt"})`
+  (or the same call through the tool's name as a property of `tools`) returns the tool's text
+  result and throws an `Error` with a `code` when the call fails or is denied. `tools.names`
+  lists the tools, `input` holds the `input` argument, and the `console.log` output and the
+  returned value (as JSON) come back. Source is at most 50,000 characters.
+- **Limits** (`scripts.limits`, a security setting): 5 s of CPU (`cpuMs`, 100 to 30,000),
+  32 MiB of memory (`memoryMb`, 8 to 128), 20 nested calls (`maxCalls`, 1 to 100) and 20,000
+  characters of log (`logChars`); the result is cut at 20,000 characters. Only time spent
+  running script code counts, so waiting for a nested call's approval does not use the budget. A
+  worker that runs past the budget plus 3 s with no call outstanding is terminated. The tool's own
+  timeout is 600 s. Errors include `cpu_limit`, `memory_limit`, `stack_limit`, `syntax_error` and
+  `script_error`.
+- **Nested calls.** Each goes through the tool runtime exactly like a direct model call:
+  validation, hooks, the gate with its asks, denies, grants and reviewer, the handler's timeout,
+  its own `tool_call` row and its audit. The row points at the script's call through
+  `parent_call_id`. Calls run one at a time; an ask pauses the script until the user answers, and
+  a deny throws inside the script. Each nested call is also audited as `script.call`, naming the
+  script's call. Taint from a result carries to every later call.
+- **No user instruction.** The tool context does not expose the provenance of the script's call,
+  so nested calls carry no user instruction: a consequential nested call asks unless a rule or
+  grant allows it. A script cannot call the tools that drive the turn itself: `script.run`,
+  `tool.search`, `skill.load`, `context.fresh`, `context.remaining` and `run.complete`.
+- **Origin.** Nested calls record the script caller's origin, with `ui` recorded as `model` (a
+  script started from the UI is still code the model wrote). The `script` origin of
+  `ToolContext` (§1) is not recorded yet, because `tool_call` allows only four origins.
+- **Not served to MCP clients.** `script.run` is itself read-only but calls write tools, so
+  Nova's MCP server never serves it (§2.2).
+- **Records and UI.** `script_run` keeps each run's status, error code, call count, CPU time and
+  a SHA-256 of the code; the code itself is not kept. `GET /api/v1/scripts/runs?threadId=` and
+  `GET /api/v1/scripts/runs/:id` list runs with each nested call, its status and the gate's
+  decision. Settings → Experimental has the switch (it asks before turning on) and the limits; a
+  Code session shows a **Scripts** tab while the flag is on. Runs are listed per thread only.
+
+### 1.6 External agent adapters (FR-203)
+
+A Code session can delegate a task to an external coding agent over an open agent protocol. Nova
+accepts an adapter only when it routes every permission request to Nova's policy engine, and the
+agent runs inside a Nova sandbox. Its file changes appear as Nova diffs. The feature is off by
+default and managed policy can keep it off.
+
+*As shipped in M7 (ADR-095; `packages/core/src/acp`, `apps/hub/src/flagged.ts`).* The security
+setting `externalAgents.enabled` (default off) turns it on. While it is off, the adapter and
+delegation routes answer 404, except reading and cancelling a delegation.
+
+- **Protocol.** Nova is a JSON-RPC client of the Agent Client Protocol, version 1, over the
+  agent's stdin and stdout; stderr is discarded. It implements the subset it needs: `initialize`
+  (advertising file reads, file writes and terminals), `session/new` (the session folder and no
+  MCP servers), `session/prompt`, `session/cancel` and the `session/update` notification, and it
+  answers the agent's `session/request_permission`, `fs/read_text_file`, `fs/write_text_file`,
+  `terminal/create`, `terminal/output`, `terminal/wait_for_exit`, `terminal/kill` and
+  `terminal/release`. An agent that answers with another protocol version is refused.
+- **Adapters.** `POST /api/v1/agent-adapters` takes `name`, `command` (a program name or path,
+  no spaces or shell syntax), `args`, `env`, `network` (declared hosts, at most 20) and
+  `permissionRouting`. Only `client` (every request routed to Nova) is accepted; `agent` is
+  refused with `permission_routing`. Env values go to the vault as
+  `secret://agent-adapter/<id>/env/<NAME>`; a reference to any other secret is refused with
+  `foreign_secret`, also when an older row already holds one. `GET`, `PATCH` and `DELETE
+  /api/v1/agent-adapters/:id` manage an adapter. `POST /api/v1/agent-adapters/:id/check
+  {sessionId}` starts the agent in that session's sandbox, runs only the handshake and records
+  the result as `lastCheck`; the agent's name and version are redacted, stripped of the adapter's
+  own secret values and clipped to 100 and 50 characters.
+- **Delegations.** `POST /api/v1/code/sessions/:id/delegations {adapterId, prompt}` answers 202
+  and starts one; `GET` on the same path lists them. Only the user starts a delegation: there is
+  no model tool for it. One delegation runs per session at a time, for at most 2 h.
+  `GET /api/v1/delegations/:id` and `POST /api/v1/delegations/:id/cancel` read and stop one. The
+  agent's reply is kept redacted, at most 20,000 characters.
+- **Operations through the gate.** Every file read, file write and command the agent asks for
+  runs as Nova's `fs.read`, `fs.write`, `exec.run` or `exec.poll` in that session, through the
+  tool runtime and the gate. The session's permission mode applies, and writes become the
+  session's diffs. The calls carry the delegation as the user's instruction plus the taint
+  `external_agent`, so rules that act on a request alone never apply to them. Paths must be
+  absolute, and the tools keep them inside the session's roots.
+- **Permission requests.** For kinds Nova then performs (read, search, edit, move, delete,
+  execute), the engine's verdict on that operation is previewed: a deny rejects at once, and
+  anything else is allowed because the operation itself still passes the gate, which asks when
+  its rule says so. The other kinds (`fetch`, `think`, other) are decided by the gate itself as
+  `acp.fetch`, `acp.think` or `acp.action`, with an approval when it asks. An allow always picks
+  the agent's `allow_once` option and never `allow_always`: Nova's own grants decide what is
+  remembered. If the engine fails, the request is rejected.
+- **Sandbox.** The agent runs in the sandbox the session's commands are routed to, never on the
+  Hub itself, with the session folder mounted read-only. A session whose environment runs
+  commands without a sandbox (SSH, WSL, a device) is refused with `no_substrate`, and
+  availability is checked on that same sandbox. Network is off unless the adapter declares hosts.
+  Then the agent's egress policy is built from those hosts only: the global mode and deny list
+  still apply, but session grants, the global allow list, injected credentials and hooks do not.
+  Only the Hub's egress proxy can enforce that, so declaring hosts on a sandbox whose network does
+  not pass it (a cloud runner) is refused with `no_egress_proxy`.
+- **Terminals.** At most 8 per delegation, and at most 1 MiB of output kept per terminal (the
+  newest), whatever the agent asks for. Every command the agent started is killed when the
+  delegation ends, directly in the sandbox, without waiting on an approval. Environment variables
+  the agent asks for on a terminal are ignored.
+- **Events and audit.** `delegation.started`, `delegation.updated` and `delegation.finished`,
+  correlated by thread. `delegation.updated` is not persisted and is coalesced to at most one
+  event per 250 ms: `message` and `thought` text joined (up to 4,000 characters each), at most 10
+  `toolCalls` with the rest counted in `droppedToolCalls`, and `plan` when the agent updated its
+  plan. Audit actions (kind `code`): `agent_adapter.create`, `.update`, `.delete` and `.check`;
+  `delegation.start`, `.permission`, `.cancel` and `.finish`.
+- **Turning it off.** Turning `externalAgents.enabled` off stops running delegations, which end
+  `cancelled` with the reason recorded. The host also checks the flag before each request the
+  agent makes, so a change that emits no event (managed policy) stops the agent at its next
+  request. A stopped agent gets 10 s to end its turn.
+- **UI.** Settings → Experimental has the switch (it asks before turning on) and the adapters:
+  add with write-only secrets, check in a chosen session, turn off, edit and remove. A Code
+  session shows an **Agents** tab while the flag is on: delegate, live activity and stop.
+
 ## 2. MCP integration
 
 ### 2.1 MCP client (FR-042)
@@ -366,13 +505,33 @@ from `auth`.
 *As shipped in M4 (ADR-091).* The client metadata document is served at
 `/.well-known/nova-client.json` and is used when the authorization server accepts one and the Hub
 has an HTTPS URL; otherwise Nova registers dynamically. Nova requests the scopes the resource
-advertises (the API does not take `oauth` settings yet). The browser returns to the Hub route
-`/api/v1/mcp/oauth/callback`, which needs no session because the single-use `state` (10 minutes,
-bound to the account) authenticates it, then redirects to `/settings/tools?oauth=ok|error`.
+advertises (in M4 the API took no `oauth` settings; M7 adds them, below). The browser returns
+to the Hub route `/api/v1/mcp/oauth/callback`, which needs no session because the single-use
+`state` (10 minutes, bound to the account) authenticates it, then redirects to
+`/settings/tools?oauth=ok|error`.
 Tokens are vault entries `secret://mcp/<id>/oauth/…`, refreshed within 60 s of expiry or after a
 401. A server that refuses an unauthenticated connection reports that it needs authorization;
 its row in Settings → Tools & MCP shows **Needs sign-in** with **Sign in**, and later
 **Reconnect** and **Sign out**.
+
+*As shipped in M7 (ADR-095; `apps/hub/src/mcp.ts`, `packages/mcp/src/device-transport.ts`).* The
+server API takes the three remaining fields of the table above.
+
+- **`deviceId`** (stdio only). The server runs on that device and the Hub reaches it through
+  `novad`'s MCP pass-through (FR-210), as the account's user, under the `mcp` grant the device's
+  owner gave for that server. `command` is the server's name as the device lists it: the Hub never
+  spawns a device server and never sends a device a command line; the device's own configuration
+  starts it. A device still waiting for approval cannot be chosen, and every call refuses a device
+  that is not active. A server the device lists with an error, or does not list, fails the
+  connection. Device servers expose tools only; their resources and prompts are not listed.
+- **`auth`** (sse and http only, not together with `oauth`). The value goes to the vault as
+  `secret://mcp/<id>/auth/header` and is sent as the `Authorization` header; a value with no
+  scheme is sent as `Bearer <value>`. An empty string keeps the saved value, `null` removes it, and
+  a `secret://` reference is refused. The server's view shows only `hasAuth`.
+- **`oauth`** (sse and http only). `clientMetadataUrl` (https), `dynamicRegistration` and
+  `scopes` now feed **Sign in**: dynamic registration skips the metadata document, another
+  document replaces the Hub's own, and listed scopes replace the advertised ones. The view returns
+  them as `oauthSettings`.
 
 **Secrets in configuration.** Every secret value in `env`, `headers` or `auth` is a
 `secret://` reference; OAuth tokens are never in the configuration at all. A secret entered
@@ -422,7 +581,33 @@ served as `mcp_x.y`). A read-only client gets only tools whose action is a read;
 is never served. Temporary chats are never shared, a client limited to some projects sees no
 chat outside them, and `read_write` reads only until a write tool exists. Calls pass the gate
 with origin `mcp_client` and no user instruction, and are audited as `client.call`. Resources,
-prompts and the `nova mcp stdio` launcher come later.
+prompts and the `nova mcp stdio` launcher arrive in M7 (below).
+
+*As shipped in M7 (ADR-095; `apps/hub/src/mcp-server.ts`, `packages/mcp/src/launcher-main.ts`).*
+
+- **Resources.** `resources/list` lists the client's chats (the 50 most recent in its scope;
+  temporary chats never) as `nova://threads/<id>` when its chat access is not `none`. A transcript
+  is Markdown, redacted and cut at 200,000 characters. `resources/templates/list` offers
+  `nova://projects/{projectId}/files/{+path}` to a client with projects in scope: a text file in
+  one of the project's folders, read-only, at most 1 MiB, never in the data folder. Files are read
+  only from projects of the client's own account; the path is resolved once and opened with
+  `O_NOFOLLOW`.
+- **Prompts.** The account's active skills, offered only to clients whose tools include
+  `skill.load` (or all tools). `prompts/get` returns the skill's body, with the optional `input`
+  argument appended.
+- **Gate.** Every read and prompt passes the gate like a tool call (as `threads.read`, `fs.read`
+  or `skill.load`) and is audited as `client.call`. The list calls pass it too (as
+  `threads.list`, `projects.list` and `skills.list`); a denied list comes back empty and is
+  audited. Anything out of scope or denied reads exactly like something that does not exist.
+- **Never served:** `tool.search` and `script.run` (§1.5).
+- **Stdio launcher.** `nova mcp stdio [--url URL] [--token-file FILE]`
+  (`packages/mcp/src/launcher-main.ts`) relays newline-delimited JSON-RPC between stdin and
+  stdout and the Hub's `/mcp`, adding the client's token as a bearer token. The endpoint comes
+  from `--url` or `NOVA_MCP_URL` and must be https (http only to this machine); the token comes
+  from `NOVA_MCP_TOKEN` or a file (`--token-file` or `NOVA_MCP_TOKEN_FILE`). The launcher never
+  prints or logs the token and holds no scope of its own: the Hub authenticates, scopes, gates and
+  audits every call as it does for an HTTP client. No `nova` command is installed yet, so it runs
+  as `node packages/mcp/src/launcher-main.ts mcp stdio`.
 
 ### 2.3 Configuration
 
@@ -1031,7 +1216,8 @@ Two later stages can adjust that result, and only in the ways stated:
    consequential actions last and can **only tighten** the decision.
 
 The same evaluation applies whatever the call's origin: the model, an MCP Apps UI, a hook's
-`mcp_tool` handler, a nested `script.run` call, or an external MCP client. The origin is
+`mcp_tool` handler, a nested `script.run` call (§1.5), an external agent's operation (§1.6), or
+an external MCP client. The origin is
 recorded in the audit log. A skill's `allowed_tools` narrows the tool set further; loading a
 deferred tool grants nothing. In M4 `allowed_tools` only keeps those tools loaded; narrowing
 comes later (ADR-091).

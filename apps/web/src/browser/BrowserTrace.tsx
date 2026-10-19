@@ -1,9 +1,11 @@
-// The agent browser's recorded actions on a computer (FR-098, FR-095, FR-194; docs/11 §4, §9),
-// newest first: what was done, on which site, the result, why a write was flagged or refused, and
-// the before/after screenshots. Refusals because a page came from an external AI agent are
-// called out above the list, and finished downloads are listed with where they went. Targets,
-// URLs and errors are page-derived text: shown as text, never as links or HTML.
-import { useEffect, useId, useState } from 'react';
+// The agent browser's recorded actions on a computer (FR-098, FR-095, FR-194; docs/11 §4, §9, §10),
+// newest first as the Hub returns them, a page at a time (`nextCursor` continues the list): what
+// was done, on which site, the result, why a write was flagged or refused, and the before/after
+// screenshots. Crash and restart rows say what happened to the browser itself. Refusals because a
+// page came from an external AI agent are called out above the list, and finished downloads are
+// listed with where they went. Targets, URLs and errors are page-derived text: shown as text,
+// never as links or HTML.
+import { useEffect, useId, useRef, useState } from 'react';
 import type { BrowserActionView } from '@nova/shared';
 import { Button, Icon, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -12,32 +14,47 @@ import { useDebounced } from '../work/events.ts';
 import { useBrowserApi } from './api.ts';
 import { eventComputerId, useHubEvents } from './events.ts';
 import {
-  RESULT_CHIP,
+  actionChip,
   browserActionText,
   externalAgentName,
   isDownload,
   isExternalAgentNotice,
+  isLifecycle,
 } from './format.ts';
 
-/** The Hub returns at most this many, oldest first. */
+/** The Hub answers at most this many per page. */
 export const BROWSER_TRACE_LIMIT = 500;
+/** Actions per page: the first load and each "Show older". */
 export const BROWSER_TRACE_PAGE = 30;
+
+/** `older` appended after `list`, without the ones already there. */
+function appendOlder(list: BrowserActionView[], older: BrowserActionView[]): BrowserActionView[] {
+  const seen = new Set(list.map((a) => a.id));
+  return [...list, ...older.filter((a) => !seen.has(a.id))];
+}
 
 export function BrowserTrace({ computerId }: { computerId: string }) {
   const api = useBrowserApi();
   const headingId = useId();
   const [items, setItems] = useState<BrowserActionView[] | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [olderError, setOlderError] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const [shown, setShown] = useState(BROWSER_TRACE_PAGE);
   const [open, setOpen] = useState<Set<string>>(new Set());
+  // A refresh reloads as many as are shown, so older pages stay open.
+  const loaded = useRef(BROWSER_TRACE_PAGE);
 
   useEffect(() => {
     let alive = true;
-    api.listBrowserActions({ computerId, limit: BROWSER_TRACE_LIMIT }).then(
-      ({ items: list }) => {
+    const limit = Math.min(BROWSER_TRACE_LIMIT, Math.max(BROWSER_TRACE_PAGE, loaded.current));
+    api.listBrowserActions({ computerId, limit }).then(
+      (page) => {
         if (!alive) return;
-        setItems([...list].reverse());
+        setItems(page.items);
+        setCursor(page.nextCursor);
+        loaded.current = Math.max(BROWSER_TRACE_PAGE, page.items.length);
         setError(null);
       },
       (err: unknown) => alive && setError(errorMessage(err, 'Could not load the browser actions.')),
@@ -46,6 +63,29 @@ export function BrowserTrace({ computerId }: { computerId: string }) {
       alive = false;
     };
   }, [api, computerId, attempt]);
+
+  const showOlder = async () => {
+    if (!cursor || loadingOlder) return;
+    setLoadingOlder(true);
+    setOlderError(null);
+    try {
+      const page = await api.listBrowserActions({
+        computerId,
+        limit: BROWSER_TRACE_PAGE,
+        cursor,
+      });
+      setItems((list) => {
+        const next = appendOlder(list ?? [], page.items);
+        loaded.current = next.length;
+        return next;
+      });
+      setCursor(page.nextCursor);
+    } catch (err) {
+      setOlderError(errorMessage(err, 'Could not load older actions.'));
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   const reload = useDebounced(() => setAttempt((n) => n + 1), 300);
   useHubEvents(['browser.action'], (env) => {
@@ -121,12 +161,18 @@ export function BrowserTrace({ computerId }: { computerId: string }) {
       ) : null}
       {items?.length ? (
         <ol className="activity-list brw-trace-list" aria-label="Browser actions">
-          {items.slice(0, shown).map((a) => {
-            const chip = RESULT_CHIP[a.result];
+          {items.map((a) => {
+            const chip = actionChip(a);
             const label = browserActionText(a);
             const expanded = open.has(a.id);
+            const life = isLifecycle(a);
             return (
-              <li key={a.id} className="activity-item" data-result={a.result}>
+              <li
+                key={a.id}
+                className="activity-item"
+                data-result={a.result}
+                data-kind={life ? 'lifecycle' : undefined}
+              >
                 <button
                   type="button"
                   className="scr-trace-step"
@@ -134,8 +180,11 @@ export function BrowserTrace({ computerId }: { computerId: string }) {
                   onClick={() => toggle(a.id)}
                 >
                   <span className="activity-title">
+                    {life ? <Icon name={a.tool === 'browser.crash' ? 'stop' : 'refresh'} /> : null}
                     {label}
-                    {a.target ? <span className="muted"> {a.target}</span> : null}
+                    {a.target ? (
+                      <span className="muted"> {life ? `(${a.target})` : a.target}</span>
+                    ) : null}
                     {a.host ? <span className="muted"> on {a.host}</span> : null}
                   </span>
                   {a.classification?.flagged ? (
@@ -222,9 +271,17 @@ export function BrowserTrace({ computerId }: { computerId: string }) {
           })}
         </ol>
       ) : null}
-      {items && items.length > shown ? (
+      {olderError ? (
+        <div className="ws-error" role="alert">
+          <p>{olderError}</p>
+          <Button onClick={() => void showOlder()}>Retry</Button>
+        </div>
+      ) : null}
+      {items && cursor ? (
         <div className="row">
-          <Button onClick={() => setShown((n) => n + BROWSER_TRACE_PAGE)}>Show older</Button>
+          <Button onClick={() => void showOlder()} disabled={loadingOlder}>
+            {loadingOlder ? <Spinner /> : null} Show older
+          </Button>
         </div>
       ) : null}
     </section>

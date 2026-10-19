@@ -54,7 +54,8 @@ export function registerNodeRoutes(app: FastifyInstance, deps: NodeRouteDeps): v
   // is the path with a code and a confirmation.
   app.post('/api/v1/devices/compute/enroll', async (req, reply) => {
     const accountId = await accountOf(req);
-    void reply.status(201);
+    // A one-use credential: no cache and no idempotent replay may keep it.
+    void reply.header('cache-control', 'no-store').status(201);
     return nodes.createEnrollToken(accountId);
   });
 

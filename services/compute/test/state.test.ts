@@ -31,6 +31,7 @@ const STATE: NodeState = {
   maxQueue: 4,
   enrollment: null,
   revokedAt: null,
+  hubTrust: null,
 };
 
 describe('state file', () => {

@@ -8,6 +8,7 @@ import { schema, type NovaDatabase } from '@nova/storage';
 import { readAttachmentBlob, writeAttachmentBlob } from '../attachments.ts';
 import type { EventSink } from '../events.ts';
 import { removeUnreferencedBlobs } from '../purge.ts';
+import { oneLine } from '../team/text.ts';
 import { prepareAvatar, sniffImage, type AvatarMime } from './avatar.ts';
 
 const { account } = schema;
@@ -56,7 +57,8 @@ export class ProfileService {
     const set: Partial<AccountRow> = { updatedAt: this.#now().toISOString() };
     const fields: string[] = [];
     if (req.displayName !== undefined) {
-      set.displayName = req.displayName?.trim() || null;
+      // One line: a name never carries newlines into a label or a prompt (decision 5).
+      set.displayName = req.displayName ? oneLine(req.displayName) || null : null;
       fields.push('displayName');
     }
     if (req.username !== undefined) {

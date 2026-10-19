@@ -60,6 +60,11 @@ export interface McpOAuthOptions {
   /** Records saved earlier (loaded at startup). */
   records?: OAuthRecord[];
   fetchFn?: FetchLike;
+  /**
+   * The fetch one account's discovery, registration and token calls use (the Hub pins a
+   * non-owner's to checked public addresses); `fetchFn` when it gives none.
+   */
+  fetchFor?: (accountId: string) => FetchLike | undefined;
   now?: () => Date;
   /** How long an authorization may take before its state expires (default 10 min). */
   stateTtlMs?: number;
@@ -104,6 +109,10 @@ export class McpOAuthService {
     for (const r of opts.records ?? []) this.#records.set(r.serverId, r);
   }
 
+  #fetch(accountId: string): FetchLike | undefined {
+    return this.#o.fetchFor?.(accountId) ?? this.#o.fetchFn;
+  }
+
   record(serverId: string): OAuthRecord | null {
     return this.#records.get(serverId) ?? null;
   }
@@ -136,7 +145,7 @@ export class McpOAuthService {
     clientMetadataUrl: string | null;
     scopes?: string[];
   }): Promise<{ authorizeUrl: string }> {
-    const fetchFn = this.#o.fetchFn;
+    const fetchFn = this.#fetch(input.accountId);
     const discovery = await discoverOAuth(input.serverUrl, fetchFn);
     const scopes = input.scopes?.length ? input.scopes : discovery.scopesSupported;
     const prev = this.#records.get(input.serverId);
@@ -241,7 +250,7 @@ export class McpOAuthService {
         redirectUrl: p.redirectUrl,
         scopes: p.scopes,
         ...(input.iss ? { iss: input.iss } : {}),
-        ...(this.#o.fetchFn ? { fetchFn: this.#o.fetchFn } : {}),
+        ...(this.#fetch(p.accountId) ? { fetchFn: this.#fetch(p.accountId) } : {}),
         now: this.#now(),
       });
     } catch (err) {
@@ -294,7 +303,7 @@ export class McpOAuthService {
     ] as const) {
       if (!ref) continue;
       const token = await this.#o.vault.get(ref);
-      if (token) await revokeOAuth(d, client, token, hint, this.#o.fetchFn);
+      if (token) await revokeOAuth(d, client, token, hint, this.#fetch(rec.accountId));
       await this.#o.vault.delete(ref);
     }
     await this.#save({
@@ -356,7 +365,7 @@ export class McpOAuthService {
         refresh,
         {
           scopes: rec.scopes,
-          ...(this.#o.fetchFn ? { fetchFn: this.#o.fetchFn } : {}),
+          ...(this.#fetch(rec.accountId) ? { fetchFn: this.#fetch(rec.accountId) } : {}),
           now: this.#now(),
         },
       );

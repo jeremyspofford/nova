@@ -78,3 +78,52 @@ export {
   codeM6Tools,
   type CodeM6ToolDeps,
 } from './tools-m6.ts';
+// M7 (docs/10 §2, §9, §15; FR-212, FR-213): environment transports, Hub-side capture for sessions
+// on other machines, session handoff, three-way merges, best-of-N attempts, the SSH transport with
+// pinned host keys, and delegation from agents.
+export {
+  LocalTransport,
+  TRANSPORT_TAG,
+  TransportGit,
+  helperTransport,
+  localWorkspace,
+  nodeWorkFs,
+  transportWorkFs,
+  transportWorkspace,
+  type CodeWorkspace,
+  type EnvironmentTransport,
+  type TransportRunRequest,
+  type TransportRunResult,
+  type WorkFs,
+} from './transport.ts';
+export {
+  HandoffService,
+  MAX_HANDOFF_BUNDLE_BYTES,
+  MAX_HANDOFF_PATCH_BYTES,
+  type HandoffServiceOptions,
+  type SessionHandoffRequest,
+  type ThreadHandoffRequest,
+} from './handoff.ts';
+export { MergeService, type MergeConflictMode, type MergeServiceOptions } from './merge.ts';
+export {
+  AttemptService,
+  type ApplyAttemptRequest,
+  type AttemptServiceOptions,
+  type StartAttemptsRequest,
+} from './attempts.ts';
+export {
+  OpenSshTransport,
+  SSH_HELPER,
+  SSH_HELPER_SHA256,
+  SSH_HELPER_VERSION,
+  SshHelperConnection,
+  normalizeHostKey,
+  type OpenSshOptions,
+} from './ssh.ts';
+export { hostKeyFingerprint } from './environments.ts';
+export {
+  CodeDelegations,
+  type CodeAgentHost,
+  type CodeDelegateInput,
+  type CodeDelegationsOptions,
+} from './delegation.ts';

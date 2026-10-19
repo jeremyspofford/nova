@@ -190,6 +190,11 @@ interface Exchange {
 
 const NULL_BODY = new Set([101, 103, 204, 205, 304]);
 
+/** The owner's decision on this client's pairing, as the Hub reports it in a sealed notice. */
+export type RelayPairingDecision =
+  | { decision: 'approved'; requestId: string | null; deviceId: string | null }
+  | { decision: 'denied' | 'expired'; requestId: string | null };
+
 /** A paired client's connection to its Hub through the Relay. */
 export class RelayClient {
   readonly paired: PairedClient;
@@ -202,6 +207,8 @@ export class RelayClient {
   readonly #pairedWaiters: ((v: { requestId: string | null; deviceId: string | null }) => void)[] =
     [];
   #pairedInfo: { requestId: string | null; deviceId: string | null } | null = null;
+  readonly #decisionWaiters: ((d: RelayPairingDecision) => void)[] = [];
+  #decision: RelayPairingDecision | null = null;
   #revoked = false;
 
   constructor(opts: RelayClientOptions) {
@@ -268,6 +275,22 @@ export class RelayClient {
   waitForPaired(): Promise<{ requestId: string | null; deviceId: string | null }> {
     if (this.#pairedInfo) return Promise.resolve(this.#pairedInfo);
     return new Promise((resolve) => this.#pairedWaiters.push(resolve));
+  }
+
+  /**
+   * Resolves with the owner's decision on this pairing: `approved` (the `paired` notice), or
+   * `denied` or `expired` (the `decided` notice, M7), so a client can tell them apart before the
+   * Relay drops its route. The first decision stands.
+   */
+  waitForDecision(): Promise<RelayPairingDecision> {
+    if (this.#decision) return Promise.resolve(this.#decision);
+    return new Promise((resolve) => this.#decisionWaiters.push(resolve));
+  }
+
+  #decide(d: RelayPairingDecision): void {
+    if (this.#decision) return;
+    this.#decision = d;
+    for (const fn of this.#decisionWaiters.splice(0)) fn(d);
   }
 
   /** A Hub API request through the tunnel; `path` starts with `/api/v1/`. */
@@ -369,6 +392,9 @@ export class RelayClient {
       if (msg?.t === 'paired') {
         this.#pairedInfo = { requestId: msg.requestId, deviceId: msg.deviceId };
         for (const fn of this.#pairedWaiters.splice(0)) fn(this.#pairedInfo);
+        this.#decide({ decision: 'approved', ...this.#pairedInfo });
+      } else if (msg?.t === 'decided') {
+        this.#decide({ decision: msg.decision, requestId: msg.requestId });
       } else if (msg?.t === 'stale') {
         this.#ids.skipPast(msg.floor);
         this.#retryStale(msg.stream);

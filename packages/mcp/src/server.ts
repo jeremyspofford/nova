@@ -3,14 +3,23 @@
 // the Hub authenticates each request, names the client, and supplies that client's tools. A
 // session belongs to the client that opened it, and closing a client (revocation) ends all of its
 // sessions and cancels their calls at once.
+//
+// M7: resources (read-only data the Hub lists and reads for the client, FR-044) and prompts
+// (the Hub's skills, served on request) when the Hub supplies them; the capability is advertised
+// only then. What a client sees and every read stay the Hub's decision.
 import { randomUUID } from 'node:crypto';
 import {
   McpServer,
   ProtocolError,
   ProtocolErrorCode,
+  ResourceNotFoundError,
   WebStandardStreamableHTTPServerTransport,
   isInitializeRequest,
   type CallToolResult,
+  type GetPromptResult,
+  type Prompt,
+  type ReadResourceResult,
+  type Resource,
   type Tool,
 } from '@modelcontextprotocol/server';
 import { Logger } from '@nova/telemetry';
@@ -41,12 +50,66 @@ export interface ServedTool {
   call(args: Record<string, unknown>, signal: AbortSignal): Promise<ServedToolResult>;
 }
 
+/** A resource a client may read (FR-044). */
+export interface ServedResource {
+  uri: string;
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+/** A family of resources read by URI (`nova://projects/{projectId}/files/{path}`). */
+export interface ServedResourceTemplate {
+  uriTemplate: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface ServedResourceContents {
+  uri: string;
+  mimeType: string;
+  text: string;
+}
+
+export interface ServedResources {
+  list(client: McpClientRef, signal: AbortSignal): Promise<ServedResource[]>;
+  templates?(client: McpClientRef): Promise<ServedResourceTemplate[]>;
+  /** The contents, or null when the client may not read it or it does not exist (alike). */
+  read(
+    client: McpClientRef,
+    uri: string,
+    signal: AbortSignal,
+  ): Promise<ServedResourceContents | null>;
+}
+
+export interface ServedPrompt {
+  name: string;
+  title?: string;
+  description?: string;
+  arguments?: { name: string; description?: string; required?: boolean }[];
+}
+
+export interface ServedPrompts {
+  list(client: McpClientRef): Promise<ServedPrompt[]>;
+  /** The prompt's text with its arguments, or null when the client may not have it. */
+  get(
+    client: McpClientRef,
+    name: string,
+    args: Record<string, string>,
+    signal: AbortSignal,
+  ): Promise<{ description?: string; text: string } | null>;
+}
+
 export interface NovaMcpServerOptions {
   name: string;
   version: string;
   instructions?: string;
   /** The tools this client may use now (asked on every list and call). */
   tools: (client: McpClientRef) => Promise<ServedTool[]>;
+  resources?: ServedResources;
+  prompts?: ServedPrompts;
   /** Open sessions per client; the oldest closes when a new one would exceed it (default 16). */
   maxSessionsPerClient?: number;
   log?: Logger;
@@ -197,7 +260,11 @@ export class NovaMcpServer {
     const server = new McpServer(
       { name: this.#opts.name, version: this.#opts.version },
       {
-        capabilities: { tools: {} },
+        capabilities: {
+          tools: {},
+          ...(this.#opts.resources ? { resources: {} } : {}),
+          ...(this.#opts.prompts ? { prompts: {} } : {}),
+        },
         ...(this.#opts.instructions ? { instructions: this.#opts.instructions } : {}),
       },
     );
@@ -257,6 +324,56 @@ export class NovaMcpServer {
         session.inflight.delete(run);
       }
     });
+    const resources = this.#opts.resources;
+    if (resources) {
+      server.server.setRequestHandler('resources/list', async (_req, ctx) => ({
+        resources: (
+          await resources.list(client, AbortSignal.any([abort.signal, ctx.mcpReq.signal]))
+        ).map((r): Resource => ({ ...r })),
+      }));
+      server.server.setRequestHandler('resources/templates/list', async () => ({
+        resourceTemplates: ((await resources.templates?.(client)) ?? []).map((t) => ({ ...t })),
+      }));
+      server.server.setRequestHandler(
+        'resources/read',
+        async (request, ctx): Promise<ReadResourceResult> => {
+          const uri = request.params.uri;
+          if (session.closed)
+            throw new ProtocolError(ProtocolErrorCode.InvalidRequest, 'the session has ended');
+          const signal = AbortSignal.any([abort.signal, ctx.mcpReq.signal]);
+          const run = resources.read(client, uri, signal);
+          session.inflight.add(run);
+          try {
+            const c = await run;
+            if (!c) throw new ResourceNotFoundError(uri);
+            return { contents: [{ uri: c.uri, mimeType: c.mimeType, text: c.text }] };
+          } finally {
+            session.inflight.delete(run);
+          }
+        },
+      );
+    }
+    const prompts = this.#opts.prompts;
+    if (prompts) {
+      server.server.setRequestHandler('prompts/list', async () => ({
+        prompts: (await prompts.list(client)).map((p): Prompt => ({ ...p })),
+      }));
+      server.server.setRequestHandler(
+        'prompts/get',
+        async (request, ctx): Promise<GetPromptResult> => {
+          const { name, arguments: args } = request.params;
+          const signal = AbortSignal.any([abort.signal, ctx.mcpReq.signal]);
+          const p = await prompts.get(client, name, args ?? {}, signal);
+          if (!p)
+            throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown prompt: ${name}`);
+          const result: GetPromptResult = {
+            messages: [{ role: 'user', content: { type: 'text', text: p.text } }],
+          };
+          if (p.description) result.description = p.description;
+          return result;
+        },
+      );
+    }
     return session;
   }
 }

@@ -75,7 +75,9 @@ function draftOf(e: SavedEnvironmentView): Draft {
       return { ...d, kind: 'wsl', deviceId: c.deviceId, distro: c.distro };
     case 'device':
       return { ...d, kind: 'device', deviceId: c.deviceId, root: c.root ?? '' };
+    // A cloud environment is managed on its own page (CloudEnvironmentDialog), not here.
     case 'local':
+    case 'cloud':
       return d;
   }
 }

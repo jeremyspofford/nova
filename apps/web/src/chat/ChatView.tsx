@@ -43,6 +43,7 @@ import {
 import { ApiError, errorMessage } from '../api.ts';
 import { isEditable } from '../hooks.ts';
 import { chatPath, navigate } from '../router.ts';
+import { GenerateImageButton } from '../images/GenerateImage.tsx';
 import { useAnnounce, useServices, type Draft, type PendingAttachment } from '../services.tsx';
 import { useSetting, useSettings } from '../settings.tsx';
 import { modelLabel, useModels, useThreads } from '../stores.tsx';
@@ -72,6 +73,9 @@ import { ToolAppsProvider } from './tool-apps.tsx';
 import { threadStateOf, useThreadFeed } from './useThreadFeed.ts';
 import { PendingSignins } from '../browser/PendingSignins.tsx';
 import { ThreadQuestions } from '../channels/ShareAsks.tsx';
+import { useShareMenu } from '../team/ShareDialog.tsx';
+import { LocalFallback } from '../offline/LocalFallback.tsx';
+import { OpenInWindowButton } from '../shellbridge/OpenInWindow.tsx';
 
 const EMPTY_DRAFT: Draft = { text: '', attachments: [] };
 
@@ -130,7 +134,7 @@ export function ChatView({
 }: ChatViewProps) {
   const { api, registry, memory, bus } = useServices();
   const threads = useThreads();
-  const { models, presets } = useModels();
+  const { models, presets, loading: modelsLoading } = useModels();
   const settings = useSettings();
   const enterToSend = useSetting('general.enterToSend').value;
   const defaultModel = useSetting('chat.defaultModel').value;
@@ -848,7 +852,8 @@ export function ChatView({
   const title =
     thread?.title || (threadId ? 'Untitled chat' : isTemporary ? 'New temporary chat' : 'New chat');
   const status = thread ? (needsInput ? 'needs_input' : threadStatus(thread, streaming)) : null;
-  const noModel = models.length === 0;
+  // While the list loads there is no model yet, but that is not "no provider".
+  const noModel = !modelsLoading && models.length === 0;
   const shown = state.messages.filter((m) => m.expect !== 'queue');
   // Approvals whose call is not on screen (no part or live call yet) still get a card.
   const shownCalls = new Set<string>();
@@ -874,6 +879,8 @@ export function ChatView({
   };
   const findQuery = find.open ? find.query : '';
 
+  // Share with members of this Hub (FR-217, M7).
+  const share = useShareMenu(thread ?? null);
   const menu: MenuItem[] = thread
     ? [
         { id: 'find', label: 'Find in chat', onSelect: openFind },
@@ -899,6 +906,7 @@ export function ChatView({
                 onSelect: toggleMemory,
               },
             ]),
+        ...share.items,
       ]
     : [];
 
@@ -931,6 +939,7 @@ export function ChatView({
             <span className="chat-flag">Not used for memory</span>
           ) : null}
           <span className="chat-header-spacer" />
+          {threadId ? <OpenInWindowButton path={chatPath(threadId)} what={title} compact /> : null}
           {thread?.model ? (
             <span className="muted chat-model">{modelLabel(models, thread.model)}</span>
           ) : null}
@@ -1075,6 +1084,8 @@ export function ChatView({
         ) : null}
         {threadId ? <ThreadQuestions threadId={threadId} /> : null}
         {signinFocus ? <PendingSignins focusId={signinFocus} /> : null}
+        {/* With the Hub away, this computer's own model can answer (desktop app, FR-128). */}
+        {threadId ? <LocalFallback threadId={threadId} /> : null}
         <Composer
           draft={draft}
           onDraftChange={(d) => {
@@ -1101,11 +1112,19 @@ export function ChatView({
           reasoningLevel={reasoningLevel}
           onReasoningChange={changeReasoning}
           inputRef={input}
-          noModelHint={noModel ? 'Connect a model provider to start' : undefined}
+          noModelHint={
+            noModel
+              ? 'Connect a model provider to start'
+              : modelsLoading && !model
+                ? 'Loading models…'
+                : undefined
+          }
+          modelLoading={modelsLoading}
           mentionSource={mentionSource}
           slashSource={slashSource}
           suggestions={suggestions}
           accessory={composerAccessory}
+          actions={<GenerateImageButton threadId={threadId} />}
           idBase={embedded ? `composer-${threadId ?? 'new'}` : undefined}
           onTurnOffSuggestions={() => {
             settings.set('chat.suggestions', false).then(
@@ -1157,6 +1176,7 @@ export function ChatView({
             </>
           }
         />
+        {share.dialog}
       </section>
     </ToolAppsProvider>
   );

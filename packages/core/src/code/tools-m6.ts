@@ -459,16 +459,24 @@ function notInCode(): NovaError {
 
 /**
  * The Code area's tools as one source (source `builtin`): in a Code thread's turn the M5 and M6
- * coding tools and the cross-session tools; in an agent thread's turn the cross-session tools;
- * nothing elsewhere. An unscoped listing (catalogs, direct invocation) has them all except the
+ * coding tools and the cross-session tools; in an agent thread's turn the cross-session tools and
+ * (M7) `code.delegate`; nothing elsewhere. An unscoped listing (catalogs, direct invocation) has them all except the
  * worker tools, whose names the runs area also uses for its sub-agents.
  */
 export function codeAreaToolSource(
   m5: readonly BuiltinTool[],
-  m6: { code: readonly BuiltinTool[]; sessions: readonly BuiltinTool[] },
+  m6: {
+    code: readonly BuiltinTool[];
+    sessions: readonly BuiltinTool[];
+    /** M7: tools only agent threads get (`code.delegate`). */
+    agent?: readonly BuiltinTool[];
+  },
 ): ToolSourceProvider {
   const inCode = [...m5, ...m6.code, ...m6.sessions];
-  const unscoped = inCode.filter((t) => !t.descriptor.name.startsWith('task.'));
+  const forAgents = [...m6.sessions, ...(m6.agent ?? [])];
+  const unscoped = [...inCode, ...(m6.agent ?? [])].filter(
+    (t) => !t.descriptor.name.startsWith('task.'),
+  );
   return {
     source: 'builtin',
     list: (_accountId: string, scope?: ToolListScope) =>
@@ -478,7 +486,7 @@ export function codeAreaToolSource(
           : scope.mode === 'code'
             ? inCode
             : scope.mode === 'agent'
-              ? [...m6.sessions]
+              ? forAgents
               : [],
       ),
   };

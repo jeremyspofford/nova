@@ -1,0 +1,23 @@
+{
+  "name": "@nova/runner-service",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A self-hostable cloud runner: Code and Work runs on managed environments, with live progress, approvals answered by the Hub, snapshots and hard caps (FR-108, FR-071, contracts/rest-api.md §5).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "nova-runner": "./src/main.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --coverage",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "fastify": "5.12.7",
+    "zod": "4.6.7"
+  }
+}

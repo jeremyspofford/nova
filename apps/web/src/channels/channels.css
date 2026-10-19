@@ -228,3 +228,70 @@
     justify-content: flex-start;
   }
 }
+
+/* ---- M7: Telegram and email setup, the message log and tests -------------------------------- */
+.ch-mail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--u-space-3);
+  align-items: start;
+}
+.ch-mail-grid .nv-field {
+  min-width: 0;
+}
+.ch-log {
+  display: grid;
+  gap: var(--u-space-3);
+  min-width: 0;
+}
+.ch-log-filters {
+  align-items: flex-end;
+}
+.ch-log-filters .nv-field {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.ch-log-row {
+  align-items: flex-start;
+}
+.ch-log-row > .ws-source-main {
+  flex: 1 1 240px;
+}
+.ch-log-who {
+  overflow-wrap: anywhere;
+}
+.ch-test-result {
+  display: flex;
+  gap: var(--u-space-2);
+  align-items: flex-start;
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.ch-test-result > .nv-icon {
+  flex: none;
+  margin-top: 3px;
+}
+.ch-webhook-secret {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.ch-webhook-secret > .ws-callout {
+  flex-direction: column;
+}
+/* A select never grows past its column because of a long option. */
+.ch-settings .nv-select,
+.ch-dialog .nv-select,
+.ch-log .nv-select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.ch-confirm {
+  flex-direction: column;
+}
+.ch-check-off {
+  display: flex;
+  gap: var(--u-space-2);
+  align-items: flex-start;
+  margin: 0;
+}

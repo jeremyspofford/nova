@@ -283,9 +283,21 @@ export interface MessageView {
    * lifecycle hook's continuation (FR-197), which is not the user's and carries no authority.
    * M5: a Work run's objective (`run`), a schedule's instructions (`schedule`), a goal
    * continuation (`goal`) or a sub-agent's task (`subagent`), each labelled in the thread.
+   * M7: `sync`, a user message written offline on a device and synced (FR-112); `offline`, an
+   * answer a device's local model wrote while the Hub was out of reach (FR-128).
    */
   provenance?:
-    'typed' | 'steer' | 'queued' | 'hook' | 'run' | 'schedule' | 'goal' | 'subagent' | 'system';
+    | 'typed'
+    | 'steer'
+    | 'queued'
+    | 'hook'
+    | 'run'
+    | 'schedule'
+    | 'goal'
+    | 'subagent'
+    | 'system'
+    | 'sync'
+    | 'offline';
   /** The `@`-mentions sent with a user message (FR-022). */
   mentions?: { kind: MentionKind; ref: string; label: string }[];
 }
@@ -767,6 +779,14 @@ export interface ApprovalView {
   createdAt: string;
   expiresAt: string;
   decidedAt: string | null;
+  /**
+   * M7: where the approval comes from, so a client can say so without listing threads: the
+   * Work run and the Code session its thread belongs to, and that thread's title. The Hub always
+   * fills them (null when not applicable).
+   */
+  runId?: string | null;
+  codeSessionId?: string | null;
+  threadTitle?: string | null;
 }
 
 /** contracts/schemas/approval-decision.json as a client sends it; the Hub sets decidedBy/At. */
@@ -1714,6 +1734,11 @@ export interface RunView {
   createdAt: string;
   updatedAt: string;
   endedAt: string | null;
+  /**
+   * M7: the cloud environment the run's commands and files go to (`POST /api/v1/cloud/work`),
+   * or null for a run on the Hub. The Hub always fills it.
+   */
+  environmentId?: string | null;
 }
 
 export const createRunSchema = z

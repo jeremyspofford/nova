@@ -289,6 +289,59 @@ describe('approval rows', () => {
     expect(store.deniedBefore(ACCOUNT, 't2', 'exec.run', 'h')).toBeNull();
   });
 
+  it('says where an approval comes from: its run, Code session and thread title (M7)', async () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    const thread = (id: string, mode: string, title: string | null, account = ACCOUNT) =>
+      db.raw
+        .prepare(
+          'INSERT INTO thread (id, account_id, mode, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        )
+        .run(id, account, mode, title, now, now);
+    thread('tw', 'work', 'Research flights');
+    thread('tc', 'code', 'Fix the build');
+    thread('tx', 'chat', null);
+    thread('to', 'chat', 'Not yours', OTHER);
+    db.raw
+      .prepare(
+        `INSERT INTO run (id, account_id, thread_id, title, objective, status, created_at, updated_at)
+         VALUES ('run-1', ?, 'tw', 'Research flights', 'find', 'running', ?, ?)`,
+      )
+      .run(ACCOUNT, now, now);
+    db.raw
+      .prepare(
+        `INSERT INTO code_session (id, account_id, thread_id, folder_path, created_at, updated_at)
+         VALUES ('cs-1', ?, 'tc', '/repo', ?, ?)`,
+      )
+      .run(ACCOUNT, now, now);
+    await store.insertApproval(row({ id: 'w', threadId: 'tw', createdAt: '2026-01-01T00:00:04Z' }));
+    await store.insertApproval(row({ id: 'c', threadId: 'tc', createdAt: '2026-01-01T00:00:03Z' }));
+    await store.insertApproval(row({ id: 'x', threadId: 'tx', createdAt: '2026-01-01T00:00:02Z' }));
+    // Another account's thread id, no thread, and a run id the gate recorded from the turn.
+    await store.insertApproval(row({ id: 'o', threadId: 'to', createdAt: '2026-01-01T00:00:01Z' }));
+    await store.insertApproval(
+      row({ id: 'n', threadId: null, runId: 'run-9', createdAt: '2026-01-01T00:00:00Z' }),
+    );
+    const list = await store.listApprovals(ACCOUNT);
+    expect(list.map((a) => [a.id, a.runId, a.codeSessionId, a.threadTitle])).toEqual([
+      ['w', 'run-1', null, 'Research flights'],
+      ['c', null, 'cs-1', 'Fix the build'],
+      ['x', null, null, null],
+      ['o', null, null, null],
+      ['n', 'run-9', null, null],
+    ]);
+    expect(await store.getApproval(ACCOUNT, 'c')).toMatchObject({
+      codeSessionId: 'cs-1',
+      threadTitle: 'Fix the build',
+      runId: null,
+    });
+    // A deleted thread no longer names its title.
+    db.raw.prepare("UPDATE thread SET deleted_at = ? WHERE id = 'tw'").run(now);
+    expect(await store.getApproval(ACCOUNT, 'w')).toMatchObject({
+      runId: null,
+      threadTitle: null,
+    });
+  });
+
   it('maps rows to views, tolerating bad JSON', () => {
     const v = approvalView(row({ optionsJson: 'nope', expiresAt: null, tier: null, reason: null }));
     expect(v).toMatchObject({

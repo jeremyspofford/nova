@@ -166,12 +166,16 @@ with Playwright against a running Hub's web UI; native-shell steps start at M7 (
 6. A sleeping device is woken through a wake helper on its LAN; the wake is audited (FR-138).
 
 ### J9 — Sync & multi-device (M7)
-1. Two profiles pair devices.
+1. Two profiles pair devices (Add Device with the "Offline copy" scope, approved on the Hub).
 2. Create a chat on device A; it appears on B.
 3. Edit the same note concurrently → merge log records the conflict; restore works.
 4. Queue an offline action; reconnect; it flushes in order.
 5. Hand a Code session off from device A to B with uncommitted changes; B continues on the
    same branch with the patch applied; the move is in the session history (FR-213).
+6. A Code session on a cloud environment keeps running on the runner while the owner's
+   browser (the "laptop") is offline; the result and usage show on reconnect (FR-108).
+7. A phone profile starts a task; the approval it causes is answered on the desktop's
+   Approvals page; the phone sees the result (FR-077, FR-111).
 
 ### J10 — Extension & governance (M8)
 1. Load a sample extension adding a command + panel + tool; permissions enforced.

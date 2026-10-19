@@ -6,7 +6,11 @@ export const REDACTED = '[REDACTED]';
 export interface RedactionRule {
   id: string;
   pattern: RegExp;
-  /** Replace the whole match, or only the named group `secret`. */
+  /**
+   * Replace the whole match, or only the named group `secret`. A rule whose match is a named
+   * group `pre` followed by `secret` (anything after it a lookahead) is replaced natively, which
+   * is several times faster than a callback on text with many matches.
+   */
   group?: 'secret';
   /**
    * How the repository secret scan uses the rule (scan.ts, FR-101): `token` matches are
@@ -17,40 +21,49 @@ export interface RedactionRule {
 }
 
 // Patterns are deliberately broad: a false positive costs a masked string, a false negative
-// leaks a credential. Each pattern must be global.
+// leaks a credential. Each pattern must be global, and must stay linear on any input: redaction
+// runs on the event loop over untrusted text (page content, M7 browser review), so every
+// repetition that could rescan the text from each start is bounded or anchored (redact-timing
+// test).
 export const DEFAULT_RULES: readonly RedactionRule[] = [
   {
     id: 'pem',
-    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+    // The body never spans another BEGIN marker and is at most 16 KiB (a 4096-bit key is about
+    // 3.3 KiB), so a run of BEGIN markers without an END costs one pass, not one per marker.
+    pattern:
+      /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----(?:(?!-----BEGIN )[\s\S]){0,16384}?-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----/g,
     scan: 'token',
   },
   // A private key cut off before its END line (a truncated paste or log line).
   {
     id: 'pem-header',
-    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[A-Za-z0-9+/=\s]*/g,
+    pattern: /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----[A-Za-z0-9+/=\s]*/g,
     scan: 'token',
   },
   {
     id: 'jwt',
-    pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+    // Starts only where a run of token characters starts (not after a `-` inside one), so a run
+    // like `-eyJ-eyJ-…` is scanned once.
+    pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,8192}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
     scan: 'token',
   },
   {
     id: 'bearer',
-    pattern: /\b(?:bearer|token)\s+(?<secret>[A-Za-z0-9._~+/=-]{12,})/gi,
+    pattern: /\b(?<pre>(?:bearer|token)\s+)(?<secret>[A-Za-z0-9._~+/=-]{12,})/gi,
     group: 'secret',
     scan: 'context',
   },
   {
     id: 'authorization-header',
     pattern:
-      /\b(?:authorization|x-api-key|api-key|cookie|set-cookie)\s*[:=]\s*(?<secret>[^\s,;"']{6,}[^\n"']*)/gi,
+      /\b(?<pre>(?:authorization|x-api-key|api-key|cookie|set-cookie)\s*[:=]\s*)(?<secret>[^\s,;"']{6,}[^\n"']*)/gi,
     group: 'secret',
     scan: 'context',
   },
   {
     id: 'provider-key',
-    pattern: /\b(?:sk|pk|rk)-(?:[A-Za-z0-9]+-)*[A-Za-z0-9_-]{16,}\b/g,
+    // `(?:[A-Za-z0-9]+-)*` before the run matched nothing the run does not, and backtracked.
+    pattern: /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}\b/g,
     scan: 'token',
   },
   {
@@ -77,40 +90,67 @@ export const DEFAULT_RULES: readonly RedactionRule[] = [
   },
   {
     id: 'url-credentials',
-    pattern: /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)(?<secret>[^\s@/]+)(@)/gi,
+    // Anchored on `://` with the scheme behind it: unanchored, dotted text such as `a.a.a.…`
+    // rescanned the run from every letter. Schemes are short (nothing real is over 32).
+    pattern:
+      /(?<=\b[a-z][a-z0-9+.-]{0,31})(?<pre>:\/\/[^\s:/@]{1,256}:)(?<secret>[^\s@/]{1,256})(?=@)/gi,
     group: 'secret',
     scan: 'context',
   },
   {
     id: 'secret-assignment-quoted',
     pattern:
-      /\b(?:password|passwd|pwd|secret|api_?key|access_?token|refresh_?token|client_?secret)\b\s*["']?\s*[:=]\s*(?<q>["'])(?<secret>(?:(?!\k<q>)[^\n]){1,})\k<q>/gi,
+      /(?<pre>\b(?:password|passwd|pwd|secret|api_?key|access_?token|refresh_?token|client_?secret)\b\s*["']?\s*[:=]\s*(?<q>["']))(?<secret>(?:(?!\k<q>)[^\n]){1,4096})(?=\k<q>)/gi,
     group: 'secret',
     scan: 'context',
   },
   {
     id: 'secret-assignment',
     pattern:
-      /\b(?:password|passwd|pwd|secret|api_?key|access_?token|refresh_?token|client_?secret)\b\s*["']?\s*[:=]\s*(?<secret>[^\s"',;]{4,})/gi,
+      /(?<pre>\b(?:password|passwd|pwd|secret|api_?key|access_?token|refresh_?token|client_?secret)\b\s*["']?\s*[:=]\s*)(?<secret>[^\s"',;]{4,})/gi,
     group: 'secret',
     scan: 'config',
   },
 ];
 
+export interface RedactorOptions {
+  /** Also mask this redactor's literals (a per-session redactor inherits the global one's). */
+  literalsFrom?: Redactor;
+}
+
+/** Literals shorter than this are ignored unless the caller allows shorter ones. */
+const MIN_LITERAL = 4;
+
 export class Redactor {
   readonly #rules: RedactionRule[];
-  readonly #literals = new Set<string>();
+  /** Longest first, so a literal that contains another is masked whole. */
+  #literals: string[] = [];
+  readonly #parent: Redactor | null;
 
-  constructor(rules: readonly RedactionRule[] = DEFAULT_RULES) {
+  constructor(rules: readonly RedactionRule[] = DEFAULT_RULES, opts: RedactorOptions = {}) {
     for (const r of rules) {
       if (!r.pattern.global) throw new TypeError(`redaction rule ${r.id} must use the g flag`);
     }
     this.#rules = [...rules];
+    this.#parent = opts.literalsFrom ?? null;
   }
 
-  /** Register a known secret value (for example one just read from the keychain). */
-  addLiteral(value: string): void {
-    if (value.length >= 4) this.#literals.add(value);
+  /**
+   * Register a known secret value (for example one just read from the keychain). Values under
+   * 4 characters are ignored unless `minLength` allows them (a per-session redactor masks a
+   * short password the user typed, at the cost of masking that text everywhere).
+   */
+  addLiteral(value: string, opts: { minLength?: number } = {}): void {
+    if (value.length < Math.max(1, opts.minLength ?? MIN_LITERAL)) return;
+    if (this.#literals.includes(value)) return;
+    this.#literals = [...this.#literals, value].sort((a, b) => b.length - a.length);
+  }
+
+  /** This redactor's literals and the ones it inherits, longest first. */
+  #allLiterals(): string[] {
+    if (!this.#parent) return this.#literals;
+    const all = new Set([...this.#literals, ...this.#parent.#allLiterals()]);
+    return [...all].sort((a, b) => b.length - a.length);
   }
 
   addRule(rule: RedactionRule): void {
@@ -118,11 +158,24 @@ export class Redactor {
     this.#rules.push(rule);
   }
 
-  redactString(input: string): string {
+  /**
+   * Mask only the known literals (this redactor's and the inherited ones): for text already
+   * redacted, where running the patterns again would mask the `[REDACTED]` markers' neighbours.
+   */
+  redactLiterals(input: string): string {
     let out = input;
-    for (const lit of this.#literals) out = out.split(lit).join(REDACTED);
+    for (const lit of this.#allLiterals()) out = out.split(lit).join(REDACTED);
+    return out;
+  }
+
+  redactString(input: string): string {
+    let out = this.redactLiterals(input);
     for (const rule of this.#rules) {
       rule.pattern.lastIndex = 0;
+      if (rule.group === 'secret' && rule.pattern.source.includes('(?<pre>')) {
+        out = out.replace(rule.pattern, `$<pre>${REDACTED}`);
+        continue;
+      }
       out = out.replace(rule.pattern, (...args: unknown[]) => {
         const match = args[0] as string;
         if (rule.group !== 'secret') return REDACTED;

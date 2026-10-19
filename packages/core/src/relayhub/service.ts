@@ -29,6 +29,7 @@ import {
   pairingSecrets,
   randomId,
   relayHttpUrl,
+  systemTimers,
   type BackoffOptions,
   type ConnectionState,
   type CryptoKey,
@@ -146,9 +147,47 @@ export interface RelayTestResult {
   detail: string | null;
 }
 
+function sameRelay(a: string, b: string): boolean {
+  return a.trim().replace(/\/+$/, '') === b.trim().replace(/\/+$/, '');
+}
+
+/**
+ * The vault value for a Relay registration token: the token with the Relay URL it was set for,
+ * so it is never sent to another Relay (a changed `relay.url` or `relay.selfHosted`).
+ */
+export function relayRegistrationSecret(token: string, relayUrl: string): string {
+  return JSON.stringify({ v: 1, url: relayUrl.trim().replace(/\/+$/, ''), token });
+}
+
+/**
+ * The registration token for `relayUrl`, or why there is none: the vault value must be one
+ * `relayRegistrationSecret` made for this same Relay. A bare token (not tied to a Relay) is
+ * never sent.
+ */
+export function relayRegistrationTokenFor(
+  stored: string,
+  relayUrl: string,
+): { token: string } | { token: null; setFor: string | null } {
+  let v: unknown;
+  try {
+    v = JSON.parse(stored);
+  } catch {
+    return { token: null, setFor: null };
+  }
+  const o = v as { url?: unknown; token?: unknown } | null;
+  if (typeof o?.url !== 'string' || typeof o.token !== 'string' || !o.token)
+    return { token: null, setFor: null };
+  return sameRelay(o.url, relayUrl) ? { token: o.token } : { token: null, setFor: o.url };
+}
+
 export interface RelaySettings {
   enabled: boolean;
   url: string;
+  /**
+   * The vault entry holding the bearer token a private Relay asks for when a Hub registers
+   * (`relay.registrationTokenRef`); empty or absent for none.
+   */
+  registrationTokenRef?: string;
 }
 
 export interface RelayHubOptions {
@@ -170,6 +209,11 @@ export interface RelayHubOptions {
   kdfIterations?: number;
   /** HTTP calls to the Relay time out after this (default 10 s). */
   httpTimeoutMs?: number;
+  /**
+   * After a denial, an expiry or a refused claim, the client's route is deleted at the Relay
+   * this long after its sealed `decided` notice (default 2 s), so the notice gets there first.
+   */
+  decidedGraceMs?: number;
 }
 
 interface RegistrationRow {
@@ -252,6 +296,8 @@ export class RelayHub {
   #stopped = false;
   #lastAutoRegister = -Infinity;
   readonly #dropLog = new Map<string, number>();
+  /** Declined clients whose route is deleted once their `decided` notice had time to arrive. */
+  readonly #declining = new Map<string, { row: ClientRow; timer: unknown }>();
 
   constructor(opts: RelayHubOptions) {
     this.#o = opts;
@@ -323,6 +369,11 @@ export class RelayHub {
     this.#offDecided?.();
     this.#offDecided = null;
     await this.#chain;
+    // Declined clients' routes go now; one that fails is deleted by the next #reconcile.
+    const declining = [...this.#declining.values()];
+    this.#declining.clear();
+    for (const d of declining) (this.#o.timers ?? systemTimers).clearTimeout(d.timer);
+    await Promise.all(declining.map((d) => this.#deleteClientRoute(d.row).catch(() => undefined)));
     this.#disconnect();
   }
 
@@ -355,10 +406,30 @@ export class RelayHub {
     let reg = this.#activeRegistration(url);
     if (!reg) {
       this.#setStatus('registering', null, url);
+      // A private Relay registers only Hubs that bring its token (services/relay); the token
+      // lives in the vault and is sent only to register, never with anything else.
+      // The token is tied to the Relay URL it was set for: a Hub moved to another Relay (a new
+      // `relay.url`, `relay.selfHosted` off) never hands the private Relay's token to it.
+      let registrationToken: string | null = null;
+      let notFor: string | null = null;
+      const tokenRef = s.registrationTokenRef?.trim() ?? '';
+      if (tokenRef) {
+        const stored = await this.#secrets.get(tokenRef).catch(() => null);
+        if (!stored) {
+          this.#setStatus('error', 'the Relay registration token is missing from the vault', url);
+          return;
+        }
+        const bound = relayRegistrationTokenFor(stored, url);
+        if (bound.token !== null) registrationToken = bound.token;
+        else notFor = bound.setFor ?? 'no Relay';
+      }
       try {
-        reg = await this.#register(url);
+        reg = await this.#register(url, registrationToken);
       } catch (err) {
-        this.#setStatus('error', `could not register with the Relay: ${errText(err)}`, url);
+        const why = notFor
+          ? `; the registration token was set for ${notFor}, not this Relay: set it again`
+          : '';
+        this.#setStatus('error', `could not register with the Relay: ${errText(err)}${why}`, url);
         return;
       }
     }
@@ -512,8 +583,20 @@ export class RelayHub {
     }
   }
 
-  async #register(url: string): Promise<RegistrationRow> {
-    const res = await this.#http('POST', url, '/v1/relay/hubs');
+  async #register(url: string, registrationToken: string | null): Promise<RegistrationRow> {
+    const res = await this.#http(
+      'POST',
+      url,
+      '/v1/relay/hubs',
+      undefined,
+      registrationToken ?? undefined,
+    );
+    if (res.status === 401)
+      throw new Error(
+        registrationToken
+          ? 'the Relay refused the registration token'
+          : 'this Relay needs a registration token (set it with the Relay settings)',
+      );
     const routeId = res.json.routeId;
     const routeToken = res.json.routeToken;
     if (res.status !== 201 || typeof routeId !== 'string' || typeof routeToken !== 'string') {
@@ -578,7 +661,9 @@ export class RelayHub {
       .all(reg.id) as unknown as ClientRow[];
     for (const row of rows) {
       const there = remote.get(row.route_id);
-      if ((row.status === 'revoked' || row.status === 'denied') && there) {
+      const gone = row.status === 'revoked' || row.status === 'denied' || row.status === 'expired';
+      if (gone && there) {
+        this.#cancelDecline(row.route_id);
         await this.#http('DELETE', reg.url, `/v1/relay/routes/${row.route_id}`, undefined, token);
       } else if (row.status === 'active' && there === 'pending') {
         await this.#http(
@@ -958,7 +1043,11 @@ export class RelayHub {
     const refuse = async (reason: string, detail: Record<string, unknown> = {}) => {
       this.#log.warn('relay pairing refused', { clientId: env.client, reason, ...detail });
       if (await this.#setPendingStatus(scope, 'denied')) {
-        await this.#deleteRoute(env.from).catch(() => undefined);
+        const row = this.#db.raw
+          .prepare('SELECT * FROM relay_client WHERE id = ?')
+          .get(scope.id) as ClientRow | undefined;
+        if (row) await this.#decline(row, 'denied', null);
+        else await this.#deleteRoute(env.from).catch(() => undefined);
       }
       await this.#auditRefusal(open.accountId, relayPairingId, reason, {
         clientId: env.client,
@@ -1066,19 +1155,11 @@ export class RelayHub {
       .get(d.relayClientId, d.accountId, d.requestId) as ClientRow | undefined;
     if (!row) return;
     const scope = { id: row.id, relayPairingId: row.relay_pairing_id, accountId: row.account_id };
-    const reg = this.#regById(row.registration_id);
-    const token = reg ? await this.#secrets.get(reg.token_ref) : null;
     if (d.decision !== 'approved') {
-      if (!(await this.#setPendingStatus(scope, d.decision === 'expired' ? 'expired' : 'denied')))
-        return;
-      if (reg && token)
-        await this.#http(
-          'DELETE',
-          reg.url,
-          `/v1/relay/routes/${row.route_id}`,
-          undefined,
-          token,
-        ).catch(() => undefined);
+      const decision = d.decision === 'expired' ? 'expired' : 'denied';
+      if (!(await this.#setPendingStatus(scope, decision))) return;
+      // The client learns which (M7), then its route goes.
+      await this.#decline(row, decision, d.requestId);
       await this.#auditAppend(row.account_id, 'relay.pair', row.id, {
         decision: d.decision,
         detail: { requestId: d.requestId, name: row.name, platform: row.platform },
@@ -1087,6 +1168,8 @@ export class RelayHub {
     }
     // Confirm at the Relay first: only then does it route the client. A failure is retried when
     // the Hub next connects (#reconcile).
+    const reg = this.#regById(row.registration_id);
+    const token = reg ? await this.#secrets.get(reg.token_ref) : null;
     if (reg && token) {
       const res = await this.#http(
         'POST',
@@ -1170,6 +1253,88 @@ export class RelayHub {
       this.#closePeer(peer);
       this.#peers.delete(id);
     }
+  }
+
+  /**
+   * A request denied or expired, or a claim the Hub refused (M7): tell the client in a sealed
+   * `decided` notice on a Hub-opened stream, then delete its route at the Relay. The Relay passes
+   * a Hub's notices to a pending route but nothing back, so no ack can come: the route goes after
+   * `decidedGraceMs` (sooner when the Hub reconnects or stops). A Relay that predates the notice
+   * drops it, and the client sees only its route revoked, as before.
+   */
+  async #decline(
+    row: ClientRow,
+    decision: 'denied' | 'expired',
+    requestId: string | null,
+  ): Promise<void> {
+    try {
+      await this.#sendDecided(row, decision, requestId);
+    } catch (err) {
+      this.#log.warn('the decided notice was not sent', { err, clientId: row.id });
+    }
+    const grace = this.#o.decidedGraceMs ?? 2_000;
+    if (grace <= 0) {
+      await this.#deleteClientRoute(row).catch(() => undefined);
+      return;
+    }
+    const t = this.#o.timers ?? systemTimers;
+    this.#cancelDecline(row.route_id);
+    const timer = t.setTimeout(() => {
+      if (this.#declining.get(row.route_id)?.timer !== timer) return;
+      this.#declining.delete(row.route_id);
+      void this.#deleteClientRoute(row).catch((err: unknown) =>
+        this.#log.warn('deleting a declined client route failed', { err, clientId: row.id }),
+      );
+    }, grace);
+    (timer as { unref?: () => void } | null)?.unref?.();
+    this.#declining.set(row.route_id, { row, timer });
+  }
+
+  #cancelDecline(routeId: string): void {
+    const d = this.#declining.get(routeId);
+    if (!d) return;
+    this.#declining.delete(routeId);
+    (this.#o.timers ?? systemTimers).clearTimeout(d.timer);
+  }
+
+  /** One sealed notice to a client that has no session (it is not active), then nothing more. */
+  async #sendDecided(
+    row: ClientRow,
+    decision: 'denied' | 'expired',
+    requestId: string | null,
+  ): Promise<void> {
+    const reg = this.#reg;
+    const conn = this.#conn;
+    if (!reg || reg.id !== row.registration_id || !this.#hubKey || conn?.state !== 'open') return;
+    const keys = await deriveSessionKeys('hub', this.#hubKey, {
+      hubRoute: reg.route_id,
+      clientRoute: row.route_id,
+      clientId: row.id,
+      hubX25519: reg.x25519_public_key,
+      clientX25519: row.x25519_public_key,
+    });
+    const session = new RelaySession({
+      clientId: row.id,
+      localRoute: reg.route_id,
+      remoteRoute: row.route_id,
+      keys,
+      transmit: (env) => conn.send(env),
+      // A pending client cannot answer through the Relay.
+      onMessage: () => undefined,
+      ...(this.#o.timers ? { timers: this.#o.timers } : {}),
+    });
+    session.setConnected(true);
+    const ids = new StreamIds('h', { now: () => this.#now().getTime() });
+    session.send(ids.next(), encodeTunnel({ t: 'decided', requestId, decision }));
+    session.close();
+  }
+
+  /** Delete a client's route at the Relay it registered with. */
+  async #deleteClientRoute(row: ClientRow): Promise<void> {
+    const reg = this.#regById(row.registration_id);
+    const token = reg ? await this.#secrets.get(reg.token_ref) : null;
+    if (!reg || !token) return;
+    await this.#http('DELETE', reg.url, `/v1/relay/routes/${row.route_id}`, undefined, token);
   }
 
   async #deleteRoute(routeId: string): Promise<void> {
@@ -1311,6 +1476,46 @@ export class RelayHub {
         detail: errText(err),
       };
     }
+  }
+
+  // ---- push (FR-111, docs/13 §6; the M7 channels area's push leg) ----------------------------
+
+  /**
+   * Ask the Relay to push a notification to the account's active native clients. The Relay
+   * learns ids, a redacted title and a deep link, nothing else, and pushes to the routes that
+   * registered an APNs or FCM token. Without an active registration nothing is sent.
+   */
+  async pushNotify(
+    accountId: string,
+    notification: { id: string; category: string; title: string; link: string | null },
+  ): Promise<{ sent: number; skipped: number; failed: number }> {
+    const none = { sent: 0, skipped: 0, failed: 0 };
+    const reg = this.#reg;
+    if (reg?.status !== 'active') return none;
+    const routes = (
+      this.#db.raw
+        .prepare(
+          `SELECT route_id FROM relay_client WHERE account_id = ? AND registration_id = ?
+             AND status = 'active' AND kind = 'native' ORDER BY created_at DESC LIMIT 50`,
+        )
+        .all(accountId, reg.id) as { route_id: string }[]
+    ).map((r) => r.route_id);
+    if (!routes.length) return none;
+    const token = await this.#secrets.get(reg.token_ref);
+    if (!token) return none;
+    const res = await this.#http(
+      'POST',
+      reg.url,
+      '/v1/relay/push/notify',
+      { routes, notification },
+      token,
+    );
+    if (res.status !== 200)
+      throw new NovaError('server_error', `the Relay refused the push (HTTP ${res.status})`, {
+        retryable: res.status >= 500 || res.status === 429,
+      });
+    const n = (k: string) => (typeof res.json[k] === 'number' ? res.json[k] : 0);
+    return { sent: n('sent'), skipped: n('skipped'), failed: n('failed') };
   }
 
   /** The Relay as an endpoint candidate (FR-135): healthy while the connection is up. */

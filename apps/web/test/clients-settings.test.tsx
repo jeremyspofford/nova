@@ -172,6 +172,14 @@ describe('Settings → Apps & clients (FR-044)', () => {
     expect(
       within(dialog).getByText(/"Authorization": "Bearer nva_fake-client-token"/),
     ).toBeTruthy();
+    // The stdio launcher as it really runs (no `nova` command is installed); the token goes in
+    // the environment, never in the command.
+    expect(
+      within(dialog).getByText('node packages/mcp/src/launcher-main.ts mcp stdio'),
+    ).toBeTruthy();
+    expect(within(dialog).getByText('NOVA_MCP_URL')).toBeTruthy();
+    expect(within(dialog).getByText('NOVA_MCP_TOKEN')).toBeTruthy();
+    expect(within(dialog).queryByText('nova mcp stdio')).toBeNull();
     await waitFor(() =>
       expect(document.activeElement).toBe(
         within(dialog).getByRole('button', { name: 'Copy token' }),

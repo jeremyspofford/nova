@@ -5,7 +5,17 @@
 // HTTP and needs that token; Origin and Host are checked by the Hub's guard like every route.
 // Every call passes the policy gate with origin `mcp_client` (never user-typed authorization,
 // FR-189) and is audited with the client id. Revoking a client closes its sessions at once.
-// A `nova mcp stdio` launcher that proxies to this endpoint is not built yet.
+//
+// M7 (FR-044): resources and prompts. Resources are the client's chats as transcripts
+// (`nova://threads/<id>`, when its thread scope allows) and its projects' files, read-only
+// (`nova://projects/<projectId>/files/<path>`, through the project's folders); prompts are the
+// account's active skills, for clients whose tool scope includes `skill.load`. Every read and
+// every prompt passes the gate like a tool call and is audited as `client.call`; anything out of
+// scope reads exactly like something that does not exist. Stdio-only clients reach `/mcp` through
+// the stdio launcher (`node packages/mcp/src/launcher-main.ts mcp stdio`, @nova/mcp), which adds
+// the client's token.
+import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
+import { extname } from 'node:path';
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { and, asc, eq, isNull, ne } from 'drizzle-orm';
@@ -19,8 +29,22 @@ import {
   type AppAuthorizationView,
   type ToolDescriptor,
 } from '@nova/shared';
-import { ProjectService, type AuditSink, type ToolGate, type ToolRuntime } from '@nova/core';
-import { NovaMcpServer, type McpClientRef, type ServedTool } from '@nova/mcp';
+import {
+  ProjectService,
+  projectFolderSource,
+  resolveInRoots,
+  type AuditSink,
+  type GateRequest,
+  type ToolGate,
+  type ToolRuntime,
+} from '@nova/core';
+import {
+  NovaMcpServer,
+  type McpClientRef,
+  type ServedPrompts,
+  type ServedResources,
+  type ServedTool,
+} from '@nova/mcp';
 import { defaultRedactor, hashToken, newToken } from '@nova/security';
 import { schema } from '@nova/storage';
 import type { HubArea, HubContext } from './hub-context.ts';
@@ -36,8 +60,11 @@ const DEFAULT_EXPIRY_DAYS = 90;
 const TOUCH_INTERVAL_MS = 60_000;
 /** Text a client can read from one call (threads are long). */
 const MAX_TEXT = 200_000;
-/** Tools that only make sense inside a Nova turn. */
-const NEVER_SERVED = new Set(['tool.search']);
+/**
+ * Tools that only make sense inside a Nova turn, and `script.run` (FR-202): it is read-only itself
+ * but calls other tools, so serving it would let a read-only client reach write tools.
+ */
+const NEVER_SERVED = new Set(['tool.search', 'script.run']);
 const HOP_BY_HOP = new Set([
   'connection',
   'content-length',
@@ -50,6 +77,23 @@ export interface McpServerArea extends HubArea {
   /** The streamable HTTP host (tests count sessions). */
   server: NovaMcpServer;
 }
+
+/** The account's skills, served as prompts (the plugins area's skill index). */
+export interface McpServerSkills {
+  list(accountId: string): Promise<{ name: string; description: string; active: boolean }[]>;
+  resolve(accountId: string, name: string): Promise<{ name: string; body: string } | null>;
+}
+
+/** Files a client may read as a resource (FR-044): text only, at most 1 MiB. */
+const MAX_RESOURCE_BYTES = 1024 * 1024;
+const THREAD_URI = /^nova:\/\/threads\/([A-Za-z0-9-]{1,100})$/;
+const FILE_URI = /^nova:\/\/projects\/([A-Za-z0-9-]{1,100})\/files\/(.+)$/;
+const MIME: Record<string, string> = {
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.html': 'text/html',
+  '.csv': 'text/csv',
+};
 
 const params = z.object({ id: idSchema });
 const threadsListArgs = z
@@ -99,7 +143,13 @@ const clip = (text: string) =>
 const out = (value: unknown) => clip(defaultRedactor.redactString(JSON.stringify(value, null, 2)));
 
 export function setupMcpServer(
-  ctx: HubContext & { audit: AuditSink; gate: ToolGate; tools: ToolsArea },
+  ctx: HubContext & {
+    audit: AuditSink;
+    gate: ToolGate;
+    tools: ToolsArea;
+    /** Skills served as prompts (FR-044); none without it. */
+    skills?: McpServerSkills;
+  },
 ): Promise<McpServerArea> {
   const { db, events, audit, gate, accountOf } = ctx;
   const runtime: ToolRuntime = ctx.tools.runtime;
@@ -192,6 +242,8 @@ export function setupMcpServer(
     descriptor: ToolDescriptor;
     args: Record<string, unknown>;
     signal: AbortSignal;
+    /** What the call touches, for the engine (a file's path). */
+    resource?: GateRequest['resource'];
   }
 
   async function auditCall(
@@ -242,6 +294,7 @@ export function setupMcpServer(
           profile: scope.profile,
           origin: 'mcp_client',
           roots: scope.roots,
+          ...(spec.resource ? { resource: spec.resource } : {}),
         },
         spec.signal,
       );
@@ -441,6 +494,226 @@ export function setupMcpServer(
     return served;
   }
 
+  // ---- resources and prompts (FR-044) ----------------------------------------------------------
+
+  const folders = projectFolderSource(db);
+  const FILES_READ = readDescriptor(
+    'fs.read',
+    'Read a file',
+    "Read a file of one of the client's projects.",
+    { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+  );
+  const SKILLS_LIST = readDescriptor(
+    'skills.list',
+    'List skills',
+    "List the user's skills a client may use as prompts.",
+    { type: 'object', properties: {}, additionalProperties: false },
+  );
+  const SKILL_LOAD = readDescriptor(
+    'skill.load',
+    'Load a skill',
+    "Load one of the user's skills as a prompt.",
+    { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+  );
+
+  /** The client's newest chats (temporary chats never), as `listThreads` scopes them. */
+  async function scopedThreads(row: AuthRow, scopes: Scopes, limit: number) {
+    if (scopes.threads === 'none') return [];
+    if (scopes.projects === '*')
+      return (await ctx.threads.list(row.accountId, { limit })).items.filter((t) => !t.temporary);
+    const all = [];
+    for (const projectId of scopes.projects)
+      all.push(
+        ...(await ctx.threads.list(row.accountId, { projectId, limit })).items.filter(
+          (t) => !t.temporary,
+        ),
+      );
+    all.sort((x, y) => (x.updatedAt < y.updatedAt ? 1 : x.updatedAt > y.updatedAt ? -1 : 0));
+    return all.slice(0, limit);
+  }
+
+  async function threadMarkdown(row: AuthRow, scopes: Scopes, threadId: string): Promise<string> {
+    const detail = await ctx.threads.detail(row.accountId, threadId);
+    if (detail.thread.temporary || !inProjects(scopes, detail.thread.projectId))
+      throw new NovaError('not_found', 'thread not found');
+    const lines = [`# ${detail.thread.title ?? 'Untitled chat'}`, ''];
+    for (const m of detail.messages) {
+      const text = m.parts
+        .map((p) => (p.type === 'text' ? p.text : p.type === 'tool_call' ? `[tool ${p.tool}]` : ''))
+        .filter(Boolean)
+        .join('\n');
+      if (text) lines.push(`## ${m.role} (${m.createdAt})`, '', text, '');
+    }
+    return clip(defaultRedactor.redactString(lines.join('\n')));
+  }
+
+  /**
+   * The real path of a file in one of the account's projects' folders (never outside them, never
+   * the data folder), resolved once: the gate is asked about this path and this path is read.
+   */
+  async function projectFilePath(
+    accountId: string,
+    projectId: string,
+    path: string,
+  ): Promise<string> {
+    const owned = db.raw
+      .prepare('SELECT 1 FROM project WHERE id = ? AND account_id = ? AND deleted_at IS NULL')
+      .get(projectId, accountId);
+    if (!owned) throw new NovaError('not_found', 'project not found');
+    const roots = (await folders(projectId)).map((f) => ({
+      path: f.path,
+      access: 'read' as const,
+      label: f.label ?? f.path,
+    }));
+    return resolveInRoots(roots, decodeURIComponent(path), 'read', { denied: [ctx.dataDir] }).path;
+  }
+
+  /** A text file's content, opened without following a link swapped in since it was resolved. */
+  function readTextFile(path: string): string {
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile() || st.size > MAX_RESOURCE_BYTES)
+        throw new NovaError('not_found', 'not a readable file');
+      const buf = readFileSync(fd);
+      if (buf.includes(0)) throw new NovaError('not_found', 'not a text file');
+      return buf.toString('utf8');
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /** Listing passes the gate like a tool call too; a denied listing is empty. */
+  const listGated = async (
+    row: AuthRow,
+    descriptor: ToolDescriptor,
+    signal: AbortSignal,
+  ): Promise<boolean> =>
+    !(
+      await gated({ row, tool: descriptor.name, descriptor, args: {}, signal }, () =>
+        Promise.resolve('listed'),
+      )
+    ).isError;
+
+  const resources: ServedResources = {
+    async list(client, signal) {
+      const row = await active(client.id);
+      if (!row) return [];
+      const scopes = parseScopes(row.scopes);
+      if (scopes.threads === 'none' || !(await listGated(row, THREADS_LIST, signal))) return [];
+      return (await scopedThreads(row, scopes, 50)).map((t) => ({
+        uri: `nova://threads/${t.id}`,
+        name: t.title ?? 'Untitled chat',
+        description: `Chat transcript, updated ${t.updatedAt}`,
+        mimeType: 'text/markdown',
+      }));
+    },
+    async templates(client) {
+      const row = await active(client.id);
+      if (!row) return [];
+      const scopes = parseScopes(row.scopes);
+      if (scopes.projects !== '*' && !scopes.projects.length) return [];
+      if (!(await listGated(row, PROJECTS_LIST, new AbortController().signal))) return [];
+      return [
+        {
+          uriTemplate: 'nova://projects/{projectId}/files/{+path}',
+          name: 'Project files',
+          description: "A file in one of a project's folders, read-only.",
+        },
+      ];
+    },
+    async read(client, uri, signal) {
+      const row = await active(client.id);
+      if (!row) return null;
+      const scopes = parseScopes(row.scopes);
+      const thread = THREAD_URI.exec(uri);
+      if (thread) {
+        if (scopes.threads === 'none') return null;
+        const threadId = thread[1]!;
+        let text = '';
+        const r = await gated(
+          { row, tool: 'threads.read', descriptor: THREADS_READ, args: { threadId }, signal },
+          async () => (text = await threadMarkdown(row, scopes, threadId)),
+        );
+        return r.isError ? null : { uri, mimeType: 'text/markdown', text };
+      }
+      const file = FILE_URI.exec(uri);
+      if (file) {
+        const projectId = file[1]!;
+        if (!inProjects(scopes, projectId)) return null;
+        let text = '';
+        let path: string;
+        try {
+          path = await projectFilePath(row.accountId, projectId, file[2]!);
+        } catch {
+          return null;
+        }
+        const r = await gated(
+          {
+            row,
+            tool: 'fs.read',
+            descriptor: FILES_READ,
+            args: { path },
+            signal,
+            resource: { kind: 'path', value: path },
+          },
+          () => Promise.resolve((text = readTextFile(path))),
+        );
+        if (r.isError) return null;
+        return { uri, mimeType: MIME[extname(path).toLowerCase()] ?? 'text/plain', text };
+      }
+      return null;
+    },
+  };
+
+  /** Skills are prompts for clients whose tools include `skill.load` (or every tool). */
+  const promptsOf = async (client: McpClientRef) => {
+    const row = await active(client.id);
+    if (!row || !ctx.skills) return null;
+    const scopes = parseScopes(row.scopes);
+    if (scopes.tools !== '*' && !scopes.tools.includes('skill.load')) return null;
+    return row;
+  };
+  const prompts: ServedPrompts = {
+    async list(client) {
+      const row = await promptsOf(client);
+      if (!row || !ctx.skills) return [];
+      if (!(await listGated(row, SKILLS_LIST, new AbortController().signal))) return [];
+      return (await ctx.skills.list(row.accountId))
+        .filter((s) => s.active)
+        .map((s) => ({
+          name: s.name,
+          description: s.description,
+          arguments: [
+            { name: 'input', description: 'What to apply the skill to', required: false },
+          ],
+        }));
+    },
+    async get(client, name, args, signal) {
+      const row = await promptsOf(client);
+      if (!row || !ctx.skills) return null;
+      const skills = ctx.skills;
+      const listed = (await skills.list(row.accountId)).find((s) => s.active && s.name === name);
+      if (!listed) return null;
+      let text = '';
+      const r = await gated(
+        { row, tool: 'skill.load', descriptor: SKILL_LOAD, args: { name }, signal },
+        async () => {
+          const skill = await skills.resolve(row.accountId, name);
+          if (!skill) throw new NovaError('not_found', 'skill not found');
+          text = skill.body;
+          return 'loaded';
+        },
+      );
+      if (r.isError) return null;
+      const input = typeof args.input === 'string' && args.input.trim() ? args.input.trim() : null;
+      return {
+        description: listed.description,
+        text: clip(input ? `${text}\n\n---\n\n${input}` : text),
+      };
+    },
+  };
+
   type ExecInput = Parameters<ToolRuntime['execute']>[0];
 
   /** A Hub tool through the runtime: validation, the gate (origin `mcp_client`), audit. */
@@ -491,6 +764,8 @@ export function setupMcpServer(
     instructions:
       "Nova's MCP server. Tools and data are limited to what the user granted this client; every call passes Nova's policy and may wait for the user's approval.",
     tools: toolsFor,
+    resources,
+    prompts,
     log,
   });
 
@@ -592,7 +867,8 @@ export function setupMcpServer(
       // The first client turns the server on (it is off until then, FR-044).
       if (!others.length) await enableServer(accountId);
       await changed(row, 'active');
-      void reply.status(201);
+      // The token is shown once: no cache and no idempotent replay may keep it.
+      void reply.header('cache-control', 'no-store').status(201);
       const created: AppAuthorizationCreated = {
         authorization: toView(row),
         token,

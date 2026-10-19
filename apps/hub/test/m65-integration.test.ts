@@ -66,6 +66,12 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+// CI sets NOVA_REQUIRE_NOVAD=1 so a missing or outdated binary fails the run instead of
+// skipping these tests unnoticed.
+it.runIf(process.env.NOVA_REQUIRE_NOVAD === '1')('has a runnable novad binary', () => {
+  expect(runnable, BIN).toBe(true);
+});
+
 describe.skipIf(!runnable)('novad joins the fully wired Hub', () => {
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'nova-hub-m65-'));

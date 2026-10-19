@@ -9,7 +9,7 @@ import {
   createTriggerSchema,
   updateTriggerSchema,
   type AgentView,
-  type ChannelBindingView,
+  type ChannelBindingViewM7,
   type McpEventSourceView,
   type ProjectView,
   type TriggerAction,
@@ -134,7 +134,7 @@ export function NewTriggerDialog({
   agents: AgentView[] | null;
   projects: ProjectView[];
   sources: McpEventSourceView[] | null;
-  slackBindings: ChannelBindingView[];
+  slackBindings: ChannelBindingViewM7[];
   publicUrl: string | null;
   /** The new trigger (or, for an MCP event, a refetch is enough). */
   onCreated: (t: TriggerView | null) => void;

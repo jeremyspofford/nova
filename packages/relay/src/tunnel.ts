@@ -23,6 +23,11 @@ export type TunnelMessage =
   | { t: 'error'; id?: string; code: string; message: string }
   /** Hub → client on a Hub-opened stream: the owner approved the pairing. */
   | { t: 'paired'; requestId: string | null; deviceId: string | null }
+  /**
+   * Hub → client on a Hub-opened stream (M7): the owner denied the pairing, it expired, or the
+   * Hub refused the claim (`denied`); the Hub then deletes the client's route at the Relay.
+   */
+  | { t: 'decided'; requestId: string | null; decision: 'denied' | 'expired' }
   /** Hub → client: a client stream id was at or below the Hub's floor (the client's clock went back). */
   | { t: 'stale'; stream: string; floor: number };
 
@@ -121,6 +126,11 @@ export function decodeTunnel(bytes: Uint8Array): TunnelMessage | null {
       return (v.requestId === null || typeof v.requestId === 'string') &&
         (v.deviceId === null || typeof v.deviceId === 'string')
         ? { t: 'paired', requestId: v.requestId, deviceId: v.deviceId }
+        : null;
+    case 'decided':
+      return (v.requestId === null || typeof v.requestId === 'string') &&
+        (v.decision === 'denied' || v.decision === 'expired')
+        ? { t: 'decided', requestId: v.requestId, decision: v.decision }
         : null;
     case 'stale':
       return typeof v.stream === 'string' &&

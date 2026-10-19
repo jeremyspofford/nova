@@ -37,6 +37,7 @@ export function useSidebarStatus(): void {
   const store = useThreads();
   const toast = useToast();
   const latest = useRef({ store, toast });
+  const unknown = useRef(new Set<string>());
   useLayoutEffect(() => {
     latest.current = { store, toast };
   });
@@ -49,7 +50,15 @@ export function useSidebarStatus(): void {
     if (ref?.kind !== 'thread' || typeof ref.id !== 'string' || !DERIVED.includes(status)) return;
     const id = ref.id;
     const known = latest.current.store.threads.find((t) => t.id === id);
-    if (!known) return;
+    // A chat this list has not seen yet (made on another device): list again, once per id, so
+    // the status of a thread that is not a chat (a Work run's) never lists over and over.
+    if (!known) {
+      if (!unknown.current.has(id)) {
+        unknown.current.add(id);
+        latest.current.store.refreshSoon();
+      }
+      return;
+    }
     // The event carries no reason; one stays only while the status it explains does.
     const reason = known.derived?.status === status ? known.derived.reason : null;
     latest.current.store.upsertLocal({

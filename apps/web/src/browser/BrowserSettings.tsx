@@ -1,9 +1,10 @@
 // Settings → Browser (FR-094, FR-086, FR-096; docs/11 §4, §4.4, §9, docs/12 §8): whether the agent
 // browser can run on this Hub, sign-in requests waiting for the user (a notification's
 // `/settings/browser?signin=<id>` lands here), the sites the agent may open with a permission level
-// each and an optional developer-protocol mode, the allow and block lists as plain lists, the
-// saved logins (passwords are never shown), and the browser settings. Allowed and blocked sites
-// are one list on the Hub: the domain lists edit the same entries.
+// each, its own levels for projects and agents (M7: the narrower scope wins) and an optional
+// developer-protocol mode, the allow and block lists as plain lists, the saved logins (passwords
+// are never shown), and the browser settings. Allowed and blocked sites are one list on the Hub:
+// the domain lists edit the same entries.
 import { useEffect, useId, useState } from 'react';
 import {
   BROWSER_SITE_LEVELS,
@@ -24,6 +25,7 @@ import { SwitchField } from '../settings/controls.tsx';
 import { useBrowserApi } from './api.ts';
 import { LEVEL_HINT, LEVEL_TEXT } from './format.ts';
 import { PendingSignins } from './PendingSignins.tsx';
+import { SiteScopeLevels, useScopeChoices } from './SiteLevels.tsx';
 import '../workspace.css';
 import './browser.css';
 
@@ -131,6 +133,7 @@ function SitesSection() {
   const [removing, setRemoving] = useState<BrowserSiteView | null>(null);
   const [devAsk, setDevAsk] = useState<BrowserSiteView | null>(null);
   const [editing, setEditing] = useState(false);
+  const choices = useScopeChoices();
 
   useEffect(() => {
     let alive = true;
@@ -317,6 +320,18 @@ function SitesSection() {
                         Remove
                       </Button>
                     </div>
+                    <SiteScopeLevels
+                      site={s}
+                      choices={choices}
+                      onChanged={(p, scoped) =>
+                        setSites(
+                          (list) =>
+                            list?.map((x) =>
+                              x.pattern === p ? { ...x, scopedLevels: scoped } : x,
+                            ) ?? null,
+                        )
+                      }
+                    />
                   </li>
                 );
               })}
@@ -373,7 +388,7 @@ function SitesSection() {
         description={
           removing?.access === 'block'
             ? 'The agent may then ask to open it again.'
-            : 'Its level and any “Always allow” answers go too; the agent asks before opening it again.'
+            : 'Its level, its levels for projects and agents, and any “Always allow” answers go too; the agent asks before opening it again.'
         }
         footer={
           <>

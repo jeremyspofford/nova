@@ -3,6 +3,7 @@
 // persisted `browser.action` event with the call's correlation so the trace can link it. Targets
 // and errors are redacted and clipped (typed text is never stored, only its length). Screenshots
 // are kept for `browser.screenshotRetentionDays` (default 30) and then deleted by `sweep`.
+// `page` lists newest first with an opaque cursor (M7; `GET /browser/actions`).
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -10,6 +11,7 @@ import {
   uuidv7,
   type BrowserActionResult,
   type BrowserActionView,
+  type BrowserActionsPageView,
   type BrowserClassificationView,
 } from '@nova/shared';
 import { defaultRedactor, resolveWithin } from '@nova/security';
@@ -59,7 +61,8 @@ interface ActionRow {
 
 function clip(text: string | null | undefined, max: number): string | null {
   if (!text) return null;
-  const t = defaultRedactor.redactString(text);
+  // Page-made text is clipped before it is redacted (M7 review finding 1).
+  const t = defaultRedactor.redactString(text.slice(0, max * 2));
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
@@ -237,6 +240,52 @@ export class BrowserRecorder {
     return rows.map(view);
   }
 
+  /**
+   * The trace newest first, `limit` rows at a time (M7). The cursor is the position after the
+   * last row of the previous page (its time and id), opaque to clients.
+   */
+  page(
+    accountId: string,
+    q: {
+      threadId?: string;
+      callId?: string;
+      computerId?: string;
+      limit?: number;
+      cursor?: string;
+    } = {},
+  ): BrowserActionsPageView {
+    const where = ['account_id = ?'];
+    const args: (string | number)[] = [accountId];
+    for (const [col, v] of [
+      ['thread_id', q.threadId],
+      ['call_id', q.callId],
+      ['computer_id', q.computerId],
+    ] as const) {
+      if (!v) continue;
+      where.push(`${col} = ?`);
+      args.push(v);
+    }
+    if (q.cursor) {
+      const [at, id] = decodeCursor(q.cursor);
+      where.push('(created_at < ? OR (created_at = ? AND id < ?))');
+      args.push(at, at, id);
+    }
+    const limit = Math.min(Math.max(q.limit ?? 100, 1), 500);
+    args.push(limit + 1);
+    const rows = this.#db.raw
+      .prepare(
+        `SELECT * FROM browser_action WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT ?`,
+      )
+      .all(...args) as unknown as ActionRow[];
+    const more = rows.length > limit;
+    const items = rows.slice(0, limit);
+    const last = items.at(-1);
+    return {
+      items: items.map(view),
+      nextCursor: more && last ? encodeCursor(last.created_at, last.id) : null,
+    };
+  }
+
   /** A recorded screenshot's bytes; `not_found` for another account or a swept file. */
   screenshot(accountId: string, id: string, which: 'before' | 'after'): Buffer {
     const row = this.#db.raw
@@ -281,4 +330,28 @@ export class BrowserRecorder {
       });
     return removed;
   }
+}
+
+function encodeCursor(at: string, id: string): string {
+  return Buffer.from(JSON.stringify([at, id]), 'utf8').toString('base64url');
+}
+
+/** The position a cursor names; `validation` for anything that is not one of ours. */
+function decodeCursor(cursor: string): [string, string] {
+  try {
+    const v = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
+    if (
+      Array.isArray(v) &&
+      v.length === 2 &&
+      typeof v[0] === 'string' &&
+      typeof v[1] === 'string' &&
+      !Number.isNaN(Date.parse(v[0])) &&
+      v[1].length > 0 &&
+      v[1].length <= 100
+    )
+      return [v[0], v[1]];
+  } catch {
+    // Not base64url JSON: the error below.
+  }
+  throw new NovaError('validation', 'the cursor is not valid; start again without it');
 }

@@ -105,6 +105,11 @@ export interface GateRequest {
   origin?: ToolContext['origin'];
   /** The roots the tool runs with, so the gate checks exactly those. */
   roots?: ToolRoot[];
+  /**
+   * The name policy rules match instead of `tool.name` (a browser write under a project's or
+   * agent's site level, M7). Hooks, limits, grants, cards, audit and events keep `tool.name`.
+   */
+  ruleTool?: string;
 }
 
 /** What the runtime does with a call once the gate has decided (including any approval). */

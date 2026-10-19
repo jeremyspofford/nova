@@ -9,6 +9,8 @@ import type {
   CallContext,
   ChatRequest,
   ContentPart,
+  ImageRequest,
+  ImageResponse,
   ModelInfo,
   NormalizedMessage,
   Provider,
@@ -23,6 +25,7 @@ import {
   getJson,
   isRecord,
   normalizeBase,
+  readCapped,
   readSseData,
   resolveKey,
   scrub,
@@ -72,8 +75,11 @@ const BASE_CAPS: ProviderCapabilities = {
   maxOutputTokens: 4_096,
 };
 
+// OpenAI and generic compatible servers have the images call (`/images/generations`, FR-030);
+// OpenRouter, Ollama and llama.cpp do not offer it on their OpenAI-style API.
 const KIND_CAPS: Record<OpenAICompatibleKind, Partial<ProviderCapabilities>> = {
   openai: {
+    imageGeneration: true,
     parallelToolCalls: true,
     vision: true,
     reasoning: 'levels',
@@ -92,8 +98,15 @@ const KIND_CAPS: Record<OpenAICompatibleKind, Partial<ProviderCapabilities>> = {
   },
   ollama: {},
   llamacpp: {},
-  openai_compatible: {},
+  openai_compatible: { imageGeneration: true },
 };
+
+/** Image sizes the images call accepts (`<width>x<height>`, each 64 to 4096). */
+const IMAGE_SIZE = /^(\d{2,4})x(\d{2,4})$/;
+/** Largest image response read, in bytes (a few base64 images). */
+const MAX_IMAGE_RESPONSE = 64 * 1024 * 1024;
+/** Time an image may take (generation is slow; docs/07 §9 has no figure, ADR-095). */
+const IMAGE_TIMEOUT_MS = 180_000;
 
 /** Kinds whose servers run on the user's hardware; their bare address gets the `/v1` path. */
 const LOCAL_SERVER_KINDS = new Set<OpenAICompatibleKind>(['ollama', 'llamacpp']);
@@ -164,6 +177,103 @@ export class OpenAICompatibleProvider implements Provider {
       toError: (e) =>
         new NovaError(e.code, e.message, { retryable: e.retryable, action: e.action }),
     });
+  }
+
+  // ---- images (FR-030) --------------------------------------------------------------------
+
+  /**
+   * One image from `/images/generations`, as base64. Image-only models (`gpt-image-*`) always
+   * answer base64 and refuse `response_format`; the others are asked for `b64_json`. A provider
+   * that answers with a URL instead is refused: Nova does not fetch from a second host.
+   */
+  async generateImage(req: ImageRequest, _ctx: CallContext): Promise<ImageResponse> {
+    if (!this.capabilities.imageGeneration)
+      throw new NovaError('capability_missing', 'this provider cannot generate images');
+    const size = IMAGE_SIZE.exec(req.size);
+    if (
+      !size ||
+      Number(size[1]) < 64 ||
+      Number(size[2]) < 64 ||
+      Number(size[1]) > 4096 ||
+      Number(size[2]) > 4096
+    )
+      throw new NovaError('validation', `unsupported image size ${req.size}`);
+    if (!req.prompt.trim()) throw new NovaError('validation', 'the prompt is empty');
+    const key = await resolveKey(this.#opts.apiKey);
+    const body: Record<string, unknown> = {
+      model: req.model,
+      prompt: req.prompt,
+      size: req.size,
+      n: 1,
+    };
+    if (!/^gpt-image/i.test(req.model)) body.response_format = 'b64_json';
+    const toError = (e: AgentErrorShape) =>
+      new NovaError(e.code, e.message, {
+        retryable: e.retryable,
+        ...(e.action ? { action: e.action } : {}),
+      });
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), IMAGE_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await this.#fetch(`${this.baseUrl}/images/generations`, {
+        method: 'POST',
+        headers: { ...this.#headers(key, 'application/json'), 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.any([req.signal, timeout.signal]),
+      });
+    } catch {
+      clearTimeout(timer);
+      if (req.signal.aborted) throw new NovaError('cancelled', 'the image request was cancelled');
+      throw toError(
+        timeout.signal.aborted
+          ? err('timeout', `${this.#host} did not finish the image in time`, true)
+          : err('network', `could not reach ${this.#host}`, true),
+      );
+    }
+    try {
+      if (!res.ok)
+        throw toError(
+          mapHttpError(res.status, await readCapped(res), key !== null, (t) => scrub(t, key)),
+        );
+      const length = Number(res.headers.get('content-length') ?? '0');
+      if (length > MAX_IMAGE_RESPONSE)
+        throw toError(
+          err('provider_error', `${this.#host} returned an image that is too large`, false),
+        );
+      let parsed: unknown;
+      try {
+        const text = await res.text();
+        if (text.length > MAX_IMAGE_RESPONSE) throw new Error('too large');
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        throw toError(
+          err('provider_error', `${this.#host} returned a response that is not an image`, false),
+        );
+      }
+      const data = isRecord(parsed) && Array.isArray(parsed.data) ? parsed.data : [];
+      const images = data.flatMap((d) => {
+        if (!isRecord(d) || typeof d.b64_json !== 'string' || !d.b64_json) return [];
+        const img: { data: string; mime?: string; revisedPrompt?: string } = { data: d.b64_json };
+        const mime = sniffImage(d.b64_json);
+        if (mime) img.mime = mime;
+        if (typeof d.revised_prompt === 'string') img.revisedPrompt = d.revised_prompt;
+        return [img];
+      });
+      if (!images.length)
+        throw toError(
+          err(
+            'provider_error',
+            data.some((d) => isRecord(d) && typeof d.url === 'string')
+              ? `${this.#host} returned a link instead of the image`
+              : `${this.#host} returned no image`,
+            false,
+          ),
+        );
+      return { model: req.model, images };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ---- streaming ------------------------------------------------------------------------
@@ -518,7 +628,12 @@ function toModels(ids: string[], kind: OpenAICompatibleKind): ModelInfo[] {
   return [...new Set(ids)].sort().map((id) => ({
     id,
     label: id,
-    capabilities: kind === 'openai' ? openAIModelCaps(id) : {},
+    capabilities:
+      kind === 'openai'
+        ? openAIModelCaps(id)
+        : kind === 'openai_compatible'
+          ? compatibleModelCaps(id)
+          : {},
   }));
 }
 
@@ -528,10 +643,29 @@ const OPENAI_VISION =
   /^(gpt-4o|chatgpt-4o|gpt-4\.1|gpt-4-turbo|gpt-4\.5|gpt-5|o1(?!-mini)|o3(?!-mini)|o4)/;
 
 export function openAIModelCaps(id: string): Partial<ProviderCapabilities> {
-  return {
+  const caps: Partial<ProviderCapabilities> = {
     reasoning: OPENAI_REASONING.test(id) ? 'levels' : false,
     vision: OPENAI_VISION.test(id),
   };
+  if (IMAGE_MODEL.test(id)) caps.imageGeneration = true;
+  return caps;
+}
+
+/** Image models by their published names (OpenAI's and common open ones on compatible servers). */
+const IMAGE_MODEL = /^(gpt-image|dall-e|(.*\/)?(stable-diffusion|sdxl|sd3|flux))/i;
+
+/** An image model on a generic compatible server is recognized by its name only. */
+export function compatibleModelCaps(id: string): Partial<ProviderCapabilities> {
+  return IMAGE_MODEL.test(id) ? { imageGeneration: true } : {};
+}
+
+/** The media type of base64 image data, from its first bytes. */
+export function sniffImage(b64: string): string | null {
+  if (b64.startsWith('iVBORw0KGgo')) return 'image/png';
+  if (b64.startsWith('/9j/')) return 'image/jpeg';
+  if (b64.startsWith('UklGR')) return 'image/webp';
+  if (b64.startsWith('R0lGOD')) return 'image/gif';
+  return null;
 }
 
 /** OpenRouter reports modalities, supported parameters and per-token prices per model. */

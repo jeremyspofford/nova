@@ -45,6 +45,7 @@ import {
 } from './parts.tsx';
 import { PolicyPanel } from './Policy.tsx';
 import { PowerPanel } from './Power.tsx';
+import { DeviceTlsFact } from './Tls.tsx';
 import { UpdatesPanel } from './Updates.tsx';
 
 const TAB_LABEL: Record<DeviceTab, string> = {
@@ -236,6 +237,7 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
             <dd>{d.endpoint ? <code className="ws-code-inline">{d.endpoint}</code> : 'Unknown'}</dd>
           </div>
         ) : null}
+        {d || s?.kind === 'compute' ? <DeviceTlsFact deviceId={deviceId} /> : null}
         {session && s ? (
           <div>
             <dt>Sessions</dt>

@@ -6,6 +6,7 @@ import { hostPatternSchema } from './m6/computers.ts';
 import { TRUST_MODES } from './m65/trust.ts';
 import { networkBaseUrlSchema } from './m65/network.ts';
 import { relayUrlSchema } from './m65/relay.ts';
+import { relayRegistrationTokenRefSchema } from './m7/devices.ts';
 
 export type SettingSource = 'default' | 'global' | 'project' | 'managed';
 
@@ -874,6 +875,266 @@ export const SETTINGS = {
     security: true,
     description:
       'The Relay is your own; turn off to use the hosted Relay when no URL is set (FR-137, docs/22 §3).',
+  }),
+  // ---- M7 sync
+  'sync.enabled': def({
+    key: 'sync.enabled',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Devices granted an offline replica may sync it with the Hub; off refuses every replica sync call (FR-109, FR-129).',
+  }),
+  'sync.maxSkewSeconds': def({
+    key: 'sync.maxSkewSeconds',
+    schema: z.number().int().min(10).max(3600),
+    default: 300,
+    security: true,
+    description:
+      'How far ahead of the Hub a pushed change may be clocked; later ones are refused so a fast clock cannot win forever (ADR-010).',
+  }),
+  'sync.mergeLogDays': def({
+    key: 'sync.mergeLogDays',
+    schema: z.number().int().min(1).max(3650),
+    default: 90,
+    description: 'How long overwritten values stay in the sync merge log for restore (FR-109).',
+  }),
+  'sync.offlineAfterMinutes': def({
+    key: 'sync.offlineAfterMinutes',
+    schema: z.number().int().min(1).max(1440),
+    default: 10,
+    description:
+      'A replica that has not pulled or pushed for this long shows as offline (docs/13 §2.2).',
+  }),
+  // ---- M7 code
+  'code.handoffSource': def({
+    key: 'code.handoffSource',
+    schema: z.enum(['keep', 'clean']),
+    default: 'keep',
+    description:
+      'After a session handoff is confirmed: keep the uncommitted changes in the source working tree, or clean them (FR-213).',
+  }),
+  'code.attempts': def({
+    key: 'code.attempts',
+    schema: z
+      .object({
+        /** Attempts a best-of-N task runs when the request names no count (2 to 4). */
+        count: z.number().int().min(2).max(4),
+        /** The bounds of each attempt (docs/09 §2). */
+        budgets: z
+          .object({
+            timeSeconds: z.number().int().min(60).nullable(),
+            tokens: z.number().int().min(1_000).nullable(),
+            costUsd: z.number().min(0.01).nullable(),
+          })
+          .strict(),
+      })
+      .strict(),
+    default: { count: 2, budgets: { timeSeconds: 1800, tokens: null, costUsd: null } },
+    description:
+      'Best-of-N: how many attempts a task runs and the budget of each (FR-212); at most 4.',
+  }),
+  'code.ssh.enabled': def({
+    key: 'code.ssh.enabled',
+    schema: z.boolean(),
+    default: false,
+    // It runs the system ssh client and installs Nova's helper under ~/.nova/remote on hosts.
+    security: true,
+    description:
+      "Reach SSH environments with this machine's ssh client and install Nova's helper under ~/.nova/remote on the host (FR-062); off by default.",
+  }),
+  // ---- M7 channels
+  'channels.email.pollSeconds': def({
+    key: 'channels.email.pollSeconds',
+    schema: z.number().int().min(15).max(3600),
+    default: 60,
+    description:
+      'How often email bindings in polling mode check their mailbox, and how soon an idle connection that dropped is opened again (FR-110).',
+  }),
+  'channels.approvalLinkMinutes': def({
+    key: 'channels.approvalLinkMinutes',
+    schema: z.number().int().min(5).max(1440),
+    default: 60,
+    security: true,
+    description:
+      'How long the signed link in an approval email works (never past the approval itself); each link works once (FR-110, docs/13 §4).',
+  }),
+  'push.enabled': def({
+    key: 'push.enabled',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Send OS notifications as push to subscribed browsers and to native apps through the Relay; only ids and redacted titles leave the Hub unencrypted (FR-111, docs/13 §6).',
+  }),
+  'push.detail': def({
+    key: 'push.detail',
+    schema: z.enum(['none', 'redacted', 'titles']),
+    default: 'redacted',
+    security: true,
+    description:
+      'What a browser push says: nothing but "Nova", a redacted title per category, or the notification title (encrypted to the browser). Native pushes through the Relay always get the redacted title (docs/13 §6).',
+  }),
+  'push.webPushHosts': def({
+    key: 'push.webPushHosts',
+    schema: z.array(hostPatternSchema).min(1).max(50),
+    default: [
+      'fcm.googleapis.com',
+      'updates.push.services.mozilla.com',
+      '*.push.apple.com',
+      '*.notify.windows.com',
+    ] as string[],
+    security: true,
+    description:
+      'The push services a browser subscription may point at (https only); the Hub sends Web Push nowhere else (FR-111).',
+  }),
+  'push.vapidSubject': def({
+    key: 'push.vapidSubject',
+    schema: z
+      .string()
+      .max(300)
+      .regex(/^(mailto:[^\s@]+@[^\s@]+|https:\/\/\S+)$/, 'a mailto: or https: contact')
+      .nullable(),
+    default: null as string | null,
+    description:
+      'The contact push services see in the VAPID token (RFC 8292 `sub`); unset uses the public Hub address, else a placeholder address.',
+  }),
+  // ---- M7 flagged
+  'scripts.enabled': def({
+    key: 'scripts.enabled',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Offer `script.run`: a short script in an isolated engine whose tool calls each pass the policy engine; off by default (FR-202).',
+  }),
+  'scripts.limits': def({
+    key: 'scripts.limits',
+    schema: z
+      .object({
+        cpuMs: z.number().int().min(100).max(30_000),
+        memoryMb: z.number().int().min(8).max(128),
+        maxCalls: z.number().int().min(1).max(100),
+        logChars: z.number().int().min(1_000).max(100_000),
+      })
+      .strict(),
+    default: { cpuMs: 5_000, memoryMb: 32, maxCalls: 20, logChars: 20_000 },
+    security: true,
+    description:
+      "Limits of one script: CPU time, the engine's memory, nested tool calls and console output (FR-202).",
+  }),
+  'externalAgents.enabled': def({
+    key: 'externalAgents.enabled',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Let Code sessions delegate to external coding agents (Agent Client Protocol) that route every permission request to Nova; off by default (FR-203).',
+  }),
+  // ---- M7 devices
+  'devices.tls.allowWithoutCertificate': def({
+    key: 'devices.tls.allowWithoutCertificate',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Over HTTPS, still accept novad devices and compute nodes that present no device certificate (reported as a diagnostics problem); off, they are refused. Plain HTTP is unaffected. On for one release, so devices added before mutual TLS keep working (FR-126).',
+  }),
+  'relay.registrationTokenRef': def({
+    key: 'relay.registrationTokenRef',
+    schema: relayRegistrationTokenRefSchema,
+    default: '',
+    security: true,
+    description:
+      'The vault entry holding the token a private Relay asks for when this Hub registers (PUT /api/v1/relay/registration-token sets it); empty for none (FR-137).',
+  }),
+  // ---- M7 runner
+  'cloud.runner.enabled': def({
+    key: 'cloud.runner.enabled',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Run the commands and files of cloud environments (Code sessions, Work runs) on the configured cloud runner; off by default (FR-108, FR-071).',
+  }),
+  'cloud.runner.url': def({
+    key: 'cloud.runner.url',
+    // https://, or http:// only to this machine (the token never crosses a network in clear).
+    schema: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine((v) => {
+        if (v === '') return true;
+        try {
+          const u = new URL(v);
+          const local = /^(localhost|\[::1\]|127(\.\d{1,3}){3})$/i.test(u.hostname);
+          const scheme = u.protocol === 'https:' || (u.protocol === 'http:' && local);
+          return scheme && !u.username && !u.password && !u.search && !u.hash;
+        } catch {
+          return false;
+        }
+      }, 'an https:// URL (http:// only to this machine), without credentials'),
+    default: '',
+    security: true,
+    description:
+      'The cloud runner: its own (self-hosted) or the hosted one; empty for none (FR-108, contracts/rest-api.md §5).',
+  }),
+  'cloud.runner.token': def({
+    key: 'cloud.runner.token',
+    // Only the vault reference, never the token (PUT /api/v1/cloud/runner sets both).
+    schema: z.enum(['', 'secret://cloud/runner/token']),
+    default: '',
+    security: true,
+    description:
+      'The vault entry holding the runner token (PUT /api/v1/cloud/runner stores it); empty for none.',
+  }),
+  'cloud.runner.caps': def({
+    key: 'cloud.runner.caps',
+    schema: z
+      .object({
+        cpuSeconds: z.number().int().min(60).max(604_800),
+        wallSeconds: z.number().int().min(60).max(604_800),
+        diskMb: z.number().int().min(16).max(1_048_576),
+        warnAt: z.number().min(0.5).max(0.99),
+      })
+      .strict(),
+    default: { cpuSeconds: 3_600, wallSeconds: 14_400, diskMb: 10_240, warnAt: 0.8 },
+    security: true,
+    description:
+      'Caps for each cloud run (CPU and wall-clock seconds) and each cloud environment (disk), with a warning at `warnAt` of a cap and a hard stop at it (FR-116).',
+  }),
+  'cloud.runner.unrestrictedNetwork': def({
+    key: 'cloud.runner.unrestrictedNetwork',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      "Let cloud environments reach the network directly from the runner, without the Hub's egress proxy: no allowlist, no blocking of private or local addresses, no egress audit. Off, cloud commands never get network and cloud environments can only be made with network off (docs/12 §8).",
+  }),
+  // ---- M7 team
+  'team.invitationHours': def({
+    key: 'team.invitationHours',
+    schema: z.number().int().min(1).max(720),
+    default: 72,
+    security: true,
+    description:
+      'How long a new invitation link stays valid, in hours; each link works once (decision 5, FR-217).',
+  }),
+  'team.publicProfiles': def({
+    key: 'team.publicProfiles',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'People of this Hub may publish a read-only public profile card (display name, avatar); off by default (FR-113).',
+  }),
+  'agents.usageRetryMinutes': def({
+    key: 'agents.usageRetryMinutes',
+    schema: z.number().int().min(1).max(1440),
+    default: 15,
+    description:
+      "How long an agent's goal stopped by a provider usage limit waits before trying again; each failed retry doubles the wait, up to 4 hours (FR-181).",
   }),
   'privacy.telemetry': def({
     key: 'privacy.telemetry',

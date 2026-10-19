@@ -1,0 +1,171 @@
+/* Offline banner, changes waiting to send, answers from this computer and Settings → Sync
+   (FR-109, FR-112, FR-128). Colors, spacing and type come only from design tokens (docs/14 §2.2). */
+
+/* ---- the banner above the workspace ------------------------------------------------------------ */
+.of-banner-region:empty {
+  display: none;
+}
+.of-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2) var(--u-space-3);
+  padding: var(--u-space-2) var(--u-space-4);
+  border-bottom: 1px solid var(--u-border);
+  border-left: 4px solid var(--u-info);
+  background: var(--u-surface-2);
+  font-size: var(--u-text-sm);
+}
+.of-banner[data-tone='offline'] {
+  border-left-color: var(--u-warn);
+}
+.of-banner[data-tone='failed'] {
+  border-left-color: var(--u-danger);
+}
+.of-banner > .nv-icon,
+.of-banner > svg {
+  flex: none;
+}
+.of-banner-text {
+  display: grid;
+  flex: 1 1 18rem;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.of-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+
+/* ---- messages written or answered offline, in a chat (src/chat/MessageItem.tsx) ------------------- */
+.msg-badge[data-kind='sync'],
+.msg-badge[data-kind='offline'] {
+  border-color: var(--u-border);
+  color: var(--u-text-muted);
+}
+
+/* ---- waiting changes ------------------------------------------------------------------------------ */
+.of-item {
+  align-items: flex-start;
+}
+/* The text takes the row; on a phone the actions go below it. */
+.of-row-main {
+  flex: 1 1 16rem;
+}
+.of-item-label {
+  overflow-wrap: anywhere;
+}
+.of-reason {
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+.of-text {
+  margin: 0;
+  max-width: 100%;
+  padding: var(--u-space-2) var(--u-space-3);
+  border-left: 3px solid var(--u-border);
+  font-size: var(--u-text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- answers from this computer (in a chat) ------------------------------------------------------ */
+.of-local {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: var(--u-space-2) 0;
+  padding: var(--u-space-3);
+  border: 1px dashed var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.of-local-title {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+  font-size: var(--u-text-md);
+}
+.of-local-note {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+}
+.of-local-controls {
+  align-items: flex-end;
+}
+.of-local-controls .nv-field {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+.of-answer {
+  display: grid;
+  gap: var(--u-space-1);
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+  list-style: none;
+}
+.of-answer-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+}
+
+/* ---- Settings → Sync -------------------------------------------------------------------------------- */
+.sy-facts {
+  max-width: 40rem;
+}
+.sy-filter {
+  max-width: 16rem;
+}
+.sy-entry {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.sy-entry-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+}
+.sy-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: var(--u-space-2);
+}
+.sy-side {
+  display: grid;
+  align-content: start;
+  gap: var(--u-space-1);
+  min-width: 0;
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+}
+.sy-side[data-side='winner'] {
+  border-color: var(--u-success);
+}
+.sy-side h5 {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.sy-value {
+  margin: 0;
+  max-height: 12rem;
+  overflow: auto;
+  font-size: var(--u-text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -2,6 +2,7 @@
 // fake in tests), the page model the tools and the classifier read, and the late-bound hooks other
 // areas fill in (the external-agent guard, the local browser fallback). The controller itself
 // implements `BrowserController` from computers/types.ts.
+import type { RawConsoleEvent, RawNetworkEvent } from './capture.ts';
 
 /** An interactive element of the page, with the stable ref the actions take. */
 export interface PageElement {
@@ -72,6 +73,17 @@ export interface DriverLaunchOptions {
   onBlockedNavigation?: (url: string) => void;
   /** The page tried to open a window (closed; reported to the agent). */
   onPopup?: (url: string) => void;
+  /** A console message or an uncaught page error (docs/11 §4 observation, M7). */
+  onConsole?: (event: RawConsoleEvent) => void;
+  /** Network activity of the page, by request id (docs/11 §4 network summary, M7). */
+  onNetwork?: (event: RawNetworkEvent) => void;
+  /**
+   * Response bodies are read only for text types whose size is under this (bytes); 0 reads
+   * none. Request bodies are never reported.
+   */
+  captureBodyMaxBytes?: number;
+  /** The page or the whole browser crashed (docs/11 §10); not called for our own close. */
+  onCrash?: (reason: string) => void;
 }
 
 /** Cookies and origins' storage, as Playwright's storage state. */
@@ -95,6 +107,8 @@ export interface DriverSession {
   /** The element behind a ref now (null when gone); used to detect a page that changed. */
   describe(ref: string): Promise<PageElement | null>;
   click(ref: string, timeoutMs: number): Promise<void>;
+  /** Move the pointer over an element (menus, tooltips); changes nothing on the site. */
+  hover(ref: string, timeoutMs: number): Promise<void>;
   fill(ref: string, text: string, timeoutMs: number): Promise<void>;
   select(ref: string, value: string, timeoutMs: number): Promise<void>;
   press(key: string, timeoutMs: number): Promise<void>;
@@ -105,6 +119,8 @@ export interface DriverSession {
     timeoutMs: number,
   ): Promise<boolean>;
   screenshot(fullPage: boolean): Promise<Uint8Array>;
+  /** A PNG of one element of the last read (docs/11 §4: element screenshots). */
+  screenshotElement(ref: string): Promise<Uint8Array>;
   /** Click `ref` and save the download it starts. */
   download(ref: string, timeoutMs: number): Promise<{ suggestedName: string; data: Uint8Array }>;
   upload(ref: string, files: { name: string; mime: string; data: Uint8Array }[]): Promise<void>;
@@ -114,6 +130,20 @@ export interface DriverSession {
   callPageTool(name: string, args: unknown, timeoutMs: number): Promise<unknown>;
   input(event: BrowserTakeoverInput): Promise<void>;
   storageState(): Promise<StorageState>;
+  /** The context's cookies (cheap; what a restart after a crash carries over). */
+  cookies(): Promise<Record<string, unknown>[]>;
+  /**
+   * After a page crash: replace the page with a new one in the same browser, which keeps its
+   * cookies. False when the browser itself is gone (the caller launches a new one).
+   */
+  recover(): Promise<boolean>;
+  /**
+   * Why the page or the browser is down, from the driver's own signals (the page's crash event,
+   * the browser's connection), never from an error message a page could write; null when up.
+   */
+  crashState(): Promise<string | null>;
+  /** Whether the focused field takes a password or a one-time code (takeover typing). */
+  focusedSecret(): Promise<boolean>;
   close(): Promise<void>;
 }
 

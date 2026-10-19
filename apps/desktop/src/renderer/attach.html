@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Attach window</title>
+    <link rel="stylesheet" href="shell.css" />
+    <script src="attach.js" defer></script>
+  </head>
+  <body>
+    <main aria-labelledby="title">
+      <div class="stack">
+        <h1 id="title">Attach window</h1>
+        <p id="source" class="muted"></p>
+        <p class="hint">
+          Nothing has been sent yet. Remove what you do not want to share, then send it to Nova.
+        </p>
+      </div>
+      <div id="error" class="error" role="alert" hidden></div>
+
+      <section id="image-part" class="panel" aria-labelledby="image-h">
+        <div class="part-head">
+          <h2 id="image-h">Image</h2>
+          <label><input id="keep-image" type="checkbox" checked /> Attach the image</label>
+        </div>
+        <img id="image" class="preview-image" alt="Screenshot of the window" hidden />
+        <p id="image-note" class="hint"></p>
+      </section>
+
+      <section id="text-part" class="panel" aria-labelledby="text-h">
+        <div class="part-head">
+          <h2 id="text-h">Text</h2>
+          <label><input id="keep-text" type="checkbox" checked /> Attach the text</label>
+        </div>
+        <textarea id="text" rows="10" readonly aria-labelledby="text-h" hidden></textarea>
+        <p id="text-note" class="hint"></p>
+        <p id="redactions" class="hint"></p>
+      </section>
+
+      <div class="stack">
+        <label for="note">Message (optional)</label>
+        <textarea id="note" rows="2"></textarea>
+      </div>
+      <fieldset>
+        <legend class="sr-only">Send to</legend>
+        <label id="current-option"
+          ><input type="radio" name="target" value="current" /> The chat open in Nova</label
+        >
+        <label><input type="radio" name="target" value="new" checked /> A new chat</label>
+      </fieldset>
+      <p class="hint">Nova reads attached content as data, never as instructions.</p>
+      <div class="actions end">
+        <button id="discard" type="button">Discard</button>
+        <button id="send" type="button" class="primary">Send</button>
+      </div>
+    </main>
+  </body>
+</html>

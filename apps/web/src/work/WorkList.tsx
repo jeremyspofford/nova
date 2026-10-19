@@ -14,6 +14,7 @@ import { followLink, WorkNav } from './nav.tsx';
 import { NewRunDialog } from './NewRunDialog.tsx';
 import '../workspace.css';
 import './work.css';
+import { NewCloudWorkButton } from '../cloud/NewCloudWork.tsx';
 
 export function WorkList() {
   const { api } = useServices();
@@ -75,6 +76,7 @@ export function WorkList() {
         <Button variant="primary" onClick={() => setCreating(true)}>
           <Icon name="plus" /> New run
         </Button>
+        <NewCloudWorkButton />
       </header>
       <WorkNav current="runs" />
       <p className="muted ws-flush">

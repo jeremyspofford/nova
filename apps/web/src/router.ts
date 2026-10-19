@@ -8,12 +8,15 @@ export type Mode = (typeof MODES)[number];
 
 export const SETTINGS_SECTIONS = [
   'general',
+  'account',
+  'members',
   'profile',
   'accounts',
   'models',
   'memory',
   'tools',
   'code',
+  'cloud',
   'plugins',
   'clients',
   'permissions',
@@ -24,10 +27,12 @@ export const SETTINGS_SECTIONS = [
   'triggers',
   'devices',
   'network',
+  'sync',
   'browser',
   'appearance',
   'keyboard',
   'import',
+  'experimental',
   'diagnostics',
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -49,6 +54,10 @@ export type Route =
   | { name: 'network'; section: string | null }
   /** /computers, /computers/:id (FR-080). */
   | { name: 'computers'; computerId: string | null }
+  /** /approvals: every pending approval, for answering from a phone (FR-111, M7). */
+  | { name: 'approvals' }
+  /** /team, /team/:section, /team/:section/:id: shared chats and team agents (FR-217, FR-091). */
+  | { name: 'team'; section: string | null; id: string | null }
   | { name: 'open'; target: string }
   | { name: 'onboarding' };
 
@@ -72,6 +81,10 @@ export function parseRoute(pathname: string, search = ''): Route {
   if (head === 'computers') return { name: 'computers', computerId: arg ?? null };
   if (head === 'devices') return { name: 'devices', deviceId: arg ?? null };
   if (head === 'network') return { name: 'network', section: arg ?? null };
+  if (head === 'approvals' && !arg) return { name: 'approvals' };
+  if (head === 'team') return { name: 'team', section: arg ?? null, id: parts[2] ?? null };
+  // A signed-in person whose identity link failed lands here; the Account page explains it.
+  if (head === 'sign-in') return { name: 'settings', section: 'account' };
   if (head === 'open')
     return { name: 'open', target: new URLSearchParams(search).get('url') ?? '' };
   const messageId = new URLSearchParams(search).get('m');

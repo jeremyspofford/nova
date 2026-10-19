@@ -6,6 +6,8 @@
 //! - storage: device file operations, folder grants, sandboxed commands, local MCP pass-through
 //!   (FR-210, FR-081).
 //! - management: power, Wake-on-LAN and systemd services (FR-144, FR-145).
+//! - local-runtime: proxies the device's local model server to authenticated local clients once
+//!   the Hub granted the scope (FR-128, src/local_runtime.rs).
 //! - compute, browser, screen, capture: answer `ping` and `status`; their work arrives with their
 //!   areas (inference supervision, FR-209 local browser, FR-207 computer use, FR-228 capture).
 
@@ -32,11 +34,14 @@ pub struct Context {
     pub bwrap: Option<PathBuf>,
     pub power: Option<Power>,
     pub runner: Box<dyn Runner>,
+    /// The local runtime (only in the `local-runtime` module), or why it could not start.
+    pub runtime: Option<Result<Arc<crate::local_runtime::Runtime>, OpError>>,
 }
 
 impl Context {
     pub fn new(name: &str, data_dir: &Path) -> Self {
         let data = DataDir(data_dir.to_path_buf());
+        let runtime = (name == crate::local_runtime::MODULE).then(|| crate::local_runtime::Runtime::new(&data).map(Arc::new));
         let power = (name == "management").then(|| {
             let cfg = data.config().unwrap_or_default();
             Power::system(cfg.power.allow_changes, cfg.power.allow_actions)
@@ -49,6 +54,7 @@ impl Context {
             bwrap: find_bwrap(),
             power,
             runner: Box::new(SystemRunner),
+            runtime,
         }
     }
 }
@@ -69,6 +75,12 @@ pub fn handle(ctx: &Context, op: &str, args: &Value) -> OpResult<Value> {
     match ctx.name.as_str() {
         "storage" => storage_op(ctx, op, args),
         "management" => management_op(ctx, op, args),
+        crate::local_runtime::MODULE => match &ctx.runtime {
+            Some(Ok(rt)) => rt.op(op, args),
+            Some(Err(e)) if op == "status" => Ok(json!({ "module": ctx.name, "ready": false, "error": e.message })),
+            Some(Err(e)) => Err(e.clone()),
+            None => Err(OpError::internal("the local runtime is not set up")),
+        },
         _ if op == "status" => Ok(json!({ "module": ctx.name, "ready": true })),
         _ => Err(OpError::not_found(format!("the {} module has no operation {op}", ctx.name))),
     }
@@ -196,6 +208,15 @@ pub fn main_loop(name: &str, data_dir: &Path) -> i32 {
     let ctx = Arc::new(Context::new(name, data_dir));
     if name == "storage" {
         ctx.storage.sweep();
+    }
+    match &ctx.runtime {
+        Some(Ok(rt)) => {
+            if let Err(e) = rt.start() {
+                eprintln!("novad local-runtime: {e}");
+            }
+        }
+        Some(Err(e)) => eprintln!("novad local-runtime: {e}"),
+        None => {}
     }
     let out = Arc::new(Mutex::new(std::io::stdout()));
     let in_flight = Arc::new(AtomicUsize::new(0));

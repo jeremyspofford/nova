@@ -5,9 +5,9 @@
 // `handoff_required` ones, which need a Nova client). Names are untrusted and shown as text.
 import { useEffect, useId, useState } from 'react';
 import {
-  channelIdentitySchema,
-  type ChannelBindingKind,
-  type ChannelIdentityView,
+  channelIdentityM7Schema,
+  type ChannelIdentityViewM7,
+  type ChannelKindM7,
   type ChannelRole,
 } from '@nova/shared';
 import { Button, Dialog, Icon, SelectField, Spinner, TextField, useToast } from '@nova/ui';
@@ -15,34 +15,36 @@ import { errorMessage } from '../api.ts';
 import { useChannelsApi } from './api.ts';
 import { KIND_TEXT, errorField, issueErrors } from './format.ts';
 
-const KINDS: ChannelBindingKind[] = ['slack', 'teams', 'webhook', 'email'];
+const KINDS: ChannelKindM7[] = ['slack', 'teams', 'telegram', 'email', 'webhook'];
 
 const ROLE_TEXT: Record<ChannelRole, string> = {
   owner: 'Owner',
   member: 'Member',
 };
 
-const ID_HINT: Partial<Record<ChannelBindingKind, string>> = {
+const ID_HINT: Partial<Record<ChannelKindM7, string>> = {
   slack: 'Their Slack member ID, like U0123ABCD.',
   teams: 'Their Teams user ID.',
+  telegram: 'Their Telegram user ID, a number (not their @name).',
   webhook: 'The sender id your service sends in "from".',
-  email: 'Their email address.',
+  email:
+    'Their email address. Mail counts as theirs only when their mail server vouches for it (DMARC), unless the channel trusts the From address.',
 };
 
 export function PeopleSection() {
   const api = useChannelsApi();
   const toast = useToast();
   const id = useId();
-  const [items, setItems] = useState<ChannelIdentityView[] | null>(null);
+  const [items, setItems] = useState<ChannelIdentityViewM7[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
-  const [kind, setKind] = useState<ChannelBindingKind>('slack');
+  const [kind, setKind] = useState<ChannelKindM7>('slack');
   const [externalId, setExternalId] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [role, setRole] = useState<ChannelRole>('member');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  const [removing, setRemoving] = useState<ChannelIdentityView | null>(null);
+  const [removing, setRemoving] = useState<ChannelIdentityViewM7 | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -60,7 +62,7 @@ export function PeopleSection() {
   }, [api, version]);
 
   const add = async () => {
-    const parsed = channelIdentitySchema.safeParse({
+    const parsed = channelIdentityM7Schema.safeParse({
       kind,
       externalId,
       role,
@@ -95,7 +97,7 @@ export function PeopleSection() {
     }
   };
 
-  const remove = async (p: ChannelIdentityView) => {
+  const remove = async (p: ChannelIdentityViewM7) => {
     setRemoving(null);
     try {
       await api.removeChannelIdentity(p.id);
@@ -163,7 +165,7 @@ export function PeopleSection() {
           <SelectField
             label="Where"
             value={kind}
-            onChange={(v) => setKind(v as ChannelBindingKind)}
+            onChange={(v) => setKind(v as ChannelKindM7)}
             options={KINDS.map((k) => ({ value: k, label: KIND_TEXT[k] }))}
           />
           <TextField

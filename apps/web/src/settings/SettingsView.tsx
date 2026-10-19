@@ -22,15 +22,24 @@ import { ToolsPage } from './ToolsPage.tsx';
 import { KeyboardPage } from './KeyboardPage.tsx';
 import { MemoryPage } from './MemoryPage.tsx';
 import { ModelsPage } from './ModelsPage.tsx';
+import { AccountPage } from '../team/AccountPage.tsx';
+import { MembersPage } from '../team/MembersPage.tsx';
+import { MemberSettingsGate, useTeamRole, visibleSettingsSections } from '../team/role.tsx';
+import { SyncPage } from '../sync/SyncPage.tsx';
+import { CloudSettings } from '../cloud/CloudSettings.tsx';
+import { ExperimentalSettings } from '../flagged/ExperimentalSettings.tsx';
 
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
+  account: 'Account',
+  members: 'Members',
   profile: 'Profile & usage',
   accounts: 'Accounts',
   models: 'Models',
   memory: 'Memory',
   tools: 'Tools & MCP',
   code: 'Code',
+  cloud: 'Cloud runner',
   plugins: 'Plugins & skills',
   clients: 'Apps & clients',
   permissions: 'Permissions',
@@ -41,10 +50,12 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   triggers: 'Triggers',
   devices: 'Devices',
   network: 'Network',
+  sync: 'Sync',
   browser: 'Browser',
   appearance: 'Appearance',
   keyboard: 'Keyboard',
   import: 'Import',
+  experimental: 'Experimental',
   diagnostics: 'Diagnostics',
 };
 
@@ -57,12 +68,14 @@ export function SettingsView({
   displayName?: string | null;
   onDisplayName: (name: string | null) => void;
 }) {
+  // A member sees only the sections that are theirs (M7, decision 5).
+  const { role } = useTeamRole();
   return (
     <div className="settings">
       <h1 className="settings-title">Settings</h1>
       <nav className="settings-nav" aria-label="Settings sections">
         <ul>
-          {SETTINGS_SECTIONS.map((s) => (
+          {visibleSettingsSections(SETTINGS_SECTIONS, role).map((s) => (
             <li key={s}>
               <a
                 href={`/settings/${s}`}
@@ -79,28 +92,35 @@ export function SettingsView({
         </ul>
       </nav>
       <div className="settings-body">
-        {section === 'general' ? <GeneralPage /> : null}
-        {section === 'accounts' ? <AccountsPage /> : null}
-        {section === 'models' ? <ModelsPage /> : null}
-        {section === 'memory' ? <MemoryPage /> : null}
-        {section === 'profile' ? <ProfilePage onDisplayName={onDisplayName} /> : null}
-        {section === 'tools' ? <ToolsPage /> : null}
-        {section === 'code' ? <CodePage /> : null}
-        {section === 'plugins' ? <PluginsPage /> : null}
-        {section === 'clients' ? <ClientsPage /> : null}
-        {section === 'import' ? <ImportPage /> : null}
-        {section === 'permissions' ? <PermissionsPage /> : null}
-        {section === 'computer-use' ? <ComputerUseSettings /> : null}
-        {section === 'agents' ? <AgentsSettings /> : null}
-        {section === 'notifications' ? <NotificationsPage /> : null}
-        {section === 'channels' ? <ChannelsPage /> : null}
-        {section === 'triggers' ? <TriggersPage /> : null}
-        {section === 'diagnostics' ? <DiagnosticsPage /> : null}
-        {section === 'devices' ? <DevicesPage /> : null}
-        {section === 'network' ? <NetworkPage /> : null}
-        {section === 'browser' ? <BrowserSettings /> : null}
-        {section === 'appearance' ? <AppearancePage /> : null}
-        {section === 'keyboard' ? <KeyboardPage /> : null}
+        <MemberSettingsGate section={section} label={SECTION_LABELS[section]}>
+          {section === 'general' ? <GeneralPage /> : null}
+          {section === 'account' ? <AccountPage /> : null}
+          {section === 'members' ? <MembersPage /> : null}
+          {section === 'sync' ? <SyncPage /> : null}
+          {section === 'cloud' ? <CloudSettings /> : null}
+          {section === 'experimental' ? <ExperimentalSettings /> : null}
+          {section === 'accounts' ? <AccountsPage /> : null}
+          {section === 'models' ? <ModelsPage /> : null}
+          {section === 'memory' ? <MemoryPage /> : null}
+          {section === 'profile' ? <ProfilePage onDisplayName={onDisplayName} /> : null}
+          {section === 'tools' ? <ToolsPage /> : null}
+          {section === 'code' ? <CodePage /> : null}
+          {section === 'plugins' ? <PluginsPage /> : null}
+          {section === 'clients' ? <ClientsPage /> : null}
+          {section === 'import' ? <ImportPage /> : null}
+          {section === 'permissions' ? <PermissionsPage /> : null}
+          {section === 'computer-use' ? <ComputerUseSettings /> : null}
+          {section === 'agents' ? <AgentsSettings /> : null}
+          {section === 'notifications' ? <NotificationsPage /> : null}
+          {section === 'channels' ? <ChannelsPage /> : null}
+          {section === 'triggers' ? <TriggersPage /> : null}
+          {section === 'diagnostics' ? <DiagnosticsPage /> : null}
+          {section === 'devices' ? <DevicesPage /> : null}
+          {section === 'network' ? <NetworkPage /> : null}
+          {section === 'browser' ? <BrowserSettings /> : null}
+          {section === 'appearance' ? <AppearancePage /> : null}
+          {section === 'keyboard' ? <KeyboardPage /> : null}
+        </MemberSettingsGate>
       </div>
     </div>
   );

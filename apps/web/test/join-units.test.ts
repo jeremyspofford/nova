@@ -138,18 +138,21 @@ describe('the link and the platform', () => {
       fingerprint: 'abc',
       code: 'ABCDEFGH',
       badCode: false,
+      relay: null,
     });
     expect(readJoinParams('', '')).toEqual({
       pairingId: null,
       fingerprint: null,
       code: null,
       badCode: false,
+      relay: null,
     });
     expect(readJoinParams('?p=../x', '#c=nope')).toEqual({
       pairingId: null,
       fingerprint: null,
       code: null,
       badCode: true,
+      relay: null,
     });
     expect(readJoinParams('', '#c=%E0%A4%A').badCode).toBe(true);
   });

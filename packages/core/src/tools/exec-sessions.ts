@@ -12,6 +12,7 @@
 import { NovaError, type ExecSessionView } from '@nova/shared';
 import { defaultRedactor, type Redactor } from '@nova/security';
 import type { EventSink } from '../events.ts';
+import { remoteFilesFor, type RemoteFiles } from './fs-remote.ts';
 import type { ExecRequestExtras } from './sandbox.ts';
 import { clip } from './text.ts';
 import type { AuditSink, ExecRequest, ExecResult, SandboxClient } from './types.ts';
@@ -22,6 +23,26 @@ export interface ExecSessionSettings {
   yieldMs: number;
   /** Tokens of output returned to the model per call (default 10,000). */
   outputTokens: number;
+}
+
+/**
+ * Availability of the sandbox a thread's commands go to: the router's `availableFor` when the
+ * sandbox routes by thread (ThreadSandboxRouter, ExecSessions over it), else its own.
+ */
+export function sandboxAvailableFor(
+  sandbox: SandboxClient,
+  accountId: string,
+  threadId: string,
+): Promise<{ ok: boolean; detail: string }> {
+  const routed = sandbox as SandboxClient & {
+    availableFor?: (
+      accountId: string | null,
+      threadId: string | null,
+    ) => Promise<{ ok: boolean; detail: string }>;
+  };
+  return typeof routed.availableFor === 'function'
+    ? routed.availableFor(accountId, threadId)
+    : sandbox.available();
 }
 
 export const DEFAULT_EXEC_SESSION_SETTINGS: ExecSessionSettings = {
@@ -92,6 +113,20 @@ export class ExecSessions implements SandboxClient {
 
   available(): Promise<{ ok: boolean; detail: string }> {
     return this.#inner.available();
+  }
+
+  /**
+   * Whether the sandbox this thread's commands go to can run them (M7): a Code session or Work
+   * run in a cloud, SSH or device environment runs them there, so a Hub without a sandbox of its
+   * own still runs them; every other thread still needs the Hub's (fail closed).
+   */
+  availableFor(accountId: string, threadId: string): Promise<{ ok: boolean; detail: string }> {
+    return sandboxAvailableFor(this.#inner, accountId, threadId);
+  }
+
+  /** Where this thread's files are (M7): the router underneath knows (fs-remote.ts). */
+  filesFor(accountId: string, threadId: string): RemoteFiles | null | undefined {
+    return remoteFilesFor(this.#inner, accountId, threadId);
   }
 
   /** The `exec.sessions` settings, clamped to their schema bounds. */

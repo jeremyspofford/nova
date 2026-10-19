@@ -28,6 +28,32 @@ import {
 const { addDeviceRequest, authToken, device, deviceCapability, transportEndpoint } = schema;
 
 type DeviceRow = typeof device.$inferSelect;
+
+/**
+ * The compute node a credential (`nvn_…`) belongs to, or null (unknown, revoked or deleted): the
+ * check every /node/v1 credential route makes, also used by the device-trust area to tie a client
+ * certificate to the credential presented with it (FR-126).
+ */
+export async function computeNodeForCredential(
+  db: NovaDatabase,
+  credential: string,
+): Promise<DeviceRow | null> {
+  if (!credential.startsWith(NODE_CREDENTIAL_PREFIX) || credential.length > 200) return null;
+  const rows = await db.orm
+    .select({ device })
+    .from(authToken)
+    .innerJoin(device, eq(device.credentialTokenId, authToken.id))
+    .where(
+      and(
+        eq(authToken.tokenHash, nodeSecretHash(credential)),
+        eq(authToken.kind, 'device'),
+        isNull(authToken.revokedAt),
+        ne(device.status, 'revoked'),
+      ),
+    )
+    .limit(1);
+  return rows[0]?.device ?? null;
+}
 export type NodeStatus = NodeView['status'];
 export type NodeLoad = { running: number; queued: number };
 
@@ -305,22 +331,8 @@ export class NodeService {
   // ---- node credential routes -------------------------------------------------------------
 
   /** The node a credential belongs to, or null (unknown, revoked or deleted). */
-  async authenticate(credential: string): Promise<DeviceRow | null> {
-    if (!credential.startsWith(NODE_CREDENTIAL_PREFIX) || credential.length > 200) return null;
-    const rows = await this.#db.orm
-      .select({ device })
-      .from(authToken)
-      .innerJoin(device, eq(device.credentialTokenId, authToken.id))
-      .where(
-        and(
-          eq(authToken.tokenHash, nodeSecretHash(credential)),
-          eq(authToken.kind, 'device'),
-          isNull(authToken.revokedAt),
-          ne(device.status, 'revoked'),
-        ),
-      )
-      .limit(1);
-    return rows[0]?.device ?? null;
+  authenticate(credential: string): Promise<DeviceRow | null> {
+    return computeNodeForCredential(this.#db, credential);
   }
 
   async #requireNode(credential: string): Promise<DeviceRow> {

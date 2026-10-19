@@ -112,6 +112,23 @@ export function matchingPattern(patterns: readonly string[], host: string): stri
 }
 
 /**
+ * Whether every host a pattern names is already allowed by `patterns`: an exact host matches one
+ * of them, and a wildcard `*.d` lies under a wildcard `*.e` with `d` equal to `e` or below it.
+ * What is not covered would widen the list (decision 5: a non-owner may only narrow it).
+ */
+export function patternCovered(patterns: readonly string[], pattern: string): boolean {
+  const p = normalizeHost(pattern);
+  if (!p.startsWith('*.')) return matchingPattern(patterns, p) !== null;
+  const d = p.slice(2);
+  return patterns.some((g) => {
+    const n = normalizeHost(g);
+    if (!n.startsWith('*.')) return false;
+    const e = n.slice(2);
+    return d === e || d.endsWith(`.${e}`);
+  });
+}
+
+/**
  * Validate a policy as it loads (FR-193): a bare `*` or a wildcard that is not the whole
  * leftmost label is a `validation` error, in either list. Returns a normalized copy.
  */

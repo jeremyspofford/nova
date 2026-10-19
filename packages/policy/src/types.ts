@@ -154,6 +154,13 @@ export interface PolicyContext {
   egress?: { allow?: string[]; deny?: string[] };
   /** The confirmed permissions of the plugin that owns the tool (FR-045). */
   plugin?: PluginPolicy;
+  /**
+   * The name policy rules match instead of `tool.name` (their `tool` match and `tool` scope),
+   * when it differs: a browser write under a project's or agent's site level
+   * (M7) is matched by that level's rule, while hooks, limits, grants, audit and events still
+   * see the tool's own name.
+   */
+  ruleTool?: string;
 }
 
 /**

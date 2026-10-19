@@ -13,6 +13,19 @@ serde_json = "1"
 # No "fast" (precomputed tables: binary size) and no "std"; "zeroize" wipes the signing key on drop.
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["zeroize"] }
 sha2 = { version = "=0.10.9", default-features = false }
+# TLS to the Hub (R-023, FR-126): rustls (Apache-2.0 OR ISC OR MIT) with the ring provider (ring
+# 0.17, Apache-2.0 AND ISC; it builds with the C compiler of the Rust image, aws-lc would need
+# cmake). TLS 1.3 and 1.2, no logging; certificate checks are rustls-webpki (ISC). src/tls.rs.
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+# The local runtime binds each user's socket in a child that switched to the user's ids and hands
+# the descriptor back over SCM_RIGHTS (src/user_socket.rs): fork, setuid and sendmsg are not in
+# std. MIT OR Apache-2.0; already in the build through ring.
+libc = { version = "=0.2.191", default-features = false }
+
+[dev-dependencies]
+# Test certificates (a Hub CA, leaves, device certificates, revocation lists) are made when the
+# tests run, so no key material is committed. MIT OR Apache-2.0.
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring", "pem"] }
 
 [profile.release]
 opt-level = "z"

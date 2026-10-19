@@ -2,6 +2,8 @@
 // routing ids, frame kinds, sequence numbers and sizes, never content, and stores nothing beyond
 // routing registrations and a bounded queue of ciphertext awaiting delivery. Hubs and clients
 // connect out to it; it forwards sealed envelopes between a Hub and its confirmed client routes.
+// A pending (claimed, unconfirmed) route gets only the Hub's data frames on Hub-opened streams
+// (the Hub's sealed `decided` notice, M7) and sends nothing until the Hub confirms it.
 //
 // Authentication: a Hub registers (optionally gated by a registration token) and gets a route
 // token; a client gets its route token by claiming a pairing slot with the code's hash; every
@@ -20,9 +22,15 @@ import {
   type RelayCloseReason,
   type RelayEnvelope,
 } from '@nova/relay';
-import { Logger } from '@nova/telemetry';
+import { streamLog, type RelayLog } from './log.ts';
 import { isIP } from 'node:net';
-import { MockPushSender, type PushSender } from './push.ts';
+import {
+  MockPushSender,
+  PUSH_TOPIC,
+  pushTokenProblem,
+  type PushOutcome,
+  type PushSender,
+} from './push.ts';
 import { DeliveryQueue } from './queue.ts';
 import {
   RelayState,
@@ -71,6 +79,8 @@ export interface RelayLimits {
   claimsPerMinute: number;
   /** At most one push wake-up per route per this interval. */
   pushIntervalMs: number;
+  /** Notifications the Hub may push to one route per minute (FR-111). */
+  notifyPerRouteMinute: number;
 }
 
 export const DEFAULT_LIMITS: RelayLimits = {
@@ -95,13 +105,14 @@ export const DEFAULT_LIMITS: RelayLimits = {
   registrationsPerHour: 20,
   claimsPerMinute: 30,
   pushIntervalMs: 30_000,
+  notifyPerRouteMinute: 30,
 };
 
 export interface RelayServerOptions {
   /** Persist routing registrations here (JSON, 0600); memory only without it. */
   dataDir?: string | null;
   state?: RelayState;
-  log?: Logger;
+  log?: RelayLog;
   push?: PushSender;
   limits?: Partial<RelayLimits>;
   /** When set, `POST /v1/relay/hubs` needs it as a bearer token (a private Relay). */
@@ -198,11 +209,38 @@ const pairingBody = z
   })
   .strict();
 const claimBody = z.object({ codeHash: z.string().regex(CODE_HASH), blob: base64(16384) }).strict();
+// Token shapes are checked here (M7): a malformed token is refused instead of failing later.
 const pushBody = z
   .object({
     platform: z.enum(['apns', 'fcm']),
     token: z.string().min(1).max(4096),
-    topic: z.string().min(1).max(256).optional(),
+    topic: z.string().regex(PUSH_TOPIC, 'a bundle id').optional(),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    const problem = pushTokenProblem(v.platform, v.token);
+    if (problem) ctx.addIssue({ code: 'custom', path: ['token'], message: problem });
+    if (v.topic && v.platform !== 'apns')
+      ctx.addIssue({ code: 'custom', path: ['topic'], message: 'only APNs takes a topic' });
+  });
+/**
+ * POST /v1/relay/push/notify (the Hub): ids, a redacted title and a deep link, nothing else. The
+ * shapes are narrow on purpose so a Hub cannot route content through push (docs/13 §6).
+ */
+const notifyBody = z
+  .object({
+    routes: z.array(z.string().regex(ROUTE_ID)).min(1).max(50),
+    notification: z
+      .object({
+        id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
+        category: z.enum(['approval', 'completion', 'error', 'attention', 'system']),
+        title: z.string().min(1).max(80),
+        link: z
+          .string()
+          .regex(/^nova:\/\/(run|code|approval|chat)\/[A-Za-z0-9-]{1,64}$/)
+          .nullable(),
+      })
+      .strict(),
   })
   .strict();
 const idParam = z.object({ id: z.string().regex(PAIRING_ID) });
@@ -271,7 +309,7 @@ export async function buildRelayServer(opts: RelayServerOptions = {}): Promise<R
   const limits: RelayLimits = { ...DEFAULT_LIMITS, ...opts.limits };
   const now = opts.now ?? (() => Date.now());
   const iso = (t = now()) => new Date(t).toISOString();
-  const log = opts.log ?? new Logger({ module: 'relay' });
+  const log = opts.log ?? streamLog();
   const trustProxy = parseTrustProxy(opts.trustProxy);
   const state =
     opts.state ??
@@ -424,8 +462,21 @@ export async function buildRelayServer(opts: RelayServerOptions = {}): Promise<R
         kind: 'wake',
         routeId: route.routeId,
       })
+      .then((out) => settlePush(route, out))
       .catch((err: unknown) => log.warn('push wake-up failed', { err, routeId: route.routeId }));
   };
+
+  /** A token the push service no longer knows is dropped; the client registers a new one. */
+  const settlePush = (route: ClientRoute, out: void | PushOutcome): boolean => {
+    if (!out) return true;
+    if (out.gone && route.push) {
+      state.clearPush(route);
+      log.info('push token dropped', { routeId: route.routeId, detail: out.detail ?? null });
+    } else if (!out.ok)
+      log.warn('push not delivered', { routeId: route.routeId, detail: out.detail });
+    return out.ok;
+  };
+  const notifyHits = new Limiter(limits.notifyPerRouteMinute, 60_000);
 
   const forward = (routeId: string, text: string, client: ClientRoute | null): void => {
     const target = newest(routeId);
@@ -455,8 +506,10 @@ export async function buildRelayServer(opts: RelayServerOptions = {}): Promise<R
         unknownRoute(conn, env);
         return;
       }
-      // Nothing reaches a client before the Hub confirmed its pairing.
-      if (target.status !== 'active') return;
+      // Nothing reaches a client before the Hub confirmed its pairing, except the Hub's own
+      // sealed notices on Hub-opened streams: a denied or expired client learns which (M7).
+      const notice = env.kind === 'data' && env.stream?.startsWith('h') === true;
+      if (target.status !== 'active' && !(target.status === 'pending' && notice)) return;
       forward(target.routeId, text, target);
       return;
     }
@@ -597,6 +650,29 @@ export async function buildRelayServer(opts: RelayServerOptions = {}): Promise<R
   });
 
   // ---- HTTP ----------------------------------------------------------------------------------
+  // Browsers pair and check reachability from a page the Hub serves (docs/22 §3), so the routes a
+  // client calls answer cross-origin requests: any origin, never with credentials (claims and
+  // pushes carry their own sealed blob or route token, and Hub routes stay same-origin only).
+  const CLIENT_CORS = new Set([
+    '/v1/relay/health',
+    '/v1/relay/pairings/:id/claim',
+    '/v1/relay/push/register',
+  ]);
+  app.addHook('onRequest', async (req, reply) => {
+    if (req.headers.origin === undefined || !CLIENT_CORS.has(req.routeOptions.url ?? '')) return;
+    void reply.header('Access-Control-Allow-Origin', '*');
+  });
+  for (const url of CLIENT_CORS)
+    app.options(url, async (_req, reply) => {
+      void reply
+        .status(204)
+        .header('Access-Control-Allow-Origin', '*')
+        .header('Access-Control-Allow-Methods', 'GET, POST')
+        .header('Access-Control-Allow-Headers', 'content-type, authorization')
+        .header('Access-Control-Max-Age', '600');
+      return reply.send();
+    });
+
   app.get('/v1/relay/health', () => ({ status: 'ok', version: opts.version ?? '0.0.0' }));
 
   app.post('/v1/relay/hubs', async (req, reply) => {
@@ -770,15 +846,55 @@ export async function buildRelayServer(opts: RelayServerOptions = {}): Promise<R
     return Promise.resolve({ ok: true });
   });
 
-  // Channel relay (webhook messages and the outbox) is M7: the routes exist and say so.
+  // A notification for the Hub's own active client routes (FR-111): pushed to those with a
+  // registration, at most `notifyPerRouteMinute` per route. The answer counts, nothing more.
+  app.post('/v1/relay/push/notify', async (req) => {
+    const hub = hubOf(req);
+    const body = notifyBody.parse(req.body);
+    let sent = 0;
+    let skipped = 0;
+    let failed = 0;
+    const t = now();
+    for (const routeId of new Set(body.routes)) {
+      const r = state.routes.get(routeId);
+      if (!r || r.hubRouteId !== hub.routeId || r.status !== 'active' || !r.push) {
+        skipped++;
+        continue;
+      }
+      if (!notifyHits.take(routeId, t)) {
+        skipped++;
+        continue;
+      }
+      stats.pushes++;
+      const out = await push
+        .send({
+          platform: r.push.platform,
+          token: r.push.token,
+          topic: r.push.topic,
+          kind: 'notify',
+          routeId,
+          notification: body.notification,
+        })
+        .catch((err: unknown): PushOutcome => {
+          log.warn('push notification failed', { err, routeId });
+          return { ok: false, detail: 'failed' };
+        });
+      if (settlePush(r, out)) sent++;
+      else failed++;
+    }
+    return { ok: true, sent, skipped, failed };
+  });
+
+  // The channel relay (webhook messages and the outbox) is not built: channels reach the Hub
+  // directly or by polling (docs/13 §4). The routes exist and say so.
   const notBuilt = (_req: FastifyRequest, reply: FastifyReply) => {
     void reply.status(501).send({
       error: {
         code: 'not_implemented',
         message:
-          'Channel relay (webhook messages and the outbox) is not built yet; it arrives in M7.',
+          'The channel relay (webhook messages and the outbox) is not built; channels reach the Hub directly or by polling.',
         retryable: false,
-        details: { reason: 'channel_relay_m7' },
+        details: { reason: 'channel_relay_not_built' },
       },
     });
   };
@@ -819,6 +935,7 @@ export async function buildRelayServer(opts: RelayServerOptions = {}): Promise<R
     }
     registrations.sweep(t);
     claims.sweep(t);
+    notifyHits.sweep(t);
     state.saveTouched();
   };
   const sweeper = setInterval(sweep, opts.sweepIntervalMs ?? 5_000);

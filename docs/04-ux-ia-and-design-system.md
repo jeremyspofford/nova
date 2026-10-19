@@ -51,6 +51,22 @@ Every thread, run, session and agent row carries a status chip (§1.1).
 **Channels**, **Triggers**, **Network** and **Browser**. Network is a Settings section in M6
 (egress, credentials, the decision log); the top-level Network surface of §9 is M6.5.
 
+**In M7** (ADR-095) the sidebar adds **Approvals** (`/approvals`, a shield icon) and **Team**
+(`/team`) after Network, and the account menu gains the connection item (first, §9) and
+**Approvals**. Team holds **Shared chats** (`/team/shared`) and **Team agents** (`/team/agents`):
+tabs on desktop; on phones `/team` lists them and each is a full page with a way back. The people
+and their invitations stay in Settings → Members. Settings adds **Account** and **Members** (after
+General), **Cloud runner** (after Code), **Sync** (after Network) and **Experimental** (before
+Diagnostics).
+
+**Members** (FR-217). Someone the owner invited signs in to an account of their own. For a member
+the sidebar hides Code, Library, Devices and Network, and Settings lists seven sections: Account,
+Members, Profile & usage, Accounts, Memory, Appearance and Keyboard (Appearance, Keyboard and
+onboarding are the member's own settings). A hidden surface or section reached by its address
+shows "Only the owner of this Hub can change this." with what it is, never a dead control. Tools &
+MCP, Notifications and Channels are hidden for members too: they read the Hub's settings and have
+no member mode yet.
+
 **In M5** (ADR-092) the sidebar's Work entry lists the active runs with live status chips; the
 Work list (`/work`) shows every run and **Scheduled** (`/work/scheduled`) the schedules. Code mode
 (`/code`) lists the sessions.
@@ -110,6 +126,18 @@ same status list:
 │ [New task]    [Attach window]    [Open Nova]     │
 └──────────────────────────────────────────────────┘
 ```
+
+**In M7** (ADR-095; `apps/desktop`) the desktop app draws its tray icon in code, with a badge while
+something needs input; the tooltip says how many items need input or are blocked. Clicking the
+icon opens the overlay. The tray menu has **Quick chat**, **New task**, **Attach window**, up to
+six status rows ("Needs input: <title> (<reason or kind>)"; a row opens its place), any global key
+another app holds, **Open Nova** and **Quit Nova**. The overlay (Ctrl+Alt+N / ⌃⌥N; pressed again
+while the overlay is in front, it brings Nova forward) has the message box ("Ask Nova…"; Enter
+sends, Esc closes), **Send to** "A new chat" (the default) or "The chat open in Nova" (the chat in
+the last used window; disabled when there is none), the status list (up to 8 rows, from the
+statuses the Hub derived; the shell derives none), and **New task** (opens New run,
+`/work?new=1`), **Attach window** (§3.2) and **Open Nova**. There is no mic: voice in quick chat
+waits for FR-216 and FR-031. Closing every window keeps the app in the tray.
 
 ## 2. Key user flows
 
@@ -351,6 +379,41 @@ decision can allow it.
   disabled with the reason. Git hosts (connect with a write-only token) and the M6 Code settings
   are in Settings → Code.
 
+**In M7** (ADR-095; `apps/web/src/code/SessionM7.tsx`):
+
+- The session header adds **Hand off…** and **Best of N…**; new tabs **Attempts**, **Merges** and
+  **Moves**, plus **Agents** and **Scripts** while their Experimental switches are on. Each M7 tab
+  loads when first opened.
+- **Hand off…** (FR-213) moves the session with its Git state to "Another environment" (this Hub,
+  an SSH host, a device or the cloud, and a folder there) or, for a repository on the Hub, to "A new
+  worktree", "The main checkout" or "An existing worktree". "After the move, the changes here":
+  **Keep them here too** or **Clean them up here** (only after the target confirmed it has them).
+  While a turn runs, **Interrupt the running turn** is offered; otherwise the move waits for it.
+  The dialog follows the move to its end and says why a refusal happened; **Moves** keeps the
+  history. Moving a chat to another device has no UI yet.
+- **Best of N…** (FR-212) runs the task as 2 to 4 attempts, each with its own budget (time, tokens,
+  cost) and optional model. The comparison shows each attempt's files, patch, tests, cost and last
+  reply. **Apply** (asks first) merges one into the session; a conflict writes nothing and offers
+  conflict markers instead. **Discard all** asks first. Best of N needs the folder on the Hub.
+- **Merge in…** (FR-073) takes "Another session" (both folders on the Hub) or "A patch" (with an
+  optional "Made against commit"), and either "Write nothing and show the conflicts" (each
+  conflicting file's base, this session and the incoming side) or "Write conflict markers to
+  resolve". With markers: **Mark resolved** (refused while markers remain), **Ask the agent to
+  resolve** and **Abort merge** (asks first).
+- **Remote sessions** (SSH, WSL, a device, the cloud) now have the diff, review, commits and
+  branches. Go to symbol, push, pull requests, dev servers, Best of N and merging another session
+  still need the folder on the Hub, and the session's note says so.
+- A session on a cloud environment shows its cloud run (usage against the caps) under the budget,
+  and its File tab shows the runner's files.
+- **Environments** adds **New cloud environment**, **Manage** on cloud rows (Settings → Cloud
+  runner, §9) and, on SSH rows, the pinned host key with its SHA256 fingerprint, a mismatch
+  explained, and **Replace key** or **Forget key** (both ask first). Settings → Code adds
+  **Connect to SSH environments** (asks before turning on), **Handing off sessions** (the default
+  for the changes left behind) and the **Best of N** defaults.
+- **Agents** and **Scripts** (Settings → Experimental, §9): the Agents tab delegates to an external
+  agent, shows its live activity and Stop (asks first); the Scripts tab lists each scripted call's
+  nested tool calls with their status and the policy decision.
+
 ### 2.5 Agent setup and operation (FR-079…090)
 
 1. Create Agent → name, avatar, responsibility (with an optional goal), connect plugins.
@@ -369,7 +432,9 @@ decision can allow it.
 - The sidebar's **Agents** entry lists the agents with their status chips; `/agents` is the full
   list and **New agent** opens `/agents/new`, a page (not a dialog): name, avatar, instructions,
   responsibilities and an optional first goal, autonomy, budgets, proactive research, memory and
-  model. Connecting plugins per agent is not built.
+  model. Connecting plugins per agent came in M7: a **Plugins** tab on the agent page offers
+  "Every plugin you turned on" (the default) or "Only the plugins chosen here", which limits the
+  agent's threads to those plugins' tools (FR-045).
 - The agent page (`/agents/<id>`, the section in `?tab=`) puts the agent's main thread beside its
   sections: **Activity**, **Responsibilities**, **Goal**, **Rules** (the four effects, scope, an
   optional command prefix, a preview of recent calls it would have matched), **Memory** (edit,
@@ -745,7 +810,26 @@ Faster  ○────────●────────○  Smarter     [
   instruction (FR-189).
 - **Not in M5** (ADR-092): dictation (FR-216) and the voice session (FR-031) wait for a local
   speech engine or a realtime audio provider, so the composer has no mic or waveform button yet.
-  The composer's **Generate image** entry point waits for a provider with an images call.
+- **In M7** (ADR-095) the composer's left cluster has **Generate an image** (FR-030), shown only
+  while the Hub lists `image.generate` (a configured provider can make images; only local ones
+  while cloud routing is off) and the chat exists; the answer is cached for 60 s. The dialog takes
+  a description (up to 4,000 characters) and a shape (Square 1024 × 1024, Landscape 1536 × 1024,
+  Portrait 1024 × 1536). The request passes the policy gate as the user's own action, so an
+  approval card appears in the chat when policy asks; the image is saved as an artifact of the
+  chat.
+- **Attach window as built (M7, ADR-095; `apps/desktop`).** Capture starts only from the desktop
+  app: Ctrl+Alt+A / ⌃⌥A, the tray or the overlay; the composer's + menu has no Attach window. The
+  shortcut does nothing while a Nova window is in front (a notification says to bring the other
+  window forward). The preview window ("Attach window": "Nothing has been sent yet") shows
+  **Image** and **Text** as separate parts, each with an "Attach the …" box, a "Message
+  (optional)", **Send to** "A new chat" (the default) or "The chat open in Nova", **Discard** and
+  **Send**; a draft expires after 15 minutes. Text comes only on Linux (AT-SPI, including text
+  scrolled off screen, at most 600 objects, 200,000 characters and 6 s; password fields are never
+  read); macOS and Windows say text is not offered yet. The text is redacted before the preview;
+  the image is not, and the preview says to check it. Both go to the chat as message attachments.
+  Excluded apps come only from `attach.excludedApps` in the app's `shell.json` (empty by default,
+  no UI) and are matched by app name, which only the Linux AT-SPI path knows; elsewhere the
+  exclusion does not apply. On Wayland the image may be missing.
 
 ## 4. Design system
 
@@ -879,6 +963,17 @@ window** key (Ctrl+Alt+A, below). There the global key wins; both can be remappe
 two differ (⌘⌥A and ⌃⌥A), and a browser tab has no global keys. "New run/session"
 (Ctrl+Shift+N) is not bound per mode yet; use the palette or the New buttons.
 
+**M7 routes and commands** (ADR-095). New routes: `/approvals` (`?focus=<id>` puts one approval
+first), `/team`, `/team/shared` and `/team/shared/<threadId>`, `/team/agents`, `/team/agents/new`
+and `/team/agents/<id>` (`?tab=`); `/sign-in` opens Settings → Account (where a failed identity
+link lands with `?oidc_error=`). `/approvals/<id>` opens the chat at that approval, or
+`/approvals?focus=<id>` when the approval has no conversation or cannot be read. Two pages render
+without a session, like `/add-device`: `/join` (an invitation, `#invite=<token>` or `?token=`) and
+`/profile/<handle>` (a public profile card). New Settings sections: `account`, `members`, `cloud`
+(Cloud runner; `?env=<id>` and `?run=<id>` open an environment or a run as a page), `sync` and
+`experimental`. Inside the desktop app the palette adds **Open this view in a new window**
+(`window.openCurrent`, no default key; §9.1).
+
 ### 5.1 Deep links (FR-007)
 
 | Link (`nova://` or `web+nova://`) | Opens |
@@ -886,7 +981,9 @@ two differ (⌘⌥A and ⌃⌥A), and a browser tab has no global keys. "New run
 | `settings`, `settings/<section>` | `/settings/<section>` (unknown section → General) |
 | `chat`, `chat/<id>`, `chat/<id>?m=<messageId>` | the chat, at the message when given |
 | `projects`, `projects/<id>` (alias `project`) | the project list or one project |
-| `code`, `code/<id>` | Code mode; in M5 `code/<id>` still opens the session list, not the session, and there is no `work` link yet |
+| `code`, `code/<id>` | Code mode or the session (`/code/<id>`) |
+| `run/<id>`, `run` (alias `work`) | the Work run (`/work/<id>`) or the Work list (M7) |
+| `approval/<id>`, `approval` (alias `approvals`) | `/approvals/<id>`: the chat at that approval card, or `/approvals?focus=<id>` when it belongs to no conversation; `approval` alone opens `/approvals` (M7) |
 | `agent/<id>`, `agents` | the agent list or one agent (M6) |
 | `computer/<id>`, `computers` | the computer list or one computer (M6) |
 | `device/<id>`, `devices` | the device list or one device (M6) |
@@ -895,8 +992,21 @@ two differ (⌘⌥A and ⌃⌥A), and a browser tab has no global keys. "New run
 
 Ids must be 1–100 characters of letters, digits, `_` and `-` after decoding; anything else,
 other schemes and longer paths are refused and the app opens `/chat`. The installed PWA
-registers `web+nova` as a protocol handler that opens `/open?url=%s`; native shells register
-`nova://` (M7).
+registers `web+nova` as a protocol handler that opens `/open?url=%s`; the desktop app registers
+`nova://` (below).
+
+**In M7** (ADR-095) `nova://run/<id>`, `nova://code/<id>` and `nova://approval/<id>` are what
+notifications open. A push notification opens its in-app `path`, else its `nova://run`, `code`,
+`approval` or `chat` link, and never another origin.
+
+The desktop app (`apps/desktop/src/deeplinks.ts`) maps the same links itself, with three
+differences: `run` and `approval` need an id; `add-device` also takes `h=<Hub address>` (and up to
+four `e=` endpoints), so the connect page is filled in and the Hub verified against the pin before
+its `/add-device` page opens; and its own route list (`apps/desktop/src/routes.ts`) does not know
+the M7 Settings sections or `/team` yet, so `nova://settings/sync` (and the like) opens Settings →
+General. A link goes to the window already at that place, else the last used window; a second
+launch hands its link to the running app. Only an installed build registers `nova://` with the
+OS; a development or test run does not.
 
 | Action | Linux/Win | macOS |
 | --- | --- | --- |
@@ -936,6 +1046,16 @@ or `novad`, so a plain browser tab cannot offer them:
   Settings → Keyboard; the installed PWA and native shell use the defaults above.
 - Conflicts with OS or other global shortcuts are detected at registration and reported in
   Settings → Keyboard (`docs/14` §3).
+
+**In M7** (ADR-095) the desktop app registers the first two keys. Settings → Keyboard →
+**Global shortcuts** lists "Open quick chat or focus Nova" and "Attach the frontmost window", each
+with its key and state (**Works**, **Taken by another app**, **Used twice**, **Not valid** or
+**Off**), and **Change** (press the new keys; Esc cancels), **Remove** and **Reset**. A global key
+needs a modifier other than Shift ("A global shortcut needs Ctrl, Alt, Super or Command, not only
+Shift."). A key another app holds is reported (also in the tray menu and the overlay), never
+forced. In a browser tab the section says that only the desktop app can offer these keys and
+lists the defaults. The kill key and the ambient pause key belong to `novad` and are not listed
+there.
 
 ## 6. States & feedback
 
@@ -1004,7 +1124,9 @@ for compute nodes.
 The joining device's page is `/add-device`, served without a session (`docs/22` §4.4): it takes
 the code from the link (or asks for it), checks the Hub, shows the six digits with "On the Hub,
 type this code to approve…", waits for approval, then offers **Open Nova** and how to install the
-app on this platform; a denial or expiry says so and offers to start again.
+app on this platform; a denial or expiry says so and offers to start again. In M7, when the link
+names a Relay (`r`, `rp`: the owner chose to pair through it), the page pairs through the Relay
+instead, needs no direct answer from the Hub, and keeps waiting across a reload (FR-137).
 
 **Network** is a top-level sidebar entry (`/network`, `/network/:section`; a setup run is
 `/network/setup?run=<id>`). Its sections are tabs on desktop; on phones `/network` lists them and
@@ -1028,6 +1150,118 @@ Test, and paired clients with Revoke. **Wake helpers** (FR-138): which devices m
 which to use and in what order, and the recent wakes with how each was sent. Updates arrive live
 through the event stream.
 
+**In M7** (ADR-095) the web UI adds:
+
+- **Offline** (FR-112, FR-129; `apps/web/src/offline`). While the Hub does not answer, a banner
+  above the workspace says "Offline: showing what this device has.", where that comes from (the
+  device's offline copy and when it was last updated, or only what the page already loaded), how
+  many changes wait to send, **Review** and **Try again**; the Hub is checked again with growing
+  pauses (2 s up to 60 s). With an offline copy (a device session with the Offline copy scope)
+  chats, messages, projects, spaces (with their names) and pages (with their versions) read from
+  the copy, and sending a message, starting a chat, renaming, pinning or archiving a chat,
+  renaming a space, editing a page and changing a project's name or instructions queue as
+  changes. Without a copy, offline is read-only. Messages with files, deletes, model changes and
+  temporary chats are not queued. Once the Hub is back the
+  banner says "Sending N changes made while offline." or, for failures, "N changes could not be
+  sent." with **Review**. The queue panel (in Settings → Sync) lists each change in order with
+  **Waiting to send**, **Sending**, **Not sent** (with the Hub's reason) or **Sent**, when it is
+  tried again, **Retry**, **Copy** and **Discard** (asks first). After a queued message reaches the
+  Hub, the app asks the Hub to answer it, without a button: only the last waiting message of a
+  chat, and not one this computer's model already answered; a refusal is a plain note on the sent
+  item ("Newer messages follow it in the chat, so it was not answered on its own."). In the chat,
+  such a message carries the badge **Written offline**.
+- **Answer on this computer** (FR-128, the desktop app only). While offline, a panel above the
+  composer lets a model on this computer (through `novad`, `window.novaShell.localRuntime`) answer
+  the messages waiting for the Hub: "Model on this computer", **Answer with this computer's
+  model**, the answer streaming as plain text, then kept on the device and queued. It needs an
+  offline copy holding the chat and a device the Hub gave Local models; otherwise the panel says
+  which is missing (in a browser tab: "…can answer only in the Nova desktop app."). An answer
+  carries the badge **Answered offline by a local model** in the chat.
+- **Settings → Sync** (FR-109): **This device** (the offline copy: on or off as the Hub's grant
+  says, size, what it holds, last synced, **Sync now** and **Load again**, which asks first),
+  **Changes waiting to send** (the queue panel), **Devices with an offline copy** (Synced,
+  Pending, Offline or Error, with **Load again**) and **History** (the merge log; "Show": Can be
+  restored, Restored, Everything; each conflict's two values, which won and which devices set them;
+  **Restore the replaced value** asks first; **Show older**).
+- **Push** (FR-111; Settings → Notifications). The browser section is now "While Nova is open".
+  **Notifications on this device**: **Turn on for this device** (asks the browser's permission and
+  subscribes), **Send a test**, **Turn off**, and "Devices that get notifications" with **Remove**
+  (asks first). **For every device**: "Send push notifications" (`push.enabled`) and "What a
+  notification says" (Nothing; The kind and where, recommended; Titles). The service worker shows
+  only the title the payload carries; an approval stays on screen with **Open** and **All
+  approvals**. Each kind in the routing table has **Send a test**, which says where it went,
+  including quiet hours.
+- **Approvals** (`/approvals`, FR-111, FR-077): every approval waiting for you, from every chat,
+  run, Code session and agent, oldest first, on a page that works at phone width. Each shows where
+  it comes from (with a link) and when it was asked, above the same card and six decisions as in
+  its conversation; the first answer from any device counts, and updates are live. **New task**
+  (also "Start a task" when nothing waits) opens a sheet that fills the bottom of a phone screen:
+  "Work run" or "Code session", a project (a Code session needs one with a folder, then a folder)
+  and the instructions, which are the run's objective or the session's first message; **Start**.
+- **Connection** (FR-137). The account menu's first item says how this browser reaches the Hub
+  ("Connected over LAN", "Connected over Mesh", "Connected through the Relay", "Checking the
+  connection…", "Cannot reach the Hub") with the address and latency, and opens Network. A browser
+  paired through the Relay falls back to it when the page's own address stops answering, and tries
+  the address again every 60 s. Images, attachments shown by address and terminals do not load
+  through the Relay yet. **Network → Relay** adds the write-only **Registration token** (set,
+  replace, remove after confirming).
+- **Settings → Cloud runner** (FR-108, FR-071, FR-116): **Runner** (its state, **Test**, "Use the
+  cloud runner", which asks first), **Address and token** (the token is write-only; **Forget
+  runner** asks first), **Caps** (CPU time and running time per run, disk per environment, "Warn
+  at" a percent of a cap),
+  **Network** ("Unrestricted network", asks first; without it new environments get no network),
+  **Cloud environments** and **Runs**. An environment page (`?env=`) has **New Work run here…**,
+  **New Code session…**, **Rebuild…**, **Delete…**, its facts, **Repositories**, **Setup** with its
+  log, **Snapshots**, **Files** and **Runs here**. A run (`?run=`, and on its Work run's page) shows
+  live CPU and running time against the caps, a warning near a cap, the capped state, **Raise
+  caps…**, **Keep a file…** and **Cancel run…**. The Work list adds **New run in the cloud…**.
+- **Settings → Experimental** (FR-202, FR-203; both off by default, turning one on asks first):
+  **Scripted tool calls** ("Let the model call tools from a short script", with its time, memory,
+  tool-call and console limits) and **External coding agents** ("Let Code sessions delegate to
+  external agents", and **Adapters**: add with write-only secrets, check in a chosen session's
+  sandbox, turn off, edit, remove). Their tabs in a Code session are in §2.4.
+- **Team** (FR-217, FR-091, FR-113). **Settings → Members**: **People** with their roles; for the
+  owner **Invite someone** ("Who it is for (optional)", "The link works for" 1, 3, 7 or 30 days;
+  the one-use link is shown once with Copy), **Invitations** with **Withdraw**, **Remove** for a
+  member (asks first; their sessions end) and **Sign-in providers** (OpenID Connect: name, issuer,
+  client id, a write-only client secret shown as Set or Not set, scopes, "Allow signing in with
+  it", **Test** on an enabled provider, **Remove**). A member sees People read-only. **Settings →
+  Account**: "You on this Hub", **Sign-in identities** (link one at an enabled provider, unlink)
+  and **Public profile card** (off by default: "Show my public card", a handle, "Show my avatar", a
+  preview of what is public; the owner's "Allow public profile cards on this Hub" asks first). The
+  sign-in screen lists the providers above the setup panel. `/join` shows who invited you and when
+  the invitation expires, takes "Your name" (**Join**) or **Continue with <provider>**, and opens
+  Nova; `/profile/<handle>` shows a card or "No public card here". A chat's menu has **Share with
+  people…**: the dialog says what is not shared (anyone's memory, connectors, projects and
+  instructions); only a plain chat outside a project can be shared, and sharing turns its memory
+  off. **Team → Shared chats** opens one at `/team/shared/<id>`: who wrote each message and who
+  asked for each reply, a text-only composer that sends as you, **Stop** for anyone, **Leave**,
+  the owner taking people out, and the approvals for your own turns. The normal chat view does not
+  show authors. **Team → Team agents**: the owner provisions one (name, responsibilities,
+  instructions, autonomy, model); anyone gives it a task; its page has **Tasks** (with the result
+  and Cancel) and, for the owner, **Approvals** (Allow once, Allow for this session, the two Deny
+  options; checked every 10 s), write-only **Credentials** and **Audit** (**Show older**).
+- **Channels** (FR-110, FR-060, FR-055). Telegram setup takes a bot token (or "Same bot as …")
+  and "How messages arrive": Polling (default) or Webhook, which needs an https public address;
+  Telegram's webhook secret shows as "Made by Nova". Email setup takes the mailbox, login,
+  password, IMAP and SMTP servers with TLS (default), STARTTLS or None (only on this machine), and
+  "Stay connected (default)" or "Check every few minutes"; email approvals are answered only by
+  their signed link. Each channel has a **message log** (newest first, filters by direction and
+  "What happened", **Show older**, live). Telegram users can be added under People. A schedule that
+  delivers to a webhook shows its **Signing secret** with **Make a new secret** (confirmed inline,
+  shown once).
+- **Browser** (FR-092, FR-103, FR-094, FR-098). The browser panel adds **What the page logged**:
+  **Console** (Every message, Errors and warnings, Errors only) and **Network** ("Address
+  contains", "Only failed or blocked"), as text, the latest 300 of each while the browser is open;
+  "The browser is not open" otherwise. **Browser site levels** can differ per project or agent
+  (Settings → Browser per site, and on a project's page and an agent's Computer tab); the
+  narrower scope wins. The trace lists actions newest first with **Show older**, **Retry** when
+  a page cannot load, and crash and restart rows.
+- **Devices** (FR-126): each device row has a certificate chip (**Certificate verified**, **No
+  certificate**, **Certificate refused**), the list has a **Device certificates** section with
+  "Require a device certificate over HTTPS" (asks first and names the devices that would be
+  refused), and a device page shows its own state.
+
 New flows:
 
 1. **Add a Device** — choose role + scopes, show QR/short code, approve on the Hub, success screen.
@@ -1041,3 +1275,42 @@ New flows:
 
 The same UI is responsive: phone/tablet use a bottom nav and single column; desktop uses the
 sidebar + inspector layout.
+
+### 9.1 The desktop app (M7)
+
+**In M7** (ADR-095; `apps/desktop`, `apps/web/src/shellbridge`) the desktop app is a client of the
+Hub that shows the Hub's own web UI in native windows. The tray and quick overlay are in §1.1,
+attach window in §3.2, global shortcuts in §5 and its `nova://` links in §5.1.
+
+- **First run.** "Connect to your Hub" offers **Add this computer** (paste the Add Device link
+  from Devices → Add a device → Client, then **Connect**) or **Enter the address and fingerprint**
+  ("Hub address", and "Hub fingerprint": the 43 characters under Network → Trust). The app checks
+  the Hub's identity against that pin before it sends anything; a refusal says why and that
+  nothing was sent. Plain HTTP is accepted only for a Hub on this computer. The app then joins
+  through the Hub's own `/add-device` page as a browser device. The app menu (Nova, or File on
+  macOS) has **Quick chat**, **New task**, **New window**, **Change Hub…** and **Quit Nova**. An
+  Add Device link for another Hub fills the connect page in, and **Connect** replaces the current
+  Hub; the page does not name the Hub it replaces.
+- **Offline start.** When the remembered Hub does not answer at start, the window opens anyway:
+  the web UI runs from its service-worker copy (the app shell and its assets; API calls are never
+  cached), every network request to the Hub is cancelled until a fresh identity check passes,
+  and the Hub's identity is checked again every 15 s; once it passes, the windows reload. A Hub with another identity shows the connect page.
+  The in-chat local answer (§9) works from this state.
+- **Windows** (FR-009). **Open in new window** (an icon button named "Open <name> in a new
+  window") sits in the chat header, on a Work run's page, in a Code session's header and on an
+  agent's page; the palette adds **Open this view in a new window**, and the app menu's **New
+  window** opens the last used window's place. A window already showing that exact place is
+  focused instead. Only app routes on the Hub's origin open (chats, Work, Code, Agents, Projects,
+  Library, Spaces, Sites, Apps, Devices, Network, Computers, Settings and `/approvals/<id>`);
+  anything else says "This view cannot open in a window of its own." The editor and terminal
+  panes have no route, so they have no window of their own. In a browser tab neither the button
+  nor the command shows.
+- **Notifications.** The app shows OS notifications itself for the Hub's notifications marked for
+  the OS (the routing rules and quiet hours decide), and a click opens their place; the page's own
+  notification permission is denied, so each shows once. Inside the app Settings →
+  Notifications shows a **This device** note ("The Nova desktop app shows notifications from your
+  operating system…"; turn them off for this computer in the OS settings) in place of "While Nova
+  is open" and the push section. Neither these nor push notifications offer **Allow once** or
+  **Deny and continue** yet (§1.1); an approval's notification opens its card.
+- **Not built:** window text on macOS and Windows, voice in quick chat, and the join page telling
+  the Hub it is the desktop app (it joins as a browser). The app's journey tests run on Linux only.

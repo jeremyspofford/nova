@@ -513,3 +513,14 @@ h2.devices-path {
 .app[data-layout='phone'] .ws-page-header > .row {
   width: 100%;
 }
+
+/* ---- M7: device certificates (FR-126) ------------------------------------------------------ */
+.devices-tls-fact {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.devices-tls .ws-warning {
+  display: block;
+}

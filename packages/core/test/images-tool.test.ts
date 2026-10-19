@@ -4,7 +4,7 @@
 // images call yet.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NovaError } from '@nova/shared';
-import type { Provider, ProviderCapabilities } from '@nova/providers';
+import type { ImageResponse, Provider, ProviderCapabilities } from '@nova/providers';
 import {
   canGenerateImages,
   imageToolSource,
@@ -172,9 +172,10 @@ function provider(
       throw new Error('not used');
     },
   };
+  // Some tests hand back malformed results on purpose: the adapter's answer is untrusted.
   if (opts.method ?? true)
     p.generateImage = vi.fn(() =>
-      Promise.resolve(opts.result ?? { model: 'x', images: [{ data: PNG }] }),
+      Promise.resolve((opts.result ?? { model: 'x', images: [{ data: PNG }] }) as ImageResponse),
     );
   return p;
 }

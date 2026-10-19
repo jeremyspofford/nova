@@ -204,6 +204,23 @@ export interface ChatServiceOptions {
   audit?: AuditSink;
   /** Compaction (FR-183) and instruction files (FR-185). */
   context?: ContextOptions;
+  /** Shared threads and whose user instructions a turn reads (FR-217); also `useAccess`. */
+  access?: ChatAccess;
+}
+
+/**
+ * Who may write in a thread they do not own, and whose personal context a turn may read (FR-217,
+ * decision 5 of ADR-095). The team area implements it. A turn in a shared thread runs under the
+ * acting account (its providers, policy, approvals and audit) and leaves out everyone's personal
+ * context: memory, past chats, skills, user instructions, instruction files and app context.
+ */
+export interface ChatAccess {
+  /** A thread shared between people: its owner and the others; null when it is not shared. */
+  sharing(
+    threadId: string,
+  ): Promise<{ ownerAccountId: string; participants: readonly string[] } | null>;
+  /** Whether `<dataDir>/instructions.md` is this account's own (the Hub owner's). */
+  readsUserInstructions(accountId: string): Promise<boolean>;
 }
 
 /** Context engineering settings and services of the loop (docs/09 §11). */
@@ -412,6 +429,13 @@ interface TurnRun {
   web: (WebCitation & { idx: number })[];
   /** Set when the turn ends early: backstop, deny and stop, or an approval timeout. */
   stop: TurnStop | null;
+  /** A thread shared between people (FR-217): nobody's personal context joins the turn. */
+  shared: boolean;
+  /**
+   * The user's answer to `ask_user` in this turn (FR-188): later calls carry their instruction
+   * (`answer:<call id>`), even in a turn that started without it.
+   */
+  answer: string | null;
 }
 
 type Plan =
@@ -419,6 +443,7 @@ type Plan =
   | { kind: 'queued'; row: QueuedRow }
   | { kind: 'edit'; messageId: string; req: EditMessageInput }
   | { kind: 'regenerate'; messageId: string; req: RegenerateInput }
+  | { kind: 'answer'; messageId: string; req: RegenerateInput }
   | HookPlan
   | StartPlan;
 
@@ -445,6 +470,7 @@ export class ChatService {
   readonly #extensions: TurnExtension[];
   readonly #audit: AuditSink | undefined;
   readonly #ctx: ContextOptions;
+  #access: ChatAccess | undefined;
   readonly #active = new Map<string, Active>();
   /** Turns startTurn asked for while the thread was busy, oldest first (in memory only). */
   readonly #starts = new Map<string, PendingStart[]>();
@@ -478,6 +504,48 @@ export class ChatService {
     this.#extensions = [...(opts.extensions ?? [])];
     this.#audit = opts.audit;
     this.#ctx = opts.context ?? {};
+    this.#access = opts.access;
+  }
+
+  /** Wire shared threads and per-account user instructions (FR-217; the team area). */
+  useAccess(access: ChatAccess): void {
+    this.#access = access;
+  }
+
+  /**
+   * The thread a turn of `accountId` runs in: its own, or one shared with it (FR-217). A failure
+   * to read the sharing refuses the turn: it might be a shared thread (fail closed).
+   */
+  async #rowFor(accountId: string, threadId: string): Promise<{ row: ThreadRow; shared: boolean }> {
+    const s = this.#access ? await this.#access.sharing(threadId) : null;
+    if (s && (s.ownerAccountId === accountId || s.participants.includes(accountId)))
+      return { row: await this.#threads.row(s.ownerAccountId, threadId), shared: true };
+    return { row: await this.#threads.row(accountId, threadId), shared: false };
+  }
+
+  /**
+   * A closed account (a removed member) starts no turn, whatever starts it: a schedule, a
+   * channel message, a trigger, an agent's own goal (decision 5).
+   */
+  #assertOpen(accountId: string): void {
+    const row = this.#db.raw
+      .prepare('SELECT deleted_at FROM account WHERE id = ?')
+      .get(accountId) as { deleted_at: string | null } | undefined;
+    if (row?.deleted_at)
+      throw new NovaError('auth_missing', 'this account is closed', {
+        details: { reason: 'account_closed' },
+      });
+  }
+
+  /** Only the Hub owner's turns read `<dataDir>/instructions.md` once accounts are told apart. */
+  async #readsUserInstructions(accountId: string): Promise<boolean> {
+    if (!this.#access) return true;
+    try {
+      return await this.#access.readsUserInstructions(accountId);
+    } catch (err) {
+      this.#log.warn('could not tell whose user instructions apply', { err });
+      return false;
+    }
   }
 
   /** Add a mode's extension after construction (areas set up after the ChatService). */
@@ -505,7 +573,8 @@ export class ChatService {
    */
   async startTurn(input: StartTurnInput): Promise<StartedTurn> {
     if (this.#closing) throw new NovaError('conflict', 'the Hub is shutting down');
-    await this.#threads.row(input.accountId, input.threadId);
+    this.#assertOpen(input.accountId);
+    await this.#rowFor(input.accountId, input.threadId);
     if (!input.text.trim() && !input.attachmentIds?.length) throw emptyMessage();
     if (input.model !== undefined && !(await this.#router.usable(input.accountId, input.model)))
       throw new NovaError('validation', `unknown model: ${input.model}`, {
@@ -541,7 +610,7 @@ export class ChatService {
    * thread's exec sessions are killed (FR-184). Input the user queued stays queued (FR-019).
    */
   async cancelTurn(accountId: string, threadId: string): Promise<void> {
-    await this.#threads.row(accountId, threadId);
+    await this.#rowFor(accountId, threadId);
     const pending = this.#starts.get(threadId) ?? [];
     this.#starts.delete(threadId);
     for (const p of pending) p.resolve(notStarted(p.plan.turnId, 'interrupted', 'cancelled'));
@@ -597,6 +666,21 @@ export class ChatService {
     return this.#start(accountId, threadId, { kind: 'regenerate', messageId, req });
   }
 
+  /**
+   * Answer a user message that has no reply: one written offline on a device and synced
+   * (FR-112), which the Hub recorded without starting a turn. The turn runs as if the message had
+   * just been sent. 409 while a turn runs, once it has a reply (`answered`), or when later
+   * messages follow it (`not_last`).
+   */
+  answer(
+    accountId: string,
+    threadId: string,
+    messageId: string,
+    req: RegenerateInput = {},
+  ): Promise<SendMessageResponse> {
+    return this.#start(accountId, threadId, { kind: 'answer', messageId, req });
+  }
+
   /** Ask in a side chat: a child thread reading this one's context, adding nothing to it. */
   async sideChat(
     accountId: string,
@@ -615,13 +699,21 @@ export class ChatService {
   }
 
   async listQueue(accountId: string, threadId: string): Promise<QueuedInputView[]> {
-    await this.#threads.row(accountId, threadId);
+    await this.#rowFor(accountId, threadId);
     return queueViews(this.#db, threadId);
   }
 
   /** Drop a queued message before it starts; `not_found` once it has started. */
   async cancelQueued(accountId: string, threadId: string, queuedId: string): Promise<void> {
-    await this.#threads.row(accountId, threadId);
+    const { shared } = await this.#rowFor(accountId, threadId);
+    if (shared) {
+      // In a shared thread only its writer drops a queued message (FR-217).
+      const q = this.#db.raw
+        .prepare('SELECT account_id FROM queued_input WHERE id = ? AND thread_id = ?')
+        .get(queuedId, threadId) as { account_id: string } | undefined;
+      if (q && q.account_id !== accountId)
+        throw new NovaError('not_found', 'queued message not found');
+    }
     const now = this.#now().toISOString();
     const dropped = await this.#db.transaction(() =>
       cancelQueued(this.#db, threadId, queuedId, now),
@@ -683,7 +775,7 @@ export class ChatService {
 
   /** Stop the running turn; resolves once its partial output is saved (FR-018). */
   async cancel(accountId: string, threadId: string): Promise<boolean> {
-    await this.#threads.row(accountId, threadId);
+    await this.#rowFor(accountId, threadId);
     return this.#stopThread(threadId);
   }
 
@@ -780,7 +872,7 @@ export class ChatService {
     req: SendMessageRequest,
     active: Active,
   ): Promise<SendMessageResponse> {
-    const row = await this.#threads.row(accountId, threadId);
+    const { row } = await this.#rowFor(accountId, threadId);
     const prepared = prepareAttachments(req.attachments ?? []);
     if (!req.text.trim() && prepared.length === 0) throw emptyMessage();
     const mode = req.inputMode ?? (await this.#settings.followUp(row.projectId));
@@ -1092,8 +1184,27 @@ export class ChatService {
     plan: Plan,
     signal: AbortSignal,
   ): Promise<TurnRun> {
-    const row = await this.#threads.row(accountId, threadId);
+    this.#assertOpen(accountId);
+    const { row, shared } = await this.#rowFor(accountId, threadId);
     if (this.#openTurn(threadId)) throw busy();
+    // Rewriting what someone else said is not offered in a shared thread (FR-217).
+    if (shared && (plan.kind === 'edit' || plan.kind === 'regenerate'))
+      throw new NovaError(
+        'validation',
+        'messages of a shared thread cannot be edited or regenerated',
+        {
+          details: { reason: 'shared_thread' },
+        },
+      );
+    // Another member's words must not run under this user's authority (FR-217, FR-189).
+    if (shared && plan.kind === 'answer')
+      throw new NovaError(
+        'validation',
+        'messages of a shared thread are answered as they are sent',
+        {
+          details: { reason: 'shared_thread' },
+        },
+      );
 
     let text = '';
     let prepared: PreparedAttachment[] = [];
@@ -1148,6 +1259,36 @@ export class ChatService {
         level = plan.req.reasoningLevel;
         break;
       }
+      case 'answer': {
+        // A user message synced from a device (FR-112): the turn answers it where it stands.
+        const target = await this.#onPath(row, plan.messageId);
+        if (target.role !== 'user')
+          throw new NovaError('validation', 'only a message from the user can be answered', {
+            details: { reason: 'not_user_message' },
+          });
+        const after = this.#db.raw
+          .prepare(
+            'SELECT role FROM message WHERE parent_id = ? AND thread_id = ? AND deleted_at IS NULL',
+          )
+          .all(target.id, threadId) as { role: string }[];
+        if (after.some((m) => m.role === 'assistant'))
+          throw new NovaError('conflict', 'this message already has a reply', {
+            details: { reason: 'answered' },
+          });
+        if (after.length)
+          throw new NovaError('conflict', 'later messages follow this one: answer the last', {
+            details: { reason: 'not_last' },
+          });
+        newUser = false;
+        userMessageId = target.id;
+        parentId = target.id;
+        text = this.#textOf(target.id);
+        query = text;
+        stored = this.#attachmentsOf(target.id);
+        model = plan.req.model;
+        level = plan.req.reasoningLevel;
+        break;
+      }
       case 'hook':
         // A stop hook's continuation (FR-197): its prompt is the turn's input, not the user's.
         text = plan.prompt;
@@ -1172,7 +1313,12 @@ export class ChatService {
     const goalId = hook ? hook.goalId : (start?.input.goalId ?? null);
     const authorKind = hook ? 'hook' : (start?.input.authorKind ?? 'user');
 
-    const ref = model ?? row.modelId ?? (await this.#threads.defaultModel(accountId));
+    // In a shared thread the last model may be another person's provider account: then the
+    // acting account's default answers (FR-217).
+    let threadModel = row.modelId;
+    if (shared && threadModel && !(await this.#router.usable(accountId, threadModel)))
+      threadModel = null;
+    const ref = model ?? threadModel ?? (await this.#threads.defaultModel(accountId));
     if (!ref)
       throw new NovaError('validation', 'choose a model first: no provider is configured', {
         details: { reason: 'no_model' },
@@ -1185,7 +1331,8 @@ export class ChatService {
     if (!primary) throw new NovaError('validation', `unknown model: ${ref}`);
     const reasoningLevel = level ?? row.reasoningLevel ?? null;
     if (prepared.length) stored = prepared.map((a) => this.#store(a));
-    const projectRow = await this.#contextProject(row);
+    // A shared thread reads no project: its instructions and sources are its owner's.
+    const projectRow = shared ? null : await this.#contextProject(row);
     // `@`-mentions become context items of the user message (FR-022); an edit keeps them, and
     // a `/name` that names a skill loads it (FR-046; an edit resolves its own text again).
     let mentions: ContextItem[] = [];
@@ -1385,14 +1532,15 @@ export class ChatService {
       final: null,
       chainSteps: hook?.chainSteps ?? 0,
       // prompt.submit sees only text the user typed (FR-197).
-      prompt: newUser && authority === 'user' ? text : null,
+      // An answered message was never submitted before: its hooks see it now.
+      prompt: (newUser || plan.kind === 'answer') && authority === 'user' ? text : null,
       cwd: undefined,
       appContext: null,
       thread: row,
       project: projectRow,
       userMessageId,
       query,
-      userTexts: newUser ? [text] : [],
+      userTexts: newUser || plan.kind === 'answer' ? [text] : [],
       ref,
       route,
       target: primary,
@@ -1415,6 +1563,8 @@ export class ChatService {
       taint,
       web: [],
       stop: null,
+      shared,
+      answer: null,
     };
   }
 
@@ -2096,7 +2246,8 @@ export class ChatService {
 
   /** MCP Apps' model context (FR-198): redacted and capped; a failure adds nothing. */
   async #readAppContext(run: TurnRun): Promise<string | null> {
-    if (!this.#appContext) return null;
+    // An app's context is the acting person's own: never in a shared thread (FR-217).
+    if (!this.#appContext || run.shared) return null;
     try {
       const text = await this.#appContext(run.accountId, run.threadId);
       if (!text?.trim()) return null;
@@ -2236,14 +2387,14 @@ export class ChatService {
     for (const call of s.calls) {
       if (run.signal.aborted) return;
       // Only text the user typed carries their instruction (FR-189); a hook's, a goal's or a
-      // sub-agent's does not.
-      const provenance: Provenance =
-        run.authority === 'user'
-          ? {
-              userInstruction: { messageId: run.userMessageId, accountId: run.accountId },
-              taint: [...run.taint],
-            }
-          : { taint: [...run.taint] };
+      // sub-agent's does not. Their answer to `ask_user` in this turn does (FR-188).
+      const instruction = run.authority === 'user' ? run.userMessageId : run.answer;
+      const provenance: Provenance = instruction
+        ? {
+            userInstruction: { messageId: instruction, accountId: run.accountId },
+            taint: [...run.taint],
+          }
+        : { taint: [...run.taint] };
       const r = await tools.call({
         call,
         messageId: s.assistantId,
@@ -2254,6 +2405,9 @@ export class ChatService {
       });
       idx += 3;
       if (r.origin) run.taint.add(r.origin);
+      // The signed-in user answered the question in a Nova client: the rest of the turn acts on
+      // their instruction (FR-188), as a loop hook rather than an untrusted tool result.
+      if (r.userAnswer) run.answer = `answer:${r.callId}`;
       if (r.status === 'ok' && call.name === 'skill.load') await this.#pinSkill(run, call.args);
       if (r.stop) {
         run.stop = r.stop === 'approval_timeout' ? 'approval_timeout' : 'cancelled';
@@ -2722,7 +2876,8 @@ export class ChatService {
     const memory = this.#memory;
     // Memory jobs ignore stop-hook continuations (docs/09 §2) and every turn whose text the
     // user did not write (a goal continuation, a sub-agent task): they are not the user's words.
-    if (!memory || run.trigger === 'hook' || run.authority !== 'user') return;
+    // What anyone says in a shared thread joins nobody's memory (FR-217).
+    if (!memory || run.trigger === 'hook' || run.authority !== 'user' || run.shared) return;
     const job = (async () => {
       const t = this.#db.raw
         .prepare('SELECT temporary, side, memory_opt_out AS optOut FROM thread WHERE id = ?')
@@ -3040,6 +3195,8 @@ export class ChatService {
   /** A stored tool result as the model gets it: inside the untrusted envelope (FR-103). */
   #resultInput(r: StoredResult, vision: boolean): ContentPart[] {
     const text = r.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('');
+    // The signed-in user's own answer to `ask_user` (FR-188): their words, not tool output.
+    if (r.userAnswer) return [{ type: 'text', text }];
     const out = untrustedParts(r.tool, text, nonce(r.callId));
     for (const c of r.content) {
       if (c.type !== 'image') continue;
@@ -3076,7 +3233,7 @@ export class ChatService {
     if (run.system !== null) return run.system;
     const sections = [this.#system];
     const p = run.project;
-    if (this.#skills) {
+    if (this.#skills && !run.shared) {
       // The skills catalog: names and descriptions only (FR-046, docs/09 §11 item 3).
       try {
         const catalog = await this.#skills.catalogSection(
@@ -3089,7 +3246,8 @@ export class ChatService {
         this.#log.warn('skills catalog unavailable for this turn', { err, turnId: run.turnId });
       }
     }
-    if (this.#memory && !run.thread.temporary) {
+    // Nobody's personal memory or past chats join a shared thread (FR-217).
+    if (this.#memory && !run.thread.temporary && !run.shared) {
       try {
         // The thread id lets past-chat retrieval leave out this chat's own tree (FR-205).
         const m = await this.#memory.contextSection(run.accountId, memoryScope(p), run.query, {
@@ -3130,6 +3288,8 @@ export class ChatService {
    */
   async #instructionSections(run: TurnRun): Promise<string[]> {
     const out: string[] = [];
+    // A shared thread reads no one's instructions or instruction files (FR-217).
+    if (run.shared) return out;
     let conf: Partial<InstructionFileSettings> = {};
     try {
       conf = (await this.#ctx.instructionFiles?.()) ?? {};
@@ -3137,7 +3297,10 @@ export class ChatService {
       this.#log.warn('instruction file settings unavailable', { err, turnId: run.turnId });
     }
     const budget = conf.budgetBytes ?? 32_768;
-    const user = readUserInstructions(this.#dataDir, budget);
+    // The file is the Hub owner's: another person's turns do not read it (decision 5, ADR-095).
+    const user = (await this.#readsUserInstructions(run.accountId))
+      ? readUserInstructions(this.#dataDir, budget)
+      : null;
     if (user)
       out.push(
         `## User instructions\nThe user wrote these for every conversation.\n\n${user.text}${user.truncated ? '\n[... truncated ...]' : ''}`,

@@ -143,14 +143,29 @@ describe('dev server detection', () => {
   });
 });
 
+/** A loopback port nothing listens on at the moment of asking. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const address = srv.address();
+      const p = typeof address === 'object' && address ? address.port : 0;
+      srv.close(() => resolve(p));
+    });
+  });
+}
+
 describe('dev servers', () => {
   it('starts a server in the session sandbox, exposes its URL through the grant, and stops it', async () => {
     box = new SessionSandbox();
     e = await makeCodeM6Env({ sandbox: box });
+    // A port free right now (not a fixed one, which another suite running at once may hold).
+    const port = await freePort();
     mkdirSync(join(e.repo, '.nova'));
     writeFileSync(
       join(e.repo, '.nova', 'launch.json'),
-      JSON.stringify({ configurations: [{ name: 'api', command: SERVER, port: 43_219 }] }),
+      JSON.stringify({ configurations: [{ name: 'api', command: SERVER, port }] }),
     );
     const s = await e.svc.create(ACCOUNT, { folder: e.repo });
     const grants: { host: string; port: number }[] = [];
@@ -171,13 +186,13 @@ describe('dev servers', () => {
       return Promise.resolve();
     });
     const v = await e.devServers.start(ACCOUNT, s.id, {}, 'user');
-    expect(v).toMatchObject({ status: 'running', candidateId: 'launch:api', port: 43_219 });
-    expect(v.url).toBe('http://127.0.0.1:43219/');
-    expect(grants).toEqual([{ host: '127.0.0.1', port: 43_219 }]);
+    expect(v).toMatchObject({ status: 'running', candidateId: 'launch:api', port });
+    expect(v.url).toBe(`http://127.0.0.1:${port}/`);
+    expect(grants).toEqual([{ host: '127.0.0.1', port }]);
     expect(opened).toEqual([v.url]);
     expect(box.reqs.at(-1)).toMatchObject({
       network: 'off',
-      env: { PORT: '43219' },
+      env: { PORT: String(port) },
       turnId: `devserver:${v.id}`,
     });
     await until(async () => {

@@ -34,6 +34,13 @@ import { defaultRedactor, type Redactor } from '@nova/security';
 import { secretRef, type SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
+import { isHubOwner } from './team/owner.ts';
+import {
+  privateAddressError,
+  publicFetch,
+  publicUrlProblem,
+  type ResolveHost,
+} from './team/public-net.ts';
 
 const { providerAccount, modelPref, providerActive } = schema;
 
@@ -67,6 +74,8 @@ export interface ProviderRegistryOptions {
    * retries and falls back (docs/07 §9), so attempts are not multiplied.
    */
   adapterRetries?: number;
+  /** DNS for the public-address check of non-owners' base URLs (tests replace it). */
+  resolveHost?: ResolveHost;
 }
 
 export interface ResolvedModel {
@@ -159,6 +168,7 @@ export class ProviderRegistry {
   readonly #now: () => Date;
   readonly #redactor: Redactor;
   readonly #adapterRetries: number;
+  readonly #resolveHost: ResolveHost | undefined;
   readonly #instances = new Map<string, Provider>();
   readonly #models = new Map<string, { at: number; models: ModelInfo[] }>();
 
@@ -171,6 +181,15 @@ export class ProviderRegistry {
     this.#now = opts.now ?? (() => new Date());
     this.#redactor = opts.redactor ?? defaultRedactor;
     this.#adapterRetries = opts.adapterRetries ?? 0;
+    this.#resolveHost = opts.resolveHost;
+  }
+
+  /**
+   * An account that is not the Hub's owner (a member, a team agent's identity) reaches public
+   * addresses only: never the Hub's loopback services or the owner's network (decision 5).
+   */
+  #publicOnly(accountId: string): boolean {
+    return !isHubOwner(this.#db, accountId);
   }
 
   async list(accountId: string): Promise<ProviderAccountListItem[]> {
@@ -266,6 +285,10 @@ export class ProviderRegistry {
     if (baseUrl) {
       // Validates scheme and shape the same way the adapter will.
       new OpenAICompatibleProvider({ id: 'check', kind: 'openai_compatible', baseUrl });
+      if (this.#publicOnly(accountId)) {
+        const problem = await publicUrlProblem(baseUrl, this.#resolveHost);
+        if (problem) throw privateAddressError('the provider base URL', problem);
+      }
     }
     const id = uuidv7();
     const apiKey = req.provider === 'mock' ? undefined : req.apiKey;
@@ -535,6 +558,8 @@ export class ProviderRegistry {
   }
 
   #build(row: ProviderAccountRow, apiKey: () => Promise<string | null>): Provider {
+    // Every request of a non-owner's adapter is pinned to a checked public address.
+    const pinned = this.#publicOnly(row.accountId) ? { fetch: publicFetch(this.#resolveHost) } : {};
     switch (row.provider) {
       case 'mock':
         return new MockProvider({ id: row.id, timing: 'streamed' });
@@ -544,6 +569,7 @@ export class ProviderRegistry {
           ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
           apiKey,
           maxRetries: this.#adapterRetries,
+          ...pinned,
         });
       case 'openai':
       case 'openrouter':
@@ -556,6 +582,7 @@ export class ProviderRegistry {
           ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
           apiKey,
           maxRetries: this.#adapterRetries,
+          ...pinned,
         });
       default:
         throw new NovaError('capability_missing', `no adapter for ${row.provider} in this build`);

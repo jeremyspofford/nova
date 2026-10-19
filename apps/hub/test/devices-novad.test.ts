@@ -87,6 +87,12 @@ async function until<T>(fn: () => Promise<T | null | undefined | false>, ms = 15
   }
 }
 
+// CI sets NOVA_REQUIRE_NOVAD=1 so a missing or outdated binary fails the run instead of
+// skipping these tests unnoticed.
+it.runIf(process.env.NOVA_REQUIRE_NOVAD === '1')('has a runnable novad binary', () => {
+  expect(runnable, BIN).toBe(true);
+});
+
 describe.skipIf(!runnable)('the real novad binary', () => {
   beforeAll(async () => {
     dir = realpathSync(mkdtempSync(join(tmpdir(), 'nova-novad-')));
@@ -173,10 +179,18 @@ describe.skipIf(!runnable)('the real novad binary', () => {
       novadVersion: '0.6.0',
       updateRequired: false,
     });
-    expect(v.capability.modules).toEqual(['compute', 'management', 'storage']);
+    // The local runtime (a client's module, FR-128) runs too and is in the signed document the
+    // Hub validated against contracts/schemas/device-capability.json.
+    expect(v.capability.modules).toEqual(['compute', 'local-runtime', 'management', 'storage']);
     expect(v.capability.computePolicy).toMatchObject({ gpuSharing: 'shared' });
     const pids = (v.modules as { pid: number }[]).map((m) => m.pid);
-    expect(new Set(pids).size).toBe(3);
+    expect((v.modules as { name: string }[]).map((m) => m.name).sort()).toEqual([
+      'compute',
+      'local-runtime',
+      'management',
+      'storage',
+    ]);
+    expect(new Set(pids).size).toBe(4);
     expect(pids).not.toContain(novad!.pid);
   });
 

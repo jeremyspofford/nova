@@ -11,14 +11,34 @@ export type BrowserSiteLevel = (typeof BROWSER_SITE_LEVELS)[number];
 export const BROWSER_SITE_ACCESS = ['allow', 'block'] as const;
 export type BrowserSiteAccess = (typeof BROWSER_SITE_ACCESS)[number];
 
+/**
+ * Scopes a site's level can be set for besides the whole account (docs/11 §4.4, M7). The
+ * narrower scope wins: an agent's level, then a project's, then the account's.
+ */
+export const BROWSER_SITE_SCOPES = ['project', 'agent'] as const;
+export type BrowserSiteScopeKind = (typeof BROWSER_SITE_SCOPES)[number];
+
+/** An allowed site's level in one project or for one agent. */
+export interface BrowserSiteScopedLevelView {
+  pattern: string;
+  scopeKind: BrowserSiteScopeKind;
+  /** The project or agent id. */
+  scopeRef: string;
+  level: BrowserSiteLevel;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BrowserSiteView {
   /** A host (`example.com`) or a leftmost wildcard (`*.example.com`). */
   pattern: string;
   access: BrowserSiteAccess;
-  /** Null for blocked sites. */
+  /** Null for blocked sites. The account-wide level; `scopedLevels` override it. */
   level: BrowserSiteLevel | null;
   /** Developer-protocol mode: off by default, never on a blocked site (FR-094). */
   devProtocol: boolean;
+  /** Levels set for a project or an agent (empty for blocked sites). */
+  scopedLevels: BrowserSiteScopedLevelView[];
   createdAt: string;
   updatedAt: string;
 }
@@ -54,6 +74,68 @@ export interface BrowserSessionView {
   lastActionAt: string | null;
   /** The cookies of this profile survive a restart only with `browser.persistCookies`. */
   persistCookies: boolean;
+  /** The browser crashed and has not restarted yet (it restarts on the next action). */
+  crash: { at: string; reason: string } | null;
+  /** Crash restarts of this session so far. */
+  restarts: number;
+}
+
+// ---- console and network capture (docs/11 §4 "Observation", M7) ----------------------------
+
+export const BROWSER_CONSOLE_LEVELS = ['error', 'warning', 'info', 'log', 'debug'] as const;
+export type BrowserConsoleLevel = (typeof BROWSER_CONSOLE_LEVELS)[number];
+
+/** One console message or uncaught page error, redacted. Untrusted page content. */
+export interface BrowserConsoleEntryView {
+  /** Increases per session. */
+  seq: number;
+  at: string;
+  level: BrowserConsoleLevel;
+  source: 'console' | 'pageerror';
+  text: string;
+  /** Where the message came from (query values that look secret are masked). */
+  url: string | null;
+  line: number | null;
+  /** The page that was open. */
+  pageUrl: string | null;
+}
+
+/** Why a response body is not part of a captured request. */
+export const BROWSER_BODY_OMITTED = ['binary', 'too_large', 'unavailable', 'none'] as const;
+export type BrowserBodyOmitted = (typeof BROWSER_BODY_OMITTED)[number];
+
+/**
+ * One request of the page, redacted: no cookie, authorization or set-cookie values, no request
+ * bodies, and a response body only for text types under the size cap.
+ */
+export interface BrowserNetworkEntryView {
+  seq: number;
+  at: string;
+  method: string;
+  url: string;
+  /** document, script, fetch, xhr, image, … */
+  resourceType: string;
+  /** A main-frame navigation. */
+  navigation: boolean;
+  status: number | null;
+  statusText: string | null;
+  mimeType: string | null;
+  /** Bytes of the captured body, or the declared length. */
+  size: number | null;
+  durationMs: number | null;
+  failure: string | null;
+  /** Refused by the browser's guards (a site not on the allow list). */
+  blocked: boolean;
+  requestHeaders: Record<string, string>;
+  responseHeaders: Record<string, string>;
+  body: string | null;
+  bodyOmitted: BrowserBodyOmitted | null;
+}
+
+/** A capture buffer: newest last; `dropped` counts entries the bound pushed out. */
+export interface BrowserCaptureView<T> {
+  items: T[];
+  dropped: number;
 }
 
 export const BROWSER_ACTION_RESULTS = ['ok', 'error', 'blocked', 'denied', 'handoff'] as const;
@@ -178,11 +260,50 @@ export const submitBrowserSigninSchema = z.union([
 ]);
 export type SubmitBrowserSigninRequest = z.input<typeof submitBrowserSigninSchema>;
 
+/** `GET /browser/actions`: newest first; `cursor` is the previous page's `nextCursor` (M7). */
 export const browserActionsQuerySchema = z
   .object({
     threadId: z.string().min(1).max(100).optional(),
     callId: z.string().min(1).max(200).optional(),
     computerId: z.string().min(1).max(200).optional(),
     limit: z.coerce.number().int().min(1).max(500).default(100),
+    cursor: z.string().min(1).max(300).optional(),
   })
+  .strict();
+export type BrowserActionsQuery = z.input<typeof browserActionsQuerySchema>;
+
+/** A page of the Activity trace, newest first; null `nextCursor` on the last page. */
+export interface BrowserActionsPageView {
+  items: BrowserActionView[];
+  nextCursor: string | null;
+}
+
+/** A project or agent id a site level is set for. */
+export const browserSiteScopeRefSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,100}$/, 'a project or agent id');
+
+export const browserSiteScopeParamsSchema = z
+  .object({
+    pattern: browserSitePatternSchema,
+    scopeKind: z.enum(BROWSER_SITE_SCOPES),
+    scopeRef: browserSiteScopeRefSchema,
+  })
+  .strict();
+
+export const putBrowserSiteLevelSchema = z.object({ level: z.enum(BROWSER_SITE_LEVELS) }).strict();
+export type PutBrowserSiteLevelRequest = z.infer<typeof putBrowserSiteLevelSchema>;
+
+/** `GET /browser/site-levels`: the levels of one scope, or of every scope. */
+export const browserSiteLevelsQuerySchema = z
+  .object({
+    scopeKind: z.enum(BROWSER_SITE_SCOPES).optional(),
+    scopeRef: browserSiteScopeRefSchema.optional(),
+    pattern: browserSitePatternSchema.optional(),
+  })
+  .strict();
+
+/** `GET /browser/sessions/:computerId/console|network`: the newest entries. */
+export const browserCaptureQuerySchema = z
+  .object({ limit: z.coerce.number().int().min(1).max(300).default(100) })
   .strict();

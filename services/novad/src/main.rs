@@ -15,6 +15,7 @@ mod grants;
 mod hardening;
 mod http;
 mod install;
+mod local_runtime;
 mod mcp;
 mod module;
 mod paths;
@@ -22,7 +23,10 @@ mod power;
 mod procs;
 mod state;
 mod supervisor;
+mod tls;
 mod update;
+#[cfg(unix)]
+mod user_socket;
 mod util;
 
 use cli::Command;
@@ -35,9 +39,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const HELP: &str = "novad — Nova device agent
 
 USAGE:
-  novad install --hub http://HUB:PORT --code ABCD-EFGH --pin FINGERPRINT [--pairing ID]
+  novad install --hub http(s)://HUB:PORT --code ABCD-EFGH --pin FINGERPRINT [--pairing ID]
                 [--role client|compute|wake-helper]... [--name NAME] [--listen HOST:PORT]
-                [--endpoint http://HOST:PORT] [--no-service] [--dry-run] [--data-dir DIR]
+                [--endpoint http://HOST:PORT] [--user NAME]... [--no-service] [--dry-run]
+                [--data-dir DIR]
       Join a Hub with the Add Device code shown in Settings → Devices (the Hub's one-line
       install command fills these in). `--code -` reads the code from standard input, and
       without --code it comes from NOVA_ADD_CODE, so it stays out of the process list. Before
@@ -46,10 +51,12 @@ USAGE:
       shows a confirmation code (signed by the Hub for this device's key) to compare with the
       Hub, waits for the owner's approval, registers, and installs and starts the service
       (root needed; --no-service skips it). --dry-run stops after the checks.
-  novad enroll --hub http://HUB:PORT --token nvd_… [--name NAME] [--role ROLE]...
-               [--listen HOST:PORT] [--endpoint http://HOST:PORT] [--channel stable|beta|nightly]
-               [--update-key KEY] [--data-dir DIR]
-      Register with a one-use token the owner created on the Hub (scripted setups).
+  novad enroll --hub http(s)://HUB:PORT --token nvd_… [--pin FINGERPRINT] [--name NAME]
+               [--role ROLE]... [--listen HOST:PORT] [--endpoint http://HOST:PORT] [--user NAME]...
+               [--channel stable|beta|nightly] [--update-key KEY] [--data-dir DIR]
+      Register with a one-use token the owner created on the Hub (scripted setups). An https://
+      Hub needs --pin. --user (default: the user who ran sudo) gets a local runtime socket of
+      their own in their runtime folder.
   novad run [--data-dir DIR]
       The supervisor, its modules and the management channel (what the service runs).
   novad version
@@ -58,8 +65,10 @@ USAGE:
   novad wol status | plan | enable [--apply] [--data-dir DIR]
   novad service-unit [--exec PATH] [--platform linux|macos|windows] [--data-dir DIR]
 
-The Hub address is http:// (novad has no TLS client yet; the pinned fingerprint and the signed
-manifest protect the install). The data folder defaults to /var/lib/nova.
+An https:// Hub is trusted through the pinned fingerprint: the Hub's signed identity statement
+must vouch for the certificate it shows, and the device certificate the approval granted is
+presented on every connection. Over http:// the pin, the signed manifest and the signed
+confirmation protect the install. The data folder defaults to /var/lib/nova.
 ";
 
 fn main() -> ExitCode {
@@ -119,6 +128,7 @@ fn run(cmd: Command) -> ExitCode {
                 update_channel: "stable",
                 fs_scopes: vec![],
                 models_dir: Some(data.path().join("models").to_string_lossy().to_string()),
+                local_models: None,
             };
             let full = capabilities::build(&doc, &extras, &local, &json!({}));
             match (data.key(), data.public_key()) {

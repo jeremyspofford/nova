@@ -758,6 +758,8 @@ export async function renderWithAllDevices(
     fail?: Partial<Record<keyof AddDeviceApi, Error>>;
     settings?: Record<string, unknown>;
     managed?: Record<string, unknown>;
+    /** Calls the client lacks (an older Hub). */
+    omit?: string[];
   } = {},
 ) {
   const hub = createHub();
@@ -774,6 +776,7 @@ export async function renderWithAllDevices(
   const added = createAddDeviceHub(opts.added ?? {}, devices.state);
   Object.assign(added.failNext, opts.fail);
   const api = { ...hub.api, ...devices.api, ...added.api };
+  for (const name of opts.omit ?? []) delete (api as Record<string, unknown>)[name];
   const { settings } = await hub.api.settings();
   const inner = createElement(ToastProvider, {
     children: createElement(AnnouncerProvider, { children: ui }),

@@ -21,9 +21,45 @@ and local tools. Cloud is an accelerator and a bridge, never a requirement.
 The server side is designed to be **content-blind**: it stores ciphertext and route metadata,
 not plaintext user content. Self-hosting the runner/relay/sync is P2 using the same protocols.
 
+*As built in M7 (ADR-095).* There is no separate sync service: the Hub is canonical and plays it
+(§2; `contracts/rest-api.md` §2 is amended). The cloud runner is `services/runner`, a remote
+execution environment the Hub drives (§3); a self-hosted runner and Relay are the same services at
+a URL, both Apache-2.0 (ADR-023). Agent computers still run on the mock cloud runner. The hosted
+auth service is not built (§7 uses an OIDC provider the owner configures).
+
 ## 2. Sync (FR-109)
 
 ### 2.1 Model
+
+*As built in M7 (ADR-095; `packages/core/src/sync`, `apps/hub/src/sync.ts`, `apps/web/src/replica`,
+`apps/web/src/offline`; routes in `contracts/hub-api.md`, "Sync").* The Hub is canonical
+(ADR-033): it holds the data and merges. A client keeps a local replica only when its device
+session has the `offline-replica` scope (FR-129, ADR-036; granted at Add Device or on the device
+page) and syncs it with the Hub over LAN, Mesh or the Relay tunnel, which stays content-blind. The
+replica loads a paged snapshot, then follows the change feed from the first page's cursor and pulls
+again on `sync.changed`; it pushes field changes the Hub merges. As built:
+
+- **Synced**: threads (title, pinned, archived, project; mode and creation time read-only),
+  messages (finished user and assistant messages of ordinary chats, each one immutable `body`),
+  projects (name, instructions), memory items of global and project scope (content, status),
+  spaces (name), pages (title, content; space and `version` read-only), schedules (enabled; not
+  agents' own wakes) and the owner's non-security global settings. Replicas may create only
+  threads and messages (with their own UUIDs) and delete only threads, projects, memory items and
+  pages.
+- **Not synced**: secrets, audit, temporary and side chats, attachments and other blobs,
+  security settings, skills, plugins, themes, keybindings, rules, grants and the device list
+  (clients read those from the Hub).
+- **Crypto as built**: the account master key above is not built. The Hub's data is encrypted at
+  rest like the rest of its database; the web replica is sealed in IndexedDB with AES-GCM under a
+  non-extractable key, so wiping the key wipes the copy. Revocation, a 401 or the scope being
+  taken away (`sync.replica.revoked`) wipes it. Devices are linked by Add Device (`docs/22` §4),
+  not a separate signed device-linking flow.
+- **The feed** keeps current state, one row per field with a growing cursor and its clock, fed by
+  the bus and a 5-minute sweep; deletes are tombstones kept indefinitely. A value the feed sees for
+  the first time takes its row's update time as its clock, so a late-noticed Hub change never beats
+  a newer device edit.
+- **Settings**: `sync.enabled` (default on; off refuses every replica call), `sync.maxSkewSeconds`
+  (300), `sync.mergeLogDays` (90), `sync.offlineAfterMinutes` (10).
 
 - **Entities synced**: settings, themes, keybindings, projects (metadata + instructions),
   threads + messages, memory items, artifacts (metadata + small blobs), schedules, rules,
@@ -46,12 +82,56 @@ not plaintext user content. Self-hosting the runner/relay/sync is P2 using the s
   **merge log** shown in Settings → Sync → History, with the option to restore.
 - The UI shows sync status per device: synced / pending / offline / error.
 
+*As built in M7.* Clocks are `<15-digit ms>-<4 hex>-<node>` strings that sort in clock order; a
+pushed clock's node must be the pushing device and may be at most `sync.maxSkewSeconds` ahead of
+the Hub (`clock_skew`). Each pushed op names the clock its edit started from (`base`); the Hub
+answers each op `accepted`, `overwritten` (a newer value won) or `rejected` with a reason. The merge
+log records `concurrent` (a newer op replaced a value its device had not seen), `stale` (an op that
+lost) and `restore` (the value a restore replaced); a device overwriting its own value is not
+logged. A delete wins only if it is newer than every field, and a tombstone removes that entity's
+merge-log entries (a forgotten memory item does not survive there). Restore writes the lost value
+back as a new change with a fresh Hub clock. Settings → Sync shows this device's copy (size,
+contents, last sync, Sync now, Load again), changes waiting to send, the devices with a copy and
+their status (the owner can make one load again), and History (the merge log with both values, who
+set them, and Restore). `sync.status.changed` is not emitted; status is read from the devices list.
+
 ### 2.3 Offline & queuing
 
 - Local writes always succeed and are queued for sync.
 - Outbound cloud operations (runs, channel messages) queue with visible status and retry with
   exponential backoff and jitter.
 - On reconnect, sync reconciles first, then queued operations execute.
+
+*As built in M7 (FR-112, FR-128).*
+
+- **Idempotent writes.** Every queued write carries its own `Idempotency-Key`, reused on resend;
+  the Hub answers a repeat with the first answer for 24 hours and never repeats the effect. Replay
+  is opt-in per route (the writes a client queues offline); an answer carrying a credential is
+  never stored (`contracts/hub-api.md`, "Idempotent writes").
+- **Offline reads.** With a copy, the chat list, a chat's messages, projects, spaces and pages are
+  answered from it, and the app can start with no Hub at all ("Offline: showing what this device
+  has."). Without a copy, offline is read-only: only what the page already loaded, and nothing is
+  written to the device.
+- **The queue.** Sending a message, starting a chat, renaming, pinning or archiving a chat, editing
+  a page, renaming a space and changing a project's name or instructions become sync changes, each
+  with a visible status (waiting, sending, not sent with the reason, sent). On reconnect the copy
+  catches up first, then items go out in order, with backoff and jitter on retryable errors; a
+  failed item can be retried, copied or discarded. Not queued offline: messages with files,
+  deletes, model or reasoning changes and temporary chats. Security settings are never kept on the
+  device. The queue has its own key, so revoking the copy does not destroy unsent work. While the
+  Hub is away it is tried again after 2 s, growing to 60 s, with jitter, and on the browser's
+  `online` event.
+- **Answers to offline messages.** A message written offline is recorded on the Hub without a turn
+  (a replica may only append). Once it reaches the Hub, the web asks the Hub to answer it
+  (`POST /api/v1/threads/:id/messages/:mid/answer`), only for the last waiting message of a chat the
+  device's own model has not answered; the Hub runs it through the normal turn, once. A refusal
+  (it already has a reply, newer messages follow it, a reply was running, or the chat is shared)
+  stays as a plain note on the sent item. Chats label such messages "Written offline".
+- **Local answers** (FR-128, desktop app only). With the device's `local-runtime` scope and
+  `novad`'s local runtime on the computer, a local model can answer the waiting message, with the
+  chat and its project's instructions as context (`docs/21` §9). The answer streams, is kept on the
+  device and is queued as an assistant message with `provenance: offline`; the Hub takes it only
+  from a device with `local-runtime`. Chats label it "Answered offline by a local model".
 
 ## 3. Cloud runner (FR-108)
 
@@ -60,6 +140,37 @@ not plaintext user content. Self-hosting the runner/relay/sync is P2 using the s
 - Snapshots before risky steps; restore on failure.
 - Resource metering and spend reporting; a hard stop at the configured cap (FR-116).
 - Artifacts and diffs are streamed back and integrated into the local session.
+
+*As built in M7 (ADR-095; `services/runner`, `packages/core/src/cloudrun`, `apps/hub/src/cloudrun.ts`;
+`contracts/rest-api.md` §5, `contracts/hub-api.md`, "Cloud runner").* The Hub keeps the agent loop,
+the model calls and the policy gate; the runner holds environments, runs their commands and file
+operations, streams output, keeps snapshots and enforces hard caps. A Code session on a `cloud`
+environment, or a Work run started on one, uses the runner as its sandbox and workdir, so it keeps
+running while the user's computer is offline (FR-071).
+
+- **One runner per Hub**, off by default (`cloud.runner.enabled`): its URL (`cloud.runner.url`,
+  https or http only to this machine) and a token kept only in the vault. The local runner is the
+  same service on this machine; Settings → Cloud runner registers, tests and turns it on.
+- **Environments** (FR-071): repositories side by side (https without credentials, or `file://`
+  from folders the runner operator allowed), a setup script run once in the first repository's
+  folder (`/workspace` without one), caches kept across rebuilds,
+  an optional base image, a disk cap, and a folder under `/workspace`. Rebuild clones again and runs
+  setup once more. Files of the workdir can be browsed from the Hub.
+- **Network is off.** Runner network does not pass the Hub's egress proxy, so cloud commands run
+  without network, and environments with network are refused, unless the owner turns on
+  `cloud.runner.unrestrictedNetwork` (a security setting whose description says what it gives up).
+- **Leases and caps** (FR-116): each session or Work run holds one lease with CPU and wall-time caps
+  (defaults 3,600 s and 4 h; wall time counts only while a command runs) and each environment a
+  disk cap (10 GiB), from `cloud.runner.caps`; a warning and an `attention` notification at 80 %
+  and a hard stop at the cap; caps can be raised again. The runner enforces process and memory
+  limits per sandbox and a share of command slots per Hub.
+- **Snapshots** are taken by hand, before a Work run (by default) and before a restore (on request);
+  they are tar files on the runner, not encrypted by Nova. Restore puts the workdir back.
+- **Artifacts**: a file of the workdir can be kept as an artifact of the thread (at most 5 MiB).
+- **The Hub trusts no path the runner reports**: folders must be under `/workspace`, and the Hub's
+  own file tools are hidden in cloud threads (commands, Git and files go to the runner).
+- **Not built**: runner network through the Hub's proxy, encrypted snapshots, region choice
+  (§8), spend reporting for billing, and agent computers on the real runner (they keep the mock).
 
 ## 4. Channels (FR-088, FR-110)
 
@@ -109,7 +220,8 @@ Design rules:
 
 *As shipped in M6 (ADR-093).* Bindings are `channel_binding` rows (`/api/v1/channels`); the
 adapters are in-app, Slack, Teams (Bot Framework) and webhook. Email bindings are refused until a
-mailbox connector exists, and Telegram, voice and SMS are not built.
+mailbox connector exists, and Telegram, voice and SMS are not built. *M7 adds Telegram and email
+(below); voice calls (FR-218) and SMS are still not built.*
 
 - **Credentials and inbound.** Bot tokens, signing secrets, app passwords and webhook tokens go to
   the vault (`secret://channel/<id>/…`) and are never returned; the client supplies a webhook's
@@ -148,6 +260,51 @@ mailbox connector exists, and Telegram, voice and SMS are not built.
 - **Watching.** Watching a Slack conversation is a `connector_event` trigger (`docs/09` §7); a
   binding alone never starts work it was not addressed in.
 
+*As built in M7 (ADR-095; `packages/core/src/channels/adapters/{telegram,email}.ts`,
+`packages/core/src/channels/pollers.ts`, `apps/hub/src/channels.ts`).*
+
+- **Telegram** (FR-110). A binding is one chat of a bot; bindings of one bot share its token. Long
+  polling is the default (it works behind NAT, one poll loop per bot); webhook mode needs an https
+  `channels.publicUrl`, and the Hub makes the webhook's secret token itself (it is shown as "Made by
+  Nova" and cannot be set by hand). Private chats and groups follow the audience rules and the
+  private-to-shared check; receipts are `tg:<chat>:<id>`. Approvals use inline-keyboard buttons.
+  Only text and captions are read, and no files are sent.
+- **Email** (FR-110). A binding is one correspondent (or a mailing list, which is a shared
+  conversation) of a mailbox; bindings of one mailbox share its password, kept in the vault. The
+  mailbox is read past a UID cursor that starts at the end of the folder, so old mail is never
+  replayed (a UIDVALIDITY change resets to the end), with IMAP IDLE or polling every
+  `channels.email.pollSeconds` (60); replies go out by SMTP with Message-ID and References
+  threading. TLS is required except to this machine. A sender counts as their mapped identity only
+  when the topmost Authentication-Results header from the receiving server shows `dmarc=pass` with
+  its own `header.from` equal to the From domain, or `dkim=pass` with an aligned `header.d` (parsed
+  per RFC 8601: comments stripped, one result at a time). Only headers carrying the binding's
+  `authservId` count (default: the IMAP host's domain and its subdomains), so mail from a large
+  provider stays unverified until its id is set (for example `mx.google.com`). This relies on the
+  receiving server adding its own header: if it adds none, a header the sender forged with the
+  trusted id still counts. `senderCheck: none` turns the check off for a server that adds no
+  results; it needs an explicit confirmation, is audited (`channel.email.sender_check_off`), and
+  each message accepted under it is logged with the reason `sender_unchecked`. Messages over 25 MiB
+  are skipped, never downloaded. Being in To addresses the
+  agent; Cc does not. Auto-Submitted, Precedence and Nova's own header prevent reply loops.
+  Attachments are stored as thread attachments. Passwords and app passwords only (no XOAUTH2).
+- **Approvals by link and button.** An approval email carries a signed one-use link (HMAC with a
+  vault key; its lifetime is capped by the approval and `channels.approvalLinkMinutes`, 60), sent
+  only to a private binding whose sender is the owner; opening it shows the choices and changes
+  nothing (mail scanners follow links), and the page's form answers once. Plain reply text is
+  refused for email. Slack prompts carry buttons; a press counts only from the owner, for an
+  approval of that binding's own thread, under the same tier rules as a text answer.
+- **Message log.** Every message in or out of a binding is logged without content (the text is in
+  the thread): direction, status (started, answered, ignored, dropped, sent, failed, withheld) and
+  the reason; Settings shows it per channel with filters.
+- **Also**: a test notification per category ("Send a test" shows where it went), notification
+  copies to Telegram and email bindings, email as a schedule delivery target, a schedule webhook's
+  signing secret rotated and shown once (FR-055), and an MCP event subscription refreshed on
+  demand.
+- **Shared threads** (FR-217) are built: §7.
+- **Not built**: voice calls (FR-218), SMS, Telegram files, email OAuth, and the channel relay
+  through the Relay (`/v1/relay/messages`): channels reach the Hub directly (webhooks need a public
+  address) or by polling.
+
 ## 5. Remote control, mobile dispatch & notifications (FR-111, FR-137)
 
 - **Every client drives every session through the Hub.** A phone or a second computer never
@@ -162,6 +319,23 @@ mailbox connector exists, and Telegram, voice and SMS are not built.
 - Deep links: `nova://run/<id>`, `nova://code/<id>`, `nova://approval/<id>` open the
   desktop app, or a read-only web view when the desktop is unavailable.
 - The relay never sees plaintext content; notifications carry only ids and redacted titles.
+
+*As built in M7 (ADR-095; `apps/web/src/dispatch`, `apps/web/src/relaytransport`, `apps/web/src/push`).*
+
+- **Approvals and tasks from a phone** (FR-111, FR-077). `/approvals` lists pending approvals
+  across conversations with the same decisions as the desktop card, says where each comes from,
+  updates live and brings `?focus=<id>` to the top. The New task sheet starts a Work run, or a Code
+  session in a project folder with the instructions as its first message.
+- **Deep links** (decision 7 of ADR-095): `nova://run/<id>` opens `/work/<id>`, `nova://code/<id>`
+  `/code/<id>` and `nova://approval/<id>` `/approvals/<id>`; push notifications open them.
+- **Pairing and reach over the Relay** (FR-137). The web join page pairs through the Relay when
+  the QR names one (`docs/22` §4.4); the page then talks to the Hub through the page's own origin
+  or the Relay tunnel (`selectEndpoint`), with its device token as a bearer header (cookies set by
+  the Hub do not come back through the tunnel). When the origin stops answering it re-sends reads,
+  and writes that carry an Idempotency-Key, through the tunnel, and tries the origin again every
+  60 s. Attachments, raw files, avatars and the terminal socket do not go through the tunnel yet.
+- **Session handoff** (FR-213) is built for Code sessions (`docs/10` §15); a chat's handoff to
+  another device is recorded and announced, and its turns still run on the Hub.
 
 ### 5.1 Relay framing (FR-137, ADR-071)
 
@@ -206,6 +380,33 @@ Run/approval event → local policy (no secrets) → queue
 Notification content is redacted by default (e.g., "Approval needed in Code session"). The
 user can choose more or less detail; secrets and file contents are never included.
 
+*As built in M7 (ADR-095; `packages/core/src/channels/push`, `apps/hub/src/push.ts`,
+`services/relay/src/push.ts`, `apps/web/public/sw.js`).* Push is the OS leg of notification
+routing (FR-060, FR-111): it goes out when the category's rule allows the OS and quiet hours are
+not in force (suppressed, not deferred), and the event's own `os` flag agrees.
+
+- **Browsers and the PWA**: Web Push from the Hub itself, encrypted to each browser (RFC 8291) and
+  signed with the Hub's VAPID key (RFC 8292, `push.vapidSubject` as the contact), on `node:crypto`.
+  A subscription's endpoint must be https on a host `push.webPushHosts` lists (the major push
+  services by default), so a subscription cannot make the Hub post anywhere else. Payloads are
+  padded to 128-byte blocks; a subscription the service reports gone is dropped.
+- **Native apps**: through the Relay only. The Hub asks the Relay to push to the account's paired
+  clients that registered an APNs or FCM token; the real senders live in the Relay, which holds the
+  app publisher's credentials and is off unless its operator configures them. No shipped native
+  app registers yet.
+- **What a push says**: ids, the category, a title and where it opens (`path` on the web and the
+  `nova://` link), nothing else. `push.detail` chooses the title: `none` ("Nova"), `redacted`
+  (default: "Approval needed in a Code session", "A task finished in a Work run", …) or `titles`
+  (the notification title, encrypted to the browser). Native pushes always get the redacted title.
+  `push.enabled` (default on) turns push off.
+- **The service worker** shows only the title the payload carries (no body) and opens the
+  payload's path, else its `nova://` link, never another origin; approvals stay on screen with an
+  "All approvals" action. Answering an approval from the notification itself is not built.
+- **Settings → Notifications** has "Notifications on this device" (turn on, which asks the
+  browser's permission and subscribes; send a test; turn off) and "For every device" (`push.enabled`,
+  `push.detail`, the device list with Remove). Inside the desktop app the app raises OS
+  notifications itself (`docs/04` §9.1).
+
 *As shipped in M6 (ADR-093).* Notification routing (FR-060) is per category (`approval`,
 `completion`, `error`, `attention`, `system`) in `notification_rule`, edited through
 `/api/v1/notification-rules`: in-app on or off, OS on or off, a list of Slack, Teams or webhook
@@ -219,7 +420,7 @@ suppressed, not deferred), and channel copies wait in `notification_delivery` un
 (a restart keeps them; a failed copy is not retried). Agents move self-set wakes and goal
 continuations to the end of the window; trigger runs and schedules are not held. Slack and Teams are
 also schedule delivery targets: the target's `ref` is a binding id and the receipt is the posted
-message's id. Push through the Relay is not built.
+message's id. Push through the Relay is not built (*M7: built, see above*).
 
 ## 7. Identity & accounts (FR-113/115)
 
@@ -228,6 +429,54 @@ message's id. Push through the Relay is not built.
 - Multiple provider accounts are supported independently of the Nova account.
 - Entitlements (plan, limits, model access) are cached and refreshed; lack of entitlement
   degrades gracefully with a clear message.
+
+*As built in M7 (ADR-095; `packages/core/src/team`, `apps/hub/src/team.ts`, `apps/web/src/team`,
+`apps/web/src/joinmember`; routes in `contracts/hub-api.md`, "Team").* Several people can use one
+Hub (decision 5, FR-217, FR-091, FR-113). Entitlements are not built.
+
+- **People.** The owner is the account that set the Hub up (the recorded owner row). The owner
+  invites members with a one-use link (a 256-bit token in the link's fragment, only its hash
+  stored, valid `team.invitationHours`, 72 by default) and can withdraw it. A member joins with a
+  display name and gets their own account, sessions, memory, connectors and provider accounts, and
+  their own appearance, keyboard and onboarding preferences; everything else in Settings is the
+  owner's. Removing a member ends their sessions, sockets and streams at once, disables their
+  schedules, triggers, channel bindings and MCP servers, ends their subscriptions and stops their
+  agents; their data is kept.
+- **What a member cannot do.** Members are refused every route that administers the Hub or reaches
+  its machine (`owner_only`; the list is in `contracts/hub-api.md` §1), including stdio MCP
+  servers. A member's chats, runs and tools work in a folder of their own
+  (`<dataDir>/members/<id>/workspace`), never the Hub's workspace or configured roots. Their
+  provider, MCP, OAuth and mail servers must be public addresses (`private_address`), their egress
+  and browser allow lists can only narrow the owner's, and they may use at most half of the
+  browser's slots. Account-less system events reach only the owner. `instructions.md` is the
+  owner's alone.
+- **Shared threads** (FR-217). The owner of a plain chat outside a project shares it with people of
+  the Hub; participants may leave and the owner can take them out. The thread stays in its owner's
+  account; each turn runs under whoever wrote it (their providers, policy, approvals and audit),
+  and if the thread's model is another person's provider account, the writer's default model
+  answers. Nobody's memory, past chats, skills, instructions, app context or project joins the
+  thread, and nothing said there becomes memory. Only built-in tools from an allow-list are offered
+  (web search, artifact, document, visualization and image creation, `tool.search`,
+  `context.remaining`, `context.fresh`). Any participant may stop a running turn but not cancel
+  another's queued message; editing and regenerating are refused. The shared view (`/team/shared/<id>`)
+  shows who wrote each message and who asked for each reply; the ordinary chat view does not yet.
+- **Team agents** (FR-091). The owner provisions an agent that lives in its own identity account,
+  which never signs in; provider and egress credentials are bound to that identity (`secret://`
+  references only). Any person may give it a task; each task runs in a shared thread of its own,
+  labelled with the requesting account and role, under the agent's identity with the requester's
+  authority, and the audit actor is the agent. The owner answers its approvals on the team agent's
+  page; its events are copied to the owner's account. Proactive research starts off. Its
+  notifications go to the identity account, which nobody watches yet.
+- **OIDC** (FR-113). The owner configures providers (issuer, client id, a write-only client secret,
+  scopes; Test checks discovery and the key set). People link an identity in Settings → Account and
+  then sign in with it; an invitation can be redeemed by signing up with a provider. The code flow
+  uses PKCE (S256), a nonce and `client_secret_basic`; the ID token is checked with `node:crypto`
+  (RS, PS, ES and EdDSA only, RSA keys of at least 2048 bits), plus issuer, audience, expiry and
+  nonce. A cookie binds the sign-in to the browser that started it. There is no sign-up without an
+  invitation, and http issuers are allowed only on this machine.
+- **Public profile cards** (FR-113): a read-only card (display name, optional avatar) at
+  `/profile/<handle>`, only while the owner's `team.publicProfiles` is on (off by default) and the
+  person opted in.
 
 ## 8. Data residency & compliance hooks
 
@@ -241,11 +490,11 @@ message's id. Push through the Relay is not built.
 
 | Failure | Behavior |
 | --- | --- |
-| Sync service down | Local continues; queue grows; status shows "pending"; retries |
+| Sync service down | Local continues; queue grows; status shows "pending"; retries (as built: the Hub is the sync service, so this is "Hub unreachable": a device with a copy reads from it and queues writes, §2.3) |
 | Relay down | Channels queue inbound; outbound retries; desktop unaffected |
 | Relay connection drops | Client reconnects and resends unacked envelopes; duplicates dropped |
-| Cloud runner down | Runs queue or fall back to local with a warning |
-| Push unavailable | In-app notifications still work; polling fallback |
+| Cloud runner down | Runs queue or fall back to local with a warning (as built: cloud calls fail with `runner_unreachable`; nothing falls back to local; the run's lease stays until it ends or is cancelled) |
+| Push unavailable | In-app notifications still work; polling fallback (as built: a failing subscription shows as failing after 3 failures, a gone one is dropped) |
 | Device key revoked | Other devices stop decrypting that device's payloads; re-link required |
 | Paired client revoked | Its relay routes drop at once; reconnects are refused until it pairs again |
 
@@ -257,7 +506,7 @@ Default hosted endpoints for `arialabs.ai` (all configurable and self-hostable):
 | --- | --- | --- |
 | Catalog | `https://catalog.arialabs.ai` | Public index; also on the tailnet |
 | Relay | `wss://relay.arialabs.ai` | Content-blind, end-to-end encrypted |
-| Sync | `https://sync.arialabs.ai` | Optional; ciphertext only |
+| Sync | `https://sync.arialabs.ai` | Not used: the Hub plays the sync service (§2, ADR-095) |
 | Auth | `https://auth.arialabs.ai` | Optional OIDC |
 | Cloud runner | `https://runner.arialabs.ai` | Optional |
 

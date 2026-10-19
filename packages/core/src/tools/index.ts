@@ -5,6 +5,7 @@ export * from './schema-check.ts';
 export * from './roots.ts';
 export * from './patch.ts';
 export * from './fs.ts';
+export * from './fs-remote.ts';
 export * from './exec.ts';
 export * from './sandbox.ts';
 export * from './web.ts';

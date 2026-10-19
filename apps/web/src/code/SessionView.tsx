@@ -4,9 +4,12 @@
 // (docs/09 §2); the session's conversation (the ordinary chat view of its `code` thread, with the
 // permission mode selector in its composer); and panes for the Diff, the Review, the Terminal, a
 // File, the Pull request with its CI checks, the auto-verify Checks (FR-068), Dev servers
-// (FR-097, FR-067) and the other Sessions with side questions (FR-072, Ctrl/Cmd+Alt+S). A session
-// on another machine (SSH, WSL, a device) says plainly which of these work only on the Hub. The
-// diff follows `code.*` events and reloads after every turn of the session's thread.
+// (FR-097, FR-067) and the other Sessions with side questions (FR-072, Ctrl/Cmd+Alt+S). M7 adds
+// Hand off… and Best of N… with the Attempts, Merges and Moves tabs, a cloud session's run usage,
+// and the flagged Agents and Scripts tabs (SessionM7.tsx). A session on another machine (SSH, WSL,
+// a device, the cloud) has its diff, review, commit and branches captured by the Hub (M7) and says
+// plainly which of the rest work only on the Hub. The diff follows `code.*` events and reloads
+// after every turn of the session's thread.
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type {
   CodeChangeView,
@@ -22,6 +25,7 @@ import type {
 import { Button, Icon, Spinner, StatusChip, rovingIndex, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { ChatView } from '../chat/ChatView.tsx';
+import { CloudFiles } from '../cloud/CloudFiles.tsx';
 import { matchesBinding } from '../keys.ts';
 import { navigate } from '../router.ts';
 import { useAnnounce, useServices } from '../services.tsx';
@@ -60,11 +64,14 @@ import { Badge } from './parts.tsx';
 import { ProcessesPanel } from './ProcessesPanel.tsx';
 import { PullRequestPane } from './PullRequestPane.tsx';
 import { ReviewPane } from './ReviewPane.tsx';
+import { useSessionM7, type M7Tab } from './SessionM7.tsx';
 import { SessionsPane, SideQuestionDialog } from './SessionsPane.tsx';
 import { SymbolSearch } from './SymbolSearch.tsx';
 import { TerminalPane } from './TerminalPane.tsx';
+import { OpenInWindowButton } from '../shellbridge/OpenInWindow.tsx';
 
-type PaneTab = 'diff' | 'review' | 'terminal' | 'file' | 'pr' | 'checks' | 'servers' | 'sessions';
+type PaneTab =
+  'diff' | 'review' | 'terminal' | 'file' | 'pr' | 'checks' | 'servers' | 'sessions' | M7Tab;
 
 /** How often a running review is checked, besides its completion event. */
 export const REVIEW_POLL_MS = 1500;
@@ -233,6 +240,23 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
   // ---- actions -----------------------------------------------------------------------------------
   const environment = environments.find((e) => e.id === session?.environmentId) ?? null;
   const ctx = useModeContext(environment);
+  // ---- M7: handoff, best-of-N, merges, cloud runs, flagged panes ----
+  const m7 = useSessionM7({
+    session,
+    extras,
+    environment,
+    tab,
+    onTab: setTab,
+    onMoved: () => {
+      reloadSession();
+      reloadChanges();
+      reloadExtras();
+      api.listEnvironments().then(
+        ({ items }) => setEnvironments(items),
+        () => undefined,
+      );
+    },
+  });
 
   const changeMode = (mode: PermissionMode) => {
     if (!session || mode === session.permissionMode) return;
@@ -327,13 +351,12 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
   const envName = extras?.environment?.label ?? environment?.label ?? null;
   const remote = isRemoteKind(envKind);
   const remoteText = remote
-    ? `This session runs on ${envName ?? 'another machine'} (${KIND_LABEL[envKind ?? 'device']}). The diff, review, commit, Go to symbol, branches, push, pull requests and dev servers work only for folders on the Hub; the agent and the terminal work there.`
+    ? `This session runs on ${envName ?? 'another machine'} (${KIND_LABEL[envKind ?? 'device']}). Go to symbol, push, pull requests, dev servers, Best of N and merging other sessions work only for folders on the Hub; the agent, the terminal, the diff, review, commits and branches work there.`
     : null;
-  const gitUnavailable = remote
-    ? 'Not available for a session on another machine.'
-    : !session.repo
-      ? 'This folder is not a Git repository.'
-      : null;
+  const noRepo = !session.repo ? 'This folder is not a Git repository.' : null;
+  // Push and pull requests still need the folder on the Hub (M7 captures the rest remotely).
+  const gitUnavailable =
+    noRepo ?? (remote ? 'Not available for a session on another machine.' : null);
   const liveServers = (extras?.devServers ?? []).filter(isLive).length;
   const setup = extras?.setup ?? null;
 
@@ -352,6 +375,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
           <Icon name="back" /> Sessions
         </a>
         <h1 className="code-title">{title}</h1>
+        <OpenInWindowButton path={`/code/${encodeURIComponent(id)}`} what={title} compact />
         <StatusChip status={session.derived.status} reason={session.derived.reason ?? undefined} />
         <span className="code-header-meta muted">
           <span className="code-path" title={session.folder.path}>
@@ -400,25 +424,20 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
         </span>
         <span className="code-header-actions">
           {remote ? null : <SymbolSearch sessionId={id} onPick={openSymbol} />}
-          <Button
-            onClick={() => void runReview()}
-            disabled={reviewStarting || remote}
-            aria-describedby={remote ? remoteNoteId : undefined}
-          >
+          <Button onClick={() => void runReview()} disabled={reviewStarting}>
             <Icon name="eye" /> Review
           </Button>
           <Button
             variant="primary"
-            disabled={!session.repo || remote}
-            title={gitUnavailable ?? undefined}
-            aria-describedby={remote ? remoteNoteId : undefined}
+            disabled={!session.repo}
+            title={noRepo ?? undefined}
             onClick={() => setCommitting(true)}
           >
             <Icon name="save" /> Commit…
           </Button>
           <Button
-            disabled={!!gitUnavailable}
-            title={gitUnavailable ?? undefined}
+            disabled={!!noRepo}
+            title={noRepo ?? undefined}
             onClick={() => setGitDialog('branch')}
           >
             <Icon name="branch" /> Branch…
@@ -437,6 +456,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
           >
             <Icon name="compare" /> {pr && pr.state === 'open' ? 'Pull request' : 'Pull request…'}
           </Button>
+          {m7.actions}
         </span>
       </header>
       {remoteText ? (
@@ -461,6 +481,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
           onChanged={(budget) => setExtras((x) => (x ? { ...x, budget } : x))}
         />
       ) : null}
+      {m7.banner}
       <div className="code-body">
         <div className="code-chat">
           <ChatView
@@ -488,9 +509,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               {
                 id: 'diff',
                 label: totals.files ? `Diff (${totals.files})` : 'Diff',
-                panel: remote ? (
-                  <RemoteUnavailable what="The diff" text={remoteText} />
-                ) : (
+                panel: (
                   <DiffPane
                     sessionId={id}
                     changes={changes}
@@ -506,9 +525,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               {
                 id: 'review',
                 label: 'Review',
-                panel: remote ? (
-                  <RemoteUnavailable what="Review" text={remoteText} />
-                ) : (
+                panel: (
                   <ReviewPane
                     review={review}
                     starting={reviewStarting}
@@ -538,14 +555,22 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               {
                 id: 'file',
                 label: 'File',
-                panel: (
-                  <FilePane
-                    root={session.repo?.root ?? session.folder.path}
-                    target={fileTarget}
-                    threadId={session.threadId}
-                    mac={registry.platform.mac}
-                  />
-                ),
+                // A cloud session's files are on the runner (the Hub's file tools are hidden there).
+                panel:
+                  envKind === 'cloud' && extras?.environment ? (
+                    <CloudFiles
+                      environmentId={extras.environment.id}
+                      start={session.folder.path}
+                      disabled={null}
+                    />
+                  ) : (
+                    <FilePane
+                      root={session.repo?.root ?? session.folder.path}
+                      target={fileTarget}
+                      threadId={session.threadId}
+                      mac={registry.platform.mac}
+                    />
+                  ),
               },
               {
                 id: 'pr',
@@ -555,8 +580,8 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
                     sessionId={id}
                     pr={pr}
                     unavailable={
-                      gitUnavailable === 'This folder is not a Git repository.'
-                        ? gitUnavailable
+                      noRepo
+                        ? noRepo
                         : remote
                           ? 'Pushing and pull requests work only for sessions whose folder is on the Hub.'
                           : null
@@ -607,6 +632,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
                   />
                 ),
               },
+              ...m7.panes,
             ]}
           />
         </div>
@@ -656,22 +682,8 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
         }}
       />
       <SideQuestionDialog target={asking} onClose={() => setAsking(null)} />
+      {m7.dialogs}
     </section>
-  );
-}
-
-/** What a pane says for a session on another machine (`remote_environment`). */
-function RemoteUnavailable({ what, text }: { what: string; text: string | null }) {
-  return (
-    <div className="nv-empty">
-      <span className="nv-empty-icon">
-        <Icon name="server" size="32px" />
-      </span>
-      <h3 className="nv-empty-title">{what} is not available for this session</h3>
-      <div className="nv-empty-description">
-        {text ?? 'It works only for sessions whose folder is on the Hub.'}
-      </div>
-    </div>
   );
 }
 

@@ -73,6 +73,7 @@ import type {
   Notifier,
   ToolGate,
 } from '../tools/types.ts';
+import { limitDenial, type ToolLimitSource } from './limits.ts';
 import { BREAKER_CONSECUTIVE, ReviewBreaker } from './reviewer-breaker.ts';
 import { loadReviewContext, reviewVerdictSchema } from './reviewer.ts';
 import { loadPermissionProfile, resolveToolRoots, type ProjectFolderSource } from './roots.ts';
@@ -223,7 +224,8 @@ export class PolicyGate implements ToolGate {
   readonly #waiters = new Map<string, Waiter>();
   readonly #waitingThreads = new Map<string, number>();
   #serverDefaults: ServerDefaults | undefined;
-  #substrate: () => Substrate | null;
+  /** The sandbox substrate a thread's commands run in (a cloud thread's is the runner's, M7). */
+  #substrate: (accountId: string | null, threadId: string | null) => Substrate | null;
   #hooks: HookDispatcher | undefined;
   #plugins: PluginPermissionSource | undefined;
   #onViolation: ((accountId: string, pluginId: string) => Promise<unknown>) | undefined;
@@ -231,6 +233,7 @@ export class PolicyGate implements ToolGate {
   #autoReviewer: Reviewer | undefined;
   readonly #threadPolicies: ThreadPolicySource[] = [];
   #agentPolicy: AgentRuleSource | undefined;
+  readonly #toolLimits: ToolLimitSource[] = [];
   readonly #breaker = new ReviewBreaker();
 
   constructor(opts: PolicyGateOptions) {
@@ -262,6 +265,15 @@ export class PolicyGate implements ToolGate {
    */
   useAgentPolicy(source: AgentRuleSource): void {
     this.#agentPolicy = source;
+  }
+
+  /**
+   * Add a source of per-thread tool limits (FR-053 a sub-agent's tool list, FR-217 a shared
+   * thread, FR-045 an agent's plugins). Every source narrows; a tool outside any source's limits
+   * is denied outright, and a source that fails denies (fail closed).
+   */
+  useToolLimits(source: ToolLimitSource): void {
+    this.#toolLimits.push(source);
   }
 
   /** Wire the auto-reviewer of the `review` approval policy (FR-085, ADR-061). */
@@ -303,7 +315,7 @@ export class PolicyGate implements ToolGate {
   }
 
   /** Wire the sandbox substrate (the `full` profile needs a VM or container). */
-  useSubstrate(fn: () => Substrate | null): void {
+  useSubstrate(fn: (accountId: string | null, threadId: string | null) => Substrate | null): void {
     this.#substrate = fn;
   }
 
@@ -323,7 +335,9 @@ export class PolicyGate implements ToolGate {
     let blocked: Built['blocked'] = null;
     let policy: ThreadPolicy | null = null;
     try {
-      policy = threadId ? await this.#threadPolicy(req.accountId, threadId) : null;
+      // Asked with no thread too: an account that is not the owner gets only its own folder
+      // from the team's fallback source, as in the tool scope (decision 5).
+      policy = await this.#threadPolicy(req.accountId, threadId ?? '');
     } catch (err) {
       // Without the session's mode the gate cannot know what it allows: deny (fail closed).
       this.#o.log?.warn('thread policy unavailable', { err, threadId });
@@ -424,7 +438,11 @@ export class PolicyGate implements ToolGate {
       tool: req.tool,
       args: req.args,
       argsHash,
-      environment: { kind: 'hub', trusted: true, substrate: this.#substrate() },
+      environment: {
+        kind: 'hub',
+        trusted: true,
+        substrate: this.#substrate(req.accountId ?? null, req.threadId ?? null),
+      },
       fs,
       egress: {
         allow: [...egressAllow, ...(resolved.network.allow ?? [])],
@@ -434,6 +452,8 @@ export class PolicyGate implements ToolGate {
     // The mode name is a label for display and audit only (docs/12 §2.1).
     if (policy?.permissionMode) ctx.preset = { permissionMode: policy.permissionMode };
     if (command !== undefined) ctx.command = command;
+    // Only rule matching reads this (M7 browser site levels per scope).
+    if (req.ruleTool && req.ruleTool !== req.tool.name) ctx.ruleTool = req.ruleTool;
     // A relative path resolves where the tools resolve it: in the first root (a Code session's
     // folder, else the workspace).
     const resource = this.#canonicalResource(
@@ -456,6 +476,27 @@ export class PolicyGate implements ToolGate {
         reason: "the plugin's permissions could not be read, so the call was not allowed",
         source: 'plugin',
       };
+    }
+    if (threadId && this.#toolLimits.length) {
+      // The tool's plugin: its own tools, or the MCP servers it installed (FR-045).
+      const owner = ctx.plugin?.pluginId ?? req.tool.pluginId ?? null;
+      for (const source of this.#toolLimits) {
+        try {
+          const limits = await source.forThread(req.accountId, threadId);
+          const why = limits ? limitDenial(limits, req.tool, owner) : null;
+          if (why) {
+            blocked ??= { reason: why, source: 'builtin' };
+            break;
+          }
+        } catch (err) {
+          this.#o.log?.warn('tool limits unavailable', { err, threadId });
+          blocked ??= {
+            reason: "the thread's tool limits could not be read, so the call was not allowed",
+            source: 'builtin',
+          };
+          break;
+        }
+      }
     }
     return { ctx, set, command, argsHash, profileHash: resolved.profile.hash, blocked, policy };
   }

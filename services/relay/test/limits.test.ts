@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RELAY_SUBPROTOCOL } from '@nova/relay';
-import { Logger, MemorySink } from '@nova/telemetry';
+import { MemoryLog, silentLog } from '../src/log.ts';
 import {
   RelayState,
   buildRelayServer,
@@ -27,7 +27,7 @@ afterEach(async () => {
 
 async function start(opts: RelayServerOptions = {}) {
   const relay = await buildRelayServer({
-    log: new Logger({ module: 'relay', sinks: [] }),
+    log: silentLog,
     ...opts,
   });
   servers.push(relay);
@@ -253,9 +253,9 @@ describe('state writes', () => {
 
 describe('per-address limits behind a proxy', () => {
   async function registrations(trustProxy: RelayServerOptions['trustProxy']) {
-    const logs = new MemorySink();
+    const logs = new MemoryLog();
     const relay = await buildRelayServer({
-      log: new Logger({ module: 'relay', sinks: [logs] }),
+      log: logs,
       trustProxy,
     });
     servers.push(relay);

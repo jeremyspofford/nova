@@ -46,10 +46,32 @@ nova-compute run
 | `--listen` | `0.0.0.0:7420` | Where the job API listens (`host:port`); port 0 needs `--advertise` |
 | `--advertise` | LAN address + port | The URL the Hub calls |
 | `--max-jobs` | `1` | Jobs run at once; up to 4 more wait, beyond that the node answers busy |
+| `--pin` | none | The Hub fingerprint from Add Device; needed to trust an `https://` Hub's own CA (below) |
+| `--pairing` | none | The pairing id from the QR payload or the install command (with `--code`) |
 | `--data-dir` | `$NOVA_COMPUTE_DATA_DIR`, else `$XDG_DATA_HOME/nova-compute` | State directory |
 
 `run` exits with code 3 when the Hub has revoked the node; enroll again with a new code or token
 (a revoked key is never accepted again; enrolling creates a new one).
+
+## HTTPS and mutual TLS (FR-126, FR-134; `src/hub-tls.ts`)
+
+With `--pin` (with a code or a token) an `https://` Hub is trusted the way `docs/22` §5 tells
+native shells to: a certificate the Hub local CA issued for the host (the CA a verified statement
+vouched for; every name the certificate carries must be inside the CA's name constraints, as
+novad's TLS stack requires), or one a verified statement listed, is trusted at once; otherwise the node asks the
+Hub for its signed identity statement on that same connection, with a fresh nonce, before
+anything else crosses it, and stops with "this is not your Hub" unless the key hashes to the pin,
+the signature verifies and the statement vouches for the chain shown. What it vouched for is kept
+in the state file (`hubTrust`). Over `http://` with a pin the node learns the Hub local CA from
+the signed statement (the CA from `GET /api/v1/trust/ca.pem` must hash to the SHA-256 it lists),
+and when a heartbeat can no longer reach the Hub it tries `https://` on the same address (at most
+once a minute), moving there for good once the pinned identity vouches for it (never back).
+Without a pin an `https://` Hub is checked against the system's roots.
+
+When Add Device grants a device certificate (the Hub's trust mode is the local CA), the node keeps
+it (`enrollment.certificatePem`) and presents it, signed with its own key, on every connection to
+a verified Hub, from registration on; a provisional connection never carries it. A Hub that
+refuses the certificate (`certificate_revoked`, …) is logged; the node keeps its credentials.
 
 ## How it works (ADR-089, contracts/hub-api.md §2)
 
@@ -57,7 +79,8 @@ nova-compute run
   capability document (`contracts/schemas/device-capability.json`: hardware, OS, backend and the
   models present) and signs its canonical JSON (sorted keys). The Hub pins the public key; every
   later document must verify against it.
-- **State.** Keys, ids and tokens live in `node.json` (mode 0600, directory 0700). Nothing secret
+- **State.** Keys, ids, tokens, the device certificate and the Hub trust live in `node.json`
+  (mode 0600, directory 0700). Nothing secret
   is printed or logged. On revocation the node wipes its keys and tokens and keeps only its
   stable device id.
 - **Heartbeat.** Every 10 s the node lists its backend's models, re-signs and syncs the document
@@ -73,5 +96,6 @@ nova-compute run
 Everything the CLI does is exported for tests and embedding: `enroll`, `joinWithCode` (with
 `addDeviceCommitment`, `addDeviceConfirmation`, `signAddDeviceReveal`, `signAddDeviceStatus`,
 `verifyHubReveal`, `hubKeyFingerprint` and `normalizeAddDeviceCode`), `ComputeNode`,
-`buildJobServer`, `JobManager`, `Backend`, `buildCapability`, `signDocument`, and
-`startFakeBackend`, a scripted OpenAI-compatible server for offline tests and demos.
+`buildJobServer`, `JobManager`, `Backend`, `buildCapability`, `signDocument`, `HubTls` (with
+`checkStatement` and `learnCaOverHttp`), and `startFakeBackend`, a scripted OpenAI-compatible
+server for offline tests and demos.

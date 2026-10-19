@@ -3,7 +3,8 @@
 // session and validates its body; site levels, developer-protocol mode (with its policy switch),
 // domain lists, sessions, recorded actions and their screenshots, private sign-in through the
 // routes (credentials never echoed or audited), saved logins, the diagnostics probe, the tool
-// source per thread mode, and the retention sweep.
+// source per thread mode, and the retention sweep. M7: site levels per project or agent, the
+// trace newest first with a cursor, and the console and network capture of a session.
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +33,8 @@ import { setupPolicy, type PolicyAreaFull } from '../src/policy.ts';
 const ACCOUNT = '01920000-0000-7000-8000-000000000001';
 const WORK = '01920000-0000-7000-8000-0000000000c1';
 const CHAT = '01920000-0000-7000-8000-0000000000c2';
+const PROJECT = '01920000-0000-7000-8000-0000000000d1';
+const AGENT = '01920000-0000-7000-8000-0000000000e1';
 const AUTH = { 'x-account': ACCOUNT };
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -42,10 +45,13 @@ const PNG = Buffer.from(
 class Driver implements BrowserDriver {
   readonly name = 'fake';
   readonly fills: string[] = [];
+  /** The last launch's options (the test emits console and network events through them). */
+  opts: DriverLaunchOptions | null = null;
   async probe() {
     return { ok: true, detail: 'fake browser' };
   }
   async launch(opts: DriverLaunchOptions): Promise<DriverSession> {
+    this.opts = opts;
     let url = 'about:blank';
     const fills = this.fills;
     const pages: Record<string, PageElement[]> = {
@@ -74,6 +80,7 @@ class Driver implements BrowserDriver {
       snapshot: snap,
       describe: async (ref) => (await snap()).elements.find((e) => e.ref === ref) ?? null,
       click: async () => undefined,
+      hover: async () => undefined,
       fill: async (_ref, text) => {
         fills.push(text);
       },
@@ -82,12 +89,17 @@ class Driver implements BrowserDriver {
       scroll: async () => undefined,
       waitFor: async () => true,
       screenshot: async () => new Uint8Array(PNG),
+      screenshotElement: async () => new Uint8Array(PNG),
       download: async () => ({ suggestedName: 'a.txt', data: new Uint8Array([1]) }),
       upload: async () => undefined,
       evaluate: async () => 1,
       callPageTool: async () => null,
       input: async (_e: BrowserTakeoverInput) => undefined,
       storageState: async () => ({ cookies: [], origins: [] }),
+      cookies: async () => [],
+      recover: async () => true,
+      crashState: async () => null,
+      focusedSecret: async () => false,
       close: async () => undefined,
     };
   }
@@ -147,6 +159,16 @@ beforeEach(async () => {
         "INSERT INTO thread (id, account_id, mode, state, created_at, updated_at) VALUES (?, ?, ?, 'streaming', ?, ?)",
       )
       .run(id, ACCOUNT, mode, now, now);
+  db.raw
+    .prepare(
+      "INSERT INTO project (id, account_id, name, kind, created_at, updated_at) VALUES (?, ?, 'Acme', 'work', ?, ?)",
+    )
+    .run(PROJECT, ACCOUNT, now, now);
+  db.raw
+    .prepare(
+      "INSERT INTO agent (id, account_id, name, time_budget_s, token_budget, created_at, updated_at) VALUES (?, ?, 'Researcher', 3600, 100000, ?, ?)",
+    )
+    .run(AGENT, ACCOUNT, now, now);
   events = new EventStore(db);
   audit = [];
   settings = {};
@@ -226,6 +248,11 @@ describe('browser routes', () => {
       ['GET', '/api/v1/browser/actions'],
       ['POST', '/api/v1/browser/signins/x/submit'],
       ['DELETE', '/api/v1/browser/logins/x'],
+      ['GET', '/api/v1/browser/site-levels'],
+      ['PUT', `/api/v1/browser/sites/a.example/levels/project/${PROJECT}`],
+      ['DELETE', `/api/v1/browser/sites/a.example/levels/project/${PROJECT}`],
+      ['GET', '/api/v1/browser/sessions/c1/console'],
+      ['GET', '/api/v1/browser/sessions/c1/network'],
     ] as const) {
       const r = await app.inject({ method, url, payload: {} });
       expect(r.statusCode, url).toBe(401);
@@ -328,6 +355,183 @@ describe('browser routes', () => {
     expect((await call('DELETE', `/api/v1/browser/sessions/thread-${WORK}`)).statusCode).toBe(404);
   });
 
+  it('set, list and remove site levels per project or agent (M7)', async () => {
+    const level = (scope: string, body: unknown, method: 'PUT' | 'DELETE' = 'PUT') =>
+      call(method, `/api/v1/browser/sites/a.example/levels/${scope}`, body);
+    expect((await level(`project/${PROJECT}`, { level: 'always_allow' })).statusCode).toBe(404);
+    await call('PUT', '/api/v1/browser/sites', { pattern: 'a.example' });
+    expect((await level(`team/${PROJECT}`, { level: 'always_allow' })).statusCode).toBe(400);
+    expect((await level('project/bad%20id', { level: 'always_allow' })).statusCode).toBe(400);
+    expect((await level(`project/${PROJECT}`, { level: 'sometimes' })).statusCode).toBe(400);
+    expect((await level(`project/${PROJECT}`, { level: 'always_allow', x: 1 })).statusCode).toBe(
+      400,
+    );
+    expect((await level(`agent/${PROJECT}`, { level: 'always_allow' })).statusCode).toBe(404);
+    const set = await level(`project/${PROJECT}`, { level: 'always_allow' });
+    expect(set.statusCode).toBe(200);
+    expect(set.json()).toMatchObject({
+      pattern: 'a.example',
+      scopeKind: 'project',
+      scopeRef: PROJECT,
+      level: 'always_allow',
+    });
+    expect((await level(`agent/${AGENT}`, { level: 'always_ask' })).statusCode).toBe(200);
+    expect((await call('GET', '/api/v1/browser/sites')).json().items[0].scopedLevels).toHaveLength(
+      2,
+    );
+    expect((await call('GET', `/api/v1/browser/site-levels?scopeKind=agent`)).json().items).toEqual(
+      [expect.objectContaining({ scopeRef: AGENT, level: 'always_ask' })],
+    );
+    expect((await call('GET', '/api/v1/browser/site-levels?scopeKind=team')).statusCode).toBe(400);
+    expect((await level(`agent/${AGENT}`, undefined, 'DELETE')).json()).toEqual({ ok: true });
+    expect((await level(`agent/${AGENT}`, undefined, 'DELETE')).statusCode).toBe(404);
+    expect(audit.filter((a) => a.action.startsWith('browser.site.level.'))).toEqual([
+      expect.objectContaining({
+        action: 'browser.site.level.set',
+        resource: 'a.example',
+        detail: { scopeKind: 'project', scopeRef: PROJECT, level: 'always_allow' },
+      }),
+      expect.objectContaining({ action: 'browser.site.level.set' }),
+      expect.objectContaining({
+        action: 'browser.site.level.removed',
+        detail: { scopeKind: 'agent', scopeRef: AGENT },
+      }),
+    ]);
+    // The scope of a thread comes from its project (the default resolver): typing on an Always
+    // ask site runs without a card in the project's thread, where the project says Always allow.
+    await call('PUT', '/api/v1/browser/sites', { pattern: 'login.example' });
+    await call('PUT', `/api/v1/browser/sites/login.example/levels/project/${PROJECT}`, {
+      level: 'always_allow',
+    });
+    db.raw.prepare('UPDATE thread SET project_id = ? WHERE id = ?').run(PROJECT, WORK);
+    expect((await area.service.navigate(browserCall(), 'https://login.example/')).ok).toBe(true);
+    expect((await area.service.read(browserCall())).ok).toBe(true);
+    const typed = await area.service.write(browserCall(), { kind: 'type', ref: 'e1', text: 'ada' });
+    expect(typed.ok).toBe(true);
+    expect(driver.fills).toEqual(['ada']);
+    expect(db.raw.prepare('SELECT COUNT(*) AS n FROM approval').get()).toEqual({ n: 0 });
+  });
+
+  it("removes a deleted project's or agent's site levels, audited as the system (M7)", async () => {
+    const OTHER = '01920000-0000-7000-8000-0000000000d2';
+    const at = new Date().toISOString();
+    db.raw
+      .prepare(
+        "INSERT INTO project (id, account_id, name, kind, created_at, updated_at) VALUES (?, ?, 'Other', 'work', ?, ?)",
+      )
+      .run(OTHER, ACCOUNT, at, at);
+    for (const site of ['a.example', 'b.example'])
+      await call('PUT', '/api/v1/browser/sites', { pattern: site });
+    for (const [site, scope] of [
+      ['a.example', `project/${PROJECT}`],
+      ['b.example', `project/${PROJECT}`],
+      ['a.example', `project/${OTHER}`],
+      ['a.example', `agent/${AGENT}`],
+    ] as const)
+      expect(
+        (
+          await call('PUT', `/api/v1/browser/sites/${site}/levels/${scope}`, {
+            level: 'always_allow',
+          })
+        ).statusCode,
+      ).toBe(200);
+    type Levels = { items: { pattern: string; scopeKind: string; scopeRef: string }[] };
+    const levels = async () =>
+      (await call('GET', '/api/v1/browser/site-levels'))
+        .json<Levels>()
+        .items.map((l) => `${l.pattern} ${l.scopeKind}/${l.scopeRef}`);
+    expect(await levels()).toHaveLength(4);
+    // Another account's deletion of the same id touches nothing here.
+    await events.emit({
+      name: 'project.deleted',
+      actor: 'system',
+      accountId: '01920000-0000-7000-8000-000000000002',
+      payload: { projectId: PROJECT },
+    });
+    await events.emit({
+      name: 'project.deleted',
+      actor: 'system',
+      accountId: ACCOUNT,
+      payload: { projectId: PROJECT },
+    });
+    await vi.waitFor(async () => expect(await levels()).toHaveLength(2));
+    expect((await levels()).sort()).toEqual([
+      `a.example agent/${AGENT}`,
+      `a.example project/${OTHER}`,
+    ]);
+    await events.emit({
+      name: 'agent.deleted',
+      actor: 'user',
+      accountId: ACCOUNT,
+      payload: { agentId: AGENT },
+    });
+    await vi.waitFor(async () => expect(await levels()).toEqual([`a.example project/${OTHER}`]));
+    // The scoped policy rules went with them: only the remaining level's rule is left.
+    const rules = db.raw
+      .prepare("SELECT COUNT(*) AS n FROM policy_rule WHERE action_match LIKE '%browser.act:%'")
+      .get() as { n: number };
+    expect(rules.n).toBe(1);
+    expect(
+      audit.filter((a) => a.action === 'browser.site.level.removed' && a.actor === 'system'),
+    ).toEqual([
+      expect.objectContaining({
+        resource: null,
+        detail: { scopeKind: 'project', scopeRef: PROJECT, count: 2, reason: 'project_deleted' },
+      }),
+      expect.objectContaining({
+        detail: { scopeKind: 'agent', scopeRef: AGENT, count: 1, reason: 'agent_deleted' },
+      }),
+    ]);
+  });
+
+  it('list the trace newest first with a cursor, and show what a session captured (M7)', async () => {
+    expect((await call('GET', `/api/v1/browser/sessions/thread-${WORK}/console`)).statusCode).toBe(
+      404,
+    );
+    await call('PUT', '/api/v1/browser/sites', { pattern: 'a.example', level: 'always_allow' });
+    for (let i = 0; i < 3; i++)
+      expect((await area.service.navigate(browserCall(), 'https://a.example/')).ok).toBe(true);
+    const first = (await call('GET', `/api/v1/browser/actions?threadId=${WORK}&limit=2`)).json();
+    expect(first.items).toHaveLength(2);
+    expect(first.items[0].createdAt >= first.items[1].createdAt).toBe(true);
+    const rest = (
+      await call(
+        'GET',
+        `/api/v1/browser/actions?threadId=${WORK}&limit=2&cursor=${first.nextCursor}`,
+      )
+    ).json();
+    expect(rest).toMatchObject({ nextCursor: null });
+    expect(rest.items).toHaveLength(1);
+    expect((await call('GET', '/api/v1/browser/actions?cursor=bogus')).statusCode).toBe(400);
+    driver.opts!.onConsole?.({
+      level: 'error',
+      text: 'Authorization: Bearer abcdefabcdefabcdef',
+      source: 'console',
+    });
+    driver.opts!.onNetwork?.({
+      phase: 'request',
+      id: 'r1',
+      method: 'GET',
+      url: 'https://a.example/api?token=t0k',
+      resourceType: 'fetch',
+      navigation: false,
+      headers: { cookie: 'sid=1' },
+    });
+    const con = (await call('GET', `/api/v1/browser/sessions/thread-${WORK}/console`)).json();
+    expect(con).toMatchObject({ dropped: 0, items: [expect.objectContaining({ level: 'error' })] });
+    expect(JSON.stringify(con)).not.toContain('abcdefabcdefabcdef');
+    const net = (
+      await call('GET', `/api/v1/browser/sessions/thread-${WORK}/network?limit=5`)
+    ).json();
+    expect(net.items[0]).toMatchObject({
+      url: 'https://a.example/api?token=[REDACTED]',
+      requestHeaders: { cookie: '[REDACTED]' },
+    });
+    expect(
+      (await call('GET', `/api/v1/browser/sessions/thread-${WORK}/network?limit=0`)).statusCode,
+    ).toBe(400);
+  });
+
   it('take a private sign-in: the answer fills the page and is never echoed or audited', async () => {
     await call('PUT', '/api/v1/browser/sites', { pattern: 'login.example' });
     expect((await area.service.navigate(browserCall(), 'https://login.example/')).ok).toBe(true);
@@ -398,6 +602,7 @@ describe('browser routes', () => {
     area.useGate(policy.gate);
     area.useReviewer({ review: () => Promise.reject(new Error('unused')) });
     area.useComputerResolver(() => Promise.resolve(null));
+    area.useScopeResolver(() => Promise.resolve({ projectId: null, agentId: null }));
   });
 
   it('stays closed without the egress proxy by default', async () => {

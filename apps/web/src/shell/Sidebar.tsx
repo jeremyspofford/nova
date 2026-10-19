@@ -14,6 +14,7 @@ import { useWorkCommands } from '../work/commands.ts';
 import { useSidebarStatus } from './SidebarStatus.ts';
 import '../workspace.css';
 import { SidebarAgents } from '../agents/SidebarAgents.tsx';
+import { surfaceHiddenFor, useTeamRole } from '../team/role.tsx';
 
 export const MODE_INFO: Record<Mode, { label: string; icon: IconName; command: string }> = {
   chat: { label: 'Chat', icon: 'chat', command: 'mode.chat' },
@@ -52,6 +53,9 @@ export function Sidebar({
 }: SidebarProps) {
   const { registry } = useServices();
   const route = useRoute();
+  // A member sees only the surfaces that are theirs (M7, decision 5).
+  const { role } = useTeamRole();
+  const shown = (surface: string) => !surfaceHiddenFor(role, surface);
   // Chips stay live for every chat, and Ctrl/Cmd+Alt+A jumps to what needs input (FR-215).
   useSidebarStatus();
   useWorkCommands();
@@ -103,52 +107,54 @@ export function Sidebar({
         />
       ) : null}
       <ul className="modes" aria-label="Modes">
-        {(Object.keys(MODE_INFO) as Mode[]).map((m) => {
-          const info = MODE_INFO[m];
-          const current = mode === m && !settingsOpen;
-          return (
-            <li key={m} className="mode-item">
-              <a
-                href={m === 'chat' ? '/chat' : `/${m}`}
-                className="mode-link"
-                aria-current={current ? 'page' : undefined}
-                onClick={(e) => {
-                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                  e.preventDefault();
-                  onSwitchMode(m);
-                  onNavigated();
-                }}
-              >
-                <Icon name={info.icon} />
-                <span className="mode-label">{info.label}</span>
-                <span className="mode-keys">{keys(info.command)}</span>
-              </a>
-              {m === 'chat' ? (
-                <ThreadList
-                  selectedId={mode === 'chat' && !settingsOpen ? selectedThreadId : null}
-                  streamingId={streamingThreadId}
-                  onOpen={onNavigated}
-                />
-              ) : null}
-              {m === 'work' ? (
-                <SidebarRuns
-                  selectedId={route.name === 'mode' && route.mode === 'work' ? route.id : null}
-                  onOpen={onNavigated}
-                />
-              ) : null}
-              {m === 'agents' ? (
-                <SidebarAgents
-                  selectedId={
-                    route.name === 'mode' && route.mode === 'agents' && route.id !== 'new'
-                      ? route.id
-                      : null
-                  }
-                  onOpen={onNavigated}
-                />
-              ) : null}
-            </li>
-          );
-        })}
+        {(Object.keys(MODE_INFO) as Mode[])
+          .filter((m) => shown(m))
+          .map((m) => {
+            const info = MODE_INFO[m];
+            const current = mode === m && !settingsOpen;
+            return (
+              <li key={m} className="mode-item">
+                <a
+                  href={m === 'chat' ? '/chat' : `/${m}`}
+                  className="mode-link"
+                  aria-current={current ? 'page' : undefined}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                    e.preventDefault();
+                    onSwitchMode(m);
+                    onNavigated();
+                  }}
+                >
+                  <Icon name={info.icon} />
+                  <span className="mode-label">{info.label}</span>
+                  <span className="mode-keys">{keys(info.command)}</span>
+                </a>
+                {m === 'chat' ? (
+                  <ThreadList
+                    selectedId={mode === 'chat' && !settingsOpen ? selectedThreadId : null}
+                    streamingId={streamingThreadId}
+                    onOpen={onNavigated}
+                  />
+                ) : null}
+                {m === 'work' ? (
+                  <SidebarRuns
+                    selectedId={route.name === 'mode' && route.mode === 'work' ? route.id : null}
+                    onOpen={onNavigated}
+                  />
+                ) : null}
+                {m === 'agents' ? (
+                  <SidebarAgents
+                    selectedId={
+                      route.name === 'mode' && route.mode === 'agents' && route.id !== 'new'
+                        ? route.id
+                        : null
+                    }
+                    onOpen={onNavigated}
+                  />
+                ) : null}
+              </li>
+            );
+          })}
       </ul>
       <div className="sidebar-projects">
         <a
@@ -190,20 +196,22 @@ export function Sidebar({
             ))}
           </ul>
         ) : null}
-        <a
-          href="/library"
-          className="mode-link"
-          aria-current={route.name === 'library' ? 'page' : undefined}
-          onClick={(e) => {
-            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-            e.preventDefault();
-            navigate('/library');
-            onNavigated();
-          }}
-        >
-          <Icon name="file" />
-          <span className="mode-label">Library</span>
-        </a>
+        {shown('library') ? (
+          <a
+            href="/library"
+            className="mode-link"
+            aria-current={route.name === 'library' ? 'page' : undefined}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+              e.preventDefault();
+              navigate('/library');
+              onNavigated();
+            }}
+          >
+            <Icon name="file" />
+            <span className="mode-label">Library</span>
+          </a>
+        ) : null}
         <a
           href="/spaces"
           className="mode-link"
@@ -260,33 +268,65 @@ export function Sidebar({
           <Icon name="terminal" />
           <span className="mode-label">Computers</span>
         </a>
+        {shown('devices') ? (
+          <a
+            href="/devices"
+            className="mode-link"
+            aria-current={route.name === 'devices' ? 'page' : undefined}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+              e.preventDefault();
+              navigate('/devices');
+              onNavigated();
+            }}
+          >
+            <Icon name="server" />
+            <span className="mode-label">Devices</span>
+          </a>
+        ) : null}
+        {shown('network') ? (
+          <a
+            href="/network"
+            className="mode-link"
+            aria-current={route.name === 'network' ? 'page' : undefined}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+              e.preventDefault();
+              navigate('/network');
+              onNavigated();
+            }}
+          >
+            <Icon name="network" />
+            <span className="mode-label">Network</span>
+          </a>
+        ) : null}
         <a
-          href="/devices"
+          href="/approvals"
           className="mode-link"
-          aria-current={route.name === 'devices' ? 'page' : undefined}
+          aria-current={route.name === 'approvals' ? 'page' : undefined}
           onClick={(e) => {
             if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
             e.preventDefault();
-            navigate('/devices');
+            navigate('/approvals');
             onNavigated();
           }}
         >
-          <Icon name="server" />
-          <span className="mode-label">Devices</span>
+          <Icon name="shield" />
+          <span className="mode-label">Approvals</span>
         </a>
         <a
-          href="/network"
+          href="/team"
           className="mode-link"
-          aria-current={route.name === 'network' ? 'page' : undefined}
+          aria-current={route.name === 'team' ? 'page' : undefined}
           onClick={(e) => {
             if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
             e.preventDefault();
-            navigate('/network');
+            navigate('/team');
             onNavigated();
           }}
         >
-          <Icon name="network" />
-          <span className="mode-label">Network</span>
+          <Icon name="at" />
+          <span className="mode-label">Team</span>
         </a>
       </div>
       <div className="sidebar-bottom">

@@ -5,6 +5,7 @@ export {
   DeviceService,
   deviceSecretHash,
   inDeviceQuietHours,
+  novadDeviceForCredential,
   managementTokenRef,
   type CapabilityValidator as DeviceCapabilityValidator,
   type ConnectionHook as DeviceConnectionHook,

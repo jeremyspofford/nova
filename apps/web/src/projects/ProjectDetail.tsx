@@ -14,6 +14,7 @@ import { projectsChanged } from './events.ts';
 import { MEMORY_SCOPE_TEXT } from './NewProjectDialog.tsx';
 import { ProjectFolders } from './ProjectFolders.tsx';
 import { SourcesPanel } from './SourcesPanel.tsx';
+import { ScopedSiteLevels } from '../browser/SiteLevels.tsx';
 
 type Load =
   | { kind: 'loading' }
@@ -170,6 +171,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       <SourcesPanel projectId={project.id} onChanged={projectsChanged} />
 
       <ProjectFolders projectId={project.id} onChanged={projectsChanged} />
+      {/* This project's own site permission levels for the agent browser (FR-094, M7). */}
+      <ScopedSiteLevels scopeKind="project" scopeRef={project.id} scopeName={project.name} />
 
       <section className="ws-section" aria-labelledby="project-delete">
         <h2 id="project-delete">Delete project</h2>

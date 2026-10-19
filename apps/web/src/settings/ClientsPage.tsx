@@ -495,10 +495,15 @@ function TokenView({ created }: { created: AppAuthorizationCreated }) {
             Copy configuration
           </Button>
         </div>
+        {/* The stdio launcher is packages/mcp/src/launcher-main.ts; no `nova` command is
+            installed (docs/08 §2.2). The token goes in the environment, never in the command. */}
         <span className="nv-field-hint">
           Paste it into the client&apos;s MCP settings. Clients that only start local commands can
-          use the launcher instead: <code className="ws-code-inline">nova mcp stdio</code> with the
-          token in an environment variable.
+          run the launcher from Nova&apos;s folder instead:{' '}
+          <code className="ws-code-inline">node packages/mcp/src/launcher-main.ts mcp stdio</code>,
+          with the endpoint in <code className="ws-code-inline">NOVA_MCP_URL</code> and the token in{' '}
+          <code className="ws-code-inline">NOVA_MCP_TOKEN</code> (set them in the client&apos;s
+          environment settings, not in the command).
         </span>
       </div>
     </div>

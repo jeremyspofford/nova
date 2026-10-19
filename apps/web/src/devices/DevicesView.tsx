@@ -2,7 +2,9 @@
 // this Hub in one list, whatever it runs (browsers and the app, computers running `novad`,
 // compute nodes), with its role, status, platform, last contact and how it is reached; requests
 // to join wait at the top for approval. /devices/add adds a device; /devices/:id is one device's
-// page. The models and load of compute nodes stay in Settings → Devices, linked from here.
+// page. The models and load of compute nodes stay in Settings → Devices, linked from here. Since
+// M7 each computer and compute node also shows what the Hub saw of its certificate over HTTPS,
+// with a "Device certificates" section (FR-126).
 import { useState } from 'react';
 import type { DeviceSummaryView, DeviceView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
@@ -28,6 +30,7 @@ import {
 } from './format.ts';
 import { DeviceStatusChip, LoadError, UpdateRequiredChip, useLoad } from './parts.tsx';
 import { PendingRequests } from './Requests.tsx';
+import { DeviceTlsChip, DeviceTlsSection, useDeviceTls } from './Tls.tsx';
 import '../workspace.css';
 import '../work/work.css';
 import './devices.css';
@@ -105,6 +108,8 @@ function DeviceList() {
   const [now, setNow] = useState(() => Date.now());
   const [waking, setWaking] = useState<string | null>(null);
   useInterval(() => setNow(Date.now()), HEARTBEAT_TICK_MS);
+  const tls = useDeviceTls();
+  const tlsOf = new Map((tls?.data?.items ?? []).map((v) => [v.deviceId, v]));
 
   const reload = useDebounced(list.reload, 150);
   useDeviceEvents(DEVICE_ROW_EVENTS, reload);
@@ -168,6 +173,7 @@ function DeviceList() {
             const n = novad?.get(d.id) ?? null;
             const wakeable = n !== null && n.wake.wakeable && d.status === 'unreachable';
             const reach = reachText(d, n);
+            const cert = tlsOf.get(d.id);
             return (
               <li key={d.id} className="ws-list-row devices-row" aria-label={d.name}>
                 <div className="devices-row-main">
@@ -181,6 +187,7 @@ function DeviceList() {
                     </a>
                     <DeviceStatusChip status={d.status} />
                     {n?.updateRequired && d.status !== 'revoked' ? <UpdateRequiredChip /> : null}
+                    {cert && d.status !== 'revoked' ? <DeviceTlsChip view={cert} /> : null}
                   </div>
                   <span className="muted ws-row-meta">
                     <span>{rolesText(d.roles)}</span>
@@ -212,6 +219,7 @@ function DeviceList() {
           })}
         </ul>
       ) : null}
+      {tls ? <DeviceTlsSection tls={tls} /> : null}
     </div>
   );
 }

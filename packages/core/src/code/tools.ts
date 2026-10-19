@@ -17,6 +17,7 @@ import {
   str,
   type BuiltinTool,
 } from '../tools/builtin.ts';
+import { sandboxAvailableFor } from '../tools/exec-sessions.ts';
 import type { ExecRequestExtras } from '../tools/sandbox.ts';
 import { CHARS_PER_TOKEN, DEFAULT_OUTPUT_TOKENS, capHeadTail } from '../tools/text.ts';
 import type {
@@ -27,6 +28,7 @@ import type {
   ToolSourceProvider,
 } from '../tools/types.ts';
 import type { CodeService } from './service.ts';
+import type { WorkFs } from './transport.ts';
 
 /** Names of the tools only Code sessions get (the runtime may hide them elsewhere). */
 export const CODE_TOOL_NAMES = [
@@ -47,35 +49,60 @@ export interface TestCommand {
   runner: 'npm' | 'pnpm' | 'yarn' | 'pytest' | 'go' | 'cargo';
 }
 
-async function exists(p: string): Promise<boolean> {
-  try {
-    await stat(p);
-    return true;
-  } catch {
-    return false;
-  }
+/** How the marker files are read: this Hub's disk, or a session's workspace elsewhere. */
+export interface ProjectFiles {
+  exists(path: string): Promise<boolean>;
+  readText(path: string): Promise<string>;
 }
 
-/** The project's test command: npm/pnpm/yarn test, pytest, go test ./... or cargo test. */
-export async function detectTestCommand(folder: string): Promise<TestCommand | null> {
+/** The Hub's own disk (local and container sessions). */
+const hubFiles: ProjectFiles = {
+  async exists(p) {
+    try {
+      await stat(p);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  readText: (p) => readFile(p, 'utf8'),
+};
+
+/** The marker files of a session's folder on its own machine (cloud, SSH, device; M7). */
+export function workspaceFiles(fs: WorkFs): ProjectFiles {
+  return {
+    exists: async (p) => (await fs.stat(p).catch(() => null)) !== null,
+    readText: async (p) => (await fs.readFile(p, 4 * 1024 * 1024)).toString('utf8'),
+  };
+}
+
+/**
+ * The project's test command: npm/pnpm/yarn test, pytest, go test ./... or cargo test. The files
+ * are read where the folder is: the Hub's disk by default, a remote session's workspace otherwise.
+ */
+export async function detectTestCommand(
+  folder: string,
+  files: ProjectFiles = hubFiles,
+): Promise<TestCommand | null> {
+  const exists = (name: string) => files.exists(join(folder, name));
   try {
-    const pkg = JSON.parse(await readFile(join(folder, 'package.json'), 'utf8')) as {
+    const pkg = JSON.parse(await files.readText(join(folder, 'package.json'))) as {
       scripts?: Record<string, unknown>;
     };
     if (typeof pkg.scripts?.test === 'string') {
-      if (await exists(join(folder, 'pnpm-lock.yaml'))) return { cmd: 'pnpm test', runner: 'pnpm' };
-      if (await exists(join(folder, 'yarn.lock'))) return { cmd: 'yarn test', runner: 'yarn' };
+      if (await exists('pnpm-lock.yaml')) return { cmd: 'pnpm test', runner: 'pnpm' };
+      if (await exists('yarn.lock')) return { cmd: 'yarn test', runner: 'yarn' };
       return { cmd: 'npm test', runner: 'npm' };
     }
   } catch {
     // No package.json, or not JSON.
   }
-  if (await exists(join(folder, 'Cargo.toml'))) return { cmd: 'cargo test', runner: 'cargo' };
-  if (await exists(join(folder, 'go.mod'))) return { cmd: 'go test ./...', runner: 'go' };
+  if (await exists('Cargo.toml')) return { cmd: 'cargo test', runner: 'cargo' };
+  if (await exists('go.mod')) return { cmd: 'go test ./...', runner: 'go' };
   for (const f of ['pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini', 'conftest.py']) {
-    if (await exists(join(folder, f))) return { cmd: 'python3 -m pytest', runner: 'pytest' };
+    if (await exists(f)) return { cmd: 'python3 -m pytest', runner: 'pytest' };
   }
-  if (await exists(join(folder, 'tests'))) return { cmd: 'python3 -m pytest', runner: 'pytest' };
+  if (await exists('tests')) return { cmd: 'python3 -m pytest', runner: 'pytest' };
   return null;
 }
 
@@ -228,7 +255,8 @@ export function codeTools(svc: CodeService): BuiltinTool[] {
         } catch (err) {
           return failFrom(err);
         }
-        const available = await ctx.sandbox.available();
+        // The session's own sandbox (a cloud, SSH or device environment's), not only the Hub's.
+        const available = await sandboxAvailableFor(ctx.sandbox, ctx.accountId, ctx.threadId);
         if (!available.ok) return fail('sandbox_unavailable', available.detail);
         const pattern = str(a.pattern);
         if (pattern && !PATTERN.test(pattern))
@@ -236,7 +264,16 @@ export function codeTools(svc: CodeService): BuiltinTool[] {
             'validation',
             'pattern must be a test path or name (letters, digits, ./:_-@=+[])',
           );
-        const detected = await detectTestCommand(folder);
+        // The marker files are read where the folder is: through the session's workspace (the
+        // same transport its file and Git operations use) when it is on another machine.
+        let detected: TestCommand | null;
+        try {
+          const info = svc.infoByThread(ctx.accountId, ctx.threadId);
+          const ws = info && !info.hubLocal ? await svc.workspace(info) : null;
+          detected = await detectTestCommand(folder, ws ? workspaceFiles(ws.fs) : hubFiles);
+        } catch (err) {
+          return failFrom(err);
+        }
         if (!detected)
           return fail(
             'not_found',

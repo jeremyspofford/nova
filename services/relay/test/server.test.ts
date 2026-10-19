@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RELAY_SUBPROTOCOL, parseEnvelope, type RelayEnvelope } from '@nova/relay';
-import { Logger } from '@nova/telemetry';
+import { silentLog } from '../src/log.ts';
 import {
   MockPushSender,
   RelayState,
@@ -27,10 +27,12 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-const quiet = () => new Logger({ module: 'relay', sinks: [] });
+const quiet = () => silentLog;
 const CODE_HASH = 'h'.repeat(43);
 const OFFER = 'AAAA';
 const BLOB = 'QkxPQg==';
+/** A well-formed APNs device token (64 hex characters). */
+const APNS_TOKEN = 'ab'.repeat(32);
 
 async function start(opts: RelayServerOptions = {}) {
   const relay = await buildRelayServer({ log: quiet(), ...opts });
@@ -202,12 +204,64 @@ describe('registration and health', () => {
     expect(third.json.error).toMatchObject({ code: 'rate_limited', retryable: true });
   });
 
-  it('answers the channel relay routes with 501 until M7', async () => {
+  it('answers the channel relay routes with 501: not built, no milestone promised', async () => {
     const { base } = await start();
     const m = await call(base, 'POST', '/v1/relay/messages', {});
     expect(m.status).toBe(501);
-    expect(m.json.error.code).toBe('not_implemented');
-    expect((await call(base, 'GET', '/v1/relay/outbox?since=1')).status).toBe(501);
+    expect(m.json.error).toMatchObject({
+      code: 'not_implemented',
+      retryable: false,
+      details: { reason: 'channel_relay_not_built' },
+    });
+    expect(m.json.error.message).toContain('not built');
+    expect(m.json.error.message).not.toMatch(/\bM\d/);
+    const o = await call(base, 'GET', '/v1/relay/outbox?since=1');
+    expect(o.status).toBe(501);
+    expect(o.json.error.details).toEqual({ reason: 'channel_relay_not_built' });
+  });
+});
+
+describe('cross-origin requests', () => {
+  it('lets a browser page reach the client routes, without credentials', async () => {
+    const { base } = await start();
+    const pre = await fetch(`${base}/v1/relay/pairings/abc/claim`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://hub.example',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'content-type',
+      },
+    });
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get('access-control-allow-origin')).toBe('*');
+    expect(pre.headers.get('access-control-allow-methods')).toContain('POST');
+    expect(pre.headers.get('access-control-allow-headers')).toContain('content-type');
+    expect(pre.headers.get('access-control-allow-credentials')).toBeNull();
+    const health = await fetch(`${base}/v1/relay/health`, {
+      headers: { origin: 'https://hub.example' },
+    });
+    expect(health.headers.get('access-control-allow-origin')).toBe('*');
+    // An unknown pairing still answers its error with the header, so the page can read it.
+    const claim = await fetch(`${base}/v1/relay/pairings/abc/claim`, {
+      method: 'POST',
+      headers: { origin: 'https://hub.example', 'content-type': 'application/json' },
+      body: JSON.stringify({ codeHash: CODE_HASH, blob: BLOB }),
+    });
+    expect(claim.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('keeps the Hub routes same-origin only', async () => {
+    const { base } = await start();
+    const pre = await fetch(`${base}/v1/relay/hubs`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' },
+    });
+    expect(pre.headers.get('access-control-allow-origin')).toBeNull();
+    const reg = await fetch(`${base}/v1/relay/hubs`, {
+      method: 'POST',
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(reg.headers.get('access-control-allow-origin')).toBeNull();
   });
 });
 
@@ -445,6 +499,42 @@ describe('connections and routing', () => {
     expect(relay.stats().invalid).toBe(3);
   });
 
+  it('passes a pending client only the Hub notices on Hub-opened streams (M7)', async () => {
+    const { base } = await start();
+    const hub = await registerHub(base);
+    const c = await pairClient(base, hub);
+    const h = connect(base, hub.routeToken);
+    const cl = connect(base, c.routeToken);
+    await Promise.all([h.opened, cl.opened]);
+    await h.next((e) => e.kind === 'data'); // the claim
+    // A Hub-opened stream reaches it (the sealed `decided` notice); acks and client streams don't.
+    h.send({ ...data(c.routeId, hub.routeId, c.clientId), stream: 'h1' });
+    h.send({
+      v: 1,
+      kind: 'ack',
+      to: c.routeId,
+      from: hub.routeId,
+      client: c.clientId,
+      stream: 'c1',
+      ack: 1,
+    });
+    expect(await cl.next()).toMatchObject({ kind: 'data', stream: 'h1' });
+    // The client still sends nothing until the Hub confirms it.
+    cl.send({ ...data(hub.routeId, c.routeId, c.clientId), stream: 'h1' });
+    cl.send({
+      v: 1,
+      kind: 'ack',
+      to: hub.routeId,
+      from: c.routeId,
+      client: c.clientId,
+      stream: 'h1',
+      ack: 1,
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(cl.frames).toEqual([]);
+    expect(h.frames).toEqual([]);
+  });
+
   it('answers frames to unknown routes with an unknown_route close frame', async () => {
     const { base } = await start();
     const hub = await registerHub(base);
@@ -611,7 +701,7 @@ describe('the delivery queue', () => {
       base,
       'POST',
       '/v1/relay/push/register',
-      { platform: 'apns', token: 'device-token', topic: 'ai.nova' },
+      { platform: 'apns', token: APNS_TOKEN, topic: 'ai.nova' },
       c.routeToken,
     );
     expect(reg.status).toBe(201);
@@ -634,7 +724,7 @@ describe('the delivery queue', () => {
     expect(push.sent).toEqual([
       {
         platform: 'apns',
-        token: 'device-token',
+        token: APNS_TOKEN,
         topic: 'ai.nova',
         kind: 'wake',
         routeId: c.routeId,

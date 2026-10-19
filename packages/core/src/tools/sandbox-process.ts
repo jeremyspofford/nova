@@ -8,6 +8,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { NovaError, uuidv7 } from '@nova/shared';
+import type { EgressPolicyOverride } from './sandbox-egress.ts';
 import type { ExecRequest, ExecResult, SandboxClient } from './types.ts';
 
 /** Open sessions per turn (FR-184). */
@@ -25,6 +26,11 @@ export interface ExecRequestExtras {
     accountId: string;
     threadId?: string | null;
     scope?: { kind: 'run' | 'session' | 'agent' | 'sandbox'; id: string } | null;
+    /**
+     * An explicit policy that replaces the scopes' (an external agent's own declared hosts,
+     * FR-203): only these hosts, the global deny list still applies, and no credentials.
+     */
+    policy?: EgressPolicyOverride;
   };
   /**
    * Make a server inside reachable from the Hub (dev servers, FR-097): the substrate bridges

@@ -1,16 +1,18 @@
 // Notification routing and quiet hours (FR-060, docs/04 §1.1), a section of Settings →
 // Notifications. Per kind: shown as unread in Nova, raised on the user's devices, and sent to
-// Slack, Teams or webhook channels; and whether it passes quiet hours (approvals do by default).
-// Quiet hours are a daily window in a time zone on chosen days: device and channel copies wait
-// until it ends; in-app records are never held back. Each change to a kind is saved at once;
-// quiet hours are saved with their own button.
+// Slack, Teams, Telegram, email or webhook channels; and whether it passes quiet hours (approvals
+// do by default). Each kind can send a test notification through the whole pipeline, which says
+// where it went (M7). Quiet hours are a daily window in a time zone on chosen days: device and
+// channel copies wait until it ends; in-app records are never held back. Each change to a kind is
+// saved at once; quiet hours are saved with their own button.
 import { useCallback, useEffect, useId, useState } from 'react';
 import {
   NOTIFICATION_KINDS,
   quietHoursSchema,
-  type ChannelBindingView,
+  type ChannelBindingViewM7,
   type NotificationKind,
   type NotificationRuleView,
+  type NotificationTestView,
   type QuietHoursView,
 } from '@nova/shared';
 import { Button, Icon, SelectField, Spinner, TextField, useToast } from '@nova/ui';
@@ -21,13 +23,14 @@ import { SwitchField } from '../settings/controls.tsx';
 import { CATEGORY_TEXT } from '../settings/NotificationsPage.tsx';
 import { browserTimezone, knownTimezones } from '../work/schedule-when.ts';
 import { attempt, useChannelsApi } from './api.ts';
+import { useChannelsM7Api } from './api-m7.ts';
 import { useChannelEvents, useDebouncedCallback } from './events.ts';
 import { KIND_TEXT, errorField, formatStamp, issueErrors } from './format.ts';
 import './channels.css';
 
 /** Most channels one kind may go to (the Hub's limit). */
 export const MAX_ROUTE_CHANNELS = 10;
-const ROUTABLE = new Set(['slack', 'teams', 'webhook']);
+const ROUTABLE = new Set(['slack', 'teams', 'telegram', 'email', 'webhook']);
 const DAYS = [
   { short: 'Sun', long: 'Sunday' },
   { short: 'Mon', long: 'Monday' },
@@ -46,7 +49,7 @@ export function NotificationRoutingSection() {
   const categories = useSettings().get('notifications.categories').value;
   const [rules, setRules] = useState<NotificationRuleView[] | null>(null);
   const [quiet, setQuiet] = useState<QuietHoursView | null>(null);
-  const [channels, setChannels] = useState<ChannelBindingView[]>([]);
+  const [channels, setChannels] = useState<ChannelBindingViewM7[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
 
@@ -134,7 +137,7 @@ export function NotificationRoutingSection() {
           : null}
         {rules && !channels.length ? (
           <p className="muted ws-flush">
-            To send notifications to Slack, Teams or a webhook, add a channel in{' '}
+            To send notifications to Slack, Teams, Telegram, email or a webhook, add a channel in{' '}
             <a
               href="/settings/channels"
               onClick={(e) => {
@@ -163,11 +166,27 @@ function RouteFields({
   rule: NotificationRuleView;
   /** Turned off in "What to notify you about": nothing is recorded or sent. */
   off: boolean;
-  channels: ChannelBindingView[];
+  channels: ChannelBindingViewM7[];
   onChange: (next: Rule) => void;
   onReset: () => void;
 }) {
   const id = useId();
+  const api = useChannelsM7Api();
+  const [testing, setTesting] = useState(false);
+  const [tested, setTested] = useState<NotificationTestView | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+  const sendTest = async () => {
+    setTesting(true);
+    setTestError(null);
+    setTested(null);
+    try {
+      setTested(await attempt(() => api.testNotification(rule.category)));
+    } catch (err) {
+      setTestError(errorMessage(err, 'Could not send a test.'));
+    } finally {
+      setTesting(false);
+    }
+  };
   const text = CATEGORY_TEXT[rule.category];
   const current: Rule = {
     inapp: rule.inapp,
@@ -240,8 +259,17 @@ function RouteFields({
       {full ? (
         <p className="nv-field-hint ws-flush">At most {MAX_ROUTE_CHANNELS} channels per kind.</p>
       ) : null}
-      {!rule.isDefault ? (
-        <div className="row">
+      <div className="row">
+        <Button
+          variant="ghost"
+          disabled={off || testing}
+          title={off ? 'Turned off above.' : undefined}
+          aria-label={`Send a test ${text.label.toLowerCase()} notification`}
+          onClick={() => void sendTest()}
+        >
+          {testing ? <Spinner /> : <Icon name="bell" />} Send a test
+        </Button>
+        {!rule.isDefault ? (
           <Button
             variant="ghost"
             onClick={onReset}
@@ -249,9 +277,63 @@ function RouteFields({
           >
             Reset to default
           </Button>
-        </div>
+        ) : null}
+      </div>
+      {tested ? <TestResult result={tested} channels={channels} osOn={rule.os} /> : null}
+      {testError ? (
+        <p role="alert" className="nv-field-error">
+          {testError}
+        </p>
       ) : null}
     </fieldset>
+  );
+}
+
+/** Where a test notification went, as the rule and quiet hours decided it. */
+export function testResultText(
+  r: NotificationTestView,
+  channelName: (id: string) => string,
+  /** The rule sends this kind to devices (so a "no" means quiet hours held it). */
+  osOn: boolean,
+): string {
+  const parts: string[] = [];
+  parts.push(r.inapp ? 'Unread in Nova: yes.' : 'Unread in Nova: no.');
+  parts.push(
+    r.os
+      ? 'On your devices: yes.'
+      : osOn && r.deferUntil
+        ? 'On your devices: no, it is quiet hours.'
+        : 'On your devices: no.',
+  );
+  if (r.channels.length) {
+    const names = r.channels.map(channelName).join(', ');
+    parts.push(
+      r.deferUntil
+        ? `To ${names}: waiting until quiet hours end at ${formatStamp(r.deferUntil)}.`
+        : `To ${names}: sent.`,
+    );
+  } else parts.push('To channels: none.');
+  return parts.join(' ');
+}
+
+function TestResult({
+  result,
+  channels,
+  osOn,
+}: {
+  result: NotificationTestView;
+  channels: ChannelBindingViewM7[];
+  osOn: boolean;
+}) {
+  const name = (cid: string) => {
+    const b = channels.find((x) => x.id === cid);
+    return b ? `${b.label} (${KIND_TEXT[b.kind]})` : 'a removed channel';
+  };
+  return (
+    <p role="status" className="ch-test-result">
+      <Icon name="check" />
+      <span>Test sent. {testResultText(result, name, osOn)}</span>
+    </p>
   );
 }
 

@@ -18,6 +18,7 @@ import {
   type Repeat,
   type WhenDraft,
 } from './schedule-when.ts';
+import { ScheduleWebhookSecret } from '../channels/WebhookSecret.tsx';
 
 type ScheduleBody = Parameters<Api['createSchedule']>[0];
 
@@ -325,6 +326,10 @@ function ScheduleForm({
               error={webhook ? (webhookError ?? undefined) : undefined}
               onChange={(e) => setWebhook(e.target.value)}
             />
+          ) : null}
+          {/* The signing secret of a saved webhook target, rotated and shown once (FR-055). */}
+          {useWebhook && editing?.deliveryTargets?.some((t) => t.kind === 'webhook') ? (
+            <ScheduleWebhookSecret scheduleId={editing.id} />
           ) : null}
           {noTarget ? (
             <p className="nv-field-error" role="alert">

@@ -1,6 +1,7 @@
 # IPC Channels (Renderer ↔ Main)
 
-**Scope: native desktop shell only** (ADR-031, ADR-081: the shell arrives in M7). The web UI
+**Scope: native desktop shell only** (ADR-031, ADR-081: the shell arrived in M7; what it built
+is in "As built in M7" below). The web UI
 served by the Hub talks to `contracts/hub-api.md` directly and never sees these channels.
 Inside the shell, domain channels (chat, runs, goals, approvals, requests, settings, ...) are
 thin proxies for Hub API endpoints with the same payloads; the Hub API stays the source of
@@ -9,6 +10,66 @@ truth for them. **Native-only** channels (window capture, dictation, global shor
 
 The renderer runs with `contextIsolation: true`, `sandbox: true`, and **no Node integration**.
 It talks to the main process through a `contextBridge` surface generated from this contract.
+
+## As built in M7
+
+*ADR-095; `apps/desktop`; payload shapes in `packages/shared/src/m7/desktop.ts`.* The M7 shell
+does not proxy the domain channels below: its windows load the Hub's own web UI, which talks to
+`contracts/hub-api.md` directly with the session the shell got by joining as a `browser` device
+(Add Device), so the Hub API stays the only domain surface. The rest of this file (the
+`window.nova` surface and its domain, stream, dictation and data channels) is the design for later
+native features and is not built. What exists is two narrow preloads, both sandboxed and
+context-isolated, passing plain values only; the main process validates every payload with zod
+and checks the sender (the top frame of one of its own Hub windows whose URL is on the Hub's
+origin, or one of its own `file:` pages in the renderer folder). Every handler answers
+`{ok: true, …}` or `{ok: false, message, reason?}`.
+
+**`window.novaShell`** (the Hub's web UI inside the shell; absent in a browser), `NovaShellBridge`:
+
+| Member | IPC channel | Payload → result |
+| --- | --- | --- |
+| `version`, `platform` | — | `1`, the OS (`linux`, `darwin`, `win32`) |
+| `openWindow(path)` | `shell.openWindow` | `{path}` → `true` when it opened an app route in a window of its own (FR-009), `false` otherwise. Only absolute paths of the shell's own route table (`apps/desktop/src/routes.ts`, a copy of the web router's) pass: never `//host`, `/\host`, a scheme, control characters or an unknown first segment such as `api`. That table does not yet know the M7 Settings sections (an unknown section opens General), `/team` or `/approvals` without an id |
+| `shortcuts()` | `shortcut.global.list` | `{}` → `ShellShortcutView[]` `{action: quickChat\|attachWindow, accelerator, label, registered, problem: conflict\|duplicate\|invalid\|null}` |
+| `setShortcut(action, accelerator)` | `shortcut.global.set` | `{action, accelerator (Electron syntax, ≤ 100) \| null}` → the list; a key needs a modifier other than Shift; a key another app holds is reported (`conflict`), never taken |
+| `localRuntime.models()` | `localRuntime.models` | `{}` → `{ok, reason?: no_novad\|no_access\|scope_missing\|no_model_server\|failed, message?, models}` (FR-128) |
+| `localRuntime.chat(req, onDelta)` | `localRuntime.chat` | `{id (the stream's), model, messages: [{role: system\|user\|assistant, content}] (1–500)}` → `{text}`; the answer's text streams to the page as `localRuntime.delta` `{id, text}` events (reasoning left out); it rejects with an Error whose message is the sentence `models()` gives. At most 4 at once; a chat stops when its page closes or navigates |
+
+The main process reaches `novad`'s local runtime itself (`hub-api.md` §4): `localRuntime` in
+`shell.json`, or `NOVA_LOCAL_RUNTIME_SOCKET` / `NOVA_LOCAL_RUNTIME_URL` with
+`NOVA_LOCAL_RUNTIME_TOKEN_FILE` (loopback only), else `$XDG_RUNTIME_DIR/nova/runtime.sock` (macOS
+`~/Library/Application Support/Nova/run/runtime.sock`), else
+`/var/lib/nova/local-runtime/runtime.sock`. novad's 403 `scope_missing` maps to `scope_missing`,
+its 502 to `no_model_server`, a 401 or a socket or token file this user may not open to
+`no_access`, nothing listening to `no_novad`. The page never sees the socket, the token or the
+address.
+
+**`window.novaLocal`** (the shell's own pages: connect, quick chat, attach preview) forwards only
+these channels, each accepted only from the page named:
+
+| Channel | Page | Payload → result |
+| --- | --- | --- |
+| `shell.connect.state` | connect | `{}` → the link, address or pin last tried and the problem |
+| `shell.connect` | connect | `{link?, url?, pin?, replace?}` (an Add Device link, or the Hub address and its 43-character fingerprint) → `{ok, origin}` after the pinning check of `docs/22` §5 (`apps/desktop/src/pinning.ts`), or `{ok: false, reason, message}`. Connecting to a Hub other than the current one needs `replace: true`, sent only after the page's "Replace your Hub?" confirmation; without it the answer is `{ok: false, reason: 'confirm_replace', replace: {current, next, fingerprint}, message}` and nothing is contacted. Plain `http://` only to a Hub on this computer |
+| `quick.state` | quick | `{}` → the Hub's state, the status list (`ShellStatusItemView[]`, Needs input first) and the current chat |
+| `quick.send` | quick | `{text, target: current\|new}` → the chat it went to (FR-008) |
+| `quick.open` | quick, attach | `{path}`: open an app route in the last used window |
+| `quick.newTask`, `quick.home`, `quick.attach` | quick | `{}`: New task, focus Nova, capture the frontmost window |
+| `window.capture.draft` | attach | `{draftId}` → `ShellCaptureDraftView` (FR-214): the screenshot, the redacted accessibility text (Linux AT-SPI; macOS and Windows offer none yet) and what was left out |
+| `window.capture.attach` | attach | `{draftId, includeImage, includeText, note, target: current\|new}` → sent: two message attachments (PNG and text) on the Hub, no `window_capture` origin |
+| `window.capture.discard` | attach | `{draftId}`: drop it; nothing left the computer |
+
+The overlay also receives `quick.status` events. `window.capture` itself is never exposed to a
+page: a capture starts only from the global shortcut (default Ctrl+Alt+A), the tray or the
+overlay (security rule 6). The quick overlay opens with Ctrl+Alt+N. OS notifications are raised
+by the main process for `notification.created` with `os: true`; the page's own notification
+permission is denied inside the shell. The shell's settings are `shell.json` in its data folder
+(`shellConfigSchema`: the Hub and its pin, shortcuts, excluded apps, `localRuntime`).
+
+Known limitations (desktop review, not yet fixed): the sender check compares the frame's URL
+rather than its real origin, so a Hub page served in a sandboxed opaque origin and opened
+top-level would pass it; `setShortcut` accepts common editing and system keys; excluded apps match
+only on the Linux AT-SPI path.
 
 ## API surface (preload `window.nova`)
 
@@ -200,6 +261,8 @@ sessions, which are killed when the run is cancelled or ends.
    global shortcut; the renderer cannot start them on its own. A capture draft is attached
    only when the user confirms it; dictation audio is never stored (FR-214, FR-216).
 7. Main talks to the local `novad` only over its 0600 socket or user-only named pipe with the
-   local token (`contracts/hub-api.md` §4); the renderer never sees that token.
+   local token (`contracts/hub-api.md` §4); the renderer never sees that token. As built in M7:
+   the per-user 0600 socket needs no token; a loopback address needs the token file; the Windows
+   per-user pipe is not built.
 8. Approval answers for `handoff_required` and `confirm_at_action` actions come only from a
    user action in the shell's own UI, never from page content (FR-189).

@@ -8,6 +8,12 @@
 // M4: servers installed from MCP bundles (FR-199; docs/08 §2.5) and OAuth for sse/http servers
 // (FR-047): PKCE with a client metadata document the Hub serves at `/.well-known/nova-client.json`
 // or dynamic registration, tokens in the vault, refreshed before expiry, revocable.
+//
+// M7 (FR-042): the server fields `deviceId` (a stdio server that runs on a device and is reached
+// through `novad` by the name the device lists; the Hub never spawns it or sends the device a
+// command line), `auth` (an API key or bearer token for an sse/http server, kept in the vault and
+// sent as its Authorization header) and `oauth` (a client metadata document URL or dynamic
+// registration, and the scopes to request).
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -18,15 +24,24 @@ import {
   NovaError,
   idSchema,
   installBundleSchema,
-  mcpServerSchema,
+  mcpServerM7Schema,
+  mcpServerPatchM7Schema,
   uuidv7,
   type BundleConfigField,
   type BundlePreview,
   type McpAuthView,
+  type McpOAuthSettings,
+  type McpServerM7View,
   type McpServerView,
   type McpStatus,
 } from '@nova/shared';
-import type { AuditSink } from '@nova/core';
+import {
+  isHubOwner,
+  privateAddressError,
+  publicFetch,
+  publicUrlProblem,
+  type AuditSink,
+} from '@nova/core';
 import {
   McpManager,
   McpOAuthService,
@@ -42,6 +57,8 @@ import {
   resolveUserConfig,
   whichOnPath,
   type BundleManifest,
+  type DeviceMcpBridge,
+  type DeviceMcpTool,
   type LaunchEnvironment,
   type McpServerConfig,
   type McpServerState,
@@ -84,6 +101,8 @@ export interface HubMcpArea extends McpArea {
    * cancelled, FR-201). A hook that fails is logged; the removal goes on.
    */
   onServerRemoving(hook: (accountId: string, serverId: string) => Promise<unknown>): void;
+  /** How device-hosted servers are reached (FR-042, FR-210); they connect once it is wired. */
+  useDeviceBridge(bridge: DeviceMcpBridge): void;
 }
 
 /** What `config_json` holds (the mcp-config.json fields without their own column). */
@@ -100,10 +119,14 @@ interface StoredConfig {
   defaultApproval: Approval | null;
   /** Grants confirmed for a bundle (mcp-config.json `policy`). */
   policy?: { network: string[]; fs: 'none' | 'read' | 'project' };
+  /** The vault reference of an sse/http server's Authorization header value (FR-042 `auth`). */
+  auth?: string;
+  /** OAuth settings (FR-047): metadata document or dynamic registration, and scopes. */
+  oauth?: McpOAuthSettings;
 }
 
 const params = z.object({ id: idSchema });
-const patchBody = z.object(mcpServerSchema.shape).partial();
+const patchBody = mcpServerPatchM7Schema;
 const bundleUpload = z.object({
   name: z.string().min(1).max(255),
   // Base64 of at most 50 MB (4/3 of it), whitespace allowed.
@@ -146,6 +169,8 @@ function storedConfig(row: Row): StoredConfig {
     defaultApproval: c.defaultApproval ?? null,
   };
   if (c.policy) out.policy = c.policy;
+  if (typeof c.auth === 'string' && c.auth.startsWith('secret://')) out.auth = c.auth;
+  if (c.oauth && typeof c.oauth === 'object') out.oauth = c.oauth;
   return out;
 }
 
@@ -160,7 +185,8 @@ function toConfig(row: Row): McpServerConfig {
     args: parseJson<string[]>(row.argsJson, []),
     url: row.url,
     env: parseJson<Record<string, string>>(row.envRefJson, {}),
-    headers: {},
+    headers: c.auth && row.transport !== 'stdio' ? { Authorization: c.auth } : {},
+    deviceId: row.transport === 'stdio' ? row.deviceId : null,
     enabled: row.enabled,
     startupTimeoutMs: c.startupTimeoutMs,
     toolTimeoutMs: c.toolTimeoutMs,
@@ -192,10 +218,14 @@ function refusePluginOwned(row: Row): void {
     );
 }
 
-function toView(row: Row, state: McpServerState | null, auth?: McpAuthView): McpServerView {
+function toView(
+  row: Row,
+  state: McpServerState | null,
+  auth?: McpAuthView,
+): McpServerView & McpServerM7View {
   const c = storedConfig(row);
   const stored = STATUSES.find((s) => s === row.lastStatus) ?? 'stopped';
-  const view: McpServerView = {
+  const view: McpServerView & McpServerM7View = {
     id: row.id,
     name: row.name,
     transport: row.transport,
@@ -224,6 +254,9 @@ function toView(row: Row, state: McpServerState | null, auth?: McpAuthView): Mcp
     restarts: state?.restarts ?? 0,
     bundle: bundleOf(row),
     pluginId: row.source === 'plugin' ? row.pluginId : null,
+    deviceId: row.deviceId,
+    hasAuth: !!c.auth,
+    oauthSettings: c.oauth ?? null,
   };
   if (auth) view.auth = auth;
   return view;
@@ -245,7 +278,7 @@ function authOf(
   const error = (row.enabled ? (state ? state.lastError : row.lastError) : null) ?? '';
   const failed = status === 'error';
   const keys = Object.keys(parseJson<Record<string, string>>(row.envRefJson, {}));
-  if (keys.length)
+  if (keys.length || storedConfig(row).auth)
     return { kind: 'api_key', status: failed ? 'error' : 'connected', expiresAt: null, scopes: [] };
   if (failed && /\b401\b|unauthori[sz]ed/i.test(error))
     return { kind: 'oauth', status: 'needs_auth', expiresAt: null, scopes: [] };
@@ -294,6 +327,60 @@ function oauthRecord(r: OAuthRow): OAuthRecord {
   };
 }
 
+/** The devices area's MCP pass-through (`DeviceService.mcpList` and `mcpCall`). */
+export interface DeviceMcpService {
+  mcpList(
+    accountId: string,
+    deviceId: string,
+    grantee: { kind: 'user'; id: string },
+  ): Promise<{ servers: unknown[] }>;
+  mcpCall(
+    accountId: string,
+    deviceId: string,
+    grantee: { kind: 'user'; id: string },
+    call: { server: string; tool: string; arguments: Record<string, unknown> },
+  ): Promise<{ content: unknown[]; isError: boolean }>;
+}
+
+/**
+ * How Hub MCP servers with a `deviceId` reach the device (FR-042, FR-210): through novad's local
+ * MCP pass-through (`/agent/v1/mcp/list` answers `{servers: [{name, tools: [{name, description,
+ * inputSchema}], error?}]}`, `/agent/v1/mcp/call` answers `{content, isError, untrusted}`), as
+ * the account's user, which the device owner grants `mcp` for the server. The device service
+ * refuses a device that is not active (pending, unreachable, revoked); a server the device lists
+ * with an error, or does not list (not declared, not granted), fails the listing.
+ */
+export function deviceBridgeFrom(svc: DeviceMcpService): DeviceMcpBridge {
+  const grantee = (accountId: string) => ({ kind: 'user' as const, id: accountId });
+  return {
+    list: async ({ accountId, deviceId, server }) => {
+      const { servers } = await svc.mcpList(accountId, deviceId, grantee(accountId));
+      const entry = servers.find(
+        (s): s is { name: string; tools?: unknown; error?: unknown } =>
+          !!s && typeof s === 'object' && (s as { name?: unknown }).name === server,
+      );
+      if (!entry)
+        throw new NovaError('not_found', `the device lists no MCP server named ${server} for you`);
+      if (entry.error) {
+        const e = entry.error as { message?: unknown };
+        throw new NovaError(
+          'node_unavailable',
+          `the device's MCP server ${server} failed: ${typeof e.message === 'string' ? e.message : 'unknown error'}`,
+        );
+      }
+      return Array.isArray(entry.tools) ? (entry.tools as DeviceMcpTool[]) : [];
+    },
+    call: async ({ accountId, deviceId, server }, call) => {
+      const r = await svc.mcpCall(accountId, deviceId, grantee(accountId), {
+        server,
+        tool: call.tool,
+        arguments: call.arguments,
+      });
+      return { content: Array.isArray(r.content) ? r.content : [], isError: r.isError === true };
+    },
+  };
+}
+
 /** The Hub's own URL as this request reached it (Host is checked by the Hub's guard, FR-192). */
 export function hubBaseUrl(req: FastifyRequest): string {
   return `${req.protocol}://${req.headers.host ?? '127.0.0.1'}`;
@@ -322,6 +409,16 @@ interface BundlePreviewEntry {
 export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<HubMcpArea> {
   const { db, secrets, events, audit, accountOf } = ctx;
   const log = ctx.log.child('mcp');
+  // A non-owner's remote servers and their OAuth reach checked public addresses only, pinned:
+  // never the Hub's loopback services or the owner's network (decision 5).
+  const pinnedFetch = publicFetch();
+  const fetchForAccount = (accountId: string) =>
+    isHubOwner(db, accountId) ? undefined : pinnedFetch;
+  const assertPublicUrl = async (accountId: string, transport: string, url?: string | null) => {
+    if (transport === 'stdio' || !url || isHubOwner(db, accountId)) return;
+    const problem = await publicUrlProblem(url);
+    if (problem) throw privateAddressError('the server URL', problem);
+  };
   const listeners = new Set<(serverId: string) => void>();
   const removing: ((accountId: string, serverId: string) => Promise<unknown>)[] = [];
   const defaults = new Map<string, Approval | null>();
@@ -354,6 +451,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
         }),
     },
     records: (await db.orm.select().from(mcpOauth)).map(oauthRecord),
+    fetchFor: fetchForAccount,
     log: log.child('oauth'),
     // New or revoked tokens take effect on a fresh connection.
     onChange: (serverId) => {
@@ -368,6 +466,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     workDir: join(ctx.dataDir, 'mcp'),
     clientVersion: ctx.config.version,
     authFor: (cfg) => oauth.provider(cfg.id),
+    fetchFor: (cfg) => fetchForAccount(cfg.accountId) ?? null,
     onStatus: (s) => {
       statusChain = statusChain
         .then(() => persistStatus(s))
@@ -386,7 +485,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     },
   });
 
-  const view = (row: Row): McpServerView => {
+  const view = (row: Row): McpServerView & McpServerM7View => {
     const state = manager.state(row.id);
     return toView(row, state, authOf(row, state, oauth.view(row.id)));
   };
@@ -476,6 +575,46 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
       const kind = ref.slice(`secret://mcp/${id}/`.length).split('/')[0] ?? '';
       if (!kinds || kinds.includes(kind)) await secrets.delete(ref);
     }
+  }
+
+  /** A device the server would run on must be one of the account's devices (FR-042). */
+  function assertDevice(accountId: string, deviceId: string | null | undefined): void {
+    if (!deviceId) return;
+    // An approved device only: one still waiting for the Hub's approval (pending) is refused.
+    const found = db.raw
+      .prepare(
+        "SELECT 1 FROM device WHERE id = ? AND account_id = ? AND status IN ('active', 'unreachable')",
+      )
+      .get(deviceId, accountId);
+    if (!found)
+      throw new NovaError('validation', 'device not found or not approved', {
+        details: { field: 'deviceId' },
+      });
+  }
+
+  /**
+   * Store an sse/http server's API key or bearer token (FR-042 `auth`) in the vault and return its
+   * reference: a value without a scheme is sent as `Bearer <value>`; '' keeps the saved one; null
+   * removes it. A reference to another secret is refused, like env values.
+   */
+  async function storeAuth(
+    id: string,
+    current: string | undefined,
+    incoming: string | null | undefined,
+  ): Promise<string | undefined> {
+    const own = secretRef('mcp', id, 'auth', 'header');
+    if (incoming === undefined || (incoming === '' && current)) return current;
+    if (incoming === null || incoming === '') {
+      if (current) await secrets.delete(current);
+      return undefined;
+    }
+    if (incoming.startsWith('secret://'))
+      throw new NovaError('validation', 'auth: enter the value, not a secret reference', {
+        details: { field: 'auth' },
+      });
+    const value = /^(Bearer|Basic|Token)\s/i.test(incoming) ? incoming : `Bearer ${incoming}`;
+    await secrets.put(own, value);
+    return own;
   }
 
   async function record(
@@ -596,14 +735,17 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
 
     app.post('/api/v1/mcp/servers', async (req, reply) => {
       const accountId = await accountOf(req);
-      const body = mcpServerSchema.parse(req.body);
+      const body = mcpServerM7Schema.parse(req.body);
       assertPlainArgs(body.args);
+      assertDevice(accountId, body.deviceId);
+      await assertPublicUrl(accountId, body.transport, body.url);
       await assertNameFree(accountId, body.name);
       const id = uuidv7();
       const now = new Date().toISOString();
       let row: Row;
       try {
         const env = await storeEnv(id, {}, body.env ?? {});
+        const authRef = await storeAuth(id, undefined, body.auth);
         const config: StoredConfig = {
           startupTimeoutMs: body.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
           toolTimeoutMs: body.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
@@ -611,6 +753,8 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
           disabledTools: body.disabledTools ?? [],
           readOnlyTools: unique(body.readOnlyTools ?? []),
           defaultApproval: body.defaultApproval ?? null,
+          ...(authRef ? { auth: authRef } : {}),
+          ...(body.oauth ? { oauth: body.oauth } : {}),
         };
         const values: Row = {
           id,
@@ -624,7 +768,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
           configJson: JSON.stringify(config),
           source: 'user',
           pluginId: null,
-          deviceId: null,
+          deviceId: body.transport === 'stdio' ? (body.deviceId ?? null) : null,
           bundleManifestJson: null,
           signatureStatus: null,
           bundleSha256: null,
@@ -647,6 +791,9 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
       defaults.set(id, added.defaultApproval);
       await record(accountId, 'add', row, {
         envKeys: Object.keys(body.env ?? {}).sort(),
+        ...(row.deviceId ? { deviceId: row.deviceId } : {}),
+        ...(added.auth ? { auth: true } : {}),
+        ...(added.oauth ? { oauth: added.oauth } : {}),
         // Declaring tools read-only loosens what agents may do without asking: on the record.
         ...(added.readOnlyTools.length ? { readOnlyTools: added.readOnlyTools } : {}),
       });
@@ -668,7 +815,10 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
       assertPlainArgs(patch.args);
       const cur = storedConfig(row);
       // The merged server must still be valid as a whole (stdio needs a command, …).
-      const merged = mcpServerSchema.parse({
+      const merged = mcpServerM7Schema.parse({
+        deviceId: patch.deviceId === undefined ? row.deviceId : patch.deviceId,
+        auth: patch.auth === undefined ? (cur.auth ? '' : undefined) : patch.auth,
+        oauth: patch.oauth === undefined ? cur.oauth : patch.oauth,
         name: patch.name ?? row.name,
         transport: patch.transport ?? row.transport,
         command: patch.command ?? row.command ?? undefined,
@@ -684,6 +834,14 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
         readOnlyTools: patch.readOnlyTools ?? cur.readOnlyTools,
       });
       if (merged.name !== row.name) await assertNameFree(accountId, merged.name, row.id);
+      assertDevice(accountId, merged.deviceId);
+      await assertPublicUrl(accountId, merged.transport, merged.url);
+      // A server that left sse/http keeps no key; `null` removes it, '' keeps it.
+      const authRef = await storeAuth(
+        row.id,
+        cur.auth,
+        merged.transport === 'stdio' ? null : patch.auth,
+      );
       // `env`, when sent, is the complete set of names (the settings UI sends it on any change).
       const savedEnv = parseJson<Record<string, string>>(row.envRefJson, {});
       const env = patch.env ? await storeEnv(row.id, savedEnv, patch.env) : savedEnv;
@@ -695,6 +853,8 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
         readOnlyTools: unique(merged.readOnlyTools ?? []),
         defaultApproval: merged.defaultApproval ?? null,
         ...(cur.policy ? { policy: cur.policy } : {}),
+        ...(authRef ? { auth: authRef } : {}),
+        ...(merged.oauth && merged.transport !== 'stdio' ? { oauth: merged.oauth } : {}),
       };
       const next: Row = {
         ...row,
@@ -705,6 +865,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
         url: merged.transport === 'stdio' ? null : (merged.url ?? null),
         envRefJson: JSON.stringify(env),
         configJson: JSON.stringify(config),
+        deviceId: merged.transport === 'stdio' ? (merged.deviceId ?? null) : null,
         enabled: merged.enabled ?? row.enabled,
         updatedAt: new Date().toISOString(),
       };
@@ -720,6 +881,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
               url: next.url,
               envRefJson: next.envRefJson,
               configJson: next.configJson,
+              deviceId: next.deviceId,
               enabled: next.enabled,
               updatedAt: next.updatedAt,
             })
@@ -745,7 +907,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
           : {}),
       });
       // New secret values keep their references, so a changed value needs an explicit relaunch.
-      start(toConfig(next), { restart: patch.env !== undefined });
+      start(toConfig(next), { restart: patch.env !== undefined || patch.auth !== undefined });
       return view(next);
     });
 
@@ -992,12 +1154,18 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
       if (row.transport === 'stdio' || !row.url)
         throw new NovaError('validation', 'OAuth is for sse and http servers');
       const base = hubBaseUrl(req);
+      // The server's OAuth settings (FR-047): dynamic registration, or another metadata document,
+      // and the scopes to ask for; without them, the Hub's own document and the advertised scopes.
+      const settings = storedConfig(row).oauth;
       const out = await oauth.start({
         serverId: row.id,
         accountId,
         serverUrl: row.url,
         redirectUrl: `${base}${OAUTH_CALLBACK_PATH}`,
-        clientMetadataUrl: `${base}${CLIENT_METADATA_PATH}`,
+        clientMetadataUrl: settings?.dynamicRegistration
+          ? null
+          : (settings?.clientMetadataUrl ?? `${base}${CLIENT_METADATA_PATH}`),
+        ...(settings?.scopes?.length ? { scopes: settings.scopes } : {}),
       });
       await record(accountId, 'oauth.start', row, {
         registration: oauth.record(row.id)?.registration ?? null,
@@ -1044,6 +1212,14 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     manager,
     onServerRemoving: (hook) => {
       removing.push(hook);
+    },
+    useDeviceBridge: (bridge) => {
+      manager.useDeviceBridge(bridge);
+      // Device servers that were waiting for it connect now.
+      for (const s of manager.states()) {
+        const cfg = manager.config(s.id);
+        if (cfg?.deviceId && cfg.enabled) start(cfg, { restart: true });
+      }
     },
     serverDefault: (serverId) => defaults.get(serverId) ?? null,
     onToolsChanged: (listener) => {

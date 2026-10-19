@@ -57,6 +57,12 @@ import { ComputersView } from '../computers/ComputersView.tsx';
 import { computerPath } from '../computers/format.ts';
 import { DevicesView } from '../devices/DevicesView.tsx';
 import { NetworkSurface } from '../netsurface/NetworkSurface.tsx';
+import { OfflineBanner } from '../offline/OfflineBanner.tsx';
+import { ApprovalsPage } from '../dispatch/ApprovalsPage.tsx';
+import { TeamSurface } from '../team/TeamSurface.tsx';
+import { MemberGate } from '../team/role.tsx';
+import { connectionMenuItem, useHubPath } from '../relaytransport/path.ts';
+import { useShellCommands } from '../shellbridge/OpenInWindow.tsx';
 import { ControlIndicator } from '../screen/ControlIndicator.tsx';
 import { ScreenPanel } from '../screen/ScreenPanel.tsx';
 import { LibraryView } from '../library/LibraryView.tsx';
@@ -333,6 +339,10 @@ export function Workspace({
     navigate(deepLinkPath(openTarget) ?? '/chat', { replace: true });
   }, [openTarget]);
 
+  // How this device reaches the Hub (FR-137) and the desktop app's commands (FR-009), M7.
+  const hubPath = useHubPath();
+  useShellCommands();
+
   // ---- approval links (FR-100): /approvals/<id> opens the chat that waits on it, at the card ----------
   const approvalOnly = /^\/approvals\/([^/?#]+)/.exec(location)?.[1] ?? null;
   useEffect(() => {
@@ -348,10 +358,12 @@ export function Workspace({
       go('/chat');
       return;
     }
+    // Without a thread (or when it cannot be read) the approvals page shows it first (M7).
+    const focus = `/approvals?focus=${encodeURIComponent(id)}`;
     api.getApproval(id).then(
       (v) =>
-        go(v.threadId ? `${chatPath(v.threadId)}?approval=${encodeURIComponent(v.id)}` : '/chat'),
-      () => go('/chat'),
+        go(v.threadId ? `${chatPath(v.threadId)}?approval=${encodeURIComponent(v.id)}` : focus),
+      () => go(focus),
     );
     return () => {
       alive = false;
@@ -890,7 +902,11 @@ export function Workspace({
                       ? 'Devices'
                       : route.name === 'network'
                         ? 'Network'
-                        : MODE_INFO[mode ?? lastMode].label;
+                        : route.name === 'approvals'
+                          ? 'Approvals'
+                          : route.name === 'team'
+                            ? 'Team'
+                            : MODE_INFO[mode ?? lastMode].label;
 
   return (
     <div
@@ -954,7 +970,10 @@ export function Workspace({
             </span>
           }
           items={[
+            // How this device reaches the Hub: directly, over the Mesh, or through the Relay.
+            connectionMenuItem(hubPath, () => navigate('/network')),
             { id: 'settings', label: 'Settings', onSelect: () => navigate('/settings/general') },
+            { id: 'approvals', label: 'Approvals', onSelect: () => navigate('/approvals') },
             { id: 'setup', label: 'Setup guide', onSelect: () => navigate('/onboarding') },
             { id: 'signout', label: 'Sign out', onSelect: onSignOut },
           ]}
@@ -975,6 +994,7 @@ export function Workspace({
           onNavigated={closeOverlaySidebar}
         />
         <main id="main" className="main" tabIndex={-1} hidden={phoneMenu}>
+          <OfflineBanner />
           <div className="mode-pane" hidden={visibleMode !== 'chat'} data-mode="chat">
             {workspaceFor(
               'chat',
@@ -1006,7 +1026,11 @@ export function Workspace({
                 m === 'work' ? (
                   <WorkView id={route.name === 'mode' && route.mode === 'work' ? route.id : null} />
                 ) : m === 'code' ? (
-                  <CodeView id={route.name === 'mode' && route.mode === 'code' ? route.id : null} />
+                  <MemberGate ownerOnly what="Code">
+                    <CodeView
+                      id={route.name === 'mode' && route.mode === 'code' ? route.id : null}
+                    />
+                  </MemberGate>
                 ) : (
                   <AgentsView
                     id={route.name === 'mode' && route.mode === 'agents' ? route.id : null}
@@ -1023,14 +1047,28 @@ export function Workspace({
             />
           ) : null}
           {route.name === 'projects' ? <ProjectsView projectId={route.projectId} /> : null}
-          {route.name === 'library' ? <LibraryView /> : null}
+          {route.name === 'library' ? (
+            <MemberGate ownerOnly what="Library">
+              <LibraryView />
+            </MemberGate>
+          ) : null}
           {route.name === 'spaces' ? (
             <SpacesView spaceId={route.spaceId} pageId={route.pageId} />
           ) : null}
           {route.name === 'sites' ? <SitesView siteId={route.siteId} /> : null}
           {route.name === 'apps' ? <AppsView entryId={route.entryId} /> : null}
-          {route.name === 'devices' ? <DevicesView deviceId={route.deviceId} /> : null}
-          {route.name === 'network' ? <NetworkSurface section={route.section} /> : null}
+          {route.name === 'devices' ? (
+            <MemberGate ownerOnly what="Devices">
+              <DevicesView deviceId={route.deviceId} />
+            </MemberGate>
+          ) : null}
+          {route.name === 'network' ? (
+            <MemberGate ownerOnly what="Network">
+              <NetworkSurface section={route.section} />
+            </MemberGate>
+          ) : null}
+          {route.name === 'approvals' ? <ApprovalsPage /> : null}
+          {route.name === 'team' ? <TeamSurface section={route.section} id={route.id} /> : null}
           {route.name === 'computers' ? (
             <ComputersView
               computerId={route.computerId}

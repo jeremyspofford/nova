@@ -79,6 +79,17 @@ export function connectionSummary(
   deviceName: (id: string) => string,
 ): string {
   switch (c.kind) {
+    case 'cloud': {
+      // M7: a cloud environment's repositories on the runner (CloudConnectionView).
+      const names = c.repoUrls.map((u) =>
+        (u.split('#')[0] ?? u)
+          .replace(/\/+$/, '')
+          .split('/')
+          .pop()
+          ?.replace(/\.git$/, ''),
+      );
+      return `${c.repoUrls.length ? names.join(', ') : 'No repositories'} on the cloud runner${c.folder ? `, in ${c.folder}` : ''}`;
+    }
     case 'local':
       return 'The Hub itself';
     case 'container':
