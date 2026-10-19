@@ -58,7 +58,7 @@ jobs:
       # TLS). The checks job has no binary, so they skip there; here a missing one fails.
       - run: >-
           npx vitest run test/devices-novad.test.ts test/agent-dist-novad.test.ts
-          test/m65-integration.test.ts test/m7-novad-tls.test.ts
+          test/m65-integration.test.ts test/m7-novad-tls.test.ts test/m75-novad-mtls.test.ts
         working-directory: apps/hub
         env:
           NOVA_NOVAD_BIN: ${{ github.workspace }}/services/novad/target/release/novad
