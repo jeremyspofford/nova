@@ -269,7 +269,9 @@ to fix or delete.
 *As built in M7 (ADR-095; `.github/workflows/ci.yml`).* The workflow runs four jobs on every push
 to `main` and every pull request, on Linux only:
 
-- `checks`: `npm ci`, the secret scan, `npm run lint`, `npm run typecheck`, `npm test`,
+- `checks`: `npm ci`, bubblewrap (with Ubuntu's AppArmor limit on unprivileged user namespaces
+  relaxed, so the sandbox tests run instead of skipping), the secret scan, `npm run lint`,
+  `npm run typecheck`, `npm test`,
   `npm run build`, `node scripts/check-spec.mjs`, the notices check and
   `npm audit --omit=dev --audit-level=high`.
 - `novad`: `cargo test` and a release build, then the capability-document contract test and the

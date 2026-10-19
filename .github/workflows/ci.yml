@@ -23,6 +23,14 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # The cloud runner's and the Hub's sandbox tests run under bubblewrap (they skip without it,
+      # and the runner's coverage floor then fails). Ubuntu's AppArmor blocks the unprivileged user
+      # namespaces bubblewrap needs unless this is relaxed.
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / true
       - run: node scripts/secret-scan.mjs
       - run: npm run lint
       - run: npm run typecheck
