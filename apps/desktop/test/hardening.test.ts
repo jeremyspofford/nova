@@ -107,7 +107,8 @@ describe('redaction away from the main process (finding 4)', () => {
         spawned++;
         return forkChannel(spawned === 1 ? stuck : WORKER);
       },
-      { timeoutMs: 300 },
+      // The limit also covers starting the fresh worker, which takes over 300 ms on a busy CI runner.
+      { timeoutMs: 3_000 },
     );
     try {
       await expect(r.redact({ title: 'a', text: 'b' })).rejects.toBeInstanceOf(RedactTimeout);
