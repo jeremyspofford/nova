@@ -283,3 +283,100 @@ export const NOT_SHARED: string[] = [
 /** Each reply runs as the person who asked; this is what the dialog says about that. */
 export const SHARED_ACTS_AS =
   'Each message runs under the account of the person who wrote it: their models, permissions and approvals.';
+
+// ---- M8: a removed member's data (ADR-097) ---------------------------------------------------
+
+export const REMOVED_TEXT = {
+  heading: 'Removed members',
+  intro:
+    'What a removed member made (their chats, files, memory, settings and tokens) is kept for a while so you can export it, then deleted for good. The audit log keeps what they did.',
+  keepLabel: 'Keep a removed member’s data for',
+  keepFormLabel: 'How long a removed member’s data is kept',
+  keepHint: 'Days before it is deleted; 0 keeps it until you delete it yourself.',
+  keepInvalid: 'Enter a whole number of days from 0 to 3650.',
+  keepSaved: (days: number) =>
+    days === 0
+      ? 'Removed members’ data is kept until you delete it.'
+      : `Removed members’ data is kept for ${days} ${days === 1 ? 'day' : 'days'}.`,
+  save: 'Save',
+  loading: 'Loading removed members',
+  loadFailed: 'Could not load the removed members.',
+  none: 'Nobody was removed from this Hub.',
+  listLabel: 'Removed members',
+  removedWhen: (when: string) => `Removed ${when}`,
+  purgedName: 'A removed member (data deleted)',
+  status: {
+    kept: 'Kept until you delete it',
+    scheduled: (when: string) => `Deleted ${when}`,
+    purged: (when: string) => `Deleted ${when}`,
+    failed: 'Deleting failed; it is tried again tomorrow',
+  },
+  byRequest: 'when you asked',
+  afterGrace: 'when the time ran out',
+  failedWhy: (why: string) => `Why: ${why}`,
+  counts: (rows: number, files: number) =>
+    `${rows} ${rows === 1 ? 'record' : 'records'} and ${files} ${files === 1 ? 'file' : 'files'} deleted.`,
+  export: 'Export their data',
+  exportLabel: (name: string) => `Export the data of ${name}`,
+  cleanupPending:
+    'Some of their files and secrets are still being removed; the next hourly sweep finishes it.',
+  exportUnavailable: 'Exporting one member’s data is not available on this Hub yet.',
+  purge: 'Delete now',
+  purgeLabel: (name: string) => `Delete the data of ${name} now`,
+  purgeTitle: (name: string) => `Delete ${name}’s data for good?`,
+  purgeWhat:
+    'Their chats, files, memory, settings, tokens, connectors and anything only they used are deleted now. Usage records stay without their chats, and the audit log keeps what they did. This cannot be undone.',
+  purgeExportFirst: 'Export it first if you might need it.',
+  purgeConfirm: (name: string) => `I understand ${name}’s data cannot be recovered`,
+  purgeButton: 'Delete for good',
+  cancel: 'Cancel',
+  purged: (name: string) => `${name}’s data was deleted.`,
+  purgeFailed: (name: string) =>
+    `Deleting ${name}’s data failed. Nothing was deleted; it is tried again tomorrow.`,
+  /** The removal's confirmation: what happens now and to what they made. */
+  removeWhat: (days: number) =>
+    days === 0
+      ? 'Their sessions end at once on every device, their account closes and the chats shared with them stop being shared. What they made is kept until you delete it under Removed members.'
+      : `Their sessions end at once on every device, their account closes and the chats shared with them stop being shared. What they made is kept for ${days} ${days === 1 ? 'day' : 'days'} so you can export it, then deleted.`,
+} as const;
+
+/** A refusal of the removed-member routes in plain words. */
+export function removedErrorMessage(err: unknown, fallback: string): string {
+  switch (reasonOf(err)) {
+    case 'already_purged':
+      return 'Their data was already deleted.';
+    case 'export_unavailable':
+      return REMOVED_TEXT.exportUnavailable;
+    case 'not_found':
+      return 'This person is no longer listed. Refresh the page.';
+    default:
+      return teamErrorMessage(err, fallback);
+  }
+}
+
+// ---- M8: member mode in Tools & MCP, Notifications and Channels (ADR-097 D7) -----------------
+
+export const MEMBER_MODE_TEXT = {
+  accessUnknown:
+    'Nova could not check what you may change here, so parts that may belong to the owner are hidden.',
+  tools:
+    'You are a member of this Hub. Your MCP servers and the defaults for your tools are your own. Servers that run as programs on the Hub, server bundles and web search belong to the owner.',
+  toolsAddresses:
+    'Your servers must be reachable on the internet: addresses on the Hub’s own network are refused.',
+  stdioOwner: 'Running a command on the Hub is for its owner only.',
+  webSearchHeading: 'Web search',
+  webSearch: 'The owner of this Hub sets the web search service everyone uses.',
+  notifications:
+    'You are a member of this Hub. Where your notifications go and which of your devices get them are yours to choose.',
+  categoriesHeading: 'What to notify you about',
+  categories: 'The owner of this Hub chooses which kinds of notifications Nova shows and sends.',
+  pushHub:
+    'The owner of this Hub decides whether push notifications are sent at all and how much they say.',
+  channels:
+    'You are a member of this Hub. Your channels, and the people they answer, are your own.',
+  channelsOwnerHeading: 'Set by the owner',
+  channelsOwner:
+    'The owner of this Hub sets the public address other services reach it at, and what happens when a reply in a shared channel would use a private detail.',
+  mailAddresses:
+    'Mail servers must be reachable on the internet: addresses on the Hub’s own network are refused.',
+} as const;

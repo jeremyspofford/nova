@@ -11,10 +11,18 @@
 //   POST /api/v1/mcp/events/:subscriptionId    (MCP delivery signature, ≤ 256 KiB)
 //   GET/POST /api/v1/channels/approval-links/:token (a signed one-use approval link; GET changes
 //                                               nothing, POST answers once)
+//   GET /api/v1/channels/oauth/callback        (M8: the provider's redirect after a mailbox's
+//                                               OAuth consent; the single-use state is the
+//                                               credential, and it only redirects to settings)
+// M8: Telegram files (core) and email OAuth: a mailbox set to `auth: oauth` is authorized in the
+// browser (`POST /channels/:id/oauth/start`, PKCE S256, the exchanges done with the M4 MCP OAuth
+// helpers against the owner's configured endpoints) and signed out with `DELETE
+// /channels/:id/oauth`.
 // What it needs from other areas is bound late (`useTurns`, `useRuns`, `useApprovals`,
 // `useRequests`, `useAgents`, `useMcp`); what it offers them: `sender` (ChannelSender), `tools`
 // (channel.list, channel.send), `delivery` (Slack and Teams for the scheduler), `quietHours`
 // and `removeForAgent`.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -41,7 +49,16 @@ import {
   updateTriggerSchema,
 } from '@nova/shared';
 import {
+  beginAuthorization,
+  completeAuthorization,
+  refreshOAuth,
+  revokeOAuth,
+  type OAuthClientRegistration,
+  type OAuthDiscovery,
+} from '@nova/mcp';
+import {
   BotFrameworkVerifier,
+  ChannelOAuth,
   ChannelPollers,
   ChannelService,
   EmailAdapter,
@@ -58,11 +75,15 @@ import {
   channelTools,
   isHubOwner,
   pinnedPublicAddress,
+  publicFetch,
+  usesOAuth,
   webhookSecretRef,
   type ApprovalRequests,
   type AuditSink,
   type BindingThreadResolver,
   type ChannelInboundGuard,
+  type ChannelOAuthEndpoints,
+  type ChannelOAuthFlows,
   type ChannelPollersOptions,
   type ChannelSender,
   type DeliveryChannel,
@@ -79,7 +100,11 @@ import {
   type TurnStarter,
   type WebhookTransport,
 } from '@nova/core';
+import { isHubUrl } from './appauth.ts';
 import type { HubArea, HubContext } from './hub-context.ts';
+
+/** Where an email provider sends the browser back after consent (M8). */
+export const CHANNEL_OAUTH_CALLBACK_PATH = '/api/v1/channels/oauth/callback';
 
 export interface ChannelsArea extends HubArea {
   service: ChannelService;
@@ -88,6 +113,8 @@ export interface ChannelsArea extends HubArea {
   routing: NotificationRouter;
   /** Telegram long polling and email mailboxes (M7). */
   pollers: ChannelPollers;
+  /** M8: email OAuth (SASL XOAUTH2) authorizations and tokens. */
+  mailOAuth: ChannelOAuth;
   /** Where agents' turns reply to a bound thread (ChannelSender). */
   sender: ChannelSender;
   /** `channel.list` and `channel.send`, offered in agent threads and bound threads. */
@@ -138,6 +165,8 @@ export interface ChannelsDeps {
   /** Tests: the mailbox reader, and how the pollers wait and back off. */
   mailReader?: MailReader;
   pollers?: Pick<ChannelPollersOptions, 'telegramWaitSeconds' | 'idleMs' | 'backoffMs'>;
+  /** Tests: the OAuth exchanges (default: the MCP OAuth helpers). */
+  mailOAuthFlows?: ChannelOAuthFlows;
 }
 
 const params = z.object({ id: idSchema });
@@ -149,6 +178,14 @@ const linkParams = z.object({ token: z.string().min(1).max(200) });
 const linkAnswer = z
   .object({ decision: z.enum(['allow_once', 'allow_session', 'deny_continue', 'deny_stop']) })
   .strict();
+/** The provider's redirect (other parameters a provider adds, such as `scope`, are dropped). */
+const oauthCallbackQuery = z.object({
+  state: z.string().min(1).max(200),
+  code: z.string().max(4000).optional(),
+  error: z.string().max(200).optional(),
+  // RFC 9207: who issued the code (checked against the mailbox's provider before any exchange).
+  iss: z.string().max(2000).optional(),
+});
 /** The parser limit of the public endpoints; the MCP receiver refuses more than 256 KiB itself. */
 const RAW_LIMIT = 1024 * 1024;
 
@@ -169,6 +206,47 @@ export function setupChannels(ctx: HubContext, deps: ChannelsDeps = {}): Promise
       ctx.config.host === '0.0.0.0' || ctx.config.host === '::' ? '127.0.0.1' : ctx.config.host;
     return `${ctx.config.tls ? 'https' : 'http'}://${host}:${ctx.config.port}`;
   };
+  // A non-owner's OAuth calls reach checked public addresses only, pinned (decision 5).
+  const pinnedFetch = publicFetch();
+  const flows =
+    deps.mailOAuthFlows ??
+    mcpOAuthFlows({
+      now,
+      fetchFor: (accountId) => (isHubOwner(ctx.db, accountId) ? undefined : pinnedFetch),
+    });
+  // The callback's `iss` (M8 review): a code is exchanged only when its issuer is the mailbox's
+  // configured provider and not this Hub. Otherwise a code another flow sent here (a Nova app code
+  // delivered to this callback) would be posted to a token endpoint the binding's creator chose.
+  const callbackIssuer = new AsyncLocalStorage<{ iss: string; hub: boolean } | null>();
+  const guardedFlows: ChannelOAuthFlows = {
+    begin: (accountId, e, opts) => flows.begin(accountId, e, opts),
+    complete: (accountId, e, opts) => {
+      const issued = callbackIssuer.getStore();
+      if (issued && (issued.hub || !sameOrigin(issued.iss, e.authUrl)))
+        return Promise.reject(
+          new NovaError('validation', "the code was not issued by this mailbox's provider", {
+            details: { reason: 'issuer_mismatch' },
+          }),
+        );
+      return flows.complete(accountId, e, opts);
+    },
+    refresh: (accountId, e, token) => flows.refresh(accountId, e, token),
+    revoke: (accountId, e, token, hint) => flows.revoke(accountId, e, token, hint),
+  };
+  const mailOAuth = new ChannelOAuth({
+    db: ctx.db,
+    secrets: ctx.secrets,
+    flows: guardedFlows,
+    log: log.child('oauth'),
+    now,
+    ...(audit ? { audit } : {}),
+    // Authorized or signed out: the mailbox is read again at once.
+    onChange: (bindingId) => {
+      service
+        .credentialsChanged(bindingId)
+        .catch((err: unknown) => log.warn('binding change not recorded', { err }));
+    },
+  });
   const service = new ChannelService({
     db: ctx.db,
     events: ctx.events,
@@ -179,6 +257,7 @@ export function setupChannels(ctx: HubContext, deps: ChannelsDeps = {}): Promise
     createThread,
     dataDir: ctx.dataDir,
     publicBase: webhookBase,
+    oauth: mailOAuth,
     ...(audit ? { audit } : {}),
     adapters: (credentials) => ({
       slack: new SlackAdapter({
@@ -214,6 +293,7 @@ export function setupChannels(ctx: HubContext, deps: ChannelsDeps = {}): Promise
         credentials,
         now,
         log,
+        oauth: mailOAuth,
         ...(deps.mailReader ? { reader: deps.mailReader } : {}),
         // A non-owner's mailbox servers are public addresses only, pinned (decision 5).
         pinHost: async (bindingId, host) => {
@@ -301,6 +381,54 @@ export function setupChannels(ctx: HubContext, deps: ChannelsDeps = {}): Promise
       })
       .catch((err: unknown) => log.warn('notification routing failed', { err }));
   });
+  // A removed member's bindings were disabled with the removal: their pollers stop at once rather
+  // than at the next restart, and their mailboxes' OAuth tokens are revoked at the provider and
+  // forgotten, best effort as when signing out (decision 5; M8). The Hub keeps no access to the
+  // mailbox of someone who left, whether or not their data is purged later.
+  const revokeMailboxes = async (accountId: string) => {
+    const rows = ctx.db.raw
+      .prepare(
+        `SELECT id, account_id, config_json, secret_ref FROM channel_binding
+         WHERE account_id = ? AND kind = 'email' AND secret_ref IS NOT NULL ORDER BY created_at`,
+      )
+      .all(accountId) as {
+      id: string;
+      account_id: string;
+      config_json: string | null;
+      secret_ref: string;
+    }[];
+    const done = new Set<string>();
+    for (const row of rows) {
+      if (done.has(row.secret_ref)) continue;
+      done.add(row.secret_ref);
+      let config: Record<string, string>;
+      try {
+        config = JSON.parse(row.config_json ?? '{}') as Record<string, string>;
+      } catch {
+        continue;
+      }
+      if (!usesOAuth(config)) continue;
+      await mailOAuth.revokeGroup(row);
+      await audit
+        ?.append({
+          accountId,
+          actor: 'system',
+          kind: 'channel',
+          action: 'channel.oauth.revoke',
+          resource: `channel_binding:${row.id}`,
+          detail: { kind: 'email', reason: 'member_removed' },
+        })
+        .catch(() => undefined);
+    }
+  };
+  const offRemoved = ctx.events.bus.subscribe('team.member.removed', (e) => {
+    pollers.reconcile();
+    const accountId = typeof e.payload.accountId === 'string' ? e.payload.accountId : null;
+    if (accountId)
+      revokeMailboxes(accountId).catch((err: unknown) =>
+        log.warn("a removed member's mailbox tokens were not revoked", { err }),
+      );
+  });
 
   ctx.diagnostics.add('channels', () => {
     const count = (sql: string) => (ctx.db.raw.prepare(sql).get() as { n: number }).n;
@@ -377,6 +505,62 @@ export function setupChannels(ctx: HubContext, deps: ChannelsDeps = {}): Promise
         return service.setEnabled(accountId, id, action === 'connect');
       });
     }
+
+    // ---- email OAuth (M8) -------------------------------------------------------------------
+    // The redirect URI is this Hub as the browser reaches it (as for MCP servers, FR-047); the
+    // owner registers it with the provider.
+    app.post('/api/v1/channels/:id/oauth/start', async (req, reply) => {
+      const accountId = await ctx.accountOf(req);
+      const { id } = params.parse(req.params);
+      emptyBody.parse(req.body);
+      const out = await mailOAuth.start({
+        accountId,
+        bindingId: id,
+        redirectUri: `${req.protocol}://${req.headers.host ?? '127.0.0.1'}${CHANNEL_OAUTH_CALLBACK_PATH}`,
+      });
+      void reply.header('cache-control', 'no-store');
+      return out;
+    });
+
+    app.delete('/api/v1/channels/:id/oauth', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { id } = params.parse(req.params);
+      await mailOAuth.revoke(accountId, id);
+      return service.get(accountId, id);
+    });
+
+    // The provider sends the browser back here; a cross-site redirect carries no session, so the
+    // single-use state from the start call is what ties it to the account and the binding. A
+    // malformed callback is refused; a well-formed one always lands back in settings.
+    app.get(CHANNEL_OAUTH_CALLBACK_PATH, async (req, reply: FastifyReply) => {
+      const q = oauthCallbackQuery.parse(req.query);
+      const issued = q.iss
+        ? {
+            iss: q.iss,
+            hub: isHubUrl(q.iss, {
+              config: ctx.config,
+              app: req.server,
+              requestHost: req.headers.host,
+            }),
+          }
+        : null;
+      let ok = false;
+      try {
+        ok = (
+          await callbackIssuer.run(issued, () =>
+            mailOAuth.finish({ state: q.state, code: q.code, error: q.error }),
+          )
+        ).ok;
+      } catch (err) {
+        log.warn('channel oauth callback refused', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return reply
+        .header('cache-control', 'no-store')
+        .header('referrer-policy', 'no-referrer')
+        .redirect(`/settings/channels?oauth=${ok ? 'ok' : 'error'}`, 302);
+    });
 
     app.post('/api/v1/channels/:id/test', async (req) => {
       const accountId = await ctx.accountOf(req);
@@ -659,6 +843,7 @@ export function setupChannels(ctx: HubContext, deps: ChannelsDeps = {}): Promise
     sender: service,
     tools,
     pollers,
+    mailOAuth,
     delivery: {
       slack: channelDelivery(service, 'slack'),
       teams: channelDelivery(service, 'teams'),
@@ -679,15 +864,22 @@ export function setupChannels(ctx: HubContext, deps: ChannelsDeps = {}): Promise
       service.useShareAsk(async (input) => {
         const minutes = await ctx.setting('policy.approvalTimeoutMinutes');
         const n = input.sources.length;
+        // Files the check cannot read (M8) are asked about as files, not as found content.
+        const files = input.sources.filter((x) => x.kind === 'file').length;
+        const question =
+          files === n
+            ? `A reply in ${input.label}, a shared channel, has ${files} ` +
+              `${files === 1 ? 'file' : 'files'} Nova cannot check for private information. ` +
+              'Share them there?'
+            : `A reply in ${input.label}, a shared channel, uses private information ` +
+              `(${n} ${n === 1 ? 'source' : 'sources'}). Share it there?`;
         const r = await broker.ask(
           {
             accountId: input.accountId,
             kind: 'user_input',
             correlation: { threadId: input.threadId },
             payload: {
-              question:
-                `A reply in ${input.label}, a shared channel, uses private information ` +
-                `(${n} ${n === 1 ? 'source' : 'sources'}). Share it there?`,
+              question,
               choices: ['Share', 'Do not share'],
               allowFreeText: false,
             },
@@ -716,6 +908,7 @@ export function setupChannels(ctx: HubContext, deps: ChannelsDeps = {}): Promise
     close: async () => {
       offApproval();
       offNotification();
+      offRemoved();
       await pollers.stop();
       await mcpEvents.stop();
       await routing.stop();
@@ -826,4 +1019,77 @@ function formOrJson(raw: Uint8Array): unknown {
     }
   }
   return Object.fromEntries(new URLSearchParams(text));
+}
+
+// ---- email OAuth exchanges over the M4 MCP OAuth helpers -------------------------------------
+
+/** The owner's configured provider as authorization server metadata (no discovery). */
+function providerOf(e: ChannelOAuthEndpoints): OAuthDiscovery {
+  const issuer = new URL(e.authUrl).origin;
+  return {
+    authorizationServerUrl: issuer,
+    metadata: {
+      issuer,
+      authorization_endpoint: e.authUrl,
+      token_endpoint: e.tokenUrl,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'],
+      // A confidential client sends its secret in the body (the form both large providers take).
+      token_endpoint_auth_methods_supported: [e.clientSecret ? 'client_secret_post' : 'none'],
+      ...(e.revokeUrl ? { revocation_endpoint: e.revokeUrl } : {}),
+    },
+    resource: null,
+    scopesSupported: [],
+  };
+}
+
+function clientOf(e: ChannelOAuthEndpoints): OAuthClientRegistration {
+  // Registered by the owner with the provider, not by Nova.
+  return { clientId: e.clientId, clientSecret: e.clientSecret, method: 'metadata_document' };
+}
+
+/** PKCE (S256) authorization, code exchange, refresh and revocation with the MCP OAuth helpers. */
+export function mcpOAuthFlows(opts: {
+  now: () => Date;
+  fetchFor: (accountId: string) => typeof fetch | undefined;
+}): ChannelOAuthFlows {
+  const fetchOf = (accountId: string) => {
+    const f = opts.fetchFor(accountId);
+    return f ? { fetchFn: f } : {};
+  };
+  return {
+    begin: (_accountId, e, o) =>
+      beginAuthorization(providerOf(e), clientOf(e), {
+        redirectUrl: o.redirectUri,
+        state: o.state,
+        scopes: e.scopes,
+      }),
+    complete: (accountId, e, o) =>
+      completeAuthorization(providerOf(e), clientOf(e), {
+        code: o.code,
+        codeVerifier: o.codeVerifier,
+        redirectUrl: o.redirectUri,
+        scopes: e.scopes,
+        now: opts.now(),
+        ...fetchOf(accountId),
+      }),
+    refresh: (accountId, e, refreshToken) =>
+      refreshOAuth(providerOf(e), clientOf(e), refreshToken, {
+        scopes: e.scopes,
+        now: opts.now(),
+        ...fetchOf(accountId),
+      }),
+    revoke: (accountId, e, token, hint) =>
+      revokeOAuth(providerOf(e), clientOf(e), token, hint, opts.fetchFor(accountId)),
+  };
+}
+
+/** Whether two URLs share an origin (an unparsable one shares nothing). */
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
 }

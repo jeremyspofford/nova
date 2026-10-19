@@ -33,6 +33,7 @@ import type {
   RouteOptions,
   RouteTarget,
 } from './types.ts';
+import { managedDenied } from '../managed/restrictions.ts';
 
 export type { RoutingStep };
 
@@ -43,6 +44,28 @@ export interface RoutingSettings {
   order: RoutingStep[];
   /** `routing.allowCloud`. */
   allowCloud: boolean;
+  /**
+   * The provider kinds managed policy allows models from (`node` for compute nodes); null or
+   * absent: any (FR-106, `ManagedRestrictions.providers`).
+   */
+  providers?: readonly string[] | null;
+}
+
+/** Targets of provider kinds managed policy allows; refused with `policy_denied` when none is. */
+function managedTargets<T extends { providerKind: string }>(
+  targets: T[],
+  settings: RoutingSettings,
+  model: string,
+): T[] {
+  const allowed = settings.providers;
+  if (!allowed) return targets;
+  const out = targets.filter((t) => allowed.includes(t.providerKind));
+  if (!out.length)
+    throw managedDenied(
+      `the models of ${model} come from providers your organization's policy does not allow`,
+      { model },
+    );
+  return out;
 }
 
 export interface RouterOptions {
@@ -184,7 +207,8 @@ export class Router implements ModelRouter {
       if (!own[0]) throw unknownModel(ref);
       candidates = [...own, ...(await this.#gather(accountId, own[0]))];
     }
-    const allowed = settings.allowCloud ? candidates : candidates.filter((t) => t.local);
+    const permitted = managedTargets(candidates, settings, ref);
+    const allowed = settings.allowCloud ? permitted : permitted.filter((t) => t.local);
     if (!allowed.length) {
       throw new NovaError(
         'validation',
@@ -258,7 +282,8 @@ export class Router implements ModelRouter {
         'preset_unavailable',
         `none of the models in the ${preset.label} preset are available; choose another model`,
       );
-    let usable = settings.allowCloud ? resolved : resolved.filter((t) => t.local);
+    const permitted = managedTargets(resolved, settings, presetRef(preset.id));
+    let usable = settings.allowCloud ? permitted : permitted.filter((t) => t.local);
     if (!usable.length)
       throw fail(
         'cloud_disabled',

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "com.examplelabs.word-count",
+  "name": "Word count",
+  "version": "1.0.0",
+  "description": "Counts the words, sentences and reading time of a text: a tool and a command.",
+  "author": { "name": "Example Labs", "url": "https://examplelabs.example" },
+  "license": "MIT",
+  "permissions": {
+    "actionDefaults": { "read": "allow" }
+  }
+}

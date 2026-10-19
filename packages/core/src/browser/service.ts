@@ -1424,7 +1424,9 @@ export class BrowserService {
     if (site.access === 'blocked')
       return refuse(
         'blocked_site',
-        `${host} is on the blocked list${site.source === 'network' ? ' of the network settings' : ''}, so the browser will not open it.`,
+        site.source === 'managed'
+          ? `${host} is not a site the browser may open by your organization's policy.`
+          : `${host} is on the blocked list${site.source === 'network' ? ' of the network settings' : ''}, so the browser will not open it.`,
         site.pattern,
       );
     if (!dev && isLocalHost(host) && !(await this.#allowLocal(call.accountId)))

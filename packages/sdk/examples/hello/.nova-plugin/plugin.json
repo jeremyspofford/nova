@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "com.example.hello",
+  "name": "Hello extension",
+  "version": "1.0.0",
+  "description": "A sample Nova extension: a command, a panel and a tool, each declared in extension.json.",
+  "author": { "name": "Nova examples" },
+  "license": "Apache-2.0",
+  "permissions": {
+    "actionDefaults": {
+      "read": "allow",
+      "write": "ask",
+      "send": "ask",
+      "delete": "deny",
+      "execute": "ask"
+    }
+  }
+}

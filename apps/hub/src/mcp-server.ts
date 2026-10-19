@@ -31,6 +31,8 @@ import {
 } from '@nova/shared';
 import {
   ProjectService,
+  managedDenied,
+  managedRestrictions,
   projectFolderSource,
   resolveInRoots,
   type AuditSink,
@@ -817,6 +819,9 @@ export function setupMcpServer(
 
     app.post('/api/v1/app-authorizations', async (req, reply) => {
       const accountId = await accountOf(req);
+      // Managed policy may turn authorizing apps off (FR-106).
+      const refused = managedRestrictions(await ctx.setting('managed.restrict')).apps();
+      if (refused) throw managedDenied(refused);
       const body = createAppAuthorizationSchema.parse(req.body);
       if (body.scopes.projects !== '*') {
         for (const projectId of new Set(body.scopes.projects)) {

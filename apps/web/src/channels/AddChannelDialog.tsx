@@ -2,7 +2,9 @@
 // why), then its conversation, agent, audience and credentials. Credentials are write-only: Slack,
 // Teams and Telegram take the app's (bot's) secrets or reuse another binding's; email takes the
 // mailbox's servers and password (and optionally its Authentication-Results name) or reuses
-// another binding's mailbox, and trusting the From address alone asks first; a webhook gets a
+// another binding's mailbox, and trusting the From address alone asks first (M8: or OAuth, with
+// the provider's endpoints, the client ID and an optional client secret, then Authorize once the
+// channel exists, and the redirect URI to register); a webhook gets a
 // token and secret made here and shown once after it is created. The last step shows the inbound address to
 // paste into the other service. The body is checked with the Hub's own schema before it is sent.
 import { useId, useState } from 'react';
@@ -34,9 +36,12 @@ import {
   isConfirmRequired,
   issueErrors,
   plainMailAllowed,
+  MAIL_OAUTH_TEXT,
+  mailOAuthRedirectUri,
   randomSecret,
   sentence,
 } from './format.ts';
+import { MailOAuthPanel } from './MailOAuth.tsx';
 import {
   Chip,
   CopyValue,
@@ -85,6 +90,14 @@ interface Form {
   /** The user confirmed trusting the From address (`senderCheck: none`, own or shared). */
   confirmNone: boolean;
   password: string;
+  /** Email (M8): '' (password, the Hub's default) or `oauth`. */
+  auth: string;
+  oauthAuthUrl: string;
+  oauthTokenUrl: string;
+  oauthRevokeUrl: string;
+  oauthClientId: string;
+  oauthScopes: string;
+  oauthClientSecret: string;
 }
 
 const EMPTY: Form = {
@@ -117,6 +130,13 @@ const EMPTY: Form = {
   authservId: '',
   confirmNone: false,
   password: '',
+  auth: '',
+  oauthAuthUrl: '',
+  oauthTokenUrl: '',
+  oauthRevokeUrl: '',
+  oauthClientId: '',
+  oauthScopes: '',
+  oauthClientSecret: '',
 };
 
 /** The mailbox settings of the form, without empty ones (the Hub's defaults apply). */
@@ -139,6 +159,32 @@ function mailboxConfig(f: Form): Record<string, string> {
     const v = f[k].trim();
     if (v) out[k] = k === 'authservId' ? v.toLowerCase() : v;
   }
+  if (f.auth === 'oauth') {
+    out.auth = 'oauth';
+    for (const k of [
+      'oauthAuthUrl',
+      'oauthTokenUrl',
+      'oauthRevokeUrl',
+      'oauthClientId',
+      'oauthScopes',
+    ] as const) {
+      const v = f[k].trim();
+      if (v) out[k] = v;
+    }
+  }
+  return out;
+}
+
+/** OAuth sign-in needs the provider's two endpoints and the client ID (the Hub checks too). */
+export function mailOAuthErrors(f: Form): Record<string, string> {
+  if (f.kind !== 'email' || f.shareWith || f.auth !== 'oauth') return {};
+  const out: Record<string, string> = {};
+  if (!f.oauthAuthUrl.trim())
+    out.oauthAuthUrl = MAIL_OAUTH_TEXT.required(MAIL_OAUTH_TEXT.authUrlName);
+  if (!f.oauthTokenUrl.trim())
+    out.oauthTokenUrl = MAIL_OAUTH_TEXT.required(MAIL_OAUTH_TEXT.tokenUrlName);
+  if (!f.oauthClientId.trim())
+    out.oauthClientId = MAIL_OAUTH_TEXT.required(MAIL_OAUTH_TEXT.clientIdName);
   return out;
 }
 
@@ -209,7 +255,12 @@ export function bindingBody(
         externalRef: f.externalRef.trim().toLowerCase(),
         ...(f.shareWith
           ? { shareCredentialsWith: f.shareWith }
-          : { credentials: { password: f.password }, config: mailboxConfig(f) }),
+          : f.auth === 'oauth'
+            ? {
+                config: mailboxConfig(f),
+                ...(f.oauthClientSecret ? { oauthClientSecret: f.oauthClientSecret } : {}),
+              }
+            : { credentials: { password: f.password }, config: mailboxConfig(f) }),
         // Sent only once the user confirmed trusting the From address.
         ...(f.confirmNone ? { confirmSenderCheckNone: true } : {}),
       };
@@ -234,6 +285,7 @@ export function AddChannelDialog({
   bindings,
   publicUrl,
   onCreated,
+  mailHint,
 }: {
   open: boolean;
   onClose: () => void;
@@ -243,6 +295,8 @@ export function AddChannelDialog({
   bindings: ChannelBindingViewM7[];
   publicUrl: string | null;
   onCreated: (b: ChannelBindingViewM7) => void;
+  /** A note under the mail servers (a member's servers must be public addresses). */
+  mailHint?: string;
 }) {
   if (!open) return null;
   return (
@@ -253,6 +307,7 @@ export function AddChannelDialog({
       bindings={bindings}
       publicUrl={publicUrl}
       onCreated={onCreated}
+      mailHint={mailHint}
     />
   );
 }
@@ -264,6 +319,7 @@ function AddChannel({
   bindings,
   publicUrl,
   onCreated,
+  mailHint,
 }: {
   onClose: () => void;
   adapters: ChannelAdapterViewM7[];
@@ -271,6 +327,7 @@ function AddChannel({
   bindings: ChannelBindingViewM7[];
   publicUrl: string | null;
   onCreated: (b: ChannelBindingViewM7) => void;
+  mailHint: string | undefined;
 }) {
   const api = useChannelsApi();
   const toast = useToast();
@@ -300,6 +357,11 @@ function AddChannel({
     if (!kind || busy) return;
     if (sharedNone && !form.confirmNone) {
       setErrors({ confirmSenderCheckNone: CONFIRM_REQUIRED_SHARED });
+      return;
+    }
+    const missing = mailOAuthErrors(form);
+    if (Object.keys(missing).length) {
+      setErrors(missing);
       return;
     }
     const webhook = { token: randomSecret(24), secret: randomSecret(32) };
@@ -369,6 +431,15 @@ function AddChannel({
               Connecting checks the {b.kind === 'telegram' ? 'bot token' : 'mailbox'} and says what
               went wrong, if anything. Add the people the agent should answer under People.
             </p>
+          ) : null}
+          {b.kind === 'email' && b.oauth ? (
+            <MailOAuthPanel
+              binding={b}
+              onSaved={(next) => {
+                setCreated((c) => (c ? { ...c, binding: next } : c));
+                onCreated(next);
+              }}
+            />
           ) : null}
           {created.secrets ? (
             <>
@@ -547,6 +618,7 @@ function AddChannel({
                 errors={errors}
                 set={set}
                 sharedNone={sharedNone}
+                hint={mailHint}
               />
             ) : null}
             {APPROVAL_HINT[kind] ? (
@@ -776,6 +848,7 @@ function MailboxFields({
   errors,
   set,
   sharedNone,
+  hint,
 }: {
   form: Form;
   apps: ChannelBindingViewM7[];
@@ -783,8 +856,11 @@ function MailboxFields({
   set: (patch: Partial<Form>) => void;
   /** The mailbox shared with has its sender check off. */
   sharedNone: boolean;
+  hint: string | undefined;
 }) {
+  const id = useId();
   const own = form.shareWith === '';
+  const oauth = form.auth === 'oauth';
   const [asking, setAsking] = useState(false);
   const confirmError = errors.confirmSenderCheckNone ? (
     <p role="alert" className="nv-field-error">
@@ -857,15 +933,37 @@ function MailboxFields({
             error={errors.username}
             onChange={(e) => set({ username: e.target.value })}
           />
-          <TextField
-            label="Password"
-            type="password"
-            autoComplete="new-password"
-            value={form.password}
-            hint="An app password if your provider has them. Kept in the Hub’s secret store and never shown again."
-            error={errors.password ?? errors.credentials}
-            onChange={(e) => set({ password: e.target.value })}
+          <RadioGroup
+            legend={MAIL_OAUTH_TEXT.authLegend}
+            name={`${id}-auth`}
+            value={form.auth}
+            onChange={(v) => set({ auth: v === 'oauth' ? 'oauth' : '' })}
+            options={[
+              {
+                value: '',
+                label: MAIL_OAUTH_TEXT.password,
+                description: MAIL_OAUTH_TEXT.passwordHint,
+              },
+              {
+                value: 'oauth',
+                label: MAIL_OAUTH_TEXT.oauth,
+                description: MAIL_OAUTH_TEXT.oauthHint,
+              },
+            ]}
           />
+          {oauth ? (
+            <MailOAuthFields form={form} errors={errors} set={set} />
+          ) : (
+            <TextField
+              label="Password"
+              type="password"
+              autoComplete="new-password"
+              value={form.password}
+              hint="An app password if your provider has them. Kept in the Hub’s secret store and never shown again."
+              error={errors.password ?? errors.credentials}
+              onChange={(e) => set({ password: e.target.value })}
+            />
+          )}
           <div className="ch-mail-grid">
             <TextField
               label="IMAP server"
@@ -904,6 +1002,7 @@ function MailboxFields({
             />
             {select('smtpSecurity', 'SMTP security')}
           </div>
+          {hint ? <p className="nv-field-hint ws-flush">{hint}</p> : null}
           {(plain(form.imapHost, form.imapSecurity) ?? plain(form.smtpHost, form.smtpSecurity)) ? (
             <p role="alert" className="nv-field-error">
               {plain(form.imapHost, form.imapSecurity) ?? plain(form.smtpHost, form.smtpSecurity)}
@@ -967,5 +1066,56 @@ function MailboxFields({
         </div>
       )}
     </fieldset>
+  );
+}
+
+/** Email OAuth (M8): the provider's endpoints, the app's client ID and secret, and the redirect. */
+function MailOAuthFields({
+  form,
+  errors,
+  set,
+}: {
+  form: Form;
+  errors: Record<string, string>;
+  set: (patch: Partial<Form>) => void;
+}) {
+  const field = (
+    key: 'oauthAuthUrl' | 'oauthTokenUrl' | 'oauthRevokeUrl' | 'oauthClientId' | 'oauthScopes',
+    extra: { type?: string; placeholder?: string } = {},
+  ) => (
+    <TextField
+      label={CONFIG_TEXT[key]?.label ?? key}
+      hint={CONFIG_TEXT[key]?.hint || undefined}
+      value={form[key]}
+      spellCheck={false}
+      autoComplete="off"
+      error={errors[key]}
+      onChange={(e) => set({ [key]: e.target.value })}
+      {...extra}
+    />
+  );
+  return (
+    <div className="stack">
+      {field('oauthAuthUrl', { type: 'url', placeholder: 'https://' })}
+      {field('oauthTokenUrl', { type: 'url', placeholder: 'https://' })}
+      {field('oauthClientId')}
+      {field('oauthScopes')}
+      <TextField
+        label={MAIL_OAUTH_TEXT.clientSecret}
+        type="password"
+        autoComplete="new-password"
+        value={form.oauthClientSecret}
+        hint={MAIL_OAUTH_TEXT.clientSecretHint}
+        error={errors.oauthClientSecret}
+        onChange={(e) => set({ oauthClientSecret: e.target.value })}
+      />
+      {field('oauthRevokeUrl', { type: 'url', placeholder: 'https://' })}
+      <CopyValue
+        label={MAIL_OAUTH_TEXT.redirectLabel}
+        value={mailOAuthRedirectUri()}
+        hint={MAIL_OAUTH_TEXT.redirectHint}
+      />
+      <p className="nv-field-hint ws-flush">{MAIL_OAUTH_TEXT.authorizeAfter}</p>
+    </div>
   );
 }

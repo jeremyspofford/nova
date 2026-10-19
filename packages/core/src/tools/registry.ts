@@ -12,9 +12,9 @@ import { toolSearchTool } from './search.ts';
 import type { ToolDefinition, ToolSourceProvider, ToolListScope } from './types.ts';
 import { webTools, type WebToolOptions } from './web.ts';
 
-/** Canonical names (contracts/schemas/tool-descriptor.json). */
+/** Canonical names (contracts/schemas/tool-descriptor.json); `ext:<id>/<name>` are SDK tools (M8). */
 export const TOOL_NAME =
-  /^(mcp:[a-z0-9-]+\.[A-Za-z0-9_.-]+|plugin:[a-z0-9.-]+\.[A-Za-z0-9_]+|page:[a-z0-9.-]+\.[A-Za-z0-9_]+|[a-z]+(\.[a-z][A-Za-z0-9_]*)+|[a-z]+(_[a-z]+)+)$/;
+  /^(mcp:[a-z0-9-]+\.[A-Za-z0-9_.-]+|plugin:[a-z0-9.-]+\.[A-Za-z0-9_]+|ext:[a-z0-9]+(\.[a-z0-9-]+)+\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}|page:[a-z0-9.-]+\.[A-Za-z0-9_]+|[a-z]+(\.[a-z][A-Za-z0-9_]*)+|[a-z]+(_[a-z]+)+)$/;
 
 export interface BuiltinToolsOptions {
   artifacts: ArtifactService;

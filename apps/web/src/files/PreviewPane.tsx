@@ -4,14 +4,16 @@
 // /files/raw, which the Hub serves sandboxed and never as a page of this app. File contents are
 // untrusted data: nothing here runs them. Apps registered for the file type (MCP Apps, FR-198)
 // are offered as "Open with"; the app runs sandboxed in the pane and gets the file in its context.
+// M8: the file actions running extensions add sit in a menu beside Download.
 import { useEffect, useState } from 'react';
 import type { FileContentView, UiEntryPointView } from '@nova/shared';
-import { Button, CodeBlock, Icon, Spinner } from '@nova/ui';
+import { Button, CodeBlock, Icon, Menu, Spinner } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { formatBytes } from '../chat/attachments.ts';
 import { Markdown } from '../chat/Markdown.tsx';
 import type { FileRef } from '../layout/model.ts';
 import { FileApp, useFileApps } from '../apps/AppsView.tsx';
+import { useExtensionMenuItems } from '../extensions/shell.tsx';
 import { useServices } from '../services.tsx';
 import { baseName, extensionOf, previewKind } from './types.ts';
 
@@ -44,6 +46,8 @@ function Preview({
   const [error, setError] = useState<string | null>(null);
   // Apps registered for this file type (MCP Apps, FR-198); without them the preview is the same.
   const apps = useFileApps(file.path) ?? [];
+  // M8: items running extensions add to a file's menu (FR-117).
+  const extensionItems = useExtensionMenuItems('file', { root: file.root, path: file.path });
   const [app, setApp] = useState<UiEntryPointView | null>(null);
   const [attempt, setAttempt] = useState(0);
   const name = baseName(file.path);
@@ -162,6 +166,13 @@ function Preview({
             <Icon name="external" /> Open with {a.title}
           </Button>
         ))}
+        {extensionItems.length ? (
+          <Menu
+            label={`More actions for ${name}`}
+            trigger={<Icon name="more" />}
+            items={extensionItems}
+          />
+        ) : null}
         <a className="link preview-download" href={raw} download={name}>
           <Icon name="download" /> Download
         </a>

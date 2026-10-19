@@ -225,7 +225,13 @@ export type MessageStatus = 'streaming' | 'complete' | 'incomplete' | 'error';
 export type PartView =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  | { type: 'error'; code: string; message: string }
+  | {
+      type: 'error';
+      code: string;
+      message: string;
+      /** What stopped it, for clients to act on (`{reason: 'spend_cap', provider}`, FR-116). */
+      details?: { reason: string; provider?: string };
+    }
   | { type: 'file'; attachmentId: string; name: string; mime: string; size: number }
   | ToolCallPartView
   | { type: 'artifact'; artifactId: string; kind: ArtifactKind; title: string | null }

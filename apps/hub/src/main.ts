@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { createServer as createTlsServer, type Server as TlsServer } from 'node:https';
 import { join } from 'node:path';
 import { createSecureContext, type SecureContext } from 'node:tls';
+import { installCrashReporting } from '@nova/core';
 import { openSecretStore } from '@nova/secrets';
 import { migrate, openDatabase } from '@nova/storage';
 import { Logger, RingSink, RotatingFileSink, stderrSink } from '@nova/telemetry';
@@ -22,6 +23,7 @@ import type { HubTlsSource } from './trust.ts';
 
 export async function start(
   config: HubConfig,
+  opts: { restart?: () => void } = {},
 ): Promise<{ url: string; close: () => Promise<void> }> {
   // The ring feeds the Diagnostics log viewer and the log export (FR-118).
   const log = new Logger({
@@ -48,7 +50,13 @@ export async function start(
   if (opened.warning) log.warn(opened.warning);
   if (opened.migrated) log.info('moved secrets into the OS keychain', { count: opened.migrated });
   const secrets = opened.store;
-  const hub: Hub = await buildHub({ config, db, log, secrets });
+  const hub: Hub = await buildHub({
+    config,
+    db,
+    log,
+    secrets,
+    ...(opts.restart ? { restart: opts.restart } : {}),
+  });
   const { app, auth, chat, registry, sources, runs } = hub;
   // A crash may have left replies mid-stream: keep their text, mark them incomplete (FR-018).
   // Queued follow-ups then start (FR-019), unfinished source indexing resumes (FR-040), and
@@ -295,7 +303,16 @@ if (isMain) {
   if (process.argv[2] === 'code') {
     await printSetupCode(config);
   } else {
-    const hub = await start(config);
+    // Local crash dumps (FR-121): written only, never sent unless the owner opts in.
+    installCrashReporting({ dataDir: config.dataDir, version: config.version });
+    let hub: { close: () => Promise<void> };
+    // Delete-all and import restart the Hub in place once they have answered (FR-105).
+    const restart = () => {
+      void hub.close().then(async () => {
+        hub = await start(config, { restart });
+      });
+    };
+    hub = await start(config, { restart });
     const shutdown = (signal: string) => {
       process.stderr.write(`received ${signal}\n`);
       void hub.close().then(() => process.exit(0));

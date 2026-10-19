@@ -254,6 +254,22 @@ export function Sidebar({
           <Icon name="server" />
           <span className="mode-label">Apps</span>
         </a>
+        {shown('marketplace') ? (
+          <a
+            href="/marketplace"
+            className="mode-link"
+            aria-current={route.name === 'marketplace' ? 'page' : undefined}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+              e.preventDefault();
+              navigate('/marketplace');
+              onNavigated();
+            }}
+          >
+            <Icon name="download" />
+            <span className="mode-label">Marketplace</span>
+          </a>
+        ) : null}
         <a
           href="/computers"
           className="mode-link"

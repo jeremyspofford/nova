@@ -11,6 +11,12 @@
 // prompts with buttons (Slack, Telegram) answered by the presser's mapped identity, and signed
 // one-use links for email (never reply text); email attachments become thread attachments; and
 // the message log (`messages`). Pollers (pollers.ts) feed `receiveFrom` with verified messages.
+// M8: Telegram files: inbound photos, documents, voice and video notes are downloaded only once a
+// message will start a turn, checked like uploads and kept as thread attachments; the artifacts a
+// channel turn made go back with its reply (and `channel.send` can name files), through the
+// private-to-shared check in a shared conversation. Email bindings may sign in with OAuth
+// (oauth.ts): their view shows the authorization, and removing the last binding of a mailbox
+// revokes its tokens.
 import {
   NovaError,
   uuidv7,
@@ -19,6 +25,7 @@ import {
   type ChannelBindingViewM7,
   type ChannelIdentityViewM7,
   type ChannelKindM7,
+  type ChannelMessageFileView,
   type ChannelMessageView,
   type ChannelMessagesPageView,
   type ChannelMessagesQuery,
@@ -52,6 +59,7 @@ import type {
   BindingCredentials,
   ChannelAction,
   InboundAttachment,
+  InboundFileRef,
   NovaChannelAdapter,
   NovaInboundMessage,
   NovaOutboundMessage,
@@ -59,6 +67,16 @@ import type {
 } from './adapters/common.ts';
 import { assertSecure } from './adapters/mail/imap.ts';
 import { ApprovalLinks } from './approval-links.ts';
+import {
+  MAX_OUTBOUND_FILES,
+  isTextLike,
+  noteLine,
+  prepareNote,
+  threadFiles,
+  turnFiles,
+  type StoredFile,
+} from './files.ts';
+import { usesOAuth, type ChannelOAuth } from './oauth.ts';
 import { overlapPrivacyCheck, type PrivateOriginCheck, type PrivateSource } from './privacy.ts';
 import { sha256Hex, type Headers } from './signing.ts';
 import type { ChannelKind, ChannelReceipt, ChannelSender, InboundMessage } from './types.ts';
@@ -166,6 +184,15 @@ export interface ChannelServiceOptions {
   dataDir?: string;
   /** The public Hub address approval links point at (`channels.publicUrl`, else the Hub's). */
   publicBase?: () => Promise<string>;
+  /** M8: email OAuth (the same `ChannelOAuth` the email adapter gets its tokens from). */
+  oauth?: Pick<ChannelOAuth, 'view' | 'revokeGroup'>;
+}
+
+/** A binding change the pollers hear of; `what: credentials` when its sign-in changed (M8). */
+export interface BindingChange {
+  bindingId: string;
+  kind: ChannelKind;
+  what?: 'credentials';
 }
 
 export interface ReceiveOutcome {
@@ -221,6 +248,8 @@ const ADAPTER_KINDS: ChannelKindM7[] = ['inapp', 'slack', 'teams', 'email', 'web
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+/** How long one inbound file may take to download (M8; up to 20 MB). */
+const DOWNLOAD_TIMEOUT_MS = 2 * MINUTE;
 
 function parseConfig(json: string | null): Record<string, string | null> {
   if (!json) return {};
@@ -255,7 +284,7 @@ export class ChannelService implements ChannelSender {
   #connector: ConnectorListener | null = null;
   #guard: ChannelInboundGuard | null = null;
   readonly #links: ApprovalLinks;
-  readonly #listeners = new Set<(change: { bindingId: string; kind: ChannelKind }) => void>();
+  readonly #listeners = new Set<(change: BindingChange) => void>();
 
   constructor(opts: ChannelServiceOptions) {
     this.#o = opts;
@@ -267,9 +296,27 @@ export class ChannelService implements ChannelSender {
   }
 
   /** Binding changes, for the pollers (pollers.ts). */
-  onBindingChange(fn: (change: { bindingId: string; kind: ChannelKind }) => void): () => void {
+  onBindingChange(fn: (change: BindingChange) => void): () => void {
     this.#listeners.add(fn);
     return () => this.#listeners.delete(fn);
+  }
+
+  /**
+   * M8: a binding's sign-in changed outside `update` (its mailbox was authorized or signed out):
+   * the pollers start reading it again at once, and clients see `channel.binding.changed`.
+   */
+  async credentialsChanged(bindingId: string): Promise<void> {
+    const row = this.#rowById(bindingId);
+    if (!row) return;
+    if (row.secret_ref)
+      await this.#db.transaction(() => {
+        this.#db.raw
+          .prepare(
+            'UPDATE channel_binding SET status_detail = NULL WHERE account_id = ? AND secret_ref = ?',
+          )
+          .run(row.account_id, row.secret_ref);
+      });
+    await this.#changed(row, 'updated', 'credentials');
   }
 
   /** An adapter by kind, for the pollers. */
@@ -422,16 +469,35 @@ export class ChannelService implements ChannelSender {
 
   async #view(r: BindingRow): Promise<ChannelBindingViewM7> {
     const adapter = this.#adapters[r.kind];
-    const names = adapter?.credentialNames ?? [];
+    const config = parseConfig(r.config_json);
+    const wanted =
+      adapter?.credentialsFor?.(config) ??
+      (adapter?.credentialNames ?? []).map((name) => ({ name, required: true }));
     const credentials: { name: string; set: boolean }[] = [];
-    for (const name of names)
-      credentials.push({
-        name,
-        set: r.secret_ref ? await this.#o.secrets.has(`${r.secret_ref}/${name}`) : false,
-      });
+    let missing = false;
+    for (const { name, required } of wanted) {
+      const set = r.secret_ref ? await this.#o.secrets.has(`${r.secret_ref}/${name}`) : false;
+      if (required && !set) missing = true;
+      credentials.push({ name, set });
+    }
+    // An OAuth mailbox is configured once it is authorized (M8).
+    const oauth =
+      r.kind === 'email' && usesOAuth(config)
+        ? r.secret_ref && this.#o.oauth
+          ? await this.#o.oauth.view(r.secret_ref)
+          : {
+              status: 'needs_auth' as const,
+              scopes: [],
+              expiresAt: null,
+              authorizedAt: null,
+              lastError: this.#o.oauth ? null : 'OAuth sign-in is not available',
+            }
+        : null;
     const own = `secret://channel/${r.id}`;
     const configured =
-      credentials.every((c) => c.set) && (adapter?.availability?.().available ?? true);
+      !missing &&
+      (!oauth || oauth.status === 'connected') &&
+      (adapter?.availability?.().available ?? true);
     return {
       id: r.id,
       agentId: r.agent_id,
@@ -459,6 +525,7 @@ export class ChannelService implements ChannelSender {
       lastMessageAt: r.last_message_at,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
+      ...(oauth ? { oauth } : {}),
     };
   }
 
@@ -492,7 +559,7 @@ export class ChannelService implements ChannelSender {
       req.kind === 'email'
     ) {
       if (req.shareCredentialsWith) {
-        if (req.credentials)
+        if (req.credentials || (req.kind === 'email' && req.oauthClientSecret))
           throw fieldError('credentials', 'give credentials or shareCredentialsWith, not both');
         const other = this.#row(accountId, req.shareCredentialsWith);
         if (other.kind !== req.kind || !other.secret_ref)
@@ -501,9 +568,15 @@ export class ChannelService implements ChannelSender {
         // A bot or mailbox shared is shared with its settings (mode, mailbox servers, bot ids).
         if (req.kind === 'telegram' || req.kind === 'email')
           inherited = parseConfig(other.config_json);
-      } else if (req.credentials) {
+      } else if (req.credentials || (req.kind === 'email' && usesOAuth(req.config ?? {}))) {
+        // An OAuth mailbox may have no credential at all (a public client, M8).
         secretRef = `secret://channel/${id}`;
         credentials = { ...req.credentials };
+        if (req.kind === 'email') {
+          if (req.oauthClientSecret) credentials.oauthClientSecret = req.oauthClientSecret;
+          if (!usesOAuth(req.config ?? {}) && !credentials.password)
+            throw fieldError('credentials.password', 'a mailbox needs its password');
+        }
         // The Hub makes these secrets (Telegram's webhook secret); a client never sets them.
         for (const [name, make] of Object.entries(adapter.generatedCredentials ?? {})) {
           if (name in credentials)
@@ -768,10 +841,16 @@ export class ChannelService implements ChannelSender {
     await this.#db.transaction(() => {
       this.#db.raw.prepare('DELETE FROM channel_binding WHERE id = ?').run(id);
     });
-    // Secrets go with the last binding that uses them.
-    if (row.secret_ref && !this.#sibling(accountId, row.secret_ref))
+    // Secrets go with the last binding that uses them; an OAuth mailbox's tokens are revoked at
+    // the provider first (best effort, M8).
+    if (row.secret_ref && !this.#sibling(accountId, row.secret_ref)) {
+      if (row.kind === 'email' && usesOAuth(parseConfig(row.config_json)))
+        await this.#o.oauth
+          ?.revokeGroup(row)
+          .catch((err: unknown) => this.#o.log?.warn('mailbox tokens not revoked', { err }));
       for (const ref of await this.#o.secrets.list(`${row.secret_ref}/`))
         await this.#o.secrets.delete(ref);
+    }
     await this.#audit(accountId, 'user', 'channel.delete', row, { kind: row.kind });
     await this.#changed(row, 'removed');
   }
@@ -1019,9 +1098,18 @@ export class ChannelService implements ChannelSender {
       .trim()
       .slice(0, 80);
     const visibility = effectiveVisibility(target, msg.visibility);
-    const files = await this.#storeAttachments(target.account_id, threadId, msg.attachments);
+    // Files the message only points at (Telegram) are fetched now, after every check (M8).
+    const fetched = await this.#download(target, msg.files);
+    const files = await this.#storeAttachments(target.account_id, threadId, [
+      ...(msg.attachments ?? []),
+      ...fetched.attachments,
+    ]);
+    // The log entry names its files (M8): kept, or refused and why.
+    await this.#recordFiles(logId, 'in', [...files.log, ...fetched.log]);
     let text = framed(target, msg, who, role, visibility);
-    if (files.skipped.length) text += `\n[Attachments not accepted: ${files.skipped.join('; ')}]`;
+    for (const line of files.notes) text += `\n${line}`;
+    const skipped = [...fetched.skipped, ...files.skipped];
+    if (skipped.length) text += `\n[Attachments not accepted: ${skipped.join('; ')}]`;
     let started: StartedTurn;
     try {
       started = await this.#starter.startTurn({
@@ -1092,25 +1180,87 @@ export class ChannelService implements ChannelSender {
     return !!sent;
   }
 
-  /** Inbound files become attachments of the thread (validated like uploads, FR-021). */
+  /**
+   * M8: download the files a message points at (Telegram), each size-capped by its adapter.
+   * Nothing is fetched when files are not kept here.
+   */
+  async #download(
+    row: BindingRow,
+    list: InboundFileRef[] | undefined,
+  ): Promise<{ attachments: InboundAttachment[]; skipped: string[]; log: FileLog[] }> {
+    const out = {
+      attachments: [] as InboundAttachment[],
+      skipped: [] as string[],
+      log: [] as FileLog[],
+    };
+    if (!list?.length) return out;
+    const adapter = this.#adapters[row.kind];
+    const refuse = (f: InboundFileRef, reason: string) => {
+      out.skipped.push(`${f.name.slice(0, 80)} (${reason})`);
+      out.log.push({
+        name: f.name,
+        size: f.size,
+        contentType: f.mime || null,
+        status: 'failed',
+        reason,
+      });
+    };
+    for (const [i, f] of list.entries()) {
+      if (i >= MAX_OUTBOUND_FILES) refuse(f, 'too many files');
+      else if (!this.#o.dataDir) refuse(f, 'files are not kept here');
+      else if (!adapter?.download) refuse(f, 'files are not read here');
+      else
+        try {
+          out.attachments.push(
+            await adapter.download(row.id, f, AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)),
+          );
+        } catch (err) {
+          refuse(f, errText(err).slice(0, 120));
+        }
+    }
+    return out;
+  }
+
+  /**
+   * Inbound files become attachments of the thread (validated like uploads, FR-021). Voice and
+   * video notes (M8) are kept too, checked for what they claim to be, but are not model input:
+   * the turn gets a line saying so instead.
+   */
   async #storeAttachments(
     accountId: string,
     threadId: string,
     list: InboundAttachment[] | undefined,
-  ): Promise<{ ids: string[]; skipped: string[] }> {
-    const out = { ids: [] as string[], skipped: [] as string[] };
+  ): Promise<{ ids: string[]; notes: string[]; skipped: string[]; log: FileLog[] }> {
+    const out = {
+      ids: [] as string[],
+      notes: [] as string[],
+      skipped: [] as string[],
+      log: [] as FileLog[],
+    };
     if (!list?.length) return out;
     const dataDir = this.#o.dataDir;
+    const refuse = (a: InboundAttachment, reason: string) => {
+      out.skipped.push(`${a.name.slice(0, 80)} (${reason})`);
+      out.log.push({
+        name: a.name,
+        size: a.bytes.length,
+        contentType: a.mime || null,
+        status: 'failed',
+        reason,
+      });
+    };
     for (const a of list) {
       if (!dataDir) {
-        out.skipped.push(`${a.name} (files are not kept here)`);
+        refuse(a, 'files are not kept here');
         continue;
       }
       try {
-        const [p] = prepareAttachments([
-          { name: a.name, mime: a.mime, data: a.bytes.toString('base64') },
-        ]);
-        const blob = writeAttachmentBlob(dataDir, p!.bytes);
+        const p = a.note
+          ? prepareNote(a)
+          : prepareAttachments([
+              { name: a.name, mime: a.mime, data: a.bytes.toString('base64') },
+            ])[0]!;
+        const blob = writeAttachmentBlob(dataDir, p.bytes);
         const id = uuidv7();
         await this.#db.transaction(() => {
           this.#db.raw
@@ -1122,21 +1272,58 @@ export class ChannelService implements ChannelSender {
             .run(
               id,
               threadId,
-              p!.name,
-              p!.mime,
-              p!.bytes.length,
+              p.name,
+              p.mime,
+              p.bytes.length,
               blob.sha256,
               blob.blobPath,
               this.#now().toISOString(),
             );
         });
-        out.ids.push(id);
+        if (a.note) out.notes.push(noteLine(a, p.name));
+        else out.ids.push(id);
+        out.log.push({
+          name: p.name,
+          size: p.bytes.length,
+          contentType: p.mime,
+          status: 'received',
+          attachmentId: id,
+        });
       } catch (err) {
-        out.skipped.push(`${a.name.slice(0, 80)} (${errText(err).slice(0, 120)})`);
+        refuse(a, errText(err).slice(0, 120));
       }
     }
     void accountId;
     return out;
+  }
+
+  /** The files of a log entry (M8): names, sizes and types, never content. */
+  async #recordFiles(messageId: string, direction: 'in' | 'out', files: FileLog[]): Promise<void> {
+    if (!files.length) return;
+    const now = this.#now().toISOString();
+    await this.#db.transaction(() => {
+      for (const [idx, f] of files.entries())
+        this.#db.raw
+          .prepare(
+            `INSERT INTO channel_message_file (id, message_id, idx, direction, status, name, size,
+               content_type, attachment_id, artifact_id, reason, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            uuidv7(),
+            messageId,
+            idx,
+            direction,
+            f.status,
+            f.name.slice(0, 300),
+            f.size,
+            f.contentType,
+            f.attachmentId ?? null,
+            f.artifactId ?? null,
+            f.reason?.slice(0, 500) ?? null,
+            now,
+          );
+    });
   }
 
   async #refuseAction(row: BindingRow, action: ChannelAction, text: string): Promise<void> {
@@ -1337,9 +1524,161 @@ export class ChannelService implements ChannelSender {
       return;
     }
     this.#turns.delete(ctx.turnId);
-    if (outcome.stop === 'cancelled' || outcome.status === 'failed' || !outcome.replyText.trim())
-      return;
-    await this.#reply(ctx, outcome.replyText, outcome.turnId);
+    if (outcome.stop === 'cancelled' || outcome.status === 'failed') return;
+    // The artifacts the turn made go with its reply, where the channel carries files (M8).
+    const { files, more } = this.#filesOfTurn(ctx, outcome.turnId);
+    let text = outcome.replyText;
+    if (more) text += `\n\n[${more} more ${more === 1 ? 'file is' : 'files are'} in Nova.]`;
+    if (!text.trim() && !files.length) return;
+    const delivered = text.trim()
+      ? (await this.#replyOutcome(ctx, text, outcome.turnId)).sent
+      : true;
+    const row = this.#rowById(ctx.bindingId);
+    if (delivered && files.length && row) await this.#sendFiles(row, ctx, files, outcome.turnId);
+  }
+
+  /** The artifacts a turn made, when its binding's channel can carry them (M8). */
+  #filesOfTurn(ctx: TurnContext, turnId: string): { files: StoredFile[]; more: number } {
+    const row = this.#rowById(ctx.bindingId);
+    if (!row || !this.#o.dataDir || !this.#adapters[row.kind]?.sendFile)
+      return { files: [], more: 0 };
+    try {
+      return turnFiles(this.#db, this.#o.dataDir, ctx.accountId, turnId);
+    } catch (err) {
+      this.#o.log?.warn('turn files not read', { err, bindingId: row.id });
+      return { files: [], more: 0 };
+    }
+  }
+
+  /**
+   * Send files to a conversation (M8): in a shared one only after the private-to-shared check
+   * (text files are read; other files cannot be, so they count as private), each one redacted
+   * when it is text, counted against the rate cap, and logged. `checked`: the caller ran the
+   * check already.
+   */
+  async #sendFiles(
+    row: BindingRow,
+    ctx: TurnContext,
+    files: StoredFile[],
+    turnId: string | null,
+    checked = false,
+  ): Promise<{ sent: ChannelReceipt[]; failed: string[]; withheld: string | null }> {
+    const out = {
+      sent: [] as ChannelReceipt[],
+      failed: [] as string[],
+      withheld: null as string | null,
+    };
+    const adapter = this.#adapters[row.kind];
+    const withholdAll = async (reason: string) => {
+      for (const f of files)
+        await this.#withhold(row, ctx, `file:${f.ref}`, reason, fileLog(f, 'withheld', reason));
+      out.withheld = reason;
+      return out;
+    };
+    if (!adapter?.sendFile) return withholdAll('files_not_supported');
+    if (!row.enabled) return withholdAll('disconnected');
+    if (!checked && ctx.visibility === 'shared') {
+      const decision = await this.#fileShareCheck(row, ctx, files, turnId);
+      if (decision !== 'allow') {
+        await withholdAll(decision);
+        // Say that something was held back, never what.
+        await this.#send(
+          row,
+          {
+            conversation: ctx.conversation,
+            threadRef: ctx.threadRef,
+            text: "I can't share those files here.",
+          },
+          ctx.threadId,
+        ).catch(() => null);
+        return out;
+      }
+    }
+    const redactor = this.#o.redactor ?? defaultRedactor;
+    for (const f of files) {
+      if (this.#overRate(row, 'out')) {
+        await this.#withhold(
+          row,
+          ctx,
+          `file:${f.ref}`,
+          'rate_limited',
+          fileLog(f, 'withheld', 'rate_limited'),
+        );
+        out.failed.push(`${f.name} (rate limited)`);
+        continue;
+      }
+      // Nothing leaves the Hub unredacted that the redactor can read.
+      const bytes = isTextLike(f.mime)
+        ? Buffer.from(redactor.redactString(f.bytes.toString('utf8')), 'utf8')
+        : f.bytes;
+      const base = {
+        conversation: ctx.conversation,
+        threadRef: ctx.threadRef,
+        sender: null,
+        threadId: ctx.threadId,
+      };
+      try {
+        const receipt = await adapter.sendFile(
+          row.id,
+          {
+            conversation: ctx.conversation,
+            threadRef: ctx.threadRef,
+            name: f.name,
+            mime: f.mime,
+            bytes,
+          },
+          AbortSignal.timeout(this.#o.sendTimeoutMs ?? 30_000),
+        );
+        await this.#record(row, {
+          ...base,
+          id: uuidv7(),
+          direction: 'out',
+          externalId: receipt.id,
+          status: 'sent',
+          reason: 'file',
+          text: `file:${f.ref}`,
+          file: { ...fileLog(f, 'sent'), size: bytes.length },
+        });
+        await this.#o.events.emit({
+          name: 'channel.message.sent',
+          accountId: row.account_id,
+          actor: 'system',
+          ...(ctx.threadId ? { correlation: { threadId: ctx.threadId } } : {}),
+          payload: { bindingId: row.id, to: ctx.conversation, threadId: ctx.threadId },
+        });
+        out.sent.push(receipt);
+      } catch (err) {
+        await this.#record(row, {
+          ...base,
+          id: uuidv7(),
+          direction: 'out',
+          externalId: null,
+          status: 'failed',
+          reason: errText(err).slice(0, 500),
+          text: `file:${f.ref}`,
+          file: fileLog(f, 'failed', errText(err)),
+        });
+        out.failed.push(`${f.name} (${errText(err).slice(0, 120)})`);
+      }
+    }
+    return out;
+  }
+
+  /** The private-to-shared check over files: text files are read, the others count as private. */
+  #fileShareCheck(
+    row: BindingRow,
+    ctx: TurnContext,
+    files: StoredFile[],
+    turnId: string | null,
+  ): Promise<'allow' | 'denied' | 'not_allowed'> {
+    const text = files
+      .filter((f) => isTextLike(f.mime))
+      .map((f) => f.bytes.toString('utf8').slice(0, 200_000))
+      .join('\n');
+    const unreadable: PrivateSource[] = files
+      .filter((f) => !isTextLike(f.mime))
+      .map((f) => ({ kind: 'file', id: f.ref }));
+    return this.#shareCheck(row, ctx, text, turnId, unreadable);
   }
 
   // ---- outbound -------------------------------------------------------------------------------
@@ -1467,9 +1806,20 @@ export class ChannelService implements ChannelSender {
     turnId: string | null;
     bindingId: string;
     text: string;
+    /** M8: artifact or attachment ids of the sending thread, sent after the text. */
+    files?: readonly string[];
   }): Promise<ChannelReceipt> {
     const row = this.#row(input.accountId, input.bindingId);
     if (!row.enabled) throw new NovaError('conflict', 'the channel is disconnected');
+    let files: StoredFile[] = [];
+    if (input.files?.length) {
+      if (!this.#adapters[row.kind]?.sendFile || !this.#o.dataDir)
+        throw new NovaError(
+          'capability_missing',
+          `${KIND_LABEL[row.kind]} channels do not carry files here`,
+        );
+      files = threadFiles(this.#db, this.#o.dataDir, input.accountId, input.threadId, input.files);
+    }
     const ctx: TurnContext = {
       accountId: input.accountId,
       bindingId: row.id,
@@ -1486,10 +1836,43 @@ export class ChannelService implements ChannelSender {
         await this.#withhold(row, ctx, input.text, decision);
         throw new NovaError('policy_denied', 'the message uses private content and was not sent');
       }
+      // The files are checked before anything goes, so nothing is half sent.
+      if (files.length) {
+        const fileDecision = await this.#fileShareCheck(row, ctx, files, input.turnId);
+        if (fileDecision !== 'allow') {
+          await this.#withhold(row, ctx, input.text, fileDecision);
+          for (const f of files)
+            await this.#withhold(
+              row,
+              ctx,
+              `file:${f.ref}`,
+              fileDecision,
+              fileLog(f, 'withheld', fileDecision),
+            );
+          throw new NovaError(
+            'policy_denied',
+            'the files may carry private content and nothing was sent',
+          );
+        }
+      }
     }
     if (this.#overRate(row, 'out'))
       throw new NovaError('rate_limited', 'the channel reached its message limit');
-    return this.#send(row, { conversation: row.external_ref, text: input.text }, input.threadId);
+    const receipt = await this.#send(
+      row,
+      { conversation: row.external_ref, text: input.text },
+      input.threadId,
+    );
+    if (files.length) {
+      const r = await this.#sendFiles(row, ctx, files, input.turnId, true);
+      if (r.failed.length)
+        throw new NovaError(
+          'server_error',
+          `the message was sent; ${r.failed.length} of ${files.length} files were not: ${r.failed.join('; ')}`,
+          { retryable: true },
+        );
+    }
+    return receipt;
   }
 
   async #reply(
@@ -1497,17 +1880,26 @@ export class ChannelService implements ChannelSender {
     text: string,
     turnId: string | null,
   ): Promise<ChannelReceipt | null> {
+    return (await this.#replyOutcome(ctx, text, turnId)).receipt;
+  }
+
+  /** A reply's receipt, and whether the reply itself went (not withheld, M8: files follow it). */
+  async #replyOutcome(
+    ctx: TurnContext,
+    text: string,
+    turnId: string | null,
+  ): Promise<{ receipt: ChannelReceipt | null; sent: boolean }> {
     const row = this.#rowById(ctx.bindingId);
     if (!row?.enabled) {
       if (row) await this.#withhold(row, ctx, text, 'disconnected');
-      return null;
+      return { receipt: null, sent: false };
     }
     if (ctx.visibility === 'shared') {
       const decision = await this.#shareCheck(row, ctx, text, turnId);
       if (decision !== 'allow') {
         await this.#withhold(row, ctx, text, decision);
         // Say that something was held back, never what.
-        return this.#send(
+        const receipt = await this.#send(
           row,
           {
             conversation: ctx.conversation,
@@ -1516,14 +1908,15 @@ export class ChannelService implements ChannelSender {
           },
           ctx.threadId,
         ).catch(() => null);
+        return { receipt, sent: false };
       }
     }
     if (this.#overRate(row, 'out')) {
       await this.#withhold(row, ctx, text, 'rate_limited');
-      return null;
+      return { receipt: null, sent: false };
     }
     try {
-      return await this.#send(
+      const receipt = await this.#send(
         row,
         {
           conversation: ctx.conversation,
@@ -1534,9 +1927,10 @@ export class ChannelService implements ChannelSender {
         },
         ctx.threadId,
       );
+      return { receipt, sent: true };
     } catch (err) {
       this.#o.log?.warn('channel reply failed', { err, bindingId: row.id });
-      return null;
+      return { receipt: null, sent: false };
     }
   }
 
@@ -1549,21 +1943,26 @@ export class ChannelService implements ChannelSender {
     ctx: TurnContext,
     text: string,
     turnId: string | null,
+    unreadable: PrivateSource[] = [],
   ): Promise<'allow' | 'denied' | 'not_allowed'> {
     let sources: PrivateSource[];
     try {
-      sources = await this.#privacy({
-        accountId: row.account_id,
-        agentId: row.agent_id,
-        threadId: ctx.threadId,
-        turnId,
-        text,
-      });
+      sources = text.trim()
+        ? await this.#privacy({
+            accountId: row.account_id,
+            agentId: row.agent_id,
+            threadId: ctx.threadId,
+            turnId,
+            text,
+          })
+        : [];
     } catch (err) {
       // Fail closed: an unknown origin is treated as private.
       this.#o.log?.warn('private content check failed', { err });
       sources = [{ kind: 'thread', id: 'unknown' }];
     }
+    // Files the check cannot read count as private, as a failed check does (M8).
+    sources = [...sources, ...unreadable];
     if (!sources.length) return 'allow';
     const policy = await this.#o.setting('channels.privateToShared');
     let decision: 'allow' | 'deny' = policy === 'allow' ? 'allow' : 'deny';
@@ -1596,7 +1995,13 @@ export class ChannelService implements ChannelSender {
     return policy === 'ask' ? 'denied' : 'not_allowed';
   }
 
-  async #withhold(row: BindingRow, ctx: TurnContext, text: string, reason: string): Promise<void> {
+  async #withhold(
+    row: BindingRow,
+    ctx: TurnContext,
+    text: string,
+    reason: string,
+    file?: FileLog,
+  ): Promise<void> {
     await this.#record(row, {
       id: uuidv7(),
       direction: 'out',
@@ -1608,6 +2013,7 @@ export class ChannelService implements ChannelSender {
       reason,
       text,
       threadId: ctx.threadId,
+      ...(file ? { file } : {}),
     });
   }
 
@@ -1680,6 +2086,8 @@ export class ChannelService implements ChannelSender {
       reason: string | null;
       text: string;
       threadId?: string | null;
+      /** M8: the file an outbound entry sent, withheld or failed to send. */
+      file?: FileLog;
     },
   ): Promise<boolean> {
     const changes = await this.#db.transaction(() =>
@@ -1708,6 +2116,7 @@ export class ChannelService implements ChannelSender {
           ).changes,
       ),
     );
+    if (changes > 0 && m.file) await this.#recordFiles(m.id, m.direction, [m.file]);
     return changes > 0;
   }
 
@@ -1958,23 +2367,66 @@ export class ChannelService implements ChannelSender {
     }[];
     const items = rows.slice(0, q.limit);
     const last = items.at(-1);
+    const files = this.#filesOf(items.map((r) => r.id));
     return {
-      items: items.map((r) => ({
-        id: r.id,
-        bindingId: r.binding_id,
-        direction: r.direction,
-        externalId: r.external_id,
-        conversation: r.conversation,
-        threadRef: r.thread_ref,
-        sender: r.sender,
-        threadId: r.thread_id,
-        turnId: r.turn_id,
-        status: r.status,
-        reason: r.reason,
-        createdAt: r.created_at,
-      })),
+      items: items.map((r) => {
+        const own = files.get(r.id) ?? [];
+        return {
+          id: r.id,
+          bindingId: r.binding_id,
+          direction: r.direction,
+          externalId: r.external_id,
+          conversation: r.conversation,
+          threadRef: r.thread_ref,
+          sender: r.sender,
+          threadId: r.thread_id,
+          turnId: r.turn_id,
+          status: r.status,
+          reason: r.reason,
+          createdAt: r.created_at,
+          ...(own[0] ? { file: own[0] } : {}),
+          ...(own.length > 1 ? { files: own } : {}),
+        };
+      }),
       nextCursor: rows.length > q.limit && last ? encodeTimeCursor(last.created_at, last.id) : null,
     };
+  }
+
+  /** The files of log entries (M8), by entry, in order. */
+  #filesOf(messageIds: string[]): Map<string, ChannelMessageFileView[]> {
+    const out = new Map<string, ChannelMessageFileView[]>();
+    if (!messageIds.length) return out;
+    const rows = this.#db.raw
+      .prepare(
+        `SELECT * FROM channel_message_file WHERE message_id IN (${messageIds.map(() => '?').join(',')})
+         ORDER BY message_id, idx`,
+      )
+      .all(...messageIds) as {
+      message_id: string;
+      direction: 'in' | 'out';
+      status: ChannelMessageFileView['status'];
+      name: string;
+      size: number | null;
+      content_type: string | null;
+      attachment_id: string | null;
+      artifact_id: string | null;
+      reason: string | null;
+    }[];
+    for (const r of rows) {
+      const list = out.get(r.message_id) ?? [];
+      list.push({
+        name: r.name,
+        size: r.size,
+        contentType: r.content_type,
+        direction: r.direction,
+        status: r.status,
+        ...(r.attachment_id ? { attachmentId: r.attachment_id } : {}),
+        ...(r.artifact_id ? { artifactId: r.artifact_id } : {}),
+        ...(r.reason ? { reason: r.reason } : {}),
+      });
+      out.set(r.message_id, list);
+    }
+    return out;
   }
 
   /** A reply that answers a pending approval of the binding's thread; the outcome, or null. */
@@ -2092,10 +2544,10 @@ export class ChannelService implements ChannelSender {
     });
   }
 
-  async #changed(row: BindingRow, change: string): Promise<void> {
+  async #changed(row: BindingRow, change: string, what?: 'credentials'): Promise<void> {
     for (const l of this.#listeners) {
       try {
-        l({ bindingId: row.id, kind: row.kind });
+        l({ bindingId: row.id, kind: row.kind, ...(what ? { what } : {}) });
       } catch (err) {
         this.#o.log?.warn('binding listener failed', { err });
       }
@@ -2143,6 +2595,30 @@ function info(r: BindingRow): ChannelBindingInfo {
   };
 }
 
+/** A file of a log entry (M8; `channel_message_file`). */
+interface FileLog {
+  name: string;
+  size: number | null;
+  contentType: string | null;
+  status: 'received' | 'sent' | 'withheld' | 'failed';
+  attachmentId?: string | null;
+  artifactId?: string | null;
+  reason?: string | null;
+}
+
+/** The log record of an outbound file. */
+function fileLog(f: StoredFile, status: FileLog['status'], reason?: string): FileLog {
+  const [kind, id] = f.ref.split(':') as [string, string];
+  return {
+    name: f.name,
+    size: f.bytes.length,
+    contentType: f.mime,
+    status,
+    ...(kind === 'artifact' ? { artifactId: id } : { attachmentId: id }),
+    ...(reason ? { reason: reason.slice(0, 500) } : {}),
+  };
+}
+
 /** Shared when the binding or the message says so (the stricter of the two). */
 function effectiveVisibility(row: BindingRow, said: 'private' | 'shared'): 'private' | 'shared' {
   return row.audience === 'shared' || said === 'shared' ? 'shared' : 'private';
@@ -2184,6 +2660,32 @@ function mailboxCheck(config: Record<string, string | null | undefined>): void {
   assertSecure({ host: config.smtpHost, security: sec(config.smtpSecurity) }, 'SMTP');
   if (config.authservId && !/^[a-z0-9.-]{1,253}$/i.test(config.authservId))
     throw fieldError('config.authservId', 'the authserv-id is a host name');
+  // M8: OAuth sign-in needs the provider; its endpoints are https (http only on this machine).
+  if (
+    config.auth !== undefined &&
+    config.auth !== null &&
+    !['password', 'oauth'].includes(config.auth)
+  )
+    throw fieldError('config.auth', 'auth is password or oauth');
+  if (config.auth === 'oauth') {
+    for (const key of ['oauthAuthUrl', 'oauthTokenUrl', 'oauthClientId'] as const)
+      if (!config[key]) throw fieldError(`config.${key}`, `OAuth sign-in needs ${key}`);
+  }
+  for (const key of ['oauthAuthUrl', 'oauthTokenUrl', 'oauthRevokeUrl'] as const) {
+    const v = config[key];
+    if (v && !oauthEndpointOk(v)) throw fieldError(`config.${key}`, 'an https URL');
+  }
+}
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+function oauthEndpointOk(v: string): boolean {
+  try {
+    const u = new URL(v);
+    return u.protocol === 'https:' || (u.protocol === 'http:' && LOOPBACK_HOSTS.has(u.hostname));
+  } catch {
+    return false;
+  }
 }
 
 /** `senderCheck: none` takes every From address as it says: it must be confirmed. */

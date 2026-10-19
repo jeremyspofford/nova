@@ -48,6 +48,16 @@ import {
   type M75FirmwareState,
 } from './fakes-m75-firmware.ts';
 import { m6SpacesImpl, m6SpacesState, type M6SpacesState } from './fakes-m6-spaces.ts';
+import { OWNER_ID } from './fakes-m7-team.ts';
+import {
+  m8ExtensionsImpl,
+  m8ExtensionsState,
+  type M8ExtensionsState,
+} from './fakes-m8-extensions.ts';
+import { m8MarketImpl, m8MarketState, type M8MarketState } from './fakes-m8-market.ts';
+import { m8ManagedImpl, m8ManagedState, type M8ManagedState } from './fakes-m8-managed.ts';
+import { m8DatactlImpl, m8DatactlState, type M8DatactlState } from './fakes-m8-datactl.ts';
+import { m8AppAuthImpl, m8AppAuthState, type M8AppAuthState } from './fakes-m8-appauth.ts';
 import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
 
 let seq = 0;
@@ -155,6 +165,11 @@ export interface HubState {
   m75devops: M75DevOpsState;
   m75browser: M75BrowserState;
   m75firmware: M75FirmwareState;
+  m8extensions: M8ExtensionsState;
+  m8market: M8MarketState;
+  m8managed: M8ManagedState;
+  m8datactl: M8DatactlState;
+  m8appauth: M8AppAuthState;
   m6code: M6CodeState;
   /** Code sessions, changes, comments and reviews (test/fakes-m5-code.ts). */
   m5code: M5CodeState;
@@ -198,6 +213,11 @@ export function createHub(init: Partial<HubState> = {}) {
     m75devops: m75DevOpsState(),
     m75browser: m75BrowserState(),
     m75firmware: m75FirmwareState(),
+    m8extensions: m8ExtensionsState(),
+    m8market: m8MarketState(),
+    m8managed: m8ManagedState(),
+    m8datactl: m8DatactlState(),
+    m8appauth: m8AppAuthState(),
     m6code: m6CodeState(),
     ...init,
   };
@@ -237,6 +257,18 @@ export function createHub(init: Partial<HubState> = {}) {
       state.m3.approvals = state.m3.approvals.map((x) => (x.id === a.id ? a : x));
     },
   };
+  // After the M6 channels, M6.5 network and M6 browser parts it extends; the M8 app-authorization
+  // part wraps its channel calls.
+  const misc = m7MiscImpl(state.m7misc, {
+    m6channels: state.m6channels,
+    m6browser: state.m6browser,
+    m65network: state.m65network,
+    id,
+    ts: () => ts(),
+    maybeFail,
+    setting: (k) => resolveSetting(k, layers()).value,
+  });
+  const member = () => state.m7team.me !== OWNER_ID;
   const impl: Api = {
     hello: async () => ({
       name: 'nova-hub',
@@ -687,14 +719,40 @@ export function createHub(init: Partial<HubState> = {}) {
       maybeFail,
       setting: (k) => resolveSetting(k, layers()).value,
     }),
-    // After the M6 channels, M6.5 network and M6 browser parts it extends.
-    ...m7MiscImpl(state.m7misc, {
-      m6channels: state.m6channels,
-      m6browser: state.m6browser,
-      m65network: state.m65network,
-      id,
-      ts: () => ts(),
+    ...misc,
+    // M8: app authorization (wraps the M7 channel calls), extensions, marketplace, managed
+    // policy and data controls.
+    ...m8AppAuthImpl(state.m8appauth, {
+      member,
+      setting: (k) => resolveSetting(k, layers()).value,
+      managed: () => state.managed,
+      channels: misc,
+      channelsState: state.m6channels,
+    }),
+    ...m8ExtensionsImpl(state.m8extensions, {
+      setting: (k) => resolveSetting(k as SettingKey, layers()).value,
+      hooks: {
+        list: () => state.m4.hooks,
+        set: (l) => {
+          state.m4.hooks = l;
+        },
+      },
+    }),
+    ...m8MarketImpl(state.m8market, {
+      setting: (k) => resolveSetting(k as SettingKey, layers()).value,
+      writeSetting: (k, v) => {
+        state.settings = { ...state.settings, [k]: v };
+      },
+    }),
+    ...m8ManagedImpl(state.m8managed, {
       maybeFail,
+      isMember: member,
+      setLayer: (l) => {
+        state.managed = l;
+      },
+    }),
+    ...m8DatactlImpl(state.m8datactl, {
+      isMember: member,
       setting: (k) => resolveSetting(k, layers()).value,
     }),
     ...m5CodeImpl(state.m5code, { id, ts: () => ts(), maybeFail }),

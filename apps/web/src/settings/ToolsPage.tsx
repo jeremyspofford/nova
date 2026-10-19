@@ -3,7 +3,8 @@
 // and the decision the policy engine would make now (a preview, no side effects); and the
 // SearXNG instance behind web search. The server list refreshes every 5 s while the page is open.
 // M4 adds installing a server from a bundle (FR-199) and OAuth sign-in for remote servers
-// (FR-047).
+// (FR-047). M8: a member sees their own servers and tool defaults; commands on the Hub, bundles and
+// web search are the owner's and are hidden or explained (src/team/access.tsx).
 import { useEffect, useId, useState } from 'react';
 import type { McpLogLine, McpServerView, ToolDescriptor, ToolView } from '@nova/shared';
 import {
@@ -27,6 +28,8 @@ import { MANAGED, formatWhen, plural, useInterval } from './common.ts';
 import { McpAuthControls, useOAuthReturn } from './McpAuth.tsx';
 import { McpServerForm, envToHeader } from './McpServerForm.tsx';
 import { EFFECT_TEXT, EFFECT_TONE, MCP_STATUS, SOURCE_TEXT, TIER_TEXT } from './policy-text.ts';
+import { MemberNote, OwnerSets, useMemberAccess, type MemberAccess } from '../team/access.tsx';
+import { MEMBER_MODE_TEXT } from '../team/format.ts';
 import '../workspace.css';
 
 export const MCP_POLL_MS = 5000;
@@ -37,6 +40,7 @@ export const READS_ONLY_HELP =
 
 export function ToolsPage() {
   const { api } = useServices();
+  const access = useMemberAccess();
   const [servers, setServers] = useState<McpServerView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
@@ -77,7 +81,9 @@ export function ToolsPage() {
   return (
     <div className="settings-page">
       <h2>Tools &amp; MCP</h2>
+      <MemberNote access={access}>{MEMBER_MODE_TEXT.tools}</MemberNote>
       <McpServersSection
+        access={access}
         servers={servers}
         error={error}
         onRetry={() => setVersion((v) => v + 1)}
@@ -85,7 +91,13 @@ export function ToolsPage() {
         onRemoved={removed}
       />
       <ToolsSection servers={servers ?? []} version={toolsVersion} />
-      <WebSearchSection />
+      {access.hubSettings ? (
+        <WebSearchSection />
+      ) : (
+        <OwnerSets heading={MEMBER_MODE_TEXT.webSearchHeading}>
+          {MEMBER_MODE_TEXT.webSearch}
+        </OwnerSets>
+      )}
     </div>
   );
 }
@@ -103,12 +115,14 @@ function McpStatusChip({ server }: { server: McpServerView }) {
 }
 
 function McpServersSection({
+  access,
   servers,
   error,
   onRetry,
   onSaved,
   onRemoved,
 }: {
+  access: MemberAccess;
   servers: McpServerView[] | null;
   error: string | null;
   onRetry: () => void;
@@ -143,13 +157,20 @@ function McpServersSection({
         <Button variant="primary" onClick={() => setAdding(true)}>
           <Icon name="plus" /> Add server
         </Button>
-        <BundleInstallButton
-          onInstalled={(s) => {
-            onSaved(s);
-            toast.show(`${s.name} installed. It connects in the background.`, { tone: 'success' });
-          }}
-        />
+        {access.may('POST', '/api/v1/mcp/bundles/install') ? (
+          <BundleInstallButton
+            onInstalled={(s) => {
+              onSaved(s);
+              toast.show(`${s.name} installed. It connects in the background.`, {
+                tone: 'success',
+              });
+            }}
+          />
+        ) : null}
       </div>
+      {access.privateAddresses ? null : (
+        <p className="muted ws-flush">{MEMBER_MODE_TEXT.toolsAddresses}</p>
+      )}
       <p className="muted">
         Hooks and plugins are in{' '}
         <a
@@ -197,6 +218,8 @@ function McpServersSection({
         onClose={() => setAdding(false)}
       >
         <McpServerForm
+          allowStdio={access.stdioMcpServers}
+          transportHint={access.stdioMcpServers ? undefined : MEMBER_MODE_TEXT.stdioOwner}
           onCancel={() => setAdding(false)}
           onSaved={(s) => {
             setAdding(false);
@@ -213,6 +236,8 @@ function McpServersSection({
         {editing ? (
           <McpServerForm
             server={editing}
+            allowStdio={access.stdioMcpServers}
+            transportHint={access.stdioMcpServers ? undefined : MEMBER_MODE_TEXT.stdioOwner}
             onCancel={() => setEditing(null)}
             onSaved={(s) => {
               setEditing(null);

@@ -22,7 +22,60 @@ export type ChannelKindM7 = (typeof CHANNEL_KINDS_M7)[number];
 /** A binding view whose kind may be any M7 kind. */
 export interface ChannelBindingViewM7 extends Omit<ChannelBindingView, 'kind'> {
   kind: ChannelKindM7;
+  /** M8: an email binding signing in with OAuth (`config.auth: oauth`): its authorization. */
+  oauth?: ChannelOAuthView | null;
 }
+
+// ---- email OAuth (M8, SASL XOAUTH2) ------------------------------------------------------------
+
+/** How an email binding signs in to its mailbox: a password (default) or OAuth (M8). */
+export const MAIL_AUTH = ['password', 'oauth'] as const;
+export type MailAuth = (typeof MAIL_AUTH)[number];
+
+/**
+ * needs_auth: not authorized yet (or signed out); connected: tokens are stored; expired: the
+ * provider refused the refresh token (authorize again); error: the last exchange or refresh
+ * failed for another reason (retried on the next use).
+ */
+export const CHANNEL_OAUTH_STATUSES = ['needs_auth', 'connected', 'expired', 'error'] as const;
+export type ChannelOAuthStatus = (typeof CHANNEL_OAUTH_STATUSES)[number];
+
+/** A mailbox's OAuth authorization (shared by the bindings of one mailbox). Never a token. */
+export interface ChannelOAuthView {
+  status: ChannelOAuthStatus;
+  /** Scopes the provider granted. */
+  scopes: string[];
+  /** When the access token expires (it is refreshed shortly before). */
+  expiresAt: string | null;
+  authorizedAt: string | null;
+  lastError: string | null;
+}
+
+/**
+ * POST /api/v1/channels/:id/oauth/start: the provider's authorization page to open in the browser
+ * (single-use state, PKCE S256), and the redirect URI to register with the provider.
+ */
+export interface ChannelOAuthStartView {
+  authorizeUrl: string;
+  redirectUri: string;
+  /** When the state stops being accepted. */
+  expiresAt: string;
+}
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+/** An OAuth endpoint: https, or http only to this machine. */
+const oauthUrl = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine((v) => {
+    try {
+      const u = new URL(v);
+      return u.protocol === 'https:' || (u.protocol === 'http:' && LOOPBACK_HOSTS.has(u.hostname));
+    } catch {
+      return false;
+    }
+  }, 'an https URL');
 
 /** An identity mapping whose kind may be any M7 kind (Telegram user ids, email addresses). */
 export interface ChannelIdentityViewM7 extends Omit<ChannelIdentityView, 'kind'> {
@@ -112,9 +165,29 @@ export const createChannelBindingM7Schema = z
           .object({ password: z.string().min(1).max(2000) })
           .strict()
           .optional(),
+        /**
+         * M8: an OAuth sign-in's client secret (a confidential client; a public client with PKCE
+         * has none). Kept in the vault like `credentials`, never returned; replaced later with
+         * `PATCH {credentials: {oauthClientSecret}}`.
+         */
+        oauthClientSecret: z.string().min(1).max(2000).optional(),
         shareCredentialsWith: idSchema.optional(),
         config: z
           .object({
+            /**
+             * M8: `password` (default) or `oauth`: IMAP and SMTP sign in with SASL XOAUTH2 using
+             * tokens from the provider's endpoints below, authorized in the browser
+             * (`POST /channels/:id/oauth/start`).
+             */
+            auth: z.enum(MAIL_AUTH).optional(),
+            /** The provider's authorization endpoint (extra query parameters are kept). */
+            oauthAuthUrl: oauthUrl.optional(),
+            oauthTokenUrl: oauthUrl.optional(),
+            /** The provider's revocation endpoint (RFC 7009), used when signing out. */
+            oauthRevokeUrl: oauthUrl.optional(),
+            oauthClientId: z.string().trim().min(1).max(500).optional(),
+            /** Space-separated scopes, e.g. the provider's IMAP and SMTP scopes. */
+            oauthScopes: z.string().trim().min(1).max(1000).optional(),
             /** The mailbox's own address: replies come from it. */
             address: z.string().trim().toLowerCase().email().max(300),
             /** The login name (default the address). */
@@ -208,6 +281,33 @@ export interface ChannelMessageView {
   /** Why it was ignored, dropped, withheld or failed. */
   reason: string | null;
   createdAt: string;
+  /**
+   * M8: the file this entry carried: an inbound message's file (received and kept as a thread
+   * attachment, or refused), or a file sent out (sent, withheld or failed).
+   */
+  file?: ChannelMessageFileView;
+  /** M8: every file, only when the entry carried more than one (an email's attachments). */
+  files?: ChannelMessageFileView[];
+}
+
+/** received: kept as a thread attachment (inbound); sent, withheld, failed: outbound. */
+export const CHANNEL_MESSAGE_FILE_STATUSES = ['received', 'sent', 'withheld', 'failed'] as const;
+export type ChannelMessageFileStatus = (typeof CHANNEL_MESSAGE_FILE_STATUSES)[number];
+
+/** A file of a message-log entry (M8). No content: the bytes are the attachment or artifact. */
+export interface ChannelMessageFileView {
+  name: string;
+  /** Bytes; null when unknown (refused before it was read). */
+  size: number | null;
+  contentType: string | null;
+  direction: 'in' | 'out';
+  status: ChannelMessageFileStatus;
+  /** The thread attachment it was kept as (inbound) or sent from (outbound). */
+  attachmentId?: string;
+  /** The artifact it was sent from (outbound). */
+  artifactId?: string;
+  /** Why it was refused, withheld or failed. */
+  reason?: string;
 }
 
 /**

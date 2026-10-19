@@ -46,3 +46,8 @@ export * from './acp/index.ts';
 export * from './firmware/index.ts';
 export * from './boot/index.ts';
 export * from './oob/index.ts';
+export * from './sdk/index.ts';
+export * from './market/index.ts';
+export * from './managed/index.ts';
+export * from './datactl/index.ts';
+export * from './appauth/index.ts';

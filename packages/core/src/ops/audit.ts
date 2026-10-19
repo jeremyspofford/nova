@@ -13,6 +13,7 @@ import type { EventSink } from '../events.ts';
 import type { AuditRecord, AuditSink } from '../tools/types.ts';
 import { canonicalJson } from '../nodes/crypto.ts';
 import { sha256Hex } from './canonical.ts';
+import { verifyAuditChain } from '../datactl/anchor.ts';
 
 /** One `audit_event` row as stored (snake_case, like the SQL). */
 export interface AuditRow {
@@ -244,25 +245,8 @@ export class AuditLog implements AuditSink {
 
   /** Walk the whole chain in order and report the first entry that does not verify. */
   verify(): Promise<AuditVerifyResult> {
-    const page = this.#db.raw.prepare(
-      'SELECT * FROM audit_event WHERE seq > ? ORDER BY seq ASC LIMIT 1000',
-    );
-    let checked = 0;
-    let prevSeq = 0;
-    let prevHash: string | null = null;
-    for (;;) {
-      const rows = page.all(prevSeq) as unknown as AuditRow[];
-      if (!rows.length) break;
-      for (const row of rows) {
-        checked++;
-        const intact =
-          row.seq === prevSeq + 1 && row.prev_hash === prevHash && auditRowHash(row) === row.hash;
-        if (!intact) return Promise.resolve({ ok: false, checked, brokenAt: row.id });
-        prevSeq = row.seq;
-        prevHash = row.hash;
-      }
-    }
-    return Promise.resolve({ ok: true, checked, brokenAt: null });
+    // From the retention anchor when audit retention pruned the start of the chain (FR-105).
+    return Promise.resolve(verifyAuditChain(this.#db.raw));
   }
 
   /**

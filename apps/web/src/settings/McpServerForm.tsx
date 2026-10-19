@@ -174,16 +174,25 @@ export function McpServerForm({
   onSaved,
   onCancel,
   submitLabel,
+  allowStdio = true,
+  transportHint,
 }: {
   /** The server to edit; omitted to add one. */
   server?: McpServerView;
   onSaved: (s: McpServerView) => void;
   onCancel?: () => void;
   submitLabel?: string;
+  /** False for a member (M8): a command on the Hub is the owner's; only web servers are offered. */
+  allowStdio?: boolean;
+  /** Said under the connection choices (why a command is not offered). */
+  transportHint?: string;
 }) {
   const { api } = useServices();
   const id = `mcp${useId()}`;
-  const [form, setForm] = useState<McpFormState>(() => formFromServer(server ?? null));
+  const [form, setForm] = useState<McpFormState>(() => {
+    const f = formFromServer(server ?? null);
+    return !allowStdio && f.transport === 'stdio' && !server ? { ...f, transport: 'http' } : f;
+  });
   const [errors, setErrors] = useState<McpFormErrors>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -247,12 +256,17 @@ export function McpServerForm({
         name={`${id}-transport`}
         value={form.transport}
         onChange={(v) => set({ transport: v as McpTransport })}
+        hint={transportHint}
         options={[
-          {
-            value: 'stdio',
-            label: 'Run a command on the Hub',
-            description: 'Nova starts the server as a program and talks to it directly.',
-          },
+          ...(allowStdio || form.transport === 'stdio'
+            ? [
+                {
+                  value: 'stdio',
+                  label: 'Run a command on the Hub',
+                  description: 'Nova starts the server as a program and talks to it directly.',
+                },
+              ]
+            : []),
           {
             value: 'http',
             label: 'Streamable HTTP',

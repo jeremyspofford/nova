@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Theme } from '@nova/ui';
 import { Button, Icon, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { ExtensionThemeOffers } from '../extensions/Offers.tsx';
 import type { ResolvedAppearance } from '../appearance.ts';
 import { navigate, useLocation } from '../router.ts';
 import { useSettings } from '../settings.tsx';
@@ -328,6 +329,12 @@ export function ThemeShare({
             ))}
           </ul>
         ) : null}
+        {/* M8: themes running extensions offer; nothing is used until chosen (FR-117). */}
+        <ExtensionThemeOffers
+          saved={saved}
+          disabled={custom.locked}
+          onKeep={(theme, use) => void keep(theme, use)}
+        />
       </div>
     </section>
   );

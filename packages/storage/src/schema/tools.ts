@@ -31,7 +31,8 @@ export const toolCall = sqliteTable(
     }).notNull(),
     serverId: text('server_id'),
     pluginId: text('plugin_id'),
-    origin: text('origin', { enum: ['model', 'ui', 'hook', 'mcp_client'] })
+    // `script`: a nested call of script.run (M8, migration 0051).
+    origin: text('origin', { enum: ['model', 'ui', 'hook', 'script', 'mcp_client'] })
       .notNull()
       .default('model'),
     /** Redacted arguments (FR-101). */

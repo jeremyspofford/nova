@@ -1,0 +1,158 @@
+/* Data controls (FR-105, FR-121) and spend caps and provider limits (FR-116, FR-115): the Data page,
+   the caps on Profile & usage, the limits on Accounts and the chat's "Raise the cap" (docs/04 §4,
+   §4.4). Colors, spacing and type come only from design tokens. */
+.dc-privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--u-space-2);
+  margin: 0;
+}
+.dc-privacy > svg,
+.dc-privacy > .nv-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--u-success);
+}
+.dc-name,
+.dc-mono {
+  overflow-wrap: anywhere;
+}
+.dc-mono {
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-sm);
+}
+.dc-sub {
+  color: var(--u-text-muted);
+  font-size: var(--u-text-sm);
+  font-weight: 400;
+}
+.dc-subhead {
+  margin: 0;
+  font-size: var(--u-text-md);
+}
+.dc-list {
+  margin: 0;
+  padding-left: var(--u-space-6);
+}
+.dc-file {
+  max-width: 100%;
+}
+.dc-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+}
+.dc-upload p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.dc-check {
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.dc-danger {
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-danger);
+  border-radius: var(--u-radius-md);
+}
+.dc-strong {
+  font-weight: 600;
+}
+.dc-restart p {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+}
+.dc-restart {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.dc-retention {
+  display: grid;
+  gap: var(--u-space-1);
+}
+.dc-due {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.dc-warn {
+  color: var(--u-warn);
+}
+.dc-endpoint {
+  display: grid;
+  gap: var(--u-space-2);
+  justify-items: start;
+}
+.dc-endpoint > .nv-field {
+  width: 100%;
+}
+.dc-reports,
+.dc-caps,
+.dc-limits {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dc-report,
+.dc-cap,
+.dc-limit {
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+  min-width: 0;
+}
+.dc-report {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+}
+.dc-report strong {
+  overflow-wrap: anywhere;
+}
+.dc-cap-row,
+.dc-limit {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.dc-cap-row p {
+  margin: 0;
+}
+.dc-cap-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1) var(--u-space-2);
+}
+.dc-meter {
+  width: 100%;
+  height: 0.75rem;
+}
+.dc-pre {
+  max-height: 20rem;
+  margin: 0;
+  padding: var(--u-space-2);
+  overflow: auto;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dc-raise {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  text-decoration: none;
+}

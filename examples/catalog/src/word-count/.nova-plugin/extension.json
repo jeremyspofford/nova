@@ -1,0 +1,10 @@
+{
+  "api": 1,
+  "entry": "extension.js",
+  "permissions": {
+    "commands": ["word-count.count"],
+    "tools": {
+      "count_words": { "action": "read", "default": "allow" }
+    }
+  }
+}

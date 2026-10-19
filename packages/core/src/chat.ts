@@ -3236,10 +3236,12 @@ export class ChatService {
     if (this.#skills && !run.shared) {
       // The skills catalog: names and descriptions only (FR-046, docs/09 §11 item 3).
       try {
+        // The thread narrows plugin skills to the plugins it may use (an agent's, FR-045).
         const catalog = await this.#skills.catalogSection(
           run.accountId,
           p?.id ?? null,
           DEFAULT_CONTEXT_TOKENS,
+          run.threadId,
         );
         if (catalog?.trim()) sections.push(catalog.trim());
       } catch (err) {

@@ -1,7 +1,7 @@
 // The App frame (FR-198, docs/04 §2.9, docs/08 §3.1): a `ui://` resource in an iframe sandboxed
 // to scripts only (never allow-same-origin, so it cannot reach the app, its session or storage),
 // inside Nova's chrome: the app's name, its plugin or server, a Verified/Unverified badge, the
-// display modes and Close. Modes change in place, so the app keeps running: inline (the height
+// outside sites it may reach (M8: the entry point's `domains`), the display modes and Close. Modes change in place, so the app keeps running: inline (the height
 // the app reports, capped), fullscreen (a dialog; Esc or Exit returns) and picture-in-picture (a
 // floating panel, draggable and resizable; one at a time). Tool calls go to the Hub with origin
 // `ui` and pass the policy gate; their approval cards render here, in Nova's chrome, never in
@@ -102,6 +102,12 @@ const MODE_TEXT: Record<DisplayMode, string> = {
   fullscreen: 'Full screen',
   pip: 'Picture in picture',
 };
+
+/** The header's allowed domains (FR-198, M8): what the app's frame may reach outside Nova. */
+export const DOMAINS_TEXT = {
+  some: (hosts: string) => `Can reach ${hosts}`,
+  none: 'Reaches no outside sites',
+} as const;
 
 function toolResult(ok: boolean, text: string): AppToolResult {
   return ok
@@ -580,6 +586,13 @@ export function McpAppFrame(props: McpAppFrameProps) {
           <span className="app-frame-badge" data-verified={verified ? 'true' : 'false'}>
             {verified ? 'Verified' : 'Unverified'}
           </span>
+          {entry.domains ? (
+            <span className="app-frame-domains muted" title={entry.domains.join(', ') || undefined}>
+              {entry.domains.length
+                ? DOMAINS_TEXT.some(entry.domains.join(', '))
+                : DOMAINS_TEXT.none}
+            </span>
+          ) : null}
         </div>
         <div className="app-frame-actions" role="group" aria-label={`${entry.title} display`}>
           {page ? null : (

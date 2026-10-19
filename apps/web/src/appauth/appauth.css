@@ -1,0 +1,70 @@
+/* Third-party apps and the telemetry export (FR-222, FR-223): the consent page and the two
+   Settings sections. Built on the workspace classes; only what they lack is here. */
+
+.aa-consent {
+  width: 100%;
+  max-width: 560px;
+}
+.aa-title {
+  margin: 0;
+  font-size: var(--u-text-xl);
+}
+.aa-title:focus {
+  outline: none;
+}
+.aa-title:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 2px;
+}
+.aa-scope-list {
+  display: grid;
+  gap: var(--u-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.aa-scope {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--u-space-2);
+}
+.aa-scope > input {
+  flex: none;
+  margin-top: 3px;
+}
+.aa-scope-text {
+  display: grid;
+  gap: var(--u-space-1);
+  min-width: 0;
+}
+.aa-scope-label {
+  font-weight: 600;
+}
+.aa-scope-text > .ws-badge {
+  justify-self: start;
+}
+.aa-actions {
+  justify-content: flex-end;
+}
+.aa-uris {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-1);
+}
+.aa-break {
+  overflow-wrap: anywhere;
+}
+.aa-header-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+  gap: var(--u-space-2);
+}
+@media (max-width: 600px) {
+  .aa-actions {
+    justify-content: stretch;
+  }
+  .aa-actions > .nv-btn {
+    flex: 1;
+  }
+}

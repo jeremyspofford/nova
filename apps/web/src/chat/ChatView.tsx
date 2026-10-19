@@ -43,6 +43,7 @@ import {
 import { ApiError, errorMessage } from '../api.ts';
 import { isEditable } from '../hooks.ts';
 import { chatPath, navigate } from '../router.ts';
+import { ComposerPlusMenu } from '../extensions/ComposerPlus.tsx';
 import { GenerateImageButton } from '../images/GenerateImage.tsx';
 import { useAnnounce, useServices, type Draft, type PendingAttachment } from '../services.tsx';
 import { useSetting, useSettings } from '../settings.tsx';
@@ -80,8 +81,8 @@ import { OpenInWindowButton } from '../shellbridge/OpenInWindow.tsx';
 
 const EMPTY_DRAFT: Draft = { text: '', attachments: [] };
 
-/** Inspector panels a chat can ask the workspace to open. */
-export type ChatPanel = 'side' | 'branches' | 'artifacts' | 'activity' | 'files';
+/** Inspector panels a chat can ask the workspace to open (M8: `apps`, from the composer's + menu). */
+export type ChatPanel = 'side' | 'branches' | 'artifacts' | 'activity' | 'files' | 'apps';
 
 export interface ChatViewProps {
   threadId: string | null;
@@ -1127,7 +1128,13 @@ export function ChatView({
           slashSource={slashSource}
           suggestions={suggestions}
           accessory={composerAccessory}
-          actions={<GenerateImageButton threadId={threadId} />}
+          actions={
+            <>
+              <GenerateImageButton threadId={threadId} />
+              {/* M8: the chat's apps and extension actions (docs/04 §2.9). */}
+              {embedded ? null : <ComposerPlusMenu threadId={threadId} />}
+            </>
+          }
           idBase={embedded ? `composer-${threadId ?? 'new'}` : undefined}
           onTurnOffSuggestions={() => {
             settings.set('chat.suggestions', false).then(

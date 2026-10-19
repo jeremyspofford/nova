@@ -109,6 +109,11 @@ export function useServices(): Services {
   return s;
 }
 
+/** The services, or null outside a provider (shared controls that also render standalone). */
+export function useOptionalServices(): Services | null {
+  return useContext(ServicesCtx);
+}
+
 // ---- screen-reader announcements (docs/04 §4.4) -------------------------------------------------
 
 type Announce = (text: string) => void;

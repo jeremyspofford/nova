@@ -16,7 +16,25 @@ export interface Principal {
   deviceId: string | null;
   /** That device's scopes, read on every request so a change applies at once; null without one. */
   scopes: string[] | null;
+  /**
+   * A third-party app's access token (`nva_`, kind `app`, FR-222): the app and the scopes it holds.
+   * The apps area's route gate admits it only to the app-scoped routes its scopes name.
+   */
+  app?: AppPrincipal | null;
 }
+
+/** The app behind an app token (FR-222, ADR-097 D6). */
+export interface AppPrincipal {
+  clientId: string;
+  clientName: string;
+  authorizationId: string;
+  scopes: string[];
+}
+
+/** Resolves an `nva_` access token; the apps area provides it once its route gate is installed. */
+export type AppTokenVerifier = (
+  token: string,
+) => Promise<{ tokenId: string; accountId: string; app: AppPrincipal } | null>;
 
 /** The device and scopes behind a request's session (ADR-095 decision 3). */
 export interface DeviceScopes {
@@ -37,10 +55,19 @@ export function deviceScopes(req: { principal?: Principal | null }): DeviceScope
 export class AuthService {
   readonly #db: NovaDatabase;
   readonly #now: () => Date;
+  #appTokens: AppTokenVerifier | null = null;
 
   constructor(db: NovaDatabase, now: () => Date = () => new Date()) {
     this.#db = db;
     this.#now = now;
+  }
+
+  /**
+   * App tokens (FR-222): without a verifier (the apps area not set up) an `nva_` token
+   * authenticates nothing.
+   */
+  useAppTokens(verify: AppTokenVerifier): void {
+    this.#appTokens = verify;
   }
 
   /**
@@ -140,6 +167,7 @@ export class AuthService {
 
   /** Verify a bearer or cookie credential. Setup codes never authenticate API calls. */
   async verify(token: string): Promise<Principal | null> {
+    if (token.startsWith('nva_')) return this.#verifyApp(token);
     const row = await this.#find(token);
     // Only sessions act as a user. Device, MCP-client and app tokens carry their own scopes and
     // are checked by the routes that accept them (FR-192), never here.
@@ -154,6 +182,21 @@ export class AuthService {
       accountId: row.accountId,
       deviceId: device?.deviceId ?? null,
       scopes: device?.scopes ?? null,
+    };
+  }
+
+  /** An app's access token: its account must still be open (a removed member's apps stop). */
+  async #verifyApp(token: string): Promise<Principal | null> {
+    if (!this.#appTokens || token.length > 200) return null;
+    const found = await this.#appTokens(token);
+    if (!found || this.#closed(found.accountId)) return null;
+    return {
+      tokenId: found.tokenId,
+      kind: 'app',
+      accountId: found.accountId,
+      deviceId: null,
+      scopes: null,
+      app: found.app,
     };
   }
 

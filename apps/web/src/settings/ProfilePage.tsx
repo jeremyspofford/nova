@@ -1,10 +1,12 @@
 // Settings → Profile & usage (FR-113, FR-114; docs/14 §6): display name, username and avatar
-// (PNG, JPEG or WebP up to 2 MB; no cropping), then local usage insights.
+// (PNG, JPEG or WebP up to 2 MB; no cropping), then local usage insights, spend caps per provider
+// and "clear usage data" (M8, FR-116).
 import { useEffect, useRef, useState } from 'react';
 import type { AccountView } from '@nova/shared';
 import { Button, Spinner, TextField, useToast } from '@nova/ui';
 import { errorMessage, type UpdateProfileRequest } from '../api.ts';
 import { formatBytes, readAsBase64 } from '../chat/attachments.ts';
+import { SpendCapsSection } from '../datactl/SpendCaps.tsx';
 import { useServices } from '../services.tsx';
 import { UsageSection } from './UsageSection.tsx';
 import '../workspace.css';
@@ -33,11 +35,14 @@ export function profileChanges(
 }
 
 export function ProfilePage({ onDisplayName }: { onDisplayName?: (name: string | null) => void }) {
+  // Clearing usage data reloads the insights.
+  const [usageVersion, setUsageVersion] = useState(0);
   return (
     <div className="settings-page">
       <h2>Profile &amp; usage</h2>
       <ProfileSection onDisplayName={onDisplayName} />
-      <UsageSection />
+      <UsageSection key={usageVersion} />
+      <SpendCapsSection onCleared={() => setUsageVersion((v) => v + 1)} />
     </div>
   );
 }

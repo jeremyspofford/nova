@@ -136,6 +136,13 @@ import { deviceOpsApi } from './devices/api-m75.ts';
 import { browserDeviceApi } from './browserdevice/api-m75.ts';
 import { firmwareApi } from './firmware/api-m75.ts';
 import { bootApi } from './boot/api-m75.ts';
+import { extensionsApi } from './extensions/api-m8.ts';
+import { marketApi } from './market/api-m8.ts';
+import { managedApi } from './managed/api-m8.ts';
+import { datactlApi } from './datactl/api-m8.ts';
+import { appAuthApi } from './appauth/api-m8.ts';
+import { channelsM8Api } from './channels/api-m8.ts';
+import { teamM8Api } from './team/api-m8.ts';
 
 export type CreateProjectRequest = z.input<typeof createProjectSchema>;
 export type UpdateProjectRequest = z.input<typeof updateProjectSchema>;
@@ -790,6 +797,14 @@ export function createApi(fetchImpl: Fetch = hubFetch, opts: { offline?: Offline
     ...browserDeviceApi(call),
     ...firmwareApi(call),
     ...bootApi(call),
+    // M8: extensions, marketplace, managed policy, data controls, app authorization.
+    ...extensionsApi(call),
+    ...marketApi(call),
+    ...managedApi(call),
+    ...datactlApi(call, fetchImpl),
+    ...appAuthApi(call),
+    ...channelsM8Api(call),
+    ...teamM8Api(call),
   };
 }
 

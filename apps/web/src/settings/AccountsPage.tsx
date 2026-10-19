@@ -1,11 +1,13 @@
 // Settings → Accounts (docs/14 §1.1): model providers. Providers can be added, tested and removed
 // here as well as in onboarding (FR-014). With more than one account of a kind, one is active:
-// new chats and the built-in presets prefer it (FR-115). Name, username and avatar moved to
-// Profile & usage (FR-113).
+// new chats and the built-in presets prefer it (FR-115). Each account's limits, this month's spend
+// and its spend cap (M8, FR-115, FR-116). Name, username and avatar moved to Profile & usage
+// (FR-113).
 import { useEffect, useState } from 'react';
 import type { ProviderAccountView, ProviderKind } from '@nova/shared';
 import { Button, Dialog, RadioGroup, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { ProviderLimitsSection } from '../datactl/ProviderLimits.tsx';
 import { PROVIDER_NAMES } from '../providers/names.ts';
 import { ProviderSetup } from '../providers/ProviderSetup.tsx';
 import { navigate } from '../router.ts';
@@ -202,6 +204,7 @@ export function AccountsPage() {
           })}
         </section>
       ) : null}
+      <ProviderLimitsSection key={version} />
       <section className="settings-section">
         <h3>Tools</h3>
         <p className="muted">

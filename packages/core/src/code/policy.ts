@@ -3,11 +3,12 @@
 // permission profile. The session folder (or its worktree) is the only root: writable in every
 // mode but Plan; protected paths inside it stay read-only or denied (FR-190, enforced by the
 // engine). Auto needs a reviewer model; Bypass needs `code.allowBypass` and a VM or container
-// substrate. When either condition no longer holds, the session runs with Manual's axes: the
-// policy fails closed, never open.
+// substrate; managed policy can turn any mode but Manual off (FR-106). When a condition no longer
+// holds, the session runs with Manual's axes: the policy fails closed, never open.
 import { basename } from 'node:path';
 import { isolatedSubstrate } from '@nova/policy';
 import { NovaError, type PermissionMode } from '@nova/shared';
+import { managedDenied } from '../managed/restrictions.ts';
 import type { ThreadPolicy } from '../runtime/types.ts';
 import type { SandboxClient } from '../tools/types.ts';
 
@@ -33,10 +34,14 @@ export interface PermissionModeConditions {
   allowBypass: boolean;
   /** The tools' sandbox substrate (Bypass needs a VM or container). */
   substrate: SandboxClient['substrate'];
+  /** Why managed policy turns the mode off, or null (FR-106; `ManagedRestrictions`). */
+  managed?: (mode: PermissionMode) => string | null;
 }
 
 /** Why a mode cannot be used now, or null when it can. */
 export function modeUnavailable(mode: PermissionMode, c: PermissionModeConditions): string | null {
+  const managed = c.managed?.(mode);
+  if (managed) return managed;
   if (mode === 'auto' && !c.reviewerModel)
     return 'Auto mode needs a reviewer model: set one in Settings (review.model) first';
   if (mode === 'bypass') {
@@ -47,8 +52,13 @@ export function modeUnavailable(mode: PermissionMode, c: PermissionModeCondition
   return null;
 }
 
-/** Throws `validation` when the mode cannot be selected now. */
+/**
+ * Throws `validation` when the mode cannot be selected now, and `policy_denied` `{reason: managed}`
+ * when managed policy turns it off (FR-106).
+ */
 export function assertModeAvailable(mode: PermissionMode, c: PermissionModeConditions): void {
+  const managed = c.managed?.(mode);
+  if (managed) throw managedDenied(managed, { mode });
   const why = modeUnavailable(mode, c);
   if (why)
     throw new NovaError('validation', why, {

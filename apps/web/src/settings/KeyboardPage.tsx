@@ -11,6 +11,7 @@ import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { MANAGED } from './common.ts';
 import { GlobalShortcutsSection } from '../shellbridge/GlobalShortcuts.tsx';
+import { ExtensionKeyOffers } from '../extensions/Offers.tsx';
 
 export function KeyboardPage() {
   const { registry } = useServices();
@@ -235,6 +236,8 @@ export function KeyboardPage() {
           {keyFilter ? `No command uses ${bindingText(keyFilter, mac)}.` : 'No matching commands.'}
         </p>
       ) : null}
+      {/* Shortcuts running extensions suggest, bound only when chosen (FR-117, M8). */}
+      <ExtensionKeyOffers />
       {/* System-wide shortcuts of the desktop app (FR-008, FR-214, M7). */}
       <GlobalShortcutsSection />
 

@@ -4,7 +4,9 @@
 // none (the Mock provider, every adapter today) it is simply not listed.
 //
 // The provider call is the optional `generateImage` method this module expects adapters to add
-// (see `ImageCapableProvider`); until one does, the tool stays hidden.
+// (see `ImageCapableProvider`); until one does, the tool stays hidden. Like a chat model call, an
+// image call goes only to a provider kind managed policy allows (FR-106), stops at a reached spend
+// cap (FR-116) and is recorded as usage (FR-114; M8 data review #9).
 import { NovaError, uuidv7, type ToolDescriptor } from '@nova/shared';
 import type { CallContext, Provider } from '@nova/providers';
 import type { AccountModel, ProviderAccountRow } from '../registry.ts';
@@ -35,6 +37,8 @@ export interface GeneratedImage {
 export interface ImageGenerationResult {
   model: string;
   images: GeneratedImage[];
+  /** What the provider says the call cost, when it does. */
+  costUsd?: number;
 }
 
 /**
@@ -70,15 +74,37 @@ export interface ProviderImageGeneratorOptions {
   };
   /** routing.allowCloud: when false only local image models are used (privacy first). */
   allowCloud?: () => Promise<boolean>;
+  /** Why managed policy refuses a provider kind (`managedRestrictions(...).provider`), or null. */
+  providerRefusal?: (kind: string) => Promise<string | null>;
+  /** The account's spend cap for a provider kind, held while the call runs (SpendCaps.gate). */
+  spend?: (
+    accountId: string,
+    provider: string,
+  ) => Promise<{ allowed: boolean; message: string | null; release: () => void }>;
+  /** Record the call as usage (a `usage_event` row). */
+  recordUsage?: (u: {
+    accountId: string;
+    provider: string;
+    model: string;
+    costUsd: number | null;
+    latencyMs: number;
+  }) => Promise<void>;
 }
 
 /** Image generation through the first configured model that declares it. */
 export function providerImageGenerator(opts: ProviderImageGeneratorOptions): ImageGenerator {
+  let refused: string | null = null;
   const pick = async (accountId: string) => {
     const cloud = (await opts.allowCloud?.()) ?? true;
+    refused = null;
     for (const m of await opts.registry.accountModels(accountId)) {
       if (m.info.capabilities.imageGeneration !== true) continue;
       if (!cloud && !m.local) continue;
+      const why = (await opts.providerRefusal?.(m.account.provider)) ?? null;
+      if (why) {
+        refused ??= why;
+        continue;
+      }
       const provider = opts.registry.provider(m.account);
       if (canGenerateImages(provider)) return { m, provider };
     }
@@ -95,11 +121,36 @@ export function providerImageGenerator(opts: ProviderImageGeneratorOptions): Ima
     },
     generate: async (accountId, req) => {
       const hit = await pick(accountId);
-      if (!hit) throw new NovaError('validation', 'no configured provider can generate images');
-      const r = await hit.provider.generateImage(
-        { model: hit.m.info.id, prompt: req.prompt, size: req.size, signal: req.signal },
-        { requestId: `image:${uuidv7()}` },
-      );
+      if (!hit) {
+        if (refused)
+          throw new NovaError('policy_denied', refused, { details: { reason: 'managed' } });
+        throw new NovaError('validation', 'no configured provider can generate images');
+      }
+      const kind = hit.m.account.provider;
+      const cap = await opts.spend?.(accountId, kind);
+      if (cap && !cap.allowed) {
+        cap.release();
+        throw new NovaError('over_budget', cap.message ?? `the ${kind} spend cap is reached`, {
+          details: { reason: 'spend_cap', provider: kind },
+        });
+      }
+      const started = Date.now();
+      let r: ImageGenerationResult;
+      try {
+        r = await hit.provider.generateImage(
+          { model: hit.m.info.id, prompt: req.prompt, size: req.size, signal: req.signal },
+          { requestId: `image:${uuidv7()}` },
+        );
+      } finally {
+        cap?.release();
+      }
+      await opts.recordUsage?.({
+        accountId,
+        provider: kind,
+        model: hit.m.info.id,
+        costUsd: typeof r.costUsd === 'number' && Number.isFinite(r.costUsd) ? r.costUsd : null,
+        latencyMs: Date.now() - started,
+      });
       const image = r.images[0];
       if (!image) throw new NovaError('provider_error', 'the provider returned no image');
       return { model: hit.m.view.ref, image };

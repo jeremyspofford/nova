@@ -682,11 +682,26 @@ export function toPartView(p: PartRow): PartView | null {
     case 'reasoning':
       return p.content ? { type: p.type, text: p.content } : null;
     case 'error': {
-      const e = parseJson(p.content) as { code?: unknown; message?: unknown } | null;
+      const e = parseJson(p.content) as {
+        code?: unknown;
+        message?: unknown;
+        details?: { reason?: unknown; provider?: unknown } | null;
+      } | null;
+      const reason = e?.details?.reason;
+      const provider = e?.details?.provider;
       return {
         type: 'error',
         code: typeof e?.code === 'string' ? e.code : 'provider_error',
         message: typeof e?.message === 'string' ? e.message : 'the response failed',
+        // The structured marker (a spend cap's stop, FR-116), kept small.
+        ...(typeof reason === 'string' && reason.length <= 40
+          ? {
+              details: {
+                reason,
+                ...(typeof provider === 'string' && provider.length <= 50 ? { provider } : {}),
+              },
+            }
+          : {}),
       };
     }
     case 'file': {

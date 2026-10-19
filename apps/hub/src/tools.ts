@@ -33,6 +33,7 @@ import {
   contextTools,
   detectSandbox,
   loadPermissionProfile,
+  managedRestrictions,
   projectFolderSource,
   resolveToolRoots,
   type AuditSink,
@@ -40,6 +41,7 @@ import {
   type Notifier,
   type PathPolicy,
   type SandboxClient,
+  type SpendCaps,
   type ToolGate,
   type ToolRoot,
   type ToolRuntimeOptions,
@@ -109,6 +111,11 @@ export interface ToolsDeps {
   projectFolders?: ProjectFolderSource;
   /** MCP Apps' model context for a thread (FR-198), from the apps area. */
   appContext?: ChatServiceOptions['appContext'];
+  /**
+   * Spend caps (FR-116): image generation checks and holds them and records its usage, like a
+   * model call through the router (M8 data review #9).
+   */
+  spend?: Pick<SpendCaps, 'gate' | 'recordUsage'>;
 }
 
 /**
@@ -209,6 +216,15 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
         generator: providerImageGenerator({
           registry: ctx.registry,
           allowCloud: () => ctx.setting('routing.allowCloud'),
+          // Managed policy's allowed providers apply to images as to models (FR-106).
+          providerRefusal: async (kind) =>
+            managedRestrictions(await ctx.setting('managed.restrict')).provider(kind),
+          ...(ctx.spend
+            ? {
+                spend: (accountId: string, kind: string) => ctx.spend!.gate(accountId, kind),
+                recordUsage: (u) => ctx.spend!.recordUsage(u),
+              }
+            : {}),
         }),
       }),
       ...ctx.sources,
@@ -430,21 +446,28 @@ export function settingsScope(
     // A session's roots replace the workspace too: its folder is its only (and first) root, so
     // relative paths, exec's working folder and instruction files resolve there.
     const own = policy?.roots ? null : workspace;
+    // Managed policy (FR-106): the sandbox mounts only folders it allows, whenever the session or
+    // project folder was added; the gate narrows the same way.
+    const managed = managedRestrictions(await ctx.setting('managed.restrict'));
     const resolved = resolveToolRoots({
       profile,
       roots: extra,
       workspaceDir: own,
+      managed,
     });
     let roots: ToolRoot[] = resolved.roots.filter((r) => dirname(r.path) !== r.path);
     if (!roots.length && resolved.roots.length) {
-      roots = [
-        ...(own ? [{ path: own, access: 'write' as const, label: 'Workspace' }] : []),
-        ...extra.map((r) => ({
-          path: resolve(r.path),
-          access: r.access,
-          label: r.label ?? (basename(r.path) || r.path),
-        })),
-      ];
+      roots = managed.narrowRoots(
+        [
+          ...(own ? [{ path: own, access: 'write' as const, label: 'Workspace' }] : []),
+          ...extra.map((r) => ({
+            path: resolve(r.path),
+            access: r.access,
+            label: r.label ?? (basename(r.path) || r.path),
+          })),
+        ],
+        { exempt: own ? [own] : [] },
+      ).roots;
     }
     return {
       roots,

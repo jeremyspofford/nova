@@ -64,6 +64,7 @@ import type {
   TurnStarter,
 } from '../runtime/types.ts';
 import type { SettingReader } from '../approvals/gate.ts';
+import { managedDenied, managedRestrictions } from '../managed/restrictions.ts';
 import type { ThreadService } from '../threads.ts';
 import { MemorySecretStore, type SecretStore } from '@nova/secrets';
 import { isCredentialPath, isProtectedRel } from '../tools/roots.ts';
@@ -443,9 +444,11 @@ export class CodeService {
       throw new NovaError('validation', 'worktrees are only available for folders on the Hub', {
         details: { reason: 'worktree_unavailable' },
       });
+    await this.#assertManagedSession(env, hubLocal);
     const folder = hubLocal
       ? await this.#checkFolder(req.folder)
       : await this.envs.checkRemoteFolder(accountId, env.id, this.#checkRemotePath(req.folder));
+    if (hubLocal) await this.#assertManagedFolder(folder);
     const projectFolderId = hubLocal
       ? this.#projectFolderFor(accountId, folder, req.projectId ?? null)
       : null;
@@ -799,6 +802,12 @@ export class CodeService {
           sessionId: s.id,
           mode: s.permissionMode,
         });
+      // Managed policy (FR-106) that turns sessions on this machine off reaches the sessions made
+      // before it too: they keep no roots, so their tools touch nothing (fail closed).
+      if (!this.#remote(s)) {
+        const why = managedRestrictions(await this.#o.setting('managed.restrict')).localSessions();
+        if (why) return { ...p, roots: [] };
+      }
       return p;
     },
   };
@@ -2720,15 +2729,40 @@ export class CodeService {
     session: { accountId: string; environmentId: string | null } | null = null,
   ): Promise<PermissionModeConditions> {
     const own = session?.environmentId ? this.sandboxFor(session) : null;
+    const managed = managedRestrictions(await this.#o.setting('managed.restrict'));
     return {
       reviewerModel: await this.#o.setting('review.model'),
       allowBypass: await this.#o.setting('code.allowBypass'),
+      managed: (mode) => managed.permissionMode(mode),
       // Another machine: no Nova sandbox at all. A container environment: its own. Else the Hub's.
       substrate:
         session && this.#remote(session)
           ? null
           : ((own ?? this.#o.sandbox?.() ?? null)?.substrate ?? null),
     };
+  }
+
+  /**
+   * Managed policy (FR-106): sessions on the Hub's own files and SSH sessions (to a host it does
+   * not allow) may be turned off. The SSH transport checks every connection too.
+   */
+  async #assertManagedSession(
+    env: { kind: EnvironmentView['kind']; configJson: string | null },
+    hubLocal: boolean,
+  ): Promise<void> {
+    const managed = managedRestrictions(await this.#o.setting('managed.restrict'));
+    let why: string | null = null;
+    if (hubLocal) why = managed.localSessions();
+    else if (env.kind === 'ssh') why = managed.sshHost(sshHostOf(env.configJson));
+    if (why) throw managedDenied(why, { environment: env.kind });
+  }
+
+  /** Managed policy (FR-106): a session folder on the Hub must be inside the allowed folders. */
+  async #assertManagedFolder(folder: string): Promise<void> {
+    const why = managedRestrictions(await this.#o.setting('managed.restrict'), {
+      ...(this.#home ? { home: this.#home } : {}),
+    }).folder(folder);
+    if (why) throw managedDenied(why, { folder });
   }
 
   async #remember(accountId: string, folder: string, mode: PermissionMode): Promise<void> {
@@ -2917,4 +2951,14 @@ function commitFailed(output: string): NovaError {
   return new NovaError('conflict', `the commit failed: ${text.split('\n')[0] ?? ''}`, {
     details: { reason: 'commit_failed', output: text },
   });
+}
+
+/** The host an SSH environment's stored configuration names ('' when it cannot be read). */
+function sshHostOf(configJson: string | null): string {
+  try {
+    const host = (JSON.parse(configJson ?? '{}') as { host?: unknown }).host;
+    return typeof host === 'string' ? host : '';
+  } catch {
+    return '';
+  }
 }

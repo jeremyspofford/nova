@@ -37,10 +37,13 @@ import {
 } from '@nova/shared';
 import {
   isHubOwner,
+  managedDenied,
+  managedRestrictions,
   privateAddressError,
   publicFetch,
   publicUrlProblem,
   type AuditSink,
+  type MarketInstaller,
 } from '@nova/core';
 import {
   McpManager,
@@ -67,10 +70,14 @@ import {
 } from '@nova/mcp';
 import { secretRef } from '@nova/secrets';
 import { schema } from '@nova/storage';
+import { isHubUrl } from './appauth.ts';
 import type { HubContext, McpArea } from './hub-context.ts';
+import { mcpMarketInstaller } from './mcp-market.ts';
 
 const { mcpServer, mcpOauth } = schema;
 type Row = typeof mcpServer.$inferSelect;
+/** A row of `mcp_server` (the marketplace installer reads it). */
+export type McpServerRow = Row;
 type OAuthRow = typeof mcpOauth.$inferSelect;
 type Approval = 'allow' | 'ask' | 'deny';
 
@@ -103,6 +110,11 @@ export interface HubMcpArea extends McpArea {
   onServerRemoving(hook: (accountId: string, serverId: string) => Promise<unknown>): void;
   /** How device-hosted servers are reached (FR-042, FR-210); they connect once it is wired. */
   useDeviceBridge(bridge: DeviceMcpBridge): void;
+  /**
+   * MCP registry entries and `.mcpb` bundles for the marketplace (FR-049, kind `mcp`):
+   * `market.useMcpInstaller(mcp.marketInstaller)` in app.ts.
+   */
+  marketInstaller: MarketInstaller;
 }
 
 /** What `config_json` holds (the mcp-config.json fields without their own column). */
@@ -340,6 +352,13 @@ export interface DeviceMcpService {
     grantee: { kind: 'user'; id: string },
     call: { server: string; tool: string; arguments: Record<string, unknown> },
   ): Promise<{ content: unknown[]; isError: boolean }>;
+  /** Resources and prompts of the same servers (M8; `/agent/v1/mcp/request`). */
+  mcpRequest?(
+    accountId: string,
+    deviceId: string,
+    grantee: { kind: 'user'; id: string },
+    req: { server: string; method: string; params: Record<string, unknown> },
+  ): Promise<unknown>;
 }
 
 /**
@@ -378,6 +397,17 @@ export function deviceBridgeFrom(svc: DeviceMcpService): DeviceMcpBridge {
       });
       return { content: Array.isArray(r.content) ? r.content : [], isError: r.isError === true };
     },
+    // Resources and prompts (M8): the same grant; the device's answer is untrusted content.
+    ...(svc.mcpRequest
+      ? {
+          request: (({ accountId, deviceId, server }, req) =>
+            svc.mcpRequest!(accountId, deviceId, grantee(accountId), {
+              server,
+              method: req.method,
+              params: req.params,
+            })) satisfies DeviceMcpBridge['request'],
+        }
+      : {}),
   };
 }
 
@@ -456,7 +486,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     // New or revoked tokens take effect on a fresh connection.
     onChange: (serverId) => {
       const cfg = manager.config(serverId);
-      if (cfg?.enabled) start(cfg, { restart: true });
+      if (cfg?.enabled) update(cfg, { restart: true });
     },
   });
 
@@ -633,11 +663,53 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     });
   }
 
-  function start(config: McpServerConfig, opts: { restart?: boolean } = {}): void {
+  /** The checks of managed policy (FR-106); an area set up without settings has none. */
+  const managed = async () =>
+    managedRestrictions(
+      typeof ctx.setting === 'function' ? await ctx.setting('managed.restrict') : undefined,
+    );
+
+  /** Why managed policy refuses this server (by name, origin, transport or plugin), or null. */
+  async function managedRefusal(
+    row: Pick<Row, 'name' | 'source' | 'transport' | 'deviceId' | 'pluginId'>,
+  ): Promise<string | null> {
+    const m = await managed();
+    return (
+      (row.pluginId ? m.plugin(row.pluginId) : null) ??
+      m.mcpServer({
+        name: row.name,
+        source: row.source,
+        transport: row.transport,
+        deviceId: row.deviceId,
+      })
+    );
+  }
+
+  /** Apply a configuration the manager already runs (a reconnect). */
+  function update(config: McpServerConfig, opts: { restart?: boolean } = {}): void {
     manager.update(config, opts).catch((err: unknown) => {
       log.warn('mcp server update failed', { serverId: config.id, err });
     });
   }
+
+  /** (Re)connect a server; one managed policy refuses is never started and stops if it runs. */
+  function start(row: Row, opts: { restart?: boolean } = {}): void {
+    void (async () => {
+      const config = toConfig(row);
+      const refused = await managedRefusal(row);
+      await manager.update(refused ? { ...config, enabled: false } : config, opts);
+    })().catch((err: unknown) => {
+      log.warn('mcp server update failed', { serverId: row.id, err });
+    });
+  }
+
+  /** Every server again: a policy change may stop some and allow others. */
+  async function reapplyAll(): Promise<void> {
+    for (const row of await db.orm.select().from(mcpServer)) start(row);
+  }
+  const offManaged = ctx.events.bus.subscribe('managed.policy.changed', () => {
+    reapplyAll().catch((err: unknown) => log.warn('mcp servers not re-checked', { err }));
+  });
 
   // ---- bundles (FR-199) ---------------------------------------------------------------------
 
@@ -709,7 +781,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     // A plugin server's `defaultApproval` is the plugin's, not the user's: the gate reads it
     // through the plugin's permissions, below its per-tool and per-action defaults.
     if (row.source !== 'plugin') defaults.set(row.id, storedConfig(row).defaultApproval);
-    start(toConfig(row));
+    start(row);
   }
   // Previews do not survive a restart.
   rmSync(previewDir, { recursive: true, force: true });
@@ -721,6 +793,345 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
         .map((s) => ({ id: s.id, name: s.name, status: s.status, lastError: s.lastError })),
     ),
   );
+
+  /** Add a server for the account: the add-server route, and registry entries (marketplace). */
+  async function createServer(
+    accountId: string,
+    body: z.infer<typeof mcpServerM7Schema>,
+  ): Promise<Row> {
+    assertPlainArgs(body.args);
+    const refused = await managedRefusal({
+      name: body.name,
+      source: 'user',
+      transport: body.transport,
+      deviceId: body.deviceId ?? null,
+      pluginId: null,
+    });
+    if (refused) throw managedDenied(refused, { server: body.name });
+    assertDevice(accountId, body.deviceId);
+    await assertPublicUrl(accountId, body.transport, body.url);
+    await assertNameFree(accountId, body.name);
+    const id = uuidv7();
+    const now = new Date().toISOString();
+    let row: Row;
+    try {
+      const env = await storeEnv(id, {}, body.env ?? {});
+      const authRef = await storeAuth(id, undefined, body.auth);
+      const config: StoredConfig = {
+        startupTimeoutMs: body.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
+        toolTimeoutMs: body.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
+        enabledTools: body.enabledTools ?? null,
+        disabledTools: body.disabledTools ?? [],
+        readOnlyTools: unique(body.readOnlyTools ?? []),
+        defaultApproval: body.defaultApproval ?? null,
+        ...(authRef ? { auth: authRef } : {}),
+        ...(body.oauth ? { oauth: body.oauth } : {}),
+      };
+      const values: Row = {
+        id,
+        accountId,
+        name: body.name,
+        transport: body.transport,
+        command: body.transport === 'stdio' ? (body.command ?? null) : null,
+        argsJson: JSON.stringify(body.args ?? []),
+        url: body.transport === 'stdio' ? null : (body.url ?? null),
+        envRefJson: JSON.stringify(env),
+        configJson: JSON.stringify(config),
+        source: 'user',
+        pluginId: null,
+        deviceId: body.transport === 'stdio' ? (body.deviceId ?? null) : null,
+        bundleManifestJson: null,
+        signatureStatus: null,
+        bundleSha256: null,
+        installRecordJson: null,
+        enabled: body.enabled ?? true,
+        lastStatus: null,
+        lastError: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await db.transaction(() => db.orm.insert(mcpServer).values(values));
+      row = values;
+    } catch (err) {
+      await deleteSecrets(id);
+      if (err instanceof Error && /UNIQUE/i.test(err.message))
+        throw new NovaError('conflict', `an MCP server named ${body.name} already exists`);
+      throw err;
+    }
+    const added = storedConfig(row);
+    defaults.set(id, added.defaultApproval);
+    await record(accountId, 'add', row, {
+      envKeys: Object.keys(body.env ?? {}).sort(),
+      ...(row.deviceId ? { deviceId: row.deviceId } : {}),
+      ...(added.auth ? { auth: true } : {}),
+      ...(added.oauth ? { oauth: added.oauth } : {}),
+      // Declaring tools read-only loosens what agents may do without asking: on the record.
+      ...(added.readOnlyTools.length ? { readOnlyTools: added.readOnlyTools } : {}),
+    });
+    start(row);
+    return row;
+  }
+
+  /** Remove a server with its secrets, work folder and bundle files (route and marketplace). */
+  async function removeServer(accountId: string, row: Row): Promise<void> {
+    for (const hook of removing)
+      await hook(accountId, row.id).catch((err: unknown) =>
+        log.warn('server removal hook failed', { err, serverId: row.id }),
+      );
+    await manager.remove(row.id);
+    await oauth.forget(row.id);
+    await db.transaction(() => db.orm.delete(mcpServer).where(eq(mcpServer.id, row.id)));
+    await deleteSecrets(row.id);
+    rmSync(join(ctx.dataDir, 'mcp', row.id), { recursive: true, force: true });
+    // A bundle's files go with it, every kept version included.
+    if (row.source === 'bundle')
+      rmSync(join(bundleRoot, row.name), { recursive: true, force: true });
+    defaults.delete(row.id);
+    await record(accountId, 'remove', row);
+  }
+
+  /**
+   * Install or update a bundle from its bytes (FR-199): the bundle route after its preview, and
+   * `.mcpb` items of the marketplace with the verdict it reached (`signature`, `source`).
+   */
+  async function installBundle(
+    accountId: string,
+    input: {
+      bytes: Uint8Array;
+      userConfig: Record<string, unknown> | undefined;
+      permissions: { network: string[]; fs: 'none' | 'read' | 'project' };
+      confirmSideload: boolean;
+      signature?: 'verified' | 'unverified';
+      source?: 'file' | 'catalog';
+      origin?: string;
+      enabled?: boolean;
+    },
+  ): Promise<Row> {
+    const read = readBundle(Buffer.from(input.bytes));
+    const { manifest } = read;
+    // The marketplace decided the verdict itself (its catalog and checksum, ADR-097 D2).
+    const signature = input.signature ?? bundleSignature(read, TRUSTED_BUNDLE_PUBLISHERS);
+    if (signature === 'unverified' && input.confirmSideload !== true)
+      throw new NovaError(
+        'validation',
+        'this bundle is not signed by a trusted publisher; confirm the sideload to install it',
+        { details: { field: 'confirmSideload', reason: 'sideload_confirmation_required' } },
+      );
+    const name = bundleServerName(manifest.name);
+    // Managed policy (FR-106): unsigned bundles, and servers it does not allow.
+    const m = await managed();
+    const refused =
+      (signature === 'unverified' ? m.unverifiedInstall('an unverified MCP bundle') : null) ??
+      m.mcpServer({ name, source: 'bundle', transport: 'stdio', deviceId: null });
+    if (refused) throw managedDenied(refused, { server: name });
+    const values = resolveUserConfig(manifest, input.userConfig ?? {});
+    const existing = await byName(accountId, name);
+    if (existing && bundleOf(existing)?.name !== manifest.name)
+      throw new NovaError(
+        'conflict',
+        `an MCP server named ${name} already exists; remove or rename it first`,
+      );
+    const id = existing?.id ?? uuidv7();
+    const dir = join(bundleRoot, name, manifest.version);
+    rmSync(dir, { recursive: true, force: true });
+    let launch: ReturnType<typeof bundleLaunch>;
+    try {
+      extractBundle(read, dir);
+      launch = bundleLaunch(manifest, dir, values, launchEnv);
+    } catch (err) {
+      rmSync(dir, { recursive: true, force: true });
+      throw err;
+    }
+
+    // Values that hold a sensitive setting go to the vault and are passed as references
+    // resolved at launch (FR-101); other values are kept as written (vault values are redacted
+    // everywhere, which a greeting or a folder must not be). An update replaces them all.
+    if (existing) await deleteSecrets(id, ['env', 'arg', 'config']);
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(launch.env)) {
+      if (!launch.secretEnv.includes(k)) {
+        env[k] = v;
+        continue;
+      }
+      const ref = secretRef('mcp', id, 'env', k);
+      await secrets.put(ref, v);
+      env[k] = ref;
+    }
+    const args = [...launch.args];
+    for (const i of launch.secretArgs) {
+      const ref = secretRef('mcp', id, 'arg', String(i));
+      await secrets.put(ref, args[i]!);
+      args[i] = ref;
+    }
+    const userConfig: Record<string, unknown> = {};
+    const secretRefs: string[] = [];
+    const paths: { path: string; access: 'read' | 'write' }[] = [];
+    for (const [k, v] of Object.entries(values)) {
+      const entry = manifest.userConfig[k]!;
+      if (entry.sensitive) {
+        const ref = secretRef('mcp', id, 'config', k);
+        await secrets.put(ref, Array.isArray(v) ? JSON.stringify(v) : String(v));
+        userConfig[k] = ref;
+        secretRefs.push(ref);
+        continue;
+      }
+      userConfig[k] = v;
+      if (
+        (entry.type === 'directory' || entry.type === 'file') &&
+        input.permissions.fs !== 'none'
+      ) {
+        for (const path of Array.isArray(v) ? v : [String(v)])
+          paths.push({ path, access: input.permissions.fs === 'project' ? 'write' : 'read' });
+      }
+    }
+    const now = new Date().toISOString();
+    const installRecord = {
+      serverId: id,
+      sha256: read.sha256,
+      source: input.source ?? ('file' as const),
+      signature,
+      permissions: { network: input.permissions.network, fs: paths, secrets: secretRefs },
+      userConfig,
+      installedAt: now,
+      enabled: input.enabled ?? true,
+    };
+    const prev = existing ? storedConfig(existing) : null;
+    const config: StoredConfig = {
+      startupTimeoutMs: prev?.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
+      toolTimeoutMs: prev?.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
+      enabledTools: prev?.enabledTools ?? null,
+      disabledTools: prev?.disabledTools ?? [],
+      readOnlyTools: prev?.readOnlyTools ?? [],
+      // A bundle's tools ask by default (docs/08 §2.5).
+      defaultApproval: prev?.defaultApproval ?? 'ask',
+      policy: { network: input.permissions.network, fs: input.permissions.fs },
+    };
+    const row: Row = {
+      id,
+      accountId,
+      name,
+      transport: 'stdio',
+      command: launch.command,
+      argsJson: JSON.stringify(args),
+      url: null,
+      envRefJson: JSON.stringify(env),
+      configJson: JSON.stringify(config),
+      source: 'bundle',
+      pluginId: null,
+      deviceId: null,
+      bundleManifestJson: JSON.stringify(manifest.raw),
+      signatureStatus: signature,
+      bundleSha256: read.sha256,
+      installRecordJson: JSON.stringify(installRecord),
+      enabled: input.enabled ?? true,
+      lastStatus: null,
+      lastError: null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    await db.transaction(async () => {
+      if (existing) {
+        const { id: _id, createdAt: _c, ...set } = row;
+        await db.orm.update(mcpServer).set(set).where(eq(mcpServer.id, id));
+      } else await db.orm.insert(mcpServer).values(row);
+    });
+    defaults.set(id, config.defaultApproval);
+    await record(accountId, existing ? 'bundle.update' : 'bundle.install', row, {
+      bundle: manifest.name,
+      version: manifest.version,
+      sha256: read.sha256,
+      signature,
+      sideloaded: signature === 'unverified',
+      permissions: installRecord.permissions,
+      previousVersion: existing ? (bundleOf(existing)?.version ?? null) : null,
+      ...(input.origin ? { origin: input.origin } : {}),
+    });
+    await events.emit({
+      name: 'mcp.bundle.installed',
+      actor: 'user',
+      accountId,
+      payload: { serverId: id, name: manifest.name, signature },
+    });
+    start(row, { restart: true });
+    return row;
+  }
+
+  /** Point a remote server at another URL or transport (a registry entry's update). */
+  async function updateRemote(
+    accountId: string,
+    row: Row,
+    change: { transport: 'http' | 'sse'; url: string; enabled: boolean; origin?: string },
+  ): Promise<Row> {
+    refusePluginOwned(row);
+    if (change.enabled) {
+      const refused = await managedRefusal({ ...row, transport: change.transport });
+      if (refused) throw managedDenied(refused, { server: row.name });
+    }
+    await assertPublicUrl(accountId, change.transport, change.url);
+    const next: Row = {
+      ...row,
+      transport: change.transport,
+      url: change.url,
+      command: null,
+      argsJson: '[]',
+      deviceId: null,
+      enabled: change.enabled,
+      updatedAt: new Date().toISOString(),
+    };
+    await db.transaction(() =>
+      db.orm
+        .update(mcpServer)
+        .set({
+          transport: next.transport,
+          url: next.url,
+          command: null,
+          argsJson: next.argsJson,
+          deviceId: null,
+          enabled: next.enabled,
+          updatedAt: next.updatedAt,
+        })
+        .where(eq(mcpServer.id, row.id)),
+    );
+    await record(accountId, 'update', next, {
+      fields: ['transport', 'url'],
+      ...(change.origin ? { origin: change.origin } : {}),
+    });
+    start(next, { restart: true });
+    return next;
+  }
+
+  /** Put a server row back as it was (the marketplace's rollback); secrets are the caller's. */
+  async function restoreServer(row: Row): Promise<void> {
+    await db.transaction(async () => {
+      const { id: _id, ...set } = row;
+      const [there] = await db.orm
+        .select({ id: mcpServer.id })
+        .from(mcpServer)
+        .where(eq(mcpServer.id, row.id));
+      if (there) await db.orm.update(mcpServer).set(set).where(eq(mcpServer.id, row.id));
+      else await db.orm.insert(mcpServer).values(row);
+    });
+    if (row.source !== 'plugin') defaults.set(row.id, storedConfig(row).defaultApproval);
+    start(row, { restart: true });
+  }
+
+  // The marketplace's installer of MCP registry entries and bundles (FR-049, kind `mcp`).
+  const marketInstaller = mcpMarketInstaller({
+    db,
+    secrets,
+    launchEnv,
+    byName,
+    isOwner: (accountId) => isHubOwner(db, accountId),
+    assertPublicUrl,
+    createServer: (accountId, body) => createServer(accountId, mcpServerM7Schema.parse(body)),
+    updateRemote,
+    installBundle,
+    removeServer: async (accountId, row) => {
+      refusePluginOwned(row);
+      await removeServer(accountId, row);
+    },
+    restoreServer,
+  });
 
   function register(app: FastifyInstance): void {
     app.get('/api/v1/mcp/servers', async (req) => {
@@ -735,69 +1146,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
 
     app.post('/api/v1/mcp/servers', async (req, reply) => {
       const accountId = await accountOf(req);
-      const body = mcpServerM7Schema.parse(req.body);
-      assertPlainArgs(body.args);
-      assertDevice(accountId, body.deviceId);
-      await assertPublicUrl(accountId, body.transport, body.url);
-      await assertNameFree(accountId, body.name);
-      const id = uuidv7();
-      const now = new Date().toISOString();
-      let row: Row;
-      try {
-        const env = await storeEnv(id, {}, body.env ?? {});
-        const authRef = await storeAuth(id, undefined, body.auth);
-        const config: StoredConfig = {
-          startupTimeoutMs: body.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
-          toolTimeoutMs: body.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
-          enabledTools: body.enabledTools ?? null,
-          disabledTools: body.disabledTools ?? [],
-          readOnlyTools: unique(body.readOnlyTools ?? []),
-          defaultApproval: body.defaultApproval ?? null,
-          ...(authRef ? { auth: authRef } : {}),
-          ...(body.oauth ? { oauth: body.oauth } : {}),
-        };
-        const values: Row = {
-          id,
-          accountId,
-          name: body.name,
-          transport: body.transport,
-          command: body.transport === 'stdio' ? (body.command ?? null) : null,
-          argsJson: JSON.stringify(body.args ?? []),
-          url: body.transport === 'stdio' ? null : (body.url ?? null),
-          envRefJson: JSON.stringify(env),
-          configJson: JSON.stringify(config),
-          source: 'user',
-          pluginId: null,
-          deviceId: body.transport === 'stdio' ? (body.deviceId ?? null) : null,
-          bundleManifestJson: null,
-          signatureStatus: null,
-          bundleSha256: null,
-          installRecordJson: null,
-          enabled: body.enabled ?? true,
-          lastStatus: null,
-          lastError: null,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await db.transaction(() => db.orm.insert(mcpServer).values(values));
-        row = values;
-      } catch (err) {
-        await deleteSecrets(id);
-        if (err instanceof Error && /UNIQUE/i.test(err.message))
-          throw new NovaError('conflict', `an MCP server named ${body.name} already exists`);
-        throw err;
-      }
-      const added = storedConfig(row);
-      defaults.set(id, added.defaultApproval);
-      await record(accountId, 'add', row, {
-        envKeys: Object.keys(body.env ?? {}).sort(),
-        ...(row.deviceId ? { deviceId: row.deviceId } : {}),
-        ...(added.auth ? { auth: true } : {}),
-        ...(added.oauth ? { oauth: added.oauth } : {}),
-        // Declaring tools read-only loosens what agents may do without asking: on the record.
-        ...(added.readOnlyTools.length ? { readOnlyTools: added.readOnlyTools } : {}),
-      });
-      start(toConfig(row));
+      const row = await createServer(accountId, mcpServerM7Schema.parse(req.body));
       void reply.status(201);
       return view(row);
     });
@@ -833,7 +1182,33 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
         disabledTools: patch.disabledTools ?? cur.disabledTools,
         readOnlyTools: patch.readOnlyTools ?? cur.readOnlyTools,
       });
+      // A bundle's server starts the way its bundle says (FR-199): editing its command, arguments
+      // or transport would make it a server the user added by hand, outside what the bundle (and
+      // managed policy's rules for bundles) allowed. Install another version instead.
+      if (
+        row.source === 'bundle' &&
+        (merged.transport !== row.transport ||
+          (merged.command ?? null) !== row.command ||
+          JSON.stringify(merged.args ?? []) !==
+            JSON.stringify(parseJson<string[]>(row.argsJson, [])))
+      )
+        throw new NovaError(
+          'validation',
+          "a bundle's server starts as its bundle says; install another version to change it",
+          { details: { reason: 'bundle_launch', server: row.name } },
+        );
       if (merged.name !== row.name) await assertNameFree(accountId, merged.name, row.id);
+      // A server managed policy refuses may be turned off or removed, never (re)enabled (FR-106).
+      if (merged.enabled !== false) {
+        const refused = await managedRefusal({
+          name: merged.name,
+          source: row.source,
+          transport: merged.transport,
+          deviceId: merged.deviceId ?? null,
+          pluginId: row.pluginId,
+        });
+        if (refused) throw managedDenied(refused, { server: merged.name });
+      }
       assertDevice(accountId, merged.deviceId);
       await assertPublicUrl(accountId, merged.transport, merged.url);
       // A server that left sse/http keeps no key; `null` removes it, '' keeps it.
@@ -907,7 +1282,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
           : {}),
       });
       // New secret values keep their references, so a changed value needs an explicit relaunch.
-      start(toConfig(next), { restart: patch.env !== undefined || patch.auth !== undefined });
+      start(next, { restart: patch.env !== undefined || patch.auth !== undefined });
       return view(next);
     });
 
@@ -915,20 +1290,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
       const accountId = await accountOf(req);
       const row = await load(accountId, params.parse(req.params).id);
       refusePluginOwned(row);
-      for (const hook of removing)
-        await hook(accountId, row.id).catch((err: unknown) =>
-          log.warn('server removal hook failed', { err, serverId: row.id }),
-        );
-      await manager.remove(row.id);
-      await oauth.forget(row.id);
-      await db.transaction(() => db.orm.delete(mcpServer).where(eq(mcpServer.id, row.id)));
-      await deleteSecrets(row.id);
-      rmSync(join(ctx.dataDir, 'mcp', row.id), { recursive: true, force: true });
-      // A bundle's files go with it, every kept version included.
-      if (row.source === 'bundle')
-        rmSync(join(bundleRoot, row.name), { recursive: true, force: true });
-      defaults.delete(row.id);
-      await record(accountId, 'remove', row);
+      await removeServer(accountId, row);
       return { ok: true };
     });
 
@@ -991,147 +1353,14 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
       const p = previews.get(body.previewId);
       if (!p || p.accountId !== accountId || !existsSync(p.file))
         throw new NovaError('not_found', 'the bundle preview expired; upload the bundle again');
-      const bytes = readFileSync(p.file);
-      const read = readBundle(bytes);
-      const { manifest } = read;
-      const signature = bundleSignature(read, TRUSTED_BUNDLE_PUBLISHERS);
-      if (signature === 'unverified' && body.confirmSideload !== true)
-        throw new NovaError(
-          'validation',
-          'this bundle is not signed by a trusted publisher; confirm the sideload to install it',
-          { details: { field: 'confirmSideload', reason: 'sideload_confirmation_required' } },
-        );
-      const values = resolveUserConfig(manifest, body.userConfig);
-      const name = bundleServerName(manifest.name);
-      const existing = await byName(accountId, name);
-      if (existing && bundleOf(existing)?.name !== manifest.name)
-        throw new NovaError(
-          'conflict',
-          `an MCP server named ${name} already exists; remove or rename it first`,
-        );
-      const id = existing?.id ?? uuidv7();
-      const dir = join(bundleRoot, name, manifest.version);
-      rmSync(dir, { recursive: true, force: true });
-      let launch: ReturnType<typeof bundleLaunch>;
-      try {
-        extractBundle(read, dir);
-        launch = bundleLaunch(manifest, dir, values, launchEnv);
-      } catch (err) {
-        rmSync(dir, { recursive: true, force: true });
-        throw err;
-      }
-
-      // Values that hold a sensitive setting go to the vault and are passed as references
-      // resolved at launch (FR-101); other values are kept as written (vault values are redacted
-      // everywhere, which a greeting or a folder must not be). An update replaces them all.
-      if (existing) await deleteSecrets(id, ['env', 'arg', 'config']);
-      const env: Record<string, string> = {};
-      for (const [k, v] of Object.entries(launch.env)) {
-        if (!launch.secretEnv.includes(k)) {
-          env[k] = v;
-          continue;
-        }
-        const ref = secretRef('mcp', id, 'env', k);
-        await secrets.put(ref, v);
-        env[k] = ref;
-      }
-      const args = [...launch.args];
-      for (const i of launch.secretArgs) {
-        const ref = secretRef('mcp', id, 'arg', String(i));
-        await secrets.put(ref, args[i]!);
-        args[i] = ref;
-      }
-      const userConfig: Record<string, unknown> = {};
-      const secretRefs: string[] = [];
-      const paths: { path: string; access: 'read' | 'write' }[] = [];
-      for (const [k, v] of Object.entries(values)) {
-        const entry = manifest.userConfig[k]!;
-        if (entry.sensitive) {
-          const ref = secretRef('mcp', id, 'config', k);
-          await secrets.put(ref, Array.isArray(v) ? JSON.stringify(v) : String(v));
-          userConfig[k] = ref;
-          secretRefs.push(ref);
-          continue;
-        }
-        userConfig[k] = v;
-        if (
-          (entry.type === 'directory' || entry.type === 'file') &&
-          body.permissions.fs !== 'none'
-        ) {
-          for (const path of Array.isArray(v) ? v : [String(v)])
-            paths.push({ path, access: body.permissions.fs === 'project' ? 'write' : 'read' });
-        }
-      }
-      const now = new Date().toISOString();
-      const installRecord = {
-        serverId: id,
-        sha256: read.sha256,
-        source: 'file' as const,
-        signature,
-        permissions: { network: body.permissions.network, fs: paths, secrets: secretRefs },
-        userConfig,
-        installedAt: now,
-        enabled: true,
-      };
-      const prev = existing ? storedConfig(existing) : null;
-      const config: StoredConfig = {
-        startupTimeoutMs: prev?.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
-        toolTimeoutMs: prev?.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
-        enabledTools: prev?.enabledTools ?? null,
-        disabledTools: prev?.disabledTools ?? [],
-        readOnlyTools: prev?.readOnlyTools ?? [],
-        // A bundle's tools ask by default (docs/08 §2.5).
-        defaultApproval: prev?.defaultApproval ?? 'ask',
-        policy: { network: body.permissions.network, fs: body.permissions.fs },
-      };
-      const row: Row = {
-        id,
-        accountId,
-        name,
-        transport: 'stdio',
-        command: launch.command,
-        argsJson: JSON.stringify(args),
-        url: null,
-        envRefJson: JSON.stringify(env),
-        configJson: JSON.stringify(config),
-        source: 'bundle',
-        pluginId: null,
-        deviceId: null,
-        bundleManifestJson: JSON.stringify(manifest.raw),
-        signatureStatus: signature,
-        bundleSha256: read.sha256,
-        installRecordJson: JSON.stringify(installRecord),
-        enabled: true,
-        lastStatus: null,
-        lastError: null,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-      };
-      await db.transaction(async () => {
-        if (existing) {
-          const { id: _id, createdAt: _c, ...set } = row;
-          await db.orm.update(mcpServer).set(set).where(eq(mcpServer.id, id));
-        } else await db.orm.insert(mcpServer).values(row);
+      const row = await installBundle(accountId, {
+        bytes: readFileSync(p.file),
+        userConfig: body.userConfig,
+        permissions: body.permissions,
+        confirmSideload: body.confirmSideload === true,
       });
       previews.delete(body.previewId);
       rmSync(p.file, { force: true });
-      defaults.set(id, config.defaultApproval);
-      await record(accountId, existing ? 'bundle.update' : 'bundle.install', row, {
-        bundle: manifest.name,
-        version: manifest.version,
-        sha256: read.sha256,
-        signature,
-        sideloaded: signature === 'unverified',
-        permissions: installRecord.permissions,
-        previousVersion: existing ? (bundleOf(existing)?.version ?? null) : null,
-      });
-      await events.emit({
-        name: 'mcp.bundle.installed',
-        actor: 'user',
-        accountId,
-        payload: { serverId: id, name: manifest.name, signature },
-      });
-      start(toConfig(row), { restart: true });
       void reply.status(201);
       return view(row);
     });
@@ -1178,9 +1407,19 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     app.get(OAUTH_CALLBACK_PATH, async (req, reply) => {
       // A malformed callback is refused outright; a well-formed one always lands back in settings.
       const q = callbackQuery.parse(req.query);
+      // A code this Hub issued (a Nova app code delivered here) is never sent on: the server's
+      // metadata, which its author controls, may omit or fake the issuer the exchange would
+      // check. The state is spent as a refusal (M8 review).
+      const fromHub =
+        q.iss !== undefined &&
+        isHubUrl(q.iss, { config: ctx.config, app: req.server, requestHost: req.headers.host });
       let ok = false;
       try {
-        const r = await oauth.finish({ state: q.state, code: q.code, error: q.error, iss: q.iss });
+        const r = await oauth.finish(
+          fromHub
+            ? { state: q.state, error: 'issuer_mismatch' }
+            : { state: q.state, code: q.code, error: q.error, iss: q.iss },
+        );
         const [row] = await db.orm
           .select()
           .from(mcpServer)
@@ -1210,6 +1449,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
   return {
     source: new McpToolSource(manager),
     manager,
+    marketInstaller,
     onServerRemoving: (hook) => {
       removing.push(hook);
     },
@@ -1218,7 +1458,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
       // Device servers that were waiting for it connect now.
       for (const s of manager.states()) {
         const cfg = manager.config(s.id);
-        if (cfg?.deviceId && cfg.enabled) start(cfg, { restart: true });
+        if (cfg?.deviceId && cfg.enabled) update(cfg, { restart: true });
       }
     },
     serverDefault: (serverId) => defaults.get(serverId) ?? null,
@@ -1228,6 +1468,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
     },
     register,
     close: async () => {
+      offManaged();
       await manager.close();
       await statusChain;
       for (const p of previews.values()) rmSync(p.file, { force: true });

@@ -68,6 +68,7 @@ import {
   PullRequestService,
   codeAreaToolSource,
   codeM6Tools,
+  managedRestrictions,
   codeToolSource,
   detectSandbox,
   noopAudit,
@@ -267,6 +268,9 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
       new OpenSshTransport({
         runDir: join(ctx.dataDir, 'code', 'ssh'),
         enabled: () => ctx.setting('code.ssh.enabled'),
+        // Managed policy may turn SSH off or allow only some hosts (FR-106).
+        managedHost: async (host) =>
+          managedRestrictions(await ctx.setting('managed.restrict')).sshHost(host),
         ...(ctx.sshClient
           ? {
               sshBin: ctx.sshClient.bin,

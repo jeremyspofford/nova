@@ -4,7 +4,7 @@
 // it connects, and a changed UIDVALIDITY starts over from the current end instead of replaying the
 // folder. `watch` keeps one connection in IDLE and resolves when the server reports new mail.
 // Plain connections are allowed only to this machine (`none` on a loopback host), so a password
-// never crosses a network in the clear. Every client has an 'error' listener: imapflow reports a
+// (or, since M8, an OAuth access token) never crosses a network in the clear. Every client has an 'error' listener: imapflow reports a
 // connection lost while a session starts (or idles) as an 'error' event, and without a listener
 // that throws inside its promise chain and escapes as an unhandled rejection, which ends the Hub.
 // The failure still reaches the caller (the call in flight rejects, `watch` sees 'close'), and the
@@ -23,7 +23,10 @@ export interface MailServer {
 
 export interface MailboxAccess extends MailServer {
   username: string;
+  /** The password (empty when the mailbox signs in with OAuth). */
   password: string;
+  /** M8: an OAuth access token; set, the login is SASL XOAUTH2 (or OAUTHBEARER) with it. */
+  accessToken?: string;
   folder: string;
 }
 
@@ -84,7 +87,9 @@ function client(access: MailboxAccess, idle: boolean, onError: (err: unknown) =>
     secure: access.security === 'tls',
     doSTARTTLS:
       access.security === 'starttls' ? true : access.security === 'none' ? false : undefined,
-    auth: { user: access.username, pass: access.password },
+    auth: access.accessToken
+      ? { user: access.username, accessToken: access.accessToken }
+      : { user: access.username, pass: access.password },
     logger: false,
     disableAutoIdle: !idle,
     disableCompression: true,

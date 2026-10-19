@@ -4,7 +4,8 @@
 // set, replaced by name, never shown; ones the Hub makes itself are only shown as set); how
 // approvals are answered there; and the inbound address to paste into the other service. Only the
 // fields that changed are sent. Turning an email binding's sender check off asks first and sends
-// the Hub's `confirmSenderCheckNone` only after the user confirmed.
+// the Hub's `confirmSenderCheckNone` only after the user confirmed. M8: an email binding may sign
+// in with OAuth (its provider settings, and the authorization with Authorize and Sign out).
 import { useId, useState } from 'react';
 import {
   updateChannelBindingSchema,
@@ -25,6 +26,7 @@ import {
   GENERATED_CREDENTIALS,
   CONFIRM_REQUIRED_TEXT,
   INBOUND_HINT,
+  MAIL_OAUTH_KEYS,
   REF_TEXT,
   absoluteUrl,
   errorField,
@@ -32,6 +34,7 @@ import {
   issueErrors,
   randomSecret,
 } from './format.ts';
+import { MailOAuthPanel, usesMailOAuth } from './MailOAuth.tsx';
 import {
   CopyValue,
   SecretsOnce,
@@ -155,7 +158,12 @@ export function BindingSettings({
     }
   };
 
-  const configFields = (CONFIG_KEYS[binding.kind] ?? []).map((k) => {
+  // An email binding's OAuth settings show only while it signs in with OAuth (M8).
+  const oauthDraft = draft.config.auth === 'oauth';
+  const keys = (CONFIG_KEYS[binding.kind] ?? []).filter(
+    (k) => binding.kind !== 'email' || oauthDraft || !MAIL_OAUTH_KEYS.includes(k),
+  );
+  const configFields = keys.map((k) => {
     const choices = CONFIG_CHOICES[binding.kind]?.[k];
     const value = draft.config[k] ?? '';
     const label = CONFIG_TEXT[k]?.label ?? k;
@@ -343,6 +351,7 @@ export function BindingSettings({
           ) : null}
         </div>
       </form>
+      {usesMailOAuth(binding) ? <MailOAuthPanel binding={binding} onSaved={onSaved} /> : null}
       {binding.credentials.length ? (
         <Credentials binding={binding} sharedWithLabel={sharedWithLabel} onSaved={onSaved} />
       ) : null}

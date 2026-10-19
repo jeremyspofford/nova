@@ -47,7 +47,10 @@ import {
 } from '../router.ts';
 import { deepLinkPath } from '../deeplinks.ts';
 import { NotificationsBell } from '../notifications/Bell.tsx';
-import { AppsView, ThreadApps } from '../apps/AppsView.tsx';
+import { AppsView, SHOW_APPS_COMMAND, ThreadApps } from '../apps/AppsView.tsx';
+import { ExtensionStatusBar, useExtensionShell } from '../extensions/shell.tsx';
+import { MarketplacePage } from '../market/MarketplacePage.tsx';
+import { AuthorizePage } from '../appauth/AuthorizePage.tsx';
 import { APPS_MOVED_EVENT } from '../apps/McpAppFrame.tsx';
 import { CodeView } from '../code/CodeView.tsx';
 import { WorkView } from '../work/WorkView.tsx';
@@ -328,7 +331,13 @@ export function Workspace({
   useEffect(() => {
     if (redirected.current) return;
     redirected.current = true;
-    if (!onboarding.completed && !onboarding.skipped && route.name !== 'onboarding')
+    // An app's consent request (/authorize) survives a fresh Hub: setup can wait (FR-222).
+    if (
+      !onboarding.completed &&
+      !onboarding.skipped &&
+      route.name !== 'onboarding' &&
+      route.name !== 'authorize'
+    )
       navigate('/onboarding', { replace: true });
   }, [onboarding.completed, onboarding.skipped, route.name]);
 
@@ -342,6 +351,8 @@ export function Workspace({
   // How this device reaches the Hub (FR-137) and the desktop app's commands (FR-009), M7.
   const hubPath = useHubPath();
   useShellCommands();
+  // Extension commands, menus, status items, themes and shortcuts (FR-117, M8).
+  useExtensionShell();
 
   // ---- approval links (FR-100): /approvals/<id> opens the chat that waits on it, at the card ----------
   const approvalOnly = /^\/approvals\/([^/?#]+)/.exec(location)?.[1] ?? null;
@@ -704,6 +715,12 @@ export function Workspace({
         run: () => a().openAppPicker(),
       },
       {
+        id: SHOW_APPS_COMMAND,
+        title: 'Show the chat’s apps',
+        category: 'Apps',
+        run: () => a().openPanel('apps'),
+      },
+      {
         id: 'library.open',
         title: 'Go to Library',
         category: 'Navigation',
@@ -906,7 +923,11 @@ export function Workspace({
                           ? 'Approvals'
                           : route.name === 'team'
                             ? 'Team'
-                            : MODE_INFO[mode ?? lastMode].label;
+                            : route.name === 'marketplace'
+                              ? 'Marketplace'
+                              : route.name === 'authorize'
+                                ? 'Allow an app'
+                                : MODE_INFO[mode ?? lastMode].label;
 
   return (
     <div
@@ -1079,6 +1100,9 @@ export function Workspace({
           {route.name === 'onboarding' ? (
             <Onboarding displayName={displayName} onDisplayName={onDisplayName} />
           ) : null}
+          {route.name === 'marketplace' ? <MarketplacePage tab={route.tab} /> : null}
+          {route.name === 'authorize' ? <AuthorizePage query={route.query} /> : null}
+          <ExtensionStatusBar />
         </main>
         <aside id="inspector" className="inspector" aria-label="Inspector" hidden={!inspectorOpen}>
           {layout === 'phone' ? (

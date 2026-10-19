@@ -3,6 +3,7 @@
 // (JSON or text) and chat exports (a list of messages per conversation, or a message tree).
 // Everything read here is untrusted data: it is parsed, never executed.
 import { isAbsolute } from 'node:path';
+import type { PluginHookConfig } from '../../plugins/types.ts';
 import { isPlaceholder, isSecret, isSecretName, looksLikeToken } from './secrets.ts';
 
 /** A lowercase name of letters, digits and `-` (`My Server_1` → `my-server-1`). */
@@ -445,6 +446,8 @@ export interface PluginLayout {
   commands: string[];
   agents: string[];
   hasHooks: boolean;
+  /** Hooks converted from the layout's hooks file (FR-200); they install untrusted. */
+  hooks?: PluginHookConfig[];
 }
 
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
@@ -476,5 +479,6 @@ export function generateManifest(
   if (layout.skills.length) manifest.skills = layout.skills;
   if (layout.commands.length) manifest.commands = layout.commands;
   if (layout.agents.length) manifest.agents = layout.agents;
+  if (layout.hooks?.length) manifest.hooks = layout.hooks;
   return manifest;
 }

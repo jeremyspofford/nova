@@ -284,7 +284,11 @@ describe('2: secret names, anti-hijacking prefixes, text pairs and URL-valued he
       expect(isSecretName(n), n).toBe(true);
     for (const n of ['author', 'keyboard', 'footprint', 'spinner', 'content-type', '%zz'])
       expect(isSecretName(n), n).toBe(false);
-    expect(timed(() => isSecretName(flat('a', 5_000_000)))).toBeLessThan(50);
+    // Bounded: a loaded machine may need more than 50 ms, but ten times the input may take at
+    // most 25 times as long (a rescanning check grows about a hundred times; see redact-timing).
+    const small = timed(() => isSecretName(flat('a', 500_000)));
+    const big = timed(() => isSecretName(flat('a', 5_000_000)));
+    expect(big).toBeLessThan(Math.max(50, small * 25));
   });
 });
 

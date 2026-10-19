@@ -5,6 +5,7 @@
 import type {
   ChannelBindingView,
   ChannelKindM7,
+  ChannelOAuthStatus,
   ChannelMessageStatus,
   ChannelMessageView,
   McpSubscriptionStatus,
@@ -65,6 +66,7 @@ export const CREDENTIAL_TEXT: Record<string, string> = {
   secret: 'Signing secret',
   webhookSecret: 'Webhook secret',
   password: 'Mailbox password',
+  oauthClientSecret: 'OAuth client secret',
 };
 
 /** Credentials the Hub makes itself: shown as set or not, never replaced by hand. */
@@ -92,6 +94,24 @@ export const CONFIG_TEXT: Record<string, { label: string; hint: string }> = {
   smtpSecurity: { label: 'SMTP security', hint: '' },
   folder: { label: 'Folder', hint: 'The folder read; leave empty for INBOX.' },
   senderCheck: { label: 'Check senders', hint: '' },
+  auth: { label: 'How Nova signs in', hint: '' },
+  oauthAuthUrl: {
+    label: 'Authorization URL',
+    hint: 'Your provider’s authorization endpoint, where you sign in. https only.',
+  },
+  oauthTokenUrl: { label: 'Token URL', hint: 'Your provider’s token endpoint. https only.' },
+  oauthRevokeUrl: {
+    label: 'Revocation URL (optional)',
+    hint: 'Where Nova revokes the tokens when you sign out, if your provider has one.',
+  },
+  oauthClientId: {
+    label: 'Client ID',
+    hint: 'From the app you registered for Nova with your mail provider.',
+  },
+  oauthScopes: {
+    label: 'Scopes',
+    hint: 'Space-separated: the scopes your provider needs for reading mail over IMAP and sending over SMTP.',
+  },
   authservId: {
     label: 'Authentication-Results name',
     hint: 'The name your mail server writes in Authentication-Results, like mx.google.com. Leave empty to use the IMAP server’s domain. Mail from big providers stays unverified until it is set.',
@@ -117,8 +137,23 @@ export const CONFIG_KEYS: Partial<Record<ChannelKindM7, readonly string[]>> = {
     'mode',
     'senderCheck',
     'authservId',
+    'auth',
+    'oauthAuthUrl',
+    'oauthTokenUrl',
+    'oauthRevokeUrl',
+    'oauthClientId',
+    'oauthScopes',
   ],
 };
+
+/** An email binding's OAuth settings: shown only while it signs in with OAuth (M8). */
+export const MAIL_OAUTH_KEYS: readonly string[] = [
+  'oauthAuthUrl',
+  'oauthTokenUrl',
+  'oauthRevokeUrl',
+  'oauthClientId',
+  'oauthScopes',
+];
 
 /** Settings with a fixed set of values: the first option (empty value) is the Hub's default. */
 export const CONFIG_CHOICES: Partial<
@@ -157,6 +192,10 @@ export const CONFIG_CHOICES: Partial<
       { value: '', label: 'Mail server vouches (default)' },
       { value: 'none', label: 'From address only' },
     ],
+    auth: [
+      { value: '', label: 'Password (default)' },
+      { value: 'oauth', label: 'OAuth' },
+    ],
   },
 };
 
@@ -165,6 +204,7 @@ export const CHOICE_HINT: Record<string, string> = {
   senderCheck:
     'Who counts as a person listed under People. By default only when your mail server vouches for them (DMARC); From address only trusts whatever address a message claims, so it asks you first.',
   imapSecurity: 'Without TLS works only for a server on this machine.',
+  auth: 'OAuth is for providers that refuse passwords: you register Nova as an app with your provider, then authorize the mailbox here.',
   smtpSecurity: 'Without TLS works only for a server on this machine.',
 };
 
@@ -357,7 +397,17 @@ const MESSAGE_REASON: Record<string, string> = {
   unknown: 'No such approval.',
   unavailable: 'The approval could not be answered here.',
   rejected: 'The service refused it.',
+  file: 'A file from the agent’s reply.',
+  files_not_supported: 'This channel does not carry files.',
 };
+
+/** The badge of a file row in the message log. */
+export const FILE_BADGE = 'File';
+
+/** A file the agent sent with its reply (M8: Telegram files), logged as its own row. */
+export function isFileRow(m: Pick<ChannelMessageView, 'reason' | 'direction'>): boolean {
+  return m.direction === 'out' && m.reason === 'file';
+}
 
 /** Why a message was ignored, dropped, held back or failed, in plain words. */
 export function messageReason(m: Pick<ChannelMessageView, 'reason'>): string | null {
@@ -372,4 +422,66 @@ export function plainMailAllowed(host: string): boolean {
     .toLowerCase()
     .replace(/^\[|\]$/g, '');
   return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
+}
+
+// ---- email OAuth (M8, FR-110) ------------------------------------------------------------------
+
+export const OAUTH_STATUS: Record<ChannelOAuthStatus, ChipSpec> = {
+  needs_auth: { text: 'Not authorized yet', icon: 'hand', tone: 'needs_input' },
+  connected: { text: 'Authorized', icon: 'check', tone: 'ready' },
+  expired: { text: 'Authorization expired', icon: 'clock', tone: 'needs_input' },
+  error: { text: 'Sign-in failed', icon: 'alert', tone: 'blocked' },
+};
+
+export const MAIL_OAUTH_TEXT = {
+  heading: 'OAuth sign-in',
+  panelLabel: (label: string) => `OAuth sign-in of ${label}`,
+  intro:
+    'Nova signs in to this mailbox with tokens from your provider. You sign in at the provider once; Nova refreshes the tokens itself.',
+  authLegend: 'How Nova signs in',
+  password: 'With a password',
+  passwordHint: 'An app password if your provider has them.',
+  oauth: 'With OAuth',
+  oauthHint:
+    'For providers that refuse passwords. Register Nova as an app with your provider first.',
+  clientSecret: 'Client secret (optional)',
+  clientSecretHint:
+    'Only if your provider gave the app a secret. Kept in the Hub’s secret store and never shown again.',
+  redirectLabel: 'Redirect URI to register with your provider',
+  redirectHint:
+    'Add this address to the app you registered with your provider, or authorizing fails.',
+  authorizeAfter: 'After adding the channel, choose Authorize to sign in at your provider.',
+  authorize: 'Authorize',
+  authorizeAgain: 'Authorize again',
+  authorizeLabel: (label: string) => `Authorize the mailbox of ${label}`,
+  authorizeAgainLabel: (label: string) => `Authorize the mailbox of ${label} again`,
+  starting: 'Opening your provider…',
+  startFailed: (why: string) => `Could not start the sign-in: ${why}`,
+  unsafeUrl: 'The provider’s sign-in address is not https, so Nova did not open it.',
+  signOut: 'Sign out',
+  signOutLabel: (label: string) => `Sign out of the mailbox of ${label}`,
+  signOutTitle: 'Sign out of this mailbox?',
+  signOutWhat:
+    'Nova revokes its tokens at your provider and deletes them, and stops reading and sending mail here until you authorize again. Channels that share this mailbox stop too.',
+  signedOut: (label: string) => `Signed out of the mailbox of ${label}. Its tokens were revoked.`,
+  signOutFailed: (why: string) => `Could not sign out: ${why}`,
+  cancel: 'Cancel',
+  scopes: (list: string) => `Granted: ${list}`,
+  authorizedWhen: (when: string) => `Authorized ${when}`,
+  renews: 'Nova renews the sign-in itself before it runs out.',
+  expiredHelp: 'Your provider no longer accepts the sign-in. Authorize again to keep reading mail.',
+  lastError: (why: string) => `Last error: ${why}`,
+  rowNeeds: 'The mailbox is not authorized yet.',
+  rowExpired: 'The mailbox needs authorizing again.',
+  returnedOk: 'Mailbox authorized. Nova reads it again now.',
+  returnedError: 'The mailbox was not authorized. Try again from its channel.',
+  required: (what: string) => `Enter the ${what}.`,
+  authUrlName: 'authorization URL',
+  tokenUrlName: 'token URL',
+  clientIdName: 'client ID',
+} as const;
+
+/** The redirect URI the Hub gives the provider: this Hub as the browser reaches it. */
+export function mailOAuthRedirectUri(origin: string = window.location.origin): string {
+  return `${origin.replace(/\/+$/, '')}/api/v1/channels/oauth/callback`;
 }

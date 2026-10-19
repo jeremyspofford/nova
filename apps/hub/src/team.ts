@@ -15,8 +15,13 @@
 //   token's signature, issuer, audience, expiry and nonce; it only ever redirects to fixed paths.
 // - `GET /api/v1/profiles/:handle`, `.../avatar`: none; only cards their person published while
 //   `team.publicProfiles` is on; rate-limited per address.
+//
+// M8 (ADR-097): a removed member's data is purged after `team.removedMemberPurgeDays` (an hourly
+// sweep) or at once on the owner's request, after the owner could export it; `/team/me/access`
+// tells the web UI what a member may reach (the route classification, D7).
 import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
@@ -31,6 +36,7 @@ import {
   joinTeamSchema,
   oidcStartSchema,
   patchMemberSettingSchema,
+  purgeMemberSchema,
   profileCardSchema,
   profileHandleSchema,
   sendMessageSchema,
@@ -41,13 +47,16 @@ import {
   type AgentPluginsView,
   type JoinPreviewView,
   type PublicProfileView,
+  type TeamAccessView,
   type TeamMeView,
   type TeamRole,
 } from '@nova/shared';
 import {
   AuditLog,
   EgressStore,
+  MemberPurgeService,
   OIDC_CALLBACK_PATH,
+  OWNER_ONLY_ROUTES,
   OidcService,
   ProfileCardService,
   ProfileService,
@@ -89,7 +98,17 @@ export interface TeamDeps {
     oidc?: { limit: number; windowMs: number };
     profiles?: { limit: number; windowMs: number };
   };
+  /** How often removed members past their grace period are purged (default hourly; 0: never). */
+  purgeSweepMs?: number;
 }
+
+/**
+ * An export of one account's data for the owner to keep before a purge (V's data export, D5):
+ * the file's name and its bytes, streamed.
+ */
+export type MemberExporter = (
+  accountId: string,
+) => Promise<{ fileName: string; contentType?: string; body: AsyncIterable<Buffer> | Readable }>;
 
 export interface TeamArea extends HubArea {
   team: TeamService;
@@ -116,6 +135,10 @@ export interface TeamArea extends HubArea {
   onMemberRemoved(fn: (accountId: string) => Promise<void> | void): void;
   /** The agents area's service: team agents and plugins per agent. */
   useAgents(agents: AgentService): void;
+  /** A removed member's data: the list, the grace-period sweep and the purge (M8). */
+  purges: MemberPurgeService;
+  /** The data controls' export of one account, offered before a purge (M8). */
+  useExporter(exporter: MemberExporter): void;
   /** The chat loop: sends in shared threads and team tasks. */
   useChat(chat: Pick<ChatService, 'send' | 'cancel' | 'turnStarter'>): void;
   useApprovals(approvals: ApprovalRequests): void;
@@ -202,6 +225,25 @@ export function setupTeam(ctx: HubContext, deps: TeamDeps): Promise<TeamArea> {
   let agentService: AgentService | null = null;
   let teamAgents: TeamAgentService | null = null;
   let chat: Pick<ChatService, 'send' | 'cancel' | 'turnStarter'> | null = null;
+  let exporter: MemberExporter | null = null;
+  const purges = new MemberPurgeService({
+    db: ctx.db,
+    dataDir: ctx.dataDir,
+    team,
+    events: ctx.events,
+    secrets: ctx.secrets,
+    log: log.child('purge'),
+    now,
+    graceDays: () => ctx.setting('team.removedMemberPurgeDays'),
+    ...(deps.audit ? { audit: deps.audit } : {}),
+  });
+  // Removed members past the grace period are purged in the background (failures are recorded and
+  // tried again a day later).
+  const sweepMs = deps.purgeSweepMs ?? 3_600_000;
+  const sweep = () =>
+    purges.sweep().catch((err: unknown) => log.warn('the removed-member sweep failed', { err }));
+  const sweeper = sweepMs > 0 ? setInterval(() => void sweep(), sweepMs) : null;
+  sweeper?.unref();
 
   const limiter = (l: { limit: number; windowMs: number } | undefined, d: number) =>
     new SlidingWindowLimiter({
@@ -397,6 +439,77 @@ export function setupTeam(ctx: HubContext, deps: TeamDeps): Promise<TeamArea> {
       setSession(req, reply, out.session);
       void reply.header('cache-control', 'no-store').status(201);
       return { accountId: out.accountId, role: 'member' as const };
+    });
+
+    // ---- a removed member's data (M8): kept, exported, purged --------------------------------
+    app.get('/api/v1/team/removed', async (req) => ({
+      items: (await purges.removed(await ctx.accountOf(req))).map((v) => ({
+        ...v,
+        exportable: v.exportable && exporter !== null,
+      })),
+    }));
+
+    app.post('/api/v1/team/removed/:id/purge', async (req) => {
+      const actor = await ctx.accountOf(req);
+      const { id } = params.parse(req.params);
+      purgeMemberSchema.parse(req.body ?? {});
+      const out = await purges.purge(actor, id);
+      return { ...out, exportable: false };
+    });
+
+    app.get('/api/v1/team/removed/:id/export', async (req, reply) => {
+      const actor = await ctx.accountOf(req);
+      const { id } = params.parse(req.params);
+      const view = await purges.get(actor, id);
+      if (!view.exportable)
+        throw new NovaError('conflict', "this member's data was already purged", {
+          details: { reason: 'already_purged' },
+        });
+      if (!exporter)
+        throw new NovaError('capability_missing', 'exporting data is not available on this Hub', {
+          details: { reason: 'export_unavailable' },
+        });
+      const out = await exporter(id);
+      await deps.audit
+        ?.append({
+          accountId: actor,
+          actor: 'user',
+          kind: 'auth',
+          action: 'team.member.export',
+          resource: `account:${id}`,
+          detail: { fileName: out.fileName },
+        })
+        .catch(() => undefined);
+      const safe = out.fileName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120) || 'export';
+      void reply
+        .header('content-type', out.contentType ?? 'application/zip')
+        .header('content-disposition', `attachment; filename="${safe}"`)
+        .header('cache-control', 'no-store');
+      return reply.send(out.body instanceof Readable ? out.body : Readable.from(out.body));
+    });
+
+    // What this person may reach, for the web UI's member mode (D7).
+    app.get('/api/v1/team/me/access', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const role = team.assertPerson(accountId);
+      const owner = role === 'owner';
+      const out: TeamAccessView = {
+        role,
+        refused: owner
+          ? []
+          : OWNER_ONLY_ROUTES.map((r) => ({
+              method: r.methods === '*' ? '*' : r.methods.join(','),
+              route: r.pattern,
+              why: r.why,
+            })),
+        limits: {
+          stdioMcpServers: owner,
+          privateAddresses: owner,
+          narrowingOnlyAllowLists: !owner,
+          hubSettings: owner,
+        },
+      };
+      return out;
     });
 
     // ---- a member's own preferences ---------------------------------------------------------
@@ -761,6 +874,10 @@ export function setupTeam(ctx: HubContext, deps: TeamDeps): Promise<TeamArea> {
     oidc,
     cards,
     shared,
+    purges,
+    useExporter: (fn) => {
+      exporter = fn;
+    },
     agents: () => teamAgents,
     access: shared.access,
     // Shared threads, and team tasks' own threads (they read none of the agent's other work).
@@ -799,6 +916,7 @@ export function setupTeam(ctx: HubContext, deps: TeamDeps): Promise<TeamArea> {
     },
     register,
     close: async () => {
+      if (sweeper) clearInterval(sweeper);
       offShared();
       offMirror();
       for (const end of [...streams]) end();

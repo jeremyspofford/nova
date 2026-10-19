@@ -2,7 +2,9 @@
 // IMAP4rev1 server that speaks what imapflow uses (CAPABILITY, LOGIN, NAMESPACE, LIST, EXAMINE /
 // SELECT, UID FETCH of sizes and whole messages, IDLE with EXISTS, NOOP, LOGOUT) over one folder,
 // recording which message bodies it sent, and an SMTP
-// server (EHLO, AUTH PLAIN/LOGIN, MAIL, RCPT, DATA, QUIT) that records what it was sent.
+// server (EHLO, AUTH PLAIN/LOGIN, MAIL, RCPT, DATA, QUIT) that records what it was sent. M8: given
+// `acceptToken`, both also take SASL XOAUTH2 (IMAP `AUTHENTICATE XOAUTH2`, SMTP `AUTH XOAUTH2`),
+// answering a refused token the way providers do (a base64 JSON challenge, then a failure).
 import { createServer, type Server, type Socket } from 'node:net';
 import type { AddressInfo } from 'node:net';
 
@@ -16,6 +18,8 @@ export interface FakeImap {
   /** Start the folder over with a new UIDVALIDITY (the server reset its UIDs). */
   reset(validity: number): void;
   logins: { user: string; ok: boolean }[];
+  /** M8: XOAUTH2 logins and whether the token was accepted. */
+  oauthLogins: { user: string; token: string; ok: boolean }[];
   commands: string[];
   /** UIDs whose whole message was sent, in order. */
   bodiesSent: number[];
@@ -29,6 +33,21 @@ export interface FakeImap {
 }
 
 const CAPS = 'IMAP4rev1 IDLE NAMESPACE UIDPLUS';
+
+/** The `user=…^Aauth=Bearer …^A^A` XOAUTH2 initial response, decoded. */
+function xoauth2(b64: string): { user: string; token: string } | null {
+  const [user, auth, end, last, ...rest] = Buffer.from(b64, 'base64')
+    .toString('utf8')
+    .split('\u0001');
+  if (rest.length || end !== '' || last !== '') return null;
+  if (!user?.startsWith('user=') || !auth?.startsWith('auth=Bearer ')) return null;
+  return { user: user.slice(5), token: auth.slice(12) };
+}
+
+/** What a provider sends back for a refused token (base64 JSON), before the failure. */
+const OAUTH_CHALLENGE = Buffer.from(
+  JSON.stringify({ status: '401', schemes: 'bearer', scope: 'https://mail.example/' }),
+).toString('base64');
 
 function unquote(s: string): string {
   return s.startsWith('"') && s.endsWith('"') ? s.slice(1, -1).replace(/\\(.)/g, '$1') : s;
@@ -53,8 +72,16 @@ function inSet(uid: number, set: string, max: number): boolean {
 }
 
 export async function startFakeImap(
-  opts: { user?: string; password?: string; folder?: string } = {},
+  opts: {
+    user?: string;
+    password?: string;
+    folder?: string;
+    /** M8: accept XOAUTH2 with these tokens (advertises AUTH=XOAUTH2). */
+    acceptToken?: (token: string) => boolean;
+  } = {},
 ): Promise<FakeImap> {
+  const caps = opts.acceptToken ? `${CAPS} AUTH=XOAUTH2` : CAPS;
+  const oauthLogins: FakeImap['oauthLogins'] = [];
   const user = opts.user ?? 'nova@example.com';
   const password = opts.password ?? 'imap-app-password-1';
   const folder = opts.folder ?? 'INBOX';
@@ -78,11 +105,12 @@ export async function startFakeImap(
     let authed = false;
     let selected = false;
     let idleTag: string | null = null;
+    let saslTag: string | null = null;
     let buf = '';
     const send = (s: string) => {
       if (!sock.destroyed) sock.write(s);
     };
-    send(`* OK [CAPABILITY ${CAPS}] fake IMAP ready\r\n`);
+    send(`* OK [CAPABILITY ${caps}] fake IMAP ready\r\n`);
     sock.on('data', (chunk: Buffer) => {
       buf += chunk.toString('latin1');
       let i: number;
@@ -93,6 +121,12 @@ export async function startFakeImap(
       }
     });
     const handle = (line: string) => {
+      if (saslTag) {
+        // The client's answer to the challenge ends the exchange: refused.
+        send(`${saslTag} NO [AUTHENTICATIONFAILED] Invalid credentials\r\n`);
+        saslTag = null;
+        return;
+      }
       if (idleTag) {
         if (line.trim().toUpperCase() === 'DONE') {
           idlers.delete(sock);
@@ -116,8 +150,22 @@ export async function startFakeImap(
       const ok = (text = 'done') => send(`${tag} OK ${text}\r\n`);
       switch (cmd) {
         case 'CAPABILITY':
-          send(`* CAPABILITY ${CAPS}\r\n`);
+          send(`* CAPABILITY ${caps}\r\n`);
           return ok();
+        case 'AUTHENTICATE': {
+          const [mech, initial] = args(a);
+          if (mech?.toUpperCase() !== 'XOAUTH2' || !opts.acceptToken)
+            return send(`${tag} NO unsupported mechanism\r\n`);
+          const said = xoauth2(initial ?? '');
+          const good = !!said && said.user === user && opts.acceptToken(said.token);
+          oauthLogins.push({ user: said?.user ?? '', token: said?.token ?? '', ok: good });
+          if (good) {
+            authed = true;
+            return ok(`[CAPABILITY ${caps}] authenticated`);
+          }
+          saslTag = tag;
+          return send(`+ ${OAUTH_CHALLENGE}\r\n`);
+        }
         case 'NOOP':
           return ok();
         case 'LOGIN': {
@@ -126,7 +174,7 @@ export async function startFakeImap(
           logins.push({ user: u ?? '', ok: good });
           if (!good) return send(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials\r\n`);
           authed = true;
-          return ok(`[CAPABILITY ${CAPS}] logged in`);
+          return ok(`[CAPABILITY ${caps}] logged in`);
         }
         case 'LOGOUT':
           send('* BYE logging out\r\n');
@@ -204,6 +252,7 @@ export async function startFakeImap(
     user,
     password,
     logins,
+    oauthLogins,
     commands,
     bodiesSent,
     dropAll: () => {
@@ -247,11 +296,18 @@ export interface FakeSmtp {
   sent: SentMail[];
   /** Refuse the next DATA with this reply (a failing server). */
   failNext: string | null;
+  /** M8: XOAUTH2 logins and whether the token was accepted. */
+  oauthLogins: { user: string; token: string; ok: boolean }[];
   close(): Promise<void>;
 }
 
 export async function startFakeSmtp(
-  opts: { user?: string; password?: string } = {},
+  opts: {
+    user?: string;
+    password?: string;
+    /** M8: accept XOAUTH2 with these tokens (advertises it). */
+    acceptToken?: (token: string) => boolean;
+  } = {},
 ): Promise<FakeSmtp> {
   const user = opts.user ?? 'nova@example.com';
   const password = opts.password ?? 'imap-app-password-1';
@@ -264,6 +320,7 @@ export async function startFakeSmtp(
     password,
     sent,
     failNext: null,
+    oauthLogins: [],
     close: () => Promise.resolve(),
   };
   const server = createServer((sock) => {
@@ -275,6 +332,7 @@ export async function startFakeSmtp(
     let mail: { from: string; to: string[] } | null = null;
     let data: string[] | null = null;
     let loginStep: 'user' | 'pass' | null = null;
+    let oauthRefused = false;
     let loginUser = '';
     const send = (s: string) => {
       if (!sock.destroyed) sock.write(`${s}\r\n`);
@@ -307,6 +365,12 @@ export async function startFakeSmtp(
           } else data.push(line.startsWith('..') ? line.slice(1) : line);
           continue;
         }
+        if (oauthRefused) {
+          // The client's empty answer to the challenge: the login fails.
+          oauthRefused = false;
+          send('535 5.7.8 Username and Password not accepted');
+          continue;
+        }
         if (loginStep === 'user') {
           loginUser = Buffer.from(line, 'base64').toString('utf8');
           loginStep = 'pass';
@@ -320,7 +384,19 @@ export async function startFakeSmtp(
         }
         const upper = line.toUpperCase();
         if (upper.startsWith('EHLO') || upper.startsWith('HELO')) {
-          sock.write('250-fake.smtp\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n');
+          const mechs = opts.acceptToken ? 'PLAIN LOGIN XOAUTH2' : 'PLAIN LOGIN';
+          sock.write(`250-fake.smtp\r\n250-AUTH ${mechs}\r\n250 8BITMIME\r\n`);
+        } else if (upper.startsWith('AUTH XOAUTH2') && opts.acceptToken) {
+          const said = xoauth2(line.slice(12).trim());
+          const good = !!said && said.user === user && opts.acceptToken(said.token);
+          state.oauthLogins.push({ user: said?.user ?? '', token: said?.token ?? '', ok: good });
+          if (good) {
+            authedAs = said.user;
+            send('235 2.7.0 Accepted');
+          } else {
+            oauthRefused = true;
+            send(`334 ${OAUTH_CHALLENGE}`);
+          }
         } else if (upper.startsWith('AUTH PLAIN')) {
           const b64 = line.slice(10).trim();
           const [, u, p] = Buffer.from(b64, 'base64').toString('utf8').split('\0');

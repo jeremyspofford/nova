@@ -19,6 +19,8 @@ import {
 } from '@nova/shared';
 import {
   RunService,
+  managedDenied,
+  managedRestrictions,
   runActivity,
   type AuditSink,
   type DeliveryCheck,
@@ -95,6 +97,9 @@ export function setupRuns(ctx: HubContext & RunsDeps): Promise<RunsArea> {
       autonomy: (projectId) => ctx.setting('runs.autonomy', projectId),
       subagents: (projectId) => ctx.setting('runs.subagents', projectId),
       escalation: (projectId) => ctx.setting('chat.escalation', projectId),
+      // Managed policy (FR-106): Autonomous runs as Auto mode does; off when Auto is.
+      managedAutonomy: async (autonomy) =>
+        managedRestrictions(await ctx.setting('managed.restrict')).autonomy(autonomy),
     },
     ...(ctx.audit ? { audit: ctx.audit } : {}),
     ...(ctx.notifier ? { notifier: ctx.notifier } : {}),
@@ -165,7 +170,14 @@ export function setupRuns(ctx: HubContext & RunsDeps): Promise<RunsArea> {
         const body = createRunSchema.parse(req.body);
         // An autonomous run's consequential actions go to the auto-reviewer (FR-085); without a
         // reviewer model each one would be denied, so say so before the run starts.
-        const autonomy = body.autonomy ?? (await ctx.setting('runs.autonomy', body.projectId));
+        let autonomy = body.autonomy ?? (await ctx.setting('runs.autonomy', body.projectId));
+        // Managed policy first (FR-106): an autonomy it turns off is refused when asked for, and a
+        // default it turns off runs as Standard.
+        const refused = managedRestrictions(await ctx.setting('managed.restrict')).autonomy(
+          autonomy,
+        );
+        if (refused && body.autonomy) throw managedDenied(refused, { autonomy });
+        if (refused) autonomy = 'standard';
         if (autonomy === 'autonomous' && !(await ctx.setting('review.model')))
           throw new NovaError(
             'validation',

@@ -64,6 +64,8 @@ export interface FakeDeviceOptions {
     {
       tools: { name: string; description?: string }[];
       call: (tool: string, args: unknown) => unknown;
+      /** Resources and prompts (M8, `/agent/v1/mcp/request`): method -> result. */
+      requests?: Record<string, (params: Record<string, unknown>) => unknown>;
     }
   >;
 }
@@ -702,6 +704,30 @@ export class FakeDevice {
         if (!srv) throw new OpError(404, 'not_found', `no local MCP server named ${name}`);
         if (!granted(name))
           throw new OpError(403, 'policy_denied', 'not granted', { reason: 'mcp_grant_required' });
+        if (parts[1] === 'request') {
+          // novad passes only these read-only methods (services/novad/src/mcp.rs PASS_METHODS).
+          const method = typeof body.method === 'string' ? body.method : '';
+          const pass = [
+            'resources/list',
+            'resources/templates/list',
+            'resources/read',
+            'prompts/list',
+            'prompts/get',
+          ];
+          if (!pass.includes(method))
+            throw new OpError(400, 'validation', `${method} cannot be passed`);
+          const handler = srv.requests?.[method];
+          if (!handler)
+            throw new OpError(502, 'server_error', 'MCP error: Method not found', {
+              reason: 'mcp_error',
+              mcpCode: -32601,
+            });
+          const params =
+            body.params && typeof body.params === 'object'
+              ? (body.params as Record<string, unknown>)
+              : {};
+          return { result: handler(params), untrusted: true };
+        }
         return {
           content: [
             { type: 'text', text: JSON.stringify(srv.call(body.tool as string, body.arguments)) },

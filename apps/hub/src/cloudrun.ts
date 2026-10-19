@@ -32,6 +32,8 @@ import {
 import {
   ArtifactService,
   CloudRunService,
+  managedDenied,
+  managedRestrictions,
   type AgentRuleSource,
   type AuditSink,
   type CloudRunnerSettingKey,
@@ -303,7 +305,12 @@ export function setupCloudRun(ctx: HubContext, deps: CloudRunDeps = {}): Promise
       const accountId = await ctx.accountOf(req);
       const body = startCloudWorkSchema.parse(req.body ?? {});
       // An autonomous run's consequential actions go to the auto-reviewer (FR-085).
-      const autonomy = body.autonomy ?? (await ctx.setting('runs.autonomy', body.projectId));
+      let autonomy = body.autonomy ?? (await ctx.setting('runs.autonomy', body.projectId));
+      // Managed policy first (FR-106): an autonomy it turns off is refused when asked for, and a
+      // default it turns off runs as Standard.
+      const refused = managedRestrictions(await ctx.setting('managed.restrict')).autonomy(autonomy);
+      if (refused && body.autonomy) throw managedDenied(refused, { autonomy });
+      if (refused) autonomy = 'standard';
       if (autonomy === 'autonomous' && !(await ctx.setting('review.model')))
         throw new NovaError(
           'validation',

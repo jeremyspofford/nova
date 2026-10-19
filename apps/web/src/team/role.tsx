@@ -140,22 +140,36 @@ export async function loadHubSettings(
 
 // ---- what a member sees --------------------------------------------------------------------
 
-/** Settings sections a member uses: their own account, people, providers, memory and looks. */
+/**
+ * Settings sections a member uses: their own account, people, providers, memory and looks, and
+ * since M8 (ADR-097 D7) their tools and MCP servers, notifications and channels, which show a
+ * member only what they may change (src/team/access.tsx) and say who sets the rest.
+ */
 export const MEMBER_SETTINGS_SECTIONS: readonly string[] = [
   'account',
   'members',
   'profile',
   'accounts',
   'memory',
+  'tools',
+  'notifications',
+  'channels',
   'appearance',
   'keyboard',
+  'managed',
 ];
 
 /** Labels of the team's own Settings sections. */
 export const TEAM_SETTINGS_LABELS = { account: 'Account', members: 'Members' } as const;
 
 /** Workspace surfaces that only reach the Hub's machine or administer the Hub (the guard's list). */
-export const MEMBER_HIDDEN_SURFACES: readonly string[] = ['devices', 'network', 'library', 'code'];
+export const MEMBER_HIDDEN_SURFACES: readonly string[] = [
+  'devices',
+  'network',
+  'library',
+  'code',
+  'marketplace',
+];
 
 export function visibleSettingsSections<S extends string>(
   all: readonly S[],

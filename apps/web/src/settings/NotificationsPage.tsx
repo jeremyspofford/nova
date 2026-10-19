@@ -1,6 +1,8 @@
 // Settings → Notifications (FR-013, docs/14 §1.1): which categories Nova shows and sends to the
 // operating system, and permission for OS notifications on this device. The browser keeps that
-// permission per device; once blocked, only the browser's site settings can allow it again.
+// permission per device; once blocked, only the browser's site settings can allow it again. M8: a
+// member chooses where their notifications go and which devices get them; which kinds Nova shows
+// and how pushes read are the Hub's, and say so (src/team/access.tsx).
 import { useState } from 'react';
 import { NOTIFICATION_KINDS, type NotificationKind } from '@nova/shared';
 import { Button, useToast } from '@nova/ui';
@@ -13,6 +15,8 @@ import '../workspace.css';
 import { PushSection } from '../push/PushSection.tsx';
 import { ShellNotificationsNote } from '../shellbridge/NotificationsNote.tsx';
 import { useShell } from '../shellbridge/bridge.ts';
+import { MemberNote, OwnerSets, useMemberAccess } from '../team/access.tsx';
+import { MEMBER_MODE_TEXT } from '../team/format.ts';
 
 export const CATEGORY_TEXT: Record<NotificationKind, { label: string; description: string }> = {
   approval: {
@@ -48,6 +52,7 @@ const PERMISSION_TEXT: Record<OsPermission, string> = {
 export function NotificationsPage() {
   const shell = useShell();
   const settings = useSettings();
+  const access = useMemberAccess();
   const toast = useToast();
   const cats = settings.get('notifications.categories');
   const [permission, setPermission] = useState<OsPermission>(() => osPermission());
@@ -63,29 +68,36 @@ export function NotificationsPage() {
   return (
     <div className="settings-page">
       <h2>Notifications</h2>
-      <section className="settings-section" aria-labelledby="notif-categories">
-        <h3 id="notif-categories">What to notify you about</h3>
-        <p className="muted">
-          Turned-off categories are not listed in the notification center and are not sent to your
-          devices.
-        </p>
-        {NOTIFICATION_KINDS.map((k) => (
-          <SwitchField
-            key={k}
-            label={CATEGORY_TEXT[k].label}
-            description={CATEGORY_TEXT[k].description}
-            checked={cats.value[k]}
-            locked={cats.locked}
-            onChange={(v) =>
-              void settings
-                .set('notifications.categories', { ...cats.value, [k]: v })
-                .catch((err: unknown) =>
-                  toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' }),
-                )
-            }
-          />
-        ))}
-      </section>
+      <MemberNote access={access}>{MEMBER_MODE_TEXT.notifications}</MemberNote>
+      {access.hubSettings ? (
+        <section className="settings-section" aria-labelledby="notif-categories">
+          <h3 id="notif-categories">What to notify you about</h3>
+          <p className="muted">
+            Turned-off categories are not listed in the notification center and are not sent to your
+            devices.
+          </p>
+          {NOTIFICATION_KINDS.map((k) => (
+            <SwitchField
+              key={k}
+              label={CATEGORY_TEXT[k].label}
+              description={CATEGORY_TEXT[k].description}
+              checked={cats.value[k]}
+              locked={cats.locked}
+              onChange={(v) =>
+                void settings
+                  .set('notifications.categories', { ...cats.value, [k]: v })
+                  .catch((err: unknown) =>
+                    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' }),
+                  )
+              }
+            />
+          ))}
+        </section>
+      ) : (
+        <OwnerSets heading={MEMBER_MODE_TEXT.categoriesHeading}>
+          {MEMBER_MODE_TEXT.categories}
+        </OwnerSets>
+      )}
       {/* In the desktop app it shows OS notifications itself (FR-008, M7). */}
       {shell ? <ShellNotificationsNote /> : null}
       <section className="settings-section" aria-labelledby="notif-device" hidden={!!shell}>
@@ -105,7 +117,9 @@ export function NotificationsPage() {
         ) : null}
       </section>
       {/* Push to this device while Nova is closed (FR-111, M7); the desktop app shows its own. */}
-      {shell ? null : <PushSection />}
+      {shell ? null : (
+        <PushSection hubSettingsNote={access.hubSettings ? undefined : MEMBER_MODE_TEXT.pushHub} />
+      )}
       <NotificationRoutingSection />
     </div>
   );

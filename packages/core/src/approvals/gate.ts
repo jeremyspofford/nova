@@ -76,6 +76,7 @@ import type {
 import { limitDenial, type ToolLimitSource } from './limits.ts';
 import { BREAKER_CONSECUTIVE, ReviewBreaker } from './reviewer-breaker.ts';
 import { loadReviewContext, reviewVerdictSchema } from './reviewer.ts';
+import { managedRestrictions } from '../managed/restrictions.ts';
 import { loadPermissionProfile, resolveToolRoots, type ProjectFolderSource } from './roots.ts';
 import type { ApprovalRow, GrantMatch, GrantRow, PolicyStore } from './store.ts';
 
@@ -355,14 +356,18 @@ export class PolicyGate implements ToolGate {
       });
     const { profile, fallback } = await loadPermissionProfile(store.db, req.accountId, profileId);
     if (fallback) this.#o.log?.warn('permission profile fell back to read-only', { fallback });
-    const [rootSetting, egressAllow, egressDeny, approvalSetting, folders] = await Promise.all([
-      setting('tools.roots'),
-      setting('network.egressAllow'),
-      // Hosts nothing may reach (FR-193): they deny a tool's network call too, not only the proxy.
-      setting('network.egressDeny'),
-      setting('tools.approvalPolicy', req.projectId),
-      this.#projectFolders(req.projectId),
-    ]);
+    const [rootSetting, egressAllow, egressDeny, approvalSetting, folders, restrict] =
+      await Promise.all([
+        setting('tools.roots'),
+        setting('network.egressAllow'),
+        // Hosts nothing may reach (FR-193): they deny a tool's network call too, not only the proxy.
+        setting('network.egressDeny'),
+        setting('tools.approvalPolicy', req.projectId),
+        this.#projectFolders(req.projectId),
+        // Managed policy (FR-106) only tightens: folders, modes and tools it turns off.
+        setting('managed.restrict'),
+      ]);
+    const managed = managedRestrictions(restrict, { home: this.#home });
     const resolved = resolveToolRoots({
       profile,
       // A session's folder (and worktree) replaces the settings' roots and the Nova workspace
@@ -370,8 +375,13 @@ export class PolicyGate implements ToolGate {
       roots: policy?.roots ?? [...rootSetting, ...folders],
       workspaceDir: policy?.roots ? null : this.#workspace,
       home: this.#home,
+      // Every root, the profile's own entries included, within the folders the policy allows.
+      managed,
     });
-    const approvalPolicy: ApprovalPolicy = { kind: policy?.approvalPolicy ?? approvalSetting };
+    // A mode managed policy turns off runs with Manual's policy wherever it was chosen (FR-106).
+    const approvalPolicy: ApprovalPolicy = {
+      kind: managed.clampApproval(policy?.approvalPolicy ?? approvalSetting),
+    };
     if (policy?.autoAcceptEdits) approvalPolicy.autoAccept = ['file_edit'];
     const fs: FsContext = {
       entries: [
@@ -498,7 +508,30 @@ export class PolicyGate implements ToolGate {
         }
       }
     }
+    // Managed policy decides before anything else that blocks (FR-106, ADR-097 D4); a plugin's
+    // MCP server tools count as the plugin's.
+    const ownerPlugin = ctx.plugin?.pluginId ?? req.tool.pluginId;
+    const managedWhy = managed.tool(
+      ownerPlugin ? { ...req.tool, pluginId: ownerPlugin } : req.tool,
+      ctx.resource?.kind === 'host' ? ctx.resource.value : null,
+      // A tool of an MCP server over http or sse reaches the network itself (egress off).
+      { remote: managed.egressOff() && this.#remoteServer(req.tool.serverId) },
+    );
+    if (managedWhy) blocked = { reason: managedWhy, source: 'managed' };
     return { ctx, set, command, argsHash, profileHash: resolved.profile.hash, blocked, policy };
+  }
+
+  /** Whether an MCP server is reached over the network (http or sse); unknown counts as yes. */
+  #remoteServer(serverId: string | undefined): boolean {
+    if (!serverId) return false;
+    try {
+      const row = this.#o.store.db.raw
+        .prepare('SELECT transport FROM mcp_server WHERE id = ?')
+        .get(serverId) as { transport: string } | undefined;
+      return row?.transport !== 'stdio';
+    } catch {
+      return true;
+    }
   }
 
   /** The first source's policy for the thread; null when no source knows it. Throws on failure. */

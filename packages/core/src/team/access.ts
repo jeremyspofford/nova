@@ -1,13 +1,16 @@
 // What a member may not do on a Hub that is not theirs (decision 5 of ADR-095, docs/12 §1).
 // Members have their own account, so every account-scoped route already shows them only their
 // own data. Routes that administer the Hub itself (its settings, trust, network, Relay, devices,
-// diagnostics and logs, plugins and hooks installed for everyone) or that reach the Hub's own
-// machine (its files, terminals, host folders, Code environments, stdio MCP servers, imports,
-// the shared publish folder) stay the owner's. A member's chats and runs work in a folder of
-// their own instead of the Hub's workspace and configured roots. Refusals fail closed.
+// diagnostics and logs, plugins and hooks installed for everyone, its people) or that reach the
+// Hub's own machine (its files, terminals, host folders, Code environments, stdio MCP servers,
+// imports, the shared publish folder) stay the owner's. Since M8 (ADR-097 D7) the list is the
+// route classification (routes.ts): every route is classified, a member is refused every `owner`
+// route, and an API route nobody classified is refused too (fail closed). A member's chats and runs
+// work in a folder of their own instead of the Hub's workspace and configured roots.
 import { join } from 'node:path';
 import { NovaError } from '@nova/shared';
 import type { ThreadPolicy, ThreadPolicySource } from '../runtime/types.ts';
+import { ROUTE_GROUPS, routeClass, routeEntry } from './routes.ts';
 
 interface Rule {
   methods: readonly string[] | '*';
@@ -17,110 +20,28 @@ interface Rule {
   why: string;
 }
 
-const ALL = '*' as const;
+/** Owner-only routes, one rule per method and pattern (the `owner` groups of routes.ts). */
+export const OWNER_ONLY_ROUTES: readonly Rule[] = ROUTE_GROUPS.filter(
+  (g) => g.class === 'owner',
+).flatMap((g) =>
+  g.routes.map((r) => {
+    const [method = '', pattern = ''] = r.split(' ');
+    return { methods: [method], pattern, why: g.why };
+  }),
+);
 
-/** Owner-only route patterns (matched against the route, never the raw URL). */
-export const OWNER_ONLY_ROUTES: readonly Rule[] = [
-  { methods: ALL, pattern: '/api/v1/settings', why: "the Hub's settings" },
-  { methods: ['PUT'], pattern: '/api/v1/presets', why: "the Hub's model presets" },
-  { methods: ALL, pattern: '/api/v1/providers/detect', why: 'probing the Hub machine' },
-  { methods: ['GET', 'PATCH'], pattern: '/api/v1/trust', why: "the Hub's trust" },
-  { methods: ALL, pattern: '/api/v1/trust/renew', why: "the Hub's certificates" },
-  { methods: ALL, pattern: '/api/v1/network', prefix: true, why: "the Hub's network" },
-  { methods: ALL, pattern: '/api/v1/relay', prefix: true, why: "the Hub's Relay" },
-  { methods: ALL, pattern: '/api/v1/devices', prefix: true, why: "the Hub's devices" },
-  { methods: ALL, pattern: '/api/v1/nodes', prefix: true, why: "the Hub's compute nodes" },
-  { methods: ALL, pattern: '/api/v1/audit/verify', why: "the Hub's whole audit chain" },
-  { methods: ALL, pattern: '/api/v1/diagnostics', prefix: true, why: "the Hub's diagnostics" },
-  { methods: ['GET'], pattern: '/api/v1/egress', why: "the Hub's egress policy" },
-  { methods: ['POST'], pattern: '/api/v1/app-authorizations', why: "the Hub's MCP server" },
-  { methods: ['POST'], pattern: '/api/v1/plugins', why: 'plugins installed for everyone' },
-  { methods: ['POST'], pattern: '/api/v1/plugins/preview', why: 'plugins installed for everyone' },
-  {
-    methods: ['PATCH', 'DELETE'],
-    pattern: '/api/v1/plugins/:id',
-    why: 'plugins installed for everyone',
-  },
-  { methods: ALL, pattern: '/api/v1/plugins/catalogs', why: "the Hub's plugin catalogs" },
-  { methods: ALL, pattern: '/api/v1/plugins/catalog', why: "the Hub's plugin catalogs" },
-  { methods: ['POST'], pattern: '/api/v1/skills', why: 'skills shared by everyone' },
-  { methods: ['PATCH', 'DELETE'], pattern: '/api/v1/skills/:id', why: 'skills shared by everyone' },
-  { methods: ALL, pattern: '/api/v1/hooks', prefix: true, why: 'hooks shared by everyone' },
-  { methods: ALL, pattern: '/api/v1/files', prefix: true, why: "the Hub's files" },
-  { methods: ALL, pattern: '/api/v1/terminals', prefix: true, why: 'a shell on the Hub machine' },
-  { methods: ALL, pattern: '/api/v1/library', why: "the Hub's workspace" },
-  {
-    methods: ALL,
-    pattern: '/api/v1/projects/:id/folders',
-    prefix: true,
-    why: 'folders of the Hub machine',
-  },
-  {
-    methods: ALL,
-    pattern: '/api/v1/import',
-    prefix: true,
-    why: 'reading folders of the Hub machine',
-  },
-  {
-    methods: ALL,
-    pattern: '/api/v1/code',
-    prefix: true,
-    why: 'Code environments on the Hub machine',
-  },
-  {
-    methods: ALL,
-    pattern: '/api/v1/environments',
-    prefix: true,
-    why: 'Code environments on the Hub machine',
-  },
-  // Other M7 areas: the cloud runner, external agent programs and their delegations.
-  { methods: ALL, pattern: '/api/v1/cloud', prefix: true, why: "the Hub's cloud runner" },
-  { methods: ALL, pattern: '/api/v1/oob', prefix: true, why: "the Hub's out-of-band management" },
-  {
-    methods: ALL,
-    pattern: '/api/v1/agent-adapters',
-    prefix: true,
-    why: 'programs on the Hub machine',
-  },
-  { methods: ALL, pattern: '/api/v1/delegations', prefix: true, why: 'Code sessions on the Hub' },
-  {
-    methods: ALL,
-    pattern: '/api/v1/mcp/bundles',
-    prefix: true,
-    why: 'programs on the Hub machine',
-  },
-  {
-    methods: ['POST'],
-    pattern: '/api/v1/sites/:id/publish',
-    why: "the Hub's shared publish folder",
-  },
-  {
-    methods: ['POST'],
-    pattern: '/api/v1/sites/:id/unpublish',
-    why: "the Hub's shared publish folder",
-  },
-];
+/** What a member is refused on a route nobody classified yet. */
+export const UNCLASSIFIED_WHY = 'this part of the Hub';
 
-/** Public routes that authenticate another way: a signed-in member may still call them. */
-const PUBLIC = new Set([
-  'POST /api/v1/devices/add/complete',
-  'POST /api/v1/devices/add/reveal',
-  'GET /api/v1/devices/add/status/:requestId',
-]);
-
-function matches(rule: Rule, method: string, route: string): boolean {
-  if (rule.methods !== ALL && !rule.methods.includes(method)) return false;
-  if (route === rule.pattern) return true;
-  return !!rule.prefix && route.startsWith(`${rule.pattern}/`);
-}
-
-/** Why a member may not call this route, or null. `route` is the matched route pattern. */
+/**
+ * Why a member may not call this route, or null. `route` is the matched route pattern (none for
+ * a request no route matched). An API route without a classification is refused (fail closed).
+ */
 export function ownerOnlyReason(method: string, route: string | undefined): string | null {
   if (!route) return null;
-  const m = method.toUpperCase();
-  if (PUBLIC.has(`${m} ${route}`)) return null;
-  for (const rule of OWNER_ONLY_ROUTES) if (matches(rule, m, route)) return rule.why;
-  return null;
+  const cls = routeClass(method, route);
+  if (cls === null) return UNCLASSIFIED_WHY;
+  return cls === 'owner' ? (routeEntry(method, route)?.why ?? UNCLASSIFIED_WHY) : null;
 }
 
 /** A request body a member may not send even on a route they may use (a program on the Hub). */

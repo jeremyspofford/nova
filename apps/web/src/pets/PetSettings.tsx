@@ -1,8 +1,14 @@
-// Settings → Appearance → Companion (FR-012): off or one of two companions, which corner it sits
-// in, and Keep still. Saved to the Hub like the rest of Appearance; managed values are locked.
+// Settings → Appearance → Companion (FR-012): off, one of Nova's two companions or a pet installed
+// from the marketplace (M8, `market:<id>`), which corner it sits in, and Keep still. Saved to the
+// Hub like the rest of Appearance; managed values are locked. More pets are a link away, in the
+// marketplace's Pets tab.
 import { RadioGroup, useToast } from '@nova/ui';
 import type { SettingKey } from '@nova/shared';
 import { errorMessage } from '../api.ts';
+import { marketTabPath } from '../market/format.ts';
+import { useInstalledPets } from '../market/MarketPet.tsx';
+import { useMarketApi } from '../market/api-m8.ts';
+import { navigate } from '../router.ts';
 import { useSettings, type SettingValue } from '../settings.tsx';
 import { SwitchField } from '../settings/controls.tsx';
 
@@ -17,9 +23,17 @@ const POSITIONS = [
   { value: 'bottom-left', label: 'Bottom left' },
 ] as const;
 
+export const PET_TEXT = {
+  installed: 'Installed from the marketplace',
+  gone: 'A pet that is no longer installed',
+  more: 'Get more pets in the Marketplace',
+} as const;
+
 export function PetSettings() {
   const settings = useSettings();
   const toast = useToast();
+  const market = useMarketApi();
+  const installed = useInstalledPets() ?? [];
   const pet = settings.get('appearance.pet');
   const position = settings.get('appearance.petPosition');
   const muted = settings.get('appearance.petMuted');
@@ -29,6 +43,18 @@ export function PetSettings() {
       toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
     });
   };
+
+  const options: { value: string; label: string; description?: string }[] = [
+    ...PETS,
+    ...installed.map((p) => ({
+      value: `market:${p.id}`,
+      label: p.name,
+      description: PET_TEXT.installed,
+    })),
+  ];
+  // The chosen pet was removed: keep it visible (and choosable away from).
+  if (!options.some((o) => o.value === pet.value))
+    options.push({ value: pet.value, label: PET_TEXT.gone });
 
   return (
     <section className="settings-section" aria-labelledby="appearance-pet">
@@ -42,12 +68,26 @@ export function PetSettings() {
         name="pet"
         value={pet.value}
         locked={pet.locked}
-        options={[...PETS]}
+        options={options}
         onChange={(v) => {
-          const next = PETS.find((p) => p.value === v);
-          if (next) save('appearance.pet', next.value);
+          if (options.some((o) => o.value === v)) save('appearance.pet', v);
         }}
       />
+      {market ? (
+        <p>
+          <a
+            href={marketTabPath('pets')}
+            className="link"
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+              e.preventDefault();
+              navigate(marketTabPath('pets'));
+            }}
+          >
+            {PET_TEXT.more}
+          </a>
+        </p>
+      ) : null}
       {pet.value === 'off' ? null : (
         <>
           <RadioGroup

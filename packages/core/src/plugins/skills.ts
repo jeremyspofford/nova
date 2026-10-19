@@ -26,6 +26,7 @@ import {
 } from '@nova/shared';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
+import type { ToolLimitSource } from '../approvals/limits.ts';
 import type { EventSink } from '../events.ts';
 import type { ResolvedSkill, SkillCatalogProvider } from '../extensions/types.ts';
 import { argsOf, builtinDescriptor, fail, ok, str, type BuiltinTool } from '../tools/builtin.ts';
@@ -223,6 +224,7 @@ export class SkillIndex implements SkillCatalogProvider {
   readonly #opts: SkillIndexOptions;
   readonly #log: Logger;
   readonly #cache = new Map<string, CacheEntry>();
+  readonly #limits: ToolLimitSource[] = [];
   readonly tools: ToolSourceProvider;
 
   constructor(opts: SkillIndexOptions) {
@@ -244,9 +246,46 @@ export class SkillIndex implements SkillCatalogProvider {
     };
   }
 
+  /**
+   * Thread limits that narrow the plugins a thread may use, as the gate applies them (the plugins
+   * connected to an agent, FR-045): in such a thread the catalog and `skill.load` know only the
+   * skills of those plugins (M8). Every source applies; one that fails leaves no plugin skill.
+   */
+  useLimits(source: ToolLimitSource): void {
+    this.#limits.push(source);
+  }
+
+  /** The plugins whose skills a thread may see; null: every enabled plugin. */
+  async #pluginsFor(accountId: string, threadId: string | null | undefined) {
+    if (!threadId || !this.#limits.length) return null;
+    let allowed: string[] | null = null;
+    for (const source of this.#limits) {
+      let limits;
+      try {
+        limits = await source.forThread(accountId, threadId);
+      } catch (err) {
+        this.#log.warn('thread limits unavailable; plugin skills left out', { err });
+        return [];
+      }
+      if (!limits?.plugins) continue;
+      const ids = limits.plugins;
+      allowed = allowed ? allowed.filter((p) => ids.includes(p)) : [...ids];
+    }
+    return allowed;
+  }
+
   /** Every skill visible to the account (and project), state and precedence applied. */
-  async list(accountId: string, projectId: string | null = null): Promise<IndexedSkill[]> {
-    const records = await this.#discover(accountId, projectId);
+  async list(
+    accountId: string,
+    projectId: string | null = null,
+    opts: { plugins?: readonly string[] | null } = {},
+  ): Promise<IndexedSkill[]> {
+    const plugins = opts.plugins ?? null;
+    // Skills of plugins the thread may not use leave before precedence, so a skill they would
+    // have shadowed takes their name.
+    const records = (await this.#discover(accountId, projectId)).filter(
+      (r) => r.source !== 'plugin' || !plugins || plugins.includes(r.pluginId ?? ''),
+    );
     const states = await this.#states(accountId);
     return applySkillPrecedence(records, (r) =>
       r.source === 'managed' ? true : (states.get(r.id)?.enabled ?? true),
@@ -305,9 +344,11 @@ export class SkillIndex implements SkillCatalogProvider {
     accountId: string,
     projectId: string | null,
     contextTokens: number,
+    threadId: string | null = null,
   ): Promise<string | null> {
+    const plugins = await this.#pluginsFor(accountId, threadId);
     return buildSkillCatalog(
-      await this.list(accountId, projectId),
+      await this.list(accountId, projectId, { plugins }),
       skillCatalogChars(contextTokens),
     );
   }
@@ -333,9 +374,11 @@ export class SkillIndex implements SkillCatalogProvider {
     accountId: string,
     projectId: string | null,
     raw: string,
+    threadId: string | null = null,
   ): Promise<IndexedSkill | null> {
     const name = raw.trim().replace(/^[/@]/, '');
-    const all = await this.list(accountId, projectId);
+    const plugins = await this.#pluginsFor(accountId, threadId);
+    const all = await this.list(accountId, projectId, { plugins });
     if (name.startsWith('skill:')) return all.find((s) => s.id === name && s.enabled) ?? null;
     const colon = name.lastIndexOf(':');
     if (colon > 0) {
@@ -669,7 +712,7 @@ export class SkillIndex implements SkillCatalogProvider {
         const a = argsOf(args);
         const name = str(a.name) ?? '';
         const file = str(a.file);
-        const s = await this.#lookup(ctx.accountId, ctx.projectId, name);
+        const s = await this.#lookup(ctx.accountId, ctx.projectId, name, ctx.threadId || null);
         if (!s) return fail('skill.not_found', `no enabled skill named ${name}`);
         const files = listFiles(s.dir).filter((f) => f !== 'SKILL.md');
         let text = s.body;

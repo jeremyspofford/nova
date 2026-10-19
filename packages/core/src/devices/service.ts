@@ -3453,6 +3453,38 @@ export class DeviceService {
     return out;
   }
 
+  /**
+   * Resources and prompts of a device-local MCP server (M8, FR-042): one of the read-only
+   * methods novad passes (`resources/list`, `resources/templates/list`, `resources/read`,
+   * `prompts/list`, `prompts/get`), under the same `mcp` grant. The answer is untrusted; reads of
+   * a resource or a prompt are audited as `device.mcp.request`, listings are not.
+   */
+  async mcpRequest(
+    accountId: string,
+    deviceId: string,
+    grantee: DeviceGrantee,
+    req: { server: string; method: string; params: Record<string, unknown> },
+    ctx: DeviceCallContext = {},
+  ): Promise<unknown> {
+    const d = await this.#usable(accountId, deviceId, ['mcp']);
+    const r = await this.#call<{ result?: unknown }>(
+      d,
+      '/agent/v1/mcp/request',
+      { grantee, server: req.server, method: req.method, params: req.params },
+      90_000,
+    );
+    if (req.method === 'resources/read' || req.method === 'prompts/get')
+      await this.#auditAppend(
+        accountId,
+        'device.mcp.request',
+        deviceId,
+        { server: req.server, method: req.method, grantee },
+        ctx,
+        { inputHash: sha256Hex(JSON.stringify(req)) },
+      );
+    return r.result ?? null;
+  }
+
   // ---- an agent's connected computer (FR-081) ------------------------------------------------
 
   /**

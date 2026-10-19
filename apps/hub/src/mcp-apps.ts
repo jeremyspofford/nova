@@ -6,7 +6,8 @@
 // permissions: a UI never reaches further than its manifest allows. Tool calls from an app use
 // POST /tools/:name/invoke (origin `ui`, tools.ts). Model context an app shares is kept per
 // thread for the chat as untrusted content (FR-189); parts the app marks private never leave the
-// browser.
+// browser. M8: entry points carry the external hosts their app may reach (`domains`, FR-198), and
+// SDK extensions' panels join them, served from the extension's own files (FR-117, docs/14 §4.2).
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { asc, eq } from 'drizzle-orm';
@@ -59,9 +60,28 @@ export type UiResourceReader = (
   uri: string,
 ) => Promise<{ ok: true; contents: UiResourceContent[] } | { ok: false; message: string }>;
 
+/**
+ * One panel of a running SDK extension (docs/14 §4.2): a `ui://` resource the extension serves
+ * from its own files, with the CSP domains it declares and its network permissions.
+ */
+export interface ExtensionUi {
+  extensionId: string;
+  entryPoints: { kind: UiEntryKind; resource: string; title?: string; extensions?: string[] }[];
+  network: string[];
+  domains: UiDomains;
+  read(uri: string): Promise<{ ok: true; html: string } | { ok: false; message: string }>;
+}
+
+/** The SDK area's view of running extensions' panels (wired with `useExtensions`). */
+export interface ExtensionUiSource {
+  list(accountId: string): Promise<ExtensionUi[]>;
+}
+
 export interface McpAppsArea extends HubArea {
   /** Where plugin entry points and permissions come from (the plugins area). */
   usePlugins(source: PluginUiSource): void;
+  /** Where SDK extensions' panels come from (the SDK area). */
+  useExtensions(source: ExtensionUiSource): void;
   /** The account's entry points, optionally of one kind. */
   entryPoints(accountId: string, kind?: UiEntryKind): Promise<UiEntryPointView[]>;
   /** What the account's apps shared as model context in a thread, labelled untrusted; null if none. */
@@ -208,6 +228,19 @@ export function allowedSources(declared: readonly string[], network: readonly st
   return [...out];
 }
 
+/**
+ * The external hosts an app may reach, for its entry point (`UiEntryPointView.domains`, FR-198):
+ * the hosts of the allowed CSP sources, without their scheme.
+ */
+export function allowedHosts(declared: UiDomains, network: readonly string[]): string[] {
+  const all = [
+    ...(declared.connectDomains ?? []),
+    ...(declared.resourceDomains ?? []),
+    ...(declared.frameDomains ?? []),
+  ];
+  return [...new Set(allowedSources(all, network).map((src) => src.replace(/^[a-z]+:\/\//, '')))];
+}
+
 /** The iframe policy for one app: the fixed base plus the allowed sources. */
 export function appCsp(sources: {
   connect: string[];
@@ -344,6 +377,8 @@ interface Entry {
   network: string[];
   /** Domains the plugin declares for its UI (`permissions.ui`). */
   domains: UiDomains;
+  /** An extension panel reads its own file instead of asking an MCP server. */
+  read?: ExtensionUi['read'];
 }
 
 type ServerRow = Pick<
@@ -383,6 +418,7 @@ export function setupMcpApps(
   const read = ctx.reader ?? managerReader(manager);
   const shared = new UiContextStore();
   let plugins: PluginUiSource = { list: () => Promise.resolve([]) };
+  let extensions: ExtensionUiSource = { list: () => Promise.resolve([]) };
 
   /** Which of a plugin's servers serves a resource: one that lists it, else one named for it. */
   function servingServer(own: ServerRow[], uri: string): ServerRow | null {
@@ -435,6 +471,7 @@ export function setupMcpApps(
             pluginId: p.pluginId,
             resource: ep.resource,
             extensions: ep.kind === 'file' ? (ep.extensions ?? []) : [],
+            domains: allowedHosts(p.domains, p.network),
           },
           network: p.network,
           domains: p.domains,
@@ -462,12 +499,41 @@ export function setupMcpApps(
             pluginId: null,
             resource: uri,
             extensions: [],
+            // Resource-declared domains are known once read; nothing else is declared here.
+            domains: [],
           },
           network: serverNetwork(r),
           domains: {},
         });
       }
     }
+    // SDK extensions: their registered panels, served from their own files (docs/14 §4.2).
+    let panels: ExtensionUi[] = [];
+    try {
+      panels = await extensions.list(accountId);
+    } catch (err) {
+      log.warn('extension panels unavailable', { err });
+    }
+    for (const x of panels)
+      for (const ep of x.entryPoints) {
+        const id = entryPointId(`extension:${x.extensionId}`, ep.kind, ep.resource);
+        if (out.has(id)) continue;
+        out.set(id, {
+          view: {
+            id,
+            kind: ep.kind,
+            title: ep.title ?? ep.resource,
+            serverId: `extension:${x.extensionId}`,
+            pluginId: x.extensionId,
+            resource: ep.resource,
+            extensions: ep.kind === 'file' ? (ep.extensions ?? []) : [],
+            domains: allowedHosts(x.domains, x.network),
+          },
+          network: x.network,
+          domains: x.domains,
+          read: (uri) => x.read(uri),
+        });
+      }
     return [...out.values()];
   }
 
@@ -509,7 +575,22 @@ export function setupMcpApps(
           reply,
           'This app is not available: its plugin or MCP server is disabled, removed or not connected.',
         );
-      const res = await read(entry.view.serverId, entry.view.resource);
+      const res = entry.read
+        ? await entry.read(entry.view.resource).then((r) =>
+            r.ok
+              ? {
+                  ok: true as const,
+                  contents: [
+                    {
+                      uri: entry.view.resource,
+                      mimeType: 'text/html;profile=mcp-app',
+                      text: r.html,
+                    },
+                  ],
+                }
+              : r,
+          )
+        : await read(entry.view.serverId, entry.view.resource);
       if (!res.ok)
         return unavailable(req, reply, clip(`The app could not be loaded: ${res.message}`));
       const html = htmlOf(res.contents, entry.view.resource);
@@ -554,6 +635,9 @@ export function setupMcpApps(
   return Promise.resolve({
     usePlugins(source) {
       plugins = source;
+    },
+    useExtensions(source) {
+      extensions = source;
     },
     entryPoints: async (accountId, kind) =>
       (await entries(accountId)).map((e) => e.view).filter((v) => !kind || v.kind === kind),

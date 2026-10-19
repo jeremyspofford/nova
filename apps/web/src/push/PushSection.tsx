@@ -86,7 +86,17 @@ interface HubSide {
   items: PushSubscriptionView[];
 }
 
-export function PushSection({ env: givenEnv }: { env?: PushEnv }) {
+export function PushSection({
+  env: givenEnv,
+  hubSettingsNote,
+}: {
+  env?: PushEnv;
+  /**
+   * Said in place of the Hub-wide switches (M8 member mode): someone who cannot change the Hub's
+   * settings sees who sets them, and no warning about a value they cannot read.
+   */
+  hubSettingsNote?: string;
+}) {
   const api = usePushApi();
   const settings = useSettings();
   const toast = useToast();
@@ -279,7 +289,7 @@ export function PushSection({ env: givenEnv }: { env?: PushEnv }) {
                 ? 'Blocked on this device. Allow notifications in the browser’s site settings, then reload.'
                 : 'Off for this device.'}
           </p>
-          {!enabled.value ? (
+          {!enabled.value && !hubSettingsNote ? (
             <p className="ws-warning">
               <Icon name="alert" /> This Hub sends no push notifications now. Turn on “Send push
               notifications” under For every device.
@@ -356,26 +366,32 @@ export function PushSection({ env: givenEnv }: { env?: PushEnv }) {
       ) : null}
 
       <h4 className="push-subhead">For every device</h4>
-      <SwitchField
-        label="Send push notifications"
-        description="From this Hub to every device above. Off: no device gets pushes, and Nova shows notifications only while it is open."
-        checked={enabled.value}
-        locked={enabled.locked}
-        onChange={(v) => saved(settings.set('push.enabled', v))}
-      />
-      <RadioGroup
-        legend="What a notification says"
-        name="push-detail"
-        value={detail.value}
-        locked={detail.locked}
-        onChange={(v) => saved(settings.set('push.detail', v as PushDetailLevel))}
-        hint="Notifications to the Nova phone app go through the Relay and never say more than the kind and where."
-        options={(['none', 'redacted', 'titles'] as const).map((k) => ({
-          value: k,
-          label: DETAIL_TEXT[k].label,
-          description: DETAIL_TEXT[k].description,
-        }))}
-      />
+      {hubSettingsNote ? (
+        <p className="muted ws-flush">{hubSettingsNote}</p>
+      ) : (
+        <>
+          <SwitchField
+            label="Send push notifications"
+            description="From this Hub to every device above. Off: no device gets pushes, and Nova shows notifications only while it is open."
+            checked={enabled.value}
+            locked={enabled.locked}
+            onChange={(v) => saved(settings.set('push.enabled', v))}
+          />
+          <RadioGroup
+            legend="What a notification says"
+            name="push-detail"
+            value={detail.value}
+            locked={detail.locked}
+            onChange={(v) => saved(settings.set('push.detail', v as PushDetailLevel))}
+            hint="Notifications to the Nova phone app go through the Relay and never say more than the kind and where."
+            options={(['none', 'redacted', 'titles'] as const).map((k) => ({
+              value: k,
+              label: DETAIL_TEXT[k].label,
+              description: DETAIL_TEXT[k].description,
+            }))}
+          />
+        </>
+      )}
 
       <ConfirmDialog
         open={removing !== null}

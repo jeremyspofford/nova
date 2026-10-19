@@ -3,6 +3,8 @@
 // external communication: the gate decides it (confirmed every time unless a rule names the
 // recipient), with the resource `account` `<kind>:<conversation>` that agent rules match
 // (`channelResource`). In a shared channel the private-to-shared check runs as for a reply.
+// M8: `files` names artifacts or attachments of the thread to send after the text, on channels
+// that carry files (Telegram); a shared channel checks them first.
 import type { ToolSourceProvider } from '../tools/types.ts';
 import { argsOf, builtinDescriptor, fail, ok, str, type BuiltinTool } from '../tools/builtin.ts';
 import type { ChannelService } from './service.ts';
@@ -38,13 +40,20 @@ export function channelTools(
       title: 'Send a channel message',
       description:
         'Post a message to one of the connected channels (use channel.list for their ids). ' +
-        'Replies to a message that arrived on a channel are sent automatically: use this only ' +
-        'to start a new message.',
+        'Replies to a message that arrived on a channel are sent automatically (with the ' +
+        'artifacts the turn made, where the channel carries files): use this only to start a new ' +
+        'message. `files` takes artifact or attachment ids of this chat to send after the text ' +
+        '(Telegram only).',
       inputSchema: {
         type: 'object',
         properties: {
           channel: { type: 'string', minLength: 1, maxLength: 300 },
           text: { type: 'string', minLength: 1, maxLength: 4000 },
+          files: {
+            type: 'array',
+            items: { type: 'string', minLength: 1, maxLength: 100 },
+            maxItems: 10,
+          },
         },
         required: ['channel', 'text'],
         additionalProperties: false,
@@ -63,6 +72,10 @@ export function channelTools(
       const ref = str(a.channel) ?? '';
       const text = str(a.text)?.trim() ?? '';
       if (!text) return fail('invalid_arguments', 'text is required');
+      const files = Array.isArray(a.files)
+        ? a.files.filter((f): f is string => typeof f === 'string' && f.length > 0)
+        : [];
+      if (files.length > 10) return fail('invalid_arguments', 'at most 10 files');
       const target = service.findTarget(ctx.accountId, ctx.threadId, ref);
       if (!target)
         return fail('not_found', `no connected channel "${ref}"; use channel.list to see them`);
@@ -73,8 +86,12 @@ export function channelTools(
           turnId: ctx.turnId || null,
           bindingId: target.id,
           text,
+          ...(files.length ? { files } : {}),
         });
-        return ok(`Sent to ${target.label}.`, { receipt: receipt.id, bindingId: target.id });
+        const what = files.length
+          ? ` with ${files.length} ${files.length === 1 ? 'file' : 'files'}`
+          : '';
+        return ok(`Sent to ${target.label}${what}.`, { receipt: receipt.id, bindingId: target.id });
       } catch (err) {
         const code = (err as { code?: unknown }).code;
         return fail(

@@ -2,7 +2,7 @@
 // shows one as a page; the Inspector's Apps tab lists the open chat's entry points, each opening
 // inline (a picture-in-picture app stays up when another chat opens); file entry points open a
 // file in an app registered for its extension (`FileApp`, for the file viewer).
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { McpServerView, PluginView, UiEntryPointView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -176,12 +176,43 @@ interface OpenApp {
   threadId: string;
 }
 
+// ---- opening a chat's app from elsewhere (the composer's + menu, M8) ----------------------------
+
+/** The registry command that shows the Inspector's Apps tab (the shell registers it). */
+export const SHOW_APPS_COMMAND = 'apps.showPanel';
+
+let requested: OpenApp[] = [];
+const requestListeners = new Set<() => void>();
+
+function setRequested(next: OpenApp[]): void {
+  requested = next;
+  for (const fn of [...requestListeners]) fn();
+}
+
+function subscribeRequests(fn: () => void): () => void {
+  requestListeners.add(fn);
+  return () => requestListeners.delete(fn);
+}
+
+const currentRequests = () => requested;
+
+/**
+ * Open a chat's app in the Inspector's Apps tab from outside it (the composer's + menu). It runs
+ * like one opened from the tab, once the tab is shown.
+ */
+export function requestThreadApp(entry: UiEntryPointView, threadId: string): void {
+  setRequested([...requested, { key: instanceKey(), entry, threadId }]);
+}
+
 /** The Inspector's Apps tab: the open chat's thread entry points, each opening inline. */
 export function ThreadApps({ threadId }: { threadId: string | null }) {
   const { api } = useServices();
   const owners = useAppOwners();
   const { items, error, reload } = useEntryPoints('thread');
-  const [open, setOpen] = useState<OpenApp[]>([]);
+  const [started, setOpen] = useState<OpenApp[]>([]);
+  // Apps asked for from the composer join the ones opened here.
+  const asked = useSyncExternalStore(subscribeRequests, currentRequests);
+  const open = [...started, ...asked];
   const here = threadId ? open.filter((o) => o.threadId === threadId) : [];
 
   const start = (entry: UiEntryPointView, tid: string) =>
@@ -240,7 +271,11 @@ export function ThreadApps({ threadId }: { threadId: string | null }) {
               })
               .catch(() => undefined);
           }}
-          onClose={() => setOpen((cur) => cur.filter((x) => x.key !== o.key))}
+          onClose={() => {
+            setOpen((cur) => cur.filter((x) => x.key !== o.key));
+            if (requested.some((r) => r.key === o.key))
+              setRequested(requested.filter((r) => r.key !== o.key));
+          }}
         />
       ))}
     </div>

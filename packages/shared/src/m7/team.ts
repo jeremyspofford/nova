@@ -393,3 +393,71 @@ export const patchMemberSettingSchema = z
   .object({ key: z.string().min(1).max(200), value: z.unknown() })
   .strict();
 export type PatchMemberSettingRequest = z.infer<typeof patchMemberSettingSchema>;
+
+// ---- M8: a removed member's data, and what a person may reach (ADR-097) ---------------------------
+
+/** Where a removed member's data stands: kept (no grace period), scheduled, purged, or failed. */
+export const REMOVED_MEMBER_STATUSES = ['kept', 'scheduled', 'purged', 'failed'] as const;
+export type RemovedMemberStatus = (typeof REMOVED_MEMBER_STATUSES)[number];
+
+/** GET /api/v1/team/removed (owner): a removed member and the purge of their data. */
+export interface RemovedMemberView {
+  accountId: string;
+  /** Null once purged (the account's personal fields are cleared). */
+  displayName: string | null;
+  removedAt: string;
+  removedBy: string | null;
+  status: RemovedMemberStatus;
+  /** When the grace period (`team.removedMemberPurgeDays`) ends; null while it is 0 or once purged. */
+  purgeAfter: string | null;
+  purgedAt: string | null;
+  /** `grace` or `request`, once a purge ran. */
+  cause: 'grace' | 'request' | null;
+  /** Why the last purge failed (it is tried again). */
+  error: string | null;
+  /** Rows deleted per table, and the blobs, vault entries and folders removed. */
+  counts: MemberPurgeCounts | null;
+  /** The owner can download an export of the data first (until it is purged). */
+  exportable: boolean;
+  /** Purged, but blobs, vault entries or folders are still being removed (the next sweep). */
+  cleanupPending: boolean;
+}
+
+export interface MemberPurgeCounts {
+  rows: Record<string, number>;
+  blobs: number;
+  secrets: number;
+  folders: number;
+}
+
+/** POST /api/v1/team/removed/:id/purge: purge at once; the confirmation is explicit. */
+export const purgeMemberSchema = z.object({ confirm: z.literal(true) }).strict();
+export type PurgeMemberRequest = z.infer<typeof purgeMemberSchema>;
+
+/** One route a person may not call, as the route classification lists it (D7). */
+export interface RefusedRouteView {
+  method: string;
+  route: string;
+  /** What the owner keeps ("the Hub's settings"). */
+  why: string;
+}
+
+/**
+ * GET /api/v1/team/me/access: what this person may reach, for the web UI's member mode (Tools &
+ * MCP, Notifications, Channels and the rest). Empty for the owner.
+ */
+export interface TeamAccessView {
+  role: TeamRole;
+  /** Owner-only routes (every API route that is not listed is open to them). */
+  refused: RefusedRouteView[];
+  limits: {
+    /** Stdio MCP servers run on the Hub machine: the owner's only. */
+    stdioMcpServers: boolean;
+    /** Provider, MCP, OAuth and mail servers on private addresses (`private_address`). */
+    privateAddresses: boolean;
+    /** Their egress and browser allow lists only narrow the owner's. */
+    narrowingOnlyAllowLists: boolean;
+    /** Hub settings beyond their own appearance, keyboard and onboarding preferences. */
+    hubSettings: boolean;
+  };
+}

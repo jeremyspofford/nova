@@ -6,6 +6,8 @@
 // any approval inside the card (FR-099, FR-100), and its artifacts as cards that open the
 // Inspector (FR-038). Web sources show their title and host and open in a new tab (FR-029).
 // M4: a tool that declares a UI shows its MCP App under its card (FR-198).
+// M8: a reply a spend cap stopped links to that provider's cap (FR-116).
+// M8: what running extensions add to a message sits in a menu at the end of its actions (FR-117).
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { CitationView, MessageView, ToolCallStatus } from '@nova/shared';
 import {
@@ -19,6 +21,8 @@ import {
   type IconName,
   type MenuItem,
 } from '@nova/ui';
+import { CapReachedAction } from '../datactl/CapReached.tsx';
+import { useExtensionMenuItems } from '../extensions/shell.tsx';
 import { ArtifactCard } from './Artifacts.tsx';
 import { Highlighted } from './find.tsx';
 import { Markdown } from './Markdown.tsx';
@@ -81,6 +85,8 @@ export interface MessageItemProps {
 }
 
 const BUSY_HINT = 'Wait for the reply to finish';
+/** The message toolbar's menu of what running extensions add (M8). */
+const EXTENSION_ACTIONS = 'More actions from extensions';
 
 const AUTHOR_LABELS: Partial<Record<NonNullable<MessageView['provenance']>, string>> = {
   hook: 'Hook',
@@ -274,6 +280,7 @@ export function MessageItem({
             <span>
               {e.message || 'The reply failed.'} <span className="muted">({e.code})</span>
             </span>
+            <CapReachedAction code={e.code} message={e.message} />
             {onRetry ? (
               <Button onClick={onRetry} disabled={retryDisabled}>
                 Retry
@@ -294,7 +301,8 @@ export function MessageItem({
         </div>
       ) : null}
       {actions && settled && !editing ? (
-        <ActionBar
+        <MessageActionBar
+          message={m}
           items={toolbarItems(m.role, text, actions, busy, () => setEditing(true))}
           label={`Actions for ${who === 'You' ? 'your message' : 'this reply'}`}
         />
@@ -385,6 +393,41 @@ function toolbarItems(
     });
   }
   return items;
+}
+
+/** The action bar plus a menu of what running extensions add to a message (M8, FR-117). */
+function MessageActionBar({
+  message,
+  items,
+  label,
+}: {
+  message: ClientMessage;
+  items: ToolbarItem[];
+  label: string;
+}) {
+  const extensionItems = useExtensionMenuItems('message', {
+    threadId: message.threadId,
+    messageId: message.id,
+  });
+  return (
+    <ActionBar
+      items={
+        extensionItems.length
+          ? [
+              ...items,
+              {
+                kind: 'menu',
+                id: 'extensions',
+                label: EXTENSION_ACTIONS,
+                icon: 'more',
+                items: extensionItems,
+              },
+            ]
+          : items
+      }
+      label={label}
+    />
+  );
 }
 
 function ActionBar({ items, label }: { items: ToolbarItem[]; label: string }) {

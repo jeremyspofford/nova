@@ -4,7 +4,9 @@
 // or disconnect at once, open its thread, read its message log, change its settings and
 // credentials (write-only), delete it. Also the share decisions waiting on the owner, the people
 // agents answer, the private-to-shared policy and the public address external services reach the
-// Hub at. Live through channel events.
+// Hub at. Live through channel events. M8: an email channel that signs in with OAuth says when its
+// mailbox needs authorizing (Authorize in its row; the provider sends the browser back here), and a
+// member sees their own channels and people while the owner's parts say who sets them.
 import { useCallback, useEffect, useId, useState } from 'react';
 import type { AgentView, ChannelAdapterViewM7, ChannelBindingViewM7 } from '@nova/shared';
 import {
@@ -21,11 +23,14 @@ import { errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useSettings } from '../settings.tsx';
 import { MANAGED, formatWhen } from '../settings/common.ts';
+import { MemberNote, OwnerSets, useMemberAccess } from '../team/access.tsx';
+import { MEMBER_MODE_TEXT } from '../team/format.ts';
 import { AddChannelDialog } from './AddChannelDialog.tsx';
 import { useChannelsApi } from './api.ts';
 import { BindingSettings } from './BindingSettings.tsx';
 import { CHANNEL_EVENTS, useChannelEvents, useDebouncedCallback } from './events.ts';
 import { BINDING_STATUS, KIND_TEXT, publicBase } from './format.ts';
+import { MailOAuthRowAction, mailOAuthRowNote, useChannelOAuthReturn } from './MailOAuth.tsx';
 import { MessageLog } from './MessageLog.tsx';
 import { Chip } from './parts.tsx';
 import { PeopleSection } from './PeopleSection.tsx';
@@ -42,6 +47,8 @@ export function ChannelsPage() {
   const api = useChannelsApi();
   const toast = useToast();
   const settings = useSettings();
+  const access = useMemberAccess();
+  useChannelOAuthReturn();
   const publicUrl = settings.get('channels.publicUrl').value;
   const [data, setData] = useState<{
     items: ChannelBindingViewM7[];
@@ -160,6 +167,7 @@ export function ChannelsPage() {
         channel keeps its own thread; an agent&apos;s memory is shared across its channels. Messages
         from channels are never treated as your instructions.
       </p>
+      <MemberNote access={access}>{MEMBER_MODE_TEXT.channels}</MemberNote>
       {data ? <ChannelShareAsks bindings={data.items} /> : null}
       <section className="settings-section" aria-labelledby="ch-list">
         <h3 id="ch-list">Your channels</h3>
@@ -219,8 +227,14 @@ export function ChannelsPage() {
                         <Icon name="alert" /> {b.statusDetail}
                       </p>
                     ) : null}
+                    {mailOAuthRowNote(b) ? (
+                      <p className="ws-warning">
+                        <Icon name="alert" /> {mailOAuthRowNote(b)}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="row ws-row-actions">
+                    <MailOAuthRowAction binding={b} />
                     {b.threadId ? (
                       <Button
                         variant="ghost"
@@ -329,8 +343,16 @@ export function ChannelsPage() {
         </p>
       </section>
       <PeopleSection />
-      <PolicySection />
-      <PublicAddressSection />
+      {access.hubSettings ? (
+        <>
+          <PolicySection />
+          <PublicAddressSection />
+        </>
+      ) : (
+        <OwnerSets heading={MEMBER_MODE_TEXT.channelsOwnerHeading}>
+          {MEMBER_MODE_TEXT.channelsOwner}
+        </OwnerSets>
+      )}
       {data ? (
         <AddChannelDialog
           open={adding}
@@ -340,6 +362,7 @@ export function ChannelsPage() {
           bindings={data.items}
           publicUrl={publicUrl}
           onCreated={replace}
+          mailHint={access.privateAddresses ? undefined : MEMBER_MODE_TEXT.mailAddresses}
         />
       ) : null}
       {testing ? <TestDialog binding={testing} onClose={() => setTesting(null)} /> : null}

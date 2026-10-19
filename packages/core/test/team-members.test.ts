@@ -12,6 +12,7 @@ import {
   memberWorkspace,
   ownerOnlyError,
   ownerOnlyReason,
+  UNCLASSIFIED_WHY,
   type AuditRecord,
 } from '../src/index.ts';
 import { ACCOUNT } from './helpers.ts';
@@ -275,11 +276,23 @@ describe('what a member may not do', () => {
     expect(ownerOnlyReason('POST', '/api/v1/projects/:id/folders')).not.toBeNull();
     expect(ownerOnlyReason('GET', '/api/v1/trust')).not.toBeNull();
     expect(ownerOnlyReason('GET', '/api/v1/trust/ca.pem')).toBeNull();
+    // The Hub's people, sign-in providers and team agents (checked in their services too, M8).
+    expect(ownerOnlyReason('POST', '/api/v1/team/invitations')).toBe("the Hub's people");
+    expect(ownerOnlyReason('POST', '/api/v1/team/removed/:id/purge')).toBe("the Hub's people");
+    expect(ownerOnlyReason('PATCH', '/api/v1/team/oidc/:id')).toBe("the Hub's sign-in providers");
+    expect(ownerOnlyReason('POST', '/api/v1/team/agents')).toBe("the Hub's team agents");
+    expect(ownerOnlyReason('HEAD', '/api/v1/settings')).toBe("the Hub's settings");
     // Public routes that authenticate another way stay open, and so do a member's own areas.
     expect(ownerOnlyReason('POST', '/api/v1/devices/add/complete')).toBeNull();
     expect(ownerOnlyReason('POST', '/api/v1/threads/:id/messages')).toBeNull();
-    expect(ownerOnlyReason('GET', '/api/v1/networks')).toBeNull();
+    expect(ownerOnlyReason('GET', '/api/v1/team/agents')).toBeNull();
+    expect(ownerOnlyReason('POST', '/agent/v1/heartbeat')).toBeNull();
     expect(ownerOnlyReason('GET', undefined)).toBeNull();
+    // The web shell's files are public; an API route nobody classified is refused (fail closed).
+    expect(ownerOnlyReason('GET', '/index.html')).toBeNull();
+    expect(ownerOnlyReason('GET', '/api/v1/networks')).toBe(UNCLASSIFIED_WHY);
+    expect(ownerOnlyReason('DELETE', '/api/v1/threads')).toBe(UNCLASSIFIED_WHY);
+    expect(ownerOnlyReason('POST', '/node/v1/elsewhere')).toBe(UNCLASSIFIED_WHY);
     expect(
       memberBodyReason('POST', '/api/v1/mcp/servers', { transport: 'stdio', command: 'sh' }),
     ).not.toBeNull();

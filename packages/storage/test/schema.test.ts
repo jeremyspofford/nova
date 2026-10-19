@@ -11,6 +11,13 @@ import * as flagged from '../src/schema/flagged.ts';
 import * as firmware from '../src/schema/firmware.ts';
 import * as boot from '../src/schema/boot.ts';
 import * as oob from '../src/schema/oob.ts';
+import * as sdk from '../src/schema/sdk.ts';
+import * as market from '../src/schema/market.ts';
+import * as teamM8 from '../src/schema/team_m8.ts';
+import * as appauth from '../src/schema/appauth.ts';
+import * as managed from '../src/schema/managed.ts';
+import * as datactl from '../src/schema/datactl.ts';
+import * as channelsM8 from '../src/schema/channels_m8.ts';
 
 const tables: SQLiteTable[] = (Object.values(schema) as unknown[]).filter(
   (v): v is SQLiteTable => typeof v === 'object' && v !== null && 'getSQL' in v,
@@ -51,8 +58,15 @@ const m7Tables: SQLiteTable[] = [
   firmware,
   boot,
   oob,
+  sdk,
+  market,
+  teamM8,
+  appauth,
+  managed,
+  datactl,
+  channelsM8,
 ]
-  .flatMap((m) => Object.values(m) as unknown[])
+  .flatMap<unknown>((m) => Object.values(m))
   .filter((v): v is SQLiteTable => typeof v === 'object' && v !== null && 'getSQL' in v);
 
 describe("M7 drizzle schema declares the migrations' indexes", () => {

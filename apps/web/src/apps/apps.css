@@ -89,6 +89,13 @@
   border-color: var(--u-success);
   color: var(--u-success);
 }
+.app-frame-domains {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--u-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .app-frame-actions {
   display: flex;
   flex-wrap: wrap;

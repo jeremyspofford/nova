@@ -16,6 +16,7 @@ import {
 } from '@nova/policy';
 import { realpathLenient } from '@nova/security';
 import { schema, type NovaDatabase } from '@nova/storage';
+import type { ManagedRestrictions } from '../managed/restrictions.ts';
 import type { ToolRoot } from '../tools/types.ts';
 import { listProjectFolderRoots } from '../workspace/roots.ts';
 
@@ -32,6 +33,11 @@ export interface ToolRootsInput {
   workspaceDir: string | null;
   /** The home directory for `:home` and `~` entries; defaults to the Hub user's. */
   home?: string | null;
+  /**
+   * Managed policy (FR-106): every root, the profile's own entries included, is narrowed to the
+   * folders it allows, and its denied folders are denied. Nova's workspace is left as it is.
+   */
+  managed?: ManagedRestrictions | null;
 }
 
 export interface ResolvedToolRoots {
@@ -77,11 +83,20 @@ export function resolveToolRoots(input: ToolRootsInput): ResolvedToolRoots {
     const prev = byPath.get(e.path);
     if (!prev || RANK[e.access] > RANK[prev.access]) byPath.set(e.path, e);
   }
-  const roots: ToolRoot[] = [];
+  let roots: ToolRoot[] = [];
   const deny: string[] = [];
   for (const e of byPath.values()) {
     if (e.access === 'deny') deny.push(e.path);
     else roots.push({ path: e.path, access: e.access, label: e.label });
+  }
+  if (input.managed?.restrictsFolders) {
+    const canonical = (p: string) => realpathLenient(resolve(p));
+    const narrowed = input.managed.narrowRoots(roots, {
+      exempt: input.workspaceDir === null ? [] : [canonical(input.workspaceDir)],
+      canonical,
+    });
+    roots = narrowed.roots;
+    for (const d of narrowed.deny) if (!deny.includes(d)) deny.push(d);
   }
   const hash = stableHash({
     profile: profileHash(input.profile),

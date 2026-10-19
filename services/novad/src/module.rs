@@ -180,6 +180,14 @@ fn storage_op(ctx: &Context, op: &str, args: &Value) -> OpResult<Value> {
             s(args, "tool")?,
             args.get("arguments").cloned().unwrap_or(json!({})),
         ),
+        "mcp.request" => crate::mcp::request(
+            &ctx.data.config()?.mcp_servers,
+            &st.grants,
+            &grantee(args)?,
+            s(args, "server")?,
+            s(args, "method")?,
+            args.get("params").cloned().unwrap_or(json!({})),
+        ),
         _ => Err(OpError::not_found(format!("the storage module has no operation {op}"))),
     }
 }

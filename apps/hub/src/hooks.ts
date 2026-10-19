@@ -1,6 +1,7 @@
 // Lifecycle hooks: discovery, trust by content hash, running them (FR-197, ADR-068; docs/08 §4.1).
-// Sources: managed policy, the user hooks file `<dataDir>/hooks.json`, each project folder's
-// `.nova/hooks.json`, and plugins (registered by the plugins area). A hook runs only while the
+// Sources: managed policy (re-read whenever it changes, `managed.policy.changed`), the user hooks
+// file `<dataDir>/hooks.json`, each project folder's `.nova/hooks.json`, and plugins (registered by
+// the plugins area). A hook runs only while the
 // user trusts its current content hash; the routes list, trust, revoke, switch and delete them.
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -99,6 +100,20 @@ export function setupHooks(ctx: HubContext & HooksDeps): Promise<HooksArea> {
     spillDir: join(workspace, 'hook-context'),
   });
 
+  // A managed policy change (FR-106, ADR-097 D4) brings every account's managed hooks in step at
+  // once: a hook the policy added is registered (trusted by policy) and one it dropped is gone,
+  // with no restart and without waiting for the next dispatch or listing.
+  const refreshAll = async () => {
+    if (!service.store.available()) return;
+    const accounts = ctx.db.raw
+      .prepare('SELECT id FROM account WHERE deleted_at IS NULL')
+      .all() as { id: string }[];
+    for (const { id } of accounts) await service.refresh(id, { only: null });
+  };
+  const offManaged = ctx.events.bus.subscribe('managed.policy.changed', () => {
+    refreshAll().catch((err: unknown) => log.warn('managed hooks not refreshed', { err }));
+  });
+
   ctx.diagnostics.add('hooks', () => {
     const counts: Record<string, number> = {};
     if (service.store.available()) {
@@ -163,6 +178,7 @@ export function setupHooks(ctx: HubContext & HooksDeps): Promise<HooksArea> {
       });
     },
     close: () => {
+      offManaged();
       service.close();
       return Promise.resolve();
     },

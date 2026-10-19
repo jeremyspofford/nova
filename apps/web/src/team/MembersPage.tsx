@@ -2,7 +2,8 @@
 // roles, and for the owner the one-use invitation links (shown once, with Copy and an expiry),
 // the invitations with Withdraw, removing a member (their sessions end at once, so it asks first)
 // and the OIDC sign-in providers. A member sees the people, read-only, and why they cannot change
-// them. Joins, removals and invitations arrive live through the shared event stream.
+// them. Joins, removals and invitations arrive live through the shared event stream. M8 adds the
+// removed members, whose data is kept for a while, exported and deleted (RemovedMembers.tsx).
 import { useId, useRef, useState } from 'react';
 import type { CreatedInvitationView, InvitationView, TeamMemberView } from '@nova/shared';
 import {
@@ -21,8 +22,16 @@ import { useSettings } from '../settings.tsx';
 import { useDebounced } from '../work/events.ts';
 import { useTeamApi } from './api.ts';
 import { MEMBERS_EVENTS, useTeamEvents } from './events.ts';
-import { INVITATION_HOURS, ROLE_TEXT, invitationChip, personName, untilText } from './format.ts';
+import {
+  INVITATION_HOURS,
+  REMOVED_TEXT,
+  ROLE_TEXT,
+  invitationChip,
+  personName,
+  untilText,
+} from './format.ts';
 import { OidcProvidersSection } from './OidcProviders.tsx';
+import { RemovedMembersSection } from './RemovedMembers.tsx';
 import { Chip, ConfirmDialog, CopyButton, FormError, LoadError, useLoad } from './parts.tsx';
 import { useTeamRole } from './role.tsx';
 import '../workspace.css';
@@ -91,6 +100,7 @@ export function MembersPage() {
               })
             }
           />
+          <RemovedMembersSection />
           <OidcProvidersSection />
         </>
       ) : null}
@@ -117,6 +127,7 @@ function People({
   const toast = useToast();
   const announce = useAnnounce();
   const headingId = useId();
+  const keepDays = useSettings().get('team.removedMemberPurgeDays').value;
   const [removing, setRemoving] = useState<TeamMemberView | null>(null);
   const nameOf = (id: string | null) =>
     id
@@ -176,7 +187,7 @@ function People({
       <ConfirmDialog
         open={removing !== null}
         title={`Remove ${personName(removing)} from this Hub?`}
-        description="Their sessions end at once on every device, their account closes and the chats shared with them stop being shared. What they made stays on the Hub's disk."
+        description={REMOVED_TEXT.removeWhat(keepDays)}
         confirmLabel="Remove"
         danger
         onClose={() => setRemoving(null)}

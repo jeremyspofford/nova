@@ -4,12 +4,12 @@
 // never focusable, and clicks pass through it. Under reduced motion (or Keep still) it holds a
 // still pose. It follows the shared Work stream, which carries `thread.status.changed` and
 // `run.completed`; a failed chat turn (`turn.completed`) is not on that stream, so only runs
-// trigger the error reaction.
-import { useEffect, useReducer } from 'react';
+// trigger the error reaction. M8: a pet installed from the marketplace shows its own frames.
 import { useMediaQuery } from '../hooks.ts';
+import { MarketCompanion } from '../market/MarketPet.tsx';
 import { useSetting } from '../settings.tsx';
-import { useWorkEvents } from '../work/events.ts';
-import { initialPet, petEventOf, petReducer, petState, type PetState } from './state.ts';
+import { usePetMood } from './mood.ts';
+import type { PetState } from './state.ts';
 import './pets.css';
 
 export type PetKind = 'sprout' | 'spark';
@@ -22,6 +22,17 @@ export function PetOverlay() {
   const osReduce = useMediaQuery('(prefers-reduced-motion: reduce)', false);
   if (pet === 'off') return null;
   const still = muted || motion === 'on' || (motion === 'system' && osReduce);
+  // M8: a pet installed from the marketplace (`market:<id>`), drawn from its own frames.
+  if (pet.startsWith('market:'))
+    return (
+      <MarketCompanion
+        petId={pet.slice('market:'.length)}
+        position={position}
+        muted={muted}
+        still={still}
+      />
+    );
+  if (pet !== 'sprout' && pet !== 'spark') return null;
   return <Companion kind={pet} position={position} muted={muted} still={still} />;
 }
 
@@ -36,22 +47,7 @@ function Companion({
   muted: boolean;
   still: boolean;
 }) {
-  const [model, dispatch] = useReducer(petReducer, initialPet);
-  useWorkEvents((env) => {
-    const ev = petEventOf(env, Date.now());
-    if (ev) dispatch(ev);
-  });
-  // End a reaction when its time is up (a little after, so the tick is never early).
-  const until = model.reaction?.until ?? null;
-  useEffect(() => {
-    if (until === null) return;
-    const t = setTimeout(
-      () => dispatch({ type: 'tick', at: Date.now() }),
-      Math.max(0, until - Date.now()) + 20,
-    );
-    return () => clearTimeout(t);
-  }, [until]);
-  const state = petState(model, muted);
+  const state = usePetMood(muted);
   return (
     <div
       className="pet"

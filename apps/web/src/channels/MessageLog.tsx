@@ -4,7 +4,8 @@
 // channel's thread, linked from each row. Senders and conversation names come from the other
 // service: shown as text. Filters by direction and status; "Show older" pages back. Live through
 // the channel's message events. Pages follow the Hub's `nextCursor`, so messages that share a
-// timestamp are never skipped.
+// timestamp are never skipped. M8: a file the agent sent with its reply (Telegram) is its own row,
+// marked as a file.
 import { useCallback, useEffect, useId, useState } from 'react';
 import {
   CHANNEL_MESSAGE_STATUSES,
@@ -17,7 +18,7 @@ import { errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useChannelsM7Api } from './api-m7.ts';
 import { useChannelEvents, useDebouncedCallback } from './events.ts';
-import { MESSAGE_STATUS, formatStamp, messageReason } from './format.ts';
+import { FILE_BADGE, MESSAGE_STATUS, formatStamp, isFileRow, messageReason } from './format.ts';
 import { Chip } from './parts.tsx';
 
 /** Messages per page. */
@@ -171,6 +172,11 @@ export function MessageLog({ binding }: { binding: ChannelBindingViewM7 }) {
                       <Icon name={m.direction === 'in' ? 'down' : 'send'} />
                       {m.direction === 'in' ? 'Received' : 'Sent'}
                     </span>
+                    {isFileRow(m) ? (
+                      <span className="ws-badge">
+                        <Icon name="attach" /> {FILE_BADGE}
+                      </span>
+                    ) : null}
                     <Chip spec={MESSAGE_STATUS[m.status]} />
                     <time className="muted" dateTime={m.createdAt}>
                       {formatStamp(m.createdAt)}

@@ -62,6 +62,7 @@ export {
   pluginHookId,
   pluginHookView,
   type InstallPluginRequest,
+  type PluginInstallProvenance,
   type PluginHookChange,
   type PluginHookDefinition,
   type PluginHookSource,

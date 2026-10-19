@@ -276,6 +276,8 @@ impl Agent {
             }
             ["mcp", "list"] => self.storage("mcp.list", body, Duration::from_secs(120)),
             ["mcp", "call"] => self.storage("mcp.call", body, Duration::from_secs(60)),
+            // Resources and prompts of the same servers (M8).
+            ["mcp", "request"] => self.storage("mcp.request", body, Duration::from_secs(60)),
             ["browser", action @ ("launch" | "close" | "list")] => crate::browser::route(&self.sup, &self.cdp, action, body),
             #[cfg(unix)]
             ["bridge", action @ ("call" | "status")] => crate::bridge::route(&self.sup, action, body),

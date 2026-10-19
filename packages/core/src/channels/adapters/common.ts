@@ -2,7 +2,7 @@
 // (channels/types.ts): credential lookup by binding, a probe for connect and test, and the
 // handshake answers some services expect before they send messages.
 import { NovaError } from '@nova/shared';
-import type { ChannelAdapter, InboundMessage, OutboundMessage } from '../types.ts';
+import type { ChannelAdapter, ChannelReceipt, InboundMessage, OutboundMessage } from '../types.ts';
 
 /** Credentials and settings of a binding; secrets come from the secret store on each use. */
 export interface BindingCredentials {
@@ -37,6 +37,38 @@ export interface InboundAttachment {
   name: string;
   mime: string;
   bytes: Buffer;
+  /**
+   * M8: a voice or video note (Telegram). It is kept with the thread's files but is not model
+   * input: models here cannot listen to it.
+   */
+  note?: { kind: 'voice' | 'video_note'; seconds: number | null };
+}
+
+/**
+ * M8: a file an inbound message points at but does not carry (Telegram). It is downloaded only
+ * after the message passed every check and will start a turn (`download`), so a stranger in a
+ * group cannot make the Hub fetch files.
+ */
+export interface InboundFileRef {
+  /** The service's file id. */
+  ref: string;
+  kind: 'photo' | 'document' | 'voice' | 'video_note' | 'unsupported';
+  name: string;
+  mime: string;
+  /** What the service says it weighs (checked again while downloading); null when unknown. */
+  size: number | null;
+  /** Voice and video notes: their length. */
+  seconds?: number | null;
+}
+
+/** M8: a file sent to a conversation (an artifact or attachment of the agent's turn). */
+export interface OutboundFile {
+  conversation: string;
+  threadRef?: string | null;
+  name: string;
+  mime: string;
+  bytes: Buffer;
+  caption?: string | null;
 }
 
 /** An inbound message with the M7 extras (channels/types.ts stays as it is). */
@@ -44,6 +76,8 @@ export interface NovaInboundMessage extends InboundMessage {
   /** A button press instead of a message. */
   action?: ChannelAction;
   attachments?: InboundAttachment[];
+  /** M8: files to download once the message is accepted (Telegram). */
+  files?: InboundFileRef[];
   /**
    * Email: whether the sender's address is authenticated (DMARC or DKIM for its domain, per the
    * receiving server). An unauthenticated sender is never matched to a mapped identity.
@@ -102,6 +136,21 @@ export interface ChannelAdapterExtras {
   ): Promise<void>;
   /** Approvals answered by message text from this channel (email: never, only by its link). */
   readonly textAnswers?: boolean;
+  /**
+   * M8: the credentials one binding uses, given its settings (email: a password, or an OAuth
+   * client secret, which a public client does not have). Default: every `credentialNames`.
+   */
+  credentialsFor?(
+    config: Record<string, string | null>,
+  ): readonly { name: string; required: boolean }[];
+  /** M8: fetch an inbound file (size-capped); throws a `validation` error saying why not. */
+  download?(
+    bindingId: string,
+    file: InboundFileRef,
+    signal: AbortSignal,
+  ): Promise<InboundAttachment>;
+  /** M8: send a file to a conversation (Telegram: a photo or a document). */
+  sendFile?(bindingId: string, file: OutboundFile, signal: AbortSignal): Promise<ChannelReceipt>;
 }
 
 export type NovaChannelAdapter = ChannelAdapter & ChannelAdapterExtras;

@@ -1,8 +1,9 @@
 //! Local MCP pass-through (FR-210, docs/23 §4.1): the device's own stdio MCP servers, declared by
 //! the device owner in novad's config, can be listed and called by Hub sessions that hold an `mcp`
 //! grant for the server. Each call starts the server (sandboxed when the device has a sandbox),
-//! initializes it, makes one request and stops it. Tool output is untrusted; the Hub runs every
-//! call through its policy engine and audit (FR-189).
+//! initializes it, makes one request and stops it. Since M8 the same grant also lists and reads
+//! the server's resources and prompts (`request`, five read-only methods). Output is untrusted;
+//! the Hub runs every call through its policy engine and audit (FR-189).
 
 use crate::exec::{find_bwrap, kill_group};
 use crate::grants::{GrantStore, Grantee};
@@ -219,6 +220,27 @@ pub fn call(servers: &[McpServer], grants: &GrantStore, grantee: &Grantee, serve
     Ok(json!({ "content": r.get("content").cloned().unwrap_or(json!([])), "isError": r["isError"].as_bool().unwrap_or(false), "untrusted": true }))
 }
 
+/// The read-only methods besides tools that a granted session may pass to a server (M8, FR-042):
+/// listing and reading resources and prompts. Anything else is refused.
+pub const PASS_METHODS: [&str; 5] = ["resources/list", "resources/templates/list", "resources/read", "prompts/list", "prompts/get"];
+
+/// One resources or prompts request to a granted server: its result as the server answered it.
+pub fn request(servers: &[McpServer], grants: &GrantStore, grantee: &Grantee, server: &str, method: &str, params: Value) -> OpResult<Value> {
+    let srv = find(servers, server)?;
+    if !grants.mcp_allowed(grantee, server)? {
+        return Err(OpError::denied("mcp_grant_required", format!("the MCP server {server} is not granted to this session")));
+    }
+    if !PASS_METHODS.contains(&method) {
+        return Err(OpError::validation(format!("{method} cannot be passed to a device's MCP server")));
+    }
+    let params = if params.is_object() { params } else { json!({}) };
+    let deadline = Instant::now() + CALL_TIMEOUT;
+    let mut s = Session::start(srv)?;
+    s.initialize(deadline)?;
+    let r = s.request(method, params, deadline)?;
+    Ok(json!({ "result": r, "untrusted": true }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +254,8 @@ while IFS= read -r line; do
     *'"method":"initialize"'*) echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"t","version":"1"}}}' ;;
     *'"method":"tools/list"'*) echo '{"jsonrpc":"2.0","method":"notifications/message","params":{}}'; echo '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"Echo","inputSchema":{"type":"object"}}]}}' ;;
     *'"method":"tools/call"'*) echo '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"echoed"}]}}' ;;
+    *'"method":"resources/list"'*) echo '{"jsonrpc":"2.0","id":2,"result":{"resources":[{"uri":"note://a","name":"a"}]}}' ;;
+    *'"method":"prompts/get"'*) echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"no prompts"}}' ;;
   esac
 done
 "#;
@@ -257,6 +281,26 @@ done
         assert_eq!(c["content"][0]["text"], "echoed");
         assert_eq!(c["untrusted"], true);
         assert_eq!(call(&servers, &store, &g, "missing", "echo", json!({})).unwrap_err().code, "not_found");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn passes_resources_and_prompts_to_granted_servers_only() {
+        let base = tmp("mcp3");
+        let store = GrantStore::new(base.join("grants.json"), base.join("data"));
+        let g = Grantee { kind: "user".into(), id: "u".into() };
+        let servers = vec![server(&base)];
+        let denied = request(&servers, &store, &g, "notes", "resources/list", json!({})).unwrap_err();
+        assert_eq!(denied.details.unwrap()["reason"], "mcp_grant_required");
+        store.grant(&g, "mcp", "notes", "call", "hub").unwrap();
+        let r = request(&servers, &store, &g, "notes", "resources/list", json!({})).unwrap();
+        assert_eq!(r["result"]["resources"][0]["uri"], "note://a");
+        assert_eq!(r["untrusted"], true);
+        // Only the read-only methods pass; a server's own error comes back as one.
+        assert_eq!(request(&servers, &store, &g, "notes", "tools/call", json!({})).unwrap_err().code, "validation");
+        assert_eq!(request(&servers, &store, &g, "notes", "initialize", json!({})).unwrap_err().code, "validation");
+        let e = request(&servers, &store, &g, "notes", "prompts/get", json!({ "name": "x" })).unwrap_err();
+        assert_eq!(e.details.unwrap()["reason"], "mcp_error");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

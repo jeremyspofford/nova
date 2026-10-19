@@ -1,7 +1,8 @@
 // Chat list (FR-017): Pinned and Recent groups, with rename (inline), pin, memory use (FR-032),
-// archive and delete (confirmed) from each row's menu or its context menu. Branches and temporary
-// chats carry a marker (FR-027, FR-033). Rows use a roving tabindex so the list is one tab stop:
-// arrows, Home and End move; F2 renames; Shift+F10 opens the row's menu.
+// archive and delete (confirmed) from each row's menu or its context menu, plus the items running
+// extensions add (M8). Branches and temporary chats carry a marker (FR-027, FR-033). Rows use a
+// roving tabindex so the list is one tab stop: arrows, Home and End move; F2 renames; Shift+F10
+// opens the row's menu.
 import { useEffect, useRef, useState } from 'react';
 import type { ThreadView } from '@nova/shared';
 import {
@@ -15,6 +16,8 @@ import {
   useToast,
 } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { menuItemsFor, useRunContributed } from '../extensions/shell.tsx';
+import { useExtensionContributions } from '../extensions/store.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useThreads } from '../stores.tsx';
 import { sortByThreadStatus, threadStatus, threadStatusReason } from './status.ts';
@@ -43,6 +46,9 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
     at: { x: number; y: number } | null;
   } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // M8: items running extensions add to a chat's menu (FR-117), before Delete.
+  const extensions = useExtensionContributions();
+  const runExtension = useRunContributed();
 
   const rows = showArchived ? (store.archived ?? []) : store.threads;
   // Needs input first, then Blocked, Running and Ready, within each group (FR-215).
@@ -136,6 +142,7 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
         );
       },
     },
+    ...menuItemsFor(extensions, 'thread', { threadId: t.id }, runExtension),
     { id: 'delete', label: 'Delete…', danger: true, onSelect: () => setConfirmDelete(t) },
   ];
 

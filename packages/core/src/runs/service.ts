@@ -32,6 +32,7 @@ import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 import type { ThreadToolLimits, ToolLimitSource } from '../approvals/limits.ts';
 import type { EventSink } from '../events.ts';
+import { managedDenied } from '../managed/restrictions.ts';
 import type {
   BoundHit,
   ContextBlock,
@@ -113,6 +114,8 @@ export interface RunSettings {
   autonomy(projectId: string | null): Promise<RunAutonomy>;
   subagents(projectId: string | null): Promise<{ maxChildren: number; maxConcurrent: number }>;
   escalation(projectId: string | null): Promise<'propose' | 'auto' | 'off'>;
+  /** Why managed policy refuses this autonomy (Autonomous runs as Auto does), or null (FR-106). */
+  managedAutonomy?(autonomy: RunAutonomy): Promise<string | null>;
 }
 
 /** Timer functions, replaced by a simulated clock in tests. */
@@ -2525,7 +2528,12 @@ export class RunService implements RunToolHost {
     const projectId = input.projectId ?? null;
     const id = uuidv7();
     const defaults = await this.#settings.defaultBudgets(projectId);
-    const autonomy = input.autonomy ?? (await this.#settings.autonomy(projectId));
+    let autonomy = input.autonomy ?? (await this.#settings.autonomy(projectId));
+    // Managed policy (FR-106): an autonomy it turns off is refused when asked for; a default it
+    // turns off runs as Standard (tighter, never looser).
+    const refused = await this.#settings.managedAutonomy?.(autonomy);
+    if (refused && input.autonomy) throw managedDenied(refused, { autonomy });
+    if (refused) autonomy = 'standard';
     let timeS = input.budgets?.timeSeconds ?? defaults.timeSeconds;
     let tokens = input.budgets?.tokens ?? defaults.tokens;
     let cost = input.budgets?.costUsd !== undefined ? input.budgets.costUsd : defaults.costUsd;

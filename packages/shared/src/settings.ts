@@ -7,6 +7,14 @@ import { TRUST_MODES } from './m65/trust.ts';
 import { networkBaseUrlSchema } from './m65/network.ts';
 import { relayUrlSchema } from './m65/relay.ts';
 import { relayRegistrationTokenRefSchema } from './m7/devices.ts';
+import { otlpEndpointSchema, otlpHeadersSettingSchema, otlpSignalsSchema } from './m8/appauth.ts';
+import { managedRestrictSettingSchema } from './m8/managed.ts';
+import { MARKET_KINDS, type MarketItemKind } from './m8/market.ts';
+import {
+  AUDIT_RETENTION_FLOOR_DAYS,
+  crashReportEndpointSchema,
+  retentionDaysSchema,
+} from './m8/datactl.ts';
 
 export type SettingSource = 'default' | 'global' | 'project' | 'managed';
 
@@ -281,13 +289,29 @@ export const SETTINGS = {
           id: z.string().regex(/^[a-z0-9-]{1,40}$/),
           name: z.string().min(1).max(100),
           location: z.string().min(1).max(1000),
+          // M8 (FR-049, ADR-097 D2): the key the catalog's index must be signed with, and for a
+          // Git catalog the commit its index is read at.
+          publisherKey: z
+            .string()
+            .regex(/^[A-Za-z0-9_-]{43}$/, 'expected base64url of a raw 32-byte Ed25519 key')
+            .optional(),
+          commit: z
+            .string()
+            .regex(/^[0-9a-f]{40}$/, 'expected a full 40-character commit SHA')
+            .optional(),
         }),
       )
       .max(20),
-    default: [] as { id: string; name: string; location: string }[],
+    default: [] as {
+      id: string;
+      name: string;
+      location: string;
+      publisherKey?: string;
+      commit?: string;
+    }[],
     security: true,
     description:
-      'Plugin catalogs: a folder on the Hub, an https URL or a Git URL (FR-045, FR-049).',
+      'Plugin and marketplace catalogs: a folder on the Hub, an https URL or a Git URL, each with the publisher key its index must be signed with and, for Git, a pinned commit (FR-045, FR-049).',
   }),
   'mcpServer.enabled': def({
     key: 'mcpServer.enabled',
@@ -585,9 +609,14 @@ export const SETTINGS = {
   }),
   'appearance.pet': def({
     key: 'appearance.pet',
-    schema: z.enum(['off', 'sprout', 'spark']),
+    // M8 (FR-049): a pet installed from the marketplace is `market:<pet id>` (its id is reverse-DNS).
+    schema: z.union([
+      z.enum(['off', 'sprout', 'spark']),
+      z.string().regex(/^market:[a-z0-9]+(\.[a-z0-9-]+)+$/, 'market:<installed pet id>'),
+    ]),
     default: 'off',
-    description: 'An optional animated companion; it never blocks input (FR-012).',
+    description:
+      'An optional animated companion; it never blocks input: off, a built-in one (sprout, spark), or an installed pet as market:<id> (FR-012).',
   }),
   'appearance.petPosition': def({
     key: 'appearance.petPosition',
@@ -1219,6 +1248,180 @@ export const SETTINGS = {
     security: true,
     description:
       'After a firmware change applied with a restart, how long the device has to come back before its watchdog restores the previous settings, 2 to 60 minutes (FR-146).',
+  }),
+  // ---- M8 apps and telemetry
+  'apps.enabled': def({
+    key: 'apps.enabled',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Let third-party apps ask for access to your Hub; you approve each app and its scopes, and can revoke it in Settings. Off, registration, consent and token requests are refused and every app token stops working (FR-222).',
+  }),
+  'apps.openRegistration': def({
+    key: 'apps.openRegistration',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Let apps register themselves (POST /api/v1/apps/register without a session, limited per address). Off, only you can register an app, with your session; approving each app is needed either way (FR-222).',
+  }),
+  'telemetry.otlp.enabled': def({
+    key: 'telemetry.otlp.enabled',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Export traces, metrics and logs over OTLP (HTTP, JSON) to the collector you name. Off by default; redaction always applies (FR-223).',
+  }),
+  'telemetry.otlp.endpoint': def({
+    key: 'telemetry.otlp.endpoint',
+    schema: otlpEndpointSchema,
+    default: '',
+    security: true,
+    description:
+      "The collector's base URL: https, or http only to this machine; /v1/traces, /v1/metrics and /v1/logs are appended (FR-223).",
+  }),
+  'telemetry.otlp.headers': def({
+    key: 'telemetry.otlp.headers',
+    schema: otlpHeadersSettingSchema,
+    default: {},
+    security: true,
+    description:
+      'Headers sent to the collector, as vault references (PUT /api/v1/telemetry/otlp stores the values) (FR-223).',
+  }),
+  'telemetry.otlp.signals': def({
+    key: 'telemetry.otlp.signals',
+    schema: otlpSignalsSchema,
+    default: { traces: true, metrics: true, logs: true },
+    security: true,
+    description: 'Which signals the OTLP export sends (FR-223).',
+  }),
+  'telemetry.otlp.includeContent': def({
+    key: 'telemetry.otlp.includeContent',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Also export content attributes (prompts, completions, tool arguments and results). Off, they are removed before export (FR-223).',
+  }),
+  // ---- M8 sdk
+  'plugins.trustedPublishers': def({
+    key: 'plugins.trustedPublishers',
+    schema: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(100),
+          key: z
+            .string()
+            .regex(/^[A-Za-z0-9_-]{43}$/, 'expected base64url of a raw 32-byte Ed25519 key'),
+        }),
+      )
+      .max(50),
+    default: [] as { name: string; key: string }[],
+    security: true,
+    description:
+      'Publishers whose signed extensions and plugins install as Verified, by their Ed25519 public key (base64url). Anything else installs only through the sideload confirmation and stays Unverified (FR-049, FR-117).',
+  }),
+  'sdk.enabled': def({
+    key: 'sdk.enabled',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      "Run installed SDK extensions: each in a worker of its own with only the permissions it declared. Off, every extension's worker stops and its commands, panels, tools and hooks go away until it is turned back on (FR-117).",
+  }),
+  // ---- M8 managed
+  'managed.restrict': def({
+    key: 'managed.restrict',
+    schema: managedRestrictSettingSchema,
+    default: { layers: [], failClosed: null },
+    security: true,
+    description:
+      "What your organization's managed policy restricts (permission modes, tools, plugins, extensions, MCP servers, sessions, folders, browser domains, egress, telemetry export, model routing, unverified installs, apps). Set only by managed policy; never by a user (FR-106, ADR-097 D4).",
+  }),
+  // ---- M8 data controls
+  'privacy.crashReports': def({
+    key: 'privacy.crashReports',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Send crash reports to the endpoint below. A crash always writes a local report (no content: the error type, a stack with relative paths, versions and platform) that you can preview, send or delete; nothing leaves this machine while this is off (FR-121).',
+  }),
+  'privacy.crashReportEndpoint': def({
+    key: 'privacy.crashReportEndpoint',
+    schema: crashReportEndpointSchema,
+    default: '',
+    security: true,
+    description:
+      'Where crash reports are sent when they are on: an https:// address of your choosing (http:// only to this machine). Empty: nowhere (FR-121).',
+  }),
+  'retention.threadsDays': def({
+    key: 'retention.threadsDays',
+    schema: retentionDaysSchema(),
+    default: null as number | null,
+    security: true,
+    description:
+      'Delete chats untouched for this many days (pinned chats are kept); a deleted chat can be recovered for 30 days, then it is purged. Null keeps every chat (FR-105).',
+  }),
+  'retention.runsDays': def({
+    key: 'retention.runsDays',
+    schema: retentionDaysSchema(),
+    default: null as number | null,
+    security: true,
+    description:
+      'Purge Work runs that ended this many days ago, with their thread, plan and steps (a run in a pinned thread is kept). Null keeps every run (FR-105).',
+  }),
+  'retention.auditDays': def({
+    key: 'retention.auditDays',
+    schema: retentionDaysSchema(AUDIT_RETENTION_FLOOR_DAYS),
+    default: null as number | null,
+    security: true,
+    description:
+      'Prune audit entries older than this many days, never fewer than 365; the chain stays verifiable from the oldest kept entry. Null keeps the whole audit log (FR-105, FR-104).',
+  }),
+  'retention.artifactsDays': def({
+    key: 'retention.artifactsDays',
+    schema: retentionDaysSchema(),
+    default: null as number | null,
+    security: true,
+    description:
+      'Delete artifacts not changed for this many days, with their versions and files (artifacts in pinned chats are kept). Null keeps every artifact (FR-105).',
+  }),
+  'retention.tracesDays': def({
+    key: 'retention.tracesDays',
+    schema: retentionDaysSchema(),
+    default: null as number | null,
+    security: true,
+    description:
+      'Prune activity history older than this many days: the stored event log, agent browser traces, network checks and notification deliveries. Null keeps it all (FR-105).',
+  }),
+  // ---- M8 market
+  'market.allowSideload': def({
+    key: 'market.allowSideload',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Allow installing Unverified marketplace items (unsigned, signed by a key you do not trust, or not matching their checksum) after the explicit sideload confirmation; they stay labelled Unverified. Off, only Verified items install. Managed policy can also forbid them (FR-049).',
+  }),
+  'market.allowedKinds': def({
+    key: 'market.allowedKinds',
+    schema: z.array(z.enum(MARKET_KINDS)).max(MARKET_KINDS.length),
+    default: [...MARKET_KINDS] as MarketItemKind[],
+    security: true,
+    description:
+      'The kinds of marketplace items that may be installed: plugins, skills, themes, pets and MCP servers (FR-049).',
+  }),
+  // ---- M8 team
+  'team.removedMemberPurgeDays': def({
+    key: 'team.removedMemberPurgeDays',
+    schema: z.number().int().min(0).max(3650),
+    default: 30,
+    security: true,
+    description:
+      "Days a removed member's data (chats, files, memory, settings, tokens) is kept before it is purged, so the owner can export it first; 0 keeps it until the owner purges it (decision 5, ADR-097).",
   }),
   'privacy.telemetry': def({
     key: 'privacy.telemetry',

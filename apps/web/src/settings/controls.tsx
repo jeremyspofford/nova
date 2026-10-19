@@ -1,7 +1,8 @@
 // Small controls shared by the settings pages: a labelled switch row whose description and
-// managed-policy lock are linked to the switch (docs/04 §4.4, docs/14 §1.2).
+// managed-policy lock are linked to the switch (docs/04 §4.4, docs/14 §1.2). The lock names the
+// policy's source when the Hub says it (M8, FR-106).
 import { useId, type ReactNode } from 'react';
-import { MANAGED } from './common.ts';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
 
 export function SwitchField({
   label,
@@ -10,6 +11,7 @@ export function SwitchField({
   onChange,
   locked,
   disabled,
+  setting,
 }: {
   label: string;
   description?: ReactNode;
@@ -17,6 +19,8 @@ export function SwitchField({
   onChange: (next: boolean) => void;
   locked?: boolean;
   disabled?: boolean;
+  /** The setting the switch shows: a lock then names the policy source of that setting. */
+  setting?: string;
 }) {
   const id = `sw${useId()}`;
   const describedBy =
@@ -33,11 +37,7 @@ export function SwitchField({
             {description}
           </span>
         ) : null}
-        {locked ? (
-          <span id={`${id}-lock`} className="nv-field-hint nv-field-lock">
-            {MANAGED}
-          </span>
-        ) : null}
+        {locked ? <ManagedNote id={`${id}-lock`} setting={setting} /> : null}
       </div>
       <button
         type="button"

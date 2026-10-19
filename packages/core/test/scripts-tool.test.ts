@@ -143,7 +143,8 @@ describe('nested calls pass the gate', () => {
       expect.objectContaining({
         tool: 'demo.read',
         status: 'ok',
-        origin: 'model',
+        // The script origin (docs/08 §1.5), judged like the model's own call.
+        origin: 'script',
         decision: 'allow',
       }),
     ]);
@@ -168,6 +169,27 @@ describe('nested calls pass the gate', () => {
     };
     expect(run).toMatchObject({ status: 'ok', calls: 1 });
     expect(run.code_sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('records the script origin for a script the user started from the UI (M8)', async () => {
+    await setup();
+    const { callId, done } = await env.runtime.invoke({
+      accountId: ACCOUNT,
+      name: 'script.run',
+      args: { code: 'return await tools.call("demo.read", {path: "x"})' },
+      threadId: THREAD,
+      initiator: 'user',
+    });
+    expect((await done).ok).toBe(true);
+    const row = env.db.raw.prepare('SELECT origin FROM tool_call WHERE id = ?').get(callId) as {
+      origin: string;
+    };
+    // The script call is the user's; its nested call is the script's, never the user's own.
+    expect(row.origin).toBe('ui');
+    expect(nested(callId)).toEqual([expect.objectContaining({ origin: 'script', status: 'ok' })]);
+    const policy = env.audit.filter((a) => a.kind === 'policy' && a.action === 'demo.read');
+    expect(policy.length).toBeGreaterThan(0);
+    expect(policy.every((a) => a.actor !== 'user')).toBe(true);
   });
 
   it('pauses the script on an ask and continues once the user allows it', async () => {

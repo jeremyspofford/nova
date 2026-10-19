@@ -1,8 +1,11 @@
 // A stdio MCP server that runs on a device (FR-042 `deviceId`, FR-210): the Hub reaches it
 // through `novad`, which exposes the device's own MCP servers by name under the device's grants.
 // This transport stands in for the process: it answers the MCP client's `initialize`, and turns
-// `tools/list` and `tools/call` into the device bridge's list and call. Everything else the
-// client asks is "method not found", so resources and prompts of device servers are not listed.
+// `tools/list` and `tools/call` into the device bridge's list and call. Since M8 a bridge that can
+// pass requests also serves the server's resources and prompts (`resources/list`,
+// `resources/templates/list`, `resources/read`, `prompts/list`, `prompts/get`), each answered by
+// the device's server as it is; the Hub treats them as untrusted like any MCP content. Everything
+// else the client asks is "method not found".
 // The Hub never sends a command line to a device: the server's `command` names the server as the
 // device lists it, and the device's own configuration starts it.
 import type { JSONRPCMessage, Transport } from '@modelcontextprotocol/client';
@@ -27,7 +30,29 @@ export interface DeviceMcpBridge {
     call: { tool: string; arguments: Record<string, unknown> },
     signal: AbortSignal,
   ): Promise<{ content: unknown[]; isError: boolean }>;
+  /**
+   * One of `DEVICE_MCP_PASS_METHODS` to the device's server, its result as the server answered
+   * (M8). Absent: the device's servers offer tools only.
+   */
+  request?(
+    target: { accountId: string; deviceId: string; server: string },
+    req: { method: DeviceMcpPassMethod; params: Record<string, unknown> },
+    signal: AbortSignal,
+  ): Promise<unknown>;
 }
+
+/** The read-only methods besides tools that reach a device's server (novad allows the same). */
+export const DEVICE_MCP_PASS_METHODS = [
+  'resources/list',
+  'resources/templates/list',
+  'resources/read',
+  'prompts/list',
+  'prompts/get',
+] as const;
+export type DeviceMcpPassMethod = (typeof DEVICE_MCP_PASS_METHODS)[number];
+
+const isPassMethod = (m: string): m is DeviceMcpPassMethod =>
+  (DEVICE_MCP_PASS_METHODS as readonly string[]).includes(m);
 
 const METHOD_NOT_FOUND = -32601;
 const INTERNAL_ERROR = -32603;
@@ -79,7 +104,10 @@ export function deviceTransport(
             result: {
               protocolVersion:
                 typeof params.protocolVersion === 'string' ? params.protocolVersion : '2025-11-25',
-              capabilities: { tools: {} },
+              // Resources and prompts only when the bridge can reach them (M8).
+              capabilities: bridge.request
+                ? { tools: {}, resources: {}, prompts: {} }
+                : { tools: {} },
               serverInfo: { name: `device:${target.server}`, version: '0' },
             },
           });
@@ -124,8 +152,32 @@ export function deviceTransport(
           );
           break;
         }
-        default:
-          reply({ error: { code: METHOD_NOT_FOUND, message: `Method not found: ${m.method}` } });
+        default: {
+          const method = m.method;
+          if (!bridge.request || !isPassMethod(method)) {
+            reply({ error: { code: METHOD_NOT_FOUND, message: `Method not found: ${method}` } });
+            break;
+          }
+          const p =
+            m.params && typeof m.params === 'object' && !Array.isArray(m.params)
+              ? (m.params as Record<string, unknown>)
+              : {};
+          void bridge.request(target, { method, params: p }, stop.signal).then(
+            (result) =>
+              result && typeof result === 'object' && !Array.isArray(result)
+                ? reply({ result })
+                : reply({
+                    error: { code: INTERNAL_ERROR, message: `the device answered ${method} badly` },
+                  }),
+            (err: unknown) =>
+              reply({
+                error: {
+                  code: INTERNAL_ERROR,
+                  message: `the device's server did not answer ${method}: ${err instanceof Error ? err.message : String(err)}`,
+                },
+              }),
+          );
+        }
       }
       return Promise.resolve();
     },

@@ -19,6 +19,7 @@ const HOST = '127.0.0.1:7419';
 const PUBLIC: Record<string, string> = {
   'GET /api/v1/hello': 'capability handshake',
   'GET /api/v1/health': 'liveness',
+  'GET /api/v1/channels/oauth/callback': 'single-use OAuth state in the query (M8 email OAuth)',
   'POST /api/v1/auth/setup': 'one-use setup code in the body',
   'POST /node/v1/register': 'one-use enrollment token in the body',
   'POST /node/v1/heartbeat': 'node credential',
@@ -76,6 +77,14 @@ const PUBLIC: Record<string, string> = {
     "the device's PXE boot token in the path (256 random bits, only its hash stored, rotatable); rate-limited, audited",
   'GET /boot/images/:token/:name':
     'the same boot token; a plain file name inside the boot-images folder; rate-limited, audited',
+  // M8 third-party apps (FR-222, ADR-097 D6): OAuth 2.0 with PKCE for native public clients. A
+  // registered app can do nothing until the owner approves it on the consent API (owner session).
+  'POST /api/v1/apps/register':
+    'none: an app registers itself (RFC 7591); rate-limited per address, apps awaiting approval capped',
+  'POST /api/v1/oauth/token':
+    'a one-use authorization code with its PKCE verifier and redirect URI, or a refresh token, bound to the client_id; rate-limited',
+  'POST /api/v1/oauth/revoke': 'the token being revoked, bound to its client_id; rate-limited',
+  'GET /.well-known/oauth-authorization-server': 'none: public OAuth metadata (RFC 8414)',
 };
 
 /** Browser flows that refuse by redirecting to the sign-in page (no session, a fixed path). */
@@ -92,6 +101,8 @@ const OPEN = new Set([
   'GET /api/v1/auth/oidc/providers',
   'GET /api/v1/profiles/:handle',
   'GET /api/v1/profiles/:handle/avatar',
+  'POST /api/v1/apps/register',
+  'GET /.well-known/oauth-authorization-server',
 ]);
 
 let dir: string;
@@ -130,25 +141,19 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-/** Every method and path in the route table (HEAD mirrors GET). */
+/** Every method and path the Hub registered (HEAD mirrors GET), exactly as registered. */
 function routes(): { method: string; path: string }[] {
-  const out: { method: string; path: string }[] = [];
-  const stack: string[] = [];
-  for (const line of hub.app.printRoutes({ commonPrefix: false }).split('\n')) {
-    const m = /^((?:│ {3}| {4})*)(?:├── |└── )(\S+)(?: \(([^)]*)\))?/.exec(line);
-    if (!m) continue;
-    const depth = m[1]!.length / 4;
-    stack.length = depth;
-    const path = (depth > 0 ? stack[depth - 1]! : '') + m[2]!;
-    stack[depth] = path;
-    for (const method of (m[3] ?? '').split(', ').filter(Boolean)) {
-      if (method !== 'HEAD') out.push({ method, path });
-    }
-  }
-  return out;
+  const seen = new Set<string>();
+  return hub.routes().filter((r) => {
+    const key = `${r.method} ${r.path}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
-const concrete = (path: string) => path.replace(/:[A-Za-z]+/g, () => uuidv7());
+const concrete = (path: string) =>
+  path.replace(/:[A-Za-z]+/g, () => uuidv7()).replace(/\*$/, 'x/y.png');
 
 async function call(
   method: string,

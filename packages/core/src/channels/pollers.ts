@@ -68,8 +68,32 @@ export class ChannelPollers {
   start(): void {
     if (this.#running) return;
     this.#running = true;
-    this.#off = this.#o.service.onBindingChange(() => this.reconcile());
+    // A changed sign-in (M8: a mailbox authorized with OAuth) restarts its group's loop at once
+    // instead of waiting out a failure's backoff.
+    this.#off = this.#o.service.onBindingChange((c) =>
+      c.what === 'credentials' ? this.restart(c.bindingId) : this.reconcile(),
+    );
     this.reconcile();
+  }
+
+  /** Stop the loop of a binding's credential group and start it again (M8). */
+  restart(bindingId: string): void {
+    if (!this.#running) return;
+    const row = this.#db.raw
+      .prepare('SELECT kind, secret_ref FROM channel_binding WHERE id = ?')
+      .get(bindingId) as { kind: string; secret_ref: string | null } | undefined;
+    const stopping: Promise<void>[] = [];
+    if (row?.secret_ref) {
+      const prefix = `${row.kind}:${row.secret_ref}:`;
+      for (const [key, loop] of this.#loops)
+        if (key.startsWith(prefix)) {
+          loop.ctl.abort();
+          this.#loops.delete(key);
+          stopping.push(loop.done);
+        }
+    }
+    // The new loop starts once the old one has stopped, so one mailbox is never read twice.
+    void Promise.all(stopping).then(() => this.reconcile());
   }
 
   /** The groups that need a loop: connected Telegram bots in polling mode and mailboxes. */

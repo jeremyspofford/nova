@@ -7,7 +7,132 @@
       "name": "Sample plugin",
       "version": "1.0.0",
       "description": "A skill, a slash command, a hook, an MCP server and an MCP App panel.",
-      "path": "sample-plugin"
+      "path": "sample-plugin",
+      "author": "Nova examples",
+      "categories": ["Examples"],
+      "permissions": {
+        "network": ["api.example.com"],
+        "tools": {
+          "plugin:com.example.sample.fetch_status": {
+            "action": "read"
+          },
+          "plugin:com.example.sample.panel_action": {
+            "action": "write",
+            "default": "ask"
+          }
+        },
+        "actionDefaults": {
+          "read": "allow",
+          "write": "ask",
+          "send": "ask",
+          "delete": "deny",
+          "execute": "ask"
+        },
+        "hooks": {
+          "answersAsks": false
+        },
+        "ui": {
+          "connectDomains": ["api.example.com"]
+        }
+      },
+      "components": {
+        "hooks": [
+          {
+            "id": "hook:com.example.sample.check-fetch",
+            "event": "tool.pre"
+          }
+        ],
+        "uiEntryPoints": [
+          {
+            "kind": "global",
+            "title": "Sample panel"
+          },
+          {
+            "kind": "thread",
+            "title": "Sample panel"
+          }
+        ]
+      },
+      "digest": "73e8215f488781180bd2e8dfd1a97324c85c208ed1062200df756aaf17d83a37"
+    }
+  ],
+  "items": [
+    {
+      "kind": "plugin",
+      "id": "com.examplelabs.release-notes",
+      "name": "Release notes",
+      "version": "1.0.0",
+      "description": "Drafts release notes and a changelog entry from the changes in your project.",
+      "author": "Example Labs",
+      "publisher": {
+        "name": "Example Labs"
+      },
+      "categories": ["Writing", "Developer tools"],
+      "homepage": "https://examplelabs.example/release-notes",
+      "path": "release-notes",
+      "permissions": {
+        "fs": ["${project}"],
+        "actionDefaults": {
+          "read": "allow",
+          "write": "ask"
+        }
+      },
+      "changelog": [
+        {
+          "version": "1.0.0",
+          "date": "2026-10-01",
+          "notes": "First release."
+        }
+      ],
+      "digest": "dca1664b0ca1da04dcf6b5ad3653be27aa557ec1e699bd8e57474f805df6c101"
+    },
+    {
+      "kind": "plugin",
+      "id": "com.examplelabs.word-count",
+      "name": "Word count",
+      "version": "1.0.0",
+      "description": "Counts the words, sentences and reading time of a text: a tool and a command.",
+      "author": "Example Labs",
+      "publisher": {
+        "name": "Example Labs",
+        "key": "KWyGeoNcQVUoD7fIgkwppFWhQZbPo5ynx1JyVjt5-O0"
+      },
+      "categories": ["Writing", "Extensions"],
+      "path": "word-count-1.0.0.novax",
+      "permissions": {
+        "actionDefaults": {
+          "read": "allow"
+        }
+      },
+      "sha256": "fbd4490f26521f65bae8d37280534a36cf331d6b2784f0548be5ddbcff8263da"
+    },
+    {
+      "kind": "theme",
+      "id": "com.examplelabs.aurora",
+      "name": "Aurora",
+      "version": "1.0.0",
+      "description": "A deep blue dark theme with a mint accent.",
+      "author": "Example Labs",
+      "publisher": {
+        "name": "Example Labs"
+      },
+      "categories": ["Dark"],
+      "path": "themes/aurora.json",
+      "sha256": "273bc79adda32b75ac34e60a3ea0dab22098590b4492def67b4016389282bf27"
+    },
+    {
+      "kind": "skill",
+      "id": "standup",
+      "name": "Stand-up update",
+      "version": "1.0.0",
+      "description": "Turns what you did, plan and are blocked on into a short stand-up update.",
+      "author": "Example Labs",
+      "publisher": {
+        "name": "Example Labs"
+      },
+      "categories": ["Writing"],
+      "path": "standup",
+      "digest": "759eeb660ab1c475ff9e6c296182bcf403757825d877b0bb9771250b0d6e0513"
     }
   ]
 }

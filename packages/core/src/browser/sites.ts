@@ -30,6 +30,7 @@ import type { NovaDatabase } from '@nova/storage';
 import type { SettingReader } from '../approvals/gate.ts';
 import type { PolicyStore } from '../approvals/store.ts';
 import { patternCovered } from '../computers/egress-policy.ts';
+import { managedRestrictions } from '../managed/restrictions.ts';
 import { isHubOwner } from '../team/owner.ts';
 import { isPrivateAddress } from '../tools/web.ts';
 
@@ -81,7 +82,8 @@ export interface SiteDecision {
   access: 'allowed' | 'blocked' | 'unknown';
   /** The entry that decided, or the network setting. */
   pattern: string | null;
-  source: 'site' | 'network' | null;
+  /** `managed`: your organization's policy (FR-106). */
+  source: 'site' | 'network' | 'managed' | null;
   /** Always ask for a site without an entry (the default for a newly allowed site). */
   level: BrowserSiteLevel;
   devProtocol: boolean;
@@ -323,10 +325,20 @@ export class BrowserSites {
    */
   async decide(accountId: string, host: string, scope?: SiteScope): Promise<SiteDecision> {
     const h = normalizeHost(host);
-    const [egressAllow, egressDeny] = await Promise.all([
+    const [egressAllow, egressDeny, restrict] = await Promise.all([
       this.#setting('network.egressAllow'),
       this.#setting('network.egressDeny'),
+      this.#setting('managed.restrict'),
     ]);
+    // Managed policy's browser domains decide first: no entry can open a site it refuses.
+    if (managedRestrictions(restrict).browserDomain(h))
+      return decision({
+        access: 'blocked',
+        pattern: null,
+        source: 'managed',
+        level: 'always_ask',
+        devProtocol: false,
+      });
     const rows = this.#rows(accountId);
     const blocked = rows.find((r) => r.access === 'block' && hostMatch(r.pattern, h));
     if (blocked)
@@ -410,16 +422,23 @@ export class BrowserSites {
     /** Sites the owner allowed by exact name (local addresses under browser.allowLocalSites). */
     named: string[];
   }> {
-    const [egressAllow, egressDeny, egressMode] = await Promise.all([
+    const [egressAllow, egressDeny, egressMode, restrict] = await Promise.all([
       this.#setting('network.egressAllow'),
       this.#setting('network.egressDeny'),
       this.#setting('network.egressMode'),
+      this.#setting('managed.restrict'),
     ]);
+    // Managed policy (FR-106): its denied domains join the deny list, and an allowed site counts
+    // only where every allow list of the policy covers it.
+    const managed = managedRestrictions(restrict);
     // Someone who is not the Hub owner may narrow the global allow list, never widen it: their
     // allowed sites count only where the Hub already allows them (decision 5).
     const narrowOnly = !isHubOwner(this.#db, accountId);
     const rows = this.#rows(accountId).filter(
-      (r) => r.access !== 'allow' || !narrowOnly || patternCovered(egressAllow, r.pattern),
+      (r) =>
+        r.access !== 'allow' ||
+        ((!narrowOnly || patternCovered(egressAllow, r.pattern)) &&
+          managed.browserAllows(r.pattern)),
     );
     return {
       // The Hub's network mode bounds the browser like every sandbox (FR-193): off is no
@@ -428,8 +447,15 @@ export class BrowserSites {
       named: rows
         .filter((r) => r.access === 'allow' && !r.pattern.includes('*'))
         .map((r) => r.pattern),
-      allow: [...rows.filter((r) => r.access === 'allow').map((r) => r.pattern), ...egressAllow],
-      deny: [...rows.filter((r) => r.access === 'block').map((r) => r.pattern), ...egressDeny],
+      allow: [
+        ...rows.filter((r) => r.access === 'allow').map((r) => r.pattern),
+        ...egressAllow.filter((p) => managed.browserAllows(p)),
+      ],
+      deny: [
+        ...rows.filter((r) => r.access === 'block').map((r) => r.pattern),
+        ...egressDeny,
+        ...managed.browserDeny(),
+      ],
     };
   }
 

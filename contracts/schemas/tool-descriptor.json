@@ -9,7 +9,7 @@
   "properties": {
     "name": {
       "type": "string",
-      "pattern": "^(mcp:[a-z0-9-]+\\.[A-Za-z0-9_.-]+|plugin:[a-z0-9.-]+\\.[A-Za-z0-9_]+|page:[a-z0-9.-]+\\.[A-Za-z0-9_]+|[a-z]+(\\.[a-z][A-Za-z0-9_]*)+|[a-z]+(_[a-z]+)+)$"
+      "pattern": "^(mcp:[a-z0-9-]+\\.[A-Za-z0-9_.-]+|plugin:[a-z0-9.-]+\\.[A-Za-z0-9_]+|ext:[a-z0-9]+(\\.[a-z0-9-]+)+\\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}|page:[a-z0-9.-]+\\.[A-Za-z0-9_]+|[a-z]+(\\.[a-z][A-Za-z0-9_]*)+|[a-z]+(_[a-z]+)+)$"
     },
     "title": { "type": "string", "maxLength": 120 },
     "description": { "type": "string", "maxLength": 2000 },

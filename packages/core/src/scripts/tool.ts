@@ -165,11 +165,13 @@ export function runtimeNestedCaller(opts: {
 }
 
 /**
- * Who a nested call is from: the script's own caller, except that a script the user started from
- * the UI is still code the model wrote, so its calls are the agent's, never the user's own.
+ * Who a nested call is from: the script (docs/08 §1.5, M8), recorded as the `script` origin. A
+ * script the user started from the UI is still code the model wrote, so its calls are never the
+ * user's own; the gate and the runtime treat `script` like `model` (an agent's call that fires
+ * hooks). Hooks and MCP clients are never given `script.run`, so no other caller occurs.
  */
-export function nestedOrigin(parent: ToolContext['origin']): ToolContext['origin'] {
-  return parent === 'ui' ? 'model' : parent;
+export function nestedOrigin(_parent: ToolContext['origin']): ToolContext['origin'] {
+  return 'script';
 }
 
 function unavailable(): NestedResult {

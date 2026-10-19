@@ -21,6 +21,7 @@ import {
   LibraryService,
   ProjectFolderService,
   TerminalManager,
+  managedRestrictions,
   type AuditSink,
   type SandboxClient,
   type TerminalAttachment,
@@ -95,6 +96,11 @@ export function setupWorkspace(ctx: HubContext & WorkspaceDeps): Promise<Workspa
     events: ctx.events,
     dataDir: ctx.dataDir,
     ...(ctx.home !== undefined ? { home: ctx.home } : {}),
+    // Managed policy (FR-106): only the folders it allows.
+    managedFolder: async (path) =>
+      managedRestrictions(await ctx.setting('managed.restrict'), {
+        ...(ctx.home ? { home: ctx.home } : {}),
+      }).folder(path),
     log: log.child('folders'),
   });
   const terminals = new TerminalManager({

@@ -18,6 +18,17 @@ export {
   type UpdateProfileRequest,
 } from './account.ts';
 export { UsageService, type UsageRange, type UsageServiceOptions } from './usage.ts';
+// M8 spend caps and provider limits (FR-116, FR-115; ADR-097).
+export {
+  SpendCaps,
+  capReachedError,
+  spendCapHref,
+  spendPeriod,
+  withSpendCaps,
+  type SpendCapsOptions,
+  type SpendReservation,
+  type SpendVerdict,
+} from './spend.ts';
 export { ImportService, type ImportServiceOptions, type ImportTargets } from './import/service.ts';
 export {
   SCAN_LIMITS as IMPORT_SCAN_LIMITS,
@@ -32,3 +43,5 @@ export {
   type McpServerPlan as ImportMcpServerPlan,
 } from './import/formats.ts';
 export { isSecret as isImportSecret, maskSecret as maskImportSecret } from './import/secrets.ts';
+// M8: hooks of other plugin layouts converted on import (FR-200).
+export { commandArgv, convertForeignHooks, type ConvertedHooks } from './import/hooks.ts';

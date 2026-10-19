@@ -13,6 +13,7 @@ import {
   PluginCatalogs,
   PluginService,
   SkillIndex,
+  managedRestrictions,
   type AuditSink,
   type CatalogConfig,
   type PluginCatalogsOptions,
@@ -154,7 +155,20 @@ export function setupPlugins(ctx: HubContext & PluginsDeps): Promise<PluginsArea
     }),
     catalogConfigs,
     servers: {
-      apply: (row) => mcp.manager.update(pluginServerConfig(row)),
+      // A server managed policy refuses (or of a plugin it refuses) is not started (FR-106).
+      apply: async (row) => {
+        const managed = managedRestrictions(await ctx.setting('managed.restrict'));
+        const refused =
+          (row.pluginId ? managed.plugin(row.pluginId) : null) ??
+          managed.mcpServer({
+            name: row.name,
+            source: row.source,
+            transport: row.transport,
+            deviceId: row.deviceId,
+          });
+        const config = pluginServerConfig(row);
+        await mcp.manager.update(refused ? { ...config, enabled: false } : config);
+      },
       remove: async (id) => {
         await mcp.manager.remove(id);
       },
@@ -164,6 +178,8 @@ export function setupPlugins(ctx: HubContext & PluginsDeps): Promise<PluginsArea
     audit,
     novaVersion: ctx.config.version,
     nodePath: novaNodeModules(),
+    // Managed policy (FR-106): refused plugins and unverified installs.
+    managed: async () => managedRestrictions(await ctx.setting('managed.restrict')),
     log,
   });
 

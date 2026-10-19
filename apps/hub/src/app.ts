@@ -31,13 +31,16 @@ import {
   ProviderRegistry,
   Router,
   SourceService,
+  SpendCaps,
   ThreadService,
   MockDesktops,
   browserDevServerGrant,
   browserDevServerOpener,
   detectLocalServers,
   isHubOwner,
+  managedRestrictions,
   threadSandboxRouter,
+  withSpendCaps,
   type ChatServiceOptions,
   type ModelRouter,
   type ProviderFactory,
@@ -56,7 +59,7 @@ import { EventStore } from './event-store.ts';
 import { registerMemoryRoutes } from './memory-routes.ts';
 import { registerModelRoutes } from './model-routes.ts';
 import { setupConsolidation } from './consolidation.ts';
-import { setupHooks } from './hooks.ts';
+import { mcpForHooks, setupHooks } from './hooks.ts';
 import { pluginUiFromManifest, setupMcpApps } from './mcp-apps.ts';
 import { setupMcpServer } from './mcp-server.ts';
 import { setupPlugins } from './plugins.ts';
@@ -79,6 +82,12 @@ import { setupPush } from './push.ts';
 import { setupTeam, type TeamArea, type TeamDeps } from './team.ts';
 import { setupFlagged } from './flagged.ts';
 import { setupDeviceTrust } from './device-trust.ts';
+import { setupManaged, type ManagedArea, type ManagedDeps } from './managed.ts';
+import { setupSdk } from './sdk.ts';
+import { setupMarket } from './market.ts';
+import { setupDatactl } from './datactl.ts';
+import { setupAppAuth, type AppAuthArea } from './appauth.ts';
+import { setupOtlp } from './otlp.ts';
 import { setupFirmware } from './firmware.ts';
 import { setupBoot } from './boot.ts';
 import { setupOob } from './oob.ts';
@@ -88,7 +97,7 @@ import { setupSpaces } from './spaces.ts';
 import { setupRequests } from './requests.ts';
 import { setupRuns } from './runs.ts';
 import { setupSchedules } from './schedules.ts';
-import { DiagnosticsRegistry, type HubContext } from './hub-context.ts';
+import { DiagnosticsRegistry, type HubArea, type HubContext } from './hub-context.ts';
 import { deviceBridgeFrom, setupMcp } from './mcp.ts';
 import { registerNodeRoutes } from './node-routes.ts';
 import { setupOps } from './ops.ts';
@@ -110,8 +119,12 @@ export interface HubDeps {
   log: Logger;
   auth?: AuthService;
   events?: EventStore;
-  /** Managed-policy settings layer (docs/12 §10); empty until M8. */
-  managedSettings?: () => Record<string, unknown>;
+  /** Tests: a managed-policy settings layer in place of the managed area's (docs/12 §10, FR-106). */
+  managedSettings?: (global?: Partial<Record<string, unknown>>) => Record<string, unknown>;
+  /** Restart the Hub in place after a delete-all or an import (FR-105; `main.ts` passes it). */
+  restart?: () => void;
+  /** Tests: where the managed area reads its policy from (an environment, a file system, ...). */
+  managed?: Omit<ManagedDeps, 'policy'>;
   /** Credential store (FR-101). Defaults to an in-memory store; `main.ts` passes the vault. */
   secrets?: SecretStore;
   /** Where blobs live (docs/06 §3); defaults to `config.dataDir`. */
@@ -127,7 +140,7 @@ export interface HubDeps {
   /** Relay connector timings and the pairing key-derivation cost (tests shorten them). */
   relay?: Pick<RelayDeps, 'backoff' | 'retransmitMs' | 'pingIntervalMs' | 'kdfIterations'>;
   /** Members' rate limits, the OIDC provider's fetch and a clock (tests). */
-  team?: Pick<TeamDeps, 'fetch' | 'now' | 'limits'>;
+  team?: Pick<TeamDeps, 'fetch' | 'now' | 'limits' | 'purgeSweepMs'>;
   /** Replace the model router (tests); the default is the full Router (docs/07 §8-§9). */
   router?: (registry: ProviderRegistry) => ModelRouter;
   /** Probe for local model servers (tests replace it; docs/07 §12). */
@@ -156,6 +169,12 @@ export interface Hub {
   relay: RelayArea;
   /** M7 members, shared threads and team agents (FR-217, FR-091). */
   team: TeamArea;
+  /** M8 third-party app authorization (FR-222). */
+  appAuth: AppAuthArea;
+  /** M8 managed policy (FR-106). */
+  managed: ManagedArea;
+  /** Every registered route, method and pattern (the route classification test, ADR-097 D7). */
+  routes(): readonly { method: string; path: string }[];
 }
 
 /** The web app's policy; `connect` adds the Relay's origins when it is on (docs/22 §3). */
@@ -187,8 +206,14 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       if (r.scopeKind === 'project' && r.scopeRef === projectId)
         project[r.key] = JSON.parse(r.valueJson) as unknown;
     }
-    return { global, project, managed: deps.managedSettings?.() ?? {} };
+    return {
+      global,
+      project,
+      managed: deps.managedSettings?.(global) ?? managedLayer?.(global) ?? {},
+    };
   }
+  // The managed policy's settings layer (FR-106), set once the managed area is up.
+  let managedLayer: ((global: Record<string, unknown>) => Record<string, unknown>) | null = null;
   const auth = deps.auth ?? new AuthService(db);
   const events = deps.events ?? new EventStore(db);
   const dataDir = deps.dataDir ?? config.dataDir;
@@ -212,11 +237,16 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
         presets: resolveSetting('models.presets', layers).value,
         order: resolveSetting('routing.order', layers).value,
         allowCloud: resolveSetting('routing.allowCloud', layers).value,
+        providers: managedRestrictions(
+          resolveSetting('managed.restrict', layers).value,
+        ).providers(),
       };
     },
     log: log.child('router'),
   });
-  const router: ModelRouter = deps.router?.(registry) ?? fullRouter;
+  // Spend caps stop a provider before its next model call (FR-116); fallbacks still run.
+  const spend = new SpendCaps({ db, events, log: log.child('spend') });
+  const router: ModelRouter = withSpendCaps(deps.router?.(registry) ?? fullRouter, spend);
   const threads = new ThreadService({
     db,
     router,
@@ -256,7 +286,11 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     accountOf,
     diagnostics: new DiagnosticsRegistry(),
   };
+  // M8 managed policy (FR-106) comes first: every area reads its restrictions through settings.
+  const managed = await setupManaged(ctx, { ...deps.managed });
+  managedLayer = (global) => managed.settingsLayer(global);
   const ops = await setupOps(ctx);
+  if (!deps.managed?.audit) managed.useAudit(ops.audit);
   const policy = await setupPolicy({ ...ctx, audit: ops.audit, notifier: ops.notifier });
   const mcp = await setupMcp({ ...ctx, audit: ops.audit });
   // M4: plugins (skills, their MCP servers and permissions) and hooks come before the tools,
@@ -269,13 +303,32 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     ...ctx,
     audit: ops.audit,
     gate: policy.gate,
-    managedHooks: () => deps.managedSettings?.()['hooks'],
+    managedHooks: () => (deps.managedSettings?.() ?? managed.settingsLayer())['hooks'],
   });
   // Plugin hooks come from the plugins area, which shows how many wait for trust.
   hooks.usePluginHooks(plugins.hooks);
   plugins.useHookTrust((accountId, pluginId) => hooks.untrustedPluginHooks(accountId, pluginId));
   policy.useHooks(hooks.dispatcher);
-  policy.usePluginPermissions(plugins.permissions);
+  // M8 extensions (FR-117): an extension is a plugin whose handlers run in a sandboxed worker;
+  // its declared permissions join the plugins' at the gate, its tools are `ext:<id>/<name>`.
+  const sdk = await setupSdk(ctx, {
+    plugins: plugins.service,
+    audit: ops.audit,
+    notifier: ops.notifier,
+    hookStore: hooks.service.store,
+  });
+  sdk.useInstallPolicy({
+    installProblem: async ({ extensionId, verified }) => {
+      const restrict = managedRestrictions(await ctx.setting('managed.restrict'));
+      return (
+        restrict.extension(extensionId) ??
+        (verified ? null : restrict.unverifiedInstall('an unverified extension'))
+      );
+    },
+  });
+  const pluginPermissions = sdk.permissions(plugins.permissions);
+  policy.usePluginPermissions(pluginPermissions);
+  hooks.useGate(sdk.hookGate(policy.gate));
   policy.usePluginViolations((accountId, pluginId) =>
     plugins.service.setEnabled(accountId, pluginId, false),
   );
@@ -503,6 +556,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     ...ctx,
     gate: policy.gate,
     sandbox,
+    // Image generation checks spend caps and records its usage (FR-116, M8 data review #9).
+    spend,
     sources: [
       mcp.source,
       plugins.skills.tools,
@@ -518,6 +573,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       devices.tools,
       browser.tools,
       flagged.tools,
+      sdk.tools,
       // Computer use goes last (its tools defer to the browser's and the shell's).
       screen.tools,
     ],
@@ -525,7 +581,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     notifier: ops.notifier,
     hooks: hooks.dispatcher,
     skills: plugins.skills,
-    pluginPermissions: plugins.permissions,
+    pluginPermissions,
     appContext: (accountId, threadId) =>
       Promise.resolve(mcpApps ? mcpApps.modelContext(accountId, threadId) : null),
   });
@@ -581,6 +637,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   policy.gate.useToolLimits(agents.service.toolLimits);
   // An agent's plugin limits follow it into the Code sessions it delegated (M7).
   policy.gate.useToolLimits(code.delegatedToolLimits(agents.service.toolLimits));
+  // An agent's skill catalog shows only the skills of plugins connected to it (M8).
+  plugins.index.useLimits(agents.service.toolLimits);
+  plugins.index.useLimits(code.delegatedToolLimits(agents.service.toolLimits));
   requests.status.useLinks(agents.service.statusLinks);
   team.useAgents(agents.service);
   flagged.useRuntime(tools.runtime);
@@ -620,7 +679,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   // A thread's own sandbox decides its isolation (a cloud thread's is the runner's, M7).
   policy.useSubstrate((accountId, threadId) => sandbox.substrateFor(accountId, threadId));
   hooks.useSandbox(tools.sandbox);
-  hooks.useMcp(mcp.manager);
+  // Hooks reach MCP servers and, for an extension's own hooks, its worker (FR-117).
+  hooks.service.useMcp(sdk.hookClient(mcpForHooks(mcp.manager)));
   const scope: ToolRuntimeOptions['scope'] = (input) =>
     tools.runtime.scopeFor(input.accountId, input.threadId, input.projectId);
   hooks.useScope(scope);
@@ -637,6 +697,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   });
   const apps = await setupMcpApps({ ...ctx, mcp });
   mcpApps = apps;
+  apps.useExtensions(sdk.ui);
   apps.usePlugins({
     list: async (accountId) =>
       (await plugins.enabledManifests(accountId)).flatMap((p) => {
@@ -790,7 +851,43 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       setting: (accountId, key, value) => writeSetting(accountId, { key, value, scope: 'global' }),
     },
   });
+  // M8: the marketplace (FR-049), data controls and spend caps (FR-105, FR-116, FR-121), third-
+  // party app authorization (FR-222) and OTLP export (FR-223); managed policy is set up first.
+  const market = await setupMarket(ctx, {
+    plugins: { service: plugins.service, index: plugins.index },
+    audit: ops.audit,
+    writeSetting: (accountId, key, value) =>
+      writeSetting(accountId, { key, value, scope: 'global' }),
+  });
+  market.useMcpInstaller(mcp.marketInstaller);
+  // Extensions from the marketplace install through the SDK, which checks their signature (FR-117).
+  market.useExtensionInstaller(sdk.service);
+  // Delete-all and import replace every row, then the Hub restarts: background writers stop first
+  // (`quiesce`, bound below once the chat loop exists; M8 data review #13). Without a restart to
+  // follow, nothing is stopped.
+  let quiesceHub: (() => Promise<void>) | null = null;
+  const datactl = await setupDatactl(ctx, {
+    audit: ops.audit,
+    notifier: ops.notifier,
+    spend,
+    ...(deps.restart
+      ? { restart: deps.restart, quiesce: () => quiesceHub?.() ?? Promise.resolve() }
+      : {}),
+  });
+  const appAuth = await setupAppAuth(ctx, { auth, audit: ops.audit });
+  const otlp = await setupOtlp(ctx, {
+    audit: ops.audit,
+    version: config.version,
+    writeSetting: (accountId, key, value) =>
+      writeSetting(accountId, { key, value, scope: 'global' }),
+  });
   const areas = [
+    managed,
+    sdk,
+    market,
+    datactl,
+    appAuth,
+    otlp,
     firmware,
     boot,
     oob,
@@ -906,6 +1003,13 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     genReqId: () => uuidv7(),
     trustProxy: false,
   });
+  // Every route as registered (method and pattern), for the route classification (ADR-097 D7):
+  // Fastify's printed route tree folds some wildcard paths, so it cannot be read back exactly.
+  const registered: { method: string; path: string }[] = [];
+  app.addHook('onRoute', (route) => {
+    for (const method of [route.method].flat())
+      if (method !== 'HEAD') registered.push({ method, path: route.url });
+  });
   // Requests the Relay tunnels in arrive from `relay:<client id>`: dispatched in-process, so the
   // network setup's lock-out guard learns their transport here (FR-136).
   relay.useInject(app);
@@ -932,12 +1036,32 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   );
   sweeper.unref();
   nodes.start();
-  app.addHook('onClose', async () => {
+  // Quiesce (delete-all, import): no new turns (running ones end and are saved), schedulers,
+  // pollers, sweeps and compute-node checks stop, every area closes but the data controls (which
+  // answer) and ops (the audit sink), and pending writes, the audit among them, are flushed. The
+  // close that the restart runs skips what this closed.
+  const quiesced = new Set<HubArea>();
+  let stopped = false;
+  const stopLoops = async () => {
+    if (stopped) return;
+    stopped = true;
     clearInterval(sweeper);
     nodes.stop();
     await chat.shutdown();
     await sources.stop();
-    for (const a of areas) await a.close();
+  };
+  quiesceHub = async () => {
+    await stopLoops();
+    for (const a of areas) {
+      if (a === datactl || a === ops || quiesced.has(a)) continue;
+      quiesced.add(a);
+      await a.close();
+    }
+    await db.transaction(() => undefined);
+  };
+  app.addHook('onClose', async () => {
+    await stopLoops();
+    for (const a of areas) if (!quiesced.has(a)) await a.close();
   });
 
   await app.register(fastifyCookie);
@@ -963,10 +1087,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   app.addHook('onResponse', (req, reply, done) => {
     log.info('request', {
       method: req.method,
-      // The PXE routes carry their token in the path: log the route, never the token.
-      url: req.url.startsWith('/boot/')
-        ? (req.routeOptions.url ?? '/boot/')
-        : req.url.split('?')[0],
+      // The route pattern, never the path: some routes carry a token in the path (PXE boot
+      // tokens, one-use approval links), and logs may leave the machine through OTLP (FR-223).
+      url: req.routeOptions.url ?? 'unmatched',
       status: reply.statusCode,
       ms: Math.round(reply.elapsedTime),
       requestId: req.id,
@@ -1344,6 +1467,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     log.warn('web UI not built; serving the API only', { webDir: config.webDir });
   }
 
+  // Enabled extensions start their workers once everything they call is wired (FR-117).
+  void sdk.start();
   return {
     app,
     auth,
@@ -1361,6 +1486,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     network,
     relay,
     team,
+    appAuth,
+    managed,
+    routes: () => registered,
   };
 }
 

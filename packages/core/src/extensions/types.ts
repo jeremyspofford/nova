@@ -19,12 +19,14 @@ export interface ResolvedSkill {
 export interface SkillCatalogProvider {
   /**
    * The catalog section for a chat: names and descriptions only, within 2 % of the context window
-   * (at most 10,000 tokens); null when there are no skills.
+   * (at most 10,000 tokens); null when there are no skills. With `threadId`, only skills of the
+   * plugins that thread may use (an agent's connected plugins, M8).
    */
   catalogSection(
     accountId: string,
     projectId: string | null,
     contextTokens: number,
+    threadId?: string | null,
   ): Promise<string | null>;
   /** A skill by name after precedence (managed > project > user > plugin > built-in). */
   resolve(accountId: string, projectId: string | null, name: string): Promise<ResolvedSkill | null>;

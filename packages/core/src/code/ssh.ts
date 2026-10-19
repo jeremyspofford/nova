@@ -33,6 +33,7 @@ import type {
   EnvSshTarget,
   EnvSshTransport,
 } from './environments.ts';
+import { managedDenied } from '../managed/restrictions.ts';
 import { shellQuote } from './transport.ts';
 
 /** The helper's version, reported in `hello`. */
@@ -139,6 +140,8 @@ export interface OpenSshOptions {
   sshBin?: string;
   /** Whether SSH environments may connect (`code.ssh.enabled`); off when it says no. */
   enabled?: () => Promise<boolean>;
+  /** Why managed policy refuses SSH to this host, or null (FR-106, `ManagedRestrictions.sshHost`). */
+  managedHost?: (host: string) => Promise<string | null>;
   connectTimeoutSeconds?: number;
   /** Reuse one SSH connection for every call (default true). */
   multiplex?: boolean;
@@ -181,6 +184,9 @@ export class OpenSshTransport implements EnvSshTransport {
   }
 
   async connect(target: EnvSshTarget, signal: AbortSignal): Promise<SshHelperConnection> {
+    // Managed policy first: its refusal is the organization's, not a setting the user can change.
+    const managed = this.#o.managedHost ? await this.#o.managedHost(target.host) : null;
+    if (managed) throw managedDenied(managed, { host: target.host });
     if (this.#o.enabled && !(await this.#o.enabled()))
       throw new NovaError(
         'capability_missing',

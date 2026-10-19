@@ -4,7 +4,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Logger } from '@nova/telemetry';
 import {
   ContainerSandbox,
@@ -332,12 +332,17 @@ describe('ContainerSandbox (through a stand-in docker CLI)', () => {
       turnId: 'T',
       onOutput: (c) => out.push(c),
     });
-    expect(r).toMatchObject({ status: 'running', output: 'start\n' });
+    // On a loaded machine the stand-in may print after the yield: the output then arrives with
+    // the poll instead, and the two together are the whole stream.
+    expect(r).toMatchObject({ status: 'running' });
+    const first = (r as { output: string }).output;
+    await vi.waitFor(() => expect(out.join('')).toContain('start'));
     const id = (r as { sessionId: string }).sessionId;
     expect(sb.sessions('T')).toEqual([id]);
     await sb.write(id, { text: 'hello\n' });
     const done = await sb.poll(id, 5_000, new AbortController().signal);
-    expect(done).toEqual({ status: 'exited', exitCode: 0, output: 'got hello\n' });
+    expect(done).toMatchObject({ status: 'exited', exitCode: 0 });
+    expect(first + (done as { output: string }).output).toBe('start\ngot hello\n');
     expect(out.join('')).toContain('got hello');
     expect(sb.sessions()).toEqual([]);
     await expect(sb.poll(id, 10, new AbortController().signal)).rejects.toMatchObject({

@@ -21,6 +21,7 @@ import type { GateRequest, Provenance, ToolGate } from '../tools/types.ts';
 import { JsonRpcError, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS } from './jsonrpc.ts';
 import type { AcpHost, PermissionAnswer, TerminalOutput } from './client.ts';
 import { toolKind, type PermissionRequest, type ToolKind } from './protocol.ts';
+import { terminalEnv } from './env.ts';
 
 /** An operation Nova refused or could not do, as the agent sees it. */
 export const ACP_DENIED = -32001;
@@ -327,7 +328,10 @@ export function policyAcpHost(o: PolicyAcpHostOptions): AcpHost & {
           ACP_DENIED,
           `at most ${MAX_AGENT_TERMINALS} terminals at once; release one first`,
         );
-      const cmd = [req.command, ...(req.args ?? [])].map(quote).join(' ');
+      // The variables the agent asks for pass the allowlist (env.ts) as leading assignments, so
+      // the policy engine judges the command with them.
+      const vars = terminalEnv(req.env).pass.map(([k, v]) => `${k}=${quote(v)}`);
+      const cmd = [...vars, ...[req.command, ...(req.args ?? [])].map(quote)].join(' ');
       const args: Record<string, unknown> = { cmd, yieldMs: 120_000 };
       if (req.cwd) args.cwd = absolute(req.cwd);
       const id = `term-${uuidv7()}`;

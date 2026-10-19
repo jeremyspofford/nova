@@ -52,7 +52,8 @@ export interface ToolContext {
   /** The assistant message the call belongs to (artifacts attach to it). */
   messageId?: string;
   projectId: string | null;
-  origin: 'model' | 'ui' | 'hook' | 'mcp_client';
+  /** Who issued the call (audited); `script`: a nested call of `script.run` (M8). */
+  origin: 'model' | 'ui' | 'hook' | 'script' | 'mcp_client';
   /** The permission profile in force (FR-190) and its hash, recorded with every decision. */
   profile: { id: string; hash: string };
   roots: ToolRoot[];

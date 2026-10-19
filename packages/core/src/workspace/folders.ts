@@ -20,6 +20,7 @@ import { isWithin, realpathLenient } from '@nova/security';
 import type { NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
+import { managedDenied } from '../managed/restrictions.ts';
 import { chunkText } from '../sources.ts';
 import { isCredentialPath, isCredentialRel, isProtectedRel } from '../tools/roots.ts';
 import { BINARY_EXTENSIONS, IGNORED_DIRS, IgnoreRules, decodeText, mimeOf } from './common.ts';
@@ -43,6 +44,8 @@ export interface ProjectFolderServiceOptions {
   /** The Hub user's home directory (`~` expansion; never a project folder itself). */
   home?: string | null;
   limits?: Partial<{ maxFileBytes: number; maxFiles: number; maxFoldersPerProject: number }>;
+  /** Why managed policy refuses this folder (its real path), or null (FR-106). */
+  managedFolder?: (path: string) => Promise<string | null>;
   log?: Logger;
   now?: () => Date;
 }
@@ -86,6 +89,7 @@ export class ProjectFolderService {
   readonly #limits: { maxFileBytes: number; maxFiles: number; maxFoldersPerProject: number };
   readonly #log: Logger;
   readonly #now: () => Date;
+  readonly #managedFolder: ProjectFolderServiceOptions['managedFolder'];
   readonly #queue: string[] = [];
   #worker: Promise<void> | null = null;
   #stopped = false;
@@ -98,6 +102,7 @@ export class ProjectFolderService {
     this.#limits = { ...FOLDER_LIMITS, ...opts.limits };
     this.#log = opts.log ?? new Logger({ module: 'core.folders', sinks: [] });
     this.#now = opts.now ?? (() => new Date());
+    this.#managedFolder = opts.managedFolder;
   }
 
   list(accountId: string, projectId: string): Promise<ProjectFolderView[]> {
@@ -125,6 +130,8 @@ export class ProjectFolderService {
   ): Promise<ProjectFolderView> {
     this.#assertProject(accountId, projectId);
     const path = await this.#checkPath(req.path);
+    const managed = (await this.#managedFolder?.(path)) ?? null;
+    if (managed) throw managedDenied(managed, { folder: path });
     const now = this.#now().toISOString();
     const id = uuidv7();
     await this.#db.transaction(() => {

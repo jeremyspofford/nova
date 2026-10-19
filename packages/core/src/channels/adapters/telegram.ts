@@ -7,8 +7,14 @@
 // returned. Approval prompts get an inline keyboard; a button press comes back as a callback
 // query from the user who pressed it. The bot token is read from the secret store on each call
 // and only ever appears in the request path, never in errors or logs.
+// M8: photos, documents, voice and video notes are read. Parsing only names them (file id, size,
+// type); the service downloads them (`getFile`, then the file URL, size-capped while reading)
+// after the message passed every check. Outbound files go as photos (JPEG, PNG or WebP up to
+// 10 MB) or documents (up to 50 MB).
 import { randomBytes } from 'node:crypto';
+import { NovaError } from '@nova/shared';
 import type { ChannelReceipt } from '../types.ts';
+import { MAX_CHANNEL_FILE_BYTES, tooLarge } from '../files.ts';
 import { headerOf, safeEqual, unauthorized } from '../signing.ts';
 import {
   jsonBody,
@@ -20,14 +26,44 @@ import {
   type BindingCredentials,
   type ChannelAction,
   type FetchLike,
+  type InboundAttachment,
+  type InboundFileRef,
   type NovaChannelAdapter,
   type NovaInboundMessage,
   type NovaOutboundMessage,
+  type OutboundFile,
 } from './common.ts';
 
 export const TELEGRAM_API = 'https://api.telegram.org';
 /** Telegram's limit on one message's text. */
 const MAX_TEXT = 4096;
+/** Telegram's limit on a caption. */
+const MAX_CAPTION = 1024;
+/** What the Bot API takes as a photo upload, and as a document. */
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
+const PHOTO_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+/** A Bot API file path (`photos/file_1.jpg`): relative, no `..`, nothing to escape. */
+const FILE_PATH = /^(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9_][A-Za-z0-9_./-]{0,255}$/;
+/** Media that is not read, and how a turn names it. */
+const NOT_READ: [string, string][] = [
+  ['video', 'a video'],
+  ['audio', 'an audio file'],
+  ['animation', 'an animation'],
+  ['sticker', 'a sticker'],
+];
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  json: 'application/json',
+  csv: 'text/csv',
+};
 const ALLOWED_UPDATES = ['message', 'callback_query'];
 
 /** Callback data is at most 64 bytes: `nova:a:<approval id>:<decision letter>`. */
@@ -112,7 +148,8 @@ export class TelegramAdapter implements NovaChannelAdapter {
     if (botId && userId === botId) return null;
     const raw =
       typeof m.text === 'string' ? m.text : typeof m.caption === 'string' ? m.caption : '';
-    if (!raw.trim()) return null;
+    const files = filesOf(m, messageId);
+    if (!raw.trim() && !files.length) return null;
     const direct = chat.type === 'private';
     const username = config.botUsername ?? null;
     const mention = username ? `@${username}` : null;
@@ -134,6 +171,7 @@ export class TelegramAdapter implements NovaChannelAdapter {
       // In a group the reply quotes the message it answers; a private chat needs no quoting.
       threadRef: direct ? null : messageId,
       receivedAt: this.#now().toISOString(),
+      ...(files.length ? { files } : {}),
     };
   }
 
@@ -245,6 +283,98 @@ export class TelegramAdapter implements NovaChannelAdapter {
   }
 
   /**
+   * Download an inbound file (M8): `getFile` names its path, then the file URL is read with the
+   * size cap enforced while reading, whatever the service said it weighs. The URL holds the
+   * token, so failures name the cause only.
+   */
+  async download(
+    bindingId: string,
+    file: InboundFileRef,
+    signal: AbortSignal,
+  ): Promise<InboundAttachment> {
+    if (file.kind === 'unsupported')
+      throw new NovaError('validation', `${file.name} is not read`, {
+        details: { attachment: file.name, reason: 'type' },
+      });
+    if (file.size !== null && file.size > MAX_CHANNEL_FILE_BYTES)
+      throw tooLarge(file.name, file.size);
+    const info = obj(await this.#call(bindingId, 'getFile', { file_id: file.ref }, signal));
+    const size = typeof info.file_size === 'number' ? info.file_size : null;
+    if (size !== null && size > MAX_CHANNEL_FILE_BYTES) throw tooLarge(file.name, size);
+    const path = str(info.file_path);
+    if (!path || !FILE_PATH.test(path))
+      throw new NovaError('validation', `"${file.name}" cannot be downloaded`, {
+        details: { attachment: file.name, reason: 'unavailable' },
+      });
+    const token = await this.#creds.secret(bindingId, 'botToken');
+    if (!token) throw notConfigured('the Telegram bot token');
+    let res: Response;
+    try {
+      res = await this.#fetch(`${this.#api}/file/bot${token}/${path}`, {
+        method: 'GET',
+        signal,
+        redirect: 'error',
+      });
+    } catch (err) {
+      throw sendFailed('Telegram file download', err instanceof Error ? err.name : 'network error');
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw sendFailed('Telegram file download', `HTTP ${res.status}`);
+    }
+    const bytes = await readCapped(res, file.name);
+    return {
+      name: file.name,
+      mime: file.mime,
+      bytes,
+      ...(file.kind === 'voice' || file.kind === 'video_note'
+        ? { note: { kind: file.kind, seconds: file.seconds ?? null } }
+        : {}),
+    };
+  }
+
+  /** Send a file (M8): a photo when Telegram takes it as one, otherwise a document. */
+  async sendFile(
+    bindingId: string,
+    file: OutboundFile,
+    signal: AbortSignal,
+  ): Promise<ChannelReceipt> {
+    if (file.bytes.length > MAX_DOCUMENT_BYTES)
+      throw tooLarge(file.name, file.bytes.length, MAX_DOCUMENT_BYTES);
+    const photo = PHOTO_MIMES.has(file.mime) && file.bytes.length <= MAX_PHOTO_BYTES;
+    if (photo) {
+      try {
+        return await this.#sendMedia(bindingId, 'sendPhoto', 'photo', file, signal);
+      } catch {
+        // A photo Telegram refuses (its dimensions, its format) still goes as a document.
+      }
+    }
+    return this.#sendMedia(bindingId, 'sendDocument', 'document', file, signal);
+  }
+
+  async #sendMedia(
+    bindingId: string,
+    method: 'sendPhoto' | 'sendDocument',
+    field: 'photo' | 'document',
+    file: OutboundFile,
+    signal: AbortSignal,
+  ): Promise<ChannelReceipt> {
+    const form = new FormData();
+    form.set('chat_id', file.conversation);
+    if (file.threadRef && /^\d+$/.test(file.threadRef))
+      form.set(
+        'reply_parameters',
+        JSON.stringify({ message_id: Number(file.threadRef), allow_sending_without_reply: true }),
+      );
+    if (file.caption) form.set('caption', file.caption.slice(0, MAX_CAPTION));
+    form.set(field, new Blob([new Uint8Array(file.bytes)], { type: file.mime }), file.name);
+    const res = obj(await this.#call(bindingId, method, form, signal));
+    const id = idOf(res.message_id);
+    const chat = idOf(obj(res.chat).id) ?? file.conversation;
+    return { id: `tg:${chat}:${id ?? '0'}`, at: this.#now().toISOString() };
+  }
+
+  /**
    * `getMe` (the token works; learns the bot's id and username for mentions and loop prevention),
    * then the delivery mode: `setWebhook` with the secret token at the public inbound address, or
    * `deleteWebhook` so long polling can run.
@@ -303,17 +433,19 @@ export class TelegramAdapter implements NovaChannelAdapter {
   async #call(
     bindingId: string,
     method: string,
-    payload: Record<string, unknown>,
+    payload: Record<string, unknown> | FormData,
     signal: AbortSignal,
   ): Promise<unknown> {
     const token = await this.#creds.secret(bindingId, 'botToken');
     if (!token) throw notConfigured('the Telegram bot token');
     let res: Response;
     try {
+      // A form (a file upload) sets its own multipart content type.
       res = await this.#fetch(`${this.#api}/bot${token}/${method}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        ...(payload instanceof FormData
+          ? { body: payload }
+          : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }),
         signal,
         redirect: 'error',
       });
@@ -344,4 +476,91 @@ function idOf(v: unknown): string | null {
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function num(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+}
+
+/** The files a message carries (M8), by kind; media that is not read is named so a turn knows. */
+function filesOf(m: Record<string, unknown>, messageId: string): InboundFileRef[] {
+  const out: InboundFileRef[] = [];
+  const photos = (Array.isArray(m.photo) ? m.photo.map(obj) : []).filter((p) => str(p.file_id));
+  if (photos.length) {
+    // The sizes Telegram made of one photo: the largest within the cap (else the smallest, which
+    // the download then refuses with its size).
+    const area = (p: Record<string, unknown>) => (num(p.width) ?? 0) * (num(p.height) ?? 0);
+    const fits = photos.filter((p) => (num(p.file_size) ?? 0) <= MAX_CHANNEL_FILE_BYTES);
+    const pick = fits.length
+      ? fits.reduce((a, b) => (area(b) > area(a) ? b : a))
+      : photos.reduce((a, b) => (area(b) < area(a) ? b : a));
+    out.push({
+      ref: str(pick.file_id)!,
+      kind: 'photo',
+      name: `photo-${messageId}.jpg`,
+      mime: 'image/jpeg',
+      size: num(pick.file_size),
+    });
+  }
+  // An animation also arrives as a document (for old clients): it is not read.
+  const doc = obj(m.document);
+  if (str(doc.file_id) && m.animation === undefined) {
+    const name = str(doc.file_name) ?? `document-${messageId}`;
+    const ext = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1]?.toLowerCase() ?? '';
+    out.push({
+      ref: str(doc.file_id)!,
+      kind: 'document',
+      name,
+      mime: str(doc.mime_type) ?? MIME_BY_EXT[ext] ?? 'application/octet-stream',
+      size: num(doc.file_size),
+    });
+  }
+  const voice = obj(m.voice);
+  if (str(voice.file_id))
+    out.push({
+      ref: str(voice.file_id)!,
+      kind: 'voice',
+      name: `voice-${messageId}.ogg`,
+      mime: 'audio/ogg',
+      size: num(voice.file_size),
+      seconds: num(voice.duration),
+    });
+  const note = obj(m.video_note);
+  if (str(note.file_id))
+    out.push({
+      ref: str(note.file_id)!,
+      kind: 'video_note',
+      name: `video-note-${messageId}.mp4`,
+      mime: 'video/mp4',
+      size: num(note.file_size),
+      seconds: num(note.duration),
+    });
+  for (const [key, label] of NOT_READ)
+    if (m[key] !== undefined)
+      out.push({ ref: '', kind: 'unsupported', name: label, mime: '', size: null });
+  return out;
+}
+
+/** A response body, refused as soon as it passes the cap (a missing or false length included). */
+async function readCapped(res: Response, name: string): Promise<Buffer> {
+  const declared = Number(res.headers.get('content-length') ?? NaN);
+  if (Number.isFinite(declared) && declared > MAX_CHANNEL_FILE_BYTES) {
+    await res.body?.cancel().catch(() => undefined);
+    throw tooLarge(name, declared);
+  }
+  if (!res.body) return Buffer.alloc(0);
+  const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_CHANNEL_FILE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge(name, total);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
 }

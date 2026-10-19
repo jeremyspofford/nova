@@ -1,7 +1,7 @@
 // M6 channels and event triggers (seams in types.ts): channel bindings and adapters (FR-088),
 // event triggers (FR-056), MCP event subscriptions (FR-201) and notification routing (FR-060).
 // M7: Telegram and email adapters, approval buttons and signed links, pollers, push (FR-110,
-// FR-111).
+// FR-111). M8: Telegram files and email OAuth (SASL XOAUTH2).
 export * from './types.ts';
 export {
   type AdapterProbe,
@@ -9,10 +9,12 @@ export {
   type ChannelAction,
   type ChannelAdapterExtras,
   type InboundAttachment,
+  type InboundFileRef,
   type NovaChannelAdapter,
   type NovaInboundMessage,
   type NovaOutboundMessage,
   type OutboundApproval,
+  type OutboundFile,
 } from './adapters/common.ts';
 export { SLACK_API, SlackAdapter, type SlackAdapterOptions } from './adapters/slack.ts';
 export {
@@ -28,7 +30,26 @@ export {
 export { WebhookAdapter, type WebhookAdapterOptions } from './adapters/webhook.ts';
 export { InAppAdapter } from './adapters/simple.ts';
 export { TELEGRAM_API, TelegramAdapter, type TelegramAdapterOptions } from './adapters/telegram.ts';
-export { EmailAdapter, type EmailAdapterOptions } from './adapters/email.ts';
+export { EmailAdapter, type EmailAdapterOptions, type MailOAuthTokens } from './adapters/email.ts';
+export {
+  ChannelOAuth,
+  OAUTH_SECRET_NAMES,
+  usesOAuth,
+  type ChannelOAuthEndpoints,
+  type ChannelOAuthFlows,
+  type ChannelOAuthOptions,
+  type ChannelOAuthTokens,
+} from './oauth.ts';
+export {
+  MAX_CHANNEL_FILE_BYTES,
+  MAX_OUTBOUND_FILES,
+  artifactFileName,
+  isTextLike,
+  prepareNote,
+  threadFiles,
+  turnFiles,
+  type StoredFile,
+} from './files.ts';
 export {
   ImapReader,
   MAX_MESSAGE_BYTES,
@@ -65,6 +86,7 @@ export {
 } from './answers.ts';
 export {
   ChannelService,
+  type BindingChange,
   type BindingThreadResolver,
   type ChannelBindingInfo,
   type ChannelInboundGuard,

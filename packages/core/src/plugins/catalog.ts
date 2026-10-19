@@ -1,8 +1,10 @@
 // Plugin catalogs (FR-045, FR-049 stub; docs/08 §7, docs/14 §5): a local folder, an https URL or a
 // Git repository whose `catalog.json` (or `nova-catalog.json`) lists plugins with their versions
 // and where they are. URL fetches are size-capped and never follow a redirect to another host;
-// Git catalogs need the `git` command and are cloned shallow, read-only, with hooks disabled.
-// Signatures arrive with the marketplace (M8): every entry is unverified until then.
+// Git catalogs need the `git` command and are cloned shallow, read-only, with hooks disabled; a
+// catalog or an entry may pin a commit SHA, which is fetched by itself and checked after checkout
+// (M8). Signatures are the marketplace's (packages/core/src/market, FR-049): the M4 installer
+// still treats every entry as unverified.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -26,6 +28,13 @@ export interface CatalogConfig {
   name: string;
   /** A folder on the Hub, an https URL or a Git URL. */
   location: string;
+  /**
+   * The publisher key (base64url Ed25519) the catalog's index must be signed with (M8, D2); none:
+   * any trusted publisher's key verifies it.
+   */
+  publisherKey?: string;
+  /** Git catalogs: read the index at this commit (40 hex characters) instead of the ref's head. */
+  commit?: string;
 }
 
 export type CatalogKind = CatalogView['kind'];
@@ -33,6 +42,7 @@ export type CatalogKind = CatalogView['kind'];
 const PLUGIN_ID = /^[a-z0-9]+(\.[a-z0-9-]+)+$/;
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const GIT_REF = /^[A-Za-z0-9._/-]{1,200}$/;
+const GIT_COMMIT = /^[0-9a-f]{40}$/;
 
 const indexSchema = z.object({
   schemaVersion: z.literal(1).optional(),
@@ -211,7 +221,7 @@ export class PluginCatalogs {
       return { catalog: c, entries: readFolderIndex(this.#folder(c.location)).plugins };
     if (kind === 'url')
       return { catalog: c, entries: (await this.#urlIndex(c.location)).index.plugins };
-    const clone = await this.cloneGit(c.location);
+    const clone = await this.catalogClone(c);
     return { catalog: c, entries: readFolderIndex(clone.dir).plugins };
   }
 
@@ -236,7 +246,7 @@ export class PluginCatalogs {
       };
     }
     if (kind === 'git') {
-      const clone = await this.cloneGit(c.location);
+      const clone = await this.catalogClone(c);
       const entry = this.#entry(readFolderIndex(clone.dir).plugins, c, pluginId, version);
       if (!entry.path) throw new NovaError('validation', `${pluginId} in ${c.name} has no path`);
       return {
@@ -255,10 +265,10 @@ export class PluginCatalogs {
         'validation',
         'a catalog archive must be served from the catalog host over https',
       );
-    const bytes = await this.#download(
+    const bytes = (await this.#download(
       archive.href,
       this.#opts.maxArchiveBytes ?? 50 * 1024 * 1024,
-    );
+    ))!;
     const sha = createHash('sha256').update(bytes).digest('hex');
     if (entry.sha256 && entry.sha256 !== sha)
       throw new NovaError(
@@ -267,6 +277,80 @@ export class PluginCatalogs {
       );
     const root = this.#unzip(bytes, sha);
     return { root, origin: `${c.id}/${pluginId}@${entry.version}`, entry };
+  }
+
+  /** A Git catalog's checkout: at its pinned commit when it has one, else at its ref's head. */
+  catalogClone(c: CatalogConfig): Promise<{ dir: string; commit: string }> {
+    return c.commit ? this.cloneGitAt(c.location, c.commit) : this.cloneGit(c.location);
+  }
+
+  /**
+   * Check out one commit of a Git URL (M8, docs/08 §7: entries pinned to a commit SHA): an empty
+   * repository fetches that commit alone (depth 1, hooks off, no tags) and checks it out
+   * detached; HEAD must then be the commit. Reused like `cloneGit`, keyed by URL and commit.
+   */
+  async cloneGitAt(location: string, commit: string): Promise<{ dir: string; commit: string }> {
+    const url = location
+      .trim()
+      .replace(/^git\+/, '')
+      .replace(/#.*$/, '');
+    if (url.startsWith('-') || !/^(https:\/\/|ssh:\/\/|git:\/\/|git@[^:]+:)/.test(url))
+      throw new NovaError('validation', 'a Git URL must use https, ssh or git');
+    if (!GIT_COMMIT.test(commit))
+      throw new NovaError('validation', 'a pinned commit is 40 lowercase hex characters');
+    const key = createHash('sha256').update(`${url}@${commit}`).digest('hex').slice(0, 32);
+    const now = this.#opts.now?.() ?? Date.now();
+    const hit = this.#gitCache.get(key);
+    // A commit never changes, so its checkout is reused for as long as it exists.
+    if (hit && existsSync(hit.dir)) return hit;
+    await this.#requireGit();
+    const parent = join(this.#opts.cacheDir, 'git');
+    mkdirSync(parent, { recursive: true, mode: 0o700 });
+    const dir = join(parent, `c-${key}`);
+    const tmp = join(parent, `.tmp-${uuidv7()}`);
+    const safe = ['-c', 'core.hooksPath=/dev/null', '-c', 'protocol.file.allow=never'];
+    const steps: [string, string[]][] = [
+      ['init', [...safe, 'init', '--quiet', '--', tmp]],
+      [
+        'fetch',
+        [...safe, '-C', tmp, 'fetch', '--depth', '1', '--no-tags', '--quiet', '--', url, commit],
+      ],
+      ['checkout', [...safe, '-C', tmp, 'checkout', '--quiet', '--detach', 'FETCH_HEAD']],
+    ];
+    try {
+      for (const [step, args] of steps) {
+        const r = await this.#git(args, { timeoutMs: 120_000 });
+        if (r.code !== 0)
+          throw new NovaError(
+            'validation',
+            `git ${step} failed: ${r.stderr.trim().split('\n').at(-1) ?? 'error'}`,
+          );
+      }
+      const head = await this.#git(['-C', tmp, 'rev-parse', 'HEAD'], { timeoutMs: 10_000 });
+      if (head.code !== 0 || head.stdout.trim() !== commit)
+        throw new NovaError('validation', `the checkout is not the pinned commit ${commit}`);
+    } catch (err) {
+      rmSync(tmp, { recursive: true, force: true });
+      throw err;
+    }
+    rmSync(dir, { recursive: true, force: true });
+    renameSync(tmp, dir);
+    const entry = { at: now, dir, commit };
+    this.#gitCache.set(key, entry);
+    return entry;
+  }
+
+  /**
+   * GET an https URL with a size cap; redirects only on the same host (the marketplace reads
+   * remote indexes, signatures and artifacts through it).
+   */
+  download(url: string, max: number): Promise<Uint8Array> {
+    return this.#download(url, max) as Promise<Uint8Array>;
+  }
+
+  /** Like `download`, but a 404 answers null (an optional file, such as an index signature). */
+  downloadOptional(url: string, max: number): Promise<Uint8Array | null> {
+    return this.#download(url, max, true);
   }
 
   /** Clone a Git URL (shallow, hooks off) into the cache; reused for `cacheMs`. */
@@ -374,14 +458,14 @@ export class PluginCatalogs {
     const now = this.#opts.now?.() ?? Date.now();
     const hit = this.#urlCache.get(url);
     if (hit && now - hit.at < (this.#opts.cacheMs ?? 5 * 60_000)) return { url, index: hit.index };
-    const bytes = await this.#download(url, this.#opts.maxIndexBytes ?? 1024 * 1024);
+    const bytes = (await this.#download(url, this.#opts.maxIndexBytes ?? 1024 * 1024))!;
     const index = parseIndex(Buffer.from(bytes).toString('utf8'), url);
     this.#urlCache.set(url, { at: now, index });
     return { url, index };
   }
 
   /** GET with a size cap; redirects are followed only on the same host (at most 3). */
-  async #download(start: string, max: number): Promise<Uint8Array> {
+  async #download(start: string, max: number, optional = false): Promise<Uint8Array | null> {
     let url = new URL(start);
     if (url.protocol !== 'https:') throw new NovaError('validation', 'catalog URLs must use https');
     const host = url.host;
@@ -410,6 +494,10 @@ export class PluginCatalogs {
           );
         url = next;
         continue;
+      }
+      if (optional && res.status === 404) {
+        await res.body?.cancel().catch(() => undefined);
+        return null;
       }
       if (!res.ok) throw new NovaError('validation', `${url.host} answered ${res.status}`);
       const declared = Number(res.headers.get('content-length') ?? '0');

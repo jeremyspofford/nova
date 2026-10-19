@@ -14,7 +14,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { z } from 'zod';
 import {
@@ -30,11 +30,13 @@ import {
   type pluginSourceSchema,
   type ToolDescriptor,
 } from '@nova/shared';
+import { isWithin } from '@nova/security';
 import { secretRef, type SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
 import type { PluginPermissionSource, PluginPermissions } from '../extensions/types.ts';
+import { managedDenied, type ManagedRestrictions } from '../managed/restrictions.ts';
 import type { AuditSink } from '../tools/types.ts';
 import { type CatalogConfig, type PluginCatalogs } from './catalog.ts';
 import { renderFrontmatter } from './frontmatter.ts';
@@ -138,6 +140,24 @@ export interface PluginUiEntry {
   network: string[];
 }
 
+/**
+ * What the caller verified about an install (FR-049, FR-117): the marketplace and the extension
+ * installer check signatures themselves and say so here, so the `plugin_install` row and the
+ * `plugin.install` audit entry agree. Without it (the plugins routes: a folder or Git) an install
+ * is unverified and needs the sideload confirmation.
+ */
+export interface PluginInstallProvenance {
+  /** Signed by a publisher the owner trusts, and the signature matched the files. */
+  verified: boolean;
+  /** The key whose signature verified (base64url), for the audit; null when unsigned. */
+  publisher?: string | null;
+  /** Where it came from, instead of the folder the preview read (an unpacked bundle). */
+  source?: PluginSource;
+  origin?: string;
+  /** Recorded in the audit: a catalog id, or `sideload` for an upload or a folder. */
+  via?: string;
+}
+
 export interface PluginServiceOptions {
   db: NovaDatabase;
   secrets: SecretStore;
@@ -158,6 +178,8 @@ export interface PluginServiceOptions {
   nodePath?: string | null;
   /** How many of a plugin's hooks are not trusted now; wired to the hooks area. */
   hookTrust?: (accountId: string, pluginId: string) => Promise<number | null>;
+  /** Managed policy (FR-106): plugins it refuses, and whether unverified ones may install. */
+  managed?: () => Promise<ManagedRestrictions>;
   previewTtlMs?: number;
   log?: Logger;
   now?: () => Date;
@@ -488,8 +510,10 @@ export class PluginService implements PluginPermissionSource {
       .where(
         and(eq(pluginInstall.accountId, accountId), eq(pluginInstall.pluginId, loaded.manifest.id)),
       );
+    // A folder or a Git clone carries no signature this installer checks: the marketplace and
+    // the extension installer verify theirs and replace this note (FR-049, FR-117).
     const warnings = [
-      'Unverified: catalog and plugin signatures are checked once the marketplace ships (FR-049). Install only plugins you trust.',
+      'Unverified: a plugin installed from a folder or Git is not signed by a publisher you trust. Install only plugins you trust.',
       ...loaded.warnings,
     ];
     if (current && compareSemver(loaded.manifest.version, current.version) < 0)
@@ -569,11 +593,23 @@ export class PluginService implements PluginPermissionSource {
 
   // ---- install and update -------------------------------------------------------------------
 
-  install(accountId: string, req: InstallPluginRequest): Promise<PluginView> {
-    return this.#serial(() => this.#install(accountId, req));
+  /**
+   * Install the previewed plugin. `provenance` comes from a caller that checked a signature
+   * itself (the marketplace, the extension installer); without it the install is unverified.
+   */
+  install(
+    accountId: string,
+    req: InstallPluginRequest,
+    provenance?: PluginInstallProvenance,
+  ): Promise<PluginView> {
+    return this.#serial(() => this.#install(accountId, req, provenance));
   }
 
-  async #install(accountId: string, req: InstallPluginRequest): Promise<PluginView> {
+  async #install(
+    accountId: string,
+    req: InstallPluginRequest,
+    provenance: PluginInstallProvenance | undefined,
+  ): Promise<PluginView> {
     this.#sweepPreviews();
     const p = this.#previews.get(req.previewId);
     if (!p || p.accountId !== accountId)
@@ -581,14 +617,19 @@ export class PluginService implements PluginPermissionSource {
         'request_expired',
         'the plugin preview expired; preview the plugin again',
       );
-    // No plugin is signed by a trusted publisher yet (FR-049), so each install is a sideload
-    // and needs the explicit confirmation (docs/08 §7, §11).
-    if (req.confirmSideload !== true)
+    // Only a caller that verified a trusted publisher's signature skips the explicit sideload
+    // confirmation (docs/08 §7, §11; docs/14 §5).
+    const verified = provenance?.verified === true;
+    if (!verified && req.confirmSideload !== true)
       throw new NovaError('validation', 'confirm that you want to install an unverified plugin', {
         details: { field: 'confirmSideload', reason: 'sideload_confirmation_required' },
       });
     const loaded = p.loaded;
     const m = loaded.manifest;
+    // Managed policy may refuse unverified installs, and any plugin it does not allow (FR-106).
+    await this.#assertManaged(m.id, loaded.root, { verified });
+    const source = provenance?.source ?? p.source;
+    const origin = provenance?.origin ?? p.origin;
     if (!existsSync(loaded.root))
       throw new NovaError('conflict', 'the plugin folder is gone; preview the plugin again');
     const entries = walkTree(loaded.root);
@@ -704,10 +745,10 @@ export class PluginService implements PluginPermissionSource {
       accountId,
       pluginId: m.id,
       version: m.version,
-      source: p.source,
-      origin: p.origin,
+      source,
+      origin,
       manifestJson: JSON.stringify(withVaultRefs(m, plan.rows)),
-      signature: 'unverified',
+      signature: verified ? 'verified' : 'unverified',
       installPath: installDir,
       registrationsJson: JSON.stringify(registrations),
       enabled: enable,
@@ -784,9 +825,11 @@ export class PluginService implements PluginPermissionSource {
     await this.#record(accountId, current ? 'plugin.update' : 'plugin.install', m.id, {
       version: m.version,
       previousVersion: current?.version ?? null,
-      source: p.source,
-      origin: p.origin,
-      verified: false,
+      source,
+      origin,
+      verified,
+      ...(provenance?.publisher ? { publisher: provenance.publisher } : {}),
+      ...(provenance?.via ? { via: provenance.via } : {}),
       enabled: enable,
       servers: plan.rows.map((r) => r.name),
       hooks: hooks.length,
@@ -912,6 +955,7 @@ export class PluginService implements PluginPermissionSource {
 
   async #setEnabled(accountId: string, pluginId: string, enabled: boolean): Promise<PluginView> {
     const row = await this.#row(accountId, pluginId);
+    if (enabled) await this.#assertManaged(pluginId, row.installPath);
     const now = this.#now().toISOString();
     const servers = await this.#servers(accountId, pluginId);
     const next = servers.map((s) => ({
@@ -965,6 +1009,9 @@ export class PluginService implements PluginPermissionSource {
 
   async #uninstall(accountId: string, pluginId: string): Promise<void> {
     const row = await this.#row(accountId, pluginId);
+    // The folder it would remove must be inside the plugins folder (a crafted id or path from an
+    // import must never remove anything else; M8 data review #2): checked before anything changes.
+    const folder = this.#ownFolder(join(this.pluginsDir, pluginId));
     const servers = await this.#servers(accountId, pluginId);
     for (const s of servers) await this.#stopServer(s.id);
     await this.#db.transaction(async () => {
@@ -986,7 +1033,7 @@ export class PluginService implements PluginPermissionSource {
       .select({ id: pluginInstall.id })
       .from(pluginInstall)
       .where(eq(pluginInstall.pluginId, pluginId));
-    if (!others.length) rmSync(join(this.pluginsDir, pluginId), { recursive: true, force: true });
+    if (!others.length) rmSync(folder, { recursive: true, force: true });
     await this.#o.events?.emit({
       name: 'plugin.removed',
       actor: 'user',
@@ -1049,11 +1096,44 @@ export class PluginService implements PluginPermissionSource {
 
   // ---- hooks handover (FR-197) --------------------------------------------------------------
 
+  /**
+   * Refuse what managed policy does not allow (FR-106): `policy_denied` `{reason: managed}`. A
+   * plugin whose folder holds `.nova-plugin/extension.json` is an extension (ADR-097 D2) and
+   * answers to the extension rules too.
+   */
+  async #assertManaged(
+    pluginId: string,
+    root: string,
+    install?: { verified: boolean },
+  ): Promise<void> {
+    const managed = await this.#o.managed?.();
+    if (!managed) return;
+    const extension = existsSync(join(root, '.nova-plugin', 'extension.json'));
+    const why =
+      this.#managedRefusal(managed, { pluginId, installPath: root }) ??
+      (install && !install.verified
+        ? managed.unverifiedInstall(extension ? 'an unverified extension' : 'an unverified plugin')
+        : null);
+    if (why) throw managedDenied(why, { pluginId });
+  }
+
+  /** Why managed policy refuses an installed plugin (or extension), or null. */
+  #managedRefusal(
+    managed: ManagedRestrictions | undefined,
+    row: { pluginId: string; installPath: string },
+  ): string | null {
+    if (!managed) return null;
+    const extension = existsSync(join(row.installPath, '.nova-plugin', 'extension.json'));
+    return managed.plugin(row.pluginId) ?? (extension ? managed.extension(row.pluginId) : null);
+  }
+
   async #hookDefinitions(accountId: string): Promise<PluginHookDefinition[]> {
     const rows = await this.#db.orm
       .select()
       .from(pluginInstall)
       .where(eq(pluginInstall.accountId, accountId));
+    // A plugin managed policy refuses runs no hooks, as if it were off (FR-106).
+    const managed = await this.#o.managed?.();
     const out: PluginHookDefinition[] = [];
     for (const r of rows.sort((a, b) => (a.pluginId < b.pluginId ? -1 : 1))) {
       const m = manifestOf(r);
@@ -1075,7 +1155,7 @@ export class PluginService implements PluginPermissionSource {
           hook: h.hook,
           contentHash: h.contentHash,
           root: r.installPath,
-          pluginEnabled: r.enabled,
+          pluginEnabled: r.enabled && !this.#managedRefusal(managed, r),
           answersAsks: m.permissions.hooks?.answersAsks === true,
           network: m.permissions.network ?? [],
         });
@@ -1138,7 +1218,18 @@ export class PluginService implements PluginPermissionSource {
       .select({ id: pluginInstall.id })
       .from(pluginInstall)
       .where(eq(pluginInstall.installPath, path));
-    if (!users.length) rmSync(path, { recursive: true, force: true });
+    if (!users.length) rmSync(this.#ownFolder(path), { recursive: true, force: true });
+  }
+
+  /** A folder strictly inside the plugins folder, else `validation` (nothing is removed). */
+  #ownFolder(path: string): string {
+    const root = resolve(this.pluginsDir);
+    const abs = resolve(path);
+    if (abs === root || !isWithin(root, abs))
+      throw new NovaError('validation', 'refusing to remove a folder outside the plugins folder', {
+        details: { reason: 'unsafe_path' },
+      });
+    return abs;
   }
 
   /** Leftover staging and backup folders from an interrupted install. */

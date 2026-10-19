@@ -8,9 +8,12 @@
 // A match does not block by itself: the channel's policy decides (default ask the owner).
 import type { NovaDatabase } from '@nova/storage';
 
-/** A piece of private content a reply would carry into a shared channel. */
+/**
+ * A piece of private content a reply would carry into a shared channel. `file` (M8): a file the
+ * check cannot read (an image, a PDF), which counts as private, as a failed check does.
+ */
 export interface PrivateSource {
-  kind: 'memory' | 'thread';
+  kind: 'memory' | 'thread' | 'file';
   id: string;
 }
 

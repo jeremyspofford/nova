@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "com.examplelabs.aurora",
+  "name": "Aurora",
+  "variant": "dark",
+  "extends": "dark",
+  "tokens": {
+    "--u-bg": "#0b1020",
+    "--u-surface": "#121a2e",
+    "--u-surface-2": "#18223a",
+    "--u-border": "#2a3656",
+    "--u-text": "#e6ecff",
+    "--u-text-muted": "#a3b0cf",
+    "--u-accent": "#7ee0c3",
+    "--u-accent-contrast": "#06221b"
+  }
+}

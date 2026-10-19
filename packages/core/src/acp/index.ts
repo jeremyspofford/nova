@@ -42,6 +42,14 @@ export {
   type PolicyAcpHostOptions,
 } from './host.ts';
 export {
+  MAX_TERMINAL_ENV,
+  MAX_TERMINAL_ENV_VALUE,
+  TERMINAL_ENV_NAMES,
+  TERMINAL_ENV_PREFIXES,
+  terminalEnv,
+  terminalEnvNameAllowed,
+} from './env.ts';
+export {
   AGENT_POLL_MS,
   agentCommandLine,
   agentSandbox,

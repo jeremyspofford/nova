@@ -29,6 +29,12 @@ import { MemberSettingsGate, useTeamRole, visibleSettingsSections } from '../tea
 import { SyncPage } from '../sync/SyncPage.tsx';
 import { CloudSettings } from '../cloud/CloudSettings.tsx';
 import { ExperimentalSettings } from '../flagged/ExperimentalSettings.tsx';
+import { ExtensionsPage } from '../extensions/ExtensionsPage.tsx';
+import { ManagedPolicyPage } from '../managed/ManagedPolicyPage.tsx';
+import { ManagedBanner } from '../managed/ManagedNote.tsx';
+import { DataPage } from '../datactl/DataPage.tsx';
+import { AppsSettings } from '../appauth/AppsSettings.tsx';
+import { OtlpSettings } from '../appauth/OtlpSettings.tsx';
 
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
@@ -42,8 +48,11 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   code: 'Code',
   cloud: 'Cloud runner',
   plugins: 'Plugins & skills',
+  extensions: 'Extensions',
   clients: 'Apps & clients',
+  apps: 'Authorized apps',
   permissions: 'Permissions',
+  managed: 'Managed policy',
   'computer-use': 'Computer use',
   agents: 'Agents',
   notifications: 'Notifications',
@@ -56,7 +65,9 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   appearance: 'Appearance',
   keyboard: 'Keyboard',
   import: 'Import',
+  data: 'Data',
   experimental: 'Experimental',
+  telemetry: 'Telemetry export',
   diagnostics: 'Diagnostics',
 };
 
@@ -93,6 +104,7 @@ export function SettingsView({
         </ul>
       </nav>
       <div className="settings-body">
+        {section !== 'managed' ? <ManagedBanner /> : null}
         <MemberSettingsGate section={section} label={SECTION_LABELS[section]}>
           {section === 'general' ? <GeneralPage /> : null}
           {section === 'account' ? <AccountPage /> : null}
@@ -107,9 +119,14 @@ export function SettingsView({
           {section === 'tools' ? <ToolsPage /> : null}
           {section === 'code' ? <CodePage /> : null}
           {section === 'plugins' ? <PluginsPage /> : null}
+          {section === 'extensions' ? <ExtensionsPage /> : null}
           {section === 'clients' ? <ClientsPage /> : null}
+          {section === 'apps' ? <AppsSettings /> : null}
           {section === 'import' ? <ImportPage /> : null}
+          {section === 'data' ? <DataPage /> : null}
           {section === 'permissions' ? <PermissionsPage /> : null}
+          {section === 'managed' ? <ManagedPolicyPage /> : null}
+          {section === 'telemetry' ? <OtlpSettings /> : null}
           {section === 'computer-use' ? <ComputerUseSettings /> : null}
           {section === 'agents' ? <AgentsSettings /> : null}
           {section === 'notifications' ? <NotificationsPage /> : null}

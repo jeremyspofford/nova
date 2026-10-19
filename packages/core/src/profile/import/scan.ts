@@ -3,7 +3,7 @@
 // dependency folders are skipped, and every size is capped, so a scan of a large tree stays
 // bounded. Recognised items keep what applying them needs (in memory only, with any secrets).
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { unzipSync } from 'fflate';
@@ -17,6 +17,7 @@ import {
   SKILL_NAME,
   validatePluginManifest,
 } from '../../plugins/index.ts';
+import { convertForeignHooks } from './hooks.ts';
 import {
   NOVA_MANIFEST,
   findMcpServers,
@@ -607,6 +608,12 @@ function scanPlugin(dir: string, mDir: string): ScannedItem | null {
     }
   } else {
     const layout = pluginLayout(dir, files, notes);
+    if (layout.hasHooks || manifest.hooks !== undefined) {
+      // Hooks of another layout become Nova hooks that wait for trust (FR-200).
+      const converted = convertForeignHooks(readForeignHooks(dir, manifest.hooks));
+      layout.hooks = converted.hooks;
+      notes.push(...converted.notes);
+    }
     out = generateManifest(
       manifest,
       layout,
@@ -642,6 +649,34 @@ function scanPlugin(dir: string, mDir: string): ScannedItem | null {
 }
 
 /**
+ * The hooks file of a plugin in another layout: the manifest's inline `hooks` object, the file it
+ * names inside the plugin folder, or `hooks/hooks.json`. Null when there is none or it is not JSON.
+ */
+function readForeignHooks(dir: string, declared: unknown): unknown {
+  if (typeof declared === 'object' && declared !== null) return declared;
+  const rel =
+    typeof declared === 'string' &&
+    !declared.startsWith('/') &&
+    !declared.split(/[\\/]/).includes('..')
+      ? declared.replace(/^\.\//, '')
+      : 'hooks/hooks.json';
+  const file = join(dir, ...rel.split('/'));
+  try {
+    // Links are not followed (the scan never reads outside what it walks).
+    if (!lstatSync(file).isFile()) return null;
+  } catch {
+    return null;
+  }
+  const text = readText(file);
+  if (text === null) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Components of a plugin in another layout, from the conventional folders. Only parts the plugins
  * area accepts are listed (a skill, command or role that does not parse would fail the whole
  * install); the rest are named in the notes.
@@ -674,7 +709,6 @@ function pluginLayout(dir: string, files: string[], notes: string[]): PluginLayo
       else skipped.push(f);
     }
   }
-  if (hasHooks) notes.push('its hooks use another format and are not imported');
   if (skipped.length) notes.push(`left out (not valid here): ${skipped.slice(0, 10).join(', ')}`);
   return { skills: skills.sort(), commands, agents, hasHooks };
 }

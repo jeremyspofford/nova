@@ -77,6 +77,12 @@ export interface AgentErrorShape {
   action?: string;
   /** How long the provider asked to wait before retrying (from Retry-After), when it said. */
   retryAfterMs?: number;
+  /**
+   * A small structured marker clients can act on without reading the message, such as
+   * `{reason: 'spend_cap', provider}` when a spend cap stopped the call (FR-116). Kept on the
+   * reply's error part.
+   */
+  details?: { reason: string; provider?: string };
 }
 
 export type StopReason = 'end' | 'tool_calls' | 'length' | 'cancelled' | 'error';
