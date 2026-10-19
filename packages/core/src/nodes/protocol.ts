@@ -51,10 +51,23 @@ export const nodeLoadSchema = z.object({
   queued: z.number().int().min(0).max(100_000),
 });
 
+/** One GPU's memory as the node reads it (FR-126, M7.5): nvidia-smi, rocm-smi or the backend. */
+export const nodeGpuVramSchema = z.object({
+  index: z.number().int().min(0).max(64),
+  vendor: z.string().max(50).nullable().optional(),
+  name: z.string().max(200).nullable().optional(),
+  totalBytes: z.number().int().min(0).nullable().optional(),
+  usedBytes: z.number().int().min(0).nullable().optional(),
+});
+
 export const heartbeatSchema = z.object({
   load: nodeLoadSchema,
   /** The backend's current model ids (unsigned: it can hide a model, never add one). */
   models: z.array(z.string().min(1).max(300)).max(2_000).optional(),
+  /** GPU memory now (M7.5); unsigned and informational. */
+  vram: z.array(nodeGpuVramSchema).max(16).optional(),
+  /** The node is in its quiet hours (its own or the Hub's policy) and takes no new jobs. */
+  quiet: z.boolean().optional(),
 });
 export type HeartbeatRequest = z.infer<typeof heartbeatSchema>;
 

@@ -141,6 +141,11 @@ export const approval = sqliteTable(
     alwaysAllowManaged: integer('always_allow_managed', { mode: 'boolean' })
       .notNull()
       .default(false),
+    /**
+     * M7.5 (0040): `hub` = answered only by the signed-in user in a Nova client, never from a
+     * channel or a hook (firmware, boot and out-of-band cards; docs/23 §6.3). Null: as the tier allows.
+     */
+    answerIn: text('answer_in', { enum: ['hub'] }),
     createdAt: text('created_at').notNull(),
   },
   (t) => [

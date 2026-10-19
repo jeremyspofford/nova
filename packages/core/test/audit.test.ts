@@ -210,7 +210,62 @@ describe('AuditLog queries', () => {
       turnId: null,
       createdAt: expect.any(String),
       hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      detail: null,
     });
+  });
+
+  it('lists each entry with its detail, redacted again and capped (M7.5)', async () => {
+    await audit.append({
+      accountId: ACCOUNT,
+      actor: 'user',
+      kind: 'settings',
+      action: 'setting.changed',
+      resource: 'devices.firmware.allowChanges',
+      detail: { scope: 'global', before: false, after: true, confirmed: true },
+    });
+    await audit.append({ accountId: ACCOUNT, actor: 'system', kind: 'policy', action: 'none' });
+    // A row written before a redaction rule existed (or by hand) is masked on the way out.
+    await audit.append({
+      accountId: ACCOUNT,
+      actor: 'user',
+      kind: 'device',
+      action: 'device.bridge',
+      resource: null,
+      detail: { note: 'x' },
+    });
+    db.raw.exec('DROP TRIGGER audit_event_no_update;');
+    db.raw.prepare('UPDATE audit_event SET detail_json = ? WHERE action = ?').run(
+      // secret-scan: fake
+      JSON.stringify({ token: 'plain', note: 'nvbr_Q2xhdWRlIHdhcyBoZXJlIDIwMjYtMTAtMTkK' }),
+      'device.bridge',
+    );
+    await audit.append({
+      accountId: ACCOUNT,
+      actor: 'user',
+      kind: 'device',
+      action: 'device.big',
+      detail: { values: 'v'.repeat(5_000) },
+    });
+    const items = (await audit.list(ACCOUNT)).items;
+    const by = (action: string) => items.find((e) => e.action === action)?.detail;
+    expect(by('setting.changed')).toEqual({
+      scope: 'global',
+      before: false,
+      after: true,
+      confirmed: true,
+    });
+    expect(by('none')).toBeNull();
+    expect(by('device.bridge')).toEqual({ token: REDACTED, note: REDACTED });
+    expect(by('device.big')).toEqual({ truncated: true, chars: expect.any(Number) as number });
+    // The entry `record` returns carries it too.
+    const rec = await audit.record({
+      accountId: ACCOUNT,
+      actor: 'user',
+      kind: 'settings',
+      action: 'setting.changed',
+      detail: { before: 1, after: 2 },
+    });
+    expect(rec.detail).toEqual({ before: 1, after: 2 });
   });
 
   it('exports one account as JSON lines with the chain fields', async () => {
@@ -342,6 +397,29 @@ describe('event-driven audit', () => {
       resource: 'routing.allowCloud',
       detail: { scope: 'global' },
     });
+    // M7.5: the settings writer's values and confirmation are the entry's (ADR-096 D3).
+    for (const confirmed of [true, false])
+      expect(
+        auditRecordFor(
+          ev({
+            name: 'settings.changed',
+            actor: 'user',
+            payload: {
+              key: 'devices.firmware.allowChanges',
+              scope: 'global',
+              before: !confirmed,
+              after: confirmed,
+              confirmed,
+            },
+          }),
+        ),
+      ).toEqual({
+        actor: 'user',
+        kind: 'settings',
+        action: 'setting.changed',
+        resource: 'devices.firmware.allowChanges',
+        detail: { scope: 'global', before: !confirmed, after: confirmed, confirmed },
+      });
     expect(
       auditRecordFor(
         ev({ name: 'settings.changed', payload: { key: 'appearance.theme', scope: 'global' } }),

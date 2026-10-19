@@ -40,6 +40,7 @@ import { webhookUrlProblem } from '../scheduler/delivery.ts';
 import { afterTimeCursor, encodeTimeCursor } from '../time-cursor.ts';
 import type { AuditSink } from '../tools/types.ts';
 import {
+  HUB_ONLY_TEXT,
   answerableFromChannel,
   answeredText,
   approvalCode,
@@ -1182,6 +1183,8 @@ export class ChannelService implements ChannelSender {
     } catch {
       return refuse('unknown', 'That approval is not known.');
     }
+    // Before anything else: a Hub-only card is never answered from a channel (docs/23 §6.3).
+    if (approval.answerIn === 'hub') return refuse('hub_only', HUB_ONLY_TEXT, approval);
     if (!row.thread_id || approval.threadId !== row.thread_id)
       return refuse(
         'other_conversation',
@@ -1735,7 +1738,7 @@ export class ChannelService implements ChannelSender {
     }
     const adapter = this.#adapter(row.kind);
     const shared = ctx.visibility === 'shared';
-    const answerable = answerableFromChannel(approval.tier);
+    const answerable = answerableFromChannel(approval.tier, approval.answerIn ?? null);
     const options = approval.options.filter((o): o is ChannelAction['decision'] =>
       CHANNEL_DECISIONS.has(o),
     );
@@ -1821,7 +1824,7 @@ export class ChannelService implements ChannelSender {
     };
   }
 
-  async #openLink(token: string) {
+  async #openLink(token: string, answering = false) {
     const gone = () => new NovaError('not_found', 'this approval link is not valid any more');
     const link = await this.#links.open(token);
     const row = this.#rowById(link.binding_id);
@@ -1833,13 +1836,28 @@ export class ChannelService implements ChannelSender {
       throw gone();
     }
     if (approval.status !== 'pending' || approval.decision !== null) throw gone();
+    if (approval.answerIn === 'hub') {
+      // A Hub-only card never gets a link; one made earlier answers nothing (docs/23 §6.3).
+      if (answering)
+        await this.#o.audit?.append({
+          accountId: row.account_id,
+          actor: `channel:${row.id}`,
+          kind: 'channel',
+          action: 'channel.approval.refused',
+          resource: `approval:${approval.id}`,
+          threadId: approval.threadId,
+          turnId: approval.turnId,
+          detail: { reason: 'hub_only', via: 'link', tier: approval.tier },
+        });
+      throw gone();
+    }
     if (!answerableFromChannel(approval.tier)) throw gone();
     return { link, row, approval };
   }
 
   /** Answer an approval with its signed link (once): the POST from the link's page. */
   async answerByLink(token: string, decision: string): Promise<{ decision: string; text: string }> {
-    const { link, row, approval } = await this.#openLink(token);
+    const { link, row, approval } = await this.#openLink(token, true);
     if (!CHANNEL_DECISIONS.has(decision) || !approval.options.includes(decision as never))
       throw new NovaError('validation', 'that choice is not offered for this approval', {
         details: { field: 'decision' },
@@ -1998,6 +2016,7 @@ export class ChannelService implements ChannelSender {
       await respond(text);
       return `refused:${reason}`;
     };
+    if (approval.answerIn === 'hub') return refuse('hub_only', HUB_ONLY_TEXT);
     // Email: reply text never answers (a From address is easy to forge); the signed link does.
     if (this.#adapters[row.kind]?.textAnswers === false)
       return refuse(

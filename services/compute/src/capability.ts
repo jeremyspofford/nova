@@ -33,6 +33,15 @@ export interface CapabilityInput {
   /** Overrides for tests; detected otherwise. */
   hardware?: HardwareFacts;
   os?: OsFacts;
+  /**
+   * GPU memory a VRAM probe read (vram.ts): when it found GPUs, they replace the detected list
+   * and carry `vramBytes` (FR-126, M7.5).
+   */
+  vram?: { vendor: string | null; name: string | null; totalBytes: number | null }[];
+  /** The node's IANA time zone (`locale.timezone`): the zone its quiet hours are read in. */
+  timeZone?: string;
+  /** The node operator's own quiet hours (`scheduling.quietHours`, `--quiet-hours`). */
+  quietHours?: string[];
 }
 
 const BACKEND_NAMES: Record<BackendKind, string> = {
@@ -55,7 +64,13 @@ export function buildCapability(input: CapabilityInput): CapabilityDocument {
     cores: Math.max(1, hw.cores),
     ramBytes: hw.ramBytes,
   };
-  if (hw.gpus.length) hardware.gpus = hw.gpus;
+  const probed: Gpu[] = (input.vram ?? []).map((g) => ({
+    ...(g.vendor ? { vendor: g.vendor } : {}),
+    ...(g.name ? { name: g.name } : {}),
+    ...(g.totalBytes !== null ? { vramBytes: g.totalBytes } : {}),
+  }));
+  const gpus = probed.length ? probed : hw.gpus;
+  if (gpus.length) hardware.gpus = gpus;
   return {
     schemaVersion: 1,
     deviceId: input.deviceId,
@@ -69,6 +84,8 @@ export function buildCapability(input: CapabilityInput): CapabilityDocument {
       modelsPresent: [...new Set(input.models)].sort().map((id) => ({ id })),
     },
     computePolicy: { maxConcurrentJobs: input.maxConcurrentJobs },
+    ...(input.timeZone ? { locale: { timezone: input.timeZone } } : {}),
+    ...(input.quietHours?.length ? { scheduling: { quietHours: [...input.quietHours] } } : {}),
   };
 }
 
@@ -89,8 +106,8 @@ export function detectOs(): OsFacts {
 }
 
 /**
- * NVIDIA GPUs on Linux, from the driver's procfs entries (no process spawn). Other vendors and
- * VRAM sizes are left out until the compute module learns them (M6).
+ * NVIDIA GPUs on Linux, from the driver's procfs entries (no process spawn). VRAM sizes and other
+ * vendors come from a VRAM probe (vram.ts) when the node has one.
  */
 export function detectGpus(root = '/proc/driver/nvidia/gpus'): Gpu[] {
   try {

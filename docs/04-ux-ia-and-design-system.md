@@ -59,6 +59,11 @@ and their invitations stay in Settings → Members. Settings adds **Account** an
 General), **Cloud runner** (after Code), **Sync** (after Network) and **Experimental** (before
 Diagnostics).
 
+**In M7.5** (ADR-096) the sidebar and the list of Settings sections do not change. Out-of-band
+management is a page under Devices (`/devices/oob`), a device page gains the **Firmware**, **Boot**
+and **Out-of-band** tabs, Settings → Devices gains **Firmware and boot**, and Settings → Browser
+gains **Continue on your computer** and **Your own browser (extension bridge)** (§9).
+
 **Members** (FR-217). Someone the owner invited signs in to an account of their own. For a member
 the sidebar hides Code, Library, Devices and Network, and Settings lists seven sections: Account,
 Members, Profile & usage, Accounts, Memory, Appearance and Keyboard (Appearance, Keyboard and
@@ -501,6 +506,33 @@ Decisions (FR-100, ADR-060):
 - Accessibility: focus lands on the card heading, never on an Allow button; Enter does not
   approve; screen readers announce "Approval needed" with the action.
 
+**Hub-only cards, as built in M7.5** (ADR-096; `apps/web/src/chat/ApprovalCard.tsx`,
+`apps/web/src/firmware/HubOnlyApproval.tsx`, `apps/web/src/oob/HubApproval.tsx`). Firmware and
+boot changes (FR-146, FR-143), out-of-band actions (FR-147) and decommissioning a device open a card
+with `answerIn: 'hub'`: tier "Asked every time; cannot be pre-approved", risk high, and only
+**Allow once** and **Deny**. Only the signed-in owner answers it, in a Nova client.
+- The card carries a shield icon and the line "Only you can answer this, in Nova: here or on the
+  Approvals page. Chat channels, email links and agents cannot answer it." A channel that relays
+  such a card says "This one can only be answered in Nova itself: open the web or desktop app to
+  decide." and refuses an answer from there (`hub_only`).
+- A card about a device (scope `device:<id>`: firmware, boot, decommission) gains a **Where** row,
+  "On <device>", linking to the device page. On these cards and on every Hub-only card, the deny
+  button reads **Deny**: no run waits on them, so there is no reason field for an agent.
+- Each card is answered where its change is asked for, and waits on the Approvals page too
+  (§9). Firmware and boot show a compact card: the title names the change and the device ("Approve
+  this firmware change on Desk PC"), the diff sits next to it, focus moves to its heading when the
+  owner has just asked for it, and it shows when it expires and **Open in Approvals**; once
+  answered it reads "Approval: Allowed once" (or Denied, or "Expired: nobody answered in time")
+  with "Answered here." or "Answered in Nova.". Out-of-band and decommission cards show the full
+  card above, with "It also waits on the Approvals page." and **Open in Approvals**. The first
+  answer wins on any client.
+- The cards expire after 24 h (firmware), 30 min (boot), 10 min (out-of-band) and 1 h
+  (decommission). Clearing a pending one-shot boot needs no card: the owner's confirmation in the
+  Boot tab is the approval.
+- On the Approvals page, the line above a Hub-only card still says "Not part of a conversation",
+  without a link; the device card's own Where row is the way to the device. An out-of-band card
+  links to neither its BMC nor its device.
+
 ### 2.7 Memory (FR-032, FR-204, FR-205)
 
 Settings → Memory, also reachable from the Inspector:
@@ -568,7 +600,8 @@ with Stop; while it shows, the kill key (`screen.killKey`, default Esc) stops co
 anywhere in the app, before any dialog sees the key. Settings → Computer use holds the grant
 length, the kill key and tier overrides; Settings → Browser holds site permissions, allow and
 block lists, saved logins and the browser settings. The desktop pill and edge highlight drawn by
-`novad` come with its screen module (not built in M6).
+`novad` come with its screen module (not built in M6; ADR-096 moves it to M9 with the capture
+work). M7.5 adds the local browser fallback and the extension bridge to these views (§9).
 
 ### 2.9 MCP Apps (FR-198)
 
@@ -974,6 +1007,15 @@ without a session, like `/add-device`: `/join` (an invitation, `#invite=<token>`
 `experimental`. Inside the desktop app the palette adds **Open this view in a new window**
 (`window.openCurrent`, no default key; §9.1).
 
+**M7.5 routes** (ADR-096). Every new path parses as the devices route; the page reads the rest of
+the address, so the router and the deep links do not change. A device page takes `?tab=firmware`
+and `?tab=boot`, and `/devices/<id>/boot` (where the boot notifications link) opens the Boot tab.
+`/devices/<id>/oob` and `/devices/<id>/oob/<endpointId>` (or `?tab=oob`) open its Out-of-band
+tab, on one BMC; `/devices/oob` is the out-of-band page and `/devices/oob/<endpointId>` one BMC.
+On either BMC path, `?action=power.on`, `power.off`, `power.cycle` or `power.reset` opens that
+action's confirmation once; nothing runs until the owner confirms it and approves its card. There
+are no new palette commands or Settings sections.
+
 ### 5.1 Deep links (FR-007)
 
 | Link (`nova://` or `web+nova://`) | Opens |
@@ -1261,6 +1303,165 @@ through the event stream.
   certificate**, **Certificate refused**), the list has a **Device certificates** section with
   "Require a device certificate over HTTPS" (asks first and names the devices that would be
   refused), and a device page shows its own state.
+
+**In M7.5** (ADR-096; `apps/web/src/devices`, `firmware`, `boot`, `oob`, `browserdevice`) the web
+UI adds:
+
+- **A device page** (a device running `novad`). The tabs are now Capabilities, Modules, Power,
+  Updates, Policy, Files, Agents, MCP, **Firmware** and **Boot**, then **Out-of-band** when a BMC
+  is linked to the device (§5 has the paths). Above the tabs, the page adds:
+  - **Management**, a fact next to the M7 Certificate fact (ADR-096 D1): **Mutual TLS** ("The Hub
+    and the device check each other's certificates on every call."), **Plain HTTP** ("Calls are not
+    encrypted. Add the device again with the Hub's local CA to use mutual TLS."), **No address
+    yet**, or **Channel refused** with when and why ("…the device still presents its old
+    certificate; it installs the renewed one with its next heartbeat"). A line under it gives the
+    certificate's renewal: "Certificate renewal offered; the device switches at its next check-in
+    (its old certificate is accepted until …)", "Certificate renewed …; valid until …", or "This
+    device has an older kind of certificate; the Hub offers a new one at its next check-in."
+  - **Decommission…** (a danger button next to Revoke, ADR-096 D9). The dialog "Decommission
+    <device>?" is "For a computer you are giving away, selling or retiring", lists what happens
+    after the approval (online: novad stops its modules, deletes its key, credentials and
+    certificate and removes its service; offline: it wipes them at its next contact; either way the
+    Hub revokes it and its certificate; it cannot be undone), offers **Also delete its Nova data**
+    (novad deletes its data folder; the owner's own files are not touched), and needs the device's
+    name typed ("Type <device> to confirm") before **Ask to decommission <device>** works. A
+    **Decommission** section then shows its state (Waiting for your approval, Decommissioning,
+    Decommissioned, Denied, "Expired: nobody answered in time", Withdrawn, Failed), its approval
+    card while it waits, and what the device did ("The device wiped its credentials and removed its
+    service, then was revoked.", or that it did not answer, refused, or was not told, and was
+    revoked anyway).
+  - **Browser bridge** (FR-096), collapsed to "Now: N shared tabs, N sites granted" with a chip
+    (Connected, Not connected, Turned off) and **Show details**; it opens by itself while a site
+    waits for the owner. Open, it shows the browser, extension version, OS user and since when;
+    **Shared tabs** ("You shared it" or "Opened by the agent in the Nova tab group"); **Sites**:
+    each waiting one ("Waiting for you") with **Confirm** and **Refuse**, each granted one
+    ("Granted") with **Revoke**, and "Site to grant" with **Grant** (the Hub's own addresses are
+    refused on the field); **All sites**, marked **Elevated risk**, with **Grant all sites…** only
+    while Settings allows it; **Show revoked grants**; **Recent activity** from the audit log
+    (connected, disconnected, a connection replaced, history searches, browser sessions the Hub
+    closed); and the setup steps (the unpacked extension build, `bridge.extensionId` and
+    `localRuntime.users` in novad's `config.json`, `novad bridge enable`), open while the bridge is
+    not connected. Every grant, confirmation, refusal and revoke asks first in a dialog that names
+    the computer and the site.
+- **Inside the existing tabs.** Modules adds **Managed services**, the services declared in
+  novad's configuration with their state and Status, Start, Stop and Restart (an older novad: "This
+  device's novad cannot list its services yet…", and the by-name form still works). Updates adds
+  **Available build**: the novad build this Hub serves for the device's platform, compared with
+  what it runs; information only ("The Hub does not install it by itself…"). Policy adds **On the
+  device** with **Push now**, a chip ("Waiting for the device: change N, it has M" or "The device
+  has the latest (change N)") and **In force on the device**, the settings from its last signed
+  capability document. Power now says that what happens after a power cut, and Wake-on-LAN in the
+  firmware, are changed in the Firmware tab, with a link.
+- **Firmware tab** (FR-146; owner only). **Read again**; **Supported** or **Not supported** with
+  the plain reason; the **Hardware support matrix** (opened on demand; Linux only); the machine,
+  firmware and how it is reached; the **Settings** table of the allowlist (Wake-on-LAN, After a
+  power cut, Boot order, Virtualization, Secure Boot, TPM, Fan profile) with "Read-only" and
+  "Weakens security when …" marked by an icon and words. With "Allow BIOS/firmware changes" off, a
+  note says what the switch does and links to Settings → Devices; reading still works. With it on,
+  **Plan a change** (a dry run; choices that weaken security say so, and the boot order moves with
+  Up and Down) leads to the **Current change**: its diff (Setting, Before, After, and "Weakens
+  security" rows), what was left out and why, then **Ask for approval**, the Hub-only card (§2.6),
+  and **Apply…**, whose dialog lists every change and offers "Restart <device> now, with the
+  watchdog" ("If <device> does not come back within <the Firmware watchdog setting>, it restores
+  the previous settings and restarts once."; hidden on a machine with a BIOS admin password, where
+  the dialog says why). The tab names how the device reaches its settings ("Linux firmware
+  attributes", "efibootmgr (boot order only)", "Test backend (no real firmware)"), and a method
+  this Hub does not know as "unknown (<name>)". **BIOS admin password** is
+  write-only (**Store**, **Remove…**). **Firmware updates** lists what fwupd reports: "Nova shows
+  them but does not install firmware updates." **History** shows each change with its status
+  (Planned, "Waiting for your approval", "Approved, ready to apply", Applied, Rolled back, Failed,
+  "Reverted by the watchdog", "Not reverted: check it") and its watchdog outcome; **Roll back…**
+  plans restoring the snapshot behind its own approval. A change the watchdog could not revert
+  adds an "On the device now" column and says the settings may not be safe; Roll back stays
+  offered.
+- **Boot tab** (FR-143; owner only). The bootloader (systemd-boot, GRUB, "UEFI boot manager",
+  "Test bootloader (fake)" for `novad`'s test backend, "None found", or "unknown (<name>)" for one
+  this Hub does not know),
+  booted and default entry, the entries, and the last trial; a note with a link while "Allow
+  low-level boot changes" is off. **Pending trial** counts down to its deadline and has **Revert…**
+  ("Works even with low-level boot changes off."). **Boot profiles** (a name for an entry; "Kernel
+  arguments" is labelled "Not supported yet." and anything typed there is refused on the form, not
+  sent) with **Try on next boot…** (the watchdog time, 2 to 60 minutes, and "Restart <device> as
+  soon as you approve"), **Rename…** and **Delete…**. **Trials** (Trying, Came back, "Back on the
+  default", "Did not come back") offer **Make default…** after one came back; an unverified trial
+  says so ("Not verified: the device could not tell which entry it booted"), and its dialog needs
+  the box "I checked that <device> booted <entry>" ticked before it asks for approval.
+  **Requests** show each card with a what-changes table. **Network boot (PXE)**: on or off, "Nova
+  runs no DHCP or TFTP server", **Make a boot token** (later **Make a new token…** and **Revoke…**,
+  each asking first), the token and the iPXE address each with **Copy** under "Copy it now: it is
+  shown only once", and the images in the Hub's boot-images folder.
+- **Out-of-band management** (FR-147; owner only). The Devices list ends with an **Out-of-band
+  management** section ("On, N BMCs." or "Off.") and **Open out-of-band management**. The page
+  `/devices/oob` has **Turn on…** (its dialog lists what it allows: the Hub connects to the BMCs
+  you add with their credentials, can power a machine on, off, cycle or reset it, pick its next
+  boot device and change its BIOS settings, every change waits for your approval in Nova and never
+  from a channel, and everything is audited; **Turn on out-of-band management** sends the consent),
+  **Turn off** (also asks; waiting approvals are withdrawn), **Add a BMC** (only while on) and the
+  **BMCs** list (kind, last check, address, the device it manages, the certificate pin, missing
+  credentials). **Add a BMC** takes a name, the kind (Redfish, IPMI, and Intel AMT shown disabled:
+  "Not available in this version."), address and port, the Redfish system id, the device, a user
+  name and password (kept in the vault, never shown again) and an optional SHA-256 fingerprint.
+  A BMC's page (also the device's Out-of-band tab) shows its facts, then:
+  - after a Redfish BMC's first check, "Is this your BMC's certificate?": the Hub read it without
+    sending credentials, the full fingerprint is shown to compare with the BMC's own page, and
+    **Yes, it is my BMC's…** (then **Confirm the fingerprint**) or **Enter the fingerprint
+    instead…**. Until then every other action says why it cannot run;
+  - on a pin mismatch, an alert names the pinned fingerprint and says Nova sent the BMC nothing,
+    with **Pin the new certificate…** and **Clear the pin…**, each asking first;
+  - **Connection** (**Check the connection**), **Waiting for you** (its cards inline, and **Apply at
+    the next restart…** for an approved BIOS plan), **Power** (**Read the power state**, then
+    **Power on…**, **Power off…**, **Power cycle…** and **Reset…**, whose dialogs say what the
+    change does, which device the BMC manages, and that it runs only after approval within 10
+    minutes; buttons "Ask to power off" and the like), **Next boot** (once; USB is not offered over
+    IPMI), **Sensors**, **BIOS settings** (Redfish only; a plan that weakens security needs "Include
+    the change that weakens security" ticked, and its diff marks the rows), and the **Action log**
+    ("A read: no approval needed", "With your approval", "From an approved plan").
+  A failed boot trial's notification ("<device> did not come back from a boot trial"), when the
+  device has a BMC and out-of-band management is on, links to the device's Out-of-band tab with
+  the **Power cycle** confirmation open; otherwise it opens the Boot tab.
+- **A compute node's page** (FR-126, FR-150). **Compute node** (a chip: "Quiet now: no new jobs",
+  "Kept out of routing" or "Takes jobs"; load, last heartbeat, what the node says, and each GPU's
+  memory with a meter), **Policy** ("Send model work to this node", quiet hours and their time
+  zone; **Save policy**; the node takes it with its next heartbeat) and **Services** (**Job API**
+  and, when the node manages one, **Model server**, with Status, Start, Stop and Restart). Settings
+  → Devices links each node to it ("Policy and services").
+- **Settings → Devices → Firmware and boot** (owner only): **Allow BIOS/firmware changes**, **Allow
+  changes that weaken security**, **Allow low-level boot changes**, **Firmware watchdog** (2 to 60
+  minutes, 10 by default: "For firmware changes applied with a restart: how long the device has to
+  come back before its watchdog restores the previous settings."), **Boot watchdog** (2 to 60
+  minutes) and **Network boot (PXE)**, the switches off by default and all lockable by managed
+  policy. Turning
+  one of the four switches on opens a dialog that says what it allows and why it is off ("Allow
+  BIOS and firmware changes on devices?", "Allow firmware changes that weaken security?", "Allow
+  low-level boot changes on devices?", "Serve network boot from this Hub?"); only its button
+  sends `confirm: true`, which the Hub requires. Turning one off never asks. The out-of-band
+  switch is on the out-of-band page, not here.
+- **Browser** (FR-209, FR-096). In a conversation, when a site blocks the agent's own browser and
+  the agent has a connected computer, a card above the composer asks "Continue <site> on
+  <device>?" with why ("Asked because the site showed a block page to the agent's browser"), the
+  Hub's question and its choices ("Continue on <device> (clean profile)", "Continue in my own
+  browser on <device> (extension)" when the bridge can serve the site, "Not now"), each with a line
+  saying what it does, and that a choice to continue is remembered until revoked in Settings →
+  Browser. In the computer's browser panel a note says "Working in <device>'s browser on <site>"
+  while a session runs, and how the last one ended for 30 minutes after; each trace row recorded
+  there carries a badge "On <device>, clean profile" (or "your own browser") and a **Where** line
+  in its details. Settings → Browser adds **Continue on your computer** ("Offer to continue on the
+  agent's computer", the **Sites you agreed to** with **Revoke**, which asks first and stops a
+  running session, and **Show revoked**) and **Your own browser (extension bridge)** ("Let agents
+  use your own browser through the extension" and "Allow the 'all sites' grant"; managed policy can
+  lock either). These switches turn on without a dialog; the grants on a device page ask.
+- **The same rules everywhere.** Every consent and confirmation dialog starts with focus on
+  **Cancel** (the forms to add a BMC or pin a new fingerprint start in their first field). The
+  "all sites" grant also needs "I understand that agents can then act on any site in tabs I share
+  on <device>." ticked, decommission the typed name, and an unverified trial its tickbox. States
+  pair an icon with words ("Weakens security", "Elevated risk", "Not reverted: check it"), never
+  color alone, and outcomes are announced. A refusal from the Hub is shown in plain words inside
+  the dialog, which stays open. A member who reaches any of these gets the owner-only notice
+  ("Only the owner of this Hub can change this.").
+- **Not in the UI.** Firmware updates (fwupd is listed, never installed), kernel arguments in boot
+  profiles, Intel AMT, a DHCP or TFTP server, and any way for an agent or model to plan, approve or
+  apply firmware, boot or out-of-band changes. The extension is installed from its unpacked build.
+  The Approvals page does not link an out-of-band card to its BMC (§2.6).
 
 New flows:
 

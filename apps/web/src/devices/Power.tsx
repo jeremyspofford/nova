@@ -2,9 +2,11 @@
 // it reports it, Wake for a device that reports Wake-on-LAN (sent through a Wake helper on its
 // network, or by the Hub when it is on that network; rate-limited by `devices.wakesPerHour`), the
 // steps to turn Wake-on-LAN on (shown first; applied only when the user asks, and novad may need
-// elevation), and Sleep, Restart and Shut down, each confirmed first.
+// elevation), and Sleep, Restart and Shut down, each confirmed first. What happens after a power
+// cut is read from the firmware (M7.5) and changed in the Firmware tab (FR-146).
 import { useState } from 'react';
 import { Button, Spinner, useToast } from '@nova/ui';
+import { firmwareTabPath } from '../firmware/format.ts';
 import { useSetting } from '../settings.tsx';
 import { plural } from '../settings/common.ts';
 import { followLink } from '../work/nav.tsx';
@@ -144,8 +146,14 @@ export function PowerPanel({ device, deviceName }: PanelProps) {
           ) : null}
         </dl>
         <p className="muted ws-flush">
-          Changing what happens after a power cut needs firmware settings, which this version cannot
-          change.
+          What happens after a power cut, and Wake-on-LAN in the firmware, are firmware settings:{' '}
+          <a
+            href={firmwareTabPath(device.id)}
+            onClick={(e) => followLink(e, firmwareTabPath(device.id))}
+          >
+            change them in Firmware
+          </a>
+          , with your approval and a snapshot to roll back to.
         </p>
       </section>
 

@@ -31,6 +31,14 @@ web replica is sealed under a non-extractable key on the device. Two assets join
 | One person's data on a shared Hub | A member, a removed member or a team agent reaches the owner's files, memory, connectors or machine | Account scoping on every route, an owner-only route list, a folder of its own for every non-owner account, public addresses only for non-owners, narrowing-only allow lists (§1.1) |
 | Work on a cloud runner | A compromised runner lies to the Hub; a command escapes to the runner host or other tenants | The Hub trusts no path the runner reports and reads bounded answers; the runner sandboxes every command with process, memory, CPU, wall and disk limits, per-token command shares and no network by default (§7.4) |
 
+*As built in M7.5 (ADR-096).* Three more:
+
+| Asset | Threat | Mitigation |
+| --- | --- | --- |
+| A device's firmware and boot settings | A captured management token, a channel answer, an agent or a replayed request changes BIOS settings, the boot entry, or decommissions the device | Off by default behind consent switches; a Hub-only approval card per change; a Hub-signed, single-use authorization `novad` checks; mutual TLS on the management channel; no model-facing tool; snapshots, watchdogs and rollback (§4.3, `docs/22` §5) |
+| BMC credentials and out-of-band reach | Credentials offered to a spoofed BMC or to a service on the Hub; an approval reused for another BMC | Vault only; the certificate pinned and confirmed by the owner before credentials go; address checks; cards bound to the BMC as it was (§4.3, §5) |
+| The user's own browser (extension bridge) | An agent acts on sites or tabs the user did not grant, uses the clipboard, or reaches the Hub's own pages | Owner-confirmed host grants, per-tab consent, a short list of methods, only Shift as a modifier, the Hub's own hosts never granted (§15, `docs/11` §4.3) |
+
 ### 1.1 Several people on one Hub (M7)
 
 *As built in M7 (decision 5 of ADR-095; `packages/core/src/team`, `apps/hub/src/team.ts`).* A Hub
@@ -47,6 +55,9 @@ account-scoped route shows a caller only its own account's data; on top of that:
   one. Members keep their own appearance, keyboard and onboarding preferences; `instructions.md`
   is the owner's alone. New Hub-administration routes must join the list: a route missing from
   it is open to members (scoped to their own account), so a review of each new area checks it.
+  M7.5 adds out-of-band management (`/api/v1/oob`); firmware, boot, PXE tokens, decommission and
+  the extension bridge's grants sit under `/api/v1/devices`, already on the list. The firmware,
+  out-of-band and bridge areas also check for the owner themselves.
 - **Folders.** Every non-owner account's chats, runs and tools work in
   `<dataDir>/members/<id>/workspace`, never the Hub's workspace or configured roots, including tool
   calls with no thread (the policy sources are asked with thread id `''`). The browser's fallback
@@ -454,7 +465,8 @@ permission profile (ADR-059).
   asked for this), the rule or check that triggered it, and the reviewer's rationale if any.
 - An approval can be answered from the card, a notification, a channel (`docs/13` §4) or as a
   server-to-client request (FR-188); exactly one answer resolves it. `confirm_at_action` and
-  `handoff_required` approvals are answered only in a Nova client.
+  `handoff_required` approvals are answered only in a Nova client, and Hub-only cards (§4.3) only
+  by the signed-in user there.
 - **Timeout**: default 24 h. The outcome is recorded as the decision `timeout`
   (`contracts/schemas/approval-decision.json`) and the run pauses (status Needs input,
   `pause_reason = approval_timeout`). A timeout never counts as allow.
@@ -480,6 +492,91 @@ asks again.
 
 The card offers a shorter lifetime (15 min, 1 h, end of day). The panic action (§13) revokes
 every grant.
+
+*As built in M7.5 (ADR-096).* Extension-bridge host grants and local browser fallback consents
+(FR-209, `docs/11` §4.6) are rows of their own (migration 0043), not `permission_grant`. Both last
+until revoked, and revoking the device revokes them. A bridge grant is `pending` until the owner
+confirms it; "all sites" needs its own acknowledgement and `browser.extensionBridgeAllSites`.
+
+### 4.3 Hub-only approvals and consent switches (M7.5)
+
+*As built in M7.5 (ADR-096; `packages/core/src/approvals/gate.ts`, `packages/core/src/channels`,
+`apps/hub/src/app.ts`, `packages/core/src/firmware/authz.ts`, `services/novad/src/authz.rs`).*
+Firmware (FR-146), boot (FR-143), out-of-band management (FR-147) and decommission change a
+machine below its operating system. Nothing proactive or autonomous reaches them: no model-facing
+tool plans, approves or applies such a change, and every route is the owner's.
+
+- **Hub-only cards.** These areas file approvals with `answerIn: 'hub'` (column
+  `approval.answer_in`, `ApprovalView.answerIn`). Only the signed-in user may answer one, in a Nova
+  client (web or desktop). The gate's `decide` refuses any other decider (a channel, a hook, a rule,
+  the system) with 403 `policy_denied` `{reason: hub_only}`, whatever the tier.
+  - Channels refuse it first (`docs/13` §4). A button press or a reply is refused with
+    `hub_only` and the text "This one can only be answered in Nova itself: open the web or desktop
+    app to decide." The channel prompt and the approval email carry no buttons and no link. A
+    signed link made earlier answers nothing (`not_found`), and trying is audited as
+    `channel.approval.refused` `{reason: hub_only, via: link}`. A push only opens Nova.
+  - In Nova the card says "Only you can answer this, in Nova: here or on the Approvals page. Chat
+    channels, email links and agents cannot answer it." Its `scope` (`device:<id>` or
+    `oob:<endpointId>`) links it to the machine.
+  - The cards: firmware apply and rollback (24 h), boot try and make-default (30 min),
+    out-of-band actions other than the read actions (10 min) and decommission (1 h). All are
+    `confirm_at_action`, risk high, with **Allow once** and **Deny** only. The card shows the
+    change: the settings diff with "(weakens security)" on the rows that do, or for a BIOS plan
+    over a BMC a summary starting "Weakens security: ". BMC-supplied values are cut to 200
+    characters with control and text-direction characters removed.
+  - Before acting, each area reads the card's row again: decided **Allow once**,
+    `decided_by = 'user'`, in time, and (firmware, boot, out-of-band) with its hash equal to the
+    change it names. An answer recorded any other way runs nothing (out-of-band:
+    `approval_not_by_user`). An out-of-band
+    card's hash covers the BMC as it was (kind, address, port, system, pin and when the pin was
+    confirmed); editing the endpoint withdraws its waiting cards and approved plans
+    (`endpoint_changed`). Reverting a pending boot trial is a safety action: its card is recorded
+    as the owner's own and sent at once.
+- **Signed authorizations.** `novad` refuses firmware apply and rollback, boot set, commit and
+  revert, and decommission without a Hub-signed authorization, whatever its management token
+  says. The authorization is `{v: 1, kind, deviceId, changeId, bodySha256, approvalId, issuedAt,
+  expiresAt}`, signed with the Hub identity key (Ed25519) over `nova-device-authz-v1` and a
+  newline followed by its canonical JSON. `bodySha256` covers the request body without the
+  authorization (and without a BIOS admin password, so no hash covers a secret).
+  - The Hub signs one only for the owner's request, with the switch on (boot revert excepted),
+    for an approved card for exactly this change, and for a device that is not revoked. It lives
+    at most 10 minutes (5 by default).
+  - `novad` checks it with the key its pin names, allows 120 s of clock skew, and remembers used
+    change ids for 24 h: a replay is 409 `conflict` `{reason: replayed}`, and a replay store it
+    cannot read refuses every privileged request (500 `{reason: replay_store_unreadable}`).
+  - Once the device holds a certificate it takes these requests only over mutual TLS (403
+    `policy_denied` `{reason: tls_required}`, `docs/22` §5). A captured management token can
+    therefore neither change firmware or boot nor decommission a device (it can turn the
+    device-side switches on, below, but not sign an authorization).
+- **Consent switches.** `devices.firmware.allowChanges`, `devices.firmware.allowSecurityDegrading`,
+  `devices.boot.allowLowLevel` and `devices.pxe.enabled` are off by default and turn on only with
+  `confirm: true`. Without it `PATCH /api/v1/settings` answers 403 `policy_denied`
+  `{reason: consent_required}`, and so does `PUT /api/v1/devices/firmware/policy` for the two
+  firmware switches.
+  - `devices.oob.enabled` cannot be turned on through the settings route at all (403
+    `consent_required`, audited `device.oob.refuse`): only `POST /api/v1/oob/enable {confirm: true}`
+    does.
+  - Turning any of them off needs no confirmation; turning out-of-band management off withdraws
+    its waiting cards. A security setting changed through the settings route, the firmware route
+    or out-of-band enable/disable is audited once (kind `settings`, `setting.changed`) with the
+    values before and after and whether the owner confirmed. Managed policy can lock any of them
+    (§10).
+  - The two device-side switches reach `novad` in every heartbeat answer
+    (`policy: {firmwareChanges, lowLevelBoot}`; a provider that fails answers false). `novad`
+    refuses firmware and boot writes while they are off, authorization or not. Reverting a boot
+    trial and the watchdogs' own restores always work.
+  - The Hub also pushes them through `POST /agent/v1/config {policy: {firmwareChanges,
+    lowLevelBoot}}` (`contracts/hub-api.md` §3): to every active device when either switch
+    changes, and before each firmware apply and rollback and each boot set and commit when the
+    device last confirmed another value (`DeviceService.syncPolicy`). If the device still refuses
+    for the switch, the Hub pushes again and retries once with a new authorization; then it answers
+    409 `conflict` `{reason: device_policy_stale}` (retryable) without spending the approval (a boot
+    request goes back to waiting).
+  - **Known limitation.** Because `/agent/v1/config` takes the management token, whoever holds a
+    device's token can now set its device-side switches (before, only the Hub's heartbeat answer
+    could). That removes only the device-side half of the double check: every firmware and boot
+    change still needs the Hub-signed authorization over its exact body, which the token cannot
+    make (ADR-096).
 
 ## 5. Secrets (FR-101)
 
@@ -583,6 +680,36 @@ every grant.
   50 ms on 2 MB of hostile input (`packages/security/test/redact-timing.test.ts`). Callers that
   redact page-supplied text clip it to twice its cap first (`docs/11` §4). Opaque tokens in URL
   paths (reset and magic links) are still not masked.
+- **As shipped in M7.5** (ADR-096). New secrets, with rows holding only references:
+  - **The BIOS admin password** (`secret://devices/<id>/bios-admin`) is set and cleared with the
+    write-only `PUT` and `DELETE /api/v1/devices/:id/firmware/admin-password` (audited kind
+    `secret`, `device.firmware.password.set` and `.clear`) and never returned. The Hub reads it
+    only for an apply or rollback on a machine that needs it, and sends it only to a device whose
+    endpoint is `https`, that is over mutual TLS (`docs/22` §5). Otherwise the call is refused
+    with 403 `policy_denied` `{reason: tls_required}` before the vault is read. `novad` also
+    refuses a body carrying it over plain HTTP, and never stores or logs it. The authorization's
+    `bodySha256` leaves it out (§4.3). It is deleted when the device is revoked or decommissioned
+    (`device.firmware.password.clear`, reason `device_revoked`). Because `novad` cannot restore a
+    machine without it, such a machine gets no guarded reboot (403 `policy_denied`
+    `{reason: watchdog_unavailable}`).
+  - **BMC credentials** (`secret://oob/<id>`, username and password) never appear in an address,
+    a row, an event or an audit entry. Redfish credentials go only on a connection whose
+    certificate matches the pin the owner confirmed. The IPMI password reaches `ipmitool` only
+    through its environment (`IPMI_PASSWORD` with `-E`), never as an argument. The vault registers
+    the stored entry as one redactor literal. The password alone joins the global redactor only
+    when it has 8 or more characters, so a default like `ADMIN` is not masked in every log line;
+    messages from the BMC and `ipmitool` have it removed locally when it has 4 or more.
+  - **PXE boot tokens** (`nvb_` and 256 random bits) are shown once (`no-store`) and kept only as
+    a SHA-256 hash in their own domain (`nova-pxe-token`); they can be rotated and revoked. The
+    Hub's request log writes the route pattern for `/boot/` paths, never the token, and the
+    redactor's `nova-token` rule covers `nvb_`.
+  - **The Hub's client certificate** for the management channel, key and certificate together, is
+    `secret://hub/client-certificate` (`docs/22` §5). A device's key stays on the device.
+  - The Hub's copies of firmware snapshots are sealed with the data key
+    (`<dataDir>/firmware/snapshots/<id>.json`). The extension bridge's per-user token (`nvbr_`,
+    `~/.config/nova/bridge-token`, 0600) never leaves the device; the redactor's `nova-token` rule
+    covers it all the same, as it covers every Nova token prefix (`nvs`, `nvx`, `nvd`, `nvm`,
+    `nva`, `nve`, `nvb`, `nvbr`, `nvc`, `nvn`, `nvdm`, `nvi`, `nvr`, `nvlr`).
 
 ## 6. Prompt-injection defense (FR-103)
 
@@ -775,6 +902,17 @@ terminal or run with `exec` fails read-only; commits go through the Code commit 
 grant and keeps the read-only locations read-only inside write grants; the Hub checks staged
 device writes again, treating `.git` and the like as read-only anywhere in the path.
 
+*As built in M7.5* (ADR-096; `services/novad/src/paths.rs`, `services/novad/src/cli.rs`): `novad`
+also protects the system folders `/sys`, `/proc`, `/dev`, `/boot`, `/efi` and `/etc`. They can never
+be granted, resolved or used as a command's working folder, and a grant made before this rule is
+never mounted into the command sandbox. BIOS settings and EFI variables live under `/sys` and the
+bootloader under `/boot`, so firmware and boot change only through their own routes, with a
+Hub-signed authorization (§4.3), never through the file or command modules. The service unit keeps
+`ProtectSystem=full` and makes only the bootloader's folders and the EFI variables writable for the
+boot module (`ReadWritePaths=-/boot/grub -/boot/grub2 -/boot/efi -/efi
+-/sys/firmware/efi/efivars`); BIOS settings under `/sys/class/firmware-attributes` are not
+affected by `ProtectSystem`.
+
 ### 7.3 Substrates
 
 | Platform | Default sandbox | Detail |
@@ -907,6 +1045,23 @@ clients; the substrate blocks every other route (`docs/11` §7).
   private-address block and no egress audit. Proxying runner traffic through the Hub is not built.
 - **Push** goes only to https endpoints on `push.webPushHosts` (instead of DNS pinning).
 
+**As shipped in M7.5** (ADR-096; `services/novad/src/egress.rs`, `docs/11` §4.6): the clean-profile
+browser of the local browser fallback runs on the user's device, not behind the Hub's proxy.
+Instead each session gets its own egress filter from `novad`: an HTTP proxy on the device's
+loopback that the browser must use for every request, loopback included.
+
+- It allows only CONNECT and absolute `http://` requests, only to ports 80 and 443, and only to
+  the session's hosts: the site and `*.site`, never an IP literal or a bare `*`, at most 200.
+- `novad` resolves each name itself. It refuses the name when any answer is private, loopback,
+  link-local, multicast, unspecified, carrier-grade NAT, unique-local or reserved (IPv4-mapped,
+  NAT64 and 6to4 forms judged by their IPv4 address), and connects to the address it checked. So
+  a page cannot reach the device's LAN.
+- It does no TLS inspection. It logs hosts and decisions, never URLs, and reports its counts when
+  the session closes.
+- It has no token, because the browser cannot present proxy credentials. It only narrows what a
+  local process could reach anyway (§15).
+- The fallback ends when the agent leaves the site. The site sees the device's own address.
+
 ## 9. Data controls & privacy (FR-105)
 
 - **Telemetry is off by default.** When enabled: no content, no prompts, no file paths —
@@ -985,6 +1140,10 @@ administrator can write it, or as a signed remote policy:
   decisions (§8), reviewer verdicts and overrides (§6.1), and grant creation, expiry and
   revocation (§4.2) are audited.
 - Exportable as JSONL for compliance; filterable by actor/scope/time in the Activity view.
+- M7.5: the audit list (`GET /api/v1/audit`) carries each entry's detail, redacted again on the
+  way out and capped at 4,096 characters of JSON (the export has it whole); Settings →
+  Diagnostics shows a settings or device change as "before → after" (with "Confirmed" when the
+  owner confirmed a consent switch) and any other detail as JSON behind a toggle.
 - M4 adds (ADR-091): plugin changes (`plugin.install`, `plugin.update`, `plugin.enable`,
   `plugin.disable`, `plugin.uninstall`), hook runs (`hook.<event>`) and hook trust changes,
   editor saves (`fs.write`, origin `ui`), terminals (`terminal.open`, `terminal.close`), client
@@ -1026,6 +1185,20 @@ administrator can write it, or as a signed remote policy:
   `settings`, `code` and `run`, members and OIDC `auth`, team agents `agent`. Device TLS refusals
   are audited at most once an hour per device and reason. Team agents' actions carry the actor
   `agent:<id>`.
+- **As shipped in M7.5** (ADR-096; the full list is in `docs/06` §2). No audit kind was added.
+  Kind `device`: firmware (`device.firmware.read`, `.plan`, `.approval`, `.apply`, `.rollback`,
+  `.watchdog`, with the values before and after), boot (`device.boot.*`, PXE fetches included as
+  `device.boot.pxe.script` and `.image`), out-of-band (`device.oob.refuse`,
+  `.endpoint.*`, `.pin`, `.pin_mismatch`, `device.oob.<action>` with its decision), endpoint
+  changes (`device.endpoint.change`, `.refuse`), decommission (`device.decommission.request`,
+  `.decide`, `device.decommission`), `device.config.push` and the compute nodes'
+  `node.policy.update` and `node.service.<action>`. Kind `secret`: the BIOS admin password
+  (`device.firmware.password.set`, `.clear`). Kind `network`: `trust.hub_client.issue`,
+  `trust.device.renew` and `trust.device.revoke` with reason `renewed`. Kind `browser`: the local
+  fallback (`browser.fallback.*`) and the extension bridge (`browser.bridge.*`). Kind `channel`:
+  `channel.approval.refused` with reason `hub_only`. Kind `settings`: security setting changes
+  with the values before and after and whether they were confirmed (§4.3). No password,
+  credential, boot token or key is ever in an entry.
 - Sensitive raw inputs can be recorded only if the user opts in; defaults store hashes.
 
 ## 12. Security testing (FR-123)
@@ -1168,7 +1341,7 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
   owner session: its scopes are recorded, not enforced. The Relay has no forward secrecy (static
   X25519 keys per pairing; `docs/22` §3.1) and accepts any push token. The identity key cannot be
   rotated, the CA is replaced only on the owner's explicit request, and device certificates are
-  not renewed. Network setup has no elevation and was exercised only
+  not renewed (M7.5 renews `novad`'s, below). Network setup has no elevation and was exercised only
   against fake CLIs.
 - **Public routes as shipped in M7** (ADR-095; same list). The signed one-use approval link of an
   approval email (GET shows, POST answers once; `no-store`, `no-referrer`, a strict CSP and no
@@ -1182,8 +1355,9 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
   the caller (`certificate_*` refusals); `devices.tls.allowWithoutCertificate` (on for one release)
   decides whether a device without one is accepted. `novad` and compute nodes verify the Hub by
   its pinned identity statement on the same connection before they send anything, and present
-  their certificate only after that check (`docs/22` §5). The Hub → `novad` management channel is
-  still bearer tokens over plain HTTP (R-022).
+  their certificate only after that check (`docs/22` §5). The Hub → `novad` management channel was
+  still bearer tokens over plain HTTP (R-022); since M7.5 it is mutual TLS for a device that holds
+  a certificate (below).
 - **Local runtime sockets** (M7, FR-128). `novad`'s local runtime listens on a 0600 Unix socket in
   a 0700 folder, and per user on `/run/user/<uid>/nova/runtime.sock` owned by that user (links and
   foreign files refused, never followed; `lchown`); a loopback address, when the owner opens one,
@@ -1205,6 +1379,89 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
   the owner allows it, bypasses the egress proxy. The `fs.*` path fix covers cloud threads only:
   SSH, WSL and device sessions still use the remote folder as roots. A removed member's running
   channel pollers keep polling (their turns are refused) until a restart. The Relay still has no
-  forward secrecy; device certificates are not renewed. A device session is still an owner
-  session apart from its scopes: `offline-replica` and `local-runtime` are now enforced, the other
-  scopes are recorded only.
+  forward secrecy; device certificates are not renewed (M7.5 renews `novad`'s, below). A device
+  session is still an owner session apart from its scopes: `offline-replica` and `local-runtime`
+  are now enforced, the other scopes are recorded only.
+- **The management channel** (M7.5, ADR-096 D1). `novad`'s management server speaks TLS 1.3 when
+  the device holds a certificate. It requires the Hub's client certificate (`urn:nova:hub:<pinned
+  fingerprint>`, clientAuth, chained to the Hub CA `novad` cached), and the Hub checks the device's
+  certificate by chain, device id and pinned key, never by host name. The bearer token stays.
+  Neither side falls back to plain HTTP: a downgraded endpoint is refused (`endpoint_downgrade`),
+  and so are privileged requests over plain HTTP (`tls_required`). Certificates are renewed
+  through the heartbeat. Details, refusals and what R-022 still covers: `docs/22` §5.
+- **Public routes as shipped in M7.5** (ADR-096; same list).
+  - `GET /boot/ipxe/:token` and `GET /boot/images/:token/:name` authenticate by the device's PXE
+    boot token in the path (§5). Both answer 404 while `devices.pxe.enabled` is off, and for an
+    unknown or revoked token or a revoked device. They allow 30 menus and 120 image requests a
+    minute per address (then 429 `rate_limited`), audit every fetch with the address, and answer
+    `no-store`. An image is a regular file directly in `<dataDir>/boot-images` (no paths, `..`,
+    links or folders); single byte ranges are served. The Host check applies, and the Relay does
+    not carry `/boot/`. Nova runs no DHCP or TFTP. iPXE over plain HTTP carries the token and the
+    images in the clear, so boot images must hold no secrets (iPXE over HTTPS needs the Hub CA
+    built into iPXE).
+  - `POST /agent/v1/bridge/events` authenticates by the device credential like a heartbeat (and,
+    over HTTPS, by the device certificate as the other `novad` routes do), only for a managed
+    `novad` device. It takes 1 to 100 events, checks each on its own and answers
+    `{accepted, refused}`.
+- **Device listeners** (M7.5).
+  - The DevTools endpoint `GET /agent/v1/browser/cdp/:sessionId` on the management server needs
+    the management token, refuses any `Origin` (403 `origin_rejected`) and passes on only the
+    WebSocket headers. `novad` answers the WebSocket itself and relays whole text messages to the
+    browser's DevTools pipe, one connection per session (a newer one replaces the older). The
+    browser opens no DevTools port (`--remote-debugging-pipe`), and the module's socket
+    `<data>/browser/cdp.sock` is 0600 in a 0700 folder.
+  - A root `novad` runs each browser session as its own dedicated unprivileged user
+    (`nova-browser1`, `nova-browser2`), never root, `nobody` or a user whose primary group is
+    root's or `nobody`'s (403 `unsafe_browser_user`; none free: 409). No other process shares the
+    browser's uid or its pipe. At most 2 sessions run per device; a session closes after 10
+    minutes without a DevTools client and after 4 hours in any case.
+  - The per-session egress filter on loopback has no token (§8).
+  - The extension bridge (FR-096, `docs/11` §4.3) listens on `bridge.sock` for each user in
+    `localRuntime.users` (`/run/user/<uid>/nova/`; bound as the user, folder 0700, socket 0600,
+    links refused). A connection must come from that user's uid (the kernel's peer credentials),
+    send `hello` with the token in that user's `~/.config/nova/bridge-token` (`nvbr_`, 0600 in a
+    0700 folder, read as the user by a forked child), and name the configured extension's origin;
+    at most 8 connections. One host is connected at a time. A newer host of the same user replaces
+    the older (`disconnected`, then `connected`, both naming the user); a host of another OS user
+    is refused (`bridge_busy`) until the first disconnects. Without a host, calls are 409
+    `bridge_offline`. The Hub treats a replaced host as a disconnect (`browser.bridge.replaced`)
+    and ties tab consents and fallback sessions to the OS user.
+- **The extension bridge's registration as built** (M7.5; the exception under "No writes into
+  other applications").
+  - `novad bridge enable`, run by the user (refused as root), writes the token and the host
+    manifest `ai.nova.bridge.json`. Its `allowed_origins` lists only the extension id the owner
+    set in `novad`'s `bridge.extensionId`. It goes into the `NativeMessagingHosts` folder of each
+    Chromium-family browser whose folder already exists in that user's home. `novad bridge
+    disable` removes the manifests and the token, and `novad uninstall` removes them for every
+    listed user. The installer never registers the bridge.
+  - The extension asks for no host permission by default. The owner confirms each host grant in
+    Nova (§4.2). No grant, "all sites" included, covers the Hub's own names and addresses
+    (`hub_host`): loopback names, its OS and mDNS names, the configured host and origins, the
+    Direct public and Relay hosts, the host of `channels.publicUrl` and every interface address.
+    If that list cannot be read, every host is refused. So an agent in the owner's signed-in
+    browser cannot reach the Hub's pages or answer a Hub-only card.
+  - Calls are only `tabs.list`, `tabs.open`, `tab.attach`, `tab.detach`, `cdp.send` and
+    `history.search`. `cdp.send` carries six DevTools methods and never a cookie, storage or
+    network-capture one. Each call names the host the tab must be on, and the extension refuses
+    with `host_changed` when the tab moved. `Runtime.evaluate` runs only the extension's own named
+    scripts. Key and mouse events take no modifier but Shift and no editing commands, so an agent
+    can neither paste the user's clipboard nor overwrite it. History search asks the user every
+    time and returns titles, hosts and visit times only; shared tabs report hosts, never full URLs.
+- **Known limitations (M7.5).**
+  - A device without a certificate (any added while the trust mode was not `local-ca`, the default
+    `none` included) is still managed over plain HTTP (R-022). Its management token, a browser
+    fallback's DevTools relay and extension bridge calls cross the LAN in the clear;
+    firmware, boot and decommission still need a signed authorization, and the BIOS admin
+    password is never sent to it. `nova-compute` nodes' certificates are not renewed.
+  - DevTools sessions that an earlier Hub connection opened inside a device's browser stay
+    attached after a reconnect, because the pipe outlives the WebSocket (only the Hub can connect).
+  - The Hub starts the device's browser headless. A visible one needs a display in `novad`'s
+    environment (else 409 `capability_missing` `{reason: no_display}`), and a root `novad`'s
+    dedicated browser user is not set up to use the desktop user's display. On macOS a root
+    `novad` creates no browser users: the owner creates two and names them in `browser.runAs`,
+    else every launch is refused.
+  - There is no Windows bridge (no named pipe, no registry manifest); `novad bridge` refuses there.
+  - `novad`'s launch of the device browser (the DevTools pipe, the proxy switches, WebRTC kept off
+    non-proxied UDP) is tested only against a fake browser; local network discovery by a real
+    Chromium has not been checked.
+  - A LAN client can tell that PXE is on: past the rate limit it gets 429 instead of 404.

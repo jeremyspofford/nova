@@ -1,6 +1,6 @@
 // The node's job API (contracts/hub-api.md §2): job-token auth on every route, browsers refused,
 // request validation, SSE streaming, cancel, health and the busy answer.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { SseParser, type ChatRequest, type StreamEvent } from '@nova/providers';
 import { Logger, MemorySink } from '@nova/telemetry';
@@ -181,8 +181,8 @@ describe('jobs', () => {
     const reader = res.body!.getReader();
     await reader.read();
     ac.abort();
-    await tick(30);
-    expect(jobs.load().running).toBe(0);
+    // The server sees the closed socket a moment later; on a loaded machine that can take a while.
+    await vi.waitFor(() => expect(jobs.load().running).toBe(0), { timeout: 5_000 });
     expect(jobs.has(second)).toBe(false);
   });
 });

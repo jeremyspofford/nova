@@ -2,7 +2,7 @@
 // `.nova/launch.json`, start in the session sandbox as an exec session, the port published through
 // the sandbox's bridge, the URL handed to the browser pane through the egress proxy's dev-server
 // grant and opened once the server answers, stop, stop-all and exits noticed.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -143,17 +143,39 @@ describe('dev server detection', () => {
   });
 });
 
-/** A loopback port nothing listens on at the moment of asking. */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+/** The lowest port the kernel hands out on its own (Linux), else 32768 (below macOS's 49152 too). */
+function ephemeralLow(): number {
+  try {
+    const low = Number(
+      readFileSync('/proc/sys/net/ipv4/ip_local_port_range', 'utf8').trim().split(/\s+/)[0],
+    );
+    return low > 20_000 ? low : 32_768;
+  } catch {
+    return 32_768;
+  }
+}
+
+function bindable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
     const srv = createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const address = srv.address();
-      const p = typeof address === 'object' && address ? address.port : 0;
-      srv.close(() => resolve(p));
-    });
+    srv.once('error', () => resolve(false));
+    srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
   });
+}
+
+/**
+ * A loopback port free now that the kernel never hands out by itself: below its ephemeral range.
+ * A fixed port, or one from `listen(0)` closed again, is inside that range (41890-45985 on WSL),
+ * so under load the kernel gives it to another socket before the dev server binds it: the server
+ * exits with EADDRINUSE while whatever took the port answers the readiness check.
+ */
+async function freePort(): Promise<number> {
+  const top = Math.min(ephemeralLow(), 32_768);
+  for (let i = 0; i < 100; i++) {
+    const port = 20_000 + Math.floor(Math.random() * (top - 20_000));
+    if (await bindable(port)) return port;
+  }
+  throw new Error('no free port below the ephemeral range');
 }
 
 describe('dev servers', () => {
@@ -300,14 +322,15 @@ describe('dev servers', () => {
     const bridged = new BridgedSandbox();
     box = bridged;
     e = await makeCodeM6Env({ sandbox: bridged });
+    const port = await freePort();
     mkdirSync(join(e.repo, '.nova'));
     writeFileSync(
       join(e.repo, '.nova', 'launch.json'),
       JSON.stringify({
         configurations: [
           // Listens a second after it starts: the browser pane opens it once it answers.
-          { name: 'slow', command: `sleep 1; ${SERVER}`, port: 43_301 },
-          { name: 'never', command: 'sleep 30', port: 43_302 },
+          { name: 'slow', command: `sleep 1; ${SERVER}`, port },
+          { name: 'never', command: 'sleep 30', port: await freePort() },
         ],
       }),
     );
@@ -341,13 +364,13 @@ describe('dev servers', () => {
       const v = await dm.start(ACCOUNT, s.id, { candidateId: 'launch:slow' }, 'user');
       expect(bridged.inner.reqs.at(-1)).toMatchObject({
         network: 'off',
-        env: { PORT: '43301' },
-        publish: { port: 43_301 },
+        env: { PORT: String(port) },
+        publish: { port },
       });
       const hostPort = bridged.bridges.get(v.execSessionId!)!.hostPort;
-      expect(hostPort).not.toBe(43_301);
+      expect(hostPort).not.toBe(port);
       // The URL is the bridge's port on the Hub; the view keeps the server's own port.
-      expect(v).toMatchObject({ status: 'running', port: 43_301 });
+      expect(v).toMatchObject({ status: 'running', port });
       expect(v.url).toBe(`http://127.0.0.1:${hostPort}/`);
       expect(grants).toEqual([{ host: '127.0.0.1', port: hostPort }]);
       // Not answering yet: the pane opens it in the background once it does.

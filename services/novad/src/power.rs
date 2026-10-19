@@ -2,8 +2,8 @@
 //! (a physical NIC that supports and has magic-packet wake enabled), plans the commands that would
 //! enable it, and applies them only behind an explicit flag with elevation. Sleep, restart and
 //! shutdown run only when the device owner turned power actions on in the local config.
-//! Power-on-after-power-loss is a firmware setting: it is reported as unknown until the firmware
-//! module (FR-146) can read it.
+//! Power-on-after-power-loss is a firmware setting: it comes from the BIOS backend of the firmware
+//! module (FR-146, src/firmware.rs) where one reads it (`on`, `off`, `last`), else `unknown`.
 //!
 //! The Wake Helper role (FR-138, docs/22 §7): a device whose roles include `wake-helper` sends
 //! Wake-on-LAN magic packets for other devices on its own LAN when the Hub asks
@@ -128,6 +128,8 @@ pub struct Power {
     /// Local config: sleep, restart and shutdown may run.
     pub allow_actions: bool,
     pub elevated: bool,
+    /// Reads power-on-after-power-loss from the BIOS (`on`, `off`, `last`), when it can.
+    pub after_power_loss: Option<Box<dyn Fn() -> Option<&'static str> + Send + Sync>>,
 }
 
 impl Power {
@@ -141,6 +143,7 @@ impl Power {
             allow_changes,
             allow_actions,
             elevated: crate::hardening::is_root(),
+            after_power_loss: None,
         }
     }
 
@@ -155,8 +158,8 @@ impl Power {
             })).collect::<Vec<_>>(),
             "macs": nics.iter().map(|n| n.mac.clone()).collect::<Vec<_>>(),
             "ac": on_ac(&self.sys_power),
-            // Needs the firmware module (FR-146, M7.5).
-            "afterPowerLoss": "unknown",
+            // From the BIOS through the firmware module's backend (FR-146), when it reads it.
+            "afterPowerLoss": self.after_power_loss.as_ref().and_then(|f| f()).unwrap_or("unknown"),
             "changesAllowed": self.allow_changes,
             "actionsAllowed": self.allow_actions,
             "elevated": self.elevated,
@@ -481,6 +484,7 @@ pub mod tests {
             allow_changes: allow,
             allow_actions: allow,
             elevated,
+            after_power_loss: None,
         }
     }
 
@@ -503,6 +507,9 @@ pub mod tests {
         assert_eq!(s["macs"], json!(["aa:bb:cc:dd:ee:ff"]));
         assert_eq!(s["ac"], true);
         assert_eq!(s["afterPowerLoss"], "unknown");
+        let mut with_bios = power(&base, r.clone(), false, false);
+        with_bios.after_power_loss = Some(Box::new(|| Some("last")));
+        assert_eq!(with_bios.status()["afterPowerLoss"], "last");
         let plan = p.wol_plan();
         assert_eq!(plan[0]["argv"], json!(["ethtool", "-s", "eth0", "wol", "g"]));
         assert!(plan[1]["content"].as_str().unwrap().contains("MACAddress=aa:bb:cc:dd:ee:ff"));

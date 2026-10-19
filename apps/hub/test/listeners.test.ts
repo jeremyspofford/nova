@@ -27,6 +27,8 @@ const PUBLIC: Record<string, string> = {
   'POST /agent/v1/register': 'one-use enrollment token in the body',
   'POST /agent/v1/heartbeat': 'device credential',
   'POST /agent/v1/capabilities': 'device credential',
+  // M7.5 extension bridge (D8): novad relays the extension's events with its device credential.
+  'POST /agent/v1/bridge/events': 'device credential',
   // Inbound deliveries from outside (docs/13 §4, docs/09 §7): each is verified by its sender's
   // signature or token before anything is read, and answers 401 otherwise.
   'POST /api/v1/channels/:id/inbound': "the channel's signature or token",
@@ -68,6 +70,12 @@ const PUBLIC: Record<string, string> = {
   // A public profile card exists only when the owner allows cards and the person opted in.
   'GET /api/v1/profiles/:handle': 'none: opted-in public cards only; rate-limited',
   'GET /api/v1/profiles/:handle/avatar': 'none: opted-in public cards only; rate-limited',
+  // M7.5 network boot (FR-143, ADR-096 D5): iPXE has no session. Both are 404 while
+  // devices.pxe.enabled is off, and for any token that is not a live boot token.
+  'GET /boot/ipxe/:token':
+    "the device's PXE boot token in the path (256 random bits, only its hash stored, rotatable); rate-limited, audited",
+  'GET /boot/images/:token/:name':
+    'the same boot token; a plain file name inside the boot-images folder; rate-limited, audited',
 };
 
 /** Browser flows that refuse by redirecting to the sign-in page (no session, a fixed path). */

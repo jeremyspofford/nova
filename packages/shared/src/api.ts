@@ -787,7 +787,23 @@ export interface ApprovalView {
   runId?: string | null;
   codeSessionId?: string | null;
   threadTitle?: string | null;
+  /**
+   * M7.5: `hub` when only the signed-in user may answer it in a Nova client (web, desktop): every
+   * channel path (a reply, a button, a signed email link) refuses it with `hub_only`. Firmware,
+   * boot and out-of-band cards (docs/23 §6.3). Null or absent: as the tier allows.
+   */
+  answerIn?: ApprovalAnswerIn | null;
+  /**
+   * M7.5: what the approval is about, as the Hub recorded it: `device:<id>` for a device's
+   * firmware, boot, folder access or decommission card, `oob:<endpointId>` for out-of-band, a
+   * thread or tool scope otherwise. Clients link a `device:` card to its device. Null or absent
+   * when not recorded.
+   */
+  scope?: string | null;
 }
+
+/** Where an approval may be answered; `hub`: only in a Nova client, by the signed-in user. */
+export type ApprovalAnswerIn = 'hub';
 
 /** contracts/schemas/approval-decision.json as a client sends it; the Hub sets decidedBy/At. */
 export const decideApprovalSchema = z
@@ -990,6 +1006,12 @@ export interface AuditEntryView {
   turnId: string | null;
   createdAt: string;
   hash: string;
+  /**
+   * M7.5: the entry's detail (the values before and after, the reason, ...), redacted again on
+   * the way out and at most 4,096 characters of JSON; a larger one is `{truncated: true, chars}`
+   * (the export has it whole). Null when the entry has none. The Hub always fills it.
+   */
+  detail?: Record<string, unknown> | null;
 }
 
 export interface AuditVerifyResult {

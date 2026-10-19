@@ -166,9 +166,23 @@ pub fn within(parent: &Path, child: &Path) -> bool {
     child.starts_with(parent)
 }
 
-/// Why a path can never be reached through novad, or None. Credential locations anywhere, and
-/// novad's own data directory.
+/// System folders no grant reaches: the kernel's interfaces (BIOS settings and EFI variables live
+/// under /sys, FR-146), devices, the bootloader (FR-143) and the system configuration. Firmware
+/// and boot changes go only through their routes, with a Hub-signed authorization (ADR-096 D2),
+/// never through the file or command modules.
+pub const SYSTEM_LOCATIONS: &[&str] = &["/sys", "/proc", "/dev", "/boot", "/efi", "/etc"];
+
+/// The system folder `p` is in, if any (canonical paths).
+pub fn system_reason(p: &Path) -> Option<String> {
+    SYSTEM_LOCATIONS.iter().find(|s| p.starts_with(s)).map(|s| format!("system locations ({s}) are never available"))
+}
+
+/// Why a path can never be reached through novad, or None. Credential locations anywhere,
+/// novad's own data directory and the system folders.
 pub fn protected_reason(p: &Path, data_dir: Option<&Path>) -> Option<String> {
+    if let Some(r) = system_reason(p) {
+        return Some(r);
+    }
     if let Some(d) = data_dir {
         if within(d, p) {
             return Some("novad's data folder is never available".into());
@@ -241,6 +255,16 @@ mod tests {
         // A parent of the data dir may be granted; the data dir inside it stays denied.
         assert!(protected_reason(Path::new("/var/lib"), Some(Path::new("/var/lib/nova"))).is_none());
         assert!(is_protected_ancestor(Path::new("/var/lib"), Some(Path::new("/var/lib/nova")), &[]));
+    }
+
+    #[test]
+    fn system_folders_are_protected() {
+        for p in ["/sys/class/firmware-attributes/dell-wmi-sysman/attributes/SecureBoot/current_value", "/sys", "/proc/1/mem", "/dev/sda", "/boot/grub/grubenv", "/efi/EFI", "/etc/default/grub", "/sys/firmware/efi/efivars"] {
+            assert!(protected_reason(Path::new(p), None).unwrap().contains("system locations"), "{p}");
+        }
+        for p in ["/system", "/home/u/etc", "/home/u/boot", "/devices", "/srv/proc"] {
+            assert!(protected_reason(Path::new(p), None).is_none(), "{p}");
+        }
     }
 
     #[test]

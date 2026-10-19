@@ -83,6 +83,8 @@ export interface AuditLogOptions {
 }
 
 const MAX_DETAIL_CHARS = 16_384;
+/** A list view's detail is at most this many characters of JSON (the export has it whole). */
+export const MAX_VIEW_DETAIL_CHARS = 4_096;
 
 function clip(value: string | null | undefined, max: number): string | null {
   if (value === null || value === undefined) return null;
@@ -184,7 +186,29 @@ export class AuditLog implements AuditSink {
     } catch (err) {
       this.#log?.warn('audit.appended event failed', { err });
     }
-    return toView(row);
+    return this.#view(row);
+  }
+
+  /**
+   * An entry as the API shows it, with its detail redacted again (like the export) and capped,
+   * so a list page stays small and nothing that looks like a secret leaves (M7.5).
+   */
+  #view(r: AuditRow): AuditEntryView {
+    let detail: Record<string, unknown> | null = null;
+    if (r.detail_json) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(r.detail_json);
+      } catch {
+        parsed = null;
+      }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const red = this.#redactor.redact(parsed as Record<string, unknown>);
+        const chars = JSON.stringify(red).length;
+        detail = chars > MAX_VIEW_DETAIL_CHARS ? { truncated: true, chars } : red;
+      }
+    }
+    return { ...toView(r), detail };
   }
 
   /** Newest first, one account, optionally one kind and one thread. */
@@ -213,7 +237,7 @@ export class AuditLog implements AuditSink {
     const page = rows.slice(0, limit);
     const last = page.at(-1);
     return Promise.resolve({
-      items: page.map(toView),
+      items: page.map((r) => this.#view(r)),
       nextCursor: rows.length > limit && last ? String(last.seq) : null,
     });
   }

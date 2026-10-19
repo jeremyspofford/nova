@@ -24,6 +24,7 @@ describe('device credentials (FR-126)', () => {
     expect(await env.svc.authenticate(fake.credential!)).toMatchObject({ id: fake.deviceId });
     // Another prefix, a wrong token, an oversized one: no device.
     expect(await novadDeviceForCredential(env.db, `nvn_${fake.credential!.slice(4)}`)).toBeNull();
+    // secret-scan: fake
     expect(await novadDeviceForCredential(env.db, 'nvc_not-a-real-credential')).toBeNull();
     expect(await novadDeviceForCredential(env.db, `nvc_${'a'.repeat(300)}`)).toBeNull();
     // A node credential lookup never finds a novad device (each hashes in its own domain).

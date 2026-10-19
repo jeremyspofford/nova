@@ -1,6 +1,7 @@
 // Per-device policy (FR-150): whether agents and models may be routed to the device, which
 // modules it may run, quiet hours when background work waits, and resource caps for its modules.
-// The Hub applies it at once and the device takes it when it next checks in.
+// The Hub applies it at once and the device takes it when it next checks in; "On the device"
+// (M7.5, ops.tsx) says whether it has, shows what is in force there, and pushes it now.
 import { useId, useState } from 'react';
 import {
   DEVICE_MODULES,
@@ -14,6 +15,7 @@ import { SwitchField } from '../settings/controls.tsx';
 import { useDevicesApi } from './api.ts';
 import type { PanelProps } from './DevicePage.tsx';
 import { MODULE_PURPOSE, deviceErrorMessage, moduleLabel, parseQuietHours } from './format.ts';
+import { OverridesSection } from './ops.tsx';
 
 const MIB = 1024 * 1024;
 
@@ -73,7 +75,12 @@ export function policyFrom(
 }
 
 export function PolicyPanel({ device, onDevice }: PanelProps) {
-  return <PolicyForm key={JSON.stringify(device.policy)} device={device} onDevice={onDevice} />;
+  return (
+    <div className="stack devices-policy">
+      <PolicyForm key={JSON.stringify(device.policy)} device={device} onDevice={onDevice} />
+      <OverridesSection device={device} />
+    </div>
+  );
 }
 
 function PolicyForm({

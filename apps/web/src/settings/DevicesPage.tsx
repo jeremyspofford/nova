@@ -5,7 +5,8 @@
 // (M2). "Add with a code" opens Add a device for a compute node; "Add compute node" creates a
 // one-use enrollment token for scripted installs (creating it is the approval, ADR-089) and shows
 // the command to run on the node; Revoke stops a node's credential at once. The node list
-// refreshes every 5 s while the page is open.
+// refreshes every 5 s while the page is open. Each node links to its device page for its policy
+// (quiet hours, routing), GPU memory and services (M7.5).
 import { useEffect, useId, useRef, useState } from 'react';
 import { DEVICE_CAPABILITIES, type NodeEnrollToken, type NodeView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, TextField, useToast, type IconName } from '@nova/ui';
@@ -15,8 +16,10 @@ import {
   DEVICES_ADD_PATH,
   DEVICES_PATH,
   addDevicePath,
+  devicePath,
 } from '../devices/format.ts';
 import { navigate } from '../router.ts';
+import { followLink } from '../work/nav.tsx';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useModels } from '../stores.tsx';
@@ -170,9 +173,18 @@ export function DevicesPage() {
                     </span>
                   </div>
                   {n.status !== 'revoked' ? (
-                    <Button variant="ghost" onClick={() => setRevoking(n)}>
-                      Revoke
-                    </Button>
+                    <div className="row ws-row-actions">
+                      <a
+                        href={devicePath(n.id)}
+                        aria-label={`Policy and services of ${n.name}`}
+                        onClick={(e) => followLink(e, devicePath(n.id))}
+                      >
+                        Policy and services
+                      </a>
+                      <Button variant="ghost" onClick={() => setRevoking(n)}>
+                        Revoke
+                      </Button>
+                    </div>
                   ) : null}
                 </li>
               );

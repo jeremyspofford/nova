@@ -9,8 +9,11 @@ import fastifyWebsocket from '@fastify/websocket';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  FIRMWARE_TOGGLE_KEYS,
   NovaError,
+  SETTINGS,
   checkSettingWrite,
+  isSettingKey,
   httpStatusFor,
   isNovaError,
   resolveAll,
@@ -76,6 +79,9 @@ import { setupPush } from './push.ts';
 import { setupTeam, type TeamArea, type TeamDeps } from './team.ts';
 import { setupFlagged } from './flagged.ts';
 import { setupDeviceTrust } from './device-trust.ts';
+import { setupFirmware } from './firmware.ts';
+import { setupBoot } from './boot.ts';
+import { setupOob } from './oob.ts';
 import { setupTrust, type TrustArea } from './trust.ts';
 import { setupScreen } from './screen.ts';
 import { setupSpaces } from './spaces.ts';
@@ -420,8 +426,62 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   // M7 device trust (FR-126): device and node routes check the certificate a device presents.
   const deviceTrust = await setupDeviceTrust(ctx, {
     verifyDeviceCertificate: (pem) => trust.verifyDeviceCertificate(pem),
+    // A renewed certificate the device presents retires its old one (ADR-096).
+    certificatePresented: (deviceId, serial) =>
+      trust.service.deviceCertificatePresented(deviceId, serial),
     audit: ops.audit,
   });
+  // M7.5 (ADR-096): the management channel over mutual TLS (D1), Hub-signed authorizations for
+  // privileged device actions (D2), device certificate renewal, firmware (FR-146), boot profiles
+  // and PXE (FR-143) and out-of-band management (FR-147), all owner-only and off by default.
+  devices.useManagementTls({
+    material: () => trust.service.hubClientCertificate(),
+    verifyDeviceCertificate: (pem) => trust.verifyDeviceCertificate(pem),
+    allowLegacyServerCertificate: (deviceId, pem) =>
+      trust.service.legacyServerCertificateAllowed(deviceId, pem),
+    presented: (deviceId, serial) => trust.service.deviceCertificatePresented(deviceId, serial),
+    certificateState: (deviceId) => trust.service.deviceCertificateState(deviceId),
+  });
+  devices.useCertificateRenewal((deviceId, key) =>
+    trust.service.deviceCertificateRenewal(deviceId, key),
+  );
+  devices.useAuthzSigner(trust.identity);
+  devices.useAvailableBuilds(async () => (await agentDist.manifest()).manifest);
+  nodes.useAudit(ops.audit);
+  const firmware = await setupFirmware(ctx, {
+    devices: devices.service,
+    audit: ops.audit,
+    notifier: ops.notifier,
+    identity: hubIdentity,
+    // The settings writer's `settings.changed` (before, after, confirmed) is the toggle's one
+    // audit entry, written by the ops subscriber (ADR-096 D3).
+    writeSetting: (accountId, key, value, opts) =>
+      writeSetting(accountId, { key, value, scope: 'global' }, opts),
+  });
+  firmware.useDeviceCall((d, path, body, ms) =>
+    devices.service.call(d.row.accountId, d.row.id, path, body, ms),
+  );
+  const oob = await setupOob(ctx, {
+    audit: ops.audit,
+    notifier: ops.notifier,
+    writeSetting: (accountId, key, value, opts) =>
+      writeSetting(accountId, { key, value, scope: 'global' }, opts),
+  });
+  const boot = await setupBoot(ctx, {
+    devices: devices.service,
+    audit: ops.audit,
+    notifier: ops.notifier,
+  });
+  boot.useHubIdentity(hubIdentity);
+  boot.usePowerCycle((accountId, deviceId) => oob.powerCycleFor(accountId, deviceId));
+  devices.useFirmwarePolicy((device) => firmware.heartbeatPolicy(device));
+  devices.useBootPolicy(() => boot.lowLevelBoot());
+  devices.service.onHeartbeatEvents((accountId, deviceId, events) =>
+    firmware.heartbeatEvents(accountId, deviceId, events),
+  );
+  devices.service.onHeartbeatEvents((accountId, deviceId, events) =>
+    boot.heartbeatEvents(accountId, deviceId, events),
+  );
   // M7 cloud runner (FR-108, FR-071): a cloud environment's commands and files run on the runner.
   const cloudrun = await setupCloudRun(ctx, { audit: ops.audit, notifier: ops.notifier });
   code.service.envs.useCloud(cloudrun.provider);
@@ -713,22 +773,11 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       if (agent.status === 'paused') await agents.service.resume(accountId, agentId);
     },
   });
-  // Local browser fallback (FR-209): an agent with a connected computer may continue on that
-  // computer's browser after the per-site consent. novad's browser module is not built yet, so
-  // the consent flow ends with the reason instead of a session.
-  browser.useLocalFallback({
-    open: async ({ accountId, computerId }) => {
-      const agentId = await agentOfComputer(accountId, computerId);
-      const connection = agentId
-        ? await devices.service.activeConnection(accountId, agentId)
-        : null;
-      if (!connection) return { ok: false, reason: 'the agent has no connected computer' };
-      return {
-        ok: false,
-        reason: "the connected computer's browser is not available yet (it needs novad 0.7)",
-      };
-    },
-  });
+  // Local browser fallback (FR-209) on a connected computer's browser through novad, and the
+  // extension bridge (FR-096): the offer asks the user, and the device's browser is reached over
+  // the management channel (M7.5).
+  browser.useRequests(requests.service);
+  browser.useDevices(devices.service, agentOfComputer);
   spaces.useAudit(ops.audit);
   // M7 sync (FR-109, FR-129): the Hub's change feed for device replicas, and idempotent writes.
   const sync = await setupSync(ctx, {
@@ -742,6 +791,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     },
   });
   const areas = [
+    firmware,
+    boot,
+    oob,
     sync,
     cloudrun,
     push,
@@ -911,7 +963,10 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   app.addHook('onResponse', (req, reply, done) => {
     log.info('request', {
       method: req.method,
-      url: req.url.split('?')[0],
+      // The PXE routes carry their token in the path: log the route, never the token.
+      url: req.url.startsWith('/boot/')
+        ? (req.routeOptions.url ?? '/boot/')
+        : req.url.split('?')[0],
       status: reply.statusCode,
       ms: Math.round(reply.elapsedTime),
       requestId: req.id,
@@ -1047,11 +1102,26 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     value: z.unknown(),
     scope: z.enum(['global', 'project']).default('global'),
     projectId: z.string().optional(),
+    /** The owner confirmed what a consent switch allows (ADR-096 D3). */
+    confirm: z.literal(true).optional(),
   });
+  // Switches that widen what the Hub may do to devices turn on only with an explicit
+  // confirmation, here as on their own routes (ADR-096 D3; the M7.5 review): the Settings dialog
+  // sends `confirm: true` after the owner reads what the switch allows. Out-of-band management has
+  // its own consent route and its area refuses it here.
+  const CONSENT_KEYS = new Set<string>([
+    ...FIRMWARE_TOGGLE_KEYS,
+    'devices.boot.allowLowLevel',
+    'devices.pxe.enabled',
+  ]);
   app.patch('/api/v1/settings', async (req) => {
     const p = requireAuth(req);
     const body = patchBody.parse(req.body);
-    await writeSetting(p.accountId, body);
+    if (CONSENT_KEYS.has(body.key) && body.value === true && body.confirm !== true)
+      throw new NovaError('policy_denied', 'turning this on needs an explicit confirmation', {
+        details: { reason: 'consent_required' },
+      });
+    await writeSetting(p.accountId, body, { confirmed: body.confirm === true });
     return { settings: resolveAll(await loadLayers(body.projectId)) };
   });
 
@@ -1059,6 +1129,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   async function writeSetting(
     accountId: string | null,
     body: z.infer<typeof patchBody>,
+    opts: { confirmed?: boolean } = {},
   ): Promise<void> {
     if (body.scope === 'project' && !body.projectId)
       throw new NovaError('validation', 'projectId is required');
@@ -1074,6 +1145,9 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       );
     }
     const scopeRef = body.scope === 'project' ? body.projectId! : '';
+    // A security setting's change is audited with its values (docs/12 §3; ops subscribers).
+    const security = isSettingKey(body.key) && SETTINGS[body.key].security === true;
+    const before = security ? resolveSetting(body.key as SettingKey, layers).value : undefined;
     const now = new Date().toISOString();
     await db.transaction(async () => {
       await db.orm
@@ -1097,7 +1171,11 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       name: 'settings.changed',
       actor: 'user',
       accountId: accountId ?? undefined,
-      payload: { key: body.key, scope: body.scope },
+      payload: {
+        key: body.key,
+        scope: body.scope,
+        ...(security ? { before, after: check.value, confirmed: opts.confirmed === true } : {}),
+      },
     });
   }
 

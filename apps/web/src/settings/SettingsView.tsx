@@ -4,6 +4,7 @@ import { AccountsPage } from './AccountsPage.tsx';
 import { AppearancePage } from './AppearancePage.tsx';
 import { GeneralPage } from './GeneralPage.tsx';
 import { DevicesPage } from './DevicesPage.tsx';
+import { FirmwareBootSettings } from '../firmware/Settings.tsx';
 import { ClientsPage } from './ClientsPage.tsx';
 import { DiagnosticsPage } from './DiagnosticsPage.tsx';
 import { ImportPage } from './ImportPage.tsx';
@@ -115,7 +116,12 @@ export function SettingsView({
           {section === 'channels' ? <ChannelsPage /> : null}
           {section === 'triggers' ? <TriggersPage /> : null}
           {section === 'diagnostics' ? <DiagnosticsPage /> : null}
-          {section === 'devices' ? <DevicesPage /> : null}
+          {section === 'devices' ? (
+            <>
+              <DevicesPage />
+              <FirmwareBootSettings />
+            </>
+          ) : null}
           {section === 'network' ? <NetworkPage /> : null}
           {section === 'browser' ? <BrowserSettings /> : null}
           {section === 'appearance' ? <AppearancePage /> : null}

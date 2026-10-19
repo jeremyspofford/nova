@@ -4,12 +4,26 @@
 // credential for heartbeats and model sync. Only hashes of tokens reach the database.
 import { randomBytes } from 'node:crypto';
 import { and, asc, eq, inArray, isNull, lt, ne, or } from 'drizzle-orm';
-import { NovaError, uuidv7, type NodeEnrollToken, type NodeView } from '@nova/shared';
+import {
+  NODE_SERVICE_NAMES,
+  NovaError,
+  nodePolicySchema,
+  uuidv7,
+  type NodeDetailView,
+  type NodeEnrollToken,
+  type NodeGpuVram,
+  type NodePolicy,
+  type NodeServiceAction,
+  type NodeServiceView,
+  type NodeView,
+} from '@nova/shared';
 import { contracts } from '@nova/contracts';
 import { secretRef, type SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
+import type { AuditSink } from '../tools/types.ts';
+import { inDeviceQuietHours } from '../devices/service.ts';
 import { keyFingerprint, nodeSecretHash, verifyDocument } from './crypto.ts';
 import { enrollBindingOf, type EnrollKeyBinding } from '../pairing/binding.ts';
 import {
@@ -84,6 +98,30 @@ export interface NodeServiceOptions {
   enrollTtlMs?: number;
   /** Defaults to contracts/schemas/device-capability.json via @nova/contracts. */
   validateCapability?: CapabilityValidator;
+  audit?: AuditSink;
+  /** The Hub's calls to a node's service routes (tests substitute it). */
+  fetch?: typeof fetch;
+}
+
+const DEFAULT_NODE_POLICY: NodePolicy = {
+  quietHours: [],
+  timeZone: null,
+  routingEligible: true,
+  revision: 0,
+};
+
+interface NodePolicyRow {
+  quiet_hours: string;
+  time_zone: string | null;
+  routing_eligible: number;
+  revision: number;
+}
+
+interface LiveReport {
+  load: NodeLoad;
+  models: string[] | null;
+  vram: NodeGpuVram[] | null;
+  quiet: boolean | null;
 }
 
 /** Where the Hub keeps a node's job token (docs/12 §5: secrets only in the vault). */
@@ -109,8 +147,10 @@ export class NodeService {
   readonly #missedBeats: number;
   readonly #enrollTtlMs: number;
   readonly #validate: CapabilityValidator;
-  /** Last heartbeat per node: load and the backend's current model list (memory only). */
-  readonly #live = new Map<string, { load: NodeLoad; models: string[] | null }>();
+  /** Last heartbeat per node: load, the backend's models, VRAM and quiet (memory only). */
+  readonly #live = new Map<string, LiveReport>();
+  #audit: AuditSink | null;
+  readonly #fetch: typeof fetch;
   readonly #revokeListeners = new Set<(nodeId: string) => void>();
   #timer: ReturnType<typeof setInterval> | null = null;
 
@@ -124,6 +164,12 @@ export class NodeService {
     this.#missedBeats = opts.missedBeats ?? MISSED_BEATS;
     this.#enrollTtlMs = opts.enrollTtlMs ?? ENROLL_TOKEN_TTL_MS;
     this.#validate = opts.validateCapability ?? defaultValidator();
+    this.#audit = opts.audit ?? null;
+    this.#fetch = opts.fetch ?? ((...a) => fetch(...a));
+  }
+
+  useAudit(audit: AuditSink): void {
+    this.#audit = audit;
   }
 
   // ---- enrollment -------------------------------------------------------------------------
@@ -345,8 +391,11 @@ export class NodeService {
     return node;
   }
 
-  /** Record a heartbeat; an unreachable node becomes active again. */
-  async heartbeat(credential: string, input: unknown): Promise<void> {
+  /**
+   * Record a heartbeat; an unreachable node becomes active again. The answer carries the owner's
+   * policy for the node (quiet hours, routing eligibility), which the node honors (M7.5).
+   */
+  async heartbeat(credential: string, input: unknown): Promise<{ ok: true; policy: NodePolicy }> {
     // Authenticate before validating, so an unauthenticated caller learns nothing.
     const node = await this.#requireNode(credential);
     const body = heartbeatSchema.parse(input);
@@ -376,8 +425,278 @@ export class NodeService {
       return status;
     });
     if (from === null) throw new NovaError('auth_missing', 'this node credential is not valid');
-    this.#live.set(node.id, { load: body.load, models: body.models ?? null });
+    const vram = body.vram
+      ? body.vram.map((g) => ({
+          index: g.index,
+          vendor: g.vendor ?? null,
+          name: g.name ?? null,
+          totalBytes: g.totalBytes ?? null,
+          usedBytes: g.usedBytes ?? null,
+        }))
+      : null;
+    this.#live.set(node.id, {
+      load: body.load,
+      models: body.models ?? null,
+      vram,
+      quiet: body.quiet ?? null,
+    });
     if (from !== 'active') await this.#statusChanged(node, from, 'active');
+    return { ok: true, policy: this.#policy(node.id) };
+  }
+
+  // ---- the owner's policy for a node (FR-126, FR-150; M7.5) ----------------------------------
+
+  #policy(nodeId: string): NodePolicy {
+    const row = this.#db.raw
+      .prepare(
+        'SELECT quiet_hours, time_zone, routing_eligible, revision FROM node_policy WHERE device_id = ?',
+      )
+      .get(nodeId) as NodePolicyRow | undefined;
+    if (!row) return { ...DEFAULT_NODE_POLICY, quietHours: [] };
+    let quiet: unknown;
+    try {
+      quiet = JSON.parse(row.quiet_hours);
+    } catch {
+      quiet = [];
+    }
+    return {
+      quietHours: Array.isArray(quiet)
+        ? quiet.filter((q): q is string => typeof q === 'string')
+        : [],
+      timeZone: row.time_zone,
+      routingEligible: row.routing_eligible === 1,
+      revision: row.revision,
+    };
+  }
+
+  async #node(accountId: string, nodeId: string): Promise<DeviceRow> {
+    const rows = await this.#db.orm
+      .select()
+      .from(device)
+      .where(
+        and(eq(device.id, nodeId), eq(device.accountId, accountId), eq(device.kind, 'compute')),
+      )
+      .limit(1);
+    const node = rows[0];
+    if (!node) throw new NovaError('not_found', 'node not found');
+    return node;
+  }
+
+  /** The node's policy (defaults until the owner sets one). */
+  async policy(accountId: string, nodeId: string): Promise<NodePolicy> {
+    await this.#node(accountId, nodeId);
+    return this.#policy(nodeId);
+  }
+
+  /** Merge a change into the node's policy; the node takes it with its next heartbeat. */
+  async setPolicy(accountId: string, nodeId: string, input: unknown): Promise<NodePolicy> {
+    const node = await this.#node(accountId, nodeId);
+    if (node.status === 'revoked')
+      throw new NovaError('conflict', 'the node was revoked', { details: { reason: 'revoked' } });
+    const patch = nodePolicySchema.parse(input);
+    const before = this.#policy(nodeId);
+    const next: NodePolicy = {
+      quietHours: patch.quietHours ?? before.quietHours,
+      timeZone: patch.timeZone === undefined ? before.timeZone : patch.timeZone,
+      routingEligible: patch.routingEligible ?? before.routingEligible,
+      revision: before.revision + 1,
+    };
+    const nowIso = this.#now().toISOString();
+    await this.#db.transaction(() => {
+      this.#db.raw
+        .prepare(
+          `INSERT INTO node_policy (device_id, quiet_hours, time_zone, routing_eligible, revision, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (device_id) DO UPDATE SET quiet_hours = excluded.quiet_hours,
+             time_zone = excluded.time_zone, routing_eligible = excluded.routing_eligible,
+             revision = excluded.revision, updated_at = excluded.updated_at`,
+        )
+        .run(
+          nodeId,
+          JSON.stringify(next.quietHours),
+          next.timeZone,
+          next.routingEligible ? 1 : 0,
+          next.revision,
+          nowIso,
+        );
+    });
+    await this.#events.emit({
+      name: 'node.policy.changed',
+      accountId,
+      payload: { nodeId, revision: next.revision, routingEligible: next.routingEligible },
+    });
+    await this.#audit
+      ?.append({
+        accountId,
+        actor: 'user',
+        kind: 'device',
+        action: 'node.policy.update',
+        resource: nodeId,
+        detail: { before, after: next },
+      })
+      .catch((err: unknown) => this.#log.warn('node policy audit failed', { err }));
+    return next;
+  }
+
+  /**
+   * Whether the node is quiet now: in the quiet hours of the owner's policy (in its zone, else
+   * the zone the node declares, else UTC), or the node said so in its last heartbeat.
+   */
+  #quietNow(nodeId: string, doc: Record<string, unknown>, policy: NodePolicy): boolean {
+    if (this.#live.get(nodeId)?.quiet === true) return true;
+    const locale = isRecord(doc.locale) ? doc.locale : {};
+    const zone =
+      policy.timeZone ?? (typeof locale.timezone === 'string' ? locale.timezone : undefined);
+    return inDeviceQuietHours(policy.quietHours, this.#now(), zone);
+  }
+
+  /** `GET /api/v1/devices/:id/node`: policy, quiet, VRAM and load. */
+  async detail(accountId: string, nodeId: string): Promise<NodeDetailView> {
+    const node = await this.#node(accountId, nodeId);
+    const policy = this.#policy(nodeId);
+    const live = this.#live.get(nodeId);
+    const doc = (await this.#document(nodeId)) ?? {};
+    return {
+      id: node.id,
+      name: node.name,
+      status: node.status,
+      policy,
+      quietNow: node.status !== 'revoked' && this.#quietNow(nodeId, doc, policy),
+      reportedQuiet: live?.quiet ?? null,
+      vram: live?.vram ?? null,
+      load: node.status === 'active' ? this.load(nodeId) : null,
+      lastSeenAt: node.lastSeenAt,
+    };
+  }
+
+  // ---- the node's managed services (`/node/v1/services/*`, M7.5) -----------------------------
+
+  async #callNode(
+    accountId: string,
+    nodeId: string,
+    method: 'GET' | 'POST',
+    path: string,
+  ): Promise<Record<string, unknown>> {
+    const [record] = await this.#records(accountId, nodeId);
+    if (!record) throw new NovaError('not_found', 'node not found');
+    if (record.status === 'revoked') throw new NovaError('not_found', 'node not found');
+    if (record.status !== 'active' || !record.endpoint)
+      throw new NovaError('node_unavailable', 'the node is not reachable', {
+        details: { reason: 'unreachable', status: record.status },
+      });
+    const token = await this.jobToken(nodeId);
+    if (!token) throw new NovaError('auth_missing', 'the Hub has no job token for this node');
+    let res: Response;
+    try {
+      res = await this.#fetch(`${record.endpoint.replace(/\/+$/, '')}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(method === 'POST' ? { 'content-type': 'application/json' } : {}),
+        },
+        ...(method === 'POST' ? { body: '{}' } : {}),
+        redirect: 'error',
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      throw new NovaError('node_unavailable', 'the node is not reachable', {
+        details: { reason: 'unreachable' },
+        cause: err,
+      });
+    }
+    const text = await res.text();
+    let body: unknown;
+    try {
+      body = text ? (JSON.parse(text) as unknown) : null;
+    } catch {
+      body = null;
+    }
+    if (res.ok) return isRecord(body) ? body : {};
+    const err = isRecord(body) && isRecord(body.error) ? body.error : {};
+    const message =
+      typeof err.message === 'string' ? err.message.slice(0, 300) : `HTTP ${res.status}`;
+    const details = isRecord(err.details) ? err.details : undefined;
+    if (res.status === 404)
+      throw new NovaError(
+        path.endsWith('/services') ? 'capability_missing' : 'not_found',
+        path.endsWith('/services') ? 'this node cannot list its services yet' : message,
+        path.endsWith('/services') ? { details: { reason: 'update_required' } } : {},
+      );
+    if (res.status === 401)
+      throw new NovaError('auth_missing', 'the node refused the Hub’s job token', {
+        details: { reason: 'job_token_rejected' },
+      });
+    const code =
+      res.status === 409
+        ? 'conflict'
+        : res.status === 400
+          ? 'validation'
+          : res.status === 503
+            ? 'node_unavailable'
+            : 'server_error';
+    throw new NovaError(code, message, details ? { details } : {});
+  }
+
+  /** The node's services: `jobs` and, when it manages one, the model `backend`. */
+  async services(accountId: string, nodeId: string): Promise<NodeServiceView[]> {
+    const out = await this.#callNode(accountId, nodeId, 'GET', '/node/v1/services');
+    const list = Array.isArray(out.services) ? out.services : [];
+    return list.filter(isRecord).flatMap((x): NodeServiceView[] => {
+      const name = (NODE_SERVICE_NAMES as readonly unknown[]).includes(x.name)
+        ? (x.name as NodeServiceView['name'])
+        : null;
+      if (!name) return [];
+      return [
+        {
+          name,
+          kind: x.kind === 'systemd' ? 'systemd' : 'builtin',
+          state: x.state === 'running' || x.state === 'stopped' ? x.state : 'unknown',
+          unit: typeof x.unit === 'string' ? x.unit.slice(0, 200) : null,
+        },
+      ];
+    });
+  }
+
+  /** Start, stop, restart or read one of the node's services; changes are audited. */
+  async serviceAction(
+    accountId: string,
+    nodeId: string,
+    name: string,
+    action: NodeServiceAction,
+  ): Promise<NodeServiceView> {
+    const out = await this.#callNode(
+      accountId,
+      nodeId,
+      'POST',
+      `/node/v1/services/${encodeURIComponent(name)}/${action}`,
+    );
+    const svc = isRecord(out.service) ? out.service : {};
+    const view: NodeServiceView = {
+      name: (NODE_SERVICE_NAMES as readonly unknown[]).includes(svc.name)
+        ? (svc.name as NodeServiceView['name'])
+        : (name as NodeServiceView['name']),
+      kind: svc.kind === 'systemd' ? 'systemd' : 'builtin',
+      state: svc.state === 'running' || svc.state === 'stopped' ? svc.state : 'unknown',
+      unit: typeof svc.unit === 'string' ? svc.unit.slice(0, 200) : null,
+    };
+    if (action !== 'status') {
+      await this.#events.emit({
+        name: 'node.service.changed',
+        accountId,
+        payload: { nodeId, service: view.name, action, state: view.state },
+      });
+      await this.#audit
+        ?.append({
+          accountId,
+          actor: 'user',
+          kind: 'device',
+          action: `node.service.${action}`,
+          resource: nodeId,
+          detail: { service: view.name, state: view.state },
+        })
+        .catch((err: unknown) => this.#log.warn('node service audit failed', { err }));
+    }
+    return view;
   }
 
   /** Replace the capability document; it must verify against the key pinned at registration. */
@@ -555,9 +874,20 @@ export class NodeService {
 
   // ---- routing accessors ------------------------------------------------------------------
 
-  /** Active nodes of an account (or one node), with the models they serve now. */
+  /**
+   * Active nodes of an account (or one node), with the models they serve now. A node the owner
+   * took out of routing, or one in its quiet hours, is left out (FR-150, M7.5).
+   */
   async activeNodes(accountId: string, nodeId?: string): Promise<NodeRecord[]> {
-    return (await this.#records(accountId, nodeId ?? null)).filter((r) => r.status === 'active');
+    const out: NodeRecord[] = [];
+    for (const r of await this.#records(accountId, nodeId ?? null)) {
+      if (r.status !== 'active') continue;
+      const policy = this.#policy(r.id);
+      if (!policy.routingEligible) continue;
+      if (this.#quietNow(r.id, (await this.#document(r.id)) ?? {}, policy)) continue;
+      out.push(r);
+    }
+    return out;
   }
 
   /** The node's last reported load; null when unknown (no heartbeat since the Hub started). */

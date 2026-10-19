@@ -48,7 +48,7 @@ async function loadPlaywright(): Promise<PlaywrightModule | null> {
 
 // Runs in the page: reads the top frame (mode `read`) or describes one element (mode `describe`).
 // Plain JavaScript in a string, so core needs no DOM types; the result is untrusted.
-const PAGE_SCRIPT = String.raw`(function (arg) {
+export const PAGE_SCRIPT = String.raw`(function (arg) {
   var MAX_NAME = 120;
   function clip(s, n) { s = (s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
   function visible(el) {
@@ -660,10 +660,32 @@ export class PlaywrightDriver implements BrowserDriver {
       // session's proxy credentials go separately: Chromium ignores them inside the URL.
       ...(opts.proxy ? { proxy: playwrightProxy(opts.proxy.server) } : {}),
     });
+    return this.#prepare(browser, opts);
+  }
+
+  /**
+   * A browser that runs elsewhere, reached over the DevTools protocol (FR-209, ADR-096 D7: a
+   * device's browser through novad's pass-through). The context gets the same guards, page-tools
+   * binding and capture as a launched one; closing the session closes that context and
+   * disconnects. `wsUrl` is a browser-level DevTools WebSocket.
+   */
+  async connectOverCdp(
+    wsUrl: string,
+    opts: DriverLaunchOptions,
+    timeoutMs = 30_000,
+  ): Promise<DriverSession> {
+    const pw = await this.#load();
+    if (!pw) throw new Error('playwright-core is not installed on this Hub');
+    const browser = await pw.chromium.connectOverCDP(wsUrl, { timeout: timeoutMs });
+    return this.#prepare(browser, opts);
+  }
+
+  async #prepare(browser: PwBrowser, opts: DriverLaunchOptions): Promise<DriverSession> {
     try {
       const contextOptions: PwContextOptions = {
         viewport: opts.viewport,
-        acceptDownloads: true,
+        // A browser on another computer would save them there, outside its profile.
+        acceptDownloads: opts.acceptDownloads ?? true,
         // Service workers would fetch outside the request guard.
         serviceWorkers: 'block',
       };

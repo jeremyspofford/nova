@@ -5,12 +5,17 @@
 // before it is added); "Deny and continue" takes an optional reason for the agent; "Hand off"
 // leaves the step to the user until they mark it done. The first answer wins (FR-188): a 409
 // means another client answered, and the card quietly shows that outcome. Focus lands on the
-// heading, never on an Allow button, so Enter alone never approves.
+// heading, never on an Allow button, so Enter alone never approves. M7.5: a Hub-only card
+// (`answerIn: 'hub'`: firmware, boot, out-of-band) says it can be answered only in Nova; a card
+// about a device (`scope: device:<id>`) links to it; on those cards no run continues after a
+// denial, so they offer a plain "Deny" without a reason for an agent.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ApprovalDecisionKind, ApprovalView, DecideApprovalRequest } from '@nova/shared';
 import { Button, Icon, Spinner, StatusChip } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
+import { HUB_ONLY_TEXT, approvalDevice } from '../firmware/format.ts';
 import { useAnnounce, useServices } from '../services.tsx';
+import { followLink } from '../work/nav.tsx';
 import { awaitsUser, type ClientApproval } from './thread-state.ts';
 
 type Decision = Exclude<ApprovalDecisionKind, 'timeout'>;
@@ -215,6 +220,11 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
     (o) => a.options.includes(o) && (o !== 'allow_always' || a.alwaysScopes.length > 0),
   );
   const scope = a.alwaysScopes[Math.min(scopeIdx, a.alwaysScopes.length - 1)];
+  const hubOnly = a.answerIn === 'hub';
+  const device = approvalDevice(a);
+  const devicePath = device ? `/devices/${encodeURIComponent(device.id)}` : null;
+  // A device's own card: no run waits on it, so a denial needs no reason for an agent.
+  const plainDeny = hubOnly || device !== null;
   const title = handingOff
     ? 'Your step'
     : a.tier === 'handoff_required'
@@ -251,6 +261,16 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
           <dt>Action</dt>
           <dd id={`${id}-action`}>{a.action}</dd>
         </div>
+        {device && devicePath ? (
+          <div>
+            <dt>Where</dt>
+            <dd>
+              <a href={devicePath} onClick={(e) => followLink(e, devicePath)}>
+                On {device.name ?? 'a device'}
+              </a>
+            </dd>
+          </div>
+        ) : null}
         {a.tool || a.argsPreview ? (
           <div>
             <dt>Target</dt>
@@ -296,6 +316,11 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
           <dd>{a.ruleId ? <code>{a.ruleId}</code> : 'Tool default'}</dd>
         </div>
       </dl>
+      {hubOnly ? (
+        <p className="muted approval-note" data-answer-in="hub">
+          <Icon name="shield" /> {HUB_ONLY_TEXT}
+        </p>
+      ) : null}
 
       {handingOff ? (
         <div className="approval-actions">
@@ -413,15 +438,17 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
             <Button
               key={o}
               data-decision={o}
-              variant={o === 'deny_stop' ? 'danger' : 'default'}
+              variant={
+                o === 'deny_stop' || (o === 'deny_continue' && plainDeny) ? 'danger' : 'default'
+              }
               disabled={busy}
               onClick={() => {
                 if (o === 'allow_always') switchMode('always', 'input[type="radio"]:checked');
-                else if (o === 'deny_continue') switchMode('deny', 'textarea');
+                else if (o === 'deny_continue' && !plainDeny) switchMode('deny', 'textarea');
                 else void decide(o);
               }}
             >
-              {BUTTON_TEXT[o]}
+              {o === 'deny_continue' && plainDeny ? 'Deny' : BUTTON_TEXT[o]}
             </Button>
           ))}
           {busy ? <Spinner label="Sending your answer" /> : null}

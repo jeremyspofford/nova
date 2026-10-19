@@ -4,11 +4,13 @@
 // the page logged (console and network), the recorded actions with before/after screenshots,
 // taking over the page (the agent waits until control is returned) and closing the session. Page
 // titles and addresses come from the web: shown as text, never as links or HTML. Mounted on a
-// computer's page.
+// computer's page. M7.5 (FR-209): a note says when the agent works on a connected computer's
+// browser (the local fallback).
 import { useEffect, useId, useState } from 'react';
 import type { BrowserSessionView, BrowserStatusView, ScreenTakeoverView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
+import { FallbackSessionNote } from '../browserdevice/FallbackTrace.tsx';
 import { useScreenApi } from '../screen/api.ts';
 import { sentence } from '../screen/format.ts';
 import { LiveView } from '../screen/LiveView.tsx';
@@ -167,6 +169,8 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
   return (
     <section className="brw-panel" aria-labelledby={headingId}>
       {heading}
+      {/* M7.5 (FR-209): while the agent works on a connected computer's browser. */}
+      <FallbackSessionNote computerId={computerId} />
       <PendingSignins computerId={computerId} />
       {session ? (
         <>

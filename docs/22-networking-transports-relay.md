@@ -548,6 +548,19 @@ keys. Re-adding needs a new code and a new key: `novad install`, `nova-compute e
 page make a fresh key every time. Revocations and every Add Device step are audited (`docs/12` §11).
 Only revoked keys are blocked: a key whose request was denied or expired may join again.
 
+*As built in M7.5 (ADR-096; `packages/core/src/devices/service.ts`,
+`services/novad/src/uninstall.rs`).* **Decommission** is a revocation that asks the device to wipe
+itself first. `POST /api/v1/devices/:id/decommission {purge}` (owner) files a Hub-only approval card
+(`docs/12` §4.3) that waits 1 hour; only the signed-in owner's **Allow once** runs it. A reachable
+device is then sent `/agent/v1/decommission` over its management channel (§5) with a Hub-signed
+authorization of kind `device.decommission`. It closes its browser sessions, stops its modules,
+wipes its key, credentials, certificate and Hub trust, removes its service and browser users and,
+with `purge`, deletes its data folder. The Hub revokes the device whatever it answered. An offline
+device is revoked at once and wipes its credentials at its next heartbeat (401). Revoking a device
+also revokes its certificates, its browser fallback consents and extension bridge grants, and
+deletes its BIOS admin password from the vault. `novad uninstall [--purge]` is the local side
+(`docs/23` §11).
+
 ## 5. Trust & HTTPS
 
 Browser/PWA features (camera, mic, service workers, notifications) require a **secure
@@ -602,10 +615,11 @@ A device may use more than one path (e.g., LAN via local CA, remote via Mesh cer
   name and the direct public host. Its key is `secret://hub/tls/<id>/key`; superseded keys leave the
   vault.
 - **Device certificates.** Issued only in `local-ca` mode, with the Add Device grant: the device's
-  own Ed25519 key signed by the CA, valid 365 days, client authentication only, OU = the role and
-  the SAN `urn:nova:device:<id>`. Revoking the device revokes them, and `verifyDeviceCertificate`
-  checks issuer, signature, validity, the recorded serial and revocation. Since M7 the device and
-  node routes check them (mutual TLS, below); there is no renewal.
+  own Ed25519 key signed by the CA, valid 365 days, client authentication only (since M7.5 also
+  server authentication, below), OU = the role and the SAN `urn:nova:device:<id>`. Revoking the
+  device revokes them, and `verifyDeviceCertificate` checks issuer, signature, validity, the
+  recorded serial and revocation. Since M7 the device and node routes check them (mutual TLS,
+  below); there was no renewal until M7.5 (below).
 - **Mesh certificates.** Requested from the mesh through the Network Setup area (`tailscale cert`),
   checked to cover the host and match their key, stored with the key in the vault
   (`secret://hub/tls/mesh/<id>/key`), renewed at two thirds of their life and served by name.
@@ -640,8 +654,10 @@ A device may use more than one path (e.g., LAN via local CA, remote via Mesh cer
      a CA, has the serverAuth usage, has a DNS or IP name matching the host dialed (the subject's
      common name is never used), and is within its validity.
 
-   Device certificates are client-only and never pass, revoked or not. On anything else, refuse,
-   warn, and send no credential.
+   Device certificates never pass, revoked or not: they name a device (`urn:nova:device:<id>`)
+   and no host, and since M7.5, when they also carry serverAuth, `checkHubIdentity` refuses any
+   leaf with a `urn:nova:` URI outright (the Hub's client certificate included). On anything else,
+   refuse, warn, and send no credential.
 7. Cache the verified CA hash. When a later connection shows an unknown leaf, repeat steps 3–6 with
    a new nonce.
 
@@ -694,8 +710,93 @@ The Hub's own reachability probe runs the same statement check against its endpo
   memory and rebuilt by the next heartbeat (migration 0039 is comment-only); a change emits
   `device.tls.changed`, a refusal is audited as `device.tls.refuse` (kind `device`) at most once an
   hour per device and reason, and a revoked device is forgotten.
-- **Not built.** Device certificates are not renewed. The Hub → `novad` management channel (§9 item
-  1) is still bearer tokens over plain HTTP.
+- **Not built in M7** (M7.5 built both, below). Device certificates were not renewed, and the
+  Hub → `novad` management channel (§9 item 1) was bearer tokens over plain HTTP.
+
+*As built in M7.5 (ADR-096 D1; `packages/core/src/devices/tls.ts`,
+`packages/core/src/trust/service.ts`, `services/novad/src/mgmt_tls.rs`,
+`services/novad/src/authz.rs`).* The management channel (Hub → `novad`, default port 7420) runs
+over mutual TLS for every device that holds a certificate of the Hub local CA. R-022 is narrowed
+again (§9 item 1).
+
+- **On the device.** When `novad` holds `device-cert.pem` at start, its management server speaks
+  TLS 1.3 only, so the client certificate travels encrypted. It presents the device certificate
+  with the device's own Ed25519 key. It requires a client certificate that chains to the Hub local
+  CA it cached from a verified identity statement (`hub-trust.json`), with EKU clientAuth and the
+  URI SAN `urn:nova:hub:<pinned fingerprint>`. The bearer management token is still checked on
+  every request (defense in depth). The server is set up again for each connection from the files;
+  when that fails (no cached CA, a damaged certificate, a certificate for another key) every
+  connection is refused, never served over plain HTTP. Without a certificate the server stays
+  plain HTTP; the choice is made when `novad` starts. `novad` registers and heartbeats its
+  endpoint as `https://` once it holds a certificate.
+- **On the Hub.** For an `https` endpoint the Hub connects with TLS 1.3 only, presents its client
+  certificate and reuses no TLS session, so every connection runs every check. It never checks the
+  host name, because LAN addresses move. The device certificate must chain to the Hub local CA,
+  be valid and carry serverAuth (OpenSSL checks these). It must also name exactly this device
+  (one URI SAN, `urn:nova:device:<id>` of the row), carry the key the Hub pinned at registration,
+  and be byte for byte a certificate the trust area recorded and did not revoke. The request, with
+  the management token, is written only after all of that. The browser area's DevTools relay
+  (`docs/11` §4.6) uses the same checked connection.
+- **No downgrade.** Registration accepts an `https` endpoint only from a device the Hub issued a
+  live certificate for, with that key (else 400 `validation` `{reason: https_needs_certificate}`).
+  A device that registered `https` is never called over plain HTTP. A heartbeat offering `http`
+  for it is refused with 403 `policy_denied` `{reason: endpoint_downgrade}`, and a heartbeat
+  never moves a plain-HTTP address. Refused endpoint changes are audited (`device.endpoint.refuse`)
+  at most once an hour per device and reason. On the device, firmware, boot and decommission
+  requests that reach a plain server anyway are refused with 403 `policy_denied`
+  `{reason: tls_required}` once it holds a certificate (`docs/12` §4.3).
+- **The Hub's client certificate.** Issued by the local CA: an ECDSA P-256 key, EKU clientAuth
+  only, URI SAN `urn:nova:hub:<hub fingerprint>`, valid 90 days. It is issued again with the TLS
+  leaf at two thirds of its life, and when the CA or the identity changes or the vault lost it.
+  It exists in any trust mode while a local CA does. Certificate and key are one vault entry,
+  `secret://hub/client-certificate`; it is not recorded among device certificates, so no device
+  or node route accepts it. Issuance is audited as `trust.hub_client.issue`.
+- **Device certificates carry both purposes**: clientAuth for their calls to the Hub (M7) and
+  serverAuth for the management server. So that neither kind can pass for the Hub, the pinning
+  check (`checkHubIdentity`, `packages/core/src/trust/pinning.ts`) refuses any leaf carrying a
+  `urn:nova:` URI SAN as `not_server_certificate`.
+- **Renewal.** A heartbeat answer carries `certificate: {pem, notAfter}` when the device's newest
+  live certificate lacks serverAuth (one issued in M7) or has passed two thirds of its life. The
+  new certificate has the same key, device id and role. Renewal works in any trust mode while the
+  local CA exists, but only renews: a device that never had a certificate does not get one this
+  way. Every answer repeats it until the device presents it, on the Hub's own routes or on the
+  management channel; then the older certificates are revoked (`revoked_reason = renewed`).
+  Audit: `trust.device.renew`, then `trust.device.revoke` with reason `renewed`. `novad` installs
+  a renewal only when it already holds a certificate and the new one chains to the cached Hub CA,
+  is valid now, has serverAuth and clientAuth, holds its own key and names its own device id. It
+  then replaces `device-cert.pem` atomically (0600), keeps the listener up (new connections use
+  the new certificate) and presents it on its next call to the Hub. A refused renewal is logged,
+  the current certificate kept and nothing reported. Certificates of `nova-compute` nodes are
+  still not renewed.
+- **M7 certificates (clientAuth only).** OpenSSL refuses them for a server. The Hub then opens a
+  second TLS 1.3 connection and checks the certificate itself before anything is sent: the device's
+  own recorded, unrevoked, unexpired certificate (same bytes), its URI SAN and pinned key, and no
+  serverAuth. TLS still proves the device holds that key. This is accepted only until a renewal
+  has existed for 10 minutes, or until the device presents the new certificate (which revokes the
+  old one). After that the old certificate gets `unsupported_purpose`. The first heartbeat answer
+  after the device starts serving TLS offers the renewal, so it normally switches at once.
+- **Refusals.** A refused channel answers 403 `policy_denied` `{reason: device_tls_failed, tls}`,
+  with `tls` one of `no_ca`, `no_client_certificate`, `untrusted_certificate`, `expired`,
+  `not_yet_valid`, `wrong_device`, `key_mismatch`, `revoked`, `unknown_certificate`,
+  `unsupported_purpose` (the certificate cannot serve; the legacy grace is over) or
+  `handshake_failed` (also a non-TLS answer, or the device closing the connection right after the
+  TLS 1.3 handshake because it refused the Hub's certificate). A device that does not answer is
+  `node_unavailable`. Nothing is retried over plain HTTP.
+- **What the owner sees.** `GET /api/v1/devices/management-tls` (owner) lists each device's
+  channel (`mutual_tls` or `plain_http`), its last call's result and failure, and its renewal:
+  `renewal` `{state: none | offered | presented, offeredAt, notAfter, reason: missing_server_auth
+  | expiring}` (null when the device holds no certificate of the Hub CA), `legacyCertificate` and
+  `legacyGraceEndsAt`. It also lists the Hub client certificate's serial, expiry and URI, and the
+  problems: devices managed over plain HTTP, no Hub client certificate, refused channels, and a
+  device whose grace passed without installing its renewal. Diagnostics carry the same as
+  `deviceManagement`, and the device page shows the channel and the renewal in one line each.
+- **What R-022 still covers.** A device without a certificate (one added while the trust mode was
+  `none`, the default, or `mesh`) keeps plain HTTP with the bearer token. The token, the call
+  bodies, a browser fallback's DevTools relay and extension bridge calls cross the LAN in the
+  clear. Firmware, boot and decommission still need a Hub-signed authorization, so a captured
+  token cannot make those changes, and the BIOS admin password is never sent to such a device
+  (`tls_required`). Such a device moves to mutual TLS only by being added again with the Hub local
+  CA as the trust path.
 
 ## 6. Network Setup (assistant)
 
@@ -836,8 +937,9 @@ is refused (`no_wake_helper`), logged as failed and audited. The per-device limi
 in one transaction before anything is sent. `wake_request.helper_device_id` names the helper; the
 wake result, `device.wake.sent` and the audit entry carry `via` (the helper's id or `hub`), and
 Network → Wake helpers lists the newest 20 wakes. Wake Helpers are Linux only, like Wake-on-LAN
-detection; there is no IPv6 fallback from the Hub. Enabling WoL in firmware is still M7.5 (`docs/23`
-§6).
+detection; there is no IPv6 fallback from the Hub. Since M7.5 the firmware area can turn
+Wake-on-LAN on in the BIOS (the `wol` setting, FR-146) on supported hardware, with the owner's
+approval (`docs/23` §6).
 
 ## 8. Configuration model
 
@@ -919,10 +1021,12 @@ and `relay.registrationTokenRef` (`""`, or a `secret://relay/registration/…` r
    authenticate by the code, then by the device key's signatures, and the only routes that answer
    anyone hand out public information (`contracts/hub-api.md` §1). Since M7 `novad` and compute
    nodes reach an HTTPS Hub through the pinned identity and present their device certificate, which
-   the device and node routes check (mutual TLS, §5). **Gap (R-022, narrowed in M7):** the Hub →
-   `novad` management channel is still bearer tokens over plain HTTP, and so is a device or node
-   whose Hub serves plain HTTP; `devices.tls.allowWithoutCertificate` still accepts a device without
-   a certificate over HTTPS.
+   the device and node routes check (mutual TLS, §5). Since M7.5 the Hub → `novad` management
+   channel is mutual TLS for a device that holds a certificate, with no downgrade (§5). **Gap
+   (R-022, narrowed in M7 and M7.5):** a device without a certificate (added while the trust mode
+   was not `local-ca`) is still managed with bearer tokens over plain HTTP, a device or node whose
+   Hub serves plain HTTP still calls the Hub over plain HTTP, and
+   `devices.tls.allowWithoutCertificate` still accepts a device without a certificate over HTTPS.
 2. Relay payloads are sealed end to end with per-direction keys derived from the two sides' X25519
    keys (§3.1); the Relay sees routing ids, kinds, sequence numbers and sizes, never the pairing
    code. **Gap:** no forward secrecy (§3.1).
@@ -942,7 +1046,11 @@ and `relay.registrationTokenRef` (`""`, or a `secret://relay/registration/…` r
    to its mDNS name and its direct public host only while they are in use; a failed certificate read
    at start serves plain HTTP on loopback only (§5). Since M7 `novad`'s local runtime listens only on
    0600 Unix sockets (its own, and one per listed user) or, if the owner sets one, a loopback address
-   that needs a token and checks Host and Origin (`docs/23` §4.3).
+   that needs a token and checks Host and Origin (`docs/23` §4.3). Since M7.5 `novad`'s management
+   server requires the Hub's client certificate when the device holds a certificate (§5); the
+   extension bridge listens on a 0600 socket per user with a per-user token, the browser module's
+   DevTools socket is 0600 in a 0700 folder, and the public PXE routes authenticate by a per-device
+   boot token (`docs/12` §15).
 9. Envelopes from unknown, pending or revoked clients are dropped and logged; segments carry client,
    stream, seq and seg as associated data, and stream floors that survive a restart refuse replayed
    streams (§3.1).

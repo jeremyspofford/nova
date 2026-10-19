@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { ApiError } from '../src/api.ts';
-import { LOG_POLL_MS, formatUptime } from '../src/settings/DiagnosticsPage.tsx';
+import {
+  LOG_POLL_MS,
+  auditChange,
+  auditValue,
+  formatUptime,
+} from '../src/settings/DiagnosticsPage.tsx';
 import { createHub } from './fakes.ts';
 import { m3State } from './fakes-m3.ts';
 import { auditEntry, logEntry } from './fakes-settings.ts';
@@ -24,6 +29,33 @@ describe('diagnostics helpers', () => {
     expect(formatUptime(3 * 3600 + 120)).toBe('3 h 2 min');
     expect(formatUptime(2 * 86_400 + 5 * 3600)).toBe('2 d 5 h');
     expect(formatUptime(-4)).toBe('0 s');
+  });
+
+  it('shortens audit values and finds a change only in settings and device entries', () => {
+    expect([true, false, null, undefined, 3, 'LanOnly'].map(auditValue)).toEqual([
+      'on',
+      'off',
+      'none',
+      'none',
+      '3',
+      'LanOnly',
+    ]);
+    expect(auditValue({ wol: 'Disabled' })).toBe('{"wol":"Disabled"}');
+    expect(auditValue('x'.repeat(200))).toHaveLength(120);
+    const detail = { before: false, after: true, confirmed: true };
+    expect(auditChange(auditEntry({ kind: 'settings', detail }))).toEqual({
+      before: 'off',
+      after: 'on',
+      confirmed: true,
+    });
+    expect(auditChange(auditEntry({ kind: 'device', detail: { before: 1, after: 2 } }))).toEqual({
+      before: '1',
+      after: '2',
+      confirmed: false,
+    });
+    expect(auditChange(auditEntry({ kind: 'approval', detail }))).toBeNull();
+    expect(auditChange(auditEntry({ kind: 'settings', detail: { scope: 'global' } }))).toBeNull();
+    expect(auditChange(auditEntry({ kind: 'settings' }))).toBeNull();
   });
 });
 
@@ -180,6 +212,63 @@ describe('Settings → Diagnostics: audit log (FR-104 partial)', () => {
     expect(within(s).getByRole('link', { name: 'Export audit log' }).getAttribute('href')).toBe(
       '/api/v1/audit/export',
     );
+  });
+
+  it('shows each entry’s detail: a change as before → after, else the JSON (M7.5)', async () => {
+    const audit = [
+      auditEntry({
+        id: 's1',
+        kind: 'settings',
+        action: 'setting.changed',
+        resource: 'devices.firmware.allowChanges',
+        decision: null,
+        detail: { scope: 'global', before: false, after: true, confirmed: true },
+      }),
+      auditEntry({
+        id: 'd1',
+        kind: 'device',
+        action: 'device.firmware.apply',
+        decision: null,
+        detail: { before: { wol: 'Disabled' }, after: { wol: 'LanOnly' } },
+      }),
+      auditEntry({
+        id: 'p1',
+        kind: 'policy',
+        action: 'deny',
+        decision: null,
+        detail: { reason: 'protected_path', path: '[REDACTED]' },
+      }),
+      auditEntry({
+        id: 't1',
+        kind: 'device',
+        action: 'device.big',
+        detail: { truncated: true, chars: 9001 },
+      }),
+      auditEntry({ id: 'n1', kind: 'auth', action: 'session.created', detail: null }),
+    ];
+    const hub = createHub({ m3: m3State({ audit }) });
+    await renderApp({ hub, path: '/settings/diagnostics' });
+    const list = await within(section('Audit log')).findByRole('list', { name: 'Audit entries' });
+    const row = (name: string) => within(list).getByRole('listitem', { name });
+    const setting = row('settings: setting.changed');
+    expect(setting.querySelector('.ws-audit-change')?.textContent).toBe(
+      'off → changed to  onConfirmed',
+    );
+    expect(within(setting).getByText('Confirmed')).toBeTruthy();
+    expect(
+      row('device: device.firmware.apply').querySelector('.ws-audit-change')?.textContent,
+    ).toBe('{"wol":"Disabled"} → changed to  {"wol":"LanOnly"}');
+    const policy = row('policy: deny');
+    expect(policy.querySelector('.ws-audit-change')).toBeNull();
+    await userEvent.click(within(policy).getByText('Details'));
+    expect(policy.querySelector('pre')?.textContent).toBe(
+      JSON.stringify({ reason: 'protected_path', path: '[REDACTED]' }, null, 2),
+    );
+    expect(
+      within(row('device: device.big')).getByText(/too long to show here \(9001 characters\)/),
+    ).toBeTruthy();
+    const plain = row('auth: session.created');
+    expect(plain.querySelector('.ws-audit-change, details')).toBeNull();
   });
 
   it('shows an empty audit log and retries a failed load', async () => {

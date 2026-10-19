@@ -4,11 +4,14 @@
 // screenshots. Crash and restart rows say what happened to the browser itself. Refusals because a
 // page came from an external AI agent are called out above the list, and finished downloads are
 // listed with where they went. Targets, URLs and errors are page-derived text: shown as text,
-// never as links or HTML.
+// never as links or HTML. M7.5 (FR-209): a row recorded on a connected computer's browser (the
+// local fallback) is marked with that computer and the profile.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { BrowserActionView } from '@nova/shared';
 import { Button, Icon, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { FallbackMark, useFallbackDeviceNames } from '../browserdevice/FallbackTrace.tsx';
+import { fallbackMarkOf, whereText } from '../browserdevice/format.ts';
 import { timeOf } from '../screen/format.ts';
 import { useDebounced } from '../work/events.ts';
 import { useBrowserApi } from './api.ts';
@@ -45,6 +48,7 @@ export function BrowserTrace({ computerId }: { computerId: string }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   // A refresh reloads as many as are shown, so older pages stay open.
   const loaded = useRef(BROWSER_TRACE_PAGE);
+  const deviceNames = useFallbackDeviceNames();
 
   useEffect(() => {
     let alive = true;
@@ -166,12 +170,15 @@ export function BrowserTrace({ computerId }: { computerId: string }) {
             const label = browserActionText(a);
             const expanded = open.has(a.id);
             const life = isLifecycle(a);
+            const mark = fallbackMarkOf(a);
+            const deviceName = mark ? (deviceNames.get(mark.deviceId) ?? null) : null;
             return (
               <li
                 key={a.id}
                 className="activity-item"
                 data-result={a.result}
                 data-kind={life ? 'lifecycle' : undefined}
+                data-local-fallback={mark ? mark.profile : undefined}
               >
                 <button
                   type="button"
@@ -192,6 +199,7 @@ export function BrowserTrace({ computerId }: { computerId: string }) {
                       <Icon name="alert" /> Flagged
                     </span>
                   ) : null}
+                  {mark ? <FallbackMark mark={mark} deviceName={deviceName} /> : null}
                   <span className="nv-chip" data-status={chip.tone ?? undefined}>
                     <Icon name={chip.icon} />
                     <span>{chip.text}</span>
@@ -203,6 +211,12 @@ export function BrowserTrace({ computerId }: { computerId: string }) {
                 {expanded ? (
                   <div className="scr-trace-detail">
                     <dl className="ws-dl">
+                      {mark ? (
+                        <>
+                          <dt>Where</dt>
+                          <dd>{whereText(mark, deviceName)}</dd>
+                        </>
+                      ) : null}
                       {a.url ? (
                         <>
                           <dt>Page</dt>

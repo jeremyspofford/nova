@@ -4,7 +4,9 @@
 // each, its own levels for projects and agents (M7: the narrower scope wins) and an optional
 // developer-protocol mode, the allow and block lists as plain lists, the saved logins (passwords
 // are never shown), and the browser settings. Allowed and blocked sites are one list on the Hub:
-// the domain lists edit the same entries.
+// the domain lists edit the same entries. M7.5 (FR-209, FR-096): continuing a blocked site on the
+// agent's computer (the switch and the consents, each revocable) and the extension bridge's
+// switches (src/browserdevice/FallbackSettings.tsx).
 import { useEffect, useId, useState } from 'react';
 import {
   BROWSER_SITE_LEVELS,
@@ -16,6 +18,7 @@ import {
 } from '@nova/shared';
 import { Button, Dialog, Icon, SelectField, Spinner, Switch, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { BrowserDeviceSettings } from '../browserdevice/FallbackSettings.tsx';
 import { useLocation } from '../router.ts';
 import { sentence } from '../screen/format.ts';
 import { useAnnounce } from '../services.tsx';
@@ -111,6 +114,7 @@ export function BrowserSettings() {
       <SitesSection />
       <LoginsSection />
       <BehaviorSection />
+      <BrowserDeviceSettings />
     </div>
   );
 }

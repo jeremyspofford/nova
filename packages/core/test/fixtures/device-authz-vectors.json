@@ -1,0 +1,117 @@
+{
+  "note": "ADR-096 D2 test vectors (K, packages/core/src/firmware/authz.ts); a test key only. The Ed25519 private key is the 32-byte seed seedHex; publicKey is the raw public key, base64url. canonical is the canonical JSON of payload (keys sorted, no whitespace, UTF-8); the signed bytes are tag + canonical (signedBytesHex); signature is base64url without padding. bodySha256 is the hex SHA-256 of the canonical JSON of body (no authorization in it). Each vector verifies at now (issuedAt + 1 s) for deviceId dev-1.",
+  "tag": "nova-device-authz-v1\n",
+  "seedHex": "561e053e2407a806f80d7ce6060a227bd39a967b0212b178641f52fb3745a88a",
+  "publicKey": "I46Z1CbxFGnoqCs7XNUqnyZFBBnOO3vbaaz-mPNk9XU",
+  "deviceId": "dev-1",
+  "vectors": [
+    {
+      "name": "firmware.apply with the security-degrading override and a reboot",
+      "body": {
+        "planId": "plan-7f3a",
+        "snapshotId": "snap-0001",
+        "changes": [
+          {
+            "key": "secureBoot",
+            "value": "Disabled"
+          },
+          {
+            "key": "wol",
+            "value": "Enabled"
+          }
+        ],
+        "reboot": true,
+        "allowSecurityDegrading": true
+      },
+      "bodySha256": "324e5f3a7627ca3d77c92241e167d382e8025136c0a8ca84b2d83a7032eac93c",
+      "payload": {
+        "v": 1,
+        "kind": "firmware.apply",
+        "deviceId": "dev-1",
+        "changeId": "01929d6e-4000-7000-8000-00000000c001",
+        "bodySha256": "324e5f3a7627ca3d77c92241e167d382e8025136c0a8ca84b2d83a7032eac93c",
+        "approvalId": "appr-1",
+        "issuedAt": "2026-10-19T12:00:00.000Z",
+        "expiresAt": "2026-10-19T12:05:00.000Z"
+      },
+      "canonical": "{\"approvalId\":\"appr-1\",\"bodySha256\":\"324e5f3a7627ca3d77c92241e167d382e8025136c0a8ca84b2d83a7032eac93c\",\"changeId\":\"01929d6e-4000-7000-8000-00000000c001\",\"deviceId\":\"dev-1\",\"expiresAt\":\"2026-10-19T12:05:00.000Z\",\"issuedAt\":\"2026-10-19T12:00:00.000Z\",\"kind\":\"firmware.apply\",\"v\":1}",
+      "signedBytesHex": "6e6f76612d6465766963652d617574687a2d76310a7b22617070726f76616c4964223a22617070722d31222c22626f6479536861323536223a2233323465356633613736323763613364373763393232343165313637643338326538303235313336633061386361383462326438336137303332656163393363222c226368616e67654964223a2230313932396436652d343030302d373030302d383030302d303030303030303063303031222c226465766963654964223a226465762d31222c22657870697265734174223a22323032362d31302d31395431323a30353a30302e3030305a222c226973737565644174223a22323032362d31302d31395431323a30303a30302e3030305a222c226b696e64223a226669726d776172652e6170706c79222c2276223a317d",
+      "signature": "mlLPKDCrXzSWvlImW9Sb0AGcvGCMderzmLwpIKzR7NITWxqDW8V5fTedha-n-jduClJDU2pGrC_c7D6KWosBDA",
+      "now": "2026-10-19T12:00:01.000Z"
+    },
+    {
+      "name": "firmware.rollback from the Hub copy of the snapshot (a non-ASCII value, a list)",
+      "body": {
+        "snapshotId": "snap-0002",
+        "snapshot": {
+          "values": {
+            "fanProfile": "Leise – Ruhig",
+            "bootOrder": ["ubuntu", "Windows Boot Manager"],
+            "powerOnAfterPowerLoss": "Last State"
+          },
+          "sha256": "64911548d3aedd6fb9e2c3f6ab84794bf2672709b94098f1348402924a023664"
+        }
+      },
+      "bodySha256": "b4f2870ca143ababd458d3766b9a414c92e6650aa9f54e6422461ba96edb030c",
+      "payload": {
+        "v": 1,
+        "kind": "firmware.rollback",
+        "deviceId": "dev-1",
+        "changeId": "01929d6e-4000-7000-8000-00000000c002",
+        "bodySha256": "b4f2870ca143ababd458d3766b9a414c92e6650aa9f54e6422461ba96edb030c",
+        "approvalId": "appr-1",
+        "issuedAt": "2026-10-19T12:30:15.250Z",
+        "expiresAt": "2026-10-19T12:40:15.250Z"
+      },
+      "canonical": "{\"approvalId\":\"appr-1\",\"bodySha256\":\"b4f2870ca143ababd458d3766b9a414c92e6650aa9f54e6422461ba96edb030c\",\"changeId\":\"01929d6e-4000-7000-8000-00000000c002\",\"deviceId\":\"dev-1\",\"expiresAt\":\"2026-10-19T12:40:15.250Z\",\"issuedAt\":\"2026-10-19T12:30:15.250Z\",\"kind\":\"firmware.rollback\",\"v\":1}",
+      "signedBytesHex": "6e6f76612d6465766963652d617574687a2d76310a7b22617070726f76616c4964223a22617070722d31222c22626f6479536861323536223a2262346632383730636131343361626162643435386433373636623961343134633932653636353061613966353465363432323436316261393665646230333063222c226368616e67654964223a2230313932396436652d343030302d373030302d383030302d303030303030303063303032222c226465766963654964223a226465762d31222c22657870697265734174223a22323032362d31302d31395431323a34303a31352e3235305a222c226973737565644174223a22323032362d31302d31395431323a33303a31352e3235305a222c226b696e64223a226669726d776172652e726f6c6c6261636b222c2276223a317d",
+      "signature": "H9kpxulLCoPRN6TdIJtvz_JfA_UlRVgBhoWlvFWwOpb8nhD38jQdkYqvXXBLJPBjMKRmxn3o8QcT-doxidPdDg",
+      "now": "2026-10-19T12:30:16.250Z"
+    },
+    {
+      "name": "boot.set one-shot with a watchdog",
+      "body": {
+        "profileId": "01929d6e-5000-7000-8000-0000000000b3",
+        "entryId": "auto-linux-6.18.efi",
+        "watchdogSeconds": 600,
+        "reboot": false
+      },
+      "bodySha256": "093642d604887150fd7f252cd27dc120493a7b29c2b52713543d1fb5cac220d6",
+      "payload": {
+        "v": 1,
+        "kind": "boot.set",
+        "deviceId": "dev-1",
+        "changeId": "01929d6e-4000-7000-8000-00000000c003",
+        "bodySha256": "093642d604887150fd7f252cd27dc120493a7b29c2b52713543d1fb5cac220d6",
+        "approvalId": "appr-1",
+        "issuedAt": "2026-10-19T23:59:59.999Z",
+        "expiresAt": "2026-10-20T00:00:59.999Z"
+      },
+      "canonical": "{\"approvalId\":\"appr-1\",\"bodySha256\":\"093642d604887150fd7f252cd27dc120493a7b29c2b52713543d1fb5cac220d6\",\"changeId\":\"01929d6e-4000-7000-8000-00000000c003\",\"deviceId\":\"dev-1\",\"expiresAt\":\"2026-10-20T00:00:59.999Z\",\"issuedAt\":\"2026-10-19T23:59:59.999Z\",\"kind\":\"boot.set\",\"v\":1}",
+      "signedBytesHex": "6e6f76612d6465766963652d617574687a2d76310a7b22617070726f76616c4964223a22617070722d31222c22626f6479536861323536223a2230393336343264363034383837313530666437663235326364323764633132303439336137623239633262353237313335343364316662356361633232306436222c226368616e67654964223a2230313932396436652d343030302d373030302d383030302d303030303030303063303033222c226465766963654964223a226465762d31222c22657870697265734174223a22323032362d31302d32305430303a30303a35392e3939395a222c226973737565644174223a22323032362d31302d31395432333a35393a35392e3939395a222c226b696e64223a22626f6f742e736574222c2276223a317d",
+      "signature": "tK9D6zxGzKhMp2Affa4jVdvUjFXZ4H9JWPeFIf8xMdCTpOb9V3r9SX5ZyjiITkI2TDnoKLHkc8on--acdA2YDQ",
+      "now": "2026-10-20T00:00:00.999Z"
+    },
+    {
+      "name": "device.decommission with purge (the longest lifetime, 10 minutes)",
+      "body": {
+        "purge": true
+      },
+      "bodySha256": "b2858228dbdf828f7b44b98d26ac1572901126fbbc144db34c17c39a783d4ca0",
+      "payload": {
+        "v": 1,
+        "kind": "device.decommission",
+        "deviceId": "dev-1",
+        "changeId": "01929d6e-4000-7000-8000-00000000c004",
+        "bodySha256": "b2858228dbdf828f7b44b98d26ac1572901126fbbc144db34c17c39a783d4ca0",
+        "approvalId": "appr-1",
+        "issuedAt": "2026-10-19T13:00:00.000Z",
+        "expiresAt": "2026-10-19T13:10:00.000Z"
+      },
+      "canonical": "{\"approvalId\":\"appr-1\",\"bodySha256\":\"b2858228dbdf828f7b44b98d26ac1572901126fbbc144db34c17c39a783d4ca0\",\"changeId\":\"01929d6e-4000-7000-8000-00000000c004\",\"deviceId\":\"dev-1\",\"expiresAt\":\"2026-10-19T13:10:00.000Z\",\"issuedAt\":\"2026-10-19T13:00:00.000Z\",\"kind\":\"device.decommission\",\"v\":1}",
+      "signedBytesHex": "6e6f76612d6465766963652d617574687a2d76310a7b22617070726f76616c4964223a22617070722d31222c22626f6479536861323536223a2262323835383232386462646638323866376234346239386432366163313537323930313132366662626331343464623334633137633339613738336434636130222c226368616e67654964223a2230313932396436652d343030302d373030302d383030302d303030303030303063303034222c226465766963654964223a226465762d31222c22657870697265734174223a22323032362d31302d31395431333a31303a30302e3030305a222c226973737565644174223a22323032362d31302d31395431333a30303a30302e3030305a222c226b696e64223a226465766963652e6465636f6d6d697373696f6e222c2276223a317d",
+      "signature": "kNJZeHGvoxx-hD1TmxKZT27OjLrm9fhhMwVX43niinU6m3YmpQZfPJF0egDEpJLr8m1W0qLG6x-iyrCzH2BJBA",
+      "now": "2026-10-19T13:09:59.000Z"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+/* M7.5 device operations (ADR-096 D1, D9; FR-126, FR-150): a compute node's GPU memory list. */
+.devices-vram {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.devices-vram > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.devices-vram meter {
+  inline-size: 8rem;
+  max-inline-size: 100%;
+}
+
+/* The Policy tab: the form, then "On the device" (the form keeps its first section flush). */
+.devices-tabs .nv-tabpanel > .devices-policy > form > .ws-section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* The certificate renewal line under the management channel fact (D1): its own line. */
+.devices-tls-renewal {
+  display: block;
+  margin-block-start: 0.25rem;
+}

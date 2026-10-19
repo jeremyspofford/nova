@@ -1136,6 +1136,90 @@ export const SETTINGS = {
     description:
       "How long an agent's goal stopped by a provider usage limit waits before trying again; each failed retry doubles the wait, up to 4 hours (FR-181).",
   }),
+  // ---- M7.5 boot
+  'devices.boot.allowLowLevel': def({
+    key: 'devices.boot.allowLowLevel',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      "Allow low-level boot changes on devices: trying a boot profile once and making it the default, each with the owner's approval. Off, devices refuse them; clearing a pending one-shot always works. Turning it on needs an explicit confirmation (`confirm: true` on the settings route); turning it off does not (FR-143, ADR-096 D3).",
+  }),
+  'devices.boot.watchdogSeconds': def({
+    key: 'devices.boot.watchdogSeconds',
+    schema: z.number().int().min(120).max(3600),
+    default: 600,
+    security: true,
+    description:
+      'How long a device has to come back on a boot profile it tries before it returns to its default entry; the Hub reports the trial failed 2 minutes later (FR-143).',
+  }),
+  'devices.pxe.enabled': def({
+    key: 'devices.pxe.enabled',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      "Serve iPXE menus and boot images from the Hub's boot-images folder to devices holding a boot token; off, both routes answer 404. Turning it on needs an explicit confirmation (`confirm: true` on the settings route); turning it off does not (FR-143, ADR-096 D3).",
+  }),
+  // ---- M7.5 browser device
+  'browser.localFallback': def({
+    key: 'browser.localFallback',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      "When a site blocks an agent's own browser, offer to continue on the agent's connected computer's browser; each site needs your consent, revocable in Settings (FR-209).",
+  }),
+  'browser.extensionBridge': def({
+    key: 'browser.extensionBridge',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Let agents act in your own browser through the Nova extension, on hosts you granted and tabs you shared; off, the bridge refuses every call (FR-096).',
+  }),
+  'browser.extensionBridgeAllSites': def({
+    key: 'browser.extensionBridgeAllSites',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Allow the elevated "all sites" grant of the extension bridge (it still needs its own confirmation); off, only hosts granted one by one count (FR-096).',
+  }),
+  // ---- M7.5 out-of-band
+  'devices.oob.enabled': def({
+    key: 'devices.oob.enabled',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Out-of-band management: the Hub reaches the BMCs you register (Redfish, IPMI) for power, sensors, BIOS pending settings and one-time boot, owner-only, approved and audited. Off by default; turning it on needs POST /api/v1/oob/enable with {confirm: true} (the settings route refuses it) (FR-147, ADR-043).',
+  }),
+  // ---- M7.5 firmware
+  'devices.firmware.allowChanges': def({
+    key: 'devices.firmware.allowChanges',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'Allow BIOS/firmware changes on devices: each change is a dry run with a snapshot, needs your approval on its diff and can be rolled back. Off by default; devices refuse changes while it is off. Turning it on needs an explicit confirmation ({confirm: true} on PUT /api/v1/devices/firmware/policy or on the settings route); turning it off does not (FR-146, ADR-042, ADR-096 D3).',
+  }),
+  'devices.firmware.allowSecurityDegrading': def({
+    key: 'devices.firmware.allowSecurityDegrading',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      'The separate override for firmware changes that weaken security (turning Secure Boot or the TPM off); without it such changes are refused even when approved. Turning it on needs an explicit confirmation ({confirm: true} on PUT /api/v1/devices/firmware/policy or on the settings route); turning it off does not (FR-146, ADR-096 D3).',
+  }),
+  'devices.firmware.watchdogSeconds': def({
+    key: 'devices.firmware.watchdogSeconds',
+    schema: z.number().int().min(120).max(3600),
+    default: 600,
+    security: true,
+    description:
+      'After a firmware change applied with a restart, how long the device has to come back before its watchdog restores the previous settings, 2 to 60 minutes (FR-146).',
+  }),
   'privacy.telemetry': def({
     key: 'privacy.telemetry',
     schema: z.boolean(),

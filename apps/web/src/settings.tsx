@@ -1,7 +1,8 @@
 // Client view of Hub settings (docs/14 §1). The Hub owns the values (FR-125); this store mirrors
 // GET /settings, applies writes optimistically, and rolls back if the Hub rejects them. A setting
 // another page or device changes through its own route (the Relay, the network panel) arrives as
-// `settings.changed`, and the store reloads.
+// `settings.changed`, and the store reloads. Turning on a consent switch (M7.5: low-level boot,
+// network boot) carries `confirm: true` after its dialog; the Hub refuses it otherwise.
 import {
   createContext,
   useCallback,
@@ -41,10 +42,28 @@ export interface SettingEntry<K extends SettingKey> {
   source: ResolvedSetting['source'];
 }
 
+/** A write's options: `confirm` once the owner confirmed what a consent switch allows. */
+export interface SetSettingOptions {
+  confirm?: boolean;
+}
+
 export interface SettingsStore {
   get<K extends SettingKey>(key: K): SettingEntry<K>;
-  set<K extends SettingKey>(key: K, value: SettingValue<K>): Promise<void>;
+  set<K extends SettingKey>(
+    key: K,
+    value: SettingValue<K>,
+    opts?: SetSettingOptions,
+  ): Promise<void>;
 }
+
+/** The client the store writes through: `PATCH /api/v1/settings` (`confirm` in its body). */
+export type SettingsClient = Pick<Api, 'settings'> & {
+  setSetting: (
+    key: string,
+    value: unknown,
+    opts?: SetSettingOptions,
+  ) => Promise<{ settings: ResolvedSetting[] }>;
+};
 
 const Ctx = createContext<SettingsStore | null>(null);
 
@@ -57,7 +76,7 @@ export function SettingsProvider({
   initial,
   children,
 }: {
-  api: Pick<Api, 'setSetting' | 'settings'>;
+  api: SettingsClient;
   initial: ResolvedSetting[];
   children: ReactNode;
 }) {
@@ -106,7 +125,11 @@ export function SettingsProvider({
   );
 
   const set = useCallback(
-    async <K extends SettingKey>(key: K, value: SettingValue<K>): Promise<void> => {
+    async <K extends SettingKey>(
+      key: K,
+      value: SettingValue<K>,
+      opts: SetSettingOptions = {},
+    ): Promise<void> => {
       const before = latest.current.get(key);
       if (before?.locked) throw new Error(`${key} is managed by your organization`);
       setValues((m) => {
@@ -115,7 +138,9 @@ export function SettingsProvider({
         return next;
       });
       try {
-        const { settings } = await api.setSetting(key, value);
+        const { settings } = await (opts.confirm
+          ? api.setSetting(key, value, { confirm: true })
+          : api.setSetting(key, value));
         if (settings.length) setValues(toMap(settings));
       } catch (err) {
         setValues((m) => {

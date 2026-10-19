@@ -11,4 +11,6 @@ export * from './jobs.ts';
 export * from './node.ts';
 export * from './protocol.ts';
 export * from './server.ts';
+export * from './services.ts';
 export * from './state.ts';
+export * from './vram.ts';

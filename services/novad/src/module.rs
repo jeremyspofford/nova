@@ -8,8 +8,10 @@
 //! - management: power, Wake-on-LAN and systemd services (FR-144, FR-145).
 //! - local-runtime: proxies the device's local model server to authenticated local clients once
 //!   the Hub granted the scope (FR-128, src/local_runtime.rs).
-//! - compute, browser, screen, capture: answer `ping` and `status`; their work arrives with their
-//!   areas (inference supervision, FR-209 local browser, FR-207 computer use, FR-228 capture).
+//! - browser: the local browser fallback's sessions on Chromium and the extension bridge (FR-209,
+//!   FR-096, src/browser.rs).
+//! - compute, screen, capture: answer `ping` and `status`; their work arrives with their areas
+//!   (inference supervision, FR-207 computer use, FR-228 capture).
 
 use crate::exec::{ExecSpec, find_bwrap};
 use crate::fsops::Storage;
@@ -36,15 +38,22 @@ pub struct Context {
     pub runner: Box<dyn Runner>,
     /// The local runtime (only in the `local-runtime` module), or why it could not start.
     pub runtime: Option<Result<Arc<crate::local_runtime::Runtime>, OpError>>,
+    /// The browser sessions and the extension bridge (only in the `browser` module, FR-209, FR-096).
+    pub browser: Option<Arc<crate::browser::Module>>,
 }
 
 impl Context {
     pub fn new(name: &str, data_dir: &Path) -> Self {
         let data = DataDir(data_dir.to_path_buf());
         let runtime = (name == crate::local_runtime::MODULE).then(|| crate::local_runtime::Runtime::new(&data).map(Arc::new));
+        let browser = (name == crate::browser::MODULE).then(|| Arc::new(crate::browser::Module::new(&data.config().unwrap_or_default(), data_dir)));
         let power = (name == "management").then(|| {
             let cfg = data.config().unwrap_or_default();
-            Power::system(cfg.power.allow_changes, cfg.power.allow_actions)
+            let mut p = Power::system(cfg.power.allow_changes, cfg.power.allow_actions);
+            // Power-on-after-power-loss from the BIOS backend, read-only (FR-144, FR-146).
+            let d = data.clone();
+            p.after_power_loss = Some(Box::new(move || crate::firmware::Firmware::reader(d.clone()).after_power_loss()));
+            p
         });
         Context {
             name: name.into(),
@@ -55,6 +64,7 @@ impl Context {
             power,
             runner: Box::new(SystemRunner),
             runtime,
+            browser,
         }
     }
 }
@@ -75,6 +85,10 @@ pub fn handle(ctx: &Context, op: &str, args: &Value) -> OpResult<Value> {
     match ctx.name.as_str() {
         "storage" => storage_op(ctx, op, args),
         "management" => management_op(ctx, op, args),
+        crate::browser::MODULE => match &ctx.browser {
+            Some(b) => crate::browser::op(b, op, args),
+            None => Err(OpError::internal("the browser module is not set up")),
+        },
         crate::local_runtime::MODULE => match &ctx.runtime {
             Some(Ok(rt)) => rt.op(op, args),
             Some(Err(e)) if op == "status" => Ok(json!({ "module": ctx.name, "ready": false, "error": e.message })),
@@ -209,6 +223,10 @@ pub fn main_loop(name: &str, data_dir: &Path) -> i32 {
     if name == "storage" {
         ctx.storage.sweep();
     }
+    if let Some(b) = &ctx.browser {
+        // Leftover profiles go (FR-209: every session starts clean); the bridge sockets (FR-096).
+        b.start();
+    }
     match &ctx.runtime {
         Some(Ok(rt)) => {
             if let Err(e) = rt.start() {
@@ -260,6 +278,7 @@ mod tests {
     use crate::crypto::b64_encode;
     use crate::grants::tests::tmp;
     use crate::power::tests::FakeRunner;
+    use std::time::Duration;
 
     fn ctx(name: &str, data: &Path) -> Context {
         let mut c = Context::new(name, data);
@@ -293,6 +312,46 @@ mod tests {
         assert_eq!(handle(&c, "nope", &json!({})).unwrap_err().code, "not_found");
         let rv = handle(&c, "fs.revoke", &json!({ "grantee": g })).unwrap();
         assert_eq!(rv["revoked"], true);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// Regression: `proc.spawn` through the module's handler on a thread that then ends (as each
+    /// request does); the process is still alive and readable through `proc.read`.
+    #[test]
+    fn spawned_processes_survive_their_request() {
+        let base = tmp("module-proc");
+        // The real sandbox where it works; else a stand-in that runs what follows `--` (this test
+        // is about the process's lifetime, not its sandbox).
+        let bwrap = crate::exec::working_bwrap().unwrap_or_else(|| {
+            let fake = base.join("fake-bwrap");
+            std::fs::write(&fake, "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n").unwrap();
+            std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            fake
+        });
+        let data = base.join("data");
+        let proj = base.join("p");
+        std::fs::create_dir_all(&proj).unwrap();
+        let mut c = ctx("storage", &data);
+        c.bwrap = Some(bwrap);
+        let c = Arc::new(c);
+        let g = json!({ "kind": "agent", "id": "a" });
+        handle(&c, "fs.grant", &json!({ "grantee": g, "target": proj, "access": "read" })).unwrap();
+        let (c2, g2, p2) = (c.clone(), g.clone(), proj.clone());
+        let id = std::thread::spawn(move || handle(&c2, "proc.spawn", &json!({ "grantee": g2, "cmd": "echo up; sleep 1; echo still", "cwd": p2 })).unwrap()["id"].as_str().unwrap().to_string())
+            .join()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        let r = handle(&c, "proc.read", &json!({ "grantee": g, "id": id, "waitMs": 2000 })).unwrap();
+        assert_eq!((r["running"].as_bool(), r["data"].as_str()), (Some(true), Some("up\n")), "{r}");
+        let mut r = r;
+        for _ in 0..100 {
+            if r["running"] == false {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+            r = handle(&c, "proc.read", &json!({ "grantee": g, "id": id })).unwrap();
+        }
+        assert_eq!(r["exitCode"], 0, "{r}");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

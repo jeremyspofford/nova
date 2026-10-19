@@ -21,8 +21,14 @@
 // it was on is opened again, the trace notes the crash, only a navigation is repeated and a read
 // or page screenshot is taken again; an action on an element, a scroll included, is not); site
 // levels per project or agent (sites.ts: the narrower scope wins).
+// M7.5 (FR-209, ADR-096 D7): the local browser fallback. A block page, or a bot challenge that
+// repeats, on the agent's own browser offers to continue the site on the agent's connected
+// computer (fallback.ts asks the user or reuses their consent); the computer's browser session
+// then replaces the Hub's for that site, runs through the same checks, and is marked in the trace
+// and audited until it leaves the site or is closed.
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { dirname, join, posix } from 'node:path';
 import {
   NovaError,
@@ -35,6 +41,9 @@ import {
   type BrowserConsoleLevel,
   type BrowserNetworkEntryView,
   type BrowserSessionView,
+  type BrowserFallbackCause,
+  type BrowserFallbackEndReason,
+  type BrowserFallbackProfile,
   type BrowserStatusView,
   type ToolDescriptor,
 } from '@nova/shared';
@@ -67,6 +76,7 @@ import type {
   ToolGate,
   ToolResult,
 } from '../tools/types.ts';
+import { ChallengeCounter, detectBlock, type BlockInput } from './blockpage.ts';
 import { formatConsole, formatNetwork } from './capture.ts';
 import { actionTitle, classifyPageAction, type PageActionKind } from './classifier.ts';
 import { pageLabel, signatureGuard, suspectInstructions } from './injection.ts';
@@ -82,6 +92,7 @@ import {
   isLoopbackHost,
   normalizeHost,
   originKey,
+  sameSite,
   type SiteDecision,
   type SiteScope,
 } from './sites.ts';
@@ -90,6 +101,7 @@ import { isHubOwner } from '../team/owner.ts';
 import type {
   BrowserDriver,
   BrowserTakeoverInput,
+  FallbackPlan,
   LocalBrowserFallback,
   PageElement,
 } from './types.ts';
@@ -109,6 +121,48 @@ export const BROWSER_RESTART_WINDOW_MS = 10 * 60_000;
 const CAPTURE_READ_CHARS = 20_000;
 /** Injection findings remembered (audited once each) per Hub process. */
 export const MAX_FLAGGED = 2_000;
+/** Page text the block-page check reads after a navigation (FR-209). */
+const BLOCK_CHECK_CHARS = 4_000;
+
+/** A computer's browser running on a connected computer (FR-209), until it ends. */
+interface ActiveFallback {
+  session: BrowserSession;
+  /** The `browser_fallback_session` row. */
+  rowId: string;
+  deviceId: string;
+  deviceName: string;
+  profile: BrowserFallbackProfile;
+  site: string;
+  consentId: string;
+  profileDir: string;
+}
+
+/** A DNS name novad's egress filter takes (its `valid_name`): labels, and a last label with a letter. */
+function egressName(h: string): boolean {
+  if (!h || h.length > 253 || isIP(h)) return false;
+  const labels = h.split('.');
+  return (
+    labels.every((l) => /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/.test(l)) &&
+    /[a-z]/.test(labels[labels.length - 1] ?? '')
+  );
+}
+
+/**
+ * The hosts a device's egress filter allows for a fallback on `site` (D7): exactly the site and
+ * its subdomains, which is what the user consented to. `*.site` only where novad's rules take it
+ * (never a wildcard over a top-level domain); nothing for a name novad would refuse.
+ */
+export function fallbackAllowHosts(site: string): string[] {
+  const h = normalizeHost(site);
+  if (!egressName(h)) return [];
+  return h.includes('.') ? [h, `*.${h}`] : [h];
+}
+
+function fallbackLabel(profile: BrowserFallbackProfile, deviceName: string): string {
+  return profile === 'clean'
+    ? `a clean profile on ${deviceName}`
+    : `your own browser on ${deviceName} (extension)`;
+}
 
 /** One tool call, as the browser needs it (from the ToolContext plus the thread's mode). */
 export interface BrowserCall {
@@ -302,7 +356,13 @@ export class BrowserService {
   #scopeOf: ScopeResolver;
   #guard: ExternalAgentGuard;
   #guardWired: boolean;
-  #fallback: LocalBrowserFallback | null;
+  #fallback: LocalBrowserFallback | null = null;
+  #offFallbackStop: (() => void) | null = null;
+  /** Fallback sessions by `accountId:computerId` (FR-209). */
+  readonly #fallbacks = new Map<string, ActiveFallback>();
+  /** Challenges per computer and site, and the page each was last noted on. */
+  readonly #challenges: ChallengeCounter;
+  readonly #challengeUrls = new Map<string, string>();
 
   constructor(opts: BrowserServiceOptions) {
     this.#o = opts;
@@ -336,7 +396,8 @@ export class BrowserService {
       ((accountId, threadId) => Promise.resolve(threadScope(opts.db, accountId, threadId)));
     this.#guard = opts.externalAgentGuard ?? signatureGuard;
     this.#guardWired = opts.externalAgentGuard !== undefined;
-    this.#fallback = opts.localFallback ?? null;
+    this.#challenges = new ChallengeCounter(() => this.#now().getTime());
+    if (opts.localFallback) this.useLocalFallback(opts.localFallback);
   }
 
   // ---- late-bound dependencies --------------------------------------------------------------
@@ -369,9 +430,38 @@ export class BrowserService {
     this.#guard = guard;
     this.#guardWired = true;
   }
-  /** The devices area's local browser fallback (FR-209). */
+  /** The local browser fallback (FR-209; fallback.ts). */
   useLocalFallback(fallback: LocalBrowserFallback): void {
+    this.#offFallbackStop?.();
     this.#fallback = fallback;
+    this.#offFallbackStop =
+      fallback.onStop?.((rowId, reason) => {
+        const fb = [...this.#fallbacks.values()].find((f) => f.rowId === rowId);
+        if (fb) void this.#endFallback(fb, reason);
+      }) ?? null;
+  }
+
+  /** The fallback a computer's browser is in now (FR-209), or null. */
+  fallbackOf(
+    accountId: string,
+    computerId: string,
+  ): {
+    sessionId: string;
+    deviceId: string;
+    deviceName: string;
+    profile: BrowserFallbackProfile;
+    site: string;
+  } | null {
+    const fb = this.#fallbacks.get(`${accountId}:${computerId}`);
+    return fb && fb.session.state !== 'closed'
+      ? {
+          sessionId: fb.rowId,
+          deviceId: fb.deviceId,
+          deviceName: fb.deviceName,
+          profile: fb.profile,
+          site: fb.site,
+        }
+      : null;
   }
 
   get externalAgentGuardWired(): boolean {
@@ -410,9 +500,13 @@ export class BrowserService {
     const key = `${accountId}:${computerId}`;
     const s = this.#sessions.get(key);
     if (!s || s.state === 'closed') return false;
-    await s.close();
-    this.#sessions.delete(key);
-    await this.#sessionEvent(s);
+    const fb = this.#fallbacks.get(key);
+    if (fb?.session === s) await this.#endFallback(fb, 'closed');
+    else {
+      await s.close();
+      this.#sessions.delete(key);
+      await this.#sessionEvent(s);
+    }
     await this.#audit(accountId, 'browser.session.closed', null, { computerId });
     return true;
   }
@@ -466,7 +560,11 @@ export class BrowserService {
     }
   }
 
-  async #start(accountId: string, computerId: string): Promise<BrowserSession> {
+  async #start(
+    accountId: string,
+    computerId: string,
+    fallback?: { driver: BrowserDriver; profileDir: string; visitHost: string | null },
+  ): Promise<BrowserSession> {
     await this.#makeRoom(accountId);
     const [exe, persist, allowLocal] = await Promise.all([
       this.#o.setting('browser.executablePath'),
@@ -488,22 +586,26 @@ export class BrowserService {
     );
     const profileDir =
       (computer as { browserProfileDir?: unknown } | null)?.browserProfileDir ?? ownProfile;
+    // A fallback session (FR-209) runs on the device: its own driver, a temporary folder, no
+    // saved cookies, and the device's egress filter instead of the Hub's proxy (D7).
     const s = new BrowserSession({
       accountId,
       computerId,
-      driver: this.#o.driver,
-      profileDir: typeof profileDir === 'string' ? profileDir : ownProfile,
+      driver: fallback?.driver ?? this.#o.driver,
+      profileDir:
+        fallback?.profileDir ?? (typeof profileDir === 'string' ? profileDir : ownProfile),
       dataDir: this.#o.dataDir,
-      executablePath: exe,
-      persistCookies: persist,
-      egress: this.#egress,
-      allowLocalBinding: allowLocal,
+      executablePath: fallback ? null : exe,
+      persistCookies: fallback ? false : persist,
+      egress: fallback ? null : this.#egress,
+      allowLocalBinding: fallback ? false : allowLocal,
       networkLists: () => this.sites.networkLists(accountId),
       timers: this.#timers,
       log: this.#log,
       now: this.#now,
       onCrash: (session, reason) => void this.#crashed(session, reason),
     });
+    if (fallback) s.visitHost = fallback.visitHost;
     await this.#refresh(s);
     await s.launch();
     this.#sessions.set(`${accountId}:${computerId}`, s);
@@ -566,7 +668,16 @@ export class BrowserService {
     const computerId = await this.#computerOf(call);
     const r = await this.#open(call.accountId, computerId);
     if ('error' in r) return r.error;
-    const s = r.session;
+    let s = r.session;
+    // A fallback session ends when `browser.localFallback` was turned off (FR-209); the agent's
+    // own browser takes the call.
+    const fb = this.#fallbacks.get(`${call.accountId}:${computerId}`);
+    if (fb?.session === s && !(await this.#o.setting('browser.localFallback'))) {
+      await this.#endFallback(fb, 'disabled');
+      const again = await this.#open(call.accountId, computerId);
+      if ('error' in again) return again.error;
+      s = again.session;
+    }
     s.lastCall = { threadId: call.threadId, turnId: call.turnId, callId: call.callId };
     // A browser that crashed since its last action restarts first (docs/11 §10).
     if (s.crash) {
@@ -1077,7 +1188,7 @@ export class BrowserService {
     },
   ) {
     try {
-      return await this.recorder.record({
+      const view = await this.recorder.record({
         accountId: call.accountId,
         computerId: s.computerId,
         threadId: call.threadId,
@@ -1095,6 +1206,10 @@ export class BrowserService {
         after: rec.after ?? null,
         approvalId: rec.approvalId ?? null,
       });
+      // A row of a fallback session is marked as such (FR-209: the session is marked).
+      const fb = this.#fallbacks.get(`${s.accountId}:${s.computerId}`);
+      if (fb?.session === s) await this.#fallback?.marked(fb.rowId, view.id);
+      return view;
     } catch (err) {
       this.#log.error('could not record a browser action', { err });
       return null;
@@ -1177,16 +1292,33 @@ export class BrowserService {
           before,
           after,
         });
-        return fail('blocked_navigation', `${text} ${this.#blockedText(refused)}`);
+        const left = await this.#leftFallbackSite(s);
+        return fail('blocked_navigation', `${text} ${this.#blockedText(refused)}${left}`);
       }
       const view = await this.#record(call, s, { ...rec, result: 'ok', before, after });
-      return ok(`${text}${this.#notes(s)}`, {
+      const left = await this.#leftFallbackSite(s);
+      return ok(`${text}${this.#notes(s)}${left}`, {
         browserAction: view ? { id: view.id, before: view.before, after: view.after } : null,
         url: s.url,
       });
     } finally {
       s.busy--;
     }
+  }
+
+  /**
+   * A fallback session covers its site and subdomains only (FR-209, what the user consented to):
+   * after a click, a key or a redirect took the page elsewhere, it ends. Gives the note for the
+   * agent, or ''.
+   */
+  async #leftFallbackSite(s: BrowserSession): Promise<string> {
+    const fb = this.#fallbacks.get(`${s.accountId}:${s.computerId}`);
+    if (fb?.session !== s) return '';
+    const host = s.host;
+    if (host && this.#onSite(fb.site, host)) return '';
+    if (!host && s.url === 'about:blank') return '';
+    await this.#endFallback(fb, 'left_site');
+    return `\nThe page left ${fb.site}, so the browser on the user's computer was closed (local fallback ended). Open the site again to continue with the agent's own browser.`;
   }
 
   #blockedText(urls: string[]): string {
@@ -1255,6 +1387,10 @@ export class BrowserService {
         'addresses with credentials in them are refused; use browser.sign_in',
       );
     const host = normalizeHost(url.hostname);
+    // A fallback session covers its site only (FR-209): another site ends it, and the agent's
+    // own browser opens that one.
+    const current = this.#fallbacks.get(`${call.accountId}:${await this.#computerOf(call)}`);
+    if (current && !this.#onSite(current.site, host)) await this.#endFallback(current, 'left_site');
     const ready = await this.#ready(call);
     if (!('s' in ready)) return ready;
     const { s, computerId } = ready;
@@ -1319,6 +1455,7 @@ export class BrowserService {
     }
     if (dev) await s.ensureLocalBinding();
     else await s.ensureReachable(host);
+    const landed: { page: BlockInput | null } = { page: null };
     const result = await this.#perform(
       call,
       s,
@@ -1326,14 +1463,22 @@ export class BrowserService {
       async () => {
         const r = await s.driver.goto(url.href, NAV_TIMEOUT_MS);
         s.sync();
-        const title = await s.driver
-          .snapshot(200)
-          .then((snap) => snap.title)
-          .catch(() => '');
+        const snap = await s.driver.snapshot(BLOCK_CHECK_CHARS).catch(() => null);
+        const title = snap?.title ?? '';
+        landed.page = {
+          status: r.status,
+          title,
+          text: snap?.text ?? '',
+          frames: snap?.frames ?? [],
+        };
         return `Opened ${s.url}${r.status ? ` (HTTP ${r.status})` : ''}${title ? `: ${JSON.stringify(title.slice(0, 200))}` : ''}. Read it with browser.read.`;
       },
     );
     await this.#navigated(call, computerId, url.href, result.ok);
+    if (result.ok && landed.page && !dev) {
+      const offered = await this.#blockCheck(call, s, computerId, landed.page, 'navigate', result);
+      if (offered) return offered;
+    }
     return result;
   }
 
@@ -1487,12 +1632,14 @@ export class BrowserService {
         snap.tree.length > treeBudget ? `${snap.tree.slice(0, treeBudget)}…` : snap.tree,
       );
     lines.push(...this.#notes(s).split('\n').filter(Boolean));
-    return ok(lines.join('\n'), {
+    const result = ok(lines.join('\n'), {
       url: snap.url,
       elements: snap.elements.length,
       findings,
       externalAgent: external?.id ?? null,
     });
+    const page = { status: null, title: snap.title, text: snap.text, frames: snap.frames };
+    return (await this.#blockCheck(call, s, computerId, page, 'read', result)) ?? result;
   }
 
   /**
@@ -2019,6 +2166,12 @@ export class BrowserService {
     const ready = await this.#ready(call);
     if (!('s' in ready)) return ready;
     const { s, computerId } = ready;
+    // A browser on a connected computer saves nothing there (review M75 #8).
+    if (this.#fallbacks.get(`${call.accountId}:${computerId}`)?.session === s)
+      return fail(
+        'not_available',
+        "Downloads are off in a browser on the user's computer. Download from the agent's own browser instead.",
+      );
     if (saveAs !== undefined && filesPath(saveAs) === null)
       return fail(
         'invalid_arguments',
@@ -2381,48 +2534,251 @@ export class BrowserService {
 
   // ---- local browser fallback (FR-209) --------------------------------------------------------
 
-  async localFallback(call: BrowserCall, profile: 'clean' | 'extension'): Promise<ToolResult> {
+  /** `host` belongs to the fallback's site (the site, its `www.` twin or a subdomain). */
+  #onSite(site: string, host: string): boolean {
+    return sameSite(site, host) || host.endsWith(`.${site}`);
+  }
+
+  /**
+   * After a navigation or a read: a block page, or a challenge that repeats, offers the fallback
+   * (only with the fallback wired, on the agent's own browser). Gives the result to return, or
+   * null to return the action's own.
+   */
+  async #blockCheck(
+    call: BrowserCall,
+    s: BrowserSession,
+    computerId: string,
+    page: BlockInput,
+    from: 'navigate' | 'read',
+    result: ToolResult,
+  ): Promise<ToolResult | null> {
+    if (!this.#fallback || !result.ok) return null;
+    const key = `${call.accountId}:${computerId}`;
+    if (this.#fallbacks.get(key)?.session === s) return null;
+    const site = s.host;
+    // A local or private-network site is not what a device's browser is for (its egress filter
+    // refuses such addresses): never offered.
+    if (!site || isLocalHost(site)) return null;
+    const finding = detectBlock(page);
+    if (!finding) return null;
+    const k = `${key}:${site}`;
+    // Reading the page a navigation already counted is not another challenge.
+    if (from === 'read' && this.#challengeUrls.get(k) === s.url) return null;
+    this.#challengeUrls.set(k, s.url);
+    if (this.#challengeUrls.size > 500) {
+      const oldest = this.#challengeUrls.keys().next().value;
+      if (oldest !== undefined) this.#challengeUrls.delete(oldest);
+    }
+    if (!this.#challenges.note(k, finding)) return null;
+    this.#challenges.reset(k);
+    return this.#offerFallback(
+      call,
+      s,
+      computerId,
+      site,
+      s.url,
+      finding.kind === 'block' ? 'block_page' : 'repeated_challenge',
+      finding.reason,
+      result,
+    );
+  }
+
+  async #offerFallback(
+    call: BrowserCall,
+    s: BrowserSession,
+    computerId: string,
+    site: string,
+    url: string,
+    cause: BrowserFallbackCause,
+    detail: string,
+    result: ToolResult | null,
+  ): Promise<ToolResult> {
+    const fallback = this.#fallback;
+    const note = (text: string): ToolResult =>
+      result?.ok
+        ? ok(
+            `${result.content.map((c) => (c.type === 'text' ? c.text : '')).join('')}\n${text}`,
+            result.meta,
+          )
+        : fail('not_available', text);
+    if (!fallback) return note('The local browser fallback is not available on this Hub.');
+    const allowHosts = fallbackAllowHosts(site);
+    if (!allowHosts.length)
+      return note(
+        `${site} seems to refuse the agent browser (${detail}); it is not a site a connected computer's browser can open.`,
+      );
+    const plan = await fallback.begin({
+      accountId: call.accountId,
+      threadId: call.threadId,
+      turnId: call.turnId,
+      callId: call.callId,
+      computerId,
+      site,
+      url,
+      cause,
+      detail,
+      allowHosts,
+      signal: call.signal,
+    });
+    if (!plan.ok)
+      return note(
+        `${site} seems to refuse the agent browser (${detail}). It was not continued on a connected computer: ${plan.message} Ask the user to take over, or try later.`,
+      );
+    return this.#switchTo(call, s, computerId, plan, site, url, cause);
+  }
+
+  /** Replace the computer's browser with the device's for `site`, then open `url` there. */
+  async #switchTo(
+    call: BrowserCall,
+    from: BrowserSession,
+    computerId: string,
+    plan: FallbackPlan,
+    site: string,
+    url: string,
+    cause: BrowserFallbackCause,
+  ): Promise<ToolResult> {
+    const key = `${call.accountId}:${computerId}`;
+    const visitHost = from.visitHost;
+    if (from.state !== 'closed') {
+      await from.close();
+      if (this.#sessions.get(key) === from) this.#sessions.delete(key);
+      await this.#sessionEvent(from);
+    }
+    const profileDir = join(
+      this.#o.dataDir,
+      'browser',
+      'fallback',
+      safeId(call.accountId),
+      safeId(plan.sessionId),
+    );
+    let s: BrowserSession;
+    try {
+      s = await this.#start(call.accountId, computerId, {
+        driver: plan.driver,
+        profileDir,
+        visitHost,
+      });
+    } catch (err) {
+      const reason = errText(err);
+      await this.#fallback?.end(plan.sessionId, 'error');
+      rmSync(profileDir, { recursive: true, force: true });
+      await this.#audit(
+        call.accountId,
+        'browser.fallback.failed',
+        site,
+        {
+          computerId,
+          deviceId: plan.deviceId,
+          profile: plan.profile,
+          sessionId: plan.sessionId,
+          reason,
+        },
+        { threadId: call.threadId, turnId: call.turnId },
+      );
+      return fail(
+        'browser_unavailable',
+        `The browser on ${plan.deviceName} could not start: ${reason}. The agent browser closed; open the site again to use it.`,
+      );
+    }
+    const fb: ActiveFallback = {
+      session: s,
+      rowId: plan.sessionId,
+      deviceId: plan.deviceId,
+      deviceName: plan.deviceName,
+      profile: plan.profile,
+      site,
+      consentId: plan.consentId,
+      profileDir,
+    };
+    this.#fallbacks.set(key, fb);
+    await this.#record({ ...call, computerId }, s, {
+      tool: 'browser.fallback',
+      action: 'local_fallback',
+      target: fallbackLabel(plan.profile, plan.deviceName),
+      url,
+      host: site,
+      result: 'ok',
+    });
+    await this.#audit(
+      call.accountId,
+      'browser.fallback.started',
+      site,
+      {
+        computerId,
+        deviceId: plan.deviceId,
+        profile: plan.profile,
+        cause,
+        consentId: plan.consentId,
+        consentReused: plan.consentReused,
+        sessionId: plan.sessionId,
+      },
+      { threadId: call.threadId, turnId: call.turnId },
+    );
+    const opened = await this.navigate({ ...call, computerId }, url);
+    const head =
+      `${site} refused the agent's own browser, so with the user's consent it continues in ` +
+      `${fallbackLabel(plan.profile, plan.deviceName)} (local fallback, marked in the trace). ` +
+      'Element refs from before are stale.';
+    return opened.ok
+      ? ok(`${head}\n${opened.content.map((c) => (c.type === 'text' ? c.text : '')).join('')}`, {
+          ...opened.meta,
+          localFallback: {
+            sessionId: plan.sessionId,
+            deviceId: plan.deviceId,
+            profile: plan.profile,
+          },
+        })
+      : fail(opened.error.code, `${head} ${opened.error.message}`, opened.error.details);
+  }
+
+  /** End a fallback session: the trace row, its browser closed, its row and folder done. */
+  async #endFallback(fb: ActiveFallback, reason: BrowserFallbackEndReason): Promise<void> {
+    const s = fb.session;
+    const key = `${s.accountId}:${s.computerId}`;
+    if (this.#fallbacks.get(key) !== fb) return;
+    await this.#record(this.#systemCall(s), s, {
+      tool: 'browser.fallback',
+      action: 'local_fallback_end',
+      target: `${fallbackLabel(fb.profile, fb.deviceName)}: ${reason.replace('_', ' ')}`,
+      host: fb.site,
+      result: 'ok',
+    });
+    this.#fallbacks.delete(key);
+    if (s.state !== 'closed') await s.close().catch(() => undefined);
+    if (this.#sessions.get(key) === s) {
+      this.#sessions.delete(key);
+      await this.#sessionEvent(s);
+    }
+    await this.#fallback?.end(fb.rowId, reason);
+    rmSync(fb.profileDir, { recursive: true, force: true });
+  }
+
+  /**
+   * Offer the fallback for the site the computer's browser is on now (the same question as after
+   * a block page; the user decides). For the UI's "continue on my computer".
+   */
+  async localFallback(call: BrowserCall): Promise<ToolResult> {
     const computerId = await this.#computerOf(call);
-    const host = this.session(call.accountId, computerId)?.host ?? null;
-    if (!this.#fallback || !host) {
+    const s = this.session(call.accountId, computerId);
+    const site = s?.host ?? null;
+    if (!this.#fallback || !s || !site) {
       await this.#audit(
         call.accountId,
         'browser.fallback.refused',
-        host,
-        {
-          computerId,
-          reason: this.#fallback ? 'no_page' : 'not_available',
-        },
+        site,
+        { computerId, reason: this.#fallback ? 'no_page' : 'not_available' },
         { threadId: call.threadId, turnId: call.turnId },
       );
       return fail(
         'not_available',
         this.#fallback
           ? 'Open the site first; the fallback continues the current site on a connected computer.'
-          : 'The local browser fallback is not available yet: no connected computer offers its browser. Ask the user to take over instead.',
+          : 'The local browser fallback is not available: no connected computer offers its browser. Ask the user to take over instead.',
       );
     }
-    const r = await this.#fallback.open({
-      accountId: call.accountId,
-      threadId: call.threadId,
-      computerId,
-      host,
-      profile,
-    });
-    await this.#audit(
-      call.accountId,
-      r.ok ? 'browser.fallback.started' : 'browser.fallback.refused',
-      host,
-      {
-        computerId,
-        profile,
-        ...(r.ok ? { deviceId: r.deviceId } : { reason: r.reason }),
-      },
-      { threadId: call.threadId, turnId: call.turnId },
-    );
-    return r.ok
-      ? ok(`The user's computer took over ${host} (local fallback, marked in the trace).`)
-      : fail('not_available', r.reason);
+    if (this.#fallbacks.get(`${call.accountId}:${computerId}`)?.session === s)
+      return fail('conflict', `${site} already runs on a connected computer.`);
+    return this.#offerFallback(call, s, computerId, site, s.url, 'requested', 'asked for', null);
   }
 
   // ---- dev servers of Code sessions (FR-097, FR-067) ---------------------------------------------
@@ -2760,6 +3116,9 @@ export class BrowserService {
 
   async close(): Promise<void> {
     await this.signins.close();
+    this.#offFallbackStop?.();
+    for (const fb of [...this.#fallbacks.values()])
+      await this.#endFallback(fb, 'closed').catch(() => undefined);
     for (const s of [...this.#sessions.values()]) await s.close().catch(() => undefined);
     this.#sessions.clear();
   }

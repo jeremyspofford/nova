@@ -43,3 +43,6 @@ export * from './cloudrun/index.ts';
 export * from './team/index.ts';
 export * from './scripts/index.ts';
 export * from './acp/index.ts';
+export * from './firmware/index.ts';
+export * from './boot/index.ts';
+export * from './oob/index.ts';

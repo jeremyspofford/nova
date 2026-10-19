@@ -1076,5 +1076,7 @@ export function approvalView(r: ApprovalRow): ApprovalView {
     runId: r.runId,
     codeSessionId: null,
     threadTitle: null,
+    answerIn: r.answerIn ?? null,
+    scope: r.scope ?? null,
   };
 }

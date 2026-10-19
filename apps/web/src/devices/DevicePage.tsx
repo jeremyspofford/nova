@@ -4,11 +4,17 @@
 // tabs for capabilities and Hub overrides (FR-142, FR-148), modules and services (FR-141,
 // FR-145), power and Wake-on-LAN (FR-144), updates (FR-148), per-device policy (FR-150), files
 // with grants, access requests and staged writes (FR-210), the agents using it as their computer
-// (FR-081) and its local MCP servers. A browser or the app has its sessions instead.
+// (FR-081) and its local MCP servers. A browser or the app has its sessions instead. M7.5: the
+// browser bridge to the user's own browser on a novad computer (FR-096), and Firmware (FR-146)
+// and Boot (FR-143) tabs; the management channel (mutual TLS or plain HTTP) and Decommission
+// with its approval and outcome (ADR-096 D1, D9); an Out-of-band tab when a BMC is linked
+// (FR-147, /devices/<id>/oob[/<endpointId>]); and a compute node's policy, GPU memory and
+// services (FR-126, FR-150).
 import { useEffect, useId, useRef, useState } from 'react';
-import type { DeviceSummaryView, DeviceView } from '@nova/shared';
+import type { DeviceDecommissionView, DeviceSummaryView, DeviceView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, Tabs, TextField, useToast } from '@nova/ui';
 import { ApiError } from '../api.ts';
+import { BrowserBridgeSection } from '../browserdevice/BridgeSection.tsx';
 import { pageNav, thisDeviceId } from '../join/store.ts';
 import { formatWhen, plural } from '../settings/common.ts';
 import { navigate, useLocation } from '../router.ts';
@@ -46,9 +52,41 @@ import {
 import { PolicyPanel } from './Policy.tsx';
 import { PowerPanel } from './Power.tsx';
 import { DeviceTlsFact } from './Tls.tsx';
+import { DecommissionButton, DecommissionStatus } from './Decommission.tsx';
+import { NodePanel } from './NodePanel.tsx';
+import { ManagementFact } from './ops.tsx';
+import { OOB_TAB, openDeviceOobTab, useDeviceOobTab } from '../oob/OobPage.tsx';
 import { UpdatesPanel } from './Updates.tsx';
+import { BootPanel } from '../boot/BootPanel.tsx';
+import { FirmwarePanel } from '../firmware/FirmwarePanel.tsx';
 
-const TAB_LABEL: Record<DeviceTab, string> = {
+/**
+ * M7.5 tabs after the M6 ones (FR-146, FR-143): `?tab=firmware`, `?tab=boot`, or the path
+ * `/devices/<id>/boot` the boot area's notifications link to.
+ */
+const M75_TABS = ['firmware', 'boot'] as const;
+type PageTab = DeviceTab | (typeof M75_TABS)[number];
+const PAGE_TABS: readonly PageTab[] = [...DEVICE_TABS, ...M75_TABS];
+const isM75Tab = (t: string | undefined): t is (typeof M75_TABS)[number] =>
+  (M75_TABS as readonly (string | undefined)[]).includes(t);
+
+function pageTabFrom(loc: string): PageTab {
+  const q = loc.indexOf('?');
+  const search = q < 0 ? '' : loc.slice(q);
+  const named = new URLSearchParams(search).get('tab') ?? undefined;
+  if (isM75Tab(named)) return named;
+  const sub = (q < 0 ? loc : loc.slice(0, q)).split('/').filter(Boolean)[2];
+  if (!named && isM75Tab(sub)) return sub;
+  return tabFrom(search);
+}
+
+function pageTabPath(id: string, tab: PageTab): string {
+  return isM75Tab(tab) ? `${devicePath(id)}?tab=${tab}` : devicePath(id, tab);
+}
+
+const TAB_LABEL: Record<PageTab, string> = {
+  firmware: 'Firmware',
+  boot: 'Boot',
   capabilities: 'Capabilities',
   modules: 'Modules',
   power: 'Power',
@@ -89,7 +127,7 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
   const api = useDevicesApi();
   const toast = useToast();
   const loc = useLocation();
-  const tab = tabFrom(loc.includes('?') ? loc.slice(loc.indexOf('?')) : '');
+  const tab = pageTabFrom(loc);
   // novad details, or null for a device that does not run novad (a 404 there).
   const dev = useLoad<DeviceView | null>(
     () =>
@@ -104,6 +142,12 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
   const [revoking, setRevoking] = useState(false);
   const [editing, setEditing] = useState(false);
   const [waking, setWaking] = useState(false);
+  // M7.5: a decommission asked here (D9), and the Out-of-band tab when a BMC is linked (FR-147).
+  const [decommission, setDecommission] = useState<DeviceDecommissionView | null>(null);
+  const oob = useDeviceOobTab(
+    deviceId,
+    dev.data?.name ?? all.data?.find((x) => x.id === deviceId)?.name ?? '',
+  );
   const reloadDev = useDebounced(dev.reload, 150);
   const reloadAll = useDebounced(all.reload, 150);
   useDeviceEvents(DEVICE_ROW_EVENTS, (env) => {
@@ -166,8 +210,10 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
   const props: PanelProps | null = d
     ? { device: d, onDevice: setDevice, reload: dev.reload, deviceName: nameOf }
     : null;
-  const panels: Record<DeviceTab, React.ReactNode> | null = props
+  const panels: Record<PageTab, React.ReactNode> | null = props
     ? {
+        firmware: <FirmwarePanel {...props} />,
+        boot: <BootPanel {...props} />,
         capabilities: <CapabilitiesPanel {...props} />,
         modules: <ModulesPanel {...props} />,
         power: <PowerPanel {...props} />,
@@ -201,6 +247,7 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
                 <Icon name="edit" /> Rename
               </Button>
             ) : null}
+            {d ? <DecommissionButton device={d} onRequested={setDecommission} /> : null}
             <Button variant="danger" onClick={() => setRevoking(true)}>
               Revoke
             </Button>
@@ -238,6 +285,7 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
           </div>
         ) : null}
         {d || s?.kind === 'compute' ? <DeviceTlsFact deviceId={deviceId} /> : null}
+        {d ? <ManagementFact deviceId={deviceId} /> : null}
         {session && s ? (
           <div>
             <dt>Sessions</dt>
@@ -269,6 +317,16 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
           <Icon name="clock" /> Your latest changes reach the device when it next checks in.
         </p>
       ) : null}
+      {d ? (
+        <DecommissionStatus
+          deviceId={deviceId}
+          latest={decommission}
+          onChanged={() => {
+            dev.reload();
+            all.reload();
+          }}
+        />
+      ) : null}
       {s ? (
         <ScopesSection device={s} revoked={revoked} onEdit={() => setEditing(true)} />
       ) : all.error ? (
@@ -287,13 +345,24 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
           .
         </p>
       ) : null}
+      {/* M7.5 (FR-126, FR-150): a compute node's policy, GPU memory and services. */}
+      {!d && s?.kind === 'compute' ? <NodePanel deviceId={deviceId} /> : null}
+      {/* M7.5 (FR-096): the extension bridge to the user's own browser on this computer. */}
+      {d && !revoked ? <BrowserBridgeSection device={d} /> : null}
       {d && panels ? (
         <Tabs
           label="Device sections"
           className="devices-tabs"
-          value={tab}
-          onChange={(id) => navigate(devicePath(d.id, id as DeviceTab), { replace: true })}
-          items={DEVICE_TABS.map((t) => ({ id: t, label: TAB_LABEL[t], panel: panels[t] }))}
+          value={oob.active ? OOB_TAB : tab}
+          onChange={(id) =>
+            id === OOB_TAB
+              ? openDeviceOobTab(d.id)
+              : navigate(pageTabPath(d.id, id as PageTab), { replace: true })
+          }
+          items={[
+            ...PAGE_TABS.map((t) => ({ id: t, label: TAB_LABEL[t], panel: panels[t] })),
+            ...(oob.item ? [oob.item] : []),
+          ]}
         />
       ) : null}
       {renaming && d ? (

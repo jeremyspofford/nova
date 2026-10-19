@@ -72,7 +72,7 @@ Rules:
 | `artifact.created` / `.updated` | yes | `{artifactId,threadId,kind,version}` (FR-038) |
 | `approval.requested` | yes | `{approvalId,callId,action,reason,scope,risk,tier}`; correlation `{threadId,turnId,callId}`; the thread's status becomes `needs_input` (`thread.status.changed`) until it is answered |
 | `approval.decided` | yes | `{approvalId,decision,alwaysScope?,decidedBy,deviceId?,override}` (`ApprovalDecision`; `timeout` is a decision); correlation `{threadId,turnId,callId}` |
-| `approval.cancelled` | yes | `{approvalId,reason}` (the turn ended or the Hub restarted while it waited) |
+| `approval.cancelled` | yes | `{approvalId,reason}` (the turn ended or the Hub restarted while it waited; M7.5: `reason: device_revoked` for a decommission card whose device was revoked through its own route) |
 | `approval.handoff_done` | yes | `{approvalId,note?}` (the handed-off step was marked done) |
 | `policy.denied` | yes | `{callId,tool,reason,ruleId?}` |
 | `policy.tier` | yes | `{callId,action,tier: handoff_required\|confirm_at_action\|pre_approvable,authorization: user_typed\|none,sources[]}` (FR-189) |
@@ -262,6 +262,34 @@ device environment `{sessionId,threadId}`.
 M6.5 also emits `device.status.changed` (`{deviceId,from,status: revoked}`, actor `user`) when a
 browser or app added with a code, or an approved device that never registered, is revoked.
 
+### device management (M7.5, `docs/23` §5-§7, §11)
+
+All persisted, no correlation. Actor `user` for the owner's own requests and `system` for
+watchdogs, sweeps and device reports. Firmware, boot, out-of-band and decommission approvals also
+emit `approval.requested` (`scope` `device:<deviceId>`, or `oob:<endpointId>` for out-of-band;
+`callId` null; risk `high`; tier `confirm_at_action`); their cards can only be answered in a Nova
+client (`answerIn: hub`, `contracts/hub-api.md` §1).
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `device.firmware.changed` | yes | `{deviceId,changeId,kind: apply\|rollback,status: planned\|awaiting_approval\|approved\|applied\|rolled_back\|failed\|reverted\|revert_failed,watchdog: pending\|ok\|reverted\|revert_failed\|missed\|null,approvalId}` (FR-146): a change was planned, sent for approval, decided, applied, rolled back or failed, or its watchdog reported (`revert_failed`: the device could not restore every key; the change stays open to rollback). `changeId` is the Hub's change id, not the authorization's |
+| `device.boot.changed` | yes | `{deviceId,kind,…}` (FR-143), by `kind`: `profile` `{id,status: created\|updated\|deleted}`; `request` `{id,request: try\|commit\|revert,status: awaiting_approval\|denied\|expired\|sent\|failed,reason}`; `attempt` `{id,profileId,entryId,status: pending\|ok\|reverted\|failed,reason}` (a watchdog report, the Hub's own deadline, or a revoked device: reason `revoked`); `pxe_token` `{status: created\|rotated\|revoked}` |
+| `device.oob.endpoint.changed` | yes | `{endpointId,change: created\|updated\|deleted\|pinned\|pin_confirmed\|pin_mismatch,kind: redfish\|ipmi\|amt,deviceId}` (FR-147); `pin_mismatch` (a BMC presented another certificate; nothing was sent) has actor `system` |
+| `device.oob.action.changed` | yes | `{actionId,endpointId,deviceId,action,status: awaiting_approval\|approved\|running\|done\|failed\|denied\|expired\|applied,approvalId,reason?}`; `action` is one of `check`, `power.status\|on\|off\|cycle\|reset`, `sensors`, `bios.read\|plan\|apply`, `boot.next`. A withdrawn card also emits `approval.cancelled` |
+| `device.endpoint.changed` | yes | `{deviceId,channel: mutual_tls}` (FR-126): the device registered an `https://` management endpoint, so the Hub now calls it over mutual TLS; actor `system` |
+| `device.decommission.requested` | yes | `{deviceId,decommissionId,purge,approvalId}` (FR-140): the owner asked to decommission; an approval card goes with it |
+| `device.decommissioned` | yes | `{deviceId,decommissionId,purge,deviceResult: wiped\|unreachable\|refused\|not_told}`: the device was revoked (whether or not it could be told); `device.status.changed` (`revoked`) goes with it |
+
+### browser on a device (M7.5, `docs/11` §4.3, §4.6)
+
+All persisted; actor `system`; no correlation.
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `browser.fallback.changed` | yes | (FR-209) `{consentId,deviceId,site,state: consent_granted\|consent_revoked}`, or `{sessionId,computerId,deviceId,site,profile: clean\|extension,state: started}`, or `{sessionId,computerId,deviceId,site,state: ended,reason: closed\|left_site\|consent_revoked\|device_gone\|error\|disabled\|restarted}` |
+| `browser.bridge.changed` | yes | `{deviceId,connected,tabs}` (FR-096): once per batch of bridge events `novad` relays (the host connected, disconnected or was replaced; a tab shared, unshared or closed; a host reported or withdrawn); `tabs` is the number of tabs the agent may use |
+| `browser.bridge.grant.changed` | yes | `{deviceId,grantId,host,state: pending\|active\|revoked}`: a host grant was reported by the browser (`pending`), confirmed by the owner (`active`) or revoked; `host` `*` is the "all sites" grant |
+
 ### network, trust & Relay (M6.5)
 
 All persisted. `network.endpoints.changed`, `network.transport.changed`, `network.changed` and
@@ -273,7 +301,7 @@ All persisted. `network.endpoints.changed`, `network.transport.changed`, `networ
 | `network.transport.changed` | yes | `{primary,previousPrimary,transports: {lan\|mesh\|relay\|direct: up\|down\|off\|none},changed: [transport]}`: a transport went up or down or the preferred one changed (the logged fallback, e.g. LAN down and Mesh primary); actor `system` |
 | `network.changed` | yes | `{changeId,kind: network.settings\|trust.mode\|network.setup.step,summary,status: applied\|rolled_back}` (FR-139): a change was recorded in the network change log or rolled back; actor the change's |
 | `network.setup.step` | yes | `{runId,stepId,kind,provider,status,autoRolledBack,error?}` (FR-136): a setup step was applied, verified, failed, rolled back (`autoRolledBack` when automatic) or could not be undone (`rollback_failed`); `error` is redacted, at most 300 characters; actor `user` |
-| `trust.changed` | yes | `{reason, …}` (FR-134); `reason` is `mode` (`{mode,meshCerts,pinNativeShells,previous,restartRequired}`, after a change through `PATCH /api/v1/trust`, the settings route or a rollback), `ca_created` (`{fingerprint}`), `ca_rotated` (`{fingerprint,previous}`), `leaf_issued` (`{serial,sans,notAfter}`), `device_issued` (`{deviceId,serial}`), `device_revoked` (`{deviceId,certificates}`) or `mesh_cert` (`{host,notAfter}`). Attributed to the owner account |
+| `trust.changed` | yes | `{reason, …}` (FR-134); `reason` is `mode` (`{mode,meshCerts,pinNativeShells,previous,restartRequired}`, after a change through `PATCH /api/v1/trust`, the settings route or a rollback), `ca_created` (`{fingerprint}`), `ca_rotated` (`{fingerprint,previous}`), `leaf_issued` (`{serial,sans,notAfter}`), `device_issued` (`{deviceId,serial}`), `device_revoked` (`{deviceId,certificates}`) or `mesh_cert` (`{host,notAfter}`). M7.5 adds `device_renewed` (`{deviceId,serial}` when a renewal certificate is issued, `{deviceId,certificates}` when the device presented it and the older ones were revoked) and `hub_client_issued` (`{serial,notAfter}`, the Hub's client certificate for the management channel). Attributed to the owner account |
 | `relay.status.changed` | yes | `{state: disabled\|unconfigured\|registering\|connecting\|connected\|error,detail,url}` (FR-137): the Relay connector's state changed |
 | `relay.client.paired` | yes | `{clientId,deviceId,name,platform}`: the owner approved a client that paired through the Relay; actor `user` |
 | `relay.client.revoked` | yes | `{clientId,deviceId}`: actor `user`, or `system` when its device was revoked elsewhere |
@@ -366,6 +394,8 @@ Correlation `{threadId}` (the Code session's thread).
 | `node.registered` | yes | `{nodeId,name,models}` (FR-126) |
 | `node.status.changed` | yes | `{nodeId,from,status: active\|unreachable\|revoked}` |
 | `node.models.changed` | yes | `{nodeId,models}` |
+| `node.policy.changed` | yes | `{nodeId,revision,routingEligible}` (FR-126, M7.5): the owner changed a compute node's policy (quiet hours, time zone, routing eligibility); the node takes it from its next heartbeat answer |
+| `node.service.changed` | yes | `{nodeId,service: jobs\|backend,action: start\|stop\|restart,state: running\|stopped\|unknown}` (M7.5): the owner started, stopped or restarted a node service (`status` emits nothing) |
 | `update.available` / `.downloaded` / `.applied` / `.failed` | yes | `{version,channel}` |
 | `diagnostics.updated` | no | `{subsystem,status}` |
 | `notification.created` | yes | `{notificationId,kind,title,os}`; a repeat with the same dedupe key while unread updates the notification and emits nothing. `os` (M6) says whether a client may raise it on the OS now: false when the category's in-app or OS rule is off or quiet hours are in force (unless the rule bypasses them); clients skip the OS notification then (FR-060) |
@@ -373,7 +403,7 @@ Correlation `{threadId}` (the Code session's thread).
 | `provider.account.created` / `.removed` | yes | `{providerAccountId,provider,secretRef}` (audited; never the key) |
 | `provider.account.activated` | yes | `{providerAccountId,provider}` (it became the active account of its kind, FR-115) |
 | `account.updated` | yes | `{accountId,fields}`; `fields` lists what changed: `displayName`, `username`, `avatar` (FR-113) |
-| `settings.changed` | yes | `{key,scope}` (security-relevant keys are audited). M7: `scope: member` for a member's own preference (`/api/v1/team/me/settings`) |
+| `settings.changed` | yes | `{key,scope}` (security-relevant keys are audited). M7: `scope: member` for a member's own preference (`/api/v1/team/me/settings`). M7.5: a setting marked `security` written through the Hub's settings writer (the settings route, the firmware policy route, `POST /api/v1/oob/enable\|disable`) adds `{before,after,confirmed}` (`confirmed` true when the change carried the owner's explicit confirmation: `confirm: true` on the settings or firmware policy route, or out-of-band enable's consent; `contracts/hub-api.md` §1), which the `setting.changed` audit entry records as the change's only entry |
 | `mcp.server.status.changed` | yes | `{serverId,name,status: disabled\|starting\|connected\|error\|stopped,error?}` (FR-043) |
 | `audit.appended` | yes | `{auditId,kind,hash}` |
 | `import.completed` | yes | `{importId,imported,duplicates,disabled,secretsMigrated}` (FR-200) |
@@ -388,8 +418,8 @@ Correlation `{threadId}` (the Code session's thread).
 - **Activity view**: renders persisted events filtered by correlation id.
 - **Audit**: mirrors security-relevant events (approvals, `policy.*`, `review.*`, `hook.*`,
   `request.*`, `ambient.grant.denied`, `app.authorization.changed`) into `audit_event` with a
-  hash chain. Areas that act also append their own entries (the M4, M5, M6, M6.5 and M7 actions are
-  listed in `docs/06` §2, "audit & events"). M5 writes no audit entry for `request.*` yet.
+  hash chain. Areas that act also append their own entries (the M4, M5, M6, M6.5, M7 and M7.5
+  actions are listed in `docs/06` §2, "audit & events"). M5 writes no audit entry for `request.*` yet.
 - **Scheduler**: listens for `trigger.fired`, `schedule.fired`, `mcp.event.received` and
   `turn.completed` (goal continuation, FR-181).
 - **M6.5 Hub areas**: the trust, network and relay areas listen for `settings.changed` of their
@@ -422,6 +452,16 @@ Correlation `{threadId}` (the Code session's thread).
   Work run's lease on `run.completed`; the browser area removes a deleted project's or agent's
   site levels on `project.deleted` and `agent.deleted`; the flagged area stops running delegations on
   `settings.changed` of `externalAgents.enabled`; the device-trust area forgets a revoked device.
+- **M7.5 Hub areas**: the firmware, boot, out-of-band and devices areas listen for
+  `approval.decided` of their own cards; each then reads the approval row and acts only on an
+  `allow_once` the signed-in owner made (`decided_by = user`), so a channel, hook or device answer
+  never sends a change (the boot area also skips `channel:` and `device:` deciders outright). The
+  out-of-band area withdraws its waiting cards on `settings.changed` turning `devices.oob.enabled`
+  off; the browser area stops running fallback sessions (`reason: disabled`) on `settings.changed`
+  turning `browser.localFallback` off. Device revocation reaches the firmware (the BIOS password
+  leaves the vault), boot (requests and trials fail, the PXE token stops) and browser areas
+  (consents and bridge grants are revoked) through the devices service's own revocation hook, not
+  through an event.
 - Ordering is per-correlation; global order is not guaranteed. Consumers must be idempotent.
 
 ## Backpressure

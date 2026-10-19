@@ -5,11 +5,18 @@
 //! a Wake Helper (FR-138).
 
 mod agent;
+mod authz;
+mod boot;
+#[cfg(unix)]
+mod bridge;
+mod browser;
 mod capabilities;
 mod cli;
 mod crypto;
 mod diff;
+mod egress;
 mod exec;
+mod firmware;
 mod fsops;
 mod grants;
 mod hardening;
@@ -17,6 +24,7 @@ mod http;
 mod install;
 mod local_runtime;
 mod mcp;
+mod mgmt_tls;
 mod module;
 mod paths;
 mod power;
@@ -24,10 +32,13 @@ mod procs;
 mod state;
 mod supervisor;
 mod tls;
+mod uninstall;
 mod update;
 #[cfg(unix)]
 mod user_socket;
 mod util;
+#[cfg(unix)]
+mod ws;
 
 use cli::Command;
 use serde_json::json;
@@ -64,6 +75,16 @@ USAGE:
   novad access list | approve ID | deny ID [--data-dir DIR]
   novad wol status | plan | enable [--apply] [--data-dir DIR]
   novad service-unit [--exec PATH] [--platform linux|macos|windows] [--data-dir DIR]
+  novad uninstall [--purge] [--data-dir DIR]
+      Stop and remove the service and the installed binary, and wipe this device's key,
+      credentials, certificate and Hub trust (root needed when a service is installed).
+      --purge also deletes the data folder. Remove the device on the Hub as well.
+  novad bridge enable|disable [--data-dir DIR]
+      Run as yourself, not root: connect your own Chromium-family browser to this device's
+      novad through Nova's extension (writes only Nova's native-messaging manifest and a
+      token in ~/.config/nova), or remove both again.
+  novad bridge-host
+      The native-messaging host the browser starts for the extension (not run by hand).
 
 An https:// Hub is trusted through the pinned fingerprint: the Hub's signed identity statement
 must vouch for the certificate it shows, and the device certificate the approval granted is
@@ -145,6 +166,22 @@ fn run(cmd: Command) -> ExitCode {
             print!("{text}");
             ExitCode::SUCCESS
         }
+        Command::Uninstall { purge, data_dir } => {
+            let data = state::DataDir(PathBuf::from(data_dir));
+            match uninstall::run(&data, purge, &install::ServiceSetup::system(), hardening::is_root(), &user_socket::SystemUsers) {
+                Ok(v) => print_json(&v),
+                Err(e) => fail(e),
+            }
+        }
+        #[cfg(unix)]
+        Command::Bridge { action, data_dir } => match bridge::cli(&action, &data_dir, &exe()) {
+            Ok(v) => print_json(&v),
+            Err(e) => fail(e),
+        },
+        #[cfg(unix)]
+        Command::BridgeHost { origin } => ExitCode::from(bridge::host_main(origin) as u8),
+        #[cfg(not(unix))]
+        Command::Bridge { .. } | Command::BridgeHost { .. } => fail("the extension bridge needs a Unix socket; it is not built for this system"),
         Command::Install(a) => match install::run(&a, &install::Env::system(exe())) {
             Ok(_) => ExitCode::SUCCESS,
             Err(e) => fail(e),

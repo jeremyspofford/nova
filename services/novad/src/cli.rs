@@ -11,6 +11,9 @@
 //!   novad access list|approve ID|deny ID [--data-dir D]
 //!   novad wol status|plan|enable [--apply] [--data-dir D]
 //!   novad service-unit [--exec PATH] [--platform linux|macos|windows] [--data-dir D]
+//!   novad uninstall [--purge] [--data-dir D]
+//!   novad bridge enable|disable [--data-dir D]
+//!   novad bridge-host [ORIGIN]   (also: novad chrome-extension://ID/, as a browser starts it)
 
 pub const DEFAULT_DATA_DIR: &str = "/var/lib/nova";
 pub const DEFAULT_LISTEN: &str = "0.0.0.0:7420";
@@ -26,6 +29,12 @@ pub enum Command {
     Access { action: String, id: Option<String>, data_dir: String },
     Wol { action: String, apply: bool, data_dir: String },
     ServiceUnit { exec: String, platform: String, data_dir: String },
+    /// Remove the service and the device's identity; `purge` also deletes the data folder (docs/23 §11).
+    Uninstall { purge: bool, data_dir: String },
+    /// The extension bridge for the user who runs it (FR-096): `enable` or `disable`.
+    Bridge { action: String, data_dir: String },
+    /// The native-messaging host the browser starts (FR-096); `origin` is the extension's.
+    BridgeHost { origin: Option<String> },
     Help,
 }
 
@@ -145,7 +154,7 @@ pub fn parse_with(args: &[String], env: &dyn Fn(&str) -> Option<String>, stdin_l
                 continue;
             }
             if a.starts_with("--") {
-                skip = !a.contains('=') && !matches!(a.as_str(), "--apply" | "--sign" | "--dry-run" | "--no-service");
+                skip = !a.contains('=') && !matches!(a.as_str(), "--apply" | "--sign" | "--dry-run" | "--no-service" | "--purge");
                 continue;
             }
             if seen == n {
@@ -171,8 +180,21 @@ pub fn parse_with(args: &[String], env: &dyn Fn(&str) -> Option<String>, stdin_l
         list.dedup();
         Ok(list)
     };
+    // A browser starts the native-messaging host with the extension's origin as its argument.
+    if cmd.starts_with("chrome-extension://") {
+        return Ok(Command::BridgeHost { origin: Some(cmd.clone()) });
+    }
     match cmd.as_str() {
         "version" | "--version" | "-V" => Ok(Command::Version),
+        "uninstall" => Ok(Command::Uninstall { purge: flag("--purge"), data_dir: data_dir() }),
+        "bridge" => {
+            let action = positional(0).ok_or("bridge needs enable or disable")?;
+            if !matches!(action.as_str(), "enable" | "disable") {
+                return Err(format!("unknown bridge action: {action}"));
+            }
+            Ok(Command::Bridge { action, data_dir: data_dir() })
+        }
+        "bridge-host" => Ok(Command::BridgeHost { origin: positional(0).filter(|o| o.starts_with("chrome-extension://")) }),
         "help" | "--help" | "-h" => Ok(Command::Help),
         "capabilities" => {
             let roles = all("--role");
@@ -331,7 +353,8 @@ pub fn parse_with(args: &[String], env: &dyn Fn(&str) -> Option<String>, stdin_l
 
 /// systemd unit for the supervisor (docs/23 §5.1: Restart=always), hardened. Home folders stay
 /// writable for the storage module's committed writes (FR-210); credential locations are refused
-/// by novad itself.
+/// by novad itself. The bootloader's folders and EFI variables stay writable for low-level boot
+/// (FR-143: grubenv, the ESP); BIOS settings go through /sys, which ProtectSystem does not touch.
 pub fn systemd_unit(exec: &str, data_dir: &str) -> String {
     format!(
         "[Unit]\n\
@@ -347,6 +370,7 @@ StateDirectory=nova\n\
 StateDirectoryMode=0700\n\
 NoNewPrivileges=yes\n\
 ProtectSystem=full\n\
+ReadWritePaths=-/boot/grub -/boot/grub2 -/boot/efi -/efi -/sys/firmware/efi/efivars\n\
 PrivateTmp=yes\n\
 LimitCORE=0\n\
 UMask=0077\n\
@@ -416,6 +440,16 @@ mod tests {
         assert!(parse(&args(&["access", "approve"])).is_err());
         assert_eq!(parse(&args(&["wol", "enable", "--apply"])).unwrap(), Command::Wol { action: "enable".into(), apply: true, data_dir: DEFAULT_DATA_DIR.into() });
         assert!(parse(&args(&["wol", "reboot"])).is_err());
+        assert_eq!(parse(&args(&["uninstall", "--purge", "--data-dir", "/d"])).unwrap(), Command::Uninstall { purge: true, data_dir: "/d".into() });
+        assert_eq!(parse(&args(&["uninstall"])).unwrap(), Command::Uninstall { purge: false, data_dir: DEFAULT_DATA_DIR.into() });
+        assert_eq!(parse(&args(&["bridge", "enable"])).unwrap(), Command::Bridge { action: "enable".into(), data_dir: DEFAULT_DATA_DIR.into() });
+        assert_eq!(parse(&args(&["bridge", "--data-dir=/d", "disable"])).unwrap(), Command::Bridge { action: "disable".into(), data_dir: "/d".into() });
+        assert!(parse(&args(&["bridge", "open"])).is_err() && parse(&args(&["bridge"])).is_err());
+        // As a browser starts the host: the extension's origin, sometimes a window handle after it.
+        let origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
+        assert_eq!(parse(&args(&[origin, "--parent-window=0"])).unwrap(), Command::BridgeHost { origin: Some(origin.into()) });
+        assert_eq!(parse(&args(&["bridge-host", origin])).unwrap(), Command::BridgeHost { origin: Some(origin.into()) });
+        assert_eq!(parse(&args(&["bridge-host"])).unwrap(), Command::BridgeHost { origin: None });
     }
 
     const PIN: &str = "LXEWQrcmsEQBYnyp-6wy9chTD7GQPMTbAiWHF5IaSIE";
@@ -540,6 +574,14 @@ mod tests {
         assert!(unit.contains("Restart=always"));
         assert!(unit.contains("NoNewPrivileges=yes"));
         assert!(unit.contains("LimitCORE=0"));
+        // Low-level boot (FR-143) writes grubenv under /boot, which ProtectSystem=full makes
+        // read-only; bootctl and efibootmgr write EFI variables. BIOS settings are written under
+        // /sys/class/firmware-attributes, which ProtectSystem leaves alone; nothing here may make
+        // /sys read-only (ProtectKernelTunables) or hide devices.
+        assert!(unit.contains("ReadWritePaths=-/boot/grub -/boot/grub2 -/boot/efi -/efi -/sys/firmware/efi/efivars"));
+        for absent in ["ProtectKernelTunables", "ProtectSystem=strict", "PrivateDevices", "ProtectKernelModules"] {
+            assert!(!unit.contains(absent), "{absent}");
+        }
         let plist = launchd_plist("/usr/local/bin/novad", "/var/lib/nova");
         assert!(plist.contains("<key>KeepAlive</key><true/>"));
         assert!(plist.contains("<string>run</string>"));

@@ -17,6 +17,11 @@ export interface JobManagerOptions {
   attachTimeoutMs?: number;
   /** A finished job is forgotten after this time if nobody streamed it (default 60 s). */
   retainMs?: number;
+  /**
+   * Asked before a job is accepted: an error refuses it (the node's quiet hours or a stopped
+   * `jobs` service, M7.5). Jobs already running are not affected.
+   */
+  gate?: () => NovaError | null;
 }
 
 type Listener = (e: StreamEvent) => void;
@@ -38,6 +43,7 @@ export class JobManager {
   readonly #run: RunJob;
   readonly #attachMs: number;
   readonly #retainMs: number;
+  readonly #gate: (() => NovaError | null) | null;
   readonly #jobs = new Map<string, Job>();
   readonly #queue: Job[] = [];
   #running = 0;
@@ -49,6 +55,7 @@ export class JobManager {
     this.maxQueue = Math.max(0, opts.maxQueue ?? 4);
     this.#attachMs = opts.attachTimeoutMs ?? 30_000;
     this.#retainMs = opts.retainMs ?? 60_000;
+    this.#gate = opts.gate ?? null;
   }
 
   load(): { running: number; queued: number } {
@@ -58,6 +65,8 @@ export class JobManager {
   /** Accept a job, or throw `rate_limited` when the node is full. */
   submit(request: ChatJobRequest): string {
     if (this.#closed) throw new NovaError('node_unavailable', 'the node is shutting down');
+    const refused = this.#gate?.();
+    if (refused) throw refused;
     if (this.#running >= this.maxConcurrentJobs && this.#queue.length >= this.maxQueue) {
       throw new NovaError('rate_limited', 'the node is busy; try again shortly', {
         details: { ...this.load(), maxConcurrentJobs: this.maxConcurrentJobs },
@@ -124,6 +133,11 @@ export class JobManager {
 
   has(id: string): boolean {
     return this.#jobs.has(id);
+  }
+
+  /** Cancel every running and waiting job (a `jobs` restart); new jobs are still taken. */
+  cancelAll(): void {
+    for (const id of [...this.#jobs.keys()]) this.cancel(id);
   }
 
   /** Cancel everything and refuse new jobs. */

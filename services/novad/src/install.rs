@@ -519,6 +519,8 @@ pub struct Env {
     /// Root (installing the service needs it).
     pub elevated: bool,
     pub hostname: Option<String>,
+    /// Make the dedicated browser users (as root, for a client; FR-209); the users made.
+    pub browser_users: Box<dyn Fn() -> Result<Vec<String>, String>>,
 }
 
 impl Env {
@@ -533,6 +535,7 @@ impl Env {
             service: ServiceSetup::system(),
             elevated: crate::hardening::is_root(),
             hostname: crate::capabilities::Probe::current().hostname,
+            browser_users: Box::new(|| crate::browser::ensure_users(&crate::power::SystemRunner, &crate::user_socket::SystemUsers)),
         }
     }
 }
@@ -617,8 +620,18 @@ pub fn run(a: &InstallArgs, env: &Env) -> Result<Value, String> {
     }
     tls.trust().save(&data.path().join(crate::tls::TRUST_FILE)).map_err(|e| e.to_string())?;
     let registered = crate::agent::register(&data, &enroll, env.exe.clone())?;
+    // With the granted certificate the endpoint registered is the https one (D1): report what the
+    // Hub was told, not the address asked for.
+    let endpoint = registered["endpoint"].as_str().map_or(endpoint, str::to_string);
     println!("Registered as device {} ({endpoint})", registered["deviceId"].as_str().unwrap_or("?"));
     let mut out = json!({ "deviceId": registered["deviceId"], "name": name, "endpoint": endpoint, "service": Value::Null });
+    // A client's local browser runs as dedicated users, never root or nobody (FR-209).
+    if env.elevated && a.roles.iter().any(|r| r == "client") {
+        match (env.browser_users)() {
+            Ok(made) => out["browserUsers"] = json!(made),
+            Err(e) => println!("The local browser stays off until its users exist: {e}"),
+        }
+    }
     if !a.no_service {
         let ran = env.service.install(&binary, &build.sha256, &a.data_dir).map_err(|e| format!("registered, but the service could not be installed: {e}; start it with `novad run --data-dir {}`", a.data_dir))?;
         println!("Service installed and started");
@@ -892,6 +905,7 @@ mod tests {
             service: ServiceSetup { platform: "linux", bin_path: base.join("bin/novad"), unit_path: base.join("units/novad.service"), runner: Box::new(runner) },
             elevated: false,
             hostname: Some("host".into()),
+            browser_users: Box::new(|| Ok(vec!["nova-browser1".into(), "nova-browser2".into()])),
         }
     }
 
@@ -911,7 +925,8 @@ mod tests {
         assert!(DataDir(data.clone()).granted_scopes().is_empty());
         assert!(!data.join("scopes.json").exists());
         assert_eq!(out["deviceId"], "dev-1");
-        assert_eq!(out["endpoint"], "http://127.0.0.1:7499");
+        // What it reports is what it registered (the https endpoint below), not the address asked for.
+        assert_eq!(out["endpoint"], "https://127.0.0.1:7499");
         let st = hub.state.lock().unwrap();
         assert_eq!(st.polls, 2, "a pending poll, then the approval");
         assert_eq!(st.bad_signatures, 0, "the reveal and every poll were signed with the device key at the Hub's time, each newer");
@@ -920,7 +935,8 @@ mod tests {
         let reg = st.registered.clone().unwrap();
         assert_eq!(reg["publicKey"].as_str(), st.device_key.as_deref());
         assert_eq!(reg["name"], "box");
-        assert_eq!(reg["endpoint"], "http://127.0.0.1:7499");
+        // The grant carried a device certificate: the management channel is mutual TLS (D1).
+        assert_eq!(reg["endpoint"], "https://127.0.0.1:7499");
         let d = DataDir(data.clone());
         assert_eq!(d.public_key().unwrap(), st.device_key.clone().unwrap());
         let dev = d.device().unwrap().unwrap();
@@ -1154,6 +1170,7 @@ mod tests {
         e.elevated = true;
         let out = run(&a, &e).unwrap();
         assert_eq!(out["service"]["ran"], json!(["systemctl daemon-reload", "systemctl enable --now novad.service"]));
+        assert_eq!(out["browserUsers"], Value::Null, "not a client: no browser users");
         let bin = base.join("bin/novad");
         assert_eq!(std::fs::read(&bin).unwrap(), BINARY);
         use std::os::unix::fs::PermissionsExt;
@@ -1170,6 +1187,19 @@ mod tests {
         let ran = win.install(BINARY, &sha(BINARY), "C:\\ProgramData\\Nova").unwrap();
         assert!(ran[0].starts_with("sc.exe create novad binPath= "), "{}", ran[0]);
         assert_eq!(ran[2], "sc.exe start novad");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_client_installed_as_root_gets_its_browser_users() {
+        let base = tmp("service-client");
+        let hub = fake_hub(&sha(BINARY));
+        let mut a = args(&hub, &base.join("data"));
+        a.roles = vec!["client".into()];
+        a.no_service = false;
+        let mut e = env(&base, BINARY, FakeRunner::default());
+        e.elevated = true;
+        assert_eq!(run(&a, &e).unwrap()["browserUsers"], json!(["nova-browser1", "nova-browser2"]));
         std::fs::remove_dir_all(&base).unwrap();
     }
 

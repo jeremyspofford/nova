@@ -25,9 +25,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import type { TLSSocket } from 'node:tls';
 import { dirname, join } from 'node:path';
 import { canonicalPath, pathAccess, within } from '@nova/policy';
 import { canonicalJson } from '../nodes/crypto.ts';
+import { MemoryReplayStore, verifyDeviceAuthorization } from '../firmware/authz.ts';
 import { MANAGEMENT_TOKEN_PREFIX } from './protocol.ts';
 
 export interface FakeDeviceOptions {
@@ -48,6 +51,13 @@ export interface FakeDeviceOptions {
   exec?: (
     spec: Record<string, unknown>,
   ) => Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }>;
+  /**
+   * The Hub identity key the device pinned (raw Ed25519, base64url): privileged requests
+   * (decommission, D2) must carry an authorization it signed. Without it they are refused.
+   */
+  hubKey?: string | null;
+  /** The device's clock for authorization windows (tests share the Hub's simulated one). */
+  now?: () => Date;
   /** Local MCP servers: name -> tools and a call handler. */
   mcp?: Record<
     string,
@@ -229,6 +239,16 @@ export class FakeDevice {
   deviceId: string | null = null;
   credential: string | null = null;
   revoked = false;
+  /**
+   * The device-side toggles (`policy.json`, D3): from heartbeat answers and `/agent/v1/config`;
+   * only `true` turns one on, an absent one keeps its value.
+   */
+  privileged = { firmwareChanges: false, lowLevelBoot: false };
+  /** Set by an accepted `/agent/v1/decommission` (D9): what it was told to do. */
+  decommissioned: { purge: boolean } | null = null;
+  /** The client certificates seen on the HTTPS listener (D1), newest last. */
+  readonly clientCerts: string[] = [];
+  readonly #replay = new MemoryReplayStore();
   #server: Server | null = null;
   #endpoint: string | null = null;
 
@@ -302,6 +322,40 @@ export class FakeDevice {
     return this.#endpoint;
   }
 
+  /** The device's own key, for a device certificate test (PKCS#8 PEM). */
+  privateKeyPem(): string {
+    return this.#privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  }
+
+  /**
+   * Serve the management API over HTTPS with a device certificate (ADR-096 D1), as novad does
+   * once it holds one: the Hub must present a client certificate chaining to `caPem`. The
+   * endpoint becomes `https://127.0.0.1:<port>`.
+   */
+  async listenTls(opts: { certPem: string; caPem: string }): Promise<string> {
+    await this.close();
+    const server = createHttpsServer(
+      {
+        key: this.privateKeyPem(),
+        cert: opts.certPem,
+        ca: opts.caPem,
+        requestCert: true,
+        rejectUnauthorized: true,
+        minVersion: 'TLSv1.3',
+      },
+      (req, res) => {
+        const peer = (req.socket as TLSSocket).getPeerX509Certificate?.();
+        if (peer) this.clientCerts.push(peer.toString());
+        void this.#handle(req, res);
+      },
+    );
+    this.#server = server;
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const addr = server.address() as { port: number };
+    this.#endpoint = `https://127.0.0.1:${addr.port}`;
+    return this.#endpoint;
+  }
+
   async close(): Promise<void> {
     if (!this.#server) return;
     this.#server.closeAllConnections();
@@ -348,14 +402,21 @@ export class FakeDevice {
     return r.json;
   }
 
-  /** One heartbeat with module reports, queued events and device-side decisions. */
-  async heartbeat(): Promise<{ status: number; json: Record<string, unknown> }> {
+  /**
+   * One heartbeat with module reports, queued events and device-side decisions; `endpoint`
+   * reports the management endpoint (D1: novad sends its https endpoint once it holds a
+   * certificate).
+   */
+  async heartbeat(
+    opts: { endpoint?: string } = {},
+  ): Promise<{ status: number; json: Record<string, unknown> }> {
     if (!this.credential) throw new Error('not enrolled');
     const decisions = this.requests.filter((r) => r.status !== 'pending' && !r.reported);
     const r = await this.#post(
       '/agent/v1/heartbeat',
       {
         novadVersion: this.novadVersion,
+        ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
         modules: this.moduleReports(),
         events: this.events.splice(0),
         accessDecisions: decisions.map((d) => ({ ...d })),
@@ -364,6 +425,7 @@ export class FakeDevice {
       this.credential,
     );
     if (r.status === 200) for (const d of decisions) d.reported = true;
+    if (r.status === 200) this.#takeToggles(r.json.policy);
     if (r.status === 401) this.revoked = true;
     return r;
   }
@@ -377,6 +439,15 @@ export class FakeDevice {
       this.credential,
     );
     return r.status;
+  }
+
+  #takeToggles(p: unknown): void {
+    if (typeof p !== 'object' || p === null) return;
+    const v = p as Record<string, unknown>;
+    if (v.firmwareChanges !== undefined && v.firmwareChanges !== null)
+      this.privileged.firmwareChanges = v.firmwareChanges === true;
+    if (v.lowLevelBoot !== undefined && v.lowLevelBoot !== null)
+      this.privileged.lowLevelBoot = v.lowLevelBoot === true;
   }
 
   moduleReports(): Record<string, unknown>[] {
@@ -523,6 +594,20 @@ export class FakeDevice {
       }
       case 'services': {
         const [, name = '', action] = parts;
+        // `POST /agent/v1/services`: the declared services (M7.5).
+        if (!name)
+          return {
+            services: this.modules.has('compute')
+              ? [
+                  {
+                    name: 'compute',
+                    kind: 'module',
+                    module: 'compute',
+                    state: this.#module('compute').state,
+                  },
+                ]
+              : [],
+          };
         if (name !== 'compute')
           throw new OpError(404, 'not_found', `no managed service named ${name}`);
         const m = this.#module('compute');
@@ -564,7 +649,13 @@ export class FakeDevice {
       case 'config': {
         if (body.capabilityOverrides)
           this.hubConfig.capabilityOverrides = body.capabilityOverrides as Record<string, unknown>;
-        if (body.policy) this.hubConfig.policy = body.policy as Record<string, unknown>;
+        if (body.policy && typeof body.policy === 'object') {
+          // Like novad (M7.5): the two toggles are taken from `policy`; any other field replaces
+          // the per-device policy, so toggles sent alone leave it as it was.
+          const { firmwareChanges, lowLevelBoot, ...rest } = body.policy as Record<string, unknown>;
+          this.#takeToggles({ firmwareChanges, lowLevelBoot });
+          if (Object.keys(rest).length) this.hubConfig.policy = rest;
+        }
         if (typeof body.updateChannel === 'string')
           this.hubConfig.updateChannel = body.updateChannel;
         this.hubConfig.revision =
@@ -577,6 +668,7 @@ export class FakeDevice {
           signature: this.sign(capability),
           revision: this.hubConfig.revision,
           modules: this.moduleReports(),
+          policy: { ...this.privileged },
         };
       }
       case 'fs':
@@ -620,6 +712,30 @@ export class FakeDevice {
       }
       case 'firmware':
         throw new OpError(403, 'firmware_disabled', 'firmware changes are off (FR-146)');
+      case 'decommission': {
+        // D9 with D2: only with an authorization the pinned Hub key signed for this device.
+        const verdict = this.#opts.hubKey
+          ? verifyDeviceAuthorization({
+              authorization: body.authorization,
+              publicKey: this.#opts.hubKey,
+              deviceId: this.deviceId ?? '',
+              kind: 'device.decommission',
+              body,
+              replay: this.#replay,
+              ...(this.#opts.now ? { now: this.#opts.now() } : {}),
+            })
+          : ({ ok: false, reason: 'authorization_invalid', message: 'no pinned Hub key' } as const);
+        if (!verdict.ok)
+          throw new OpError(
+            verdict.reason === 'replayed' ? 409 : 403,
+            verdict.reason === 'replayed' ? 'conflict' : 'policy_denied',
+            verdict.message,
+            { reason: verdict.reason },
+          );
+        this.decommissioned = { purge: body.purge === true };
+        for (const m of this.modules.values()) m.state = 'stopped';
+        return { decommissioned: true, purge: body.purge === true };
+      }
       default:
         throw new OpError(404, 'not_found', 'unknown management route');
     }

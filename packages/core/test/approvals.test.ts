@@ -219,6 +219,7 @@ describe('approval rows', () => {
     ruleId: null,
     ruleLabel: null,
     alwaysAllowManaged: false,
+    answerIn: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...over,
   });
@@ -339,6 +340,19 @@ describe('approval rows', () => {
     expect(await store.getApproval(ACCOUNT, 'w')).toMatchObject({
       runId: null,
       threadTitle: null,
+    });
+  });
+
+  it('maps the scope and the Hub-only answer place to the view', async () => {
+    expect(approvalView(row({ scope: 'device:d1', answerIn: 'hub' }))).toMatchObject({
+      scope: 'device:d1',
+      answerIn: 'hub',
+    });
+    expect(approvalView(row({ scope: null }))).toMatchObject({ scope: null, answerIn: null });
+    await store.insertApproval(row({ id: 'dv', scope: 'device:d9', answerIn: 'hub' }));
+    expect(await store.getApproval(ACCOUNT, 'dv')).toMatchObject({
+      scope: 'device:d9',
+      answerIn: 'hub',
     });
   });
 

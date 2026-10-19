@@ -353,6 +353,16 @@
 .ws-log-module {
   color: var(--u-text-muted);
 }
+.ws-audit-change {
+  overflow-wrap: anywhere;
+}
+.ws-audit-detail {
+  width: 100%;
+  min-width: 0;
+}
+.ws-audit-detail > .ws-log {
+  max-height: 200px;
+}
 .ws-check {
   display: inline-flex;
   align-items: center;

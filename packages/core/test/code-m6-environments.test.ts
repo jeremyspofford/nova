@@ -185,7 +185,8 @@ describe('saved environments', () => {
     });
     // An environment in use cannot be removed.
     await expect(reason(e.svc.envs.remove(ACCOUNT, v.id))).resolves.toBe('conflict:in_use');
-  });
+    // Every remote file operation runs a helper process: slow when every package tests at once.
+  }, 30_000);
 
   it('never offers Bypass in an SSH environment: Nova has no sandbox there (FR-063)', async () => {
     e = await makeCodeM6Env({ values: { 'code.allowBypass': true } });

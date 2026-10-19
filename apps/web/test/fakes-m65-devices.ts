@@ -45,7 +45,7 @@ import type { AddDeviceApi, AddDeviceStarted } from '../src/devices/api.ts';
 import { AnnouncerProvider, ServicesProvider } from '../src/services.tsx';
 import { SettingsProvider } from '../src/settings.tsx';
 import { DONE_ONBOARDING, createHub, fakeEventSource, testRegistry } from './fakes.ts';
-import { createDevicesHub, type M6DevicesState } from './fakes-m6-devices.ts';
+import { createDevicesHub, m6DevicesState, type M6DevicesState } from './fakes-m6-devices.ts';
 
 const T0 = '2026-10-01T12:00:00.000Z';
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -724,8 +724,13 @@ export type AddDeviceMocks = AddDeviceApi &
   Record<keyof AddDeviceApi, Mock<(...args: never[]) => unknown>>;
 
 /** A standalone fake over the M6 devices state: every method a spy. */
-export function createAddDeviceHub(init: Partial<M65DevicesState>, m6: M6DevicesState) {
-  const state = m65DevicesState(init);
+export function createAddDeviceHub(
+  init: Partial<M65DevicesState>,
+  m6: M6DevicesState,
+  /** A state to use instead of a new one (the main fake Hub's, so every part sees one). */
+  given?: M65DevicesState,
+) {
+  const state = given ?? m65DevicesState(init);
   const failNext: Partial<Record<keyof AddDeviceApi, Error>> = {};
   const impl = m65DevicesImpl(state, {
     m6,
@@ -762,18 +767,27 @@ export async function renderWithAllDevices(
     omit?: string[];
   } = {},
 ) {
-  const hub = createHub();
+  // One devices state for the main fake Hub and these parts: the Hub's other areas that read
+  // devices (M7.5 device operations and out-of-band) see the same ones.
+  const hub = createHub({
+    m6devices: m6DevicesState(opts.devices),
+    m65devices: m65DevicesState(opts.added ?? {}),
+  });
   hub.state.settings = { 'onboarding.state': DONE_ONBOARDING, ...opts.settings };
   hub.state.managed = { ...opts.managed };
-  const devices = createDevicesHub(opts.devices, {
-    approvals: {
-      list: () => hub.state.m3.approvals,
-      add: (a) => {
-        hub.state.m3.approvals = [...hub.state.m3.approvals, a];
+  const devices = createDevicesHub(
+    {},
+    {
+      approvals: {
+        list: () => hub.state.m3.approvals,
+        add: (a) => {
+          hub.state.m3.approvals = [...hub.state.m3.approvals, a];
+        },
       },
+      state: hub.state.m6devices,
     },
-  });
-  const added = createAddDeviceHub(opts.added ?? {}, devices.state);
+  );
+  const added = createAddDeviceHub({}, devices.state, hub.state.m65devices);
   Object.assign(added.failNext, opts.fail);
   const api = { ...hub.api, ...devices.api, ...added.api };
   for (const name of opts.omit ?? []) delete (api as Record<string, unknown>)[name];

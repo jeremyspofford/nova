@@ -1,6 +1,7 @@
 // The node's job API (contracts/hub-api.md §2, FR-126): called only by the Hub, every request
 // bearing the node's job token. Browsers are refused outright (any Origin header), so a web page
-// on the LAN cannot drive the node even if it learned the address.
+// on the LAN cannot drive the node even if it learned the address. M7.5: the node's managed
+// services (`GET /node/v1/services`, `POST /node/v1/services/:name/{start,stop,restart,status}`).
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { NovaError, httpStatusFor, isNovaError } from '@nova/shared';
@@ -9,6 +10,7 @@ import type { Logger } from '@nova/telemetry';
 import { tokenMatches } from './identity.ts';
 import type { JobManager } from './jobs.ts';
 import { parseJob } from './protocol.ts';
+import type { NodeServices } from './services.ts';
 
 export const COMPUTE_NODE_VERSION = '0.0.0';
 
@@ -21,9 +23,15 @@ export interface JobServerOptions {
   keepAliveMs?: number;
   /** Largest job body; requests carry base64 images (default 64 MB). */
   bodyLimit?: number;
+  /** The node's managed services; without them the service routes are 404. */
+  services?: NodeServices;
 }
 
 const params = z.object({ id: z.string().min(1).max(100) });
+const serviceParams = z.object({
+  name: z.string().min(1).max(50),
+  action: z.enum(['start', 'stop', 'restart', 'status']),
+});
 
 export function buildJobServer(opts: JobServerOptions): FastifyInstance {
   const { jobs, log } = opts;
@@ -94,6 +102,18 @@ export function buildJobServer(opts: JobServerOptions): FastifyInstance {
     maxConcurrentJobs: jobs.maxConcurrentJobs,
     maxQueue: jobs.maxQueue,
   }));
+
+  const services = opts.services;
+  if (services) {
+    app.get('/node/v1/services', async () => ({ services: await services.list() }));
+    app.post('/node/v1/services/:name/:action', async (req) => {
+      const p = serviceParams.parse(req.params);
+      const service = await services.act(p.name, p.action);
+      if (p.action !== 'status')
+        log.info('service changed by the Hub', { service: p.name, action: p.action });
+      return { service };
+    });
+  }
 
   app.post('/node/v1/jobs', (req, reply) => {
     const request = parseJob(req.body);

@@ -47,6 +47,8 @@ nova-compute run
 | `--advertise` | LAN address + port | The URL the Hub calls |
 | `--max-jobs` | `1` | Jobs run at once; up to 4 more wait, beyond that the node answers busy |
 | `--pin` | none | The Hub fingerprint from Add Device; needed to trust an `https://` Hub's own CA (below) |
+| `--quiet-hours` | none | `HH:MM-HH:MM` ranges, comma separated, in this machine's zone: no new jobs then (M7.5) |
+| `--backend-unit` | none | The systemd unit running the model server; the Hub may then start, stop and restart it |
 | `--pairing` | none | The pairing id from the QR payload or the install command (with `--code`) |
 | `--data-dir` | `$NOVA_COMPUTE_DATA_DIR`, else `$XDG_DATA_HOME/nova-compute` | State directory |
 
@@ -91,11 +93,29 @@ refuses the certificate (`certificate_revoked`, …) is logged; the node keeps i
   (compared in constant time); requests carrying an `Origin` header (browsers) are refused. A job
   is cancelled, and its backend request aborted, when the Hub cancels it or disconnects.
 
+## GPU memory, quiet hours and services (M7.5, FR-126)
+
+- **VRAM.** `nvidia-smi` or `rocm-smi`, when installed, is read without a shell (`src/vram.ts`):
+  each GPU's total memory goes into the signed document (`hardware.gpus[].vramBytes`) and every
+  heartbeat carries `vram: [{index, vendor, name, totalBytes, usedBytes}]`. Nothing is guessed
+  when neither tool answers.
+- **Quiet hours.** New jobs are refused with 503 `node_unavailable` `{reason: quiet_hours}` in the
+  operator's own hours (`--quiet-hours`, declared as `scheduling.quietHours`, read in the zone the
+  document declares as `locale.timezone`) and in the owner's: every heartbeat answer carries the
+  Hub's policy for the node `{quietHours, timeZone, routingEligible, revision}`, kept in the state
+  file. Running jobs finish; each heartbeat reports `quiet`.
+- **Services.** `GET /node/v1/services` and `POST /node/v1/services/:name/{start,stop,restart,status}`
+  (job token, like the job API): `jobs` (stopped, new jobs get `{reason: jobs_stopped}`; restart
+  cancels what runs) and `backend`, only with `--backend-unit` (`systemctl` with the unit name
+  after `--`; otherwise 409 `{reason: not_managed}`). Any other name is 404.
+
 ## Library
 
 Everything the CLI does is exported for tests and embedding: `enroll`, `joinWithCode` (with
 `addDeviceCommitment`, `addDeviceConfirmation`, `signAddDeviceReveal`, `signAddDeviceStatus`,
 `verifyHubReveal`, `hubKeyFingerprint` and `normalizeAddDeviceCode`), `ComputeNode`,
 `buildJobServer`, `JobManager`, `Backend`, `buildCapability`, `signDocument`, `HubTls` (with
-`checkStatement` and `learnCaOverHttp`), and `startFakeBackend`, a scripted OpenAI-compatible
-server for offline tests and demos.
+`checkStatement` and `learnCaOverHttp`), `NodeServices` (with `systemctlController` and
+`fakeUnitController`), the VRAM probes (`detectVramProbe`, `nvidiaSmiProbe`, `rocmSmiProbe`,
+`fakeVramProbe`), and `startFakeBackend`, a scripted OpenAI-compatible server for offline tests
+and demos.

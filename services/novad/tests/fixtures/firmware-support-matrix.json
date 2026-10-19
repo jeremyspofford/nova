@@ -1,0 +1,54 @@
+[
+  {
+    "vendor": "dell",
+    "method": "firmware-attributes",
+    "driver": "dell-wmi-sysman",
+    "supported": true,
+    "keys": {
+      "wol": "WakeOnLan",
+      "powerOnAfterPowerLoss": "AcPwrRcvry",
+      "virtualization": "Virtualization",
+      "secureBoot": "SecureBoot",
+      "tpm": "TpmSecurity",
+      "fanProfile": "ThermalManagement"
+    }
+  },
+  {
+    "vendor": "lenovo",
+    "method": "firmware-attributes",
+    "driver": "thinklmi",
+    "supported": true,
+    "keys": {
+      "wol": "WakeOnLAN",
+      "powerOnAfterPowerLoss": "AfterPowerLoss",
+      "bootOrder": "BootOrder",
+      "virtualization": "VirtualizationTechnology",
+      "secureBoot": "SecureBoot",
+      "tpm": "SecurityChip",
+      "fanProfile": "AdaptiveThermalManagementAC"
+    }
+  },
+  {
+    "vendor": "hp",
+    "method": "firmware-attributes",
+    "driver": "hp-bioscfg",
+    "supported": true,
+    "keys": {
+      "wol": "Wake On LAN",
+      "powerOnAfterPowerLoss": "After Power Loss",
+      "bootOrder": "UEFI Boot Order",
+      "virtualization": "Virtualization Technology (VTx)",
+      "secureBoot": "Secure Boot",
+      "tpm": "TPM State"
+    }
+  },
+  { "vendor": "asus", "method": null, "driver": null, "supported": false, "keys": {} },
+  { "vendor": "supermicro", "method": null, "driver": null, "supported": false, "keys": {} },
+  {
+    "vendor": "generic-uefi",
+    "method": "efibootmgr",
+    "driver": null,
+    "supported": true,
+    "keys": { "bootOrder": "BootOrder" }
+  }
+]

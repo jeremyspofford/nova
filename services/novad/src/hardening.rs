@@ -142,6 +142,40 @@ impl Limits {
     }
 }
 
+/// Start a child that must outlive the request that asked for it (a module, a Code process, a
+/// browser). Every hardened child gets the kernel's parent-death signal, and Linux sends it when
+/// the *thread* that forked the child exits, not the process: a child spawned on a request's
+/// thread would be killed as soon as that request returned. So these are spawned on one thread
+/// that lives as long as novad. A program written a moment ago can still be open for writing in a
+/// process forked meanwhile (ETXTBSY); that clears within milliseconds, so it is retried.
+pub fn spawn_kept(cmd: Command) -> std::io::Result<std::process::Child> {
+    use std::sync::{Mutex, OnceLock, mpsc};
+    type Job = (Command, mpsc::Sender<std::io::Result<std::process::Child>>);
+    static TX: OnceLock<Mutex<mpsc::Sender<Job>>> = OnceLock::new();
+    let tx = TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let _ = std::thread::Builder::new().name("novad-spawner".into()).spawn(move || {
+            for (mut cmd, back) in rx {
+                let mut tries = 0;
+                let r = loop {
+                    match cmd.spawn() {
+                        Err(e) if e.raw_os_error() == Some(26) && tries < 10 => {
+                            tries += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        r => break r,
+                    }
+                };
+                let _ = back.send(r);
+            }
+        });
+        Mutex::new(tx)
+    });
+    let (back, answer) = mpsc::channel();
+    tx.lock().unwrap_or_else(|p| p.into_inner()).send((cmd, back)).map_err(|_| std::io::Error::other("the spawner thread is gone"))?;
+    answer.recv().map_err(|_| std::io::Error::other("the spawner thread is gone"))?
+}
+
 /// Prepare a command for a hardened child: cleared environment (allowlist plus `extra`), and on
 /// Linux, in the child before exec: core dumps off, no new privileges, killed when novad dies,
 /// and the resource caps.
@@ -220,6 +254,47 @@ mod tests {
         let out = String::from_utf8(cmd.output().unwrap().stdout).unwrap();
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines, vec!["0", "64"]);
+    }
+
+    /// The parent-death signal follows the thread that forked: a child spawned through
+    /// `spawn_kept` from a thread that then ends keeps running.
+    #[test]
+    fn kept_children_outlive_the_thread_that_asked() {
+        let kept = std::thread::spawn(|| {
+            let mut cmd = Command::new("/bin/sh");
+            cmd.args(["-c", "sleep 30"]);
+            harden_command(&mut cmd, &[], Limits::default());
+            spawn_kept(cmd).unwrap()
+        })
+        .join()
+        .unwrap();
+        #[cfg(target_os = "linux")]
+        let direct = std::thread::spawn(|| {
+            let mut cmd = Command::new("/bin/sh");
+            cmd.args(["-c", "sleep 30"]);
+            harden_command(&mut cmd, &[], Limits::default());
+            cmd.spawn().unwrap()
+        })
+        .join()
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let mut kept = kept;
+        assert!(kept.try_wait().unwrap().is_none(), "still running");
+        #[cfg(target_os = "linux")]
+        {
+            // What the bug looked like: spawned on a thread that ended, killed with it.
+            let mut direct = direct;
+            let t0 = std::time::Instant::now();
+            let mut st = direct.try_wait().unwrap();
+            while st.is_none() && t0.elapsed() < std::time::Duration::from_secs(3) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                st = direct.try_wait().unwrap();
+            }
+            use std::os::unix::process::ExitStatusExt;
+            assert_eq!(st.and_then(|s| s.signal()), Some(9));
+        }
+        kept.kill().unwrap();
+        kept.wait().unwrap();
     }
 
     #[test]

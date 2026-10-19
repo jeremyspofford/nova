@@ -28,7 +28,7 @@
           "local-runtime"
         ]
       },
-      "description": "Installed modules (docs/23 §4); capture is the networkless ambient capture helper (FR-228); local-runtime serves this device's local models to local clients (FR-128, M7).",
+      "description": "Installed modules (docs/23 §4); capture is the networkless ambient capture helper (FR-228); local-runtime serves this device's local models to local clients (FR-128, M7); since M7.5 novad lists browser (the local browser fallback and the extension bridge host, FR-209, FR-096) and firmware (listed only when a BIOS backend works on this machine, FR-146).",
       "uniqueItems": true
     },
     "hardware": {

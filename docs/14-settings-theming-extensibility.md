@@ -24,7 +24,7 @@ ignored, and Diagnostics shows a warning naming the key and the project.
 | **Profile & usage** | display name, username, avatar (PNG, JPEG or WebP up to 2 MB, metadata stripped; FR-113), usage insights (§6, FR-114) |
 | **Accounts** | provider accounts, active account per provider kind ("Active <kind> account" when a kind has more than one, FR-115), default model, spend caps; display name moved to Profile & usage in M4 |
 | **Models** | presets from Faster to Smarter (`models.presets`; empty = generated built-ins, FR-221), local model server detection, routing order (`routing.order`, FR-127), allow cloud models (`routing.allowCloud`, security-relevant) |
-| **Devices** | compute nodes: add (one-use enrollment token), status, models, load, revoke (FR-126) |
+| **Devices** | compute nodes: add (one-use enrollment token), status, models, load, revoke (FR-126); **Firmware and boot** (M7.5: the firmware, low-level boot and network boot switches, below) |
 | **Appearance** | theme, accent, background, foreground, uiFont, codeFont, fontSize, density, sidebarWidth, reducedMotion, highContrast; theme export and import with saved themes (`appearance.customThemes`, at most 50, §2.2, FR-011) |
 | **Pets** | enabled, petId, position, size, reactions, mute |
 | **Keyboard** | bindings map, reset, search |
@@ -192,6 +192,49 @@ keys through `/api/v1/team/me/settings` (`docs/13` §7). Security settings never
 | `team.invitationHours` | `72` | yes | How long a new invitation link is valid (1 to 720 hours); each works once |
 | `team.publicProfiles` | `false` | yes | People of this Hub may publish a read-only public profile card (FR-113) |
 | `agents.usageRetryMinutes` | `15` | no | How long an agent's goal stopped by a provider usage limit waits before trying again (1 to 1,440); each failed retry doubles the wait, up to 4 hours (FR-181) |
+
+*Added in M7.5* (ADR-096). The keys are in `packages/shared/src/settings.ts` (the `// ---- M7.5`
+blocks); every one is security-relevant and owner-only. Where each one is shown: Settings →
+Devices → **Firmware and boot** (the two `devices.firmware.*` switches, the "Firmware watchdog"
+`devices.firmware.watchdogSeconds`, `devices.boot.*` and `devices.pxe.enabled`; the firmware
+switches are written through `PUT /api/v1/devices/firmware/policy`, the others through `PATCH
+/api/v1/settings`), Devices →
+Out-of-band (`/devices/oob`, the `devices.oob.enabled` switch, written through `POST
+/api/v1/oob/enable` and `POST /api/v1/oob/disable`) and Settings → Browser (**Continue on your
+computer**: `browser.localFallback` and the sites agreed to; **Your own browser (extension
+bridge)**: the two `browser.extensionBridge*` keys). Managed policy can lock each one.
+
+| Key | Default | Security | Notes |
+| --- | --- | --- | --- |
+| `devices.firmware.allowChanges` | `false` | yes | "Allow BIOS/firmware changes" (FR-146): off, planning, approval and applying are refused (`firmware_disabled`) and devices refuse changes too (the heartbeat answer's `policy.firmwareChanges`); reading a device's settings still works. Also governs out-of-band BIOS plans (FR-147). Turning it on needs `confirm: true` |
+| `devices.firmware.allowSecurityDegrading` | `false` | yes | The separate override for firmware changes that weaken security (Secure Boot or the TPM turned off); without it such a change, rollbacks included, is refused (`policy_denied` `{reason: security_degrading}`) even when approved. Checked at approval and again at apply. Turning it on needs `confirm: true` |
+| `devices.firmware.watchdogSeconds` | `600` | yes | "Firmware watchdog" (FR-146): after a firmware change applied with a restart, how long the device has to come back before its watchdog restores the previous settings (120 to 3,600 s). The Hub sends it as `watchdogSeconds` with every apply that restarts, kept inside that range whatever is stored; an apply without a restart sends none. Separate from the boot watchdog, because a restart into new firmware settings goes through the BIOS start-up |
+| `devices.boot.allowLowLevel` | `false` | yes | Low-level boot changes (FR-143): trying a boot profile once and making it the default, each after the owner's approval. Off, both are refused (`policy_denied` `{reason: low_level_boot_off}`) by the Hub and by devices (`policy.lowLevelBoot`); clearing a pending one-shot always works. Turning it on needs `confirm: true` |
+| `devices.boot.watchdogSeconds` | `600` | yes | How long a device has to come back on a profile it tries (120 to 3,600 s) before it returns to its default entry; the default for a try, which may give its own within the same range. The Hub marks a trial still pending 120 s after its deadline failed |
+| `devices.pxe.enabled` | `false` | yes | Serve iPXE menus and boot images from `<dataDir>/boot-images` to devices holding a boot token; off, both public `/boot/` routes answer 404. It does not need `devices.boot.allowLowLevel`. Nova runs no DHCP or TFTP. Turning it on needs `confirm: true` |
+| `devices.oob.enabled` | `false` | yes | Out-of-band management (FR-147): the Hub reaches the BMCs you register (Redfish, IPMI; Intel AMT is not built) for power, sensors, BIOS pending settings and one-time boot. Turned on only through `POST /api/v1/oob/enable` `{confirm: true}`. Off, actions, pin confirmation and adding or editing a BMC are refused (`oob_disabled`; deleting one still works) and waiting cards are withdrawn |
+| `browser.localFallback` | `true` | yes | When a site blocks an agent's own browser, offer to continue on its connected computer's browser (FR-209); each site needs a consent per agent, computer and site, revocable in Settings → Browser. Turning it off stops running fallback sessions (end reason `disabled`) |
+| `browser.extensionBridge` | `true` | yes | Let agents act in your own browser through the Nova extension, on hosts you granted and tabs you shared (FR-096); off, the bridge refuses every call |
+| `browser.extensionBridgeAllSites` | `true` | yes | Allow the elevated "all sites" grant (it still needs its own confirmation per computer); off, only hosts granted one by one count |
+
+**Consent switches.** Four switches turn on only with an explicit confirmation:
+`devices.firmware.allowChanges`, `devices.firmware.allowSecurityDegrading`,
+`devices.boot.allowLowLevel` and `devices.pxe.enabled`. `PATCH /api/v1/settings` refuses to set
+one of them to `true` without `confirm: true` in the body (403 `policy_denied`
+`{reason: consent_required}`); the Settings page sends it after a dialog that says what the switch
+allows. The firmware pair can also be set through `PUT /api/v1/devices/firmware/policy`, with the
+same rule. `devices.oob.enabled` is never turned on through `PATCH /api/v1/settings` (403
+`policy_denied` `{reason: consent_required}`, audited `device.oob.refuse`): only `POST
+/api/v1/oob/enable` with `{confirm: true}` turns it on. Turning any of them off never asks, by any
+route. A managed value wins over all of these routes.
+
+**Audit of security settings.** Every write of a `security: true` key through the Hub's settings
+writer emits `settings.changed` with `before`, `after` and `confirmed` (true when the change came
+with the owner's explicit confirmation). The settings route, the firmware policy route and
+`POST /api/v1/oob/enable|disable` all write through it (out-of-band enable counts its consent as
+the confirmation). The security audit records each change once, as kind `settings`, action
+`setting.changed`, resource the key, with the same values (`docs/06` §2); no route writes an audit
+entry of its own for the change.
 
 ### 1.2 Settings UI
 

@@ -131,6 +131,11 @@ import { cloudApi } from './cloud/api.ts';
 import { codeM7Api } from './code/api-m7.ts';
 import { flaggedApi } from './flagged/api.ts';
 import { imagesApi } from './images/api.ts';
+import { oobApi } from './oob/api-m75.ts';
+import { deviceOpsApi } from './devices/api-m75.ts';
+import { browserDeviceApi } from './browserdevice/api-m75.ts';
+import { firmwareApi } from './firmware/api-m75.ts';
+import { bootApi } from './boot/api-m75.ts';
 
 export type CreateProjectRequest = z.input<typeof createProjectSchema>;
 export type UpdateProjectRequest = z.input<typeof updateProjectSchema>;
@@ -339,8 +344,13 @@ export function createApi(fetchImpl: Fetch = hubFetch, opts: { offline?: Offline
       ),
     logout: () => call<{ ok: true }>('POST', `${V1}/auth/logout`),
     settings: () => call<{ settings: ResolvedSetting[] }>('GET', `${V1}/settings`),
-    setSetting: (key: string, value: unknown) =>
-      call<{ settings: ResolvedSetting[] }>('PATCH', `${V1}/settings`, { key, value }),
+    // `confirm` only when true: the Hub takes it for the consent switches (ADR-096 D3).
+    setSetting: (key: string, value: unknown, opts: { confirm?: boolean } = {}) =>
+      call<{ settings: ResolvedSetting[] }>('PATCH', `${V1}/settings`, {
+        key,
+        value,
+        ...(opts.confirm ? { confirm: true } : {}),
+      }),
 
     // providers & models (FR-014, FR-023)
     listProviders: () => call<{ items: ProviderAccountView[] }>('GET', `${V1}/providers`),
@@ -775,6 +785,11 @@ export function createApi(fetchImpl: Fetch = hubFetch, opts: { offline?: Offline
     ...codeM7Api(call),
     ...flaggedApi(call),
     ...imagesApi(call),
+    ...oobApi(call),
+    ...deviceOpsApi(call),
+    ...browserDeviceApi(call),
+    ...firmwareApi(call),
+    ...bootApi(call),
   };
 }
 

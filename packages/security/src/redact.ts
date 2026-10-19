@@ -74,8 +74,15 @@ export const DEFAULT_RULES: readonly RedactionRule[] = [
   { id: 'chat-token', pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g, scan: 'token' },
   { id: 'aws-access-key', pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, scan: 'token' },
   { id: 'google-key', pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g, scan: 'token' },
-  // Nova's own bearer tokens (tokens.ts) and enrollment tokens.
-  { id: 'nova-token', pattern: /\bnv[sxdmae]_[A-Za-z0-9_-]{20,}/g, scan: 'token' },
+  // Nova's own tokens: bearer tokens (tokens.ts: nvs, nvx, nvd, nvm, nva), enrollment (nve, nvd),
+  // device and node credentials (nvc, nvn), management tokens (nvdm), invitations (nvi), Relay
+  // routes (nvr), PXE boot tokens (nvb) and novad's local runtime and extension bridge tokens
+  // (nvlr, nvbr).
+  {
+    id: 'nova-token',
+    pattern: /\bnv(?:dm|lr|br|[sxdmaebncri])_[A-Za-z0-9_-]{20,}/g,
+    scan: 'token',
+  },
   // Common prefixed tokens: source-hosting personal tokens, package registries, model hubs.
   {
     id: 'prefixed-token',

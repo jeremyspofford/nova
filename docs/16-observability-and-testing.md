@@ -76,7 +76,9 @@ durations, feature adoption flags. A local dashboard mirrors what would be sent.
   refused once its certificate is revoked. It runs on Linux (x64, arm64) when a debug build with
   the TLS client exists (`node scripts/cargo.mjs build`, or `NOVA_NOVAD_BIN`) and is skipped
   otherwise. The CI `checks` job builds no `novad`, so the `novad` job runs this test and the other
-  three that use the real binary (`devices-novad`, `agent-dist-novad`, `m65-integration`) against
+  four that use the real binary (`devices-novad`, `agent-dist-novad`, `m65-integration`, and
+  `m75-novad-mtls`: the Hub's management client over mutual TLS, the policy push, a signed firmware
+  apply and certificate renewal, M7.5) against
   its release build with `NOVA_REQUIRE_NOVAD=1`, which turns a missing or outdated binary into a
   failure instead of a skip.
 - **Web offline layer.** The replica, queue and Settings → Sync tests run in jsdom against the
@@ -129,6 +131,20 @@ so the journey passes `--no-sandbox` only inside a container (`/.dockerenv`, `/r
 keep `sandbox: true`, context isolation and no Node. `NOVA_SHELL_E2E_HUB_ROOT` points the journey
 at another checkout's Hub (a known-good build while the tree's own Hub does not start).
 
+*As built in M7.5 (ADR-096; `e2e/j9-5-devices.spec.ts`, `e2e/support/m75.ts`,
+`e2e/support/bmc-redirect.ts`).* J9.5 is three tests (firmware, boot, out-of-band) against a real
+Hub and the real release `novad` (`cargo build --release`, as J8.5), which joins through Add Device
+and runs with its fake firmware and bootloader backends; its restarts go to a fake `systemctl` that
+only records them. "The machine never came back" is played by stopping `novad` until the real
+watchdog deadline has passed (2 minutes, the shortest the Hub offers) and starting it again, so
+`novad` reverts with `not_restarted`; waiting out the firmware and the boot watchdogs makes a run
+take about 5 minutes (300 s per test). The fake Redfish BMC listens on loopback, which the Hub
+refuses as a BMC address, so a preload in the Hub process routes only the TCP connection for the
+TEST-NET-1 address `192.0.2.80` to it. Not covered there, and covered elsewhere: a real restart
+with a new boot id (the `deadline` path and `watchdog.ok`, `novad`'s Rust tests), answering a
+Hub-only card from a channel (`packages/core/test/channels-hub-only.test.ts`) and the mutual TLS
+channel (the journey's Hub uses trust mode `none`; `apps/hub/test/m75-novad-mtls.test.ts`, §3.2).
+
 The golden journeys are the scripts in `docs/18` §3:
 
 | Journey | Milestone | Covers |
@@ -143,6 +159,7 @@ The golden journeys are the scripts in `docs/18` §3:
 | J8 | M6 | browser safety, proxy credential injection, external-agent rule, computer-use tiers |
 | J8.5 | M6.5 | Add Device (headless and phone), signed `novad` install, LAN → Mesh → Relay fallback, network setup rollback, wake helper |
 | J9 | M7 | sync and multi-device, session handoff |
+| J9.5 | M7.5 | firmware off by default, consent, a Hub-only approval, apply, rollback, the security override and the firmware watchdog; boot trials reverted by the watchdog; out-of-band off by default, a pinned Redfish BMC power cycled after approval (real release `novad` with fake backends; about 5 minutes) |
 | J10 | M8 | extension and governance |
 | J11 | M10 | install, update, rollback, install robustness |
 
@@ -170,6 +187,24 @@ against live providers behind secrets.
 | Runner substrate | `services/runner/test/host-substrate.ts` | A sandbox that runs programs directly, without isolation (§3.2) |
 | `novad` local runtime | `apps/desktop/e2e/support.ts` | A local-runtime socket that streams an answer or refuses with `scope_missing` |
 | Fake Hub (web) | `apps/web/test/fakes-m7-*.ts` | The M7 routes for the web UI tests (sync, push, cloud runner, Code, flagged features, team, channels, browser, devices) |
+
+*As built in M7.5 (ADR-096).* The M7.5 test doubles, all offline. Nothing in M7.5 ran against a
+real BIOS, bootloader or BMC; the device lab is T-M9-05.
+
+| Double | Where | Stands in for |
+| --- | --- | --- |
+| Device authorization vectors | `packages/core/test/fixtures/device-authz-vectors.json` (a copy in `services/novad/tests/fixtures/`) | Four fixed Hub-signed authorizations (`firmware.apply`, `firmware.rollback`, `boot.set`, `device.decommission`) with one test key; the Hub's signer reproduces them and `novad` verifies them, and the Rust test fails when the copy drifts |
+| `FakeFirmwareNovad` | `packages/core/src/firmware/fake-novad.ts` | `novad`'s firmware routes on 127.0.0.1: checks every authorization, refuses the BIOS password over plain HTTP and a degrading rollback without the override, and reports watchdog events with `changeId` and `novad`'s `detail` shape |
+| `FakeBootDevice` | `packages/core/src/boot/fake.ts` | `novad`'s boot routes with one-shot semantics and its own authorization check; can report unverified GRUB trials and refuse commit |
+| Fake device (devices) | `packages/core/src/devices/fake-device.ts` | M7.5 adds the services list and decommission (with its authorization) to the M6 fake `novad` |
+| Fake `novad` (browser) | `packages/core/test/browser-fallback-device.test.ts` | `novad`'s browser routes, the DevTools pass-through and the bridge call; where a Chromium starts (the Playwright image, CI) a real one sits behind it |
+| `novad`'s fake backends | `novad` config `firmware.backend = "fake"`, `boot.backend = "fake"` | A BIOS and a bootloader as JSON files, for the Rust tests and the E2E device; restarts go to a fake `systemctl` that records them |
+| Fake Chromium | `services/novad/src/browser.rs` tests | Chromium speaking the DevTools pipe protocol (the test binary run again as a child), with no TCP port |
+| Fake Redfish BMC | `packages/core/test/fixtures/oob/fake-redfish.ts` | A Redfish service over `node:https` on 127.0.0.1 with a self-signed certificate: power, a one-time boot override, BIOS pending settings, sensors; it records every request that reached HTTP, so a test can prove no credential went out on a wrong certificate |
+| Fake `ipmitool` | `packages/core/test/fixtures/oob/fake-ipmitool.mjs` | `ipmitool` lanplus power, sensor and boot-device commands, reading the password only from `IPMI_PASSWORD` |
+| Fake `chrome.*` | `apps/extension/test/fake-chrome.ts` | The extension APIs the bridge uses: tabs, tab groups, debugger, permissions, history, native messaging |
+| Compute probes | `services/compute/src/vram.ts` (`fakeVramProbe`), `src/services.ts` (`fakeUnitController`) | `nvidia-smi` and `rocm-smi`, and `systemctl` for the model server's unit |
+| Fake Hub (web) | `apps/web/test/fakes-m75-*.ts` | The M7.5 routes for the web UI tests (firmware and boot, out-of-band, device operations, browser fallback and bridge), with the Hub's consent and Hub-only rules |
 
 ## 5. Security testing (FR-123)
 
@@ -275,7 +310,7 @@ to `main` and every pull request, on Linux only:
   `npm run build`, `node scripts/check-spec.mjs`, the notices check and
   `npm audit --omit=dev --audit-level=high`.
 - `novad`: `cargo test` and a release build, then the capability-document contract test and the
-  Hub's four tests against the real binary (`NOVA_REQUIRE_NOVAD=1`: a missing binary fails).
+  Hub's five tests against the real binary (`NOVA_REQUIRE_NOVAD=1`: a missing binary fails).
 - `e2e`: a build, a release `novad`, Playwright's Chromium and `npm run test:e2e`.
 - `e2e-shell`: the desktop shell's journey in the Playwright image (§3.3).
 

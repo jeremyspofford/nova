@@ -157,6 +157,7 @@ beforeEach(async () => {
   });
   area = await setupDeviceTrust(ctx, {
     verifyDeviceCertificate: (pem) => trust.verifyDeviceCertificate(pem),
+    certificatePresented: (id, serial) => trust.service.deviceCertificatePresented(id, serial),
     audit: { append: (r) => (audit.push(r), Promise.resolve()) },
   });
   novad = await addDevice('novad', 'desk');
@@ -290,6 +291,21 @@ describe('mutual TLS on the device and node routes (FR-126)', () => {
       body: { publicKey: novad.publicKey },
     });
     expect([wrongKey.status, reason(wrongKey)]).toEqual([403, 'certificate_mismatch']);
+  });
+
+  it('revokes the older certificate once a renewed one is presented (M7.5)', async () => {
+    const renewed = await trust.service.issueDeviceCertificate({
+      deviceId: novad.id,
+      publicKey: novad.publicKey,
+      role: 'client',
+    });
+    // Both work until the device shows the new one.
+    expect((await call('/agent/v1/heartbeat', as(novad))).status).toBe(200);
+    const fresh = { ...novad, certPem: renewed!.certificatePem };
+    expect((await call('/agent/v1/heartbeat', as(fresh))).status).toBe(200);
+    const old = await call('/agent/v1/heartbeat', as(novad));
+    expect([old.status, reason(old)]).toEqual([403, 'certificate_revoked']);
+    expect((await call('/agent/v1/heartbeat', as(fresh))).status).toBe(200);
   });
 
   it('refuses revoked, foreign and other devices’ certificates', async () => {

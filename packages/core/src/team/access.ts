@@ -75,6 +75,7 @@ export const OWNER_ONLY_ROUTES: readonly Rule[] = [
   },
   // Other M7 areas: the cloud runner, external agent programs and their delegations.
   { methods: ALL, pattern: '/api/v1/cloud', prefix: true, why: "the Hub's cloud runner" },
+  { methods: ALL, pattern: '/api/v1/oob', prefix: true, why: "the Hub's out-of-band management" },
   {
     methods: ALL,
     pattern: '/api/v1/agent-adapters',

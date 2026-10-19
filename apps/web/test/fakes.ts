@@ -13,6 +13,7 @@ import {
   type ModelView,
   type ProviderAccountView,
   type QueuedInputView,
+  type SettingKey,
   type SearchHit,
   type ThreadView,
 } from '@nova/shared';
@@ -37,6 +38,15 @@ import { m7PushImpl, m7PushState, type M7PushState } from './fakes-m7-push.ts';
 import { m7MiscImpl, m7MiscState, type M7MiscState } from './fakes-m7-misc.ts';
 import { FakeSyncHub } from './fakes-m7-sync.ts';
 import { m7WorkImpl, m7WorkState, type M7WorkState } from './fakes-m7-work.ts';
+import { m75OobImpl, m75OobState, type M75OobState, type OobApprovals } from './fakes-m75-oob.ts';
+import { m75DevOpsImpl, m75DevOpsState, type M75DevOpsState } from './fakes-m75-devops.ts';
+import { m75BrowserImpl, m75BrowserState, type M75BrowserState } from './fakes-m75-browser.ts';
+import {
+  consentRefusal,
+  m75FirmwareImpl,
+  m75FirmwareState,
+  type M75FirmwareState,
+} from './fakes-m75-firmware.ts';
 import { m6SpacesImpl, m6SpacesState, type M6SpacesState } from './fakes-m6-spaces.ts';
 import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
 
@@ -141,6 +151,10 @@ export interface HubState {
   m7push: M7PushState;
   m7misc: M7MiscState;
   m7work: M7WorkState;
+  m75oob: M75OobState;
+  m75devops: M75DevOpsState;
+  m75browser: M75BrowserState;
+  m75firmware: M75FirmwareState;
   m6code: M6CodeState;
   /** Code sessions, changes, comments and reviews (test/fakes-m5-code.ts). */
   m5code: M5CodeState;
@@ -180,6 +194,10 @@ export function createHub(init: Partial<HubState> = {}) {
     m7push: m7PushState(),
     m7misc: m7MiscState(),
     m7work: m7WorkState(),
+    m75oob: m75OobState(),
+    m75devops: m75DevOpsState(),
+    m75browser: m75BrowserState(),
+    m75firmware: m75FirmwareState(),
     m6code: m6CodeState(),
     ...init,
   };
@@ -209,6 +227,16 @@ export function createHub(init: Partial<HubState> = {}) {
   };
   const layers = () => ({ global: state.settings, managed: state.managed });
 
+  // The approvals list the M7.5 out-of-band and device-operations fakes add their Hub-only cards to.
+  const m75Approvals: OobApprovals = {
+    list: () => state.m3.approvals,
+    add: (a) => {
+      state.m3.approvals = [...state.m3.approvals, a];
+    },
+    update: (a) => {
+      state.m3.approvals = state.m3.approvals.map((x) => (x.id === a.id ? a : x));
+    },
+  };
   const impl: Api = {
     hello: async () => ({
       name: 'nova-hub',
@@ -223,8 +251,10 @@ export function createHub(init: Partial<HubState> = {}) {
     setup: async () => ({ accountId: 'a1' }),
     logout: async () => ({ ok: true }) as const,
     settings: async () => ({ settings: resolveAll(layers()) }),
-    setSetting: async (key, value) => {
+    setSetting: async (key, value, opts?: { confirm?: boolean }) => {
       maybeFail('setSetting');
+      const refused = consentRefusal(key, value, opts);
+      if (refused) throw refused;
       const check = checkSettingWrite(key, value, 'global', layers());
       if (!check.ok)
         throw new ApiError(check.error === 'managed' ? 403 : 400, {
@@ -607,6 +637,43 @@ export function createHub(init: Partial<HubState> = {}) {
       addArtifact: (a) => {
         state.m3.artifacts = [...state.m3.artifacts, a];
       },
+    }),
+    // M7.5: out-of-band management, device operations, and the local browser fallback and bridge.
+    ...m75OobImpl(state.m75oob, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      approvals: m75Approvals,
+      setting: (k) => resolveSetting(k as SettingKey, layers()).value,
+      deviceIds: () => [
+        ...state.m6devices.devices.map((d) => d.id),
+        ...state.m65devices.others.map((d) => d.id),
+      ],
+    }),
+    ...m75DevOpsImpl(state.m75devops, {
+      m6: state.m6devices,
+      others: () => state.m65devices.others,
+      id,
+      ts: () => ts(),
+      maybeFail,
+      approvals: m75Approvals,
+    }),
+    ...m75BrowserImpl(state.m75browser, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      setting: (k) => resolveSetting(k, layers()).value,
+    }),
+    ...m75FirmwareImpl(state.m75firmware, {
+      setting: (k) => resolveSetting(k as SettingKey, layers()).value,
+      writeSetting: (k, v) => {
+        state.settings = { ...state.settings, [k]: v };
+      },
+      approvals: m75Approvals,
+      deviceName: (deviceId) =>
+        state.m6devices.devices.find((d) => d.id === deviceId)?.name ?? 'a device',
+      endpoint: (deviceId) =>
+        state.m6devices.devices.find((d) => d.id === deviceId)?.endpoint ?? null,
     }),
     ...m6AgentsImpl(state.m6agents, {
       id,

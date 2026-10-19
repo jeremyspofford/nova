@@ -1,0 +1,119 @@
+/* Firmware and Boot tabs of a device (FR-146, FR-143), and their settings section. */
+
+.fw-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.fw-table-wrap .ws-table td,
+.fw-table-wrap .ws-table th {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.fw-degrading {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  color: var(--u-danger);
+  font-weight: 600;
+}
+
+.fw-card {
+  display: grid;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.fw-card[data-current] {
+  border-left: 4px solid var(--u-accent);
+}
+.fw-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+}
+.fw-card-head h3 {
+  margin: 0;
+  font-size: var(--u-text-md);
+}
+.fw-card p {
+  margin: 0;
+}
+
+.fw-list {
+  display: grid;
+  gap: var(--u-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fw-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--u-space-3);
+}
+
+.fw-order {
+  display: grid;
+  gap: var(--u-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fw-order li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.fw-order li > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fw-approval {
+  display: grid;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-warn);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface-2);
+}
+.fw-approval h3,
+.fw-approval h4 {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  margin: 0;
+  font-size: var(--u-text-md);
+}
+.fw-approval p {
+  margin: 0;
+}
+
+.fw-once {
+  display: grid;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-warn);
+  border-radius: var(--u-radius-md);
+}
+.fw-once code {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.fw-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--u-space-2);
+}
+.fw-check input {
+  margin-top: 3px;
+}

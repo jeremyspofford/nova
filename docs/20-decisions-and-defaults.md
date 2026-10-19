@@ -104,6 +104,7 @@ silently.
 | ADR-093 | M6 implementation choices | Agents in the one loop with rules in the user layer, channel text never authority (amends ADR-083), egress proxy with HTTPS inspection (amends ADR-063), bubblewrap and container substrates (supersedes ADR-090 "Sandbox until M6"), protected paths mounted in sandboxes, computers as folders, Playwright browser with per-action checks, screen tiers and kill key, `novad` over bearer tokens (extends ADR-089), Code environments, PRs and worktrees, spaces and sites |
 | ADR-094 | M6.5 implementation choices | Add Device commit-then-reveal with a Hub-signed confirmation (the Relay keeps v1), code-only guess budget, grants bound to the device key, approved roles only, signed `novad` manifest with a domain tag and `novad install` over HTTP with a pinned identity (extends ADR-089), Hub identity and CA never replaced silently, name constraints without single labels, nonce-bound identity statement, real hello probes, Wake Helper routing, consent bound to the exact text, lock-out guard, Relay sealing and PBKDF2-stretched pairing codes (extends ADR-071) |
 | ADR-095 | M7 implementation choices | The Hub plays the sync service with per-field LWW, a merge log and offline replicas only with `offline-replica` (amends `rest-api.md` §2), opt-in idempotent replay that never stores a credential, the cloud runner as a remote sandbox with network off unless the owner opts in (amends `rest-api.md` §5), native push only through the Relay, email approvals by signed link only, Code handoff, attempts, Hub-side merges and pinned SSH, members with an owner-only route list and their own folders, shared threads with a tool allow-list, team agents under their own identity, OIDC bound to the browser, scripts and external agents off by default and gated, the desktop shell with pinned TLS and a local-runtime bridge, mutual TLS and `novad`'s TLS client, per-user local runtime sockets, scoped browser site levels through `ruleTool`, bounded redactor rules, Apache-2.0 Relay and runner (applies ADR-023) |
+| ADR-096 | M7.5 implementation choices | Mutual TLS on the Hub → `novad` management channel with a Hub client certificate, no downgrade and certificate renewal (amends `hub-api.md` §3; closes R-022 for devices with a certificate), Hub-signed short-lived authorizations for firmware, boot and decommission, consent switches and Hub-only approval cards, no model tools for firmware, boot or out-of-band, firmware through the kernel's firmware-attributes class with a support matrix, snapshots and a key-by-key watchdog (`fwupd` read-only), one-shot boot trials with a watchdog and PXE by per-device token (no DHCP/TFTP, no kernel arguments), out-of-band on the Hub only with certificates confirmed before credentials (no Intel AMT), the local browser fallback as a `user_input` offer with a clean profile run by dedicated users behind an egress filter (4-hour sessions), the extension bridge through a per-user `novad` socket with owner-confirmed host grants (amends `hub-api.md` §4), decommission and uninstall, compute node VRAM and quiet hours; the `novad` screen and compute modules not built |
 
 ## Details & rationale
 
@@ -1511,6 +1512,36 @@ which lists every decision with the known limitations).
   and present device certificates; per-user local runtime sockets.
 - *Browser (FR-092, FR-094, FR-098).* Scoped site levels through the policy engine's `ruleTool`,
   redacted console and network capture, crash restarts that replay only a GET navigation.
+
+**ADR-096 — M7.5 implementation choices** (extends ADR-042, ADR-043, ADR-075, ADR-093, ADR-094 and
+ADR-095; amends `contracts/hub-api.md` §3 and §4; see `docs/adr/0096-m75-implementation-choices.md`,
+which lists every decision with the known limitations).
+- *Management channel (FR-126, FR-192).* A device that holds a certificate serves the management
+  channel over TLS 1.3 and accepts only the Hub's client certificate; the Hub verifies the device by
+  chain and device-id SAN, never by host name, and never calls an https device over http.
+  Certificates now carry both purposes and are renewed through the heartbeat answer.
+- *Privileged actions (D2, D3).* Firmware apply and rollback, boot set, commit and revert, and
+  decommission need the owner's switch, the owner's own answer on a Hub-only approval card and a
+  Hub-signed authorization over the exact body, valid 10 minutes and never replayed. Turning a
+  device switch on needs `confirm: true`; no model tool touches firmware, boot or out-of-band.
+- *Firmware (FR-146).* Dell, Lenovo and HP through the kernel's firmware-attributes class, boot
+  order on generic UEFI, everything else refused with the reason; dry-run diff, snapshot, approval,
+  rollback, a separate override for changes that weaken security, and a watchdog that restores key
+  by key and reports `revert_failed` when it cannot. `fwupd` is listed only.
+- *Boot (FR-143).* One-shot trials on systemd-boot, GRUB and UEFI with a watchdog on the device
+  and on the Hub, made the default only after a confirmed trial; PXE menus and images by a
+  per-device token; no DHCP or TFTP, no kernel arguments.
+- *Out-of-band (FR-147).* Redfish and IPMI from the Hub only, owner-only and off by default, with
+  the BMC's certificate confirmed by the owner before any credential is sent and approvals bound to
+  the BMC they name; Intel AMT is not built.
+- *Browser on a device (FR-209, FR-096).* The fallback offer is a `user_input` request; a consented
+  clean profile runs on the device as a dedicated user, behind an egress filter limited to the site,
+  for at most 4 hours; the extension bridge reaches the user's own browser only on owner-confirmed
+  hosts and shared tabs, never the Hub's own hosts.
+- *Device operations (FR-140, FR-126).* Decommission revokes whether or not the device could be
+  told; `novad uninstall`; services, available builds and overrides on the Hub; compute nodes report
+  VRAM and keep the owner's quiet hours. The `novad` screen module moved to M9 and the `novad`
+  compute module is not built.
 
 ## Defaults for common ambiguities
 

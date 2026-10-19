@@ -39,3 +39,8 @@ export * from './schema/code_m7.ts';
 export * from './schema/team.ts';
 export * from './schema/flagged.ts';
 export * from './schema/device_trust.ts';
+export * from './schema/firmware.ts';
+export * from './schema/boot.ts';
+export * from './schema/oob.ts';
+export * from './schema/browser_device.ts';
+export * from './schema/device_ops.ts';

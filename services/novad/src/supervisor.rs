@@ -65,7 +65,9 @@ pub struct Manifest {
 impl Manifest {
     /// What a device installs by role (docs/23 §4): management and storage everywhere, compute on
     /// compute nodes, the local runtime on clients (it refuses every request until the Hub grants
-    /// `local-runtime`, FR-128). Browser, screen and capture are installed only when asked for.
+    /// `local-runtime`, FR-128) and the browser module on clients (it starts a browser only for a
+    /// session the Hub opens after the user's consent, FR-209, and binds the extension bridge's
+    /// sockets, FR-096). Screen and capture are installed only when asked for.
     pub fn default_for(roles: &[String]) -> Self {
         let mut modules = vec![ModuleSpec::builtin("management", true), ModuleSpec::builtin("storage", true)];
         if roles.iter().any(|r| r == "compute") {
@@ -73,6 +75,7 @@ impl Manifest {
         }
         if roles.iter().any(|r| r == "client") {
             modules.push(ModuleSpec::builtin(crate::local_runtime::MODULE, true));
+            modules.push(ModuleSpec::builtin(crate::browser::MODULE, true));
         }
         Manifest { modules }
     }
@@ -614,19 +617,9 @@ fn spawn(opts: &Options, slot: &mut Slot, allowed: Option<&[String]>, caps: Limi
     cmd.args(args);
     harden_command(&mut cmd, &[("NOVAD_MODULE".into(), name.clone())], slot.spec.limits.min(caps));
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
-    // A program written a moment ago can still be open for writing in a process forked
-    // meanwhile (ETXTBSY); that clears within milliseconds.
-    let mut tries = 0;
-    let mut child = loop {
-        match cmd.spawn() {
-            Ok(c) => break c,
-            Err(e) if e.raw_os_error() == Some(26) && tries < 10 => {
-                tries += 1;
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(e) => return Err(OpError::internal(format!("the {name} module did not start: {e}"))),
-        }
-    };
+    // On novad's spawner thread: a module started from a management request's thread would
+    // otherwise be killed when that request returns (the parent-death signal follows the thread).
+    let mut child = crate::hardening::spawn_kept(cmd).map_err(|e| OpError::internal(format!("the {name} module did not start: {e}")))?;
     let stdin = child.stdin.take();
     let stdout = child.stdout.take().ok_or_else(|| OpError::internal("no module stdout"))?;
     let conn = Arc::new(Conn { stdin: Mutex::new(stdin), pending: Mutex::new(HashMap::new()), next_id: AtomicU64::new(1), closed: AtomicBool::new(false) });
@@ -717,11 +710,29 @@ pub mod tests {
     #[test]
     fn default_manifest_follows_roles() {
         let m = Manifest::default_for(&["client".into()]);
-        assert_eq!(m.modules.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["management", "storage", "local-runtime"]);
+        assert_eq!(m.modules.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["management", "storage", "local-runtime", "browser"]);
         let m = Manifest::default_for(&["wake-helper".into()]);
         assert_eq!(m.modules.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["management", "storage"]);
         let m = Manifest::default_for(&["compute".into()]);
         assert!(m.modules.iter().any(|s| s.name == "compute"));
+    }
+
+    /// Regression: a module started by a management request (a thread that ends right after)
+    /// keeps running; it used to die with that thread and count as a crash.
+    #[test]
+    fn a_module_started_by_a_request_outlives_it() {
+        let dir = tmp("sup-kept");
+        let sup = Supervisor::new(opts(&dir), Manifest { modules: vec![ModuleSpec { autostart: false, ..sh("storage", PONG) }] });
+        let s2 = sup.clone();
+        std::thread::spawn(move || s2.start("storage").unwrap()).join().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        sup.tick();
+        let st = sup.status("storage").unwrap();
+        assert_eq!((st["state"].as_str(), st["restarts"].as_u64()), (Some("running"), Some(0)), "{st}");
+        assert!(sup.call("storage", "ping", json!({}), Duration::from_secs(2)).is_ok());
+        assert!(sup.drain_events().iter().all(|e| e["kind"] != "crashed"));
+        sup.stop_all();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

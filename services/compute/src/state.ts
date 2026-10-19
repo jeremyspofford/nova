@@ -50,6 +50,22 @@ const stateSchema = z.object({
     })
     .nullable()
     .default(null),
+  /** The operator's own quiet hours (`--quiet-hours HH:MM-HH:MM`, M7.5). */
+  quietHours: z.array(z.string()).optional(),
+  /** The systemd unit running the model server, which the Hub may manage (`--backend-unit`). */
+  backendUnit: z.string().nullable().optional(),
+  /** The owner's policy from the last heartbeat answer (quiet hours, routing eligibility). */
+  hubPolicy: z
+    .object({
+      quietHours: z.array(z.string()),
+      timeZone: z.string().nullable(),
+      routingEligible: z.boolean(),
+      revision: z.number().int(),
+    })
+    .nullable()
+    .optional(),
+  /** The `jobs` service was stopped from the Hub: no new jobs until it starts again. */
+  jobsStopped: z.boolean().optional(),
 });
 export type NodeState = z.infer<typeof stateSchema>;
 export type Enrollment = NonNullable<NodeState['enrollment']>;

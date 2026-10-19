@@ -54,14 +54,15 @@ const CREDENTIAL =
   /\b((change|reset|update|set) (your |my |the )?password|new password|(enable|disable|turn on|turn off|remove) (two factor|2fa|mfa|two step)|security (settings|questions)|recovery (email|phone|codes?))\b/;
 const BYPASS =
   /\b(proceed (anyway|to)|continue to (the )?site|accept the risk|ignore (this |the )?warning|visit this unsafe site|bypass|i understand the risks)\b/;
-const CAPTCHA =
+/** CAPTCHA words (also the local fallback's challenge detection, FR-209). */
+export const CAPTCHA =
   /\b(captcha|recaptcha|hcaptcha|turnstile|i m not a robot|i am not a robot|verify (that )?you are (a )?human|are you a robot|bot check)\b/;
 const OTP =
   /\b(otp|one time (code|password|passcode)|verification code|security code|2fa|two factor|authenticator|mfa|passcode|sms code)\b/;
 const PAYMENT_FIELD =
   /\b(card number|credit card|debit card|cvv|cvc|cvv2|expiry|expiration|iban|routing number|account number)\b/;
 const SEARCH_FIELD = /\b(search|query|find|q|s)\b/;
-const CAPTCHA_FRAME =
+export const CAPTCHA_FRAME =
   /(recaptcha|hcaptcha|turnstile|captcha|arkoselabs|funcaptcha|challenges\.cloudflare)/i;
 const PAYMENT_PAGE = /\b(checkout|payment|pay|billing|cart)\b/;
 const EXECUTABLE = /\.(exe|msi|msix|dmg|pkg|deb|rpm|appimage|apk|ipa|sh|bat|cmd|ps1|jar|vbs|scr)$/i;

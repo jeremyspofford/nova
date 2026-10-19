@@ -4,7 +4,8 @@
 // to join wait at the top for approval. /devices/add adds a device; /devices/:id is one device's
 // page. The models and load of compute nodes stay in Settings → Devices, linked from here. Since
 // M7 each computer and compute node also shows what the Hub saw of its certificate over HTTPS,
-// with a "Device certificates" section (FR-126).
+// with a "Device certificates" section (FR-126). M7.5 adds the way into out-of-band management
+// (/devices/oob, FR-147).
 import { useState } from 'react';
 import type { DeviceSummaryView, DeviceView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
@@ -31,6 +32,8 @@ import {
 import { DeviceStatusChip, LoadError, UpdateRequiredChip, useLoad } from './parts.tsx';
 import { PendingRequests } from './Requests.tsx';
 import { DeviceTlsChip, DeviceTlsSection, useDeviceTls } from './Tls.tsx';
+import { OOB_ID } from '../oob/format.ts';
+import { OobEntry, OobPage } from '../oob/OobPage.tsx';
 import '../workspace.css';
 import '../work/work.css';
 import './devices.css';
@@ -40,6 +43,8 @@ export function DevicesView({ deviceId }: { deviceId: string | null }) {
     <DeviceEventsProvider>
       {deviceId === ADD_DEVICE_ID ? (
         <AddDevicePage />
+      ) : deviceId === OOB_ID ? (
+        <OobPage />
       ) : deviceId ? (
         <DevicePage key={deviceId} deviceId={deviceId} />
       ) : (
@@ -220,6 +225,7 @@ function DeviceList() {
         </ul>
       ) : null}
       {tls ? <DeviceTlsSection tls={tls} /> : null}
+      <OobEntry />
     </div>
   );
 }

@@ -538,9 +538,12 @@ describe.skipIf(skip)('environments and commands in the sandbox', () => {
       })
     ).body;
     const p = await t.req('POST', `/v1/runner/runs/${run.id}/exec`, { cmd: 'while :; do :; done' });
+    // The run is marked capped, then its processes are stopped: wait until both show.
     const capped = await until(
       () => t.req('GET', `/v1/runner/runs/${run.id}`),
-      (r) => r.body.status !== 'active',
+      (r) =>
+        r.body.status !== 'active' &&
+        r.body.processes.find((x: Json) => x.id === p.body.id)?.running === false,
     );
     expect(capped.body).toMatchObject({ status: 'capped', reason: 'cpu' });
     expect(capped.body.usage.cpuSeconds).toBeGreaterThan(0.8);

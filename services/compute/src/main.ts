@@ -4,8 +4,12 @@
 //                       [--pin <fingerprint>] --backend <url>
 //                       [--backend-kind ollama|llamacpp|openai_compatible] [--name <n>]
 //                       [--listen <host:port>] [--advertise <url>] [--max-jobs <n>]
+//                       [--quiet-hours <HH:MM-HH:MM,...>] [--backend-unit <unit>]
 //                       [--data-dir <dir>]
 //   nova-compute run [--data-dir <dir>]
+// M7.5: GPU memory is read with nvidia-smi or rocm-smi when present; --quiet-hours refuses new
+// jobs in those hours (the Hub's policy may add more); --backend-unit lets the Hub start, stop and
+// restart the model server's systemd unit.
 // With --code the node joins through Add Device: it prints the confirmation to compare with the
 // Hub's screen and waits for the owner to approve it there. --pin (the Hub fingerprint) makes an
 // https:// Hub trusted through its signed identity, and the node presents the device certificate
@@ -14,14 +18,16 @@
 import { parseArgs } from 'node:util';
 import { formatConfirmation, joinWithCode } from './add-device.ts';
 import { BACKEND_KINDS, type BackendKind } from './backend.ts';
-import { ComputeNode, enroll } from './node.ts';
+import { ComputeNode, enroll, parseQuietHours } from './node.ts';
 import { defaultDataDir, statePath } from './state.ts';
+import { detectVramProbe } from './vram.ts';
 
 const USAGE = `Usage:
   nova-compute enroll --hub <url> (--token <nve_...> | --code <ABCD-EFGH> [--pairing <id>])
                       [--pin <fingerprint>] --backend <url>
                       [--backend-kind ollama|llamacpp|openai_compatible] [--name <name>]
                       [--listen <host:port>] [--advertise <url>] [--max-jobs <n>]
+                      [--quiet-hours <HH:MM-HH:MM,...>] [--backend-unit <unit>]
                       [--data-dir <dir>]
   nova-compute run [--data-dir <dir>]
 `;
@@ -47,6 +53,8 @@ async function main(argv: string[]): Promise<number> {
         listen: { type: 'string' },
         advertise: { type: 'string' },
         'max-jobs': { type: 'string' },
+        'quiet-hours': { type: 'string' },
+        'backend-unit': { type: 'string' },
         'data-dir': { type: 'string' },
       },
     });
@@ -69,6 +77,9 @@ async function main(argv: string[]): Promise<number> {
       ...(values.listen ? { listen: values.listen } : {}),
       ...(values.advertise ? { advertise: values.advertise } : {}),
       ...(values['max-jobs'] ? { maxConcurrentJobs: Number(values['max-jobs']) } : {}),
+      ...(values['quiet-hours'] ? { quietHours: parseQuietHours(values['quiet-hours']) } : {}),
+      ...(values['backend-unit'] ? { backendUnit: values['backend-unit'] } : {}),
+      vram: await detectVramProbe(),
     };
     const state = values.code
       ? await joinWithCode({
@@ -94,7 +105,10 @@ async function main(argv: string[]): Promise<number> {
   }
   if (command === 'run') {
     const { values } = parseArgs({ args: rest, options: { 'data-dir': { type: 'string' } } });
-    const node = await ComputeNode.start({ dataDir: values['data-dir'] ?? defaultDataDir() });
+    const node = await ComputeNode.start({
+      dataDir: values['data-dir'] ?? defaultDataDir(),
+      vram: await detectVramProbe(),
+    });
     const stop = () => void node.stop();
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);

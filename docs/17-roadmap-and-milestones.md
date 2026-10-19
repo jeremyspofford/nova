@@ -271,6 +271,17 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
 
 **Demo:** enable WoL and power-on-after-power-loss on a test device with approval and rollback.
 
+*As built (ADR-096).* M7.5 also took the device work carried in from M6 and M7: the local browser
+fallback (FR-209) and the extension bridge (FR-096) with `novad`'s browser module, mutual TLS on
+the Hub → `novad` management channel with certificate renewal, decommission and `novad uninstall`,
+the device operations routes the M6 UI lacked, and the compute node's VRAM, quiet hours and
+service routes (FR-126). The golden journey is J9.5 (`docs/18` §3). Moved: the `novad` `screen`
+module (computer use on a real desktop, the device side of FR-093 and FR-207) goes to M9 together
+with N1's capture work (the `capture` module, `docs/24`); the `novad` `compute` module is dropped
+(`services/compute` is the compute node). Not built: firmware updates through `fwupd` (listed
+read-only), BIOS settings on Windows and macOS, Intel AMT, DHCP and TFTP servers, and kernel
+arguments in boot profiles.
+
 ---
 
 ## M8 — Extensibility, Enterprise & Data Controls
@@ -304,6 +315,8 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
   evals (FR-224).
 - Test suite completion across all FRs; flakiness eliminated.
 - Accessibility, i18n, and error-state polish; empty/degraded states everywhere.
+- The `novad` `screen` module: computer use on a real desktop through `novad` (the device side
+  of FR-093 and FR-207), moved from M7.5 to be built with N1's capture work (ADR-096).
 
 **Exit criteria**
 - All performance budgets met on reference hardware with CI enforcement.

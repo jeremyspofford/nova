@@ -1,0 +1,13 @@
+{
+  "name": "@nova/extension",
+  "version": "0.7.5",
+  "private": true,
+  "description": "Nova's browser extension (Manifest V3): lets your agents act in tabs you share, on hosts you grant, through novad's native-messaging host (FR-096, FR-209).",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p .",
+    "test": "vitest run --coverage"
+  }
+}

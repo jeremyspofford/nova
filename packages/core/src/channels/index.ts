@@ -54,6 +54,7 @@ export { ApprovalLinks, LINK_KEY_REF } from './approval-links.ts';
 export { ChannelPollers, type ChannelPollersOptions } from './pollers.ts';
 export * from './push/index.ts';
 export {
+  HUB_ONLY_TEXT,
   answerableFromChannel,
   approvalCode,
   approvalEmailText,

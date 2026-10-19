@@ -80,6 +80,14 @@ interface HandoffRow {
   completedAt: string | null;
 }
 
+/** What a handoff's row may change after it is recorded. */
+type HandoffPatch = Partial<
+  Pick<
+    HandoffRow,
+    'status' | 'reason' | 'error' | 'gitStateJson' | 'toRef' | 'targetFolder' | 'completedAt'
+  >
+>;
+
 const HANDOFF_COLUMNS = `id, account_id AS accountId, thread_id AS threadId,
   code_session_id AS codeSessionId, from_ref AS fromRef, to_ref AS toRef, from_label AS fromLabel,
   to_label AS toLabel, target_folder AS targetFolder, source_action AS sourceAction,
@@ -373,6 +381,9 @@ export class HandoffService {
     let release: (() => void) | null = null;
     let captured: Captured | null = null;
     let state: HandoffGitStateView | null = null;
+    // The final state and its audit entry, published only once the session is free again.
+    let final: HandoffPatch;
+    let outcome: { action: string; result: string; detail: Record<string, unknown> };
     try {
       release = await this.#betweenTurns(s0, interrupt);
       await this.#update(row, { status: 'running' });
@@ -474,19 +485,23 @@ export class HandoffService {
         if (s.worktreeId && placed.worktreeId !== s.worktreeId)
           await code.worktrees.remove(s.accountId, s.worktreeId).catch(() => undefined);
       }
-      await this.#update(row, {
+      final = {
         status: 'completed',
         toRef: placed.toRef,
         targetFolder: placed.work,
         completedAt: this.#iso(),
-      });
-      await this.#audit(row, actor, 'code.handoff.completed', 'ok', {
-        to: placed.toRef,
-        stateHash: state.stateHash,
-        files: state.files,
-        bundleCommits: state.bundleCommits,
-        source: row.sourceAction,
-      });
+      };
+      outcome = {
+        action: 'code.handoff.completed',
+        result: 'ok',
+        detail: {
+          to: placed.toRef,
+          stateHash: state.stateHash,
+          files: state.files,
+          bundleCommits: state.bundleCommits,
+          source: row.sourceAction,
+        },
+      };
     } catch (err) {
       const refused = err instanceof Refusal;
       const reason: HandoffReason = refused ? err.reason : reasonOf(err);
@@ -494,25 +509,27 @@ export class HandoffService {
         .redactString(err instanceof Error ? err.message : String(err))
         .slice(0, 2000);
       if (!refused) this.#log.warn('a handoff failed', { err, handoffId: row.id });
-      await this.#update(row, {
+      final = {
         status: refused ? 'refused' : 'failed',
         reason,
         error: detail,
         completedAt: this.#iso(),
-      });
-      await this.#audit(
-        row,
-        actor,
-        refused ? 'code.handoff.refused' : 'code.handoff.failed',
-        refused ? 'denied' : 'error',
-        {
-          reason,
-        },
-      );
+      };
+      outcome = {
+        action: refused ? 'code.handoff.refused' : 'code.handoff.failed',
+        result: refused ? 'denied' : 'error',
+        detail: { reason },
+      };
     } finally {
       if (captured) await captured.shadow.remove().catch(() => undefined);
       release?.();
+      // Free the session before the final state shows: whoever sees it may hand the session off
+      // again at once, and must not be refused as `handoff_running` by this one's cleanup.
+      if (row.codeSessionId && this.#bySession.get(row.codeSessionId) === row.id)
+        this.#bySession.delete(row.codeSessionId);
     }
+    await this.#update(row, final);
+    await this.#audit(row, actor, outcome.action, outcome.result, outcome.detail);
     const view = this.get(row.accountId, row.id);
     await this.#announce(row, view.git?.branch ?? state?.branch ?? null);
     return view;
@@ -1070,15 +1087,7 @@ export class HandoffService {
     });
   }
 
-  async #update(
-    r: HandoffRow,
-    patch: Partial<
-      Pick<
-        HandoffRow,
-        'status' | 'reason' | 'error' | 'gitStateJson' | 'toRef' | 'targetFolder' | 'completedAt'
-      >
-    >,
-  ): Promise<void> {
+  async #update(r: HandoffRow, patch: HandoffPatch): Promise<void> {
     Object.assign(r, patch);
     await this.#o.db.transaction(() => {
       this.#o.db.raw

@@ -73,6 +73,7 @@ import { ToolAppsProvider } from './tool-apps.tsx';
 import { threadStateOf, useThreadFeed } from './useThreadFeed.ts';
 import { PendingSignins } from '../browser/PendingSignins.tsx';
 import { ThreadQuestions } from '../channels/ShareAsks.tsx';
+import { FallbackOffers } from '../browserdevice/FallbackOffer.tsx';
 import { useShareMenu } from '../team/ShareDialog.tsx';
 import { LocalFallback } from '../offline/LocalFallback.tsx';
 import { OpenInWindowButton } from '../shellbridge/OpenInWindow.tsx';
@@ -1083,6 +1084,8 @@ export function ChatView({
           </p>
         ) : null}
         {threadId ? <ThreadQuestions threadId={threadId} /> : null}
+        {/* M7.5 (FR-209): continue a site that blocked the agent's browser on its computer. */}
+        {threadId ? <FallbackOffers threadId={threadId} /> : null}
         {signinFocus ? <PendingSignins focusId={signinFocus} /> : null}
         {/* With the Hub away, this computer's own model can answer (desktop app, FR-128). */}
         {threadId ? <LocalFallback threadId={threadId} /> : null}

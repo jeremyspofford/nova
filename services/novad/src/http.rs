@@ -145,6 +145,15 @@ impl ServerHandle {
 /// otherwise), at most 64 headers / 16 KiB of head (431 otherwise); malformed requests get a 400
 /// JSON error. A panicking handler yields a 500 JSON error and does not kill the server.
 pub fn serve(listener: TcpListener, max_body: usize, handler: Handler) -> ServerHandle {
+    serve_connections(listener, Arc::new(move |stream| handle_connection(stream, max_body, &handler)))
+}
+
+/// What each accepted connection is handed to, on its own thread: the plain HTTP handler above,
+/// or the TLS management channel (src/mgmt_tls.rs).
+pub type Connection = Arc<dyn Fn(TcpStream) + Send + Sync>;
+
+/// The accept loop of `serve`: one thread per connection, at most 256 at once.
+pub fn serve_connections(listener: TcpListener, connection: Connection) -> ServerHandle {
     let addr = listener
         .local_addr()
         .unwrap_or_else(|_| SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
@@ -170,14 +179,14 @@ pub fn serve(listener: TcpListener, max_body: usize, handler: Handler) -> Server
                     continue;
                 }
                 let slot = Slot(Arc::clone(&active));
-                let handler = Arc::clone(&handler);
+                let connection = Arc::clone(&connection);
                 // If the spawn fails the closure is dropped, which closes the stream and
                 // frees the slot.
                 let _ = thread::Builder::new()
                     .name("novad-http-conn".into())
                     .spawn(move || {
                         let _slot = slot;
-                        handle_connection(stream, max_body, &handler);
+                        connection(stream);
                     });
             }
         })
@@ -225,6 +234,7 @@ fn handle_connection(stream: TcpStream, max_body: usize, handler: &Handler) {
     let peer = stream.peer_addr().ok();
     let mut reader = BufReader::new(&stream);
     let mut writer = &stream;
+    let _ = claim_takeover();
     let (response, head_only) = match read_request(&mut reader, &mut writer, max_body, peer) {
         Ok(request) => {
             let head_only = request.method == "HEAD";
@@ -235,9 +245,65 @@ fn handle_connection(stream: TcpStream, max_body: usize, handler: &Handler) {
             None => return,
         },
     };
+    // The handler took the connection over (the CDP pass-through, FR-209): no response here.
+    if let Some(take) = claim_takeover() {
+        let rest = reader.buffer().to_vec();
+        drop(reader);
+        take(Box::new(stream), rest);
+        return;
+    }
     if write_response(&mut writer, &response, head_only).is_ok() {
         linger_close(&mut reader, &stream);
     }
+}
+
+/// One request on an established stream (the management channel over TLS, src/mgmt_tls.rs),
+/// like `handle_connection` without 100 Continue: read it, answer it or hand the stream over
+/// (`take_over`). The stream comes back unless a handler took it.
+pub(crate) fn handle_stream<S: Timed + Send + 'static>(mut stream: S, peer: Option<SocketAddr>, max_body: usize, handler: &Handler) -> Option<S> {
+    let _ = claim_takeover();
+    let (got, rest) = {
+        let mut reader = BufReader::new(&mut stream);
+        let got = read_request(&mut reader, &mut io::sink(), max_body, peer);
+        let rest = reader.buffer().to_vec();
+        (got, rest)
+    };
+    let (response, head_only) = match got {
+        Ok(request) => {
+            let head_only = request.method == "HEAD";
+            (call_handler(handler, request), head_only)
+        }
+        Err(err) => match error_response(&err, max_body) {
+            Some(response) => (response, false),
+            None => return Some(stream),
+        },
+    };
+    if let Some(take) = claim_takeover() {
+        take(Box::new(stream), rest);
+        return None;
+    }
+    let _ = write_response(&mut stream, &response, head_only);
+    Some(stream)
+}
+
+/// A connection a handler takes over instead of answering (the CDP pass-through of FR-209): it
+/// gets the stream (plain TCP, or TLS over TCP) and the bytes already read past the request.
+pub type Takeover = Box<dyn FnOnce(Box<dyn Timed + Send>, Vec<u8>) + Send>;
+
+thread_local! {
+    static TAKEOVER: std::cell::RefCell<Option<Takeover>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Called by a handler: once it returns, the server writes nothing and hands the connection to
+/// `f` on the same thread (handlers run on their connection's thread). Its response is ignored.
+pub fn take_over(f: Takeover) {
+    TAKEOVER.with(|t| *t.borrow_mut() = Some(f));
+}
+
+/// The takeover the last handler on this thread asked for; every server calls it after the
+/// handler (and before, to drop anything stale).
+pub fn claim_takeover() -> Option<Takeover> {
+    TAKEOVER.with(|t| t.borrow_mut().take())
 }
 
 /// One request from a reader (no 100 Continue: the client sends its body after a short wait).

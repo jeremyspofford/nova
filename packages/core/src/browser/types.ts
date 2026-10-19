@@ -2,6 +2,11 @@
 // fake in tests), the page model the tools and the classifier read, and the late-bound hooks other
 // areas fill in (the external-agent guard, the local browser fallback). The controller itself
 // implements `BrowserController` from computers/types.ts.
+import type {
+  BrowserFallbackCause,
+  BrowserFallbackEndReason,
+  BrowserFallbackProfile,
+} from '@nova/shared';
 import type { RawConsoleEvent, RawNetworkEvent } from './capture.ts';
 
 /** An interactive element of the page, with the stable ref the actions take. */
@@ -84,6 +89,8 @@ export interface DriverLaunchOptions {
   captureBodyMaxBytes?: number;
   /** The page or the whole browser crashed (docs/11 §10); not called for our own close. */
   onCrash?: (reason: string) => void;
+  /** Whether the browser saves downloads (default true); off for a device's browser (FR-209). */
+  acceptDownloads?: boolean;
 }
 
 /** Cookies and origins' storage, as Playwright's storage state. */
@@ -160,16 +167,73 @@ export interface BrowserDriver {
 // `signatureGuard` in injection.ts stands in for it until it is wired.
 
 /**
- * The local browser fallback (FR-209, docs/11 §4.6): continue on a connected computer's browser
- * after the user consents for that site. The devices area provides it; until then it is null and
- * the fallback is refused as not available.
+ * The local browser fallback (FR-209, docs/11 §4.6; ADR-096 D7): continue a site on the agent's
+ * connected computer's browser after the user consents for that site. `LocalFallbackService`
+ * (fallback.ts) implements it; until it is wired the fallback is refused as not available.
  */
 export interface LocalBrowserFallback {
-  open(input: {
-    accountId: string;
-    threadId: string | null;
-    computerId: string;
-    host: string;
-    profile: 'clean' | 'extension';
-  }): Promise<{ ok: true; deviceId: string } | { ok: false; reason: string }>;
+  /**
+   * Whether and how a computer's browser continues `site` on a device: a live consent of the
+   * call's agent or thread, or else the user's answer to the offer (which records the consent).
+   * The plan's driver runs the device's browser; the caller starts a session with it and ends the
+   * fallback session (`end`) whatever happens.
+   */
+  begin(input: FallbackBeginInput): Promise<FallbackPlan | FallbackRefusal>;
+  /** A trace row recorded during the fallback session (FR-098: the session is marked). */
+  marked(sessionId: string, actionId: string): Promise<void>;
+  /** The fallback session ended; `egress` is what the device reported, when it did. */
+  end(
+    sessionId: string,
+    reason: BrowserFallbackEndReason,
+    egress?: { allowed: number; refused: number } | null,
+  ): Promise<void>;
+  /** Called when a fallback session must stop (its consent was revoked, the device went away). */
+  onStop?(listener: (sessionId: string, reason: BrowserFallbackEndReason) => void): () => void;
+}
+
+export interface FallbackBeginInput {
+  accountId: string;
+  threadId: string | null;
+  turnId: string | null;
+  callId: string;
+  computerId: string;
+  /** The site (host) the agent's browser was refused on. */
+  site: string;
+  url: string;
+  cause: BrowserFallbackCause;
+  /** What was detected, for the offer ("a CAPTCHA widget"); never page text. */
+  detail: string;
+  /** Hosts the device's egress filter allows (exact hosts and `*.host`). */
+  allowHosts: string[];
+  signal: AbortSignal;
+}
+
+export interface FallbackPlan {
+  ok: true;
+  /** The `browser_fallback_session` row; trace rows are marked with it. */
+  sessionId: string;
+  deviceId: string;
+  deviceName: string;
+  profile: BrowserFallbackProfile;
+  consentId: string;
+  /** A consent already held (no offer was shown). */
+  consentReused: boolean;
+  /** Runs the browser on the device (clean profile) or a tab of the user's own (extension). */
+  driver: BrowserDriver;
+}
+
+export interface FallbackRefusal {
+  ok: false;
+  reason:
+    | 'not_available'
+    | 'disabled'
+    | 'no_thread'
+    | 'no_connected_computer'
+    | 'no_browser_module'
+    | 'device_unreachable'
+    | 'declined'
+    | 'expired'
+    | 'cancelled'
+    | 'failed';
+  message: string;
 }

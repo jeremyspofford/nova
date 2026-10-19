@@ -171,6 +171,8 @@ impl GrantStore {
             .grants
             .into_iter()
             .filter(|g| g.kind == "folder" && &g.grantee == grantee)
+            // A grant made before system folders were refused is never mounted.
+            .filter(|g| paths::system_reason(Path::new(&g.target)).is_none())
             .map(|g| (PathBuf::from(g.target), g.access == "write"))
             .collect())
     }
@@ -459,6 +461,26 @@ pub mod tests {
         assert!(Grantee::parse(&json!({"kind": "agent", "id": "x"})).is_ok());
         assert!(Grantee::parse(&json!({"kind": "root", "id": "x"})).is_err());
         assert!(Grantee::parse(&json!({"kind": "agent", "id": ""})).is_err());
+    }
+
+    #[test]
+    fn system_folders_are_never_granted_or_mounted() {
+        let base = tmp("grants-sys");
+        let data = base.join("data");
+        let store = GrantStore::new(data.join("grants.json"), data.clone());
+        let a = agent();
+        // A management-token holder cannot reach BIOS settings or EFI variables through files or
+        // commands (ADR-096): no grant, no resolve, no working folder there.
+        for p in ["/sys/class/firmware-attributes", "/sys/firmware/efi/efivars", "/boot", "/etc", "/proc", "/dev"] {
+            let e = store.grant(&a, "folder", p, "write", "hub").unwrap_err();
+            assert_eq!(e.details.as_ref().unwrap()["reason"], "protected_path", "{p}");
+            assert_eq!(store.resolve(&a, p, Need::Read).unwrap_err().details.unwrap()["reason"], "protected_path", "{p}");
+        }
+        // A grant from before the rule is never mounted into the sandbox.
+        let old = Grant { id: "g1".into(), grantee: a.clone(), kind: "folder".into(), target: "/sys/class/firmware-attributes".into(), access: "write".into(), granted_by: "hub".into(), created_at: String::new() };
+        write_json(&data.join("grants.json"), &GrantsFile { grants: vec![old], requests: vec![] }, true).unwrap();
+        assert!(store.roots(&a).unwrap().is_empty());
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

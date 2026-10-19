@@ -23,6 +23,7 @@ use crate::local_runtime::valid_user;
 use crate::util::{OpError, OpResult};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::io::Read;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
@@ -61,7 +62,19 @@ impl Users for SystemUsers {
             }
             String::from_utf8(out.stdout).ok()?.trim().parse().ok()
         };
-        let home = if cfg!(target_os = "macos") { PathBuf::from("/Users").join(name) } else { PathBuf::from("/home").join(name) };
+        // The home folder from the user database (directory users too), else the usual place.
+        let home = if cfg!(target_os = "macos") {
+            PathBuf::from("/Users").join(name)
+        } else {
+            std::process::Command::new("getent")
+                .args(["passwd", "--", name])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|l| l.trim().split(':').nth(5).filter(|h| h.starts_with('/')).map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from("/home").join(name))
+        };
         Some(Account { uid: id("-u")?, gid: id("-g")?, home })
     }
 }
@@ -76,16 +89,22 @@ pub struct Layout {
 }
 
 /// Linux: under `run_root/<uid>` (`/run/user`); macOS: in the user's Application Support.
+#[cfg(test)]
 pub fn layout(a: &Account, run_root: &Path, macos: bool) -> Layout {
+    layout_for(a, run_root, macos, "runtime.sock")
+}
+
+/// The same folders with another socket file (`bridge.sock`, the extension bridge of FR-096).
+pub fn layout_for(a: &Account, run_root: &Path, macos: bool, file: &str) -> Layout {
     if macos {
         let anchor = a.home.join("Library").join("Application Support");
         let nova = anchor.join("Nova");
         let run = nova.join("run");
-        Layout { socket: run.join("runtime.sock"), dirs: vec![nova, run], anchor }
+        Layout { socket: run.join(file), dirs: vec![nova, run], anchor }
     } else {
         let anchor = run_root.join(a.uid.to_string());
         let nova = anchor.join("nova");
-        Layout { socket: nova.join("runtime.sock"), dirs: vec![nova], anchor }
+        Layout { socket: nova.join(file), dirs: vec![nova], anchor }
     }
 }
 
@@ -323,7 +342,164 @@ pub fn bind(a: &Account, l: &Layout) -> OpResult<Option<(UnixListener, u64)>> {
 }
 
 fn refuse(path: &Path, why: &str) -> OpError {
-    OpError::denied("unsafe_path", format!("{} {why}; the local runtime socket was not made there", path.display()))
+    OpError::denied("unsafe_path", format!("{} {why}; no socket was made there", path.display()))
+}
+
+/// The uid of the process at the other end of a Unix socket connection.
+pub fn peer_uid(s: &std::os::unix::net::UnixStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let r = unsafe { libc::getsockopt(s.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut libc::ucred as *mut libc::c_void, &mut len) };
+        (r == 0).then_some(cred.uid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let (mut uid, mut gid): (libc::uid_t, libc::gid_t) = (0, 0);
+        (unsafe { libc::getpeereid(s.as_raw_fd(), &mut uid, &mut gid) } == 0).then_some(uid)
+    }
+}
+
+/// What the reading child reports before the bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ReadReport {
+    code: u32,
+    errno: i32,
+    len: u64,
+}
+
+const E_OPEN: u32 = 10;
+const E_NOT_PRIVATE: u32 = 11;
+const E_READ: u32 = 12;
+
+/// Read a small private file of the user's (a token in their home folder) as that user: a forked
+/// child switches to the user's ids and opens it without following a link, so root never follows
+/// anything the user controls. The file must be a regular file of the user, mode 0600 or
+/// stricter, at most `max` bytes. Ok(None) when it does not exist.
+pub fn read_as(a: &Account, path: &Path, max: usize) -> OpResult<Option<Vec<u8>>> {
+    use std::os::fd::AsRawFd;
+    let path_c = cpath(path)?;
+    // Allocated before the fork: the child may not allocate.
+    let mut buf = vec![0u8; max];
+    let (parent, kid) = std::os::unix::net::UnixStream::pair()?;
+    parent.set_read_timeout(Some(Duration::from_secs(10)))?;
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if pid == 0 {
+        unsafe {
+            let chan = kid.as_raw_fd();
+            let mut r = ReadReport::default();
+            let send = |r: &ReadReport, data: &[u8]| {
+                libc::write(chan, r as *const ReadReport as *const libc::c_void, std::mem::size_of::<ReadReport>());
+                if !data.is_empty() {
+                    libc::write(chan, data.as_ptr() as *const libc::c_void, data.len());
+                }
+            };
+            let fail = |r: &mut ReadReport, code: u32| -> ! {
+                r.code = code;
+                r.errno = errno();
+                send(r, &[]);
+                libc::_exit(code as libc::c_int)
+            };
+            if libc::getuid() == 0 && libc::setgroups(0, std::ptr::null()) != 0 {
+                fail(&mut r, E_IDS);
+            }
+            if libc::setgid(a.gid as libc::gid_t) != 0 || libc::setuid(a.uid as libc::uid_t) != 0 || libc::geteuid() != a.uid {
+                fail(&mut r, E_IDS);
+            }
+            let fd = libc::open(path_c.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NOCTTY | libc::O_NONBLOCK);
+            if fd < 0 {
+                fail(&mut r, E_OPEN);
+            }
+            let mut st: libc::stat = std::mem::zeroed();
+            if libc::fstat(fd, &mut st) != 0 || !is(&st, libc::S_IFREG) || st.st_uid != a.uid || (st.st_mode & 0o077) != 0 || st.st_size as u64 > buf.len() as u64 {
+                fail(&mut r, E_NOT_PRIVATE);
+            }
+            let mut n = 0usize;
+            while n < buf.len() {
+                let got = libc::read(fd, buf.as_mut_ptr().add(n) as *mut libc::c_void, buf.len() - n);
+                if got < 0 {
+                    fail(&mut r, E_READ);
+                }
+                if got == 0 {
+                    break;
+                }
+                n += got as usize;
+            }
+            r.code = OK;
+            r.len = n as u64;
+            send(&r, &buf[..n]);
+            libc::_exit(0)
+        }
+    }
+    drop(kid);
+    let mut head = [0u8; std::mem::size_of::<ReadReport>()];
+    let got = (&parent).read_exact(&mut head);
+    let mut status = 0;
+    let r: ReadReport = unsafe { std::ptr::read_unaligned(head.as_ptr() as *const ReadReport) };
+    let data = if got.is_ok() && r.code == OK && r.len as usize <= max {
+        let mut d = vec![0u8; r.len as usize];
+        (&parent).read_exact(&mut d).map(|_| d).ok()
+    } else {
+        None
+    };
+    unsafe { libc::waitpid(pid, &mut status, 0) };
+    got.map_err(|e| OpError::internal(format!("the file helper failed: {e}")))?;
+    match r.code {
+        OK => data.map(Some).ok_or_else(|| OpError::internal("the file helper sent too little")),
+        E_OPEN if r.errno == libc::ENOENT || r.errno == libc::ENOTDIR => Ok(None),
+        E_IDS => Err(OpError::denied("os_permission", format!("cannot switch to user {}", a.uid))),
+        E_NOT_PRIVATE => Err(OpError::denied("unsafe_path", format!("{} is not a private file of the user (mode 0600, at most {max} bytes)", path.display()))),
+        E_OPEN if r.errno == libc::ELOOP => Err(OpError::denied("unsafe_path", format!("{} is a link; it was not followed", path.display()))),
+        _ => Err(OpError::internal(format!("cannot read {} ({})", path.display(), std::io::Error::from_raw_os_error(r.errno)))),
+    }
+}
+
+/// Remove files of a user's (Nova's own manifests and token in their home) as that user: a
+/// forked child switches to the user's ids and unlinks each path (a link is removed, never
+/// followed), so root changes nothing in a folder the user controls. The number removed.
+pub fn remove_as(a: &Account, paths: &[PathBuf]) -> OpResult<usize> {
+    use std::os::fd::AsRawFd;
+    let cs = paths.iter().map(|p| cpath(p)).collect::<OpResult<Vec<_>>>()?;
+    let (parent, kid) = std::os::unix::net::UnixStream::pair()?;
+    parent.set_read_timeout(Some(Duration::from_secs(10)))?;
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if pid == 0 {
+        unsafe {
+            let chan = kid.as_raw_fd();
+            let mut out: [u32; 2] = [OK, 0];
+            if (libc::getuid() == 0 && libc::setgroups(0, std::ptr::null()) != 0) || libc::setgid(a.gid as libc::gid_t) != 0 || libc::setuid(a.uid as libc::uid_t) != 0 || libc::geteuid() != a.uid {
+                out[0] = E_IDS;
+            } else {
+                for c in &cs {
+                    if libc::unlink(c.as_ptr()) == 0 {
+                        out[1] += 1;
+                    }
+                }
+            }
+            libc::write(chan, out.as_ptr() as *const libc::c_void, std::mem::size_of_val(&out));
+            libc::_exit(0)
+        }
+    }
+    drop(kid);
+    let mut buf = [0u8; 8];
+    let got = (&parent).read_exact(&mut buf);
+    let mut status = 0;
+    unsafe { libc::waitpid(pid, &mut status, 0) };
+    got.map_err(|e| OpError::internal(format!("the file helper failed: {e}")))?;
+    let code = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if code != OK {
+        return Err(OpError::denied("os_permission", format!("cannot switch to user {}", a.uid)));
+    }
+    Ok(u32::from_ne_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize)
 }
 
 struct Bound {
@@ -333,9 +509,12 @@ struct Bound {
     stop: Arc<AtomicBool>,
 }
 
-/// The per-user sockets of one local runtime.
+/// The per-user sockets of one listener kind: the local runtime's (`runtime.sock`) or the
+/// extension bridge's (`bridge.sock`), each with its own admission in `serve`.
 pub struct UserSockets {
     names: Vec<String>,
+    file: String,
+    label: String,
     users: Box<dyn Users>,
     run_root: PathBuf,
     macos: bool,
@@ -347,7 +526,14 @@ pub struct UserSockets {
 impl UserSockets {
     /// `serve` handles one accepted connection (the runtime's socket admission).
     pub fn new(names: Vec<String>, users: Box<dyn Users>, run_root: PathBuf, macos: bool, serve: Arc<dyn Fn(std::os::unix::net::UnixStream) + Send + Sync>) -> UserSockets {
-        UserSockets { names, users, run_root, macos, serve, bound: Mutex::new(HashMap::new()), problems: Mutex::new(HashMap::new()) }
+        UserSockets { names, file: "runtime.sock".into(), label: "local-runtime".into(), users, run_root, macos, serve, bound: Mutex::new(HashMap::new()), problems: Mutex::new(HashMap::new()) }
+    }
+
+    /// Another listener kind in the same folders: its socket file and its name in the log.
+    pub fn named(mut self, file: &str, label: &str) -> UserSockets {
+        self.file = file.into();
+        self.label = label.into();
+        self
     }
 
     /// The system's layout: `/run/user` on Linux, the home folder on macOS.
@@ -366,7 +552,7 @@ impl UserSockets {
                 }
                 Err(e) => {
                     if p.get(name) != Some(&e.message) {
-                        eprintln!("novad local-runtime: user {name}: {}", e.message);
+                        eprintln!("novad {}: user {name}: {}", self.label, e.message);
                     }
                     p.insert(name.clone(), e.message);
                 }
@@ -389,7 +575,7 @@ impl UserSockets {
             return Err(OpError::validation(format!("{name:?} is not a valid user name")));
         }
         let a = self.users.lookup(name).ok_or_else(|| OpError::not_found(format!("no user named {name}")))?;
-        let l = layout(&a, &self.run_root, self.macos);
+        let l = layout_for(&a, &self.run_root, self.macos, &self.file);
         let Some((listener, ino)) = bind(&a, &l)? else { return Ok(()) };
         let stop = Arc::new(AtomicBool::new(false));
         listener.set_nonblocking(true)?;
@@ -632,6 +818,61 @@ mod tests {
         assert_eq!(read_from(&l.socket), "hello");
         s.stop();
         assert!(!l.socket.exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn reads_a_private_file_as_the_user_without_following_links() {
+        let base = tmp("usock-read");
+        let a = me(&base);
+        let f = base.join("token");
+        std::fs::write(&f, b"nvbr_secret").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read_as(&a, &f, 256).unwrap().as_deref(), Some(&b"nvbr_secret"[..]));
+        assert_eq!(read_as(&a, &base.join("none"), 256).unwrap(), None);
+        assert_eq!(read_as(&a, &base.join("none/deeper"), 256).unwrap(), None);
+        // Too big, readable by others, a link, a folder: refused.
+        assert_eq!(read_as(&a, &f, 4).unwrap_err().details.unwrap()["reason"], "unsafe_path");
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(read_as(&a, &f, 256).unwrap_err().details.unwrap()["reason"], "unsafe_path");
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&f, &link).unwrap();
+        let e = read_as(&a, &link, 256).unwrap_err();
+        assert!(e.message.contains("link"), "{}", e.message);
+        assert!(read_as(&a, &base, 256).is_err());
+        // Another user's ids: only root may switch to them.
+        if unsafe { libc::geteuid() } != 0 {
+            let other = Account { uid: a.uid + 1, ..a.clone() };
+            assert_eq!(read_as(&other, &f, 256).unwrap_err().details.unwrap()["reason"], "os_permission");
+        }
+        // The connecting process's uid comes from the kernel.
+        let (x, _y) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert_eq!(peer_uid(&x), Some(unsafe { libc::geteuid() }));
+        // Other socket files go in the same folders.
+        let l = layout_for(&a, Path::new("/run/user"), false, "bridge.sock");
+        assert_eq!(l.socket, PathBuf::from(format!("/run/user/{}/nova/bridge.sock", a.uid)));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn removes_a_users_files_as_the_user() {
+        let base = tmp("usock-rm");
+        let a = me(&base);
+        let f1 = base.join("one.json");
+        let f2 = base.join("two");
+        std::fs::write(&f1, "x").unwrap();
+        // A link is removed itself; its target stays.
+        let target = base.join("target");
+        std::fs::write(&target, "keep").unwrap();
+        std::os::unix::fs::symlink(&target, &f2).unwrap();
+        assert_eq!(remove_as(&a, &[f1.clone(), f2.clone(), base.join("missing")]).unwrap(), 2);
+        assert!(!f1.exists() && std::fs::symlink_metadata(&f2).is_err() && target.exists());
+        if unsafe { libc::geteuid() } != 0 {
+            let other = Account { uid: a.uid + 1, ..a.clone() };
+            assert_eq!(remove_as(&other, &[target.clone()]).unwrap_err().details.unwrap()["reason"], "os_permission");
+            assert!(target.exists());
+        }
         std::fs::remove_dir_all(&base).unwrap();
     }
 

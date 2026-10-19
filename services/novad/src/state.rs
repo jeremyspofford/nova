@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 
 pub const CHANNELS: &[&str] = &["stable", "beta", "nightly"];
 
+/// The file that marks a folder as novad's data folder (written by `ensure`).
+pub const DATA_MARKER: &str = ".novad-data";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceState {
@@ -86,6 +89,14 @@ pub struct Config {
     pub mcp_servers: Vec<McpServer>,
     /// The local runtime module (FR-128): the model server it proxies and where it listens.
     pub local_runtime: crate::local_runtime::LocalRuntimeConfig,
+    /// The browser module (FR-209): which Chromium, who it runs as, where profiles go.
+    pub browser: crate::browser::BrowserConfig,
+    /// The extension bridge (FR-096): the one extension id the host manifest allows.
+    pub bridge: crate::browser::BridgeConfig,
+    /// BIOS/firmware backend (FR-146): `auto`, `none`, or `fake` with `fakePath` (tests only).
+    pub firmware: crate::firmware::FirmwareConfig,
+    /// Bootloader backend (FR-143): `auto`, a named bootloader, `none`, or `fake`.
+    pub boot: crate::boot::BootConfig,
 }
 
 impl Default for Config {
@@ -96,6 +107,10 @@ impl Default for Config {
             power: PowerConfig::default(),
             mcp_servers: vec![],
             local_runtime: Default::default(),
+            browser: Default::default(),
+            bridge: Default::default(),
+            firmware: Default::default(),
+            boot: Default::default(),
         }
     }
 }
@@ -105,6 +120,16 @@ impl Default for Config {
 #[serde(rename_all = "camelCase", default)]
 pub struct GrantedScopes {
     pub scopes: Vec<String>,
+    pub updated_at: String,
+}
+
+/// `policy.json`: the device-side toggles the Hub's heartbeat answers carry (D3 of ADR-096):
+/// BIOS/firmware changes (FR-146) and low-level boot (FR-143), both off until the Hub says on.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PrivilegedPolicy {
+    pub firmware_changes: bool,
+    pub low_level_boot: bool,
     pub updated_at: String,
 }
 
@@ -181,6 +206,41 @@ impl DataDir {
         Ok(true)
     }
 
+    /// The Hub's privileged toggles (`policy.json`, 0600); deleted at enrollment like `scopes.json`.
+    pub fn policy_path(&self) -> PathBuf {
+        self.0.join("policy.json")
+    }
+
+    /// The last toggles the Hub sent; all off before the first answer or when the file is damaged.
+    pub fn privileged_policy(&self) -> PrivilegedPolicy {
+        read_json_or::<PrivilegedPolicy>(&self.policy_path(), PrivilegedPolicy::default()).unwrap_or_default()
+    }
+
+    /// Keep the heartbeat answer's `policy` (`{firmwareChanges, lowLevelBoot}`; anything but `true`
+    /// is off); returns whether it changed.
+    pub fn save_privileged_policy(&self, v: &Value) -> OpResult<bool> {
+        let next = PrivilegedPolicy { firmware_changes: v["firmwareChanges"].as_bool() == Some(true), low_level_boot: v["lowLevelBoot"].as_bool() == Some(true), updated_at: String::new() };
+        let now = self.privileged_policy();
+        if self.policy_path().exists() && now.firmware_changes == next.firmware_changes && now.low_level_boot == next.low_level_boot {
+            return Ok(false);
+        }
+        write_json(&self.policy_path(), &PrivilegedPolicy { updated_at: crate::util::now_iso(), ..next }, true)?;
+        Ok(true)
+    }
+
+    /// The toggles the Hub pushes through `/agent/v1/config` (D3), merged: a key that is present
+    /// sets its toggle (only `true` is on), an absent one keeps it. Returns the toggles in effect.
+    pub fn merge_privileged_policy(&self, v: &Value) -> OpResult<PrivilegedPolicy> {
+        let now = self.privileged_policy();
+        let pick = |key: &str, current: bool| match v.get(key) {
+            None | Some(Value::Null) => current,
+            Some(x) => x.as_bool() == Some(true),
+        };
+        let next = json!({ "firmwareChanges": pick("firmwareChanges", now.firmware_changes), "lowLevelBoot": pick("lowLevelBoot", now.low_level_boot) });
+        self.save_privileged_policy(&next)?;
+        Ok(self.privileged_policy())
+    }
+
     /// Create the folder, private to novad's user.
     pub fn ensure(&self) -> OpResult<()> {
         std::fs::create_dir_all(&self.0)?;
@@ -188,6 +248,11 @@ impl DataDir {
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700))?;
+        }
+        // The marker `novad uninstall --purge` and decommission look for before deleting a folder.
+        let marker = self.0.join(DATA_MARKER);
+        if std::fs::symlink_metadata(&marker).is_err() {
+            write_atomic(&marker, b"This folder holds a Nova device agent's data (novad).\n", false)?;
         }
         Ok(())
     }
@@ -297,6 +362,14 @@ mod tests {
         assert!(!d.save_granted_scopes(&["local-runtime".into(), "files".into()]).unwrap());
         assert!(d.save_granted_scopes(&[]).unwrap());
         assert!(d.granted_scopes().is_empty());
+        // The privileged toggles: off until the Hub says on, kept private, only `true` counts.
+        assert_eq!((d.privileged_policy().firmware_changes, d.privileged_policy().low_level_boot), (false, false));
+        assert!(d.save_privileged_policy(&json!({ "firmwareChanges": true, "lowLevelBoot": "yes" })).unwrap());
+        assert_eq!((d.privileged_policy().firmware_changes, d.privileged_policy().low_level_boot), (true, false));
+        assert!(!d.save_privileged_policy(&json!({ "firmwareChanges": true })).unwrap());
+        assert_eq!(std::fs::metadata(d.policy_path()).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::write(d.policy_path(), "not json").unwrap();
+        assert!(!d.privileged_policy().firmware_changes, "damaged: off");
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

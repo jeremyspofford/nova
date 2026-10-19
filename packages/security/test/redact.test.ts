@@ -29,6 +29,38 @@ describe('redactString', () => {
     expect(out).toContain(REDACTED);
   });
 
+  // Every Nova token prefix (redact.ts `nova-token`), the PXE boot token `nvb_` and the extension
+  // bridge token `nvbr_` included; a bare prefix or a short value is not a token.
+  it.each([
+    'nvs',
+    'nvx',
+    'nvd',
+    'nvm',
+    'nva',
+    'nve',
+    'nvb',
+    'nvbr',
+    'nvc',
+    'nvn',
+    'nvdm',
+    'nvi',
+    'nvr',
+    'nvlr',
+  ])('masks a Nova %s_ token', (prefix) => {
+    const token = `${prefix}_Q2xhdWRlIHdhcyBoZXJlIDIwMjYtMTAtMTkK-x_y`;
+    const out = r.redactString(`hello ${token} there`);
+    expect(out).toBe(`hello ${REDACTED} there`);
+  });
+
+  it('leaves Nova-like words that are not tokens alone', () => {
+    for (const text of [
+      'nvbr_short',
+      'nvq_Q2xhdWRlIHdhcyBoZXJlIDIwMjYtMTAtMTkK',
+      'xnvbr_Q2xhdWRlIHdhcyBoZXJl',
+    ])
+      expect(r.redactString(text)).toBe(text);
+  });
+
   it('keeps the label of bearer and header values', () => {
     expect(r.redactString('Authorization: Bearer abcdefghijklmnop123')).toBe(
       `Authorization: ${REDACTED}`,

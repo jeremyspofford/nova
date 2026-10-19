@@ -91,8 +91,14 @@ export function checkHubIdentity(input: HubIdentityCheckInput): HubIdentityCheck
   const caHash = s.certificates.find((c) => c.kind === 'ca')?.sha256;
   const ca = caHash ? input.chain.find((c) => sha256(c) === caHash) : undefined;
   if (!ca || !leaf.checkIssued(ca) || !leaf.verify(ca.publicKey)) return refused('not_listed');
-  // Only a server certificate: never a CA, never a client-only (device) certificate.
-  if (leaf.ca || !(leaf.keyUsage ?? []).includes(OID.serverAuth))
+  // Only a server certificate: never a CA, never a client-only certificate, and never a Nova
+  // identity certificate (a device's, which also serves its management endpoint since M7.5, or
+  // the Hub's client certificate): those name a device or the Hub, not a host.
+  if (
+    leaf.ca ||
+    !(leaf.keyUsage ?? []).includes(OID.serverAuth) ||
+    (leaf.subjectAltName ?? '').split(', ').some((n) => n.startsWith('URI:urn:nova:'))
+  )
     return refused('not_server_certificate');
   const host = input.host.replace(/^\[|\]$/g, '');
   const matches = isIP(host) ? leaf.checkIP(host) : leaf.checkHost(host, { subject: 'never' });

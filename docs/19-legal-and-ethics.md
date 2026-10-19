@@ -114,6 +114,19 @@ Apache-2.0, or both). Web Push (RFC 8291,
 RFC 8292), the OIDC token checks and the APNs and FCM senders use `node:crypto` only. No GPL or
 AGPL dependency was added.
 
+### 3.3 M7.5: no new third-party code (ADR-096)
+
+M7.5 adds no third-party package or crate. `ring` 0.17.14, already in `novad`'s build through
+`rustls` (§3.2), becomes a direct dependency for the one SHA-1 the WebSocket handshake of the
+browser's DevTools relay requires, so the lockfile gains no crate. The browser extension
+(`apps/extension`, `@nova/extension`, AGPL-3.0-or-later like the rest of the repository) is our
+own code with no dependencies of its own; its icon is drawn by our own script
+(`scripts/icons.mjs`), and it carries no third-party asset, text or trademark. The Redfish, IPMI,
+iPXE, UEFI and firmware-attributes support is written from the public specifications and the Linux
+kernel's documented `sysfs` interface; the programs Nova calls (`ipmitool`, `efibootmgr`,
+`bootctl`, `grub-reboot`, `fwupdmgr`, Chromium) are run as separate processes on the user's
+machine and are neither bundled nor linked.
+
 ## 4. Privacy & data protection
 
 - **No training on user data**, ever. The product states this plainly.

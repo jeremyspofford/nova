@@ -1,0 +1,42 @@
+:root {
+  color-scheme: light dark;
+  font:
+    13px/1.4 system-ui,
+    sans-serif;
+}
+body {
+  width: 320px;
+  margin: 12px;
+}
+h1 {
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+.label {
+  margin: 12px 0 2px;
+  font-weight: 600;
+}
+.ok {
+  color: #1a7f37;
+}
+.warn {
+  color: #b35900;
+}
+.query {
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+}
+button {
+  margin-top: 8px;
+  padding: 6px 10px;
+}
+button.quiet {
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+ul {
+  margin: 0;
+  padding-left: 18px;
+}

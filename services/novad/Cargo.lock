@@ -277,11 +277,12 @@ dependencies = [
 
 [[package]]
 name = "novad"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ed25519-dalek",
  "libc",
  "rcgen",
+ "ring",
  "rustls",
  "serde",
  "serde_json",

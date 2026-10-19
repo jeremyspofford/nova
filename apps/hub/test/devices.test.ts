@@ -5,6 +5,8 @@
 // POST /approvals; connections are one per agent and refused below the minimum novad version; a
 // device credential never authenticates a user route. (J7 step 7 runs this flow offline.)
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -399,5 +401,42 @@ describe('devices through the Hub', () => {
       (await api('POST', `/api/v1/devices/${id}/mcp/call`, { server: 'notes', tool: 'find' }))
         .status,
     ).toBe(403);
+  });
+});
+
+describe('device errors reach the Hub’s clients with the shared status', () => {
+  it('a novad 409 capability_missing is the Hub’s 400, details kept', async () => {
+    const fake = await enroll();
+    // Stand in for novad: every management call answers like its browser module without a
+    // browser (services/novad/src/browser.rs: 409 `capability_missing` `{reason: no_browser}`).
+    const novad = createServer((req, res) => {
+      req.resume();
+      res.writeHead(409, { 'content-type': 'application/json', connection: 'close' });
+      res.end(
+        JSON.stringify({
+          error: {
+            code: 'capability_missing',
+            message: 'no browser found',
+            details: { reason: 'no_browser' },
+          },
+        }),
+      );
+    });
+    await new Promise<void>((r) => novad.listen(0, '127.0.0.1', r));
+    try {
+      const port = (novad.address() as AddressInfo).port;
+      db.raw
+        .prepare('UPDATE transport_endpoint SET url = ? WHERE device_id = ?')
+        .run(`http://127.0.0.1:${port}`, fake.deviceId);
+      const r = await api('GET', `/api/v1/devices/${fake.deviceId!}/services`);
+      expect(r.status).toBe(400);
+      expect(r.json.error).toMatchObject({
+        code: 'capability_missing',
+        message: 'no browser found',
+        details: { reason: 'no_browser' },
+      });
+    } finally {
+      await new Promise<void>((r) => novad.close(() => r()));
+    }
   });
 });

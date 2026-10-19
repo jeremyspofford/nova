@@ -1195,6 +1195,8 @@ export class PolicyGate implements ToolGate {
       ruleId: d.ruleId ?? null,
       ruleLabel: ruleLabelOf(d, b.set),
       alwaysAllowManaged: !persistent && d.persistable,
+      // A tool call's card is answered wherever its tier allows (Hub-only cards are M7.5's).
+      answerIn: null,
       createdAt: now.toISOString(),
     };
     let settled = false;
@@ -1325,6 +1327,12 @@ export class PolicyGate implements ToolGate {
     const { store } = this.#o;
     const row = await store.approvalRow(accountId, body.approvalId);
     if (row.status !== 'pending' || row.decision !== null) throw answered(row);
+    // A Hub-only card (firmware, boot, out-of-band, decommission; docs/23 §6.3) is answered by the
+    // signed-in user in a Nova client only: a channel, a link or a hook is refused whatever the tier.
+    if (row.answerIn === 'hub' && decidedBy !== 'user')
+      throw new NovaError('policy_denied', 'this approval can only be answered in Nova', {
+        details: { reason: 'hub_only' },
+      });
     if (
       body.decision === 'allow_always' &&
       !(await this.#o.setting('policy.allowPersistentGrants'))

@@ -2,8 +2,15 @@
 // approval, and the replies that answer it. The decisions are the card's own (allow once, allow
 // for the session, deny and continue, deny and stop); "Always allow" and hand-off need the full
 // card in a Nova client. `confirm_at_action` and `handoff_required` approvals are never answered
-// from a channel (FR-189); their prompt says to open Nova.
-import type { ApprovalDecisionKind, ApprovalView, ConfirmationTier } from '@nova/shared';
+// from a channel (FR-189); their prompt says to open Nova. Neither is a Hub-only card
+// (`answerIn: 'hub'`, M7.5: firmware, boot, out-of-band, decommission; docs/23 §6.3), whatever its
+// tier: every channel path refuses it with `hub_only`.
+import type {
+  ApprovalAnswerIn,
+  ApprovalDecisionKind,
+  ApprovalView,
+  ConfirmationTier,
+} from '@nova/shared';
 
 export type ChannelDecision = Extract<
   ApprovalDecisionKind,
@@ -43,10 +50,20 @@ export function parseAnswer(text: string): ChannelAnswer | null {
   return { decision, code: m[3]?.toLowerCase() ?? null, reason: m[4]?.trim() || null };
 }
 
-/** Only pre-approvable approvals can be answered from a channel (docs/13 §4, FR-189). */
-export function answerableFromChannel(tier: ConfirmationTier): boolean {
-  return tier === 'pre_approvable';
+/**
+ * Only pre-approvable approvals can be answered from a channel (docs/13 §4, FR-189), and never a
+ * Hub-only one.
+ */
+export function answerableFromChannel(
+  tier: ConfirmationTier,
+  answerIn: ApprovalAnswerIn | null = null,
+): boolean {
+  return answerIn !== 'hub' && tier === 'pre_approvable';
 }
+
+/** What a channel says about a Hub-only card (prompt and refusal). */
+export const HUB_ONLY_TEXT =
+  'This one can only be answered in Nova itself: open the web or desktop app to decide.';
 
 const LABELS: Partial<Record<ApprovalDecisionKind, string>> = {
   allow_once: 'allow',
@@ -61,7 +78,7 @@ const LABELS: Partial<Record<ApprovalDecisionKind, string>> = {
  * posted.
  */
 export function approvalPrompt(
-  a: Pick<ApprovalView, 'id' | 'action' | 'reason' | 'tier' | 'options'>,
+  a: Pick<ApprovalView, 'id' | 'action' | 'reason' | 'tier' | 'options' | 'answerIn'>,
   opts: { shared?: boolean } = {},
 ): string {
   const code = approvalCode(a.id);
@@ -69,6 +86,7 @@ export function approvalPrompt(
     ? `Approval needed for an action (${code}); the details are in Nova.`
     : `Approval needed: ${a.action}`;
   const why = a.reason && !opts.shared ? `\n${a.reason}` : '';
+  if (a.answerIn === 'hub') return `${head}${why}\n${HUB_ONLY_TEXT}`;
   if (!answerableFromChannel(a.tier))
     return `${head}${why}\nThis one can only be answered in Nova: open the app to decide.`;
   const replies = a.options
@@ -83,7 +101,7 @@ export function approvalPrompt(
  * (a shared conversation, a sender who is not the owner) it says to open Nova.
  */
 export function approvalEmailText(
-  a: Pick<ApprovalView, 'id' | 'action' | 'reason'>,
+  a: Pick<ApprovalView, 'id' | 'action' | 'reason' | 'answerIn'>,
   opts: { shared?: boolean; link: boolean },
 ): string {
   const code = approvalCode(a.id);
@@ -91,6 +109,7 @@ export function approvalEmailText(
     ? `Approval needed for an action (${code}); the details are in Nova.`
     : `Approval needed: ${a.action}`;
   const why = a.reason && !opts.shared ? `\n${a.reason}` : '';
+  if (a.answerIn === 'hub') return `${head}${why}\n${HUB_ONLY_TEXT}`;
   return opts.link
     ? `${head}${why}`
     : `${head}${why}\nThis one can only be answered in Nova: open the app to decide.`;

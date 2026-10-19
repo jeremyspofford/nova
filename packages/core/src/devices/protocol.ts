@@ -130,6 +130,13 @@ export const devicePowerReportSchema = z
 
 export const deviceHeartbeatSchema = z.object({
   novadVersion: novadVersionSchema,
+  /**
+   * The management endpoint the device serves now (ADR-096 D1): novad sends `https://…` once it
+   * holds a device certificate. The Hub takes an https endpoint only for a device holding a live
+   * certificate it issued, never moves a device from https back to http, and does not move a
+   * plain-HTTP endpoint (nothing would authenticate the new address).
+   */
+  endpoint: endpointSchema.optional(),
   modules: z.array(moduleReportSchema).max(20).default([]),
   events: z.array(z.record(z.string(), z.unknown())).max(500).default([]),
   accessDecisions: z.array(accessDecisionSchema).max(500).default([]),

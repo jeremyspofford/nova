@@ -6,7 +6,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SessionHandoffView } from '@nova/shared';
+import { SETTINGS, type SessionHandoffView, type SettingKey } from '@nova/shared';
+import { HandoffService, type AuditRecord } from '../src/index.ts';
 import { ACCOUNT } from './helpers.ts';
 import { makeCodeM7Env, type CodeM7Env } from './code-m7-env.ts';
 
@@ -320,6 +321,50 @@ describe('session handoff', () => {
     expect(e.svc.info(ACCOUNT, s.id).folder).toBe(src);
     expect(existsSync(join(home, 'x.txt'))).toBe(false);
     expect(e.gitIn(home, ['status', '--porcelain']).trim()).toBe('');
+  });
+
+  it('takes the next handoff as soon as the last one shows its final state', async () => {
+    e = await makeCodeM7Env();
+    // The completed handoff's audit entry is held: its bookkeeping is still running.
+    let unhold!: () => void;
+    const held = new Promise<void>((r) => (unhold = r));
+    const handoffs = new HandoffService({
+      db: e.db,
+      code: e.svc,
+      threads: e.threads,
+      events: e.events,
+      audit: {
+        append: async (r: AuditRecord) => {
+          e.audit.push(r);
+          if (r.action === 'code.handoff.completed') await held;
+        },
+      },
+      dataDir: e.dataDir,
+      setting: (key: SettingKey) => Promise.resolve(SETTINGS[key].default),
+      turnWaitMs: 2_000,
+      pollMs: 20,
+    });
+    const cloud = e.cloudEnv();
+    const target = e.clone('next');
+    const local = (await e.svc.envs.local(ACCOUNT)).id;
+    const s = await e.svc.create(ACCOUNT, { folder: e.repo });
+    writeFileSync(join(e.repo, 'app.ts'), 'export const a = 8;\n');
+    const first = await handoffs.start(ACCOUNT, s.id, {
+      to: { environmentId: cloud, folder: target },
+    });
+    await vi.waitFor(() => expect(handoffs.get(ACCOUNT, first.view.id).status).toBe('completed'), {
+      timeout: 30_000,
+      interval: 10,
+    });
+    // Whoever sees the final state may move the session again at once (here back to the Hub's
+    // checkout, which still has the kept change: refused, and recorded).
+    const back = await handoffs.start(ACCOUNT, s.id, {
+      to: { environmentId: local, folder: e.repo },
+    });
+    unhold();
+    await first.done;
+    expect(await back.done).toMatchObject({ status: 'refused', reason: 'target_dirty' });
+    await handoffs.close();
   });
 
   it('moves a chat to another device', async () => {

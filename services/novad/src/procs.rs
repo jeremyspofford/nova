@@ -106,7 +106,8 @@ impl Procs {
             command.process_group(0);
         }
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child: Child = command.spawn().map_err(|e| OpError::new(409, "sandbox_unavailable", format!("the sandbox could not start: {e}")))?;
+        // On novad's spawner thread: the request's thread ends long before the process does.
+        let mut child: Child = crate::hardening::spawn_kept(command).map_err(|e| OpError::new(409, "sandbox_unavailable", format!("the sandbox could not start: {e}")))?;
         let id = new_id();
         let p = Arc::new(Proc {
             id: id.clone(),
@@ -303,6 +304,28 @@ mod tests {
         }
         assert!(last["dropped"].as_u64().unwrap() >= 1_100_000 - KEEP_BYTES as u64);
         assert_eq!(last["data"].as_str().unwrap().len(), KEEP_BYTES);
+    }
+
+    /// Regression: a process started on a request's thread kept running after that thread ended
+    /// only by luck; the parent-death signal follows the forking thread, so it was killed.
+    #[test]
+    fn processes_outlive_the_request_thread_that_started_them() {
+        let p = Procs::default();
+        let p2 = p.clone();
+        let id = std::thread::spawn(move || sh(&p2, "echo started; sleep 1; echo later")).join().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let r = p.read(&g(), &id, 0, 2_000).unwrap();
+        assert_eq!((r["running"].as_bool(), r["data"].as_str()), (Some(true), Some("started\n")), "{r}");
+        let mut r = p.read(&g(), &id, r["offset"].as_u64().unwrap(), 3_000).unwrap();
+        for _ in 0..100 {
+            if r["running"] == false {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+            r = p.read(&g(), &id, 0, 0).unwrap();
+        }
+        assert_eq!((r["running"].as_bool(), r["exitCode"].as_i64()), (Some(false), Some(0)), "it ran to the end: {r}");
+        assert!(p.read(&g(), &id, 0, 0).unwrap()["data"].as_str().unwrap().contains("later"));
     }
 
     #[test]

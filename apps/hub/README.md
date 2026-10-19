@@ -105,7 +105,7 @@ desktops; devices serve as local-host computers and Code device environments; Co
 the browser's grant and opener (`browserDevServerGrant`, `browserDevServerOpener`), and container
 environments the egress proxy (late-bound). The Hub answers to the host of `channels.publicUrl` and
 follows the setting. Not wired in M6: an SSH transport, the Hub's update key and the local browser
-fallback.
+fallback (M7.5 wires it, below).
 
 M6.5 adds six areas (decisions in ADR-094). `app.ts` sets them up after devices: trust →
 network → add device → agent dist → network setup → relay, and wires them together. The trust
@@ -164,6 +164,39 @@ tunnel); `mcp.ts` and `mcp-server.ts` (device MCP servers through `novad`, `auth
 resources and prompts on `/mcp`); `agent-dist.ts` (the install command for an https Hub fetches
 with `curl -fsSLk` and checks the SHA-256 it carries). `main.ts` asks HTTPS clients for a
 certificate of the Hub local CA without requiring one.
+
+M7.5 adds three areas and extends others (decisions in ADR-096; routes in `contracts/hub-api.md`).
+`app.ts` sets them up after device trust: the devices area gets the management channel's mutual TLS
+(the trust area's Hub client certificate and device certificate checks), certificate renewal, the
+authorization signer and the available builds; then firmware → out-of-band → boot, each wired to the
+devices service (device calls, heartbeat events, the heartbeat's `policy`), and boot gets the
+out-of-band power-cycle link. All of it is owner-only (`/api/v1/devices` and `/api/v1/oob` are on the
+owner-only list) and off by default. `PATCH /settings` refuses to turn on the firmware, low-level
+boot and PXE switches without `confirm: true` and refuses `devices.oob.enabled`. The settings
+route, the firmware policy route and `POST /oob/enable|disable` all write through `writeSetting`,
+so a security setting's change has one audit entry (the ops subscriber's `setting.changed`) with
+before, after and `confirmed`. The request log
+records the route pattern, never the token, for `/boot/` paths.
+
+| File | Area | Routes |
+| --- | --- | --- |
+| `firmware.ts` | BIOS and firmware (FR-146): the switches with consent, the support matrix, read, plan, Hub-only approval, apply and rollback with a signed authorization, the BIOS password, watchdog sweeps every 30 s; the `firmware` probe | `GET`/`PUT /devices/firmware/policy`, `GET /devices/firmware/support`, under `/devices/:id/firmware`: `GET`, `POST plan`, `GET changes/:changeId`, `POST changes/:changeId/{request-approval,apply}`, `POST snapshots/:snapshotId/rollback`, `GET history`, `PUT`/`DELETE admin-password` |
+| `boot.ts` | Boot profiles and PXE (FR-143): trials and "make default" after approval, revert, the Hub-side watchdog, boot tokens, images; the `boot` probe | under `/devices/:id/boot`: `GET`, `GET`/`POST profiles`, `PATCH`/`DELETE profiles/:pid`, `POST profiles/:pid/try`, `GET attempts/:aid`, `POST attempts/:aid/commit`, `POST revert`, `GET requests/:rid`, `POST`/`DELETE pxe/token`; `GET /devices/boot-images`; and the public `GET /boot/ipxe/:token` and `GET /boot/images/:token/:name` (per-device boot token; 30 menus and 120 images a minute per address) |
+| `oob.ts` | Out-of-band management (FR-147): BMC endpoints, pins confirmed by the owner, Hub-only approvals, the 60 s sweep, the settings guard for `devices.oob.enabled`; the `oob` probe | `GET /oob`, `POST /oob/{enable,disable}`, `GET`/`POST /oob/endpoints`, `GET`/`PATCH`/`DELETE /oob/endpoints/:id`, `POST /oob/endpoints/:id/pin/confirm`, `POST /oob/endpoints/:id/actions/:action`, `GET /oob/actions`, `GET /oob/actions/:id` |
+
+Extended areas: `devices.ts` (`GET /devices/management-tls`, `GET /devices/:id/services`,
+`GET /devices/:id/updates/available`, `GET /devices/:id/overrides`, `POST /devices/:id/overrides/push`,
+`GET`/`POST /devices/:id/decommission`, decommission cards answered through `approval.decided`; the
+`deviceManagement` probe); `node-routes.ts` (`GET /devices/:id/node`, `GET`/`PUT /devices/:id/node/policy`,
+`GET /devices/:id/node/services`, `POST /devices/:id/node/services/:name/:action`); `browser.ts`
+(the local browser fallback and the extension bridge, FR-209, FR-096: `GET /browser/fallback/consents`,
+`DELETE /browser/fallback/consents/:id`, `GET /browser/fallback/sessions`, `GET /devices/:id/bridge`,
+`GET`/`POST /devices/:id/bridge/grants`, `POST /devices/:id/bridge/grants/:grantId/confirm`,
+`DELETE /devices/:id/bridge/grants/:grantId`, the public `POST /agent/v1/bridge/events` with the device
+credential; it ends its own open fallback sessions at start and closes unknown device sessions every
+15 minutes; `browser.useDevices(devices.service, …)` connects it to devices); `device-trust.ts`
+(`/agent/v1/bridge/events` is a `novad` route; a renewed certificate the device presents retires the
+old one).
 
 More options: `NOVA_SECRETS=keychain|vault`, `NOVA_TLS_CERT` / `NOVA_TLS_KEY` (HTTPS),
 `NOVA_SANDBOX=auto|docker|podman|bwrap|microvm|off` (M6 adds bubblewrap and the micro-VM stub;

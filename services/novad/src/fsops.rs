@@ -411,7 +411,9 @@ mod tests {
         assert_eq!(r["truncated"], true);
         assert_eq!(r["sha256"], hex(&sha256(b"one\ntwo\nthree\n")));
         assert_eq!(s.stat(&g, proj.join("src").to_str().unwrap()).unwrap()["kind"], "dir");
-        assert_eq!(s.list(&g, "/etc").unwrap_err().details.unwrap()["reason"], "folder_access_required");
+        assert_eq!(s.list(&g, "/usr").unwrap_err().details.unwrap()["reason"], "folder_access_required");
+        // System folders are never reachable, granted or not (ADR-096).
+        assert_eq!(s.list(&g, "/etc").unwrap_err().details.unwrap()["reason"], "protected_path");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

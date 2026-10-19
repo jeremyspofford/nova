@@ -38,16 +38,45 @@ request runs on its own thread, at most 16 in flight. The default manifest has `
 `storage` on every device and `compute` on compute-role devices; only `storage` (files, grants,
 staged writes, commands, processes, local MCP) and `management` (power, Wake-on-LAN, systemd
 services) do real work. `compute`, `browser`, `screen` and `capture` are placeholders that answer
-only `ping` and `status`. Modules run as `novad`'s user with resource limits only: there is no
-separate unprivileged module user and no per-module filesystem or network sandbox yet.
+only `ping` and `status` (M7.5 made `browser` real, below). Modules run as `novad`'s user with
+resource limits only: there is no separate unprivileged module user and no per-module filesystem or
+network sandbox yet.
 
 *As built in M7 (ADR-095).* The default manifest also has `local-runtime` on client-role devices
 (§4.3), so a client runs three module processes (`management`, `storage`, `local-runtime`) and a
-device that is both client and compute runs four. `novad` gained a TLS client: `rustls` 0.23.45
-(Apache-2.0 OR ISC OR MIT) with the `ring` 0.17.14 provider (Apache-2.0 AND ISC; it builds with the C
-compiler of the Rust image, where aws-lc would need cmake), whose certificate checks are
-`rustls-webpki`; the tests make their certificates with `rcgen` 0.14.10 (MIT OR Apache-2.0), a dev
-dependency only, so no key material is committed.
+device that is both client and compute runs four (one more each since M7.5, below). `novad`
+gained a TLS client: `rustls` 0.23.45 (Apache-2.0 OR ISC OR MIT) with the `ring` 0.17.14 provider
+(Apache-2.0 AND ISC; it builds with the C compiler of the Rust image, where aws-lc would need
+cmake), whose certificate checks are `rustls-webpki`; the tests make their certificates with
+`rcgen` 0.14.10 (MIT OR Apache-2.0), a dev dependency only, so no key material is committed.
+
+*As built in M7.5 (ADR-096; `services/novad/src/{hardening,supervisor,procs,browser,firmware,boot}.rs`).*
+`novad` is 0.7.0.
+
+- **Long-lived children are spawned on one thread.** A module started by a management request
+  (`modules/*`, `services/*`, an update's restart, a policy change), a Code process (`proc.spawn`)
+  and a browser session are spawned on `novad`'s spawner thread (`spawn_kept` in `hardening.rs`,
+  which also retries a program that is still busy from being written, ETXTBSY), so they outlive the
+  request thread that asked for them. Every hardened child gets the kernel's parent-death signal,
+  and Linux sends it when the *thread* that forked the child ends, not the process. Before M7.5
+  they were spawned on the request's own thread: a module started that way was killed as soon as
+  its request returned, counted as a crash and restarted on backoff, and a Code process died with
+  the request that started it.
+- **One new direct dependency.** `ring` 0.17.14 (Apache-2.0 AND ISC), for the one SHA-1 the
+  WebSocket handshake of the browser's DevTools relay needs (`src/ws.rs`). It is the crate rustls
+  already builds, so the lock file gains no new crate.
+- **Which modules are real.** `browser` does real work now (the local browser fallback and the
+  extension bridge host, §4.4) and is in the default manifest of client-role devices, so a client
+  runs four module processes (`management`, `storage`, `local-runtime`, `browser`) and a device that
+  is also compute runs five. BIOS settings and low-level boot are not separate processes: the
+  supervisor serves their routes itself (§5.2, §6) and asks the `management` module for the
+  restarts, and the capability document lists `firmware` when a BIOS backend works (§3).
+  Out-of-band management is the Hub's own and never goes through `novad` (§7). `screen` (moved to
+  M9 with the capture work) and `compute` (the compute node is `services/compute`) are still
+  placeholders that answer only `ping` and `status`, and so is `capture`.
+- The management channel also lists the owner's managed services with their state
+  (`POST /agent/v1/services`, FR-145); a service whose state cannot be read is listed as `unknown`
+  with the reason.
 
 ## 2. Install & bootstrap
 
@@ -112,7 +141,7 @@ novad install --hub http://<hub> --code - --pin <hub fingerprint> [--pairing <id
 **Known limitations (M6.5).** The install ran over plain HTTP only: `novad` had no TLS client and
 refused an `https://` Hub (M7 below). The Windows command is generated but untested and key
 generation reads `/dev/urandom`, so install fails there; the macOS service setup is untested.
-`novad uninstall` is still not built.
+`novad uninstall` is still not built (M7.5 built it, §11).
 
 *As built in M7 (ADR-095; `services/novad/src/{tls,install,cli,agent}.rs`).*
 
@@ -148,7 +177,36 @@ novad enroll --hub http(s)://<hub> --token nvd_… [--pin <hub fingerprint>] [--
   letters, digits, `_`, `.` and `-` (not starting with `-` or `.`, at most 64) is refused. The list
   is stored as `config.json` `localRuntime.users`; an enrollment that names nobody (no `--user`, not
   run through `sudo` by a user) keeps the existing list.
-- `--endpoint`, the address the Hub calls for the management channel, stays `http://`.
+- `--endpoint`, the address the Hub calls for the management channel, stays `http://` (since M7.5
+  `novad` registers it as `https://` once it holds a certificate, below).
+
+*As built in M7.5 (ADR-096; `services/novad/src/{install,agent,mgmt_tls,browser,bridge,uninstall,cli}.rs`).*
+
+```bash
+novad bridge enable | disable      # as the user, never root: the extension bridge (§4.4)
+novad bridge-host                  # what the browser starts for the extension
+novad uninstall [--purge] [--data-dir D]   # §11
+```
+
+- **The endpoint becomes `https://`.** `--endpoint` is still given as `http://`. Once the device
+  holds `device-cert.pem`, `install` and `enroll` register it, and every heartbeat reports it, as
+  `https://` on the same address, because the management channel is then mutual TLS (§9). The Hub
+  never moves a device that registered `https://` back to plain HTTP (a heartbeat offering
+  `http://` is 403 `policy_denied` `{reason: endpoint_downgrade}`).
+- **Browser users.** `install` and `enroll`, run as root for a client-role device on Linux, create
+  the dedicated users the local browser runs as, `nova-browser1` and `nova-browser2` (`useradd
+  --system --user-group --no-create-home`, no login shell; one per session, §4.4). An existing user
+  of that name that is not a dedicated unprivileged one stops the step. When the users cannot be
+  made, the device still enrolls and says so, and a root `novad` refuses to launch a browser until
+  they exist. On macOS `novad` makes no users: the owner creates two and names them in
+  `browser.runAs`. There is still no unprivileged user for the other modules.
+- **The extension bridge** is registered only by `novad bridge enable`, run by the user it is for
+  (refused as root), and removed by `novad bridge disable` (§4.4); the installer never writes a
+  browser's configuration.
+- **`novad uninstall [--purge]`** removes the service, the binary, the browser users and the bridge
+  files, and wipes the device's identity (§11). It does not contact the Hub, so it revokes nothing
+  there: remove or decommission the device on the Hub as well (the Hub's decommission revokes the
+  device and its certificate, §11).
 
 ## 3. Capability declaration
 
@@ -214,13 +272,27 @@ for files, staged writes, exec, MCP, power, services and updates; 0.7.0 for comp
 browser; 0.8.0 for capture; `devices.minNovadVersions` can raise them. Module versions are not
 checked.
 
+*As built in M7.5 (ADR-096; `services/novad/src/{agent,firmware,power}.rs`).* `modules` lists the
+installed modules, so `browser` on client-role devices (§4.4), plus `firmware` whenever a BIOS
+backend works on the machine (Dell, Lenovo or HP with its kernel driver loaded, a UEFI machine of a
+vendor outside the matrix with `efibootmgr`, or the owner's fake; §6), whether or not the Hub
+allows it.
+The Hub's `allowedModules` (FR-150) may name `firmware`; a list without it makes every firmware
+route answer 403 `module_not_allowed`. `hardware.firmware` is still not detected: the platform
+facts and the settings come from `firmware/read` (§6). Power-on-after-power-loss is not in the
+document: the power status (in heartbeats and `POST /agent/v1/power`) reports `afterPowerLoss` as
+`on`, `off` or `last`, read from the BIOS by the firmware-attributes backend, and `unknown` where
+none reads it (the boot-order-only `efibootmgr` backend included). `novad` 0.7.0 meets the 0.7.0
+minimum for the browser; computer use runs in the `screen` module, which is still a placeholder
+(§1).
+
 ## 4. Modules
 
 | Module | Purpose | Privilege | Default |
 | --- | --- | --- | --- |
-| **management** | Power state, boot configuration, services, updates, (opt) BIOS/OOB | High | On for Hub/desktop |
+| **management** | Power state, boot configuration, services, updates, (opt) BIOS | High | On for Hub/desktop |
 | **compute** | Run inference/embeddings/media backends; manage models | Medium | On for Compute Nodes |
-| **browser** | Headless browser automation for agents; the local browser fallback (FR-209); the native-messaging host for the extension bridge, which talks only to this `novad` (FR-096) | Low | Optional |
+| **browser** | Headless browser automation for agents; the local browser fallback (FR-209); the native-messaging host for the extension bridge, which talks only to this `novad` (FR-096) | Low | On for clients |
 | **screen** | Observe and control the desktop (computer use): per-app control tiers and grants, the kill key, the control indicator and edge highlight (FR-207); attach-window capture (FR-214) | Medium | Optional |
 | **storage** | Device file operations for Hub sessions (§4.1); local MCP pass-through; model storage; snapshots | Medium | Optional |
 | **capture** | Ambient capture helper with no network access (§4.2, FR-228) | Medium | Off |
@@ -338,14 +410,111 @@ the Hub is unreachable (`docs/21` §9).
   Limits: 16 MiB per request, 256 MiB per answer, 32 connections at once, 300 s of silence from the
   model server; a server that does not answer is 502 `node_unavailable`.
 - **Capability document.** The models the server lists appear as
-  `services.computeBackends: ["local-runtime"]` and `services.modelsPresent`. The module itself
-  stays out of `modules` (`DOCUMENT_MODULES` in `src/capabilities.rs`), although
-  `contracts/schemas/device-capability.json` now lists `local-runtime` in its enum.
+  `services.computeBackends: ["local-runtime"]` and `services.modelsPresent`. The module itself is
+  listed in `modules` (`DOCUMENT_MODULES` in `src/capabilities.rs`), as
+  `contracts/schemas/device-capability.json` allows.
 - **Not built.** No peer-credential check on the sockets (the file mode is the authentication). A
   `novad` that does not run as root can make a socket only for its own user (for anyone else the
   `lchown` fails, and `status` says so). Windows has no per-user named pipe. Binding for another
   real user as root, and the macOS path on a Mac, have not been tried: the tests bind for the test's
   own user.
+
+### 4.4 Local browser fallback and extension bridge (FR-209, FR-096)
+
+*As built in M7.5 (ADR-096; `services/novad/src/{browser,egress,ws,bridge}.rs`).* The `browser`
+module runs a clean Chromium on the device for an agent whose own browser a site blocked, once the
+user consented on the Hub for that site, and it hosts the extension bridge to the user's own
+browser. The Hub side (the offer, the per-site consent, the driver, the extension) is `docs/11` §4.6
+and §4.3; the routes are in `contracts/hub-api.md` §3.
+
+- **Launch.** `POST /agent/v1/browser/launch {sessionId, grantee, allowHosts, headless?}` →
+  `{sessionId, cdpPath, skippedHosts?}`. The browser is `config.json` `browser.executablePath` (an
+  absolute path to an executable), else the first of the usual Chromium-family install paths on
+  Linux or macOS; none is 409 `capability_missing` `{reason: no_browser}`. At most
+  2 sessions run on a device (409 `conflict` `{reason: session_limit}`; a repeated id is
+  `session_exists`). Each session gets a fresh profile folder (0700), deleted when it closes, inside
+  `novad`'s own folder `nova-browser-<hash of the data folder>` (0711) under `browser.profileRoot`
+  (default the temporary folder, private to the service under `PrivateTmp`); `novad` never changes
+  or cleans the configured folder itself, and profiles a crash left behind are deleted when the
+  module starts. Headless by default; a visible browser needs a display (409 `{reason:
+  no_display}`). A session is ready once the browser answers `novad`'s own `Browser.getVersion`
+  within 20 s; otherwise, or when it exits at start, the launch is 503 `{reason:
+  browser_start_failed}` with the tail of its output. `close {sessionId}` → `{closed: true, egress:
+  {allowed, refused}}` stops the browser's whole process group (SIGTERM, then SIGKILL before the
+  browser is reaped) and deletes the profile; `list` first closes sessions whose browser died.
+- **Who it runs as.** A `novad` that is not root runs Chromium as itself. A root `novad` runs each
+  session as its own dedicated user, never root, `nobody`, or a user whose primary group is
+  root's or `nobody`'s: `nova-browser1` and `nova-browser2` (§2), or the users `browser.runAs`
+  names (a name or a list). An unsafe `runAs` is 403 `{reason: unsafe_browser_user}`; no such user
+  is 409 `capability_missing` `{reason: no_browser_user}` and none free is 409 `conflict` `{reason:
+  no_free_browser_user}` (fail closed). Two live sessions never share a uid, so no other process shares the browser's
+  user and its DevTools pipe. The folder the profiles go in must be passable by that user (o+x),
+  else 400.
+- **Egress filter.** Each session's Chromium gets `--proxy-server` pointing at its own HTTP proxy
+  on `127.0.0.1:<free port>`, with `<-loopback>` so loopback goes through it too, and WebRTC kept
+  off non-proxied UDP. The filter takes CONNECT and absolute `http://` requests only (400
+  otherwise), to ports 80 and 443 only, and only to `allowHosts`: exact names, and `*.name` for the
+  names under it (not `name` itself). At most 200 entries; an entry `novad` cannot use (`*`, a
+  wildcard over a whole top-level domain such as `*.dev`, an IP literal, a name whose last label
+  has no letter) is skipped and returned as `skippedHosts: [{host, reason}]`, and the launch fails
+  (400) only when no host is left. IP literals and numeric names are refused whatever the list
+  says, and an unlisted name is refused before any lookup. `novad` resolves a listed name itself
+  and refuses it (403) when any address it gets is private, loopback, link-local, multicast,
+  unspecified, carrier-grade NAT, unique-local or reserved, so a public name cannot point the
+  browser at the device's LAN; for IPv6 only 2000::/3 counts as public, and IPv4-mapped, NAT64 and
+  6to4 addresses are judged by the IPv4 address they carry. It then connects to the address it
+  checked, never to a second lookup. There is no TLS inspection. Bounds: 64 connections, 30 s for a
+  request head, 5 minutes idle. It logs hosts and decisions, never URLs, and its counts go back to
+  the Hub when the session closes. It has no token (Chromium cannot present proxy credentials);
+  it only narrows what any local process could reach anyway.
+- **DevTools.** Chromium runs with `--remote-debugging-pipe` (it reads fd 3 and writes fd 4,
+  NUL-terminated JSON) and opens no TCP port. The Hub connects to `GET
+  /agent/v1/browser/cdp/<sessionId>` with the management token, over mutual TLS when the device
+  holds a certificate (§9); a request with an `Origin` is 403 `origin_rejected`, and the upgrade
+  needs WebSocket version 13 and a 16-byte key (400 otherwise). The supervisor reaches the module
+  over `<data>/browser/cdp.sock` (0600 in a 0700 folder; 404 for an unknown session, 503 `{reason:
+  module_unavailable}` without the module) and answers the WebSocket itself (`src/ws.rs`, no
+  extension or subprotocol): each text message goes to the pipe whole, and each of the browser's
+  messages comes back as one text frame. Client frames must be masked; binary is refused (1003),
+  invalid UTF-8 or a NUL inside a message is 1007, and a message over 64 MiB either way is 1009;
+  the decoder holds at most one message plus one read. One connection per session: a newer one
+  replaces the older (closed with 1001), and closing the session closes it with 1001. The pipe
+  outlives a connection, so DevTools sessions a previous connection attached inside the browser
+  stay attached after a reconnect.
+- **Idle and lifetime.** A session with no DevTools client for 10 minutes is closed, and every
+  session after 4 hours, so a Hub that crashed, or a close that never reached the device, cannot
+  hold the two slots.
+- **The extension bridge host.** `novad bridge enable`, run by the user (refused as root), writes
+  `~/.config/nova/bridge-token` (`nvbr_…`, 0600 in a 0700 folder) and the native-messaging host
+  manifest `ai.nova.bridge.json` into the `NativeMessagingHosts` folder of each Chromium-family
+  browser whose config folder already exists in the user's home, with `allowed_origins` only Nova's
+  extension (`config.json` `bridge.extensionId`, required; asked of `novad` over the bridge socket
+  when the user cannot read the config). `disable` removes both. The browser starts the host
+  (`novad bridge-host`, or `novad chrome-extension://…/`), which speaks native messaging on stdin
+  and stdout (a 4-byte native-endian length, then JSON, at most 1 MiB each way) and relays with the
+  same framing to the user's `bridge.sock` beside the local runtime's socket (§4.3); it passes only
+  `call` frames to the extension and only `result`, `error` and `event` frames to `novad`. The
+  module binds `bridge.sock` for each user in `localRuntime.users` the way the local runtime binds
+  its socket. A connection must come from that user's uid (the kernel's peer credentials), present
+  the token in that user's token file (read by a child running as the user) and, for a host, the
+  configured extension's origin (`token_required`, `bridge_not_configured`, `origin_not_allowed`
+  otherwise). One host at a time: a newer host of the same user replaces the older one (`novad`
+  reports `disconnected` for it, then `connected`), and a host of another OS user gets
+  `bridge_busy` until the connected one is gone.
+- **Calls and events.** `POST /agent/v1/bridge/call {method, params?, timeoutMs?}` → `{result}` or
+  `{error: {code, message}}`, for `tabs.list`, `tabs.open`, `tab.attach`, `tab.detach`, `cdp.send`
+  and `history.search`; `timeoutMs` is 1 to 120 s (default 30 s; past it 504 `{reason:
+  bridge_timeout}`); with no host connected, or no browser module, 409 `bridge_offline`. `POST
+  /agent/v1/bridge/status` → `{configured, connected, user, since, users}`. The extension's
+  `tab.shared`, `tab.unshared`, `tab.closed`, `host.granted` and `host.revoked` and `novad`'s own
+  `connected` and `disconnected` (with the user) are queued (500, oldest dropped, 16 KiB each) and
+  posted to the Hub's `POST /agent/v1/bridge/events` with the device credential, at most 100
+  events and under 900 KiB a post. 5xx, 408 and 429 are retried, a 413 halves the batch (a single
+  event that still does not fit is dropped), and any other 4xx drops the batch with a log line.
+- **Not built.** No bridge on Windows (no named pipe, no registry manifest). A visible browser run
+  as a dedicated user probably cannot use the desktop user's display. On a kernel without
+  unprivileged user namespaces Chromium's own sandbox does not start, which shows as
+  `browser_start_failed`. `novad`'s tests drive a fake Chromium that speaks the pipe protocol.
 
 ## 5. Boot & power
 
@@ -370,6 +539,75 @@ For headless/compute machines and lab setups, `novad` may manage lower-level boo
 
 Low-level boot is disabled by default and requires an admin toggle.
 
+*As built in M7.5 (ADR-096; `services/novad/src/boot.rs`, `packages/core/src/boot`, `apps/hub/src/boot.ts`).*
+
+- **Bootloaders.** Linux only (elsewhere `os_not_supported`). `config.json` `boot.backend` (default
+  `auto`) tries systemd-boot (`bootctl is-installed`), then GRUB (`grub.cfg` in `/boot/grub` or
+  `/boot/grub2` and `grub-reboot` or `grub2-reboot`; entries, `submenu>entry` ids included, read
+  from `grub.cfg`), then UEFI boot entries (`efibootmgr`); `fake` reads a JSON file (tests and the
+  E2E fake device) and `none` turns it off. Without one, `boot/status` answers `{supported: false,
+  reason}` and every other route 409 `conflict` `{reason: unsupported_hardware, detail}`. The Hub
+  reads the `bootloader` name leniently (`DeviceBootStatusView.bootloader` is a plain string):
+  `fake` is a known one (shown as "Test bootloader (fake)"), a short plain name it does not know
+  is kept and shown as "unknown (<name>)", and anything else or a missing name becomes
+  `unreadable`, so a newer `novad` never makes the whole status unreadable. Every tool
+  runs through the hardened child-process helper as an argument vector, never a shell, within 10 s.
+- **One-shot.** `boot/set {profileId, entryId, watchdogSeconds?, reboot?}` sets a one-shot next boot
+  (`bootctl set-oneshot`, `grub-reboot`, `efibootmgr --bootnext`), so a machine that never comes up
+  returns to its default entry by itself at the next power cycle. `boot/commit` makes the entry the
+  default (`bootctl set-default`, `grub-set-default`, or `efibootmgr --bootorder` with the entry
+  moved first) and `boot/revert` clears a pending one-shot. Set and commit need the Hub's
+  `lowLevelBoot` policy, from the heartbeat answer or pushed through `/agent/v1/config` (403
+  `{reason: low_level_boot_off}`), and a Hub-signed authorization (§9); revert needs only its
+  authorization. Before a set or commit the Hub pushes the toggle when the device last confirmed
+  another value; a device that still refuses gets it again and the change once more with a new
+  change id, and if it still refuses the request goes back to waiting with its approval unspent
+  (`device_policy_stale`) and the Hub's sweep sends it again. One pending change at a time
+  (409 `boot_pending`); a restart needs the owner's `power.allowActions`, checked before anything
+  changes (409 `reboot_unavailable`).
+- **Watchdog.** `boot/pending.json` (the deadline, this boot's id, the authorization's change id) is
+  written before the one-shot and removed again when setting it fails. The deadline is
+  `watchdogSeconds` (120 to 3600, default 600; the Hub sends `devices.boot.watchdogSeconds`) counted
+  from `set`, even without `reboot`. After a restart, the first heartbeat the Hub accepts before the
+  deadline reports `boot.watchdog.ok` with `{booted, verified}`. A machine that booted another entry
+  gets the one-shot cleared and `boot.watchdog.reverted` (`not_booted`, no restart). The deadline
+  passing first clears the one-shot, reports `reverted` (`deadline`) and restarts once into the
+  default, only when the machine is on the pending entry or cannot tell. A machine never restarted
+  by the deadline is cleared without a restart (`not_restarted`). A marker is handled once and
+  never loops.
+- **GRUB.** GRUB cannot name the entry it booted. `verified` is false when `next_entry` is still set
+  in grubenv (the one-shot never ran) or `/proc/cmdline` names another kernel than the entry's
+  `linux` line. The entry list marks the default grub.cfg really boots, and commit is refused with
+  409 `{reason: grub_default_not_saved}` unless grub.cfg boots `saved_entry` (`GRUB_DEFAULT=saved`),
+  because `grub-set-default` changes nothing otherwise. The service unit keeps `/boot/grub`,
+  `/boot/grub2`, the ESP and the EFI variables writable (§9).
+- **The Hub.** Named boot profiles per device, each an entry id; kernel arguments are not supported
+  (400 `capability_missing` `{reason: kernel_args_not_supported}`). Trying a profile and making a
+  confirmed trial the default each open an approval card (risk high, confirm at action, 30 minutes,
+  answered only in Nova by the signed-in owner) and are sent once, with a signed authorization, when
+  the owner allows them; with `devices.boot.allowLowLevel` off both are refused when asked and again
+  when sent. A revert is a safety action: the owner's own request is its approval, and it works with
+  the toggle off. One trial and one waiting request per device. A trial reported with `verified:
+  false` becomes the default only with `confirmUnverified: true` (else 409 `{reason:
+  unverified_trial}`). A trial with no report 120 s after its deadline is marked `failed`
+  (`no_heartbeat`, or `no_watchdog_report` when the device was heard from) and the owner is told,
+  with a power-cycle link when an out-of-band endpoint is linked to the device (the owner's own
+  action, §7); a later report from the device corrects the record.
+- **Network boot is the Hub's.** PXE/iPXE is served by the Hub, not `novad`, and only with
+  `devices.pxe.enabled` (off by default; it does not need the low-level toggle). Each device gets a
+  boot token (`nvb_` and 256 random bits, shown once, only its hash kept, rotatable, dead with the
+  device). `GET /boot/ipxe/<token>` answers an iPXE menu of the images in `<dataDir>/boot-images/`
+  (the local disk after 30 s), and `GET /boot/images/<token>/<name>` serves one (plain file names
+  directly in that folder; single byte ranges). Both answer 404 while PXE is off and for an unknown
+  or revoked token, allow 30 menus and 120 images a minute per address, audit every fetch, and are
+  masked in the Hub's request log so the token never reaches it. Nova runs no DHCP or TFTP: point a
+  DHCP server's next-server/filename, or an iPXE build's embedded script, at `/boot/ipxe/<token>`.
+  iPXE over plain HTTP carries the token in the clear, so images must hold no secrets; iPXE over
+  HTTPS needs the Hub local CA built into it. Either way iPXE must use an address the Hub answers
+  to (its Host check applies).
+- **Not built.** Kernel arguments, DHCP and TFTP, and low-level boot on Windows or macOS. The
+  bootloaders were tested with fake tools only, never on real hardware.
+
 ### 5.3 Wake-on-LAN
 
 - Enable WoL where the platform allows (NIC setting, and BIOS where supported).
@@ -381,9 +619,10 @@ Low-level boot is disabled by default and requires an admin toggle.
 magic-packet wake on (`sysfs` plus `ethtool`). Enabling it is a plan by default (an `ethtool`
 command and a systemd-networkd `.link` file per NIC); applying needs `apply`, the owner's
 `power.allowChanges` and root. Sleep, restart and shutdown use `systemctl` and need
-`power.allowActions`. Power-on-after-power-loss is `unknown` (it needs the firmware module). There
-is no Wake Helper yet: the Hub sends the magic packet itself as a UDP broadcast on its own LAN,
-at most `devices.wakesPerHour` per device. Low-level boot answers `capability_missing`.
+`power.allowActions`. Power-on-after-power-loss is `unknown` (it needs the firmware module; since
+M7.5 it is read from the BIOS where a backend can, §3, §6). There is no Wake Helper yet: the Hub
+sends the magic packet itself as a UDP broadcast on its own LAN, at most `devices.wakesPerHour` per
+device. Low-level boot answers `capability_missing` (M7.5 built it, §5.2).
 
 *As built in M6.5 (ADR-094).* A device whose roles include `wake-helper` accepts
 `POST /agent/v1/power/wake-other {mac, broadcast?, port?}` on the management channel, with the same
@@ -429,6 +668,111 @@ Secure Boot / TPM state · fan/thermal profile.
 7. Reboot/power-cycle coordination, with a watchdog and automatic rollback on failed boot.
 8. Every change is written to the **audit log** with before/after values.
 
+*As built in M7.5 (ADR-096; `services/novad/src/firmware.rs`, `packages/core/src/firmware`,
+`apps/hub/src/firmware.ts`, `packages/shared/src/m75/firmware.ts`).* `novad` reads and writes the
+settings; the Hub decides whether it may. Linux only, through the kernel's firmware-attributes class
+(`/sys/class/firmware-attributes/<driver>/attributes/<name>/current_value`) or `efibootmgr`, with
+the platform read from `/sys/class/dmi/id` (no `dmidecode`). The vendor tools of 6.1 are not used.
+Nothing has run on real BIOS hardware: the vendor attribute names are checked against mock sysfs
+trees only.
+
+**Support matrix.** `novad`'s vendor table decides (the first attribute name a machine has wins):
+
+| Vendor | Method (driver) | Canonical keys (the vendor's attribute) | Not offered |
+| --- | --- | --- | --- |
+| Dell | firmware-attributes (`dell-wmi-sysman`) | `wol` WakeOnLan, `powerOnAfterPowerLoss` AcPwrRcvry, `virtualization` Virtualization, `secureBoot` SecureBoot, `tpm` TpmSecurity, `fanProfile` ThermalManagement | `bootOrder` |
+| Lenovo | firmware-attributes (think-lmi, `thinklmi`) | all seven; `bootOrder` BootOrder (a colon-separated list) | — |
+| HP | firmware-attributes (`hp-bioscfg`) | `wol`, `powerOnAfterPowerLoss`, `bootOrder` (UEFI Boot Order), `virtualization`, `secureBoot`, `tpm` (TPM State or TPM Device) | `fanProfile` |
+| ASUS | none | — | refused: no interface to these settings from Linux |
+| Supermicro | none | — | refused: manage it out of band (§7) |
+| Any other UEFI machine | `efibootmgr` | `bootOrder` only | everything else |
+
+Refusals name their reason: `os_not_supported` (Windows and macOS; the vendor tools there are
+Windows-only and not built), `driver_missing` (a matrix vendor whose kernel driver is not loaded),
+`vendor_not_supported` (ASUS, Supermicro, and other vendors' machines without UEFI, which the Hub's
+matrix calls `legacy_bios`), `tool_missing` (a UEFI machine without `efibootmgr`) and
+`disabled_by_owner` (`config.json` `firmware.backend: "none"`). `firmware/read` then answers
+`supported: false` with the reason, and every write is 409 `conflict` `{reason:
+unsupported_hardware, detail}`; the Hub requires both the device and its own matrix to say
+supported. The Hub's copy (`FIRMWARE_SUPPORT_MATRIX`, shown on the support route) matches `novad`'s
+table on vendor, method, driver folder, support and keys: one fixture
+(`services/novad/tests/fixtures/firmware-support-matrix.json`) is compared by both test suites, so
+they cannot drift (vendor names still match a little differently: `novad` looks for the name
+anywhere, the Hub at the start of a word). The Hub reads `firmware/read`'s `method` leniently
+(`FirmwareReadView.method` is a plain string): `firmware-attributes`, `efibootmgr`, `fake` or
+`unknown`, or a short plain name a newer `novad` sends, which the web shows as "unknown (<name>)";
+anything else becomes `unreadable`, and never the whole answer. **fwupd** is read-only: `firmware/read` lists the updates `fwupdmgr get-updates
+--json` offers (within 10 s, at most 50; none without fwupd), and installing them is not built.
+
+**The safety model of 6.3, as the code does it.**
+
+1. **Toggle.** `devices.firmware.allowChanges` (off, owner-only, `security: true`; turning it on
+   needs `{confirm: true}` and is audited with the values before and after). The Hub refuses plan,
+   approval and apply while it is off (`firmware_disabled`). `novad` learns it in every heartbeat
+   answer (`policy.firmwareChanges`, kept in `policy.json`; only `true` counts, a damaged file is
+   off, enrollment deletes it) and refuses apply and rollback without it (403 `firmware_disabled`),
+   even with a valid authorization. The Hub does not wait for a heartbeat: it pushes the toggle
+   with `POST /agent/v1/config {policy: {firmwareChanges, lowLevelBoot}}` (§9) to every active
+   device when the switch changes, and before each apply and rollback when the device last
+   confirmed another value (`DeviceService.syncPolicy`). A device that still answers
+   `firmware_disabled` while the switch is on gets the toggle again and the change once more with a
+   freshly signed authorization; if it still refuses, the Hub answers 409 `device_policy_stale`
+   (retryable) and the change stays approved. Reading and planning on the device work whatever the toggle,
+   but only while the Hub allows the `firmware` module (403 `module_not_allowed`).
+2. **Approval.** Each change is an approval card (risk high, confirm at action, Allow once or Deny,
+   24 h) that shows the diff and is answered only by the signed-in owner in Nova: a channel button,
+   reply or link, a hook or a rule is refused `hub_only`. Its hash binds it to the change, the diff
+   and the snapshot, and it is used once. The Hub then signs an authorization of kind
+   `firmware.apply` or `firmware.rollback` for exactly that request body, which `novad` requires
+   (§9). No model-facing tool plans, approves or applies a firmware change.
+3. **Dry run and diff.** `firmware/plan {changes}` (1 to 16 keys, each once) changes nothing and
+   answers the diff (`from`, `to`, `securityDegrading`) and the keys it refused (`unknown_key`,
+   `read_only`, `not_allowed_value`, `unsupported`). An enumeration takes only its possible values,
+   an integer only values within its bounds, and a boot order may only be reordered, never
+   shortened or extended. The Hub caches a device's read for 60 s and runs one firmware operation
+   per device at a time (`firmware_busy`).
+4. **Snapshot and rollback.** Each plan snapshots every allowlisted value on the device
+   (`firmware/snapshots/<id>.json`, 0600, the newest 20 and any a watchdog marker names); the Hub
+   keeps its own copy, sealed with the data key. Apply writes only while the machine still holds the
+   snapshot's values (409 `base_mismatch`, nothing written), and a write that fails midway restores
+   what it had written (500 `apply_failed` with `restored`). `firmware/rollback` restores a
+   snapshot from the device's copy or, when the device lost it, from the Hub's (its SHA-256
+   checked). A rollback is a change of its own, with its own approval, and never restarts the
+   machine.
+5. **Allowlist and override.** Only `wol`, `powerOnAfterPowerLoss`, `bootOrder`, `virtualization`,
+   `secureBoot`, `tpm` and `fanProfile` exist; every other setting a BIOS has, firmware write
+   protection included, cannot be read or changed. Setting Secure Boot or the TPM to a value that
+   is not "on" is security-degrading: it needs `devices.firmware.allowSecurityDegrading` (also off,
+   also confirmed), which the Hub checks at approval and again at apply, rollbacks included, before
+   it sends `allowSecurityDegrading: true` inside the signed body. `novad` refuses such a write
+   without it (403 `security_degrading`). The Hub flags these keys even when the device does not.
+6. **Matrix.** Above.
+7. **Watchdog.** With `reboot: true`, `novad` first checks that it may restart (the owner's
+   `power.allowActions`, else 409 `reboot_unavailable`), writes `firmware/pending.json` before the
+   first BIOS write (removed again when the change fails), answers, and restarts through the
+   `management` module 1.5 s later. The deadline is `watchdogSeconds` after the apply: the Hub
+   sends `devices.firmware.watchdogSeconds` ("Firmware watchdog", default 600, kept inside 120 to
+   3600) with every apply that restarts, separate from the boot watchdog because a restart into new
+   firmware settings goes through the BIOS start-up; `novad` takes 120 to 3600 and defaults to 600. The first heartbeat the Hub accepts after the restart, before the
+   deadline, reports `firmware.watchdog.ok`; the deadline passing first restores the snapshot key by
+   key and reports `firmware.watchdog.reverted` (§10). Only a complete revert restarts, once; one
+   guarded restart is pending at a time (409 `watchdog_pending`) and a snapshot never gets a second
+   watchdog (409 `watchdog_already_used`). **A BIOS admin password** changes this. `novad` never
+   keeps the password, so its watchdog cannot write such a BIOS (every key fails with
+   `admin_password_required`, and there is no restart); the Hub therefore refuses `reboot: true` on
+   a device that reports `adminPasswordSet` (403 `policy_denied` `{reason: watchdog_unavailable}`)
+   before it reads the vault: apply without a reboot, restart by hand, and roll back from Nova if
+   needed. The password (`secret://devices/<id>/bios-admin`, write-only on the Hub) is read and sent
+   per call, only to a device with an `https://` endpoint (else 403 `tls_required`, and no vault
+   read), and is left out of the signed body hash. `novad` writes it to the driver's
+   `authentication/Admin/current_password` before each write and clears it after, never stores or
+   logs it, and refuses a body that carries it over plain HTTP (403 `tls_required`). An apply or
+   rollback without it on such a BIOS is 403 `admin_password_required`.
+8. **Audit.** The Hub audits `device.firmware.read|plan|approval|apply|rollback|watchdog` (kind
+   `device`) with the values before and after, the password's `device.firmware.password.set|clear`
+   (kind `secret`), and the toggles once each as `setting.changed` (kind `settings`, from the
+   settings writer's `settings.changed`); it emits `device.firmware.changed`.
+
 ## 7. Out-of-band management (BM4, opt-in)
 
 - **IPMI** (BMC), **Redfish**, **Intel AMT/vPro**: power on/off/cycle, firmware settings,
@@ -437,6 +781,40 @@ Secure Boot / TPM state · fan/thermal profile.
   must be allowlisted.
 - All operations are policy-gated, approved, and audited.
 - Supports server hardware (Supermicro/Dell/HPE) and vPro client machines.
+
+*As built in M7.5 (ADR-096; `packages/core/src/oob`, `apps/hub/src/oob.ts`).* Out-of-band
+management is the Hub's own: the Hub talks to the BMC, and `novad` has no out-of-band route (it
+answers `/agent/v1/oob/*` with 403 `oob_disabled`). `devices.oob.enabled` is off by default and is
+turned on only by `POST /api/v1/oob/enable {confirm: true}` (the settings route refuses it); every
+route is owner-only and every step is audited (`device.oob.<action>`, with the values before and
+after).
+
+- **Endpoints.** The owner registers each BMC (the registry is the allowlist): Redfish over HTTPS,
+  or IPMI through `ipmitool` (lanplus; the password goes only through `IPMI_PASSWORD`, never on the
+  command line). Intel AMT is not built (`capability_missing` `{reason: not_built}`), nor are
+  console access and BIOS settings over IPMI. The address may not be loopback, link-local,
+  unspecified, multicast or the Hub's own, and every address a name resolves to is checked again
+  at each connection. Credentials live only in the vault (`secret://oob/<id>`).
+- **Pinning.** A Redfish BMC's certificate is pinned like an SSH host key: the first `check` reads
+  its SHA-256 without sending credentials, and the owner confirms it (`POST
+  /api/v1/oob/endpoints/:id/pin/confirm`) before any are sent. Every later connection is checked
+  against the pin before a byte is written (403 `policy_denied` `{reason: tls_pin_mismatch}`
+  otherwise); redirects are never
+  followed, and each call times out after 10 s.
+- **Actions.** `check`, `power.status|on|off|cycle|reset`, `sensors`, `bios.read`, `bios.plan` and
+  `bios.apply` (Redfish pending settings, applied at the next reboot; the canonical keys and both
+  firmware toggles of §6 with this area's own attribute table: Dell and HPE mapped, Lenovo and
+  Supermicro refused), and `boot.next` (a one-time boot override; many BMCs drop it if the machine
+  does not restart within about 60 s).
+- **Approvals.** Every action but `check`, `power.status`, `sensors` and `bios.read` files a
+  Hub-only approval card (risk high), bound to the BMC as it was (address, port, system, pin) and
+  run only on the signed-in owner's own Allow once: power and `boot.next` run when allowed within 10
+  minutes, and a `bios.plan` card shows the diff and covers its single `bios.apply`. Editing or
+  deleting an endpoint withdraws its open cards and approved plans. No device authorization (§9) is
+  involved, because no device is called.
+
+The policy side is `docs/12` §4 (approvals) and §5 (the vault); the routes are in
+`contracts/hub-api.md` §1.
 
 ## 8. Updates
 
@@ -464,6 +842,13 @@ binary as `<data>/bin/novad-previous`, renames the new one over itself and exits
 watchdog restores the old binary after 3 starts without an accepted heartbeat, and the first
 accepted heartbeat commits the update and reports it. A watchdog rollback is not reported, so the
 Hub keeps that bundle as `staged`. The Hub hosts no bundles.
+
+*As built in M7.5 (ADR-096).* `novad` is 0.7.0. A watchdog rollback of a `novad` update is still
+not reported: `update.rs` `watchdog_on_start` restores the old binary, `novad` logs it and exits,
+and no heartbeat event carries it, so the M6 sentence above stands. The device page now shows
+whether a newer `novad` build is available (`GET /api/v1/devices/:id/updates/available`, compared
+with the signed builds the Hub serves for Add Device): information only, nothing is pushed.
+Firmware updates are only listed, from fwupd (§6).
 
 ## 9. Security model
 
@@ -509,11 +894,96 @@ HTTPS when the Hub serves it, trusted only through the pinned Hub identity (§2)
 `device-cert.pem` as the client certificate (mutual TLS); the Hub checks it on those routes, while
 `devices.tls.allowWithoutCertificate` (on for one release) still accepts a device without one
 (`docs/22` §5). The management channel the Hub calls on the device is still bearer tokens over
-plain HTTP (`--endpoint` must be `http://`; R-022, narrowed to this channel). The first local
-socket is the local runtime's (§4.3): 0600 Unix sockets, its own and one per listed user, or a
-loopback address that needs its token, serving only the model routes after the Hub's grant. The
-`local.*` methods of `contracts/hub-api.md` §4 and the local token they use are not built. Device
-certificates are not renewed.
+plain HTTP (`--endpoint` must be `http://`; R-022, narrowed to this channel; M7.5 made it mutual
+TLS for a device that holds a certificate, below). The first local socket is the local runtime's
+(§4.3): 0600 Unix sockets, its own and one per listed user, or a loopback address that needs its
+token, serving only the model routes after the Hub's grant. The `local.*` methods of
+`contracts/hub-api.md` §4 and the local token they use are not built. Device certificates are not
+renewed (M7.5 renews them, below).
+
+*As built in M7.5 (ADR-096; `services/novad/src/{mgmt_tls,authz,paths,grants,cli,browser}.rs`,
+`packages/core/src/devices`, `packages/core/src/firmware/authz.ts`).*
+
+- **Mutual TLS on the management channel** (closes R-022 for devices with a certificate). When
+  `novad` starts holding `device-cert.pem`, its management server (default port 7420) speaks TLS
+  1.3 only, so the client certificate travels encrypted. It presents the device certificate with
+  the device's own Ed25519 key and requires a client certificate that chains to the Hub local CA
+  `novad` cached from a verified identity statement (`hub-trust.json`), carries EKU clientAuth and
+  the URI SAN `urn:nova:hub:<pinned fingerprint>` (another device's certificate from the same CA is
+  refused); the bearer management token is still checked on every request. The configuration is
+  read per connection, so a CA learned later applies at once; when it cannot be built (no cached
+  CA, a damaged certificate, one for another key) every connection is refused, logged at most once
+  a minute, and nothing is ever served over plain HTTP instead. Whether the channel is TLS is fixed
+  when `novad` starts. Without a certificate it stays plain HTTP, but even there a body carrying
+  the BIOS admin password is refused (403 `policy_denied` `{reason: tls_required}`).
+- **No downgrade.** On a device that holds a certificate, a privileged request (firmware apply and
+  rollback, boot set, commit and revert, decommission) that arrives over plain HTTP is 403
+  `policy_denied` `{reason: tls_required}` before anything else is looked at. The device registers
+  and heartbeats its endpoint as `https://` (§2). The Hub calls such a device only over TLS 1.3
+  with its own client certificate (from the Hub local CA: URI SAN `urn:nova:hub:<fingerprint>`,
+  clientAuth, 90 days, kept in the vault and renewed with the TLS leaf), without session reuse, and
+  checks `novad`'s certificate by chain, the URI SAN `urn:nova:device:<id>` and the pinned key,
+  never by host name; it never falls back to plain HTTP for a device that registered `https://`
+  (`docs/22` §5).
+- **Certificate renewal.** New device certificates carry serverAuth as well as clientAuth. A
+  heartbeat answer may carry `certificate: {pem, notAfter}` when the device's certificate lacks
+  serverAuth (issued in M7) or has a third of its life left. `novad` takes it only as a renewal,
+  when it chains to the cached Hub CA, is valid now, has serverAuth and clientAuth, holds the
+  device's own key and names `urn:nova:device:<id>`; it replaces `device-cert.pem` atomically
+  (0600), new connections use it at once and the calls to the Hub from the next request. A refusal
+  (`wrong_key`, `wrong_device`, `untrusted`, `expired`, `not_yet_valid`, `missing_server_auth`,
+  `missing_client_auth`, `malformed`, `not_pem`, `no_ca`) is logged and the current certificate
+  kept. The Hub sends the renewal until the device presents it, then revokes the old certificate;
+  an M7 certificate without serverAuth is still accepted (checked byte for byte against the one the
+  Hub issued) until the renewal is presented or 10 minutes after it was offered. The device page
+  shows the renewal state, and diagnostics report a device still on the old certificate after that
+  grace.
+- **Hub-signed authorizations** (D2 of ADR-096). Every privileged request carries `authorization:
+  {payload, signature}`, without which `novad` refuses it whatever the management token says. The
+  payload is `{v: 1, kind, deviceId, changeId, bodySha256, approvalId, issuedAt, expiresAt}`, signed
+  with Ed25519 by the Hub identity key over `nova-device-authz-v1\n` followed by the payload's
+  canonical JSON (base64url). `novad` takes the key only as the one its pinned fingerprint names
+  (read once from `GET /api/v1/hello` and kept in `hub-key.json` while it hashes to the pin) and
+  checks the signature; `v`; a known `kind` equal to the route's (`firmware.apply`,
+  `firmware.rollback`, `boot.set`, `boot.commit`, `boot.revert`, `device.decommission`); its own
+  device id; `changeId` a UUIDv7; `bodySha256` equal to the SHA-256 of the body's canonical JSON
+  without `authorization` (also accepted: without `adminPassword` too, so a hash never covers a
+  secret); `expiresAt` at most 10 minutes after `issuedAt` (ISO times or epoch milliseconds); and
+  the time window with 120 s of skew. It then spends the change id: used ids are kept 24 h
+  (`authz-replay.json`, 0600, at most 4096). Refusals are 403 `policy_denied` `{reason:
+  authorization_invalid | authorization_expired | authorization_mismatch}` and 409 `conflict`
+  `{reason: replayed}`; a replay store that cannot be read refuses every privileged request (500
+  `{reason: replay_store_unreadable}`). The Hub signs only for the owner's own request, with the
+  action's toggle on (a boot revert and a decommission have none), after an approval card for
+  exactly that change was allowed by the signed-in owner in Nova (a boot revert's approval is the
+  owner's request itself), and for a device that is not revoked. Both sides test the same fixed
+  vectors (`packages/core/test/fixtures/device-authz-vectors.json`, copied into the crate).
+- **The device-side toggles.** `policy.json` (0600) holds `firmwareChanges` and `lowLevelBoot`, the
+  second half of the double check: the device refuses firmware apply and rollback, and boot set
+  and commit, while its toggle is off, even with a valid authorization. Two routes set them. A
+  heartbeat answer's `policy` sets both (a missing one counts as off; an answer without `policy`
+  keeps the last values). `POST /agent/v1/config` (management token) accepts `policy:
+  {firmwareChanges?, lowLevelBoot?}` and merges: a toggle present sets its value (only `true`
+  turns it on), one absent or null keeps it, toggles sent alone leave `allowedModules` and the
+  other per-device fields as they are, and the answer always carries the `policy` in effect. The
+  Hub uses it to push the toggles when the owner changes a switch and before each privileged send
+  (`DeviceService.syncPolicy`; §6, §5.2), so a change sent right after a switch is turned on is not
+  refused. Since this route takes the management token, whoever holds that token can now set the
+  toggles too (before M7.5's push, only the Hub's heartbeat answer could). That removes only the
+  device-side half of the check: every firmware and boot change still needs the Hub-signed
+  authorization over its exact body, which the token cannot make (ADR-096 D3).
+- **Dedicated browser users.** A root `novad` never runs Chromium as root or `nobody`: each session
+  runs as `nova-browser1` or `nova-browser2` (§2, §4.4). Every other module still runs as `novad`'s
+  user; there is no unprivileged module user yet.
+- **Protected system paths.** `/sys`, `/proc`, `/dev`, `/boot`, `/efi` and `/etc` are never granted,
+  resolved or used as a working folder (`protected_path`), and a grant of one made before this rule
+  is never mounted into the command sandbox. So BIOS settings and EFI variables change only through
+  the firmware and boot routes, with a Hub-signed authorization, never through the file or command
+  modules.
+- **The service unit** keeps `ProtectSystem=full` and adds `ReadWritePaths=-/boot/grub -/boot/grub2
+  -/boot/efi -/efi -/sys/firmware/efi/efivars`, so low-level boot can write grubenv, the ESP and
+  the EFI variables; BIOS settings sit under `/sys/class/firmware-attributes`, which
+  `ProtectSystem` does not touch, and nothing in the unit makes `/sys` read-only or hides devices.
 
 ## 10. Failure & recovery
 
@@ -531,8 +1001,35 @@ module's calls in flight (`module_crashed`) and restarts it after 1 s, doubling 
 crashes in ten minutes disable it (`crash_loop`) until the Hub or the owner starts it again.
 Starts, stops, crashes and disables are reported on the next heartbeat (`device.module.changed`);
 while the Hub is unreachable they are buffered in memory only (500 at most). A device is
-`unreachable` after three missed heartbeats (30 s). Firmware and out-of-band routes answer 403.
-`novad uninstall` and decommission are not built.
+`unreachable` after three missed heartbeats (30 s). Firmware and out-of-band routes answer 403
+(M7.5 built the firmware routes, §6; out-of-band management is the Hub's, §7). `novad uninstall`
+and decommission are not built (M7.5 built them, §11).
+
+*As built in M7.5 (ADR-096; `services/novad/src/{firmware,boot,agent}.rs`, `packages/core/src/{firmware,boot}`).*
+
+- **The event outbox.** Firmware and boot watchdog results wait in file outboxes
+  (`firmware/events.json`, `boot/events.json`, at most 100 each) that survive restarts. Every
+  heartbeat carries them with the module events (500 in all), and they are removed only once the
+  Hub accepted that heartbeat. Each carries the authorization's `changeId`; the Hub matches by it,
+  falling back to the snapshot or the profile only for an event without one.
+- **Firmware watchdog events.** `firmware.watchdog.ok` `{snapshotId, changeId, at, detail: {}}`, and
+  `firmware.watchdog.reverted` with `detail: {reason: deadline | not_restarted, complete, restored:
+  [{key, from, to}], failed: [{key, from, to, error}], rebooted}` (or `complete: false` with
+  `error` and `errorCode` when the backend or the snapshot is gone). The revert restores key by key:
+  a key it cannot write stays as it is and is listed in `failed` (on a BIOS with an admin password
+  every key, `admin_password_required`), the keys restored stay restored, and only a complete revert
+  restarts the machine, so a half-reverted machine stays reachable.
+- **Boot watchdog events.** `boot.watchdog.ok` `{profileId, entryId, changeId, at, detail: {booted,
+  verified}}` and `boot.watchdog.reverted` with `detail: {reason: deadline | not_restarted |
+  not_booted, booted, rebooted, error}` (§5.2).
+- **On the Hub.** A firmware revert counts only when it is complete (`complete` not false, nothing
+  in `failed`, no `error`, every changed key restored). Anything else makes the change
+  `revert_failed`: the owner gets an attention notice ("A firmware change could not be reverted"),
+  the audit records the values the machine really holds and what was not restored, and rollback
+  stays open. A firmware change whose device has not reported 120 s after its deadline is marked
+  `missed`, and a boot trial `failed` (§5.2), each with an attention notice: the Hub cannot revert
+  a machine that does not come up (`novad` does when it starts, and a boot one-shot is gone after
+  the next power cycle).
 
 ## 11. Uninstall & decommission
 
@@ -540,3 +1037,48 @@ while the Hub is unreachable they are buffered in memory only (500 at most). A d
 - The Hub removes the device from the registry and revokes its certificate.
 - For rented/sold hardware, a **decommission** action wipes Nova data and, where supported,
   clears the BIOS management credentials it installed.
+
+*As built in M7.5 (ADR-096; `services/novad/src/uninstall.rs`, `packages/core/src/devices/service.ts`).*
+
+- **`novad uninstall [--purge]`** (root when a service is installed) stops and removes the service
+  (`systemctl disable --now`, the unit file, `daemon-reload`; macOS `launchctl unload -w`; Windows
+  `sc.exe stop` and `delete`), removes the installed binary and, as root, the browser users
+  (`userdel`), removes the bridge's host manifests and token from the homes of the users in
+  `localRuntime.users` (as each user, through a forked child that switched to their ids), and wipes
+  `key.seed` (zeroed first, best effort), `device.json` (with the credential and management token),
+  `device-cert.pem`, `hub-trust.json`, `hub-key.json`, `scopes.json`, `policy.json` and the local
+  runtime's token and socket. The authorization replay store stays until the folder goes, so a
+  spent authorization stays spent. It does not contact the Hub: remove or decommission the device
+  there too.
+- **Purge.** `--purge` also deletes the data folder, but only one marked as `novad`'s
+  (`.novad-data`, written when `novad` makes the folder, or its `device.json`, `key.seed` and
+  `modules.json` together), and never `/`, a folder right under it, a folder right under `/home` or
+  `/Users`, the usual system folders or the caller's home folder. `uninstall --purge` on an
+  unmarked folder stops before removing anything; a decommission skips the purge and says so
+  (`purge: false` in its answer).
+- **Decommission.** `POST /api/v1/devices/:id/decommission {purge}` (owner) opens an approval card
+  (risk high, Allow once or Deny, 1 hour, answered only in Nova by the signed-in owner); one open
+  request per device (`decommission_pending`). Once allowed, a reachable device is told through
+  `POST /agent/v1/decommission {purge?, authorization}` with a Hub-signed `device.decommission`
+  authorization for exactly that body (§9; over mutual TLS when it holds a certificate; any other
+  field is 400). `novad` closes the browser sessions (their profiles go), stops every module,
+  forgets its credential and management token at once (later calls are 401), wipes the same files
+  as uninstall and answers `{decommissioned, purge, wiped, service}`.
+- **The fixed order.** Half a second after answering, `novad` removes the users' bridge files and,
+  when purging, the data folder, then hands the rest to one transient unit (`systemd-run
+  --unit=novad-decommission --on-active=3`), because the service cannot write `/etc` or `/usr`
+  under `ProtectSystem=full` and stopping it ends `novad`. That unit disables the service, removes
+  the unit file and the binary, reloads systemd, removes the browser users and only then stops
+  `novad`. On macOS the files go first, then `launchctl bootout`; on Windows `sc.exe delete`, then
+  `stop`. A `novad` that runs without a service exits at its next heartbeat.
+- **The Hub revokes whether told or not.** Whatever the device answered (`wiped`, `refused`,
+  `unreachable`, or `not_told` when the Hub identity could not sign), the Hub then revokes the
+  device and its certificate. An offline device is revoked at once and wipes its credentials at
+  its next contact (the 401 of §10). A decommission a Hub restart interrupted is finished at the
+  next start. Events `device.decommission.requested` and `device.decommissioned`; audit
+  `device.decommission.request`, `device.decommission.decide` and `device.decommission` with the
+  status before and after.
+- **BIOS credentials.** `novad` installs none: the BIOS admin password lives only in the Hub's vault
+  (§6), and is deleted from it when the device is revoked or decommissioned (audited
+  `device.firmware.password.clear`, reason `device_revoked`). Out-of-band credentials (§7) belong
+  to an endpoint, not to the device, and go when the owner deletes the endpoint.

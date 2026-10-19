@@ -2,7 +2,13 @@
 // a commitment, the signed reveal and status poll), register, heartbeat, model sync. The node never contacts anything else but
 // its backend (FR-126); redirects are refused. An https:// Hub is reached through `HubTls`
 // (hub-tls.ts: the pinned identity and the device certificate) as the `fetch` passed in.
-import type { HeartbeatBody, RegisterBody, RegisterResult, SyncBody } from './protocol.ts';
+import type {
+  HeartbeatBody,
+  HeartbeatResult,
+  RegisterBody,
+  RegisterResult,
+  SyncBody,
+} from './protocol.ts';
 
 /** `POST /api/v1/devices/add/complete` as a compute node sends it (Add Device v2). */
 export interface AddDeviceCompleteBody {
@@ -115,8 +121,10 @@ export class HubClient {
     );
   }
 
-  async heartbeat(credential: string, body: HeartbeatBody): Promise<void> {
-    await this.#post('/node/v1/heartbeat', body, credential);
+  /** Report load, models, VRAM and quiet; the answer carries the owner's policy (M7.5). */
+  async heartbeat(credential: string, body: HeartbeatBody): Promise<HeartbeatResult> {
+    const r = await this.#post<HeartbeatResult | null>('/node/v1/heartbeat', body, credential);
+    return r ?? {};
   }
 
   async syncModels(credential: string, body: SyncBody): Promise<void> {

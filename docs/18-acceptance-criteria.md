@@ -177,6 +177,44 @@ with Playwright against a running Hub's web UI; native-shell steps start at M7 (
 7. A phone profile starts a task; the approval it causes is answered on the desktop's
    Approvals page; the phone sees the result (FR-077, FR-111).
 
+### J9.5 — Boot, power & firmware (M7.5)
+A device joins through Add Device with the real release `novad`, running its fake firmware and
+bootloader backends (restarts go to a fake `systemctl`); the journey never waits for a heartbeat
+before a privileged change, since the Hub pushes the device-side toggles.
+
+1. The device's Firmware tab shows the supported platform and the allowlisted settings; with
+   "Allow BIOS/firmware changes" off (the default) the tab says changes are off and offers no plan,
+   and the Hub refuses one (`firmware_disabled`) (FR-146).
+2. Settings → Devices → Firmware and boot: turning the switch on asks first, and the settings
+   routes refuse it without the confirmation (`consent_required`); the audit has exactly one
+   `setting.changed` entry with before, after and the confirmation. "Firmware watchdog" is set to
+   its shortest window, 2 minutes.
+3. The demo: plan Wake-on-LAN on and power-on-after-power-loss "On"; the diff shows both and the
+   plan changes nothing on the machine. Ask for approval: the card is Hub-only and says so
+   (`answerIn: hub`), also on the Approvals page. Allow it as the owner and apply: the values change
+   in the tab and in the device's BIOS; the history shows before and after, and the audit (also in
+   Settings → Diagnostics) has the plan, the approval and the apply with before and after values.
+4. Roll the snapshot back: it asks for its own approval, then the values are restored.
+5. Turning Secure Boot off is refused without the separate override, and the UI says why.
+6. Apply Wake-on-LAN with the restart: the device arms the 2-minute window the Hub sent and the Hub
+   shows the same deadline; the machine does not come back before it, so on its next start
+   `novad`'s watchdog restores the snapshot (`not_restarted`); the change shows "Reverted by the
+   watchdog" and the owner's notice says the machine did not restart before the deadline
+   (FR-146 safety 7).
+7. Boot: the tab lists the device's entries and "Test bootloader (fake)"; with low-level boot off a
+   trial is refused in the tab and by the Hub; turning it on asks first (the settings route refuses
+   it without the confirmation). A profile is tried with the shortest watchdog and a restart after
+   its Hub-only approval; the machine is not heard from by the deadline, `novad` clears the one-shot
+   and reports it, and the default entry is untouched (FR-143).
+8. Out-of-band management is off by default: its page says so, nothing reaches a BMC and the Hub
+   refuses its actions and turning it on without consent. Turned on through its consent dialog, a
+   Redfish BMC on a loopback address is refused; at its network address the first check reads the
+   certificate without credentials and the owner confirms the fingerprint; the power state is read
+   with no approval; a power cycle waits on its Hub-only card, runs once the owner allows it (the
+   BMC gets exactly one), and shows in the action log; the audit has one settings entry with the
+   consent and the refused attempt (FR-147).
+9. Every page, dialog, approval card and the notifications panel pass the accessibility checks.
+
 ### J10 — Extension & governance (M8)
 1. Load a sample extension adding a command + panel + tool; permissions enforced.
 2. Apply a managed policy that locks bypass mode and network; UI shows "managed".

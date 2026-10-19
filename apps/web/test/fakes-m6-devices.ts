@@ -1037,9 +1037,13 @@ export type DevicesMocks = DevicesApi &
 /** A standalone fake: every method a spy over the in-memory implementation. */
 export function createDevicesHub(
   init: Partial<M6DevicesState> = {},
-  opts: { approvals?: ApprovalStore } = {},
+  opts: {
+    approvals?: ApprovalStore;
+    /** A state to use instead of a new one (the main fake Hub's, so every part sees one). */
+    state?: M6DevicesState;
+  } = {},
 ) {
-  const state = m6DevicesState(init);
+  const state = opts.state ?? m6DevicesState(init);
   const own: ApprovalView[] = [];
   const approvals = opts.approvals ?? {
     list: () => own,
@@ -1079,17 +1083,23 @@ export async function renderWithDevices(
     managed?: Record<string, unknown>;
   } = {},
 ) {
-  const hub = createHub();
+  // One devices state for the main fake Hub and this part: the Hub's other areas that read
+  // devices (M7.5 device operations and out-of-band) see the same ones.
+  const hub = createHub({ m6devices: m6DevicesState(opts.devices) });
   hub.state.settings = { 'onboarding.state': DONE_ONBOARDING, ...opts.settings };
   hub.state.managed = { ...opts.managed };
-  const devices = createDevicesHub(opts.devices, {
-    approvals: {
-      list: () => hub.state.m3.approvals,
-      add: (a) => {
-        hub.state.m3.approvals = [...hub.state.m3.approvals, a];
+  const devices = createDevicesHub(
+    {},
+    {
+      approvals: {
+        list: () => hub.state.m3.approvals,
+        add: (a) => {
+          hub.state.m3.approvals = [...hub.state.m3.approvals, a];
+        },
       },
+      state: hub.state.m6devices,
     },
-  });
+  );
   const api = { ...hub.api, ...devices.api };
   const { settings } = await hub.api.settings();
   const inner = createElement(ToastProvider, {

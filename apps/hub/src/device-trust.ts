@@ -16,7 +16,9 @@
 // Refusals are 403 `policy_denied` with `details.reason` `certificate_<why>` (novad and the
 // compute node name it), audited as `device.tls.refuse` (at most once an hour per device and
 // reason). A device's state is announced as `device.tls.changed` when it changes. The owner route
-// `GET /api/v1/devices/tls` (session) lists what each device last presented.
+// `GET /api/v1/devices/tls` (session) lists what each device last presented. M7.5 (ADR-096 D1):
+// a verified certificate is reported to the trust area (`certificatePresented`), which revokes
+// the device's older certificates once a renewed one is in use.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { TLSSocket } from 'node:tls';
 import {
@@ -39,6 +41,7 @@ import type { HubArea, HubContext } from './hub-context.ts';
 const ROUTES: Record<string, { kind: 'novad' | 'compute'; register: boolean }> = {
   '/agent/v1/register': { kind: 'novad', register: true },
   '/agent/v1/heartbeat': { kind: 'novad', register: false },
+  '/agent/v1/bridge/events': { kind: 'novad', register: false },
   '/agent/v1/capabilities': { kind: 'novad', register: false },
   '/node/v1/register': { kind: 'compute', register: true },
   '/node/v1/heartbeat': { kind: 'compute', register: false },
@@ -51,6 +54,8 @@ const DAY = 24 * HOUR;
 export interface DeviceTrustDeps {
   /** The trust area's check (`trust.verifyDeviceCertificate`). */
   verifyDeviceCertificate(pem: string): DeviceCertificateCheck;
+  /** The trust area's renewal bookkeeping (`trust.service.deviceCertificatePresented`). */
+  certificatePresented?(deviceId: string, serial: string): Promise<unknown>;
   audit?: AuditSink;
   now?: () => Date;
 }
@@ -229,7 +234,12 @@ export function setupDeviceTrust(ctx: HubContext, deps: DeviceTrustDeps): Promis
       if (row) await note(row, route.kind, 'refused', 'certificate_mismatch', result.serial);
       throw refuse('certificate_mismatch', 'the device certificate belongs to another device');
     }
-    if (row) await note(row, route.kind, 'verified', null, result.serial);
+    if (row) {
+      await note(row, route.kind, 'verified', null, result.serial);
+      await deps
+        .certificatePresented?.(row.id, result.serial)
+        ?.catch((err: unknown) => log.warn('renewal bookkeeping failed', { err }));
+    }
   }
 
   function problems(): string[] {

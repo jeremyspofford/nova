@@ -8,6 +8,9 @@ import * as channelsM7 from '../src/schema/channels_m7.ts';
 import * as codeM7 from '../src/schema/code_m7.ts';
 import * as team from '../src/schema/team.ts';
 import * as flagged from '../src/schema/flagged.ts';
+import * as firmware from '../src/schema/firmware.ts';
+import * as boot from '../src/schema/boot.ts';
+import * as oob from '../src/schema/oob.ts';
 
 const tables: SQLiteTable[] = (Object.values(schema) as unknown[]).filter(
   (v): v is SQLiteTable => typeof v === 'object' && v !== null && 'getSQL' in v,
@@ -36,9 +39,19 @@ describe('drizzle schema matches migrations', () => {
   });
 });
 
-// The M7 schema files also declare every index their migration creates by name (older files
+// The M7 and M7.5 schema files also declare every index their migration creates by name (older files
 // predate this check). An inline UNIQUE constraint makes an unnamed autoindex and is not counted.
-const m7Tables: SQLiteTable[] = [sync, runner, channelsM7, codeM7, team, flagged]
+const m7Tables: SQLiteTable[] = [
+  sync,
+  runner,
+  channelsM7,
+  codeM7,
+  team,
+  flagged,
+  firmware,
+  boot,
+  oob,
+]
   .flatMap((m) => Object.values(m) as unknown[])
   .filter((v): v is SQLiteTable => typeof v === 'object' && v !== null && 'getSQL' in v);
 

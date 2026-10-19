@@ -176,21 +176,28 @@ describe.skipIf(!runnable)('the real novad binary', () => {
     expect(v).toMatchObject({
       name: 'real-box',
       status: 'active',
-      novadVersion: '0.6.0',
+      novadVersion: '0.7.0',
       updateRequired: false,
     });
-    // The local runtime (a client's module, FR-128) runs too and is in the signed document the
-    // Hub validated against contracts/schemas/device-capability.json.
-    expect(v.capability.modules).toEqual(['compute', 'local-runtime', 'management', 'storage']);
-    expect(v.capability.computePolicy).toMatchObject({ gpuSharing: 'shared' });
-    const pids = (v.modules as { pid: number }[]).map((m) => m.pid);
-    expect((v.modules as { name: string }[]).map((m) => m.name).sort()).toEqual([
+    // The local runtime (a client's module, FR-128) and the browser module (FR-209, M7.5) run too
+    // and are in the signed document the Hub validated against device-capability.json.
+    expect(v.capability.modules).toEqual([
+      'browser',
       'compute',
       'local-runtime',
       'management',
       'storage',
     ]);
-    expect(new Set(pids).size).toBe(4);
+    expect(v.capability.computePolicy).toMatchObject({ gpuSharing: 'shared' });
+    const pids = (v.modules as { pid: number }[]).map((m) => m.pid);
+    expect((v.modules as { name: string }[]).map((m) => m.name).sort()).toEqual([
+      'browser',
+      'compute',
+      'local-runtime',
+      'management',
+      'storage',
+    ]);
+    expect(new Set(pids).size).toBe(5);
     expect(pids).not.toContain(novad!.pid);
   });
 
@@ -355,7 +362,7 @@ describe.skipIf(!runnable)('the real novad binary', () => {
       new AbortController().signal,
     ))!;
     expect(await conn.hello()).toMatchObject({
-      version: '0.6.0',
+      version: '0.7.0',
       platform: 'linux',
       verified: true,
     });
@@ -400,7 +407,7 @@ describe.skipIf(!runnable)('the real novad binary', () => {
     const script = `#!/bin/sh\nwhile IFS= read -r l; do id=$(printf '%s' "$l" | sed 's/.*"id":\\([0-9]*\\).*/\\1/'); printf '{"id":%s,"ok":true,"result":{"pong":true}}\\n' "$id"; done\n`;
     const manifest = {
       target: 'compute',
-      version: '0.6.1',
+      version: '0.7.1',
       channel: 'stable' as const,
       sha256: createHash('sha256').update(script).digest('hex'),
       size: Buffer.byteLength(script),
@@ -416,10 +423,10 @@ describe.skipIf(!runnable)('the real novad binary', () => {
     expect(r.json.items[0]).toMatchObject({
       target: 'compute',
       status: 'applied',
-      fromVersion: '0.6.0',
-      toVersion: '0.6.1',
+      fromVersion: '0.7.0',
+      toVersion: '0.7.1',
     });
-    const tampered = { ...bundle, manifest: { ...manifest, version: '0.6.2' } };
+    const tampered = { ...bundle, manifest: { ...manifest, version: '0.7.2' } };
     const bad = await api('POST', `/api/v1/devices/${deviceId}/updates`, { bundles: [tampered] });
     expect(bad.json.items[0]).toMatchObject({ status: 'refused' });
     expect(bad.json.items[0].detail).toMatch(/pinned key/);

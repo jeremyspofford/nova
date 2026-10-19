@@ -50,6 +50,18 @@ member has no session yet:
 | `GET /api/v1/auth/oidc/callback` | The single-use 10-minute state from start, the `nova_oidc_binding` cookie of the browser that started, then the ID token's checks; it only ever redirects to fixed paths (refusals to `/sign-in?oidc_error=` or `/settings/account?oidc_error=`) |
 | `GET /api/v1/profiles/:handle`, `GET /api/v1/profiles/:handle/avatar` | None: only cards their person published while `team.publicProfiles` is on |
 
+M7.5 adds (ADR-096; same list). Network boot has no session (iPXE cannot hold one), and the
+extension bridge's events come from `novad` like its heartbeats:
+
+| Route | How it authenticates |
+| --- | --- |
+| `GET /boot/ipxe/:token` | The device's PXE boot token in the path (`nvb_` + 256 random bits, base64url; only its hash is stored, in its own domain; shown once, rotatable and revocable; a revoked device's token stops at once). 404 while `devices.pxe.enabled` is off and, alike, for an unknown, malformed or revoked token. 30 a minute per address (429 `rate_limited` `{reason: address_rate_limited, retryAfter: 60}`, counted after the PXE check and before the token). Every fetch is audited (`device.boot.pxe.script`) |
+| `GET /boot/images/:token/:name` | The same token; `name` is a plain file name directly in `<dataDir>/boot-images` (letters, digits, `.`, `_`, `-`; never a path, `..`, a link or a folder), else 404. 120 a minute per address. Audited per fetch with the range asked (`device.boot.pxe.image`) |
+| `POST /agent/v1/bridge/events` | The device credential (`nvc_…`) as a bearer token, and the device certificate under mutual TLS, as for heartbeats (§3); the credential must name a managed `novad` device, else 401 `auth_missing` |
+
+The request log writes the route pattern for `/boot/` paths, never the token, and the redactor's
+Nova-token rule covers `nvb_`.
+
 Telegram webhooks arrive on the existing `POST /api/v1/channels/:id/inbound` (the secret-token
 header the Hub generated), and so do Slack button presses (form-encoded, the same signing-secret
 check).
@@ -65,13 +77,18 @@ or reach its machine are the owner's: any other account gets 403 `policy_denied`
 `{reason: owner_only}`. The list is `OWNER_ONLY_ROUTES` in `packages/core/src/team/access.ts`:
 `/api/v1/settings` (all methods; members keep their own appearance, keyboard and onboarding
 preferences at `/api/v1/team/me/settings`), `PUT /presets`, `/providers/detect`, `GET/PATCH /trust`,
-`/trust/renew`, everything under `/network`, `/relay`, `/devices` and `/nodes`, `/audit/verify`,
+`/trust/renew`, everything under `/network`, `/relay`, `/devices`, `/nodes` and (M7.5) `/oob`,
+`/audit/verify`,
 `/diagnostics`, `GET /egress`, `POST /app-authorizations`, installing, changing and removing
 plugins and their catalogs, creating, changing and deleting skills, `/hooks`, `/files`,
 `/terminals`, `/library`, `/projects/:id/folders`, `/import`, `/code`, `/environments`, `/cloud`,
 `/agent-adapters`, `/delegations`, `/mcp/bundles` and site publish and unpublish. A member may add
 remote MCP servers but not stdio ones (a body with `transport: stdio`, `command`, `args` or `env`
 is refused the same way). The three public Add Device routes stay open to a signed-in member.
+The M7.5 firmware, boot, device operation and extension bridge routes fall under `/devices` and
+out-of-band management under `/oob`; the firmware, out-of-band and bridge services also refuse a
+member themselves (`owner_only`). The local browser fallback's consents and sessions
+(`/browser/fallback`) are account-scoped.
 
 ### Idempotent writes (M7, FR-112, decision 2 of ADR-095)
 
@@ -257,14 +274,14 @@ public (table above). Owner routes need a session.
 | `PATCH/DELETE` | `/api/v1/schedules/:id` | Edit the fields sent (`enabled: false` pauses it; resuming does not catch up the paused time; `nothing to update` is `validation`) / cancel it: `{ok: true}`, its history and webhook secret go, a run already going continues; proxied by the shell's `schedule.upsert` / `schedule.cancel`. Audited as `schedule.update` / `schedule.delete` |
 | `GET` | `/api/v1/schedules/:id/fires?limit=` | The schedule's history, newest first (`limit` 1–500, default 100): `{items: ScheduleFireView[]}` `{id, scheduleId, kind: fire\|catch_up\|skipped, window: {first, last, count}\|null, runId, outcome: done\|output_missing\|failed\|cancelled\|no_news\|null, firedAt}` (ADR-079) |
 | `POST` | `/api/v1/schedules/:id/run` | Run now, outside the rule (the next fire is unchanged): 201 `{runId}`; `schedule.fired` with `manual: true`; audited as `schedule.run_now`. `capability_missing` when Work runs are unavailable, `server_error` when the run could not start. M6: for an agent's schedule 201 `{runId: null, threadId}` (a turn on the agent's main thread); `capability_missing` when agents are unavailable |
-| `GET/POST` | `/api/v1/approvals` | List (`status=pending\|all`, `threadId`; a handed-off approval stays pending until marked done) / decide approvals; a decision is an [`ApprovalDecision`](schemas/approval-decision.json) without `decidedBy`/`decidedAt`, which the Hub sets. The first valid answer wins; a later one is `conflict`. A decision the tier does not offer is `validation`; `allow_always` while managed policy disables persistent grants is `policy_denied` (FR-100, FR-189). Allow once on a card the auto-reviewer opened records `override` (audited as `review.override`, FR-085). M5 ships `ApprovalView` without the reviewer's verdict (stored in `docs/06` `approval.review_json`); showing it on the card is a follow-up. M7: every `ApprovalView` also carries `runId` (its thread's Work run, else the run stored on the approval), `codeSessionId` and `threadTitle`, looked up from its thread (null for a deleted thread); the shared type marks them optional, the Hub always fills them |
+| `GET/POST` | `/api/v1/approvals` | List (`status=pending\|all`, `threadId`; a handed-off approval stays pending until marked done) / decide approvals; a decision is an [`ApprovalDecision`](schemas/approval-decision.json) without `decidedBy`/`decidedAt`, which the Hub sets. The first valid answer wins; a later one is `conflict`. A decision the tier does not offer is `validation`; `allow_always` while managed policy disables persistent grants is `policy_denied` (FR-100, FR-189). Allow once on a card the auto-reviewer opened records `override` (audited as `review.override`, FR-085). M5 ships `ApprovalView` without the reviewer's verdict (stored in `docs/06` `approval.review_json`); showing it on the card is a follow-up. M7: every `ApprovalView` also carries `runId` (its thread's Work run, else the run stored on the approval), `codeSessionId` and `threadTitle`, looked up from its thread (null for a deleted thread); the shared type marks them optional, the Hub always fills them. M7.5 (ADR-096): `ApprovalView.answerIn` is `hub` on a Hub-only card (firmware, boot, out-of-band and decommission cards), null or absent otherwise (as the tier allows). Only the signed-in user answers a Hub-only card, in a Nova client: a decision recorded by anyone else (a channel's reply or button, a hook, the system) is 403 `policy_denied` `{reason: hub_only}`, whatever the tier; channel prompts and emails for it carry no buttons or link, and an approval link made earlier answers nothing (`not_found`; audited as `channel.approval.refused` `{reason: hub_only, via: link}`). `ApprovalView.scope` is what the card is about, as recorded: `device:<id>` (a device's firmware, boot, folder access or decommission card), `oob:<endpointId>` (out-of-band), else a thread or tool scope; null when none was recorded |
 | `GET` | `/api/v1/approvals/:id` | One approval as shown on the card |
 | `POST` | `/api/v1/approvals/:id/handoff-done` | The user finished a handed-off step `{note?}`; the waiting turn resumes |
 | `GET` | `/api/v1/requests?status=pending\|all&threadId=` | Server-to-client requests ([`server-request.json`](schemas/server-request.json), FR-188), newest first: the pending ones (default) or the last 200 of any status, plus pending approvals as read-only `approval` items whose id is the approval id. `{items: ServerRequestView[]}`. With the `x-nova-client-session` header, requests aimed at another device are left out |
 | `GET` | `/api/v1/requests/:id` | One request, or a pending approval as an `approval` item; otherwise `not_found` |
 | `POST` | `/api/v1/requests/:id/respond` | Answer `{result}` (§5); returns the resolved `ServerRequestView`. The first valid answer wins: a later one is `conflict` with `details.resolution`; one after `expiresAt` is `request_expired` `{status, reason}`; one that does not fit the kind is `validation`; a request aimed at another device than the `x-nova-client-session` header names is `policy_denied`. An approval id takes an `ApprovalDecision` without `approvalId` and is decided by the approvals flow (no `request.resolved`; `approval.decided`). M5 ships `ServerRequestView.resolution` as `{by, at, result}`; the schema's `{result, resolvedBy, deviceId, resolvedAt}` is a follow-up |
 | `GET` | `/api/v1/activity?ref=` | Activity trace for a thread/run/agent, oldest first: turns, tool calls, approvals, policy decisions; `not_found` for another account's thread. M5 takes a thread id only (a run's trace is `GET /runs/:id/activity`, or this route with the run's thread). M6 still takes a thread id only; an agent's trace is `GET /agents/:id/activity`. Since M6 `ActivityItemView.kind` adds `computer` (browser and screen actions, `browser.navigated`), with `shots: {before, after}` (API paths) when screenshots exist |
-| `GET` | `/api/v1/audit?kind=&threadId=&cursor=&limit=` | Audit entries, newest first, paged by sequence (FR-104) |
+| `GET` | `/api/v1/audit?kind=&threadId=&cursor=&limit=` | Audit entries, newest first, paged by sequence (FR-104): `{items: AuditEntryView[], nextCursor}`. M7.5: each entry carries `detail` (the values before and after, the reason, ...), redacted again on the way out like the export and at most 4,096 characters of JSON (a larger one is `{truncated: true, chars}`; the export has it whole), or null |
 | `GET` | `/api/v1/audit/verify` | Walk the hash chain; reports the first entry whose sequence, previous hash or hash does not match |
 | `GET` | `/api/v1/audit/export` | Audit log export (`application/x-ndjson`, redacted) |
 | `GET` | `/api/v1/notifications?unread=` | Notifications, newest first, with the unread count (FR-013). Since M6 a category whose in-app rule is off is recorded read (no badge; `docs/13` §5) |
@@ -525,7 +542,7 @@ queries are checked by their schema (`validation` with `details.issues`).
 | `GET/PUT` | `/api/v1/browser/domains` | The allow and block lists as patterns `{allow, deny}` (`network.egressAllow` and `network.egressDeny` also count) / replace either `{allow? (≤ 500), deny? (≤ 500)}`; a pattern on both is blocked. Audited as `browser.domains.set` |
 | `GET` | `/api/v1/browser/sessions` | Open agent browsers, held in Hub memory (FR-096): `{items: [{computerId, state: starting\|running\|paused\|closed\|error, url, title, host, pausedBy, pageTools, startedAt, lastActionAt, persistCookies}]}`; `pageTools` are `page:<host>.<name>` (FR-208). A browser runs on the thread's agent computer, else `thread-<threadId>`; at most `browser.maxConcurrent` are open (the least recently used idle one closes). M7 adds `crash` `{at, reason}\|null` (it crashed and restarts on the next action) and `restarts` |
 | `DELETE` | `/api/v1/browser/sessions/:computerId` | Close that browser (cookies saved first when `browser.persistCookies` is on): `{ok: true}`. Audited as `browser.session.closed`; `browser.session.changed` |
-| `GET` | `/api/v1/browser/actions?threadId=&callId=&computerId=&limit=` | The browser's trace (FR-098), oldest first, `limit` 1–500 (default 100): `{items: BrowserActionView[]}` `{id, computerId, threadId, turnId, callId, tool, action, target, url, host, result: ok\|error\|blocked\|denied\|handoff, error, classification: {effects, flagged, reasons, handoff}\|null, before, after, approvalId, createdAt}`. `url` has no query or fragment; `target` and `error` are redacted; typed text is never stored. M7: newest first with `?cursor=` (the previous page's `nextCursor`): `{items, nextCursor}` (null on the last page); a forged or malformed cursor is 400 `validation`. `browser.crash` and `browser.restart` rows join the trace |
+| `GET` | `/api/v1/browser/actions?threadId=&callId=&computerId=&limit=` | The browser's trace (FR-098), oldest first, `limit` 1–500 (default 100): `{items: BrowserActionView[]}` `{id, computerId, threadId, turnId, callId, tool, action, target, url, host, result: ok\|error\|blocked\|denied\|handoff, error, classification: {effects, flagged, reasons, handoff}\|null, before, after, approvalId, createdAt}`. `url` has no query or fragment; `target` and `error` are redacted; typed text is never stored. M7: newest first with `?cursor=` (the previous page's `nextCursor`): `{items, nextCursor}` (null on the last page); a forged or malformed cursor is 400 `validation`. `browser.crash` and `browser.restart` rows join the trace. M7.5: every item adds `localFallback` `{sessionId, deviceId, profile: clean\|extension}`, or null for a row not recorded in a local browser fallback session (below) |
 | `GET` | `/api/v1/browser/site-levels?scopeKind=project\|agent&scopeRef=&pattern=` | Site levels set for one project or agent (FR-094, M7, `docs/11` §4.4): `{items: BrowserSiteScopedLevelView[]}` `{pattern, scopeKind, scopeRef, level, createdAt, updatedAt}`. The narrower scope wins: an agent's level, then a project's, then the account's. `BrowserSiteView` gains `scopedLevels` |
 | `PUT/DELETE` | `/api/v1/browser/sites/:pattern/levels/:scopeKind/:scopeRef` | Set `{level: always_ask\|auto_review\|always_allow}` / remove an allowed site's level for that project or agent (`scopeRef` letters, digits, `_` and `-`). Blocking or removing the site removes its scoped levels. Audited as `browser.site.level.set` / `.removed` |
 | `GET` | `/api/v1/browser/sessions/:computerId/console?limit=`, `…/network?limit=` | What the open browser captured (FR-092, FR-103, M7), newest last (`limit` 1–300, default 100): `{items, dropped}` of `BrowserConsoleEntryView` `{seq, at, level: error\|warning\|info\|log\|debug, source: console\|pageerror, text, url, line, pageUrl}` or `BrowserNetworkEntryView` `{seq, at, method, url, resourceType, navigation, status, statusText, mimeType, size, durationMs, failure, blocked, requestHeaders, responseHeaders, body, bodyOmitted: binary\|too_large\|unavailable\|none\|null}`; redacted like what the agent reads (`docs/11` §4), page content and untrusted. 404 when that computer has no open browser |
@@ -663,14 +680,14 @@ gaps. Calls on behalf of a schedule, automation, agent or app are checked agains
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET/PATCH` | `/api/v1/settings` | Read/update settings |
+| `GET/PATCH` | `/api/v1/settings` | Read/update settings. `PATCH` `{key, value, scope?: global\|project, projectId?, confirm?: true}`; a value managed policy sets is `policy_denied` `{reason: managed}`. M7.5 (ADR-096 D3): turning on `devices.firmware.allowChanges`, `devices.firmware.allowSecurityDegrading`, `devices.boot.allowLowLevel` or `devices.pxe.enabled` needs `confirm: true` (the owner read what the switch allows), else 403 `policy_denied` `{reason: consent_required}`; turning them off never does. `devices.oob.enabled: true` is refused here whatever the body (403 `policy_denied` `{reason: consent_required}`, audited as `device.oob.refuse`): only `POST /api/v1/oob/enable {confirm: true}` turns it on. A change of a `security: true` setting emits `settings.changed` with `before`, `after` and `confirmed`, audited as `setting.changed` (kind `settings`) with the same values |
 | `GET` | `/api/v1/flags` | Feature flags with stage ([`feature-flag.json`](schemas/feature-flag.json), ADR-082) |
 | `PATCH` | `/api/v1/flags/:key` | Toggle a `beta` or `experimental` flag; `removed` flags and managed locks are refused |
 | `GET/PATCH` | `/api/v1/network` | Transports, endpoints, mDNS and Wake Helpers (M6.5; Network below). The egress policy lives under `/api/v1/egress` (M6) |
 | `POST` | `/api/v1/network/setup` | One Network Setup assistant action (M6.5; Network setup below) |
 | `POST` | `/api/v1/network/test` | Run every reachability test now (M6.5; Network below) |
 | `POST` | `/api/v1/network/rollback` | Revert the last network change, or a named one (M6.5; Network below) |
-| `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, MCP servers, sandbox, secrets backend, encryption at rest, warnings, other probes); M6 adds the probes `agents`, `channels`, `egress`, `browser`, `devices` and `spaces`; M6.5 adds `trust`, `network`, `networkSetup`, `relay` and `agentDist` |
+| `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, MCP servers, sandbox, secrets backend, encryption at rest, warnings, other probes); M6 adds the probes `agents`, `channels`, `egress`, `browser`, `devices` and `spaces`; M6.5 adds `trust`, `network`, `networkSetup`, `relay` and `agentDist`; M7.5 adds `firmware`, `boot`, `oob` and `deviceManagement` |
 | `GET` | `/api/v1/diagnostics/logs?level=&module=&since=&limit=` | Recent log entries from the in-memory ring (5,000), newest first; `level` means that level and above; redacted (FR-118) |
 | `GET` | `/api/v1/diagnostics/logs/export` | The same as `application/x-ndjson` |
 | `POST` | `/api/v1/diagnostics/test` | Test one component (FR-119) `{component: provider\|mcp\|sandbox\|storage\|update, ref?}`; `ref` is a provider account or MCP server id (all of them when omitted). Returns `{component, ref, status: ok\|warning\|error\|unavailable, detail, checks: [{name, ref, status, detail}], durationMs, testedAt}`; a failing component is a result, not an error. `provider` connects, lists the account's own models and sends one 16-token request held to that account (no fallback); `mcp` reports the connection and the server's last tool list; `sandbox` runs `true` with network off; `storage` writes, reads back and deletes a test file in the data folder, runs a SQLite integrity check and reports free space (`warning` under 1 GB); `update` is `unavailable` (no update channel yet). Each test stops after 30 s. Results are not audited. A bad body is `validation`, an unknown `ref` is `not_found`. M5 keeps the result type in the Hub; a shared type is a follow-up |
@@ -931,6 +948,249 @@ stops running delegations).
 | `GET` | `/api/v1/delegations/:id` | One `DelegationView` |
 | `POST` | `/api/v1/delegations/:id/cancel` | Stop it (the agent gets a grace period to end its turn; its terminals are killed at once); audited as `delegation.cancel` |
 
+### Firmware (M7.5, `docs/23` §6)
+
+BIOS/firmware settings of `novad` devices (FR-146; ADR-096 D2-D4; shapes in
+`packages/shared/src/m75/firmware.ts`). Every route needs a session and the Hub's owner (403
+`policy_denied` `{reason: owner_only}`); none is public, and no model-facing tool plans, approves or
+applies a change. Only the canonical keys exist: `wol`, `powerOnAfterPowerLoss`, `bootOrder`,
+`virtualization`, `secureBoot`, `tpm`, `fanProfile`.
+
+- **Off by default.** While `devices.firmware.allowChanges` is off, `plan`, `request-approval`,
+  `apply` and `rollback` answer 403 `firmware_disabled` `{reason: firmware_disabled, setting}`.
+  Reading works whatever the toggle (`novad` still needs its `firmware` module in
+  `policy.allowedModules`).
+- **Supported machines.** The device and the support matrix must both call the machine
+  supported, else plan, apply and rollback are 409 `conflict` `{reason: unsupported_hardware, detail}`. `detail` is
+  `os_not_supported` (Windows and macOS: their vendor tools are not used), `legacy_bios`,
+  `unknown_platform`, the vendor's reason, or the device's own (`driver_missing`,
+  `vendor_not_supported`, `tool_missing`, `disabled_by_owner`).
+- **Security-degrading changes** (Secure Boot or the TPM off; the Hub marks them even when the
+  device does not) also need `devices.firmware.allowSecurityDegrading`, checked when the card is
+  asked and again at apply: 403 `policy_denied` `{reason: security_degrading, keys, setting}`.
+- One firmware operation runs per device at a time (409 `conflict` `{reason: firmware_busy}`,
+  retryable). A device that is not active with an endpoint is `node_unavailable`
+  `{reason: unreachable}`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET/PUT` | `/api/v1/devices/firmware/policy` | The two toggles `FirmwarePolicyView` `{allowChanges, allowSecurityDegrading}` / set `{allowChanges?, allowSecurityDegrading?, confirm?}` (at least one toggle). Turning either on needs `confirm: true`, else 403 `policy_denied` `{reason: consent_required}`; turning off never does. Written as the global settings through the Hub's settings writer (a managed lock refuses: `policy_denied` `{reason: managed}`); each changed toggle emits `settings.changed` `{key, scope, before, after, confirmed}`, audited once as `setting.changed` (kind `settings`) with the same values. A change of `allowChanges` is pushed to every active device at once (`POST /agent/v1/config`, §3) |
+| `GET` | `/api/v1/devices/firmware/support` | The hardware support matrix `{items: FirmwareSupportEntry[]}` `{vendor, label, match, method: firmware-attributes\|efibootmgr\|null, driver, supported, reason, keys (canonical key → the vendor's attribute name), notes}`: Dell (dell-wmi-sysman), Lenovo (think-lmi) and HP (hp-bioscfg) through the kernel firmware-attributes class; ASUS and Supermicro refused with the reason; any other UEFI machine the boot order only (efibootmgr). `novad` holds the authoritative vendor names |
+| `GET` | `/api/v1/devices/:id/firmware?fresh=` | `FirmwareReadView` `{deviceId, supported, reason, platform: {vendor, product, biosVendor, biosVersion, biosDate, uefi}\|null, method (a plain string: `firmware-attributes`, `efibootmgr`, `fake`, `unknown`, a name a newer `novad` sent, which clients show as "unknown (<name>)", or `unreadable`; null when none), adminPasswordSet, settings: [{key, vendorKey, value, type: enum\|order\|string\|int, allowed, readOnly, securityDegrading (the values that weaken security)}], updates: [{device, version, summary}], support (the matrix entry), policy, readAt, cached, adminPasswordStored}`, read through the device and reused for 60 s (`fresh=1` reads again). `updates` is what fwupd lists, read only: Nova installs no firmware updates. Audited as `device.firmware.read` |
+| `POST` | `/api/v1/devices/:id/firmware/plan` | A dry run `{changes: [{key, value}] (1–7, each key once)}` → 201 `FirmwareChangeView` `{id, deviceId, kind: apply\|rollback, status, method, planId, snapshotId, rollbackOf, diff: [{key, vendorKey, from, to, securityDegrading}], refused: [{key, reason: unknown_key\|read_only\|not_allowed_value\|unsupported}], from, to, securityDegrading, requiresReboot, reboot, approval: {id, status, decision, decidedAt, expiresAt}\|null, watchdog: {state: pending\|ok\|reverted\|revert_failed\|missed, deadline}\|null, error, createdAt, updatedAt, appliedAt}` with status `planned`. Nothing changes on the device. The Hub keeps its own copy of the device's snapshot, sealed with the data key (`<dataDir>/firmware/snapshots/<id>.json`; `sha256` is the hex SHA-256 of the canonical JSON of its values). A device answer whose snapshot does not match its hash, or that plans a change nobody asked for, is `server_error` (`snapshot_mismatch`, `unexpected_diff`). Audited as `device.firmware.plan` with before and after; `device.firmware.changed` |
+| `GET` | `/api/v1/devices/:id/firmware/changes/:changeId` | One `FirmwareChangeView` |
+| `POST` | `/api/v1/devices/:id/firmware/changes/:changeId/request-approval` | `{note? (≤ 300)}` → `FirmwareChangeView` (`awaiting_approval`): a Hub-only approval card (`answerIn: hub`, risk high, tier `confirm_at_action`, `allow_once` or `deny_continue`, scope `device:<id>`, 24 h) showing the diff. Its hash binds the change, its plan, its diff and its snapshot. An open card, or a usable "Allow once", is returned as it is. The signed-in owner's "Allow once" makes the change `approved`; any other answer puts it back to `planned`. Refusals: `conflict` `{reason: already_applied, status}`, `{reason: failed}` (plan it again), `{reason: nothing_to_apply}`; `security_degrading`. Audited as `device.firmware.approval`; `approval.requested`, `device.firmware.changed` |
+| `POST` | `/api/v1/devices/:id/firmware/changes/:changeId/apply` | `{reboot? (default false)}` → `FirmwareChangeView`: run an approved change (a plan, or a rollback) on the device with a Hub-signed authorization (kind `firmware.apply` or `firmware.rollback`, §3). The approval must exist, be the signed-in owner's "Allow once" (`decided_by = 'user'`), be in date and match the change, and is used once: else 409 `approval_required` `{reason: approval_required, approvalId}` (none, gone or still pending), 409 `conflict` `{reason: approval_expired}`, 403 `policy_denied` `{reason: approval_denied}` or `{reason: approval_mismatch}`. `reboot: true` restarts the device through its power module with its watchdog armed: the Hub sends `watchdogSeconds` from `devices.firmware.watchdogSeconds` (default 600, kept inside 120–3600 whatever is stored); an apply without a restart sends none. A rollback with `reboot` is `validation` `{reason: reboot_not_offered}`. **Device policy sync** (ADR-096 D3): before sending, the Hub pushes the device-side toggles (`POST /agent/v1/config`, §3) when what the device last confirmed differs; if the device still answers `firmware_disabled` while the switch is on, the Hub pushes again and retries once with a freshly signed authorization; if it still refuses, the answer is 409 `conflict` `{reason: device_policy_stale}` (retryable) and the approval is not spent: the change stays `approved` and can be applied again. A machine with a BIOS admin password: `reboot: true` is 403 `policy_denied` `{reason: watchdog_unavailable, detail: admin_password_set}` (`novad` never keeps the password, so its watchdog could not restore the machine); the password is read from the vault (`secret://devices/<id>/bios-admin`) and sent only to an https device over mutual TLS, else 403 `policy_denied` `{reason: tls_required}` before the vault is read; with none stored, `conflict` `{reason: bios_password_required}`. Other refusals: `conflict` `{reason: already_applied}`, `{reason: failed}`, `{reason: snapshot_missing}`, `{reason: identity_unavailable}` (no Hub identity to sign with); `server_error` `{reason: snapshot_unreadable\|snapshot_corrupt}` (the Hub's copy); the device's own refusals (§3). The device's `base_mismatch` (the settings moved since the plan) or `apply_failed` makes the change `failed`, unless a fresh read shows the target values already (an earlier answer was lost): then it is `applied`. Audited as `device.firmware.apply` or `device.firmware.rollback` with before and after; `device.firmware.changed` |
+| `POST` | `/api/v1/devices/:id/firmware/snapshots/:snapshotId/rollback` | `{note? (≤ 300)}` → 202 `FirmwareChangeView`: plan restoring the snapshot of an `applied` or `revert_failed` change (the diff from the values now) as a change of its own (kind `rollback`) and open its Hub-only card at once; once approved it runs through `…/changes/:changeId/apply`, sending the Hub's copy of the snapshot (which the device uses when it lost its own) and `allowSecurityDegrading: true` for a restore that weakens security (the override is checked first). An open rollback for the same change is returned as it is. Refusals: `not_found`; `conflict` `{reason: nothing_to_roll_back}` (nothing applied, or the device already holds the values) or `{reason: rolled_back}`. Audited as `device.firmware.rollback` (result `requested`) |
+| `GET` | `/api/v1/devices/:id/firmware/history?limit=` | `FirmwareHistoryView` `{changes: FirmwareChangeView[], snapshots: [{id, deviceId, deviceSnapshotId, takenAt, keys, sha256, createdAt}]}`, newest first (`limit` 1–200, default 50) |
+| `PUT/DELETE` | `/api/v1/devices/:id/firmware/admin-password` | Store `{password (1–256)}` (`no-store`) / remove the BIOS admin password in the vault (`secret://devices/<id>/bios-admin`) → `{stored}`; never returned. It is also removed when the device is revoked or decommissioned. Audited as `device.firmware.password.set` / `.clear` (kind `secret`) |
+
+A change is a `firmware_change` row (`docs/06`) whose status is `planned`, `awaiting_approval`,
+`approved`, `applied`, `rolled_back`, `failed`, `reverted` or `revert_failed`. A guarded reboot is
+closed by the device's `firmware.watchdog.*` heartbeat events (§3): `ok`, or `reverted` only when
+the device reports every changed key restored with no error; anything else is `revert_failed`:
+the change stays on the machine, rollback stays open and the owner gets an attention notice.
+With no report by the deadline plus 120 s the Hub marks the watchdog `missed` and notifies the
+owner. Audited as `device.firmware.watchdog`. BIOS settings through a BMC are in Out-of-band below.
+
+### Boot and network boot (M7.5, `docs/23` §5.2)
+
+Low-level boot of `novad` devices and network boot from the Hub (FR-143; ADR-096 D2, D3, D5;
+shapes in `packages/shared/src/m75/boot.ts`). Every route needs a session and is owner-only
+(Members above); the two public PXE routes are in the table at the top of §1.
+
+- **Off by default.** While `devices.boot.allowLowLevel` is off, trying and committing are 403
+  `policy_denied` `{reason: low_level_boot_off}`. Reverting a pending one-shot always works.
+- **Approve, then send once.** Try and commit open a Hub-only approval card (risk high, tier
+  `confirm_at_action`, `allow_once` or `deny_continue`, scope `device:<id>`, 30 minutes) whose args
+  hash is the request body's. Once the signed-in owner allows it, the Hub checks the approval in
+  its table again (decided, allowed, by the user, the same hash) and sends the change once with a
+  Hub-signed authorization (kind `boot.set`, `boot.commit` or `boot.revert`, §3). An answer from a
+  channel never sends a change.
+- **Device policy sync** (ADR-096 D3). Before a set or commit the Hub pushes the device-side
+  toggles (`POST /agent/v1/config`, §3) when what the device last confirmed differs; if the device
+  still answers `low_level_boot_off` while the switch is on, the Hub pushes again and retries once
+  with a new change id. If it still refuses, the request goes back to `awaiting_approval` with its
+  approval unspent (`decidedAt` cleared, `error.reason: device_policy_stale`) and the Hub's sweep
+  sends it again until it expires.
+- **Only what the device lists.** The entry must be one the device lists (`validation`
+  `{reason: unknown_entry, entries}`) on a bootloader it manages (`conflict`
+  `{reason: unsupported_hardware, detail}`). A revoked device is `conflict` `{reason: revoked}`.
+- **Kernel arguments** in profiles are not supported: a body naming `kernelArgs`, `cmdline` or
+  `kernelArguments` is 400 `capability_missing` `{reason: kernel_args_not_supported}`.
+- **No DHCP or TFTP.** Nova serves only the iPXE menu and the images; a DHCP server's
+  next-server/filename (or an iPXE build's embedded script) points at `/boot/ipxe/<token>`.
+  `devices.pxe.enabled` (off by default) gates the public routes; it does not need the low-level
+  toggle.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/devices/:id/boot` | `DeviceBootView` `{deviceId, lowLevelBoot, pxeEnabled, watchdogSeconds, status: {supported, reason, bootloader (a plain string: `systemd-boot`, `grub`, `uefi`, `fake` (novad's test bootloader, shown as "Test bootloader (fake)"), `none`, a name a newer `novad` sent, shown as "unknown (<name>)", or `unreadable`), entries: [{id, title, isDefault}], booted, pending: {profileId, entryId, deadline}\|null, last: {profileId, entryId, result: ok\|reverted\|failed, at}\|null}\|null, statusError: {code, reason, message}\|null, profiles, attempts (newest 20), requests (newest 20), pxe: PxeTokenView}`. The device's status is read through it (null with `statusError` when it cannot be), and an open trial is brought up to date from the device's `last` result. Audited as `device.boot.read` |
+| `GET/POST` | `/api/v1/devices/:id/boot/profiles` | `{items: BootProfileView[]}` `{id, deviceId, name, entryId, createdAt, updatedAt}` / create `{name (1–100), entryId (1–200)}` (201). A name the device already uses is `conflict` `{reason: name_taken}`; the entry is checked against the device's list (skipped while the device is unreachable). Audited as `device.boot.profile.create` |
+| `PATCH/DELETE` | `/api/v1/devices/:id/boot/profiles/:pid` | Change `{name?, entryId?}` / delete (`{ok: true}`). Audited as `device.boot.profile.update` / `.delete` |
+| `POST` | `/api/v1/devices/:id/boot/profiles/:pid/try` | `{watchdogSeconds? (120–3,600; default devices.boot.watchdogSeconds, 600), reboot? (default true; false sets the one-shot for the next restart)}` → 202 `BootRequestView` `{id, deviceId, kind: try\|commit\|revert, status: awaiting_approval\|denied\|expired\|sent\|failed, profileId, attemptId, entryId, approvalId, changeId, error: {code, reason, message}\|null, createdAt, expiresAt, decidedAt, sentAt}`. Once approved, the device gets a one-shot next boot (`boot/set`), so a machine that never comes up returns to its default entry at its next power cycle, and a `BootAttemptView` `{id, deviceId, profileId, requestId, entryId, status: pending\|ok\|reverted\|failed, reboot, watchdogSeconds, deadline, reason, detail, verified, committedAt, createdAt, finishedAt}` starts `pending`. One pending trial (`conflict` `{reason: attempt_pending, attemptId}`) and one request awaiting approval (`conflict` `{reason: request_pending, requestId}`) per device. Audited as `device.boot.request`, then `device.boot.set` (or `.denied`, `.expired`) |
+| `GET` | `/api/v1/devices/:id/boot/attempts/:aid` | One `BootAttemptView` |
+| `POST` | `/api/v1/devices/:id/boot/attempts/:aid/commit` | Make a trial's entry the default `{confirmUnverified?}` → 202 `BootRequestView`, sent (`boot/commit`) once approved. Only a trial the device confirmed: `conflict` `{reason: not_confirmed, status}` or `{reason: already_default}`. A trial the device could not verify (`verified: false`: GRUB cannot always tell which entry booted) is `conflict` `{reason: unverified_trial}` unless `confirmUnverified: true`, and its card says so. A device whose GRUB does not boot its saved entry refuses with `grub_default_not_saved`: the request becomes `failed` with that reason. Audited as `device.boot.request`, then `device.boot.commit` |
+| `POST` | `/api/v1/devices/:id/boot/revert` | `{}`: clear a pending one-shot (`boot/revert`) at once, whatever the toggle; the owner's own request is its approval (a card recorded as already decided). → `BootRequestView` (`sent`); a refusal from the device is answered with its code and `{reason, requestId}`. Audited as `device.boot.revert` |
+| `GET` | `/api/v1/devices/:id/boot/requests/:rid` | One `BootRequestView` |
+| `POST/DELETE` | `/api/v1/devices/:id/boot/pxe/token` | Make, or rotate, the device's PXE boot token: 201 `PxeTokenCreatedView` `{deviceId, active, createdAt, lastUsedAt, token: "nvb_…", scriptUrl}`, `no-store`, shown once (`scriptUrl` is `/boot/ipxe/<token>` on the address the request came in on) / revoke it → `PxeTokenView` `{deviceId, active, createdAt, lastUsedAt}`. A revoked device is `conflict` `{reason: revoked}`. Audited as `device.boot.pxe.token` (`created`, `rotated`, `revoked`) |
+| `GET` | `/api/v1/devices/boot-images` | `{enabled (devices.pxe.enabled), folder (<dataDir>/boot-images), items: [{name, size, modifiedAt}]}`: the regular files with plain names directly in the folder |
+
+The iPXE menu (`text/plain`, `no-store`) offers each image and boots the local disk after 30 s;
+image URLs use the address the request came in on, and images are served whole or as one byte
+range (206, or 416 for an unsatisfiable range). iPXE over plain HTTP sends the token in the clear,
+so boot images must not hold secrets. The device's `boot.watchdog.*` heartbeat events (§3) close a
+trial: `ok` (with `verified`) or `reverted` (`reverted_by_device`). With no report 120 s after its
+deadline the Hub fails it (`no_heartbeat` when the device has not been heard from since the
+deadline, else `no_watchdog_report`) and notifies the owner; with an out-of-band endpoint linked
+to the device, the alert links its power-cycle action (`/devices/<id>/oob/<endpointId>?action=power.cycle`),
+which the owner still asks for and approves. A later report from the device corrects a Hub
+failure. A request a Hub restart caught between its approval and the device's answer becomes
+`failed` with `interrupted`. Revoking the device fails its waiting requests and pending trials and
+stops its boot token. Audited as `device.boot.watchdog`; every change emits `device.boot.changed`.
+
+### Out-of-band management (M7.5, `docs/23` §7)
+
+The Hub talks to BMCs itself (FR-147; ADR-096 D6; shapes in `packages/shared/src/m75/oob.ts`):
+Redfish over HTTPS with a pinned certificate, IPMI through `ipmitool` (`lanplus`, the password
+only through `IPMI_PASSWORD`, never on the command line). No `novad` is involved (§3), and no
+model-facing tool reaches it. Intel AMT is not built: an `amt` endpoint is 400
+`capability_missing` `{reason: not_built}`.
+
+- **Owner only.** Every route needs a session and the Hub's owner (`/api/v1/oob` is in
+  `OWNER_ONLY_ROUTES`, and the service refuses a member too, audited as `device.oob.refuse`).
+- **Off by default.** Creating and changing endpoints, confirming a pin and every action need
+  `devices.oob.enabled`: 403 `oob_disabled` `{reason: oob_disabled}`, audited as `device.oob.refuse`.
+  Reading the status, listing and deleting work while it is off. Turning it off, by any route,
+  withdraws the waiting cards and approved plans (`approval.cancelled`; the actions end
+  `oob_disabled`).
+- **Credentials only after the pin.** A Redfish BMC's first `check` reads its certificate
+  fingerprint with a TLS handshake only and sends no credentials; the owner confirms it
+  (`pin/confirm`) before any are sent. Until then every other action is 409 `conflict`
+  `{reason: pin_unconfirmed, tlsPin}`. After that, every connection is checked against the pin
+  before a byte is written: another certificate is 403 `policy_denied` `{reason: tls_pin_mismatch,
+  expected, presented}` (audited as `device.oob.pin_mismatch`). Redirects are never followed;
+  calls time out after 10 s.
+- **Approvals.** Every action but the read ones (`check`, `power.status`, `sensors`, `bios.read`)
+  and `bios.apply` (its card was its plan's) files a Hub-only card (risk high, tier
+  `confirm_at_action`, `allow_once` or `deny_continue`, scope `oob:<endpointId>`, 10 minutes). Its
+  hash covers the action, its parameters and the BMC as it is (kind, address, port, system, pin and
+  when the pin was confirmed). The action runs when the signed-in owner allows it in time; an
+  "Allow once" recorded by anyone else is treated as denied.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/oob` | `OobStatusView` `{enabled, kinds: {redfish: {built: true}, ipmi: {built: true}, amt: {built: false, reason: not_built}}, readActions, endpoints (count)}` |
+| `POST` | `/api/v1/oob/enable` | Turn it on with the explicit consent `{confirm: true}` (the strict body; anything else is 403 `policy_denied` `{reason: consent_required}`) → `OobStatusView`. A managed lock wins (`policy_denied` `{reason: managed}`). Written through the Hub's settings writer: `settings.changed` `{key, scope, before, after, confirmed: true}`, audited once as `setting.changed` (kind `settings`) |
+| `POST` | `/api/v1/oob/disable` | Turn it off → `OobStatusView`; waiting cards and approved plans are withdrawn. `settings.changed` `{key, scope, before, after, confirmed: false}`, audited once as `setting.changed` |
+| `GET/POST` | `/api/v1/oob/endpoints` | `{items: OobEndpointView[]}` `{id, name, kind: redfish\|ipmi\|amt, address, port (null: 443 for Redfish, 623 for IPMI), systemId, deviceId, credentialRef, hasCredentials, tlsPin, tlsPinnedAt, tlsPinConfirmed, tlsPinConfirmedAt, lastCheckAt, lastCheckOk, lastError, supported, createdAt, updatedAt}` / create `{name (1–100), kind, address (a host name or IP; for Redfish also a bare https:// URL), port?, systemId? (Redfish; needed when a BMC manages several systems), credentials: {username (≤ 64, no colon or control characters), password (≤ 256)}, deviceId? (a device of the account), tlsPin? (SHA-256 of the BMC certificate's DER: 64 hex digits, colons allowed)}` (201). The credentials go only to the vault (`secret://oob/<id>`) and are never returned; a pin entered here counts as confirmed. The address may not carry credentials, and it is refused when it is loopback, link-local, unspecified or multicast (also in IPv4-mapped, compatible and NAT64 forms), `localhost` or `*.localhost`, one of the Hub's own addresses or host names (400 `validation` `{reason: address_not_allowed, kind}`), or a numeric host form other than dotted decimal (`{reason: bad_address}`). Audited as `device.oob.endpoint.create`; `device.oob.endpoint.changed` |
+| `GET/PATCH/DELETE` | `/api/v1/oob/endpoints/:id` | One / change `{name?, address?, port?, systemId?, credentials?, deviceId?, tlsPin?}` (`tlsPin: null` forgets the pin; a new address or port clears it unless one is given; the endpoint's waiting cards and approved plans are withdrawn with `endpoint_changed`) / delete it with its credentials, also while off (its open actions end `endpoint_deleted`). Audited as `device.oob.endpoint.update` / `.delete`; `device.oob.endpoint.changed` |
+| `POST` | `/api/v1/oob/endpoints/:id/pin/confirm` | Redfish only (`validation` otherwise): `{tlsPin}`, the fingerprint a first `check` read → `OobEndpointView` with `tlsPinConfirmed: true`. `conflict` `{reason: no_pin}` (run `check` first) or `{reason: pin_changed, tlsPin}` (the BMC now presents another certificate). Audited as `device.oob.pin` (decision `confirmed`); `device.oob.endpoint.changed` (`pin_confirmed`) |
+| `POST` | `/api/v1/oob/endpoints/:id/actions/:action` | `action`: `check`, `power.status`, `power.on`, `power.off` (ForceOff), `power.cycle` (PowerCycle; refused when the BMC does not list it, with no fallback), `power.reset` (ForceRestart), `sensors`, `bios.read`, `bios.plan`, `bios.apply`, `boot.next`. The body is `{}` except `bios.plan` `{changes: [{key, value (1–100)}] (canonical firmware keys, each once), allowSecurityDegrading?}`, `bios.apply` `{planId}` and `boot.next` `{target: pxe\|disk\|cdrom\|bios\|usb, mode?: uefi\|legacy}` (one-time: Redfish `BootSourceOverride`, IPMI `chassis bootdev`). → `{action: OobActionView}` `{id, endpointId, endpointName, action, params, status: awaiting_approval\|approved\|running\|done\|failed\|denied\|expired\|applied, approvalId, planId, before, after, result, error: {code, reason, message}\|null, createdAt, expiresAt, decidedAt, finishedAt}`: 200 when it is done, 202 while it waits for its approval. The read actions run at once. `bios.plan` reads the BIOS through the BMC and files the card that shows the diff (`OobBiosPlanView`: Redfish pending settings, applied at the next reboot); it follows the firmware switches (403 `firmware_disabled` `{reason: firmware_changes_off}`), and a security-degrading change also needs `allowSecurityDegrading: true` in the body and the override on. `bios.apply` runs an approved plan once, within 10 minutes of its approval, after checking the switches, the BMC target and the BIOS values against the plan's snapshot again (its card was the plan's). On IPMI, BIOS actions and a one-time USB boot are 400 `capability_missing` `{reason: not_supported_by_ipmi}`; without `ipmitool` on the Hub, `{reason: ipmitool_missing}`. Audited as `device.oob.<action>` with decision `requested`, `approved`, `denied`, `expired`, `done` or `failed` and before and after; `device.oob.action.changed` |
+| `GET` | `/api/v1/oob/actions?endpointId=&limit=` | `{items: OobActionView[]}`, newest first (`limit` 1–200, default 50) |
+| `GET` | `/api/v1/oob/actions/:id` | One `OobActionView` |
+
+Refusals at connect time: a name that resolves to a refused address is 403 `policy_denied`
+`{reason: address_not_allowed}` (every resolved address is checked, and TLS and `ipmitool`
+connect to the checked IP); one that does not resolve is 409 `conflict`
+`{reason: bmc_unreachable}`. The BMC's own failures are 409 `conflict` with the reason:
+`bmc_unreachable`, `bmc_timeout`, `bmc_auth_failed`, `bmc_session_failed`, `bmc_refused`,
+`bmc_not_found`, `bmc_precondition_failed`, `bmc_error`, `redirect_refused`, `not_redfish`,
+`bad_response`, `no_system`, `system_not_found`, `system_ambiguous`, `unsupported_by_bmc`, and
+`unsupported_hardware` for a BMC vendor without a BIOS attribute table (Dell and HPE are mapped;
+Lenovo and Supermicro are refused with the reason). BIOS plans add `nothing_to_change`,
+`credentials_missing`, `plan_used`, `plan_expired`, `plan_failed`, `plan_target_changed` (the
+endpoint changed since the approval), `base_mismatch` (the BIOS moved since the plan), 409
+`approval_required` (the plan is not approved yet) and 403 `policy_denied`
+`{reason: security_degrading}`. A failure after the settings were sent marks the plan `failed` with
+`apply_outcome_unknown`: it is never applied again (read the BIOS and plan again). An action's
+`error.reason` also says why it ended without running: `approval_denied`, `approval_expired`,
+`approval_not_by_user`, `approval_mismatch` (the BMC changed), `endpoint_changed`,
+`endpoint_deleted`, or `interrupted` (a Hub restart; never re-run).
+
+### Device operations (M7.5, `docs/23`)
+
+The management channel's state, the `novad` routes the M6 UI lacked, decommission and compute-node
+policy (ADR-096 D1, D9; FR-126, FR-142, FR-145, FR-148, FR-150; shapes in
+`packages/shared/src/m75/devices.ts`). Every route needs a session and is owner-only through the
+`/api/v1/devices` prefix; none is public.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/devices/management-tls` | `DeviceManagementTlsSummaryView` `{hubClient: {serial, notAfter, uri}\|null, items: [{deviceId, name, status, endpoint, channel: mutual_tls\|plain_http\|null, lastCall: {ok, at, failure}\|null (since the Hub started), renewal: {state: none\|offered\|presented, offeredAt, notAfter, reason: missing_server_auth\|expiring\|null}\|null, legacyCertificate, legacyGraceEndsAt}], problems}` for every `novad` device not revoked (§3 mutual TLS). `renewal` is null for a device without a certificate of the Hub CA; `legacyGraceEndsAt` is when the Hub stops accepting a clientAuth-only certificate. `problems` are plain sentences (devices on plain HTTP, no Hub client certificate, refused channels, a renewal not installed past its grace), also in diagnostics (`deviceManagement`) |
+| `GET` | `/api/v1/devices/:id/services` | The services the device owner declared in `novad`'s config, with their state now (`POST /agent/v1/services`, §3): `{items: [{name, kind: module\|systemd, state, module, unit}]}` (at most 100); needs `services`. A `novad` without that route is `capability_missing` `{reason: update_required, capability: services}` |
+| `GET` | `/api/v1/devices/:id/updates/available` | `DeviceAvailableUpdateView` `{deviceId, current: {novad}, platform: {os, arch}\|null, novad: {version, file, sha256, size}\|null, newer, reason: newer_available\|up_to_date\|no_builds\|no_build_for_platform\|unknown_platform\|unknown_version}`: the `novad` build this Hub serves for the device's platform (the agent-dist manifest) against its version. Information only: nothing is pushed |
+| `GET` | `/api/v1/devices/:id/overrides` | `DeviceOverridesView` `{deviceId, capabilityOverrides, policy, updateChannel, configRevision, pushedRevision, configPending, effective}`: what the owner set (`PATCH /api/v1/devices/:id`), whether the device took it, and what its last signed document says is in force for the overridable sections |
+| `POST` | `/api/v1/devices/:id/overrides/push` | Send the overrides and policy now (`/agent/v1/config`) instead of with the next heartbeat → `DeviceOverridesView`; the device must be reachable. Audited as `device.config.push`; `device.overrides.changed` `{pushed: true}` |
+| `GET/POST` | `/api/v1/devices/:id/decommission` | `{decommission: DeviceDecommissionView\|null}` (the latest) / ask `{purge? (default false; also delete the device's Nova data)}` → 202 `DeviceDecommissionView` `{id, deviceId, deviceName, purge, status: awaiting_approval\|running\|done\|denied\|expired\|cancelled\|failed, approvalId, deviceResult: wiped\|unreachable\|refused\|not_told\|null, detail, createdAt, decidedAt, finishedAt}`. A Hub-only card (risk high, tier `confirm_at_action`, `allow_once` or `deny_continue`, scope `device:<id>`, 1 hour); only the signed-in owner's "Allow once" runs it. A reachable device is told with `POST /agent/v1/decommission` and a Hub-signed `device.decommission` authorization (§3); the device is then revoked whatever it answered (`wiped`, `refused`, `unreachable`, or `not_told` when the Hub could not sign). An offline device is revoked at once and wipes its credentials at its next heartbeat (401). Revoking removes its credential, management token, connections, grants, certificate, sessions, boot token and BIOS admin password. One open request per device (`conflict` `{reason: decommission_pending, decommissionId}`); a revoked device is `conflict` `{reason: revoked}`. A waiting request is `cancelled` when it is withdrawn: its card was cancelled (a Hub restart), or the device was revoked through its own route (its card is cancelled too: `approval.cancelled` `{reason: device_revoked}`). A run a Hub restart interrupted is finished at the next start. Audited as `device.decommission.request`, `device.decommission.decide` and `device.decommission`; `approval.requested`, `device.decommission.requested`, `device.decommissioned` |
+| `GET` | `/api/v1/devices/:id/node` | A compute node's `NodeDetailView` `{id, name, status, policy, quietNow, reportedQuiet, vram: [{index, vendor, name, totalBytes, usedBytes}]\|null, load: {running, queued}\|null, lastSeenAt}`; `vram`, `load` and `reportedQuiet` are what its last heartbeat said (Hub memory). Any other device is `not_found` |
+| `GET/PUT` | `/api/v1/devices/:id/node/policy` | `NodePolicy` `{quietHours, timeZone, routingEligible, revision}` (default `[]`, null, true, 0) / merge `{quietHours? (≤ 10 HH:MM-HH:MM ranges; one may cross midnight), timeZone? (IANA, or null: the node's own zone), routingEligible?}`. `revision` goes up by one and the node takes the policy with its next heartbeat answer (§2). A revoked node is `conflict` `{reason: revoked}`. Routing skips a node that is not routing-eligible, is in its quiet hours (read in the policy's zone, else the zone the node declares, else UTC) or reported itself quiet. Audited as `node.policy.update` (before and after); `node.policy.changed` |
+| `GET` | `/api/v1/devices/:id/node/services` | The node's managed services through `GET /node/v1/services` with its job token (§2): `{items: [{name: jobs\|backend, kind: builtin\|systemd, state: running\|stopped\|unknown, unit}]}`. A node without that route is `capability_missing` `{reason: update_required}` |
+| `POST` | `/api/v1/devices/:id/node/services/:name/{start,stop,restart,status}` | → `{service: NodeServiceView}` through `POST /node/v1/services/:name/:action`. The node's refusals come back with their code (`not_found` for another name, `conflict` `{reason: not_managed}` for `backend` on a node started without `--backend-unit`); a node that refuses the job token is `auth_missing` `{reason: job_token_rejected}`, an unreachable one `node_unavailable` `{reason: unreachable}`. `start`, `stop` and `restart` are audited as `node.service.<action>` and emit `node.service.changed` |
+
+Since M7.5, revoking a device (`POST /api/v1/devices/:id/revoke`) also removes its BIOS admin
+password from the vault (audited as `device.firmware.password.clear` with `reason:
+device_revoked`), fails its waiting boot requests and trials, stops its PXE boot token, revokes
+its browser fallback consents and extension bridge grants, and ends their sessions.
+
+### Local browser fallback and extension bridge (M7.5, `docs/11` §4.3, §4.6)
+
+An agent whose own browser a site refused may continue on its connected computer (FR-209), and an
+agent may act in the user's own Chromium-family browser through Nova's extension (FR-096)
+(ADR-096 D7, D8; shapes in `packages/shared/src/m75/browser_device.ts`). The settings are
+`browser.localFallback`, `browser.extensionBridge` and `browser.extensionBridgeAllSites` (all
+`security: true`, on by default; managed policy can turn them off).
+
+- **The offer.** When the agent's own browser meets a block page, or the same challenge twice in
+  10 minutes, on a public site (local and private-address sites are never offered), and the agent
+  has a connected computer (FR-081) whose capability document offers `browser`, the Hub asks the
+  user with a `user_input` request carrying `context` (§5; 10 minutes to answer): a clean profile
+  on the device, the user's own browser through the extension (only while the bridge is connected
+  there and the site's host is granted), or "Not now". Accepting records a revocable consent per
+  agent (or thread), device and site with the profile chosen (`browser.fallback.consent.granted`);
+  the next block on that site continues without asking.
+- **A clean-profile session** is launched on the device (`browser/launch`, §3) with the egress
+  allow list exactly the site and `*.site` (never an address, never a wildcard over a top-level
+  domain), driven by Playwright over the DevTools relay with downloads off; the management token
+  and TLS never reach Playwright. Actions keep the site's permission level, the classifier and
+  the gate, and the trace marks each row (`localFallback` on `/browser/actions`). A session ends
+  when the agent leaves the site (a navigation, click, key or redirect: the Hub's own browser
+  takes over), when its consent is revoked, its device or connection goes, `browser.localFallback`
+  is turned off (`disabled`) or the Hub restarts (`restarted`). At start and every 15 minutes the
+  Hub closes the device sessions it does not know (`browser.fallback.orphan_closed`).
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/browser/fallback/consents?scopeKind=agent\|thread&scopeRef=&deviceId=&all=` | The account's consents: `{items: BrowserFallbackConsentView[]}` `{id, scopeKind, scopeRef, deviceId, deviceName, site, profile: clean\|extension, grantedBy, createdAt, lastUsedAt, revokedAt, revokedBy}`; revoked ones too with `all=true` (newest first) |
+| `DELETE` | `/api/v1/browser/fallback/consents/:id` | Revoke a consent: `{ok: true}`; a session running on it stops (`consent_revoked`). Audited as `browser.fallback.consent.revoked` with before and after; `browser.fallback.changed` |
+| `GET` | `/api/v1/browser/fallback/sessions?computerId=&limit=` | `{items: BrowserFallbackSessionView[]}` `{id, computerId, threadId, deviceId, site, profile, cause: block_page\|repeated_challenge\|requested, consentId, startedAt, endedAt, endReason: closed\|left_site\|consent_revoked\|device_gone\|error\|disabled\|restarted\|null, egress: {allowed, refused}\|null, bridgeUser?}` (`limit` 1–200) |
+| `GET` | `/api/v1/devices/:id/bridge` | The owner's (`policy_denied` `{reason: owner_only}` otherwise, as for the grant routes). `BrowserBridgeStatusView` `{deviceId, deviceName, connected, since, extensionVersion, browser, user, enabled (browser.extensionBridge), allSitesAllowed (browser.extensionBridgeAllSites), tabs: [{tabId, host, title, origin: shared\|agent, since, user?}]}`, built from the events `novad` relays and held in Hub memory: after a Hub restart a device counts as disconnected until `novad` reports again |
+| `GET/POST` | `/api/v1/devices/:id/bridge/grants?all=` | Per-host grants `{items: BrowserBridgeGrantView[]}` `{id, deviceId, host, allSites, state: pending\|active\|revoked, browserPermission, confirmedBy, confirmedAt, createdAt, updatedAt, revokedAt, revokedBy}` (revoked ones too with `all=true`) / grant `{kind: host, host (an exact host name), confirm: true}` or the separate "all sites" grant `{kind: all_sites, confirm: true, acknowledgeElevatedRisk: true}` (201, `active`). Refusals: `policy_denied` `{reason: bridge_disabled}`, `{reason: all_sites_disabled}`, `{reason: hub_host}` (no grant, "all sites" included, ever covers the Hub's own names and addresses). Audited as `browser.bridge.grant.created` or `.all_sites`; `browser.bridge.grant.changed` |
+| `POST` | `/api/v1/devices/:id/bridge/grants/:grantId/confirm` | Confirm a `pending` grant (the extension reported the browser's own permission for a host; only the owner's confirmation makes it `active`) `{confirm: true, acknowledgeElevatedRisk?: true}` (required for all sites, else `validation` `{reason: elevated_ack_required}`) → the grant. A revoked one is `conflict` |
+| `DELETE` | `/api/v1/devices/:id/bridge/grants/:grantId` | Revoke → `{ok: true}`. Audited as `browser.bridge.grant.revoked`; `browser.bridge.grant.changed` |
+
+The bridge's calls (`POST /agent/v1/bridge/call`, §3) are checked on the Hub first: the switch,
+the method, the tab (only tabs the user shared or the agent opened in the Nova tab group, and of
+the OS user the session started with), the host's active grant, and for `cdp.send` six DevTools
+methods only: `Runtime.evaluate` naming one of the extension's own page scripts (never an
+expression), `Input.dispatchMouseEvent`, `Input.dispatchKeyEvent` and `Input.insertText` with Shift
+as the only modifier and no `commands`, `Page.navigate` and `Page.captureScreenshot`, each with
+`expectHost` (the extension refuses with `host_changed` when the tab is elsewhere). Refusals are
+`policy_denied` with `details.reason` `bridge_disabled`, `tab_not_shared`, `user_changed`,
+`cdp_method_not_allowed`, `script_not_allowed`, `modifier_not_allowed`, `host_unknown`,
+`host_not_granted`, `hub_host`, `all_sites_disabled` or `extension_refused` (with the extension's
+`code`), audited as `browser.bridge.refused`; actions then pass the `browser.act` gate with the
+site's level and the classifier. Developer-protocol scripts, page tools, downloads, uploads and
+takeover input are refused in the user's own browser. Nothing reads cookies, passwords, storage or network bodies; history is searched
+(`browser.history_search`) only through the extension's own prompt each time, and returns titles,
+hosts and visit times. Audit actions: `browser.fallback.offered`, `.consent.granted`,
+`.consent.used`, `.consent.revoked`, `.started`, `.ended`, `.refused`, `.failed`, `.orphan_closed`;
+`browser.bridge.connected`, `.disconnected`, `.replaced` (a `connected` while connected ends the
+earlier connection), `.tab.shared`, `.tab.unshared`, `.tab.closed`, `.tab.opened`, `.tab.attach`,
+`.tab.detach`, `.host.reported`, `.host.withdrawn`, `.grant.created`, `.grant.all_sites`,
+`.grant.revoked`, `.refused`, `.history.search` (resource `device:<id>`) and `.events.refused`.
+Events: `browser.fallback.changed`, `browser.bridge.changed`, `browser.bridge.grant.changed`.
+
 ## 2. Hub ↔ Compute Node
 
 Internal, authenticated (mTLS over Mesh or LAN). The Hub authorizes every job; nodes never
@@ -957,16 +1217,43 @@ presents the device certificate Add Device granted as its client certificate onc
 check passed; the `/node/v1` routes check it (§3, mutual TLS). An unpinned node uses the system
 roots for an https Hub. The Hub → node job channel is unchanged.
 
+*As built in M7.5* (ADR-096 D9; FR-126, FR-150; `services/compute/src/{vram,services,node,server}.ts`,
+`packages/core/src/nodes/service.ts`). The node owner's routes on the Hub are in §1 "Device
+operations".
+
+- **VRAM.** The node reads GPU memory through a probe: `nvidia-smi` or `rocm-smi`, run without a
+  shell with a short timeout and a capped output (a fake in tests; a probe that fails reports
+  nothing). Each GPU's total goes into the signed capability document (`hardware.gpus[].vramBytes`;
+  the document is re-signed and sent with `models/sync` when the models or the totals change), and
+  every heartbeat carries `vram: [{index, vendor, name, totalBytes, usedBytes}]` (at most 16;
+  unsigned and informational) and `quiet` (the node is in its quiet hours).
+- **Node policy.** The heartbeat answer is `{ok: true, policy: {quietHours, timeZone,
+  routingEligible, revision}}`, the owner's policy for the node (`PUT
+  /api/v1/devices/:id/node/policy`). The node keeps a newer revision, across restarts too, and
+  honors it at once.
+- **Quiet hours.** In the operator's own quiet hours (`nova-compute enroll --quiet-hours
+  HH:MM-HH:MM,…`, at most 10, also `scheduling.quietHours` in the document) or the owner's (read
+  in the policy's zone, else the node's), and while its `jobs` service is stopped, `POST
+  /node/v1/jobs` is 503 `node_unavailable` `{reason: quiet_hours}` or `{reason: jobs_stopped}`. The
+  Hub's routing skips such a node, and one the owner took out of routing.
+- **Services.** `jobs` is the node's job API (stopped, it takes no new jobs; `restart` cancels what
+  runs and waits); `backend` is the model server, listed only when the operator named its systemd
+  unit with `--backend-unit <unit>` at enroll, and driven through `systemctl` without a shell (the
+  unit name is checked and passed after `--`). Nothing else on the machine can be started or
+  stopped from the Hub. A node from before M7.5 has no service routes: the Hub answers
+  `capability_missing` `{reason: update_required}`.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/node/v1/register` | (node → Hub) Announce capabilities + certificate; M2: `{enrollToken, name, endpoint, publicKey, capability, signature, jobToken, protocolVersions}` → `{nodeId, credential, heartbeatIntervalMs, protocolVersion}` |
-| `POST` | `/node/v1/heartbeat` | (node → Hub) Health, load, queue depth, temperature; `401` once revoked |
+| `POST` | `/node/v1/heartbeat` | (node → Hub) Health, load, queue depth, temperature; `401` once revoked. M7.5: `{load: {running, queued}, models?, vram?, quiet?}` → `{ok: true, policy: {quietHours, timeZone, routingEligible, revision}}` |
 | `POST` | `/node/v1/models/sync` | (node → Hub) Advertise available models in a re-signed capability document |
 | `POST` | `/node/v1/jobs` | (Hub → node) Submit a job (chat/tool/embedding/media); M2: `{kind: "chat", request}` → `{jobId}` |
 | `GET` | `/node/v1/jobs/:id/stream` | (Hub → node) Stream job output as SSE of normalized stream events (`docs/07` §2) |
 | `POST` | `/node/v1/jobs/:id/cancel` | (Hub → node) Cancel a job |
 | `GET` | `/node/v1/health` | (Hub → node) Health and load |
-| `POST` | `/node/v1/services/:name/{start,stop,restart}` | Manage a service |
+| `GET` | `/node/v1/services` | (Hub → node, job token; M7.5) `{services: [{name: jobs\|backend, kind: builtin\|systemd, state: running\|stopped\|unknown, unit}]}` |
+| `POST` | `/node/v1/services/:name/{start,stop,restart,status}` | Manage a service (M7.5 adds `status`; Hub → node, job token) → `{service: {name, kind, state, unit}}`. Another name is 404 `not_found`; `backend` on a node without `--backend-unit` is 409 `conflict` `{reason: not_managed}`; a failing `systemctl` is 500 `server_error` `{reason: unit_failed, exitCode}` |
 
 ## 3. Hub ↔ `novad` (management channel)
 
@@ -985,7 +1272,12 @@ updates. Every re-sent document must verify against the pinned key. Heartbeats e
 missed beats mark the device `unreachable`. The Hub calls the device's endpoint (default port
 7420) with `Authorization: Bearer nvdm_…`; `novad` compares it in constant time and answers 401
 `token_required` otherwise, 405 to anything but `POST`, 400 to a body that is not a JSON object,
-404 to an unknown route and 413 over 96 MiB. Errors use the Hub's error shape (§6). Calls run in
+404 to an unknown route and 413 over 96 MiB. Errors use the Hub's error shape (§6); their HTTP
+status is `novad`'s own and can differ from §6's table (`novad` answers `capability_missing` with
+409). The Hub reads only the `code`, `message` and `details` of a device error (an unknown code is
+`server_error`, a 401 is `auth_missing` `{reason: device_token_rejected}`) and answers its own
+clients with §6's status for that code, so a device's `capability_missing` reaches them as 400 with
+its `details`. Calls run in
 a module process: a module that is not running is 503 `node_unavailable` `{reason:
 module_unavailable}`, one that crashes during the call `{reason: module_crashed}`; more than 16
 calls in flight to one module is 429. The Hub does not run these calls through the policy engine:
@@ -1027,24 +1319,138 @@ Refusals are 403 `policy_denied` with `details.reason` `certificate_required`,
 audited as `device.tls.refuse` (at most once an hour per device and reason). Plain HTTP and
 requests the Relay tunnels in are not checked. The heartbeat answer adds `scopes` (the device's
 granted scopes, `local-runtime` included), which `novad` keeps in `scopes.json` so a grant holds
-while the Hub is away. The Hub → `novad` calls below are still bearer tokens over plain HTTP.
+while the Hub is away. The Hub → `novad` calls below are still bearer tokens over plain HTTP
+(M7.5: mutual TLS for a device that holds a certificate, below).
+
+*As built in M7.5* (ADR-096 D1-D9; `services/novad/src/{mgmt_tls,authz,firmware,boot,browser,ws,bridge,uninstall}.rs`,
+`packages/core/src/devices/tls.ts`, `packages/core/src/firmware/authz.ts`; `novad` 0.7.0).
+
+**Mutual TLS on the management channel** (D1; closes R-022 for devices with a certificate). When
+`novad` holds `device-cert.pem` (Add Device in `local-ca` mode), its management server (port 7420)
+speaks TLS 1.3 only, presents that certificate with the device's Ed25519 key, and requires a
+client certificate that chains to the Hub local CA it cached from a verified identity statement,
+with EKU clientAuth and the URI SAN `urn:nova:hub:<pinned fingerprint>`; the bearer management
+token is still checked on every request. Without a certificate the server stays plain HTTP. When
+the TLS configuration cannot be built (no cached CA, a damaged certificate, one for another key)
+every connection is refused; it never falls back to plain HTTP.
+
+- **The Hub's client certificate** is issued by its local CA (URI SAN `urn:nova:hub:<hubFingerprint>`,
+  EKU clientAuth, 90 days, renewed with the TLS leaf), kept in the vault at
+  `secret://hub/client-certificate` (not in `trust_certificate`, so no device route accepts it)
+  and audited as `trust.hub_client.issue`.
+- **The Hub's checks.** The Hub calls a device whose endpoint is `https://` over TLS 1.3 only, with
+  no session reuse, and accepts it only when its certificate chains to the Hub CA, carries exactly
+  one URI SAN, `urn:nova:device:<id>` of that device, holds the key pinned at registration, and is
+  one the trust area recorded and has not revoked. The host name is never checked (LAN addresses
+  move). The management token is written only on a connection that passed all of that. A failure
+  is 403 `policy_denied` `{reason: device_tls_failed, tls}`, `tls` one of `no_ca`,
+  `no_client_certificate`, `untrusted_certificate`, `expired`, `not_yet_valid`, `wrong_device`,
+  `key_mismatch`, `revoked`, `unknown_certificate`, `unsupported_purpose`, `handshake_failed` (also
+  a non-TLS answer or a reset right after the handshake), and it is never retried over plain HTTP.
+- **No downgrade.** `novad` registers and heartbeats its endpoint as `https://…` once it holds a
+  certificate. A registration with an https endpoint is 400 `validation`
+  `{reason: https_needs_certificate, field: endpoint}` unless the Hub issued a live certificate for
+  that device and key. A heartbeat offering `http://` for a device whose endpoint is https is 403
+  `policy_denied` `{reason: endpoint_downgrade}`; an https endpoint from a heartbeat is taken only
+  from a device holding a live certificate; a plain-HTTP endpoint is never moved by a heartbeat.
+  Refusals are audited as `device.endpoint.refuse` (at most once an hour per device and reason);
+  a move to https as `device.endpoint.change`, with `device.endpoint.changed`. On the device, a
+  privileged request (below) that arrives over plain HTTP while the device holds a certificate is
+  403 `policy_denied` `{reason: tls_required}` before anything else is looked at, and so is a
+  firmware apply or rollback body carrying `adminPassword` over plain HTTP.
+- **Legacy certificates and renewal.** Device certificates issued since M7.5 carry serverAuth and
+  clientAuth. One issued in M7 has clientAuth only: the Hub then opens a second TLS 1.3 connection
+  and checks the certificate itself before anything is sent (byte for byte the one the trust area
+  recorded for the device, unrevoked, in date, with the device's URI SAN and pinned key), until 10
+  minutes after a renewal was offered or until the device presents the renewal; after that it is
+  `unsupported_purpose`. While the device's newest certificate lacks serverAuth or has less than a
+  third of its life left, the heartbeat answer carries `certificate: {pem, notAfter}` (same key,
+  device id and role) until the device presents it; the older certificate is then revoked
+  (`trust.device.renew`, then `trust.device.revoke` with reason `renewed`). `novad` takes it only
+  when it already holds a certificate and the new one chains to the cached Hub CA, is valid now,
+  has serverAuth and clientAuth, holds its own key and names `urn:nova:device:<id>`; it replaces
+  `device-cert.pem` atomically (0600) and serves it from the next connection. A refusal
+  (`not_a_renewal`, `wrong_key`, `wrong_device`, `untrusted`, `expired`, `not_yet_valid`,
+  `missing_server_auth`, `missing_client_auth`, `malformed`, `not_pem`, `no_ca`, `not_enrolled`)
+  is logged on the device, which keeps its certificate; nothing goes back to the Hub.
+
+**Hub-signed authorization** (D2). Firmware apply and rollback, boot set, commit and revert, and
+decommission are privileged: their body carries `authorization: {payload, signature}`, and
+`novad` refuses them without a valid one whatever the management token says (a stolen token
+cannot change firmware).
+
+- **The object.** `payload` is `{v: 1, kind, deviceId, changeId, bodySha256, approvalId, issuedAt,
+  expiresAt}`. `kind` is `firmware.apply`, `firmware.rollback`, `boot.set`, `boot.commit`,
+  `boot.revert` or `device.decommission`. `changeId` is a UUIDv7, never reused. `bodySha256` is the
+  hex SHA-256 of the canonical JSON (keys sorted, no whitespace, UTF-8) of the request body without
+  `authorization`; the Hub also leaves out `adminPassword` (the BIOS admin password, firmware only)
+  and `novad` accepts either form, so no hash covers a secret. `issuedAt` and `expiresAt` are
+  ISO-8601 UTC (`novad` also accepts epoch milliseconds), at most 10 minutes apart (the Hub gives
+  5).
+- **The signature** is Ed25519 by the Hub identity key over UTF-8 `nova-device-authz-v1\n`
+  followed by the payload's canonical JSON, base64url. `novad` checks it with the key the pinned
+  fingerprint names: read once from `GET /api/v1/hello` and cached in `hub-key.json` only when it
+  hashes to the pin.
+- **The checks** after the signature: the device id is its own, the kind is the route's, the body
+  hash matches, and the time window holds with 120 s of clock skew. Then the change id is spent:
+  used ids are kept 24 h in `authz-replay.json` (0600, at most 4,096).
+- **Refusals:** 403 `policy_denied` `{reason: authorization_invalid}` (missing, malformed, not
+  signed by the pinned Hub, unknown kind or version, a lifetime over 10 minutes, no pinned Hub key),
+  `{reason: authorization_mismatch}` (another device, another route's kind, another body),
+  `{reason: authorization_expired}` (expired, or not valid yet beyond the skew); 409 `conflict`
+  `{reason: replayed}`; 500 `server_error` `{reason: replay_store_unreadable}` (a replay store that
+  cannot be read refuses every privileged request: it never fails open); 429 `rate_limited` when
+  4,096 ids were spent within an authorization's lifetime.
+- **The Hub signs** only for the owner's own request, with the area's toggle on, after the
+  approval card for exactly this change was answered "Allow once" by the signed-in owner
+  (`decided_by = 'user'`, its hash matching), for a device that is not revoked. Both sides test
+  against the same vectors (`packages/core/test/fixtures/device-authz-vectors.json`, copied to
+  `services/novad/tests/fixtures/`).
+
+**Heartbeat.** The body adds `endpoint` (above) and `novad`'s watchdog results in `events`, kept
+in a file outbox on the device until the Hub accepts a heartbeat:
+`{kind: firmware.watchdog.ok|firmware.watchdog.reverted, snapshotId, changeId, at, detail}` and
+`{kind: boot.watchdog.ok|boot.watchdog.reverted, profileId, entryId, changeId, at, detail}`.
+`changeId` is the authorization's, which the Hub matches first (an event without one, from an
+older `novad`, falls back to the snapshot or the profile). `detail`:
+
+- `firmware.watchdog.ok`: `{}`.
+- `firmware.watchdog.reverted`: `{reason: deadline|not_restarted, complete, restored: [{key, from,
+  to}], failed: [{key, from, to, error}], rebooted}`, or `{reason, complete: false, restored: [],
+  failed: [], rebooted: false, error, errorCode}` when nothing could be done. A BIOS with an admin
+  password lists every key in `failed` with `admin_password_required`; only a complete revert
+  restarts the machine.
+- `boot.watchdog.ok`: `{booted, verified}` (`verified: false` when the bootloader cannot show the
+  trial entry booted, as with GRUB).
+- `boot.watchdog.reverted`: `{reason: deadline|not_restarted|not_booted, booted, rebooted, error}`.
+
+The answer adds `policy: {firmwareChanges, lowLevelBoot}` (`devices.firmware.allowChanges` and
+`devices.boot.allowLowLevel` as the firmware and boot areas decide them; false when unset or when
+asking fails), which `novad` keeps in `policy.json` (anything but `true` is off; an answer without
+`policy` keeps the last; deleted at enrollment), and `certificate` (renewal, above). The Hub also
+pushes the two toggles through `POST /agent/v1/config` (below) when a switch changes and before
+each privileged send, so a device does not wait for its next heartbeat. Out-of-band
+management has no `novad` route: the Hub talks to BMCs itself (§1).
 
 novad → Hub (no session; §1 lists how each authenticates):
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/agent/v1/register` | (novad → Hub) `{enrollToken, name (1–100), endpoint (a plain http(s) base URL without credentials, query or fragment), publicKey (raw Ed25519, base64url), capability, signature, managementToken ("nvdm_…"), novadVersion, protocolVersions}` → 201 `{deviceId, credential: "nvc_…", heartbeatIntervalMs, protocolVersion, updateChannel, updateKey}` (`updateKey`: the update signing key the device pins, or null; the M6 Hub has none). A bad body is `validation` and no protocol version in common `capability_missing`, both before the token is spent. An unknown, used or expired token is 401 `auth_missing`. After that the token is spent even on failure: a document that fails the schema is `validation` `{reason: invalid_capability}`, a bad signature `policy_denied` `{reason: bad_signature}`, a key already registered `conflict` `{reason: key_in_use}`. The roles are the ones the document declares (the token's when it declares none); the device's kind is `hub`, `wake-helper` or `client`, never `compute`. Audited as `device.register`; `device.registered` |
-| `POST` | `/agent/v1/heartbeat` | (novad → Hub) `Authorization: Bearer nvc_…` (none: 401 `token_required`; unknown or revoked: 401 `auth_missing`, and the device then stops its modules and wipes its credentials). `{novadVersion, modules?, events? (≤ 500), accessDecisions? (≤ 500), power?}` → `{ok: true, heartbeatIntervalMs, capabilityRequested}`. Marks the device `active`; module events become `device.module.changed` (crashes and disables are audited); decisions made on the device (`novad access approve\|deny`) close their Hub cards; a `novad` self-update the device reports is recorded; overrides or policy the device has not taken yet are pushed after the beat. M6.5: `power` may carry `lan: [{interface?, network, broadcast?}]`, the device's physical IPv4 subnets (from `/proc/net/route`, container bridges and tunnels left out), for Wake Helper routing; `network` must be an IPv4 network `a.b.c.d/p` with p from 1 to 30 and no host bits set (at most 32 entries), else the beat is `validation`. A reported `broadcast` is kept but never used: the Hub computes it from `network` |
+| `POST` | `/agent/v1/heartbeat` | (novad → Hub) `Authorization: Bearer nvc_…` (none: 401 `token_required`; unknown or revoked: 401 `auth_missing`, and the device then stops its modules and wipes its credentials). `{novadVersion, modules?, events? (≤ 500), accessDecisions? (≤ 500), power?}` → `{ok: true, heartbeatIntervalMs, capabilityRequested}`. Marks the device `active`; module events become `device.module.changed` (crashes and disables are audited); decisions made on the device (`novad access approve\|deny`) close their Hub cards; a `novad` self-update the device reports is recorded; overrides or policy the device has not taken yet are pushed after the beat. M6.5: `power` may carry `lan: [{interface?, network, broadcast?}]`, the device's physical IPv4 subnets (from `/proc/net/route`, container bridges and tunnels left out), for Wake Helper routing; `network` must be an IPv4 network `a.b.c.d/p` with p from 1 to 30 and no host bits set (at most 32 entries), else the beat is `validation`. A reported `broadcast` is kept but never used: the Hub computes it from `network`. M7.5 (above): the body adds `endpoint` and the watchdog events; the answer adds `policy` and, for a renewal, `certificate`; an https → http endpoint is 403 `policy_denied` `{reason: endpoint_downgrade}` |
+| `POST` | `/agent/v1/bridge/events` | (novad → Hub, M7.5, FR-096) The device credential and certificate as for heartbeats. `{events (1–100)}` → `{accepted, refused}`. Each event is checked on its own: `tab.shared {tabId, host (a host only, never an address), title?, origin?: shared\|agent}`, `tab.unshared {tabId}`, `tab.closed {tabId}`, `host.granted {host}`, `host.revoked {host}` (`host` an exact host name, or `*` for the browser's permission on every site), `connected {user?, extensionVersion?, browser?}`, `disconnected {user?}`, each with an optional `at`. An event the Hub cannot read is counted in `refused` (audited as `browser.bridge.events.refused`) and never blocks the batch. `novad` posts at most 100 events and under 900 KiB at a time from a queue of 500 (oldest dropped); a 413 halves the batch (a single event that still does not fit is dropped), another 4xx drops the batch, and 5xx, 408 and 429 are retried. Unknown or revoked credential: 401 `auth_missing` |
 | `POST` | `/agent/v1/capabilities` | (novad → Hub) Device credential as for heartbeats. `{capability, signature, novadVersion}` → `{ok: true}`. The document must pass the schema, verify against the pinned key and keep its `deviceId` (`validation` `{reason: device_mismatch}`). `device.capabilities.changed` when its modules or version changed. Sent at start, every 30th heartbeat and when a heartbeat answer asks |
 
-Hub → novad (all `POST`, management token):
+Hub → novad (all `POST` but the DevTools WebSocket, management token; over mutual TLS for a device
+with a certificate since M7.5):
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/agent/v1/status` | `{novadVersion, deviceId, channel, modules: [{name, version, state, desired, pid, restarts, lastExit, disabledReason, startedAt, previousVersion}], uptimeMs, sandbox, hardened}` |
 | `POST` | `/agent/v1/capabilities` | The current signed document `{capability, signature, novadVersion}` (not called by the M6 Hub) |
-| `POST` | `/agent/v1/config` | The Hub's overrides and policy (FR-142, FR-150) `{capabilityOverrides?, policy?: {allowedModules?, resourceCaps?, quietHours?, routingEligible?}, updateChannel?, revision}`: saved and applied (modules outside `allowedModules` stop; resource caps apply from each module's next start); answers `{capability, signature, revision, modules}` with the re-signed document. An override outside the Advanced fields is `validation` |
+| `POST` | `/agent/v1/config` | The Hub's overrides and policy (FR-142, FR-150) `{capabilityOverrides?, policy?: {allowedModules?, resourceCaps?, quietHours?, routingEligible?, firmwareChanges?, lowLevelBoot?}, updateChannel?, revision?}`: saved and applied (modules outside `allowedModules` stop; resource caps apply from each module's next start); answers `{capability, signature, revision, modules, policy: {firmwareChanges, lowLevelBoot}}` with the re-signed document. An override outside the Advanced fields, or a `policy` that is not an object, is `validation`. M7.5: `allowedModules` may name `firmware` (the supervisor's own BIOS module, listed in the document when a backend works). **The device-side toggles** (ADR-096 D3): a `firmwareChanges` or `lowLevelBoot` that is present sets the value (only `true` turns it on); one absent or null keeps the current value; the result is written to `policy.json` (0600) as the heartbeat does. Toggles sent alone (`policy: {firmwareChanges: true}`) leave `allowedModules` and the other per-device fields as they are; a `policy` with any other field (or an empty `policy: {}`) replaces those fields as before. The answer always carries the toggles in effect, also for a request without `policy`. Unlike a heartbeat answer's `policy`, which sets both toggles (a missing one counts as off), this route merges. The Hub sends the toggles alone: to every active device with an endpoint when `devices.firmware.allowChanges` or `devices.boot.allowLowLevel` changes, and before each firmware apply and rollback and each boot set and commit when what the device last confirmed differs (`DeviceService.syncPolicy`). Anyone holding the management token can set them here, which removes only the device-side half of the double check; the Hub-signed authorization still gates every change |
 | `POST` | `/agent/v1/modules/:name/{start,stop,restart,rollback}` | Start, stop, restart a module or roll it back to the version an update replaced (FR-141): `{module}`. `not_found` for a module that is not installed; `policy_denied` `{reason: module_not_allowed\|checksum_mismatch}`; `conflict` without a previous version |
+| `POST` | `/agent/v1/services` | (M7.5) `{}` → `{services: [{name, kind: module\|systemd, state, module\|unit}]}`: every service the device owner declared, with its state now; one whose status cannot be read is listed with `state: unknown` and `error` |
 | `POST` | `/agent/v1/services/:name/{start,stop,restart,status}` | A service the device owner declared: a supervised module, or a systemd unit through `systemctl` (FR-145). `{service: {name, kind, state}}` |
 | `POST` | `/agent/v1/power` | `{action: status\|wol-plan\|wol-enable\|sleep\|restart\|shutdown, apply?}` (FR-144); refusals as `POST /api/v1/devices/:id/power`. There is no `wake` here: a device wakes other devices through `power/wake-other`. Linux only |
 | `POST` | `/agent/v1/power/wake-other` | The Wake Helper (FR-138, M6.5) `{mac, broadcast?, port?}` → `{sent: true, mac, port, targets: [{broadcast, interface}]}`: the device sends the magic packet on its LAN. Only a device whose roles include `wake-helper` (else 403 `policy_denied` `{reason: not_wake_helper}`). `mac` must be a unicast address; `broadcast`, when given, must be on one of the device's physical IPv4 subnets (else 403 `policy_denied` `{reason: not_on_lan, lan}`), otherwise the packet goes to every physical subnet's broadcast address; `port` is 9 (default) or 7. A device with no LAN interface is 409 `{reason: no_lan}`; more than 10 a minute is 429 `rate_limited` `{retryAfterMs}` (counted in the supervisor, so a module restart does not reset it); a bad body is 400 `validation`. The Hub calls it from `POST /api/v1/devices/:id/wake` with the broadcast address it computed. Linux only |
@@ -1059,12 +1465,22 @@ Hub → novad (all `POST`, management token):
 | `POST` | `/agent/v1/proc/{spawn,read,write,list}` | Long-lived processes kept by `novad` for Code environments (FR-062, FR-078): spawn `{grantee, cmd, cwd, env?, tag?}` → `{id}` (32 per grantee); read `{grantee, id, offset?, waitMs? (≤ 30,000)}` → `{data, offset, dropped, running, exitCode}` (the newest 1 MiB is kept); write `{text?, closeStdin?, signal?}`; list |
 | `POST` | `/agent/v1/mcp/list` | `{grantee}` → the device's local stdio MCP servers the grantee holds an `mcp` grant for, with their tools |
 | `POST` | `/agent/v1/mcp/call` | `{grantee, server, tool, arguments?}` → `{content, isError, untrusted: true}`; the server starts for the call, under bubblewrap unless its owner turned that off |
-| `POST` | `/agent/v1/boot/profile` | Set/inspect the next boot profile (FR-143). Not built: every `boot/*` path answers 400 `capability_missing` |
-| `POST` | `/agent/v1/firmware/read` | Read current BIOS/firmware settings (allowlisted) (FR-146). Not built: every `firmware/*` path answers 403 `firmware_disabled` |
-| `POST` | `/agent/v1/firmware/plan` | Dry-run: proposed vs current diff. Not built |
-| `POST` | `/agent/v1/firmware/apply` | Apply an approved change (snapshot + rollback). Not built |
-| `POST` | `/agent/v1/firmware/rollback` | Restore a snapshot. Not built |
-| `POST` | `/agent/v1/oob/:action` | Out-of-band action (IPMI/Redfish/AMT), off by default (FR-147). Not built: answers 403 `oob_disabled` |
+| `POST` | `/agent/v1/firmware/read` | (FR-146; M7.5) `{}` → `{supported: true, platform: {vendor, product, biosVendor, biosVersion, biosDate, uefi}, method: firmware-attributes\|efibootmgr\|fake, adminPasswordSet, settings: [{key, vendorKey, value, type: enum\|order\|string\|int, allowed, readOnly, securityDegrading}], updates: [{device, version, summary}]}`, or `{supported: false, reason, platform, …}` (`reason`: `os_not_supported`, `driver_missing`, `vendor_not_supported`, `tool_missing`, `disabled_by_owner`). Whatever the policy, but only while `firmware` is in `policy.allowedModules` (else 403 `policy_denied` `{reason: module_not_allowed}`, for every firmware route). The platform comes from `/sys/class/dmi/id`; the backends are the kernel firmware-attributes class (dell-wmi-sysman, think-lmi, hp-bioscfg), `efibootmgr` (the boot order only) and a fake the owner's `config.json` alone selects; `updates` is `fwupdmgr get-updates --json` (10 s; `[]` without fwupd), read only. Only the canonical keys exist |
+| `POST` | `/agent/v1/firmware/plan` | `{changes: [{key, value}] (1–16, each key once)}` → `{planId, snapshot: {id, takenAt, values, sha256}, diff: [{key, vendorKey, from, to, securityDegrading}], refused: [{key, reason: unknown_key\|read_only\|not_allowed_value\|unsupported}], requiresReboot}`. A dry run, allowed whatever the policy; the snapshot of every allowlisted value is kept under the data folder (`firmware/snapshots/<id>.json`, 0600, the last 20). A `bootOrder` value may only reorder the entries: dropping or adding one is `not_allowed_value` |
+| `POST` | `/agent/v1/firmware/apply` | (privileged, kind `firmware.apply`) `{planId, snapshotId, changes, reboot?, watchdogSeconds? (120–3,600; default 600; the Hub sends `devices.firmware.watchdogSeconds` with every apply that restarts), allowSecurityDegrading?, adminPassword?, authorization}` → `{applied: [{key, from, to}], pendingReboot, watchdog: {deadline}\|null}`. Checked in this order: `adminPassword` over plain HTTP (`tls_required`), the module, a supported backend (409 `conflict` `{reason: unsupported_hardware, detail}`), the Hub's `policy.firmwareChanges` (403 `firmware_disabled`, even with a valid authorization), the authorization. It writes only while the machine still holds the snapshot's values (409 `conflict` `{reason: base_mismatch, keys}`, nothing written); refuses a security-degrading value without `allowSecurityDegrading: true` (403 `policy_denied` `{reason: security_degrading, keys}`) and, on a BIOS with an admin password, a body without `adminPassword` (403 `{reason: admin_password_required}`; the password is used for the writes and cleared after, never stored or logged). A write that fails midway restores what was written and answers 500 `server_error` `{reason: apply_failed, restored, key}`. With `reboot: true` the watchdog marker (`firmware/pending.json`) is written before any setting, and the restart goes through the power module, which needs the device's `power.allowActions` (409 `{reason: reboot_unavailable}`, checked before anything is written); one guarded restart may be pending (409 `{reason: watchdog_pending}`) and the watchdog reverts a snapshot once only (409 `{reason: watchdog_already_used}`). Other refusals: 404 `not_found` `{reason: snapshot_missing}`, 409 `{reason: plan_mismatch}`, 400 `validation` `{reason: unknown_key\|read_only\|not_allowed_value\|unsupported, key}` |
+| `POST` | `/agent/v1/firmware/rollback` | (privileged, kind `firmware.rollback`) `{snapshotId, snapshot?: {values, sha256}, allowSecurityDegrading?, adminPassword?, authorization}` → `{restored: [{key, from, to}]}`: the device's copy of the snapshot, or the Hub's when the device lost it (409 `{reason: snapshot_mismatch}` when its hash is wrong; 404 `{reason: snapshot_missing}` with neither). The checks of apply, in the same order (a restore that turns Secure Boot or the TPM off needs `allowSecurityDegrading` too); a value that no longer fits is 409 `{reason: snapshot_not_applicable, key, why}`; a failed write is 500 `{reason: rollback_failed, restored, key}`. No restart; a pending watchdog of that snapshot is cleared |
+| `POST` | `/agent/v1/boot/status` | (FR-143; M7.5) `{}` → `{supported, reason?, bootloader: systemd-boot\|grub\|uefi\|none, entries: [{id, title, isDefault}], booted, pending: {profileId, entryId, deadline}\|null, last: {profileId, entryId, result: ok\|reverted\|failed, at, verified}\|null}`, whatever the policy (`reason`: `os_not_supported`, `no_bootloader`, `disabled_by_owner`). Backends: systemd-boot (`bootctl`), GRUB (`grub-reboot`, `grub-set-default`, `grubenv`), UEFI (`efibootmgr`) and a fake. GRUB names no booted entry: a trial counts as verified only when `next_entry` was consumed and the kernel in `/proc/cmdline` is the entry's, and the default shown is what `grub.cfg` boots |
+| `POST` | `/agent/v1/boot/set` | (privileged, kind `boot.set`) `{profileId, entryId, watchdogSeconds? (120–3,600; default 600), reboot? (default false), authorization}` → `{pending: {profileId, entryId, deadline}}`: a one-shot next boot (`bootctl set-oneshot`, `grub-reboot`, `efibootmgr --bootnext`), so a machine that never comes up returns to its default entry at its next power cycle. The watchdog marker (`boot/pending.json`) is written first, and its deadline counts from now even with `reboot: false`. Refusals: 403 `policy_denied` `{reason: low_level_boot_off}` (the Hub's `policy.lowLevelBoot` is false, even with a valid authorization), 400 `validation` `{reason: unknown_entry}`, 409 `conflict` `{reason: boot_pending}` (revert it first), `{reason: reboot_unavailable}`, `{reason: unsupported_hardware, detail}`, 409 `capability_missing` `{reason: tool_missing, tool}` |
+| `POST` | `/agent/v1/boot/commit` | (privileged, kind `boot.commit`) `{profileId, entryId, authorization}` → `{committed: {profileId, entryId}, entries}`: the entry becomes the default (`bootctl set-default`, `grub-set-default`, `efibootmgr --bootorder`). `low_level_boot_off` as for set; a GRUB that does not boot its saved entry (`GRUB_DEFAULT=saved`) is 409 `{reason: grub_default_not_saved}` |
+| `POST` | `/agent/v1/boot/revert` | (privileged, kind `boot.revert`) `{authorization}` → `{reverted, pending: null}`: clears a pending one-shot. It needs the authorization, never the policy. On start with a marker, the boot watchdog reports `boot.watchdog.ok` once a heartbeat is accepted before the deadline on the trial entry; otherwise it clears the one-shot, reports `boot.watchdog.reverted` and restarts once into the default, only a machine still on the trial entry (or that cannot tell) |
+| `POST` | `/agent/v1/browser/launch` | (FR-209; M7.5) `{sessionId (1–64 letters, digits, - or _), grantee, allowHosts (1–200 exact hosts or *.host), headless? (default true)}` → `{sessionId, cdpPath: "/agent/v1/browser/cdp/<sessionId>", skippedHosts?: [{host, reason}]}`. A Chromium-family browser (`browser.executablePath`, else the usual install paths) with a fresh temporary profile deleted on close, DevTools over a pipe (`--remote-debugging-pipe`: no TCP port), and every request through the session's own egress filter on loopback: CONNECT and absolute `http://` only, to the allowed hosts, ports 80 and 443 only, every resolved address checked (no IP literals, private, loopback or link-local destinations), no TLS inspection, hosts and decisions logged, never URLs. At most 2 sessions per device; a session with no DevTools client for 10 minutes is closed, and every session after 4 hours. Chromium never runs as root, `nobody` or a user of their groups: a root `novad` runs each session as its own dedicated user (`nova-browser1`, `nova-browser2`, made by `novad install` and `enroll` as root on Linux; on macOS the owner creates them and sets `browser.runAs`). Hosts `novad` cannot use are skipped and reported; with none left, 400 `validation`. Refusals: 409 `capability_missing` `{reason: no_browser}`, `{reason: no_browser_user}`, `{reason: no_display}` (a visible browser without a display); 403 `policy_denied` `{reason: unsafe_browser_user}`, `{reason: unsafe_path}` (`browser.profileRoot`); 409 `conflict` `{reason: session_exists}`, `{reason: session_limit, max}`, `{reason: no_free_browser_user}`; 503 `node_unavailable` `{reason: browser_start_failed}` with Chromium's own error text |
+| `POST` | `/agent/v1/browser/close` | `{sessionId}` → `{closed: true, egress: {allowed, refused}}`: the browser and its helpers stop, the filter closes, the profile is deleted and the session's DevTools connection ends (1001). 404 for an unknown session |
+| `POST` | `/agent/v1/browser/list` | `{}` → `{sessions: [{sessionId, grantee, headless, browser, allowHosts, startedAt, egress: {allowed, refused}}], max: 2}`; a session whose browser died is closed first. The Hub closes the sessions it does not know at start and every 15 minutes |
+| `GET` | `/agent/v1/browser/cdp/:sessionId` | The session's DevTools WebSocket, answered by `novad` itself (management token in `Authorization`; over mutual TLS when the device holds a certificate). 401 `token_required` without the token, 403 `origin_rejected` for any `Origin`, 400 `validation` without a version-13 WebSocket upgrade or with a malformed `Sec-WebSocket-Key`, 404 for an unknown session, 503 `node_unavailable` `{reason: module_unavailable}` without the browser module; else `101` and text frames relayed to the browser's DevTools pipe, one message per frame. One connection per session: a newer one replaces the older (closed with 1001), and closing the session closes it with 1001. No extension or subprotocol is agreed; client frames must be masked; a binary message closes with 1003, invalid UTF-8 or a NUL with 1007, a message over 64 MiB (or more buffered than one message and one read) with 1009; a ping gets a pong and a close a close. There is no `/json/version` endpoint: the Hub connects to this URL directly |
+| `POST` | `/agent/v1/bridge/call` | (FR-096; M7.5) `{method: tabs.list\|tabs.open\|tab.attach\|tab.detach\|cdp.send\|history.search, params? (an object), timeoutMs? (1,000–120,000; default 30,000)}` → `{result}`, or `{error: {code, message}}` (200: the extension's refusal, its code kept when it is a short identifier, else `extension_error`), relayed to the user's extension through the bridge host (§4). 409 `bridge_offline` (that code; the Hub answers it as `conflict` `{reason: bridge_offline}`) while no host is connected or the browser module is not running; 504 `server_error` `{reason: bridge_timeout}`; 400 `validation` for another method, params that are not an object, a call over 1 MiB or a timeout out of range. `cdp.send` params are `{tabId, method, params, expectHost}`; `history.search` asks the user in the extension each time |
+| `POST` | `/agent/v1/bridge/status` | `{}` → `{configured (bridge.extensionId is set), connected, user, since, users (each bridge socket's state)}`; not configured and not connected without the browser module |
+| `POST` | `/agent/v1/decommission` | (D9; privileged, kind `device.decommission`) `{purge? (default false), authorization}` (another field is 400) → `{decommissioned: true, purge, wiped: [file names], service: removing\|none}`. It closes the browser sessions, stops every module, wipes the device key, credential, management token, certificate, Hub trust and Hub key (the replay store is kept, so a spent authorization stays spent) and answers. About half a second later it removes the bridge host manifests and tokens of the local users, deletes the data folder with `purge` (only one that is recognizably `novad`'s: its `.novad-data` marker, or its own `device.json`, `key.seed` and `modules.json`; never `/`, a folder right under it, a system or a home folder), and hands one transient unit (`systemd-run --on-active=3`) the service's removal: disable it, remove the unit file and the binary, daemon-reload, remove the browser users, stop the service last (macOS: the files first, then `launchctl bootout`; Windows: `sc.exe delete`, then stop). `novad uninstall [--purge]` does the local side by hand |
+| `POST` | `/agent/v1/oob/*` | Out-of-band management (FR-147) is the Hub's own since M7.5 (§1 "Out-of-band management"; ADR-096 D6): `novad` has no out-of-band route and answers every `oob/*` path 403 `oob_disabled` |
 | `POST` | `/agent/v1/ambient/records` | (novad → Hub) Signed batch of capture and status records ([`ambient-record.json`](schemas/ambient-record.json)); the Hub acks each record id or refuses it with `redaction_policy_stale`, `redaction_categories_insufficient`, `redaction_model_missing`, `redaction_model_rejected` or `forgotten_window` (FR-227, FR-228). Not built |
 | `GET` | `/agent/v1/ambient/policy` | (novad → Hub) Current redaction policy version and categories, capture rules, accepted models and profile settings. Not built |
 | `POST` | `/agent/v1/ambient/forget` | Delete a window from the device spool, queue and pixel targets; also novad → Hub to forward a forget made while offline (FR-154). Not built |
@@ -1072,9 +1488,14 @@ Hub → novad (all `POST`, management token):
 Every `fs/*`, `exec`, `proc/*` and `mcp/*` call names a `grantee` `{kind: user\|agent\|session\|run\|thread, id}` and refuses
 credential locations and `novad`'s data folder whatever the grant (`policy_denied` `{reason:
 protected_path}`); writes also refuse the read-only locations (`.git`, `.nova`, `.agents`, shell
-startup files) inside a grant. `/agent/v1/firmware/*` will return `403` unless the global "Allow
-BIOS/firmware changes" toggle is enabled **and** the change has an approval record, and
-`/agent/v1/oob/*` unless the out-of-band module is enabled.
+startup files) inside a grant. Since M7.5, `/agent/v1/firmware/apply` and `rollback` answer 403
+`firmware_disabled` unless the device's `policy.firmwareChanges` (the global "Allow
+BIOS/firmware changes" toggle, from the heartbeat answer or `/agent/v1/config`) is on, **and** 403 `policy_denied` unless the body carries a valid
+Hub-signed authorization, which the Hub issues only for a change with an approved approval record
+(D2 above); `firmware/read` and `plan` change nothing and work whatever the toggle. `boot/set` and
+`commit` need `policy.lowLevelBoot` and an authorization the same way; `boot/revert` needs only the
+authorization. `/agent/v1/oob/*` always answers 403 `oob_disabled`: out-of-band management never
+goes through `novad`.
 
 ## 4. Native shell ↔ local `novad`
 
@@ -1103,7 +1524,8 @@ The shell never receives raw secrets; it requests scoped operations that `novad`
 
 Not built in M6: the local socket, the local token and every `local.*` method. Computer use on a
 real desktop (`local.screen`) and the local browser (`local.browser`) wait for the `screen` and
-`browser` modules, which answer only `ping` and `status` in M6.
+`browser` modules, which answer only `ping` and `status` in M6 (M7.5 built the `browser` module
+and the extension bridge, below; the `screen` module moves to M9 with the capture work).
 
 *As built in M7* (ADR-095, FR-128): what exists is `novad`'s **local runtime** module on client
 devices, not the `local.*` methods above (still not built). It serves only the four OpenAI-style
@@ -1125,6 +1547,52 @@ logout. A link or a foreign file at those paths is refused, never followed; owne
 `lchown`. The desktop shell's main process uses it for `window.novaShell.localRuntime`
 (`ipc-channels.md`); the page never sees the socket, the token or the address. Windows has no
 per-user named pipe yet.
+
+*As built in M7.5* (ADR-096 D8, FR-096; `services/novad/src/bridge.rs`,
+`apps/extension/src/protocol.ts`): the `local.*` methods above are still not built. `local.browser`
+is served instead by `novad`'s `browser` module (a clean Chromium the Hub drives, §3) and by the
+**extension bridge**, which reaches the user's own Chromium-family browser through Nova's
+extension, a native-messaging host and a per-user socket:
+
+- **The bridge socket.** `novad`'s browser module binds `bridge.sock` next to the local runtime's
+  socket for each user in `localRuntime.users` (`/run/user/<uid>/nova/bridge.sock`; macOS
+  `~/Library/Application Support/Nova/run/bridge.sock`): bound as that user, folder 0700, socket
+  0600, links refused, re-checked every 30 s, at most 8 connections at a time. A connection must
+  come from that user's uid (the kernel's peer credentials) and open within 10 s with
+  `{type: hello, role: host|cli, token, origin?, version?}`. `token` must equal the user's bridge
+  token in `~/.config/nova/bridge-token` (`nvbr_` + 256 random bits, 0600 in a 0700 folder), which
+  `novad` reads as the user (a forked child: root never follows anything in a user's home).
+- **Framing.** On the socket and on the native-messaging side alike: a 4-byte native-endian
+  length, then JSON, at most 1 MiB each way (a larger message is refused, nothing written).
+- **Registration** is the user's own act: `novad bridge enable`, run as that user (never as root,
+  never by the installer), makes the token and writes the host manifest `ai.nova.bridge.json`
+  (`allowed_origins`: only the extension id the device owner set in `config.json`
+  `bridge.extensionId`) into the `NativeMessagingHosts` folder of each Chromium-family browser
+  whose own folder exists in the user's home. When the user cannot read `novad`'s config, it asks
+  over the socket (`role: cli`, then `{type: config}` → `{type: config, extensionId}`). `novad
+  bridge disable` removes the manifests and the token; `novad uninstall` and decommission remove
+  them for each local user. There is no bridge on Windows yet (no named pipe, no registry
+  manifest).
+- **`novad`'s answer to a hello:** `{type: welcome}`, or `{type: error, error: {code, message}}`
+  and the connection closes: `token_required` (another uid, or a missing or wrong token),
+  `validation` (no `hello` first, an unknown role), `bridge_not_configured` (no
+  `bridge.extensionId`), `origin_not_allowed` (a host naming another extension's origin),
+  `bridge_busy` (another OS user's host is connected). One host is connected at a time: a newer
+  host of the same user replaces the older, and `novad` reports `disconnected` for the old one
+  before `connected` for the new.
+- **`novad bridge-host`** (what the manifest starts; the browser passes the extension's origin)
+  relays between the extension's stdio and the socket. To the extension it first sends
+  `{type: status, connected, reason}`; when not connected it then exits, with `reason`
+  `not_enabled`, `novad_unreachable` or the code `novad` refused with. After that it passes only
+  `{type: call, id, method, params}` to the extension, and only `{type: result, id, result}`,
+  `{type: error, id, error: {code, message}}` and `{type: event, event: {kind, …}}` to `novad`.
+- **Calls and events.** Calls are `tabs.list`, `tabs.open`, `tab.attach`, `tab.detach`,
+  `cdp.send` (`{tabId, method, params, expectHost}`) and `history.search`, each answered within
+  its `timeoutMs` (§3 `bridge/call`). The extension's events are `tab.shared {tabId, host,
+  title?, origin?: shared|agent}`, `tab.unshared {tabId}`, `tab.closed {tabId}`,
+  `host.granted {host}` and `host.revoked {host}`, at most 16 KiB each (others are dropped);
+  `novad` adds `at`, reports `connected` and `disconnected` (`{user}`) itself, queues at most 500
+  and posts them to the Hub (`POST /agent/v1/bridge/events`, §3).
 
 ## 5. Streaming & backpressure
 
@@ -1262,6 +1730,15 @@ Rules:
    Unanswered, the tool fails with `approval_timeout`, which ends the turn with that stop
    reason and pauses the run. While a request waits, the thread is `waiting_input` (Needs
    input) and the run's time budget does not run.
+6. M7.5 (FR-209, ADR-096 D7): the local browser fallback's offer is also a `user_input`
+   request, tied to the refused browser call (its `callId`). Its payload is `{question, choices,
+   allowFreeText: false, context}`; the optional `context` (`browserFallbackOfferContextSchema` in
+   `@nova/shared`) is the same offer, structured, for clients that show it their own way:
+   `{kind: browser.fallback, site, deviceId, deviceName, cause: block_page|repeated_challenge|requested,
+   choices: [{id: clean|extension|decline, label, profile: clean|extension|null}] (1–3)}`. Each
+   `label` is one of `choices`, and the `extension` choice appears only while the bridge can
+   serve the site on that device. The answer is still `{choice: <label>}`; the offer waits 10
+   minutes. A client that does not know `context` shows the question and its choices as usual.
 
 ## 6. Error shape
 
@@ -1273,27 +1750,27 @@ Rules:
 
 | Code | HTTP | Meaning |
 | --- | --- | --- |
-| `auth_missing` | 401 | No credentials. M6.5 also answers it for a wrong Add Device code (`wrong_code`, with `attemptsLeft`) and for a reveal or status poll the device key did not sign freshly (`missing_proof`, `bad_signature`, `bad_reveal`, `stale_time`, `replayed`) |
+| `auth_missing` | 401 | No credentials. M6.5 also answers it for a wrong Add Device code (`wrong_code`, with `attemptsLeft`) and for a reveal or status poll the device key did not sign freshly (`missing_proof`, `bad_signature`, `bad_reveal`, `stale_time`, `replayed`). M7.5: `job_token_rejected` (a compute node refused the Hub's job token) |
 | `auth_expired` | 401 | Token or certificate expired |
 | `token_required` | 401 | A listener or stream upgrade without a valid token or certificate (FR-192) |
 | `origin_rejected` | 403 | WebSocket or MCP request with a non-allowlisted `Origin` or `Host` |
-| `policy_denied` | 403 | The policy engine denied the action. M6.5 also answers it with `details.reason` `add_device_disabled`, `key_revoked`, `key_mismatch`, `managed` (a setting managed policy fixes), `system_changes_disabled` and `consent_required` (Network setup) |
-| `approval_required` | 409 | An approval is pending; `details.approvalId` |
+| `policy_denied` | 403 | The policy engine denied the action. M6.5 also answers it with `details.reason` `add_device_disabled`, `key_revoked`, `key_mismatch`, `managed` (a setting managed policy fixes), `system_changes_disabled` and `consent_required` (Network setup). M7.5 adds `consent_required` (turning on a firmware, boot, PXE or out-of-band switch without `confirm: true`), `hub_only` (a Hub-only approval card answered other than by the signed-in user in Nova), `low_level_boot_off`, `security_degrading`, `approval_denied`, `approval_mismatch`, `watchdog_unavailable`, `tls_required`, `endpoint_downgrade`, `device_tls_failed` (with `tls`), `tls_pin_mismatch`, `address_not_allowed`, and the extension bridge's `bridge_disabled`, `all_sites_disabled`, `hub_host`, `host_not_granted`, `tab_not_shared`, `user_changed`, `cdp_method_not_allowed`, `script_not_allowed`, `modifier_not_allowed`, `host_unknown`, `extension_refused`; `novad` adds `authorization_invalid`, `authorization_expired`, `authorization_mismatch`, `module_not_allowed`, `admin_password_required`, `unsafe_browser_user` and `unsafe_path` |
+| `approval_required` | 409 | An approval is pending; `details.approvalId`. M7.5 also answers it for a firmware change or an out-of-band BIOS plan that has no approved card yet (`details.reason: approval_required` on firmware) |
 | `hook_untrusted` | 409 | The hook's content hash changed or was never trusted |
-| `rate_limited` | 429 | Retry after `details.retryAfter`. M6 also answers it for a wake past `devices.wakesPerHour` and for more than 200 pending folder requests on a device. M6.5 adds `details.reason`: `start_rate_limited` (20 Add Device starts an hour), `code_only_locked` (10 wrong typed codes in 5 minutes), `address_rate_limited` (the public Add Device and dist routes per client address), `wake_rate_limited` |
+| `rate_limited` | 429 | Retry after `details.retryAfter`. M6 also answers it for a wake past `devices.wakesPerHour` and for more than 200 pending folder requests on a device. M6.5 adds `details.reason`: `start_rate_limited` (20 Add Device starts an hour), `code_only_locked` (10 wrong typed codes in 5 minutes), `address_rate_limited` (the public Add Device and dist routes per client address), `wake_rate_limited`. M7.5: `address_rate_limited` on the public PXE routes (`retryAfter: 60`); `novad` answers it when 4,096 authorizations were spent within one's lifetime |
 | `over_budget` | 402 | Account or provider spend cap reached (FR-116) |
 | `budget_exhausted` | 409 | A run or goal budget, or the 200-step backstop, was reached; `details.bound` (FR-182). M5 answers it when a run or goal is resumed while that budget is still used up |
 | `goal_blocked` | 409 | The goal is `blocked`; `details.blocker` (FR-181) |
 | `request_expired` | 410 | The server request expired before this answer. M6.5: an Add Device pairing or request that expired, was used or never existed (`details.reason: expired`) |
-| `capability_missing` | 400 | Feature, request kind or experimental field not negotiated (§7) |
+| `capability_missing` | 400 | Feature, request kind or experimental field not negotiated (§7). M7.5 adds `details.reason` `not_built` (Intel AMT), `kernel_args_not_supported` (boot profiles), `not_supported_by_ipmi`, `ipmitool_missing`, and `update_required` for a `novad` or compute node without the services list; `novad` answers `no_browser`, `no_browser_user`, `no_display` and `tool_missing` with this code but HTTP 409 on its own wire |
 | `sandbox_unavailable` | 409 | No sandbox could be created (for example for a terminal); fails closed, read-only mode offered |
-| `node_unavailable` | 503 | No node can take the job |
-| `firmware_disabled` | 403 | Firmware changes are off |
-| `oob_disabled` | 403 | Out-of-band module is off |
+| `node_unavailable` | 503 | No node can take the job. M7.5: a compute node refuses new jobs with `details.reason` `quiet_hours` or `jobs_stopped`; `novad` answers `browser_start_failed` and `module_unavailable` (the DevTools relay without the browser module) |
+| `firmware_disabled` | 403 | Firmware changes are off (`devices.firmware.allowChanges`, FR-146). Since M7.5 the Hub answers it on firmware plan, request-approval, apply and rollback (`details: {reason: firmware_disabled, setting}`) and on out-of-band `bios.plan` and `bios.apply` (`{reason: firmware_changes_off}`); `novad` answers it on `/agent/v1/firmware/apply` and `rollback` while its heartbeat `policy.firmwareChanges` is false, even with a valid authorization |
+| `oob_disabled` | 403 | Out-of-band management is off (`devices.oob.enabled`, FR-147). Since M7.5 the Hub's out-of-band area answers it (`details.reason: oob_disabled`, audited as `device.oob.refuse`); `novad` answers it for every `/agent/v1/oob/*` path, since out-of-band management is the Hub's own |
 | `validation` | 400 | Payload failed its schema or rule examples |
-| `conflict` | 409 | State changed (request already resolved, stale hash, lease held, worktree cap); `details.reason` names it where there is one, e.g. `stale_hunk`, `staged_changes`, `detached_head`, `commit_failed`, `worktree_cap`; M6 adds `stale_version`, `stale_proposal`, `decided`, `slug_taken`, `published`, `not_published`, `folder_in_use`, `in_use`, `leased`, `dirty`, `not_leased`, `verify_running`, `too_many_dev_servers`, `dev_server_exited`, `hook_failed`, `push_failed`, `base_mismatch`, `staged_tampered`, `access_granted`, `agent_connected`, `key_in_use`; M6.5 adds `already_revealed`, `device_not_pending`, `revoked`, `no_wake_helper`, `nothing_to_roll_back`, `rollback_in_progress`, `rolled_back`, `trust_off`, `no_local_ca`, `no_mesh_cert`, `identity_missing`, `identity_mismatch`, `identity_unavailable`, and the Network setup reasons (`would_lock_out`, `setup_busy`, `earlier_step_pending`, `not_applicable`, `already_applied`, `nothing_to_apply`, `rollback_pending`, `not_applied`, `not_last_step`, `mesh_in_use`) |
+| `conflict` | 409 | State changed (request already resolved, stale hash, lease held, worktree cap); `details.reason` names it where there is one, e.g. `stale_hunk`, `staged_changes`, `detached_head`, `commit_failed`, `worktree_cap`; M6 adds `stale_version`, `stale_proposal`, `decided`, `slug_taken`, `published`, `not_published`, `folder_in_use`, `in_use`, `leased`, `dirty`, `not_leased`, `verify_running`, `too_many_dev_servers`, `dev_server_exited`, `hook_failed`, `push_failed`, `base_mismatch`, `staged_tampered`, `access_granted`, `agent_connected`, `key_in_use`; M6.5 adds `already_revealed`, `device_not_pending`, `revoked`, `no_wake_helper`, `nothing_to_roll_back`, `rollback_in_progress`, `rolled_back`, `trust_off`, `no_local_ca`, `no_mesh_cert`, `identity_missing`, `identity_mismatch`, `identity_unavailable`, and the Network setup reasons (`would_lock_out`, `setup_busy`, `earlier_step_pending`, `not_applicable`, `already_applied`, `nothing_to_apply`, `rollback_pending`, `not_applied`, `not_last_step`, `mesh_in_use`); M7.5 adds `firmware_busy`, `already_applied`, `failed`, `nothing_to_apply`, `approval_expired`, `snapshot_missing`, `bios_password_required`, `identity_unavailable`, `identity_missing`, `unsupported_hardware` (with `detail`), `name_taken`, `attempt_pending`, `request_pending`, `not_confirmed`, `already_default`, `unverified_trial`, `decommission_pending`, `not_managed`, `bridge_offline`, the out-of-band `pin_unconfirmed`, `pin_changed`, `no_pin`, `nothing_to_change`, `credentials_missing`, `plan_used`, `plan_expired`, `plan_failed`, `plan_target_changed` and the BMC's reasons (`bmc_unreachable`, `bmc_timeout`, `bmc_auth_failed`, `bmc_session_failed`, `bmc_refused`, `bmc_not_found`, `bmc_precondition_failed`, `bmc_error`, `redirect_refused`, `not_redfish`, `bad_response`, `no_system`, `system_not_found`, `system_ambiguous`, `unsupported_by_bmc`), and from `novad` `replayed`, `plan_mismatch`, `snapshot_mismatch`, `snapshot_not_applicable`, `watchdog_pending`, `watchdog_already_used`, `boot_pending`, `reboot_unavailable`, `grub_default_not_saved`, `session_exists`, `session_limit`, `no_free_browser_user` |
 | `not_found` | 404 | No such resource |
-| `server_error` | 500 | Unexpected failure |
+| `server_error` | 500 | Unexpected failure. M7.5: `novad` answers a firmware write that failed midway with `details.reason` `apply_failed` or `rollback_failed` (`{restored, key}`), an unreadable replay store with `replay_store_unreadable`, and an extension that did not answer in time with `bridge_timeout` (HTTP 504 on its wire); the Hub's own copy of a firmware snapshot that fails its check is `snapshot_unreadable` or `snapshot_corrupt` |
 
 ## 7. Versioning
 

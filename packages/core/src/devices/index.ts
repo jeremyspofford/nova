@@ -1,7 +1,10 @@
 // M6 devices: devices running `novad` (docs/23) — the registry and management channel, versions
 // and capability gating, Wake-on-LAN, file operations with staged writes, an agent's connected
 // computer and its file tools, a Code session's device environment, and a fake device for tests.
+// M7.5 (ADR-096 D1, D3, D9): the management channel over mutual TLS, the heartbeat's device
+// policy, decommission, managed services, available updates and owner overrides.
 export {
+  DECOMMISSION_APPROVAL_TTL_MS,
   DeviceService,
   deviceSecretHash,
   inDeviceQuietHours,
@@ -13,7 +16,22 @@ export {
   type DeviceServiceOptions,
   type DeviceSettings,
   type ManagedDevice,
+  type AvailableNovadBuilds,
+  type DevicePolicyFlag,
+  type HeartbeatEventsListener,
+  type CertificateRenewal,
 } from './service.ts';
+export {
+  checkDeviceServerCertificate,
+  deviceTlsError,
+  mutualTlsDeviceTransport,
+  mutualTlsPost,
+  openMutualTls,
+  tlsFailureOf,
+  type DeviceTarget,
+  type DeviceTlsMaterial,
+  type DeviceTlsTrust,
+} from './tls.ts';
 export {
   DEVICE_CREDENTIAL_PREFIX,
   DEVICE_ENROLL_PREFIX,

@@ -1,7 +1,8 @@
 // Settings → Diagnostics (FR-118, FR-119, FR-043, FR-104; docs/16 §1): a health snapshot of the
 // Hub and its parts, each with a Test action (providers, MCP servers, the sandbox, storage,
 // updates), the redacted log viewer with level and module filters, and the audit log with an
-// integrity check of its hash chain. Exports are redacted by the Hub.
+// integrity check of its hash chain; each entry shows its redacted detail (M7.5: a change as
+// "before → after"). Exports are redacted by the Hub.
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type {
   AuditEntryView,
@@ -492,6 +493,61 @@ function LogsSection() {
 
 // ---- audit (FR-104 partial) ------------------------------------------------------------------------
 
+/** One value of an audit change, short: on/off for switches, `none`, the text, or compact JSON. */
+export function auditValue(v: unknown): string {
+  if (v === null || v === undefined) return 'none';
+  if (typeof v === 'boolean') return v ? 'on' : 'off';
+  if (typeof v === 'number') return String(v);
+  const text = typeof v === 'string' ? v : JSON.stringify(v);
+  return text.length > 120 ? `${text.slice(0, 119)}…` : text;
+}
+
+/**
+ * The change a settings or device entry records (M7.5: the Hub's detail carries the values
+ * before and after), or null when it records none.
+ */
+export function auditChange(
+  e: AuditEntryView,
+): { before: string; after: string; confirmed: boolean } | null {
+  const d = e.detail;
+  if (!d || (e.kind !== 'settings' && e.kind !== 'device')) return null;
+  if (!('before' in d) || !('after' in d)) return null;
+  return {
+    before: auditValue(d.before),
+    after: auditValue(d.after),
+    confirmed: d.confirmed === true,
+  };
+}
+
+/** An entry's detail: "before → after" for a change, else the redacted JSON behind a toggle. */
+function AuditDetail({ entry }: { entry: AuditEntryView }) {
+  const d = entry.detail;
+  if (!d || !Object.keys(d).length) return null;
+  if (d.truncated === true && typeof d.chars === 'number')
+    return (
+      <span className="muted">
+        The details are too long to show here ({d.chars} characters); the export has them.
+      </span>
+    );
+  const change = auditChange(entry);
+  if (change)
+    return (
+      <span className="ws-row-meta ws-audit-change">
+        <span>
+          {change.before} <span aria-hidden="true">→</span>
+          <span className="nv-vh"> changed to </span> {change.after}
+        </span>
+        {change.confirmed ? <span className="ws-badge">Confirmed</span> : null}
+      </span>
+    );
+  return (
+    <details className="ws-advanced ws-audit-detail">
+      <summary>Details</summary>
+      <pre className="ws-log">{JSON.stringify(d, null, 2)}</pre>
+    </details>
+  );
+}
+
 function AuditSection() {
   const { api } = useServices();
   const toast = useToast();
@@ -598,6 +654,7 @@ function AuditSection() {
                   {e.result ? <span>Result: {e.result}</span> : null}
                   <span>{formatWhen(e.createdAt)}</span>
                 </span>
+                <AuditDetail entry={e} />
               </div>
             </li>
           ))}

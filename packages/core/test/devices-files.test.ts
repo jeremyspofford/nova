@@ -8,7 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CREDENTIAL_LOCATIONS, READ_ONLY_LOCATIONS } from '@nova/policy';
-import { NovaError } from '@nova/shared';
+import { NovaError, httpStatusFor } from '@nova/shared';
 import {
   DeviceComputerProvider,
   callDevice,
@@ -646,6 +646,20 @@ describe('the management client', () => {
       code: 'policy_denied',
       details: { reason: 'x' },
     });
+    // novad answers `capability_missing` with 409; the Hub keeps the code and details and its
+    // clients get the shared mapping's status (400), not the device's.
+    const missing = deviceError(409, {
+      error: {
+        code: 'capability_missing',
+        message: 'no browser',
+        details: { reason: 'no_browser' },
+      },
+    });
+    expect(missing).toMatchObject({
+      code: 'capability_missing',
+      details: { reason: 'no_browser' },
+    });
+    expect(httpStatusFor(missing.code)).toBe(400);
     expect(deviceError(500, { error: { code: 'weird', message: 'm' } }).code).toBe('server_error');
     expect(deviceError(401, {}).code).toBe('auth_missing');
     expect(deviceError(413, null).code).toBe('validation');

@@ -1,8 +1,11 @@
 // The Hub's side of the management channel (contracts/hub-api.md §3): JSON POSTs to a device's
 // `/agent/v1/*` with the management token. novad answers errors in the Hub's own error shape, so
 // known codes pass through; anything else becomes `server_error`. An unreachable device is
-// `node_unavailable` (retryable).
+// `node_unavailable` (retryable). M7.5 (ADR-096 D1): an https endpoint is called over mutual TLS
+// (tls.ts); a refused channel is `policy_denied` `{reason: device_tls_failed, tls}` and passes
+// through unchanged.
 import { HUB_ERROR_CODES, NovaError, type HubErrorCode } from '@nova/shared';
+import type { DeviceTarget } from './tls.ts';
 
 export interface DeviceTransportResponse {
   status: number;
@@ -11,11 +14,13 @@ export interface DeviceTransportResponse {
 
 /** How the Hub reaches a device (tests substitute it). */
 export interface DeviceTransport {
+  /** `target` names the device a mutual TLS call must reach (its id and pinned key). */
   post(
     url: string,
     token: string,
     body: unknown,
     timeoutMs: number,
+    target?: DeviceTarget,
   ): Promise<DeviceTransportResponse>;
 }
 
@@ -74,11 +79,20 @@ export async function callDevice<T = Record<string, unknown>>(
   path: string,
   body: unknown,
   timeoutMs: number,
+  target?: DeviceTarget,
 ): Promise<T> {
   let res: DeviceTransportResponse;
   try {
-    res = await transport.post(`${endpoint.replace(/\/+$/, '')}${path}`, token, body, timeoutMs);
+    res = await transport.post(
+      `${endpoint.replace(/\/+$/, '')}${path}`,
+      token,
+      body,
+      timeoutMs,
+      target,
+    );
   } catch (err) {
+    // A refused TLS channel says why; it is never `node_unavailable` (nothing to retry).
+    if (err instanceof NovaError) throw err;
     throw new NovaError('node_unavailable', 'the device is not reachable', {
       details: { reason: 'unreachable' },
       cause: err,

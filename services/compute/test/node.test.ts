@@ -200,7 +200,11 @@ describe('running node', () => {
     expect(node.nodeId).toBe('node-1');
     // First beat: the capability is re-signed once (the Hub may have an older list), then a beat.
     expect(hub.syncs).toHaveLength(1);
-    expect(hub.beats.at(-1)?.body).toEqual({ load: { running: 0, queued: 0 }, models: ['llama3'] });
+    expect(hub.beats.at(-1)?.body).toEqual({
+      load: { running: 0, queued: 0 },
+      models: ['llama3'],
+      quiet: false,
+    });
 
     const health = await fetch(`${node.url}/node/v1/health`, {
       headers: { authorization: `Bearer ${state.enrollment!.jobToken}` },

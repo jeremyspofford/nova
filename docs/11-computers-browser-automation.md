@@ -300,6 +300,105 @@ connects the user's own browser to the agent. It is separate from the clean agen
 - Every action passes the policy engine with the site's permission level (§4.4) and the
   confirmation tiers. Managed policy can disable the bridge (`browser.extensionBridge`).
 
+*As built in M7.5 (ADR-096; `apps/extension`, `packages/core/src/browser/bridge*.ts`,
+`device-link.ts`, `apps/hub/src/browser.ts`; novad's host and relay in `docs/23` §4).* The bridge
+is built for Chromium-family browsers on Linux and macOS devices. Agents reach it in two ways only:
+the "my own browser" choice of the local browser fallback (§4.6) and the `browser.history_search`
+tool. No other agent tool acts in the user's browser.
+
+- **The extension.** `apps/extension` is Nova's own Manifest V3 extension ("Nova Bridge", Chromium
+  116 or later): our own code, and an icon drawn by `scripts/icons.mjs`. `npm run build` writes
+  `apps/extension/dist`, which the user loads unpacked. Permissions: `nativeMessaging`, `tabs`,
+  `tabGroups`, `debugger` and `storage`; `history` is optional, and so is host access
+  (`<all_urls>` as an optional host permission, requested one site at a time). There is no
+  `cookies` permission. The popup shows whether Nova is connected and shares the current tab;
+  sharing first asks the browser for that one site, in the user's click. Tabs the agent opens are
+  blank tabs in a tab group named "Nova". Every shared or agent tab carries a "NOVA" badge, and a
+  tab the agent controls also shows the browser's own debugging banner (`chrome.debugger`).
+  Cancelling that banner, closing the tab or "Stop sharing" ends the tab's consent at once. The
+  extension keeps its consents in the browser's session storage, so they end when the browser
+  closes.
+- **Transport.** The extension talks to novad's native-messaging host `ai.nova.bridge` (a 4-byte
+  length plus JSON, at most 1 MiB a message). Only `novad bridge enable`, run by the user,
+  registers it, for the one extension id in novad's `bridge.extensionId` (`docs/12` §15). The host
+  relays to novad over a per-user socket with a per-user token. The Hub calls
+  `POST /agent/v1/bridge/call` with the management token (mutual TLS where the device has a
+  certificate, `docs/23` §9), and novad posts the bridge's events to `POST /agent/v1/bridge/events`
+  with its device credential, like a heartbeat, at most 100 per post (`contracts/hub-api.md`). The
+  Hub checks each event on its own and answers `{accepted, refused}`; refused ones are audited
+  (`browser.bridge.events.refused`). Without a connected host novad answers 409 `bridge_offline`.
+  One host is connected at a time: a newer one from the same OS user replaces it, and a host of
+  another OS user is refused (`bridge_busy`) until the first one leaves.
+- **Status.** Connected or not, the extension's version, the browser, the OS user and the shared
+  tabs come only from those events and live in Hub memory (`GET /api/v1/devices/:id/bridge`).
+  After a Hub restart a device counts as disconnected until novad reports again. After every
+  reconnect the extension reports its shared tabs, the tabs the agent opened and the sites the
+  browser allows again. A `connected` while connected counts as a disconnect: the tab consents go,
+  fallback sessions in the user's browser stop, and it is audited `browser.bridge.replaced` with
+  the OS users before and after.
+- **Per-host grants.** Owner-only rows (`browser_bridge_grant`, 0043) under
+  `/api/v1/devices/:id/bridge/grants`. A grant names one exact host, never a pattern or an address,
+  and covers that host and its `www.` twin; a subdomain needs its own grant. When the browser
+  reports its permission for a host (`host.granted`), the Hub records a `pending` grant; only the
+  owner's confirmation makes it `active`, and only active grants count. "All sites" (host `*`) is
+  a separate grant: creating or confirming it needs `acknowledgeElevatedRisk: true` besides
+  `confirm: true`, and with `browser.extensionBridgeAllSites` off it is refused and an existing one
+  counts for nothing. When the browser withdraws its permission (`host.revoked`) the grant records
+  it and the extension unshares the tabs on that site. Revoking a grant in Nova does not remove the
+  browser's permission, but the Hub then refuses that host. Grants are audited with before and
+  after (`browser.bridge.grant.created`, `.grant.all_sites`, `.grant.revoked`); a revoked device
+  loses its grants.
+- **The Hub's own hosts are never granted**, "all sites" included: loopback names, its OS and mDNS
+  names, the configured listen host and extra origins, the Direct public and Relay hosts, the host
+  of `channels.publicUrl`, every interface address, and their subdomains. A grant for one is refused with 403 `policy_denied`
+  `{reason: hub_host}`, and when the list cannot be read every host counts as the Hub's (fail
+  closed).
+- **Per-tab consent.** The agent acts only in a tab the user shared (`tab.shared`) or one it opened
+  in the Nova group, and only in the browser of the OS user connected now. Each tab records that
+  user, a tab of another user is refused, and the fallback's tab driver pins the user at launch
+  (`user_changed`). `tab.unshared` and `tab.closed` end the consent.
+- **What a call may do.** The Hub checks every call before it goes out, and the extension checks
+  it again. Methods: `tabs.list`, `tabs.open` (a blank tab only; the Hub then navigates it through
+  its own checks), `tab.attach`, `tab.detach`, `cdp.send` and `history.search`. `cdp.send` carries
+  only six DevTools methods (`Runtime.evaluate`, `Input.dispatchMouseEvent`,
+  `Input.dispatchKeyEvent`, `Input.insertText`, `Page.navigate`, `Page.captureScreenshot`), on a
+  consented, attached tab whose host has an active grant (for `Page.navigate`, the target's host).
+  Every `cdp.send` names the host it was checked for (`expectHost`; null only for about:blank,
+  which is checked against the session's site). The extension refuses with `host_changed` when the
+  tab is on another host now, a pending navigation included, and also needs the browser's own
+  permission for the host.
+- **Page scripts and keys.** `Runtime.evaluate` never carries an expression. It names one of the
+  extension's 13 page scripts (`apps/extension/src/scripts.ts`; the page reader is the Hub's own),
+  which the extension builds and wraps so it returns nothing on another host. Key and mouse events
+  may hold only Shift: Control, Alt, Meta and editor `commands` are refused, so the user's
+  clipboard is never pasted, copied or cut. After each action the driver waits up to 10 s for a
+  navigation to commit and follows the tab only onto an allowed, granted site; anywhere else it
+  refuses everything but a navigation back.
+- **Never in the user's own browser:** cookies, passwords or storage (nothing is read, carried or
+  saved), developer-protocol scripts, page tools, downloads, uploads and takeover input. Page
+  actions still pass the browser controller's site lists, levels, classifier and gate (§4.4,
+  FR-095). A refused call is audited `browser.bridge.refused` with its reason; attaching,
+  detaching and the tabs the agent opens are audited too.
+- **History.** `browser.history_search` (`query` up to 200 characters, `maxResults` 1 to 50,
+  default 20) is listed only in an agent's threads whose connected computer was given its browser,
+  while `browser.extensionBridge` is on and the bridge is connected. For every search the
+  extension opens its own prompt; only the user's "Allow this search" asks the browser for the
+  `history` permission, which the extension removes right after. The prompt waits 110 s, the Hub
+  120 s. Results are titles, hosts and last visits only, never full addresses, labelled untrusted.
+  The gate sees the tool as a read: the consent is the user's click in their browser. Each search
+  is audited `browser.bridge.history.search` with the device as its resource and the query's
+  length only.
+- **Settings and UI.** `browser.extensionBridge` (default on, `security: true`, lockable by managed
+  policy) off refuses every call and every new grant and hides the history tool;
+  `browser.extensionBridgeAllSites` (default on) governs the "all sites" grant. Both are in
+  Settings → Browser. A device's page has a "Browser bridge" section: the status and shared tabs,
+  confirming, refusing, adding and revoking grants ("all sites" needs its own tick box), the
+  device's history searches, and the setup steps.
+
+Not built: a bridge on Windows (no named pipe, no registry manifest); a pinned extension id (the
+manifest has no `key`, so the owner sets novad's `bridge.extensionId` from the unpacked id); a
+store listing of the extension.
+
 ### 4.4 Per-site permission levels (FR-094)
 
 | Level | Write actions on the site |
@@ -360,6 +459,102 @@ parent's), never from tool arguments; when they cannot be read the action is den
 - The session is marked "local fallback" in the trace and audited; the per-site consent is a
   revocable grant. Egress from the clean profile goes through that device's egress proxy.
 
+*As built in M7.5 (ADR-096; `packages/core/src/browser/fallback.ts`, `blockpage.ts`,
+`device-launcher.ts`, `device-link.ts`, `service.ts`, `apps/hub/src/browser.ts`; novad's `browser`
+module and egress filter in `docs/23` §4).* The agent's browser on the Hub hands a site over to its
+connected computer's browser.
+
+- **When it is offered.** After `browser.navigate` or `browser.read` on the agent's own browser. A
+  block page offers at once: HTTP 401, 403, 405, 406, 429, 451 or 503 with words of a refusal, or
+  any 429. A bot challenge (a CAPTCHA widget, challenge words, a CAPTCHA title) offers only when it
+  is seen a second time on the same site within 10 minutes, so the first one stays the user's to
+  solve (§4.1); reading the page a navigation already counted does not count again. Never for a
+  local or private site (`localhost`, `.local`, `.internal`, a single-label name, a private
+  address), nor for a name novad's egress filter would refuse. What is detected comes from the
+  page, so at worst a page makes Nova ask; the user decides.
+- **Who can use it.** `browser.localFallback` is on (default on, `security: true`); the browser
+  belongs to an agent's computer; the agent has an active connection to a device (FR-081) that
+  was given `browser` among its capabilities; the device's capability document offers the
+  `browser` module; and the device is active with a management endpoint. Otherwise the agent's
+  result says why, and the refusal is audited `browser.fallback.refused` (`disabled`,
+  `no_connected_computer`, `no_browser_module`, `device_unreachable` and others).
+- **The offer.** A question to the user (a `user_input` server request tied to the call, FR-188),
+  never something a model answers. It needs a thread and waits 10 minutes; there is one offer at a
+  time per computer and site. Choices: "Continue on <device> (clean profile)", "Continue in my own
+  browser on <device> (extension)" only while the bridge can serve the site (switched on,
+  connected, an active grant, §4.3), and "Not now". The text says that the clean profile starts
+  empty and reaches only the site and its subdomains, that in the user's own browser the agent acts
+  only in a tab it opens or one they shared, that the session stops when the agent leaves the site,
+  and that the choice is remembered until revoked. The payload also carries a `context`
+  (`{kind: 'browser.fallback', site, deviceId, deviceName, cause, choices}`, each choice
+  `{id: clean|extension|decline, label, profile}`) so a client can show the offer as its own card;
+  the answer is still `{choice: <label>}`. The offer is audited `browser.fallback.offered`; no
+  answer, a cancel or "Not now" leaves the agent's browser where it was.
+- **Consent.** Accepting records a revocable consent per agent, device and site with the chosen
+  profile (`browser_fallback_consent`, 0043; one live consent per scope, device and site; audited
+  `browser.fallback.consent.granted` with before and after). The next block on that site continues
+  without asking (`browser.fallback.consent.used`), except that an extension consent asks again
+  while the bridge cannot serve the site. `GET` and `DELETE /api/v1/browser/fallback/consents`
+  list and revoke consents (Settings → Browser, "Continue on your computer"); revoking stops a
+  session running on it. Revoking a device revokes its consents, which ends its sessions. The table
+  also takes a thread scope, which nothing uses yet.
+- **The clean profile.** novad launches a headless Chromium (the Hub never asks for a visible one)
+  with a fresh temporary profile that is deleted when the session closes; a root novad runs it as a
+  dedicated unprivileged user (`docs/23` §4), and at most 2 sessions run on a device. The Hub
+  drives it with Playwright's `connectOverCDP` through a relay on its own loopback
+  (`ws://127.0.0.1:<port>/<random path>`, one connection). The relay opens the device's management
+  connection (TCP, or mutual TLS with the Hub's client certificate where the device has a
+  certificate; an https device never gets plain HTTP), sends the WebSocket upgrade to
+  `/agent/v1/browser/cdp/<sessionId>` with the management token and only the WebSocket headers,
+  and then pipes bytes. So the management token and the TLS client certificate never reach
+  Playwright. novad answers the WebSocket itself and talks to Chromium over a pipe, so the browser
+  opens no DevTools port. The Hub refuses a launch answer that names another session or path. The
+  browser context gets the same request guard, page-tools binding and capture as the Hub's own
+  browser; downloads are off (the download tool refuses), and no cookies are saved.
+- **Egress.** Each clean-profile session has its own egress filter in novad, its browser's only
+  route; the Hub's proxy is not used (§7). The allow list the Hub sends is exactly the site and
+  `*.site` (never a wildcard over a top-level domain, never an address), so other allowed sites
+  are not reachable from the device. The filter takes ports 80 and 443 only, resolves names itself
+  and refuses private, loopback, link-local and other non-public addresses (the device's LAN is not
+  the site), does no TLS inspection, and reports how many requests it allowed and refused when the
+  session closes; the counts are kept on the session.
+- **The session.** The agent's browser on the Hub closes and the device's browser takes its place
+  for that site (element refs from before are stale), then opens the page again. The session ends
+  when the agent leaves the site: a navigation elsewhere, or a click, key or redirect that takes
+  the page off the site; the agent's own browser then opens the other site. Sessions are
+  `browser_fallback_session` rows with the profile, the cause, the consent, the OS user for the
+  extension profile, the end reason and the egress counts (`GET /api/v1/browser/fallback/sessions`,
+  `computerId`, `limit` 1 to 200, default 50; event `browser.fallback.changed`).
+- **End reasons.** `closed`; `left_site`; `consent_revoked`; `device_gone` (the agent's connection
+  to the device ended or, for the extension profile, the extension disconnected); `error`
+  (the device's browser could not start: the tool answers `browser_unavailable` and the agent
+  browser stays closed until the site is opened again); `disabled` (`browser.localFallback` turned
+  off: at once, or at the latest at the next action); `restarted` (at start the Hub ends the rows a
+  previous run left open).
+- **Trace and audit.** The start and the end are `browser.fallback` trace rows (`local_fallback`,
+  `local_fallback_end` with the reason). Every action in between is linked to the session
+  (`browser_fallback_action`), and each item of `GET /api/v1/browser/actions` carries
+  `localFallback: {sessionId, deviceId, profile}` or null. The browser panel says the agent is
+  working in the device's browser while a session runs, and the trace rows carry a badge. Actions
+  pass the same site lists, levels, classifier and gate as on the Hub. Audit:
+  `browser.fallback.offered`, `.consent.granted`, `.consent.used`, `.consent.revoked`, `.started`,
+  `.ended`, `.refused`, `.failed` and `.orphan_closed`.
+- **Leftovers.** When the devices area binds at start, and every 15 minutes, the Hub lists each
+  active managed device's browser sessions (`/agent/v1/browser/list`) and closes those it does not
+  run (`browser.fallback.orphan_closed`). novad closes a session with no DevTools client after 10
+  minutes, and every session after 4 hours.
+
+Not built: asking for the fallback by hand (the service's `localFallback` has no route or tool, so
+the `requested` cause never occurs); a visible browser on the device; browser users made by novad
+on macOS (the owner creates two unprivileged users and sets `browser.runAs`; novad makes them only
+on Linux, as root).
+
+Known limits: novad's tests use a fake Chromium (the Hub side ran against a real one in the
+Playwright container), and WebRTC traffic policy and LAN discovery were not checked against a real
+Chromium. On a kernel without unprivileged user namespaces Chromium's sandbox does not start
+(`browser_start_failed`). DevTools sessions an earlier Hub connection opened inside Chromium stay
+attached after a reconnect.
+
 *As shipped in M6 (ADR-093).* The browser controller runs in the Hub on `playwright-core` (loaded
 lazily), with headless Chromium from `browser.executablePath` or Playwright's install; there is no
 `browserv` service and no bundled browser. One browser per computer (a thread without an agent
@@ -389,9 +584,8 @@ stores the login in the vault, and reuse needs the user to pick it). Data sent t
 named it (FR-194). Every action is recorded with sealed before and after screenshots (§9). Page
 tools: only the top frame, the current origin, at most 20, annotations ignored. Not built in M6:
 console and network capture, hover, element screenshots and the restart after a crash (all built in
-M7, below), the extension bridge (§4.3) and the local browser fallback (§4.6: no tool calls it, and
-it refuses with the reason until a device offers a browser module). The last two are still not
-built.
+M7, below), the extension bridge (§4.3) and the local browser fallback (§4.6; M7.5 built both, see
+the notes in those sections).
 
 With `browser.allowLocalSites` on, the agent browser may open a site on the local network (a
 test site, a router page) when the owner allowed that site by its exact name: the browser's proxy
@@ -600,6 +794,14 @@ only the granted browser's proxy session may reach. SOCKS5 is not built. `networ
 and `network.egressDeny` take the proxy's own host patterns (at most 500 each); a stored list
 that fails them resolves to the default (none). `web.fetch` and MCP servers still run outside the
 proxy, in the Hub process and unsandboxed.
+
+*As built in M7.5 (ADR-096).* The browser of a local fallback session (§4.6) runs on the
+connected computer and does not use the Hub's proxy, so `network.egressMode` does not apply to it
+(its `limited` read-only mode included). A clean profile's only route is novad's per-session egress
+filter: exactly the site and its subdomains, ports 80 and 443, public addresses only, names
+resolved by novad, no TLS inspection; the browser's own request guard still applies the site lists.
+The user's own browser (§4.3) keeps the user's network: the bridge limits where the agent acts
+(granted hosts, consented tabs), not what the page loads.
 
 ## 8. Resource governance
 

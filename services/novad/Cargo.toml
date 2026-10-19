@@ -1,6 +1,6 @@
 [package]
 name = "novad"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 description = "Nova device agent: supervisor for signed, sandboxed modules, the management channel and device file operations (docs/23)."
@@ -21,6 +21,10 @@ rustls = { version = "=0.23.45", default-features = false, features = ["ring", "
 # the descriptor back over SCM_RIGHTS (src/user_socket.rs): fork, setuid and sendmsg are not in
 # std. MIT OR Apache-2.0; already in the build through ring.
 libc = { version = "=0.2.191", default-features = false }
+# The browser module answers the Hub's DevTools WebSocket itself (src/ws.rs, FR-209): the
+# handshake's accept key is SHA-1 by RFC 6455, which sha2 does not have. ring is already in the
+# build through rustls (same version, Apache-2.0 AND ISC); only its legacy digest is used.
+ring = { version = "=0.17.14", default-features = false }
 
 [dev-dependencies]
 # Test certificates (a Hub CA, leaves, device certificates, revocation lists) are made when the

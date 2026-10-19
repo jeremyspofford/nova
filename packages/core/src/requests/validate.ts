@@ -3,7 +3,7 @@
 // kind allows, and an answer resolves it only when it is valid for that kind and payload
 // (contracts/hub-api.md §5 rule 3). Approvals are answered through the approvals flow.
 import { z } from 'zod';
-import { NovaError, type ServerRequestKind } from '@nova/shared';
+import { NovaError, browserFallbackOfferContextSchema, type ServerRequestKind } from '@nova/shared';
 
 export type AskKind = Exclude<ServerRequestKind, 'approval'>;
 
@@ -14,6 +14,8 @@ const userInputPayload = z
     allowFreeText: z.boolean().optional(),
     /** The answer is long-form text (a multi-line field); see the contract note in the area. */
     multiline: z.boolean().optional(),
+    /** What the question is about, for clients that show it their own way (M7.5: FR-209). */
+    context: browserFallbackOfferContextSchema.optional(),
   })
   .strict();
 

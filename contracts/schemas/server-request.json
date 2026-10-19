@@ -113,6 +113,38 @@
         "multiline": {
           "type": "boolean",
           "description": "The answer is long-form text: clients show a multi-line field."
+        },
+        "context": {
+          "$ref": "#/$defs/browserFallbackOfferContext",
+          "description": "What the question is about, for clients that show it their own way (M7.5, FR-209). The answer is still {choice: <one of choices>}."
+        }
+      }
+    },
+    "browserFallbackOfferContext": {
+      "type": "object",
+      "description": "The local browser fallback offer (docs/11 §4.6): the site the agent's own browser could not use, the connected computer that can continue, and the choices with the profile each picks.",
+      "required": ["kind", "site", "deviceId", "deviceName", "cause", "choices"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "browser.fallback" },
+        "site": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "deviceId": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "deviceName": { "type": "string", "maxLength": 200 },
+        "cause": { "enum": ["block_page", "repeated_challenge", "requested"] },
+        "choices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "required": ["id", "label", "profile"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "enum": ["clean", "extension", "decline"] },
+              "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "profile": { "enum": ["clean", "extension", null] }
+            }
+          }
         }
       }
     },

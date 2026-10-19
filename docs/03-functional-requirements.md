@@ -150,6 +150,13 @@ the terminal) cannot be detached yet.
 | FR-097 | P1 | M6 | Local dev server manager: detect, start, stop, and stop-all; expose URLs to the browser pane. |
 | FR-098 | P0 | M6 | Every browser/computer action is recorded in the Activity trace with before/after screenshots. |
 
+*M7.5 notes (ADR-096).* FR-096: the extension bridge is built (`apps/extension`, Manifest V3, our own
+code): native messaging to the local `novad` only, which relays to the Hub; per-host grants the
+owner confirms ("all sites" a separate elevated grant that policy can switch off; the Hub's own hosts
+never), per-tab consent, the debugger banner and a badge on controlled tabs, and history search that
+asks the user each time. Agents never get cookies, passwords or storage, and pages are read only by
+the extension's own scripts. No Windows bridge yet (`docs/11` §4.3).
+
 ## I. Permissions, security, privacy
 
 | ID | Pri | Ms | Requirement / Acceptance |
@@ -259,6 +266,29 @@ web app's replica (`docs/13` §2).
 | FR-148 | P0 | M6 | **`novad` updates**: signed bundles, staged, health-checked, with automatic rollback; channels stable/beta/nightly. The Hub enforces a minimum `novad` version per capability. |
 | FR-149 | P0 | M3 | **Hub trusted, external paths E2E**: data encrypted at rest on the Hub, TLS in transit, and end-to-end encryption for everything leaving the Hub (Relay, cloud, device sync). Optional sealed mode keeps keys in the OS secure enclave. |
 | FR-150 | P1 | M6 | **Per-device policy overrides** for routing eligibility, allowed modules, resource caps, and quiet hours. |
+
+*M7.5 notes (ADR-096).* FR-143: built for systemd-boot, GRUB and UEFI (`efibootmgr`): a boot profile
+is tried once as a one-shot next boot after the owner's approval, with a watchdog on the device (it
+clears the one-shot and restarts into the default) and on the Hub (it fails a trial with no report
+120 s past its deadline); only a confirmed trial becomes the default, and GRUB trials it cannot verify
+need an explicit confirmation. PXE/iPXE menus and images are served by the Hub to devices holding a
+per-device boot token; Nova runs no DHCP or TFTP, and kernel arguments in profiles are not supported
+(`docs/23` §5.2). FR-146: built on Linux for Dell, Lenovo and HP (the kernel's firmware-attributes
+class) and boot order on generic UEFI, with the support matrix, dry-run diff, snapshot, Hub-only
+approval, a Hub-signed authorization, rollback, a separate override for changes that weaken
+security, a key-by-key watchdog and audit; BIOS settings on Windows and macOS are refused
+(`os_not_supported`) and `fwupd` is listed read-only (`docs/23` §6). FR-147: built on the Hub for
+Redfish and IPMI (power, sensors, BIOS pending settings over Redfish, one-time boot), off by default,
+owner-only, approved and audited, credentials in the vault and BMC certificates confirmed by the
+owner before any credential is sent; Intel AMT, console access and BIOS settings over IPMI are not
+built (`docs/23` §7). FR-126: M7.5 finished the compute node part: VRAM in the signed document and
+heartbeats, the owner's node policy with quiet hours and routing eligibility, and `/node/v1/services`;
+mutual TLS now also covers the Hub → `novad` management channel for a device that holds a
+certificate, and device certificates are renewed (`docs/22` §5). FR-140: devices can be
+decommissioned (revoked whether or not they could be told) and `novad uninstall` is built. FR-141:
+the `browser` module is real; the `screen` module (computer use on a real desktop) moved to M9 with
+N1's capture work, and the `compute` module stays a placeholder (`services/compute` is the compute
+node).
 
 ## O. Ambient Memory (screen & audio) — track N1
 
@@ -373,6 +403,13 @@ Added by `docs/external/RECONCILIATION.md`. Grouped by area; IDs continue the se
 | FR-208 | P2 | M6 | **Page-registered tools**: a page loaded in an agent browser may register tools (name, description, input schema) from its top frame only. Each call is policy-gated and reviewed like an external write; results are untrusted. |
 | FR-209 | P1 | M6 | **Local browser fallback**: when a site blocks an agent's own browser, an agent with a connected computer may continue on that computer's browser after a per-site user consent (clean profile, or the user's profile through the extension bridge per FR-096). The session is marked and audited. |
 | FR-210 | P1 | M6 | **Device operations through `novad`**: Hub sessions reach a device's files only through `novad`: list directories within granted scopes, request access to a new folder (approved on the device or the Hub), and write in two phases (stage, then commit after the diff is shown and policy allows). `novad` can expose the device's local stdio MCP servers to Hub sessions under the device's grants. |
+
+*M7.5 notes (ADR-096).* FR-209: built. A block page or a repeated challenge on an agent's own browser
+offers, as a question to the user, to continue on the agent's connected computer: a clean profile
+there (Chromium run by `novad`, never as root, behind an egress filter limited to the site) or,
+when the extension bridge is usable, the user's own browser. Consent is per agent, device and site,
+revocable; the session ends when the agent leaves the site and after at most 4 hours; its
+trace rows are marked and audited (`docs/11` §4.6).
 
 ### T6. Code
 

@@ -71,6 +71,8 @@ Account ──1:N── ProviderAccount ──1:N── ModelPref
    │            └──0:1── ScreenControl
    ├──1:N── EgressScope / EgressCredential
    ├──1:N── BrowserSite / BrowserAction / BrowserLogin
+   ├──1:N── BrowserFallbackConsent / BrowserFallbackSession ──1:N── BrowserFallbackAction (M7.5)
+   ├──1:N── OobEndpoint ──1:N── OobAction ──0:1── Approval (M7.5)
    ├──1:N── Space ──1:N── SpacePage ──1:N── SpacePageVersion / SpaceComment
    │            └──1:N── SpaceProposal
    ├──1:N── Site ──1:N── SiteVersion / SitePublish
@@ -89,6 +91,10 @@ Account ──1:N── ProviderAccount ──1:N── ModelPref
    ├──1:N── Device (§7) ──1:N── TransportEndpoint / StagedWrite / Worktree
    │            ├──0:1── SyncReplica (M7)
    │            ├──0:1── DeviceManagement (novad devices)
+   │            ├──1:N── FirmwareSnapshot / FirmwareChange ──0:1── Approval (M7.5)
+   │            ├──1:N── BootProfile / BootRequest / BootAttempt / PxeToken (M7.5)
+   │            ├──1:N── DeviceDecommission / BrowserBridgeGrant (M7.5)
+   │            ├──0:1── NodePolicy (compute nodes, M7.5)
    │            └──1:N── DeviceGrant / DeviceUpdate / WakeRequest
    └──1:N── Automation / SmartEntity (§8)
             AmbientRecord / AmbientCoverage / AmbientGrant / Meeting / Speaker (§8)
@@ -430,6 +436,8 @@ CREATE TABLE approval (            -- ids of threads, turns, runs, calls and rul
   rule_id TEXT, rule_label TEXT,
   always_allow_managed INTEGER NOT NULL DEFAULT 0, -- "Always allow" shown disabled (managed)
   handoff_note TEXT, handoff_done_at TEXT,
+  answer_in TEXT CHECK (answer_in IS NULL OR answer_in = 'hub'), -- 0040 (M7.5): NULL anywhere its
+                                   -- tier allows; hub = only the signed-in user in a Nova client
   created_at TEXT NOT NULL,
   CHECK (decision IS NULL OR decision <> 'allow_always' OR always_scope IS NOT NULL),
   CHECK (override = 0 OR decision = 'allow_once'),
@@ -574,6 +582,14 @@ M5 writes no `approval` rows here: approvals keep their own table, and `GET /req
 pending approvals as read-only `approval` items read from `approval`. M6 still writes NULL in
 `agent_id`: a request's thread leads to its agent through `agent_thread`.
 
+Migration 0040 (M7.5; FR-146, FR-189; ADR-096) adds `approval.answer_in`. Firmware, boot,
+out-of-band and decommission cards set it to `hub`: risk high, tier `confirm_at_action`, options
+`allow_once` and `deny_continue`. The gate refuses any decision on such a card not made by the
+signed-in user (`decided_by` other than `user`) with `policy_denied` `{reason: hub_only}`; a
+channel's button press or reply is refused the same way, a signed email link answers nothing, and
+the channel prompt carries no buttons or link. Each of those areas also acts only on an
+`allow_once` with `decided_by = 'user'`. Clients see the column as `ApprovalView.answerIn`.
+
 ### audit & events
 
 ```sql
@@ -671,7 +687,7 @@ Audit actions added in M6 (ADR-093; `kind` / `action`; inputs are stored as a ha
 | `browser` | `browser.site.set`, `browser.site.removed`, `browser.domains.set`, `browser.devprotocol.enabled`, `browser.devprotocol.disabled`, `browser.session.closed` | the site or host | site permissions and lists (FR-094) |
 | `browser` | `browser.devserver.granted`, `browser.devserver.revoked` | `127.0.0.1:<port>` | a Code session's dev server granted to (or taken from) a computer's browser (FR-097, FR-067); detail `{computerId}` |
 | `browser` | `browser.navigation.blocked`, `browser.action.denied`, `browser.external_agent`, `browser.injection_suspected` | the host | refusals: `browser.action.denied` has `cause: password\|external_agent` |
-| `browser` | `browser.signin.requested`, `.submitted`, `.cancelled`, `.expired`, `browser.login.saved`, `.used`, `.deleted`, `browser.fallback.started`, `browser.fallback.refused` | the host | private sign-in (FR-086); passwords are never audited; the fallback actions have no caller in M6 |
+| `browser` | `browser.signin.requested`, `.submitted`, `.cancelled`, `.expired`, `browser.login.saved`, `.used`, `.deleted`, `browser.fallback.started`, `browser.fallback.refused` | the host | private sign-in (FR-086); passwords are never audited; the fallback actions have no caller in M6 (M7.5 gave them one, below) |
 | `review` | `review.verdict` | the host | the auto-reviewer on an `auto_review` site (`detail.source: browser`) |
 | `screen` | `screen.control.enabled`, `screen.control.disabled`, `screen.kill`, `screen.resume`, `screen.grant.created`, `screen.grant.renewed`, `screen.grant.revoked`, `screen.click`, `screen.scroll`, `screen.type`, `screen.key`, `screen.drag`, `appshot.captured` | `computer:<id>` (`/app:<app>`) | computer use (FR-093, FR-207, FR-098, FR-075); one entry per recorded action, `decision: deny` for a refusal; typed text only as a hash |
 | `code` | `environment.created`, `environment.updated`, `environment.removed`, `code.push`, `code.pr.opened`, `code.branch.created`, `code.budget.extended`, `code.worktree.created`, `code.worktree.released`, `code.worktree.removed`, `code.devserver.start`, `code.devserver.stop`, `code.session.messaged`, `code.session.archived`, `code.worker.spawned` | the session folder, environment id, worktree path or pull request URL | Code M6 (FR-062, FR-068, FR-070, FR-072, FR-073, FR-097); `code.push` is written for denied pushes too; `code.commit` records actor `agent` for the agent's commits |
@@ -747,6 +763,38 @@ No entry holds a runner token, push key, invitation token, OIDC code or secret, 
 value or script code. Sync pushes and their merges are not audited (the merge log keeps every
 overwritten value), nor are push deliveries (`push_delivery` keeps how each ended) or idempotent
 replays.
+
+Audit actions added in M7.5 (ADR-096; `kind` / `action`; no new kind: firmware, boot, out-of-band,
+decommission and compute-node policy use `device`):
+
+| Kind | Action | Resource | Written for |
+| --- | --- | --- | --- |
+| `device` | `device.firmware.read`, `device.firmware.plan`, `device.firmware.approval`, `device.firmware.apply`, `device.firmware.rollback` | the device id | BIOS/firmware changes (FR-146): a read through the device (`{supported, method, vendor, settings}`, a count), then each step with the change id and the values `before` and `after`; `apply` also has the approval and authorization ids and `result` `ok`, `failed` or `error`; a planned rollback has `result: requested` |
+| `device` | `device.firmware.watchdog` | the device id | the device's watchdog report (actor `system`): `result` `ok`, `reverted`, `revert_failed` (with `failed`, `notRestored`, `errorCode` and the values the machine now holds) or `missed` (the Hub's sweep: no report by the deadline plus 120 s) |
+| `secret` | `device.firmware.password.set`, `device.firmware.password.clear` | the device id | the write-only BIOS admin password: `{ref}` only (`secret://devices/<id>/bios-admin`); cleared when the device is revoked or decommissioned (actor `system`, `reason: device_revoked`) |
+| `device` | `device.boot.read`, `device.boot.profile.create`, `device.boot.profile.update`, `device.boot.profile.delete` | the device id | boot status read through the device (`result` `ok` or the error code) and profile edits with before and after (FR-143) |
+| `device` | `device.boot.request`, `device.boot.denied`, `device.boot.expired`, `device.boot.set`, `device.boot.commit`, `device.boot.revert` | the device id | a try, commit or revert: its card filed, denied or expired, then sent to the device (`set` is a try) with the state before and after |
+| `device` | `device.boot.watchdog` | the device id | a trial's end (actor `system`): `result` `ok`, `reverted` or `failed` (`no_heartbeat`, `no_watchdog_report`), from the device's report or the Hub's own watchdog |
+| `device` | `device.boot.pxe.token`, `device.boot.pxe.script`, `device.boot.pxe.image` | the device id | a boot token created, rotated or revoked (its id and creation time, never the token); every iPXE menu and image fetch (actor `system`, `{from, …}`; images with name, size and byte range) |
+| `device` | `device.oob.refuse` | none; a refusal about one endpoint: its id | out-of-band management (FR-147) refused (`decision: denied`, `{what, reason}`) for a member (`owner_only`), while it is off (`oob_disabled`), or for turning it on through the settings route (`consent_required`, `via: settings`); turning it on or off is the `setting.changed` entry of `devices.oob.enabled` |
+| `device` | `device.oob.endpoint.create`, `device.oob.endpoint.update`, `device.oob.endpoint.delete` | the endpoint id | BMC registrations: name, kind, address, port, system, device, pin and whether it is confirmed; never a credential |
+| `device` | `device.oob.pin`, `device.oob.pin_mismatch` | the endpoint id | a BMC certificate fingerprint read on first use without credentials (`decision: unconfirmed`), confirmed by the owner (`confirmed`), or a different certificate refused (expected and presented fingerprints) |
+| `device` | `device.oob.<action>` | the endpoint id | each out-of-band action (`check`, `power.status`, `power.on`, `power.off`, `power.cycle`, `power.reset`, `sensors`, `bios.read`, `bios.plan`, `bios.apply`, `boot.next`): `decision` `requested`, `approved`, `denied`, `expired`, `done` or `failed`, the parameters, `inputHash` the approval's hash; changes also carry before and after |
+| `device` | `device.decommission.request`, `device.decommission.decide`, `device.decommission` | the device id | decommissioning a `novad` device (ADR-096 D9): the request `{purge, approvalId, reachable}`; a card that ended without the owner's Allow once (`decision` `denied` or `expired`), or a request withdrawn because the device was revoked meanwhile (`decision: cancelled`); the run, `result` `wiped`, `unreachable`, `refused` or `not_told`, with the status before and after (revoked, certificate revoked) |
+| `device` | `device.endpoint.change`, `device.endpoint.refuse` | the device id | a device moving its management endpoint to `https://` for mutual TLS (actor `system`, `{before, after, channel: mutual_tls}`); a refused endpoint (`endpoint_downgrade`, `https_needs_certificate`; `decision: deny`, at most once an hour per device and reason) |
+| `device` | `device.config.push` | the device id | the owner's "push now" of a device's overrides (FR-142, FR-150): `{revision}` |
+| `device` | `node.policy.update`, `node.service.start`, `node.service.stop`, `node.service.restart` | the compute node's device id | a compute node's policy (quiet hours, time zone, routing) with before and after, and its services (`{service, state}`); reading a service's status is not audited (FR-126) |
+| `network` | `trust.hub_client.issue`, `trust.device.renew`, `trust.device.revoke` | the device id (`trust.hub_client.issue`: none) | the Hub's client certificate for the management channel (`{serial, notAfter, uri}`); a device certificate renewal (`{serial, role, notAfter}`); the older certificates revoked once the renewal is presented (actor `system`, `{certificates, reason: renewed, serials}`) |
+| `settings` | `setting.changed` | the key | M7.5 adds `before`, `after` and `confirmed` (true when the change came with the owner's explicit confirmation) for every security setting written through the Hub's settings writer: `PATCH /api/v1/settings`, `PUT /api/v1/devices/firmware/policy` and `POST /api/v1/oob/enable\|disable` (enable's consent is `confirmed: true`). It is the change's only audit entry |
+| `browser` | `browser.fallback.offered`, `browser.fallback.consent.granted`, `browser.fallback.consent.used`, `browser.fallback.consent.revoked`, `browser.fallback.started`, `browser.fallback.ended`, `browser.fallback.refused`, `browser.fallback.failed` | the site | the local browser fallback (FR-209): the offer, the per-site consent (before and after), a session on a device's browser and how it ended (with the egress filter's counts); a refusal has `decision: deny` and the reason |
+| `browser` | `browser.fallback.orphan_closed` | the device id | a device browser session the Hub did not know, closed at start or by the 15-minute sweep (actor `system`) |
+| `browser` | `browser.bridge.connected`, `browser.bridge.disconnected`, `browser.bridge.replaced`, `browser.bridge.events.refused` | the device id | the extension bridge (FR-096) as `novad` reports it: a connection, its end, a second connection replacing the first (before and after OS users), and relayed events that failed their check (a count) |
+| `browser` | `browser.bridge.tab.shared`, `browser.bridge.tab.unshared`, `browser.bridge.tab.closed`, `browser.bridge.tab.opened`, `browser.bridge.tab.attach`, `browser.bridge.tab.detach` | the tab's host (`tab.opened`: the site; `unshared`, `closed`, `attach`, `detach`: none) | per-tab consent and the agent's own tabs: `{deviceId, tabId}` |
+| `browser` | `browser.bridge.host.reported`, `browser.bridge.host.withdrawn`, `browser.bridge.grant.created`, `browser.bridge.grant.all_sites`, `browser.bridge.grant.revoked` | the host (`*` for all sites) | per-host grants: the browser's permission reported or withdrawn, the owner's grant or confirmation, the separate "all sites" grant, a revocation; before and after states |
+| `browser` | `browser.bridge.refused`, `browser.bridge.history.search` | none; `device:<id>` for a history search | a bridge call refused (`decision: deny`, `{deviceId, method, reason}`); every history search, answered or not (`{deviceId, queryLength}`, never the query) |
+| `channel` | `channel.approval.refused` | `approval:<id>` | M7.5 adds the reason `hub_only`: a button press or reply on a Hub-only card, or an answer through a signed link made before (`via: link`) |
+
+No entry holds a BIOS password, a BMC credential or a boot token.
 
 ### work runs, goals, schedules, triggers
 
@@ -1866,6 +1914,82 @@ CREATE TABLE screen_appshot (       -- an image artifact of a window, the screen
 );
 ```
 
+Migration 0043 (M7.5; FR-209, FR-096; ADR-096 D7, D8) adds the local browser fallback and the
+extension bridge's grants. Device, computer and thread ids are plain TEXT: devices are revoked, not
+deleted, and a consent or a trace row never blocks a purge. Nothing secret is stored.
+
+```sql
+CREATE TABLE browser_fallback_consent ( -- a revocable consent to continue a site on a device's
+  id TEXT PRIMARY KEY,             -- browser (FR-209); a revoked row is kept for the record
+  account_id TEXT NOT NULL REFERENCES account(id),
+  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('agent', 'thread')),
+  scope_ref TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  site TEXT NOT NULL,              -- the site and its subdomains
+  profile TEXT NOT NULL CHECK (profile IN ('clean', 'extension')), -- a clean temporary profile on
+                                   -- the device, or the user's own browser through the extension
+  granted_by TEXT NOT NULL,
+  created_at TEXT NOT NULL, last_used_at TEXT,
+  revoked_at TEXT, revoked_by TEXT,
+  CHECK ((revoked_at IS NULL) = (revoked_by IS NULL))
+);
+CREATE UNIQUE INDEX ux_browser_fallback_consent_live
+  ON browser_fallback_consent(account_id, scope_kind, scope_ref, device_id, site)
+  WHERE revoked_at IS NULL;        -- one live consent per scope, device and site
+CREATE INDEX idx_browser_fallback_consent_device ON browser_fallback_consent(device_id);
+
+CREATE TABLE browser_fallback_session ( -- one session of a computer's browser moved to a device
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  computer_id TEXT NOT NULL, thread_id TEXT, device_id TEXT NOT NULL,
+  site TEXT NOT NULL,
+  profile TEXT NOT NULL CHECK (profile IN ('clean', 'extension')),
+  cause TEXT NOT NULL CHECK (cause IN ('block_page', 'repeated_challenge', 'requested')),
+  consent_id TEXT REFERENCES browser_fallback_consent(id),
+  started_at TEXT NOT NULL, ended_at TEXT,
+  end_reason TEXT CHECK (end_reason IN ('closed', 'left_site', 'consent_revoked', 'device_gone',
+                                        'error', 'disabled', 'restarted')),
+  egress_allowed INTEGER, egress_refused INTEGER, -- the device egress filter's counts at close
+  bridge_user TEXT,                -- profile extension: the OS user whose browser it was
+  CHECK ((ended_at IS NULL) = (end_reason IS NULL))
+);
+CREATE INDEX idx_browser_fallback_session_computer
+  ON browser_fallback_session(account_id, computer_id, started_at);
+
+CREATE TABLE browser_fallback_action ( -- the trace mark (FR-098): a browser_action row recorded
+  action_id TEXT PRIMARY KEY REFERENCES browser_action(id) ON DELETE CASCADE, -- during a session
+  session_id TEXT NOT NULL REFERENCES browser_fallback_session(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_browser_fallback_action_session ON browser_fallback_action(session_id);
+
+CREATE TABLE browser_bridge_grant ( -- a per-host grant of the extension bridge (FR-096); host '*'
+  id TEXT PRIMARY KEY,             -- is the separate "all sites" grant
+  account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT NOT NULL, host TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'active', 'revoked')), -- pending: the browser
+                                   -- allowed the host and the owner has not confirmed it; only
+                                   -- active counts
+  browser_permission INTEGER NOT NULL DEFAULT 0, -- what the extension last reported for the host
+  confirmed_by TEXT, confirmed_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  revoked_at TEXT, revoked_by TEXT,
+  CHECK (state <> 'active' OR confirmed_at IS NOT NULL),
+  CHECK ((state = 'revoked') = (revoked_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX ux_browser_bridge_grant_live ON browser_bridge_grant(device_id, host)
+  WHERE state <> 'revoked';        -- one live grant per device and host
+CREATE INDEX idx_browser_bridge_grant_account ON browser_bridge_grant(account_id, device_id);
+```
+
+A fallback session's start and end are also `browser_action` rows (tool `browser.fallback`, action
+`local_fallback` and `local_fallback_end`), and every action in between is marked through
+`browser_fallback_action`, so `browser_action` keeps its columns. A consent records the profile the
+user chose; an `extension` consent whose bridge is gone asks again. At start the Hub ends its own
+open sessions with `restarted`. The bridge's connection state (connected, since, extension
+version, browser, OS user) and its per-tab consents (the tabs the user shared or the agent opened)
+live only in Hub memory, from the events `novad` relays: after a restart a device counts as
+disconnected until `novad` reports again, and the extension shares its tabs again on every
+reconnect.
+
 ### spaces & sites
 
 Migration 0026 (FR-036, FR-037). Every save of a page is a version; the page row keeps the
@@ -2334,6 +2458,10 @@ carrying a credential is never written. A 5xx or 429 answer forgets the key, so 
 ├── browser/profiles/<computer-id>/ # browser state (state.json, sealed) when no computer folder
 ├── browser/files/<computer-id>/    # browser downloads without a computer service
 ├── egress/ca-cert.pem, ca-key.pem  # the egress proxy's inspection CA (key 0600; M6, ADR-063)
+├── firmware/snapshots/<snapshot-id>.json  # the Hub's copy of a device's firmware snapshot,
+│                                   # sealed with the data key (M7.5, FR-146; §7)
+├── boot-images/                    # images the owner puts there for network boot; the Hub only
+│                                   # reads them (M7.5, FR-143)
 ├── sites/<folder>/                 # published sites, unless `sites.publishRoot` names another
 │                                   # folder; each carries a `.nova-site` marker (M6, FR-037)
 ├── plugins-drafts/<id>/            # plugin drafts written by plugin.scaffold (FR-050); never installed
@@ -2369,7 +2497,10 @@ carrying a credential is never written. A 5xx or 429 answer forgets the key, so 
   `screen.screenshotRetentionDays` (pruned daily); device stages expire after 24 h. Snapshot
   expiry is not enforced yet. M7 keeps `push_delivery` rows 7 days, `idempotency_key` rows 24 h,
   merge-log entries `sync.mergeLogDays` (90) and handoff files 7 days; change-feed tombstones are
-  kept.
+  kept. M7.5 prunes none of its rows or files: firmware changes and snapshot copies, boot
+  requests and attempts, revoked boot tokens, out-of-band actions, fallback consents and sessions,
+  bridge grants and decommissions are kept (`novad` keeps its own last 20 firmware snapshots). A
+  fallback trace mark goes with its `browser_action` row.
 - Export: a single `.nova` archive (SQLite + blobs + manifest) plus a JSONL audit export.
   Uncertified ambient rows are never exported (FR-227).
 - Delete: cascading soft-delete then hard-delete job with a 30-day recovery window.
@@ -2538,14 +2669,8 @@ CREATE TABLE agent_device_connection ( -- an agent's connected computer (FR-081)
 CREATE UNIQUE INDEX idx_agent_device_connection_active ON agent_device_connection(agent_id)
   WHERE status = 'active';         -- one active connection per agent
 
-CREATE TABLE firmware_change (
-  id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES device(id),
-  setting TEXT NOT NULL, old_value TEXT, new_value TEXT,
-  method TEXT NOT NULL, snapshot_ref TEXT,
-  status TEXT NOT NULL,                          -- planned|approved|applied|rolled_back|failed
-  approval_id TEXT REFERENCES approval(id),
-  created_at TEXT NOT NULL, applied_at TEXT
-);
+-- `firmware_change` (FR-146) is built by migration 0040, extended from the design that stood here:
+-- see "Firmware, boot, out-of-band and device operations (M7.5)" below.
 ```
 
 A `novad` device (M6, migration 0024) is a `device` row of kind `client`, `hub` or `wake-helper`,
@@ -2556,7 +2681,8 @@ the device lives in the vault at `secret://devices/<id>/management-token`. Every
 rotates the device key, so a revoked device can be added again.
 
 Invariants: a `device` certificate is unique; a `device_capability` exists for every active
-compute node; `firmware_change` requires an `approval` before `applied`; `wake_request`
+compute node; `firmware_change` requires an `approval` before `applied` (a CHECK from M7.5,
+below); `wake_request`
 requires an active `wake-helper` device on the same LAN; a `staged_write` commits only when the
 file's current hash still equals `base_sha256` and policy allows (otherwise `conflict`);
 revoking a device also stops relay routing for its `relay_client_id`.
@@ -2740,6 +2866,274 @@ next heartbeat; a refusal is audited as `device.tls.refuse` (§2). The Relay reg
 vault entry (`secret://relay/registration/token`) named by the `relay.registrationTokenRef`
 setting, not a `relay_registration` column. A device's offline replica is a `sync_replica` row
 (§2, migration 0033).
+
+### Firmware, boot, out-of-band and device operations (M7.5)
+
+Migrations 0040 (firmware), 0041 (boot), 0042 (out-of-band) and 0044 (device operations); FR-146,
+FR-143, FR-147, FR-126, FR-150; ADR-096. 0040 also adds `approval.answer_in` (§2), and 0043 holds
+the browser fallback and bridge tables (§2, browser & screen). All timestamps are UTC ISO-8601 and
+ids UUIDv7. Every privileged change here (a firmware change, a boot try or commit, an out-of-band
+action other than a read, a decommission) is the owner's request and needs an approval card the
+owner answers in Nova (`answer_in = 'hub'`, §2); firmware changes, low-level boot, network boot
+and out-of-band management sit behind switches that are off by default (`docs/14`). No row
+holds a credential: the BIOS admin password is the vault entry `secret://devices/<id>/bios-admin`,
+a BMC's user name and password are `secret://oob/<id>`, the Hub's client certificate for the
+management channel is `secret://hub/client-certificate`, and a boot token is kept only as a hash.
+
+```sql
+CREATE TABLE firmware_snapshot (    -- 0040: the Hub's copy of a snapshot the device took when it
+  id TEXT PRIMARY KEY,             -- planned a change (the allowlisted values before it)
+  account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT NOT NULL REFERENCES device(id),
+  device_snapshot_id TEXT NOT NULL, -- the snapshot's id on the device
+  taken_at TEXT NOT NULL,
+  keys_json TEXT NOT NULL DEFAULT '[]', -- the keys only; the values are in the sealed file
+  sha256 TEXT NOT NULL,            -- hex SHA-256 of the canonical JSON of the values
+  blob_path TEXT NOT NULL,         -- firmware/snapshots/<id>.json, relative to the data folder
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_firmware_snapshot_device ON firmware_snapshot(device_id, device_snapshot_id);
+
+CREATE TABLE firmware_change (      -- 0040: one plan's settings (apply) or a snapshot restored
+  id TEXT PRIMARY KEY,             -- (rollback), with its approval (FR-146)
+  account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT NOT NULL REFERENCES device(id),
+  kind TEXT NOT NULL CHECK (kind IN ('apply', 'rollback')),
+  setting TEXT NOT NULL,           -- the canonical keys, comma-separated
+  old_value TEXT, new_value TEXT,  -- JSON {key: value} before and after
+  diff_json TEXT NOT NULL DEFAULT '[]', -- the diff the approval card showed
+  refused_json TEXT NOT NULL DEFAULT '[]', -- keys the device would not plan, with the reason
+  method TEXT NOT NULL,            -- firmware-attributes|efibootmgr|fake (unknown when the device
+                                   -- named none)
+  plan_id TEXT,                    -- the device's plan id (kind apply)
+  snapshot_ref TEXT REFERENCES firmware_snapshot(id),
+  rollback_of TEXT REFERENCES firmware_change(id), -- the change a rollback undoes
+  security_degrading INTEGER NOT NULL DEFAULT 0, -- needs devices.firmware.allowSecurityDegrading
+  requires_reboot INTEGER NOT NULL DEFAULT 0,
+  reboot INTEGER,                  -- what apply asked for
+  status TEXT NOT NULL CHECK (status IN ('planned', 'awaiting_approval', 'approved', 'applied',
+    'rolled_back', 'failed', 'reverted', 'revert_failed')),
+  approval_id TEXT REFERENCES approval(id),
+  change_id TEXT,                  -- the changeId (ADR-096 D2) of the last authorization signed for
+                                   -- it: a fresh one per attempt, never reused
+  watchdog_state TEXT CHECK (watchdog_state IS NULL
+    OR watchdog_state IN ('pending', 'ok', 'reverted', 'revert_failed', 'missed')),
+  watchdog_deadline TEXT,
+  watchdog_reason TEXT,              -- novad's reason for a revert: deadline | not_restarted
+  error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, applied_at TEXT,
+  CHECK (status NOT IN ('applied', 'rolled_back', 'reverted', 'revert_failed')
+    OR approval_id IS NOT NULL)
+);
+CREATE INDEX idx_firmware_change_device ON firmware_change(device_id, created_at);
+CREATE UNIQUE INDEX idx_firmware_change_authz ON firmware_change(change_id)
+  WHERE change_id IS NOT NULL;
+
+CREATE TABLE boot_profile (         -- 0041: a named bootloader entry of a device (FR-143); kernel
+  id TEXT PRIMARY KEY,             -- arguments are not part of a profile in M7.5
+  account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT NOT NULL REFERENCES device(id),
+  name TEXT NOT NULL,
+  entry_id TEXT NOT NULL,          -- the entry as /agent/v1/boot/status lists it
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  deleted_at TEXT                  -- a deleted profile keeps its row for the attempts naming it
+);
+CREATE UNIQUE INDEX idx_boot_profile_name ON boot_profile(device_id, name)
+  WHERE deleted_at IS NULL;
+
+CREATE TABLE boot_request (         -- 0041: a try, commit or revert the owner asked for; sent to
+  id TEXT PRIMARY KEY,             -- the device once, with a Hub-signed authorization (D2)
+  account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT NOT NULL REFERENCES device(id),
+  kind TEXT NOT NULL CHECK (kind IN ('try', 'commit', 'revert')),
+  profile_id TEXT REFERENCES boot_profile(id),
+  attempt_id TEXT,                 -- the attempt a commit makes the default, or a sent try started
+  entry_id TEXT,
+  body_json TEXT NOT NULL,         -- the device body without its authorization, canonical JSON:
+                                   -- its SHA-256 is the card's args_hash and the authorization's
+                                   -- bodySha256
+  before_json TEXT NOT NULL DEFAULT '{}', -- {booted, default, pending} when the owner asked
+  approval_id TEXT REFERENCES approval(id),
+  change_id TEXT NOT NULL UNIQUE,  -- the authorization's changeId; never reused
+  status TEXT NOT NULL
+    CHECK (status IN ('awaiting_approval', 'denied', 'expired', 'sent', 'failed')),
+  error_code TEXT, error_reason TEXT, error_message TEXT,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT, sent_at TEXT
+);
+CREATE INDEX idx_boot_request_device ON boot_request(device_id, created_at);
+CREATE INDEX idx_boot_request_approval ON boot_request(approval_id);
+
+CREATE TABLE boot_attempt (         -- 0041: a one-shot trial of a profile
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT NOT NULL REFERENCES device(id),
+  profile_id TEXT NOT NULL REFERENCES boot_profile(id),
+  request_id TEXT NOT NULL REFERENCES boot_request(id),
+  entry_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'ok', 'reverted', 'failed')),
+  reboot INTEGER NOT NULL, watchdog_seconds INTEGER NOT NULL,
+  deadline TEXT NOT NULL,          -- when the device gives up on the entry, by the Hub's clock
+  reason TEXT, detail TEXT,
+  verified INTEGER,                -- the device's boot.watchdog.ok: 1 it saw the trial entry
+                                   -- booted, 0 it could not tell (GRUB reports no booted entry),
+                                   -- NULL no report yet
+  committed_at TEXT,
+  created_at TEXT NOT NULL, finished_at TEXT
+);
+CREATE UNIQUE INDEX idx_boot_attempt_pending ON boot_attempt(device_id)
+  WHERE status = 'pending';        -- at most one pending trial per device
+CREATE INDEX idx_boot_attempt_device ON boot_attempt(device_id, created_at);
+
+CREATE TABLE pxe_token (            -- 0041: a device's PXE boot token (nvb_…); the public iPXE
+  id TEXT PRIMARY KEY,             -- routes authenticate by it
+  account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT NOT NULL REFERENCES device(id),
+  token_hash TEXT NOT NULL UNIQUE, -- hex SHA-256 of `nova-pxe-token\0<token>`; the token itself
+                                   -- is shown once
+  created_at TEXT NOT NULL, revoked_at TEXT,
+  last_used_at TEXT                -- set by every menu and image fetch
+);
+CREATE UNIQUE INDEX idx_pxe_token_active ON pxe_token(device_id) WHERE revoked_at IS NULL;
+
+CREATE TABLE oob_endpoint (         -- 0042: a BMC the owner registered (FR-147); the registry is
+  id TEXT PRIMARY KEY,             -- the allowlist: the Hub contacts no other address
+  account_id TEXT NOT NULL REFERENCES account(id),
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('redfish', 'ipmi', 'amt')), -- amt is refused at create
+                                   -- (capability_missing {reason: not_built})
+  address TEXT NOT NULL,           -- a host name or IP literal: no URL, no credentials
+  port INTEGER,                    -- NULL: the protocol's default
+  system_id TEXT,                  -- Redfish: the ComputerSystem, when the service lists several
+  credential_ref TEXT NOT NULL,    -- secret://oob/<id>
+  device_id TEXT REFERENCES device(id) ON DELETE SET NULL, -- the device this BMC belongs to: a
+                                   -- failed-boot alert offers its power cycle
+  tls_pin TEXT,                    -- SHA-256 of the BMC certificate's DER (lower-case hex), read on
+  tls_pinned_at TEXT,              -- first use or entered by the owner
+  tls_pin_confirmed_at TEXT,       -- when the owner confirmed the pin (an entered pin counts as
+                                   -- confirmed); credentials go to a Redfish BMC only after it
+  last_check_at TEXT, last_check_ok INTEGER, last_error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_oob_endpoint_account ON oob_endpoint(account_id, created_at);
+CREATE INDEX idx_oob_endpoint_device ON oob_endpoint(device_id);
+
+CREATE TABLE oob_action (           -- 0042: every action asked of a BMC; rows outlive their
+  id TEXT PRIMARY KEY,             -- endpoint
+  account_id TEXT NOT NULL REFERENCES account(id),
+  endpoint_id TEXT REFERENCES oob_endpoint(id) ON DELETE SET NULL,
+  endpoint_name TEXT NOT NULL,     -- what the endpoint was called
+  action TEXT NOT NULL,            -- check|power.status|power.on|power.off|power.cycle|power.reset|
+                                   -- sensors|bios.read|bios.plan|bios.apply|boot.next
+  params_json TEXT NOT NULL DEFAULT '{}',
+  params_hash TEXT NOT NULL,       -- the card's args_hash: the endpoint id, action and parameters,
+                                   -- and the BMC as it was (kind, address, port, system, pin, pin
+                                   -- confirmation)
+  status TEXT NOT NULL CHECK (status IN ('awaiting_approval', 'approved', 'running', 'done',
+    'failed', 'denied', 'expired', 'applied')),
+  approval_id TEXT,                -- plain TEXT
+  plan_id TEXT,                    -- bios.apply: the bios.plan action it applies
+  before_json TEXT, after_json TEXT,
+  result_json TEXT,                -- a bios.plan row holds its plan (snapshot and diff) here
+  error_code TEXT, error_reason TEXT, error_message TEXT,
+  created_at TEXT NOT NULL, expires_at TEXT, decided_at TEXT, finished_at TEXT
+);
+CREATE INDEX idx_oob_action_endpoint ON oob_action(endpoint_id, created_at);
+CREATE INDEX idx_oob_action_account ON oob_action(account_id, created_at);
+CREATE INDEX idx_oob_action_approval ON oob_action(approval_id);
+
+CREATE TABLE device_decommission (  -- 0044: one decommission of a novad device (ADR-096 D9)
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT NOT NULL REFERENCES device(id),
+  purge INTEGER NOT NULL DEFAULT 0, -- also delete the device's Nova data (novad uninstall --purge)
+  status TEXT NOT NULL CHECK (status IN ('awaiting_approval', 'running', 'done', 'denied',
+    'expired', 'cancelled', 'failed')), -- cancelled: withdrawn (card cancelled, device revoked)
+  approval_id TEXT REFERENCES approval(id),
+  change_id TEXT,                  -- the authorization's changeId (D2), once one was issued
+  device_result TEXT CHECK (device_result IS NULL
+    OR device_result IN ('wiped', 'unreachable', 'refused', 'not_told')),
+  detail TEXT,
+  created_at TEXT NOT NULL, decided_at TEXT, finished_at TEXT
+);
+CREATE INDEX idx_device_decommission_device ON device_decommission(device_id, created_at);
+CREATE INDEX idx_device_decommission_approval ON device_decommission(approval_id);
+CREATE UNIQUE INDEX idx_device_decommission_open ON device_decommission(device_id)
+  WHERE status IN ('awaiting_approval', 'running'); -- at most one open per device
+
+CREATE TABLE node_policy (          -- 0044: the owner's policy for a compute node (FR-126, FR-150);
+  device_id TEXT PRIMARY KEY REFERENCES device(id), -- one row per node, made on first change
+  quiet_hours TEXT NOT NULL DEFAULT '[]', -- JSON list of HH:MM-HH:MM ranges
+  time_zone TEXT,                  -- IANA zone; NULL: the node's declared locale.timezone, else UTC
+  routing_eligible INTEGER NOT NULL DEFAULT 1,
+  revision INTEGER NOT NULL DEFAULT 0, -- bumped on every change
+  updated_at TEXT NOT NULL
+);
+```
+
+**Firmware.** A plan is a dry run on the device; the Hub records it as one `firmware_change` row
+(`kind` apply, `planned`) with its snapshot copy, in one transaction. This replaces the
+one-setting design that stood in §7: `setting` names every key the plan sets and `old_value` and
+`new_value` hold maps. Requesting approval files a card valid 24 hours (`awaiting_approval`); the
+owner's own Allow once makes it `approved`, anything else puts it back to `planned`. Applying ends
+`applied`, or `failed` when the device refused for good (`base_mismatch`, `apply_failed`). A
+rollback is its own change (`kind` rollback, `rollback_of`) with its own approval, run through
+the same apply route; applying it marks the change it undoes `rolled_back` (allowed from `applied`
+and `revert_failed`). With a reboot, `watchdog_state` is `pending` until the device's heartbeat
+reports: `ok`; `reverted` (the status becomes `reverted` too); `revert_failed` (the device's
+restore failed or was partial: the status becomes `revert_failed`, the change stays in place and
+can still be rolled back); or the Hub sets `missed` when nothing came by `watchdog_deadline` plus
+120 s. A watchdog event is matched by `change_id`, and by the snapshot only when it carries none.
+
+**What is sealed or kept outside the database.** The snapshot values the Hub keeps live in
+`<dataDir>/firmware/snapshots/<id>.json`, sealed with the data key when encryption at rest is on
+and bound to the snapshot id (§3); the row keeps only the keys and the hash. A rollback uses the
+device's own copy, or the Hub's when the device lost it (the hash is checked). `novad` keeps the
+last 20 snapshots in its own data folder (`firmware/snapshots/`, 0600) and its pending markers
+(`firmware/pending.json`, `boot/pending.json`) there too. Boot images are files the owner puts in
+`<dataDir>/boot-images/`; the Hub only reads them (plain files directly in that folder, no links
+or subfolders) and keeps no row for them. Kept only in Hub memory: a device's firmware read (60 s),
+the result of the last management call per device (for diagnostics) and, from 0043, the extension
+bridge's connection state and tab consents (§2). The heartbeat answer's `policy` (`firmwareChanges`,
+`lowLevelBoot`) is computed from the settings each time, not stored.
+
+**Boot.** A try or commit files a card valid 30 minutes and is sent once, when the owner allows
+it; before signing, the Hub checks the card is decided, allowed and its `args_hash` equals the
+SHA-256 of `body_json`. A revert works with `devices.boot.allowLowLevel` off: its approval is the
+owner's own request and it is sent at once. One request may wait for approval and one trial be
+pending per device. A request a restart caught between approval and the device's answer becomes
+`failed` (`interrupted`). An attempt ends `ok` or `reverted` from the device's report; one still
+pending 120 s after its deadline is `failed` (`no_heartbeat` when the device has not been heard
+from since the deadline, else `no_watchdog_report`), and a later report corrects it. An `ok`
+without `verified` (an older `novad`) counts as verified; making an unverified trial the default
+needs `confirmUnverified`. A new boot token revokes the previous one.
+
+**Out-of-band.** A Redfish endpoint's first `check` reads the certificate fingerprint with a TLS
+handshake only; every other action is refused (`pin_unconfirmed`) until the owner confirms it.
+Clearing the pin or changing the address clears the confirmation. Changing an endpoint (and
+deleting it, which also deletes its vault entry) withdraws its waiting cards and approved plans.
+The read actions (`check`, `power.status`, `sensors`, `bios.read`) end `done` or `failed` at once.
+Power actions, `boot.next` and `bios.plan` file a card valid 10 minutes; only the owner's own Allow
+once counts, else they end `denied` or `expired`. An allowed power or boot action runs (`running`,
+then `done` or `failed`). An allowed `bios.plan` becomes `approved` and may be applied for the next
+10 minutes: its card covers the `bios.apply` that uses it once (`applied`), and a failure after
+the BMC was sent the change makes the plan `failed` (`apply_outcome_unknown`). Actions a restart
+interrupted become `failed` (`interrupted`) and never run again.
+
+**Decommission and compute nodes.** A decommission files a card valid 1 hour and runs once, on the
+owner's own Allow once: a reachable device is told with a Hub-signed `device.decommission`
+authorization (`change_id`), then revoked whatever it answered; an offline device is revoked at
+once (`unreachable`) and wipes its credentials at its next contact; `not_told` when the Hub
+identity could not sign. After a restart a `running` row ends `done` (the device is revoked) and a
+card approved meanwhile runs. The CHECK allows `cancelled`, which M7.5 never writes. The node
+policy goes out in every heartbeat answer: the node takes no new jobs in its quiet hours and
+routing skips it while quiet or not eligible. A `novad` device's policy stays in
+`device_management.policy`.
+
+**Management channel (D1).** Mutual TLS on the Hub-to-`novad` channel adds no table. A device's
+`https://` management endpoint is its `transport_endpoint` row (`net = 'lan'`); a heartbeat never
+moves it back to plain HTTP. A renewed device certificate is a new `trust_certificate` row (kind
+`device`); once the device presents it, the older ones are revoked with `revoked_reason =
+'renewed'`.
 
 ## 8. Automations, smart home & ambient (added)
 

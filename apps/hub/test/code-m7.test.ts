@@ -208,13 +208,22 @@ function client(e: Env) {
 }
 
 // Handoffs run dozens of git processes: 0.7 s alone, over 10 s when every package tests at once.
-async function until(fn: () => boolean | Promise<boolean>, ms = 25_000): Promise<void> {
+// Polls `get` until `ok` holds; a timeout says what it saw last.
+async function until<T>(
+  get: () => T | Promise<T>,
+  ok: (v: T) => boolean = Boolean,
+  ms = 25_000,
+): Promise<T> {
   const end = Date.now() + ms;
-  while (!(await fn())) {
-    if (Date.now() > end) throw new Error('timed out waiting');
+  for (;;) {
+    const last = await get();
+    if (ok(last)) return last;
+    if (Date.now() > end) throw new Error(`timed out waiting; last saw ${JSON.stringify(last)}`);
     await new Promise((r) => setTimeout(r, 20));
   }
 }
+
+const FINAL = ['completed', 'refused', 'failed'];
 
 function cloudEnv(): string {
   const id = uuidv7();
@@ -272,14 +281,15 @@ describe('M7 code routes', () => {
     expect(started.statusCode).toBe(202);
     const h = started.json<{ id: string; status: string }>();
     expect(h.status).toBe('pending');
-    await until(
-      async () =>
-        (await req('GET', `/api/v1/handoffs/${h.id}`)).json<{ status: string }>().status !==
-          'pending' &&
-        (await req('GET', `/api/v1/handoffs/${h.id}`)).json<{ status: string }>().status !==
-          'running',
-    );
-    expect((await req('GET', `/api/v1/handoffs/${h.id}`)).json()).toMatchObject({
+    const handoff = async (id: string) =>
+      (await req('GET', `/api/v1/handoffs/${id}`)).json<{ status: string; reason?: string }>();
+    // Any final state, so a handoff that failed under load says why instead of timing out.
+    expect(
+      await until(
+        () => handoff(h.id),
+        (v) => FINAL.includes(v.status),
+      ),
+    ).toMatchObject({
       status: 'completed',
     });
     expect(readFileSync(join(target, 'doc.txt'), 'utf8')).toContain('TWO');
@@ -293,17 +303,18 @@ describe('M7 code routes', () => {
     const local = (await req('GET', '/api/v1/environments'))
       .json<{ items: { id: string; kind: string }[] }>()
       .items.find((x) => x.kind === 'local')!.id;
-    const back = (
-      await req('POST', `/api/v1/code/sessions/${s.id}/handoff`, {
-        to: { environmentId: local, folder: repo },
-      })
-    ).json<{ id: string }>();
-    await until(
-      async () =>
-        (await req('GET', `/api/v1/handoffs/${back.id}`)).json<{ status: string }>().status ===
-        'refused',
-    );
-    expect((await req('GET', `/api/v1/handoffs/${back.id}`)).json()).toMatchObject({
+    const backRes = await req('POST', `/api/v1/code/sessions/${s.id}/handoff`, {
+      to: { environmentId: local, folder: repo },
+    });
+    expect(backRes.statusCode, backRes.body).toBe(202);
+    const back = backRes.json<{ id: string }>();
+    expect(
+      await until(
+        () => handoff(back.id),
+        (v) => FINAL.includes(v.status),
+      ),
+    ).toMatchObject({
+      status: 'refused',
       reason: 'target_dirty',
     });
     const history = (await req('GET', `/api/v1/code/sessions/${s.id}/handoffs`)).json<{

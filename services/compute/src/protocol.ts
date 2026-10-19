@@ -119,6 +119,30 @@ export interface RegisterResult {
 export interface HeartbeatBody {
   load: { running: number; queued: number };
   models?: string[];
+  /** GPU memory now (M7.5), when the node can read it. */
+  vram?: {
+    index: number;
+    vendor: string | null;
+    name: string | null;
+    totalBytes: number | null;
+    usedBytes: number | null;
+  }[];
+  /** In quiet hours (its own or the Hub's): the node takes no new jobs. */
+  quiet?: boolean;
+}
+
+/** The owner's policy for this node, in every heartbeat answer (M7.5). */
+export interface HubNodePolicy {
+  quietHours: string[];
+  timeZone: string | null;
+  routingEligible: boolean;
+  revision: number;
+}
+
+export interface HeartbeatResult {
+  ok?: boolean;
+  /** Absent from a Hub before M7.5. */
+  policy?: HubNodePolicy;
 }
 
 export interface SyncBody {

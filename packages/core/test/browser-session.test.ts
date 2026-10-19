@@ -370,17 +370,29 @@ describe('the tool source and the seam', () => {
   });
 
   it('refuses the local browser fallback until a connected computer offers it', async () => {
-    const none = await env.service.localFallback(env.call(), 'clean');
+    const none = await env.service.localFallback(env.call());
     expect(none).toMatchObject({ ok: false, error: { code: 'not_available' } });
     expect(env.audit.at(-1)).toMatchObject({ action: 'browser.fallback.refused' });
+    // The full flow (offer, consent, the device's browser) is in browser-fallback.test.ts.
     env.service.useLocalFallback({
-      open: (input) => Promise.resolve({ ok: true, deviceId: `dev-for-${input.host}` }),
+      begin: (input) =>
+        Promise.resolve({
+          ok: true,
+          sessionId: `fs-${input.site}`,
+          deviceId: `dev-for-${input.site}`,
+          deviceName: 'Laptop',
+          profile: 'clean',
+          consentId: 'c1',
+          consentReused: true,
+          driver: env.driver,
+        }),
+      marked: () => Promise.resolve(),
+      end: () => Promise.resolve(),
     });
     expect((await env.service.navigate(env.call(), 'https://a.example/')).ok).toBe(true);
-    const ok = await env.service.localFallback(env.call(), 'clean');
+    const ok = await env.service.localFallback(env.call());
     expect(ok.ok).toBe(true);
-    expect(env.audit.at(-1)).toMatchObject({
-      action: 'browser.fallback.started',
+    expect(env.audit.find((a) => a.action === 'browser.fallback.started')).toMatchObject({
       detail: expect.objectContaining({ deviceId: 'dev-for-a.example' }),
     });
   });

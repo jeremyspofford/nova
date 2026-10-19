@@ -45,8 +45,11 @@ Domain services for the Hub, independent of HTTP (`docs/05`, `docs/09` §2).
 - Approvals (`src/approvals/`) — the policy store and the gate (FR-048, FR-100, FR-189, FR-190):
   rules, command rules, grants, tool defaults, permission profiles and roots, approvals with
   every decision, timeouts and cancellation, previews.
-- Ops (`src/ops/`) — the hash-chained audit log, notifications, activity, diagnostics and the
-  data key that seals blobs at rest (FR-013, FR-104 partial, FR-118, FR-149 baseline).
+- Ops (`src/ops/`) — the hash-chained audit log (its list views carry each entry's detail,
+  redacted again and capped; M7.5), notifications, activity, diagnostics and the data key that
+  seals blobs at rest (FR-013, FR-104 partial, FR-118, FR-149 baseline). The security subscriber
+  writes the one `setting.changed` entry of every security setting change, with before, after
+  and `confirmed`.
 - `ConsolidationService`, history (`src/consolidation.ts`, `src/history.ts`) — memory
   consolidation with summaries, topics and aging, and past-chat reference (FR-204, FR-205).
 
@@ -328,3 +331,52 @@ M7 (decisions in `docs/20` ADR-095):
   the gate takes the thread's own substrate (`useSubstrate(accountId, threadId)`) and `ruleTool`;
   `ask_user` answers carry the user's authority for the rest of the turn (FR-188); the tool runtime
   adds a redacted `approvalDetail` to approval cards (a device commit's staged diff).
+
+M7.5 (decisions in `docs/20` ADR-096):
+
+- Device authorizations (`src/firmware/authz.ts`) — the Hub-signed authorization every privileged
+  `novad` request carries (firmware apply and rollback, boot set, commit and revert,
+  decommission): canonical JSON, `signDeviceAuthorization` / `authorizeDeviceBody` over the
+  `nova-device-authz-v1` domain, `verifyDeviceAuthorization` with a `MemoryReplayStore` (used by
+  the fakes); the fixed vectors in `test/fixtures/device-authz-vectors.json` are shared with
+  `novad`.
+- Firmware (`src/firmware/`) — `FirmwareService` (FR-146): reads through the device (cached
+  60 s), plans with the device's snapshot, Hub-only approval cards bound to the diff, apply and
+  rollback with a signed authorization, the Hub's sealed copy of each snapshot, the BIOS admin
+  password from the vault (sent only over mutual TLS, deleted when the device is revoked),
+  watchdog reports from heartbeats (`revert_failed`, `missed`) and the hardware support check;
+  `protocol.ts` parses `novad`'s answers; `FakeFirmwareNovad` (`fake-novad.ts`) is a `novad`
+  firmware double that checks every authorization. The support matrix is in `@nova/shared`
+  (`m75/firmware.ts`).
+- Boot (`src/boot/`) — `BootService` (FR-143): boot profiles, one-shot trials and "make default"
+  after a Hub-only approval, revert, the Hub-side watchdog and the device's watchdog reports;
+  `PxeService` (`pxe.ts`): per-device boot tokens (hashed), the iPXE menu (`ipxeScript`) and boot
+  images; `protocol.ts` (the `novad` boot wire and `bootAuthorizer`); `FakeBootDevice` (`fake.ts`).
+- Out-of-band (`src/oob/`) — `OobService` (FR-147): BMC endpoints with checked addresses
+  (`address.ts`), credentials in the vault, certificate pins confirmed by the owner, Hub-only
+  approval cards bound to the BMC, power, sensors, one-time boot and BIOS pending settings;
+  `RedfishClient` (`redfish.ts`, pinned TLS, no redirects), `IpmiAdapter` (`ipmi.ts`, `ipmitool`
+  with the password only in the environment) and the Redfish BIOS table (`bios.ts`).
+- Browser on a device (`src/browser/`) — the local browser fallback (FR-209):
+  `ChallengeCounter` and `detectBlock` (`blockpage.ts`), `LocalFallbackService` (`fallback.ts`:
+  the offer as a `user_input` request with a `context`, consents, sessions, orphan cleanup),
+  `DeviceBrowserDriver` and the loopback DevTools relay (`device-launcher.ts`) and
+  `deviceBrowserLink` (`device-link.ts`, over the devices service's management transport). The
+  extension bridge (FR-096): `ExtensionBridgeService` (`bridge.ts`: connection state, tab consent,
+  host grants, the Hub's own hosts excluded, `cdp.send` limited to `BRIDGE_CDP_METHODS`),
+  `BridgeTabDriver` (`bridge-tab.ts`) and the `browser.history_search` tool (`bridge-tools.ts`).
+- Devices M7.5 (`src/devices/`) — the management channel over mutual TLS (`tls.ts`:
+  `openMutualTls`, `mutualTlsDeviceTransport`, `checkDeviceServerCertificate`, the legacy
+  clientAuth-only check), `DeviceService.call` (never plain HTTP to an https device), the endpoint
+  no-downgrade rule, the heartbeat answer's `policy` and `certificate`, `onHeartbeatEvents`,
+  `useFirmwarePolicy` and `useBootPolicy`, decommission with a Hub-only card, managed services,
+  available builds and owner overrides with push-now.
+- Trust M7.5 (`src/trust/`) — the Hub's client certificate (in the vault), device certificates
+  with both purposes, renewal through the heartbeat (`deviceCertificateRenewal`,
+  `deviceCertificatePresented`, `deviceCertificateState`) and the legacy certificate's grace.
+- Compute nodes (`src/nodes/`) — the owner's node policy (quiet hours, routing eligibility) in the
+  heartbeat answer, VRAM from the node's reports, and the node's services.
+- Elsewhere — the approvals gate refuses any decision on a Hub-only card (`answerIn: 'hub'`) not
+  made by the signed-in user (`hub_only`); channels never offer or accept an answer to one
+  (`HUB_ONLY_TEXT`); `ApprovalView` gains `answerIn` and `scope`; `user_input` requests take an
+  optional `context` (`requests/validate.ts`).

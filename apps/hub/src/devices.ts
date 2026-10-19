@@ -7,6 +7,13 @@
 // novad's: register authenticates with the one-use token in its body, heartbeat and capabilities
 // with the device credential, which they check themselves; a device credential never
 // authenticates a user route.
+//
+// M7.5 (ADR-096 D1, D3, D9): the management channel over mutual TLS (`useManagementTls`: the trust
+// area's Hub client certificate; `GET /devices/management-tls` and diagnostics `deviceManagement`
+// say which devices use it), the heartbeat answer's `policy` from the firmware and boot areas
+// (`useFirmwarePolicy`, `useBootPolicy`), decommission with an approval card and a Hub-signed
+// authorization (`useAuthzSigner`), and the routes the M6 UI lacked: managed services, available
+// updates (`useAvailableBuilds`: the agent-dist manifest) and owner overrides.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
@@ -15,6 +22,7 @@ import {
   NovaError,
   connectAgentDeviceSchema,
   deviceAccessRequestSchema,
+  deviceDecommissionSchema,
   deviceGrantSchema,
   deviceGranteeSchema,
   deviceMcpCallSchema,
@@ -34,8 +42,13 @@ import {
   deviceEnvironment,
   deviceToolSource,
   type AuditSink,
+  type AvailableNovadBuilds,
+  type CertificateRenewal,
   type DeviceAgentThreadResolver,
+  type DeviceAuthzSigner,
   type DeviceEnvironment,
+  type DevicePolicyFlag,
+  type DeviceTlsTrust,
   type DeviceTransport,
   type Notifier,
   type ToolSourceProvider,
@@ -80,6 +93,24 @@ export interface DevicesArea extends HubArea {
       input: { deviceId: string; agentId?: string | null },
     ): Promise<unknown>;
   }): void;
+  /**
+   * The management channel's mutual TLS (D1): `{material: () => trust.service
+   * .hubClientCertificate(), verifyDeviceCertificate: (pem) => trust.verifyDeviceCertificate(pem)}`.
+   */
+  useManagementTls(trust: DeviceTlsTrust): void;
+  /** The Hub identity that signs D2 authorizations (decommission): the trust area's identity. */
+  useAuthzSigner(signer: DeviceAuthzSigner | null): void;
+  /** `policy.firmwareChanges` in the heartbeat answer (D3; the firmware area). */
+  useFirmwarePolicy(flag: DevicePolicyFlag | null): void;
+  /** `policy.lowLevelBoot` in the heartbeat answer (D3; the boot area). */
+  useBootPolicy(flag: DevicePolicyFlag | null): void;
+  /** The novad builds the Hub serves (the agent-dist manifest), for available updates. */
+  useAvailableBuilds(builds: (() => Promise<AvailableNovadBuilds>) | null): void;
+  /**
+   * Device certificate renewal for the heartbeat answer's `certificate` (D1):
+   * `(id, key) => trust.service.deviceCertificateRenewal(id, key)`.
+   */
+  useCertificateRenewal(renewal: CertificateRenewal | null): void;
 }
 
 export interface DevicesDeps {
@@ -179,6 +210,19 @@ export function setupDevices(ctx: HubContext, deps: DevicesDeps = {}): Promise<D
       .catch((err: unknown) => ctx.log.warn('passing an access decision failed', { err }));
   });
 
+  // A device-side toggle changed (D3): every reachable device gets it now, not at its next
+  // heartbeat, so a firmware apply or boot trial right after turning it on is not refused.
+  const offToggles = ctx.events.bus.subscribe('settings.changed', (e) => {
+    const key = e.payload.key;
+    if (key !== 'devices.firmware.allowChanges' && key !== 'devices.boot.allowLowLevel') return;
+    void service
+      .pushPolicyToAll()
+      .catch((err: unknown) => ctx.log.warn('pushing the device policy failed', { err }));
+  });
+
+  // Which devices the Hub manages over mutual TLS, and refused channels (D1).
+  ctx.diagnostics.add('deviceManagement', () => service.managementDiagnostics());
+
   ctx.diagnostics.add('devices', () => {
     const rows = ctx.db.raw
       .prepare(
@@ -232,6 +276,11 @@ export function setupDevices(ctx: HubContext, deps: DevicesDeps = {}): Promise<D
       return out;
     });
 
+    // ---- the management channel (D1) --------------------------------------------------------
+    app.get('/api/v1/devices/management-tls', async (req) =>
+      service.managementTls(await ctx.accountOf(req)),
+    );
+
     app.get('/api/v1/devices/:id', async (req) => {
       const accountId = await ctx.accountOf(req);
       return service.get(accountId, params.parse(req.params).id);
@@ -267,6 +316,11 @@ export function setupDevices(ctx: HubContext, deps: DevicesDeps = {}): Promise<D
       return { service: await service.serviceAction(accountId, p.id, p.name, p.action) };
     });
 
+    app.get('/api/v1/devices/:id/services', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      return { items: await service.services(accountId, params.parse(req.params).id) };
+    });
+
     app.get('/api/v1/devices/:id/power', async (req) => {
       const accountId = await ctx.accountOf(req);
       return service.power(accountId, params.parse(req.params).id, { action: 'status' });
@@ -290,6 +344,36 @@ export function setupDevices(ctx: HubContext, deps: DevicesDeps = {}): Promise<D
     app.get('/api/v1/devices/:id/updates', async (req) => {
       const accountId = await ctx.accountOf(req);
       return { items: await service.updates(accountId, params.parse(req.params).id) };
+    });
+
+    app.get('/api/v1/devices/:id/updates/available', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      return service.availableUpdates(accountId, params.parse(req.params).id);
+    });
+
+    // ---- owner overrides (FR-142, FR-150): PATCH /devices/:id sets them ------------------------
+    app.get('/api/v1/devices/:id/overrides', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      return service.overrides(accountId, params.parse(req.params).id);
+    });
+
+    app.post('/api/v1/devices/:id/overrides/push', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      return service.pushOverrides(accountId, params.parse(req.params).id);
+    });
+
+    // ---- decommission (D9): the approval card decides; the device is revoked either way ------
+    app.get('/api/v1/devices/:id/decommission', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      return { decommission: await service.decommission(accountId, params.parse(req.params).id) };
+    });
+
+    app.post('/api/v1/devices/:id/decommission', async (req, reply) => {
+      const accountId = await ctx.accountOf(req);
+      const body = deviceDecommissionSchema.parse(req.body ?? {});
+      const out = await service.requestDecommission(accountId, params.parse(req.params).id, body);
+      void reply.status(202);
+      return out;
     });
 
     app.post('/api/v1/devices/:id/updates', { bodyLimit: 96 * 1024 * 1024 }, async (req) => {
@@ -473,6 +557,12 @@ export function setupDevices(ctx: HubContext, deps: DevicesDeps = {}): Promise<D
     useAgentThreads: (resolver) => {
       agentThreads = resolver;
     },
+    useManagementTls: (trust) => service.useManagementTls(trust),
+    useAuthzSigner: (signer) => service.useAuthzSigner(signer),
+    useFirmwarePolicy: (flag) => service.useFirmwarePolicy(flag),
+    useBootPolicy: (flag) => service.useBootPolicy(flag),
+    useAvailableBuilds: (builds) => service.useAvailableBuilds(builds),
+    useCertificateRenewal: (renewal) => service.useCertificateRenewal(renewal),
     useComputers: (c) => {
       service.onConnectionChanged(async (accountId, conn) => {
         if (conn.status === 'active')
@@ -482,6 +572,7 @@ export function setupDevices(ctx: HubContext, deps: DevicesDeps = {}): Promise<D
     register,
     close: () => {
       off();
+      offToggles();
       service.stop();
       return Promise.resolve();
     },

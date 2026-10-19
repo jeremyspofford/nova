@@ -1,7 +1,8 @@
-// Updates (FR-148; docs/23 §8): the device's channel, what needs a newer novad, installing signed
-// update bundles (checked here, verified again by the device, applied in order with novad last),
-// the result of every update, and rolling a module back to its previous version. A failed health
-// check rolls back on the device by itself.
+// Updates (FR-148; docs/23 §8): the device's channel, the novad build this Hub serves for it
+// (M7.5, information only), what needs a newer novad, installing signed update bundles (checked
+// here, verified again by the device, applied in order with novad last), the result of every
+// update, and rolling a module back to its previous version. A failed health check rolls back on
+// the device by itself.
 import { useId, useRef, useState } from 'react';
 import {
   DEVICE_UPDATE_CHANNELS,
@@ -24,6 +25,7 @@ import {
   formatBytes,
   moduleLabel,
 } from './format.ts';
+import { AvailableBuild } from './ops.tsx';
 import { ConfirmDialog, LoadError, Unavailable, useLoad } from './parts.tsx';
 
 const CHANNEL_TEXT: Record<DeviceUpdateChannel, string> = {
@@ -121,6 +123,8 @@ export function UpdatesPanel({ device, onDevice, reload }: PanelProps) {
           options={DEVICE_UPDATE_CHANNELS.map((c) => ({ value: c, label: CHANNEL_TEXT[c] }))}
         />
       </section>
+
+      <AvailableBuild device={device} />
 
       <section className="ws-section devices-flat" aria-labelledby={`${base}-new`}>
         <h2 id={`${base}-new`}>Install an update</h2>

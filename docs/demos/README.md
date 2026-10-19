@@ -15,6 +15,7 @@ small; large recordings go in the release assets, not the repo.
 | M6 | [An agent books a meeting and asks before sending; research, Slack, events, browser, takeover](M6.md) |
 | M6.5 | [Add a computer and a phone with a code; turn the LAN off and the Relay takes over](M6.5.md) |
 | M7 | [A phone starts a task through the Relay and the desktop approves it; two devices sync and restore a conflict; offline changes; a cloud run](M7.md) |
+| M7.5 | [Wake-on-LAN and power-on after a power cut turned on with approval and rolled back; a boot trial reverted by its watchdog; a BMC power cycled out of band](M7.5.md) |
 
 ## Template
 

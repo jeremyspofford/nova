@@ -1,7 +1,8 @@
 // Modules and services (FR-141, FR-145; docs/23 §1, §4, §10): each signed module the supervisor
 // runs, with its state, restarts and a crash loop said plainly, and Start, Stop, Restart and Roll
-// back; then the device's managed services, by name, with Status, Start, Stop and Restart. Both
-// need the device online with its management module; the reason shows when they cannot run.
+// back; then the managed services novad lists (M7.5, Services.tsx), and any service by name, with
+// Status, Start, Stop and Restart. Both need the device online with its management module; the
+// reason shows when they cannot run.
 import { useId, useState } from 'react';
 import {
   DEVICE_MODULES,
@@ -22,6 +23,7 @@ import {
   moduleLabel,
 } from './format.ts';
 import { Chip, ConfirmDialog, Unavailable } from './parts.tsx';
+import { ServiceList } from './Services.tsx';
 
 type ModuleAction = 'start' | 'stop' | 'restart' | 'rollback';
 
@@ -37,6 +39,7 @@ export function ModulesPanel({ device, onDevice, reload }: PanelProps) {
   return (
     <div className="stack">
       <ModuleList device={device} onDevice={onDevice} reload={reload} />
+      <ServiceList device={device} />
       <Services device={device} />
     </div>
   );

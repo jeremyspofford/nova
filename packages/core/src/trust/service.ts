@@ -35,6 +35,7 @@ import {
   type TrustServingView,
   type TrustSummary,
   type TrustView,
+  type DeviceCertificateStateView,
 } from '@nova/shared';
 import type { SecretStore } from '@nova/secrets';
 import type { NovaDatabase } from '@nova/storage';
@@ -57,6 +58,19 @@ const DAY = 86_400_000;
 export const LOCAL_CA_DAYS = 3650;
 export const LEAF_DAYS = 90;
 export const DEVICE_CERT_DAYS = 365;
+/** The Hub's client certificate for the management channel lives as long as its TLS leaf. */
+export const HUB_CLIENT_DAYS = LEAF_DAYS;
+/**
+ * The vault entry holding the Hub's client certificate and its key (ADR-096 D1): one JSON value
+ * `{certPem, keyPem}`. The certificate is public; the key never leaves the vault but for the TLS
+ * client that presents it.
+ */
+export const HUB_CLIENT_REF = 'secret://hub/client-certificate';
+/**
+ * How long after a renewal was issued the Hub still accepts the device's old certificate without
+ * serverAuth on the management channel (the device installs the renewal at its next check-in).
+ */
+export const LEGACY_SERVER_CERT_GRACE_MS = 10 * 60_000;
 /** A mesh certificate this close to expiry is `expiring`. */
 const MESH_EXPIRING_DAYS = 14;
 const MAX_SANS = 100;
@@ -106,6 +120,22 @@ export interface DeviceCertificateRequest {
   /** base64url of the device's raw 32-byte Ed25519 public key. */
   publicKey: string;
   role: string;
+}
+
+/**
+ * The Hub's client certificate for the Hub -> novad management channel (ADR-096 D1): issued by the
+ * local CA, URI SAN `urn:nova:hub:<hubFingerprint>`, EKU clientAuth, renewed with the TLS leaf.
+ */
+export interface HubClientCertificate {
+  certPem: string;
+  keyPem: string;
+  /** The local CA that issued it: what device certificates must chain to. */
+  caPem: string;
+  /** Lower-case hex. */
+  serial: string;
+  notBefore: string;
+  notAfter: string;
+  uri: string;
 }
 
 export type DeviceCertificateCheck =
@@ -222,6 +252,11 @@ function sameSet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const s = new Set(a);
   return b.every((x) => s.has(x));
+}
+
+/** Whether certificate `a` was issued before `b` (UUIDv7 ids break ties within a millisecond). */
+function before(a: { id: string; created_at: string }, b: { id: string; created_at: string }) {
+  return a.created_at < b.created_at || (a.created_at === b.created_at && a.id < b.id);
 }
 
 /** When a certificate is renewed: at two thirds of its life. */
@@ -733,6 +768,15 @@ export class TrustService {
     who: Actor = SYSTEM,
   ): Promise<{ certificatePem: string; expiresAt: string; serial: string } | null> {
     if ((await this.#settings.mode()) !== 'local-ca') return null;
+    return this.#issueDevice(input, who, 'issued');
+  }
+
+  /** A device certificate from the local CA, in any trust mode (Add Device and renewal). */
+  async #issueDevice(
+    input: DeviceCertificateRequest,
+    who: Actor,
+    reason: 'issued' | 'renewed',
+  ): Promise<{ certificatePem: string; expiresAt: string; serial: string }> {
     await this.identity.load();
     if (!DEVICE_ID.test(input.deviceId)) throw new NovaError('validation', 'bad device id');
     if (!ROLE.test(input.role)) throw new NovaError('validation', 'bad device role');
@@ -759,7 +803,9 @@ export class TrustService {
         notBefore,
         notAfter,
         keyUsage: KEY_USAGE.digitalSignature,
-        extKeyUsage: [OID.clientAuth],
+        // clientAuth for its calls to the Hub (M7 mutual TLS), serverAuth for its management
+        // server, which the Hub calls over mutual TLS (ADR-096 D1).
+        extKeyUsage: [OID.clientAuth, OID.serverAuth],
         altNames: { uris: [uri] },
       });
       const row: CertRow = {
@@ -783,13 +829,180 @@ export class TrustService {
       await this.#db.transaction(() => this.#insert(row));
       await this.#record(
         who,
-        'trust.device.issue',
+        reason === 'renewed' ? 'trust.device.renew' : 'trust.device.issue',
         input.deviceId,
         { serial: row.serial, role: input.role, notAfter: row.not_after },
-        { reason: 'device_issued', deviceId: input.deviceId, serial: row.serial },
+        {
+          reason: reason === 'renewed' ? 'device_renewed' : 'device_issued',
+          deviceId: input.deviceId,
+          serial: row.serial,
+        },
       );
       return { certificatePem: row.cert_pem, expiresAt: row.not_after, serial: row.serial };
     });
+  }
+
+  // ---- device certificate renewal (ADR-096 D1; the M7 gap "certificates are not renewed") ------
+
+  /** A device's live certificates from the active CA for this key, newest first. */
+  #liveDeviceCerts(deviceId: string, publicKey?: string): CertRow[] {
+    const ca = this.#caRow();
+    if (!ca) return [];
+    const rows = this.#db.raw
+      .prepare(
+        `SELECT * FROM trust_certificate WHERE kind = 'device' AND device_id = ? AND ca_id = ?
+           AND revoked_at IS NULL AND not_after > ? ORDER BY created_at DESC, id DESC`,
+      )
+      .all(deviceId, ca.id, iso(this.#now())) as unknown as CertRow[];
+    return publicKey === undefined ? rows : rows.filter((r) => r.public_key === publicKey);
+  }
+
+  /**
+   * The certificate a device should install (the heartbeat answer's `certificate`), or null.
+   * When the device's newest certificate cannot serve its management endpoint (no serverAuth,
+   * issued before M7.5) or has less than a third of its life left, a fresh one is issued for the
+   * same key, device id and role; until the device presents it, every heartbeat answer carries it
+   * again (the older one stays valid until then, and is revoked the first time the new one is
+   * seen: `deviceCertificatePresented`).
+   */
+  async deviceCertificateRenewal(
+    deviceId: string,
+    publicKey: string,
+  ): Promise<{ pem: string; notAfter: string; serial: string } | null> {
+    const live = this.#liveDeviceCerts(deviceId, publicKey);
+    const newest = live[0];
+    if (!newest) return null;
+    const answer = (r: { cert_pem: string; not_after: string; serial: string }) => ({
+      pem: r.cert_pem,
+      notAfter: r.not_after,
+      serial: r.serial,
+    });
+    // Issued, not yet presented: send it again.
+    if (live.length > 1) return answer(newest);
+    const serverAuth = (new X509Certificate(newest.cert_pem).keyUsage ?? []).includes(
+      OID.serverAuth,
+    );
+    if (serverAuth && this.#now().getTime() < renewAt(newest.not_before, newest.not_after))
+      return null;
+    const fresh = await this.#issueDevice(
+      { deviceId, publicKey, role: newest.role ?? 'client' },
+      SYSTEM,
+      'renewed',
+    );
+    return { pem: fresh.certificatePem, notAfter: fresh.expiresAt, serial: fresh.serial };
+  }
+
+  /**
+   * A device presented this certificate (mutual TLS on the Hub's routes or its management
+   * endpoint). When it is newer than others the device holds, those are revoked: the renewal is
+   * done. Returns how many were revoked.
+   */
+  async deviceCertificatePresented(deviceId: string, serial: string): Promise<number> {
+    const live = this.#liveDeviceCerts(deviceId);
+    const shown = live.find((r) => r.serial === serial.toLowerCase());
+    if (!shown) return 0;
+    const older = live.filter((r) => before(r, shown));
+    if (!older.length) return 0;
+    const at = iso(this.#now());
+    await this.#db.transaction(() => {
+      for (const r of older)
+        this.#db.raw
+          .prepare(
+            `UPDATE trust_certificate SET revoked_at = ?, revoked_reason = 'renewed'
+             WHERE id = ? AND revoked_at IS NULL`,
+          )
+          .run(at, r.id);
+    });
+    await this.#record(
+      SYSTEM,
+      'trust.device.revoke',
+      deviceId,
+      { certificates: older.length, reason: 'renewed', serials: older.map((r) => r.serial) },
+      { reason: 'device_renewed', deviceId, certificates: older.length },
+    );
+    return older.length;
+  }
+
+  /**
+   * A device's certificate as the management channel sees it (the devices area's view): the one
+   * it uses now (the oldest live one, until a renewal is presented), whether that is the legacy
+   * clientAuth-only kind and when its grace ends, and the renewal's state.
+   */
+  deviceCertificateState(
+    deviceId: string,
+    graceMs = LEGACY_SERVER_CERT_GRACE_MS,
+  ): DeviceCertificateStateView {
+    const live = this.#liveDeviceCerts(deviceId);
+    const current = live.at(-1);
+    if (!current) return { renewal: null, legacyCertificate: false, legacyGraceEndsAt: null };
+    const serverAuth = (pem: string) =>
+      (new X509Certificate(pem).keyUsage ?? []).includes(OID.serverAuth);
+    const legacy = !serverAuth(current.cert_pem);
+    const offered = live.length > 1 ? live[0] : undefined;
+    if (offered) {
+      return {
+        renewal: {
+          state: 'offered',
+          offeredAt: offered.created_at,
+          notAfter: offered.not_after,
+          reason: legacy ? 'missing_server_auth' : 'expiring',
+        },
+        legacyCertificate: legacy,
+        legacyGraceEndsAt: legacy
+          ? new Date(Date.parse(offered.created_at) + graceMs).toISOString()
+          : null,
+      };
+    }
+    const replaced = this.#db.raw
+      .prepare(
+        `SELECT * FROM trust_certificate WHERE kind = 'device' AND device_id = ?
+           AND revoked_reason = 'renewed' ORDER BY created_at DESC, id DESC LIMIT 1`,
+      )
+      .get(deviceId) as CertRow | undefined;
+    if (replaced && before(replaced, current))
+      return {
+        renewal: {
+          state: 'presented',
+          offeredAt: current.created_at,
+          notAfter: current.not_after,
+          reason: serverAuth(replaced.cert_pem) ? 'expiring' : 'missing_server_auth',
+        },
+        legacyCertificate: legacy,
+        legacyGraceEndsAt: null,
+      };
+    return {
+      renewal: { state: 'none', offeredAt: null, notAfter: null, reason: null },
+      legacyCertificate: legacy,
+      legacyGraceEndsAt: null,
+    };
+  }
+
+  /**
+   * Whether the Hub may still accept this device certificate as a management server certificate
+   * although it lacks serverAuth (issued in M7, before devices served TLS): only the device's own
+   * recorded, unrevoked, unexpired certificate, and only until it is renewed, that is while no
+   * newer certificate of the device was issued more than `graceMs` ago (the device installs a
+   * renewal with its next heartbeat; presenting it revokes the old one at once).
+   */
+  legacyServerCertificateAllowed(
+    deviceId: string,
+    pem: string,
+    graceMs = LEGACY_SERVER_CERT_GRACE_MS,
+  ): boolean {
+    const check = this.verifyDeviceCertificate(pem);
+    if (!check.ok || check.deviceId !== deviceId) return false;
+    let x: X509Certificate;
+    try {
+      x = new X509Certificate(pem);
+    } catch {
+      return false;
+    }
+    if ((x.keyUsage ?? []).includes(OID.serverAuth)) return false;
+    const live = this.#liveDeviceCerts(deviceId);
+    const mine = live.find((r) => r.serial === check.serial);
+    if (!mine) return false;
+    const cutoff = this.#now().getTime() - graceMs;
+    return !live.some((r) => before(mine, r) && Date.parse(r.created_at) < cutoff);
   }
 
   /** Revoke every certificate of a device (device revocation, docs/22 §4.5). */
@@ -825,6 +1038,102 @@ export class TrustService {
       )
       .all() as { serial: string; device_id: string | null; revoked_at: string }[];
     return rows.map((r) => ({ serial: r.serial, deviceId: r.device_id, revokedAt: r.revoked_at }));
+  }
+
+  // ---- the Hub's client certificate (ADR-096 D1) ------------------------------------------------
+
+  /**
+   * The Hub's client certificate for the management channel, issued again when it reached two
+   * thirds of its life (it lives as long as the leaf and is renewed with it), when the local CA
+   * or the Hub identity changed, when the vault lost it, or with `force`. Null while there is no
+   * local CA: a device certificate needs one, so no device then serves the channel over TLS. It
+   * is never recorded in `trust_certificate` (not a device's), so no device route accepts it.
+   */
+  hubClientCertificate(
+    opts: { force?: boolean; who?: Actor } = {},
+  ): Promise<HubClientCertificate | null> {
+    return this.#serialize(async () => {
+      await this.identity.load();
+      const ca = this.#caRow();
+      if (!ca) return null;
+      const uri = `urn:nova:hub:${this.identity.fingerprint}`;
+      const current = opts.force ? null : await this.#storedHubClient(ca, uri);
+      if (current) return current;
+      return this.#issueHubClient(ca, uri, opts.who ?? SYSTEM);
+    });
+  }
+
+  /** The stored client certificate if it is still good for `ca` and this identity, else null. */
+  async #storedHubClient(ca: CaRow, uri: string): Promise<HubClientCertificate | null> {
+    const raw = await this.#secrets.get(HUB_CLIENT_REF).catch(() => null);
+    if (!raw) return null;
+    try {
+      const v = JSON.parse(raw) as { certPem?: unknown; keyPem?: unknown };
+      if (typeof v.certPem !== 'string' || typeof v.keyPem !== 'string') return null;
+      const x = new X509Certificate(v.certPem);
+      const caX = new X509Certificate(ca.cert_pem);
+      if (!x.checkIssued(caX) || !x.verify(caX.publicKey)) return null;
+      if (!x.checkPrivateKey(createPrivateKey(v.keyPem))) return null;
+      if (!(x.subjectAltName ?? '').split(', ').includes(`URI:${uri}`)) return null;
+      const notBefore = new Date(x.validFrom).toISOString();
+      const notAfter = new Date(x.validTo).toISOString();
+      if (this.#now().getTime() >= renewAt(notBefore, notAfter)) return null;
+      return {
+        certPem: v.certPem,
+        keyPem: v.keyPem,
+        caPem: ca.cert_pem,
+        serial: x.serialNumber.toLowerCase(),
+        notBefore,
+        notAfter,
+        uri,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async #issueHubClient(ca: CaRow, uri: string, who: Actor): Promise<HubClientCertificate> {
+    const signer = await this.#caKey(ca);
+    const caX = new X509Certificate(ca.cert_pem);
+    const now = this.#now();
+    const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    const { notBefore, notAfter } = validity(now, HUB_CLIENT_DAYS);
+    const cert = buildCertificate({
+      // No dots in the name: no verifier takes it for a host name.
+      subject: {
+        commonName: `Nova Hub ${this.identity.fingerprint.slice(0, 8)}`,
+        organizationalUnit: 'hub-client',
+      },
+      issuer: { commonName: commonNameOf(caX.subject) },
+      publicKey,
+      signer,
+      issuerKeyId: keyId(createPublicKey(signer)),
+      notBefore,
+      notAfter,
+      keyUsage: KEY_USAGE.digitalSignature,
+      extKeyUsage: [OID.clientAuth],
+      altNames: { uris: [uri] },
+    });
+    const keyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    await this.#secrets.put(HUB_CLIENT_REF, JSON.stringify({ certPem: cert.pem, keyPem }));
+    this.#failures.delete('hub-client');
+    const out: HubClientCertificate = {
+      certPem: cert.pem,
+      keyPem,
+      caPem: ca.cert_pem,
+      serial: cert.serial,
+      notBefore: iso(notBefore),
+      notAfter: iso(notAfter),
+      uri,
+    };
+    await this.#record(
+      who,
+      'trust.hub_client.issue',
+      null,
+      { serial: out.serial, notAfter: out.notAfter, uri },
+      { reason: 'hub_client_issued', serial: out.serial, notAfter: out.notAfter },
+    );
+    return out;
   }
 
   /**
@@ -1014,6 +1323,16 @@ export class TrustService {
         this.#log.warn('renewing the Hub TLS certificate failed', { err });
       }
     }
+    // The management channel's client certificate follows the leaf (ADR-096 D1), in any mode
+    // while a local CA exists: devices that hold its certificates still want it.
+    if (this.#caRow()) {
+      try {
+        await this.hubClientCertificate();
+      } catch (err) {
+        this.#failures.set('hub-client', err instanceof Error ? err.message : String(err));
+        this.#log.warn('renewing the Hub client certificate failed', { err });
+      }
+    }
     if (!(await this.#meshInUse(mode)) || !this.#mesh) return;
     const now = this.#now().getTime();
     for (const r of this.#current('mesh')) {
@@ -1121,7 +1440,13 @@ export class TrustService {
     }
     for (const [what, why] of this.#failures)
       out.push(
-        `Renewing ${what === 'leaf' ? 'the Hub TLS certificate' : what.slice(5)} failed: ${why}`,
+        `Renewing ${
+          what === 'leaf'
+            ? 'the Hub TLS certificate'
+            : what === 'hub-client'
+              ? 'the Hub client certificate'
+              : what.slice(5)
+        } failed: ${why}`,
       );
     const material = mode === 'local-ca' || this.#current('mesh').length > 0;
     // (A start that fell back to loopback already says to restart.)

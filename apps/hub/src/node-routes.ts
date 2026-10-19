@@ -4,9 +4,14 @@
 // register authenticates with the one-use enrollment token in its body, heartbeat and model sync
 // with the node credential, which they check themselves. A node credential never authenticates
 // a user route: it is hashed in its own domain, so the session lookup cannot find it.
+//
+// M7.5 (FR-126, FR-150): the heartbeat answer carries the owner's policy for the node (quiet
+// hours, routing eligibility); owner routes read a node's detail (policy, quiet now, VRAM, load),
+// change its policy, and list and control its managed services through the node's
+// `/node/v1/services/*` with its job token.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { NovaError, idSchema } from '@nova/shared';
+import { NODE_SERVICE_ACTIONS, NovaError, idSchema } from '@nova/shared';
 import type { NodeService } from '@nova/core';
 
 /**
@@ -36,6 +41,11 @@ const DEVICE_ROLES = ['client', 'compute', 'wake-helper'] as const;
 
 const listQuerySchema = z.object({ role: z.enum(DEVICE_ROLES).optional() });
 const params = z.object({ id: idSchema });
+const serviceParams = z.object({
+  id: idSchema,
+  name: z.string().min(1).max(50),
+  action: z.enum(NODE_SERVICE_ACTIONS),
+});
 
 function nodeCredential(req: FastifyRequest): string {
   const header = req.headers.authorization;
@@ -91,6 +101,36 @@ export function registerNodeRoutes(app: FastifyInstance, deps: NodeRouteDeps): v
     throw missing;
   });
 
+  // ---- a compute node's policy, state and services (M7.5) --------------------------------
+
+  app.get('/api/v1/devices/:id/node', async (req) => {
+    const accountId = await accountOf(req);
+    return nodes.detail(accountId, params.parse(req.params).id);
+  });
+
+  app.get('/api/v1/devices/:id/node/policy', async (req) => {
+    const accountId = await accountOf(req);
+    return nodes.policy(accountId, params.parse(req.params).id);
+  });
+
+  // The body is checked by the service (`nodePolicySchema`); a change reaches the node with its
+  // next heartbeat answer.
+  app.put('/api/v1/devices/:id/node/policy', async (req) => {
+    const accountId = await accountOf(req);
+    return nodes.setPolicy(accountId, params.parse(req.params).id, req.body ?? {});
+  });
+
+  app.get('/api/v1/devices/:id/node/services', async (req) => {
+    const accountId = await accountOf(req);
+    return { items: await nodes.services(accountId, params.parse(req.params).id) };
+  });
+
+  app.post('/api/v1/devices/:id/node/services/:name/:action', async (req) => {
+    const accountId = await accountOf(req);
+    const p = serviceParams.parse(req.params);
+    return { service: await nodes.serviceAction(accountId, p.id, p.name, p.action) };
+  });
+
   // ---- nodes (no session) ---------------------------------------------------------------
 
   app.post('/node/v1/register', async (req, reply) => {
@@ -99,10 +139,8 @@ export function registerNodeRoutes(app: FastifyInstance, deps: NodeRouteDeps): v
     return result;
   });
 
-  app.post('/node/v1/heartbeat', async (req) => {
-    await nodes.heartbeat(nodeCredential(req), req.body);
-    return { ok: true };
-  });
+  // The answer carries the owner's policy for the node (M7.5).
+  app.post('/node/v1/heartbeat', async (req) => nodes.heartbeat(nodeCredential(req), req.body));
 
   app.post('/node/v1/models/sync', async (req) => {
     await nodes.syncModels(nodeCredential(req), req.body);

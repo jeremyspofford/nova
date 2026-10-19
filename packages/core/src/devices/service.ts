@@ -6,6 +6,7 @@
 // writes (FR-210), and an agent's one connected computer (FR-081). Every privileged action is
 // audited (kind `device`); tool and file output from a device is untrusted (FR-189).
 import { createHash, randomBytes } from 'node:crypto';
+import type { Duplex } from 'node:stream';
 import { and, asc, eq, isNull, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import {
@@ -27,6 +28,15 @@ import {
   type DeviceUpdateView,
   type DeviceView,
   type DeviceWakeView,
+  type DeviceAvailableUpdateView,
+  type DeviceCertificateStateView,
+  type DeviceDecommissionView,
+  type DeviceHeartbeatPolicy,
+  type DeviceManagementTlsSummaryView,
+  type DeviceManagementTlsView,
+  type DeviceOverridesView,
+  type DeviceServiceView,
+  type DeviceTlsFailure,
   type StagedWriteView,
 } from '@nova/shared';
 import { contracts } from '@nova/contracts';
@@ -39,7 +49,15 @@ import type { AuditSink, Notifier } from '../tools/types.ts';
 import type { ComputerExecResult, ComputerExecSpec } from '../computers/types.ts';
 import { keyFingerprint, verifyDocument } from '../nodes/crypto.ts';
 import { enrollBindingOf, type EnrollKeyBinding } from '../pairing/binding.ts';
+import { signDeviceAuthorization, type DeviceAuthzSigner } from '../firmware/authz.ts';
 import { callDevice, httpDeviceTransport, type DeviceTransport } from './client.ts';
+import {
+  deviceTlsError,
+  mutualTlsDeviceTransport,
+  openMutualTls,
+  type DeviceTarget,
+  type DeviceTlsTrust,
+} from './tls.ts';
 import {
   DEVICE_CREDENTIAL_PREFIX,
   DEVICE_ENROLL_PREFIX,
@@ -60,6 +78,7 @@ import {
   type WireRequest,
 } from './protocol.ts';
 import {
+  compareNovadVersions,
   deviceCapabilityStatuses,
   minimumNovadVersions,
   requireDeviceCapabilities,
@@ -104,6 +123,47 @@ export interface DeviceServiceOptions {
   callTimeoutMs?: number;
   /** Whether an agent exists for the account (the agents area); any id passes without it. */
   agentExists?: (accountId: string, agentId: string) => Promise<boolean>;
+  /**
+   * The management channel's mutual TLS (ADR-096 D1): the Hub's client certificate and the
+   * trust area's check. Without it an https device is refused (`device_tls_failed`), never
+   * called over plain HTTP. `useManagementTls` binds it late.
+   */
+  tls?: DeviceTlsTrust;
+  /** Tests: the transport for https endpoints (mutual TLS from `tls` by default). */
+  tlsTransport?: DeviceTransport;
+  /** Signs D2 authorizations with the Hub identity key (decommission); `useAuthzSigner`. */
+  authzSigner?: DeviceAuthzSigner;
+}
+
+/**
+ * Whether a device may change firmware, or boot low-level, as the firmware (K) and boot (L) areas
+ * decide it (ADR-096 D3). The heartbeat answer carries both; false when unset or failing.
+ */
+export type DevicePolicyFlag = (device: {
+  accountId: string;
+  deviceId: string;
+}) => boolean | Promise<boolean>;
+
+/** Each accepted heartbeat's `events` (the firmware and boot watchdogs read theirs, D4, D5). */
+export type HeartbeatEventsListener = (
+  accountId: string,
+  deviceId: string,
+  events: readonly Record<string, unknown>[],
+) => void | Promise<void>;
+
+/**
+ * The certificate a device should install (the trust area's `deviceCertificateRenewal`): a
+ * renewal of one without serverAuth or in the last third of its life, sent until presented.
+ */
+export type CertificateRenewal = (
+  deviceId: string,
+  publicKey: string,
+) => Promise<{ pem: string; notAfter: string } | null>;
+
+/** The novad builds the Hub serves (the agent-dist manifest), for available updates (FR-148). */
+export interface AvailableNovadBuilds {
+  version: string | null;
+  files: { name: string; os: string; arch: string; sha256: string; size: number }[];
 }
 
 /** Why the Hub reached into a device, for audit and events (thread, run, agent or session). */
@@ -179,6 +239,28 @@ function grantedScopes(d: DeviceRow): string[] {
 
 function sha256Hex(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex');
+}
+
+function samePolicy(a: DeviceHeartbeatPolicy, b: DeviceHeartbeatPolicy): boolean {
+  return a.firmwareChanges === b.firmwareChanges && a.lowLevelBoot === b.lowLevelBoot;
+}
+
+/** The toggles in effect a `/agent/v1/config` answer reports, or null when it says none. */
+function policyIn(v: unknown): DeviceHeartbeatPolicy | null {
+  if (!isRecord(v)) return null;
+  if (typeof v.firmwareChanges !== 'boolean' || typeof v.lowLevelBoot !== 'boolean') return null;
+  return { firmwareChanges: v.firmwareChanges, lowLevelBoot: v.lowLevelBoot };
+}
+
+function isHttps(url: string): boolean {
+  return url.toLowerCase().startsWith('https:');
+}
+
+/** The `device_tls_failed` reason of a refused management call, if that is what it is. */
+function tlsFailureIn(err: unknown): DeviceTlsFailure | null {
+  if (!(err instanceof NovaError) || err.details?.reason !== 'device_tls_failed') return null;
+  const tls = err.details.tls;
+  return typeof tls === 'string' ? (tls as DeviceTlsFailure) : null;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -323,6 +405,66 @@ interface UpdateRow {
   created_at: string;
 }
 
+interface DecomRow {
+  id: string;
+  account_id: string;
+  device_id: string;
+  purge: number;
+  status: DeviceDecommissionView['status'];
+  approval_id: string | null;
+  change_id: string | null;
+  device_result: DeviceDecommissionView['deviceResult'];
+  detail: string | null;
+  created_at: string;
+  decided_at: string | null;
+  finished_at: string | null;
+}
+
+/** How long a decommission waits for its approval card (D9). */
+export const DECOMMISSION_APPROVAL_TTL_MS = 60 * 60 * 1000;
+
+/** The capability document sections the Hub's overrides reach (FR-142, FR-150). */
+const OVERRIDABLE_SECTIONS = [
+  'models',
+  'computePolicy',
+  'scheduling',
+  'limits',
+  'power',
+  'locale',
+  'data',
+] as const;
+
+/** A device's build platform as the agent-dist manifest names it, from its document. */
+function buildPlatformOf(doc: Record<string, unknown>): { os: string; arch: string } | null {
+  const os = isRecord(doc.os) && typeof doc.os.family === 'string' ? doc.os.family : '';
+  const hw =
+    isRecord(doc.hardware) && typeof doc.hardware.arch === 'string' ? doc.hardware.arch : '';
+  const osName =
+    os === 'linux'
+      ? 'linux'
+      : os === 'macos' || os === 'darwin'
+        ? 'darwin'
+        : os === 'windows'
+          ? 'windows'
+          : null;
+  const arch =
+    hw === 'x86_64' || hw === 'amd64' || hw === 'x64'
+      ? 'amd64'
+      : hw === 'aarch64' || hw === 'arm64'
+        ? 'arm64'
+        : null;
+  return osName && arch ? { os: osName, arch } : null;
+}
+
+/** A device's own error answer in a sentence: `code: reason` or its message. */
+function refusalOf(err: unknown): string {
+  if (err instanceof NovaError) {
+    const reason = typeof err.details?.reason === 'string' ? err.details.reason : null;
+    return `${err.code}${reason ? `: ${reason}` : ''} (${err.message.slice(0, 200)})`;
+  }
+  return err instanceof Error ? err.message.slice(0, 300) : 'failed';
+}
+
 /** A device the Hub can call. */
 export interface ManagedDevice {
   row: DeviceRow;
@@ -366,8 +508,28 @@ export class DeviceService {
   #wakeRouter: DeviceWakeRouter | null = null;
   readonly #connectionHooks = new Set<ConnectionHook>();
   readonly #revokeHooks = new Set<(accountId: string, deviceId: string) => void | Promise<void>>();
+  readonly #heartbeatListeners = new Set<HeartbeatEventsListener>();
   #timer: ReturnType<typeof setInterval> | null = null;
   readonly #pushing = new Set<string>();
+  #tls: DeviceTlsTrust | null;
+  readonly #tlsTransport: DeviceTransport | null;
+  #authzSigner: DeviceAuthzSigner | null;
+  #firmwarePolicy: DevicePolicyFlag | null = null;
+  #bootPolicy: DevicePolicyFlag | null = null;
+  #builds: (() => Promise<AvailableNovadBuilds>) | null = null;
+  #renewal: CertificateRenewal | null = null;
+  /** The last management call per device since start (D1 diagnostics; memory only). */
+  readonly #lastCall = new Map<
+    string,
+    { ok: boolean; at: string; failure: DeviceTlsFailure | null }
+  >();
+  /**
+   * The device-side toggles each device last confirmed (D3): from a `/agent/v1/config` answer, or
+   * what the last heartbeat answer carried. Memory only; a privileged send pushes when it differs.
+   */
+  readonly #ackedPolicy = new Map<string, DeviceHeartbeatPolicy>();
+  /** When an endpoint refusal was last audited, per device and reason (once an hour). */
+  readonly #endpointAudited = new Map<string, number>();
 
   constructor(opts: DeviceServiceOptions) {
     this.#db = opts.db;
@@ -387,6 +549,39 @@ export class DeviceService {
     this.#updateKey = opts.updateKey ?? (() => Promise.resolve(null));
     this.#callTimeoutMs = opts.callTimeoutMs ?? 30_000;
     this.#agentExists = opts.agentExists ?? null;
+    this.#tls = opts.tls ?? null;
+    this.#tlsTransport = opts.tlsTransport ?? null;
+    this.#authzSigner = opts.authzSigner ?? null;
+  }
+
+  /** The management channel's mutual TLS (ADR-096 D1; the trust area's client certificate). */
+  useManagementTls(trust: DeviceTlsTrust): void {
+    this.#tls = trust;
+  }
+
+  /** The Hub identity that signs D2 authorizations (decommission). */
+  useAuthzSigner(signer: DeviceAuthzSigner | null): void {
+    this.#authzSigner = signer;
+  }
+
+  /** The firmware area's answer for `policy.firmwareChanges` in the heartbeat (D3). */
+  useFirmwarePolicy(flag: DevicePolicyFlag | null): void {
+    this.#firmwarePolicy = flag;
+  }
+
+  /** The boot area's answer for `policy.lowLevelBoot` in the heartbeat (D3). */
+  useBootPolicy(flag: DevicePolicyFlag | null): void {
+    this.#bootPolicy = flag;
+  }
+
+  /** Device certificate renewal for the heartbeat answer's `certificate` (D1). */
+  useCertificateRenewal(renewal: CertificateRenewal | null): void {
+    this.#renewal = renewal;
+  }
+
+  /** The novad builds the Hub serves (the agent-dist manifest), for available updates. */
+  useAvailableBuilds(builds: (() => Promise<AvailableNovadBuilds>) | null): void {
+    this.#builds = builds;
   }
 
   useAudit(audit: AuditSink): void {
@@ -413,6 +608,16 @@ export class DeviceService {
   onRevoked(hook: (accountId: string, deviceId: string) => void | Promise<void>): () => void {
     this.#revokeHooks.add(hook);
     return () => this.#revokeHooks.delete(hook);
+  }
+
+  /**
+   * Called with each accepted heartbeat's `events`, after the heartbeat is stored (the firmware
+   * and boot areas' watchdogs, D4, D5). A listener that throws is logged and never fails the
+   * heartbeat.
+   */
+  onHeartbeatEvents(listener: HeartbeatEventsListener): () => void {
+    this.#heartbeatListeners.add(listener);
+    return () => this.#heartbeatListeners.delete(listener);
   }
 
   /** Called when an agent's connection starts or ends (the computers area registers its row). */
@@ -586,6 +791,18 @@ export class DeviceService {
         );
       }
       this.#checkDocument(body.capability, body.signature, body.publicKey);
+      // An https management endpoint is served with the device certificate the Hub issued for
+      // exactly this device and key (ADR-096 D1); without one the Hub could never verify it.
+      if (isHttps(body.endpoint) && !this.#holdsCertificate(deviceId, body.publicKey)) {
+        throw new NovaError(
+          'validation',
+          'an https endpoint needs the device certificate this Hub issued for the device',
+          {
+            details: { reason: 'https_needs_certificate', field: 'endpoint' },
+            action: 'Add the device with the Hub local CA as the trust path, or register http://',
+          },
+        );
+      }
       await this.#secrets.put(ref, body.managementToken);
       await this.#db.transaction(async () => {
         const taken = await this.#db.orm
@@ -788,14 +1005,26 @@ export class DeviceService {
     heartbeatIntervalMs: number;
     capabilityRequested: boolean;
     scopes: string[];
+    policy: DeviceHeartbeatPolicy;
+    certificate?: { pem: string; notAfter: string };
   }> {
     const d = await this.#requireDevice(credential);
     const body = deviceHeartbeatSchema.parse(input);
+    // Before anything is recorded: a device that registered https never moves back (D1).
+    const endpointBefore = this.#endpoint(d.id);
+    const newEndpoint = await this.#offeredEndpoint(d, endpointBefore, body.endpoint);
     const nowIso = this.#iso();
     const mgmt = this.#mgmt(d.id)!;
     const before = parseJson<ModuleReport[]>(mgmt.modules, []);
     const from = d.status;
     await this.#db.transaction(async () => {
+      if (newEndpoint) {
+        this.#run(
+          "UPDATE transport_endpoint SET url = ? WHERE device_id = ? AND net = 'lan'",
+          newEndpoint,
+          d.id,
+        );
+      }
       await this.#db.orm
         .update(device)
         .set({
@@ -819,6 +1048,20 @@ export class DeviceService {
       );
     });
     if (from !== 'active') await this.#statusChanged(d, from, 'active');
+    if (newEndpoint) {
+      this.#lastCall.delete(d.id);
+      await this.#emit('device.endpoint.changed', d.accountId, {
+        deviceId: d.id,
+        channel: 'mutual_tls',
+      });
+      await this.#auditAppend(
+        d.accountId,
+        'device.endpoint.change',
+        d.id,
+        { before: endpointBefore, after: newEndpoint, channel: 'mutual_tls' },
+        { actor: 'system' },
+      );
+    }
     if (d.novadVersion !== body.novadVersion) {
       await this.#emit('device.capabilities.changed', d.accountId, {
         deviceId: d.id,
@@ -828,6 +1071,15 @@ export class DeviceService {
     }
     await this.#moduleEvents(d, before, body.modules, body.events);
     for (const decision of body.accessDecisions) await this.#deviceDecided(d, decision);
+    if (body.events.length) {
+      for (const listener of this.#heartbeatListeners) {
+        try {
+          await listener(d.accountId, d.id, body.events);
+        } catch (err) {
+          this.#log.warn('a heartbeat events listener failed', { err, deviceId: d.id });
+        }
+      }
+    }
     if (mgmt.config_revision > mgmt.pushed_revision) this.#pushConfigSoon(d.accountId, d.id);
     this.#passDecisionsSoon(d);
     return {
@@ -835,7 +1087,172 @@ export class DeviceService {
       heartbeatIntervalMs: this.heartbeatIntervalMs,
       capabilityRequested: d.novadVersion !== body.novadVersion,
       scopes: grantedScopes(d),
+      policy: await this.#answeredPolicy(d),
+      ...(await this.#certificateFor(d)),
     };
+  }
+
+  /** A renewed device certificate for the answer, until the device presents it (D1). */
+  async #certificateFor(
+    d: DeviceRow,
+  ): Promise<{ certificate?: { pem: string; notAfter: string } }> {
+    if (!this.#renewal) return {};
+    try {
+      const c = await this.#renewal(d.id, d.publicKey);
+      return c ? { certificate: { pem: c.pem, notAfter: c.notAfter } } : {};
+    } catch (err) {
+      this.#log.warn('renewing a device certificate failed', { err, deviceId: d.id });
+      return {};
+    }
+  }
+
+  async #answeredPolicy(d: DeviceRow): Promise<DeviceHeartbeatPolicy> {
+    const policy = await this.#heartbeatPolicy(d);
+    this.#ackedPolicy.set(d.id, policy);
+    return policy;
+  }
+
+  /**
+   * Make sure a device runs with the current device-side toggles before a privileged send
+   * (firmware apply and rollback, boot set and commit; D3): when what the device last confirmed
+   * differs, or with `force`, push them at once with `POST /agent/v1/config {policy:
+   * {firmwareChanges, lowLevelBoot}}` (the toggles alone, so the per-device policy stays) and
+   * read the values in effect from its answer. `confirmed` is false when the device did not say
+   * (a novad before M7.5) or still differs. The device must be reachable (`node_unavailable`).
+   */
+  async syncPolicy(
+    accountId: string,
+    deviceId: string,
+    opts: { force?: boolean } = {},
+  ): Promise<{ policy: DeviceHeartbeatPolicy; confirmed: boolean }> {
+    const d = await this.#usable(accountId, deviceId, []);
+    const policy = await this.#heartbeatPolicy(d.row);
+    const acked = this.#ackedPolicy.get(deviceId);
+    if (!opts.force && acked && samePolicy(acked, policy)) return { policy, confirmed: true };
+    const res = await this.#call<{ policy?: unknown }>(d, '/agent/v1/config', {
+      policy: { firmwareChanges: policy.firmwareChanges, lowLevelBoot: policy.lowLevelBoot },
+    });
+    const got = policyIn(res.policy);
+    if (got) this.#ackedPolicy.set(deviceId, got);
+    else this.#ackedPolicy.delete(deviceId);
+    return { policy, confirmed: got !== null && samePolicy(got, policy) };
+  }
+
+  /**
+   * A toggle changed (`devices.firmware.allowChanges`, `devices.boot.allowLowLevel`): every
+   * active novad device with an endpoint gets the new values now, not at its next heartbeat. A
+   * device that cannot be reached takes them with its next heartbeat answer. Returns how many
+   * confirmed.
+   */
+  async pushPolicyToAll(): Promise<number> {
+    const rows = this.#all<{ id: string; account_id: string }>(
+      `SELECT d.id, d.account_id FROM device d JOIN device_management m ON m.device_id = d.id
+       WHERE d.status = 'active' ORDER BY d.created_at, d.id`,
+    );
+    let confirmed = 0;
+    await Promise.all(
+      rows.map(async (r) => {
+        try {
+          if (!this.#endpoint(r.id)) return;
+          if ((await this.syncPolicy(r.account_id, r.id, { force: true })).confirmed) confirmed++;
+        } catch (err) {
+          this.#log.info('pushing the device policy failed; the next heartbeat carries it', {
+            deviceId: r.id,
+            err,
+          });
+        }
+      }),
+    );
+    return confirmed;
+  }
+
+  /**
+   * The device-side toggles novad keeps in `policy.json` (ADR-096 D3): what the firmware and boot
+   * areas decide for this device, false when unset or when asking fails (fail closed).
+   */
+  async #heartbeatPolicy(d: DeviceRow): Promise<DeviceHeartbeatPolicy> {
+    const ask = async (flag: DevicePolicyFlag | null, what: string): Promise<boolean> => {
+      if (!flag) return false;
+      try {
+        return (await flag({ accountId: d.accountId, deviceId: d.id })) === true;
+      } catch (err) {
+        this.#log.warn('a device policy provider failed; answering false', { err, what });
+        return false;
+      }
+    };
+    return {
+      firmwareChanges: await ask(this.#firmwarePolicy, 'firmwareChanges'),
+      lowLevelBoot: await ask(this.#bootPolicy, 'lowLevelBoot'),
+    };
+  }
+
+  /** Whether the Hub issued this device a live certificate for this key (trust_certificate). */
+  #holdsCertificate(deviceId: string, publicKey: string): boolean {
+    return Boolean(
+      this.#get<{ one: number }>(
+        `SELECT 1 AS one FROM trust_certificate
+         WHERE kind = 'device' AND revoked_at IS NULL AND not_after > ?
+           AND device_id = ? AND public_key = ? LIMIT 1`,
+        this.#iso(),
+        deviceId,
+        publicKey,
+      ),
+    );
+  }
+
+  /**
+   * The endpoint a heartbeat offers (D1), or null to keep the current one. https -> http is
+   * refused outright (403 `policy_denied` `{reason: endpoint_downgrade}`); an https endpoint is
+   * taken only from a device holding a live certificate the Hub issued; a plain-HTTP address is
+   * never moved by a heartbeat (nothing would authenticate it, and the management token goes
+   * there). Refusals are audited at most once an hour per device and reason.
+   */
+  async #offeredEndpoint(
+    d: DeviceRow,
+    current: string | null,
+    offered: string | undefined,
+  ): Promise<string | null> {
+    if (!offered) return null;
+    const url = offered.replace(/\/+$/, '');
+    if (url === current) return null;
+    if (current && isHttps(current) && !isHttps(url)) {
+      await this.#endpointRefused(d, 'endpoint_downgrade', current, url);
+      throw new NovaError(
+        'policy_denied',
+        'this device registered an https management endpoint and is never called over plain HTTP',
+        {
+          details: { reason: 'endpoint_downgrade' },
+          action: 'Restore the device certificate on the device, or add the device again',
+        },
+      );
+    }
+    if (!isHttps(url)) return null;
+    if (!this.#holdsCertificate(d.id, d.publicKey)) {
+      await this.#endpointRefused(d, 'https_needs_certificate', current, url);
+      return null;
+    }
+    return url;
+  }
+
+  async #endpointRefused(
+    d: DeviceRow,
+    reason: string,
+    current: string | null,
+    offered: string,
+  ): Promise<void> {
+    this.#log.warn('a device endpoint change was refused', { deviceId: d.id, reason });
+    const key = `${d.id}:${reason}`;
+    const now = this.#now().getTime();
+    if (now - (this.#endpointAudited.get(key) ?? -Infinity) < 3_600_000) return;
+    this.#endpointAudited.set(key, now);
+    await this.#auditAppend(
+      d.accountId,
+      'device.endpoint.refuse',
+      d.id,
+      { reason, current, offered },
+      { actor: 'system' },
+      { decision: 'deny' },
+    );
   }
 
   /** `POST /agent/v1/capabilities`: a re-signed document; it must verify against the pinned key. */
@@ -985,6 +1402,9 @@ export class DeviceService {
 
   start(): void {
     if (this.#timer) return;
+    this.recoverDecommissions().catch((err: unknown) =>
+      this.#log.warn('recovering decommissions failed', { err }),
+    );
     this.#timer = setInterval(() => {
       this.sweep().catch((err: unknown) => this.#log.warn('device sweep failed', { err }));
     }, this.heartbeatIntervalMs);
@@ -1086,14 +1506,126 @@ export class DeviceService {
     const token = await this.#secrets.get(managementTokenRef(d.row.id));
     if (!token)
       throw new NovaError('auth_missing', 'the Hub has no management token for this device');
-    return callDevice<T>(
-      this.#transport,
-      d.endpoint,
-      token,
-      path,
-      body,
-      timeoutMs ?? this.#callTimeoutMs,
+    const https = isHttps(d.endpoint);
+    try {
+      const out = await callDevice<T>(
+        https ? this.#httpsTransport() : this.#transport,
+        d.endpoint,
+        token,
+        path,
+        body,
+        timeoutMs ?? this.#callTimeoutMs,
+        { deviceId: d.row.id, publicKey: d.row.publicKey },
+      );
+      this.#noteCall(d.row.id, true, null);
+      return out;
+    } catch (err) {
+      const failure = tlsFailureIn(err);
+      // A device that answered (with an error) passed the channel's checks.
+      if (failure) this.#noteCall(d.row.id, false, failure);
+      else if (err instanceof NovaError && err.code !== 'node_unavailable')
+        this.#noteCall(d.row.id, true, null);
+      throw err;
+    }
+  }
+
+  /**
+   * One management call to a device for other areas (firmware, boot, browser: ADR-096): a POST of
+   * `body` to `path` on the device's endpoint with its management token, over mutual TLS when the
+   * endpoint is https (never falling back to plain HTTP). The device must be active with an
+   * endpoint (`node_unavailable` otherwise; a revoked one is `not_found`). Capability, toggle,
+   * approval and authorization checks stay with the caller; novad enforces its own.
+   */
+  async call<T = Record<string, unknown>>(
+    accountId: string,
+    deviceId: string,
+    path: string,
+    body: unknown,
+    timeoutMs?: number,
+  ): Promise<T> {
+    if (!path.startsWith('/agent/v1/'))
+      throw new NovaError('validation', 'a management path starts with /agent/v1/');
+    const d = await this.#usable(accountId, deviceId, []);
+    return this.#call<T>(d, path, body, timeoutMs);
+  }
+
+  #noteCall(deviceId: string, ok: boolean, failure: DeviceTlsFailure | null): void {
+    this.#lastCall.set(deviceId, { ok, at: this.#iso(), failure });
+  }
+
+  /** The transport for https endpoints: mutual TLS, or a refusal when the Hub has none (D1). */
+  #httpsTransport(): DeviceTransport {
+    if (this.#tlsTransport) return this.#tlsTransport;
+    if (this.#tls) return mutualTlsDeviceTransport(this.#tls);
+    return {
+      post: () => Promise.reject(deviceTlsError('no_client_certificate')),
+    };
+  }
+
+  /** The device an endpoint URL belongs to (one live novad device), for callers without one. */
+  #targetFor(url: string): DeviceTarget {
+    const origin = new URL(url).origin;
+    const rows = this.#all<{ id: string; public_key: string }>(
+      `SELECT d.id, d.public_key FROM transport_endpoint e JOIN device d ON d.id = e.device_id
+       JOIN device_management m ON m.device_id = d.id
+       WHERE e.net = 'lan' AND d.status != 'revoked' AND (e.url = ? OR e.url LIKE ?)`,
+      origin,
+      `${origin}/%`,
     );
+    const only = rows.length === 1 ? rows[0] : undefined;
+    if (!only) throw deviceTlsError('wrong_device');
+    return { deviceId: only.id, publicKey: only.public_key };
+  }
+
+  /**
+   * The management channel for other areas' calls to novad (the browser area's `/agent/v1/
+   * browser/*`, the firmware and boot areas): plain HTTP endpoints as before, https endpoints
+   * over mutual TLS checked against the device the endpoint belongs to (or `target`). It never
+   * falls back from https to http.
+   */
+  readonly managementTransport: DeviceTransport = {
+    post: (url, token, body, timeoutMs, target) => {
+      if (!isHttps(url)) return this.#transport.post(url, token, body, timeoutMs, target);
+      let t: DeviceTarget;
+      try {
+        t = target ?? this.#targetFor(url);
+      } catch (err) {
+        return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+      }
+      return this.#httpsTransport().post(url, token, body, timeoutMs, t);
+    },
+  };
+
+  /**
+   * A raw connection to a device's management endpoint (the browser area's DevTools relay, D7).
+   * An https endpoint gets a mutual TLS socket that passed every D1 check; an http endpoint is
+   * refused here (the caller opens plain TCP itself, as before).
+   */
+  async connectManagementTls(endpoint: URL, deviceId: string): Promise<Duplex> {
+    const rows = this.#all<{ public_key: string; url: string }>(
+      `SELECT d.public_key, e.url FROM device d JOIN transport_endpoint e ON e.device_id = d.id
+       WHERE d.id = ? AND e.net = 'lan' AND d.status = 'active' LIMIT 1`,
+      deviceId,
+    );
+    const row = rows[0];
+    if (!row) throw new NovaError('node_unavailable', 'the device is not reachable');
+    if (!isHttps(row.url) || new URL(row.url).origin !== endpoint.origin)
+      throw deviceTlsError('wrong_device');
+    if (!this.#tls) throw deviceTlsError('no_client_certificate');
+    try {
+      const socket = await openMutualTls(
+        this.#tls,
+        endpoint,
+        { deviceId, publicKey: row.public_key },
+        this.#callTimeoutMs,
+      );
+      this.#noteCall(deviceId, true, null);
+      return socket;
+    } catch (err) {
+      const failure = tlsFailureIn(err);
+      if (failure) this.#noteCall(deviceId, false, failure);
+      throw err;
+    }
   }
 
   async list(accountId: string): Promise<DeviceView[]> {
@@ -1218,20 +1750,23 @@ export class DeviceService {
     const d = await this.device(accountId, deviceId);
     if (d.row.status !== 'active' || !d.endpoint) return false;
     const revision = d.mgmt.config_revision;
-    const res = await this.#call<{ capability?: unknown; signature?: unknown; revision?: unknown }>(
-      { row: d.row, endpoint: d.endpoint },
-      '/agent/v1/config',
-      {
-        capabilityOverrides: parseJson(d.mgmt.capability_overrides, {}),
-        policy: parseJson(d.mgmt.policy, {}),
-        updateChannel: d.mgmt.update_channel,
-        revision,
-      },
-    );
+    const res = await this.#call<{
+      capability?: unknown;
+      signature?: unknown;
+      revision?: unknown;
+      policy?: unknown;
+    }>({ row: d.row, endpoint: d.endpoint }, '/agent/v1/config', {
+      capabilityOverrides: parseJson(d.mgmt.capability_overrides, {}),
+      policy: parseJson(d.mgmt.policy, {}),
+      updateChannel: d.mgmt.update_channel,
+      revision,
+    });
     if (isRecord(res.capability) && typeof res.signature === 'string') {
       this.#checkDocument(res.capability, res.signature, d.row.publicKey);
       await this.#storeDocument(d.row, res.capability, null);
     }
+    const inEffect = policyIn(res.policy);
+    if (inEffect) this.#ackedPolicy.set(deviceId, inEffect);
     await this.#db.transaction(() => {
       this.#run(
         'UPDATE device_management SET pushed_revision = MAX(pushed_revision, ?) WHERE device_id = ?',
@@ -1291,6 +1826,11 @@ export class DeviceService {
     const d = await this.device(accountId, deviceId);
     if (d.row.status === 'revoked') return;
     const nowIso = this.#iso();
+    const open =
+      this.#get<DecomRow>(
+        "SELECT * FROM device_decommission WHERE device_id = ? AND status = 'awaiting_approval'",
+        deviceId,
+      ) ?? null;
     await this.#db.transaction(async () => {
       await this.#db.orm
         .update(device)
@@ -1312,8 +1852,41 @@ export class DeviceService {
         nowIso,
         deviceId,
       );
+      // A decommission still waiting for its card is moot once the device is revoked: the
+      // request is withdrawn (`cancelled`) and its card with it (ADR-096 D9). A running one is
+      // the caller (it revokes the device itself) and is left alone.
+      if (open) {
+        this.#run(
+          "UPDATE device_decommission SET status = 'cancelled', finished_at = ? WHERE id = ? AND status = 'awaiting_approval'",
+          nowIso,
+          open.id,
+        );
+        if (open.approval_id)
+          this.#run(
+            "UPDATE approval SET status = 'cancelled' WHERE id = ? AND status = 'pending' AND decision IS NULL",
+            open.approval_id,
+          );
+      }
     });
+    if (open?.approval_id) {
+      await this.#emit(
+        'approval.cancelled',
+        accountId,
+        { approvalId: open.approval_id, reason: 'device_revoked' },
+        ctx,
+      );
+      await this.#auditAppend(
+        accountId,
+        'device.decommission.decide',
+        deviceId,
+        { decommissionId: open.id, approvalId: open.approval_id },
+        ctx,
+        { decision: 'cancelled' },
+      );
+    }
     await this.#secrets.delete(managementTokenRef(deviceId));
+    this.#lastCall.delete(deviceId);
+    this.#ackedPolicy.delete(deviceId);
     await this.#statusChanged(d.row, d.row.status, 'revoked');
     await this.#auditAppend(accountId, 'device.revoke', deviceId, { name: d.row.name }, ctx);
     for (const hook of this.#revokeHooks) {
@@ -2192,6 +2765,15 @@ export class DeviceService {
 
   /** The user answered a folder-access approval card. */
   async onApprovalDecided(accountId: string, approvalId: string, decision: string): Promise<void> {
+    const decom = this.#get<DecomRow>(
+      "SELECT * FROM device_decommission WHERE account_id = ? AND approval_id = ? AND status = 'awaiting_approval'",
+      accountId,
+      approvalId,
+    );
+    if (decom) {
+      await this.#decommissionDecided(decom, decision);
+      return;
+    }
     const row = this.#get<GrantRow>(
       "SELECT * FROM device_grant WHERE account_id = ? AND approval_id = ? AND status = 'pending'",
       accountId,
@@ -3093,6 +3675,596 @@ export class DeviceService {
       status: row.status,
       createdAt: row.created_at,
       revokedAt: row.revoked_at,
+    };
+  }
+
+  // ---- decommission (ADR-096 D9) ---------------------------------------------------------------
+
+  #decomView(r: DecomRow, name: string): DeviceDecommissionView {
+    return {
+      id: r.id,
+      deviceId: r.device_id,
+      deviceName: name,
+      purge: r.purge === 1,
+      status: r.status,
+      approvalId: r.approval_id,
+      deviceResult: r.device_result,
+      detail: r.detail,
+      createdAt: r.created_at,
+      decidedAt: r.decided_at,
+      finishedAt: r.finished_at,
+    };
+  }
+
+  /**
+   * Close an open request whose card can no longer be answered: `cancelled` when the card was
+   * withdrawn (a Hub restart cancels every waiting card), `expired` when it expired, is gone or is
+   * past its TTL.
+   */
+  async #expireStale(r: DecomRow): Promise<DecomRow> {
+    if (r.status !== 'awaiting_approval') return r;
+    const a = r.approval_id
+      ? this.#get<{ status: string; expires_at: string | null }>(
+          'SELECT status, expires_at FROM approval WHERE id = ?',
+          r.approval_id,
+        )
+      : undefined;
+    const nowIso = this.#iso();
+    const stale =
+      !a ||
+      a.status === 'expired' ||
+      a.status === 'cancelled' ||
+      (a.status === 'pending' && a.expires_at !== null && a.expires_at <= nowIso);
+    if (!stale) return r;
+    const status = a?.status === 'cancelled' ? 'cancelled' : 'expired';
+    await this.#db.transaction(() => {
+      this.#run(
+        "UPDATE device_decommission SET status = ?, finished_at = ? WHERE id = ? AND status = 'awaiting_approval'",
+        status,
+        nowIso,
+        r.id,
+      );
+      if (r.approval_id)
+        this.#run(
+          "UPDATE approval SET status = 'expired', decision = 'timeout', decided_by = 'system', decided_at = ? WHERE id = ? AND status = 'pending' AND decision IS NULL",
+          nowIso,
+          r.approval_id,
+        );
+    });
+    return this.#get<DecomRow>('SELECT * FROM device_decommission WHERE id = ?', r.id)!;
+  }
+
+  /** The device's latest decommission, or null. */
+  async decommission(accountId: string, deviceId: string): Promise<DeviceDecommissionView | null> {
+    const d = await this.device(accountId, deviceId);
+    const row = this.#get<DecomRow>(
+      'SELECT * FROM device_decommission WHERE device_id = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+      deviceId,
+    );
+    return row ? this.#decomView(await this.#expireStale(row), d.row.name) : null;
+  }
+
+  /**
+   * Ask to decommission a device (D9): an approval card (high risk) shows what will happen; once
+   * the owner approves it the device is told to wipe itself (`/agent/v1/decommission` with a
+   * Hub-signed authorization, D2) when it is reachable, and is revoked either way. One open
+   * request per device (`conflict` `{reason: decommission_pending}`).
+   */
+  async requestDecommission(
+    accountId: string,
+    deviceId: string,
+    input: { purge: boolean },
+    ctx: DeviceCallContext = {},
+  ): Promise<DeviceDecommissionView> {
+    const d = await this.device(accountId, deviceId);
+    if (d.row.status === 'revoked')
+      throw new NovaError('conflict', 'the device was already revoked', {
+        details: { reason: 'revoked' },
+      });
+    const open = this.#get<DecomRow>(
+      "SELECT * FROM device_decommission WHERE device_id = ? AND status IN ('awaiting_approval', 'running')",
+      deviceId,
+    );
+    if (open && (await this.#expireStale(open)).status !== 'expired') {
+      throw new NovaError('conflict', 'a decommission of this device is already waiting', {
+        details: { reason: 'decommission_pending', decommissionId: open.id },
+      });
+    }
+    const id = uuidv7();
+    const approvalId = uuidv7();
+    const now = this.#now();
+    const nowIso = now.toISOString();
+    const online = d.row.status === 'active' && Boolean(d.endpoint);
+    const what = input.purge
+      ? 'stop its modules, remove its services, wipe its credentials and delete its Nova data'
+      : 'stop its modules, remove its services and wipe its credentials';
+    const action = `Decommission ${d.row.name}: ${what}; revoke it and its certificate`;
+    const argsPreview = JSON.stringify({
+      device: d.row.name,
+      deviceId,
+      purge: input.purge,
+      reachable: online,
+      after: { status: 'revoked', certificate: 'revoked' },
+    });
+    await this.#db.transaction(async () => {
+      await this.#db.orm.insert(approval).values({
+        id: approvalId,
+        accountId,
+        toolCallId: null,
+        threadId: null,
+        turnId: null,
+        runId: null,
+        agentId: null,
+        toolName: 'device.decommission',
+        requestedAction: action,
+        argsPreview,
+        argsHash: sha256Hex(argsPreview),
+        reason: online
+          ? 'The device is told to wipe itself, then revoked.'
+          : 'The device is offline: it is revoked at once and wipes its credentials at its next contact.',
+        scope: `device:${deviceId}`,
+        risk: 'high',
+        tier: 'confirm_at_action',
+        userAsked: false,
+        optionsJson: JSON.stringify(['allow_once', 'deny_continue']),
+        alwaysScopesJson: '[]',
+        status: 'pending',
+        // Answered in Nova by the signed-in owner only (docs/23 §6.3, like firmware and boot):
+        // the gate refuses a channel, link or hook answer with `hub_only`.
+        answerIn: 'hub',
+        createdAt: nowIso,
+        expiresAt: new Date(now.getTime() + DECOMMISSION_APPROVAL_TTL_MS).toISOString(),
+      });
+      this.#run(
+        `INSERT INTO device_decommission (id, account_id, device_id, purge, status, approval_id, created_at)
+         VALUES (?, ?, ?, ?, 'awaiting_approval', ?, ?)`,
+        id,
+        accountId,
+        deviceId,
+        input.purge ? 1 : 0,
+        approvalId,
+        nowIso,
+      );
+    });
+    await this.#emit(
+      'approval.requested',
+      accountId,
+      {
+        approvalId,
+        callId: null,
+        action,
+        reason: '',
+        scope: `device:${deviceId}`,
+        risk: 'high',
+        tier: 'confirm_at_action',
+      },
+      { ...ctx, actor: 'system' },
+    );
+    await this.#emit(
+      'device.decommission.requested',
+      accountId,
+      { deviceId, decommissionId: id, purge: input.purge, approvalId },
+      ctx,
+    );
+    await this.#auditAppend(
+      accountId,
+      'device.decommission.request',
+      deviceId,
+      { decommissionId: id, purge: input.purge, approvalId, reachable: online },
+      ctx,
+    );
+    if (this.#notifier) {
+      await this.#notifier
+        .notify({
+          accountId,
+          kind: 'approval',
+          title: 'Decommission requested',
+          body: action.slice(0, 200),
+          href: `/approvals/${approvalId}`,
+          dedupeKey: `approval:${approvalId}`,
+        })
+        .catch((err: unknown) => this.#log.warn('decommission notification failed', { err }));
+    }
+    return this.#decomView(
+      this.#get<DecomRow>('SELECT * FROM device_decommission WHERE id = ?', id)!,
+      d.row.name,
+    );
+  }
+
+  /** The owner answered a decommission card. */
+  async #decommissionDecided(r: DecomRow, decision: string): Promise<void> {
+    const a = this.#get<{ decision: string | null; decided_by: string | null; status: string }>(
+      'SELECT decision, decided_by, status FROM approval WHERE id = ?',
+      r.approval_id ?? '',
+    );
+    const nowIso = this.#iso();
+    // The card itself must say "allow once", decided by the signed-in owner (D2 (a), (c)), and
+    // in time: anything else ends the request without touching the device.
+    const approved =
+      decision === 'allow_once' &&
+      a?.decision === 'allow_once' &&
+      a.status === 'decided' &&
+      a.decided_by === 'user' &&
+      new Date(Date.parse(r.created_at) + DECOMMISSION_APPROVAL_TTL_MS).toISOString() > nowIso;
+    if (!approved) {
+      const status = decision === 'timeout' || decision === 'allow_once' ? 'expired' : 'denied';
+      const changed = await this.#db.transaction(() =>
+        this.#run(
+          "UPDATE device_decommission SET status = ?, decided_at = ?, finished_at = ? WHERE id = ? AND status = 'awaiting_approval'",
+          status,
+          nowIso,
+          nowIso,
+          r.id,
+        ),
+      );
+      if (changed)
+        await this.#auditAppend(
+          r.account_id,
+          'device.decommission.decide',
+          r.device_id,
+          { decommissionId: r.id, approvalId: r.approval_id },
+          { actor: a?.decided_by === 'user' ? 'user' : 'system' },
+          { decision: status },
+        );
+      return;
+    }
+    await this.#runDecommission(r);
+  }
+
+  /**
+   * Run an approved decommission once: tell a reachable device to wipe itself with a signed
+   * authorization (kind `device.decommission`, D2), then revoke the device (its credential,
+   * management token, connections, grants and, through the revoke hooks, its certificate and
+   * sessions). An offline device is revoked at once: its next heartbeat gets 401 and novad wipes
+   * its credentials then.
+   */
+  async #runDecommission(r: DecomRow): Promise<void> {
+    const nowIso = this.#iso();
+    const claimed = await this.#db.transaction(() =>
+      this.#run(
+        "UPDATE device_decommission SET status = 'running', decided_at = ? WHERE id = ? AND status = 'awaiting_approval'",
+        nowIso,
+        r.id,
+      ),
+    );
+    if (!claimed) return;
+    const finish = (
+      status: 'done' | 'failed',
+      result: DeviceDecommissionView['deviceResult'],
+      detail: string | null,
+      changeId: string | null,
+    ) =>
+      this.#db.transaction(() => {
+        this.#run(
+          `UPDATE device_decommission SET status = ?, device_result = ?, detail = ?, change_id = ?,
+             finished_at = ? WHERE id = ?`,
+          status,
+          result,
+          detail,
+          changeId,
+          this.#iso(),
+          r.id,
+        );
+      });
+    let d: ManagedDevice;
+    try {
+      d = await this.device(r.account_id, r.device_id);
+    } catch {
+      await finish('failed', null, 'the device is gone', null);
+      return;
+    }
+    if (d.row.status === 'revoked') {
+      await finish('failed', null, 'the device was already revoked', null);
+      return;
+    }
+    const before = d.row.status;
+    const body = { purge: r.purge === 1 };
+    let result: NonNullable<DeviceDecommissionView['deviceResult']>;
+    let detail: string | null = null;
+    let changeId: string | null = null;
+    if (before !== 'active' || !d.endpoint) {
+      result = 'unreachable';
+      detail =
+        'The device was offline: it is revoked now and wipes its credentials at its next contact.';
+    } else {
+      let authorization: ReturnType<typeof signDeviceAuthorization> | null = null;
+      try {
+        if (!this.#authzSigner) throw new Error('no signer');
+        authorization = signDeviceAuthorization(this.#authzSigner, {
+          kind: 'device.decommission',
+          deviceId: d.row.id,
+          approvalId: r.approval_id ?? '',
+          body,
+          now: this.#now(),
+        });
+        changeId = authorization.payload.changeId;
+      } catch (err) {
+        this.#log.warn('the decommission authorization could not be signed', { err });
+      }
+      if (!authorization) {
+        result = 'not_told';
+        detail =
+          'The Hub identity key could not sign the authorization; the device was revoked without being told.';
+      } else {
+        try {
+          await this.#call(
+            { row: d.row, endpoint: d.endpoint },
+            '/agent/v1/decommission',
+            { ...body, authorization },
+            60_000,
+          );
+          result = 'wiped';
+        } catch (err) {
+          const unreachable = err instanceof NovaError && err.code === 'node_unavailable';
+          result = unreachable ? 'unreachable' : 'refused';
+          detail = unreachable
+            ? 'The device did not answer: it is revoked now and wipes its credentials at its next contact.'
+            : `The device refused: ${refusalOf(err)}. It is revoked anyway.`;
+        }
+      }
+    }
+    try {
+      await this.revoke(r.account_id, r.device_id, { actor: 'user' });
+    } catch (err) {
+      await finish('failed', result, `revoking failed: ${refusalOf(err)}`, changeId);
+      throw err;
+    }
+    await finish('done', result, detail, changeId);
+    await this.#emit('device.decommissioned', r.account_id, {
+      deviceId: r.device_id,
+      decommissionId: r.id,
+      purge: r.purge === 1,
+      deviceResult: result,
+    });
+    await this.#auditAppend(
+      r.account_id,
+      'device.decommission',
+      r.device_id,
+      {
+        decommissionId: r.id,
+        approvalId: r.approval_id,
+        changeId,
+        purge: r.purge === 1,
+        deviceResult: result,
+        before: { status: before },
+        after: { status: 'revoked', certificate: 'revoked' },
+      },
+      { actor: 'user' },
+      { result },
+    );
+  }
+
+  /**
+   * After a restart: a decommission that was running finishes (the device is revoked; whether it
+   * was told is unknown), and one whose card was approved while the Hub was down runs now.
+   */
+  async recoverDecommissions(): Promise<void> {
+    const rows = this.#all<DecomRow>(
+      "SELECT * FROM device_decommission WHERE status IN ('running', 'awaiting_approval')",
+    );
+    for (const r of rows) {
+      try {
+        if (r.status === 'running') {
+          await this.revoke(r.account_id, r.device_id, { actor: 'system' }).catch(() => undefined);
+          await this.#db.transaction(() => {
+            this.#run(
+              "UPDATE device_decommission SET status = 'done', detail = COALESCE(detail, ?), finished_at = ? WHERE id = ? AND status = 'running'",
+              'The Hub restarted during the decommission; the device is revoked.',
+              this.#iso(),
+              r.id,
+            );
+          });
+          continue;
+        }
+        const a = this.#get<{ decision: string | null; status: string }>(
+          'SELECT decision, status FROM approval WHERE id = ?',
+          r.approval_id ?? '',
+        );
+        if (a?.status === 'decided' && a.decision) await this.#decommissionDecided(r, a.decision);
+        else await this.#expireStale(r);
+      } catch (err) {
+        this.#log.warn('recovering a decommission failed', { err, id: r.id });
+      }
+    }
+  }
+
+  // ---- managed services, available updates, overrides (the M6 UI gaps) ---------------------------
+
+  /**
+   * The services the device owner declared in novad's config (FR-145): `POST /agent/v1/services`.
+   * A novad without that route is `capability_missing` `{reason: update_required}`.
+   */
+  async services(accountId: string, deviceId: string): Promise<DeviceServiceView[]> {
+    const d = await this.#usable(accountId, deviceId, ['services']);
+    let res: { services?: unknown };
+    try {
+      res = await this.#call<{ services?: unknown }>(d, '/agent/v1/services', {});
+    } catch (err) {
+      if (err instanceof NovaError && err.code === 'not_found')
+        throw new NovaError('capability_missing', 'this novad cannot list its services yet', {
+          details: { reason: 'update_required', capability: 'services' },
+          action: 'Update novad on the device',
+        });
+      throw err;
+    }
+    const list = Array.isArray(res.services) ? res.services : [];
+    const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : null);
+    return list
+      .filter(isRecord)
+      .flatMap((x): DeviceServiceView[] => {
+        const name = str(x.name, 100);
+        if (!name) return [];
+        const state = isRecord(x.state) ? str(x.state.state, 50) : str(x.state, 50);
+        return [
+          {
+            name,
+            kind: x.kind === 'systemd' ? 'systemd' : 'module',
+            state,
+            module: str(x.module, 50) ?? (isRecord(x.module) ? str(x.module.name, 50) : null),
+            unit: str(x.unit, 200),
+          },
+        ];
+      })
+      .slice(0, 100);
+  }
+
+  /** The novad build this Hub serves for the device's platform, against its version (FR-148). */
+  async availableUpdates(accountId: string, deviceId: string): Promise<DeviceAvailableUpdateView> {
+    const d = await this.device(accountId, deviceId);
+    if (d.row.status === 'revoked') throw new NovaError('not_found', 'device not found');
+    const platform = buildPlatformOf(d.document);
+    const base = { deviceId, current: { novad: d.row.novadVersion }, platform };
+    const builds = this.#builds ? await this.#builds().catch(() => null) : null;
+    if (!builds?.version || builds.files.length === 0)
+      return { ...base, novad: null, newer: false, reason: 'no_builds' };
+    if (!platform) return { ...base, novad: null, newer: false, reason: 'unknown_platform' };
+    const file = builds.files.find((f) => f.os === platform.os && f.arch === platform.arch);
+    if (!file) return { ...base, novad: null, newer: false, reason: 'no_build_for_platform' };
+    const novad = {
+      version: builds.version,
+      file: file.name,
+      sha256: file.sha256,
+      size: file.size,
+    };
+    if (!d.row.novadVersion) return { ...base, novad, newer: false, reason: 'unknown_version' };
+    let newer: boolean;
+    try {
+      newer = compareNovadVersions(builds.version, d.row.novadVersion) > 0;
+    } catch {
+      return { ...base, novad, newer: false, reason: 'unknown_version' };
+    }
+    return { ...base, novad, newer, reason: newer ? 'newer_available' : 'up_to_date' };
+  }
+
+  /** The owner's overrides and policy, whether the device took them, and what is in force. */
+  async overrides(accountId: string, deviceId: string): Promise<DeviceOverridesView> {
+    const d = await this.device(accountId, deviceId);
+    const effective: Record<string, unknown> = {};
+    for (const k of OVERRIDABLE_SECTIONS) if (k in d.document) effective[k] = d.document[k];
+    return {
+      deviceId,
+      capabilityOverrides: parseJson<Record<string, unknown>>(d.mgmt.capability_overrides, {}),
+      policy: parseJson<Record<string, unknown>>(d.mgmt.policy, {}),
+      updateChannel: d.mgmt.update_channel,
+      configRevision: d.mgmt.config_revision,
+      pushedRevision: d.mgmt.pushed_revision,
+      configPending: d.mgmt.config_revision > d.mgmt.pushed_revision,
+      effective,
+    };
+  }
+
+  /** Send the overrides and policy now instead of with the next heartbeat (`/agent/v1/config`). */
+  async pushOverrides(
+    accountId: string,
+    deviceId: string,
+    ctx: DeviceCallContext = {},
+  ): Promise<DeviceOverridesView> {
+    const d = await this.#usable(accountId, deviceId, []);
+    await this.pushConfig(accountId, d.row.id);
+    await this.#emit('device.overrides.changed', accountId, { deviceId, pushed: true }, ctx);
+    await this.#auditAppend(
+      accountId,
+      'device.config.push',
+      deviceId,
+      { revision: d.mgmt.config_revision },
+      ctx,
+    );
+    return this.overrides(accountId, deviceId);
+  }
+
+  // ---- the management channel's state (D1 diagnostics) -------------------------------------------
+
+  #channelView(r: {
+    id: string;
+    name: string;
+    status: DeviceRow['status'];
+  }): DeviceManagementTlsView {
+    const endpoint = this.#endpoint(r.id);
+    let cert: DeviceCertificateStateView = {
+      renewal: null,
+      legacyCertificate: false,
+      legacyGraceEndsAt: null,
+    };
+    try {
+      cert = this.#tls?.certificateState?.(r.id) ?? cert;
+    } catch (err) {
+      this.#log.warn('reading a device certificate state failed', { err, deviceId: r.id });
+    }
+    return {
+      deviceId: r.id,
+      name: r.name,
+      status: r.status,
+      endpoint,
+      channel: endpoint ? (isHttps(endpoint) ? 'mutual_tls' : 'plain_http') : null,
+      lastCall: this.#lastCall.get(r.id) ?? null,
+      ...cert,
+    };
+  }
+
+  #channelRows(accountId: string | null) {
+    return this.#all<{ id: string; name: string; status: DeviceRow['status'] }>(
+      `SELECT d.id, d.name, d.status FROM device d JOIN device_management m ON m.device_id = d.id
+       WHERE d.status != 'revoked' ${accountId ? 'AND d.account_id = ?' : ''}
+       ORDER BY d.created_at, d.id`,
+      ...(accountId ? [accountId] : []),
+    );
+  }
+
+  #channelProblems(items: DeviceManagementTlsView[], hasClient: boolean): string[] {
+    const out: string[] = [];
+    const plain = items.filter((i) => i.channel === 'plain_http' && i.status === 'active');
+    if (plain.length)
+      out.push(
+        `${plain.length} device${plain.length === 1 ? ' is' : 's are'} managed over plain HTTP (${plain
+          .map((i) => i.name)
+          .join(
+            ', ',
+          )}): add ${plain.length === 1 ? 'it' : 'them'} again with the Hub local CA as the trust path to use mutual TLS.`,
+      );
+    if (!hasClient && items.some((i) => i.channel === 'mutual_tls'))
+      out.push(
+        'The Hub has no client certificate for the management channel: devices on mutual TLS cannot be reached. Check the trust settings.',
+      );
+    for (const i of items)
+      if (i.lastCall && !i.lastCall.ok && i.lastCall.failure)
+        out.push(`${i.name}: the management channel was refused (${i.lastCall.failure}).`);
+    const now = this.#now().toISOString();
+    for (const i of items)
+      if (i.renewal?.state === 'offered' && i.legacyGraceEndsAt && i.legacyGraceEndsAt < now)
+        out.push(
+          `${i.name} has not installed its renewed certificate; the Hub no longer accepts its old one.`,
+        );
+    return out;
+  }
+
+  async #hubClientSummary(): Promise<DeviceManagementTlsSummaryView['hubClient']> {
+    if (!this.#tls) return null;
+    try {
+      const m = await this.#tls.material();
+      return m?.serial && m.notAfter && m.uri
+        ? { serial: m.serial, notAfter: m.notAfter, uri: m.uri }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** `GET /api/v1/devices/management-tls`: each device's management channel. */
+  async managementTls(accountId: string): Promise<DeviceManagementTlsSummaryView> {
+    const items = this.#channelRows(accountId).map((r) => this.#channelView(r));
+    const hubClient = await this.#hubClientSummary();
+    return { hubClient, items, problems: this.#channelProblems(items, hubClient !== null) };
+  }
+
+  /** For diagnostics (`deviceManagement`): counts and problems across accounts. */
+  async managementDiagnostics(): Promise<Record<string, unknown>> {
+    const items = this.#channelRows(null).map((r) => this.#channelView(r));
+    const hubClient = await this.#hubClientSummary();
+    return {
+      mutualTls: items.filter((i) => i.channel === 'mutual_tls').map((i) => i.name),
+      plainHttp: items.filter((i) => i.channel === 'plain_http').map((i) => i.name),
+      hubClient: hubClient ? { serial: hubClient.serial, notAfter: hubClient.notAfter } : null,
+      problems: this.#channelProblems(items, hubClient !== null),
     };
   }
 

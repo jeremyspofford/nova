@@ -14,7 +14,10 @@ export {
 export { checkHubIdentity, type HubIdentityCheck, type HubIdentityCheckInput } from './pinning.ts';
 export {
   DEVICE_CERT_DAYS,
+  HUB_CLIENT_DAYS,
+  HUB_CLIENT_REF,
   LEAF_DAYS,
+  LEGACY_SERVER_CERT_GRACE_MS,
   LOCAL_CA_BASE_CONSTRAINTS,
   LOCAL_CA_DAYS,
   TrustService,
@@ -22,6 +25,7 @@ export {
   isSingleLabel,
   type DeviceCertificateCheck,
   type DeviceCertificateRequest,
+  type HubClientCertificate,
   type MeshCertSource,
   type TlsMaterial,
   type TrustServiceOptions,

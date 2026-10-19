@@ -4,8 +4,14 @@
 // An https:// Hub is trusted through the pinned fingerprint and the node presents the device
 // certificate Add Device granted (mutual TLS, hub-tls.ts); a node on http:// with a pin moves to
 // https:// once the Hub serves it, never back.
+//
+// M7.5 (FR-126 leftovers): GPU memory from a VRAM probe goes into the capability document and every
+// heartbeat; quiet hours (the operator's own `--quiet-hours` and the owner's policy from the
+// heartbeat answer) refuse new jobs; the Hub manages the `jobs` service and, when the operator
+// named its unit, the model server (`/node/v1/services/*`).
 import { hostname, networkInterfaces } from 'node:os';
 import type { FastifyInstance } from 'fastify';
+import { NovaError, quietHoursActive } from '@nova/shared';
 import { Logger, stderrSink } from '@nova/telemetry';
 import { Backend, guardedFetch, type BackendKind } from './backend.ts';
 import { buildCapability, type HardwareFacts, type OsFacts } from './capability.ts';
@@ -13,11 +19,40 @@ import { HubClient, HubError } from './hub-client.ts';
 import { HubTls, learnCaOverHttp, type HubTrust } from './hub-tls.ts';
 import { generateKeys, newDeviceId, newJobToken, signDocument, type NodeKeys } from './identity.ts';
 import { JobManager } from './jobs.ts';
-import { PROTOCOL_VERSIONS } from './protocol.ts';
+import { PROTOCOL_VERSIONS, type HubNodePolicy } from './protocol.ts';
 import { buildJobServer } from './server.ts';
+import { NodeServices, UNIT_NAME, type UnitController } from './services.ts';
 import { loadState, saveState, statePath, type Enrollment, type NodeState } from './state.ts';
+import type { GpuMemory, VramProbe } from './vram.ts';
 
 export const DEFAULT_PORT = 7420;
+
+const QUIET_RANGE = /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/;
+
+/** `HH:MM-HH:MM` ranges (`--quiet-hours`, comma separated), checked. */
+export function parseQuietHours(value: string | string[]): string[] {
+  const list = (Array.isArray(value) ? value : value.split(','))
+    .map((r) => r.trim())
+    .filter(Boolean);
+  for (const r of list)
+    if (!QUIET_RANGE.test(r)) throw new TypeError(`quiet hours look like 22:00-07:00, not ${r}`);
+  if (list.length > 10) throw new TypeError('at most 10 quiet-hour ranges');
+  return list;
+}
+
+/** This machine's IANA time zone. */
+export function localTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+}
+
+async function readVram(probe: VramProbe | undefined): Promise<GpuMemory[] | null> {
+  if (!probe) return null;
+  try {
+    return await probe.read();
+  } catch {
+    return null;
+  }
+}
 
 export interface EnrollOptions {
   hubUrl: string;
@@ -43,6 +78,14 @@ export interface EnrollOptions {
   trust?: HubTrust;
   /** The device certificate Add Device granted for `keys` (local-CA mode). */
   certificatePem?: string | null;
+  /** The operator's quiet hours (`--quiet-hours`): no new jobs then (M7.5). */
+  quietHours?: string[];
+  /** The systemd unit running the model server, which the Hub may then manage. */
+  backendUnit?: string | null;
+  /** Reads GPU memory for the capability document (main.ts detects one; none by default). */
+  vram?: VramProbe;
+  /** Defaults to this machine's zone. */
+  timeZone?: string;
 }
 
 /**
@@ -122,6 +165,10 @@ export async function enroll(opts: EnrollOptions): Promise<NodeState> {
   const endpoint = plainHttpUrl(opts.advertise ?? advertiseUrl(listen), 'the advertised URL');
   const name = (opts.name ?? hostname()).trim().slice(0, 100) || 'compute node';
   const maxConcurrentJobs = Math.max(1, opts.maxConcurrentJobs ?? 1);
+  const quietHours = parseQuietHours(opts.quietHours ?? []);
+  const backendUnit = opts.backendUnit ?? null;
+  if (backendUnit !== null && !UNIT_NAME.test(backendUnit))
+    throw new TypeError(`not a systemd unit name: ${backendUnit}`);
 
   const backend = new Backend({ url: backendUrl, kind: backendKind, ...fetchOpt(opts.fetch) });
   let models: string[];
@@ -149,6 +196,7 @@ export async function enroll(opts: EnrollOptions): Promise<NodeState> {
       })
     : null;
   const deviceId = existing?.deviceId ?? newDeviceId();
+  const vram = await readVram(opts.vram);
   const capability = buildCapability({
     deviceId,
     name,
@@ -157,6 +205,9 @@ export async function enroll(opts: EnrollOptions): Promise<NodeState> {
     maxConcurrentJobs,
     ...(opts.hardware ? { hardware: opts.hardware } : {}),
     ...(opts.os ? { os: opts.os } : {}),
+    ...(vram?.length ? { vram } : {}),
+    timeZone: opts.timeZone ?? localTimeZone(),
+    quietHours,
   });
   const hub = new HubClient({ hubUrl, fetch: hubFetchFor(hubUrl, tls, opts.fetch) });
   const result = await hub.register({
@@ -192,6 +243,10 @@ export async function enroll(opts: EnrollOptions): Promise<NodeState> {
     },
     revokedAt: null,
     hubTrust: trust,
+    quietHours,
+    backendUnit,
+    hubPolicy: null,
+    jobsStopped: false,
   };
   saveState(opts.dataDir, state);
   return state;
@@ -211,12 +266,21 @@ export interface RunOptions {
   keepAliveMs?: number;
   hardware?: HardwareFacts;
   os?: OsFacts;
+  /** Reads GPU memory for the document and heartbeats (main.ts detects one; none by default). */
+  vram?: VramProbe;
+  /** Controls the model server's unit (`systemctl` by default). */
+  units?: UnitController;
+  /** The clock quiet hours are read with (tests). */
+  now?: () => Date;
+  /** Defaults to this machine's zone. */
+  timeZone?: string;
 }
 
 export type StopReason = 'stopped' | 'revoked';
 
 export class ComputeNode {
   readonly jobs: JobManager;
+  readonly services: NodeServices;
   readonly done: Promise<StopReason>;
   readonly #opts: RunOptions;
   #state: NodeState;
@@ -226,7 +290,7 @@ export class ComputeNode {
   #httpsTriedAt = -Infinity;
   readonly #server: FastifyInstance;
   readonly #log: Logger;
-  #synced: string[] | null = null;
+  #synced: string | null = null;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #beating: Promise<void> | null = null;
   #stopped = false;
@@ -248,11 +312,26 @@ export class ComputeNode {
       run: (req) => this.#backend.stream(req),
       maxConcurrentJobs: state.maxConcurrentJobs,
       maxQueue: state.maxQueue,
+      gate: () => this.#refusal(),
+    });
+    this.services = new NodeServices({
+      jobs: {
+        stopped: () => this.#state.jobsStopped === true,
+        setStopped: (stopped) => {
+          this.#state = { ...this.#state, jobsStopped: stopped };
+          saveState(this.#opts.dataDir, { ...this.#state, enrollment: this.#enrollment });
+          this.#log.info(stopped ? 'jobs stopped by the Hub' : 'jobs started by the Hub');
+        },
+        cancelAll: () => this.jobs.cancelAll(),
+      },
+      backendUnit: state.backendUnit ?? null,
+      ...(opts.units ? { units: opts.units } : {}),
     });
     this.#server = buildJobServer({
       jobs: this.jobs,
       jobToken: () => this.#enrollment?.jobToken ?? null,
       log: this.#log.child('jobs'),
+      services: this.services,
       ...(opts.keepAliveMs ? { keepAliveMs: opts.keepAliveMs } : {}),
     });
     this.done = new Promise((resolve) => (this.#resolve = resolve));
@@ -335,6 +414,56 @@ export class ComputeNode {
     return this.#enrollment?.nodeId ?? null;
   }
 
+  /** The owner's policy from the last heartbeat answer, if any. */
+  get hubPolicy(): HubNodePolicy | null {
+    return this.#state.hubPolicy ?? null;
+  }
+
+  #zone(): string {
+    return this.#opts.timeZone ?? localTimeZone();
+  }
+
+  /** In the operator's quiet hours, or the owner's (in the owner's zone, else this one). */
+  quietNow(): boolean {
+    const now = this.#opts.now?.() ?? new Date();
+    const zone = this.#zone();
+    if (quietHoursActive(this.#state.quietHours ?? [], now, zone)) return true;
+    const p = this.#state.hubPolicy;
+    return p ? quietHoursActive(p.quietHours, now, p.timeZone ?? zone) : false;
+  }
+
+  /** Why a new job is refused now, or null. */
+  #refusal(): NovaError | null {
+    if (this.#state.jobsStopped)
+      return new NovaError('node_unavailable', 'the node’s jobs service is stopped', {
+        details: { reason: 'jobs_stopped' },
+      });
+    if (this.quietNow())
+      return new NovaError('node_unavailable', 'the node is in its quiet hours', {
+        details: { reason: 'quiet_hours' },
+      });
+    return null;
+  }
+
+  /** Keep a newer policy from a heartbeat answer (the node honors it at once and after restarts). */
+  #takePolicy(policy: HubNodePolicy | undefined): void {
+    if (!policy || policy.revision === this.#state.hubPolicy?.revision) return;
+    const ranges = Array.isArray(policy.quietHours)
+      ? policy.quietHours.filter((r) => typeof r === 'string' && QUIET_RANGE.test(r)).slice(0, 10)
+      : [];
+    this.#state = {
+      ...this.#state,
+      hubPolicy: {
+        quietHours: ranges,
+        timeZone: typeof policy.timeZone === 'string' ? policy.timeZone : null,
+        routingEligible: policy.routingEligible !== false,
+        revision: Number.isInteger(policy.revision) ? policy.revision : 0,
+      },
+    };
+    saveState(this.#opts.dataDir, { ...this.#state, enrollment: this.#enrollment });
+    this.#log.info('the Hub’s policy for this node changed', { revision: policy.revision });
+  }
+
   /**
    * One heartbeat cycle: list the backend's models, re-sign and sync the capability document if
    * they changed, then report load and models. A 401 means the Hub revoked this node.
@@ -355,8 +484,13 @@ export class ComputeNode {
       models = null;
       this.#log.warn('the model backend did not answer', { err: String(err) });
     }
+    const vram = await readVram(this.#opts.vram);
     try {
-      if (models && (this.#synced === null || models.join('\n') !== this.#synced.join('\n'))) {
+      // The signed document changes with the models and the GPUs' total memory.
+      const key = models
+        ? JSON.stringify([models, (vram ?? []).map((g) => [g.name, g.totalBytes])])
+        : null;
+      if (models && key !== this.#synced) {
         const capability = buildCapability({
           deviceId: this.#state.deviceId,
           name: this.#state.name,
@@ -365,19 +499,25 @@ export class ComputeNode {
           maxConcurrentJobs: this.#state.maxConcurrentJobs,
           ...(this.#opts.hardware ? { hardware: this.#opts.hardware } : {}),
           ...(this.#opts.os ? { os: this.#opts.os } : {}),
+          ...(vram?.length ? { vram } : {}),
+          timeZone: this.#zone(),
+          quietHours: this.#state.quietHours ?? [],
         });
         await this.#hub.syncModels(enrollment.credential, {
           capability,
           signature: signDocument(capability, enrollment.privateKeyPem),
         });
-        this.#synced = models;
+        this.#synced = key;
         this.#log.info('models synced with the Hub', { models: models.length });
       }
       // A backend that does not answer serves nothing: report no models until it is back.
-      await this.#hub.heartbeat(enrollment.credential, {
+      const answer = await this.#hub.heartbeat(enrollment.credential, {
         load: this.jobs.load(),
         models: models ?? [],
+        ...(vram ? { vram } : {}),
+        quiet: this.quietNow(),
       });
+      this.#takePolicy(answer.policy);
     } catch (err) {
       if (err instanceof HubError && err.status === 401) {
         await this.#revoked();

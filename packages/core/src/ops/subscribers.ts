@@ -87,6 +87,9 @@ export function auditRecordFor(e: EventEnvelope): Omit<AuditRecord, 'accountId'>
         detail: { provider: str(p.provider), secretRef: str(p.secretRef) },
       };
     case 'settings.changed': {
+      // The one audit entry of a security setting's change, whichever route wrote it (the
+      // settings route, the firmware policy route, out-of-band enable): the Hub's settings writer
+      // puts before, after and confirmed in the event (ADR-096 D3).
       const key = str(p.key);
       if (!key || !isSecuritySetting(key)) return null;
       return {
@@ -94,7 +97,11 @@ export function auditRecordFor(e: EventEnvelope): Omit<AuditRecord, 'accountId'>
         kind: 'settings',
         action: 'setting.changed',
         resource: key,
-        detail: { scope: str(p.scope) },
+        detail: {
+          scope: str(p.scope),
+          ...('before' in p ? { before: p.before, after: p.after } : {}),
+          ...(typeof p.confirmed === 'boolean' ? { confirmed: p.confirmed } : {}),
+        },
       };
     }
     case 'node.registered':
