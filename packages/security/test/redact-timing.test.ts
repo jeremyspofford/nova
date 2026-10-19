@@ -2,7 +2,9 @@
 // Every redaction rule stays linear on hostile input (M7 browser review finding 1): redaction runs
 // on the event loop over untrusted text (a page's console, its URLs, headers and bodies), and one
 // rule that rescans the text from every start freezes the Hub. Each rule runs alone over inputs
-// built to defeat it, at the capture caps and at 1-2 MB, and must finish well under 50 ms.
+// built to defeat it: at the capture caps it must finish well under 50 ms; at 1-2 MB, where a
+// slow CI machine needs more than 50 ms for one linear pass, it must grow linearly (ten times the
+// input may take at most 25 times as long; a rule that rescans grows about a hundred times).
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RULES, REDACTED, Redactor } from '../src/redact.ts';
 
@@ -55,8 +57,8 @@ function ms(r: Redactor, text: string): number {
 }
 
 describe('every rule is linear on hostile input', () => {
-  // The capture caps (console text, URLs, header values, bodies), then 1 and 2 MB.
-  for (const size of [2_000, 4_000, 16_384, 1_000_000, 2_000_000]) {
+  // The capture caps (console text, URLs, header values, bodies): an absolute bound.
+  for (const size of [2_000, 4_000, 16_384]) {
     it(`finishes well under 50 ms at ${size} characters`, () => {
       const slow: string[] = [];
       for (const rule of DEFAULT_RULES) {
@@ -64,6 +66,24 @@ describe('every rule is linear on hostile input', () => {
         for (const [name, family] of Object.entries(FAMILIES)) {
           const t = ms(r, input(family, size));
           if (t >= 50) slow.push(`${rule.id} on ${name}: ${t.toFixed(0)} ms`);
+        }
+      }
+      expect(slow).toEqual([]);
+    }, 120_000);
+  }
+
+  // 1 and 2 MB: linear growth against a tenth of the input, and never seconds.
+  for (const size of [1_000_000, 2_000_000]) {
+    it(`grows linearly up to ${size} characters`, () => {
+      const slow: string[] = [];
+      for (const rule of DEFAULT_RULES) {
+        const r = new Redactor([rule]);
+        for (const [name, family] of Object.entries(FAMILIES)) {
+          const t = ms(r, input(family, size));
+          if (t < 50) continue;
+          const base = ms(r, input(family, size / 10));
+          if (t > 25 * Math.max(base, 2) || t > 2_000)
+            slow.push(`${rule.id} on ${name}: ${t.toFixed(0)} ms (a tenth: ${base.toFixed(0)} ms)`);
         }
       }
       expect(slow).toEqual([]);
