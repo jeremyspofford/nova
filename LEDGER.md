@@ -28,7 +28,7 @@ Last updated: 2026-10-20T03:51:01Z
 | M6.5 Networking/Add Device | done | 2026-10-17 | 2026-10-17 | J1-J8.5 green (21/21, axe clean), J8.5 three runs in a row; `docs/demos/M6.5.md` |
 | M7 Cloud/Sync/Multi-device | done | 2026-10-17 | 2026-10-19 | J1-J9 green (25/25, axe clean), J9 three runs in a row; desktop shell journey (e2e-shell); CI green at 990bc0b after three CI-only fixes (a timing test made linear, a worker timeout, bubblewrap in the checks job); `docs/demos/M7.md` |
 | M7.5 Boot/Power/Firmware | done | 2026-10-19 | 2026-10-19 | J1-J9.5 green (28/28, axe clean), J9.5 three runs in a row; CI green at 39502ca after three CI-only test fixes; `docs/demos/M7.5.md` |
-| M8 Extensibility/Governance | done | 2026-10-19 | 2026-10-20 | J1-J10 green (52/52, axe clean), J10 three runs in a row; the WCAG 2.2 A/AA sweep (16 tests, no exclusions) and the right-to-left layout check; CI green at 6a8bceb (waves 1 and 2); `docs/demos/M8.md` |
+| M8 Extensibility/Governance | done | 2026-10-19 | 2026-10-20 | J1-J10 green (52/52, axe clean), J10 three runs in a row; the WCAG 2.2 A/AA sweep (16 tests, no exclusions) and the right-to-left layout check; CI green at 6a8bceb (waves 1 and 2) and at 92f7e2d after one CI-only fix (on the runner's wider default font, wide Settings tables broke reflow at 320 px; they now scroll in their own region); `docs/demos/M8.md` |
 | M9 Hardening/Security/Perf | todo | — | — | — |
 | M10 Packaging/Release | todo | — | — | — |
 | N1 Ambient Memory | todo | — | — | — |
