@@ -5,7 +5,6 @@
 import { useId, useState } from 'react';
 import {
   EGRESS_MODES,
-  checkHostPattern,
   type EgressHook,
   type EgressModeView,
   type EgressScopeKind,
@@ -15,10 +14,10 @@ import { Button, Dialog, Icon, SelectField, Spinner, TextField, useToast } from 
 import { errorMessage } from '../api.ts';
 import { useComputersApi } from '../computers/api.ts';
 import { MODE_TEXT, scopeKindText } from '../computers/format.ts';
-import { plural } from '../settings/common.ts';
 import { SwitchField } from '../settings/controls.tsx';
-import { HostListEditor } from './HostListEditor.tsx';
+import { HostListEditor, hostProblem } from './HostListEditor.tsx';
 import { RULE_SCOPES, type RuleScope, type ScopeTargets } from './scopes.ts';
+import { ACCESS_TEXT, EGRESS_TEXT, HOSTS_TEXT, RULES_TEXT as S } from './strings.ts';
 
 /** Strictness of an access level: a scope's mode only ever narrows (off < limited < allowlist). */
 const RANK: Record<EgressModeView, number> = { off: 0, limited: 1, allowlist: 2 };
@@ -27,11 +26,7 @@ export function effectiveMode(global: EgressModeView, scope: EgressModeView | nu
   return scope && RANK[scope] < RANK[global] ? scope : global;
 }
 
-const HOOK_ACTIONS: Record<EgressHook['action'], string> = {
-  strip_header: 'Remove a header',
-  strip_cookies: 'Remove cookies',
-  block: 'Block the request',
-};
+const HOOK_ACTIONS: EgressHook['action'][] = ['strip_header', 'strip_cookies', 'block'];
 
 export function ScopeRules({
   scopes,
@@ -55,42 +50,47 @@ export function ScopeRules({
 
   return (
     <section className="settings-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>Rules for one agent, run or session</h3>
-      <p className="muted">
-        A rule allows more hosts, or blocks more, for one agent, Work run or Code session. Its
-        access can only be stricter than the access above, never wider.
-      </p>
-      {scopes.length === 0 ? <p className="ws-flush">No rules yet.</p> : null}
+      <h3 id={headingId}>{S.heading}</h3>
+      <p className="muted">{S.intro}</p>
+      {scopes.length === 0 ? <p className="ws-flush">{S.empty}</p> : null}
       {scopes.length ? (
-        <ul className="ws-list" aria-label="Network rules">
+        <ul className="ws-list" aria-label={S.list}>
           {scopes.map((s) => {
             const name = label(s.kind, s.id);
             const mode = effectiveMode(globalMode, s.mode);
             return (
               <li key={`${s.kind}:${s.id}`} className="ws-list-row">
                 <div className="network-row-main">
-                  <span className="ws-card-link">{name}</span>
+                  <span className="ws-card-link" dir="auto">
+                    {name}
+                  </span>
                   <span className="muted ws-row-meta">
                     <span>
-                      {s.mode ? MODE_TEXT[s.mode].label : 'Same access as above'}
-                      {s.mode && mode !== s.mode ? ` (${MODE_TEXT[mode].label} applies)` : ''}
+                      {!s.mode
+                        ? S.sameAccess
+                        : mode !== s.mode
+                          ? S.narrowed({
+                              mode: MODE_TEXT[s.mode].label,
+                              applied: MODE_TEXT[mode].label,
+                            })
+                          : MODE_TEXT[s.mode].label}
                     </span>
-                    <span>{plural(s.allow.length, 'more allowed host')}</span>
-                    <span>{plural(s.deny.length, 'blocked host')}</span>
-                    {s.hooks.length ? <span>{plural(s.hooks.length, 'request rule')}</span> : null}
-                    {s.allowLocalBinding ? <span>Dev servers on private addresses</span> : null}
+                    <span>{S.moreAllowed({ n: s.allow.length })}</span>
+                    <span>{S.blockedHosts({ n: s.deny.length })}</span>
+                    {s.hooks.length ? <span>{S.requestRules({ n: s.hooks.length })}</span> : null}
+                    {s.allowLocalBinding ? <span>{S.devServers}</span> : null}
                   </span>
                 </div>
                 <span className="network-actions">
-                  <Button aria-label={`Edit the rule for ${name}`} onClick={() => setEditing(s)}>
-                    <Icon name="edit" /> Edit
+                  <Button aria-label={S.editRule({ name })} onClick={() => setEditing(s)}>
+                    <Icon name="edit" /> {EGRESS_TEXT.edit}
                   </Button>
                   <Button
                     variant="ghost"
-                    aria-label={`Remove the rule for ${name}`}
+                    aria-label={S.removeRule({ name })}
                     onClick={() => setRemoving(s)}
                   >
-                    <Icon name="trash" /> Remove
+                    <Icon name="trash" /> {EGRESS_TEXT.remove}
                   </Button>
                 </span>
               </li>
@@ -100,7 +100,7 @@ export function ScopeRules({
       ) : null}
       <div>
         <Button onClick={() => setEditing('new')}>
-          <Icon name="plus" /> Add a rule
+          <Icon name="plus" /> {S.add}
         </Button>
       </div>
       {editing ? (
@@ -113,23 +113,21 @@ export function ScopeRules({
           onClose={() => setEditing(null)}
           onSaved={(v) => {
             setEditing(null);
-            toast.show(`Saved the rule for ${label(v.kind, v.id)}.`, { tone: 'success' });
+            toast.show(S.saved({ name: label(v.kind, v.id) }), { tone: 'success' });
             onChanged();
           }}
         />
       ) : null}
       <Dialog
         open={removing !== null}
-        title="Remove this rule?"
+        title={S.removeTitle}
         description={
-          removing
-            ? `${label(removing.kind, removing.id)} goes back to the access for every sandbox. Hosts allowed only by this rule are no longer reachable from it.`
-            : undefined
+          removing ? S.removeBody({ name: label(removing.kind, removing.id) }) : undefined
         }
         onClose={() => setRemoving(null)}
         footer={
           <>
-            <Button onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button onClick={() => setRemoving(null)}>{EGRESS_TEXT.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -138,15 +136,15 @@ export function ScopeRules({
                 setRemoving(null);
                 api.deleteEgressScope(r.kind, r.id).then(
                   () => {
-                    toast.show(`Removed the rule for ${label(r.kind, r.id)}.`, { tone: 'success' });
+                    toast.show(S.removed({ name: label(r.kind, r.id) }), { tone: 'success' });
                     onChanged();
                   },
                   (err: unknown) =>
-                    toast.show(`Could not remove it: ${errorMessage(err)}`, { tone: 'error' }),
+                    toast.show(S.couldNotRemove({ error: errorMessage(err) }), { tone: 'error' }),
                 );
               }}
             >
-              Remove rule
+              {S.removeButton}
             </Button>
           </>
         }
@@ -184,19 +182,18 @@ function toDraft(h: EgressHook): HookDraft {
 export function hookFromDraft(
   d: HookDraft,
 ): { ok: true; hook: EgressHook } | { ok: false; error: string } {
-  const why = checkHostPattern(d.host);
-  if (why) return { ok: false, error: `Host: ${why}.` };
+  const why = hostProblem(d.host);
+  if (why) return { ok: false, error: S.hostProblem({ why }) };
   const methods = d.methods
     .split(/[\s,]+/)
     .filter(Boolean)
     .map((m) => m.toUpperCase());
-  if (methods.some((m) => !/^[A-Z]{1,20}$/.test(m)))
-    return { ok: false, error: 'Methods: letters only, for example POST, PUT.' };
+  if (methods.some((m) => !/^[A-Z]{1,20}$/.test(m))) return { ok: false, error: S.methodsProblem };
   const path = d.pathPrefix.trim();
-  if (path && !path.startsWith('/')) return { ok: false, error: 'Path must start with /.' };
+  if (path && !path.startsWith('/')) return { ok: false, error: S.pathProblem };
   const header = d.header.trim();
   if (d.action === 'strip_header' && !/^[A-Za-z0-9-]{1,100}$/.test(header))
-    return { ok: false, error: 'Name the header to remove, for example Authorization.' };
+    return { ok: false, error: S.headerProblem };
   return {
     ok: true,
     hook: {
@@ -250,14 +247,14 @@ function ScopeDialog({
   const submit = async () => {
     if (busy) return;
     if (!chosen) {
-      setError(`Choose the ${scopeKindText(kind).toLowerCase()} this rule is for.`);
+      setError(S.chooseTarget({ kind }));
       return;
     }
     const built: EgressHook[] = [];
     for (const [i, d] of hooks.entries()) {
       const r = hookFromDraft(d);
       if (!r.ok) {
-        setError(`Request rule ${i + 1}: ${r.error}`);
+        setError(S.hookError({ n: i + 1, error: r.error }));
         return;
       }
       built.push(r.hook);
@@ -276,7 +273,7 @@ function ScopeDialog({
         }),
       );
     } catch (err) {
-      setError(errorMessage(err, 'Could not save the rule.'));
+      setError(errorMessage(err, S.saveError));
       setBusy(false);
     }
   };
@@ -284,7 +281,7 @@ function ScopeDialog({
   return (
     <Dialog
       open
-      title={existing ? `Rule for ${label(existing.kind, existing.id)}` : 'Add a network rule'}
+      title={existing ? S.ruleFor({ name: label(existing.kind, existing.id) }) : S.addTitle}
       className="ws-wide-dialog"
       onClose={onClose}
     >
@@ -299,7 +296,7 @@ function ScopeDialog({
         {existing ? null : (
           <div className="ws-preset-grid">
             <SelectField
-              label="Applies to"
+              label={S.appliesTo}
               value={kind}
               onChange={(v) => {
                 setKind(
@@ -317,15 +314,14 @@ function ScopeDialog({
               hint={
                 options !== null && free.length === 0
                   ? options.length
-                    ? 'Each of them already has a rule; edit it instead.'
-                    : `There is no ${scopeKindText(kind).toLowerCase()} yet.`
+                    ? S.allTaken
+                    : S.noTargets({ kind })
                   : undefined
               }
               options={[
                 {
                   value: '',
-                  label:
-                    options === null ? 'Loading…' : `Choose a ${scopeKindText(kind).toLowerCase()}`,
+                  label: options === null ? S.loading : S.chooseOne({ kind }),
                 },
                 ...free.map((o) => ({ value: o.id, label: o.name })),
               ]}
@@ -333,13 +329,13 @@ function ScopeDialog({
           </div>
         )}
         <SelectField
-          label="Access"
+          label={S.access}
           value={mode}
           onChange={(v) =>
             setMode((EGRESS_MODES as readonly string[]).includes(v) ? (v as EgressModeView) : '')
           }
           options={[
-            { value: '', label: `Same as for every sandbox (${MODE_TEXT[globalMode].label})` },
+            { value: '', label: S.sameAsEvery({ mode: MODE_TEXT[globalMode].label }) },
             ...(['limited', 'off', 'allowlist'] as const).map((m) => ({
               value: m,
               label: MODE_TEXT[m].label,
@@ -347,90 +343,86 @@ function ScopeDialog({
           ]}
           hint={
             mode && narrowed !== mode
-              ? `${MODE_TEXT[mode].label} is wider than the access for every sandbox, so ${MODE_TEXT[narrowed].label} still applies.`
+              ? S.wider({ mode: MODE_TEXT[mode].label, applied: MODE_TEXT[narrowed].label })
               : mode
                 ? MODE_TEXT[mode].description
                 : undefined
           }
         />
         <HostListEditor
-          label="More allowed hosts"
-          inputLabel="Add an allowed host for this rule"
+          label={S.moreAllowedHosts}
+          inputLabel={S.addAllowed}
+          removeLabel={(host) => S.removeAllowed({ host })}
           hosts={allow}
           onChange={setAllow}
-          annotate={(h) => (deny.includes(h) ? 'Also blocked: blocking wins' : null)}
-          emptyText="None: only the hosts allowed for every sandbox."
+          annotate={(h) => (deny.includes(h) ? ACCESS_TEXT.alsoBlocked : null)}
+          emptyText={S.allowedEmpty}
         />
         <HostListEditor
-          label="More blocked hosts"
-          inputLabel="Add a blocked host for this rule"
+          label={S.moreBlockedHosts}
+          inputLabel={S.addBlocked}
+          removeLabel={(host) => S.removeBlocked({ host })}
           hosts={deny}
           onChange={setDeny}
-          emptyText="None."
+          emptyText={HOSTS_TEXT.none}
         />
         <SwitchField
-          label="Dev servers on private addresses"
-          description="Lets commands reach private and loopback addresses, only for the hosts and ports a dev-server grant covers."
+          label={S.devServers}
+          description={S.devServersDescription}
           checked={local}
           onChange={setLocal}
         />
         <details className="ws-advanced" open={hooks.length > 0 || undefined}>
-          <summary>Request rules ({hooks.length})</summary>
+          <summary>{S.requestRulesCount({ n: hooks.length })}</summary>
           <div className="stack">
-            <p className="nv-field-hint ws-flush">
-              Remove a header or cookies from matching HTTPS requests, or block them. Request rules
-              can only make access stricter.
-            </p>
+            <p className="nv-field-hint ws-flush">{S.requestRulesHint}</p>
             {hooks.map((h, i) => (
               <fieldset key={h.key} className="ws-fieldset">
-                <legend>Request rule {i + 1}</legend>
+                <legend>{S.hookN({ n: i + 1 })}</legend>
                 <div className="ws-preset-grid">
                   <SelectField
-                    label="Action"
+                    label={S.action}
                     value={h.action}
                     onChange={(v) =>
                       setHook(h.key, {
                         action: v === 'strip_cookies' || v === 'block' ? v : 'strip_header',
                       })
                     }
-                    options={Object.entries(HOOK_ACTIONS).map(([value, text]) => ({
-                      value,
-                      label: text,
-                    }))}
+                    options={HOOK_ACTIONS.map((a) => ({ value: a, label: S.hookAction[a] }))}
                   />
                   <TextField
-                    label="Host"
+                    label={S.host}
                     value={h.host}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder="api.github.com"
+                    placeholder={S.hostPlaceholder}
                     onChange={(e) => setHook(h.key, { host: e.target.value })}
                   />
                   {h.action === 'strip_header' ? (
                     <TextField
-                      label="Header"
+                      label={S.header}
                       value={h.header}
                       spellCheck={false}
                       autoComplete="off"
-                      placeholder="Authorization"
+                      placeholder={S.headerPlaceholder}
                       onChange={(e) => setHook(h.key, { header: e.target.value })}
                     />
                   ) : null}
                   <TextField
-                    label="Methods (optional)"
+                    label={S.methods}
                     value={h.methods}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder="POST, PUT"
-                    hint="Empty: every method."
+                    placeholder={S.methodsPlaceholder}
+                    hint={S.methodsHint}
                     onChange={(e) => setHook(h.key, { methods: e.target.value })}
                   />
                   <TextField
-                    label="Path starts with (optional)"
+                    label={S.path}
                     value={h.pathPrefix}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder="/repos/"
+                    placeholder={S.pathPlaceholder}
                     onChange={(e) => setHook(h.key, { pathPrefix: e.target.value })}
                   />
                 </div>
@@ -439,7 +431,7 @@ function ScopeDialog({
                     variant="ghost"
                     onClick={() => setHooks((list) => list.filter((x) => x.key !== h.key))}
                   >
-                    Remove request rule {i + 1}
+                    {S.removeHook({ n: i + 1 })}
                   </Button>
                 </div>
               </fieldset>
@@ -461,7 +453,7 @@ function ScopeDialog({
                   ])
                 }
               >
-                <Icon name="plus" /> Add a request rule
+                <Icon name="plus" /> {S.addHook}
               </Button>
             </div>
           </div>
@@ -472,9 +464,9 @@ function ScopeDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{EGRESS_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Save rule
+            {busy ? <Spinner /> : null} {S.saveRule}
           </Button>
         </div>
       </form>

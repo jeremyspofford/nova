@@ -15,7 +15,12 @@ export {
   type ParsedSkill,
   type SkillParse,
 } from './skill-file.ts';
-export { expandPluginRoot, pluginHookContentHash, pluginHookScriptPaths } from './hook-hash.ts';
+export {
+  expandPluginRoot,
+  pluginHookContentHash,
+  pluginHookScriptPaths,
+  pluginTreeDigest,
+} from './hook-hash.ts';
 export {
   loadPluginFolder,
   loadPluginHooks,
@@ -62,7 +67,9 @@ export {
   pluginHookId,
   pluginHookView,
   type InstallPluginRequest,
+  type PluginInstallGuard,
   type PluginInstallProvenance,
+  type PluginPublisherChange,
   type PluginHookChange,
   type PluginHookDefinition,
   type PluginHookSource,

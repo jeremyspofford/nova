@@ -3,6 +3,7 @@
 // projects, chat access, read-only or run-allowed, expiry), shown once and stored only as a hash.
 // Nova never writes into another app's configuration: it shows the endpoint and a snippet.
 import { useEffect, useRef, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type {
   AppAuthorizationCreated,
   AppAuthorizationView,
@@ -22,25 +23,116 @@ import {
 import { errorMessage, type CreateAppAuthorizationRequest } from '../api.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
-import { formatWhen, plural } from './common.ts';
+import { formatWhen } from './common.ts';
 import { SwitchField } from './controls.tsx';
 import { copyText } from './copy.ts';
+import { embed } from './embed.tsx';
 import '../workspace.css';
 
 type Scopes = AppAuthorizationView['scopes'];
 
-const THREADS_TEXT: Record<Scopes['threads'], string> = {
-  none: 'no chats',
-  read: 'reads chats',
-  read_write: 'reads and adds to chats',
-};
+export const CLIENTS_TEXT = defineMessages('settings.clients', {
+  scopes: {
+    allTools: 'all allowed tools',
+    tools: '{n, plural, one {# tool} other {# tools}}',
+    allProjects: 'all projects',
+    projects: '{n, plural, one {# project} other {# projects}}',
+    threads: { none: 'no chats', read: 'reads chats', read_write: 'reads and adds to chats' },
+    readOnly: 'read-only',
+    mayRun: 'may run tools',
+  },
+  neverExpires: 'never expires',
+  expired: 'expired',
+  expires: 'expires {date}',
+  loadFailed: 'Could not load the clients.',
+  serverOn: "Nova's MCP server is on.",
+  serverOff: "Nova's MCP server is off. Clients cannot connect.",
+  changeFailed: 'Could not change it: {error}',
+  revoked: '{name} revoked. Its sessions were closed.',
+  revokeFailed: 'Could not revoke {name}: {error}',
+  title: 'Apps & clients',
+  server: 'Nova as an MCP server',
+  serverHint:
+    'Other MCP clients can read your projects and chats and run tools you allow, each with its ' +
+    'own token. Every call passes your permission rules and is recorded in the audit log.',
+  serverSwitch: "Nova's MCP server",
+  serverSwitchOn: 'On: clients with a valid token can connect.',
+  serverSwitchOff: 'Off: no client can connect. Adding a client turns it on.',
+  clients: 'Clients',
+  add: 'Add a client',
+  retry: 'Retry',
+  loading: 'Loading clients',
+  none: 'No clients yet',
+  noneHint: 'Add a client to let another MCP app use Nova.',
+  list: 'MCP clients',
+  meta: 'last used {used} · {expiry} · added {added}',
+  revokeName: 'Revoke {name}',
+  revoke: 'Revoke',
+  revokeTitle: 'Revoke {name}?',
+  revokeThis: 'Revoke this client?',
+  revokeBody: 'Its token stops working and its open sessions close at once.',
+  cancel: 'Cancel',
+  needName: 'Enter a name for the client.',
+  needTool: 'Choose at least one tool.',
+  needProject: 'Choose at least one project.',
+  addFailed: 'Could not add the client.',
+  added: '{name} added',
+  addedBody: 'Copy the token now. It is not shown again; Nova keeps only a hash of it.',
+  done: 'Done',
+  addTitle: 'Add an MCP client',
+  addBody: 'Choose what this client may reach. You can revoke it at any time.',
+  name: 'Client name',
+  nameHint: 'So you can tell clients apart, for example: Laptop editor.',
+  tools: 'Tools',
+  toolsAll: 'Every tool your rules allow',
+  toolsSome: 'Only the tools I choose',
+  toolsNone: 'No tools',
+  toolsPick: 'Tools this client may call',
+  loadingTools: 'Loading tools',
+  projects: 'Projects',
+  projectsAll: 'All projects',
+  projectsSome: 'Only the projects I choose',
+  projectsPick: 'Projects this client may see',
+  loadingProjects: 'Loading projects',
+  noProjects: 'You have no projects.',
+  chats: 'Chats',
+  chatsNone: 'No access to chats',
+  chatsRead: 'Read chats',
+  chatsReadWrite: 'Read and add to chats',
+  mode: 'What it may do',
+  readOnly: 'Read only',
+  readOnlyHint: 'Only tools that change nothing.',
+  mayRun: 'May run tools',
+  mayRunHint: 'Tools that ask first still ask you.',
+  expiry: 'Token expires',
+  inDays: '{n, plural, one {In # day} other {In # days}}',
+  inYear: 'In a year',
+  never: 'Never',
+  addClient: 'Add client',
+  copied: '{what, select, token {Token copied.} other {Configuration copied.}}',
+  copyFailed:
+    '{what, select, token {Could not copy. The token is selected; copy it with your keyboard.} other {Could not copy. The configuration is selected; copy it with your keyboard.}}',
+  token: 'Token',
+  copyToken: 'Copy token',
+  endpoint: 'Endpoint',
+  config: 'Configuration for the client',
+  copyConfig: 'Copy configuration',
+  configHint:
+    "Paste it into the client's MCP settings. Clients that only start local commands can run the launcher from Nova's folder instead: {command}, with the endpoint in {urlVar} and the token in {tokenVar} (set them in the client's environment settings, not in the command).",
+});
+const S = CLIENTS_TEXT;
+// The stdio launcher and its environment variables: code, the same in every language.
+const LAUNCHER = 'node packages/mcp/src/launcher-main.ts mcp stdio';
+const URL_VAR = 'NOVA_MCP_URL';
+const TOKEN_VAR = 'NOVA_MCP_TOKEN';
 
 /** "All tools · 2 projects · reads chats · read-only". */
 export function scopesText(s: Scopes): string {
-  const tools = s.tools === '*' ? 'all allowed tools' : plural(s.tools.length, 'tool');
-  const projects = s.projects === '*' ? 'all projects' : plural(s.projects.length, 'project');
-  const mode = s.mode === 'read_only' ? 'read-only' : 'may run tools';
-  return `${tools} · ${projects} · ${THREADS_TEXT[s.threads]} · ${mode}`;
+  const tools = s.tools === '*' ? S.scopes.allTools : S.scopes.tools({ n: s.tools.length });
+  const projects =
+    s.projects === '*' ? S.scopes.allProjects : S.scopes.projects({ n: s.projects.length });
+  const mode = s.mode === 'read_only' ? S.scopes.readOnly : S.scopes.mayRun;
+  return `${tools} · ${projects} · ${S.scopes.threads[s.threads]} · ${mode}`;
 }
 
 /** A configuration snippet for an MCP client that speaks streamable HTTP. */
@@ -57,10 +149,10 @@ export function clientSnippet(endpoint: string, token: string): string {
 }
 
 function expiryText(a: AppAuthorizationView, now = Date.now()): string {
-  if (!a.expiresAt) return 'never expires';
+  if (!a.expiresAt) return S.neverExpires;
   const t = Date.parse(a.expiresAt);
-  if (!Number.isNaN(t) && t <= now) return 'expired';
-  return `expires ${new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`;
+  if (!Number.isNaN(t) && t <= now) return S.expired;
+  return S.expires({ date: fmt.date(t, { year: 'numeric', month: 'short', day: 'numeric' }) });
 }
 
 export function ClientsPage() {
@@ -82,7 +174,7 @@ export function ClientsPage() {
         setClients(items.filter((a) => a.kind === 'mcp_client'));
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the clients.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -91,12 +183,8 @@ export function ClientsPage() {
 
   const setServer = (on: boolean) => {
     settings.set('mcpServer.enabled', on).then(
-      () =>
-        toast.show(
-          on ? "Nova's MCP server is on." : "Nova's MCP server is off. Clients cannot connect.",
-          { tone: 'success' },
-        ),
-      (err: unknown) => toast.show(`Could not change it: ${errorMessage(err)}`, { tone: 'error' }),
+      () => toast.show(on ? S.serverOn : S.serverOff, { tone: 'success' }),
+      (err: unknown) => toast.show(S.changeFailed({ error: errorMessage(err) }), { tone: 'error' }),
     );
   };
 
@@ -105,72 +193,66 @@ export function ClientsPage() {
     try {
       await api.revokeAppAuthorization(a.id);
       setClients((list) => list?.filter((x) => x.id !== a.id) ?? null);
-      toast.show(`${a.clientName} revoked. Its sessions were closed.`, { tone: 'success' });
+      toast.show(S.revoked({ name: a.clientName }), { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not revoke ${a.clientName}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.revokeFailed({ name: a.clientName, error: errorMessage(err) }), {
+        tone: 'error',
+      });
     }
   };
 
   return (
     <div className="settings-page">
-      <h2>Apps &amp; clients</h2>
+      <h2>{S.title}</h2>
       <section className="settings-section" aria-labelledby="clients-server">
-        <h3 id="clients-server">Nova as an MCP server</h3>
-        <p className="muted">
-          Other MCP clients can read your projects and chats and run tools you allow, each with its
-          own token. Every call passes your permission rules and is recorded in the audit log.
-        </p>
+        <h3 id="clients-server">{S.server}</h3>
+        <p className="muted">{S.serverHint}</p>
         <SwitchField
-          label="Nova's MCP server"
-          description={
-            enabled.value
-              ? 'On: clients with a valid token can connect.'
-              : 'Off: no client can connect. Adding a client turns it on.'
-          }
+          label={S.serverSwitch}
+          description={enabled.value ? S.serverSwitchOn : S.serverSwitchOff}
           checked={enabled.value}
           locked={enabled.locked}
           onChange={setServer}
         />
       </section>
       <section className="settings-section" aria-labelledby="clients-list">
-        <h3 id="clients-list">Clients</h3>
+        <h3 id="clients-list">{S.clients}</h3>
         <div className="row">
           <Button variant="primary" onClick={() => setAdding(true)}>
-            Add a client
+            {S.add}
           </Button>
         </div>
         {error ? (
           <div role="alert" className="ws-error">
             <p>{error}</p>
-            <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+            <Button onClick={() => setVersion((v) => v + 1)}>{S.retry}</Button>
           </div>
         ) : null}
-        {clients === null && !error ? <Spinner label="Loading clients" /> : null}
+        {clients === null && !error ? <Spinner label={S.loading} /> : null}
         {clients?.length === 0 ? (
-          <EmptyState
-            level={3}
-            title="No clients yet"
-            description="Add a client to let another MCP app use Nova."
-          />
+          <EmptyState level={3} title={S.none} description={S.noneHint} />
         ) : null}
         {clients?.length ? (
-          <ul className="ws-list" aria-label="MCP clients">
+          <ul className="ws-list" aria-label={S.list}>
             {clients.map((a) => (
               <li key={a.id} className="ws-list-row" aria-label={a.clientName}>
                 <div className="ws-source-main">
                   <strong>{a.clientName}</strong>
                   <span className="muted">{scopesText(a.scopes)}</span>
                   <span className="muted ws-row-meta">
-                    last used {formatWhen(a.lastUsedAt)} · {expiryText(a)} · added{' '}
-                    {formatWhen(a.createdAt)}
+                    {S.meta({
+                      used: formatWhen(a.lastUsedAt),
+                      expiry: expiryText(a),
+                      added: formatWhen(a.createdAt),
+                    })}
                   </span>
                 </div>
                 <Button
                   variant="ghost"
-                  aria-label={`Revoke ${a.clientName}`}
+                  aria-label={S.revokeName({ name: a.clientName })}
                   onClick={() => setRevoking(a)}
                 >
-                  Revoke
+                  {S.revoke}
                 </Button>
               </li>
             ))}
@@ -189,14 +271,14 @@ export function ClientsPage() {
       ) : null}
       <Dialog
         open={revoking !== null}
-        title={revoking ? `Revoke ${revoking.clientName}?` : 'Revoke this client?'}
-        description="Its token stops working and its open sessions close at once."
+        title={revoking ? S.revokeTitle({ name: revoking.clientName }) : S.revokeThis}
+        description={S.revokeBody}
         onClose={() => setRevoking(null)}
         footer={
           <>
-            <Button onClick={() => setRevoking(null)}>Cancel</Button>
+            <Button onClick={() => setRevoking(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => revoking && void revoke(revoking)}>
-              Revoke
+              {S.revoke}
             </Button>
           </>
         }
@@ -246,10 +328,9 @@ function AddClientDialog({
 
   const submit = async () => {
     const clientName = name.trim();
-    if (!clientName) return setError('Enter a name for the client.');
-    if (toolPick === 'some' && tools.size === 0) return setError('Choose at least one tool.');
-    if (projectPick === 'some' && projects.size === 0)
-      return setError('Choose at least one project.');
+    if (!clientName) return setError(S.needName);
+    if (toolPick === 'some' && tools.size === 0) return setError(S.needTool);
+    if (projectPick === 'some' && projects.size === 0) return setError(S.needProject);
     setError(null);
     setBusy(true);
     const body: CreateAppAuthorizationRequest = {
@@ -268,7 +349,7 @@ function AddClientDialog({
       setCreated(c);
       onCreated(c);
     } catch (err) {
-      setError(errorMessage(err, 'Could not add the client.'));
+      setError(errorMessage(err, S.addFailed));
     } finally {
       setBusy(false);
     }
@@ -286,13 +367,13 @@ function AddClientDialog({
     return (
       <Dialog
         open
-        title={`${created.authorization.clientName} added`}
-        description="Copy the token now. It is not shown again; Nova keeps only a hash of it."
+        title={S.added({ name: created.authorization.clientName })}
+        description={S.addedBody}
         onClose={onClose}
         className="ws-wide-dialog"
         footer={
           <Button variant="primary" onClick={onClose}>
-            Done
+            {S.done}
           </Button>
         }
       >
@@ -303,8 +384,8 @@ function AddClientDialog({
   return (
     <Dialog
       open
-      title="Add an MCP client"
-      description="Choose what this client may reach. You can revoke it at any time."
+      title={S.addTitle}
+      description={S.addBody}
       onClose={onClose}
       className="ws-wide-dialog"
     >
@@ -316,27 +397,27 @@ function AddClientDialog({
         }}
       >
         <TextField
-          label="Client name"
+          label={S.name}
           value={name}
           maxLength={100}
-          hint="So you can tell clients apart, for example: Laptop editor."
+          hint={S.nameHint}
           onChange={(e) => setName(e.target.value)}
         />
         <RadioGroup
-          legend="Tools"
+          legend={S.tools}
           name="client-tools"
           value={toolPick}
           onChange={(v) => setToolPick(v as Pick3)}
           options={[
-            { value: 'all', label: 'Every tool your rules allow' },
-            { value: 'some', label: 'Only the tools I choose' },
-            { value: 'none', label: 'No tools' },
+            { value: 'all', label: S.toolsAll },
+            { value: 'some', label: S.toolsSome },
+            { value: 'none', label: S.toolsNone },
           ]}
         />
         {toolPick === 'some' ? (
           <fieldset className="ws-fieldset">
-            <legend>Tools this client may call</legend>
-            {toolList === null ? <Spinner label="Loading tools" /> : null}
+            <legend>{S.toolsPick}</legend>
+            {toolList === null ? <Spinner label={S.loadingTools} /> : null}
             <div className="ws-checks">
               {(toolList ?? []).map((t) => (
                 <label key={t.name} className="ws-check">
@@ -352,20 +433,20 @@ function AddClientDialog({
           </fieldset>
         ) : null}
         <RadioGroup
-          legend="Projects"
+          legend={S.projects}
           name="client-projects"
           value={projectPick}
           onChange={(v) => setProjectPick(v as 'all' | 'some')}
           options={[
-            { value: 'all', label: 'All projects' },
-            { value: 'some', label: 'Only the projects I choose' },
+            { value: 'all', label: S.projectsAll },
+            { value: 'some', label: S.projectsSome },
           ]}
         />
         {projectPick === 'some' ? (
           <fieldset className="ws-fieldset">
-            <legend>Projects this client may see</legend>
-            {projectList === null ? <Spinner label="Loading projects" /> : null}
-            {projectList?.length === 0 ? <p className="muted">You have no projects.</p> : null}
+            <legend>{S.projectsPick}</legend>
+            {projectList === null ? <Spinner label={S.loadingProjects} /> : null}
+            {projectList?.length === 0 ? <p className="muted">{S.noProjects}</p> : null}
             <div className="ws-checks">
               {(projectList ?? []).map((p) => (
                 <label key={p.id} className="ws-check">
@@ -381,44 +462,42 @@ function AddClientDialog({
           </fieldset>
         ) : null}
         <RadioGroup
-          legend="Chats"
+          legend={S.chats}
           name="client-threads"
           value={threads}
           onChange={(v) => setThreads(v as Scopes['threads'])}
           options={[
-            { value: 'none', label: 'No access to chats' },
-            { value: 'read', label: 'Read chats' },
-            { value: 'read_write', label: 'Read and add to chats' },
+            { value: 'none', label: S.chatsNone },
+            { value: 'read', label: S.chatsRead },
+            { value: 'read_write', label: S.chatsReadWrite },
           ]}
         />
         <RadioGroup
-          legend="What it may do"
+          legend={S.mode}
           name="client-mode"
           value={mode}
           onChange={(v) => setMode(v as Scopes['mode'])}
           options={[
             {
               value: 'read_only',
-              label: 'Read only',
-              description: 'Only tools that change nothing.',
+              label: S.readOnly,
+              description: S.readOnlyHint,
             },
             {
               value: 'run_allowed',
-              label: 'May run tools',
-              description: 'Tools that ask first still ask you.',
+              label: S.mayRun,
+              description: S.mayRunHint,
             },
           ]}
         />
         <SelectField
-          label="Token expires"
+          label={S.expiry}
           value={expiry}
           onChange={setExpiry}
           options={[
-            { value: '7', label: 'In 7 days' },
-            { value: '30', label: 'In 30 days' },
-            { value: '90', label: 'In 90 days' },
-            { value: '365', label: 'In a year' },
-            { value: 'never', label: 'Never' },
+            ...[7, 30, 90].map((n) => ({ value: String(n), label: S.inDays({ n }) })),
+            { value: '365', label: S.inYear },
+            { value: 'never', label: S.never },
           ]}
         />
         {error ? (
@@ -427,9 +506,9 @@ function AddClientDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Add client
+            {busy ? <Spinner /> : null} {S.addClient}
           </Button>
         </div>
       </form>
@@ -448,62 +527,70 @@ function TokenView({ created }: { created: AppAuthorizationCreated }) {
   }, []);
   const snippetRef = useRef<HTMLElement>(null);
   const snippet = clientSnippet(created.endpoint, created.token);
-  const copy = async (text: string, el: HTMLElement | null, what: string) => {
+  const copy = async (text: string, el: HTMLElement | null, what: 'token' | 'config') => {
     const ok = await copyText(text, el);
-    toast.show(
-      ok
-        ? `${what} copied.`
-        : `Could not copy. The ${what.toLowerCase()} is selected; copy it with your keyboard.`,
-      { tone: ok ? 'success' : 'error' },
-    );
+    toast.show(ok ? S.copied({ what }) : S.copyFailed({ what }), {
+      tone: ok ? 'success' : 'error',
+    });
   };
   return (
     <div className="stack">
       <div className="nv-field">
         <span className="nv-field-label" id="client-token-label">
-          Token
+          {S.token}
         </span>
-        <pre className="ws-command" aria-labelledby="client-token-label">
+        <pre role="group" className="ws-command" aria-labelledby="client-token-label">
           <code ref={tokenRef}>{created.token}</code>
         </pre>
         <div className="row">
           <Button
             ref={copyButton}
-            onClick={() => void copy(created.token, tokenRef.current, 'Token')}
+            onClick={() => void copy(created.token, tokenRef.current, 'token')}
           >
-            Copy token
+            {S.copyToken}
           </Button>
         </div>
       </div>
       <div className="nv-field">
         <span className="nv-field-label" id="client-endpoint-label">
-          Endpoint
+          {S.endpoint}
         </span>
-        <code className="ws-code-inline" aria-labelledby="client-endpoint-label">
+        <code role="group" className="ws-code-inline" aria-labelledby="client-endpoint-label">
           {created.endpoint}
         </code>
       </div>
       <div className="nv-field">
         <span className="nv-field-label" id="client-snippet-label">
-          Configuration for the client
+          {S.config}
         </span>
-        <pre className="ws-command" aria-labelledby="client-snippet-label">
+        <pre role="group" className="ws-command" aria-labelledby="client-snippet-label">
           <code ref={snippetRef}>{snippet}</code>
         </pre>
         <div className="row">
-          <Button onClick={() => void copy(snippet, snippetRef.current, 'Configuration')}>
-            Copy configuration
+          <Button onClick={() => void copy(snippet, snippetRef.current, 'config')}>
+            {S.copyConfig}
           </Button>
         </div>
         {/* The stdio launcher is packages/mcp/src/launcher-main.ts; no `nova` command is
             installed (docs/08 §2.2). The token goes in the environment, never in the command. */}
         <span className="nv-field-hint">
-          Paste it into the client&apos;s MCP settings. Clients that only start local commands can
-          run the launcher from Nova&apos;s folder instead:{' '}
-          <code className="ws-code-inline">node packages/mcp/src/launcher-main.ts mcp stdio</code>,
-          with the endpoint in <code className="ws-code-inline">NOVA_MCP_URL</code> and the token in{' '}
-          <code className="ws-code-inline">NOVA_MCP_TOKEN</code> (set them in the client&apos;s
-          environment settings, not in the command).
+          {embed(S.configHint, {
+            command: (
+              <code className="ws-code-inline" dir="ltr">
+                {LAUNCHER}
+              </code>
+            ),
+            urlVar: (
+              <code className="ws-code-inline" dir="ltr">
+                {URL_VAR}
+              </code>
+            ),
+            tokenVar: (
+              <code className="ws-code-inline" dir="ltr">
+                {TOKEN_VAR}
+              </code>
+            ),
+          })}
         </span>
       </div>
     </div>

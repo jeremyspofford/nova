@@ -2,16 +2,8 @@
 // from, and the Relay when this browser is paired through one. The Hub advertises its endpoints in
 // `POST /api/v1/hello` (best first); a browser can only call its own origin (the Hub sends no CORS
 // headers, and the session cookie belongs to that origin), so an advertised endpoint at another
-// address only tells which transport the page's own address is. Names the path in use for people:
-// LAN, Mesh, Relay or Direct.
+// address only tells which transport the page's own address is (path.ts names it for people).
 import { TRANSPORT_PRIORITY, type EndpointCandidate, type NetworkTransport } from '@nova/shared';
-
-export const TRANSPORT_LABEL: Record<NetworkTransport, string> = {
-  lan: 'LAN',
-  mesh: 'Mesh',
-  relay: 'Relay',
-  direct: 'Direct',
-};
 
 function originOf(url: string): string | null {
   try {

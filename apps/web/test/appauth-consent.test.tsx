@@ -43,7 +43,7 @@ describe('the consent page (FR-222)', () => {
     });
     await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(api.getAppConsent).toHaveBeenCalledWith(q);
-    expect(screen.getByText(CONSENT_TEXT.intro('Notes Desk'))).toBeTruthy();
+    expect(screen.getByText(CONSENT_TEXT.intro({ name: 'Notes Desk' }))).toBeTruthy();
     expect(screen.getByRole('note').textContent).toContain(CONSENT_TEXT.nameCaution);
     expect(
       screen.getByText(
@@ -68,7 +68,9 @@ describe('the consent page (FR-222)', () => {
     expect(target.get('state')).toBe('xyz');
     expect(target.get('iss')).toBe(window.location.origin);
     expect(go.mock.calls[0]![0].startsWith('http://127.0.0.1:53682/callback?')).toBe(true);
-    expect(screen.getByRole('status').textContent).toBe(CONSENT_TEXT.allowed('Notes Desk'));
+    expect(screen.getByRole('status').textContent).toBe(
+      CONSENT_TEXT.allowed({ name: 'Notes Desk' }),
+    );
     expect(screen.queryByRole('button', { name: 'Allow' })).toBeNull();
     expect(state.grants.map((g) => g.scopes)).toEqual([['account:read', 'threads:read']]);
   });
@@ -103,7 +105,9 @@ describe('the consent page (FR-222)', () => {
     expect(target.get('state')).toBe('xyz');
     expect(target.get('code')).toBeNull();
     expect(state.grants).toEqual([]);
-    expect(screen.getByRole('status').textContent).toBe(CONSENT_TEXT.denied('Notes Desk'));
+    expect(screen.getByRole('status').textContent).toBe(
+      CONSENT_TEXT.denied({ name: 'Notes Desk' }),
+    );
   });
 
   it('marks what an earlier approval allowed and says allowing again adds to it', async () => {
@@ -161,7 +165,7 @@ describe('the consent page (FR-222)', () => {
       settings: { 'apps.enabled': false },
     });
     expect((await screen.findByRole('alert')).textContent).toBe(
-      'App access is turned off on this Hub. The owner can turn it on in Settings → Apps.',
+      'App access is turned off on this Hub. The owner can turn it on in Settings → Authorized apps.',
     );
     expect(screen.getByText(CONSENT_TEXT.tellAppHint)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: CONSENT_TEXT.tellApp }));
@@ -256,7 +260,7 @@ describe('the words and checks behind it', () => {
       '([::1]:8080)',
     );
     expect(backText({ redirectUri: '::bad', redirectKind: 'private_scheme' })).toBe(
-      CONSENT_TEXT.backScheme(''),
+      CONSENT_TEXT.backScheme({ scheme: '' }),
     );
     expect(scopeText('usage:read').label).toBe('See your usage');
     expect(scopeText('devices:read')).toEqual({ label: 'devices:read', description: '' });
@@ -285,7 +289,9 @@ describe('the words and checks behind it', () => {
       'app:/x?error=a',
     );
     expect(refusalRedirect(new Error('x'))).toBeNull();
-    expect(APPS_TEXT.revokeWhat('Notes', 0)).toContain('its tokens stop working');
-    expect(APPS_TEXT.revokeWhat('Notes', 2)).toContain('its 2 sign-ins end');
+    expect(APPS_TEXT.revokeWhat({ name: 'Notes', sessions: 0 })).toContain(
+      'its tokens stop working',
+    );
+    expect(APPS_TEXT.revokeWhat({ name: 'Notes', sessions: 2 })).toContain('its 2 sign-ins end');
   });
 });

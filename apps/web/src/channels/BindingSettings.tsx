@@ -7,6 +7,7 @@
 // the Hub's `confirmSenderCheckNone` only after the user confirmed. M8: an email binding may sign
 // in with OAuth (its provider settings, and the authorization with Authorize and Sign out).
 import { useId, useState } from 'react';
+import { defineMessages, messageFor } from '@nova/i18n';
 import {
   updateChannelBindingSchema,
   type ChannelAudience,
@@ -14,24 +15,26 @@ import {
 } from '@nova/shared';
 import { Button, Dialog, Icon, RadioGroup, SelectField, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { SwitchField } from '../settings/controls.tsx';
 import { useChannelsApi } from './api.ts';
 import {
   APPROVAL_HINT,
+  CHANNEL_TEXT,
   CHOICE_HINT,
-  CONFIG_CHOICES,
   CONFIG_KEYS,
   CONFIG_TEXT,
   CREDENTIAL_TEXT,
   GENERATED_CREDENTIALS,
-  CONFIRM_REQUIRED_TEXT,
   INBOUND_HINT,
   MAIL_OAUTH_KEYS,
   REF_TEXT,
   absoluteUrl,
+  configChoices,
   errorField,
   isConfirmRequired,
   issueErrors,
+  midSentence,
   randomSecret,
 } from './format.ts';
 import { MailOAuthPanel, usesMailOAuth } from './MailOAuth.tsx';
@@ -42,6 +45,61 @@ import {
   SenderCheckOffNotice,
   SigningHelp,
 } from './parts.tsx';
+
+/** A channel's settings' words (FR-016). Names, ids and the Hub's errors are data. */
+export const BINDING_TEXT = defineMessages('channels.binding', {
+  form: '{name} settings',
+  name: 'Name',
+  refValue: '{label}: {value}',
+  audience: 'Who can read it',
+  private: { label: 'Private', description: 'Only you.' },
+  shared: {
+    label: 'Shared',
+    description: 'Other people read it; private details are checked first.',
+  },
+  inappPrivate: 'The in-app channel is always private.',
+  mainThread: "Use the agent's main thread",
+  mainThreadHint: 'Your private channels and the in-app channel share one thread.',
+  unknown: 'Answer people Nova does not know',
+  unknownHint: 'Off: only people listed under People get answers here.',
+  rateLimit: 'Rate limit',
+  rateLimitHint: 'The most messages the agent answers here; more are dropped.',
+  perMinute: 'Per minute',
+  perHour: 'Per hour',
+  bot: 'Bot: {name}',
+  mailbox: 'Mailbox',
+  mailboxHint: 'The mailbox the agent reads and answers from. Mail already in it is never read.',
+  webhookNeedsHttps: 'Webhook needs an https public address (below on this page).',
+  saving: 'Saving…',
+  save: 'Save changes',
+  discard: 'Discard',
+  saved: '{name} saved.',
+  saveFailed: 'Could not save the channel.',
+  saveFailedWith: 'Could not save: {error}',
+  inbound: 'Inbound address',
+  credentials: {
+    legend: 'Credentials',
+    shared:
+      '{kind, select, email {Uses the mailbox of {name}. Replacing one changes it for every channel that uses it.} telegram {Uses the bot of {name}. Replacing one changes it for every channel that uses it.} other {Uses the app of {name}. Replacing one changes it for every channel that uses it.}}',
+    kept: 'Kept in the Hub’s secret store; values are never shown.',
+    set: 'Set',
+    notSet: 'Not set',
+    madeByNova: 'Made by Nova',
+    replaceLabel: 'Replace {label}',
+    replace: 'Replace',
+    newLabel: 'New {label}',
+    save: 'Save',
+    cancel: 'Cancel',
+    tooShort: 'Enter at least 8 characters.',
+    replaced: '{name} replaced.',
+    replaceFailed: 'Could not replace it.',
+    rotate: 'New token and secret',
+    rotateTitle: 'Make a new token and secret?',
+    rotateWhat:
+      'The current ones stop working at once. Give the new ones to the service on the other side.',
+    rotateConfirm: 'Make new ones',
+  },
+});
 
 interface Draft {
   label: string;
@@ -146,13 +204,13 @@ export function BindingSettings({
         ...(turningOff && draft.confirmNone ? { confirmSenderCheckNone: true as const } : {}),
       });
       onSaved(next);
-      toast.show(`${next.label} saved.`, { tone: 'success' });
+      toast.show(BINDING_TEXT.saved({ name: next.label }), { tone: 'success' });
     } catch (err) {
       const field = errorField(err);
-      const message = errorMessage(err, 'Could not save the channel.');
-      if (isConfirmRequired(err)) setErrors({ 'config.senderCheck': CONFIRM_REQUIRED_TEXT });
+      const message = errorMessage(err, BINDING_TEXT.saveFailed);
+      if (isConfirmRequired(err)) setErrors({ 'config.senderCheck': CHANNEL_TEXT.confirmRequired });
       else if (field) setErrors({ [field]: message });
-      else toast.show(`Could not save: ${message}`, { tone: 'error' });
+      else toast.show(BINDING_TEXT.saveFailedWith({ error: message }), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -163,8 +221,9 @@ export function BindingSettings({
   const keys = (CONFIG_KEYS[binding.kind] ?? []).filter(
     (k) => binding.kind !== 'email' || oauthDraft || !MAIL_OAUTH_KEYS.includes(k),
   );
+  const choiceSets = configChoices()[binding.kind];
   const configFields = keys.map((k) => {
-    const choices = CONFIG_CHOICES[binding.kind]?.[k];
+    const choices = choiceSets?.[k];
     const value = draft.config[k] ?? '';
     const label = CONFIG_TEXT[k]?.label ?? k;
     if (choices) {
@@ -181,7 +240,7 @@ export function BindingSettings({
           options={options.map((c) => ({ value: c.value, label: c.label }))}
           hint={
             k === 'mode' && binding.kind === 'telegram'
-              ? `${chosen ?? ''} Webhook needs an https public address (below on this page).`.trim()
+              ? [chosen, BINDING_TEXT.webhookNeedsHttps].filter(Boolean).join(' ')
               : (CHOICE_HINT[k] ?? chosen)
           }
           error={errors[`config.${k}`]}
@@ -215,11 +274,12 @@ export function BindingSettings({
     );
   });
 
+  const S = BINDING_TEXT;
   return (
     <div className="ch-settings stack" id={`${id}-settings`}>
       <form
         className="stack"
-        aria-label={`${binding.label} settings`}
+        aria-label={S.form({ name: binding.label })}
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
@@ -227,7 +287,7 @@ export function BindingSettings({
         }}
       >
         <TextField
-          label="Name"
+          label={S.name}
           value={draft.label}
           maxLength={200}
           error={errors.label}
@@ -235,52 +295,53 @@ export function BindingSettings({
         />
         {!inapp ? (
           <p className="ws-flush">
-            <span className="muted">{ref.label}: </span>
-            <code className="ws-code-inline">{binding.externalRef}</code>
+            {rich(S.refValue, {
+              label: <span className="muted">{ref.label}</span>,
+              value: (
+                <code className="ws-code-inline" dir="auto">
+                  {binding.externalRef}
+                </code>
+              ),
+            })}
           </p>
         ) : null}
         {!inapp ? (
           <RadioGroup
-            legend="Who can read it"
+            legend={S.audience}
             name={`${id}-audience`}
             value={draft.audience}
             onChange={(v) => set({ audience: v as ChannelAudience })}
-            options={[
-              { value: 'private', label: 'Private', description: 'Only you.' },
-              {
-                value: 'shared',
-                label: 'Shared',
-                description: 'Other people read it; private details are checked first.',
-              },
-            ]}
+            options={(['private', 'shared'] as const).map((v) => ({
+              value: v,
+              label: S[v].label,
+              description: S[v].description,
+            }))}
           />
         ) : (
-          <p className="muted ws-flush">The in-app channel is always private.</p>
+          <p className="muted ws-flush">{S.inappPrivate}</p>
         )}
         {inapp || draft.audience === 'private' ? (
           <SwitchField
-            label="Use the agent's main thread"
-            description="Your private channels and the in-app channel share one thread."
+            label={S.mainThread}
+            description={S.mainThreadHint}
             checked={draft.sharePrimaryThread}
             onChange={(v) => set({ sharePrimaryThread: v })}
           />
         ) : (
           <SwitchField
-            label="Answer people Nova does not know"
-            description="Off: only people listed under People get answers here."
+            label={S.unknown}
+            description={S.unknownHint}
             checked={draft.allowUnknown}
             onChange={(v) => set({ allowUnknown: v })}
           />
         )}
         {!inapp ? (
           <fieldset className="ws-fieldset">
-            <legend>Rate limit</legend>
-            <p className="nv-field-hint ws-flush">
-              The most messages the agent answers here; more are dropped.
-            </p>
+            <legend>{S.rateLimit}</legend>
+            <p className="nv-field-hint ws-flush">{S.rateLimitHint}</p>
             <div className="row">
               <TextField
-                label="Per minute"
+                label={S.perMinute}
                 type="number"
                 min={1}
                 max={600}
@@ -290,7 +351,7 @@ export function BindingSettings({
                 onChange={(e) => set({ perMinute: e.target.value })}
               />
               <TextField
-                label="Per hour"
+                label={S.perHour}
                 type="number"
                 min={1}
                 max={10000}
@@ -304,16 +365,15 @@ export function BindingSettings({
         ) : null}
         {binding.kind === 'telegram' && binding.config.botUsername ? (
           <p className="ws-flush">
-            <span className="muted">Bot: </span>
-            <code className="ws-code-inline">@{binding.config.botUsername}</code>
+            {rich(S.bot, {
+              name: <code className="ws-code-inline">@{binding.config.botUsername}</code>,
+            })}
           </p>
         ) : null}
         {binding.kind === 'email' ? (
           <fieldset className="ws-fieldset">
-            <legend>Mailbox</legend>
-            <p className="nv-field-hint ws-flush">
-              The mailbox the agent reads and answers from. Mail already in it is never read.
-            </p>
+            <legend>{S.mailbox}</legend>
+            <p className="nv-field-hint ws-flush">{S.mailboxHint}</p>
             <div className="ch-mail-grid">{configFields}</div>
             {askingNone ? (
               <SenderCheckOffConfirm
@@ -336,7 +396,7 @@ export function BindingSettings({
         ) : null}
         <div className="row">
           <Button type="submit" variant="primary" disabled={!dirty || busy}>
-            {busy ? 'Saving…' : 'Save changes'}
+            {busy ? S.saving : S.save}
           </Button>
           {dirty ? (
             <Button
@@ -346,7 +406,7 @@ export function BindingSettings({
                 setAskingNone(false);
               }}
             >
-              Discard
+              {S.discard}
             </Button>
           ) : null}
         </div>
@@ -363,7 +423,7 @@ export function BindingSettings({
       {binding.inboundPath ? (
         <div className="stack">
           <CopyValue
-            label="Inbound address"
+            label={S.inbound}
             value={absoluteUrl(binding.inboundPath, publicUrl)}
             hint={INBOUND_HINT[binding.kind]}
           />
@@ -392,6 +452,8 @@ function Credentials({
   const [busy, setBusy] = useState(false);
   const [fresh, setFresh] = useState<{ token: string; secret: string } | null>(null);
   const [confirmRotate, setConfirmRotate] = useState(false);
+  const C = BINDING_TEXT.credentials;
+  const nameOf = (name: string) => messageFor(CREDENTIAL_TEXT, name) ?? name;
 
   const replace = async (credentials: Record<string, string>) => {
     setBusy(true);
@@ -401,7 +463,7 @@ function Credentials({
       onSaved(next);
       return true;
     } catch (err) {
-      setError(errorMessage(err, 'Could not replace it.'));
+      setError(errorMessage(err, C.replaceFailed));
       return false;
     } finally {
       setBusy(false);
@@ -410,13 +472,13 @@ function Credentials({
 
   const saveOne = async (name: string) => {
     if (value.length < 8) {
-      setError('Enter at least 8 characters.');
+      setError(C.tooShort);
       return;
     }
     if (await replace({ [name]: value })) {
       setEditing(null);
       setValue('');
-      toast.show(`${CREDENTIAL_TEXT[name] ?? name} replaced.`, { tone: 'success' });
+      toast.show(C.replaced({ name: nameOf(name) }), { tone: 'success' });
     }
   };
 
@@ -428,15 +490,13 @@ function Credentials({
 
   return (
     <fieldset className="ws-fieldset">
-      <legend>Credentials</legend>
+      <legend>{C.legend}</legend>
       <p className="nv-field-hint ws-flush">
-        {sharedWithLabel
-          ? `Uses the ${binding.kind === 'email' ? 'mailbox' : binding.kind === 'telegram' ? 'bot' : 'app'} of ${sharedWithLabel}. Replacing one changes it for every channel that uses it.`
-          : 'Kept in the Hub’s secret store; values are never shown.'}
+        {sharedWithLabel ? C.shared({ kind: binding.kind, name: sharedWithLabel }) : C.kept}
       </p>
-      <ul className="ws-list" aria-label="Credentials">
+      <ul className="ws-list" aria-label={C.legend}>
         {binding.credentials.map((c) => {
-          const label = CREDENTIAL_TEXT[c.name] ?? c.name;
+          const label = nameOf(c.name);
           return (
             <li key={c.name} className="ws-list-row">
               <div className="ws-source-main">
@@ -444,41 +504,41 @@ function Credentials({
                 <span className="ws-badge" data-set={c.set}>
                   {c.set ? (
                     <>
-                      <Icon name="check" /> Set
+                      <Icon name="check" /> {C.set}
                     </>
                   ) : (
                     <>
-                      <Icon name="alert" /> Not set
+                      <Icon name="alert" /> {C.notSet}
                     </>
                   )}
                 </span>
               </div>
               {(GENERATED_CREDENTIALS[binding.kind] ?? []).includes(c.name) ? (
-                <span className="muted">Made by Nova</span>
+                <span className="muted">{C.madeByNova}</span>
               ) : binding.kind !== 'webhook' && editing !== c.name ? (
                 <Button
                   variant="ghost"
-                  aria-label={`Replace ${label.toLowerCase()}`}
+                  aria-label={C.replaceLabel({ label: midSentence(label) })}
                   onClick={() => {
                     setEditing(c.name);
                     setValue('');
                     setError(null);
                   }}
                 >
-                  {c.set ? 'Replace' : 'Set'}
+                  {c.set ? C.replace : C.set}
                 </Button>
               ) : null}
               {editing === c.name ? (
                 <form
                   className="row ch-replace"
-                  aria-label={`Replace ${label.toLowerCase()}`}
+                  aria-label={C.replaceLabel({ label: midSentence(label) })}
                   onSubmit={(e) => {
                     e.preventDefault();
                     void saveOne(c.name);
                   }}
                 >
                   <TextField
-                    label={`New ${label.toLowerCase()}`}
+                    label={C.newLabel({ label: midSentence(label) })}
                     type="password"
                     autoComplete="new-password"
                     value={value}
@@ -486,7 +546,7 @@ function Credentials({
                     onChange={(e) => setValue(e.target.value)}
                   />
                   <Button type="submit" variant="primary" disabled={busy}>
-                    Save
+                    {C.save}
                   </Button>
                   <Button
                     onClick={() => {
@@ -495,7 +555,7 @@ function Credentials({
                       setError(null);
                     }}
                   >
-                    Cancel
+                    {C.cancel}
                   </Button>
                 </form>
               ) : null}
@@ -506,15 +566,15 @@ function Credentials({
       {binding.kind === 'webhook' ? (
         <div className="row">
           <Button disabled={busy} onClick={() => setConfirmRotate(true)}>
-            <Icon name="refresh" /> New token and secret
+            <Icon name="refresh" /> {C.rotate}
           </Button>
         </div>
       ) : null}
       {fresh ? (
         <SecretsOnce
           items={[
-            { label: 'Bearer token', value: fresh.token },
-            { label: 'Signing secret', value: fresh.secret },
+            { label: CREDENTIAL_TEXT.token, value: fresh.token },
+            { label: CREDENTIAL_TEXT.secret, value: fresh.secret },
           ]}
         />
       ) : null}
@@ -525,14 +585,14 @@ function Credentials({
       ) : null}
       <Dialog
         open={confirmRotate}
-        title="Make a new token and secret?"
-        description="The current ones stop working at once. Give the new ones to the service on the other side."
+        title={C.rotateTitle}
+        description={C.rotateWhat}
         onClose={() => setConfirmRotate(false)}
         footer={
           <>
-            <Button onClick={() => setConfirmRotate(false)}>Cancel</Button>
+            <Button onClick={() => setConfirmRotate(false)}>{C.cancel}</Button>
             <Button variant="danger" onClick={() => void rotate()}>
-              Make new ones
+              {C.rotateConfirm}
             </Button>
           </>
         }

@@ -3,9 +3,14 @@
 // the New session dialog.
 import { useId } from 'react';
 import type { EnvironmentView, PermissionMode } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { SelectField, VisuallyHidden } from '@nova/ui';
 import { useSettings } from '../settings.tsx';
 import { MODE_DESCRIPTION, modeOptions, type ModeContext } from './modes.ts';
+
+export const MODE_SELECT_TEXT = defineMessages('code.modeSelect', {
+  label: 'Permission mode',
+});
 
 /** What decides which modes are available, from the settings and the session's environment. */
 export function useModeContext(environment: EnvironmentView | null): ModeContext {
@@ -39,7 +44,7 @@ export function ModeSelect({
     <>
       <SelectField
         className={className}
-        label="Permission mode"
+        label={MODE_SELECT_TEXT.label}
         hideLabel={hideLabel}
         value={value}
         disabled={disabled}

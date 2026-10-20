@@ -102,7 +102,7 @@ describe('the signed sample extension (J10 step 1)', () => {
       registered: {
         commands: 1,
         panels: 1,
-        tools: 2,
+        tools: 3,
         hooks: 1,
         keybindings: 1,
         menus: 1,
@@ -127,7 +127,7 @@ describe('the signed sample extension (J10 step 1)', () => {
 
     // The command, with a secret the owner stored.
     await env.service.setSecret(ACCOUNT, HELLO_ID, 'greeting', 'Hi');
-    expect(await env.secrets.get(`secret://extension/${HELLO_ID}/greeting`)).toBe('Hi');
+    expect(await env.secrets.get(`secret://extension/${ACCOUNT}/${HELLO_ID}/greeting`)).toBe('Hi');
     await expect(env.service.setSecret(ACCOUNT, HELLO_ID, 'other', 'x')).rejects.toThrow(
       /does not declare/,
     );
@@ -147,7 +147,7 @@ describe('the signed sample extension (J10 step 1)', () => {
       panels: [{ id: 'hello.panel', resource: 'ui://hello/panel', entryPoint: 'global' }],
       keybindings: [{ command: `ext:${HELLO_ID}/hello.greet`, key: 'mod+shift+h' }],
       menus: [{ where: 'thread', items: [{ title: 'Say hello', command: 'hello.greet' }] }],
-      statusItems: [{ id: 'hello.count', command: 'hello.greet' }],
+      statusItems: [{ id: 'hello.count', command: 'hello.greet', clickable: true }],
     });
     expect((await env.service.clickStatus(ACCOUNT, HELLO_ID, 'hello.count')).result).toMatchObject({
       greeted: 2,
@@ -168,6 +168,7 @@ describe('the signed sample extension (J10 step 1)', () => {
     // The tools, decided by the gate with the extension's declared permissions.
     const names = (await env.service.tools.list(ACCOUNT)).map((t) => t.descriptor.name).sort();
     expect(names).toEqual([
+      extensionToolName(HELLO_ID, 'check_status'),
       extensionToolName(HELLO_ID, 'greet'),
       extensionToolName(HELLO_ID, 'save_note'),
     ]);
@@ -576,7 +577,7 @@ describe('lifecycle', () => {
     expect(await env.service.list(ACCOUNT)).toEqual([]);
     expect(await env.plugins.list(ACCOUNT)).toEqual([]);
     expect((await env.hooks.list(ACCOUNT)).filter((h) => h.source === 'extension')).toEqual([]);
-    expect(await env.secrets.list(`secret://extension/${HELLO_ID}/`)).toEqual([]);
+    expect(await env.secrets.list(`secret://extension/${ACCOUNT}/${HELLO_ID}/`)).toEqual([]);
     expect(existsSync(data)).toBe(false);
     expect(existsSync(join(env.dir, 'data', 'plugins', HELLO_ID))).toBe(false);
     expect(env.service.host.liveWorkers()).toBe(0);
@@ -613,7 +614,13 @@ describe('lifecycle', () => {
     await installSample();
     env.settings.enabled = false;
     await env.service.stopAll();
-    expect((await env.service.get(ACCOUNT, HELLO_ID)).status).toBe('stopped');
+    expect(await env.service.get(ACCOUNT, HELLO_ID)).toMatchObject({
+      status: 'stopped',
+      stopped: { reason: 'sdk_off', policy: null },
+    });
+    // Turned off by the owner, it is off, not stopped: no stop reason.
+    expect((await env.service.setEnabled(ACCOUNT, HELLO_ID, false)).stopped).toBeNull();
+    await env.service.setEnabled(ACCOUNT, HELLO_ID, true);
     await env.service.startAll();
     expect(env.service.host.liveWorkers()).toBe(0);
     env.settings.enabled = true;
@@ -896,6 +903,8 @@ describe('managed policy (FR-106, D4)', () => {
     const refused = await env.service.get(ACCOUNT, HELLO_ID);
     expect(refused).toMatchObject({
       status: 'stopped',
+      // Why, for the card: the policy's extensions list, so a client can name its source.
+      stopped: { reason: 'managed', policy: 'extensions' },
       error: expect.stringMatching(/not allowed/),
     });
     // Its hooks are off, so they neither run nor block what they guard.
@@ -916,6 +925,7 @@ describe('managed policy (FR-106, D4)', () => {
     await env.service.reapplyPolicy();
     expect(await env.service.get(ACCOUNT, HELLO_ID)).toMatchObject({
       status: 'running',
+      stopped: null,
       error: null,
     });
     expect((await env.hooks.list(ACCOUNT)).find((h) => h.source === 'extension')?.status).toBe(
@@ -934,7 +944,11 @@ describe('managed policy (FR-106, D4)', () => {
     // As after an import: the rows are there, and startAll leaves it stopped.
     await env.service.startAll();
     expect(env.service.host.liveWorkers()).toBe(0);
-    expect((await env.service.get(ACCOUNT, HELLO_ID)).error).toMatch(/unverified extension/);
+    expect(await env.service.get(ACCOUNT, HELLO_ID)).toMatchObject({
+      status: 'stopped',
+      stopped: { reason: 'managed', policy: 'unverifiedInstalls' },
+      error: expect.stringMatching(/unverified extension/),
+    });
     await expect(restore!()).rejects.toMatchObject({ code: 'policy_denied' });
     expect(env.service.host.liveWorkers()).toBe(0);
     // A verified one still runs under the same policy.
@@ -944,7 +958,11 @@ describe('managed policy (FR-106, D4)', () => {
     // An unreadable policy fails closed.
     failClosed = 'bad signature';
     await env.service.reapplyPolicy();
-    expect((await env.service.get(ACCOUNT, HELLO_ID)).error).toMatch(/could not be read/);
+    expect(await env.service.get(ACCOUNT, HELLO_ID)).toMatchObject({
+      status: 'stopped',
+      stopped: { reason: 'managed_unreadable', policy: null },
+      error: expect.stringMatching(/could not be read/),
+    });
     expect(env.service.host.liveWorkers()).toBe(0);
   });
 
@@ -1052,5 +1070,45 @@ describe('managed policy (FR-106, D4)', () => {
     deny = [];
     mode = 'off';
     expect(await f()).toMatch(/turned off/);
+  });
+});
+
+describe('status items', () => {
+  it('say whether a click does something: a command, an onClick handler, or neither', async () => {
+    const root = probeExtension(env.dir, {
+      code: `let clicks = 0;
+export function activate(nova) {
+  nova.commands.register({ id: 'c', run: () => 'command' });
+  nova.status.addItem({ id: 'by-command', text: 'A', onClick: 'c' });
+  nova.status.addItem({ id: 'by-handler', text: 'B', onClick: () => ++clicks });
+  nova.status.addItem({ id: 'plain', text: 'C' });
+}`,
+      permissions: { commands: ['c'] },
+    });
+    const p = await env.service.preview(ACCOUNT, { kind: 'path', path: root });
+    await env.service.install(ACCOUNT, { previewId: p.previewId, confirmSideload: true });
+    await until(() => env.service.contributions(ACCOUNT).statusItems.length === 3);
+    expect(env.service.contributions(ACCOUNT).statusItems).toEqual([
+      {
+        extensionId: 'com.example.probe',
+        id: 'by-command',
+        text: 'A',
+        command: 'c',
+        clickable: true,
+      },
+      {
+        extensionId: 'com.example.probe',
+        id: 'by-handler',
+        text: 'B',
+        command: null,
+        clickable: true,
+      },
+      { extensionId: 'com.example.probe', id: 'plain', text: 'C', command: null, clickable: false },
+    ]);
+    const click = async (id: string) =>
+      (await env.service.clickStatus(ACCOUNT, 'com.example.probe', id)).result;
+    expect(await click('by-command')).toBe('command');
+    expect(await click('by-handler')).toBe(1);
+    expect(await click('plain')).toBeNull();
   });
 });

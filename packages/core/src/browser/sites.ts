@@ -325,13 +325,16 @@ export class BrowserSites {
    */
   async decide(accountId: string, host: string, scope?: SiteScope): Promise<SiteDecision> {
     const h = normalizeHost(host);
-    const [egressAllow, egressDeny, restrict] = await Promise.all([
+    const [ownAllow, egressDeny, restrict] = await Promise.all([
       this.#setting('network.egressAllow'),
       this.#setting('network.egressDeny'),
       this.#setting('managed.restrict'),
     ]);
-    // Managed policy's browser domains decide first: no entry can open a site it refuses.
-    if (managedRestrictions(restrict).browserDomain(h))
+    // Managed policy's browser domains decide first: no entry can open a site it refuses. Its
+    // egress allow list is a ceiling over the owner's (ADR-097).
+    const managed = managedRestrictions(restrict);
+    const egressAllow = managed.egressAllow(ownAllow);
+    if (managed.browserDomain(h))
       return decision({
         access: 'blocked',
         pattern: null,
@@ -422,15 +425,16 @@ export class BrowserSites {
     /** Sites the owner allowed by exact name (local addresses under browser.allowLocalSites). */
     named: string[];
   }> {
-    const [egressAllow, egressDeny, egressMode, restrict] = await Promise.all([
+    const [ownAllow, egressDeny, egressMode, restrict] = await Promise.all([
       this.#setting('network.egressAllow'),
       this.#setting('network.egressDeny'),
       this.#setting('network.egressMode'),
       this.#setting('managed.restrict'),
     ]);
     // Managed policy (FR-106): its denied domains join the deny list, and an allowed site counts
-    // only where every allow list of the policy covers it.
+    // only where every allow list of the policy covers it; its egress allow list is a ceiling.
     const managed = managedRestrictions(restrict);
+    const egressAllow = managed.egressAllow(ownAllow);
     // Someone who is not the Hub owner may narrow the global allow list, never widen it: their
     // allowed sites count only where the Hub already allows them (decision 5).
     const narrowOnly = !isHubOwner(this.#db, accountId);

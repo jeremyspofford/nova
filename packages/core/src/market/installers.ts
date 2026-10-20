@@ -22,10 +22,13 @@ import { z } from 'zod';
 import { contracts, type Validator } from '@nova/contracts';
 import {
   NovaError,
+  SAFE_THEME_VALUE,
   uuidv7,
   type MarketItemKind,
   type MarketPermissionLine,
+  type ExtensionPermissionLine,
   type MarketPetView,
+  type MarketPreview,
 } from '@nova/shared';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { loadPluginFolder, PLUGIN_MANIFEST_PATH } from '../plugins/manifest.ts';
@@ -63,6 +66,8 @@ export interface MarketInspection {
   warnings: string[];
   /** Kept with the preview and handed back at install (the plugin installer's preview id). */
   handle?: string;
+  /** An extension update by another publisher (or none), from the extension installer. */
+  publisherChange?: MarketPreview['publisherChange'];
 }
 
 export interface MarketInstalledState {
@@ -84,6 +89,8 @@ export interface MarketInstallRequest {
   enable: boolean;
   trustHooks?: { id: string; contentHash: string }[];
   userConfig?: Record<string, unknown>;
+  /** The owner accepted the preview's change of publisher. */
+  acceptPublisherChange?: boolean;
 }
 
 export interface MarketInstaller {
@@ -162,10 +169,57 @@ export type ExtensionInstaller = Pick<
   'preview' | 'install' | 'get' | 'uninstall' | 'snapshot'
 >;
 
-function extensionLines(
-  lines: readonly { key: string; kind: MarketPermissionLine['kind']; text: string }[],
+/** The line kinds the marketplace knows; another kind an installer sends counts as `plugin`. */
+// Every kind, listed once: adding one to the union without listing it here fails to compile.
+const KNOWN_KINDS: Record<MarketPermissionLine['kind'], true> = {
+  network: true,
+  fs: true,
+  secret: true,
+  tool: true,
+  action_default: true,
+  hooks_answer_asks: true,
+  browser_extension: true,
+  ui_domain: true,
+  ui_entry: true,
+  hook: true,
+  role: true,
+  mcp_server: true,
+  program: true,
+  skill_tools: true,
+  command: true,
+  panel: true,
+  event: true,
+  plugin: true,
+};
+const LINE_KINDS = new Set<string>(Object.keys(KNOWN_KINDS));
+
+/** Every kind the extension installer sends is a marketplace kind (checked when compiling). */
+type ExtensionKindsFit = ExtensionPermissionLine['kind'] extends MarketPermissionLine['kind']
+  ? true
+  : never;
+export const EXTENSION_KINDS_FIT: ExtensionKindsFit = true;
+
+/**
+ * The extension installer's lines as marketplace lines. The detail is what the diff compares
+ * under one key: the installer's own `detail` when it gives one, else the line's wording and
+ * whether it is sensitive, so a tool that goes from read to execute, or a default from ask to
+ * allow, under the same key still shows as a change that needs accepting.
+ */
+export function extensionLines(
+  lines: readonly {
+    key: string;
+    kind: string;
+    text: string;
+    sensitive?: boolean;
+    detail?: string | null;
+  }[],
 ): MarketPermissionLine[] {
-  return lines.map((l) => ({ key: l.key, kind: l.kind, text: l.text, detail: null }));
+  return lines.map((l) => ({
+    key: l.key,
+    kind: LINE_KINDS.has(l.kind) ? (l.kind as MarketPermissionLine['kind']) : 'plugin',
+    text: l.text,
+    detail: l.detail ?? `${l.text}${l.sensitive ? ' (sensitive)' : ''}`,
+  }));
 }
 
 /**
@@ -236,6 +290,7 @@ export class PluginMarketInstaller implements MarketInstaller {
       // The extension installer's own Unverified note is replaced by the marketplace's verdict.
       warnings: p.warnings.filter((w) => !w.startsWith('Unverified:')),
       handle: p.previewId,
+      publisherChange: p.publisherChange ?? null,
     };
   }
 
@@ -364,6 +419,8 @@ export class PluginMarketInstaller implements MarketInstaller {
           // The owner confirmed the sideload in the marketplace when it is not verified.
           ...(req.verified ? {} : { confirmSideload: true }),
           ...(req.trustHooks ? { trustHooks: req.trustHooks } : {}),
+          // The owner accepted another publisher (or none) in the marketplace preview.
+          ...(req.acceptPublisherChange ? { acceptPublisherChange: true } : {}),
         },
         // Where it came from; the signature verdict stays the extension installer's.
         { source: 'catalog', origin: req.origin, via: req.catalogId },
@@ -493,14 +550,16 @@ export class SkillMarketInstaller implements MarketInstaller {
 let themeValidator: Validator | null = null;
 const THEME_MAX_BYTES = 64 * 1024;
 const MAX_THEMES = 50;
-/** Token values are CSS values: refuse anything that could leave its declaration. */
-const SAFE_VALUE = /^[\w\s#%.,'"()+-]{1,200}$/;
 
 export interface ThemeStore {
   /** `appearance.customThemes` now. */
   read(accountId: string): Promise<Record<string, unknown>[]>;
   /** Write `appearance.customThemes` the way the settings route does (a managed lock refuses). */
   write(accountId: string, themes: Record<string, unknown>[]): Promise<void>;
+  /** `appearance.customTheme`: the id of the saved theme in use, or null. */
+  inUse(accountId: string): Promise<string | null>;
+  /** Set `appearance.customTheme` to null: no saved theme is in use. */
+  clearInUse(accountId: string): Promise<void>;
 }
 
 /** Themes (FR-011): a theme file (contracts/schemas/theme.json) added to the saved themes. */
@@ -537,7 +596,8 @@ export class ThemeMarketInstaller implements MarketInstaller {
       fonts?: Record<string, string>;
     };
     for (const [k, val] of Object.entries({ ...t.tokens, ...t.fonts }))
-      if (!SAFE_VALUE.test(val))
+      // The same rule as the Appearance settings and extension themes (one regex, in shared).
+      if (!SAFE_THEME_VALUE.test(val))
         throw new NovaError('validation', `theme.json: the value of ${k} is not a plain CSS value`);
     return Promise.resolve({
       id: t.id,
@@ -578,6 +638,9 @@ export class ThemeMarketInstaller implements MarketInstaller {
   async remove(accountId: string, id: string): Promise<void> {
     const themes = await this.#store.read(accountId);
     if (!themes.some((t) => t.id === id)) throw new NovaError('not_found', 'theme not installed');
+    // A removed theme stops being the one in use first, so installing it again later does not
+    // quietly bring it back into use.
+    if ((await this.#store.inUse(accountId)) === id) await this.#store.clearInUse(accountId);
     await this.#store.write(
       accountId,
       themes.filter((t) => t.id !== id),

@@ -85,6 +85,7 @@ export function pluginPreview(over: Partial<PluginPreview> = {}): PluginPreview 
     verified: true,
     warnings: [],
     replaces: null,
+    publisherChange: null,
     ...over,
   };
 }

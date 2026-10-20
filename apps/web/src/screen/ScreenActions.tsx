@@ -5,7 +5,9 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import type { ScreenActionView } from '@nova/shared';
 import { Button, Icon, Spinner } from '@nova/ui';
+import { defineMessages, fmt } from '@nova/i18n';
 import { errorMessage } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useDebounced } from '../work/events.ts';
 import { useScreenApi } from './api.ts';
 import { eventComputerId, useHubEvents } from './events.ts';
@@ -19,6 +21,47 @@ import {
 } from './format.ts';
 
 export const SCREEN_ACTIONS_PAGE = 50;
+
+export const ACTIONS_TEXT = defineMessages('screen.actions', {
+  title: 'Screen actions',
+  loadFailed: 'Could not load the screen actions.',
+  olderFailed: 'Could not load older actions.',
+  refresh: 'Refresh',
+  retry: 'Retry',
+  loading: 'Loading screen actions',
+  empty:
+    'No screen actions yet. Each click, keystroke or scroll Nova sends is recorded here with a screenshot before and after.',
+  /** An action and the app it was in: "Click at (120, 40) in Spreadsheet". */
+  inApp: '{step} in {app}',
+  who: 'Who',
+  window: 'Window',
+  level: 'Level',
+  why: 'Why',
+  time: 'Time',
+  before: 'Before',
+  after: 'After',
+  beforeAlt: 'Before: {step}',
+  afterAlt: 'After: {step}',
+  noShotsRefused: 'Nothing was sent, so there are no screenshots.',
+  noShots: 'No screenshots: they were not taken or are past the retention.',
+  older: 'Show older',
+});
+const S = ACTIONS_TEXT;
+
+/** A recorded action's full date and time (what `toLocaleString()` showed). */
+function fullTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : fmt.dateTime(d, {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+}
 
 const newestFirst = (a: ScreenActionView, b: ScreenActionView) =>
   b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id);
@@ -46,7 +89,7 @@ export function ScreenActions({ computerId }: { computerId: string }) {
         setMore((m) => m || fresh.length >= SCREEN_ACTIONS_PAGE);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the screen actions.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -73,7 +116,7 @@ export function ScreenActions({ computerId }: { computerId: string }) {
       });
       setMore(page.length >= SCREEN_ACTIONS_PAGE);
     } catch (err) {
-      setError(errorMessage(err, 'Could not load older actions.'));
+      setError(errorMessage(err, S.olderFailed));
     } finally {
       setLoadingMore(false);
     }
@@ -90,26 +133,21 @@ export function ScreenActions({ computerId }: { computerId: string }) {
   return (
     <section className="ws-section scr-actions" aria-labelledby={headingId}>
       <div className="ws-section-header">
-        <h3 id={headingId}>Screen actions</h3>
+        <h3 id={headingId}>{S.title}</h3>
         <Button variant="ghost" onClick={() => setAttempt((n) => n + 1)}>
-          <Icon name="refresh" /> Refresh
+          <Icon name="refresh" /> {S.refresh}
         </Button>
       </div>
       {error ? (
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading screen actions" /> : null}
-      {items?.length === 0 ? (
-        <p className="muted">
-          No screen actions yet. Each click, keystroke or scroll Nova sends is recorded here with a
-          screenshot before and after.
-        </p>
-      ) : null}
+      {items === null && !error ? <Spinner label={S.loading} /> : null}
+      {items?.length === 0 ? <p className="muted">{S.empty}</p> : null}
       {items?.length ? (
-        <ol className="activity-list scr-trace" aria-label="Screen actions">
+        <ol className="activity-list scr-trace" aria-label={S.title}>
           {items.map((a) => {
             const st = ACTION_STATUS[a.status];
             const label = screenActionText(a);
@@ -123,8 +161,16 @@ export function ScreenActions({ computerId }: { computerId: string }) {
                   onClick={() => toggle(a.id)}
                 >
                   <span className="activity-title">
-                    {label}
-                    {a.app ? <span className="muted"> in {a.app}</span> : null}
+                    {a.app
+                      ? rich(S.inApp, {
+                          step: label,
+                          app: (
+                            <span className="muted" dir="auto">
+                              {a.app}
+                            </span>
+                          ),
+                        })
+                      : label}
                   </span>
                   <span className="nv-chip" data-status={st.tone}>
                     <Icon name={st.icon} />
@@ -138,28 +184,28 @@ export function ScreenActions({ computerId }: { computerId: string }) {
                 {expanded ? (
                   <div className="scr-trace-detail">
                     <dl className="ws-dl">
-                      <dt>Who</dt>
+                      <dt>{S.who}</dt>
                       <dd>{actorText(a.actor, a.origin)}</dd>
                       {a.windowTitle ? (
                         <>
-                          <dt>Window</dt>
-                          <dd>{a.windowTitle}</dd>
+                          <dt>{S.window}</dt>
+                          <dd dir="auto">{a.windowTitle}</dd>
                         </>
                       ) : null}
                       {a.tier ? (
                         <>
-                          <dt>Level</dt>
+                          <dt>{S.level}</dt>
                           <dd>{TIER_TEXT[a.tier]}</dd>
                         </>
                       ) : null}
                       {a.error ? (
                         <>
-                          <dt>Why</dt>
+                          <dt>{S.why}</dt>
                           <dd>{sentence(a.error.message)}</dd>
                         </>
                       ) : null}
-                      <dt>Time</dt>
-                      <dd>{new Date(a.createdAt).toLocaleString()}</dd>
+                      <dt>{S.time}</dt>
+                      <dd>{fullTime(a.createdAt)}</dd>
                     </dl>
                     {a.hasBefore || a.hasAfter ? (
                       <div className="scr-shots">
@@ -167,28 +213,26 @@ export function ScreenActions({ computerId }: { computerId: string }) {
                           <figure>
                             <img
                               src={api.screenShotUrl(computerId, a.id, 'before')}
-                              alt={`Before: ${label}`}
+                              alt={S.beforeAlt({ step: label })}
                               loading="lazy"
                             />
-                            <figcaption>Before</figcaption>
+                            <figcaption>{S.before}</figcaption>
                           </figure>
                         ) : null}
                         {a.hasAfter ? (
                           <figure>
                             <img
                               src={api.screenShotUrl(computerId, a.id, 'after')}
-                              alt={`After: ${label}`}
+                              alt={S.afterAlt({ step: label })}
                               loading="lazy"
                             />
-                            <figcaption>After</figcaption>
+                            <figcaption>{S.after}</figcaption>
                           </figure>
                         ) : null}
                       </div>
                     ) : (
                       <p className="muted ws-flush">
-                        {a.status === 'refused'
-                          ? 'Nothing was sent, so there are no screenshots.'
-                          : 'No screenshots: they were not taken or are past the retention.'}
+                        {a.status === 'refused' ? S.noShotsRefused : S.noShots}
                       </p>
                     )}
                   </div>
@@ -201,7 +245,7 @@ export function ScreenActions({ computerId }: { computerId: string }) {
       {more && items?.length ? (
         <div className="row">
           <Button onClick={() => void older()} disabled={loadingMore}>
-            Show older
+            {S.older}
           </Button>
         </div>
       ) : null}

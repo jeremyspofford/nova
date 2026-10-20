@@ -3,6 +3,7 @@
 // words (docs/04 §4.4, §6, §7).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Dialog, Spinner } from '@nova/ui';
+import { DATA_STRINGS as S } from './format.ts';
 
 export interface Fetched<T> {
   data: T | null;
@@ -55,7 +56,7 @@ export function ErrorBox({ message, onRetry }: { message: string; onRetry?: () =
   return (
     <div role="alert" className="ws-error">
       <p>{message}</p>
-      {onRetry ? <Button onClick={onRetry}>Retry</Button> : null}
+      {onRetry ? <Button onClick={onRetry}>{S.retry}</Button> : null}
     </div>
   );
 }
@@ -152,7 +153,7 @@ function ConfirmBody({
       footer={
         <>
           <Button ref={cancelRef} onClick={onClose} disabled={busy}>
-            Cancel
+            {S.cancel}
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}

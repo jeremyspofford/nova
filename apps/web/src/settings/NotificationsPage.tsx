@@ -4,7 +4,8 @@
 // member chooses where their notifications go and which devices get them; which kinds Nova shows
 // and how pushes read are the Hub's, and say so (src/team/access.tsx).
 import { useState } from 'react';
-import { NOTIFICATION_KINDS, type NotificationKind } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
+import { NOTIFICATION_KINDS } from '@nova/shared';
 import { Button, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { NotificationRoutingSection } from '../channels/NotificationRoutingSection.tsx';
@@ -18,7 +19,7 @@ import { useShell } from '../shellbridge/bridge.ts';
 import { MemberNote, OwnerSets, useMemberAccess } from '../team/access.tsx';
 import { MEMBER_MODE_TEXT } from '../team/format.ts';
 
-export const CATEGORY_TEXT: Record<NotificationKind, { label: string; description: string }> = {
+export const CATEGORY_TEXT = defineMessages('settings.notifications.categories', {
   approval: {
     label: 'Approvals',
     description: 'An action is waiting for your decision.',
@@ -39,15 +40,28 @@ export const CATEGORY_TEXT: Record<NotificationKind, { label: string; descriptio
     label: 'System',
     description: 'Updates and notices about the Hub itself.',
   },
-};
+});
 
-const PERMISSION_TEXT: Record<OsPermission, string> = {
-  unsupported: 'This browser cannot show notifications.',
-  default: 'Notifications are not allowed on this device yet.',
-  granted: 'Notifications are allowed on this device.',
-  denied:
-    'Notifications are blocked on this device. Allow them in your browser’s site settings, then reload.',
-};
+export const NOTIFICATIONS_TEXT = defineMessages('settings.notifications', {
+  title: 'Notifications',
+  whatToNotify: 'What to notify you about',
+  whatToNotifyHint:
+    'Turned-off categories are not listed in the notification center and are not sent to your ' +
+    'devices.',
+  saveFailed: 'Could not save: {error}',
+  whileOpen: 'While Nova is open',
+  whileOpenHint: 'When Nova is in the background, notifications can also appear on this device.',
+  allow: 'Allow notifications on this device',
+  permission: {
+    unsupported: 'This browser cannot show notifications.',
+    default: 'Notifications are not allowed on this device yet.',
+    granted: 'Notifications are allowed on this device.',
+    denied:
+      'Notifications are blocked on this device. Allow them in your browser’s site settings, ' +
+      'then reload.',
+  },
+});
+const S = NOTIFICATIONS_TEXT;
 
 export function NotificationsPage() {
   const shell = useShell();
@@ -67,15 +81,12 @@ export function NotificationsPage() {
 
   return (
     <div className="settings-page">
-      <h2>Notifications</h2>
+      <h2>{S.title}</h2>
       <MemberNote access={access}>{MEMBER_MODE_TEXT.notifications}</MemberNote>
       {access.hubSettings ? (
         <section className="settings-section" aria-labelledby="notif-categories">
-          <h3 id="notif-categories">What to notify you about</h3>
-          <p className="muted">
-            Turned-off categories are not listed in the notification center and are not sent to your
-            devices.
-          </p>
+          <h3 id="notif-categories">{S.whatToNotify}</h3>
+          <p className="muted">{S.whatToNotifyHint}</p>
           {NOTIFICATION_KINDS.map((k) => (
             <SwitchField
               key={k}
@@ -87,7 +98,7 @@ export function NotificationsPage() {
                 void settings
                   .set('notifications.categories', { ...cats.value, [k]: v })
                   .catch((err: unknown) =>
-                    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' }),
+                    toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' }),
                   )
               }
             />
@@ -101,17 +112,15 @@ export function NotificationsPage() {
       {/* In the desktop app it shows OS notifications itself (FR-008, M7). */}
       {shell ? <ShellNotificationsNote /> : null}
       <section className="settings-section" aria-labelledby="notif-device" hidden={!!shell}>
-        <h3 id="notif-device">While Nova is open</h3>
-        <p className="muted">
-          When Nova is in the background, notifications can also appear on this device.
-        </p>
+        <h3 id="notif-device">{S.whileOpen}</h3>
+        <p className="muted">{S.whileOpenHint}</p>
         <p role="status" className="ws-flush">
-          {PERMISSION_TEXT[permission]}
+          {S.permission[permission]}
         </p>
         {permission === 'default' ? (
           <div className="row">
             <Button variant="primary" disabled={asking} onClick={() => void ask()}>
-              Allow notifications on this device
+              {S.allow}
             </Button>
           </div>
         ) : null}

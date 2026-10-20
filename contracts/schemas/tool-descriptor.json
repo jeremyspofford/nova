@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://arialabs.ai/schemas/tool-descriptor.json",
   "title": "ToolDescriptor",
-  "description": "Registered tool metadata (docs/08 §1). Built-in names are domain.action (for example tool.search, context.remaining, context.fresh, exec.write, goal.update, schedule.wake, ambient.activity_summary) plus a few single-word tools such as ask_user.",
+  "description": "Registered tool metadata (docs/08 §1). Built-in names are domain.action (for example tool.search, context.remaining, context.fresh, exec.write, goal.update, schedule.wake, ambient.activity_summary) plus a few single-word tools such as ask_user. An SDK extension's tools are ext:<extensionId>/<name> with source plugin (M8, ADR-097 D3).",
   "type": "object",
   "required": ["name", "title", "description", "source", "inputSchema"],
   "additionalProperties": false,

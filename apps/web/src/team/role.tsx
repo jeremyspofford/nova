@@ -13,6 +13,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { defineMessages } from '@nova/i18n';
 import {
   SETTINGS,
   resolveSetting,
@@ -84,6 +85,14 @@ export function useTeamRole(): TeamRoleState {
   // Hooks run unconditionally; under a provider the local copy stays idle.
   const local = useFetchedRole(null, shared === null);
   return shared ?? local;
+}
+
+/**
+ * The signed-in person's account id from the shell's provider, or null outside it or while
+ * unknown. It never fetches, so a list of messages can read it for each one (FR-217).
+ */
+export function useMyAccountId(): string | null {
+  return useContext(RoleCtx)?.me?.accountId ?? null;
 }
 
 // ---- a member's settings in place of the Hub's ---------------------------------------------
@@ -160,7 +169,10 @@ export const MEMBER_SETTINGS_SECTIONS: readonly string[] = [
 ];
 
 /** Labels of the team's own Settings sections. */
-export const TEAM_SETTINGS_LABELS = { account: 'Account', members: 'Members' } as const;
+export const TEAM_SETTINGS_LABELS = defineMessages('team.settingsSections', {
+  account: 'Account',
+  members: 'Members',
+});
 
 /** Workspace surfaces that only reach the Hub's machine or administer the Hub (the guard's list). */
 export const MEMBER_HIDDEN_SURFACES: readonly string[] = [

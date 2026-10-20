@@ -232,6 +232,11 @@ async function stageInto(id: string, dir: string, opts: StageOptions): Promise<S
   const res = exportManifestSchema.safeParse(parsed);
   if (!res.success) throw refuse('the archive manifest is malformed', 'archive_damaged');
   const manifest = res.data;
+  if (manifest.accountScope !== 'hub')
+    throw refuse(
+      "this archive holds one account's data, not a Hub's: it is kept, not imported",
+      'account_scope',
+    );
   if (manifest.schemaVersion > current)
     throw refuse(
       `the archive comes from a newer Nova (schema ${manifest.schemaVersion}; this Hub has ${current}): update this Hub first`,

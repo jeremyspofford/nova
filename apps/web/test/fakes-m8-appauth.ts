@@ -8,7 +8,10 @@
 //   type other than `code` 400 `unsupported_response_type`, no S256 challenge 400
 //   `invalid_request`, an unknown or unregistered scope 400 `invalid_scope`); the decision denies
 //   to `error=access_denied` or approves (kept scopes must be requested: 400 `not_requested`) to a
-//   one-use code, adding to an earlier grant; the owner's list and revoke (404 `not_found`);
+//   one-use code, adding to an earlier grant; the owner's list and revoke (404 `not_found`; the
+//   app stays registered); the registered apps no one authorizes (`listPending`: approved once,
+//   or registered within the last hour, newest first; `expiresAt` null once approved) and
+//   removing one (404 `not_found`, 409 `conflict` `{reason: authorized}` while it is allowed);
 // - OTLP export (apps/hub/src/otlp.ts): owner only; `putOtlpSchema` (400 `validation` issues),
 //   enabling refused by managed policy (403 `managed`), a setting managed policy locks refused
 //   (403 `managed`), at most 20 headers (400 `{field: headers}`); header values only as set or
@@ -41,9 +44,11 @@ import {
   resolveSetting,
   type AppConsentView,
   type AppGrantView,
+  type AppPendingView,
   type AppScope,
   type ChannelBindingViewM7,
   type ChannelOAuthView,
+  type ManagedPolicyView,
   type OtlpSignal,
   type OtlpStatusView,
   type OtlpTestResultView,
@@ -72,6 +77,8 @@ import {
 import { MEMBER_ID, OWNER_ID, m7TeamState } from './fakes-m7-team.ts';
 
 const T0 = '2026-10-01T12:00:00.000Z';
+/** An unapproved registration lapses after this long (AppAuthService `pendingTtlMs`). */
+const PENDING_TTL_MS = 3_600_000;
 let seq = 0;
 const nid = (p: string) => `${p}${(++seq).toString().padStart(4, '0')}`;
 let clock = 0;
@@ -395,6 +402,15 @@ export function m8AppAuthImpl(
     return { client, requested, scopes, back };
   }
 
+  /** Where a redirect goes, as the pending list shows it (AppAuthService `redirectHost`). */
+  const redirectHost = (uri: string) => {
+    try {
+      const u = new URL(uri);
+      return u.protocol === 'http:' ? u.host : u.protocol.slice(0, -1);
+    } catch {
+      return uri.slice(0, 100);
+    }
+  };
   const kindOf = (uri: string): 'loopback' | 'private_scheme' =>
     loopback(uri) ? 'loopback' : 'private_scheme';
 
@@ -460,6 +476,38 @@ export function m8AppAuthImpl(
       owner("the Hub's app authorizations");
       if (!st.grants.some((g) => g.id === id)) throw fail(404, 'not_found', 'app not found');
       st.grants = st.grants.filter((g) => g.id !== id);
+      return { ok: true };
+    },
+    listPendingApps: async () => {
+      owner("the Hub's app authorizations");
+      const now = Date.now();
+      const items: AppPendingView[] = st.clients
+        .filter(
+          (c) =>
+            !st.grants.some((g) => g.clientId === c.id) &&
+            (c.approved || Date.parse(c.registeredAt) + PENDING_TTL_MS > now),
+        )
+        .sort((a, b) => b.registeredAt.localeCompare(a.registeredAt) || b.id.localeCompare(a.id))
+        .map((c) => ({
+          clientId: c.id,
+          name: c.name,
+          redirectHosts: [...new Set(c.redirectUris.map(redirectHost))],
+          scopes: [...c.scopes],
+          registeredAt: c.registeredAt,
+          expiresAt: c.approved
+            ? null
+            : new Date(Date.parse(c.registeredAt) + PENDING_TTL_MS).toISOString(),
+        }));
+      return { items };
+    },
+    removePendingApp: async (clientId) => {
+      owner("the Hub's app authorizations");
+      if (!st.clients.some((c) => c.id === clientId)) throw fail(404, 'not_found', 'app not found');
+      if (st.grants.some((g) => g.clientId === clientId))
+        throw fail(409, 'conflict', 'this app is authorized: revoke it first', {
+          reason: 'authorized',
+        });
+      st.clients = st.clients.filter((c) => c.id !== clientId);
       return { ok: true };
     },
 
@@ -781,11 +829,11 @@ export interface RenderW11Options {
   member?: boolean;
   settings?: Record<string, unknown>;
   managed?: Record<string, unknown>;
+  /** What `GET /api/v1/managed` answers: where the policy comes from (the lock notes' source). */
+  policy?: ManagedPolicyView;
   appauth?: Partial<M8AppAuthState>;
   channels?: Partial<M6ChannelsState>;
   misc?: Partial<M7MiscState>;
-  /** Registered apps nobody approved (the diagnostics `apps` probe); null: no probe. */
-  pendingApps?: number | null;
   /** Calls that fail once, from the first render on. */
   fail?: Partial<Record<string, Error>>;
 }
@@ -800,11 +848,7 @@ export async function renderW11(ui: ReactNode, opts: RenderW11Options = {}) {
   const hub = createHub({ m7team: m7TeamState({ me: member ? MEMBER_ID : OWNER_ID }) });
   hub.state.settings = { 'onboarding.state': DONE_ONBOARDING, ...opts.settings };
   hub.state.managed = { ...opts.managed };
-  if (opts.pendingApps !== null)
-    hub.state.m3.diagnostics = {
-      ...hub.state.m3.diagnostics,
-      probes: { apps: { enabled: true, pendingClients: opts.pendingApps ?? 0 } },
-    };
+  if (opts.policy) hub.state.m8managed.view = opts.policy;
   const setting = <K extends SettingKey>(k: K): SettingValue<K> =>
     resolveSetting(k, { global: hub.state.settings, managed: hub.state.managed }).value;
   const channelsHub = createChannelsHub({

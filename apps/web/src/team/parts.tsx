@@ -3,10 +3,18 @@
 // or outward-facing actions (docs/04 §4.4, §6, §7). The loader, chips, copy button and facts are
 // the Network surface's (src/netsurface/parts.tsx).
 import { useId, useRef, useState, type ReactNode } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, Icon, Spinner } from '@nova/ui';
-import { OWNER_ONLY_TEXT, isOwnerOnly, teamErrorMessage } from './format.ts';
+import { TEAM_TEXT, isOwnerOnly, teamErrorMessage } from './format.ts';
 
 export { Chip, CopyButton, Fact, useLoad, type Loaded } from '../netsurface/parts.tsx';
+
+const PARTS_TEXT = defineMessages('team.parts', {
+  belongsWhat: '“{what}” belongs to the whole Hub, so only its owner sees and changes it.',
+  belongs: 'This part belongs to the whole Hub, so only its owner sees and changes it.',
+  staysYours: 'Your own chats, memory, connectors and settings stay yours.',
+  didNotWork: 'That did not work.',
+});
 
 /** Shown instead of a part of the Hub a member may not change (decision 5). */
 export function OwnerOnlyNotice({ what }: { what?: string }) {
@@ -14,12 +22,9 @@ export function OwnerOnlyNotice({ what }: { what?: string }) {
     <div className="ws-callout team-owner-only" role="note">
       <Icon name="shield" />
       <div className="stack">
-        <p className="team-strong">{OWNER_ONLY_TEXT}</p>
+        <p className="team-strong">{TEAM_TEXT.ownerOnly}</p>
         <p className="muted">
-          {what
-            ? `“${what}” belongs to the whole Hub, so only its owner sees and changes it.`
-            : 'This part belongs to the whole Hub, so only its owner sees and changes it.'}{' '}
-          Your own chats, memory, connectors and settings stay yours.
+          {what ? PARTS_TEXT.belongsWhat({ what }) : PARTS_TEXT.belongs} {PARTS_TEXT.staysYours}
         </p>
       </div>
     </div>
@@ -42,7 +47,7 @@ export function LoadError({
   return (
     <div role="alert" className="ws-error">
       <p>{teamErrorMessage(error, fallback)}</p>
-      <Button onClick={onRetry}>Retry</Button>
+      <Button onClick={onRetry}>{TEAM_TEXT.retry}</Button>
     </div>
   );
 }
@@ -126,7 +131,7 @@ function ConfirmBody({
       footer={
         <>
           <Button ref={cancelRef} onClick={onClose}>
-            Cancel
+            {TEAM_TEXT.cancel}
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}
@@ -141,7 +146,7 @@ function ConfirmBody({
       {children}
       {error ? (
         <p role="alert" className="nv-field-error">
-          {teamErrorMessage(error, 'That did not work.')}
+          {teamErrorMessage(error, PARTS_TEXT.didNotWork)}
         </p>
       ) : null}
     </Dialog>

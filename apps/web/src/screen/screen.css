@@ -38,7 +38,7 @@
   gap: var(--u-space-2) var(--u-space-3);
   padding: var(--u-space-3) var(--u-space-4);
   border: 1px solid var(--u-border);
-  border-left: 4px solid var(--u-border);
+  border-inline-start: 4px solid var(--u-border);
   border-radius: var(--u-radius-md);
   background: var(--u-surface-2);
 }
@@ -137,7 +137,7 @@
   background: none;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .scr-trace-step .activity-title {
@@ -147,7 +147,8 @@
 .scr-trace-detail {
   display: grid;
   gap: var(--u-space-2);
-  margin: var(--u-space-1) 0 var(--u-space-2) var(--u-space-4);
+  margin-block: var(--u-space-1) var(--u-space-2);
+  margin-inline: var(--u-space-4) 0;
 }
 .scr-shots {
   display: grid;
@@ -200,20 +201,21 @@
 .scr-indicators {
   position: fixed;
   top: var(--u-space-2);
-  left: 50%;
+  inset-inline: 0;
   z-index: var(--u-z-toast);
   display: grid;
   gap: var(--u-space-1);
   width: max-content;
   max-width: calc(100vw - 2 * var(--u-space-2));
-  transform: translateX(-50%);
+  margin-inline: auto;
 }
 .scr-indicator {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--u-space-2);
-  padding: var(--u-space-1) var(--u-space-1) var(--u-space-1) var(--u-space-3);
+  padding-block: var(--u-space-1);
+  padding-inline: var(--u-space-3) var(--u-space-1);
   border: 2px solid var(--u-info);
   border-radius: 999px;
   background: var(--u-surface);
@@ -229,10 +231,8 @@
 }
 @media (max-width: 600px) {
   .scr-indicators {
-    left: var(--u-space-2);
-    right: var(--u-space-2);
+    inset-inline: var(--u-space-2);
     width: auto;
-    transform: none;
   }
   .scr-indicator {
     border-radius: var(--u-radius-md);

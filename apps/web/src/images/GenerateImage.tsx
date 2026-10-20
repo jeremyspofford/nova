@@ -5,16 +5,48 @@
 // request passes the policy gate like any tool call; when it asks first, the approval is in the
 // chat. Images are loaded only from the Hub's own artifact route.
 import { useEffect, useId, useRef, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Button, Dialog, Icon, IconButton, RadioGroup, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useAnnounce, useServices } from '../services.tsx';
 import { useImagesApi, type ImageSize, type ImagesApi } from './api.ts';
 import './images.css';
 
-const SHAPES: { value: ImageSize; label: string; description: string }[] = [
-  { value: '1024x1024', label: 'Square', description: '1024 × 1024' },
-  { value: '1536x1024', label: 'Landscape', description: '1536 × 1024' },
-  { value: '1024x1536', label: 'Portrait', description: '1024 × 1536' },
+export const IMAGE_TEXT = defineMessages('images', {
+  shape: { square: 'Square', landscape: 'Landscape', portrait: 'Portrait' },
+  /** An image size in pixels: "1024 × 1536". */
+  size: '{width} × {height}',
+  generate: 'Generate an image',
+  describe: 'Describe the image: its subject, style and composition.',
+  tooLong: 'Keep the description under {max} characters.',
+  generating: 'Generating the image.',
+  waitsApproval: 'The image waits for your approval in the chat.',
+  generated: 'Image generated and saved in this chat.',
+  notGenerated: 'The image was not generated.',
+  failed: 'Could not generate the image.',
+  dialogBody: 'It is saved in this chat as an image, with your description.',
+  description: 'Description',
+  shapeLabel: 'Shape',
+  generatingShort: 'Generating',
+  generatingLong: 'Generating… This can take a minute.',
+  saved: 'Saved in this chat’s artifacts.',
+  approvalNote:
+    'Your rules ask before generating images. Approve it in the chat; the image then appears in its artifacts.',
+  done: 'Done',
+  cancel: 'Cancel',
+  another: 'Generate another',
+  go: 'Generate',
+});
+
+const SHAPES: {
+  value: ImageSize;
+  shape: 'square' | 'landscape' | 'portrait';
+  w: number;
+  h: number;
+}[] = [
+  { value: '1024x1024', shape: 'square', w: 1024, h: 1024 },
+  { value: '1536x1024', shape: 'landscape', w: 1536, h: 1024 },
+  { value: '1024x1536', shape: 'portrait', w: 1024, h: 1536 },
 ];
 
 const PROMPT_MAX = 4000;
@@ -60,7 +92,7 @@ export function GenerateImageButton({ threadId }: { threadId: string | null }) {
   return (
     <>
       <IconButton
-        label="Generate an image"
+        label={IMAGE_TEXT.generate}
         icon={<Icon name="image" />}
         variant="ghost"
         onClick={() => setOpen(true)}
@@ -97,9 +129,9 @@ function GenerateImageDialog({
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [shown, setShown] = useState('');
   const problem = !prompt.trim()
-    ? 'Describe the image: its subject, style and composition.'
+    ? IMAGE_TEXT.describe
     : prompt.length > PROMPT_MAX
-      ? `Keep the description under ${PROMPT_MAX.toLocaleString()} characters.`
+      ? IMAGE_TEXT.tooLong({ max: fmt.number(PROMPT_MAX) })
       : null;
 
   const generate = async () => {
@@ -107,22 +139,22 @@ function GenerateImageDialog({
     if (problem || busy) return;
     setBusy(true);
     setOutcome(null);
-    announce('Generating the image.');
+    announce(IMAGE_TEXT.generating);
     try {
       const r = await api.generateImage(threadId, prompt.trim(), size);
       if (r.approvalId !== undefined) {
         setOutcome({ kind: 'waiting' });
-        announce('The image waits for your approval in the chat.');
+        announce(IMAGE_TEXT.waitsApproval);
       } else if (r.ok) {
         // The tool's result names the artifact it saved.
         setShown(prompt.trim());
         setOutcome({ kind: 'done', artifactId: r.meta?.artifact?.id ?? null, text: r.text ?? '' });
-        announce('Image generated and saved in this chat.');
+        announce(IMAGE_TEXT.generated);
       } else {
-        setOutcome({ kind: 'failed', text: r.error?.message ?? 'The image was not generated.' });
+        setOutcome({ kind: 'failed', text: r.error?.message ?? IMAGE_TEXT.notGenerated });
       }
     } catch (err) {
-      setOutcome({ kind: 'failed', text: errorMessage(err, 'Could not generate the image.') });
+      setOutcome({ kind: 'failed', text: errorMessage(err, IMAGE_TEXT.failed) });
     } finally {
       setBusy(false);
     }
@@ -131,8 +163,8 @@ function GenerateImageDialog({
   return (
     <Dialog
       open
-      title="Generate an image"
-      description="It is saved in this chat as an image, with your description."
+      title={IMAGE_TEXT.generate}
+      description={IMAGE_TEXT.dialogBody}
       onClose={onClose}
       initialFocusRef={first}
       className="ws-wide-dialog"
@@ -147,7 +179,7 @@ function GenerateImageDialog({
       >
         <div className="nv-field">
           <label className="nv-field-label" htmlFor={`${id}-prompt`}>
-            Description
+            {IMAGE_TEXT.description}
           </label>
           <textarea
             ref={first}
@@ -166,16 +198,20 @@ function GenerateImageDialog({
           ) : null}
         </div>
         <RadioGroup
-          legend="Shape"
+          legend={IMAGE_TEXT.shapeLabel}
           name={`${id}-size`}
           value={size}
           onChange={(v) => setSize(v as ImageSize)}
-          options={SHAPES}
+          options={SHAPES.map((s) => ({
+            value: s.value,
+            label: IMAGE_TEXT.shape[s.shape],
+            description: IMAGE_TEXT.size({ width: s.w, height: s.h }),
+          }))}
         />
         <div aria-live="polite" className="img-result">
           {busy ? (
             <p className="muted">
-              <Spinner label="Generating" /> Generating… This can take a minute.
+              <Spinner label={IMAGE_TEXT.generatingShort} /> {IMAGE_TEXT.generatingLong}
             </p>
           ) : outcome?.kind === 'done' ? (
             outcome.artifactId ? (
@@ -185,18 +221,15 @@ function GenerateImageDialog({
                   alt={shown}
                   className="img-preview"
                 />
-                <figcaption className="muted">Saved in this chat’s artifacts.</figcaption>
+                <figcaption className="muted">{IMAGE_TEXT.saved}</figcaption>
               </figure>
             ) : (
-              <p className="muted">Saved in this chat’s artifacts.</p>
+              <p className="muted">{IMAGE_TEXT.saved}</p>
             )
           ) : outcome?.kind === 'waiting' ? (
             <p className="ws-callout" role="status">
               <Icon name="hand" />
-              <span>
-                Your rules ask before generating images. Approve it in the chat; the image then
-                appears in its artifacts.
-              </span>
+              <span>{IMAGE_TEXT.approvalNote}</span>
             </p>
           ) : outcome?.kind === 'failed' ? (
             <p className="nv-field-error" role="alert">
@@ -205,10 +238,12 @@ function GenerateImageDialog({
           ) : null}
         </div>
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>{outcome?.kind === 'done' ? 'Done' : 'Cancel'}</Button>
+          <Button onClick={onClose}>
+            {outcome?.kind === 'done' ? IMAGE_TEXT.done : IMAGE_TEXT.cancel}
+          </Button>
           <Button type="submit" variant="primary" disabled={busy}>
             {busy ? <Spinner /> : <Icon name="image" />}{' '}
-            {outcome?.kind === 'done' ? 'Generate another' : 'Generate'}
+            {outcome?.kind === 'done' ? IMAGE_TEXT.another : IMAGE_TEXT.go}
           </Button>
         </div>
       </form>

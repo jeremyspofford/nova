@@ -4,6 +4,7 @@
 import type { ShellCaptureAttachRequest, ShellQuickSendRequest } from '@nova/shared';
 import { draftAttachments, type CaptureDraft } from './capture/index.ts';
 import type { HubClient } from './hub-client.ts';
+import { CAPTURE_TEXT } from './text.ts';
 
 export interface SentView {
   threadId: string;
@@ -37,11 +38,11 @@ export async function sendCapture(
   currentThreadId: string | null,
 ): Promise<SentView> {
   const attachments = draftAttachments(draft, { image: req.includeImage, text: req.includeText });
-  if (attachments.length === 0) throw new Error('Nothing is left to attach.');
+  if (attachments.length === 0) throw new Error(CAPTURE_TEXT.nothingLeft);
   const threadId = await targetThread(client, req.target, currentThreadId);
   const note = req.note.trim();
   const res = await client.send(threadId, {
-    text: note || `Attached window: ${draft.windowTitle || draft.appName}`,
+    text: note || CAPTURE_TEXT.attachedWindow({ title: draft.windowTitle || draft.appName }),
     attachments,
   });
   return { threadId, path: `/chat/${encodeURIComponent(threadId)}`, disposition: res.disposition };

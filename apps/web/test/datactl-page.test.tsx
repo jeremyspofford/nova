@@ -64,7 +64,7 @@ describe('what the Hub holds and the export', () => {
     expect(exp.textContent).toContain('stored keys and passwords are left out');
     expect(exp.textContent).toContain('This Hub holds 4 stored keys and passwords.');
     await userEvent.click(within(exp).getByRole('button', { name: 'Export' }));
-    expect(api.createExportTicket).toHaveBeenCalledWith(undefined);
+    expect(api.createExportTicket).toHaveBeenCalledWith(undefined, undefined);
     await waitFor(() =>
       expect(startDownload).toHaveBeenCalledWith(
         '/api/v1/data/export/download?ticket=ticket-1-abcdefghijklmnopqrstuvwxyz',
@@ -89,10 +89,56 @@ describe('what the Hub holds and the export', () => {
       within(exp).getByLabelText('Repeat the passphrase'),
       'short but longer now',
     );
+    // A sealed export carries every stored key: the Hub's name is typed first.
+    const name = within(exp).getByLabelText("Type the Hub's name, nova-hub, to confirm");
+    expect(exp.textContent).toContain('carries every stored key and password on this Hub');
     await userEvent.click(within(exp).getByRole('button', { name: 'Export' }));
-    expect(api.createExportTicket).toHaveBeenCalledWith('short but longer now');
+    expect(
+      within(exp).getByText("That is not this Hub's name. Type it exactly as shown."),
+    ).toBeTruthy();
+    expect(api.createExportTicket).not.toHaveBeenCalled();
+    await userEvent.type(name, ' NOVA-hub ');
+    await userEvent.click(within(exp).getByRole('button', { name: 'Export' }));
+    expect(api.createExportTicket).toHaveBeenCalledWith('short but longer now', 'NOVA-hub');
     await waitFor(() => expect(startDownload).toHaveBeenCalled());
     expect(within(exp).getByLabelText<HTMLInputElement>('Passphrase (optional)').value).toBe('');
+    expect(within(exp).queryByLabelText(/Type the Hub's name/)).toBeNull();
+  });
+
+  it('says why the Hub refused a sealed export: a paired device, or a name that changed', async () => {
+    const { api, state } = await page({ datactl: { deviceSession: true } });
+    const exp = region('Export');
+    await userEvent.type(within(exp).getByLabelText('Passphrase (optional)'), 'a long passphrase');
+    await userEvent.type(within(exp).getByLabelText('Repeat the passphrase'), 'a long passphrase');
+    await userEvent.type(within(exp).getByLabelText(/Type the Hub's name/), 'nova-hub');
+    await userEvent.click(within(exp).getByRole('button', { name: 'Export' }));
+    expect((await within(exp).findByRole('alert')).textContent).toBe(
+      'An export with a passphrase carries every stored key and password, so it can only be started from a browser signed in to the Hub, not from a paired device.',
+    );
+    expect(api.createExportTicket).toHaveBeenCalledWith('a long passphrase', 'nova-hub');
+    expect(startDownload).not.toHaveBeenCalled();
+
+    // The Hub was renamed meanwhile: its refusal sits at the name field.
+    state.deviceSession = false;
+    state.overview = { ...state.overview, hubName: 'renamed-hub' };
+    await userEvent.click(within(exp).getByRole('button', { name: 'Export' }));
+    expect(
+      await within(exp).findByText("That is not this Hub's name. Type it exactly as shown."),
+    ).toBeTruthy();
+    // Only the field's error is left: the earlier refusal went away.
+    expect(
+      within(exp)
+        .getAllByRole('alert')
+        .map((a) => a.textContent),
+    ).toEqual(["That is not this Hub's name. Type it exactly as shown."]);
+    expect(startDownload).not.toHaveBeenCalled();
+
+    // Without a passphrase nothing is confirmed, from anywhere.
+    state.deviceSession = true;
+    await userEvent.clear(within(exp).getByLabelText('Passphrase (optional)'));
+    await userEvent.click(within(exp).getByRole('button', { name: 'Export' }));
+    expect(api.createExportTicket).toHaveBeenLastCalledWith(undefined, undefined);
+    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(1));
   });
 
   it('says why an export could not start', async () => {
@@ -216,7 +262,7 @@ describe('import', () => {
     );
     expect(await within(imp).findByText('What the file holds')).toBeTruthy();
     expect(within(imp).getByText('940 in 2 tables')).toBeTruthy();
-    expect(within(imp).getByText('12 (5.0 MB)')).toBeTruthy();
+    expect(within(imp).getByText('12 (5 MB)')).toBeTruthy();
     expect(within(imp).getByText('Model provider API keys: 2')).toBeTruthy();
     expect(within(imp).getByText('MCP server credentials: 1')).toBeTruthy();
     expect(within(imp).getByText(/Table trust_ca:/)).toBeTruthy();
@@ -255,7 +301,7 @@ describe('import', () => {
     expect(await within(imp).findByText('Stored keys and passwords included')).toBeTruthy();
     await userEvent.click(within(imp).getByRole('button', { name: 'Import…' }));
     const dialog = screen.getByRole('dialog', { name: 'Replace this Hub with the export?' });
-    expect(dialog.textContent).toContain('940 rows in 2 tables and 12 files (5.0 MB), exported');
+    expect(dialog.textContent).toContain('940 rows in 2 tables and 12 files (5 MB), exported');
     expect(dialog.textContent).toContain('3 stored keys and passwords come with it.');
     expect(dialog.textContent).not.toContain('paired devices must be added again');
     expect(dialog.textContent).toContain('hooks need trusting again');
@@ -334,6 +380,61 @@ describe('import', () => {
       'This Hub already holds data. Delete all data first, then import.',
     );
     expect(api.importData).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts the vetting refusals in words: unsafe paths, a full disk, secrets it may not name', async () => {
+    const { api } = await page({
+      datactl: {
+        ...emptyHub(),
+        archives: {
+          'paths.novaexport': {
+            ...plainArchive(),
+            refuse: {
+              reason: 'unsafe_path',
+              message: 'the archive puts a plugin outside the plugins folder',
+            },
+          },
+          'big.novaexport': {
+            ...plainArchive(),
+            refuse: {
+              reason: 'disk_full',
+              message: 'not enough free disk space to import: 900 MiB needed, 12 MiB free',
+            },
+          },
+          'refs.novaexport': {
+            ...plainArchive(),
+            refuseImport: {
+              reason: 'foreign_secret',
+              message: 'the archive names a secret this Hub holds and the archive does not carry',
+            },
+          },
+        },
+      },
+    });
+    const imp = region('Import');
+    await upload('paths.novaexport');
+    expect((await within(imp).findByRole('alert')).textContent).toBe(
+      'The file names a folder or file outside where Nova keeps its data, so it was refused. Nothing was imported.',
+    );
+    await userEvent.click(within(imp).getByRole('button', { name: 'Choose another file' }));
+    await upload('big.novaexport');
+    expect((await within(imp).findByRole('alert')).textContent).toBe(
+      'There is not enough free disk space on the Hub to import this file. Free some space and try again.',
+    );
+    await userEvent.click(within(imp).getByRole('button', { name: 'Choose another file' }));
+
+    // Checked clean, refused while applying: the refusal stays in the dialog, nothing changed.
+    await upload('refs.novaexport');
+    await within(imp).findByText('What the file holds');
+    await userEvent.click(within(imp).getByRole('button', { name: 'Import…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Replace this Hub with the export?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Import and restart' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toBe(
+      'The file points to stored keys or passwords that it does not carry or that belong to a Hub itself, so it was refused. Nothing was imported.',
+    );
+    expect(api.importData).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('The import is done and verified.')).toBeNull();
+    expect(reload).not.toHaveBeenCalled();
   });
 });
 

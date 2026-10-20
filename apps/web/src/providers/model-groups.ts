@@ -2,6 +2,7 @@
 // compute node (FR-023, FR-126, FR-221). Group labels use the provider display names.
 import type { ModelView } from '@nova/shared';
 import { PROVIDER_NAMES } from './names.ts';
+import { PROVIDER_TEXT } from './strings.ts';
 
 export interface ModelOptionGroup {
   label: string;
@@ -25,6 +26,6 @@ export function modelGroups(
   return [...groups.values()].map((g) => {
     const n = (seen.get(g.label) ?? 0) + 1;
     seen.set(g.label, n);
-    return n === 1 ? g : { ...g, label: `${g.label} (${n})` };
+    return n === 1 ? g : { ...g, label: PROVIDER_TEXT.numbered({ label: g.label, n }) };
   });
 }

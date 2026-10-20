@@ -1,6 +1,7 @@
 // Pure helpers for the Diff pane (FR-064): pairing removed and added lines of a hunk, rows for the
 // split view, word-level differences inside a modified line, and totals. Nothing here looks at
 // syntax: highlighting is by change kind only, so every language reads the same.
+import { defineMessages } from '@nova/i18n';
 import type { CodeChangeView, DiffHunkView } from '@nova/shared';
 
 export type DiffLine = DiffHunkView['lines'][number];
@@ -150,25 +151,25 @@ export function diffTotals(changes: readonly CodeChangeView[]): DiffTotals {
   return { files: changes.length, additions, deletions, pendingHunks };
 }
 
-export const CHANGE_KIND_TEXT: Record<CodeChangeView['kind'], string> = {
+export const CHANGE_KIND_TEXT = defineMessages('code.changeKind', {
   add: 'Added',
   modify: 'Modified',
   delete: 'Deleted',
   rename: 'Renamed',
-};
+}) satisfies Record<CodeChangeView['kind'], string>;
 
-export const CHANGE_STATE_TEXT: Record<CodeChangeView['state'], string> = {
+export const CHANGE_STATE_TEXT = defineMessages('code.changeState', {
   pending: 'Pending',
   accepted: 'Accepted',
   rejected: 'Rejected',
   partial: 'Partly accepted',
-};
+}) satisfies Record<CodeChangeView['state'], string>;
 
-export const HUNK_STATE_TEXT: Record<DiffHunkView['state'], string> = {
+export const HUNK_STATE_TEXT = defineMessages('code.hunkState', {
   pending: 'Pending',
   accepted: 'Accepted',
   rejected: 'Rejected',
-};
+}) satisfies Record<DiffHunkView['state'], string>;
 
 /** Replace changes by id with newer versions, keeping the order of the list. */
 export function mergeChanges(

@@ -745,4 +745,5 @@ the runner and is read on from its offset (§12).
   recorded as completed at once, announced so that device's client can open the chat, and audited
   as `thread.handoff`; `interrupt` cancels a running turn. The chat's turns still run on the Hub,
   so the move changes where it is shown, not where it runs. The web app has no control for it yet.
-- **Not built.** The `nova` CLI.
+- **Not built.** The `nova` CLI client for Code sessions (the `nova` command of M8, ADR-097 D1, authors
+  extensions, runs `mcp stdio` and exports data; it does not attach to sessions).

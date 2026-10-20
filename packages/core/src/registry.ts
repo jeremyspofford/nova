@@ -194,14 +194,24 @@ export class ProviderRegistry {
 
   async list(accountId: string): Promise<ProviderAccountListItem[]> {
     const { rows, active } = await this.#ordered(accountId);
-    return rows.map((r) => toView(r, active.has(r.id)));
+    return Promise.all(rows.map(async (r) => toView(r, active.has(r.id), await this.#stored(r))));
   }
 
   /** The view of one account, with its active flag. */
   async view(accountId: string, id: string): Promise<ProviderAccountListItem> {
     const row = await this.account(accountId, id);
     const { active } = await this.#ordered(accountId);
-    return toView(row, active.has(row.id));
+    return toView(row, active.has(row.id), await this.#stored(row));
+  }
+
+  /**
+   * Whether the vault holds the account's credential. The reference alone is not enough: an
+   * import without a passphrase keeps the references and leaves the secrets out (M8V2), so the
+   * key must be entered again before the account works.
+   */
+  async #stored(row: ProviderAccountRow): Promise<boolean> {
+    if (row.secretRef === null) return false;
+    return this.#secrets.has(row.secretRef).catch(() => false);
   }
 
   /**
@@ -220,7 +230,7 @@ export class ProviderRegistry {
           set: { providerAccountId: id, updatedAt: now },
         }),
     );
-    return toView(row, true);
+    return toView(row, true, await this.#stored(row));
   }
 
   /**
@@ -604,7 +614,11 @@ export class ProviderRegistry {
   }
 }
 
-function toView(r: ProviderAccountRow, active: boolean): ProviderAccountListItem {
+function toView(
+  r: ProviderAccountRow,
+  active: boolean,
+  hasSecret: boolean,
+): ProviderAccountListItem {
   return {
     id: r.id,
     provider: r.provider as ProviderKind,
@@ -612,7 +626,7 @@ function toView(r: ProviderAccountRow, active: boolean): ProviderAccountListItem
     authKind: r.authKind,
     baseUrl: r.baseUrl,
     status: r.status,
-    hasSecret: r.secretRef !== null,
+    hasSecret,
     lastCheckAt: r.lastCheckAt,
     createdAt: r.createdAt,
     active,

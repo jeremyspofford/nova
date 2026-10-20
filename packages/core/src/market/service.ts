@@ -2,15 +2,20 @@
 // catalog source, preview an item (its artifact fetched, staged in the Hub's own folder, checked
 // and inspected), install it, update it with the permission diff, remove it, and rate it.
 //
-// Verification: a catalog whose signature is invalid is refused outright. An item is Verified
-// when its catalog index is signed by a key the catalog pins or a trusted publisher, the index
-// lists its SHA-256 and the artifact matches it, and (for a `.novax` bundle) the bundle carries a
-// good signature by a trusted key or the key its signed entry names. Anything else is Unverified:
-// it installs only with the explicit sideload confirmation, never when managed policy forbids
-// unverified installs or the owner turned sideloading off, and stays labelled Unverified.
+// Verification: a catalog whose signature is invalid, or that pins a key and is not signed, is
+// refused outright, and so is a bundle whose signature does not match its files. An item is
+// Verified when its catalog index is signed by a key the catalog pins or a trusted publisher, the
+// index lists its checksum and the artifact matches it, and (for a `.novax` bundle) the bundle is
+// signed by a key in the trusted publishers: the catalog never vouches for a bundle's signer, the
+// same rule the extension installer applies. An extension shipped as a folder or zip is never
+// Verified. Anything else is Unverified: it installs only with the explicit sideload
+// confirmation, never when managed policy forbids unverified installs or the owner turned
+// sideloading off, and stays labelled Unverified. An untrusted signer is shown by its key's
+// fingerprint, never by the name a catalog claims for it.
 //
 // Installs and removals run one at a time. An update that adds or changes a permission needs the
-// diff's hash echoed back. A failed install puts back what it replaced (each installer's
+// diff's hash echoed back, and an extension update by another publisher (or none) needs
+// `acceptPublisherChange`. A failed install puts back what it replaced (each installer's
 // snapshot) and is audited; nothing about installs or ratings leaves the Hub.
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { extname, join } from 'node:path';
@@ -58,6 +63,7 @@ import {
 } from './permissions.ts';
 import {
   folderDigest,
+  publisherView,
   sha256Hex,
   verifyCatalogIndex,
   type CatalogSignatureCheck,
@@ -151,6 +157,7 @@ interface PreviewRecord {
 }
 
 interface ListingContext {
+  trusted: TrustedPublisherKey[];
   records: Map<string, InstallRow>;
   installed: Map<string, string | null>;
   ratings: Map<string, MarketRatingView>;
@@ -368,7 +375,7 @@ export class Marketplace {
     const ratings = new Map(
       (await this.#ratingRows(accountId)).map((r) => [`${r.kind}\n${r.itemId}`, ratingView(r)]),
     );
-    return { records, installed, ratings };
+    return { trusted: await this.#o.trustedPublishers(), records, installed, ratings };
   }
 
   #itemView(s: CatalogState, e: MarketIndexEntry, ctx: ListingContext): MarketItemView {
@@ -394,9 +401,10 @@ export class Marketplace {
       name: e.name,
       version: e.version,
       description: e.description ?? null,
-      author: e.author ?? e.publisher?.name ?? null,
+      // The item's own author only: who signed it is the publisher line, which is trust-aware.
+      author: e.author ?? null,
       publisher: e.publisher?.key
-        ? { name: e.publisher.name ?? null, key: e.publisher.key }
+        ? publisherView(e.publisher.key, ctx.trusted)
         : (s.check?.publisher ?? null),
       categories: e.categories ?? [],
       verified: catalogVerified && (!!expectedChecksum(e) || (!!e.server && !e.path && !e.url)),
@@ -464,17 +472,21 @@ export class Marketplace {
         else if (expected !== staged.sha256) reasons.push('checksum_mismatch');
       }
       let publisher = s.check.publisher;
+      const inspectionWarnings: string[] = [];
       if (staged.bundle) {
         // A bundle needs its publisher's signature by a key the owner trusts (docs/08 §7), the
         // same rule the extension installer applies, so both give the same verdict.
         const b = staged.bundle;
         if (b.reason === 'unsigned') reasons.push('bundle_unsigned');
         if (b.reason === 'untrusted') reasons.push('bundle_untrusted');
-        if (b.publisher)
-          publisher = {
-            key: b.publisher,
-            name: b.publisherName ?? entry.publisher?.name ?? null,
-          };
+        if (b.publisher) {
+          // The name a catalog claims for a key is never shown as the publisher's.
+          publisher = publisherView(b.publisher, trusted);
+          if (!publisher.trusted)
+            inspectionWarnings.push(
+              `Signed by a publisher you have not trusted (key ${publisher.fingerprint}); the name the catalog gives it is not checked.`,
+            );
+        }
       } else if (
         req.kind === 'plugin' &&
         staged.artifact.dir &&
@@ -505,7 +517,11 @@ export class Marketplace {
             { version: entry.version, lines: inspection.permissions },
           )
         : null;
-      const warnings = [...inspection.warnings];
+      const publisherChange = inspection.publisherChange ?? null;
+      // A change of publisher is said first (the extension installer's warning leads its list).
+      const warnings = publisherChange
+        ? [...inspection.warnings, ...inspectionWarnings]
+        : [...inspectionWarnings, ...inspection.warnings];
       const declared = declaredLines(entry);
       if (declared.length && !sameKeys(declared, inspection.permissions) && req.kind === 'plugin')
         warnings.push(
@@ -542,15 +558,36 @@ export class Marketplace {
         id: entry.id,
         name: inspection.name ?? entry.name,
         version: entry.version,
-        verification: { status: verified ? 'verified' : 'unverified', reasons, publisher },
+        verification: {
+          status: verified ? 'verified' : 'unverified',
+          reasons,
+          publisher,
+          // Who vouches, said by name rather than a bare key: the catalog (a pinned key verifies
+          // only that catalog's index), and a bundle's own trusted signer.
+          vouchedBy: verified
+            ? {
+                catalog: {
+                  id: s.config.id,
+                  name: s.config.name,
+                  signedWith: s.config.publisherKey ? 'pinned_key' : 'trusted_publisher',
+                  publisher: s.check.publisher,
+                },
+                bundle: staged.bundle?.publisher
+                  ? publisherView(staged.bundle.publisher, trusted)
+                  : null,
+              }
+            : null,
+        },
         permissions: inspection.permissions,
         diff,
+        publisherChange,
         replaces: installed
           ? { version: installed.version ?? record?.version ?? 'installed' }
           : null,
         requires: {
           sideloadConfirmation: !verified,
           permissionAcceptance: diffNeedsAcceptance(diff),
+          publisherChangeAcceptance: publisherChange !== null,
         },
         allowed: block.by === null,
         blockedBy: block.by,
@@ -700,6 +737,20 @@ export class Marketplace {
           },
         },
       );
+    const publisherChange = p.inspection.publisherChange ?? null;
+    if (publisherChange && body.acceptPublisherChange !== true)
+      throw new NovaError(
+        'validation',
+        'this update comes from another publisher than the installed version; accept the change to install it (its secrets and data are cleared)',
+        {
+          details: {
+            field: 'acceptPublisherChange',
+            reason: 'publisher_change_confirmation_required',
+            from: publisherChange.from.key,
+            to: publisherChange.to.key,
+          },
+        },
+      );
     if (diffNeedsAcceptance(p.diff) && body.acceptPermissions !== p.diff!.hash)
       throw new NovaError(
         'validation',
@@ -753,6 +804,7 @@ export class Marketplace {
         enable: body.enable ?? true,
         ...(body.trustHooks ? { trustHooks: body.trustHooks } : {}),
         ...(body.userConfig ? { userConfig: body.userConfig } : {}),
+        ...(publisherChange ? { acceptPublisherChange: true } : {}),
       });
       await this.#db.transaction(async () => {
         if (previous)
@@ -811,6 +863,9 @@ export class Marketplace {
       ...(p.verified ? {} : { sideload: true, reasons: p.reasons }),
       publisherKey: p.publisher?.key ?? null,
       sha256: p.sha256,
+      ...(publisherChange
+        ? { publisherChange: { from: publisherChange.from.key, to: publisherChange.to.key } }
+        : {}),
       ...(p.diff
         ? {
             permissionsAdded: p.diff.added.map((l) => l.key),

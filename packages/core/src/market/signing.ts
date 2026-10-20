@@ -7,11 +7,12 @@
 import { createHash, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import type { MarketCatalogSignature, MarketPublisher } from '@nova/shared';
+import { NovaError, type MarketCatalogSignature, type MarketPublisher } from '@nova/shared';
 import { walkTree, type TreeEntry } from '../plugins/paths.ts';
 import { extensionDigest } from '../sdk/bundle.ts';
 import {
   CATALOG_INDEX_SIGNATURE_CONTEXT,
+  publisherFingerprint,
   publisherKeyOf,
   signDigest,
   verifyDigest,
@@ -36,9 +37,20 @@ export function sha256Hex(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-/** The D2 digest of a folder (links that leave it and oversized trees are refused). */
+/**
+ * The D2 digest of a folder (links that leave it and oversized trees are refused). A file name
+ * with a control character is refused, as in a bundle: a newline could merge lines of the listing,
+ * so one digest could stand for another set of files.
+ */
 export function folderDigest(root: string, entries?: readonly TreeEntry[]): string {
   const list = entries ?? walkTree(root);
+  // eslint-disable-next-line no-control-regex
+  const bad = list.find((e) => /[\u0000-\u001f\u007f]/.test(e.path));
+  if (bad)
+    throw new NovaError(
+      'validation',
+      `a file name in the item contains a control character: ${JSON.stringify(bad.path.slice(0, 200))}`,
+    );
   // One file in memory at a time.
   return extensionDigest(
     (function* () {
@@ -64,6 +76,24 @@ export interface TrustedPublisherKey {
   key: string;
 }
 
+/**
+ * A publisher as shown: named only when the owner trusts the key (the trusted publishers, or the
+ * key a catalog pins), always with its fingerprint.
+ */
+export function publisherView(
+  key: string,
+  trusted: readonly TrustedPublisherKey[],
+  pinned = false,
+): MarketPublisher {
+  const named = trusted.find((t) => t.key === key);
+  return {
+    name: named?.name ?? null,
+    key,
+    fingerprint: publisherFingerprint(key),
+    trusted: named !== undefined || pinned,
+  };
+}
+
 export interface CatalogSignatureCheck {
   status: MarketCatalogSignature;
   publisher: MarketPublisher | null;
@@ -82,7 +112,14 @@ export function verifyCatalogIndex(
   opts: { pinned?: string | null; trusted: readonly TrustedPublisherKey[] },
 ): CatalogSignatureCheck {
   if (!signatureFile)
-    return { status: 'unsigned', publisher: null, reason: 'the index is not signed' };
+    // A catalog that pins a key is always signed: a missing signature is a downgrade, refused.
+    return opts.pinned
+      ? {
+          status: 'invalid',
+          publisher: null,
+          reason: 'this catalog pins a publisher key, but its index is not signed',
+        }
+      : { status: 'unsigned', publisher: null, reason: 'the index is not signed' };
   let parsed: CatalogSignatureFile;
   try {
     const r = signatureFileSchema.safeParse(
@@ -94,7 +131,11 @@ export function verifyCatalogIndex(
     return { status: 'invalid', publisher: null, reason: 'the signature file is damaged' };
   }
   const named = opts.trusted.find((t) => t.key === parsed.publisher);
-  const publisher: MarketPublisher = { name: named?.name ?? null, key: parsed.publisher };
+  const publisher = publisherView(
+    parsed.publisher,
+    opts.trusted,
+    !!opts.pinned && opts.pinned === parsed.publisher,
+  );
   if (parsed.digest !== sha256Hex(index))
     return { status: 'invalid', publisher, reason: 'the index does not match its signature' };
   if (

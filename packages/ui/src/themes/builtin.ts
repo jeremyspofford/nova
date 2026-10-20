@@ -28,6 +28,24 @@ export const COLOR_TOKENS = [
   '--u-focus',
 ] as const;
 
+/** Corner radii: the geometry a theme may set besides its colors (docs/14 §2.1, §2.2). */
+export const RADIUS_TOKENS = [
+  '--u-radius-sm',
+  '--u-radius-md',
+  '--u-radius-lg',
+  '--u-radius-xl',
+] as const;
+
+/**
+ * Every token a custom theme may set (FR-011): the color roles and the radii. Spacing, type
+ * sizes, motion and layering stay the app's, so a theme cannot undo the text size, reduced motion
+ * or the layout; a theme's other tokens are ignored.
+ */
+export const THEME_TOKENS: readonly string[] = [...COLOR_TOKENS, ...RADIUS_TOKENS];
+
+/** The fonts a theme may set (its `fonts` object). */
+export const THEME_FONTS = ['--u-font-ui', '--u-font-code'] as const;
+
 export const dark: Theme = {
   schemaVersion: 1,
   id: 'nova.dark',

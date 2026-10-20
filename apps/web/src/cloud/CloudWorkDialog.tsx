@@ -4,6 +4,7 @@
 // autonomy, optional caps for this run, and whether to snapshot the environment first so a failed
 // run can be undone. Starting opens the run.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { CloudEnvironmentView, CloudWorkView, RunAutonomy } from '@nova/shared';
 import { Button, Dialog, RadioGroup, SelectField, Spinner, TextField } from '@nova/ui';
 import { useSettings } from '../settings.tsx';
@@ -11,9 +12,35 @@ import { AUTONOMY_TEXT } from '../work/format.ts';
 import { useCloudApi, type StartCloudWorkBody } from './api.ts';
 import { TextArea } from './CloudEnvironmentDialog.tsx';
 import { parseCapMinutes } from './CloudRunCard.tsx';
-import { cloudErrorMessage, environmentState } from './format.ts';
+import { CAP_TEXT, CLOUD_TEXT, cloudErrorMessage, environmentState } from './format.ts';
 
 const OBJECTIVE_MAX = 8000;
+
+/** A Work run on a cloud environment. {name} is an environment's name. */
+export const CLOUD_WORK_TEXT = defineMessages('cloud.work', {
+  chooseEnvironment: 'Choose a cloud environment.',
+  /** {state} is the environment's state, such as "Setting up". */
+  notReady: '{name} is not ready: {state}.',
+  describe: 'Describe what the run should get done.',
+  /** {max} is a number of characters. */
+  tooLong: 'Keep it under {max} characters.',
+  startFailed: 'Could not start the run.',
+  title: 'New Work run in the cloud',
+  description:
+    'Its commands run on the cloud runner and keep going while your devices are off. Approvals still come to you.',
+  environment: 'Cloud environment',
+  choose: 'Choose an environment',
+  /** An environment that is not ready, in the list: "App env (Setting up)". */
+  optionNotReady: '{name} ({state})',
+  objective: 'What should the run get done?',
+  autonomy: 'Autonomy',
+  caps: 'Caps for this run (optional)',
+  capsHint:
+    'Without them, the caps from Settings → Cloud runner apply. The run stops at a cap and waits for you to raise it.',
+  snapshot: 'Take a snapshot first',
+  snapshotHint: 'You can restore it if the run leaves the environment in a bad state.',
+  start: 'Start run',
+});
 
 export function CloudWorkDialog({
   open,
@@ -69,14 +96,15 @@ function CloudWorkForm({
   const [error, setError] = useState<string | null>(null);
   const env = environments.find((e) => e.id === envId) ?? null;
 
+  const S = CLOUD_WORK_TEXT;
   const errors: Record<string, string> = {};
-  if (!env) errors.env = 'Choose a cloud environment.';
-  else if (!ready(env)) errors.env = `${env.label} is not ready: ${environmentState(env).text}.`;
-  if (!objective.trim()) errors.objective = 'Describe what the run should get done.';
-  else if (objective.length > OBJECTIVE_MAX)
-    errors.objective = `Keep it under ${OBJECTIVE_MAX.toLocaleString()} characters.`;
-  const cpuR = cpu.trim() ? parseCapMinutes(cpu, 0, 'CPU time') : null;
-  const wallR = wall.trim() ? parseCapMinutes(wall, 0, 'running time') : null;
+  if (!env) errors.env = S.chooseEnvironment;
+  else if (!ready(env))
+    errors.env = S.notReady({ name: env.label, state: environmentState(env).text });
+  if (!objective.trim()) errors.objective = S.describe;
+  else if (objective.length > OBJECTIVE_MAX) errors.objective = S.tooLong({ max: OBJECTIVE_MAX });
+  const cpuR = cpu.trim() ? parseCapMinutes(cpu, 0, CAP_TEXT.resource.cpu) : null;
+  const wallR = wall.trim() ? parseCapMinutes(wall, 0, CAP_TEXT.resource.wall) : null;
   if (cpuR && 'error' in cpuR) errors.cpu = cpuR.error;
   if (wallR && 'error' in wallR) errors.wall = wallR.error;
   const shown = tried ? errors : {};
@@ -101,7 +129,7 @@ function CloudWorkForm({
     try {
       onStarted(await api.startCloudWork(body));
     } catch (err) {
-      setError(cloudErrorMessage(err, 'Could not start the run.'));
+      setError(cloudErrorMessage(err, S.startFailed));
       setBusy(false);
     }
   };
@@ -109,8 +137,8 @@ function CloudWorkForm({
   return (
     <Dialog
       open
-      title="New Work run in the cloud"
-      description="Its commands run on the cloud runner and keep going while your devices are off. Approvals still come to you."
+      title={S.title}
+      description={S.description}
       onClose={onClose}
       className="ws-wide-dialog"
     >
@@ -124,14 +152,16 @@ function CloudWorkForm({
         }}
       >
         <SelectField
-          label="Cloud environment"
+          label={S.environment}
           value={envId}
           onChange={setEnvId}
           options={[
-            ...(env ? [] : [{ value: '', label: 'Choose an environment' }]),
+            ...(env ? [] : [{ value: '', label: S.choose }]),
             ...environments.map((e) => ({
               value: e.id,
-              label: ready(e) ? e.label : `${e.label} (${environmentState(e).text.toLowerCase()})`,
+              label: ready(e)
+                ? e.label
+                : S.optionNotReady({ name: e.label, state: environmentState(e).text }),
               disabled: !ready(e),
             })),
           ]}
@@ -139,21 +169,21 @@ function CloudWorkForm({
         />
         <TextArea
           id={`${id}-objective`}
-          label="What should the run get done?"
+          label={S.objective}
           value={objective}
           rows={4}
           error={shown.objective}
           onChange={setObjective}
         />
         <TextField
-          label="Title (optional)"
+          label={CLOUD_TEXT.titleOptional}
           value={title}
           maxLength={200}
           autoComplete="off"
           onChange={(e) => setTitle(e.target.value)}
         />
         <RadioGroup
-          legend="Autonomy"
+          legend={S.autonomy}
           name={`${id}-autonomy`}
           value={autonomy}
           onChange={(v) => setAutonomy(v as RunAutonomy)}
@@ -164,14 +194,11 @@ function CloudWorkForm({
           }))}
         />
         <details className="ws-advanced">
-          <summary>Caps for this run (optional)</summary>
-          <p className="nv-field-hint">
-            Without them, the caps from Settings → Cloud runner apply. The run stops at a cap and
-            waits for you to raise it.
-          </p>
+          <summary>{S.caps}</summary>
+          <p className="nv-field-hint">{S.capsHint}</p>
           <div className="cl-field-row">
             <TextField
-              label="CPU time cap (minutes)"
+              label={CLOUD_TEXT.cpuCapMinutes}
               type="number"
               inputMode="numeric"
               className="ws-number"
@@ -181,7 +208,7 @@ function CloudWorkForm({
               onChange={(e) => setCpu(e.target.value)}
             />
             <TextField
-              label="Running time cap (minutes)"
+              label={CLOUD_TEXT.wallCapMinutes}
               type="number"
               inputMode="numeric"
               className="ws-number"
@@ -199,10 +226,10 @@ function CloudWorkForm({
             aria-describedby={`${id}-snap`}
             onChange={(e) => setSnapshot(e.target.checked)}
           />
-          Take a snapshot first
+          {S.snapshot}
         </label>
         <span id={`${id}-snap`} className="nv-field-hint">
-          You can restore it if the run leaves the environment in a bad state.
+          {S.snapshotHint}
         </span>
         {error ? (
           <p className="nv-field-error" role="alert">
@@ -210,9 +237,9 @@ function CloudWorkForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{CLOUD_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Start run
+            {busy ? <Spinner /> : null} {S.start}
           </Button>
         </div>
       </form>

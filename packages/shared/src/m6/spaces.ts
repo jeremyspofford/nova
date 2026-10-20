@@ -207,8 +207,25 @@ export interface SiteDataConnection {
   name: string;
 }
 
-/** M6 targets: a folder under the publish root, or a zip the user downloads. */
-export type SiteTarget = { kind: 'folder'; folder: string } | { kind: 'zip' };
+/**
+ * M6 targets: a folder under the publish root, or a zip the user downloads. M8 adds a folder on a
+ * remote hosting target the owner set up (`/api/v1/sites/targets`).
+ */
+export type SiteTarget =
+  | { kind: 'folder'; folder: string }
+  | { kind: 'zip' }
+  | { kind: 'remote'; targetId: string; folder: string };
+
+/** The remote hosting target a publish went to (M8), for showing it. */
+export interface SiteRemoteRef {
+  targetId: string;
+  /** The target's name; null once it was removed. */
+  name: string | null;
+  /** Where the site's folder is on the target (the upload address). */
+  location: string | null;
+  /** Where visitors see it, when the target names a public address. */
+  publicUrl: string | null;
+}
 
 export interface SiteView {
   id: string;
@@ -221,6 +238,8 @@ export interface SiteView {
   latestVersion: number | null;
   publishedVersion: number | null;
   publishedTarget: SiteTarget | null;
+  /** The live publish's remote target (M8), when it went to one. */
+  publishedRemote?: SiteRemoteRef | null;
   publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -249,6 +268,8 @@ export interface SitePublishView {
   siteId: string;
   version: number;
   target: SiteTarget;
+  /** The remote target (M8), when it went to one. */
+  remote?: SiteRemoteRef | null;
   /** The publish that is live now. */
   current: boolean;
   /** Undone by an unpublish. */
@@ -263,6 +284,11 @@ export interface SitePublishResult {
   downloadUrl: string | null;
   /** For a folder target: the folder written on the Hub. */
   folderPath: string | null;
+  /**
+   * M8: where an earlier copy could not be taken down when the site moved to another target or
+   * was unpublished (the target was unreachable); the user removes it there by hand.
+   */
+  leftBehind?: { target: SiteTarget; location: string | null; reason: string } | null;
 }
 
 /** A project source a site can connect as data (JSON or CSV). */
@@ -294,6 +320,13 @@ export const siteDataSchema = z
 export const siteTargetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('folder'), folder: pageSlugSchema }).strict(),
   z.object({ kind: z.literal('zip') }).strict(),
+  z
+    .object({
+      kind: z.literal('remote'),
+      targetId: z.string().min(1).max(100),
+      folder: pageSlugSchema,
+    })
+    .strict(),
 ]);
 
 export const createSiteSchema = z
@@ -322,6 +355,178 @@ export const publishSiteSchema = z
   .strict();
 
 export const unpublishSiteSchema = z.object({ confirm: z.literal(true) }).strict();
+
+// ==== M8: page order, deleted pages, a site's source, hosting targets (FR-036, FR-037) ===========
+
+/** Set the order of a space's pages: every page it has now, each once. */
+export const reorderPagesSchema = z
+  .object({ pageIds: z.array(z.string().min(1).max(100)).min(1).max(10_000) })
+  .strict()
+  .refine((b) => new Set(b.pageIds).size === b.pageIds.length, { message: 'name each page once' });
+
+/** What deleting a page takes with it, for the confirmation. Pages have no child pages. */
+export interface PageDeletionView {
+  pageId: string;
+  spaceId: string;
+  title: string;
+  /** Saved versions (its history). */
+  versions: number;
+  /** Comment threads on it, open or resolved, and their replies. */
+  comments: number;
+  replies: number;
+  /** Agent proposals for it that end rejected (they stay rejected after a restore). */
+  openProposals: number;
+  /** Sites built from the space: their next build leaves the page out. */
+  sites: { id: string; name: string; publishedVersion: number | null }[];
+}
+
+/** A deleted page the space keeps, so it can be restored with its history and comments. */
+export interface DeletedPageView {
+  id: string;
+  spaceId: string;
+  title: string;
+  slug: string;
+  version: number;
+  /** Comment threads and replies that come back with it. */
+  comments: number;
+  deletedAt: string;
+}
+
+/** Compare a build from another source (and data) with the site's latest version. */
+export const siteSourcePreviewSchema = z
+  .object({ source: siteSourceSchema.optional(), data: siteDataSchema.optional() })
+  .strict();
+
+export type SiteFileChange = 'added' | 'removed' | 'changed' | 'same';
+
+export interface SiteSourcePreviewView {
+  siteId: string;
+  current: { source: SiteSource; sourceLabel: string | null; data: SiteDataConnection[] };
+  next: { source: SiteSource; sourceLabel: string | null; data: SiteDataConnection[] };
+  /** The latest built version the files are compared with; null when none was built. */
+  comparedWith: number | null;
+  /** The files a build from `next` makes, then the files only the compared version has. */
+  files: (SiteFileView & { change: SiteFileChange })[];
+  /** The total size of the files a build from `next` makes. */
+  size: number;
+  /** Whether that build's preview may run the source's own scripts. */
+  scripts: boolean;
+}
+
+/** Hosting targets: where the owner publishes sites besides the Hub's folder and a zip. */
+export const HOSTING_KINDS = ['webdav'] as const;
+export type HostingKind = (typeof HOSTING_KINDS)[number];
+export const HOSTING_AUTH = ['none', 'basic', 'bearer'] as const;
+export type HostingAuth = (typeof HOSTING_AUTH)[number];
+
+/** Why a check, publish or plan refused or failed (`details.reason`, `lastCheck.reason`). */
+export type HostingProblem =
+  | 'target_unreachable'
+  | 'target_timeout'
+  | 'target_auth_failed'
+  | 'target_not_found'
+  | 'target_refused'
+  | 'target_redirected'
+  | 'egress_denied'
+  | 'remote_targets_off';
+
+export interface SiteHostingTargetView {
+  id: string;
+  name: string;
+  kind: HostingKind;
+  /** The collection site folders go into (ends in `/`). */
+  url: string;
+  /** Where visitors see those folders, when it is another address (ends in `/`). */
+  publicUrl: string | null;
+  auth: HostingAuth;
+  username: string | null;
+  /** A password or token is in the vault (never returned). */
+  hasCredential: boolean;
+  /** Sites live on this target now. */
+  sites: { siteId: string; name: string; folder: string; version: number }[];
+  lastCheck: {
+    ok: boolean;
+    at: string;
+    reason: HostingProblem | null;
+    message: string | null;
+  } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const hostingUrlSchema = z.string().trim().min(1).max(2000);
+const hostingNameSchema = z.string().trim().min(1).max(100);
+
+/** The credential a target sends; write-only, it goes to the vault. */
+export const hostingCredentialSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('none') }).strict(),
+  z
+    .object({
+      kind: z.literal('basic'),
+      username: z
+        .string()
+        .min(1)
+        .max(200)
+        .regex(/^[^:\p{Cc}]+$/u, 'no colon or control characters'),
+      password: z.string().min(1).max(1000),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('bearer'),
+      token: z
+        .string()
+        .min(1)
+        .max(4000)
+        .regex(/^[\x21-\x7e]+$/, 'visible ASCII characters'),
+    })
+    .strict(),
+]);
+
+export const createHostingTargetSchema = z
+  .object({
+    name: hostingNameSchema,
+    kind: z.enum(HOSTING_KINDS),
+    url: hostingUrlSchema,
+    publicUrl: hostingUrlSchema.nullable().optional(),
+    credential: hostingCredentialSchema,
+  })
+  .strict();
+
+/** A sent `credential` replaces the stored one; `url` cannot change while a site is live there. */
+export const updateHostingTargetSchema = z
+  .object({
+    name: hostingNameSchema.optional(),
+    url: hostingUrlSchema.optional(),
+    publicUrl: hostingUrlSchema.nullable().optional(),
+    credential: hostingCredentialSchema.optional(),
+  })
+  .strict();
+
+/** What publishing a version to a target would do, shown before the user confirms it. */
+export const publishPlanSchema = z
+  .object({ version: versionSchema, target: siteTargetSchema })
+  .strict();
+
+export interface SitePublishPlanView {
+  siteId: string;
+  version: number;
+  target: SiteTarget;
+  remote: SiteRemoteRef | null;
+  /** The folder on the Hub or the address on the remote target; null for a zip. */
+  location: string | null;
+  /** The files written or uploaded, and their total size. */
+  files: SiteFileView[];
+  size: number;
+  /** What is live now and is replaced; null when nothing is published. */
+  live: { version: number; target: SiteTarget; remote: SiteRemoteRef | null } | null;
+  /** The live publish's place, when this publish moves the site away from it (taken down). */
+  takesDown: { target: SiteTarget; remote: SiteRemoteRef | null } | null;
+  /** Unpublishing takes it back; false for a zip download (the file cannot be recalled). */
+  reversible: boolean;
+  /** For a remote target: its host and whether the network policy lets Nova reach it. */
+  egress: { host: string; allowed: boolean; message: string | null } | null;
+}
 
 // ==== Visualizations (FR-076): specs =============================================================
 

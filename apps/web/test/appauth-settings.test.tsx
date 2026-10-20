@@ -1,4 +1,4 @@
-// Settings → Apps (FR-222) and Settings → Telemetry export (FR-223): the apps switch and its
+// Settings → Authorized apps (FR-222) and Settings → Telemetry export (FR-223): the apps switch and its
 // managed state, the authorized apps with Revoke (asks first), apps waiting for approval; the OTLP
 // export off by default, its collector address, write-only headers, signals, content (asks first),
 // the test and the status, the refusals, and managed policy.
@@ -7,10 +7,10 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { ApiError } from '../src/api.ts';
 import { AppsSettings, redirectLabel } from '../src/appauth/AppsSettings.tsx';
-import { APPS_TEXT, OTLP_TEXT } from '../src/appauth/format.ts';
+import { APPS_TEXT, OTLP_TEXT, pendingHostLabel } from '../src/appauth/format.ts';
 import { OtlpSettings, inactiveWhy } from '../src/appauth/OtlpSettings.tsx';
 import { FakeEventSource } from './fakes.ts';
-import { appGrant, m8AppAuthState, renderW11 } from './fakes-m8-appauth.ts';
+import { appClient, appGrant, m8AppAuthState, renderW11 } from './fakes-m8-appauth.ts';
 import { resetDom } from './render.tsx';
 
 afterEach(() => {
@@ -25,11 +25,11 @@ const otlp = (over: Partial<ReturnType<typeof m8AppAuthState>['otlp']> = {}) => 
   ...over,
 });
 
-describe('Settings → Apps (FR-222)', () => {
+describe('Settings → Authorized apps (FR-222)', () => {
   it('lists the apps you allowed with what they read, where they return and their use', async () => {
     await renderW11(<AppsSettings />, {
-      pendingApps: 2,
       appauth: {
+        clients: [appClient({ approved: true })],
         grants: [
           appGrant({
             id: 'auth-1',
@@ -43,13 +43,16 @@ describe('Settings → Apps (FR-222)', () => {
       },
     });
     const list = await screen.findByRole('list', { name: APPS_TEXT.listLabel });
+    // The page is named as the Settings nav names it (not "Apps & clients", another page).
+    expect(screen.getByRole('heading', { level: 2, name: 'Authorized apps' })).toBeTruthy();
     const row = within(list).getByRole('listitem', { name: 'Notes Desk' });
     expect(row.textContent).toContain('May read: See your name and picture · Read your chats');
     expect(within(row).getByText('127.0.0.1 (any port)')).toBeTruthy();
     expect(within(row).getByText('com.example.notes:')).toBeTruthy();
     expect(row.textContent).toContain('Signed in on 2 devices');
     expect(row.textContent).toContain('last used never');
-    expect(await screen.findByText(APPS_TEXT.pending(2))).toBeTruthy();
+    // An app someone allows is not among the registered ones without access.
+    expect(await screen.findByText(APPS_TEXT.pendingNone)).toBeTruthy();
     expect(screen.getByText(APPS_TEXT.pendingHow)).toBeTruthy();
     expect(
       screen.getByText(`${window.location.origin}/.well-known/oauth-authorization-server`),
@@ -64,7 +67,7 @@ describe('Settings → Apps (FR-222)', () => {
     });
     await userEvent.click(await screen.findByRole('button', { name: 'Revoke Notes Desk' }));
     const dialog = screen.getByRole('dialog', { name: 'Revoke Notes Desk?' });
-    expect(dialog.textContent).toContain(APPS_TEXT.revokeWhat('Notes Desk', 1));
+    expect(dialog.textContent).toContain(APPS_TEXT.revokeWhat({ name: 'Notes Desk', sessions: 1 }));
     expect(api.revokeApp).not.toHaveBeenCalled();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(state.grants).toHaveLength(1);
@@ -74,7 +77,7 @@ describe('Settings → Apps (FR-222)', () => {
     );
     await waitFor(() => expect(state.grants).toHaveLength(0));
     expect(api.revokeApp).toHaveBeenCalledWith('auth-1');
-    expect(await screen.findByText(APPS_TEXT.revoked('Notes Desk'))).toBeTruthy();
+    expect(await screen.findByText(APPS_TEXT.revoked({ name: 'Notes Desk' }))).toBeTruthy();
     expect(screen.getByText(APPS_TEXT.emptyTitle)).toBeTruthy();
   });
 
@@ -95,7 +98,10 @@ describe('Settings → Apps (FR-222)', () => {
     );
     expect(
       await screen.findByText(
-        APPS_TEXT.revokeFailed('Notes Desk', 'It is no longer there. Refresh the page.'),
+        APPS_TEXT.revokeFailed({
+          name: 'Notes Desk',
+          why: 'It is no longer there. Refresh the page.',
+        }),
       ),
     ).toBeTruthy();
     await waitFor(() => expect(api.listApps).toHaveBeenCalledTimes(2));
@@ -129,18 +135,165 @@ describe('Settings → Apps (FR-222)', () => {
     expect(screen.getAllByText(/Managed by your organization/).length).toBeGreaterThan(0);
   });
 
-  it('says when the list or the waiting apps cannot be read, with Retry', async () => {
+  it('names where the policy that turned apps off comes from (the shared managed view)', async () => {
+    const remote = {
+      channel: 'remote' as const,
+      location: 'https://policy.example.com/nova.json',
+      status: 'active' as const,
+      problem: null,
+      inForce: true,
+      cached: false,
+      serial: 4,
+      loadedAt: '2026-10-19T08:00:00.000Z',
+      checkedAt: '2026-10-19T09:00:00.000Z',
+    };
+    const { hub } = await renderW11(<AppsSettings />, {
+      managed: { 'managed.restrict': { layers: [{ apps: false }], failClosed: null } },
+      policy: {
+        active: true,
+        failClosed: null,
+        sources: [remote],
+        settings: [],
+        restrict: [{ channel: 'remote', restrict: { apps: false } }],
+        egress: null,
+        ignored: [],
+        checkedAt: '2026-10-19T09:00:00.000Z',
+      },
+    });
+    const notes = await screen.findAllByText('(remote policy)');
+    // The callout and the switch's lock both name it; the policy is read once.
+    expect(notes.length).toBe(2);
+    expect(vi.mocked(hub.api.getManagedPolicy)).toHaveBeenCalledTimes(1);
+  });
+
+  it('says when the list cannot be read, with Retry', async () => {
     const { api } = await renderW11(<AppsSettings />, {
-      pendingApps: null,
       fail: {
         listApps: new ApiError(500, { code: 'server_error', message: 'boom', retryable: true }),
       },
     });
     expect((await screen.findByRole('alert')).textContent).toContain('boom');
-    expect(await screen.findByText(APPS_TEXT.pendingUnknown)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: APPS_TEXT.retry }));
     expect(await screen.findByText(APPS_TEXT.emptyTitle)).toBeTruthy();
     expect(api.listApps).toHaveBeenCalledTimes(2);
+  });
+
+  it('lists registered apps nobody allows by name, and removes one only after asking', async () => {
+    const recent = new Date(Date.now() - 10 * 60_000).toISOString();
+    const { api, state } = await renderW11(<AppsSettings />, {
+      appauth: {
+        clients: [
+          appClient({
+            id: 'app_cal',
+            name: 'Calendar Bridge',
+            registeredAt: recent,
+            redirectUris: ['http://127.0.0.1:9000/cb', 'http://127.0.0.1:9001/cb'],
+            scopes: ['account:read', 'threads:read'],
+          }),
+          appClient({
+            id: 'app_old',
+            name: 'Old Notes',
+            approved: true,
+            redirectUris: ['com.example.notes:/oauth'],
+            scopes: ['memory:read'],
+          }),
+          // Unapproved and older than an hour: the Hub no longer lists it.
+          appClient({ id: 'app_gone', name: 'Gone App' }),
+        ],
+      },
+    });
+    const list = await screen.findByRole('list', { name: APPS_TEXT.pendingLabel });
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((li) => li.getAttribute('aria-label')),
+    ).toEqual(['Calendar Bridge', 'Old Notes']);
+    const cal = within(list).getByRole('listitem', { name: 'Calendar Bridge' });
+    expect(cal.textContent).toContain('Asks to read: See your name and picture · Read your chats');
+    expect(within(cal).getAllByText('127.0.0.1 (any port)')).toHaveLength(1);
+    expect(cal.textContent).toContain('Waiting for its first approval. It is removed at');
+    expect(cal.textContent).toContain('Registered 10 min ago.');
+    const old = within(list).getByRole('listitem', { name: 'Old Notes' });
+    expect(within(old).getByText('com.example.notes:')).toBeTruthy();
+    expect(old.textContent).toContain(APPS_TEXT.notAllowedNow);
+    expect(screen.queryByText('Gone App')).toBeNull();
+
+    await userEvent.click(within(old).getByRole('button', { name: 'Remove Old Notes' }));
+    const dialog = screen.getByRole('dialog', { name: 'Remove Old Notes?' });
+    expect(dialog.textContent).toContain(APPS_TEXT.removeWhat({ name: 'Old Notes' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: APPS_TEXT.cancel }));
+    expect(api.removePendingApp).not.toHaveBeenCalled();
+    await userEvent.click(within(old).getByRole('button', { name: 'Remove Old Notes' }));
+    await userEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: APPS_TEXT.remove }),
+    );
+    expect(await screen.findByText(APPS_TEXT.removed({ name: 'Old Notes' }))).toBeTruthy();
+    expect(api.removePendingApp).toHaveBeenCalledWith('app_old');
+    expect(state.clients.map((c) => c.id)).not.toContain('app_old');
+    expect(screen.queryByRole('listitem', { name: 'Old Notes' })).toBeNull();
+  });
+
+  it('says why a removal was refused, and a revoked app moves to the registered list', async () => {
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    const { api, state } = await renderW11(<AppsSettings />, {
+      appauth: {
+        clients: [
+          appClient({ id: 'app_cal', name: 'Calendar Bridge', registeredAt: recent }),
+          appClient({ id: 'app_notes', name: 'Notes Desk', approved: true }),
+        ],
+        grants: [appGrant({ id: 'auth-1', clientId: 'app_notes', name: 'Notes Desk' })],
+      },
+    });
+    const pending = await screen.findByRole('list', { name: APPS_TEXT.pendingLabel });
+    // Someone allowed it in another tab meanwhile: the Hub refuses, the list is read again.
+    state.grants.push(appGrant({ id: 'auth-2', clientId: 'app_cal', name: 'Calendar Bridge' }));
+    await userEvent.click(within(pending).getByRole('button', { name: 'Remove Calendar Bridge' }));
+    await userEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: APPS_TEXT.remove }),
+    );
+    expect(
+      await screen.findByText(
+        APPS_TEXT.removeFailed({
+          name: 'Calendar Bridge',
+          why: 'This app is allowed now. Revoke it under “Apps you allowed” first.',
+        }),
+      ),
+    ).toBeTruthy();
+    await waitFor(() => expect(api.listPendingApps).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(APPS_TEXT.pendingNone)).toBeTruthy();
+
+    // Revoking keeps the app registered: it shows under the registered apps.
+    state.grants = state.grants.filter((g) => g.id !== 'auth-2');
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke Notes Desk' }));
+    await userEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: APPS_TEXT.revoke }),
+    );
+    const again = await screen.findByRole('list', { name: APPS_TEXT.pendingLabel });
+    expect(await within(again).findByRole('listitem', { name: 'Notes Desk' })).toBeTruthy();
+  });
+
+  it('says when the registered apps cannot be read, with Retry', async () => {
+    const { api } = await renderW11(<AppsSettings />, {
+      fail: {
+        listPendingApps: new ApiError(403, {
+          code: 'policy_denied',
+          message: 'owner only',
+          retryable: false,
+          details: { reason: 'owner_only' },
+        }),
+      },
+    });
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Only the owner');
+    await userEvent.click(within(alert).getByRole('button', { name: APPS_TEXT.retry }));
+    expect(await screen.findByText(APPS_TEXT.pendingNone)).toBeTruthy();
+    expect(api.listPendingApps).toHaveBeenCalledTimes(2);
+  });
+
+  it('labels registered return addresses plainly', () => {
+    expect(pendingHostLabel('127.0.0.1')).toBe('127.0.0.1 (any port)');
+    expect(pendingHostLabel('[::1]:9000')).toBe('[::1] (any port)');
+    expect(pendingHostLabel('com.example.app')).toBe('com.example.app:');
   });
 
   it('labels redirect URIs plainly', () => {
@@ -212,18 +365,24 @@ describe('Settings → Telemetry export (FR-223)', () => {
     expect(document.body.textContent).not.toContain('s3cret');
 
     await userEvent.click(
-      screen.getByRole('button', { name: OTLP_TEXT.replaceLabel('x-api-key') }),
+      screen.getByRole('button', { name: OTLP_TEXT.replaceLabel({ name: 'x-api-key' }) }),
     );
-    const replace = screen.getByRole('form', { name: OTLP_TEXT.replaceLabel('x-api-key') });
+    const replace = screen.getByRole('form', {
+      name: OTLP_TEXT.replaceLabel({ name: 'x-api-key' }),
+    });
     await userEvent.type(
-      within(replace).getByLabelText(OTLP_TEXT.headerValueNew('x-api-key')),
+      within(replace).getByLabelText(OTLP_TEXT.headerValueNew({ name: 'x-api-key' })),
       'k2',
     );
     await userEvent.click(within(replace).getByRole('button', { name: OTLP_TEXT.save }));
     await waitFor(() => expect(state.otlp.headers['x-api-key']).toBe('k2'));
 
-    await userEvent.click(screen.getByRole('button', { name: OTLP_TEXT.removeLabel('x-api-key') }));
-    const dialog = screen.getByRole('dialog', { name: OTLP_TEXT.removeTitle('x-api-key') });
+    await userEvent.click(
+      screen.getByRole('button', { name: OTLP_TEXT.removeLabel({ name: 'x-api-key' }) }),
+    );
+    const dialog = screen.getByRole('dialog', {
+      name: OTLP_TEXT.removeTitle({ name: 'x-api-key' }),
+    });
     expect(dialog.textContent).toContain(OTLP_TEXT.removeWhat);
     expect(state.otlp.headers['x-api-key']).toBe('k2');
     await userEvent.click(within(dialog).getByRole('button', { name: OTLP_TEXT.remove }));
@@ -237,7 +396,7 @@ describe('Settings → Telemetry export (FR-223)', () => {
     });
     await userEvent.click(await screen.findByRole('switch', { name: OTLP_TEXT.contentLabel }));
     const dialog = screen.getByRole('dialog', { name: OTLP_TEXT.contentConfirmTitle });
-    expect(dialog.textContent).toContain(OTLP_TEXT.contentConfirm('https://c.example'));
+    expect(dialog.textContent).toContain(OTLP_TEXT.contentConfirm({ where: 'https://c.example' }));
     expect(api.updateOtlp).not.toHaveBeenCalled();
     await userEvent.click(within(dialog).getByRole('button', { name: OTLP_TEXT.cancel }));
     expect(state.otlp.includeContent).toBe(false);
@@ -267,7 +426,7 @@ describe('Settings → Telemetry export (FR-223)', () => {
     await userEvent.click(await screen.findByRole('switch', { name: 'Logs' }));
     await waitFor(() => expect(state.otlp.signals.logs).toBe(false));
     expect(await screen.findByText(OTLP_TEXT.inactiveWhy.noSignal)).toBeTruthy();
-    expect(await screen.findByText(OTLP_TEXT.savedSignal('Logs', false))).toBeTruthy();
+    expect(await screen.findByText(OTLP_TEXT.signalOff({ signal: 'logs' }))).toBeTruthy();
   });
 
   it('sends a test and says what the collector answered', async () => {
@@ -275,15 +434,15 @@ describe('Settings → Telemetry export (FR-223)', () => {
       appauth: { otlp: otlp({ endpoint: 'https://c.example' }) },
     });
     await userEvent.click(await screen.findByRole('button', { name: OTLP_TEXT.test }));
-    expect(await screen.findByText(OTLP_TEXT.testOk(200))).toBeTruthy();
+    expect(await screen.findByText(OTLP_TEXT.testOkStatus({ status: '200' }))).toBeTruthy();
     state.otlpTest = { ok: false, status: 401, error: 'the collector refused the headers' };
     await userEvent.click(screen.getByRole('button', { name: OTLP_TEXT.test }));
     expect(
-      await screen.findByText(OTLP_TEXT.testFailed('the collector refused the headers')),
+      await screen.findByText(OTLP_TEXT.testFailed({ why: 'the collector refused the headers' })),
     ).toBeTruthy();
     state.otlpTest = { ok: false, status: null, error: null };
     await userEvent.click(screen.getByRole('button', { name: OTLP_TEXT.test }));
-    expect(await screen.findByText(OTLP_TEXT.testFailed('no answer'))).toBeTruthy();
+    expect(await screen.findByText(OTLP_TEXT.testFailed({ why: 'no answer' }))).toBeTruthy();
   });
 
   it('shows the export’s numbers and last error', async () => {

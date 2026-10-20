@@ -4,7 +4,23 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Dialog, Icon, Spinner, useToast, type IconName } from '@nova/ui';
 import type { DeviceView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { DEVICE_STATUS, deviceErrorMessage, type ChipTone } from './format.ts';
+
+export const PARTS_TEXT = defineMessages('devices.parts', {
+  updateRequired: 'Update required',
+  retry: 'Retry',
+  cancel: 'Cancel',
+  failed: 'That did not work.',
+  /** What was copied, named in the toast. */
+  copied:
+    '{what, select, code {Code copied.} link {Link copied.} command {Command copied.} windowsCommand {Windows command copied.} bootToken {Boot token copied.} ipxeAddress {iPXE address copied.} other {Copied.}}',
+  copyFailed:
+    '{what, select, code {Could not copy. The code is selected; copy it with your keyboard.} link {Could not copy. The link is selected; copy it with your keyboard.} command {Could not copy. The command is selected; copy it with your keyboard.} windowsCommand {Could not copy. The Windows command is selected; copy it with your keyboard.} bootToken {Could not copy. The boot token is selected; copy it with your keyboard.} ipxeAddress {Could not copy. The iPXE address is selected; copy it with your keyboard.} other {Could not copy. The text is selected; copy it with your keyboard.}}',
+});
+
+/** What `useCopy` copies, so its toast can name it. */
+export type CopyWhat = 'code' | 'link' | 'command' | 'windowsCommand' | 'bootToken' | 'ipxeAddress';
 
 export interface Loaded<T> {
   data: T | null;
@@ -74,7 +90,7 @@ export function DeviceStatusChip({ status }: { status: DeviceView['status'] }) {
 }
 
 export function UpdateRequiredChip() {
-  return <Chip tone="needs_input" icon="alert" text="Update required" />;
+  return <Chip tone="needs_input" icon="alert" text={PARTS_TEXT.updateRequired} />;
 }
 
 export function LoadError({
@@ -89,7 +105,7 @@ export function LoadError({
   return (
     <div role="alert" className="ws-error">
       <p>{deviceErrorMessage(error, fallback)}</p>
-      <Button onClick={onRetry}>Retry</Button>
+      <Button onClick={onRetry}>{PARTS_TEXT.retry}</Button>
     </div>
   );
 }
@@ -180,7 +196,7 @@ function ConfirmBody({
       footer={
         <>
           <Button ref={cancelRef} onClick={onClose}>
-            Cancel
+            {PARTS_TEXT.cancel}
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}
@@ -195,7 +211,7 @@ function ConfirmBody({
       {children}
       {error ? (
         <p role="alert" className="nv-field-error">
-          {deviceErrorMessage(error, 'That did not work.')}
+          {deviceErrorMessage(error, PARTS_TEXT.failed)}
         </p>
       ) : null}
     </Dialog>
@@ -206,14 +222,14 @@ function ConfirmBody({
  * Copy text to the clipboard; when the browser refuses, select it on the page (`el`) so the user
  * can copy it with the keyboard. `what` names it in the toast: "Command copied."
  */
-export function useCopy(): (text: string, el: HTMLElement | null, what: string) => Promise<void> {
+export function useCopy(): (text: string, el: HTMLElement | null, what: CopyWhat) => Promise<void> {
   const toast = useToast();
   return useCallback(
     async (text, el, what) => {
       try {
         if (!navigator.clipboard) throw new Error('no clipboard');
         await navigator.clipboard.writeText(text);
-        toast.show(`${what} copied.`, { tone: 'success' });
+        toast.show(PARTS_TEXT.copied({ what }), { tone: 'success' });
       } catch {
         const sel = window.getSelection();
         if (el && sel) {
@@ -222,10 +238,7 @@ export function useCopy(): (text: string, el: HTMLElement | null, what: string) 
           sel.removeAllRanges();
           sel.addRange(range);
         }
-        toast.show(
-          `Could not copy. The ${what.toLowerCase()} is selected; copy it with your keyboard.`,
-          { tone: 'error' },
-        );
+        toast.show(PARTS_TEXT.copyFailed({ what }), { tone: 'error' });
       }
     },
     [toast],

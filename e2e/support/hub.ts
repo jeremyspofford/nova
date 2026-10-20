@@ -19,6 +19,8 @@ export async function startHub(opts: {
   dataDir?: string;
   /** Node options before the entry point (for example `--import` of a test preload). */
   nodeArgs?: string[];
+  /** Hub arguments after the entry point (for example `--allow-test-policy`). */
+  args?: string[];
   /** Extra environment for the Hub process. */
   env?: Record<string, string>;
 }): Promise<RunningHub> {
@@ -26,7 +28,7 @@ export async function startHub(opts: {
   const t0 = Date.now();
   const child: ChildProcess = spawn(
     process.execPath,
-    [...(opts.nodeArgs ?? []), 'apps/hub/src/main.ts'],
+    [...(opts.nodeArgs ?? []), 'apps/hub/src/main.ts', ...(opts.args ?? [])],
     {
       env: {
         ...process.env,

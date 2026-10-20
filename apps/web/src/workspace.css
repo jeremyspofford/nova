@@ -146,7 +146,8 @@
 }
 .ws-rejections {
   margin: 0;
-  padding: var(--u-space-2) var(--u-space-3) var(--u-space-2) var(--u-space-6);
+  padding-block: var(--u-space-2);
+  padding-inline: var(--u-space-6) var(--u-space-3);
   border: 1px solid var(--u-warn);
   border-radius: var(--u-radius-sm);
   font-size: var(--u-text-sm);
@@ -231,8 +232,8 @@
 }
 .ws-quote {
   margin: 0;
-  padding-left: var(--u-space-3);
-  border-left: 3px solid var(--u-border);
+  padding-inline-start: var(--u-space-3);
+  border-inline-start: 3px solid var(--u-border);
   overflow-wrap: anywhere;
 }
 .ws-import-result {
@@ -400,7 +401,7 @@
 }
 .ws-plain-list {
   margin: 0;
-  padding-left: var(--u-space-4);
+  padding-inline-start: var(--u-space-4);
   font-size: var(--u-text-sm);
 }
 .ws-ok {
@@ -428,7 +429,7 @@
 .bell-count {
   position: absolute;
   top: 0;
-  right: 0;
+  inset-inline-end: 0;
   min-width: 16px;
   height: 16px;
   padding: 0 var(--u-space-1);
@@ -442,7 +443,7 @@
 .bell-panel {
   position: absolute;
   top: calc(100% + var(--u-space-1));
-  right: 0;
+  inset-inline-end: 0;
   z-index: var(--u-z-overlay);
   display: grid;
   gap: var(--u-space-3);
@@ -484,7 +485,7 @@
   border-radius: var(--u-radius-sm);
 }
 .bell-item[data-unread] {
-  border-left: 3px solid var(--u-accent);
+  border-inline-start: 3px solid var(--u-accent);
 }
 .bell-item-main {
   display: grid;
@@ -496,7 +497,7 @@
   background: none;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .bell-item-title {
@@ -531,8 +532,8 @@
 .app[data-layout='phone'] .bell-panel {
   position: fixed;
   top: 56px;
-  right: var(--u-space-2);
-  left: var(--u-space-2);
+  inset-inline-end: var(--u-space-2);
+  inset-inline-start: var(--u-space-2);
   width: auto;
 }
 
@@ -549,7 +550,7 @@
   gap: var(--u-space-2);
   padding: var(--u-space-3);
   border: 1px solid var(--u-border);
-  border-left: 4px solid var(--u-warn);
+  border-inline-start: 4px solid var(--u-warn);
   border-radius: var(--u-radius-sm);
   background: var(--u-surface-2);
 }
@@ -656,13 +657,13 @@
 .ws-table caption {
   padding: var(--u-space-1) 0;
   font-weight: 600;
-  text-align: left;
+  text-align: start;
 }
 .ws-table th,
 .ws-table td {
   padding: var(--u-space-1) var(--u-space-2);
   border-bottom: 1px solid var(--u-border);
-  text-align: left;
+  text-align: start;
 }
 .ws-table thead th {
   color: var(--u-text-muted);

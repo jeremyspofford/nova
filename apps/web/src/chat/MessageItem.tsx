@@ -9,7 +9,8 @@
 // M8: a reply a spend cap stopped links to that provider's cap (FR-116).
 // M8: what running extensions add to a message sits in a menu at the end of its actions (FR-117).
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { CitationView, MessageView, ToolCallStatus } from '@nova/shared';
+import { defineMessages, messageFor } from '@nova/i18n';
+import type { CitationView, ToolCallStatus } from '@nova/shared';
 import {
   Button,
   Icon,
@@ -22,6 +23,7 @@ import {
   type MenuItem,
 } from '@nova/ui';
 import { CapReachedAction } from '../datactl/CapReached.tsx';
+import { useMyAccountId } from '../team/role.tsx';
 import { useExtensionMenuItems } from '../extensions/shell.tsx';
 import { ArtifactCard } from './Artifacts.tsx';
 import { Highlighted } from './find.tsx';
@@ -84,18 +86,61 @@ export interface MessageItemProps {
   onOpenArtifact?: (artifactId: string) => void;
 }
 
-const BUSY_HINT = 'Wait for the reply to finish';
-/** The message toolbar's menu of what running extensions add (M8). */
-const EXTENSION_ACTIONS = 'More actions from extensions';
-
-const AUTHOR_LABELS: Partial<Record<NonNullable<MessageView['provenance']>, string>> = {
-  hook: 'Hook',
-  run: 'Run objective',
-  schedule: 'Schedule',
-  goal: 'Goal',
-  subagent: 'Task',
-  system: 'Nova',
-};
+export const MESSAGE_TEXT = defineMessages('chat.message', {
+  busyHint: '{action}: Wait for the reply to finish',
+  /** The message toolbar's menu of what running extensions add (M8). */
+  extensionActions: 'More actions from extensions',
+  /** Who wrote a user-role message the user did not type (FR-197). */
+  author: {
+    hook: 'Hook',
+    run: 'Run objective',
+    schedule: 'Schedule',
+    goal: 'Goal',
+    subagent: 'Task',
+    system: 'Nova',
+  },
+  role: '{role, select, user {You} assistant {Assistant} system {System} tool {Tool} summary {Summary} other {Message}}',
+  /** In a shared chat (FR-217): a person who wrote a message and has no display name. */
+  someone: 'Someone',
+  /** The toolbar of another person's message in a shared chat; `name` is who wrote it. */
+  actionsForTheirs: 'Actions for the message from {name}',
+  label:
+    '{who}{stopped, select, yes {, stopped} other {}}{steering, select, yes {, steering} other {}}',
+  contextSummary: 'Context summary',
+  compacted:
+    '{n, plural, one {Earlier messages were summarized to save context (# message, {before} → {after} tokens)} other {Earlier messages were summarized to save context (# messages, {before} → {after} tokens)}}',
+  modelThatAnswered: 'Model that answered',
+  steering: 'Steering',
+  writtenOffline: 'Written offline',
+  offlineHint: 'A model on one of your devices answered while the Hub was unreachable',
+  answeredOffline: 'Answered offline by a local model',
+  stopped: 'Stopped',
+  responding: 'Responding',
+  reasoning: 'Reasoning',
+  attachedFiles: 'Attached files',
+  failed: 'The reply failed.',
+  retry: 'Retry',
+  actionsForYours: 'Actions for your message',
+  actionsForReply: 'Actions for this reply',
+  copy: 'Copy',
+  edit: 'Edit',
+  regenerate: 'Regenerate',
+  regenerateWithAnother: 'Regenerate with another model',
+  regenerateWith: 'Regenerate with {model}',
+  branch: 'Branch from here',
+  quote: 'Quote',
+  delete: 'Delete',
+  versions: 'Versions',
+  previousVersion: 'Previous version',
+  nextVersion: 'Next version',
+  versionOf: 'Version {n} of {count}',
+  editMessage: 'Edit message',
+  editedMessage: 'Edited message',
+  save: 'Save',
+  cancel: 'Cancel',
+  sources: 'Sources',
+  source: 'Source {n}',
+});
 
 export function MessageItem({
   message: m,
@@ -115,6 +160,7 @@ export function MessageItem({
   onOpenArtifact,
 }: MessageItemProps) {
   const [editing, setEditing] = useState(false);
+  const me = useMyAccountId();
   const text = messageText(m, streamed);
   const segments = m.role === 'assistant' ? messageSegments(m, streamed, liveCalls ?? []) : null;
   const storedReasoning = m.parts
@@ -132,20 +178,32 @@ export function MessageItem({
       <article
         id={`${idPrefix}${m.id}`}
         className="msg msg-compaction"
-        aria-label="Context summary"
+        aria-label={MESSAGE_TEXT.contextSummary}
       >
         <details>
           <summary>
-            Earlier messages were summarized to save context ({compaction.covered} messages,{' '}
-            {compaction.tokensBefore} → {compaction.tokensAfter} tokens)
+            {MESSAGE_TEXT.compacted({
+              n: compaction.covered,
+              before: compaction.tokensBefore,
+              after: compaction.tokensAfter,
+            })}
           </summary>
-          <p className="msg-compaction-text">{compaction.summary}</p>
+          <p className="msg-compaction-text" dir="auto">
+            {compaction.summary}
+          </p>
         </details>
       </article>
     );
   // A user-role message the user did not type in the composer says who wrote it (FR-197, M5).
-  const label = m.role === 'user' && m.provenance ? AUTHOR_LABELS[m.provenance] : undefined;
-  const who = label ?? (m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Assistant' : m.role);
+  const label =
+    m.role === 'user' && m.provenance ? messageFor(MESSAGE_TEXT.author, m.provenance) : undefined;
+  // In a shared chat (FR-217) another person's message is theirs, by name; yours say You.
+  const theirs =
+    m.role === 'user' && label === undefined && m.author && m.author.accountId !== me
+      ? m.author.displayName?.trim() || MESSAGE_TEXT.someone
+      : undefined;
+  const who = label ?? theirs ?? MESSAGE_TEXT.role({ role: m.role });
+  const yours = m.role === 'user' && label === undefined && theirs === undefined;
   const steering = m.provenance === 'steer' || m.expect === 'steer';
   const siblings = m.siblingIds && m.siblingIds.length > 1 ? m.siblingIds : null;
   const settled = !m.id.startsWith('local-') && m.status !== 'streaming';
@@ -157,41 +215,43 @@ export function MessageItem({
       data-role={m.role}
       data-status={m.status}
       data-highlight={highlighted || undefined}
-      aria-label={`${who}${m.status === 'incomplete' ? ', stopped' : ''}${steering ? ', steering' : ''}`}
+      aria-label={MESSAGE_TEXT.label({
+        who,
+        stopped: m.status === 'incomplete' ? 'yes' : 'no',
+        steering: steering ? 'yes' : 'no',
+      })}
       tabIndex={-1}
     >
       <div className="msg-meta">
-        <span className="msg-who">{who}</span>
+        <span className="msg-who" dir={theirs ? 'auto' : undefined}>
+          {who}
+        </span>
         {m.role === 'assistant' && modelName ? (
-          <span className="msg-model" title="Model that answered">
+          <span className="msg-model" title={MESSAGE_TEXT.modelThatAnswered}>
             {modelName}
           </span>
         ) : null}
         {steering ? (
           <span className="msg-badge" data-kind="steer">
-            <Icon name="forward" /> Steering
+            <Icon name="forward" /> {MESSAGE_TEXT.steering}
           </span>
         ) : null}
         {m.provenance === 'sync' ? (
           <span className="msg-badge" data-kind="sync">
-            <Icon name="clock" /> Written offline
+            <Icon name="clock" /> {MESSAGE_TEXT.writtenOffline}
           </span>
         ) : null}
         {m.provenance === 'offline' ? (
-          <span
-            className="msg-badge"
-            data-kind="offline"
-            title="A model on one of your devices answered while the Hub was unreachable"
-          >
-            <Icon name="server" /> Answered offline by a local model
+          <span className="msg-badge" data-kind="offline" title={MESSAGE_TEXT.offlineHint}>
+            <Icon name="server" /> {MESSAGE_TEXT.answeredOffline}
           </span>
         ) : null}
         {m.status === 'incomplete' ? (
           <span className="msg-badge" data-kind="stopped">
-            <Icon name="stop" /> Stopped
+            <Icon name="stop" /> {MESSAGE_TEXT.stopped}
           </span>
         ) : null}
-        {m.status === 'streaming' ? <Spinner label="Responding" /> : null}
+        {m.status === 'streaming' ? <Spinner label={MESSAGE_TEXT.responding} /> : null}
         {siblings ? (
           <Versions
             ids={siblings}
@@ -203,8 +263,8 @@ export function MessageItem({
       </div>
       {thinking ? (
         <details className="msg-reasoning">
-          <summary>Reasoning</summary>
-          <p>{thinking}</p>
+          <summary>{MESSAGE_TEXT.reasoning}</summary>
+          <p dir="auto">{thinking}</p>
         </details>
       ) : null}
       {editing && actions?.onEdit ? (
@@ -243,12 +303,12 @@ export function MessageItem({
           );
         })
       ) : text ? (
-        <p className="msg-text">
+        <p className="msg-text" dir="auto">
           <Highlighted text={text} query={find} />
         </p>
       ) : null}
       {files.length ? (
-        <ul className="chips" aria-label="Attached files">
+        <ul className="chips" aria-label={MESSAGE_TEXT.attachedFiles}>
           {files.map((f, i) =>
             f.type === 'file' ? (
               <li key={`${f.attachmentId}-${i}`} className="chip">
@@ -269,7 +329,7 @@ export function MessageItem({
       {notices.map((n, i) =>
         n.type === 'notice' ? (
           <p key={`n${i}`} className="msg-notice muted" role="note">
-            <Icon name="alert" /> {n.message}
+            <Icon name="alert" /> <span dir="auto">{n.message}</span>
           </p>
         ) : null,
       )}
@@ -278,12 +338,15 @@ export function MessageItem({
           <div key={i} className="msg-error" role="alert">
             <Icon name="alert" />
             <span>
-              {e.message || 'The reply failed.'} <span className="muted">({e.code})</span>
+              {e.message || MESSAGE_TEXT.failed}{' '}
+              <span className="muted" dir="ltr">
+                ({e.code})
+              </span>
             </span>
-            <CapReachedAction code={e.code} message={e.message} />
+            <CapReachedAction code={e.code} message={e.message} details={e.details} />
             {onRetry ? (
               <Button onClick={onRetry} disabled={retryDisabled}>
-                Retry
+                {MESSAGE_TEXT.retry}
               </Button>
             ) : null}
           </div>
@@ -292,10 +355,10 @@ export function MessageItem({
       {m.status === 'error' && errors.length === 0 ? (
         <div className="msg-error" role="alert">
           <Icon name="alert" />
-          <span>The reply failed.</span>
+          <span>{MESSAGE_TEXT.failed}</span>
           {onRetry ? (
             <Button onClick={onRetry} disabled={retryDisabled}>
-              Retry
+              {MESSAGE_TEXT.retry}
             </Button>
           ) : null}
         </div>
@@ -304,7 +367,13 @@ export function MessageItem({
         <MessageActionBar
           message={m}
           items={toolbarItems(m.role, text, actions, busy, () => setEditing(true))}
-          label={`Actions for ${who === 'You' ? 'your message' : 'this reply'}`}
+          label={
+            theirs
+              ? MESSAGE_TEXT.actionsForTheirs({ name: theirs })
+              : yours
+                ? MESSAGE_TEXT.actionsForYours
+                : MESSAGE_TEXT.actionsForReply
+          }
         />
       ) : null}
     </article>
@@ -330,13 +399,19 @@ function toolbarItems(
   startEdit: () => void,
 ): ToolbarItem[] {
   const items: ToolbarItem[] = [
-    { kind: 'button', id: 'copy', label: 'Copy', icon: 'copy', onClick: () => a.onCopy(text) },
+    {
+      kind: 'button',
+      id: 'copy',
+      label: MESSAGE_TEXT.copy,
+      icon: 'copy',
+      onClick: () => a.onCopy(text),
+    },
   ];
   if (role === 'user' && a.onEdit)
     items.push({
       kind: 'button',
       id: 'edit',
-      label: 'Edit',
+      label: MESSAGE_TEXT.edit,
       icon: 'edit',
       onClick: startEdit,
       disabled: busy,
@@ -346,7 +421,7 @@ function toolbarItems(
     items.push({
       kind: 'button',
       id: 'regenerate',
-      label: 'Regenerate',
+      label: MESSAGE_TEXT.regenerate,
       icon: 'refresh',
       onClick: () => regen(),
       disabled: busy,
@@ -355,11 +430,11 @@ function toolbarItems(
       items.push({
         kind: 'menu',
         id: 'regenerate-with',
-        label: 'Regenerate with another model',
+        label: MESSAGE_TEXT.regenerateWithAnother,
         icon: 'more',
         items: a.regenerateModels.map((mo) => ({
           id: mo.ref,
-          label: `Regenerate with ${mo.label}`,
+          label: MESSAGE_TEXT.regenerateWith({ model: mo.label }),
           onSelect: () => regen(mo.ref),
         })),
       });
@@ -369,7 +444,7 @@ function toolbarItems(
     items.push({
       kind: 'button',
       id: 'branch',
-      label: 'Branch from here',
+      label: MESSAGE_TEXT.branch,
       icon: 'branch',
       onClick: branch,
     });
@@ -377,7 +452,7 @@ function toolbarItems(
   items.push({
     kind: 'button',
     id: 'quote',
-    label: 'Quote',
+    label: MESSAGE_TEXT.quote,
     icon: 'quote',
     onClick: () => a.onQuote(text),
   });
@@ -386,7 +461,7 @@ function toolbarItems(
     items.push({
       kind: 'button',
       id: 'delete',
-      label: 'Delete',
+      label: MESSAGE_TEXT.delete,
       icon: 'trash',
       onClick: del,
       disabled: busy,
@@ -418,7 +493,7 @@ function MessageActionBar({
               {
                 kind: 'menu',
                 id: 'extensions',
-                label: EXTENSION_ACTIONS,
+                label: MESSAGE_TEXT.extensionActions,
                 icon: 'more',
                 items: extensionItems,
               },
@@ -475,7 +550,7 @@ function ActionBar({ items, label }: { items: ToolbarItem[]; label: string }) {
             className="msg-tool"
             tabIndex={i === current ? 0 : -1}
             aria-disabled={it.disabled || undefined}
-            title={it.disabled ? `${it.label}: ${BUSY_HINT}` : it.label}
+            title={it.disabled ? MESSAGE_TEXT.busyHint({ action: it.label }) : it.label}
             onFocus={() => setActive(i)}
             onClick={() => {
               if (!it.disabled) it.onClick();
@@ -502,9 +577,9 @@ function Versions({
   const prev = ids[i - 1];
   const next = ids[i + 1];
   return (
-    <span className="msg-versions" role="group" aria-label="Versions">
+    <span className="msg-versions" role="group" aria-label={MESSAGE_TEXT.versions}>
       <IconButton
-        label="Previous version"
+        label={MESSAGE_TEXT.previousVersion}
         icon={<Icon name="back" />}
         variant="ghost"
         disabled={disabled || !prev}
@@ -513,11 +588,9 @@ function Versions({
       <span aria-hidden="true">
         {i + 1} / {ids.length}
       </span>
-      <VisuallyHidden>
-        Version {i + 1} of {ids.length}
-      </VisuallyHidden>
+      <VisuallyHidden>{MESSAGE_TEXT.versionOf({ n: i + 1, count: ids.length })}</VisuallyHidden>
       <IconButton
-        label="Next version"
+        label={MESSAGE_TEXT.nextVersion}
         icon={<Icon name="forward" />}
         variant="ghost"
         disabled={disabled || !next}
@@ -558,7 +631,7 @@ function EditForm({
   return (
     <form
       className="msg-edit"
-      aria-label="Edit message"
+      aria-label={MESSAGE_TEXT.editMessage}
       onSubmit={(e) => {
         e.preventDefault();
         void save();
@@ -571,7 +644,7 @@ function EditForm({
       }}
     >
       <label htmlFor={id} className="nv-vh">
-        Edited message
+        {MESSAGE_TEXT.editedMessage}
       </label>
       <textarea
         id={id}
@@ -595,9 +668,9 @@ function EditForm({
       <div className="row">
         <Button type="submit" variant="primary" disabled={saving || busy || !value.trim()}>
           {saving ? <Spinner /> : null}
-          Save
+          {MESSAGE_TEXT.save}
         </Button>
-        <Button onClick={onDone}>Cancel</Button>
+        <Button onClick={onDone}>{MESSAGE_TEXT.cancel}</Button>
       </div>
     </form>
   );
@@ -622,12 +695,12 @@ function Citations({ items }: { items: CitationView[] }) {
   return (
     <div className="msg-sources" role="group" aria-labelledby={id}>
       <span id={id} className="msg-sources-title">
-        Sources
+        {MESSAGE_TEXT.sources}
       </span>
       <ol>
         {sorted.map((c, i) => {
           const host = sourceHost(c.url);
-          const name = c.title?.trim() || host || c.url || `Source ${i + 1}`;
+          const name = c.title?.trim() || host || c.url || MESSAGE_TEXT.source({ n: i + 1 });
           return (
             <li key={c.id}>
               {c.url && host ? (
@@ -638,7 +711,11 @@ function Citations({ items }: { items: CitationView[] }) {
                 <span className="msg-source-name">{name}</span>
               )}
               {host && host !== name ? <span className="msg-source-host">{host}</span> : null}
-              {c.snippet ? <p className="msg-source-snippet">{c.snippet}</p> : null}
+              {c.snippet ? (
+                <p className="msg-source-snippet" dir="auto">
+                  {c.snippet}
+                </p>
+              ) : null}
             </li>
           );
         })}

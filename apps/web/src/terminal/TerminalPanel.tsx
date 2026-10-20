@@ -18,7 +18,7 @@ import { Button, Icon, IconButton, Spinner, rovingIndex, useToast } from '@nova/
 import { errorMessage } from '../api.ts';
 import type { CommandRegistry } from '../commands.ts';
 import { useAnnounce, useServices } from '../services.tsx';
-import { TerminalHub, type TerminalsSnapshot } from './session.ts';
+import { TERMINAL_TEXT, TerminalHub, exitCodeArg, type TerminalsSnapshot } from './session.ts';
 
 const HubCtx = createContext<TerminalHub | null>(null);
 
@@ -49,9 +49,7 @@ export function TerminalsProvider({ children }: { children: ReactNode }) {
   );
   useEffect(
     () =>
-      hub.onExit((t) =>
-        announce(`Terminal exited${t.exitCode === null ? '' : ` with code ${t.exitCode}`}.`),
-      ),
+      hub.onExit((t) => announce(TERMINAL_TEXT.exitedAnnounce({ code: exitCodeArg(t.exitCode) }))),
     [announce, hub],
   );
   useEffect(() => () => hub.dispose(), [hub]);
@@ -71,7 +69,7 @@ export function useTerminals(): TerminalsSnapshot {
 
 export function terminalLabel(items: TerminalView[], id: string): string {
   const i = items.findIndex((t) => t.id === id);
-  return `Terminal ${i < 0 ? '' : i + 1}`.trim();
+  return i < 0 ? TERMINAL_TEXT.terminal : TERMINAL_TEXT.numbered({ n: i + 1 });
 }
 
 export interface TerminalPanelProps {
@@ -95,7 +93,7 @@ export function TerminalPanel({
   threadId = null,
   focusSignal = 0,
   newSignal = 0,
-  label = 'Terminals',
+  label = TERMINAL_TEXT.terminals,
 }: TerminalPanelProps) {
   const hub = useTerminalHub();
   const snap = useTerminals();
@@ -123,7 +121,7 @@ export function TerminalPanel({
           if (id) {
             if (focus) focusNext.current = id;
             setPicked(id);
-            announce('Terminal started.');
+            announce(TERMINAL_TEXT.started);
           } else if (focus) {
             focusNote.current = true;
             setPicked(null);
@@ -131,7 +129,7 @@ export function TerminalPanel({
           return id;
         },
         (err: unknown) => {
-          toast.show(`Could not start a terminal: ${errorMessage(err)}`, { tone: 'error' });
+          toast.show(TERMINAL_TEXT.createFailed({ reason: errorMessage(err) }), { tone: 'error' });
           return null;
         },
       ),
@@ -141,9 +139,11 @@ export function TerminalPanel({
   const close = (id: string) => {
     const name = terminalLabel(items, id);
     hub.close(id).then(
-      () => announce(`${name} closed.`),
+      () => announce(TERMINAL_TEXT.closed({ name })),
       (err: unknown) =>
-        toast.show(`Could not close ${name}: ${errorMessage(err)}`, { tone: 'error' }),
+        toast.show(TERMINAL_TEXT.closeFailed({ name, reason: errorMessage(err) }), {
+          tone: 'error',
+        }),
     );
   };
 
@@ -196,7 +196,7 @@ export function TerminalPanel({
           <div
             ref={tabs}
             role="tablist"
-            aria-label="Open terminals"
+            aria-label={TERMINAL_TEXT.open}
             className="terminal-tabs"
             onKeyDown={onTabKey}
           >
@@ -210,17 +210,19 @@ export function TerminalPanel({
                     role="tab"
                     id={`${base}-tab-${t.id}`}
                     aria-selected={on}
-                    aria-label={t.status === 'exited' ? `${name} (exited)` : name}
+                    aria-label={t.status === 'exited' ? TERMINAL_TEXT.exitedName({ name }) : name}
                     aria-controls={`${base}-panel`}
                     tabIndex={on ? 0 : -1}
                     className="terminal-tab-button"
                     onClick={() => setPicked(t.id)}
                   >
                     <Icon name="terminal" /> {name}
-                    {t.status === 'exited' ? <span className="muted"> (exited)</span> : null}
+                    {t.status === 'exited' ? (
+                      <span className="muted"> {TERMINAL_TEXT.exited}</span>
+                    ) : null}
                   </button>
                   <IconButton
-                    label={`Close ${name}`}
+                    label={TERMINAL_TEXT.close({ name })}
                     icon={<Icon name="close" />}
                     variant="ghost"
                     onClick={() => close(t.id)}
@@ -230,11 +232,11 @@ export function TerminalPanel({
             })}
           </div>
         ) : (
-          <span className="muted terminal-none">Terminal</span>
+          <span className="muted terminal-none">{TERMINAL_TEXT.terminal}</span>
         )}
         <span className="terminal-bar-spacer" />
         <IconButton
-          label="New terminal"
+          label={TERMINAL_TEXT.new}
           icon={<Icon name="plus" />}
           variant="ghost"
           disabled={busy || !!snap.unavailable}
@@ -265,13 +267,13 @@ export function TerminalPanel({
         <div className="terminal-empty">
           {!snap.loaded ? (
             <p className="muted">
-              <Spinner label="Loading terminals" /> Loading…
+              <Spinner label={TERMINAL_TEXT.loading} /> {TERMINAL_TEXT.loadingDots}
             </p>
           ) : (
             <>
-              <p className="muted">No terminal is open.</p>
+              <p className="muted">{TERMINAL_TEXT.none}</p>
               <Button onClick={() => void create(true)} disabled={busy}>
-                <Icon name="terminal" /> Start a terminal
+                <Icon name="terminal" /> {TERMINAL_TEXT.start}
               </Button>
             </>
           )}
@@ -318,7 +320,7 @@ function TerminalScreenView({
   const state = session?.state ?? 'starting';
   const elsewhere = visible && !!session && session.owner !== null && !mine;
   return (
-    <div className="terminal-screen-wrap">
+    <div className="terminal-screen-wrap" dir="ltr">
       <div
         ref={box}
         className="terminal-screen"
@@ -329,24 +331,24 @@ function TerminalScreenView({
       />
       {elsewhere ? (
         <div className="terminal-elsewhere">
-          <p className="muted">{name} is shown in another place.</p>
-          <Button onClick={() => setClaim((n) => n + 1)}>Show it here</Button>
+          <p className="muted">{TERMINAL_TEXT.elsewhere({ name })}</p>
+          <Button onClick={() => setClaim((n) => n + 1)}>{TERMINAL_TEXT.showHere}</Button>
         </div>
       ) : null}
       <p className="terminal-status muted" role="status">
         {state === 'starting' || state === 'connecting' ? (
           <>
-            <Spinner label="Connecting" /> Connecting…
+            <Spinner label={TERMINAL_TEXT.connecting} /> {TERMINAL_TEXT.connectingDots}
           </>
         ) : state === 'disconnected' ? (
           <>
-            {session?.error ?? 'Disconnected from the terminal.'}{' '}
+            {session?.error ?? TERMINAL_TEXT.disconnected}{' '}
             <button type="button" className="link" onClick={() => hub.session(id).connect()}>
-              Reconnect
+              {TERMINAL_TEXT.reconnect}
             </button>
           </>
         ) : state === 'exited' ? (
-          `The shell exited${session?.exitCode === null || session?.exitCode === undefined ? '' : ` with code ${session.exitCode}`}.`
+          TERMINAL_TEXT.shellExited({ code: exitCodeArg(session?.exitCode) })
         ) : null}
       </p>
     </div>

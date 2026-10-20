@@ -3,12 +3,16 @@
 // back the newer page, never a silent overwrite. Comments anchor to the page, a range or a block
 // and move forward with every save. Agent edits follow the space's setting: a proposal the user
 // accepts or rejects, or a direct version (still restorable). Agent text never authorizes anything
-// (FR-189); it is content.
+// (FR-189); it is content. M8: the whole order of a space's pages is set in one write, a deleted
+// page stays in the space's deleted list with its history and comments and can be restored, and a
+// deletion first says what it takes with it.
 import {
   NovaError,
   uuidv7,
   type CommentAnchor,
+  type DeletedPageView,
   type PageAuthorKind,
+  type PageDeletionView,
   type PageCommentView,
   type PageProposalView,
   type PageSummaryView,
@@ -469,6 +473,159 @@ export class SpaceService {
       { spaceId, pageId, version: page.version, authorKind: 'user' },
       USER,
     );
+  }
+
+  /**
+   * Set the order of a space's pages (M8): `pageIds` names every page the space has now, each once.
+   * A list that misses a page or names another (one was added or deleted meanwhile) is `conflict`
+   * `{reason: order_stale}`, so a stale drag never hides a page.
+   */
+  async reorderPages(
+    accountId: string,
+    spaceId: string,
+    pageIds: string[],
+  ): Promise<PageSummaryView[]> {
+    this.#space(accountId, spaceId);
+    const now = this.#stamp();
+    await this.#db.transaction(() => {
+      const live = this.#all<{ id: string }>(
+        'SELECT id FROM space_page WHERE space_id = ? AND deleted_at IS NULL',
+        spaceId,
+      ).map((r) => r.id);
+      const known = new Set(live);
+      if (
+        new Set(pageIds).size !== pageIds.length ||
+        pageIds.length !== live.length ||
+        pageIds.some((id) => !known.has(id))
+      )
+        throw new NovaError('conflict', 'the pages of this space changed; reload and try again', {
+          details: { reason: 'order_stale' },
+        });
+      // Order is not a version: the pages' own times stay, so lists keep saying who last wrote.
+      pageIds.forEach((id, i) =>
+        this.#run('UPDATE space_page SET position = ? WHERE id = ? AND position <> ?', i, id, i),
+      );
+      this.#touchSpace(spaceId, now);
+    });
+    await this.#emit('space.pages.reordered', accountId, { spaceId }, USER);
+    return this.listPages(accountId, spaceId);
+  }
+
+  /** What deleting a page takes with it (M8), for the confirmation. */
+  deletionImpact(accountId: string, spaceId: string, pageId: string): Promise<PageDeletionView> {
+    return this.#sync(() => {
+      const page = this.#page(accountId, spaceId, pageId);
+      const count = (sql: string, ...params: (string | number)[]) =>
+        this.#get<{ n: number }>(sql, ...params)?.n ?? 0;
+      const sites = this.#all<{ id: string; name: string; published: number | null }>(
+        `SELECT s.id, s.name,
+           (SELECT p.version FROM site_publish p WHERE p.site_id = s.id AND p.reverted_at IS NULL
+             ORDER BY p.created_at DESC, p.rowid DESC LIMIT 1) AS published
+         FROM site s WHERE s.account_id = ? AND s.source_kind = 'space' AND s.source_ref = ?
+           AND s.deleted_at IS NULL ORDER BY s.name, s.id`,
+        accountId,
+        spaceId,
+      );
+      return {
+        pageId,
+        spaceId,
+        title: page.title,
+        versions: count('SELECT count(*) AS n FROM space_page_version WHERE page_id = ?', pageId),
+        comments: count(
+          'SELECT count(*) AS n FROM space_comment WHERE page_id = ? AND deleted_at IS NULL AND parent_id IS NULL',
+          pageId,
+        ),
+        replies: count(
+          'SELECT count(*) AS n FROM space_comment WHERE page_id = ? AND deleted_at IS NULL AND parent_id IS NOT NULL',
+          pageId,
+        ),
+        openProposals: count(
+          "SELECT count(*) AS n FROM space_proposal WHERE page_id = ? AND status = 'open'",
+          pageId,
+        ),
+        sites: sites.map((r) => ({ id: r.id, name: r.name, publishedVersion: r.published })),
+      };
+    });
+  }
+
+  /** The space's deleted pages, newest deletion first (M8); they come back with `undeletePage`. */
+  listDeletedPages(accountId: string, spaceId: string): Promise<DeletedPageView[]> {
+    return this.#sync(() => {
+      this.#space(accountId, spaceId);
+      return this.#all<PageRow & { comments: number }>(
+        `SELECT p.*, (SELECT count(*) FROM space_comment c WHERE c.page_id = p.id
+             AND c.deleted_at IS NULL) AS comments
+         FROM space_page p WHERE p.space_id = ? AND p.deleted_at IS NOT NULL
+         ORDER BY p.deleted_at DESC, p.id`,
+        spaceId,
+      ).map((r) => ({
+        id: r.id,
+        spaceId: r.space_id,
+        title: r.title,
+        slug: r.slug,
+        version: r.version,
+        comments: r.comments,
+        deletedAt: r.deleted_at ?? r.updated_at,
+      }));
+    });
+  }
+
+  /**
+   * Bring a deleted page back (M8) with its versions and comments, at its old place in the order.
+   * Its file name gets `-2`, `-3`, … when another page took it meanwhile. Proposals that ended
+   * rejected when it was deleted stay rejected.
+   */
+  async undeletePage(accountId: string, spaceId: string, pageId: string): Promise<PageView> {
+    this.#space(accountId, spaceId);
+    const row = this.#get<PageRow>(
+      'SELECT * FROM space_page WHERE id = ? AND space_id = ? AND account_id = ? AND deleted_at IS NOT NULL',
+      pageId,
+      spaceId,
+      accountId,
+    );
+    if (!row) throw new NovaError('not_found', 'deleted page not found');
+    const now = this.#stamp();
+    let slug = row.slug;
+    await this.#db.transaction(() => {
+      slug = this.#freeSlug(spaceId, row.slug, false);
+      const live = this.#all<{ id: string; position: number; created_at: string }>(
+        'SELECT id, position, created_at FROM space_page WHERE space_id = ? AND deleted_at IS NULL ORDER BY position, created_at, id',
+        spaceId,
+      );
+      const at = live.filter(
+        (p) =>
+          p.position < row.position ||
+          (p.position === row.position && p.created_at < row.created_at),
+      ).length;
+      const order = live.map((p) => p.id);
+      order.splice(at, 0, pageId);
+      this.#run(
+        'UPDATE space_page SET deleted_at = NULL, slug = ?, updated_at = ? WHERE id = ?',
+        slug,
+        now,
+        pageId,
+      );
+      order.forEach((id, i) =>
+        this.#run('UPDATE space_page SET position = ? WHERE id = ? AND position <> ?', i, id, i),
+      );
+      this.#touchSpace(spaceId, now);
+    });
+    await this.#audit.append({
+      accountId,
+      actor: 'user',
+      kind: 'space',
+      action: 'space.page.undeleted',
+      resource: `page:${pageId}`,
+      result: 'ok',
+      detail: { spaceId, title: row.title, version: row.version, slug },
+    });
+    await this.#emit(
+      'space.page.undeleted',
+      accountId,
+      { spaceId, pageId, version: row.version, authorKind: 'user' },
+      USER,
+    );
+    return this.getPage(accountId, spaceId, pageId);
   }
 
   // ---- versions ----------------------------------------------------------------------------------

@@ -4,12 +4,52 @@
 // nothing is overwritten by accident. Unsaved text survives closing the pane for the session.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FileContentView } from '@nova/shared';
-import { Button, Icon, IconButton, Spinner } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
+import { Button, Icon, IconButton, Spinner, spokenKey, spokenKeys } from '@nova/ui';
+import { formatBinding } from '../keys.ts';
 import { ApiError, errorMessage } from '../api.ts';
 import type { FileRef } from '../layout/model.ts';
 import { useAnnounce, useServices } from '../services.tsx';
 import { openNotifications } from '../workspace-commands.ts';
 import { baseName, hasRichPreview, lineCount } from './types.ts';
+
+export const EDITOR_TEXT = defineMessages('files.editor', {
+  openFile: 'Open a file from the Files panel to edit it.',
+  gone: 'This file no longer exists.',
+  openFailed: 'Could not open the file.',
+  undone: 'Undone.',
+  redone: 'Redone.',
+  needsApproval: 'Saving needs approval.',
+  saved: 'Saved {name}.',
+  conflictAnnounce: 'The file changed on the Hub. Your changes are not saved.',
+  notSaved: 'Not saved: {reason}',
+  reloaded: 'Reloaded {name}.',
+  stillWaiting: 'Still waiting for the approval.',
+  retry: 'Retry',
+  opening: 'Opening {name}',
+  openingDots: 'Opening…',
+  notText: '{name} is not a text file, or is too large to edit here.',
+  openPreview: 'Open the preview',
+  actions: '{name} actions',
+  unsaved: '(unsaved)',
+  readOnly: 'Read-only',
+  undo: 'Undo',
+  redo: 'Redo',
+  saveTitle: 'Save ({keys})',
+  save: 'Save',
+  conflict: '{name} changed on the Hub after you opened it. Your changes are not saved yet.',
+  reload: 'Reload and discard my changes',
+  overwrite: 'Save mine anyway',
+  approval:
+    'Saving {name} needs approval. Approve it in the notification center, then check again.',
+  showNotifications: 'Show notifications',
+  checkAgain: 'Check again',
+  contents: 'Contents of {name}',
+  readOnlyHelp: 'Read-only.',
+  help: '{save} saves. {undo} undoes, {redo} redoes.',
+  saving: 'Saving…',
+  savedStatus: 'Saved.',
+});
 
 /** Unsaved edits per file for this session, so closing a pane never loses them. */
 interface EditorDraft {
@@ -69,7 +109,7 @@ export interface EditorPaneProps {
 }
 
 export function EditorPane({ file, mac, onPreview }: EditorPaneProps) {
-  if (!file) return <p className="muted pane-note">Open a file from the Files panel to edit it.</p>;
+  if (!file) return <p className="muted pane-note">{EDITOR_TEXT.openFile}</p>;
   return <Editor key={draftKey(file)} file={file} mac={mac} onPreview={onPreview} />;
 }
 
@@ -115,8 +155,8 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
         if (alive)
           setLoadError(
             err instanceof ApiError && err.status === 404
-              ? 'This file no longer exists.'
-              : errorMessage(err, 'Could not open the file.'),
+              ? EDITOR_TEXT.gone
+              : errorMessage(err, EDITOR_TEXT.openFailed),
           );
       },
     );
@@ -146,7 +186,7 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
     if (!r) return;
     setHistory(r.history);
     setText(r.text);
-    announce(dir === 'undo' ? 'Undone.' : 'Redone.');
+    announce(dir === 'undo' ? EDITOR_TEXT.undone : EDITOR_TEXT.redone);
   };
 
   const doSave = async (baseSha: string | null = base) => {
@@ -161,7 +201,7 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
       });
       if ('approvalId' in res) {
         setSave({ kind: 'approval', approvalId: res.approvalId });
-        announce('Saving needs approval.');
+        announce(EDITOR_TEXT.needsApproval);
         return;
       }
       setContent(res);
@@ -169,13 +209,13 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
       setBase(res.sha256);
       drafts.delete(key);
       setSave({ kind: 'saved' });
-      announce(`Saved ${name}.`);
+      announce(EDITOR_TEXT.saved({ name }));
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         setSave({ kind: 'conflict' });
-        announce('The file changed on the Hub. Your changes are not saved.');
+        announce(EDITOR_TEXT.conflictAnnounce);
       } else {
-        const message = `Not saved: ${errorMessage(err)}`;
+        const message = EDITOR_TEXT.notSaved({ reason: errorMessage(err) });
         setSave({ kind: 'error', message });
         announce(message);
       }
@@ -188,7 +228,7 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
       const latest = await api.readFile(file.root, file.path);
       await doSave(latest.sha256);
     } catch (err) {
-      setSave({ kind: 'error', message: `Not saved: ${errorMessage(err)}` });
+      setSave({ kind: 'error', message: EDITOR_TEXT.notSaved({ reason: errorMessage(err) }) });
     }
   };
 
@@ -199,7 +239,7 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
     api.readFile(file.root, file.path).then(
       (view) => {
         apply(view, false);
-        announce(`Reloaded ${name}.`);
+        announce(EDITOR_TEXT.reloaded({ name }));
       },
       (err: unknown) => setSave({ kind: 'error', message: errorMessage(err) }),
     );
@@ -215,9 +255,9 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
           setBase(view.sha256);
           drafts.delete(key);
           setSave({ kind: 'saved' });
-          announce(`Saved ${name}.`);
+          announce(EDITOR_TEXT.saved({ name }));
         } else {
-          announce('Still waiting for the approval.');
+          announce(EDITOR_TEXT.stillWaiting);
         }
       },
       (err: unknown) => setSave({ kind: 'error', message: errorMessage(err) }),
@@ -245,43 +285,50 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
     return (
       <div className="pane-note" role="alert">
         <p>{loadError}</p>
-        <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+        <Button onClick={() => setAttempt((n) => n + 1)}>{EDITOR_TEXT.retry}</Button>
       </div>
     );
   if (!content)
     return (
       <p className="muted pane-note">
-        <Spinner label={`Opening ${name}`} /> Opening…
+        <Spinner label={EDITOR_TEXT.opening({ name })} /> {EDITOR_TEXT.openingDots}
       </p>
     );
   if (content.text === null)
     return (
       <div className="pane-note">
-        <p>{name} is not a text file, or is too large to edit here.</p>
-        {onPreview ? <Button onClick={() => onPreview(file)}>Open the preview</Button> : null}
+        <p>{EDITOR_TEXT.notText({ name })}</p>
+        {onPreview ? (
+          <Button onClick={() => onPreview(file)}>{EDITOR_TEXT.openPreview}</Button>
+        ) : null}
       </div>
     );
 
   const lines = lineCount(text);
-  const saveKeys = mac ? '⌘S' : 'Ctrl+S';
+  // Key caps with the modifiers named in the active locale ("Ctrl+S", "⌘S").
+  const caps = (binding: string) =>
+    formatBinding(binding, mac)
+      .map(spokenKey)
+      .join(mac ? '' : '+');
+  const spoken = (binding: string) => spokenKeys(formatBinding(binding, mac));
   return (
     <div className="editor" data-dirty={dirty || undefined}>
-      <div className="editor-bar" role="toolbar" aria-label={`${name} actions`}>
-        <span className="editor-file" title={file.path}>
+      <div className="editor-bar" role="toolbar" aria-label={EDITOR_TEXT.actions({ name })}>
+        <span className="editor-file" title={file.path} dir="auto">
           {name}
-          {dirty ? <span className="editor-dirty"> (unsaved)</span> : null}
+          {dirty ? <span className="editor-dirty"> {EDITOR_TEXT.unsaved}</span> : null}
         </span>
-        {readOnly ? <span className="muted">Read-only</span> : null}
+        {readOnly ? <span className="muted">{EDITOR_TEXT.readOnly}</span> : null}
         <span className="editor-spacer" />
         <IconButton
-          label="Undo"
+          label={EDITOR_TEXT.undo}
           icon={<Icon name="undo" />}
           variant="ghost"
           disabled={!history.past.length}
           onClick={() => step('undo')}
         />
         <IconButton
-          label="Redo"
+          label={EDITOR_TEXT.redo}
           icon={<Icon name="redo" />}
           variant="ghost"
           disabled={!history.future.length}
@@ -289,7 +336,7 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
         />
         {onPreview && hasRichPreview(content.mime, file.path) ? (
           <IconButton
-            label="Open the preview"
+            label={EDITOR_TEXT.openPreview}
             icon={<Icon name="eye" />}
             variant="ghost"
             onClick={() => onPreview(file)}
@@ -300,33 +347,31 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
             variant={dirty ? 'primary' : 'default'}
             disabled={save.kind === 'saving' || (!dirty && save.kind !== 'conflict')}
             aria-keyshortcuts={mac ? 'Meta+S' : 'Control+S'}
-            title={`Save (${saveKeys})`}
+            title={EDITOR_TEXT.saveTitle({ keys: caps('mod+s') })}
             onClick={() => void doSave()}
           >
-            {save.kind === 'saving' ? <Spinner /> : <Icon name="save" />} Save
+            {save.kind === 'saving' ? <Spinner /> : <Icon name="save" />} {EDITOR_TEXT.save}
           </Button>
         )}
       </div>
       {save.kind === 'conflict' ? (
         <div className="editor-alert" role="alert">
           <p>
-            <Icon name="alert" /> {name} changed on the Hub after you opened it. Your changes are
-            not saved yet.
+            <Icon name="alert" /> {EDITOR_TEXT.conflict({ name })}
           </p>
-          <Button onClick={reload}>Reload and discard my changes</Button>
+          <Button onClick={reload}>{EDITOR_TEXT.reload}</Button>
           <Button variant="danger" onClick={() => void overwrite()}>
-            Save mine anyway
+            {EDITOR_TEXT.overwrite}
           </Button>
         </div>
       ) : null}
       {save.kind === 'approval' ? (
         <div className="editor-alert" role="note">
           <p>
-            <Icon name="hand" /> Saving {name} needs approval. Approve it in the notification
-            center, then check again.
+            <Icon name="hand" /> {EDITOR_TEXT.approval({ name })}
           </p>
-          <Button onClick={openNotifications}>Show notifications</Button>
-          <Button onClick={checkApproval}>Check again</Button>
+          <Button onClick={openNotifications}>{EDITOR_TEXT.showNotifications}</Button>
+          <Button onClick={checkApproval}>{EDITOR_TEXT.checkAgain}</Button>
         </div>
       ) : null}
       {save.kind === 'error' ? (
@@ -334,14 +379,14 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
           <Icon name="alert" /> {save.message}
         </p>
       ) : null}
-      <div className="editor-body">
+      <div className="editor-body" dir="ltr">
         <div ref={gutter} className="editor-gutter" aria-hidden="true">
           {Array.from({ length: lines }, (_, i) => (
             <div key={i}>{i + 1}</div>
           ))}
         </div>
         <label htmlFor={`${id}-text`} className="nv-vh">
-          {`Contents of ${name}`}
+          {EDITOR_TEXT.contents({ name })}
         </label>
         <textarea
           id={`${id}-text`}
@@ -361,12 +406,20 @@ function Editor({ file, mac, onPreview }: { file: FileRef } & Omit<EditorPanePro
         />
         <span id={`${id}-help`} className="nv-vh">
           {readOnly
-            ? 'Read-only.'
-            : `${saveKeys} saves. ${mac ? '⌘Z' : 'Ctrl+Z'} undoes, ${mac ? '⇧⌘Z' : 'Ctrl+Y'} redoes.`}
+            ? EDITOR_TEXT.readOnlyHelp
+            : EDITOR_TEXT.help({
+                save: spoken('mod+s'),
+                undo: spoken('mod+z'),
+                redo: spoken(mac ? 'mod+shift+z' : 'mod+y'),
+              })}
         </span>
       </div>
       <p className="muted editor-status" role="status">
-        {save.kind === 'saving' ? 'Saving…' : save.kind === 'saved' ? 'Saved.' : ''}
+        {save.kind === 'saving'
+          ? EDITOR_TEXT.saving
+          : save.kind === 'saved'
+            ? EDITOR_TEXT.savedStatus
+            : ''}
       </p>
     </div>
   );

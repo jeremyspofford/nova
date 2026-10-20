@@ -6,13 +6,44 @@
 import { useEffect, useState } from 'react';
 import type { BrowserActionFallbackMark, BrowserFallbackSessionView } from '@nova/shared';
 import { Icon } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
+import { rich } from '../i18n/rich.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useHubEvents } from '../spaces/events.ts';
 import { useDebounced } from '../work/events.ts';
 import { useBrowserDeviceApi } from './api-m75.ts';
 import { FALLBACK_EVENTS, eventComputer } from './events.ts';
-import { CAUSE_TEXT, END_TEXT, PROFILE_TEXT, markText } from './format.ts';
+import { CAUSE_TEXT, markText } from './format.ts';
 import './browserdevice.css';
+
+export const TRACE_TEXT = defineMessages('browserDevice.trace', {
+  /** Where the session runs: a noun phrase inside the sentences below. */
+  whereOwn: '{user}’s own browser on {device}',
+  whereOwnYours: '{user}’s own browser on your computer',
+  whereDevice: '{device}’s browser',
+  whereYours: 'your computer’s browser',
+  workingIn: 'Working in {where} on {site}',
+  workingClean: '{title} (clean profile) since {when}, because {cause}.',
+  workingOwn: '{title} (your own browser) since {when}, because {cause}.',
+  cleanNote:
+    'The profile starts empty and reaches only this site and its subdomains; it is deleted when the session ends.',
+  extensionNote:
+    'The agent acts only in a tab it opened or one you shared, and never reads cookies or passwords.',
+  marked:
+    'Actions there are marked below. It stops when the agent leaves {site}, and the agent goes back to its own browser.',
+  /** How the last session ended: a clause, after a colon. */
+  ends: {
+    closed: 'closed',
+    left_site: 'ended when the agent left the site',
+    consent_revoked: 'ended when the consent was revoked',
+    device_gone: 'ended when the computer left',
+    error: 'ended by an error',
+    disabled: 'ended when continuing on a computer was turned off',
+    restarted: 'ended when the Hub restarted',
+  },
+  ended: 'The last session in {where} on {site}: {end}, {when}.',
+});
+const S = TRACE_TEXT;
 
 /** Device names by id, from the account's consents (revoked ones too); live. */
 export function useFallbackDeviceNames(): Map<string, string> {
@@ -95,10 +126,14 @@ export function FallbackSessionNote({ computerId }: { computerId: string }) {
     last?.endedAt && last.endReason && loaded.at - Date.parse(last.endedAt) < RECENT_MS
       ? last
       : null;
-  const where = (s: BrowserFallbackSessionView) =>
-    s.profile === 'extension' && s.bridgeUser
-      ? `${s.bridgeUser}’s own browser on ${names.get(s.deviceId) ?? 'your computer'}`
-      : `${names.get(s.deviceId) ?? 'your computer'}’s browser`;
+  const where = (s: BrowserFallbackSessionView) => {
+    const device = names.get(s.deviceId);
+    if (s.profile === 'extension' && s.bridgeUser)
+      return device
+        ? S.whereOwn({ user: s.bridgeUser, device })
+        : S.whereOwnYours({ user: s.bridgeUser });
+    return device ? S.whereDevice({ device }) : S.whereYours;
+  };
   return (
     <div role="status" className="bdv-now-live">
       {open ? (
@@ -106,25 +141,27 @@ export function FallbackSessionNote({ computerId }: { computerId: string }) {
           <Icon name="server" />
           <div className="stack">
             <p className="ws-flush">
-              <strong>
-                Working in {where(open)} on {open.site}
-              </strong>{' '}
-              ({PROFILE_TEXT[open.profile].toLowerCase()}) since {formatWhen(open.startedAt)},
-              because {CAUSE_TEXT[open.cause]}.
+              {rich(open.profile === 'clean' ? S.workingClean : S.workingOwn, {
+                title: <strong>{S.workingIn({ where: where(open), site: open.site })}</strong>,
+                when: formatWhen(open.startedAt),
+                cause: CAUSE_TEXT[open.cause],
+              })}
             </p>
             <p className="muted ws-flush">
-              {open.profile === 'clean'
-                ? 'The profile starts empty and reaches only this site and its subdomains; it is deleted when the session ends.'
-                : 'The agent acts only in a tab it opened or one you shared, and never reads cookies or passwords.'}{' '}
-              Actions there are marked below. It stops when the agent leaves {open.site}, and the
-              agent goes back to its own browser.
+              {open.profile === 'clean' ? S.cleanNote : S.extensionNote}{' '}
+              {S.marked({ site: open.site })}
             </p>
           </div>
         </div>
       ) : recent?.endReason ? (
         <p className="muted ws-flush bdv-ended">
-          <Icon name="server" /> The last session in {where(recent)} on {recent.site}:{' '}
-          {END_TEXT[recent.endReason].toLowerCase()}, {formatWhen(recent.endedAt)}.
+          <Icon name="server" />{' '}
+          {S.ended({
+            where: where(recent),
+            site: recent.site,
+            end: S.ends[recent.endReason],
+            when: formatWhen(recent.endedAt),
+          })}
         </p>
       ) : null}
     </div>

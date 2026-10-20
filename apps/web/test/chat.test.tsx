@@ -444,7 +444,7 @@ describe('composer (FR-021, FR-023, FR-024)', () => {
     });
     const alert = await screen.findByText(/virus\.exe is not a supported file type/);
     expect(alert.closest('[role="alert"]')!.textContent).toMatch(
-      /huge\.pdf is 21\.0 MB; the limit is 20\.0 MB/,
+      /huge\.pdf is 21 MB; the limit is 20 MB/,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByText(/virus\.exe/)).toBeNull();

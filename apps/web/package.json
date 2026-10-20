@@ -12,6 +12,7 @@
     "dev": "vite"
   },
   "dependencies": {
+    "@nova/i18n": "^0.0.0",
     "@nova/relay": "^0.0.0",
     "@nova/shared": "^0.0.0",
     "@nova/ui": "^0.0.0",

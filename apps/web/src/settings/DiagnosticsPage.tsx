@@ -4,6 +4,7 @@
 // integrity check of its hash chain; each entry shows its redacted detail (M7.5: a change as
 // "before → after"). Exports are redacted by the Hub.
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { defineMessages, messageFor } from '@nova/i18n';
 import type {
   AuditEntryView,
   AuditVerifyResult,
@@ -13,10 +14,123 @@ import type {
 import { Button, Icon, SelectField, Spinner, useToast } from '@nova/ui';
 import { ApiError, errorMessage, type ApiErrorBody } from '../api.ts';
 import { useServices } from '../services.tsx';
-import { formatWhen, plural, useInterval } from './common.ts';
+import { formatWhen, useInterval } from './common.ts';
 import { SwitchField } from './controls.tsx';
 import { MCP_STATUS } from './policy-text.ts';
 import '../workspace.css';
+
+export const DIAGNOSTICS_TEXT = defineMessages('settings.diagnostics', {
+  uptime: {
+    days: '{d} d {h} h',
+    hours: '{h} h {m} min',
+    minutes: '{m} min',
+    seconds: '{s} s',
+  },
+  testStatus: { ok: 'Passed', warning: 'Warning', error: 'Failed', unavailable: 'Not available' },
+  testFailed: 'The test could not run.',
+  statusLabel: '{status}:',
+  checks: 'Checks',
+  check: '{name}: {status}. {detail}',
+  testName: 'Test {name}',
+  test: 'Test',
+  title: 'Diagnostics',
+  loadFailed: 'Could not load diagnostics.',
+  health: 'Health',
+  refresh: 'Refresh',
+  retry: 'Retry',
+  loading: 'Loading diagnostics',
+  warnings: 'Warnings',
+  noWarnings: 'No warnings.',
+  hub: 'Hub',
+  version: 'Version',
+  runningFor: 'Running for',
+  dataFolder: 'Data folder',
+  encryption: 'Encryption at rest',
+  blobs: 'Files and backups',
+  blobsEncrypted: 'Encrypted with the Hub key',
+  notEncrypted: 'Not encrypted',
+  volume: 'Data volume',
+  encrypted: 'Encrypted',
+  cannotTell: 'Cannot tell',
+  secrets: 'Secrets',
+  keychain: 'System keychain',
+  vault: 'Encrypted vault',
+  memoryOnly: 'Memory only (lost on restart)',
+  sandbox: 'Sandbox',
+  available: 'Available',
+  availableOn: 'Available ({substrate})',
+  notAvailable: 'Not available',
+  theSandbox: 'the sandbox',
+  storage: 'Storage',
+  storageHint: 'Writes, reads and deletes a test file in the data folder and checks the database.',
+  theStorage: 'storage',
+  updates: 'Updates',
+  versionN: 'Version {version}',
+  theUpdates: 'updates',
+  providers: 'Providers',
+  noProviders: 'No providers connected.',
+  providerStatus: {
+    active: 'active',
+    expired: 'expired',
+    revoked: 'revoked',
+    error: 'needs attention',
+  },
+  nodes: 'Compute nodes',
+  noNodes: 'No compute nodes.',
+  nodeStatus: {
+    active: 'active',
+    pending: 'waiting for first contact',
+    unreachable: 'unreachable',
+    revoked: 'revoked',
+  },
+  mcp: 'MCP servers',
+  noMcp: 'No MCP servers.',
+  logsFailed: 'Could not load the logs.',
+  logs: 'Logs',
+  logsHint:
+    'Recent Hub logs. Keys, tokens and other secrets are removed before they are shown or ' +
+    'exported.',
+  level: 'Level',
+  allLevels: 'All levels',
+  infoUp: 'Info and above',
+  warnUp: 'Warnings and errors',
+  errorsOnly: 'Errors only',
+  module: 'Module',
+  allModules: 'All modules',
+  exportLogs: 'Export logs',
+  autoRefresh: 'Refresh automatically',
+  autoRefreshHint: 'Every 5 seconds while this page is open.',
+  loadingLogs: 'Loading logs',
+  noLogs: 'No log entries match.',
+  logEntries: 'Log entries',
+  value: { none: 'none', on: 'on', off: 'off' },
+  truncated:
+    'The details are too long to show here ({n, plural, one {# character} other {# characters}}); the export has them.',
+  changedTo: 'changed to',
+  confirmed: 'Confirmed',
+  details: 'Details',
+  auditFailed: 'Could not load the audit log.',
+  moreFailed: 'Could not load more: {error}',
+  verifyFailed: 'Could not check the audit log: {error}',
+  audit: 'Audit log',
+  auditHint:
+    'A tamper-evident record of approvals, policy decisions, tool calls and setting changes.',
+  verify: 'Verify integrity',
+  exportAudit: 'Export audit log',
+  intact: 'The audit log is intact ({n, plural, one {# entry} other {# entries}} checked).',
+  broken:
+    'The audit log was changed: the chain breaks at entry {at} ({n, plural, one {# entry} other {# entries}} checked).',
+  unknown: 'unknown',
+  loadingAudit: 'Loading the audit log',
+  auditEmpty: 'The audit log is empty.',
+  auditEntries: 'Audit entries',
+  by: 'By {actor}',
+  on: 'On {resource}',
+  decision: 'Decision: {decision}',
+  result: 'Result: {result}',
+  loadMore: 'Load more',
+});
+const S = DIAGNOSTICS_TEXT;
 
 export const LOG_POLL_MS = 5000;
 export const LOG_LIMIT = 200;
@@ -27,10 +141,10 @@ export function formatUptime(seconds: number): string {
   const d = Math.floor(s / 86_400);
   const h = Math.floor((s % 86_400) / 3600);
   const m = Math.floor((s % 3600) / 60);
-  if (d) return `${d} d ${h} h`;
-  if (h) return `${h} h ${m} min`;
-  if (m) return `${m} min`;
-  return `${s} s`;
+  if (d) return S.uptime.days({ d, h });
+  if (h) return S.uptime.hours({ h, m });
+  if (m) return S.uptime.minutes({ m });
+  return S.uptime.seconds({ s });
 }
 
 // ---- component tests (FR-119) -------------------------------------------------------------------
@@ -72,12 +186,7 @@ export async function postDiagnosticTest(body: {
   return data as DiagnosticTestResult;
 }
 
-export const TEST_STATUS_TEXT: Record<DiagnosticStatus, string> = {
-  ok: 'Passed',
-  warning: 'Warning',
-  error: 'Failed',
-  unavailable: 'Not available',
-};
+export const TEST_STATUS_TEXT = S.testStatus;
 
 interface TestState {
   running: boolean;
@@ -106,7 +215,7 @@ function useDiagnosticTests(onDone: (component: DiagnosticComponent) => void) {
           [key]: {
             running: false,
             result: null,
-            error: errorMessage(err, 'The test could not run.'),
+            error: errorMessage(err, S.testFailed),
           },
         }));
       }
@@ -140,14 +249,14 @@ function TestResult({ state }: { state: TestState }) {
           >
             <Icon name={r.status === 'ok' ? 'check' : 'alert'} />{' '}
             <span>
-              <strong>{TEST_STATUS_TEXT[r.status]}:</strong> {r.detail}
+              <strong>{S.statusLabel({ status: TEST_STATUS_TEXT[r.status] })}</strong> {r.detail}
             </span>
           </p>
           {r.checks.length > 1 ? (
-            <ul className="ws-plain-list" aria-label="Checks">
+            <ul className="ws-plain-list" aria-label={S.checks}>
               {r.checks.map((c) => (
                 <li key={`${c.name}-${c.ref ?? ''}`}>
-                  {c.name}: {TEST_STATUS_TEXT[c.status]}. {c.detail}
+                  {S.check({ name: c.name, status: TEST_STATUS_TEXT[c.status], detail: c.detail })}
                 </li>
               ))}
             </ul>
@@ -174,11 +283,11 @@ function TestControl({
     <div className="ws-diag-test">
       <Button
         variant="ghost"
-        aria-label={`Test ${label}`}
+        aria-label={S.testName({ name: label })}
         disabled={state.running}
         onClick={() => void tests.run(component, refId)}
       >
-        {state.running ? <Spinner /> : <Icon name="refresh" />} Test
+        {state.running ? <Spinner /> : <Icon name="refresh" />} {S.test}
       </Button>
       <TestResult state={state} />
     </div>
@@ -188,7 +297,7 @@ function TestControl({
 export function DiagnosticsPage() {
   return (
     <div className="settings-page">
-      <h2>Diagnostics</h2>
+      <h2>{S.title}</h2>
       <SnapshotSection />
       <LogsSection />
       <AuditSection />
@@ -198,8 +307,8 @@ export function DiagnosticsPage() {
 
 // ---- snapshot -------------------------------------------------------------------------------------
 
-function Card({ title, children }: { title: string; children: ReactNode }) {
-  const id = `diag-${title.toLowerCase().replace(/\W+/g, '-')}`;
+function Card({ id: slug, title, children }: { id: string; title: string; children: ReactNode }) {
+  const id = `diag-${slug}`;
   return (
     <section className="ws-card ws-diag-card" aria-labelledby={id}>
       <h4 id={id}>{title}</h4>
@@ -227,7 +336,7 @@ function SnapshotSection() {
         setSnap(s);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load diagnostics.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -238,22 +347,22 @@ function SnapshotSection() {
   return (
     <section className="settings-section" aria-labelledby="diag-health">
       <div className="ws-section-header">
-        <h3 id="diag-health">Health</h3>
+        <h3 id="diag-health">{S.health}</h3>
         <Button variant="ghost" onClick={() => setVersion((v) => v + 1)}>
-          <Icon name="refresh" /> Refresh
+          <Icon name="refresh" /> {S.refresh}
         </Button>
       </div>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {snap === null && !error ? <Spinner label="Loading diagnostics" /> : null}
+      {snap === null && !error ? <Spinner label={S.loading} /> : null}
       {snap ? (
         <>
           {snap.warnings.length ? (
-            <div className="contrast-warning" role="group" aria-label="Warnings">
+            <div className="contrast-warning" role="group" aria-label={S.warnings}>
               <Icon name="alert" />
               <ul>
                 {snap.warnings.map((w) => (
@@ -262,77 +371,89 @@ function SnapshotSection() {
               </ul>
             </div>
           ) : (
-            <p className="muted">No warnings.</p>
+            <p className="muted">{S.noWarnings}</p>
           )}
           <div className="ws-diag-grid">
-            <Card title="Hub">
+            <Card id="hub" title={S.hub}>
               <dl className="ws-dl">
-                <dt>Version</dt>
+                <dt>{S.version}</dt>
                 <dd>{snap.hub.version}</dd>
-                <dt>Running for</dt>
+                <dt>{S.runningFor}</dt>
                 <dd>{formatUptime(snap.hub.uptimeSeconds)}</dd>
-                <dt>Data folder</dt>
+                <dt>{S.dataFolder}</dt>
                 <dd>
-                  <code className="ws-code-inline">{snap.hub.dataDir}</code>
+                  <code className="ws-code-inline" dir="ltr">
+                    {snap.hub.dataDir}
+                  </code>
                 </dd>
               </dl>
             </Card>
-            <Card title="Encryption at rest">
+            <Card id="encryption-at-rest" title={S.encryption}>
               <dl className="ws-dl">
-                <dt>Files and backups</dt>
-                <dd>{enc?.blobs ? 'Encrypted with the Hub key' : 'Not encrypted'}</dd>
-                <dt>Data volume</dt>
+                <dt>{S.blobs}</dt>
+                <dd>{enc?.blobs ? S.blobsEncrypted : S.notEncrypted}</dd>
+                <dt>{S.volume}</dt>
                 <dd>
                   {enc?.volume === 'encrypted'
-                    ? 'Encrypted'
+                    ? S.encrypted
                     : enc?.volume === 'unencrypted'
-                      ? 'Not encrypted'
-                      : 'Cannot tell'}
+                      ? S.notEncrypted
+                      : S.cannotTell}
                 </dd>
               </dl>
             </Card>
-            <Card title="Secrets">
+            <Card id="secrets" title={S.secrets}>
               <p className="ws-flush">
                 {snap.secrets.backend === 'keychain'
-                  ? 'System keychain'
+                  ? S.keychain
                   : snap.secrets.backend === 'vault'
-                    ? 'Encrypted vault'
-                    : 'Memory only (lost on restart)'}
+                    ? S.vault
+                    : S.memoryOnly}
               </p>
               <p className="muted ws-flush">{snap.secrets.detail}</p>
             </Card>
-            <Card title="Sandbox">
+            <Card id="sandbox" title={S.sandbox}>
               <p className="ws-flush">
                 {snap.sandbox.available
-                  ? `Available${snap.sandbox.substrate ? ` (${snap.sandbox.substrate.replace('_', ' ')})` : ''}`
-                  : 'Not available'}
+                  ? snap.sandbox.substrate
+                    ? S.availableOn({ substrate: snap.sandbox.substrate.replace('_', ' ') })
+                    : S.available
+                  : S.notAvailable}
               </p>
               <p className="muted ws-flush">{snap.sandbox.detail}</p>
-              <TestControl label="the sandbox" component="sandbox" tests={tests} />
+              <TestControl label={S.theSandbox} component="sandbox" tests={tests} />
             </Card>
-            <Card title="Storage">
-              <p className="muted ws-flush">
-                Writes, reads and deletes a test file in the data folder and checks the database.
-              </p>
-              <TestControl label="storage" component="storage" tests={tests} />
+            <Card id="storage" title={S.storage}>
+              <p className="muted ws-flush">{S.storageHint}</p>
+              <TestControl label={S.theStorage} component="storage" tests={tests} />
             </Card>
-            <Card title="Updates">
-              <p className="ws-flush">Version {snap.hub.version}</p>
-              <TestControl label="updates" component="update" tests={tests} />
+            <Card id="updates" title={S.updates}>
+              <p className="ws-flush">{S.versionN({ version: snap.hub.version })}</p>
+              <TestControl label={S.theUpdates} component="update" tests={tests} />
             </Card>
-            <Card title="Providers">
+            <Card id="providers" title={S.providers}>
               <NamedStatuses
-                items={snap.providers.map((p) => ({ id: p.id, name: p.label, status: p.status }))}
-                empty="No providers connected."
+                items={snap.providers.map((p) => ({
+                  id: p.id,
+                  name: p.label,
+                  status: messageFor(S.providerStatus, p.status) ?? p.status,
+                }))}
+                empty={S.noProviders}
                 action={(i) => (
                   <TestControl label={i.name} component="provider" refId={i.id} tests={tests} />
                 )}
               />
             </Card>
-            <Card title="Compute nodes">
-              <NamedStatuses items={snap.nodes} empty="No compute nodes." />
+            <Card id="compute-nodes" title={S.nodes}>
+              <NamedStatuses
+                items={snap.nodes.map((n) => ({
+                  ...n,
+                  status: messageFor(S.nodeStatus, n.status) ?? n.status,
+                }))}
+                empty={S.noNodes}
+              />
             </Card>
-            <Card title="MCP servers">
+            <Card id="mcp-servers" title={S.mcp}>
               <NamedStatuses
                 items={snap.mcp.map((m) => ({
                   id: m.id,
@@ -340,7 +461,7 @@ function SnapshotSection() {
                   status: MCP_STATUS[m.status].text,
                   detail: m.lastError,
                 }))}
-                empty="No MCP servers."
+                empty={S.noMcp}
                 action={(i) => (
                   <TestControl label={i.name} component="mcp" refId={i.id} tests={tests} />
                 )}
@@ -416,7 +537,7 @@ function LogsSection() {
             return next.size === known.length ? known : [...next].sort();
           });
         },
-        (err: unknown) => alive && setError(errorMessage(err, 'Could not load the logs.')),
+        (err: unknown) => alive && setError(errorMessage(err, S.logsFailed)),
       );
     return () => {
       alive = false;
@@ -426,55 +547,59 @@ function LogsSection() {
 
   return (
     <section className="settings-section" aria-labelledby="diag-logs">
-      <h3 id="diag-logs">Logs</h3>
-      <p className="muted">
-        Recent Hub logs. Keys, tokens and other secrets are removed before they are shown or
-        exported.
-      </p>
+      <h3 id="diag-logs">{S.logs}</h3>
+      <p className="muted">{S.logsHint}</p>
       <div className="ws-toolbar">
         <SelectField
-          label="Level"
+          label={S.level}
           value={level}
           onChange={setLevel}
           options={[
-            { value: '', label: 'All levels' },
-            { value: 'info', label: 'Info and above' },
-            { value: 'warn', label: 'Warnings and errors' },
-            { value: 'error', label: 'Errors only' },
+            { value: '', label: S.allLevels },
+            { value: 'info', label: S.infoUp },
+            { value: 'warn', label: S.warnUp },
+            { value: 'error', label: S.errorsOnly },
           ]}
         />
         <SelectField
-          label="Module"
+          label={S.module}
           value={module}
           onChange={setModule}
           options={[
-            { value: '', label: 'All modules' },
+            { value: '', label: S.allModules },
             ...modules.map((m) => ({ value: m, label: m })),
           ]}
         />
         <Button variant="ghost" onClick={() => setVersion((v) => v + 1)}>
-          <Icon name="refresh" /> Refresh
+          <Icon name="refresh" /> {S.refresh}
         </Button>
         <a className="nv-btn" data-variant="ghost" href={api.logsExportUrl()} download>
-          <Icon name="download" /> Export logs
+          <Icon name="download" /> {S.exportLogs}
         </a>
       </div>
       <SwitchField
-        label="Refresh automatically"
-        description="Every 5 seconds while this page is open."
+        label={S.autoRefresh}
+        description={S.autoRefreshHint}
         checked={auto}
         onChange={setAuto}
       />
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {entries === null && !error ? <Spinner label="Loading logs" /> : null}
-      {entries?.length === 0 ? <p className="muted">No log entries match.</p> : null}
+      {entries === null && !error ? <Spinner label={S.loadingLogs} /> : null}
+      {entries?.length === 0 ? <p className="muted">{S.noLogs}</p> : null}
       {entries?.length ? (
-        <ol className="ws-log ws-log-list" aria-label="Log entries" tabIndex={0}>
+        // Log lines are the Hub's own words: never translated, always left to right.
+        <ol
+          className="ws-log ws-log-list"
+          aria-label={S.logEntries}
+          tabIndex={0}
+          dir="ltr"
+          translate="no"
+        >
           {entries.map((e, i) => (
             <li key={`${e.ts}-${i}`} data-level={e.level}>
               <span className="ws-log-ts">{e.ts}</span>{' '}
@@ -495,8 +620,8 @@ function LogsSection() {
 
 /** One value of an audit change, short: on/off for switches, `none`, the text, or compact JSON. */
 export function auditValue(v: unknown): string {
-  if (v === null || v === undefined) return 'none';
-  if (typeof v === 'boolean') return v ? 'on' : 'off';
+  if (v === null || v === undefined) return S.value.none;
+  if (typeof v === 'boolean') return v ? S.value.on : S.value.off;
   if (typeof v === 'number') return String(v);
   const text = typeof v === 'string' ? v : JSON.stringify(v);
   return text.length > 120 ? `${text.slice(0, 119)}…` : text;
@@ -524,25 +649,21 @@ function AuditDetail({ entry }: { entry: AuditEntryView }) {
   const d = entry.detail;
   if (!d || !Object.keys(d).length) return null;
   if (d.truncated === true && typeof d.chars === 'number')
-    return (
-      <span className="muted">
-        The details are too long to show here ({d.chars} characters); the export has them.
-      </span>
-    );
+    return <span className="muted">{S.truncated({ n: d.chars })}</span>;
   const change = auditChange(entry);
   if (change)
     return (
       <span className="ws-row-meta ws-audit-change">
         <span>
           {change.before} <span aria-hidden="true">→</span>
-          <span className="nv-vh"> changed to </span> {change.after}
+          <span className="nv-vh"> {S.changedTo} </span> {change.after}
         </span>
-        {change.confirmed ? <span className="ws-badge">Confirmed</span> : null}
+        {change.confirmed ? <span className="ws-badge">{S.confirmed}</span> : null}
       </span>
     );
   return (
     <details className="ws-advanced ws-audit-detail">
-      <summary>Details</summary>
+      <summary>{S.details}</summary>
       <pre className="ws-log">{JSON.stringify(d, null, 2)}</pre>
     </details>
   );
@@ -568,7 +689,7 @@ function AuditSection() {
         setCursor(page.nextCursor);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the audit log.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.auditFailed)),
     );
     return () => {
       alive = false;
@@ -583,7 +704,7 @@ function AuditSection() {
       setEntries((list) => [...(list ?? []), ...page.items]);
       setCursor(page.nextCursor);
     } catch (err) {
-      toast.show(`Could not load more: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.moreFailed({ error: errorMessage(err) }), { tone: 'error' });
     } finally {
       setMore(false);
     }
@@ -595,7 +716,7 @@ function AuditSection() {
     try {
       setVerify(await api.verifyAudit());
     } catch (err) {
-      toast.show(`Could not check the audit log: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.verifyFailed({ error: errorMessage(err) }), { tone: 'error' });
     } finally {
       setVerifying(false);
     }
@@ -603,29 +724,26 @@ function AuditSection() {
 
   return (
     <section className="settings-section" aria-labelledby="diag-audit">
-      <h3 id="diag-audit">Audit log</h3>
-      <p className="muted">
-        A tamper-evident record of approvals, policy decisions, tool calls and setting changes.
-      </p>
+      <h3 id="diag-audit">{S.audit}</h3>
+      <p className="muted">{S.auditHint}</p>
       <div className="row">
         <Button disabled={verifying} onClick={() => void check()}>
-          {verifying ? <Spinner /> : <Icon name="shield" />} Verify integrity
+          {verifying ? <Spinner /> : <Icon name="shield" />} {S.verify}
         </Button>
         <a className="nv-btn" data-variant="ghost" href={api.auditExportUrl()} download>
-          <Icon name="download" /> Export audit log
+          <Icon name="download" /> {S.exportAudit}
         </a>
       </div>
       <div role="status">
         {verify ? (
           verify.ok ? (
             <p className="ws-ok ws-flush">
-              <Icon name="check" /> The audit log is intact (
-              {plural(verify.checked, 'entry', 'entries')} checked).
+              <Icon name="check" /> {S.intact({ n: verify.checked })}
             </p>
           ) : (
             <p className="ws-warning ws-flush">
-              <Icon name="alert" /> The audit log was changed: the chain breaks at entry{' '}
-              {verify.brokenAt ?? 'unknown'} ({plural(verify.checked, 'entry', 'entries')} checked).
+              <Icon name="alert" />{' '}
+              {S.broken({ at: verify.brokenAt ?? S.unknown, n: verify.checked })}
             </p>
           )
         ) : null}
@@ -633,13 +751,13 @@ function AuditSection() {
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {entries === null && !error ? <Spinner label="Loading the audit log" /> : null}
-      {entries?.length === 0 ? <p className="muted">The audit log is empty.</p> : null}
+      {entries === null && !error ? <Spinner label={S.loadingAudit} /> : null}
+      {entries?.length === 0 ? <p className="muted">{S.auditEmpty}</p> : null}
       {entries?.length ? (
-        <ul className="ws-list" aria-label="Audit entries">
+        <ul className="ws-list" aria-label={S.auditEntries}>
           {entries.map((e) => (
             <li key={e.id} className="ws-list-row ws-audit" aria-label={`${e.kind}: ${e.action}`}>
               <div className="ws-source-main">
@@ -648,10 +766,10 @@ function AuditSection() {
                   <strong>{e.action}</strong>
                 </span>
                 <span className="muted ws-row-meta">
-                  <span>By {e.actor}</span>
-                  {e.resource ? <span>On {e.resource}</span> : null}
-                  {e.decision ? <span>Decision: {e.decision}</span> : null}
-                  {e.result ? <span>Result: {e.result}</span> : null}
+                  <span>{S.by({ actor: e.actor })}</span>
+                  {e.resource ? <span>{S.on({ resource: e.resource })}</span> : null}
+                  {e.decision ? <span>{S.decision({ decision: e.decision })}</span> : null}
+                  {e.result ? <span>{S.result({ result: e.result })}</span> : null}
                   <span>{formatWhen(e.createdAt)}</span>
                 </span>
                 <AuditDetail entry={e} />
@@ -663,7 +781,7 @@ function AuditSection() {
       {cursor ? (
         <div className="row">
           <Button disabled={more} onClick={() => void loadMore()}>
-            {more ? <Spinner /> : null} Load more
+            {more ? <Spinner /> : null} {S.loadMore}
           </Button>
         </div>
       ) : null}

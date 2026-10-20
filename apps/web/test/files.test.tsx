@@ -97,7 +97,7 @@ describe('file browser (FR-039)', () => {
     // Folders first, then files by name.
     expect(items.map((i) => i.textContent?.trim())).toEqual([
       'src',
-      'logo.png2.0 KB',
+      'logo.png2 KB',
       'README.md12 B',
     ]);
     const src = within(tree).getByRole('treeitem', { name: 'src' });

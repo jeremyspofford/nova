@@ -1,0 +1,16 @@
+{
+  "managed": "تديره مؤسستك",
+  "notifications": "الإشعارات",
+  "dismissNotification": "إغلاق الإشعار",
+  "faster": "أسرع",
+  "smarter": "أذكى",
+  "color.hex": "القيمة السداسية عشرية لـ {label}",
+  "color.reset": "العودة إلى لون السمة",
+  "color.resetFor": "{action}: {label}",
+  "color.invalid": "أدخل علامة # متبوعة بستة أرقام سداسية عشرية (0–9، a–f)",
+  "status.needs_input": "بانتظار ردّك",
+  "status.blocked": "عالق",
+  "status.running": "قيد التشغيل",
+  "status.ready": "جاهز",
+  "status.withReason": "{status}: {reason}"
+}

@@ -4,6 +4,7 @@
 // roving tabindex so the list is one tab stop: arrows, Home and End move; F2 renames; Shift+F10
 // opens the row's menu.
 import { useEffect, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { ThreadView } from '@nova/shared';
 import {
   Button,
@@ -21,9 +22,53 @@ import { useExtensionContributions } from '../extensions/store.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useThreads } from '../stores.tsx';
 import { sortByThreadStatus, threadStatus, threadStatusReason } from './status.ts';
+import { CHAT_TEXT } from './strings.ts';
+
+export const THREADS_TEXT = defineMessages('chat.threads', {
+  rename: 'Rename',
+  renameFailed: 'Could not rename: {reason}',
+  pin: 'Pin',
+  unpin: 'Unpin',
+  pinFailed: 'Could not pin: {reason}',
+  noMemory: "Don't use for memory",
+  memoryFailed: 'Could not change memory use: {reason}',
+  archive: 'Archive',
+  unarchive: 'Unarchive',
+  archiveFailed: 'Could not archive: {reason}',
+  unarchiveFailed: 'Could not unarchive: {reason}',
+  restored: 'Chat restored.',
+  archived: 'Chat archived.',
+  delete: 'Delete…',
+  branch: 'Branch',
+  temporary: 'Temporary chat',
+  /** Read after a row's title by screen readers. */
+  unreadSuffix: ', unread',
+  pinnedSuffix: ', pinned',
+  branchSuffix: ', branch',
+  temporarySuffix: ', temporary',
+  actionsFor: 'Actions for {title}',
+  loading: 'Loading chats…',
+  retry: 'Retry',
+  pinned: 'Pinned',
+  recent: 'Recent',
+  archivedHeading: 'Archived',
+  noArchived: 'No archived chats.',
+  none: 'No chats yet.',
+  showMore: 'Show more',
+  backToChats: 'Back to chats',
+  archivedChats: 'Archived chats',
+  deleteTitle: 'Delete this chat?',
+  deleteBody:
+    '“{title}” and its messages will be removed from every device. This cannot be undone.',
+  cancel: 'Cancel',
+  deleteButton: 'Delete',
+  deleteFailed: 'Could not delete: {reason}',
+  deleted: 'Chat deleted.',
+  chatName: 'Chat name',
+});
 
 export function threadTitle(t: Pick<ThreadView, 'title'>): string {
-  return t.title?.trim() || 'Untitled chat';
+  return t.title?.trim() || CHAT_TEXT.untitled;
 }
 
 export interface ThreadListProps {
@@ -66,8 +111,8 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
   const current =
     ordered.find((t) => t.id === focusId) ?? ordered.find((t) => t.id === selectedId) ?? ordered[0];
 
-  const act = (label: string, p: Promise<unknown>) =>
-    p.catch((err: unknown) => toast.show(`${label}: ${errorMessage(err)}`, { tone: 'error' }));
+  const act = (failed: (p: { reason: string }) => string, p: Promise<unknown>) =>
+    p.catch((err: unknown) => toast.show(failed({ reason: errorMessage(err) }), { tone: 'error' }));
 
   const focusRow = (id: string) => {
     setFocusId(id);
@@ -96,14 +141,15 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
   };
 
   const items = (t: ThreadView) => [
-    { id: 'rename', label: 'Rename', onSelect: () => setRenaming(t.id) },
+    { id: 'rename', label: THREADS_TEXT.rename, onSelect: () => setRenaming(t.id) },
     ...(t.archived
       ? []
       : [
           {
             id: 'pin',
-            label: t.pinned ? 'Unpin' : 'Pin',
-            onSelect: () => void act('Could not pin', store.update(t.id, { pinned: !t.pinned })),
+            label: t.pinned ? THREADS_TEXT.unpin : THREADS_TEXT.pin,
+            onSelect: () =>
+              void act(THREADS_TEXT.pinFailed, store.update(t.id, { pinned: !t.pinned })),
           },
         ]),
     ...(t.temporary
@@ -111,39 +157,36 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
       : [
           {
             id: 'memory',
-            label: "Don't use for memory",
+            label: THREADS_TEXT.noMemory,
             checked: t.memoryOptOut,
             onSelect: () =>
               void act(
-                'Could not change memory use',
-                store
-                  .update(t.id, { memoryOptOut: !t.memoryOptOut })
-                  .then(() =>
-                    toast.show(
-                      t.memoryOptOut
-                        ? 'This chat can be used for memory.'
-                        : 'This chat will not be used for memory.',
-                      { tone: 'success' },
-                    ),
-                  ),
+                THREADS_TEXT.memoryFailed,
+                store.update(t.id, { memoryOptOut: !t.memoryOptOut }).then(() =>
+                  toast.show(t.memoryOptOut ? CHAT_TEXT.memoryOn : CHAT_TEXT.memoryOff, {
+                    tone: 'success',
+                  }),
+                ),
               ),
           },
         ]),
     {
       id: 'archive',
-      label: t.archived ? 'Unarchive' : 'Archive',
+      label: t.archived ? THREADS_TEXT.unarchive : THREADS_TEXT.archive,
       onSelect: () => {
         void act(
-          t.archived ? 'Could not unarchive' : 'Could not archive',
+          t.archived ? THREADS_TEXT.unarchiveFailed : THREADS_TEXT.archiveFailed,
           store.update(t.id, { archived: !t.archived }).then(() => {
-            toast.show(t.archived ? 'Chat restored.' : 'Chat archived.', { tone: 'success' });
+            toast.show(t.archived ? THREADS_TEXT.restored : THREADS_TEXT.archived, {
+              tone: 'success',
+            });
             if (!t.archived && t.id === selectedId) navigate(chatPath(null));
           }),
         );
       },
     },
     ...menuItemsFor(extensions, 'thread', { threadId: t.id }, runExtension),
-    { id: 'delete', label: 'Delete…', danger: true, onSelect: () => setConfirmDelete(t) },
+    { id: 'delete', label: THREADS_TEXT.delete, danger: true, onSelect: () => setConfirmDelete(t) },
   ];
 
   const renderRow = (t: ThreadView) => {
@@ -169,7 +212,7 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
               setRenaming(null);
               focusRow(t.id);
               if (title !== null && title !== (t.title ?? ''))
-                void act('Could not rename', store.update(t.id, { title: title || null }));
+                void act(THREADS_TEXT.renameFailed, store.update(t.id, { title: title || null }));
             }}
           />
         ) : (
@@ -188,27 +231,31 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
           >
             {t.unread ? <span className="unread-dot" aria-hidden="true" /> : null}
             {t.parentThreadId && !t.side ? (
-              <span className="thread-mark" title="Branch">
+              <span className="thread-mark" title={THREADS_TEXT.branch}>
                 <Icon name="branch" />
               </span>
             ) : null}
             {t.temporary ? (
-              <span className="thread-mark" data-kind="temporary" title="Temporary chat">
+              <span className="thread-mark" data-kind="temporary" title={THREADS_TEXT.temporary}>
                 <Icon name="clock" />
               </span>
             ) : null}
-            <span className="thread-title">{threadTitle(t)}</span>
-            {t.unread ? <VisuallyHidden>, unread</VisuallyHidden> : null}
-            {t.pinned ? <VisuallyHidden>, pinned</VisuallyHidden> : null}
-            {t.parentThreadId && !t.side ? <VisuallyHidden>, branch</VisuallyHidden> : null}
-            {t.temporary ? <VisuallyHidden>, temporary</VisuallyHidden> : null}
+            <span className="thread-title" dir="auto">
+              {threadTitle(t)}
+            </span>
+            {t.unread ? <VisuallyHidden>{THREADS_TEXT.unreadSuffix}</VisuallyHidden> : null}
+            {t.pinned ? <VisuallyHidden>{THREADS_TEXT.pinnedSuffix}</VisuallyHidden> : null}
+            {t.parentThreadId && !t.side ? (
+              <VisuallyHidden>{THREADS_TEXT.branchSuffix}</VisuallyHidden>
+            ) : null}
+            {t.temporary ? <VisuallyHidden>{THREADS_TEXT.temporarySuffix}</VisuallyHidden> : null}
             {status !== 'ready' ? (
               <StatusChip status={status} reason={threadStatusReason(t)} compact />
             ) : null}
           </a>
         )}
         <Menu
-          label={`Actions for ${threadTitle(t)}`}
+          label={THREADS_TEXT.actionsFor({ title: threadTitle(t) })}
           trigger={<span aria-hidden="true">⋯</span>}
           items={items(t)}
           open={menuFor?.id === t.id}
@@ -222,39 +269,39 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
 
   return (
     <div className="thread-list" ref={listRef} onKeyDown={onListKey}>
-      {store.loading ? <p className="muted sidebar-note">Loading chats…</p> : null}
+      {store.loading ? <p className="muted sidebar-note">{THREADS_TEXT.loading}</p> : null}
       {store.error ? (
         <p className="sidebar-note" role="alert">
           {store.error}{' '}
           <button type="button" className="link" onClick={() => void store.refresh()}>
-            Retry
+            {THREADS_TEXT.retry}
           </button>
         </p>
       ) : null}
       {pinned.length ? (
         <section aria-labelledby="threads-pinned">
           <h3 id="threads-pinned" className="sidebar-heading">
-            Pinned
+            {THREADS_TEXT.pinned}
           </h3>
           <ul className="threads">{pinned.map(renderRow)}</ul>
         </section>
       ) : null}
       <section aria-labelledby="threads-recent">
         <h3 id="threads-recent" className="sidebar-heading">
-          {showArchived ? 'Archived' : 'Recent'}
+          {showArchived ? THREADS_TEXT.archivedHeading : THREADS_TEXT.recent}
         </h3>
         {recent.length ? (
           <ul className="threads">{recent.map(renderRow)}</ul>
         ) : !store.loading ? (
           <p className="muted sidebar-note">
-            {showArchived ? 'No archived chats.' : 'No chats yet.'}
+            {showArchived ? THREADS_TEXT.noArchived : THREADS_TEXT.none}
           </p>
         ) : null}
       </section>
       <div className="thread-list-footer">
         {!showArchived && store.hasMore ? (
           <button type="button" className="link" onClick={() => void store.loadMore()}>
-            Show more
+            {THREADS_TEXT.showMore}
           </button>
         ) : null}
         <button
@@ -266,22 +313,20 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
             setShowArchived(!showArchived);
           }}
         >
-          {showArchived ? 'Back to chats' : 'Archived chats'}
+          {showArchived ? THREADS_TEXT.backToChats : THREADS_TEXT.archivedChats}
         </button>
       </div>
       <Dialog
         open={confirmDelete !== null}
-        title="Delete this chat?"
+        title={THREADS_TEXT.deleteTitle}
         description={
-          confirmDelete
-            ? `“${threadTitle(confirmDelete)}” and its messages will be removed from every device. This cannot be undone.`
-            : undefined
+          confirmDelete ? THREADS_TEXT.deleteBody({ title: threadTitle(confirmDelete) }) : undefined
         }
         onClose={() => setConfirmDelete(null)}
         fallbackFocus={() => document.querySelector<HTMLElement>('.sidebar-new')}
         footer={
           <>
-            <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
+            <Button onClick={() => setConfirmDelete(null)}>{THREADS_TEXT.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -289,15 +334,15 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
                 setConfirmDelete(null);
                 if (!t) return;
                 void act(
-                  'Could not delete',
+                  THREADS_TEXT.deleteFailed,
                   store.remove(t.id).then(() => {
-                    toast.show('Chat deleted.', { tone: 'success' });
+                    toast.show(THREADS_TEXT.deleted, { tone: 'success' });
                     if (t.id === selectedId) navigate(chatPath(null));
                   }),
                 );
               }}
             >
-              Delete
+              {THREADS_TEXT.deleteButton}
             </Button>
           </>
         }
@@ -329,7 +374,7 @@ function RenameField({
     <input
       ref={ref}
       className="nv-input thread-rename"
-      aria-label="Chat name"
+      aria-label={THREADS_TEXT.chatName}
       value={value}
       maxLength={300}
       onChange={(e) => setValue(e.target.value)}

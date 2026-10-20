@@ -9,6 +9,7 @@ import {
   type DeviceView,
 } from '@nova/shared';
 import { Button, Icon, SelectField, TextField, useToast } from '@nova/ui';
+import { defineMessages, messageFor } from '@nova/i18n';
 import { useDevicesApi } from './api.ts';
 import type { PanelProps } from './DevicePage.tsx';
 import {
@@ -16,10 +17,107 @@ import {
   capabilityReason,
   deviceErrorMessage,
   formatBytes,
+  listText,
   moduleLabel,
   parseQuietHours,
   pathProblem,
 } from './format.ts';
+
+/** The Capabilities tab's words (FR-016). */
+export const CAPABILITIES_TEXT = defineMessages('devices.capabilities', {
+  sections: {
+    models: 'Models',
+    computePolicy: 'Compute',
+    scheduling: 'Scheduling',
+    limits: 'Network',
+    power: 'Power',
+    locale: 'Locale',
+  },
+  /** Each override field's label, by its key. */
+  fields: {
+    storagePaths: 'Model folders',
+    cacheQuotaBytes: 'Model cache limit (GB)',
+    gpuSharing: 'GPU sharing',
+    vramReserveBytes: 'GPU memory kept free (GB)',
+    maxConcurrentJobs: 'Jobs at once',
+    maxJobDurationSec: 'Longest job (seconds)',
+    quietHours: 'Quiet hours the device declares',
+    routingWeight: 'Routing weight',
+    energyPriceTier: 'Energy price tier',
+    maxEgressMbps: 'Upload limit (Mbps)',
+    policy: 'Power policy',
+    thermalLimitC: 'Thermal limit (°C)',
+    locale: 'Locale',
+  },
+  /** Help under some fields, by the field's key. */
+  hints: {
+    storagePaths: 'One full path per line.',
+    quietHours: 'Like 22:00-07:00; separate several with commas.',
+    routingWeight: 'Higher gets more work when several devices fit. 0 to 1000.',
+    locale: 'Like en-US.',
+  },
+  options: {
+    shared: 'Shared with other work',
+    exclusive: 'Only Nova jobs',
+  },
+  deviceDecides: 'The device decides',
+  deviceReports: 'The device reports {value}.',
+  invalid: {
+    whole: 'Enter a whole number.',
+    number: 'Enter a number.',
+    range: 'Enter a number from {min} to {max}.',
+    atLeast: 'Enter a number of {min} or more.',
+    ranges: '“{text}” is not a time range like 22:00-07:00.',
+  },
+  status: {
+    title: 'What it can do',
+    needUpdate:
+      'Some capabilities need a newer novad. Update the device in the Updates tab; it keeps the others meanwhile.',
+    list: 'Capabilities',
+    available: 'Available · {module} module',
+    none: 'The device has not reported its capabilities yet.',
+  },
+  facts: {
+    processor: 'Processor',
+    memory: 'Memory',
+    gpus: 'GPUs',
+    disks: 'Disks',
+    system: 'System',
+    sandbox: 'Sandbox',
+    modelServers: 'Model servers',
+    peripherals: 'Peripherals',
+    sharedFolders: 'Shared folders',
+    timeZone: 'Time zone',
+  },
+  cores: '{n, plural, one {# core} other {# cores}}',
+  gpu: 'GPU',
+  gpuMemory: '{name} ({size})',
+  diskFree: '{mount} {size} free',
+  free: '{size} free',
+  peripheralCount: '{n} {name}',
+  noSandbox: 'None found; commands are refused',
+  noFolders: 'None',
+  reported: {
+    title: 'Reported by the device',
+    intro: 'Detected on the device, with any changes made there. Only the device can change these.',
+    none: 'Nothing reported yet.',
+    showDocument: 'Show the full document',
+    document: 'Capability document',
+  },
+  overrides: {
+    title: 'Hub overrides',
+    intro:
+      "Advanced. An override replaces what the device declares for routing and limits; leave a field blank to keep the device's own value.",
+    revoked: 'This device was revoked.',
+    save: 'Save overrides',
+    discard: 'Discard changes',
+    saved: 'Saved. The device has it.',
+    savedPending: 'Saved. The device takes it when it next checks in.',
+    saveFailed: 'Could not save the overrides.',
+  },
+});
+
+const S = CAPABILITIES_TEXT;
 
 const GIB = 1024 ** 3;
 
@@ -28,98 +126,37 @@ type Kind = 'int' | 'num' | 'gib' | 'text' | 'paths' | 'ranges' | 'select';
 
 interface Field {
   section: Section;
-  key: string;
-  label: string;
+  key: keyof typeof S.fields;
   kind: Kind;
   min?: number;
   max?: number;
-  options?: { value: string; label: string }[];
-  hint?: string;
+  /** A select's values; their words are in `S.options`. */
+  options?: readonly string[];
 }
 
-const SECTION_LABEL: Record<Section, string> = {
-  models: 'Models',
-  computePolicy: 'Compute',
-  scheduling: 'Scheduling',
-  limits: 'Network',
-  power: 'Power',
-  locale: 'Locale',
-};
+/** A field's label and help, read at render time. */
+const fieldLabel = (f: Field): string => S.fields[f.key];
+const fieldHint = (f: Field): string | undefined => messageFor(S.hints, f.key);
 
 export const OVERRIDE_FIELDS: Field[] = [
-  {
-    section: 'models',
-    key: 'storagePaths',
-    label: 'Model folders',
-    kind: 'paths',
-    hint: 'One full path per line.',
-  },
-  { section: 'models', key: 'cacheQuotaBytes', label: 'Model cache limit (GB)', kind: 'gib' },
+  { section: 'models', key: 'storagePaths', kind: 'paths' },
+  { section: 'models', key: 'cacheQuotaBytes', kind: 'gib' },
   {
     section: 'computePolicy',
     key: 'gpuSharing',
-    label: 'GPU sharing',
     kind: 'select',
-    options: [
-      { value: 'shared', label: 'Shared with other work' },
-      { value: 'exclusive', label: 'Only Nova jobs' },
-    ],
+    options: ['shared', 'exclusive'],
   },
-  {
-    section: 'computePolicy',
-    key: 'vramReserveBytes',
-    label: 'GPU memory kept free (GB)',
-    kind: 'gib',
-  },
-  {
-    section: 'computePolicy',
-    key: 'maxConcurrentJobs',
-    label: 'Jobs at once',
-    kind: 'int',
-    min: 0,
-  },
-  {
-    section: 'computePolicy',
-    key: 'maxJobDurationSec',
-    label: 'Longest job (seconds)',
-    kind: 'int',
-    min: 1,
-  },
-  {
-    section: 'scheduling',
-    key: 'quietHours',
-    label: 'Quiet hours the device declares',
-    kind: 'ranges',
-    hint: 'Like 22:00-07:00; separate several with commas.',
-  },
-  {
-    section: 'scheduling',
-    key: 'routingWeight',
-    label: 'Routing weight',
-    kind: 'num',
-    min: 0,
-    max: 1000,
-    hint: 'Higher gets more work when several devices fit. 0 to 1000.',
-  },
-  { section: 'scheduling', key: 'energyPriceTier', label: 'Energy price tier', kind: 'text' },
-  {
-    section: 'limits',
-    key: 'maxEgressMbps',
-    label: 'Upload limit (Mbps)',
-    kind: 'num',
-    min: 0,
-    max: 100_000,
-  },
-  { section: 'power', key: 'policy', label: 'Power policy', kind: 'text' },
-  {
-    section: 'power',
-    key: 'thermalLimitC',
-    label: 'Thermal limit (°C)',
-    kind: 'int',
-    min: 30,
-    max: 120,
-  },
-  { section: 'locale', key: 'locale', label: 'Locale', kind: 'text', hint: 'Like en-US.' },
+  { section: 'computePolicy', key: 'vramReserveBytes', kind: 'gib' },
+  { section: 'computePolicy', key: 'maxConcurrentJobs', kind: 'int', min: 0 },
+  { section: 'computePolicy', key: 'maxJobDurationSec', kind: 'int', min: 1 },
+  { section: 'scheduling', key: 'quietHours', kind: 'ranges' },
+  { section: 'scheduling', key: 'routingWeight', kind: 'num', min: 0, max: 1000 },
+  { section: 'scheduling', key: 'energyPriceTier', kind: 'text' },
+  { section: 'limits', key: 'maxEgressMbps', kind: 'num', min: 0, max: 100_000 },
+  { section: 'power', key: 'policy', kind: 'text' },
+  { section: 'power', key: 'thermalLimitC', kind: 'int', min: 30, max: 120 },
+  { section: 'locale', key: 'locale', kind: 'text' },
 ];
 
 const fieldId = (f: Field) => `${f.section}.${f.key}`;
@@ -166,11 +203,14 @@ export function overridesFrom(
       const n = Number(text);
       const whole = f.kind === 'int';
       if (!Number.isFinite(n) || (whole && !Number.isInteger(n))) {
-        errors[id] = `Enter ${whole ? 'a whole number' : 'a number'}.`;
+        errors[id] = whole ? S.invalid.whole : S.invalid.number;
         continue;
       }
       if ((f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max) || n < 0) {
-        errors[id] = `Enter a number from ${f.min ?? 0} to ${f.max ?? 'any size'}.`;
+        errors[id] =
+          f.max === undefined
+            ? S.invalid.atLeast({ min: f.min ?? 0 })
+            : S.invalid.range({ min: f.min ?? 0, max: f.max });
         continue;
       }
       value = f.kind === 'gib' ? Math.round(n * GIB) : n;
@@ -188,7 +228,7 @@ export function overridesFrom(
     } else if (f.kind === 'ranges') {
       const r = parseQuietHours(text);
       if ('bad' in r) {
-        errors[id] = `“${r.bad}” is not a time range like 22:00-07:00.`;
+        errors[id] = S.invalid.ranges({ text: r.bad });
         continue;
       }
       value = r.ranges;
@@ -224,15 +264,14 @@ export function CapabilitiesPanel({ device, onDevice }: PanelProps) {
 function CapabilityStatuses({ device }: { device: DeviceView }) {
   return (
     <section className="ws-section devices-flat" aria-labelledby="caps-status">
-      <h2 id="caps-status">What it can do</h2>
+      <h2 id="caps-status">{S.status.title}</h2>
       {device.updateRequired ? (
         <p className="devices-note">
-          <Icon name="alert" /> Some capabilities need a newer novad. Update the device in the
-          Updates tab; it keeps the others meanwhile.
+          <Icon name="alert" /> {S.status.needUpdate}
         </p>
       ) : null}
       {device.capabilities.length ? (
-        <ul className="devices-caps" aria-label="Capabilities">
+        <ul className="devices-caps" aria-label={S.status.list}>
           {device.capabilities.map((c) => {
             const why = capabilityReason(c);
             return (
@@ -242,14 +281,14 @@ function CapabilityStatuses({ device }: { device: DeviceView }) {
                 />
                 <span className="devices-cap-name">{CAPABILITY_LABEL[c.name]}</span>
                 <span className="muted">
-                  {why ?? `Available · ${moduleLabel(c.module)} module`}
+                  {why ?? S.status.available({ module: moduleLabel(c.module) })}
                 </span>
               </li>
             );
           })}
         </ul>
       ) : (
-        <p className="muted ws-flush">The device has not reported its capabilities yet.</p>
+        <p className="muted ws-flush">{S.status.none}</p>
       )}
     </section>
   );
@@ -263,55 +302,60 @@ export function reportedFacts(doc: Record<string, unknown> | null): [string, str
     if (v === undefined || v === null || v === '') return;
     out.push([label, typeof v === 'string' ? v : JSON.stringify(v)]);
   };
+  const F = S.facts;
+  const strings = (xs: unknown[]) => xs.map((x) => (typeof x === 'string' ? x : String(x)));
   const hw = rec(doc.hardware);
-  add(
-    'Processor',
-    [hw.arch, typeof hw.cores === 'number' ? `${hw.cores} cores` : null]
-      .filter(Boolean)
-      .join(', ') || null,
-  );
-  if (typeof hw.ramBytes === 'number') add('Memory', formatBytes(hw.ramBytes));
+  const cpu = [
+    typeof hw.arch === 'string' && hw.arch ? hw.arch : null,
+    typeof hw.cores === 'number' ? S.cores({ n: hw.cores }) : null,
+  ].filter((x): x is string => x !== null);
+  add(F.processor, cpu.length ? listText(cpu) : null);
+  if (typeof hw.ramBytes === 'number') add(F.memory, formatBytes(hw.ramBytes));
   if (Array.isArray(hw.gpus) && hw.gpus.length)
     add(
-      'GPUs',
-      hw.gpus
-        .map((g) => {
+      F.gpus,
+      listText(
+        hw.gpus.map((g) => {
           const r = rec(g);
-          const vram = typeof r.vramBytes === 'number' ? ` (${formatBytes(r.vramBytes)})` : '';
-          return `${typeof r.name === 'string' ? r.name : 'GPU'}${vram}`;
-        })
-        .join(', '),
+          const name = typeof r.name === 'string' ? r.name : S.gpu;
+          return typeof r.vramBytes === 'number'
+            ? S.gpuMemory({ name, size: formatBytes(r.vramBytes) })
+            : name;
+        }),
+      ),
     );
   if (Array.isArray(hw.disks) && hw.disks.length)
     add(
-      'Disks',
-      hw.disks
-        .map((x) => {
+      F.disks,
+      listText(
+        hw.disks.map((x) => {
           const r = rec(x);
-          const free = typeof r.freeBytes === 'number' ? `${formatBytes(r.freeBytes)} free` : '';
-          return [typeof r.mount === 'string' ? r.mount : '', free].filter(Boolean).join(' ');
-        })
-        .join(', '),
+          const mount = typeof r.mount === 'string' ? r.mount : '';
+          if (typeof r.freeBytes !== 'number') return mount;
+          const size = formatBytes(r.freeBytes);
+          return mount ? S.diskFree({ mount, size }) : S.free({ size });
+        }),
+      ),
     );
   const os = rec(doc.os);
-  add('System', [os.family, os.version].filter((x) => typeof x === 'string').join(' ') || null);
+  add(F.system, [os.family, os.version].filter((x) => typeof x === 'string').join(' ') || null);
   const sandbox = Object.entries(rec(os.sandbox))
     .filter(([, v]) => v === true)
     .map(([k]) => k);
-  add('Sandbox', sandbox.length ? sandbox.join(', ') : 'None found; commands are refused');
+  add(F.sandbox, sandbox.length ? listText(sandbox) : S.noSandbox);
   const services = rec(doc.services);
   if (Array.isArray(services.computeBackends) && services.computeBackends.length)
-    add('Model servers', services.computeBackends.join(', '));
+    add(F.modelServers, listText(strings(services.computeBackends)));
   const peripherals = rec(doc.peripherals);
   const have = Object.entries(peripherals)
     .filter(([, v]) => v === true || (typeof v === 'number' && v > 0))
-    .map(([k, v]) => (typeof v === 'number' ? `${v} ${k}` : k));
-  if (have.length) add('Peripherals', have.join(', '));
+    .map(([k, v]) => (typeof v === 'number' ? S.peripheralCount({ n: v, name: k }) : k));
+  if (have.length) add(F.peripherals, listText(have));
   const access = rec(doc.access);
   if (Array.isArray(access.fsScopes))
-    add('Shared folders', access.fsScopes.length ? access.fsScopes.join(', ') : 'None');
+    add(F.sharedFolders, access.fsScopes.length ? listText(strings(access.fsScopes)) : S.noFolders);
   const locale = rec(doc.locale);
-  add('Time zone', locale.timezone);
+  add(F.timeZone, locale.timezone);
   return out;
 }
 
@@ -319,26 +363,30 @@ function ReportedDocument({ device }: { device: DeviceView }) {
   const facts = reportedFacts(device.capability);
   return (
     <section className="ws-section devices-flat" aria-labelledby="caps-reported">
-      <h2 id="caps-reported">Reported by the device</h2>
-      <p className="muted ws-flush">
-        Detected on the device, with any changes made there. Only the device can change these.
-      </p>
+      <h2 id="caps-reported">{S.reported.title}</h2>
+      <p className="muted ws-flush">{S.reported.intro}</p>
       {facts.length ? (
         <dl className="devices-facts">
           {facts.map(([k, v]) => (
             <div key={k}>
               <dt>{k}</dt>
-              <dd>{v}</dd>
+              <dd dir="auto">{v}</dd>
             </div>
           ))}
         </dl>
       ) : (
-        <p className="muted ws-flush">Nothing reported yet.</p>
+        <p className="muted ws-flush">{S.reported.none}</p>
       )}
       {device.capability ? (
         <details className="ws-advanced">
-          <summary>Show the full document</summary>
-          <pre className="ws-command devices-json" tabIndex={0} aria-label="Capability document">
+          <summary>{S.reported.showDocument}</summary>
+          <pre
+            role="group"
+            className="ws-command devices-json"
+            tabIndex={0}
+            aria-label={S.reported.document}
+            dir="ltr"
+          >
             {JSON.stringify(device.capability, null, 2)}
           </pre>
         </details>
@@ -377,16 +425,13 @@ function OverridesForm({
     setSaveError(null);
     try {
       const next = await api.updateNovadDevice(device.id, { capabilityOverrides: r.value });
-      toast.show(
-        next.configPending
-          ? 'Saved. The device takes it when it next checks in.'
-          : 'Saved. The device has it.',
-        { tone: 'success' },
-      );
+      toast.show(next.configPending ? S.overrides.savedPending : S.overrides.saved, {
+        tone: 'success',
+      });
       // The form remounts with the saved values (its key is the overrides).
       onDevice(next);
     } catch (err) {
-      setSaveError(deviceErrorMessage(err, 'Could not save the overrides.'));
+      setSaveError(deviceErrorMessage(err, S.overrides.saveFailed));
     } finally {
       setBusy(false);
     }
@@ -395,11 +440,8 @@ function OverridesForm({
   const sections = [...new Set(OVERRIDE_FIELDS.map((f) => f.section))];
   return (
     <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
-      <h2 id={`${base}-h`}>Hub overrides</h2>
-      <p className="muted ws-flush">
-        Advanced. An override replaces what the device declares for routing and limits; leave a
-        field blank to keep the device&apos;s own value.
-      </p>
+      <h2 id={`${base}-h`}>{S.overrides.title}</h2>
+      <p className="muted ws-flush">{S.overrides.intro}</p>
       <form
         className="stack"
         onSubmit={(e) => {
@@ -408,20 +450,17 @@ function OverridesForm({
         }}
       >
         <fieldset className="devices-overrides" disabled={revoked || busy}>
-          <legend className="nv-vh">Hub overrides</legend>
+          <legend className="nv-vh">{S.overrides.title}</legend>
           {sections.map((s) => (
-            <div
-              key={s}
-              className="devices-override-group"
-              role="group"
-              aria-label={SECTION_LABEL[s]}
-            >
-              <h3>{SECTION_LABEL[s]}</h3>
+            <div key={s} className="devices-override-group" role="group" aria-label={S.sections[s]}>
+              <h3>{S.sections[s]}</h3>
               {OVERRIDE_FIELDS.filter((f) => f.section === s).map((f) => {
                 const id = fieldId(f);
+                const label = fieldLabel(f);
                 const reported = reportedText(f, rec(doc[f.section])[f.key]);
+                // Two whole sentences: the field's help, then what the device reports.
                 const hint =
-                  [f.hint, reported ? `The device reports ${reported}.` : null]
+                  [fieldHint(f), reported ? S.deviceReports({ value: reported }) : null]
                     .filter(Boolean)
                     .join(' ') || undefined;
                 const set = (v: string) => setDraft((d) => ({ ...d, [id]: v }));
@@ -429,19 +468,25 @@ function OverridesForm({
                   return (
                     <SelectField
                       key={id}
-                      label={f.label}
+                      label={label}
                       value={draft[id] ?? ''}
                       onChange={set}
                       hint={hint}
                       error={errors[id]}
-                      options={[{ value: '', label: 'The device decides' }, ...(f.options ?? [])]}
+                      options={[
+                        { value: '', label: S.deviceDecides },
+                        ...(f.options ?? []).map((value) => ({
+                          value,
+                          label: messageFor(S.options, value) ?? value,
+                        })),
+                      ]}
                     />
                   );
                 if (f.kind === 'paths')
                   return (
                     <div key={id} className="nv-field">
                       <label className="nv-field-label" htmlFor={`${base}-${id}`}>
-                        {f.label}
+                        {label}
                       </label>
                       <textarea
                         id={`${base}-${id}`}
@@ -466,7 +511,7 @@ function OverridesForm({
                 return (
                   <TextField
                     key={id}
-                    label={f.label}
+                    label={label}
                     value={draft[id] ?? ''}
                     inputMode={numeric ? (f.kind === 'int' ? 'numeric' : 'decimal') : undefined}
                     className={numeric ? 'ws-number' : undefined}
@@ -479,7 +524,7 @@ function OverridesForm({
             </div>
           ))}
         </fieldset>
-        {revoked ? <p className="muted ws-flush">This device was revoked.</p> : null}
+        {revoked ? <p className="muted ws-flush">{S.overrides.revoked}</p> : null}
         {saveError ? (
           <p role="alert" className="nv-field-error">
             {saveError}
@@ -487,7 +532,7 @@ function OverridesForm({
         ) : null}
         <div className="row">
           <Button type="submit" variant="primary" disabled={!dirty || busy || revoked}>
-            Save overrides
+            {S.overrides.save}
           </Button>
           <Button
             disabled={!dirty || busy}
@@ -496,7 +541,7 @@ function OverridesForm({
               setErrors({});
             }}
           >
-            Discard changes
+            {S.overrides.discard}
           </Button>
         </div>
       </form>

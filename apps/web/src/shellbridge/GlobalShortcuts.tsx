@@ -4,6 +4,7 @@
 // shortcut shows its key and whether the OS let Nova have it (another app may hold it), and can be
 // changed by pressing the new keys, removed, or reset to its default, through `setShortcut`.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, Kbd, Spinner } from '@nova/ui';
 import { useAnnounce } from '../services.tsx';
 import {
@@ -23,17 +24,62 @@ import {
 } from './bridge.ts';
 import './shellbridge.css';
 
+/** Settings → Keyboard, Global shortcuts. `{title}` is a shortcut's title, `{key}` a key as printed. */
+export const GLOBAL_SHORTCUTS_TEXT = defineMessages('shellbridge.globalShortcuts', {
+  heading: 'Global shortcuts',
+  chip: {
+    off: 'Off',
+    works: 'Works',
+    taken: 'Taken by another app',
+    usedTwice: 'Used twice',
+    notValid: 'Not valid',
+  },
+  browserIntro:
+    'These keys work while Nova is in the background, so only the Nova desktop app can offer ' +
+    'them. A browser tab cannot. In the app you can change them here.',
+  browserList: 'Global shortcuts in the desktop app',
+  appIntro:
+    'These keys work while Nova is in the background. If another app already uses a key, Nova ' +
+    'cannot have it: choose another one.',
+  listFailed: 'The desktop app did not list its shortcuts.',
+  refused: 'The desktop app refused that key.',
+  retry: 'Retry',
+  loading: 'Loading global shortcuts',
+  problems: 'Global shortcut problems',
+  /** A shortcut with a problem: "Attach the frontmost window (Ctrl+Alt+A): Both global shortcuts use this key." */
+  problemLine: '{title} ({key}): {problem}',
+  list: 'Global shortcuts',
+  none: 'No shortcut',
+  clash:
+    'In the app this key wins over Nova’s own “Go to the next item that needs input”, which also uses {key}.',
+  capture: 'Press the new shortcut for {title}, or Escape to cancel',
+  capturing: 'Press keys… (Esc cancels)',
+  change: 'Change',
+  changeFor: 'Change the shortcut for {title}',
+  remove: 'Remove',
+  removeFor: 'Remove the shortcut for {title}',
+  reset: 'Reset',
+  resetFor: 'Reset the shortcut for {title} to {key}',
+  announce: {
+    off: '{title}: no shortcut.',
+    problem: '{title}: {problem}',
+    notRegistered: '{title}: not registered.',
+    set: '{title}: {key}.',
+  },
+});
+
 /** The status chip of one global shortcut: icon and text, never color alone. */
 function ShortcutChip({ view }: { view: ShellShortcutView }) {
+  const S = GLOBAL_SHORTCUTS_TEXT.chip;
   const spec: { text: string; icon: 'check' | 'alert' | 'slash'; tone?: string } = !view.accelerator
-    ? { text: 'Off', icon: 'slash' }
+    ? { text: S.off, icon: 'slash' }
     : view.registered
-      ? { text: 'Works', icon: 'check', tone: 'ready' }
+      ? { text: S.works, icon: 'check', tone: 'ready' }
       : view.problem === 'conflict'
-        ? { text: 'Taken by another app', icon: 'alert', tone: 'blocked' }
+        ? { text: S.taken, icon: 'alert', tone: 'blocked' }
         : view.problem === 'duplicate'
-          ? { text: 'Used twice', icon: 'alert', tone: 'blocked' }
-          : { text: 'Not valid', icon: 'alert', tone: 'blocked' };
+          ? { text: S.usedTwice, icon: 'alert', tone: 'blocked' }
+          : { text: S.notValid, icon: 'alert', tone: 'blocked' };
   return (
     <span className="nv-chip" data-status={spec.tone}>
       <Icon name={spec.icon} />
@@ -47,7 +93,7 @@ export function GlobalShortcutsSection() {
   const headingId = useId();
   return (
     <section className="settings-section shb-shortcuts" aria-labelledby={headingId}>
-      <h3 id={headingId}>Global shortcuts</h3>
+      <h3 id={headingId}>{GLOBAL_SHORTCUTS_TEXT.heading}</h3>
       {shell ? <ShellShortcuts shell={shell} /> : <BrowserTabShortcuts />}
     </section>
   );
@@ -57,13 +103,11 @@ export function GlobalShortcutsSection() {
 function BrowserTabShortcuts() {
   const mac = /mac|iphone|ipad/i.test(typeof navigator === 'undefined' ? '' : navigator.platform);
   const platform = mac ? 'darwin' : 'other';
+  const S = GLOBAL_SHORTCUTS_TEXT;
   return (
     <>
-      <p className="muted">
-        These keys work while Nova is in the background, so only the Nova desktop app can offer
-        them. A browser tab cannot. In the app you can change them here.
-      </p>
-      <ul className="ws-list" aria-label="Global shortcuts in the desktop app">
+      <p className="muted">{S.browserIntro}</p>
+      <ul className="ws-list" aria-label={S.browserList}>
         {GLOBAL_SHORTCUT_ACTIONS.map((a) => (
           <li key={a} className="ws-list-row shb-row">
             <div className="ws-source-main">
@@ -89,6 +133,7 @@ function ShellShortcuts({ shell }: { shell: ShellBridge }) {
     null,
   );
   const mac = shell.platform === 'darwin';
+  const S = GLOBAL_SHORTCUTS_TEXT;
 
   useEffect(() => {
     let alive = true;
@@ -99,8 +144,7 @@ function ShellShortcuts({ shell }: { shell: ShellBridge }) {
         setLoadError(null);
       },
       (err: unknown) =>
-        alive &&
-        setLoadError(shellErrorMessage(err, 'The desktop app did not list its shortcuts.')),
+        alive && setLoadError(shellErrorMessage(err, GLOBAL_SHORTCUTS_TEXT.listFailed)),
     );
     return () => {
       alive = false;
@@ -122,12 +166,15 @@ function ShellShortcuts({ shell }: { shell: ShellBridge }) {
       setViews(next);
       const mine = next.find((v) => v.action === action);
       const title = GLOBAL_SHORTCUT_TEXT[action].title;
-      if (!accelerator) announce(`${title}: no shortcut.`);
-      else if (mine && !mine.registered && mine.problem)
-        announce(`${title}: ${shortcutProblemText(mine) ?? 'not registered.'}`);
-      else announce(`${title}: ${mine?.label ?? accelerator}.`);
+      if (!accelerator) announce(S.announce.off({ title }));
+      else if (mine && !mine.registered && mine.problem) {
+        const problem = shortcutProblemText(mine);
+        announce(
+          problem ? S.announce.problem({ title, problem }) : S.announce.notRegistered({ title }),
+        );
+      } else announce(S.announce.set({ title, key: mine?.label ?? accelerator }));
     } catch (err) {
-      setRowError({ action, text: shellErrorMessage(err, 'The desktop app refused that key.') });
+      setRowError({ action, text: shellErrorMessage(err, S.refused) });
     } finally {
       setBusy(null);
     }
@@ -137,33 +184,33 @@ function ShellShortcuts({ shell }: { shell: ShellBridge }) {
     return (
       <div role="alert" className="ws-error">
         <p>{loadError}</p>
-        <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+        <Button onClick={() => setAttempt((n) => n + 1)}>{S.retry}</Button>
       </div>
     );
-  if (!views) return <Spinner label="Loading global shortcuts" />;
+  if (!views) return <Spinner label={S.loading} />;
 
   const byAction = new Map(views.map((v) => [v.action, v]));
   const problems = views.filter((v) => v.accelerator && !v.registered && v.problem);
   return (
     <>
-      <p className="muted">
-        These keys work while Nova is in the background. If another app already uses a key, Nova
-        cannot have it: choose another one.
-      </p>
+      <p className="muted">{S.appIntro}</p>
       {problems.length ? (
-        <div className="contrast-warning" role="status" aria-label="Global shortcut problems">
+        <div className="contrast-warning" role="status" aria-label={S.problems}>
           <Icon name="alert" />
           <ul>
             {problems.map((v) => (
               <li key={v.action}>
-                {GLOBAL_SHORTCUT_TEXT[v.action].title} ({v.label ?? v.accelerator}):{' '}
-                {shortcutProblemText(v)}
+                {S.problemLine({
+                  title: GLOBAL_SHORTCUT_TEXT[v.action].title,
+                  key: v.label ?? v.accelerator ?? '',
+                  problem: shortcutProblemText(v) ?? '',
+                })}
               </li>
             ))}
           </ul>
         </div>
       ) : null}
-      <ul className="ws-list" aria-label="Global shortcuts">
+      <ul className="ws-list" aria-label={S.list}>
         {GLOBAL_SHORTCUT_ACTIONS.map((action) => {
           const v = byAction.get(action) ?? {
             action,
@@ -192,14 +239,13 @@ function ShellShortcuts({ shell }: { shell: ShellBridge }) {
                   {v.accelerator ? (
                     <Kbd keys={acceleratorKeys(v.accelerator, shell.platform)} />
                   ) : (
-                    <span className="muted">No shortcut</span>
+                    <span className="muted">{S.none}</span>
                   )}
                   <ShortcutChip view={v} />
                 </span>
                 {clashesInApp ? (
                   <span className="muted shb-note">
-                    In the app this key wins over Nova’s own “Go to the next item that needs input”,
-                    which also uses {acceleratorLabel(fallback, shell.platform)}.
+                    {S.clash({ key: acceleratorLabel(fallback, shell.platform) })}
                   </span>
                 ) : null}
                 {error ? (
@@ -215,7 +261,7 @@ function ShellShortcuts({ shell }: { shell: ShellBridge }) {
                     className="nv-btn kb-capture"
                     data-variant="primary"
                     autoFocus
-                    aria-label={`Press the new shortcut for ${text.title}, or Escape to cancel`}
+                    aria-label={S.capture({ title: text.title })}
                     onBlur={() => setCapturing(null)}
                     onKeyDown={(e) => {
                       // Plain Tab leaves capture, so the keyboard is never trapped here.
@@ -235,39 +281,42 @@ function ShellShortcuts({ shell }: { shell: ShellBridge }) {
                       void set(action, acc);
                     }}
                   >
-                    Press keys… (Esc cancels)
+                    {S.capturing}
                   </button>
                 ) : (
                   <Button
                     variant="ghost"
                     disabled={busy !== null}
-                    aria-label={`Change the shortcut for ${text.title}`}
+                    aria-label={S.changeFor({ title: text.title })}
                     onClick={() => {
                       setRowError(null);
                       setCapturing(action);
                     }}
                   >
-                    {busy === action ? <Spinner /> : null} Change
+                    {busy === action ? <Spinner /> : null} {S.change}
                   </Button>
                 )}
                 {v.accelerator ? (
                   <Button
                     variant="ghost"
                     disabled={busy !== null}
-                    aria-label={`Remove the shortcut for ${text.title}`}
+                    aria-label={S.removeFor({ title: text.title })}
                     onClick={() => void set(action, null)}
                   >
-                    Remove
+                    {S.remove}
                   </Button>
                 ) : null}
                 {!isDefault ? (
                   <Button
                     variant="ghost"
                     disabled={busy !== null}
-                    aria-label={`Reset the shortcut for ${text.title} to ${acceleratorLabel(fallback, shell.platform)}`}
+                    aria-label={S.resetFor({
+                      title: text.title,
+                      key: acceleratorLabel(fallback, shell.platform),
+                    })}
                     onClick={() => void set(action, fallback)}
                   >
-                    Reset
+                    {S.reset}
                   </Button>
                 ) : null}
               </div>

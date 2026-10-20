@@ -17,6 +17,7 @@ import {
 import type { ModelView, Preset, ThreadView, UpdateThreadRequest } from '@nova/shared';
 import { errorMessage, type Api } from './api.ts';
 import { useHubStream } from './hub-events.ts';
+import { STORE_TEXT } from './strings.ts';
 
 export interface ThreadsStore {
   threads: ThreadView[];
@@ -67,7 +68,7 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
       setCursor(page.nextCursor);
       setError(null);
     } catch (err) {
-      setError(errorMessage(err, 'Could not load chats.'));
+      setError(errorMessage(err, STORE_TEXT.loadChats));
     } finally {
       setLoading(false);
     }
@@ -84,7 +85,7 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
       });
       setCursor(page.nextCursor);
     } catch (err) {
-      setError(errorMessage(err, 'Could not load more chats.'));
+      setError(errorMessage(err, STORE_TEXT.loadMoreChats));
     }
   }, [api, cursor]);
 
@@ -93,7 +94,7 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
       const page = await api.listThreads({ mode: 'chat', archived: true, limit: 200 });
       setArchived(page.items.filter((t) => t.archived));
     } catch (err) {
-      setError(errorMessage(err, 'Could not load archived chats.'));
+      setError(errorMessage(err, STORE_TEXT.loadArchived));
     }
   }, [api]);
 
@@ -247,7 +248,7 @@ export function ModelsProvider({ api, children }: { api: Api; children: ReactNod
       setModels(items);
       setError(null);
     } catch (err) {
-      setError(errorMessage(err, 'Could not load models.'));
+      setError(errorMessage(err, STORE_TEXT.loadModels));
     } finally {
       setLoading(false);
     }
@@ -273,7 +274,7 @@ export function useModels(): ModelsStore {
 
 /** Display name for a model ref, falling back to the raw id. */
 export function modelLabel(models: ModelView[], ref: string | null): string {
-  if (!ref) return 'No model';
+  if (!ref) return STORE_TEXT.noModel;
   const known = models.find((m) => m.ref === ref)?.label;
   if (known) return known;
   if (ref.startsWith('preset:')) return ref.slice('preset:'.length);

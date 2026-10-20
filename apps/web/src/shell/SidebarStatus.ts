@@ -7,11 +7,13 @@ import type { DerivedStatus, ThreadView } from '@nova/shared';
 import { useToast } from '@nova/ui';
 import { threadStatus } from '../chat/status.ts';
 import { threadStateOf } from '../chat/useThreadFeed.ts';
+import { CATEGORY } from '../commands.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useThreads } from '../stores.tsx';
 import { useWorkEvents } from '../work/events.ts';
 import { runPath } from '../work/format.ts';
+import { SIDEBAR_TEXT } from './strings.ts';
 
 export const NEXT_NEEDS_INPUT = 'status.nextNeedsInput';
 
@@ -80,12 +82,12 @@ export function useSidebarStatus(): void {
       }
       const next = nextTarget(needsInputTargets(s.threads, runs), window.location.pathname);
       if (next) navigate(next);
-      else t.show('Nothing needs your input right now.', { tone: 'info' });
+      else t.show(SIDEBAR_TEXT.nothingNeedsInput, { tone: 'info' });
     };
     return registry.register({
       id: NEXT_NEEDS_INPUT,
-      title: 'Go to the next item that needs input',
-      category: 'Navigation',
+      title: SIDEBAR_TEXT.nextNeedsInput,
+      category: CATEGORY.navigation,
       binding: 'mod+alt+a',
       run: () => void go(),
     });

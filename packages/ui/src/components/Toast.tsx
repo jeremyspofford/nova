@@ -11,6 +11,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { UI_TEXT } from '../strings.ts';
 
 export type ToastTone = 'info' | 'success' | 'error';
 
@@ -61,7 +62,8 @@ export function ToastProvider({
         id,
         message,
         tone: options.tone ?? 'info',
-        duration: options.duration ?? defaultDuration,
+        // A toast with an action waits for the user: an action never times out (WCAG 2.2.1).
+        duration: options.duration ?? (options.action ? 0 : defaultDuration),
         action: options.action,
       };
       setToasts((list) => [...list.slice(-3), entry]);
@@ -77,7 +79,7 @@ export function ToastProvider({
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="nv-toasts" role="region" aria-label="Notifications">
+      <div className="nv-toasts" role="region" aria-label={UI_TEXT.notifications}>
         <div aria-live="polite" aria-relevant="additions text">
           {polite.map((t) => (
             <ToastView key={t.id} toast={t} onDismiss={dismiss} />
@@ -94,13 +96,26 @@ export function ToastProvider({
 }
 
 function ToastView({ toast, onDismiss }: { toast: ToastEntry; onDismiss: (id: number) => void }) {
+  // Pointer or focus on the toast holds it; it counts down again from the start when they leave
+  // (WCAG 2.2.1).
+  const [held, setHeld] = useState({ pointer: false, focus: false });
+  const paused = held.pointer || held.focus;
   useEffect(() => {
-    if (toast.duration <= 0) return;
+    if (toast.duration <= 0 || paused) return;
     const t = setTimeout(() => onDismiss(toast.id), toast.duration);
     return () => clearTimeout(t);
-  }, [toast.id, toast.duration, onDismiss]);
+  }, [toast.id, toast.duration, onDismiss, paused]);
   return (
-    <div className="nv-toast" data-tone={toast.tone}>
+    <div
+      className="nv-toast"
+      data-tone={toast.tone}
+      onMouseEnter={() => setHeld((h) => ({ ...h, pointer: true }))}
+      onMouseLeave={() => setHeld((h) => ({ ...h, pointer: false }))}
+      onFocus={() => setHeld((h) => ({ ...h, focus: true }))}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setHeld((h) => ({ ...h, focus: false }));
+      }}
+    >
       <span className="nv-toast-message">{toast.message}</span>
       {toast.action ? (
         <button
@@ -120,7 +135,7 @@ function ToastView({ toast, onDismiss }: { toast: ToastEntry; onDismiss: (id: nu
         className="nv-btn"
         data-variant="ghost"
         data-size="icon"
-        aria-label="Dismiss notification"
+        aria-label={UI_TEXT.dismissNotification}
         onClick={() => onDismiss(toast.id)}
       >
         <span aria-hidden="true">×</span>

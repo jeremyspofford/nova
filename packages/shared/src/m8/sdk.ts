@@ -29,8 +29,25 @@ export type TrustedPublisher = z.infer<typeof trustedPublisherSchema>;
  */
 export type ExtensionSignature = 'verified' | 'unverified' | 'dev';
 
-/** Where an extension's worker is: running, starting, stopped (the SDK switch is off), off, failed. */
+/**
+ * Where an extension's worker is: running, starting, stopped (by the Hub: see `ExtensionStopView`),
+ * off, failed.
+ */
 export type ExtensionStatus = 'running' | 'starting' | 'stopped' | 'disabled' | 'error';
+
+/**
+ * Why the Hub stopped an extension the owner left on (FR-117, FR-106):
+ * - `managed`: managed policy refuses it; `policy` names the part of the policy's `restrict`
+ *   that does (`extensions` or `plugins`: its id is not allowed; `unverifiedInstalls`: only
+ *   extensions signed by a trusted publisher may run), so a client can name its source;
+ * - `managed_unreadable`: a trusted policy source could not be read, so every extension stays
+ *   stopped until it is fixed (fail closed, docs/12 §10);
+ * - `sdk_off`: the SDK switch (`sdk.enabled`) is off.
+ */
+export interface ExtensionStopView {
+  reason: 'managed' | 'managed_unreadable' | 'sdk_off';
+  policy: 'extensions' | 'plugins' | 'unverifiedInstalls' | null;
+}
 
 /** Largest `.novax` accepted from an upload (bytes, before base64). */
 export const EXTENSION_BUNDLE_MAX_BYTES = 32 * 1024 * 1024;
@@ -65,6 +82,11 @@ export const installExtensionSchema = z.object({
   enable: z.boolean().default(true),
   /** Hooks (plugin and SDK) to trust now, with the hash the preview showed (FR-197). */
   trustHooks: z.array(trustHookSchema).max(100).optional(),
+  /**
+   * Required when the preview's `publisherChange` is set: another publisher (or none) replaces
+   * the installed one. The extension's secrets and data are then cleared, as for a new install.
+   */
+  acceptPublisherChange: z.boolean().optional(),
 });
 export type InstallExtensionRequest = z.input<typeof installExtensionSchema>;
 
@@ -77,6 +99,8 @@ export const devExtensionSchema = z.object({
   bundle: base64Bundle,
   confirmSideload: z.literal(true),
   trustHooks: z.boolean().default(false),
+  /** Replace an installed extension signed by a publisher (a dev load is unsigned). */
+  acceptPublisherChange: z.boolean().optional(),
 });
 export type DevExtensionRequest = z.input<typeof devExtensionSchema>;
 
@@ -107,10 +131,32 @@ export interface ExtensionPublisherView {
  */
 export interface ExtensionPermissionLine {
   key: string;
-  kind: 'network' | 'fs' | 'secret' | 'command' | 'panel' | 'tool' | 'hook' | 'event' | 'plugin';
+  kind:
+    | 'network'
+    | 'fs'
+    | 'secret'
+    | 'command'
+    | 'panel'
+    | 'tool'
+    | 'action_default'
+    | 'hook'
+    | 'hooks_answer_asks'
+    | 'event'
+    | 'role'
+    | 'mcp_server'
+    | 'ui_entry'
+    | 'ui_domain'
+    | 'browser_extension'
+    | 'plugin';
   text: string;
-  /** Network, secrets, write access, send/delete/execute tools and hooks are marked. */
+  /** Network, secrets, write access, send/delete/execute tools, hooks and chat events are marked. */
   sensitive: boolean;
+  /**
+   * What can change under the same key between versions, as text (canonical JSON, or
+   * `action:default` for a tool): a tool's action and default, an MCP server's command, args,
+   * approval default and policy, a hook's handler. A different detail is a changed permission.
+   */
+  detail: string | null;
 }
 
 export interface ExtensionHookView {
@@ -140,6 +186,8 @@ export interface ExtensionView {
   digest: string;
   enabled: boolean;
   status: ExtensionStatus;
+  /** Set while `status` is `stopped`: why the Hub stopped it (`error` keeps the Hub's sentence). */
+  stopped: ExtensionStopView | null;
   error: string | null;
   permissions: ExtensionPermissionLine[];
   hooks: ExtensionHookView[];
@@ -175,8 +223,17 @@ export interface ExtensionPreviewView {
   /** Set when the bundle needs the sideload confirmation, in plain words. */
   sideloadReason: string | null;
   permissions: ExtensionPermissionLine[];
-  /** On an update: what the new version adds or drops (docs/14 §5 permission diff). */
-  diff: { added: ExtensionPermissionLine[]; removed: ExtensionPermissionLine[] } | null;
+  /** On an update: what the new version adds, drops or changes (docs/14 §5 permission diff). */
+  diff: {
+    added: ExtensionPermissionLine[];
+    removed: ExtensionPermissionLine[];
+    changed: { key: string; text: string; before: string | null; after: string | null }[];
+  } | null;
+  /**
+   * On an update by another publisher (or none: signed to unsigned): who it was and who it is.
+   * Installing needs `acceptPublisherChange: true`, and clears the extension's secrets and data.
+   */
+  publisherChange: { from: ExtensionPublisherView; to: ExtensionPublisherView } | null;
   /** SDK hooks and the plugin's own hooks, with the hashes to trust. */
   hooks: ExtensionHookView[];
   pluginHooks: { id: string; event: string; contentHash: string }[];
@@ -211,6 +268,8 @@ export interface ExtensionStatusItemView {
   text: string;
   /** The command a click runs, if any. */
   command: string | null;
+  /** Whether a click does something: it has a command or the extension's own click handler. */
+  clickable: boolean;
 }
 
 export interface ExtensionKeybindingView {

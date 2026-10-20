@@ -1,5 +1,6 @@
 // Small feedback components (docs/04 §4.2, §6): VisuallyHidden, Spinner, EmptyState, StatusChip.
 import type { ReactNode } from 'react';
+import { UI_TEXT } from '../strings.ts';
 import { Icon, type IconName } from './Icon.tsx';
 
 /** Text for assistive tech only (WCAG technique C7). */
@@ -54,11 +55,11 @@ export function EmptyState({ title, description, icon, action, level = 2 }: Empt
 /** The four runtime statuses (docs/04 §1.1, FR-215). */
 export type Status = 'needs_input' | 'blocked' | 'running' | 'ready';
 
-const STATUS: Record<Status, { text: string; icon: IconName | null }> = {
-  needs_input: { text: 'Needs input', icon: 'hand' },
-  blocked: { text: 'Blocked', icon: 'stop' },
-  running: { text: 'Running', icon: null },
-  ready: { text: 'Ready', icon: 'check' },
+const STATUS_ICON: Record<Status, IconName | null> = {
+  needs_input: 'hand',
+  blocked: 'stop',
+  running: null,
+  ready: 'check',
 };
 
 /** Status chip: always icon plus text, never color alone (docs/04 §7). */
@@ -72,8 +73,9 @@ export function StatusChip({
   /** Icon only visually; the text stays available to assistive tech. */
   compact?: boolean;
 }) {
-  const s = STATUS[status];
-  const text = reason ? `${s.text}: ${reason}` : s.text;
+  const icon = STATUS_ICON[status];
+  const name = UI_TEXT.status[status];
+  const text = reason ? UI_TEXT.status.withReason({ status: name, reason }) : name;
   return (
     <span
       className="nv-chip"
@@ -81,7 +83,7 @@ export function StatusChip({
       data-compact={compact || undefined}
       title={compact ? text : undefined}
     >
-      {s.icon ? <Icon name={s.icon} /> : <Spinner />}
+      {icon ? <Icon name={icon} /> : <Spinner />}
       {compact ? <VisuallyHidden>{text}</VisuallyHidden> : <span>{text}</span>}
     </span>
   );

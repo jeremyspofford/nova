@@ -1,15 +1,24 @@
 // Attachment checks and encoding (FR-021). Limits come from @nova/shared so the client rejects
 // exactly what the Hub would, with a specific message per file instead of a failed send.
+import { defineMessages, fmt } from '@nova/i18n';
 import { ATTACHMENT_LIMITS } from '@nova/shared';
 import type { PendingAttachment } from '../services.tsx';
 
 const MIMES: readonly string[] = ATTACHMENT_LIMITS.mimes;
 const TEXT_EXTENSIONS: readonly string[] = ATTACHMENT_LIMITS.textExtensions;
 
+export const ATTACHMENT_TEXT = defineMessages('chat.attachments', {
+  unsupported:
+    '{name} is not a supported file type. Attach images, PDF, text, Markdown, JSON, CSV or code files.',
+  tooLarge: '{name} is {size}; the limit is {limit} per file.',
+  tooMany:
+    '{max, plural, one {{name} was not added: a message can have only # attachment.} other {{name} was not added: a message can have up to # attachments.}}',
+  readFailed: 'Could not read the file',
+});
+
+/** A file size in the active locale ("512 B", "1.5 KB", "12 MB"). */
 export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return fmt.bytes(n);
 }
 
 function extension(name: string): string {
@@ -53,17 +62,21 @@ export function checkFiles(
     if (!mime) {
       rejected.push({
         name: file.name,
-        reason: `${file.name} is not a supported file type. Attach images, PDF, text, Markdown, JSON, CSV or code files.`,
+        reason: ATTACHMENT_TEXT.unsupported({ name: file.name }),
       });
     } else if (file.size > ATTACHMENT_LIMITS.maxBytes) {
       rejected.push({
         name: file.name,
-        reason: `${file.name} is ${formatBytes(file.size)}; the limit is ${formatBytes(ATTACHMENT_LIMITS.maxBytes)} per file.`,
+        reason: ATTACHMENT_TEXT.tooLarge({
+          name: file.name,
+          size: formatBytes(file.size),
+          limit: formatBytes(ATTACHMENT_LIMITS.maxBytes),
+        }),
       });
     } else if (alreadyAttached + accepted.length >= max) {
       rejected.push({
         name: file.name,
-        reason: `${file.name} was not added: a message can have up to ${max} attachments.`,
+        reason: ATTACHMENT_TEXT.tooMany({ name: file.name, max }),
       });
     } else {
       accepted.push({ file, mime });
@@ -76,7 +89,7 @@ export function checkFiles(
 export function readAsBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('Could not read the file'));
+    reader.onerror = () => reject(reader.error ?? new Error(ATTACHMENT_TEXT.readFailed));
     reader.onload = () => {
       const url = typeof reader.result === 'string' ? reader.result : '';
       resolve(url.slice(url.indexOf(',') + 1));

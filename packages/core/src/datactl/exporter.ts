@@ -20,6 +20,7 @@ import type { NovaDatabase } from '@nova/storage';
 import { hubOwnerId } from '../team/owner.ts';
 import { LOG_TABLES, SECRET_REF_PATTERN, dataTables, tableLines } from './codec.ts';
 import { isCredentialFile, isSealedBlob, listDataFiles, openSealed } from './files.ts';
+import { narrowToAccount, selectedFile, type AccountSelection } from './account.ts';
 import { createSealer, type ScryptParams } from './seal.ts';
 import { ZipWriter } from './zip.ts';
 
@@ -68,6 +69,11 @@ export interface ExportOptions {
   now?: () => Date;
   /** Called once the last byte was produced. */
   onComplete?: (manifest: ExportManifest, bytes: number) => void;
+  /**
+   * One account's data instead of the Hub's (account.ts): never sealed, so it carries no secret
+   * and lists the references its rows hold to re-enter. Such an archive is not imported.
+   */
+  account?: string;
 }
 
 /** The working folder of the data controls (snapshots, uploads, staging); never exported. */
@@ -109,10 +115,24 @@ const FILE_CHUNK = 1024 * 1024;
 export async function* exportArchive(opts: ExportOptions): AsyncGenerator<Buffer> {
   const now = (opts.now ?? (() => new Date()))();
   const encrypted = opts.passphrase !== undefined;
+  if (encrypted && opts.account !== undefined)
+    throw new NovaError('validation', "an account's export carries no secrets: no passphrase", {
+      details: { reason: 'account_scope' },
+    });
   const sealer = encrypted ? await createSealer(opts.passphrase!, opts.scrypt) : null;
   const snapPath = await snapshotDatabase(opts.db, opts.dataDir);
   let snap: DatabaseSync | null = null;
+  let selection: AccountSelection | null = null;
   try {
+    if (opts.account !== undefined) {
+      // The copy is private: everything that is not the account's leaves it first.
+      const rw = new DatabaseSync(snapPath);
+      try {
+        selection = narrowToAccount(rw, opts.account);
+      } finally {
+        rw.close();
+      }
+    }
     snap = new DatabaseSync(snapPath, { readOnly: true });
     const zip = new ZipWriter(now);
     let bytes = 0;
@@ -168,6 +188,7 @@ export async function* exportArchive(opts: ExportOptions): AsyncGenerator<Buffer
 
     const blobs: ExportBlob[] = [];
     for (const f of listDataFiles(opts.dataDir)) {
+      if (selection && !selectedFile(selection, f.path)) continue;
       let sealed: boolean;
       try {
         sealed = isSealedBlob(f.abs);
@@ -241,7 +262,8 @@ export async function* exportArchive(opts: ExportOptions): AsyncGenerator<Buffer
       });
     }
 
-    const refs = await opts.secrets.list();
+    // An account's export lists only the references its own rows hold.
+    const refs = selection ? [] : await opts.secrets.list();
     let secrets: ExportManifest['secrets'] = null;
     const toReEnter: string[] = [];
     if (encrypted) {
@@ -269,8 +291,8 @@ export async function* exportArchive(opts: ExportOptions): AsyncGenerator<Buffer
       hubVersion: opts.hubVersion,
       schemaVersion: schemaVersionOf(snap),
       createdAt: now.toISOString(),
-      accountScope: 'hub',
-      ownerAccountId: ownerOf(snap),
+      accountScope: opts.account !== undefined ? { accountId: opts.account } : 'hub',
+      ownerAccountId: opts.account !== undefined ? null : ownerOf(snap),
       dataDir: resolve(opts.dataDir),
       encrypted,
       tables,

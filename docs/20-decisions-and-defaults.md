@@ -105,6 +105,7 @@ silently.
 | ADR-094 | M6.5 implementation choices | Add Device commit-then-reveal with a Hub-signed confirmation (the Relay keeps v1), code-only guess budget, grants bound to the device key, approved roles only, signed `novad` manifest with a domain tag and `novad install` over HTTP with a pinned identity (extends ADR-089), Hub identity and CA never replaced silently, name constraints without single labels, nonce-bound identity statement, real hello probes, Wake Helper routing, consent bound to the exact text, lock-out guard, Relay sealing and PBKDF2-stretched pairing codes (extends ADR-071) |
 | ADR-095 | M7 implementation choices | The Hub plays the sync service with per-field LWW, a merge log and offline replicas only with `offline-replica` (amends `rest-api.md` §2), opt-in idempotent replay that never stores a credential, the cloud runner as a remote sandbox with network off unless the owner opts in (amends `rest-api.md` §5), native push only through the Relay, email approvals by signed link only, Code handoff, attempts, Hub-side merges and pinned SSH, members with an owner-only route list and their own folders, shared threads with a tool allow-list, team agents under their own identity, OIDC bound to the browser, scripts and external agents off by default and gated, the desktop shell with pinned TLS and a local-runtime bridge, mutual TLS and `novad`'s TLS client, per-user local runtime sockets, scoped browser site levels through `ruleTool`, bounded redactor rules, Apache-2.0 Relay and runner (applies ADR-023) |
 | ADR-096 | M7.5 implementation choices | Mutual TLS on the Hub → `novad` management channel with a Hub client certificate, no downgrade and certificate renewal (amends `hub-api.md` §3; closes R-022 for devices with a certificate), Hub-signed short-lived authorizations for firmware, boot and decommission, consent switches and Hub-only approval cards, no model tools for firmware, boot or out-of-band, firmware through the kernel's firmware-attributes class with a support matrix, snapshots and a key-by-key watchdog (`fwupd` read-only), one-shot boot trials with a watchdog and PXE by per-device token (no DHCP/TFTP, no kernel arguments), out-of-band on the Hub only with certificates confirmed before credentials (no Intel AMT), the local browser fallback as a `user_input` offer with a clean profile run by dedicated users behind an egress filter (4-hour sessions), the extension bridge through a per-user `novad` socket with owner-confirmed host grants (amends `hub-api.md` §4), decommission and uninstall, compute node VRAM and quiet hours; the `novad` screen and compute modules not built |
+| ADR-097 | M8 implementation choices | One `nova` command (`@nova/cli`), signed `.novax` extension bundles and catalog indexes (Ed25519 over domain-tagged digests, Verified only for trusted publishers), extensions in a QuickJS worker per account and extension with declared permissions through the policy engine and the egress ceiling, `ext:` tools and SDK hooks (amends `hook-config.json`, `tool-descriptor.json`), the marketplace with pinned keys and commits, permission diffs and rollback, managed policy from a root-owned file and a signed remote policy that only tightens, `minSerial` and fails closed (amends `docs/12` §10), a Hub-wide `.novaexport` with chunked passphrase sealing, delete-all and vetted import into an empty Hub, retention with an audit anchor, spend caps with reservations, local crash reports, third-party apps by OAuth 2.0 code + PKCE with read-only scopes (amends `hub-api.md` §1), OTLP/HTTP JSON export, route classification (closes R-032), Telegram files and email OAuth, the removed-member purge and its account-scoped export, `@nova/i18n` on the platform's `Intl` with pseudo-locales and right-to-left layout (supersedes ADR-027's i18next), saved themes applied token for token, WebDAV hosting targets for sites, an accessibility sweep with no exclusions and a WCAG 2.2 A/AA conformance statement |
 
 ## Details & rationale
 
@@ -1542,6 +1543,50 @@ which lists every decision with the known limitations).
   told; `novad uninstall`; services, available builds and overrides on the Hub; compute nodes report
   VRAM and keep the owner's quiet hours. The `novad` screen module moved to M9 and the `novad`
   compute module is not built.
+
+**ADR-097 — M8 implementation choices** (extends ADR-009, ADR-019, ADR-049, ADR-066, ADR-068,
+ADR-075, ADR-078, ADR-091 and ADR-095; amends `contracts/hub-api.md` §1, `docs/12` §10, `docs/16` §1
+and the `hook-config.json` and `tool-descriptor.json` schemas; closes R-032; see
+`docs/adr/0097-m8-implementation-choices.md`, which lists every decision, the security reviews and
+the known limitations).
+- *The `nova` command (FR-117, FR-044, FR-105).* `init`, `validate`, `pack`, `keys`, `dev`,
+  `mcp stdio` and `data export|import`; credentials from the environment only, a publisher key 0600
+  outside any repository, packing that refuses secrets.
+- *Extensions (FR-117).* A plugin folder plus `extension.json`, shipped as a `.novax` signed with
+  Ed25519 over `"nova-extension-v1\n"` + a digest of every file; Verified only for a key in
+  `plugins.trustedPublishers`, refused when the signature does not match. Code runs in QuickJS in a
+  worker thread with nothing to reach but a checked `nova` object: declared commands, panels,
+  tools (`ext:<id>/<name>`), hooks (trusted by a hash over the bundle), themes and keybindings
+  (offered, never applied), fetch to declared hosts within the egress policy, declared files and
+  secrets.
+- *Marketplace (FR-049).* Built-in, folder, Git (pinned commit) and https catalogs with signed
+  indexes and pinned keys; a bad signature refuses the whole catalog; permission diffs accepted by
+  hash; rollback for every kind; local ratings.
+- *Managed policy (FR-106).* `managed-settings.json` in a root-owned place, a signed remote policy
+  with `minSerial`, a test layer only in tests; tighten-only settings that lock, typed restrictions
+  for every area, fail closed on an unreadable source or an unverified pinned remote.
+- *Data controls (FR-105, FR-116, FR-121).* A streamed Hub-wide export, secrets only under a
+  passphrase (scrypt, chunked AES-256-GCM); delete-all keeping only the owner; import only into an
+  empty Hub with everything an unsigned archive cannot vouch for checked or turned off; per-item
+  retention with an audit anchor; spend caps with reservations; crash reports only to the owner's
+  endpoint.
+- *Apps and telemetry (FR-222, FR-223).* OAuth 2.0 code + PKCE (S256), seven read-only scopes over 23
+  routes, loopback or private-scheme redirects that never reach the Hub's own callbacks, rotating
+  refresh tokens; OTLP/HTTP with JSON, redacted, content behind one switch.
+- *Routes (R-032).* Every route classified once; unclassified routes refused to members.
+- *Localization (FR-016, D9; supersedes the i18next choice of ADR-027).* `@nova/i18n` on the
+  platform's `Intl`: typed ICU-subset messages declared next to their code, `en` with a partial
+  `ar` and the `en-XA` and `ar-XB` pseudo-locales, `appearance.locale`, `npm run i18n:check` and a
+  lint rule against literal UI text, pseudo-locale tests per area, logical CSS for right to left;
+  Hub-written text stays English in M8.
+- *Also.* Saved themes applied token for token (`appearance.customTheme`); page order and restore,
+  source previews and WebDAV hosting targets for sites behind the egress policy
+  (`sites.remoteTargets`); the managed egress allow list as a ceiling over the owner's list; every
+  security setting either tightens or is listed as having no safe direction.
+- *Accessibility (FR-015).* An axe sweep with every WCAG 2.0-2.2 A and AA rule over every surface
+  plus browser probes; toasts with actions never time out, hoverable tooltips, backdrops that close
+  only on a full press, click alternatives to drags, lock notes linked to their controls, 3:1 field
+  edges; conformance per criterion in `docs/04` §4.4 (1.4.10, 3.1.2 and 3.3.8 partial).
 
 ## Defaults for common ambiguities
 

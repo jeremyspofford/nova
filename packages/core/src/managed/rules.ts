@@ -133,6 +133,18 @@ export const SECURITY_RULES: Readonly<Record<string, TightenRule>> = {
   // The administrator chooses which model judges consequential actions under Auto (FR-085). It
   // cannot make Auto available where the policy turns it off (restrict.permissionModes).
   'review.model': { kind: 'pin' },
+  // M8 apps (FR-222): registration only with the owner's session tightens.
+  'apps.openRegistration': OFF,
+  // Where opt-in crash reports go (FR-121): '' forbids sending anywhere, an address pins where
+  // they go. Neither loosens privacy: nothing is sent unless the user turns crash reports on,
+  // which policy can only turn off.
+  'privacy.crashReportEndpoint': { kind: 'pin' },
+  // How long a removed member's data waits before it is purged (decision 5): shorter is less
+  // data kept, longer is a hold for export or review. Neither is safer for every organization,
+  // so the administrator fixes the value; 0 (kept until the owner purges it) included.
+  'team.removedMemberPurgeDays': { kind: 'pin' },
+  // M8 sites (FR-037): publishing to remote hosting targets off tightens.
+  'sites.remoteTargets': OFF,
 };
 
 export function ruleFor(key: string): TightenRule | null {
@@ -162,7 +174,7 @@ export function comparable(rule: TightenRule, v: unknown): boolean {
     case 'cap':
       return v === null || (typeof v === 'number' && Number.isFinite(v));
     case 'pin':
-      return v === null || typeof v === 'string';
+      return v === null || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
     case 'fields':
       return (
         isRecord(v) &&

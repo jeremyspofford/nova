@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arialabs.ai/schemas/catalog-index.json",
+  "title": "CatalogIndex",
+  "description": "A marketplace catalog index, catalog.json (or nova-catalog.json) at the root of a catalog folder, Git repository or https location (FR-049, docs/08 §7, docs/14 §5, ADR-097 D2). The M4 plugins list is kept (each entry is a plugin); items holds entries of every kind. Signed by the file next to it (catalog-signature.json). An entry's artifact is a folder or file inside the catalog (path), a file next to a remote index (url, same host), a folder of another Git repository pinned to a commit (repo + commit), or for an MCP registry entry a remote server (server). sha256 is a file artifact's SHA-256; digest a folder artifact's D2 digest (SHA-256 over its sorted \"<path>\\n<sha256>\\n\" lines). At most 1 MiB. Unknown keys are ignored. Mirrors marketIndexSchema in packages/core/src/market/catalog-index.ts.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "name": { "type": "string", "maxLength": 100 },
+    "plugins": {
+      "description": "M4 entries; each is a plugin (the M4 reader also needs reverse-DNS ids here).",
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/entry" }
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/entry" },
+          {
+            "type": "object",
+            "required": ["kind"],
+            "properties": { "kind": { "enum": ["plugin", "skill", "theme", "pet", "mcp"] } }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "semver": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "not": { "pattern": "\\u0000" }
+    },
+    "shortStrings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "type": "string", "maxLength": 300 }
+    },
+    "domains": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "type": "string", "maxLength": 300 }
+    },
+    "entry": {
+      "type": "object",
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,99}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "version": { "$ref": "#/$defs/semver" },
+        "description": { "type": "string", "maxLength": 500 },
+        "author": { "type": "string", "maxLength": 100 },
+        "publisher": {
+          "description": "The key that signs the item's .novax bundle, and its name for display. A bundle is Verified only when this key is in plugins.trustedPublishers.",
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "maxLength": 100 },
+            "key": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+          }
+        },
+        "categories": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "type": "string", "minLength": 1, "maxLength": 40 }
+        },
+        "homepage": { "type": "string", "format": "uri", "maxLength": 500 },
+        "screenshots": {
+          "description": "PNG, JPEG or WebP files in the catalog, at most 2 MiB each.",
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/relativePath" }
+        },
+        "changelog": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": ["version", "notes"],
+            "properties": {
+              "version": { "$ref": "#/$defs/semver" },
+              "date": { "type": "string", "maxLength": 40 },
+              "notes": { "type": "string", "maxLength": 4000 }
+            }
+          }
+        },
+        "permissions": {
+          "description": "What the card shows before install; the installer reads the real permissions from the artifact.",
+          "type": "object",
+          "properties": {
+            "network": { "$ref": "#/$defs/shortStrings" },
+            "fs": { "$ref": "#/$defs/shortStrings" },
+            "secrets": { "$ref": "#/$defs/shortStrings" },
+            "tools": {
+              "type": "object",
+              "propertyNames": { "maxLength": 300 },
+              "additionalProperties": {
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                  "action": { "type": "string", "maxLength": 20 },
+                  "default": { "type": "string", "maxLength": 10 }
+                }
+              }
+            },
+            "actionDefaults": {
+              "type": "object",
+              "propertyNames": { "maxLength": 20 },
+              "additionalProperties": { "type": "string", "maxLength": 10 }
+            },
+            "hooks": {
+              "type": "object",
+              "properties": { "answersAsks": { "type": "boolean" } }
+            },
+            "browserExtensions": {
+              "type": "array",
+              "maxItems": 20,
+              "items": { "type": "string", "maxLength": 100 }
+            },
+            "ui": {
+              "type": "object",
+              "properties": {
+                "connectDomains": { "$ref": "#/$defs/domains" },
+                "resourceDomains": { "$ref": "#/$defs/domains" },
+                "frameDomains": { "$ref": "#/$defs/domains" }
+              }
+            }
+          }
+        },
+        "components": {
+          "type": "object",
+          "properties": {
+            "hooks": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "object",
+                "required": ["id", "event"],
+                "properties": {
+                  "id": { "type": "string", "maxLength": 100 },
+                  "event": { "type": "string", "maxLength": 50 }
+                }
+              }
+            },
+            "roles": {
+              "type": "array",
+              "maxItems": 50,
+              "items": { "type": "string", "maxLength": 100 }
+            },
+            "browserExtensions": {
+              "type": "array",
+              "maxItems": 20,
+              "items": { "type": "string", "maxLength": 100 }
+            },
+            "uiEntryPoints": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                  "kind": { "type": "string", "maxLength": 20 },
+                  "title": { "type": "string", "maxLength": 100 }
+                }
+              }
+            }
+          }
+        },
+        "format": {
+          "description": "The artifact's format; when absent it follows from the location (.novax, .mcpb, .zip, .json; a url without one is a zip, a path without one a folder, a server alone a registry entry). Plugins, skills and pets are folders, zips or .novax bundles; themes are json; MCP items are registry entries or .mcpb bundles.",
+          "enum": ["folder", "zip", "novax", "json", "mcpb", "registry"]
+        },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "url": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "repo": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "digest": { "$ref": "#/$defs/sha256" },
+        "server": {
+          "description": "An MCP registry entry: a remote server (https).",
+          "type": "object",
+          "required": ["transport", "url"],
+          "properties": {
+            "transport": { "enum": ["http", "sse"] },
+            "url": { "type": "string", "format": "uri", "maxLength": 2000 }
+          }
+        },
+        "compat": {
+          "type": "object",
+          "properties": { "nova": { "type": "string", "maxLength": 50 } }
+        }
+      },
+      "if": { "required": ["repo"] },
+      "then": { "required": ["commit"] },
+      "else": {
+        "anyOf": [{ "required": ["path"] }, { "required": ["url"] }, { "required": ["server"] }]
+      }
+    }
+  }
+}

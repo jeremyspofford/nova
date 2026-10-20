@@ -14,6 +14,7 @@ import type {
   VerifyRunView,
   WorktreeView,
 } from '@nova/shared';
+import { defineMessages, fmt, messageFor } from '@nova/i18n';
 import type { IconName } from '@nova/ui';
 import { formatCost, formatSpan, formatTokens } from '../work/format.ts';
 
@@ -23,7 +24,7 @@ export { formatCost, formatSpan, formatTokens };
 export const CREATABLE_KINDS = ['container', 'ssh', 'wsl', 'device'] as const;
 export type CreatableKind = (typeof CREATABLE_KINDS)[number];
 
-export const KIND_LABEL: Record<EnvironmentView['kind'], string> = {
+export const KIND_LABEL = defineMessages('code.envKind', {
   local: 'This Hub',
   cloud: 'Cloud',
   ssh: 'SSH host',
@@ -31,15 +32,53 @@ export const KIND_LABEL: Record<EnvironmentView['kind'], string> = {
   container: 'Container',
   vm: 'Virtual machine',
   device: 'Device',
-};
+}) satisfies Record<EnvironmentView['kind'], string>;
 
-export const KIND_DESCRIPTION: Record<CreatableKind, string> = {
+export const KIND_DESCRIPTION = defineMessages('code.envKindDescription', {
   container:
     'Commands run in a container image on the Hub, with a setup script run once per session.',
   ssh: 'Nova installs its helper on the host and works there over SSH. Sessions keep running while you are away.',
   wsl: 'A Linux distro on a Windows device that runs the Nova device agent.',
   device: 'A registered device that runs the Nova device agent, under that device’s own grants.',
-};
+}) satisfies Record<CreatableKind, string>;
+
+/** Words of the format helpers below (FR-016). */
+export const FORMAT_TEXT = defineMessages('code.format', {
+  connection: {
+    cloud: '{repos} on the cloud runner',
+    cloudIn: '{repos} on the cloud runner, in {folder}',
+    cloudNone: 'No repositories on the cloud runner',
+    cloudNoneIn: 'No repositories on the cloud runner, in {folder}',
+    local: 'The Hub itself',
+    image: 'Image {image}',
+    imageWithSetup: 'Image {image}, with a setup script',
+    in: '{target} in {folder}',
+    wsl: '{distro} on {device}',
+  },
+  check: {
+    queued: 'Queued',
+    running: 'Running',
+    success: 'Passed',
+    failure: 'Failed',
+    cancelled: 'Cancelled',
+    timed_out: 'Timed out',
+    skipped: 'Skipped',
+    neutral: 'Neutral',
+    action_required: 'Action required',
+    stale: 'Stale',
+  },
+  lease: {
+    removed: 'Removed from disk',
+    none: 'Not leased',
+    untilReleased: 'Leased to {who} until it is released or archived',
+    to: 'Leased to {who}',
+    ended: 'Lease to {who} has ended',
+    until: 'Leased to {who} until {time}',
+  },
+  /** A budget's use without a limit ("12 min used") and against one ("12 min / 60 min"). */
+  used: '{used} used',
+  usedOf: '{used} / {limit}',
+});
 
 /**
  * Whether a session in this environment works on another machine: the Hub then cannot capture
@@ -50,12 +89,12 @@ export function isRemoteKind(kind: EnvironmentView['kind'] | null | undefined): 
   return !!kind && kind !== 'local' && kind !== 'container';
 }
 
-export const HEALTH_TEXT: Record<EnvironmentView['status'], string> = {
+export const HEALTH_TEXT = defineMessages('code.health', {
   ok: 'Ready',
   degraded: 'Degraded',
   down: 'Unavailable',
   unknown: 'Not checked',
-};
+}) satisfies Record<EnvironmentView['status'], string>;
 
 export const HEALTH_ICON: Record<EnvironmentView['status'], IconName> = {
   ok: 'check',
@@ -78,28 +117,36 @@ export function connectionSummary(
   c: EnvironmentConnectionView,
   deviceName: (id: string) => string,
 ): string {
+  const T = FORMAT_TEXT.connection;
   switch (c.kind) {
     case 'cloud': {
       // M7: a cloud environment's repositories on the runner (CloudConnectionView).
-      const names = c.repoUrls.map((u) =>
-        (u.split('#')[0] ?? u)
-          .replace(/\/+$/, '')
-          .split('/')
-          .pop()
-          ?.replace(/\.git$/, ''),
+      const names = c.repoUrls.map(
+        (u) =>
+          (u.split('#')[0] ?? u)
+            .replace(/\/+$/, '')
+            .split('/')
+            .pop()
+            ?.replace(/\.git$/, '') ?? u,
       );
-      return `${c.repoUrls.length ? names.join(', ') : 'No repositories'} on the cloud runner${c.folder ? `, in ${c.folder}` : ''}`;
+      if (!c.repoUrls.length) return c.folder ? T.cloudNoneIn({ folder: c.folder }) : T.cloudNone;
+      const repos = fmt.list(names, { type: 'unit', style: 'short' });
+      return c.folder ? T.cloudIn({ repos, folder: c.folder }) : T.cloud({ repos });
     }
     case 'local':
-      return 'The Hub itself';
+      return T.local;
     case 'container':
-      return `Image ${c.image}${c.setupScript ? ', with a setup script' : ''}`;
-    case 'ssh':
-      return `${c.user}@${c.host}${c.port === 22 ? '' : `:${c.port}`}${c.root ? ` in ${c.root}` : ''}`;
+      return c.setupScript ? T.imageWithSetup({ image: c.image }) : T.image({ image: c.image });
+    case 'ssh': {
+      const target = `${c.user}@${c.host}${c.port === 22 ? '' : `:${c.port}`}`;
+      return c.root ? T.in({ target, folder: c.root }) : target;
+    }
     case 'wsl':
-      return `${c.distro} on ${deviceName(c.deviceId)}`;
-    case 'device':
-      return `${deviceName(c.deviceId)}${c.root ? ` in ${c.root}` : ''}`;
+      return T.wsl({ distro: c.distro, device: deviceName(c.deviceId) });
+    case 'device': {
+      const target = deviceName(c.deviceId);
+      return c.root ? T.in({ target, folder: c.root }) : target;
+    }
   }
 }
 
@@ -112,13 +159,13 @@ export function connectionOf(e: EnvironmentView): EnvironmentConnectionView | nu
 
 // ---- pull requests and CI -----------------------------------------------------------------
 
-export const CI_TEXT: Record<CiStatus, string> = {
+export const CI_TEXT = defineMessages('code.ci', {
   none: 'No checks',
   queued: 'Checks queued',
   running: 'Checks running',
   passed: 'Checks passed',
   failed: 'Checks failed',
-};
+}) satisfies Record<CiStatus, string>;
 
 export const CI_ICON: Record<CiStatus, IconName> = {
   none: 'clock',
@@ -136,28 +183,19 @@ export const CI_TONE: Record<CiStatus, Tone> = {
   failed: 'danger',
 };
 
-export const PR_STATE_TEXT: Record<PullRequestView['state'], string> = {
+export const PR_STATE_TEXT = defineMessages('code.prState', {
   open: 'Open',
   closed: 'Closed',
   merged: 'Merged',
-};
+}) satisfies Record<PullRequestView['state'], string>;
 
 /** One check's state in words: "Queued", "Running", or its conclusion. */
 export function checkText(c: Pick<CiCheckView, 'status' | 'conclusion'>): string {
-  if (c.status === 'queued') return 'Queued';
-  if (c.status === 'running') return 'Running';
+  if (c.status === 'queued') return FORMAT_TEXT.check.queued;
+  if (c.status === 'running') return FORMAT_TEXT.check.running;
   const conclusion = c.conclusion ?? 'done';
-  const words: Record<string, string> = {
-    success: 'Passed',
-    failure: 'Failed',
-    cancelled: 'Cancelled',
-    timed_out: 'Timed out',
-    skipped: 'Skipped',
-    neutral: 'Neutral',
-    action_required: 'Action required',
-    stale: 'Stale',
-  };
-  return words[conclusion] ?? conclusion.replace(/_/g, ' ');
+  // An unknown conclusion is the Hub's own word, shown as it is.
+  return messageFor(FORMAT_TEXT.check, conclusion) ?? conclusion.replace(/_/g, ' ');
 }
 
 export function checkTone(c: Pick<CiCheckView, 'status' | 'conclusion'>): Tone {
@@ -182,13 +220,13 @@ export function asCiStatus(v: unknown): CiStatus | null {
 
 // ---- auto-verify ----------------------------------------------------------------------------
 
-export const VERIFY_TEXT: Record<VerifyRunView['status'], string> = {
+export const VERIFY_TEXT = defineMessages('code.verify', {
   running: 'Checking',
   passed: 'All checks passed',
   failed: 'Checks failed',
   error: 'Checks could not run',
   skipped: 'Skipped',
-};
+}) satisfies Record<VerifyRunView['status'], string>;
 
 export const VERIFY_ICON: Record<VerifyRunView['status'], IconName> = {
   running: 'refresh',
@@ -206,13 +244,13 @@ export const VERIFY_TONE: Record<VerifyRunView['status'], Tone> = {
   skipped: 'muted',
 };
 
-export const CHECK_TEXT: Record<VerifyCheckView['status'], string> = {
+export const CHECK_TEXT = defineMessages('code.verifyCheck', {
   passed: 'Passed',
   failed: 'Failed',
   timeout: 'Timed out',
   error: 'Error',
   skipped: 'Skipped',
-};
+}) satisfies Record<VerifyCheckView['status'], string>;
 
 export const CHECK_ICON: Record<VerifyCheckView['status'], IconName> = {
   passed: 'check',
@@ -222,23 +260,19 @@ export const CHECK_ICON: Record<VerifyCheckView['status'], IconName> = {
   skipped: 'slash',
 };
 
+/** "450 ms", "4.2 s", "1 min 5 s" in the active locale. */
 export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
-  const m = Math.floor(s / 60);
-  const rest = Math.round(s % 60);
-  return rest ? `${m} min ${rest} s` : `${m} min`;
+  return fmt.duration(ms);
 }
 
 // ---- dev servers ----------------------------------------------------------------------------
 
-export const SERVER_TEXT: Record<DevServerView['status'], string> = {
+export const SERVER_TEXT = defineMessages('code.server', {
   starting: 'Starting',
   running: 'Serving',
   stopped: 'Stopped',
   failed: 'Failed',
-};
+}) satisfies Record<DevServerView['status'], string>;
 
 export const SERVER_ICON: Record<DevServerView['status'], IconName> = {
   starting: 'clock',
@@ -266,21 +300,22 @@ export function leaseText(
   sessionName: (id: string) => string,
   now = Date.now(),
 ): string {
-  if (w.status === 'removed') return 'Removed from disk';
-  if (!w.leasedBy) return 'Not leased';
+  const L = FORMAT_TEXT.lease;
+  if (w.status === 'removed') return L.removed;
+  if (!w.leasedBy) return L.none;
   const who = sessionName(w.leasedBy);
-  if (!w.leaseExpiresAt) return `Leased to ${who} until it is released or archived`;
+  if (!w.leaseExpiresAt) return L.untilReleased({ who });
   const t = Date.parse(w.leaseExpiresAt);
-  if (Number.isNaN(t)) return `Leased to ${who}`;
-  if (t <= now) return `Lease to ${who} has ended`;
-  return `Leased to ${who} until ${formatClock(t, now)}`;
+  if (Number.isNaN(t)) return L.to({ who });
+  if (t <= now) return L.ended({ who });
+  return L.until({ who, time: formatClock(t, now) });
 }
 
 /** "14:05" today, else "Oct 3, 14:05". */
 export function formatClock(t: number, now = Date.now()): string {
   const d = new Date(t);
   const sameDay = new Date(now).toDateString() === d.toDateString();
-  return d.toLocaleString(undefined, {
+  return fmt.dateTime(d, {
     ...(sameDay ? {} : { month: 'short', day: 'numeric' }),
     hour: '2-digit',
     minute: '2-digit',
@@ -303,12 +338,6 @@ export function inRepo(folder: string, repoPath: string): boolean {
 
 // ---- budgets --------------------------------------------------------------------------------
 
-export const BOUND_TEXT: Record<NonNullable<CodeBudgetView['reached']>, string> = {
-  time: 'time',
-  tokens: 'tokens',
-  cost: 'cost',
-};
-
 export function hasLimits(b: CodeBudgetView): boolean {
   return b.limits.timeSeconds !== null || b.limits.tokens !== null || b.limits.costUsd !== null;
 }
@@ -317,18 +346,22 @@ export function hasLimits(b: CodeBudgetView): boolean {
 export function timeText(b: CodeBudgetView): string {
   const used = formatSpan(b.used.timeSeconds);
   return b.limits.timeSeconds === null
-    ? `${used} used`
-    : `${used} / ${formatSpan(b.limits.timeSeconds)}`;
+    ? FORMAT_TEXT.used({ used })
+    : FORMAT_TEXT.usedOf({ used, limit: formatSpan(b.limits.timeSeconds) });
 }
 
 export function tokensText(b: CodeBudgetView): string {
   const used = formatTokens(b.used.tokens);
-  return b.limits.tokens === null ? `${used} used` : `${used} / ${formatTokens(b.limits.tokens)}`;
+  return b.limits.tokens === null
+    ? FORMAT_TEXT.used({ used })
+    : FORMAT_TEXT.usedOf({ used, limit: formatTokens(b.limits.tokens) });
 }
 
 export function costText(b: CodeBudgetView): string {
   const used = formatCost(b.used.costUsd);
-  return b.limits.costUsd === null ? `${used} used` : `${used} / ${formatCost(b.limits.costUsd)}`;
+  return b.limits.costUsd === null
+    ? FORMAT_TEXT.used({ used })
+    : FORMAT_TEXT.usedOf({ used, limit: formatCost(b.limits.costUsd) });
 }
 
 // ---- links ----------------------------------------------------------------------------------

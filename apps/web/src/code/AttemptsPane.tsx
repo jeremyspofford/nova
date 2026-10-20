@@ -11,11 +11,12 @@ import type {
   CodeSessionView,
 } from '@nova/shared';
 import { MAX_CODE_ATTEMPTS } from '@nova/shared';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Button, Dialog, EmptyState, Icon, SelectField, Spinner, TextField } from '@nova/ui';
 import { useHubStream } from '../hub-events.ts';
 import { modelGroups } from '../providers/model-groups.ts';
 import { useAnnounce } from '../services.tsx';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { useSettings } from '../settings.tsx';
 import { modelLabel, useModels } from '../stores.tsx';
 import { ConfirmAction, TextBlock, useLoad } from '../cloud/parts.tsx';
@@ -35,6 +36,77 @@ import {
 import { ATTEMPT_STATUS, SET_STATUS, codeM7ErrorMessage, conflictPaths } from './m7-format.ts';
 import { parseBudgets, type BudgetDraft } from './NewSessionDialog.tsx';
 import { Badge } from './parts.tsx';
+
+export const ATTEMPTS_TEXT = defineMessages('code.attempts', {
+  intro:
+    'Run one task as several attempts in separate worktrees, compare what each did, and keep the best.',
+  bestOfN: 'Best of N…',
+  loadFailed: 'Could not load the attempts.',
+  retry: 'Retry',
+  loading: 'Loading the attempts',
+  emptyTitle: 'No attempts yet',
+  emptyBody:
+    'Best of N runs the same task 2 to 4 times, each with its own budget, so you can compare and keep one.',
+  sets: 'Attempt sets',
+  count: '{n, plural, one {# attempt} other {# attempts}}',
+  from: 'From {commit}',
+  appliedConflicts: 'Applied with conflicts to resolve in the Merges tab.',
+  applied: 'Attempt applied.',
+  started: '{n, plural, one {Started # attempt.} other {Started # attempts.}}',
+  conflicts: 'Attempt {n} conflicts with this session’s files, so nothing was written.',
+  conflictsIn: 'Attempt {n} conflicts with this session’s files ({paths}), so nothing was written.',
+  withMarkers: 'Apply with conflict markers',
+  sideBySide: 'Attempts side by side',
+  sessionModel: 'The session’s model',
+  sessionModelIs: 'The session’s model ({model})',
+  discardAll: 'Discard all…',
+  applyTitle: 'Apply attempt {n}?',
+  applyBody:
+    'Its changes are merged into this session. The other attempts stop, and their sessions and worktrees are removed.',
+  apply: 'Apply',
+  applyFailed: 'Could not apply the attempt.',
+  discardTitle: 'Discard every attempt?',
+  discardBody:
+    'They stop, and their sessions and worktrees are removed. This session stays as it is.',
+  discardConfirm: 'Discard all',
+  discardFailed: 'Could not discard the attempts.',
+  attempt: 'Attempt {n}',
+  model: 'Model',
+  files: 'Files',
+  fileCount: '{n, plural, one {# file} other {# files}}',
+  addedLines: '{n, plural, one {# added line} other {# added lines}}',
+  removedLines: '{n, plural, one {# removed line} other {# removed lines}}',
+  tests: 'Tests',
+  notRun: 'Not run yet',
+  cost: 'Cost',
+  costLine: '{cost}, {tokens} tokens, {time}',
+  changedFiles: 'Files attempt {n} changed',
+  binary: 'binary',
+  noChanges: 'No changes yet.',
+  lastReply: 'Its last reply',
+  lastReplyOf: 'Attempt {n}’s last reply',
+  patch: 'The patch',
+  patchOf: 'Attempt {n}’s patch',
+  patchCut: 'The patch is cut short here.',
+  applyButton: 'Apply…',
+  openSession: 'Open its session',
+  describeTask: 'Describe the task every attempt works on.',
+  startFailed: 'Could not start the attempts.',
+  dialogTitle: 'Best of N',
+  dialogBody:
+    'Each attempt is its own session in its own worktree, starting from this session’s last commit.',
+  task: 'The task',
+  attempts: 'Attempts',
+  modelEach: 'Model of each attempt',
+  budgetEach: 'Budget of each attempt',
+  minutes: 'Time (minutes)',
+  tokens: 'Tokens',
+  costUsd: 'Cost (US dollars)',
+  budgetHint: 'Each attempt stops at its own limits. Empty means no limit.',
+  cancel: 'Cancel',
+  start: '{n, plural, one {Start # attempt} other {Start # attempts}}',
+  pickModel: 'Pick a model for attempt {n} too, or leave every attempt on the session’s model.',
+});
 
 export function AttemptsPane({
   session,
@@ -76,42 +148,40 @@ export function AttemptsPane({
   return (
     <div className="cm7-pane">
       <div className="cm7-pane-head">
-        <p className="muted ws-flush">
-          Run one task as several attempts in separate worktrees, compare what each did, and keep
-          the best.
-        </p>
+        <p className="muted ws-flush">{ATTEMPTS_TEXT.intro}</p>
         <Button
           disabled={!!unavailable}
           title={unavailable ?? undefined}
           onClick={() => setStarting(true)}
         >
-          <Icon name="split-right" /> Best of N…
+          <Icon name="split-right" /> {ATTEMPTS_TEXT.bestOfN}
         </Button>
       </div>
       {unavailable ? <p className="muted cl-small">{unavailable}</p> : null}
       {list.error && !items ? (
         <div className="ws-error" role="alert">
-          <p>{codeM7ErrorMessage(list.error, 'Could not load the attempts.')}</p>
-          <Button onClick={list.reload}>Retry</Button>
+          <p>{codeM7ErrorMessage(list.error, ATTEMPTS_TEXT.loadFailed)}</p>
+          <Button onClick={list.reload}>{ATTEMPTS_TEXT.retry}</Button>
         </div>
       ) : null}
-      {list.loading ? <Spinner label="Loading the attempts" /> : null}
+      {list.loading ? <Spinner label={ATTEMPTS_TEXT.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
           level={3}
-          title="No attempts yet"
-          description="Best of N runs the same task 2 to 4 times, each with its own budget, so you can compare and keep one."
+          title={ATTEMPTS_TEXT.emptyTitle}
+          description={ATTEMPTS_TEXT.emptyBody}
           icon="split-right"
         />
       ) : null}
       {items?.length ? (
-        <ul className="cm7-list" aria-label="Attempt sets">
+        <ul className="cm7-list" aria-label={ATTEMPTS_TEXT.sets}>
           {items.map((set) => (
             <li key={set.id} className="cm7-row" aria-label={set.objective}>
               <span className="cm7-row-title">
                 <button
                   type="button"
                   className="cl-link"
+                  dir="auto"
                   aria-expanded={shown === set.id}
                   onClick={() => setOpen(shown === set.id ? '' : set.id)}
                 >
@@ -122,8 +192,8 @@ export function AttemptsPane({
                 </Badge>
               </span>
               <span className="muted ws-row-meta">
-                <span>{plural(set.attempts.length, 'attempt')}</span>
-                <span>From {set.baseSha.slice(0, 7)}</span>
+                <span>{ATTEMPTS_TEXT.count({ n: set.attempts.length })}</span>
+                <span>{ATTEMPTS_TEXT.from({ commit: set.baseSha.slice(0, 7) })}</span>
                 <span>{formatWhen(set.createdAt)}</span>
               </span>
               {shown === set.id ? (
@@ -136,8 +206,8 @@ export function AttemptsPane({
                     list.setData((prev) => prev?.map((x) => (x.id === next.id ? next : x)) ?? null);
                     announce(
                       merge.status === 'conflicted'
-                        ? 'Applied with conflicts to resolve in the Merges tab.'
-                        : 'Attempt applied.',
+                        ? ATTEMPTS_TEXT.appliedConflicts
+                        : ATTEMPTS_TEXT.applied,
                     );
                     onApplied(merge);
                   }}
@@ -155,7 +225,7 @@ export function AttemptsPane({
           setStarting(false);
           list.setData((prev) => [set, ...(prev ?? []).filter((x) => x.id !== set.id)]);
           setOpen(set.id);
-          announce(`Started ${plural(set.attempts.length, 'attempt')}.`);
+          announce(ATTEMPTS_TEXT.started({ n: set.attempts.length }));
         }}
       />
     </div>
@@ -205,10 +275,14 @@ function Compare({
         <div className="cl-notice" data-tone="warn" role="alert">
           <Icon name="alert" />
           <span>
-            Attempt {refused.attempt.index + 1} conflicts with this session’s files
-            {refused.paths.length ? ` (${refused.paths.join(', ')})` : ''}, so nothing was written.{' '}
+            {refused.paths.length
+              ? ATTEMPTS_TEXT.conflictsIn({
+                  n: refused.attempt.index + 1,
+                  paths: fmt.list(refused.paths, { type: 'unit', style: 'short' }),
+                })
+              : ATTEMPTS_TEXT.conflicts({ n: refused.attempt.index + 1 })}{' '}
             <Button onClick={() => void apply(refused.attempt, true).catch(() => undefined)}>
-              Apply with conflict markers
+              {ATTEMPTS_TEXT.withMarkers}
             </Button>
           </span>
         </div>
@@ -216,14 +290,14 @@ function Compare({
       <div
         className="cm7-compare"
         role="group"
-        aria-label="Attempts side by side"
+        aria-label={ATTEMPTS_TEXT.sideBySide}
         style={{ '--cm7-n': set.attempts.length } as CSSProperties}
       >
         {set.attempts.map((a) => (
           <AttemptColumn
             key={a.id}
             a={a}
-            model={a.model ? modelLabel(models, a.model) : 'The session’s model'}
+            model={a.model ? modelLabel(models, a.model) : ATTEMPTS_TEXT.sessionModel}
             chosen={set.appliedAttemptId === a.id}
             canApply={!settled && a.status !== 'discarded'}
             onApply={() => setApplying(a)}
@@ -233,16 +307,16 @@ function Compare({
       {settled ? null : (
         <div className="cl-actions">
           <Button variant="danger" onClick={() => setDiscarding(true)}>
-            <Icon name="trash" /> Discard all…
+            <Icon name="trash" /> {ATTEMPTS_TEXT.discardAll}
           </Button>
         </div>
       )}
       <ConfirmAction
         open={applying !== null}
-        title={`Apply attempt ${(applying?.index ?? 0) + 1}?`}
-        description="Its changes are merged into this session. The other attempts stop, and their sessions and worktrees are removed."
-        confirmLabel="Apply"
-        errorText={(err) => codeM7ErrorMessage(err, 'Could not apply the attempt.')}
+        title={ATTEMPTS_TEXT.applyTitle({ n: (applying?.index ?? 0) + 1 })}
+        description={ATTEMPTS_TEXT.applyBody}
+        confirmLabel={ATTEMPTS_TEXT.apply}
+        errorText={(err) => codeM7ErrorMessage(err, ATTEMPTS_TEXT.applyFailed)}
         onClose={() => setApplying(null)}
         onConfirm={async () => {
           if (applying) await apply(applying, false);
@@ -250,11 +324,11 @@ function Compare({
       />
       <ConfirmAction
         open={discarding}
-        title="Discard every attempt?"
-        description="They stop, and their sessions and worktrees are removed. This session stays as it is."
-        confirmLabel="Discard all"
+        title={ATTEMPTS_TEXT.discardTitle}
+        description={ATTEMPTS_TEXT.discardBody}
+        confirmLabel={ATTEMPTS_TEXT.discardConfirm}
         danger
-        errorText={(err) => codeM7ErrorMessage(err, 'Could not discard the attempts.')}
+        errorText={(err) => codeM7ErrorMessage(err, ATTEMPTS_TEXT.discardFailed)}
         onClose={() => setDiscarding(false)}
         onConfirm={async () => {
           const next = await m7.discardAttempts(set.id);
@@ -285,79 +359,89 @@ function AttemptColumn({
   return (
     <section className="cm7-attempt" aria-labelledby={id} data-chosen={chosen || undefined}>
       <h4 id={id} className="cm7-attempt-title">
-        Attempt {a.index + 1}
+        {ATTEMPTS_TEXT.attempt({ n: a.index + 1 })}
       </h4>
       <Badge tone={s.tone} icon={s.icon}>
         {s.text}
       </Badge>
       <dl className="cm7-attempt-facts">
         <div>
-          <dt>Model</dt>
+          <dt>{ATTEMPTS_TEXT.model}</dt>
           <dd>{model}</dd>
         </div>
         <div>
-          <dt>Files</dt>
+          <dt>{ATTEMPTS_TEXT.files}</dt>
           <dd>
-            {plural(a.files.length, 'file')},{' '}
-            <span aria-label={`${a.additions} added lines`}>+{a.additions}</span>{' '}
-            <span aria-label={`${a.deletions} removed lines`}>−{a.deletions}</span>
+            {ATTEMPTS_TEXT.fileCount({ n: a.files.length })},{' '}
+            <span role="img" aria-label={ATTEMPTS_TEXT.addedLines({ n: a.additions })}>
+              +{a.additions}
+            </span>{' '}
+            <span role="img" aria-label={ATTEMPTS_TEXT.removedLines({ n: a.deletions })}>
+              −{a.deletions}
+            </span>
           </dd>
         </div>
         <div>
-          <dt>Tests</dt>
+          <dt>{ATTEMPTS_TEXT.tests}</dt>
           <dd>
             {t ? (
               <Badge tone={VERIFY_TONE[t.status]} icon={VERIFY_ICON[t.status]}>
                 {VERIFY_TEXT[t.status]}
               </Badge>
             ) : (
-              'Not run yet'
+              ATTEMPTS_TEXT.notRun
             )}
           </dd>
         </div>
         <div>
-          <dt>Cost</dt>
+          <dt>{ATTEMPTS_TEXT.cost}</dt>
           <dd>
-            {formatCost(a.budget.used.costUsd)}, {formatTokens(a.budget.used.tokens)} tokens,{' '}
-            {formatSpan(a.budget.used.timeSeconds)}
+            {ATTEMPTS_TEXT.costLine({
+              cost: formatCost(a.budget.used.costUsd),
+              tokens: formatTokens(a.budget.used.tokens),
+              time: formatSpan(a.budget.used.timeSeconds),
+            })}
           </dd>
         </div>
       </dl>
       {a.files.length ? (
-        <ul className="cm7-attempt-files" aria-label={`Files attempt ${a.index + 1} changed`}>
+        <ul
+          className="cm7-attempt-files"
+          aria-label={ATTEMPTS_TEXT.changedFiles({ n: a.index + 1 })}
+        >
           {a.files.map((f) => (
             <li key={f.path}>
               <code className="cl-break">{f.path}</code>{' '}
               <span className="muted cl-small">
-                {f.binary ? 'binary' : `+${f.additions} −${f.deletions}`}
+                {f.binary ? ATTEMPTS_TEXT.binary : `+${f.additions} −${f.deletions}`}
               </span>
             </li>
           ))}
         </ul>
       ) : (
-        <p className="muted cl-small">No changes yet.</p>
+        <p className="muted cl-small">{ATTEMPTS_TEXT.noChanges}</p>
       )}
       {a.reply ? (
         <details className="ws-advanced">
-          <summary>Its last reply</summary>
-          <TextBlock text={a.reply} label={`Attempt ${a.index + 1}’s last reply`} />
+          <summary>{ATTEMPTS_TEXT.lastReply}</summary>
+          <TextBlock text={a.reply} label={ATTEMPTS_TEXT.lastReplyOf({ n: a.index + 1 })} />
         </details>
       ) : null}
       {a.patch ? (
         <details className="ws-advanced">
-          <summary>The patch</summary>
-          <TextBlock text={a.patch} label={`Attempt ${a.index + 1}’s patch`} />
-          {a.patchTruncated ? <p className="muted cl-small">The patch is cut short here.</p> : null}
+          <summary>{ATTEMPTS_TEXT.patch}</summary>
+          <TextBlock text={a.patch} label={ATTEMPTS_TEXT.patchOf({ n: a.index + 1 })} />
+          {a.patchTruncated ? <p className="muted cl-small">{ATTEMPTS_TEXT.patchCut}</p> : null}
         </details>
       ) : null}
       <div className="cl-actions">
         {canApply ? (
           <Button variant="primary" onClick={onApply}>
-            <Icon name="check" /> Apply…
+            <Icon name="check" /> {ATTEMPTS_TEXT.applyButton}
           </Button>
         ) : null}
         {a.status !== 'discarded' && a.status !== 'applied' ? (
-          <AppLink to={sessionPath(a.sessionId)}>Open its session</AppLink>
+          <AppLink to={sessionPath(a.sessionId)}>{ATTEMPTS_TEXT.openSession}</AppLink>
         ) : null}
       </div>
     </section>
@@ -409,7 +493,7 @@ function StartAttemptsForm({
   const n = Number(count);
   const budgets = parseBudgets(budget);
   const problems: Record<string, string> = {};
-  if (!objective.trim()) problems.objective = 'Describe the task every attempt works on.';
+  if (!objective.trim()) problems.objective = ATTEMPTS_TEXT.describeTask;
   if ('error' in budgets) problems.budget = budgets.error;
   const perAttempt = attemptModels(picked.slice(0, n), session.model);
   if ('error' in perAttempt) problems.models = perAttempt.error;
@@ -430,7 +514,7 @@ function StartAttemptsForm({
         }),
       );
     } catch (err) {
-      setError(codeM7ErrorMessage(err, 'Could not start the attempts.'));
+      setError(codeM7ErrorMessage(err, ATTEMPTS_TEXT.startFailed));
       setBusy(false);
     }
   };
@@ -438,8 +522,8 @@ function StartAttemptsForm({
   return (
     <Dialog
       open
-      title="Best of N"
-      description="Each attempt is its own session in its own worktree, starting from this session’s last commit."
+      title={ATTEMPTS_TEXT.dialogTitle}
+      description={ATTEMPTS_TEXT.dialogBody}
       onClose={onClose}
       className="ws-wide-dialog"
     >
@@ -453,27 +537,27 @@ function StartAttemptsForm({
       >
         <TextArea
           id={`${id}-objective`}
-          label="The task"
+          label={ATTEMPTS_TEXT.task}
           value={objective}
           rows={4}
           error={shown.objective}
           onChange={setObjective}
         />
         <SelectField
-          label="Attempts"
+          label={ATTEMPTS_TEXT.attempts}
           value={count}
           onChange={setCount}
           options={Array.from({ length: MAX_CODE_ATTEMPTS - 1 }, (_, i) => ({
             value: String(i + 2),
-            label: String(i + 2),
+            label: fmt.number(i + 2),
           }))}
         />
         <fieldset className="ws-fieldset">
-          <legend>Model of each attempt</legend>
+          <legend>{ATTEMPTS_TEXT.modelEach}</legend>
           {Array.from({ length: n }, (_, i) => (
             <SelectField
               key={i}
-              label={`Attempt ${i + 1}`}
+              label={ATTEMPTS_TEXT.attempt({ n: i + 1 })}
               value={picked[i] ?? ''}
               onChange={(v) =>
                 setPicked((p) => {
@@ -486,8 +570,8 @@ function StartAttemptsForm({
                 {
                   value: '',
                   label: session.model
-                    ? `The session’s model (${modelLabel(models, session.model)})`
-                    : 'The session’s model',
+                    ? ATTEMPTS_TEXT.sessionModelIs({ model: modelLabel(models, session.model) })
+                    : ATTEMPTS_TEXT.sessionModel,
                 },
               ]}
               groups={modelGroups(models)}
@@ -500,10 +584,10 @@ function StartAttemptsForm({
           ) : null}
         </fieldset>
         <fieldset className="ws-fieldset">
-          <legend>Budget of each attempt</legend>
+          <legend>{ATTEMPTS_TEXT.budgetEach}</legend>
           <div className="cl-field-row">
             <TextField
-              label="Time (minutes)"
+              label={ATTEMPTS_TEXT.minutes}
               type="number"
               inputMode="numeric"
               className="ws-number"
@@ -512,7 +596,7 @@ function StartAttemptsForm({
               onChange={(e) => setBudget((b) => ({ ...b, minutes: e.target.value }))}
             />
             <TextField
-              label="Tokens"
+              label={ATTEMPTS_TEXT.tokens}
               type="number"
               inputMode="numeric"
               className="ws-number"
@@ -521,7 +605,7 @@ function StartAttemptsForm({
               onChange={(e) => setBudget((b) => ({ ...b, tokens: e.target.value }))}
             />
             <TextField
-              label="Cost (US dollars)"
+              label={ATTEMPTS_TEXT.costUsd}
               type="number"
               inputMode="decimal"
               className="ws-number"
@@ -536,9 +620,7 @@ function StartAttemptsForm({
               {shown.budget}
             </p>
           ) : (
-            <p className="nv-field-hint">
-              Each attempt stops at its own limits. Empty means no limit.
-            </p>
+            <p className="nv-field-hint">{ATTEMPTS_TEXT.budgetHint}</p>
           )}
         </fieldset>
         {error ? (
@@ -547,9 +629,9 @@ function StartAttemptsForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{ATTEMPTS_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Start {Number.isFinite(n) ? n : ''} attempts
+            {busy ? <Spinner /> : null} {ATTEMPTS_TEXT.start({ n: Number.isFinite(n) ? n : 0 })}
           </Button>
         </div>
       </form>
@@ -574,7 +656,7 @@ export function attemptModels(
     const v = picked[i] || sessionModel;
     if (!v)
       return {
-        error: `Pick a model for attempt ${i + 1} too, or leave every attempt on the session’s model.`,
+        error: ATTEMPTS_TEXT.pickModel({ n: i + 1 }),
       };
     out.push(v);
   }

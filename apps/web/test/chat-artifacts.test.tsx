@@ -147,7 +147,7 @@ describe('artifacts (FR-038)', () => {
     await userEvent.click(within(inspector()).getByRole('button', { name: /bundle\.zip/ }));
     const viewer = await within(inspector()).findByRole('article', { name: 'bundle.zip' });
     expect(viewer.textContent).toContain('cannot be previewed');
-    expect(viewer.textContent).toContain('2.0 KB');
+    expect(viewer.textContent).toContain('2 KB');
     const link = within(viewer).getByRole('link', { name: /Download/ });
     expect(link.getAttribute('download')).toBe('bundle.zip');
   });

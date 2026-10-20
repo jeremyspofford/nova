@@ -3,6 +3,7 @@
 // managed policy can lock them), policy rules, command rules, remembered approvals with Revoke,
 // and a preview of what the policy engine would decide for a call.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type {
   PermissionGrantView,
   PermissionProfileView,
@@ -20,18 +21,121 @@ import {
 } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
 import { useSettings } from '../settings.tsx';
-import { MANAGED, formatWhen } from './common.ts';
+import { formatWhen } from './common.ts';
 import { CommandRulesSection } from './CommandRules.tsx';
 import { PolicyRulesSection } from './PolicyRules.tsx';
 import { TIER_TEXT, grantDurationText } from './policy-text.ts';
 import { EffectChip } from './ToolsPage.tsx';
 import '../workspace.css';
 
+export const PERMISSIONS_TEXT = defineMessages('settings.permissions', {
+  title: 'Permissions',
+  foldersSaveFailed: 'Could not save the folders: {error}',
+  needPath: 'Enter a full path on the Hub, for example /home/sam/notes.',
+  pathExample: '/home/sam/notes',
+  alreadyListed: 'This folder is already listed.',
+  added: '{path} added.',
+  folders: 'Folders',
+  foldersHint:
+    "Folders on the Hub that file and command tools may use. The Hub's own workspace folder is " +
+    'always included. Protected locations such as .git, keys and credentials stay read-only or ' +
+    'hidden inside every folder.',
+  accessTo: 'Access to {path}',
+  nowAccess:
+    '{access, select, write {{path} is now read and write.} other {{path} is now read only.}}',
+  readOnly: 'Read only',
+  readWrite: 'Read and write',
+  removeName: 'Remove {path}',
+  removed: '{path} removed.',
+  remove: 'Remove',
+  noFolders: 'No extra folders. Tools use only the Hub workspace folder.',
+  addFolderForm: 'Add a folder',
+  folderPath: 'Folder path',
+  access: 'Access',
+  label: 'Label',
+  addFolder: 'Add folder',
+  policy: {
+    ask_always: {
+      label: 'Ask every time',
+      description:
+        'Ask before every action that is not read-only, unless a rule or a remembered approval ' +
+        'allows it.',
+    },
+    defaults: {
+      label: 'Use tool defaults',
+      description: 'Each tool’s default decides: read-only tools run, consequential ones ask.',
+    },
+    review: {
+      label: 'Auto-review',
+      description:
+        'Pre-approvable actions inside the profile run; consequential ones go to the ' +
+        'auto-reviewer, which can only be stricter.',
+    },
+    never_ask: {
+      label: 'Skip tool-default questions',
+      description:
+        'A tool default that asks becomes allow. Your rules, managed policy and actions that ' +
+        'must be confirmed still ask.',
+    },
+  },
+  fsEntry: '{access, select, read {read {path}} write {write {path}} other {{access} {path}}}',
+  noFiles: 'no files',
+  noNetwork: 'no network',
+  networkHosts: 'network: {hosts}',
+  networkAllowList: 'network: allow list',
+  limitedNetwork: 'limited network',
+  summary: '{files}; {network}.',
+  summaryVm: '{files}; {network}; only inside a VM or container.',
+  profilesFailed: 'Could not load the profiles.',
+  saveFailed: 'Could not save: {error}',
+  custom: '{name} (custom)',
+  whatToolsMayDo: 'What tools may do',
+  loadingProfiles: 'Loading profiles',
+  profile: 'Permission profile',
+  profileHint: 'What the sandbox lets tools in chats read, write and reach.',
+  whenToAsk: 'When to ask',
+  grantsFailed: 'Could not load remembered approvals.',
+  revoked: 'Revoked: {label}. Nova asks again next time.',
+  revokeFailed: 'Could not revoke {label}: {error}',
+  grants: 'Remembered approvals',
+  grantsHint:
+    'Approvals you answered with Allow for this session or Always allow. Revoke one and Nova ' +
+    'asks again.',
+  retry: 'Retry',
+  loadingGrants: 'Loading remembered approvals',
+  noGrants: 'No remembered approvals',
+  noGrantsHint: 'They appear here when you allow an action for a session or always.',
+  inScope:
+    '{kind, select, project {In this project} thread {In this chat} agent {In this agent} space {In this space} other {In this {kind}}}',
+  inScopeRef:
+    '{kind, select, project {In this project ({ref})} thread {In this chat ({ref})} agent {In this agent ({ref})} space {In this space ({ref})} other {In this {kind} ({ref})}}',
+  expires: 'Expires {when}',
+  addedAt: 'Added {when}',
+  revokeName: 'Revoke {label}',
+  revoke: 'Revoke',
+  argsJson: 'Arguments must be JSON, for example {example}.',
+  previewFailed: 'Could not preview the decision.',
+  preview: 'Preview a decision',
+  previewHint: 'See what Nova would do for a tool call. Nothing runs.',
+  tool: 'Tool',
+  argsLabel: 'Arguments (JSON, optional)',
+  asIfAsked: 'As if you asked for it in a message',
+  previewButton: 'Preview',
+  tier: 'Tier: {tier}',
+  decidedBy: 'Decided by: {source}',
+  rule: 'Rule: {id}',
+});
+const S = PERMISSIONS_TEXT;
+// Examples typed into fields: a tool name and JSON, the same in every language.
+const TOOL_EXAMPLE = 'fs.write';
+const ARGS_EXAMPLE = '{"path": "notes/plan.md"}';
+
 export function PermissionsPage() {
   return (
     <div className="settings-page">
-      <h2>Permissions</h2>
+      <h2>{S.title}</h2>
       <FoldersSection />
       <ProfileSection />
       <PolicyRulesSection />
@@ -68,7 +172,7 @@ function FoldersSection() {
         return true;
       },
       (err: unknown) => {
-        toast.show(`Could not save the folders: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(S.foldersSaveFailed({ error: errorMessage(err) }), { tone: 'error' });
         return false;
       },
     );
@@ -76,16 +180,16 @@ function FoldersSection() {
   const add = async () => {
     const p = path.trim();
     if (!isAbsolutePath(p)) {
-      setError('Enter a full path on the Hub, for example /home/sam/notes.');
+      setError(S.needPath);
       return;
     }
     if (roots.value.some((r) => r.path === p)) {
-      setError('This folder is already listed.');
+      setError(S.alreadyListed);
       return;
     }
     setError(null);
     const root: Root = { path: p, access, ...(label.trim() ? { label: label.trim() } : {}) };
-    if (await save([...roots.value, root], `${p} added.`)) {
+    if (await save([...roots.value, root], S.added({ path: p }))) {
       setPath('');
       setLabel('');
       setAccess('read');
@@ -93,76 +197,79 @@ function FoldersSection() {
   };
 
   return (
-    <section className="settings-section" aria-labelledby="perm-folders">
-      <h3 id="perm-folders">Folders</h3>
-      <p className="muted">
-        Folders on the Hub that file and command tools may use. The Hub&apos;s own workspace folder
-        is always included. Protected locations such as .git, keys and credentials stay read-only or
-        hidden inside every folder.
-      </p>
-      {locked ? <p className="nv-field-hint nv-field-lock">{MANAGED}</p> : null}
+    <section
+      className="settings-section"
+      aria-labelledby="perm-folders"
+      aria-describedby={locked ? 'perm-folders-lock' : undefined}
+    >
+      <h3 id="perm-folders">{S.folders}</h3>
+      <p className="muted">{S.foldersHint}</p>
+      {locked ? <ManagedNote as="p" id="perm-folders-lock" setting="tools.roots" /> : null}
       {roots.value.length ? (
-        <ul className="ws-list" aria-label="Folders">
+        <ul className="ws-list" aria-label={S.folders}>
           {roots.value.map((r, i) => (
             <li key={r.path} className="ws-list-row" aria-label={r.label ?? r.path}>
               <div className="ws-source-main">
                 {r.label ? <strong>{r.label}</strong> : null}
-                <code className="ws-code-inline">{r.path}</code>
+                <code className="ws-code-inline" dir="ltr">
+                  {r.path}
+                </code>
               </div>
               <div className="row ws-row-actions">
                 <SelectField
-                  label={`Access to ${r.path}`}
+                  label={S.accessTo({ path: r.path })}
                   hideLabel
                   value={r.access}
                   locked={locked}
+                  setting="tools.roots"
                   onChange={(v) =>
                     void save(
                       roots.value.map((x, j) =>
                         j === i ? { ...x, access: v as 'read' | 'write' } : x,
                       ),
-                      `${r.path} is now ${v === 'write' ? 'read and write' : 'read only'}.`,
+                      S.nowAccess({ access: v, path: r.path }),
                     )
                   }
                   options={[
-                    { value: 'read', label: 'Read only' },
-                    { value: 'write', label: 'Read and write' },
+                    { value: 'read', label: S.readOnly },
+                    { value: 'write', label: S.readWrite },
                   ]}
                 />
                 <Button
                   variant="ghost"
                   disabled={locked}
-                  aria-label={`Remove ${r.path}`}
+                  aria-label={S.removeName({ path: r.path })}
                   onClick={() =>
                     void save(
                       roots.value.filter((_, j) => j !== i),
-                      `${r.path} removed.`,
+                      S.removed({ path: r.path }),
                     )
                   }
                 >
-                  Remove
+                  {S.remove}
                 </Button>
               </div>
             </li>
           ))}
         </ul>
       ) : (
-        <p className="muted">No extra folders. Tools use only the Hub workspace folder.</p>
+        <p className="muted">{S.noFolders}</p>
       )}
       {!locked ? (
         <form
           className="ws-toolbar"
-          aria-label="Add a folder"
+          aria-label={S.addFolderForm}
           onSubmit={(e) => {
             e.preventDefault();
             void add();
           }}
         >
           <TextField
-            label="Folder path"
+            label={S.folderPath}
             value={path}
             spellCheck={false}
             autoComplete="off"
-            placeholder="/home/sam/notes"
+            placeholder={S.pathExample}
             error={error ?? undefined}
             onChange={(e) => {
               setPath(e.target.value);
@@ -170,22 +277,22 @@ function FoldersSection() {
             }}
           />
           <SelectField
-            label="Access"
+            label={S.access}
             value={access}
             onChange={(v) => setAccess(v as 'read' | 'write')}
             options={[
-              { value: 'read', label: 'Read only' },
-              { value: 'write', label: 'Read and write' },
+              { value: 'read', label: S.readOnly },
+              { value: 'write', label: S.readWrite },
             ]}
           />
           <TextField
-            label="Label"
+            label={S.label}
             value={label}
             maxLength={100}
             onChange={(e) => setLabel(e.target.value)}
           />
           <Button type="submit" disabled={!path.trim()}>
-            Add folder
+            {S.addFolder}
           </Button>
         </form>
       ) : null}
@@ -195,42 +302,31 @@ function FoldersSection() {
 
 // ---- profile and approval policy (docs/12 §2.1, §7.1) ---------------------------------------------
 
-const POLICY_OPTIONS = [
-  {
-    value: 'ask_always',
-    label: 'Ask every time',
-    description:
-      'Ask before every action that is not read-only, unless a rule or a remembered approval allows it.',
-  },
-  {
-    value: 'defaults',
-    label: 'Use tool defaults',
-    description: 'Each tool’s default decides: read-only tools run, consequential ones ask.',
-  },
-  {
-    value: 'review',
-    label: 'Auto-review',
-    description:
-      'Pre-approvable actions inside the profile run; consequential ones go to the auto-reviewer, which can only be stricter.',
-  },
-  {
-    value: 'never_ask',
-    label: 'Skip tool-default questions',
-    description:
-      'A tool default that asks becomes allow. Your rules, managed policy and actions that must be confirmed still ask.',
-  },
-] as const;
+const POLICIES = ['ask_always', 'defaults', 'review', 'never_ask'] as const;
+
+/** The approval policies with their words, read in the active locale. */
+const policyOptions = () =>
+  POLICIES.map((value) => ({
+    value,
+    label: S.policy[value].label,
+    description: S.policy[value].description,
+  }));
 
 export function profileSummary(p: PermissionProfileView): string {
-  const fs = p.fs.map((e) => `${e.access} ${e.path.replace(/^:/, '')}`).join(', ');
+  const fs = fmt.list(
+    p.fs.map((e) => S.fsEntry({ access: e.access, path: e.path.replace(/^:/, '') })),
+    { type: 'unit' },
+  );
   const net =
     p.network.mode === 'off'
-      ? 'no network'
+      ? S.noNetwork
       : p.network.mode === 'allowlist'
-        ? `network: ${p.network.allow.length ? p.network.allow.join(', ') : 'allow list'}`
-        : 'limited network';
-  const vm = p.requiresSubstrate ? '; only inside a VM or container' : '';
-  return `${fs || 'no files'}; ${net}${vm}.`;
+        ? p.network.allow.length
+          ? S.networkHosts({ hosts: fmt.list(p.network.allow, { type: 'unit' }) })
+          : S.networkAllowList
+        : S.limitedNetwork;
+  const parts = { files: fs || S.noFiles, network: net };
+  return p.requiresSubstrate ? S.summaryVm(parts) : S.summary(parts);
 }
 
 function ProfileSection() {
@@ -246,7 +342,7 @@ function ProfileSection() {
     let alive = true;
     api.listProfiles().then(
       ({ items }) => alive && setProfiles(items),
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the profiles.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.profilesFailed)),
     );
     return () => {
       alive = false;
@@ -254,14 +350,14 @@ function ProfileSection() {
   }, [api]);
 
   const fail = (err: unknown) =>
-    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+    toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' });
   const list =
     profiles ??
     // Until the list loads (or if it fails), the current choice is still shown.
     [];
   const options = list.map((p) => ({
     value: p.id,
-    label: p.builtin ? p.name : `${p.name} (custom)`,
+    label: p.builtin ? p.name : S.custom({ name: p.name }),
     description: profileSummary(p),
   }));
   if (!options.some((o) => o.value === profile.value))
@@ -269,33 +365,33 @@ function ProfileSection() {
 
   return (
     <section className="settings-section" aria-labelledby="perm-profile">
-      <h3 id="perm-profile">What tools may do</h3>
+      <h3 id="perm-profile">{S.whatToolsMayDo}</h3>
       {error ? (
         <p role="alert" className="nv-field-error">
           {error}
         </p>
       ) : null}
-      {profiles === null && !error ? <Spinner label="Loading profiles" /> : null}
+      {profiles === null && !error ? <Spinner label={S.loadingProfiles} /> : null}
       <RadioGroup
-        legend="Permission profile"
+        legend={S.profile}
         name="permission-profile"
         value={profile.value}
         locked={profile.locked}
-        hint="What the sandbox lets tools in chats read, write and reach."
+        setting="tools.permissionProfile"
+        hint={S.profileHint}
         onChange={(v) => void settings.set('tools.permissionProfile', v).catch(fail)}
         options={options}
       />
       <RadioGroup
-        legend="When to ask"
+        legend={S.whenToAsk}
         name="approval-policy"
         value={policy.value}
         locked={policy.locked}
+        setting="tools.approvalPolicy"
         onChange={(v) =>
-          void settings
-            .set('tools.approvalPolicy', v as (typeof POLICY_OPTIONS)[number]['value'])
-            .catch(fail)
+          void settings.set('tools.approvalPolicy', v as (typeof POLICIES)[number]).catch(fail)
         }
-        options={[...POLICY_OPTIONS]}
+        options={policyOptions()}
       />
     </section>
   );
@@ -318,8 +414,7 @@ function GrantsSection() {
         setGrants(items);
         setError(null);
       },
-      (err: unknown) =>
-        alive && setError(errorMessage(err, 'Could not load remembered approvals.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.grantsFailed)),
     );
     return () => {
       alive = false;
@@ -330,35 +425,28 @@ function GrantsSection() {
     try {
       await api.revokeGrant(g.id);
       setGrants((list) => list?.filter((x) => x.id !== g.id) ?? null);
-      toast.show(`Revoked: ${g.label}. Nova asks again next time.`, { tone: 'success' });
+      toast.show(S.revoked({ label: g.label }), { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not revoke ${g.label}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.revokeFailed({ label: g.label, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
   return (
     <section className="settings-section" aria-labelledby="perm-grants">
-      <h3 id="perm-grants">Remembered approvals</h3>
-      <p className="muted">
-        Approvals you answered with Allow for this session or Always allow. Revoke one and Nova asks
-        again.
-      </p>
+      <h3 id="perm-grants">{S.grants}</h3>
+      <p className="muted">{S.grantsHint}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {grants === null && !error ? <Spinner label="Loading remembered approvals" /> : null}
+      {grants === null && !error ? <Spinner label={S.loadingGrants} /> : null}
       {grants?.length === 0 ? (
-        <EmptyState
-          level={3}
-          title="No remembered approvals"
-          description="They appear here when you allow an action for a session or always."
-        />
+        <EmptyState level={3} title={S.noGrants} description={S.noGrantsHint} />
       ) : null}
       {grants?.length ? (
-        <ul className="ws-list" aria-label="Remembered approvals">
+        <ul className="ws-list" aria-label={S.grants}>
           {grants.map((g) => (
             <li key={g.id} className="ws-list-row" aria-label={g.label}>
               <div className="ws-source-main">
@@ -367,22 +455,23 @@ function GrantsSection() {
                   <span>{grantDurationText(g)}</span>
                   {g.scopeKind && g.scopeKind !== 'global' ? (
                     <span>
-                      In this {g.scopeKind}
-                      {g.scopeRef ? ` (${g.scopeRef})` : ''}
+                      {g.scopeRef
+                        ? S.inScopeRef({ kind: g.scopeKind, ref: g.scopeRef })
+                        : S.inScope({ kind: g.scopeKind })}
                     </span>
                   ) : null}
                   {g.expiresAt ? (
-                    <span>Expires {new Date(g.expiresAt).toLocaleString()}</span>
+                    <span>{S.expires({ when: fmt.dateTime(g.expiresAt) })}</span>
                   ) : null}
-                  <span>Added {formatWhen(g.createdAt)}</span>
+                  <span>{S.addedAt({ when: formatWhen(g.createdAt) })}</span>
                 </span>
               </div>
               <Button
                 variant="ghost"
-                aria-label={`Revoke ${g.label}`}
+                aria-label={S.revokeName({ label: g.label })}
                 onClick={() => void revoke(g)}
               >
-                Revoke
+                {S.revoke}
               </Button>
             </li>
           ))}
@@ -423,7 +512,7 @@ function PreviewSection() {
       try {
         parsed = JSON.parse(args);
       } catch {
-        setArgsError('Arguments must be JSON, for example {"path": "notes/plan.md"}.');
+        setArgsError(S.argsJson({ example: ARGS_EXAMPLE }));
         return;
       }
     }
@@ -440,7 +529,7 @@ function PreviewSection() {
       );
     } catch (err) {
       setResult(null);
-      setFailure(errorMessage(err, 'Could not preview the decision.'));
+      setFailure(errorMessage(err, S.previewFailed));
     } finally {
       setBusy(false);
     }
@@ -448,23 +537,23 @@ function PreviewSection() {
 
   return (
     <section className="settings-section" aria-labelledby="perm-preview">
-      <h3 id="perm-preview">Preview a decision</h3>
-      <p className="muted">See what Nova would do for a tool call. Nothing runs.</p>
+      <h3 id="perm-preview">{S.preview}</h3>
+      <p className="muted">{S.previewHint}</p>
       <form
         className="stack"
-        aria-label="Preview a decision"
+        aria-label={S.preview}
         onSubmit={(e) => {
           e.preventDefault();
           if (tool.trim()) void run();
         }}
       >
         <TextField
-          label="Tool"
+          label={S.tool}
           value={tool}
           list={`${id}-tools`}
           spellCheck={false}
           autoComplete="off"
-          placeholder="fs.write"
+          placeholder={TOOL_EXAMPLE}
           onChange={(e) => setTool(e.target.value)}
         />
         <datalist id={`${id}-tools`}>
@@ -474,7 +563,7 @@ function PreviewSection() {
         </datalist>
         <div className="nv-field">
           <label className="nv-field-label" htmlFor={`${id}-args`}>
-            Arguments (JSON, optional)
+            {S.argsLabel}
           </label>
           <textarea
             id={`${id}-args`}
@@ -501,11 +590,11 @@ function PreviewSection() {
             checked={userAsked}
             onChange={(e) => setUserAsked(e.target.checked)}
           />
-          <span>As if you asked for it in a message</span>
+          <span>{S.asIfAsked}</span>
         </label>
         <div className="row">
           <Button type="submit" disabled={busy || !tool.trim()}>
-            {busy ? <Spinner /> : null} Preview
+            {busy ? <Spinner /> : null} {S.previewButton}
           </Button>
         </div>
       </form>
@@ -522,9 +611,9 @@ function PreviewSection() {
               <span>{result.reason}</span>
             </span>
             <span className="muted ws-row-meta">
-              <span>Tier: {TIER_TEXT[result.tier]}</span>
-              <span>Decided by: {result.source}</span>
-              {result.ruleId ? <span>Rule: {result.ruleId}</span> : null}
+              <span>{S.tier({ tier: TIER_TEXT[result.tier] })}</span>
+              <span>{S.decidedBy({ source: result.source })}</span>
+              {result.ruleId ? <span>{S.rule({ id: result.ruleId })}</span> : null}
             </span>
           </div>
         ) : null}

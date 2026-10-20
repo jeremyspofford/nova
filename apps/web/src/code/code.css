@@ -86,7 +86,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--u-space-2);
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 .code-body {
   display: grid;
@@ -99,7 +99,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-right: 1px solid var(--u-border);
+  border-inline-end: 1px solid var(--u-border);
 }
 /* The embedded chat fits its column instead of growing to its widest line. */
 .code-chat > .chat {
@@ -143,7 +143,7 @@
     overflow: auto;
   }
   .code-chat {
-    border-right: 0;
+    border-inline-end: 0;
     border-bottom: 1px solid var(--u-border);
   }
 }
@@ -159,7 +159,7 @@
   position: absolute;
   z-index: 20;
   top: 100%;
-  right: 0;
+  inset-inline-end: 0;
   width: min(32rem, 90vw);
   max-height: 20rem;
   margin: var(--u-space-1) 0 0;
@@ -308,7 +308,7 @@
 .code-lines .code-ln {
   padding: 0 var(--u-space-1);
   color: var(--u-text-muted);
-  text-align: right;
+  text-align: end;
   vertical-align: top;
   user-select: none;
 }
@@ -316,7 +316,7 @@
   /* A target of at least 24 by 24 px however few digits the line number has (WCAG 2.5.8). */
   min-width: 24px;
   min-height: 24px;
-  text-align: right;
+  text-align: end;
   padding: 0;
   border: 0;
   background: none;
@@ -434,7 +434,7 @@
   gap: var(--u-space-1);
   padding: var(--u-space-2) var(--u-space-3);
   border: 1px solid var(--u-border);
-  border-left-width: 4px;
+  border-inline-start-width: 4px;
   border-radius: var(--u-radius-sm);
 }
 .code-finding > p {
@@ -455,18 +455,18 @@
 }
 .code-finding[data-severity='error'],
 .code-note-review[data-severity='error'] {
-  border-left-color: var(--u-danger);
+  border-inline-start-color: var(--u-danger);
 }
 .code-finding[data-severity='warn'],
 .code-note-review[data-severity='warn'] {
-  border-left-color: var(--u-warn);
+  border-inline-start-color: var(--u-warn);
 }
 .code-finding[data-severity='info'],
 .code-note-review[data-severity='info'] {
-  border-left-color: var(--u-info);
+  border-inline-start-color: var(--u-info);
 }
 .code-note-review {
-  border-left-width: 4px;
+  border-inline-start-width: 4px;
 }
 .code-fix {
   margin: 0;
@@ -703,7 +703,7 @@
   display: grid;
   gap: var(--u-space-1);
   margin: 0;
-  padding-left: var(--u-space-4);
+  padding-inline-start: var(--u-space-4);
   font-size: var(--u-text-sm);
 }
 .code-preview {
@@ -788,7 +788,7 @@
   border-bottom: 1px solid var(--u-border);
 }
 .code-budget[data-reached] {
-  border-left: 4px solid var(--u-danger);
+  border-inline-start: 4px solid var(--u-danger);
 }
 .code-budget-banner {
   display: flex;
@@ -828,7 +828,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--u-space-1);
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 .code-budget-note {
   margin: 0;
@@ -950,7 +950,7 @@
     flex: 1 1 100%;
   }
   .code-budget-actions {
-    margin-left: 0;
+    margin-inline-start: 0;
   }
   .code-actions {
     flex-basis: 100%;

@@ -1,11 +1,12 @@
 // Words for managed policy (FR-106; docs/12 §10; ADR-097 D4): where a policy comes from, each
 // source's status, why a key of a policy does not apply, the restrictions in plain sentences, the
-// values it sets, and the Hub's refusals. Every user-facing string of the managed views is here,
-// whole sentences only, so they can be extracted for translation.
-import { MANAGED_TEXT, type IconName } from '@nova/ui';
+// values it sets, and the Hub's refusals. Every user-facing string of the managed views is a
+// message here (FR-016), whole sentences only, read at render time; the Hub's own words (a
+// source's problem, why a value is invalid, the fail-closed reason) stay as the Hub sent them.
+import { defineMessages, fmt, messageFor } from '@nova/i18n';
+import type { IconName } from '@nova/ui';
 import type {
   ManagedChannel,
-  ManagedIgnoreReason,
   ManagedPolicyView,
   ManagedRestrict,
   ManagedSourceStatus,
@@ -19,17 +20,17 @@ import { PROVIDER_NAMES } from '../providers/names.ts';
 /** Settings → Managed policy. */
 export const MANAGED_PATH = '/settings/managed';
 
-export const MANAGED_STRINGS = {
-  managed: MANAGED_TEXT,
+export const MANAGED_STRINGS = defineMessages('managed', {
   title: 'Managed policy',
   intro:
     'Your organization can set and lock settings on this Hub and restrict what Nova may do. A policy only ever tightens: it can turn things off, never on.',
   precedenceTitle: 'How a setting is decided',
-  precedence: [
-    "Nova's default.",
-    "This Hub's settings, as you set them.",
-    "Your organization's policy, which locks the setting.",
-  ],
+  /** The three layers, in order. */
+  precedence: {
+    defaults: "Nova's default.",
+    hub: "This Hub's settings, as you set them.",
+    policy: "Your organization's policy, which locks the setting.",
+  },
   precedenceBoth:
     'When the policy file and the remote policy both set something, the stricter value applies.',
   none: 'No managed policy applies to this Hub. Every setting is yours to change.',
@@ -62,6 +63,7 @@ export const MANAGED_STRINGS = {
   serial: 'Version',
   loadedAt: 'Read',
   checkedAt: 'Last checked',
+  lastChecked: 'Last checked: {when}',
   inForceCached: 'In force from the copy kept on this Hub (the last good one).',
   inForceLastGood: 'The last good policy from this source stays in force.',
   testOverride: 'For tests only: this file comes from NOVA_MANAGED_SETTINGS_FILE.',
@@ -74,24 +76,41 @@ export const MANAGED_STRINGS = {
   notSet: 'Not set',
   empty: 'Empty',
   noneValue: 'None',
-} as const;
+  /** An empty list inside a restriction sentence: "Agents may use only these tools: none." */
+  noneInList: 'none',
+  retry: 'Retry',
+  loading: 'Loading the managed policy',
+  checkFailed: 'Could not check the policy.',
+  somethingWrong: 'Something went wrong.',
+  notAccepted: 'The Hub did not accept the request. Reload the page and try again.',
+  /** The accessible name of a source's restriction list. */
+  restrictionsFrom: 'Restrictions: {source}',
+  /** A source in force, in the Settings banner: its name, then its location. */
+  sourceAt: '{source}: {location}',
+  /** The egress allow list in force: the policy's hosts, or yours within them (ADR-097). */
+  egressInForce: 'Hosts agents may reach now: {list}.',
+  egressNoneOfYours:
+    "None of the hosts on your own allow list is within the policy's hosts, so agents may reach none of them without asking. Add hosts the policy allows in Network, or empty your list to use the policy's hosts.",
+  egressOutside:
+    "These hosts on your allow list are outside the policy's and do not apply: {list}.",
+});
 
 // ---- sources -----------------------------------------------------------------------------------
 
-export const CHANNEL_LABEL: Record<ManagedChannel | 'both', string> = {
+export const CHANNEL_LABEL = defineMessages('managed.channel', {
   local: 'Policy file on this Hub',
   remote: 'Signed remote policy',
   test: 'Test policy file',
   both: 'Policy file and remote policy',
-};
+});
 
 /** The short source shown next to "Managed by your organization". */
-export const LOCK_SOURCE: Record<ManagedChannel | 'both', string> = {
+export const LOCK_SOURCE = defineMessages('managed.lockSource', {
   local: '(policy file)',
   remote: '(remote policy)',
   test: '(test policy file)',
   both: '(policy file and remote policy)',
-};
+});
 
 export interface StatusSpec {
   text: string;
@@ -100,126 +119,188 @@ export interface StatusSpec {
   tone: 'ready' | 'needs_input' | 'blocked' | null;
 }
 
-export const SOURCE_STATUS: Record<ManagedSourceStatus, StatusSpec> = {
-  absent: { text: 'Not present', icon: 'slash', tone: null },
-  active: { text: 'In force', icon: 'check', tone: 'ready' },
-  ignored: { text: 'Ignored', icon: 'alert', tone: 'needs_input' },
-  invalid: { text: 'Cannot be read', icon: 'alert', tone: 'blocked' },
-  refused: { text: 'Refused', icon: 'shield', tone: 'blocked' },
-  unreachable: { text: 'Unreachable', icon: 'network', tone: 'needs_input' },
+const STATUS_TEXT = defineMessages('managed.status', {
+  absent: 'Not present',
+  active: 'In force',
+  ignored: 'Ignored',
+  invalid: 'Cannot be read',
+  refused: 'Refused',
+  unreachable: 'Unreachable',
+});
+
+const STATUS_LOOK: Record<ManagedSourceStatus, Omit<StatusSpec, 'text'>> = {
+  absent: { icon: 'slash', tone: null },
+  active: { icon: 'check', tone: 'ready' },
+  ignored: { icon: 'alert', tone: 'needs_input' },
+  invalid: { icon: 'alert', tone: 'blocked' },
+  refused: { icon: 'shield', tone: 'blocked' },
+  unreachable: { icon: 'network', tone: 'needs_input' },
 };
+
+/** A source status's chip: its word (in the active locale) and its look. */
+export function sourceStatus(status: ManagedSourceStatus): StatusSpec {
+  return { ...STATUS_LOOK[status], text: STATUS_TEXT[status] };
+}
+
+const STATUS_SENTENCE = defineMessages('managed.statusText', {
+  absentLocal: 'There is no policy file at this location.',
+  absentRemote: 'No remote policy is configured.',
+  active: 'Read, checked and in force.',
+  ignored: 'Ignored, so nothing in it applies: {problem}.',
+  invalid: 'It cannot be read, so every agent tool is denied: {problem}.',
+  refused: 'Refused: {problem}.',
+  unreachable: 'It could not be fetched: {problem}.',
+  /** Stands in for the Hub's problem when it gave none. */
+  noReason: 'no reason given',
+});
 
 /** What a source's status means, in a sentence (its problem comes from the Hub). */
 export function sourceStatusText(s: ManagedSourceView): string {
-  const problem = s.problem ?? 'no reason given';
+  const problem = s.problem ?? STATUS_SENTENCE.noReason;
   switch (s.status) {
     case 'absent':
-      return s.channel === 'local'
-        ? 'There is no policy file at this location.'
-        : 'No remote policy is configured.';
+      return s.channel === 'local' ? STATUS_SENTENCE.absentLocal : STATUS_SENTENCE.absentRemote;
     case 'active':
-      return 'Read, checked and in force.';
+      return STATUS_SENTENCE.active;
     case 'ignored':
-      return `Ignored, so nothing in it applies: ${problem}.`;
+      return STATUS_SENTENCE.ignored({ problem });
     case 'invalid':
-      return `It cannot be read, so every agent tool is denied: ${problem}.`;
+      return STATUS_SENTENCE.invalid({ problem });
     case 'refused':
-      return `Refused: ${problem}.`;
+      return STATUS_SENTENCE.refused({ problem });
     case 'unreachable':
-      return `It could not be fetched: ${problem}.`;
+      return STATUS_SENTENCE.unreachable({ problem });
   }
 }
 
 // ---- ignored keys ------------------------------------------------------------------------------
 
-export const IGNORE_REASON: Record<ManagedIgnoreReason, string> = {
+export const IGNORE_REASON = defineMessages('managed.ignore', {
   unknown_key: 'Nova has no setting by this name.',
   invalid_value: 'The value is not valid for this setting.',
   loosens: 'It would loosen a security setting, and a policy can only tighten them.',
   unordered:
     'Nova cannot tell whether this value tightens or loosens the setting, so a policy cannot set it.',
   manual_mode: 'Manual mode can never be turned off.',
-};
+});
 
 // ---- restrictions ------------------------------------------------------------------------------
 
-const RESTRICT_PART: Record<keyof ManagedRestrict, string> = {
-  permissionModes: 'permission modes',
-  tools: 'tools',
-  plugins: 'plugins',
-  extensions: 'extensions',
-  mcpServers: 'MCP servers',
-  sessions: 'sessions',
-  folders: 'folders',
-  browserDomains: 'browser sites',
-  egress: 'network access',
-  telemetryExport: 'telemetry export',
-  routing: 'model routing',
-  unverifiedInstalls: 'unverified installs',
-  apps: 'apps',
-};
+// One whole sentence per `restrict` part (keys are the parts of ManagedRestrict).
+const DERIVED_TEXT = defineMessages('managed.derived', {
+  permissionModes: 'Follows from the permission modes restriction.',
+  tools: 'Follows from the tools restriction.',
+  plugins: 'Follows from the plugins restriction.',
+  extensions: 'Follows from the extensions restriction.',
+  mcpServers: 'Follows from the MCP servers restriction.',
+  sessions: 'Follows from the sessions restriction.',
+  folders: 'Follows from the folders restriction.',
+  browserDomains: 'Follows from the browser sites restriction.',
+  egress: 'Follows from the network access restriction.',
+  telemetryExport: 'Follows from the telemetry export restriction.',
+  routing: 'Follows from the model routing restriction.',
+  unverifiedInstalls: 'Follows from the unverified installs restriction.',
+  apps: 'Follows from the apps restriction.',
+  /** A part this version does not know: `{part}` is the policy key. */
+  unknown: 'Follows from the {part} restriction.',
+});
 
 /** `restrict.egress` → "Follows from the network access restriction." */
 export function derivedText(derivedFrom: string): string {
-  const part = derivedFrom.replace(/^restrict\./, '') as keyof ManagedRestrict;
-  return `Follows from the ${RESTRICT_PART[part] ?? part} restriction.`;
+  const part = derivedFrom.replace(/^restrict\./, '');
+  return (part !== 'unknown' && messageFor(DERIVED_TEXT, part)) || DERIVED_TEXT.unknown({ part });
 }
 
-const list = (xs: readonly string[]) => (xs.length ? xs.join(', ') : 'none');
+const RESTRICT_TEXT = defineMessages('managed.restrict', {
+  modesAllow: 'Code sessions may use only these modes: {modes}. Manual is always allowed.',
+  modesDeny: 'These modes are turned off: {modes}.',
+  toolsAllow: 'Agents may use only these tools: {list}.',
+  toolsDeny: 'Agents may not use these tools: {list}.',
+  pluginsAllow: 'Only these plugins may be used: {list}.',
+  pluginsDeny: 'These plugins may not be used: {list}.',
+  extensionsAllow: 'Only these extensions may be used: {list}.',
+  extensionsDeny: 'These extensions may not be used: {list}.',
+  mcpAllow: 'Only these MCP servers may be used: {list}.',
+  mcpDeny: 'These MCP servers may not be used: {list}.',
+  mcpUserAdded: 'MCP servers you add yourself are not allowed.',
+  mcpLocalStdio: 'MCP servers that run as programs on this Hub (stdio) are not allowed.',
+  sessionsLocal: "Code sessions on this Hub's own files are turned off.",
+  sessionsSsh: 'Code sessions over SSH are turned off.',
+  sshHosts: 'SSH sessions may connect only to: {list}.',
+  foldersAllow: 'Sessions, project folders and tool roots may use only these folders: {list}.',
+  foldersDeny: 'These folders are off limits: {list}.',
+  browserAllow: 'The agent browser may open only these sites: {list}.',
+  browserDeny: 'The agent browser may not open these sites: {list}.',
+  egressOff: 'Agents have no network access.',
+  egressLimited: "Agents' network access is limited.",
+  egressAllowlist: 'Agents may reach only the hosts that are allowed.',
+  egressAllow: 'Agents may reach hosts only within: {list}.',
+  egressDeny: 'Hosts agents may never reach: {list}.',
+  telemetryOff: 'Telemetry export (OpenTelemetry/OTLP) stays off.',
+  cloudOff: 'Cloud models are turned off: only local models and compute nodes.',
+  providers: 'Models may come only from: {list}.',
+  verifiedOnly: 'Only plugins, extensions and bundles with a verified signature can be installed.',
+  appsOff: 'No third-party app or MCP client can be authorized.',
+});
+
+/** Names joined the locale's way without a conjunction ("a, b, c"), or "none". */
+const list = (xs: readonly string[]) =>
+  xs.length ? fmt.list(xs, { type: 'unit', style: 'short' }) : MANAGED_STRINGS.noneInList;
 const modes = (xs: readonly PermissionMode[]) => list(xs.map((m) => MODE_LABEL[m] ?? m));
+
+/**
+ * The egress allow list in force (`view.egress`): the hosts agents may reach now, and a note when
+ * the owner's own list keeps none of them or has hosts outside the policy's.
+ */
+export function egressLines(egress: ManagedPolicyView['egress']): string[] {
+  if (!egress) return [];
+  const S = MANAGED_STRINGS;
+  const out = [S.egressInForce({ list: list(egress.effective) })];
+  const outside = egress.own.filter((h) => !egress.effective.includes(h));
+  if (egress.own.length && !egress.effective.length) out.push(S.egressNoneOfYours);
+  else if (outside.length) out.push(S.egressOutside({ list: list(outside) }));
+  return out;
+}
 
 /** One plain sentence per thing a `restrict` block restricts, in the schema's order. */
 export function restrictionLines(r: ManagedRestrict): string[] {
+  const T = RESTRICT_TEXT;
   const out: string[] = [];
   const pm = r.permissionModes;
-  if (pm?.allow)
-    out.push(
-      `Code sessions may use only these modes: ${modes(pm.allow)}. Manual is always allowed.`,
-    );
-  if (pm?.deny?.length) out.push(`These modes are turned off: ${modes(pm.deny)}.`);
-  if (r.tools?.allow) out.push(`Agents may use only these tools: ${list(r.tools.allow)}.`);
-  if (r.tools?.deny?.length) out.push(`Agents may not use these tools: ${list(r.tools.deny)}.`);
-  if (r.plugins?.allow) out.push(`Only these plugins may be used: ${list(r.plugins.allow)}.`);
-  if (r.plugins?.deny?.length) out.push(`These plugins may not be used: ${list(r.plugins.deny)}.`);
-  if (r.extensions?.allow)
-    out.push(`Only these extensions may be used: ${list(r.extensions.allow)}.`);
-  if (r.extensions?.deny?.length)
-    out.push(`These extensions may not be used: ${list(r.extensions.deny)}.`);
+  if (pm?.allow) out.push(T.modesAllow({ modes: modes(pm.allow) }));
+  if (pm?.deny?.length) out.push(T.modesDeny({ modes: modes(pm.deny) }));
+  if (r.tools?.allow) out.push(T.toolsAllow({ list: list(r.tools.allow) }));
+  if (r.tools?.deny?.length) out.push(T.toolsDeny({ list: list(r.tools.deny) }));
+  if (r.plugins?.allow) out.push(T.pluginsAllow({ list: list(r.plugins.allow) }));
+  if (r.plugins?.deny?.length) out.push(T.pluginsDeny({ list: list(r.plugins.deny) }));
+  if (r.extensions?.allow) out.push(T.extensionsAllow({ list: list(r.extensions.allow) }));
+  if (r.extensions?.deny?.length) out.push(T.extensionsDeny({ list: list(r.extensions.deny) }));
   const mcp = r.mcpServers;
-  if (mcp?.allow) out.push(`Only these MCP servers may be used: ${list(mcp.allow)}.`);
-  if (mcp?.deny?.length) out.push(`These MCP servers may not be used: ${list(mcp.deny)}.`);
-  if (mcp?.userAdded === false) out.push('MCP servers you add yourself are not allowed.');
-  if (mcp?.localStdio === false)
-    out.push('MCP servers that run as programs on this Hub (stdio) are not allowed.');
+  if (mcp?.allow) out.push(T.mcpAllow({ list: list(mcp.allow) }));
+  if (mcp?.deny?.length) out.push(T.mcpDeny({ list: list(mcp.deny) }));
+  if (mcp?.userAdded === false) out.push(T.mcpUserAdded);
+  if (mcp?.localStdio === false) out.push(T.mcpLocalStdio);
   const s = r.sessions;
-  if (s?.local === false) out.push("Code sessions on this Hub's own files are turned off.");
-  if (s?.ssh === false) out.push('Code sessions over SSH are turned off.');
-  if (s?.sshHosts) out.push(`SSH sessions may connect only to: ${list(s.sshHosts)}.`);
-  if (r.folders?.allow)
-    out.push(
-      `Sessions, project folders and tool roots may use only these folders: ${list(r.folders.allow)}.`,
-    );
-  if (r.folders?.deny?.length) out.push(`These folders are off limits: ${list(r.folders.deny)}.`);
-  if (r.browserDomains?.allow)
-    out.push(`The agent browser may open only these sites: ${list(r.browserDomains.allow)}.`);
+  if (s?.local === false) out.push(T.sessionsLocal);
+  if (s?.ssh === false) out.push(T.sessionsSsh);
+  if (s?.sshHosts) out.push(T.sshHosts({ list: list(s.sshHosts) }));
+  if (r.folders?.allow) out.push(T.foldersAllow({ list: list(r.folders.allow) }));
+  if (r.folders?.deny?.length) out.push(T.foldersDeny({ list: list(r.folders.deny) }));
+  if (r.browserDomains?.allow) out.push(T.browserAllow({ list: list(r.browserDomains.allow) }));
   if (r.browserDomains?.deny?.length)
-    out.push(`The agent browser may not open these sites: ${list(r.browserDomains.deny)}.`);
+    out.push(T.browserDeny({ list: list(r.browserDomains.deny) }));
   const e = r.egress;
-  if (e?.mode === 'off') out.push('Agents have no network access.');
-  if (e?.mode === 'limited') out.push("Agents' network access is limited.");
-  if (e?.mode === 'allowlist') out.push('Agents may reach only the hosts that are allowed.');
-  if (e?.allow) out.push(`Hosts agents may reach: ${list(e.allow)}.`);
-  if (e?.deny?.length) out.push(`Hosts agents may never reach: ${list(e.deny)}.`);
-  if (r.telemetryExport === false) out.push('Telemetry export (OpenTelemetry/OTLP) stays off.');
-  if (r.routing?.allowCloud === false)
-    out.push('Cloud models are turned off: only local models and compute nodes.');
+  if (e?.mode === 'off') out.push(T.egressOff);
+  if (e?.mode === 'limited') out.push(T.egressLimited);
+  if (e?.mode === 'allowlist') out.push(T.egressAllowlist);
+  if (e?.allow) out.push(T.egressAllow({ list: list(e.allow) }));
+  if (e?.deny?.length) out.push(T.egressDeny({ list: list(e.deny) }));
+  if (r.telemetryExport === false) out.push(T.telemetryOff);
+  if (r.routing?.allowCloud === false) out.push(T.cloudOff);
   if (r.routing?.providers)
-    out.push(
-      `Models may come only from: ${list(r.routing.providers.map((p) => PROVIDER_NAMES[p] ?? p))}.`,
-    );
-  if (r.unverifiedInstalls === false)
-    out.push('Only plugins, extensions and bundles with a verified signature can be installed.');
-  if (r.apps === false) out.push('No third-party app or MCP client can be authorized.');
+    out.push(T.providers({ list: list(r.routing.providers.map((p) => PROVIDER_NAMES[p] ?? p)) }));
+  if (r.unverifiedInstalls === false) out.push(T.verifiedOnly);
+  if (r.apps === false) out.push(T.appsOff);
   return out;
 }
 
@@ -229,10 +310,10 @@ export function restrictionLines(r: ManagedRestrict): string[] {
 export function formatPolicyValue(v: unknown): string {
   if (v === null || v === undefined) return MANAGED_STRINGS.notSet;
   if (typeof v === 'boolean') return v ? MANAGED_STRINGS.on : MANAGED_STRINGS.off;
-  if (typeof v === 'number') return v.toLocaleString('en-US');
+  if (typeof v === 'number') return fmt.number(v);
   if (typeof v === 'string') return v === '' ? MANAGED_STRINGS.empty : v;
   if (Array.isArray(v) && v.every((x) => typeof x === 'string'))
-    return v.length ? v.join(', ') : MANAGED_STRINGS.noneValue;
+    return v.length ? fmt.list(v, { type: 'unit', style: 'short' }) : MANAGED_STRINGS.noneValue;
   const json = JSON.stringify(v) ?? '';
   return json.length > 200 ? `${json.slice(0, 199)}…` : json;
 }
@@ -240,14 +321,28 @@ export function formatPolicyValue(v: unknown): string {
 // ---- where a lock comes from -------------------------------------------------------------------
 
 /**
- * The source of a locked setting: the setting's own channel when the policy names it, else the
- * sources in force. Null when nothing is known (no view, or nothing in force).
+ * The source of a locked setting: the setting's own channel when the policy names it (for
+ * `restrict.<part>`, the sources whose restrict block sets that part), else the sources in force.
+ * Null when nothing is known (no view, or nothing in force).
  */
 export function lockChannel(
-  view: Pick<ManagedPolicyView, 'settings' | 'sources'> | null,
+  view:
+    | (Pick<ManagedPolicyView, 'settings' | 'sources'> &
+        Partial<Pick<ManagedPolicyView, 'restrict'>>)
+    | null,
   key?: string,
 ): ManagedChannel | 'both' | null {
   if (!view) return null;
+  if (key?.startsWith('restrict.')) {
+    const part = key.slice('restrict.'.length) as keyof ManagedRestrict;
+    const from = new Set(
+      (view.restrict ?? []).filter((r) => r.restrict[part] !== undefined).map((r) => r.channel),
+    );
+    if (from.has('test')) return 'test';
+    if (from.has('local') && from.has('remote')) return 'both';
+    const [only] = from;
+    if (only) return only;
+  }
   const own = key ? view.settings.find((s) => s.key === key) : undefined;
   if (own) return own.channel;
   const inForce = view.sources.filter((s) => s.inForce).map((s) => s.channel);
@@ -276,9 +371,11 @@ export function isOwnerOnlyError(err: unknown): boolean {
   return err instanceof ApiError && err.status === 403 && reasonOf(err) === 'owner_only';
 }
 
-export function managedErrorMessage(err: unknown, fallback = 'Something went wrong.'): string {
+export function managedErrorMessage(
+  err: unknown,
+  fallback: string = MANAGED_STRINGS.somethingWrong,
+): string {
   if (isOwnerOnlyError(err)) return MANAGED_STRINGS.ownerReloads;
-  if (err instanceof ApiError && err.body.code === 'validation')
-    return 'The Hub did not accept the request. Reload the page and try again.';
+  if (err instanceof ApiError && err.body.code === 'validation') return MANAGED_STRINGS.notAccepted;
   return errorMessage(err, fallback);
 }

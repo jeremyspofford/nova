@@ -205,7 +205,7 @@ describe('Project page (FR-034)', () => {
     const del = screen.getByRole('button', { name: 'Delete project' });
     await userEvent.click(del);
     const dialog = screen.getByRole('dialog', { name: 'Delete this project?' });
-    expect(dialog.textContent).toMatch(/2 sources are removed\. Its 1 chat are kept/);
+    expect(dialog.textContent).toMatch(/2 sources are removed\. Its 1 chat is kept/);
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(hub.api.deleteProject).not.toHaveBeenCalled();
@@ -329,7 +329,7 @@ describe('Project sources (FR-040)', () => {
     Object.defineProperty(big, 'size', { value: 20 * 1024 * 1024 + 1 });
     await userEvent.upload(screen.getByLabelText('Upload source files'), big);
     expect(
-      await screen.findByText(/huge\.txt is 20\.0 MB; a source can be at most 20\.0 MB/),
+      await screen.findByText(/huge\.txt is 20 MB; a source can be at most 20 MB/),
     ).toBeTruthy();
     expect(screen.queryByRole('listitem', { name: 'huge.txt' })).toBeNull();
   });

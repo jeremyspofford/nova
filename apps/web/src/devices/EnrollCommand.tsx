@@ -6,6 +6,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { DEVICE_ENROLL_ROLES, type DeviceEnrollToken, type DeviceView } from '@nova/shared';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
+import { rich } from '../i18n/rich.tsx';
 import { formatCountdown } from '../settings/DevicesPage.tsx';
 import { useInterval } from '../settings/common.ts';
 import { navigate } from '../router.ts';
@@ -28,12 +30,46 @@ type Role = (typeof DEVICE_ENROLL_ROLES)[number];
 /** What the success screen shows about the new device. */
 type Added = Pick<DeviceView, 'id' | 'name' | 'roles' | 'novadVersion'>;
 
-const ROLE_HELP: Record<Role, string> = {
-  client:
-    'A computer you use. Agents can work with its files, browser and screen when you allow it.',
-  compute: 'Runs models and other heavy work for this Hub.',
-  'wake-helper': 'Always on, on the same network as the others, so it can wake them.',
-};
+export const ENROLL_TEXT = defineMessages('devices.enroll', {
+  roleHelp: {
+    client:
+      'A computer you use. Agents can work with its files, browser and screen when you allow it.',
+    compute: 'Runs models and other heavy work for this Hub.',
+    'wake-helper': 'Always on, on the same network as the others, so it can wake them.',
+  },
+  ready: 'Command ready. Run it on the device.',
+  added: '{name} is added.',
+  theDevice: 'The device',
+  notYet: 'Not registered yet.',
+  checkFailed: 'Could not check.',
+  addedTitle: '{name} is added',
+  rolesSentence: '{roles}.',
+  novadSentence: 'novad {version}.',
+  openHint: 'Open it to choose which folders it shares and what it may run.',
+  open: 'Open {name}',
+  another: 'Add another device',
+  title: 'Add a device',
+  intro: 'A one-use command, for installs you script. {link}.',
+  withCode: 'Add it with a code instead',
+  roles: 'What will this device do?',
+  chooseOne: 'Choose at least one.',
+  next: 'Next you get one command to run on the device. Creating it approves the device; it works once, for 15 minutes. The device then reports what it can do, and nothing is shared until you allow it.',
+  createFailed: 'Could not create the command.',
+  create: 'Create command',
+  cancel: 'Cancel',
+  command: 'Enrollment command',
+  run: 'Run this on the device, in a terminal with administrator rights. novad installs as a service and registers with this Hub.',
+  replace: 'Replace {token} with the address this Hub can reach the device at.',
+  copy: 'Copy command',
+  createNew: 'Create a new command',
+  expired: 'This command has expired. Create a new one to add the device.',
+  waiting: 'Waiting for the device to register. The command expires in {time}.',
+  checkNow: 'Check now',
+  back: 'Back to devices',
+});
+const S = ENROLL_TEXT;
+
+const ROLE_HELP: Readonly<Record<Role, string>> = S.roleHelp;
 
 export function EnrollCommand() {
   const api = useDevicesApi();
@@ -73,7 +109,7 @@ export function EnrollCommand() {
       const t = await api.enrollNovadDevice({ roles });
       setToken(t);
       setNow(Date.now());
-      announce('Command ready. Run it on the device.');
+      announce(S.ready);
     } catch (err) {
       setError(err);
     } finally {
@@ -83,7 +119,7 @@ export function EnrollCommand() {
 
   const found = (d: Added) => {
     setAdded(d);
-    announce(`${d.name} is added.`);
+    announce(S.added({ name: d.name }));
   };
 
   // The device registers on its own; the Hub tells every open client.
@@ -92,7 +128,7 @@ export function EnrollCommand() {
     const id = eventDeviceId(env);
     if (!id) return;
     api.getNovadDevice(id).then(found, () => {
-      const name = typeof env.payload.name === 'string' ? env.payload.name : 'The device';
+      const name = typeof env.payload.name === 'string' ? env.payload.name : S.theDevice;
       found({ id, name, roles: [], novadVersion: null });
     });
   });
@@ -103,9 +139,9 @@ export function EnrollCommand() {
       const { items } = await api.listNovadDevices();
       const fresh = items.find((d) => !known.current?.has(d.id) && d.status !== 'revoked');
       if (fresh) found(fresh);
-      else announce('Not registered yet.');
+      else announce(S.notYet);
     } catch (err) {
-      toast.show(deviceErrorMessage(err, 'Could not check.'), { tone: 'error' });
+      toast.show(deviceErrorMessage(err, S.checkFailed), { tone: 'error' });
     } finally {
       setChecking(false);
     }
@@ -122,18 +158,18 @@ export function EnrollCommand() {
     return (
       <section className="devices-success" aria-labelledby={`${formId}-done`}>
         <h1 id={`${formId}-done`} ref={headingRef} tabIndex={-1}>
-          <Icon name="check" /> {added.name} is added
+          <Icon name="check" /> {S.addedTitle({ name: added.name })}
         </h1>
         <p className="muted ws-flush">
-          {added.roles.length ? `${rolesText(added.roles)}. ` : ''}
-          {added.novadVersion ? `novad ${added.novadVersion}. ` : ''}
-          Open it to choose which folders it shares and what it may run.
+          {added.roles.length ? `${S.rolesSentence({ roles: rolesText(added.roles) })} ` : ''}
+          {added.novadVersion ? `${S.novadSentence({ version: added.novadVersion })} ` : ''}
+          {S.openHint}
         </p>
         <div className="row">
           <Button variant="primary" onClick={() => navigate(devicePath(added.id))}>
-            Open {added.name}
+            {S.open({ name: added.name })}
           </Button>
-          <Button onClick={restart}>Add another device</Button>
+          <Button onClick={restart}>{S.another}</Button>
         </div>
       </section>
     );
@@ -142,14 +178,16 @@ export function EnrollCommand() {
   return (
     <>
       <header className="ws-page-header">
-        <h1>Add a device</h1>
+        <h1>{S.title}</h1>
       </header>
       <p className="muted ws-flush">
-        A one-use command, for installs you script.{' '}
-        <a href={DEVICES_ADD_PATH} onClick={(e) => followLink(e, DEVICES_ADD_PATH)}>
-          Add it with a code instead
-        </a>
-        .
+        {rich(S.intro, {
+          link: (
+            <a href={DEVICES_ADD_PATH} onClick={(e) => followLink(e, DEVICES_ADD_PATH)}>
+              {S.withCode}
+            </a>
+          ),
+        })}
       </p>
       {!token ? (
         <form
@@ -161,7 +199,7 @@ export function EnrollCommand() {
           }}
         >
           <fieldset className="ws-fieldset devices-roles">
-            <legend>What will this device do?</legend>
+            <legend>{S.roles}</legend>
             {DEVICE_ENROLL_ROLES.map((r) => (
               <label key={r} className="nv-radio">
                 <input
@@ -184,72 +222,62 @@ export function EnrollCommand() {
           </fieldset>
           {!roles.length ? (
             <p className="nv-field-error" role="alert">
-              Choose at least one.
+              {S.chooseOne}
             </p>
           ) : null}
-          <p className="muted ws-flush">
-            Next you get one command to run on the device. Creating it approves the device; it works
-            once, for 15 minutes. The device then reports what it can do, and nothing is shared
-            until you allow it.
-          </p>
+          <p className="muted ws-flush">{S.next}</p>
           {error ? (
             <div role="alert" className="ws-error">
-              <p>{deviceErrorMessage(error, 'Could not create the command.')}</p>
+              <p>{deviceErrorMessage(error, S.createFailed)}</p>
             </div>
           ) : null}
           <div className="row">
             <Button type="submit" variant="primary" disabled={!roles.length || busy}>
-              {busy ? <Spinner /> : null} Create command
+              {busy ? <Spinner /> : null} {S.create}
             </Button>
-            <Button onClick={() => navigate(DEVICES_PATH)}>Cancel</Button>
+            <Button onClick={() => navigate(DEVICES_PATH)}>{S.cancel}</Button>
           </div>
         </form>
       ) : (
-        <section className="stack" aria-label="Enrollment command">
-          <p className="ws-flush">
-            Run this on the device, in a terminal with administrator rights. novad installs as a
-            service and registers with this Hub.
-          </p>
-          <pre className="ws-command">
+        <section className="stack" aria-label={S.command}>
+          <p className="ws-flush">{S.run}</p>
+          <pre className="ws-command" dir="ltr">
             <code ref={commandRef}>{token.command}</code>
           </pre>
           {token.command.includes('<this-device>') ? (
-            <p className="muted ws-flush">
-              Replace &lt;this-device&gt; with the address this Hub can reach the device at.
-            </p>
+            <p className="muted ws-flush">{S.replace({ token: '<this-device>' })}</p>
           ) : null}
           <div className="row">
             <Button
-              onClick={() => void copy(token.command, commandRef.current, 'Command')}
+              onClick={() => void copy(token.command, commandRef.current, 'command')}
               disabled={expired}
             >
-              <Icon name="copy" /> Copy command
+              <Icon name="copy" /> {S.copy}
             </Button>
             {expired ? (
               <Button variant="primary" onClick={() => void create()} disabled={busy}>
-                Create a new command
+                {S.createNew}
               </Button>
             ) : null}
           </div>
           {expired ? (
             <p role="alert" className="nv-field-error">
-              This command has expired. Create a new one to add the device.
+              {S.expired}
             </p>
           ) : (
             <div className="devices-waiting" role="status">
               <Spinner />
               <span>
-                Waiting for the device to register. The command expires in{' '}
-                <span role="timer">{formatCountdown(left)}</span>.
+                {rich(S.waiting, { time: <span role="timer">{formatCountdown(left)}</span> })}
               </span>
             </div>
           )}
           <div className="row">
             <Button onClick={() => void checkNow()} disabled={checking}>
-              {checking ? <Spinner /> : null} Check now
+              {checking ? <Spinner /> : null} {S.checkNow}
             </Button>
             <Button variant="ghost" onClick={() => navigate(DEVICES_PATH)}>
-              Back to devices
+              {S.back}
             </Button>
           </div>
         </section>

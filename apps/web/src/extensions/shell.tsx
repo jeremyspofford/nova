@@ -3,32 +3,46 @@
 // one), their status items sit in a status bar, and their context menu items join the menus of
 // chats, messages, files and the composer. Every run goes to the Hub, which runs the extension's
 // handler in its sandbox (`POST /extensions/:id/commands/:command/run`); its outcome is announced
-// and shown as a toast. Nothing here applies a theme or binds a key.
+// and shown as a toast. Nothing here applies a theme or binds a key. Items placed in the sidebar
+// (`where: 'sidebar'`) sit in a menu at the foot of the sidebar, above Settings.
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { ExtensionCommandResult } from '@nova/shared';
-import { useToast, type MenuItem } from '@nova/ui';
+import { Icon, Menu, useToast, type MenuItem } from '@nova/ui';
+import { CATEGORY } from '../commands.ts';
 import { navigate } from '../router.ts';
 import { useAnnounce, useServices } from '../services.tsx';
 import { MARKET_PATH } from '../market/format.ts';
 import { useExtensionsApi, type ExtensionsApi } from './api-m8.ts';
+import { CommandResultDialog, showCommandResult } from './CommandResult.tsx';
 import {
   EXTENSIONS_PATH,
   commandErrorText,
+  commandResultText,
   extensionCommandKey,
   extensionErrorMessage,
 } from './format.ts';
 import { extensionName, useExtensionContributions, type ContributionsState } from './store.ts';
 import './extensions.css';
 
-export const SHELL_TEXT = {
+// Titles, menu item names and status texts come from the extensions themselves (data); only the
+// words around them are messages.
+export const SHELL_TEXT = defineMessages('extensions.shell', {
   openMarket: 'Open the marketplace',
   manage: 'Manage extensions',
-  done: (title: string) => `${title}: done.`,
-  result: (title: string, text: string) => `${title}: ${text}`,
-  from: (name: string) => `From ${name}`,
+  /** A contributed command finished without saying anything. */
+  done: '{title}: done.',
+  /** A contributed command finished with `text`, in its own words. */
+  result: '{title}: {text}',
+  /** A contributed command returned more than one line can show: the dialog has it. */
+  finished: '{title} finished.',
+  showResult: 'Show the result',
+  couldNotRun: '{title} could not run.',
+  from: 'From {name}',
   statusBar: 'Extension status',
-  statusFrom: (text: string, name: string) => `${text} (from ${name})`,
-} as const;
+  statusFrom: '{text} (from {name})',
+  sidebarMenu: 'From extensions',
+});
 
 /** Where a context menu item of an extension can appear (docs/14 §4.1 "Context menus"). */
 export type MenuPlace = 'thread' | 'message' | 'file' | 'composer' | 'sidebar';
@@ -45,11 +59,24 @@ export function useRunContributed(): (title: string, run: Run) => void {
     run(api).then(
       (r) => {
         if (r.ok) {
-          const text =
-            typeof r.result === 'string' && r.result.trim()
-              ? SHELL_TEXT.result(title, r.result.trim().slice(0, 300))
-              : SHELL_TEXT.done(title);
-          toast.show(text, { tone: 'success' });
+          // What it returned, in its own words: one line in the toast, the whole in a dialog.
+          const { line, full } = commandResultText(r.result);
+          const text = line
+            ? SHELL_TEXT.result({ title, text: line })
+            : full
+              ? SHELL_TEXT.finished({ title })
+              : SHELL_TEXT.done({ title });
+          toast.show(text, {
+            tone: 'success',
+            ...(full
+              ? {
+                  action: {
+                    label: SHELL_TEXT.showResult,
+                    onClick: () => showCommandResult(title, full),
+                  },
+                }
+              : {}),
+          });
           announce(text);
         } else {
           const text = commandErrorText(title, r.error);
@@ -58,7 +85,7 @@ export function useRunContributed(): (title: string, run: Run) => void {
         }
       },
       (err: unknown) => {
-        const text = extensionErrorMessage(err, `${title} could not run.`);
+        const text = extensionErrorMessage(err, SHELL_TEXT.couldNotRun({ title }));
         toast.show(text, { tone: 'error' });
         announce(text);
       },
@@ -92,18 +119,19 @@ export function useExtensionShell(): void {
   );
   const signature = JSON.stringify(list);
 
+  // Titles are read here, when the commands register; the shell remounts on a language change.
   useEffect(() => {
     const offs = [
       registry.register({
         id: 'marketplace.open',
         title: SHELL_TEXT.openMarket,
-        category: 'Navigation',
+        category: CATEGORY.navigation,
         run: () => navigate(MARKET_PATH),
       }),
       registry.register({
         id: 'extensions.manage',
         title: SHELL_TEXT.manage,
-        category: 'Settings',
+        category: CATEGORY.settings,
         run: () => navigate(EXTENSIONS_PATH),
       }),
     ];
@@ -153,7 +181,7 @@ export function menuItemsFor(
       m.items.map((it) => ({
         id: `ext:${m.extensionId}:${it.id}`,
         label: it.title,
-        description: SHELL_TEXT.from(extensionName(state, m.extensionId)),
+        description: SHELL_TEXT.from({ name: extensionName(state, m.extensionId) }),
         onSelect: () =>
           run(it.title, (api) => api.runExtensionCommand(m.extensionId, it.command, args)),
       })),
@@ -170,8 +198,44 @@ export function useExtensionMenuItems(place: MenuPlace, args: Record<string, unk
   return menuItemsFor(state, place, args, run);
 }
 
-/** The status bar: running extensions' status items; a click runs the item's command. */
+/**
+ * The sidebar's menu of the items running extensions place there; nothing when there are none (a
+ * member's shell gets no contributions). It opens upward, from the foot of the sidebar.
+ */
+export function SidebarExtensionMenu() {
+  const items = useExtensionMenuItems('sidebar', {});
+  if (items.length === 0) return null;
+  return (
+    <Menu
+      label={SHELL_TEXT.sidebarMenu}
+      trigger={
+        <>
+          <Icon name="more" />
+          <span className="mode-label">{SHELL_TEXT.sidebarMenu}</span>
+        </>
+      }
+      items={items}
+      className="ext-sidebar-menu"
+      triggerProps={{ className: 'nv-btn mode-link ext-sidebar-trigger' }}
+    />
+  );
+}
+
+/**
+ * The status bar: running extensions' status items. A clickable one (it has a command, or the
+ * extension's own click handler) is a button; the Hub runs what the click does. It also holds the
+ * dialog of a command's whole result (the workspace always renders it).
+ */
 export function ExtensionStatusBar() {
+  return (
+    <>
+      <StatusItems />
+      <CommandResultDialog />
+    </>
+  );
+}
+
+function StatusItems() {
   const state = useExtensionContributions();
   const run = useRunContributed();
   const items = state.contributions.statusItems;
@@ -180,8 +244,8 @@ export function ExtensionStatusBar() {
     <div className="ext-statusbar" role="group" aria-label={SHELL_TEXT.statusBar}>
       {items.map((s) => {
         const name = extensionName(state, s.extensionId);
-        const label = SHELL_TEXT.statusFrom(s.text, name);
-        return s.command ? (
+        const label = SHELL_TEXT.statusFrom({ text: s.text, name });
+        return s.clickable || s.command ? (
           <button
             key={`${s.extensionId}:${s.id}`}
             type="button"
@@ -195,6 +259,7 @@ export function ExtensionStatusBar() {
           </button>
         ) : (
           <span
+            role="group"
             key={`${s.extensionId}:${s.id}`}
             className="ext-status-item"
             title={label}

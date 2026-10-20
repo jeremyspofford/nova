@@ -133,7 +133,7 @@
   border-radius: var(--u-radius-sm);
 }
 .ws-callout[data-tone='blocked'] {
-  border-left-color: var(--u-danger);
+  border-inline-start-color: var(--u-danger);
 }
 
 /* A pet installed from the marketplace as the companion: its frames in place of the drawing. */
@@ -143,6 +143,31 @@
   height: 44px;
   object-fit: contain;
   pointer-events: none;
+}
+
+/* What an update changes (also the extension preview's): parts of a changed permission, with a
+   change that lets the item do more without asking marked and in bold. */
+.market-change-parts {
+  margin: var(--u-space-1) 0 0;
+  padding-inline-start: var(--u-space-5);
+}
+.market-change-parts li[data-sensitive] {
+  color: var(--u-text);
+}
+.market-sensitive {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  color: var(--u-warn);
+  font-size: var(--u-text-xs);
+  font-weight: 600;
+}
+.market-change-note {
+  margin: var(--u-space-1) 0 0;
+  font-size: var(--u-text-sm);
+}
+.market-strong {
+  font-weight: 600;
 }
 
 @media (max-width: 640px) {

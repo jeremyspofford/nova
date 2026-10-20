@@ -18,6 +18,7 @@ import {
   reasonOf,
   refusalRedirect,
   sameTarget,
+  scopeText,
 } from './format.ts';
 import '../workspace.css';
 import './appauth.css';
@@ -101,7 +102,7 @@ export function AuthorizePage({ query }: { query?: string }) {
         // let the app hear it.
         setView(null);
         setLoadError(err);
-      } else setFailure(appErrorMessage(err, 'Could not send your answer.'));
+      } else setFailure(appErrorMessage(err, CONSENT_TEXT.sendFailed));
     } finally {
       setBusy(null);
     }
@@ -138,7 +139,7 @@ export function AuthorizePage({ query }: { query?: string }) {
           {CONSENT_TEXT.refusedTitle}
         </h1>
         <p role="alert" className="ws-flush">
-          {appErrorMessage(loadError, 'The Hub could not read this request.')}
+          {appErrorMessage(loadError, CONSENT_TEXT.readFailed)}
         </p>
         {back ? (
           <div className="stack">
@@ -168,15 +169,16 @@ export function AuthorizePage({ query }: { query?: string }) {
   return (
     <Frame>
       <h1 ref={headingRef} tabIndex={-1} className="aa-title" aria-describedby={descId}>
-        {CONSENT_TEXT.title(name)}
+        {CONSENT_TEXT.title({ name })}
       </h1>
       <p id={descId} className="ws-flush">
-        {CONSENT_TEXT.intro(name)}
+        {CONSENT_TEXT.intro({ name })}
       </p>
       <p className="ws-callout ws-flush" role="note">
         <Icon name="alert" />
         <span>
-          {CONSENT_TEXT.nameCaution} {CONSENT_TEXT.registered(formatWhen(view.client.registeredAt))}
+          {CONSENT_TEXT.nameCaution}{' '}
+          {CONSENT_TEXT.registered({ when: formatWhen(view.client.registeredAt) })}
         </span>
       </p>
       {view.authorized ? <p className="muted ws-flush">{CONSENT_TEXT.authorizedBefore}</p> : null}
@@ -188,6 +190,7 @@ export function AuthorizePage({ query }: { query?: string }) {
         <ul className="aa-scope-list">
           {view.scopes.map((s) => {
             const boxId = `${descId}-${s.scope.replace(/[^a-z]/g, '-')}`;
+            const words = scopeText(s.scope, s);
             return (
               <li key={s.scope} className="aa-scope">
                 <input
@@ -206,10 +209,10 @@ export function AuthorizePage({ query }: { query?: string }) {
                 />
                 <span className="aa-scope-text">
                   <label htmlFor={boxId} className="aa-scope-label">
-                    {s.label}
+                    {words.label}
                   </label>
                   <span id={`${boxId}-desc`} className="nv-field-hint">
-                    {s.description}
+                    {words.description}
                   </span>
                   {s.granted ? (
                     <span className="ws-badge" data-tone="ok">
@@ -236,7 +239,7 @@ export function AuthorizePage({ query }: { query?: string }) {
       ) : null}
       {done ? (
         <p role="status" className="ws-flush">
-          {done === 'approve' ? CONSENT_TEXT.allowed(name) : CONSENT_TEXT.denied(name)}
+          {done === 'approve' ? CONSENT_TEXT.allowed({ name }) : CONSENT_TEXT.denied({ name })}
         </p>
       ) : (
         <div className="row aa-actions">

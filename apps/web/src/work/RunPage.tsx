@@ -4,6 +4,7 @@
 // plan, the sub-agents, the result, the conversation and the Activity trace. Everything follows
 // the shared event stream; budget meters update from usage events without a refetch.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { GoalView, ProjectView, RunView, SubagentView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, StatusChip, useToast } from '@nova/ui';
 import { ApiError, errorMessage, type Api } from '../api.ts';
@@ -14,7 +15,9 @@ import { ActivityTrace } from './ActivityTrace.tsx';
 import { eventCorrelation, eventRunId, useDebounced, useWorkEvents } from './events.ts';
 import { ExtendBudgetDialog } from './ExtendBudgetDialog.tsx';
 import {
+  AMOUNT_TEXT,
   AUTONOMY_TEXT,
+  WORK_TEXT,
   budgetBound,
   formatCost,
   formatTokens,
@@ -37,21 +40,88 @@ import { ThreadCloudRun } from '../cloud/ThreadCloudRun.tsx';
 /** Events after which the trace has new lines. */
 const TRACE_ON = /^(run\.(step|status|completed|budget\.reached|subagent)|approval\.|request\.)/;
 
-const ORIGIN_TEXT: Record<RunView['origin'], string> = {
-  user: 'Started by you',
-  schedule: 'Started by a schedule',
-  trigger: 'Started by a trigger',
-  chat_escalation: 'Started from a chat',
-  delegation: 'Delegated by another run',
-  goal: 'Started to pursue a goal',
-};
+/** One run's page. {reason} is the Hub's own words (English, D9). */
+export const RUN_TEXT = defineMessages('work.run', {
+  origin: {
+    user: 'Started by you',
+    schedule: 'Started by a schedule',
+    trigger: 'Started by a trigger',
+    chat_escalation: 'Started from a chat',
+    delegation: 'Delegated by another run',
+    goal: 'Started to pursue a goal',
+  },
+  deleted: 'This run was deleted or does not exist.',
+  loadFailed: 'Could not load this run.',
+  loading: 'Loading the run',
+  /** Toasts when a change fails. */
+  failed: {
+    change: 'Could not change the run: {reason}',
+    redirect: 'Could not redirect the run: {reason}',
+    extend: 'Could not extend the budget: {reason}',
+    setGoal: 'Could not set the goal: {reason}',
+    saveGoal: 'Could not save the goal: {reason}',
+    changeGoal: 'Could not change the goal: {reason}',
+    clearGoal: 'Could not clear the goal: {reason}',
+    savePlan: 'Could not save the plan: {reason}',
+    start: 'Could not start the run: {reason}',
+  },
+  /** Said when the status changes: "Run Tidy the notes: Paused by you." */
+  statusChanged: 'Run {title}: {status}.',
+  /** {level} is the autonomy level, such as "Standard". */
+  autonomy: 'Autonomy: {level}',
+  /** {when} is a time, such as "5 minutes ago". */
+  started: 'Started {when}',
+  controls: 'Run controls',
+  pause: 'Pause',
+  paused: 'Run paused.',
+  resume: 'Resume',
+  resumed: 'Run resumed.',
+  redirect: 'Redirect…',
+  cancel: 'Cancel run',
+  redirected: 'New instructions sent. The run applies them at its next step.',
+  goalSet: 'Goal set.',
+  goalSaved: 'Goal saved. It applies at the start of the next turn.',
+  goalCleared: 'Goal cleared.',
+  planSaved: 'Plan saved.',
+  starting: 'The run is starting.',
+  extended: 'Budget extended.',
+  cancelTitle: 'Cancel this run?',
+  cancelBody: 'The run stops now. What it did so far stays in its conversation and Activity.',
+  keep: 'Keep running',
+  cancelled: 'Run cancelled.',
+  instructions: 'New instructions',
+  instructionsHint: 'The run applies them at the start of its next step.',
+  send: 'Send instructions',
+  close: 'Close',
+  stepLimit: 'Step limit reached',
+  /** {amounts} is what the run used against the budget, such as "10 / 10 min". */
+  budgetReached:
+    '{bound, select, time {Budget reached: time ({amounts})} tokens {Budget reached: tokens ({amounts})} other {Budget reached: cost ({amounts})}}',
+  /** The status chip's reason while a budget pauses the run. */
+  budgetReason: 'Budget reached',
+  backstopBody: 'The last turn used its 200 steps. The run waits until you let it continue.',
+  pausedBody: 'The run paused with its progress saved. Nothing runs until you extend the budget.',
+  continue: 'Continue',
+  continuing: 'Continuing.',
+  extendMinutes: 'Extend {n} min',
+  addedMinutes: '{n, plural, one {Added # minute.} other {Added # minutes.}}',
+  /** {amount} is a token count, such as "1M". */
+  extendTokens: 'Extend {amount} tokens',
+  addedTokens: 'Added {amount} tokens.',
+  extendBudget: 'Extend budget…',
+  budgetUse: 'Budget use',
+  time: 'Time',
+  tokens: 'Tokens',
+  cost: 'Cost',
+  timeHint: 'Time waiting for an approval or your input is not counted.',
+  /** The cost used when no cost budget is set. */
+  costNoLimit: '{cost} (limit: provider spend cap)',
+});
 
 function loadError(err: unknown): { message: string; missing: boolean } {
   const missing = err instanceof ApiError && err.status === 404;
   return {
-    message: missing
-      ? 'This run was deleted or does not exist.'
-      : errorMessage(err, 'Could not load this run.'),
+    message: missing ? RUN_TEXT.deleted : errorMessage(err, RUN_TEXT.loadFailed),
     missing,
   };
 }
@@ -73,10 +143,11 @@ export function RunPage({ runId }: { runId: string }) {
   const [attempt, setAttempt] = useState(0);
   const lastStatus = useRef<string | null>(null);
 
+  const S = RUN_TEXT;
   const fail =
-    (what: string) =>
+    (what: (p: { reason: string }) => string) =>
     (err: unknown): void => {
-      toast.show(`${what}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(what({ reason: errorMessage(err) }), { tone: 'error' });
     };
 
   // The page is keyed by run id, so these loads never race another run's.
@@ -132,7 +203,7 @@ export function RunPage({ runId }: { runId: string }) {
     if (!run) return;
     const line = runStatusLine(run);
     if (lastStatus.current !== null && lastStatus.current !== line)
-      announce(`Run ${run.title}: ${line}.`);
+      announce(RUN_TEXT.statusChanged({ title: run.title, status: line }));
     lastStatus.current = line;
   }, [announce, run]);
 
@@ -194,7 +265,7 @@ export function RunPage({ runId }: { runId: string }) {
     api.controlRun(runId, action).then((r) => {
       setRun(r);
       toast.show(label, { tone: 'success' });
-    }, fail('Could not change the run'));
+    }, fail(S.failed.change));
   };
 
   if (error && !run)
@@ -203,7 +274,9 @@ export function RunPage({ runId }: { runId: string }) {
         <Breadcrumb />
         <div role="alert" className="ws-error">
           <p>{error.message}</p>
-          {error.missing ? null : <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>}
+          {error.missing ? null : (
+            <Button onClick={() => setAttempt((n) => n + 1)}>{WORK_TEXT.retry}</Button>
+          )}
         </div>
       </div>
     );
@@ -211,7 +284,7 @@ export function RunPage({ runId }: { runId: string }) {
     return (
       <div className="ws-page work-page">
         <Breadcrumb />
-        <Spinner label="Loading the run" />
+        <Spinner label={S.loading} />
       </div>
     );
 
@@ -225,7 +298,7 @@ export function RunPage({ runId }: { runId: string }) {
       <Breadcrumb />
       <header className="work-run-header">
         <div className="ws-page-header">
-          <h1>{run.title}</h1>
+          <h1 dir="auto">{run.title}</h1>
           <OpenInWindowButton
             path={`/work/${encodeURIComponent(run.id)}`}
             what={run.title}
@@ -243,10 +316,10 @@ export function RunPage({ runId }: { runId: string }) {
                 href={chatPath(run.originRef)}
                 onClick={(e) => followLink(e, chatPath(run.originRef ?? ''))}
               >
-                {ORIGIN_TEXT.chat_escalation}
+                {S.origin.chat_escalation}
               </a>
             ) : (
-              ORIGIN_TEXT[run.origin]
+              S.origin[run.origin]
             )}
           </span>
           {project ? (
@@ -254,33 +327,35 @@ export function RunPage({ runId }: { runId: string }) {
               href={projectPath(project.id)}
               onClick={(e) => followLink(e, projectPath(project.id))}
             >
-              <Icon name="folder" /> {project.name}
+              <Icon name="folder" /> <span dir="auto">{project.name}</span>
             </a>
           ) : null}
-          <span>Autonomy: {AUTONOMY_TEXT[run.autonomy].label}</span>
-          <span>Started {formatWhen(run.createdAt)}</span>
+          <span>{S.autonomy({ level: AUTONOMY_TEXT[run.autonomy].label })}</span>
+          <span>{S.started({ when: formatWhen(run.createdAt) })}</span>
         </p>
-        <p className="work-objective">{run.objective}</p>
+        <p className="work-objective" dir="auto">
+          {run.objective}
+        </p>
         <p role="status" className="work-progress">
           {progressLine(run)}
         </p>
         {final ? null : (
-          <div className="ws-toolbar" role="group" aria-label="Run controls">
+          <div className="ws-toolbar" role="group" aria-label={S.controls}>
             {canPause ? (
-              <Button onClick={() => control('pause', 'Run paused.')}>
-                <Icon name="stop" /> Pause
+              <Button onClick={() => control('pause', S.paused)}>
+                <Icon name="stop" /> {S.pause}
               </Button>
             ) : null}
             {canResume ? (
-              <Button onClick={() => control('resume', 'Run resumed.')}>
-                <Icon name="forward" /> Resume
+              <Button onClick={() => control('resume', S.resumed)}>
+                <Icon name="forward" /> {S.resume}
               </Button>
             ) : null}
             <Button aria-expanded={redirecting} onClick={() => setRedirecting((r) => !r)}>
-              Redirect…
+              {S.redirect}
             </Button>
             <Button variant="danger" onClick={() => setConfirmCancel(true)}>
-              Cancel run
+              {S.cancel}
             </Button>
           </div>
         )}
@@ -291,11 +366,9 @@ export function RunPage({ runId }: { runId: string }) {
               try {
                 setRun(await api.controlRun(runId, 'redirect', text));
                 setRedirecting(false);
-                toast.show('New instructions sent. The run applies them at its next step.', {
-                  tone: 'success',
-                });
+                toast.show(S.redirected, { tone: 'success' });
               } catch (err) {
-                fail('Could not redirect the run')(err);
+                fail(S.failed.redirect)(err);
               }
             }}
           />
@@ -310,7 +383,7 @@ export function RunPage({ runId }: { runId: string }) {
             api.extendRunBudget(runId, body).then((r) => {
               setRun(r);
               toast.show(label, { tone: 'success' });
-            }, fail('Could not extend the budget'))
+            }, fail(S.failed.extend))
           }
           onExtend={() => setExtending(true)}
         />
@@ -326,10 +399,10 @@ export function RunPage({ runId }: { runId: string }) {
           set: async (objective) => {
             try {
               setGoal(await api.setRunGoal(runId, { objective }));
-              toast.show('Goal set.', { tone: 'success' });
+              toast.show(S.goalSet, { tone: 'success' });
               return true;
             } catch (err) {
-              fail('Could not set the goal')(err);
+              fail(S.failed.setGoal)(err);
               return false;
             }
           },
@@ -337,26 +410,22 @@ export function RunPage({ runId }: { runId: string }) {
             if (!goal) return false;
             try {
               setGoal(await api.updateGoal(goal.id, { objective }));
-              toast.show('Goal saved. It applies at the start of the next turn.', {
-                tone: 'success',
-              });
+              toast.show(S.goalSaved, { tone: 'success' });
               return true;
             } catch (err) {
-              fail('Could not save the goal')(err);
+              fail(S.failed.saveGoal)(err);
               return false;
             }
           },
           act: (action) => {
             if (!goal) return;
-            api
-              .goalAction(goal.id, action)
-              .then((g) => setGoal(g), fail('Could not change the goal'));
+            api.goalAction(goal.id, action).then((g) => setGoal(g), fail(S.failed.changeGoal));
           },
           clear: () => {
             api.clearRunGoal(runId).then(() => {
               setGoal(null);
-              toast.show('Goal cleared.', { tone: 'success' });
-            }, fail('Could not clear the goal'));
+              toast.show(S.goalCleared, { tone: 'success' });
+            }, fail(S.failed.clearGoal));
           },
           extend: () => setExtending(true),
         }}
@@ -367,18 +436,18 @@ export function RunPage({ runId }: { runId: string }) {
         onSave={async (steps) => {
           try {
             setRun(await api.updateRunPlan(runId, { steps }));
-            toast.show('Plan saved.', { tone: 'success' });
+            toast.show(S.planSaved, { tone: 'success' });
             return true;
           } catch (err) {
-            fail('Could not save the plan')(err);
+            fail(S.failed.savePlan)(err);
             return false;
           }
         }}
         onApprove={() => {
           api.startRun(runId).then((r) => {
             setRun(r);
-            toast.show('The run is starting.', { tone: 'success' });
-          }, fail('Could not start the run'));
+            toast.show(S.starting, { tone: 'success' });
+          }, fail(S.failed.start));
         }}
       />
 
@@ -404,25 +473,25 @@ export function RunPage({ runId }: { runId: string }) {
         onExtended={(r) => {
           setExtending(false);
           setRun(r);
-          toast.show('Budget extended.', { tone: 'success' });
+          toast.show(S.extended, { tone: 'success' });
         }}
       />
       <Dialog
         open={confirmCancel}
-        title="Cancel this run?"
-        description="The run stops now. What it did so far stays in its conversation and Activity."
+        title={S.cancelTitle}
+        description={S.cancelBody}
         onClose={() => setConfirmCancel(false)}
         footer={
           <>
-            <Button onClick={() => setConfirmCancel(false)}>Keep running</Button>
+            <Button onClick={() => setConfirmCancel(false)}>{S.keep}</Button>
             <Button
               variant="danger"
               onClick={() => {
                 setConfirmCancel(false);
-                control('cancel', 'Run cancelled.');
+                control('cancel', S.cancelled);
               }}
             >
-              Cancel run
+              {S.cancel}
             </Button>
           </>
         }
@@ -435,7 +504,7 @@ function Breadcrumb() {
   return (
     <p className="ws-breadcrumb">
       <a href="/work" onClick={(e) => followLink(e, '/work')}>
-        <Icon name="back" /> Work
+        <Icon name="back" /> {WORK_TEXT.work}
       </a>
     </p>
   );
@@ -451,6 +520,7 @@ function RedirectForm({
   const id = `rd${useId()}`;
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const S = RUN_TEXT;
   return (
     <form
       className="stack work-redirect"
@@ -463,7 +533,7 @@ function RedirectForm({
     >
       <div className="nv-field">
         <label className="nv-field-label" htmlFor={id}>
-          New instructions
+          {S.instructions}
         </label>
         <textarea
           id={id}
@@ -482,22 +552,20 @@ function RedirectForm({
           }}
         />
         <span id={`${id}-hint`} className="nv-field-hint">
-          The run applies them at the start of its next step.
+          {S.instructionsHint}
         </span>
       </div>
       <div className="ws-toolbar">
         <Button type="submit" variant="primary" disabled={busy || !text.trim()}>
-          {busy ? <Spinner /> : null} Send instructions
+          {busy ? <Spinner /> : null} {S.send}
         </Button>
-        <Button onClick={onCancel}>Close</Button>
+        <Button onClick={onCancel}>{S.close}</Button>
       </div>
     </form>
   );
 }
 
 type QuickExtend = Parameters<Api['extendRunBudget']>[1];
-
-const BOUND_TEXT = { time: 'time', tokens: 'tokens', cost: 'cost' } as const;
 
 /** At a bound the header turns into a decision (docs/04 §2.3.1); nothing continues silently. */
 function BudgetBanner({
@@ -512,53 +580,60 @@ function BudgetBanner({
   onExtend: () => void;
 }) {
   const headingId = useId();
+  const S = RUN_TEXT;
+  const A = AMOUNT_TEXT;
   const amounts =
     bound === 'time'
-      ? `${minutes(run.used.timeSeconds)} / ${minutes(run.budgets.timeSeconds)} min`
+      ? A.minutesOf({
+          used: minutes(run.used.timeSeconds),
+          total: minutes(run.budgets.timeSeconds),
+        })
       : bound === 'tokens'
-        ? `${formatTokens(run.used.tokens)} / ${formatTokens(run.budgets.tokens)} tokens`
-        : bound === 'cost'
-          ? `${formatCost(run.used.costUsd)}${run.budgets.costUsd === null ? '' : ` / ${formatCost(run.budgets.costUsd)}`}`
-          : null;
+        ? A.tokensOf({
+            used: formatTokens(run.used.tokens),
+            total: formatTokens(run.budgets.tokens),
+          })
+        : run.budgets.costUsd === null
+          ? formatCost(run.used.costUsd)
+          : A.of({ used: formatCost(run.used.costUsd), total: formatCost(run.budgets.costUsd) });
+  const million = formatTokens(1_000_000);
   return (
     <section className="work-banner" aria-labelledby={headingId}>
       <div className="work-goal-head">
         <h2 id={headingId}>
-          {bound === 'backstop'
-            ? 'Step limit reached'
-            : `Budget reached: ${BOUND_TEXT[bound]} (${amounts ?? ''})`}
+          {bound === 'backstop' ? S.stepLimit : S.budgetReached({ bound, amounts })}
         </h2>
-        <StatusChip status="blocked" reason="Budget reached" />
+        <StatusChip status="blocked" reason={S.budgetReason} />
       </div>
-      <p className="ws-flush">
-        {bound === 'backstop'
-          ? 'The last turn used its 200 steps. The run waits until you let it continue.'
-          : 'The run paused with its progress saved. Nothing runs until you extend the budget.'}
-      </p>
-      {run.result?.summary ? <p className="ws-summary">{run.result.summary}</p> : null}
+      <p className="ws-flush">{bound === 'backstop' ? S.backstopBody : S.pausedBody}</p>
+      {run.result?.summary ? (
+        <p className="ws-summary" dir="auto">
+          {run.result.summary}
+        </p>
+      ) : null}
       <div className="ws-toolbar">
         {bound === 'backstop' ? (
-          <Button variant="primary" onClick={() => void onQuick({ steps: true }, 'Continuing.')}>
-            Continue
+          <Button variant="primary" onClick={() => void onQuick({ steps: true }, S.continuing)}>
+            {S.continue}
           </Button>
         ) : null}
         {bound === 'time' ? (
           <Button
             variant="primary"
-            onClick={() => void onQuick({ timeSeconds: 1800 }, 'Added 30 minutes.')}
+            onClick={() => void onQuick({ timeSeconds: 1800 }, S.addedMinutes({ n: 30 }))}
           >
-            Extend 30 min
+            {S.extendMinutes({ n: 30 })}
           </Button>
         ) : null}
         {bound === 'tokens' ? (
           <Button
             variant="primary"
-            onClick={() => void onQuick({ tokens: 1_000_000 }, 'Added 1M tokens.')}
+            onClick={() => void onQuick({ tokens: 1_000_000 }, S.addedTokens({ amount: million }))}
           >
-            Extend 1M tokens
+            {S.extendTokens({ amount: million })}
           </Button>
         ) : null}
-        {bound === 'backstop' ? null : <Button onClick={onExtend}>Extend budget…</Button>}
+        {bound === 'backstop' ? null : <Button onClick={onExtend}>{S.extendBudget}</Button>}
       </div>
     </section>
   );
@@ -568,32 +643,34 @@ function BudgetBanner({
 function BudgetMeters({ run }: { run: RunView }) {
   const headingId = useId();
   const { used, budgets } = run;
+  const S = RUN_TEXT;
+  const A = AMOUNT_TEXT;
   return (
     <section className="work-meters" aria-labelledby={headingId}>
       <h2 id={headingId} className="nv-vh">
-        Budget use
+        {S.budgetUse}
       </h2>
       <Meter
-        label="Time"
+        label={S.time}
         value={used.timeSeconds}
         max={budgets.timeSeconds}
-        text={`${minutes(used.timeSeconds)} / ${minutes(budgets.timeSeconds)} min`}
-        hint="Time waiting for an approval or your input is not counted."
+        text={A.minutesOf({ used: minutes(used.timeSeconds), total: minutes(budgets.timeSeconds) })}
+        hint={S.timeHint}
       />
       <Meter
-        label="Tokens"
+        label={S.tokens}
         value={used.tokens}
         max={budgets.tokens}
-        text={`${formatTokens(used.tokens)} / ${formatTokens(budgets.tokens)}`}
+        text={A.of({ used: formatTokens(used.tokens), total: formatTokens(budgets.tokens) })}
       />
       <Meter
-        label="Cost"
+        label={S.cost}
         value={used.costUsd}
         max={budgets.costUsd}
         text={
           budgets.costUsd === null
-            ? `${formatCost(used.costUsd)} (limit: provider spend cap)`
-            : `${formatCost(used.costUsd)} / ${formatCost(budgets.costUsd)}`
+            ? S.costNoLimit({ cost: formatCost(used.costUsd) })
+            : A.of({ used: formatCost(used.costUsd), total: formatCost(budgets.costUsd) })
         }
       />
     </section>

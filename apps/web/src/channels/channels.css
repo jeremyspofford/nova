@@ -88,7 +88,7 @@
   display: grid;
   gap: var(--u-space-1);
   margin: 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
   font-size: var(--u-text-sm);
 }
 .ch-help code {
@@ -258,6 +258,25 @@
   flex: 1 1 240px;
 }
 .ch-log-who {
+  overflow-wrap: anywhere;
+}
+/* M8: the files of a log entry, one line each (name, size, state, why). */
+.ch-log-files {
+  display: grid;
+  gap: var(--u-space-1);
+  margin: var(--u-space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.ch-log-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1) var(--u-space-2);
+  min-width: 0;
+}
+.ch-log-file-name {
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 .ch-test-result {

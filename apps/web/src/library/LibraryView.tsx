@@ -3,28 +3,61 @@
 // chat, the project or the artifact), using the link the Hub gives it.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LibraryItemView, LibraryKind } from '@nova/shared';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Button, EmptyState, Icon, Spinner, TextField, rovingIndex, type IconName } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { formatBytes } from '../chat/attachments.ts';
 import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 
-export const LIBRARY_KINDS: { value: LibraryKind | 'all'; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'artifact', label: 'Artifacts' },
-  { value: 'attachment', label: 'Attachments' },
-  { value: 'source', label: 'Sources' },
-  { value: 'image', label: 'Images' },
-  { value: 'file', label: 'Files' },
-];
+export const LIBRARY_TEXT = defineMessages('library', {
+  /** The kind filter's choices. */
+  filter: {
+    all: 'All',
+    artifact: 'Artifacts',
+    attachment: 'Attachments',
+    source: 'Sources',
+    image: 'Images',
+    file: 'Files',
+  },
+  kind: {
+    artifact: 'Artifact',
+    attachment: 'Attachment',
+    source: 'Source',
+    image: 'Image',
+    file: 'File',
+  },
+  loadFailed: 'Could not load the library.',
+  moreFailed: 'Could not load more.',
+  title: 'Library',
+  intro: 'Artifacts, attachments, sources and images from all your chats and projects.',
+  kindLabel: 'Kind',
+  search: 'Search the library',
+  searchPlaceholder: 'Title',
+  retry: 'Retry',
+  loading: 'Loading the library',
+  loadingDots: 'Loading…',
+  noMatchTitle: 'Nothing matches',
+  noMatchBody: 'Try another kind or search.',
+  emptyTitle: 'Nothing here yet',
+  emptyBody: 'Artifacts, attachments and sources from your chats and projects appear here.',
+  count:
+    '{more, select, yes {{n, plural, one {# item, more available} other {# items, more available}}} other {{n, plural, one {# item} other {# items}}}}',
+  list: 'Library items',
+  /** An item's kind and size: "Attachment, 2 KB". */
+  withSize: '{kind}, {size}',
+  showMore: 'Show more',
+});
 
-const KIND_TEXT: Record<LibraryKind, string> = {
-  artifact: 'Artifact',
-  attachment: 'Attachment',
-  source: 'Source',
-  image: 'Image',
-  file: 'File',
-};
+/** The kind filter's choices, in order. */
+export const LIBRARY_KINDS: readonly (LibraryKind | 'all')[] = [
+  'all',
+  'artifact',
+  'attachment',
+  'source',
+  'image',
+  'file',
+];
 
 const KIND_ICON: Record<LibraryKind, IconName> = {
   artifact: 'artifact',
@@ -80,7 +113,7 @@ export function LibraryView({ searchDelayMs = 250 }: { searchDelayMs?: number })
           setError(null);
         },
         (err: unknown) => {
-          if (alive) setError(errorMessage(err, 'Could not load the library.'));
+          if (alive) setError(errorMessage(err, LIBRARY_TEXT.loadFailed));
         },
       );
     return () => {
@@ -106,7 +139,7 @@ export function LibraryView({ searchDelayMs = 250 }: { searchDelayMs?: number })
               ? { ...cur, items: [...cur.items, ...p.items], cursor: p.nextCursor }
               : cur,
           ),
-        (err: unknown) => setError(errorMessage(err, 'Could not load more.')),
+        (err: unknown) => setError(errorMessage(err, LIBRARY_TEXT.moreFailed)),
       )
       .finally(() => setMore(false));
   }, [api, kind, more, page, q]);
@@ -115,24 +148,22 @@ export function LibraryView({ searchDelayMs = 250 }: { searchDelayMs?: number })
   const choose = (i: number) => {
     const k = LIBRARY_KINDS[i];
     if (!k) return;
-    setKind(k.value);
+    setKind(k);
     radios.current?.querySelectorAll<HTMLElement>('[role="radio"]')[i]?.focus();
   };
-  const at = LIBRARY_KINDS.findIndex((k) => k.value === kind);
+  const at = LIBRARY_KINDS.indexOf(kind);
 
   return (
     <section className="library" aria-labelledby="library-title">
       <h1 id="library-title" className="library-title">
-        Library
+        {LIBRARY_TEXT.title}
       </h1>
-      <p className="muted">
-        Artifacts, attachments, sources and images from all your chats and projects.
-      </p>
+      <p className="muted">{LIBRARY_TEXT.intro}</p>
       <div className="library-filters">
         <div
           ref={radios}
           role="radiogroup"
-          aria-label="Kind"
+          aria-label={LIBRARY_TEXT.kindLabel}
           className="library-kinds"
           onKeyDown={(e) => {
             const next = rovingIndex(e.key, at, LIBRARY_KINDS.length, 'horizontal');
@@ -143,25 +174,25 @@ export function LibraryView({ searchDelayMs = 250 }: { searchDelayMs?: number })
         >
           {LIBRARY_KINDS.map((k, i) => (
             <button
-              key={k.value}
+              key={k}
               type="button"
               role="radio"
-              aria-checked={k.value === kind}
-              tabIndex={k.value === kind ? 0 : -1}
+              aria-checked={k === kind}
+              tabIndex={k === kind ? 0 : -1}
               className="library-kind"
               onClick={() => choose(i)}
             >
-              {k.label}
+              {LIBRARY_TEXT.filter[k]}
             </button>
           ))}
         </div>
         <div className="library-search">
           <TextField
-            label="Search the library"
+            label={LIBRARY_TEXT.search}
             type="search"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Title"
+            placeholder={LIBRARY_TEXT.searchPlaceholder}
           />
         </div>
       </div>
@@ -174,37 +205,36 @@ export function LibraryView({ searchDelayMs = 250 }: { searchDelayMs?: number })
               setAttempt((n) => n + 1);
             }}
           >
-            Retry
+            {LIBRARY_TEXT.retry}
           </Button>
         </div>
       ) : !current ? (
         <p className="muted">
-          <Spinner label="Loading the library" /> Loading…
+          <Spinner label={LIBRARY_TEXT.loading} /> {LIBRARY_TEXT.loadingDots}
         </p>
       ) : current.items.length === 0 ? (
         <EmptyState
-          title={q || kind !== 'all' ? 'Nothing matches' : 'Nothing here yet'}
-          description={
-            q || kind !== 'all'
-              ? 'Try another kind or search.'
-              : 'Artifacts, attachments and sources from your chats and projects appear here.'
-          }
+          title={q || kind !== 'all' ? LIBRARY_TEXT.noMatchTitle : LIBRARY_TEXT.emptyTitle}
+          description={q || kind !== 'all' ? LIBRARY_TEXT.noMatchBody : LIBRARY_TEXT.emptyBody}
           icon="library"
           level={2}
         />
       ) : (
         <>
           <p className="nv-vh" role="status">
-            {current.items.length} {current.items.length === 1 ? 'item' : 'items'}
-            {current.cursor ? ', more available' : ''}
+            {LIBRARY_TEXT.count({
+              n: current.items.length,
+              more: current.cursor ? 'yes' : 'no',
+            })}
           </p>
-          <ul className="library-list" aria-label="Library items">
+          <ul className="library-list" aria-label={LIBRARY_TEXT.list}>
             {current.items.map((item) => (
               <li key={`${item.kind}:${item.id}`} className="library-item">
                 <Icon name={KIND_ICON[item.kind]} />
                 {inApp(item.href) ? (
                   <a
                     className="library-item-title"
+                    dir="auto"
                     href={item.href}
                     onClick={(e) => {
                       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -215,14 +245,20 @@ export function LibraryView({ searchDelayMs = 250 }: { searchDelayMs?: number })
                     {item.title}
                   </a>
                 ) : (
-                  <span className="library-item-title">{item.title}</span>
+                  <span className="library-item-title" dir="auto">
+                    {item.title}
+                  </span>
                 )}
                 <span className="library-item-meta">
-                  {KIND_TEXT[item.kind]}
-                  {item.size !== null ? `, ${formatBytes(item.size)}` : ''}
+                  {item.size !== null
+                    ? LIBRARY_TEXT.withSize({
+                        kind: LIBRARY_TEXT.kind[item.kind],
+                        size: formatBytes(item.size),
+                      })
+                    : LIBRARY_TEXT.kind[item.kind]}
                 </span>
                 <time className="library-item-meta" dateTime={item.createdAt}>
-                  {new Date(item.createdAt).toLocaleDateString()}
+                  {fmt.date(item.createdAt)}
                 </time>
               </li>
             ))}
@@ -234,7 +270,7 @@ export function LibraryView({ searchDelayMs = 250 }: { searchDelayMs?: number })
           ) : null}
           {current.cursor ? (
             <Button className="library-more" onClick={loadMore} disabled={more}>
-              {more ? <Spinner /> : null} Show more
+              {more ? <Spinner /> : null} {LIBRARY_TEXT.showMore}
             </Button>
           ) : null}
         </>

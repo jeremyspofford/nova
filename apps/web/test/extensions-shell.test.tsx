@@ -72,7 +72,8 @@ describe('commands and the status bar', () => {
     await waitFor(() =>
       expect(ext.runExtensionCommand).toHaveBeenCalledWith('com.examplelabs.word-count', 'count'),
     );
-    expect(await screen.findByText('Count words: 342 words')).toBeTruthy();
+    // The toast, and for a moment its screen-reader announcement too: either may be found.
+    expect((await screen.findAllByText('Count words: 342 words')).length).toBeGreaterThan(0);
   });
 
   it('says in plain words why a command failed', async () => {
@@ -117,13 +118,34 @@ describe('commands and the status bar', () => {
 
     // The extension updates its item: the Hub says so, and the bar follows.
     state.installed[0]!.bundle.contributes!.statusItems = [
-      { extensionId: '', id: 'words', text: '121 words', command: null },
+      { extensionId: '', id: 'words', text: '121 words', command: null, clickable: false },
     ];
     events().emit('extension.contributions.changed', {
       extensionId: 'com.examplelabs.word-count',
     });
     expect(await within(bar).findByText('121 words')).toBeTruthy();
     expect(within(bar).queryByRole('button')).toBeNull();
+
+    // Its own click handler, without a command: still a button, and the Hub runs the handler.
+    state.installed[0]!.bundle.contributes!.statusItems = [
+      { extensionId: '', id: 'words', text: '122 words', command: null, clickable: true },
+    ];
+    state.commandResults['com.examplelabs.word-count/status:words'] = {
+      ok: true,
+      result: 'Counted again',
+      error: null,
+    };
+    events().emit('extension.contributions.changed', {
+      extensionId: 'com.examplelabs.word-count',
+    });
+    await userEvent.click(
+      await within(bar).findByRole('button', { name: '122 words (from Word count)' }),
+    );
+    expect(ext.clickExtensionStatus).toHaveBeenLastCalledWith(
+      'com.examplelabs.word-count',
+      'words',
+    );
+    expect((await screen.findAllByText('122 words: Counted again')).length).toBeGreaterThan(0);
 
     // Turned off: its commands and items go.
     await ext.setExtensionEnabled('com.examplelabs.word-count', false);
@@ -170,6 +192,49 @@ describe('context menus', () => {
         { threadId: t.id },
       ),
     );
+  });
+
+  it('puts items placed in the sidebar in a menu at its foot, and shows none without them', async () => {
+    const plain = createHub();
+    const plainExt = withExtensions(plain);
+    await installed(plainExt.api, wordCount());
+    await renderApp({ hub: plain });
+    const nav = await screen.findByRole('navigation', { name: 'Sidebar' });
+    // Once the contributions are read (Word count only adds to a chat's menu): no sidebar menu.
+    await waitFor(() => expect(plainExt.api.extensionContributions).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(within(nav).queryByRole('button', { name: 'From extensions' })).toBeNull();
+    resetDom();
+
+    const b = wordCount();
+    b.contributes!.menus = [
+      {
+        extensionId: '',
+        where: 'sidebar',
+        items: [{ id: 's', title: 'Word count of today', command: 'count' }],
+      },
+    ];
+    const hub = createHub();
+    const ext = withExtensions(hub);
+    await installed(ext.api, b);
+    await renderApp({ hub });
+    const sidebar = await screen.findByRole('navigation', { name: 'Sidebar' });
+    const trigger = await within(sidebar).findByRole('button', { name: 'From extensions' });
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+    await userEvent.click(trigger);
+    const item = screen.getByRole('menuitem', { name: 'Word count of today' });
+    expect(item.getAttribute('title')).toBe('From Word count');
+    await userEvent.click(item);
+    await waitFor(() =>
+      expect(ext.api.runExtensionCommand).toHaveBeenCalledWith(
+        'com.examplelabs.word-count',
+        'count',
+        {},
+      ),
+    );
+    expect(document.activeElement).toBe(trigger);
   });
 
   it('adds message and file items where the extension asked for them', async () => {

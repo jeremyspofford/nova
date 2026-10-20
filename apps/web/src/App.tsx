@@ -13,7 +13,7 @@ import {
   type ResolvedSetting,
   type Session,
 } from './api.ts';
-import { readCachedTheme } from './appearance.ts';
+import { applyAppearance, readCachedLook, readCachedTheme } from './appearance.ts';
 import { CommandRegistry } from './commands.ts';
 import { AnnouncerProvider, ServicesProvider } from './services.tsx';
 import { SettingsProvider } from './settings.tsx';
@@ -29,6 +29,25 @@ import { MemberPublicPageView, memberPublicPage } from './joinmember/pages.tsx';
 import { SignInOptions } from './joinmember/SignInOptions.tsx';
 import type { TerminalScreenFactory, WebSocketFactory } from './terminal/session.ts';
 import { TerminalsProvider } from './terminal/TerminalPanel.tsx';
+import { ManagedLockNotes } from './managed/ManagedNote.tsx';
+import { LocaleFromSettings, LocaleProvider, useLocale } from './i18n/I18nProvider.tsx';
+import { defineMessages } from '@nova/i18n';
+
+const APP_TEXT = defineMessages('app', {
+  connecting: 'Connecting to the Hub…',
+  offline: 'Cannot reach the Hub',
+  retry: 'Retry',
+  setup: {
+    title: 'Set up Nova',
+    linkDetected: 'Setup link detected. Choose a display name to finish.',
+    code: 'Setup code',
+    codeHint: 'Printed by the Hub at startup, or run: {command}',
+    name: 'Your name (optional)',
+    finish: 'Finish setup',
+    badCode: 'That setup code is invalid or has expired.',
+    failed: 'Setup failed. Try again.',
+  },
+});
 
 type State =
   | { kind: 'loading' }
@@ -70,10 +89,20 @@ export function takeSetupCodeFromLocation(): string | null {
  * or sign-in screen; every other path is the Hub app.
  */
 export function App(props: AppProps) {
+  // The interface language wraps everything (FR-016); signed in, it follows the setting.
+  return (
+    <LocaleProvider>
+      <AppRoutes {...props} />
+    </LocaleProvider>
+  );
+}
+
+function AppRoutes(props: AppProps) {
   const [joining] = useState(() => isJoinPath(window.location.pathname));
   const [memberPage] = useState(() => memberPublicPage(window.location.pathname));
-  if (joining) return <JoinPage />;
-  if (memberPage) return <MemberPublicPageView page={memberPage} />;
+  const { locale } = useLocale();
+  if (joining) return <JoinPage key={locale} />;
+  if (memberPage) return <MemberPublicPageView key={locale} page={memberPage} />;
   return <HubApp {...props} />;
 }
 
@@ -89,6 +118,8 @@ function HubApp({
   offline,
 }: AppProps) {
   const registry = useMemo(() => given ?? new CommandRegistry(), [given]);
+  // Re-render (and re-read messages) when the language changes.
+  useLocale();
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [setupCode] = useState(() => takeSetupCode());
   const [displayName, setDisplayName] = useState<string | null>(null);
@@ -108,7 +139,7 @@ function HubApp({
         else throw err;
       }
     } catch (err) {
-      setState({ kind: 'offline', message: errorMessage(err, 'Cannot reach the Hub') });
+      setState({ kind: 'offline', message: errorMessage(err, APP_TEXT.offline) });
     }
   }, [api, setupCode]);
 
@@ -121,7 +152,10 @@ function HubApp({
   useEffect(() => {
     if (state.kind === 'ready') return; // the workspace applies the full appearance
     const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true;
-    applyTheme(resolveTheme(readCachedTheme(), dark), document.documentElement);
+    // The last look this device applied (a saved theme and overrides included), else its theme.
+    const look = readCachedLook(dark);
+    if (look) applyAppearance(look, document.documentElement);
+    else applyTheme(resolveTheme(readCachedTheme(), dark), document.documentElement);
   }, [state.kind]);
 
   const signOut = () => {
@@ -155,12 +189,12 @@ function HubApp({
         <span className="brand">Nova</span>
       </header>
       <main className="main" id="main">
-        {state.kind === 'loading' ? <p className="muted">Connecting to the Hub…</p> : null}
+        {state.kind === 'loading' ? <p className="muted">{APP_TEXT.connecting}</p> : null}
         {state.kind === 'offline' ? (
           <section className="panel" role="alert">
-            <h1>Cannot reach the Hub</h1>
+            <h1>{APP_TEXT.offline}</h1>
             <p className="muted">{state.message}</p>
-            <Button onClick={() => void load()}>Retry</Button>
+            <Button onClick={() => void load()}>{APP_TEXT.retry}</Button>
           </section>
         ) : null}
         {state.kind === 'signed-out' ? (
@@ -204,6 +238,7 @@ function ReadyApp({
     () => (state.member ? memberSettingsApi(api) : api),
     [api, state.member],
   );
+  const { locale } = useLocale();
   {
     return (
       <ServicesProvider
@@ -215,18 +250,23 @@ function ReadyApp({
       >
         <OfflineProvider runtime={offline}>
           <SettingsProvider api={settingsApi} initial={state.settings}>
+            <LocaleFromSettings />
             <ToastProvider>
               <AnnouncerProvider>
                 <ThreadsProvider api={api}>
                   <ModelsProvider api={api}>
                     <TerminalsProvider>
                       <TeamRoleProvider role={state.session.role ?? null}>
-                        <Workspace
-                          displayName={displayName}
-                          onDisplayName={setDisplayName}
-                          onSignOut={signOut}
-                          announceEveryMs={announceEveryMs}
-                        />
+                        {/* Locked fields name the policy's source (FR-106, WCAG 1.3.1). */}
+                        <ManagedLockNotes>
+                          <Workspace
+                            key={locale}
+                            displayName={displayName}
+                            onDisplayName={setDisplayName}
+                            onSignOut={signOut}
+                            announceEveryMs={announceEveryMs}
+                          />
+                        </ManagedLockNotes>
                       </TeamRoleProvider>
                     </TerminalsProvider>
                   </ModelsProvider>
@@ -257,8 +297,8 @@ function SetupPanel({ api, code, onDone }: { api: Api; code: string | null; onDo
     } catch (err) {
       setError(
         err instanceof ApiError && err.status === 401
-          ? 'That setup code is invalid or has expired.'
-          : 'Setup failed. Try again.',
+          ? APP_TEXT.setup.badCode
+          : APP_TEXT.setup.failed,
       );
     } finally {
       setBusy(false);
@@ -267,27 +307,30 @@ function SetupPanel({ api, code, onDone }: { api: Api; code: string | null; onDo
 
   return (
     <section className="panel">
-      <h1>Set up Nova</h1>
+      <h1>{APP_TEXT.setup.title}</h1>
       <form className="stack" onSubmit={(e) => void submit(e)}>
         {code ? (
-          <p className="muted">Setup link detected. Choose a display name to finish.</p>
+          <p className="muted">{APP_TEXT.setup.linkDetected}</p>
         ) : (
           <TextField
-            label="Setup code"
-            hint="Printed by the Hub at startup, or run: nova-hub code"
+            label={APP_TEXT.setup.code}
+            hint={APP_TEXT.setup.codeHint({ command: 'nova-hub code' })}
             value={manual}
             onChange={(e) => setManual(e.target.value)}
-            autoComplete="off"
+            // A one-time code: paste and autofill work (WCAG 3.3.8).
+            autoComplete="one-time-code"
+            spellCheck={false}
           />
         )}
         <TextField
-          label="Your name (optional)"
+          label={APP_TEXT.setup.name}
+          autoComplete="name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           error={error ?? undefined}
         />
         <Button type="submit" variant="primary" disabled={busy || effective.length < 10}>
-          Finish setup
+          {APP_TEXT.setup.finish}
         </Button>
       </form>
     </section>

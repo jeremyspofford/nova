@@ -188,6 +188,55 @@ describe('the local file (J10 step 2)', () => {
     expect(layer['appearance.theme']).toBe('light');
   });
 
+  it('locks app registration, the crash report address and the purge days, ignoring bad values', async () => {
+    fs.file(PATH, {
+      version: 1,
+      settings: {
+        'apps.openRegistration': false,
+        'privacy.crashReportEndpoint': '',
+        'team.removedMemberPurgeDays': 7,
+      },
+    });
+    const p = policy();
+    await p.load();
+    const user = {
+      'apps.openRegistration': true,
+      'privacy.crashReportEndpoint': 'https://mine.example/crash',
+      'team.removedMemberPurgeDays': 365,
+    };
+    const layer = p.settingsLayer(user);
+    for (const [key, value] of [
+      ['apps.openRegistration', false],
+      ['privacy.crashReportEndpoint', ''],
+      ['team.removedMemberPurgeDays', 7],
+    ] as const)
+      expect(resolveSetting(key, { global: user, managed: layer }), key).toMatchObject({
+        value,
+        source: 'managed',
+        locked: true,
+      });
+    // A value that would loosen (crash reports to a plain-http address elsewhere) or that the
+    // setting refuses is ignored for that key and reported; the user's value stays, unlocked.
+    fs.file(PATH, {
+      version: 1,
+      settings: {
+        'privacy.crashReportEndpoint': 'http://collector.example/crash',
+        'team.removedMemberPurgeDays': -1,
+        'apps.openRegistration': 'yes',
+      },
+    });
+    const view = await p.reload();
+    expect(view.ignored.map((i) => [i.key, i.reason])).toEqual([
+      ['privacy.crashReportEndpoint', 'invalid_value'],
+      ['team.removedMemberPurgeDays', 'invalid_value'],
+      ['apps.openRegistration', 'invalid_value'],
+    ]);
+    const after = p.settingsLayer(user);
+    expect(
+      resolveSetting('privacy.crashReportEndpoint', { global: user, managed: after }),
+    ).toMatchObject({ value: 'https://mine.example/crash', locked: false });
+  });
+
   it('meets security values with the user value and reports Manual mode', async () => {
     fs.file(PATH, {
       version: 1,
@@ -211,7 +260,11 @@ describe('the local file (J10 step 2)', () => {
       'network.egressDeny': ['y.example'],
     });
     expect(layer['network.egressMode']).toBe('off');
-    expect(layer['network.egressAllow']).toEqual(['b.example']);
+    // The allow list is a ceiling, never a locked value: the owner's hosts within it apply.
+    expect(layer['network.egressAllow']).toBeUndefined();
+    expect(
+      managedRestrictions(layer['managed.restrict']).egressAllow(['b.example', 'c.example']),
+    ).toEqual(['b.example']);
     expect(layer['network.egressDeny']).toEqual(['x.example', 'y.example']);
     expect(layer['tools.approvalPolicy']).toBe('defaults');
     expect(layer['telemetry.otlp.enabled']).toBe(false);
@@ -226,6 +279,59 @@ describe('the local file (J10 step 2)', () => {
         'cloud.runner.unrestrictedNetwork'
       ],
     ).toBe(false);
+  });
+
+  it("treats the egress allow list as a ceiling over the owner's own list (ADR-097)", async () => {
+    fs.file(PATH, {
+      version: 1,
+      restrict: { egress: { mode: 'allowlist', allow: ['api.example.com'] } },
+    });
+    const p = policy();
+    await p.load();
+    const inForce = (own?: string[]) => {
+      const global = own === undefined ? {} : { 'network.egressAllow': own };
+      return {
+        restrict: p.settingsLayer(global)['managed.restrict'] as { egressAllow?: string[] },
+        view: p.view(global).egress,
+      };
+    };
+    // The owner never set a list: the policy's hosts apply.
+    expect(inForce().restrict.egressAllow).toEqual(['api.example.com']);
+    expect(inForce([]).view).toEqual({
+      ceilings: [['api.example.com']],
+      own: [],
+      effective: ['api.example.com'],
+      note: null,
+    });
+    expect(p.settingsLayer({})['network.egressAllow']).toBeUndefined();
+    // The owner's list: their hosts within the ceiling.
+    const both = inForce(['a.example', 'api.example.com']);
+    expect(both.restrict.egressAllow).toEqual(['api.example.com']);
+    expect(both.view?.note).toMatch(
+      /outside your organization's policy and do not apply: a\.example/,
+    );
+    // None of the owner's hosts is within it: nothing, said plainly.
+    const none = inForce(['a.example']);
+    expect(none.restrict.egressAllow).toEqual([]);
+    expect(none.view?.note).toMatch(/None of the hosts on your own allow list/);
+    // A policy's explicit setting joins its source's list: both apply.
+    fs.file(PATH, {
+      version: 1,
+      settings: { 'network.egressAllow': ['*.example.com'] },
+      restrict: { egress: { allow: ['api.example.com', 'other.example'] } },
+    });
+    await p.reload();
+    expect(p.view().restrict[0]!.restrict.egress?.allow).toEqual(['api.example.com']);
+    expect(p.view().settings.map((s) => s.key)).not.toContain('network.egressAllow');
+    fs.file(PATH, { version: 1, settings: { 'network.egressAllow': ['api.example.com'] } });
+    await p.reload();
+    expect(p.view().restrict).toEqual([
+      { channel: 'local', restrict: { egress: { allow: ['api.example.com'] } } },
+    ]);
+    expect(p.view().egress?.effective).toEqual(['api.example.com']);
+    fs.file(PATH, { version: 1 });
+    await p.reload();
+    expect(p.view().egress).toBeNull();
   });
 
   it('trusts only pinned publishers while unverified installs are refused', async () => {

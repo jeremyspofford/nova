@@ -2,6 +2,7 @@
 // a fieldset, so it is one tab stop and the arrow keys move the choice; every stop keeps a visible
 // label, and the end captions only repeat the direction of the scale.
 import { useId, type ReactNode } from 'react';
+import { UI_TEXT } from '../strings.ts';
 
 export interface PresetScaleOption {
   value: string;
@@ -31,8 +32,8 @@ export function PresetScale({
   options,
   value,
   onChange,
-  startLabel = 'Faster',
-  endLabel = 'Smarter',
+  startLabel = UI_TEXT.faster,
+  endLabel = UI_TEXT.smarter,
   disabled,
   children,
   className,

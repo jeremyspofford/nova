@@ -455,7 +455,12 @@ export class PolicyGate implements ToolGate {
       },
       fs,
       egress: {
-        allow: [...egressAllow, ...(resolved.network.allow ?? [])],
+        // Within the policy's egress ceiling (ADR-097): the hosts in force, and only the
+        // profile's hosts the ceiling covers.
+        allow: [
+          ...managed.egressAllow(egressAllow),
+          ...(resolved.network.allow ?? []).filter((h) => managed.egressCovered(h)),
+        ],
         deny: [...egressDeny, ...(resolved.network.deny ?? [])],
       },
     };
@@ -1059,13 +1064,17 @@ export class PolicyGate implements ToolGate {
         pluginId,
       });
     }
+    // An extension's tool (`ext:<id>/<name>`, FR-117) leads to Settings → Extensions, where the
+    // owner turns it back on; a plain plugin's to Settings → Plugins.
+    const extension = req.tool.name.startsWith('ext:');
+    const what = extension ? 'Extension' : 'Plugin';
     await this.#o.notifier
       .notify({
         accountId: req.accountId,
         kind: 'attention',
-        title: disabled ? `Plugin ${pluginId} was turned off` : `Plugin ${pluginId} was blocked`,
+        title: disabled ? `${what} ${pluginId} was turned off` : `${what} ${pluginId} was blocked`,
         body: clip(`It tried to use ${req.tool.name} beyond its permissions: ${d.reason}.`, 200),
-        href: '/settings/plugins',
+        href: extension ? '/settings/extensions' : '/settings/plugins',
         dedupeKey: `plugin-violation:${pluginId}`,
       })
       .catch((err: unknown) => this.#o.log?.warn('plugin violation notification failed', { err }));

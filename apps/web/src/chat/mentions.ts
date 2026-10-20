@@ -1,6 +1,7 @@
 // `@`-mentions in the composer (FR-022, docs/04 §3): finding the `@query` at the caret, ranking
 // the Hub's candidates fuzzily, and grouping them for the popover (files, folders, MCP servers,
 // tools, skills).
+import { defineMessages } from '@nova/i18n';
 import type { MentionCandidate, MentionKind } from '@nova/shared';
 import type { IconName } from '@nova/ui';
 
@@ -64,12 +65,24 @@ export function filterMentions(items: MentionCandidate[], query: string): Mentio
   );
 }
 
-export const MENTION_GROUPS: readonly { kind: MentionKind; label: string }[] = [
-  { kind: 'file', label: 'Files' },
-  { kind: 'folder', label: 'Folders' },
-  { kind: 'mcp_server', label: 'MCP servers' },
-  { kind: 'tool', label: 'Tools' },
-  { kind: 'skill', label: 'Skills' },
+export const MENTION_TEXT = defineMessages('chat.mentions', {
+  /** Group headings in the @ menu, by mention kind. */
+  group: {
+    file: 'Files',
+    folder: 'Folders',
+    mcp_server: 'MCP servers',
+    tool: 'Tools',
+    skill: 'Skills',
+  },
+});
+
+/** The @ menu's groups, in order. */
+export const MENTION_GROUPS: readonly MentionKind[] = [
+  'file',
+  'folder',
+  'mcp_server',
+  'tool',
+  'skill',
 ];
 
 export const MENTION_ICON: Record<MentionKind, IconName> = {
@@ -88,9 +101,10 @@ export interface MentionGroup {
 
 /** Candidates in group order; ranking order is kept inside each group. */
 export function groupMentions(items: MentionCandidate[]): MentionGroup[] {
-  return MENTION_GROUPS.map((g) => ({
-    ...g,
-    items: items.filter((c) => c.kind === g.kind),
+  return MENTION_GROUPS.map((kind) => ({
+    kind,
+    label: MENTION_TEXT.group[kind],
+    items: items.filter((c) => c.kind === kind),
   })).filter((g) => g.items.length > 0);
 }
 

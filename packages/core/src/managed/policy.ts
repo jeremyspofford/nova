@@ -20,6 +20,7 @@ import {
   SETTINGS,
   isSettingKey,
   type ManagedChannel,
+  type ManagedEgressView,
   type ManagedIgnoredView,
   type ManagedPolicyDocument,
   type ManagedPolicyView,
@@ -33,7 +34,8 @@ import {
 } from '@nova/shared';
 import { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
-import { ManagedRestrictions } from './restrictions.ts';
+import { patternCovered } from '../computers/egress-policy.ts';
+import { ManagedRestrictions, effectiveEgressAllow } from './restrictions.ts';
 import { meet, ruleFor, securityValueProblem, tightenSetting } from './rules.ts';
 import {
   checkProtectedFile,
@@ -51,6 +53,13 @@ export const MANAGED_RESTRICT_KEY = 'managed.restrict';
 /** The non-setting key of the layer that carries managed hooks (docs/08 §4). */
 export const MANAGED_HOOKS_KEY = 'hooks';
 const TRUSTED_PUBLISHERS_KEY = 'plugins.trustedPublishers';
+const EGRESS_ALLOW_KEY = 'network.egressAllow';
+
+/** The owner's own egress allow list from the global layer ([] when unset or unreadable). */
+function ownEgressAllow(global: Partial<Record<string, unknown>> | undefined): string[] {
+  const parsed = SETTINGS[EGRESS_ALLOW_KEY].schema.safeParse(global?.[EGRESS_ALLOW_KEY]);
+  return parsed.success ? parsed.data : [];
+}
 const CACHE_FILE = 'remote-policy.json';
 const DEFAULT_REFRESH_MINUTES = 60;
 
@@ -124,6 +133,9 @@ export function compileManaged(
 ): Compiled {
   const settings = new Map<string, Entry>();
   const ignored: ManagedIgnoredView[] = [];
+  // A policy's egress allow list is a ceiling over the owner's own list, never a locked value
+  // (ADR-097): `settings['network.egressAllow']` joins its source's restrictions as one.
+  const ceilings = new Map<ManagedChannel, string[]>();
   let hooks: unknown;
   const add = (channel: ManagedChannel, key: string, value: unknown, from: string | null) => {
     const cur = settings.get(key);
@@ -165,6 +177,10 @@ export function compileManaged(
         });
         continue;
       }
+      if (key === EGRESS_ALLOW_KEY) {
+        ceilings.set(channel, parsed.data as string[]);
+        continue;
+      }
       if (isSecurityKey(key)) {
         const problem = securityValueProblem(key, parsed.data);
         if (problem) {
@@ -189,9 +205,25 @@ export function compileManaged(
         message: 'Manual mode cannot be turned off: every refused mode falls back to it',
       });
   }
-  const layers = sources.flatMap(({ channel, doc }) =>
-    doc.restrict ? [{ channel, restrict: doc.restrict }] : [],
-  );
+  const layers = sources.flatMap(({ channel, doc }) => {
+    const extra = ceilings.get(channel);
+    if (!extra) return doc.restrict ? [{ channel, restrict: doc.restrict }] : [];
+    // Both of one source's lists apply: what each covers of the other.
+    const own = doc.restrict?.egress?.allow;
+    const allow = own
+      ? [
+          ...new Set([
+            ...own.filter((p) => patternCovered(extra, p)),
+            ...extra.filter((p) => patternCovered(own, p)),
+          ]),
+        ]
+      : extra;
+    const restrict: ManagedRestrict = {
+      ...doc.restrict,
+      egress: { ...doc.restrict?.egress, allow },
+    };
+    return [{ channel, restrict }];
+  });
   return { settings, layers, hooks, ignored };
 }
 
@@ -212,7 +244,6 @@ function impliedSettings(r: ManagedRestrict): [string, unknown, string][] {
   // bypass the proxy and every list (FR-108).
   if (r.egress) out.push(['cloud.runner.unrestrictedNetwork', false, 'restrict.egress']);
   if (r.egress?.mode) out.push(['network.egressMode', r.egress.mode, 'restrict.egress']);
-  if (r.egress?.allow) out.push(['network.egressAllow', r.egress.allow, 'restrict.egress']);
   if (r.egress?.deny) out.push(['network.egressDeny', r.egress.deny, 'restrict.egress']);
   if (r.telemetryExport === false && isSettingKey('telemetry.otlp.enabled'))
     out.push(['telemetry.otlp.enabled', false, 'restrict.telemetryExport']);
@@ -585,11 +616,19 @@ export class ManagedPolicy {
     return Boolean(this.#local.doc || this.#test?.doc || this.#remote?.doc || this.failClosed);
   }
 
-  /** The `managed.restrict` value: every restrict block in force, and the fail-closed reason. */
-  restrictSetting(): ManagedRestrictSetting {
+  /**
+   * The `managed.restrict` value: every restrict block in force, the fail-closed reason, and the
+   * egress allow list in force against the owner's own (`global`; none: as if unset).
+   */
+  restrictSetting(global?: Partial<Record<string, unknown>>): ManagedRestrictSetting {
+    const layers = this.#compiled.layers.map((l) => l.restrict);
+    const ceilings = layers.flatMap((l) => (l.egress?.allow ? [l.egress.allow] : []));
     return {
-      layers: this.#compiled.layers.map((l) => l.restrict),
+      layers,
       failClosed: this.failClosed,
+      ...(ceilings.length
+        ? { egressAllow: effectiveEgressAllow(ceilings, ownEgressAllow(global)) }
+        : {}),
     };
   }
 
@@ -622,7 +661,7 @@ export class ManagedPolicy {
       const pinned = this.#compiled.settings.get(TRUSTED_PUBLISHERS_KEY)?.value;
       out[TRUSTED_PUBLISHERS_KEY] = Array.isArray(pinned) ? pinned : [];
     }
-    out[MANAGED_RESTRICT_KEY] = this.restrictSetting();
+    out[MANAGED_RESTRICT_KEY] = this.restrictSetting(global);
     if (this.#compiled.hooks !== undefined) out[MANAGED_HOOKS_KEY] = this.#compiled.hooks;
     return out;
   }
@@ -668,8 +707,24 @@ export class ManagedPolicy {
     return out;
   }
 
-  /** GET /api/v1/managed. */
-  view(): ManagedPolicyView {
+  /** The egress allow list in force and how it came about (`global`: the owner's settings). */
+  #egressView(global?: Partial<Record<string, unknown>>): ManagedEgressView | null {
+    const ceilings = this.#restrictions.egressCeilings();
+    if (!ceilings.length) return null;
+    const own = ownEgressAllow(global);
+    const effective = effectiveEgressAllow(ceilings, own);
+    const outside = own.filter((h) => !effective.includes(h));
+    const allowed = [...new Set(ceilings.flat())].join(', ');
+    let note: string | null = null;
+    if (own.length && !effective.length)
+      note = `None of the hosts on your own allow list is among the hosts your organization's policy allows (${allowed}), so agents may reach none without asking. Add hosts the policy allows in Network, or empty your list to use the policy's hosts.`;
+    else if (outside.length)
+      note = `These hosts on your own allow list are outside your organization's policy and do not apply: ${outside.join(', ')}.`;
+    return { ceilings, own, effective, note };
+  }
+
+  /** GET /api/v1/managed (`global`: the owner's settings, for what is in force). */
+  view(global?: Partial<Record<string, unknown>>): ManagedPolicyView {
     const settings: ManagedSettingView[] = [...this.#compiled.settings].map(([key, e]) => ({
       key,
       value: e.value,
@@ -682,6 +737,7 @@ export class ManagedPolicy {
       sources: this.#sourceViews(),
       settings,
       restrict: this.#compiled.layers.map((l) => ({ channel: l.channel, restrict: l.restrict })),
+      egress: this.#egressView(global),
       ignored: [...this.#compiled.ignored],
       checkedAt: this.#local.checkedAt,
     };

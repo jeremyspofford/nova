@@ -2,11 +2,71 @@
 // the skill that shadows it by precedence (managed > project > user > plugin > built-in), an
 // on/off switch and its body; user skills can be created here and user or project skills deleted.
 import { useEffect, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { SkillDetail, SkillView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Spinner, Switch, TextField, useToast } from '@nova/ui';
 import { errorMessage, type CreateSkillRequest } from '../api.ts';
 import { useServices } from '../services.tsx';
 import { SKILL_SOURCE_TEXT } from './plugin-text.ts';
+
+export const SKILLS_TEXT = defineMessages('settings.skills', {
+  nameRule: 'Use 1 to 64 lowercase letters, digits and hyphens, starting with a letter or digit.',
+  needDescription: 'Say what the skill does; Nova uses this to pick it.',
+  tooLong: 'Keep it under {max} characters.',
+  tooManyTools: 'List at most {max} tools.',
+  needBody: 'Write the instructions the skill gives.',
+  loadFailed: 'Could not load skills.',
+  changeFailed: 'Could not change {name}: {error}',
+  deleted: 'Skill {name} deleted.',
+  deleteFailed: 'Could not delete {name}: {error}',
+  title: 'Skills',
+  intro:
+    "Only a skill's name and description sit in a chat until it is used; type /name in the " +
+    'composer to use one. When two skills share a name, managed wins over project, then yours, ' +
+    'then plugins, then built-in.',
+  newSkill: 'New skill',
+  retry: 'Retry',
+  loading: 'Loading skills',
+  none: 'No skills yet',
+  noneHint: 'Create one, install a plugin that brings some, or import them.',
+  shadowedBy:
+    'Shadowed by {name} ({source, select, builtin {built-in} user {yours} project {project} plugin {plugin} managed {managed} import {imported} other {{source}}}); this one is not used.',
+  shadowedById: 'Shadowed by {id}; this one is not used.',
+  toggle: 'Use {name}',
+  viewName: 'View {name}',
+  view: 'View',
+  deleteName: 'Delete {name}',
+  delete: 'Delete',
+  created: 'Skill {name} created. Use it with /{name}.',
+  deleteTitle: 'Delete the skill {name}?',
+  deleteThis: 'Delete this skill?',
+  deleteBody: 'Its folder and files are deleted from the Hub.',
+  cancel: 'Cancel',
+  loadOneFailed: 'Could not load the skill.',
+  skillTitle: 'Skill {name}',
+  close: 'Close',
+  loadingOne: 'Loading the skill',
+  source: 'Source',
+  sourceOf: '{source} ({plugin})',
+  whenToUse: 'When to use',
+  tools: 'Tools it may use',
+  anyTool: 'Any allowed tool',
+  files: 'Files',
+  instructions: 'Instructions',
+  createFailed: 'Could not create the skill.',
+  createTitle: 'New skill',
+  createBody: 'Saved as SKILL.md in your skills folder on the Hub.',
+  name: 'Name',
+  nameHint: 'Lowercase letters, digits and hyphens; you type /name to use it.',
+  description: 'Description',
+  whenToUseOptional: 'When to use (optional)',
+  toolsOptional: 'Tools it may use (optional)',
+  toolsHint:
+    'Tool names separated by commas, for example fs.read, web.search. Empty allows any tool ' +
+    'the chat may use.',
+  create: 'Create skill',
+});
+const S = SKILLS_TEXT;
 
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -32,19 +92,17 @@ export function skillRequest(
 ): { body: CreateSkillRequest } | { errors: Partial<Record<keyof SkillForm, string>> } {
   const errors: Partial<Record<keyof SkillForm, string>> = {};
   const name = f.name.trim();
-  if (!SKILL_NAME.test(name))
-    errors.name =
-      'Use 1 to 64 lowercase letters, digits and hyphens, starting with a letter or digit.';
+  if (!SKILL_NAME.test(name)) errors.name = S.nameRule;
   const description = f.description.trim();
-  if (!description) errors.description = 'Say what the skill does; Nova uses this to pick it.';
-  else if (description.length > 1024) errors.description = 'Keep it under 1,024 characters.';
-  if (f.whenToUse.trim().length > 1024) errors.whenToUse = 'Keep it under 1,024 characters.';
+  if (!description) errors.description = S.needDescription;
+  else if (description.length > 1024) errors.description = S.tooLong({ max: 1024 });
+  if (f.whenToUse.trim().length > 1024) errors.whenToUse = S.tooLong({ max: 1024 });
   const tools = f.allowedTools
     .split(/[\s,]+/)
     .map((t) => t.trim())
     .filter(Boolean);
-  if (tools.length > 50) errors.allowedTools = 'List at most 50 tools.';
-  if (!f.body.trim()) errors.body = 'Write the instructions the skill gives.';
+  if (tools.length > 50) errors.allowedTools = S.tooManyTools({ max: 50 });
+  if (!f.body.trim()) errors.body = S.needBody;
   if (Object.keys(errors).length) return { errors };
   return {
     body: {
@@ -75,7 +133,7 @@ export function SkillsSection({ version }: { version: number }) {
         setSkills(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load skills.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -89,7 +147,7 @@ export function SkillsSection({ version }: { version: number }) {
       const next = await api.updateSkill(s.id, { enabled: on });
       setSkills((list) => list?.map((x) => (x.id === s.id ? next : x)) ?? null);
     } catch (err) {
-      toast.show(`Could not change ${s.name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.changeFailed({ name: s.name, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -97,40 +155,32 @@ export function SkillsSection({ version }: { version: number }) {
     setRemoving(null);
     try {
       await api.deleteSkill(s.id);
-      toast.show(`Skill ${s.name} deleted.`, { tone: 'success' });
+      toast.show(S.deleted({ name: s.name }), { tone: 'success' });
       setReload((r) => r + 1);
     } catch (err) {
-      toast.show(`Could not delete ${s.name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.deleteFailed({ name: s.name, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
   return (
     <section className="settings-section" aria-labelledby="plugins-skills">
-      <h3 id="plugins-skills">Skills</h3>
-      <p className="muted">
-        Only a skill&apos;s name and description sit in a chat until it is used; type /name in the
-        composer to use one. When two skills share a name, managed wins over project, then yours,
-        then plugins, then built-in.
-      </p>
+      <h3 id="plugins-skills">{S.title}</h3>
+      <p className="muted">{S.intro}</p>
       <div className="row">
-        <Button onClick={() => setCreating(true)}>New skill</Button>
+        <Button onClick={() => setCreating(true)}>{S.newSkill}</Button>
       </div>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setReload((r) => r + 1)}>Retry</Button>
+          <Button onClick={() => setReload((r) => r + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {skills === null && !error ? <Spinner label="Loading skills" /> : null}
+      {skills === null && !error ? <Spinner label={S.loading} /> : null}
       {skills?.length === 0 ? (
-        <EmptyState
-          level={3}
-          title="No skills yet"
-          description="Create one, install a plugin that brings some, or import them."
-        />
+        <EmptyState level={3} title={S.none} description={S.noneHint} />
       ) : null}
       {skills?.length ? (
-        <ul className="ws-list" aria-label="Skills">
+        <ul className="ws-list" aria-label={S.title}>
           {skills.map((s) => {
             const winner = s.shadowedBy ? byId.get(s.shadowedBy) : undefined;
             const deletable = s.source === 'user' || s.source === 'project';
@@ -142,37 +192,37 @@ export function SkillsSection({ version }: { version: number }) {
                     <span className="ws-badge">{SKILL_SOURCE_TEXT[s.source]}</span>
                     {s.pluginId ? <span className="muted">{s.pluginId}</span> : null}
                   </span>
-                  <span className="muted">{s.description}</span>
+                  <span className="muted" dir="auto">
+                    {s.description}
+                  </span>
                   {s.shadowedBy ? (
                     <span className="ws-row-meta ws-warning">
-                      Shadowed by{' '}
                       {winner
-                        ? `${winner.name} (${SKILL_SOURCE_TEXT[winner.source].toLowerCase()})`
-                        : s.shadowedBy}
-                      ; this one is not used.
+                        ? S.shadowedBy({ name: winner.name, source: winner.source })
+                        : S.shadowedById({ id: s.shadowedBy })}
                     </span>
                   ) : null}
                 </div>
                 <div className="row ws-row-actions">
                   <Switch
-                    label={`Use ${s.name}`}
+                    label={S.toggle({ name: s.name })}
                     checked={s.enabled}
                     onChange={(v) => void toggle(s, v)}
                   />
                   <Button
                     variant="ghost"
                     onClick={() => setViewing(s)}
-                    aria-label={`View ${s.name}`}
+                    aria-label={S.viewName({ name: s.name })}
                   >
-                    View
+                    {S.view}
                   </Button>
                   {deletable ? (
                     <Button
                       variant="ghost"
                       onClick={() => setRemoving(s)}
-                      aria-label={`Delete ${s.name}`}
+                      aria-label={S.deleteName({ name: s.name })}
                     >
-                      Delete
+                      {S.delete}
                     </Button>
                   ) : null}
                 </div>
@@ -187,21 +237,21 @@ export function SkillsSection({ version }: { version: number }) {
           onClose={() => setCreating(false)}
           onCreated={(s) => {
             setCreating(false);
-            toast.show(`Skill ${s.name} created. Use it with /${s.name}.`, { tone: 'success' });
+            toast.show(S.created({ name: s.name }), { tone: 'success' });
             setReload((r) => r + 1);
           }}
         />
       ) : null}
       <Dialog
         open={removing !== null}
-        title={removing ? `Delete the skill ${removing.name}?` : 'Delete this skill?'}
-        description="Its folder and files are deleted from the Hub."
+        title={removing ? S.deleteTitle({ name: removing.name }) : S.deleteThis}
+        description={S.deleteBody}
         onClose={() => setRemoving(null)}
         footer={
           <>
-            <Button onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button onClick={() => setRemoving(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => removing && void remove(removing)}>
-              Delete
+              {S.delete}
             </Button>
           </>
         }
@@ -219,7 +269,7 @@ function SkillViewer({ skill, onClose }: { skill: SkillView; onClose: () => void
     let alive = true;
     api.getSkill(skill.id).then(
       (d) => alive && setDetail(d),
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the skill.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadOneFailed)),
     );
     return () => {
       alive = false;
@@ -229,44 +279,47 @@ function SkillViewer({ skill, onClose }: { skill: SkillView; onClose: () => void
   return (
     <Dialog
       open
-      title={`Skill ${skill.name}`}
+      title={S.skillTitle({ name: skill.name })}
       description={skill.description}
       onClose={onClose}
       className="ws-wide-dialog"
-      footer={<Button onClick={onClose}>Close</Button>}
+      footer={<Button onClick={onClose}>{S.close}</Button>}
     >
       {error ? (
         <p role="alert" className="nv-field-error">
           {error}
         </p>
       ) : null}
-      {!detail && !error ? <Spinner label="Loading the skill" /> : null}
+      {!detail && !error ? <Spinner label={S.loadingOne} /> : null}
       {detail ? (
         <div className="stack">
           <dl className="ws-dl">
-            <dt>Source</dt>
+            <dt>{S.source}</dt>
             <dd>
-              {SKILL_SOURCE_TEXT[detail.source]}
-              {detail.pluginId ? ` (${detail.pluginId})` : ''}
+              {detail.pluginId
+                ? S.sourceOf({ source: SKILL_SOURCE_TEXT[detail.source], plugin: detail.pluginId })
+                : SKILL_SOURCE_TEXT[detail.source]}
             </dd>
             {detail.whenToUse ? (
               <>
-                <dt>When to use</dt>
-                <dd>{detail.whenToUse}</dd>
+                <dt>{S.whenToUse}</dt>
+                <dd dir="auto">{detail.whenToUse}</dd>
               </>
             ) : null}
-            <dt>Tools it may use</dt>
+            <dt>{S.tools}</dt>
             <dd>
-              {detail.allowedTools.length ? detail.allowedTools.join(', ') : 'Any allowed tool'}
+              {detail.allowedTools.length
+                ? fmt.list(detail.allowedTools, { type: 'unit' })
+                : S.anyTool}
             </dd>
             {detail.files.length ? (
               <>
-                <dt>Files</dt>
-                <dd>{detail.files.join(', ')}</dd>
+                <dt>{S.files}</dt>
+                <dd dir="ltr">{fmt.list(detail.files, { type: 'unit' })}</dd>
               </>
             ) : null}
           </dl>
-          <pre className="ws-log" tabIndex={0} aria-label="Instructions">
+          <pre role="group" className="ws-log" tabIndex={0} aria-label={S.instructions}>
             {detail.body}
           </pre>
         </div>
@@ -301,7 +354,7 @@ function SkillCreator({
     try {
       onCreated(await api.createSkill(out.body));
     } catch (err) {
-      setFailure(errorMessage(err, 'Could not create the skill.'));
+      setFailure(errorMessage(err, S.createFailed));
       setBusy(false);
     }
   };
@@ -309,8 +362,8 @@ function SkillCreator({
   return (
     <Dialog
       open
-      title="New skill"
-      description="Saved as SKILL.md in your skills folder on the Hub."
+      title={S.createTitle}
+      description={S.createBody}
       onClose={onClose}
       className="ws-wide-dialog"
     >
@@ -323,36 +376,36 @@ function SkillCreator({
         }}
       >
         <TextField
-          label="Name"
+          label={S.name}
           value={form.name}
           spellCheck={false}
-          hint="Lowercase letters, digits and hyphens; you type /name to use it."
+          hint={S.nameHint}
           error={errors.name}
           onChange={(e) => set('name')(e.target.value)}
         />
         <TextField
-          label="Description"
+          label={S.description}
           value={form.description}
           error={errors.description}
           onChange={(e) => set('description')(e.target.value)}
         />
         <TextField
-          label="When to use (optional)"
+          label={S.whenToUseOptional}
           value={form.whenToUse}
           error={errors.whenToUse}
           onChange={(e) => set('whenToUse')(e.target.value)}
         />
         <TextField
-          label="Tools it may use (optional)"
+          label={S.toolsOptional}
           value={form.allowedTools}
           spellCheck={false}
-          hint="Tool names separated by commas, for example fs.read, web.search. Empty allows any tool the chat may use."
+          hint={S.toolsHint}
           error={errors.allowedTools}
           onChange={(e) => set('allowedTools')(e.target.value)}
         />
         <div className="nv-field">
           <label className="nv-field-label" htmlFor="skill-body">
-            Instructions
+            {S.instructions}
           </label>
           <textarea
             id="skill-body"
@@ -375,9 +428,9 @@ function SkillCreator({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Create skill
+            {busy ? <Spinner /> : null} {S.create}
           </Button>
         </div>
       </form>

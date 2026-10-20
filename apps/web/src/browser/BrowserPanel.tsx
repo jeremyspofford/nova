@@ -7,6 +7,7 @@
 // computer's page. M7.5 (FR-209): a note says when the agent works on a connected computer's
 // browser (the local fallback).
 import { useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { BrowserSessionView, BrowserStatusView, ScreenTakeoverView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
@@ -22,16 +23,66 @@ import { useHasBrowserCapture } from './api-m7.ts';
 import { BrowserTrace } from './BrowserTrace.tsx';
 import { PageCapture } from './PageCapture.tsx';
 import { BROWSER_PAGE_EVENTS, eventComputerId, useHubEvents } from './events.ts';
-import { SESSION_CHIP } from './format.ts';
+import { BROWSER_TEXT, sessionChip } from './format.ts';
 import { PendingSignins } from './PendingSignins.tsx';
 import '../workspace.css';
 import '../screen/screen.css';
 import './browser.css';
 
+/** A computer's agent browser. Page titles, addresses and the Hub's reasons are data. */
+export const PANEL_TEXT = defineMessages('browser.panel', {
+  loadFailed: 'Could not load the agent browser.',
+  closed: 'The agent browser is closed.',
+  closedToast: 'Browser closed.',
+  alreadyClosed: 'The browser was already closed.',
+  /** Toasts; {reason} is the Hub's own words (English, D9). */
+  closeFailed: 'Could not close the browser: {reason}',
+  takeoverAnnounce: 'You have the agent browser. The agent waits until you return control.',
+  takeoverFailed: 'Could not take over the browser: {reason}',
+  returnedAnnounce: 'Control returned. The agent continues in the browser.',
+  returnedToast: 'Control returned to the agent.',
+  returnFailed: 'Could not return control: {reason}',
+  heading: 'Browser',
+  loading: 'Loading the agent browser',
+  untitled: 'Untitled page',
+  pausedByYou: 'Paused: you have the page',
+  paused: 'Paused',
+  keepsCookies: 'Keeps its cookies between sessions',
+  clearsCookies: 'Cookies are cleared when it closes',
+  /** {when} is a time, such as "5 minutes ago". */
+  lastAction: 'Last action {when}',
+  restarts:
+    '{n, plural, one {Restarted after a crash once} other {Restarted after a crash # times}}',
+  /** {reason} is the crash reason as the browser reported it (English). */
+  crashed:
+    'The browser crashed {when}: {reason} It restarts on the agent’s next action and reopens the page if the site is still allowed. Steps on page elements are not repeated.',
+  pageTools:
+    'This page offers tools to the agent. Each call is checked like any change on the site, and what they return is treated as untrusted.',
+  pageToolsList: 'Tools from this page',
+  takeover: 'Takeover',
+  youHaveIt: 'You have the agent browser.',
+  agentWaits: 'The agent waits until you return control.',
+  returnControl: 'Return control',
+  cannotShow: 'The page cannot be shown right now.',
+  /** The live frame's text alternative; {title} is the page's title. */
+  frameAlt: 'The agent browser showing {title}',
+  frameAltNoTitle: 'The agent browser showing a page',
+  refreshView: 'Refresh view',
+  takeOver: 'Take over the browser',
+  desktopTakeover:
+    'You have this computer’s desktop. Return control there to take over the browser.',
+  close: 'Close browser',
+  notOpen: 'The browser is not open',
+  /** {reason} is the Hub's own words (English, D9). */
+  unavailable: 'The agent browser cannot run on this Hub: {reason}',
+  opensWhenUsed: 'It opens when an agent uses the browser on this computer.',
+  closeTitle: 'Close the agent browser?',
+  closeKeeps: 'The open page closes. Its cookies are kept, so sign-ins last until they expire.',
+  closeClears: 'The open page closes and its cookies are cleared, so the agent must sign in again.',
+});
+
 export function BrowserSessionChip({ session }: { session: BrowserSessionView | null }) {
-  const c = session
-    ? SESSION_CHIP[session.state]
-    : { text: 'Not open', icon: 'slash' as const, tone: null };
+  const c = sessionChip(session ? session.state : null);
   return (
     <span className="nv-chip" data-status={c.tone ?? undefined}>
       <Icon name={c.icon} />
@@ -74,7 +125,7 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
         setLoaded(true);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the agent browser.')),
+      (err: unknown) => alive && setError(errorMessage(err, PANEL_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -89,19 +140,20 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
     if (eventComputerId(env) === computerId) reload();
   });
 
+  const S = PANEL_TEXT;
   const close = async () => {
     setConfirmClose(false);
     setBusy(true);
     try {
       await api.closeBrowserSession(computerId);
       setSession(null);
-      announce('The agent browser is closed.');
-      toast.show('Browser closed.', { tone: 'success' });
+      announce(S.closed);
+      toast.show(S.closedToast, { tone: 'success' });
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setSession(null);
-        toast.show('The browser was already closed.');
-      } else toast.show(`Could not close the browser: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(S.alreadyClosed);
+      } else toast.show(S.closeFailed({ reason: errorMessage(err) }), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -111,11 +163,9 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
     setBusy(true);
     try {
       setTakeover(await screenApi.startTakeover(computerId, 'browser'));
-      announce('You have the agent browser. The agent waits until you return control.');
+      announce(S.takeoverAnnounce);
     } catch (err) {
-      toast.show(`Could not take over the browser: ${sentence(errorMessage(err))}`, {
-        tone: 'error',
-      });
+      toast.show(S.takeoverFailed({ reason: sentence(errorMessage(err)) }), { tone: 'error' });
       setAttempt((n) => n + 1);
     } finally {
       setBusy(false);
@@ -128,10 +178,10 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
       await screenApi.endTakeover(computerId);
       setTakeover(null);
       setNonce((n) => n + 1);
-      announce('Control returned. The agent continues in the browser.');
-      toast.show('Control returned to the agent.', { tone: 'success' });
+      announce(S.returnedAnnounce);
+      toast.show(S.returnedToast, { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not return control: ${sentence(errorMessage(err))}`, { tone: 'error' });
+      toast.show(S.returnFailed({ reason: sentence(errorMessage(err)) }), { tone: 'error' });
       setAttempt((n) => n + 1);
     } finally {
       setBusy(false);
@@ -140,7 +190,7 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
 
   const heading = (
     <header className="ws-section-header">
-      <h2 id={headingId}>Browser</h2>
+      <h2 id={headingId}>{S.heading}</h2>
       {loaded ? <BrowserSessionChip session={session} /> : null}
     </header>
   );
@@ -151,7 +201,7 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
         {heading}
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{BROWSER_TEXT.retry}</Button>
         </div>
       </section>
     );
@@ -159,7 +209,7 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
     return (
       <section className="brw-panel" aria-labelledby={headingId}>
         {heading}
-        <Spinner label="Loading the agent browser" />
+        <Spinner label={S.loading} />
       </section>
     );
 
@@ -176,43 +226,37 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
         <>
           <div className="brw-page">
             {/* The page's title and address are untrusted text from the web. */}
-            <p className="brw-title">{session.title || 'Untitled page'}</p>
-            {session.url ? <p className="muted brw-url">{session.url}</p> : null}
+            <p className="brw-title" dir="auto">
+              {session.title || S.untitled}
+            </p>
+            {session.url ? (
+              <p className="muted brw-url" dir="ltr">
+                {session.url}
+              </p>
+            ) : null}
             <p className="muted ws-row-meta">
               {session.pausedBy ? (
-                <span>{session.pausedBy === 'user' ? 'Paused: you have the page' : 'Paused'}</span>
+                <span>{session.pausedBy === 'user' ? S.pausedByYou : S.paused}</span>
               ) : null}
-              <span>
-                {session.persistCookies
-                  ? 'Keeps its cookies between sessions'
-                  : 'Cookies are cleared when it closes'}
-              </span>
-              <span>Last action {formatWhen(session.lastActionAt)}</span>
-              {session.restarts > 0 ? (
-                <span>
-                  Restarted after a crash{' '}
-                  {session.restarts === 1 ? 'once' : `${session.restarts} times`}
-                </span>
-              ) : null}
+              <span>{session.persistCookies ? S.keepsCookies : S.clearsCookies}</span>
+              <span>{S.lastAction({ when: formatWhen(session.lastActionAt) })}</span>
+              {session.restarts > 0 ? <span>{S.restarts({ n: session.restarts })}</span> : null}
             </p>
             {session.crash ? (
               <p className="ws-warning brw-crash" role="status">
                 <Icon name="alert" />
                 <span>
-                  The browser crashed {formatWhen(session.crash.at)}:{' '}
-                  {sentence(session.crash.reason)} It restarts on the agent’s next action and
-                  reopens the page if the site is still allowed. Steps on page elements are not
-                  repeated.
+                  {S.crashed({
+                    when: formatWhen(session.crash.at),
+                    reason: sentence(session.crash.reason),
+                  })}
                 </span>
               </p>
             ) : null}
             {session.pageTools.length ? (
               <div className="brw-page-tools">
-                <p className="ws-flush">
-                  This page offers tools to the agent. Each call is checked like any change on the
-                  site, and what they return is treated as untrusted.
-                </p>
-                <ul className="ws-plain-list" aria-label="Tools from this page">
+                <p className="ws-flush">{S.pageTools}</p>
+                <ul className="ws-plain-list" aria-label={S.pageToolsList}>
                   {session.pageTools.map((t) => (
                     <li key={t}>
                       <code>{t}</code>
@@ -223,14 +267,13 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
             ) : null}
           </div>
           {browserTakeover ? (
-            <div className="scr-banner" data-tone="user" role="group" aria-label="Takeover">
+            <div className="scr-banner" data-tone="user" role="group" aria-label={S.takeover}>
               <Icon name="hand" />
               <p>
-                <strong>You have the agent browser.</strong> The agent waits until you return
-                control.
+                <strong>{S.youHaveIt}</strong> {S.agentWaits}
               </p>
               <Button variant="primary" onClick={() => void giveBack()} disabled={busy}>
-                Return control
+                {S.returnControl}
               </Button>
             </div>
           ) : null}
@@ -239,17 +282,17 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
           ) : (
             <figure className="brw-frame">
               {frameFailed === nonce ? (
-                <p className="muted">The page cannot be shown right now.</p>
+                <p className="muted">{S.cannotShow}</p>
               ) : (
                 <img
                   src={screenApi.screenFrameUrl(computerId, 'browser', nonce)}
-                  alt={`The agent browser showing ${session.title || 'a page'}`}
+                  alt={session.title ? S.frameAlt({ title: session.title }) : S.frameAltNoTitle}
                   onError={() => setFrameFailed(nonce)}
                 />
               )}
               <figcaption className="row">
                 <Button variant="ghost" onClick={() => setNonce((n) => n + 1)}>
-                  <Icon name="refresh" /> Refresh view
+                  <Icon name="refresh" /> {S.refreshView}
                 </Button>
               </figcaption>
             </figure>
@@ -257,16 +300,12 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
           <div className="row">
             {!takeover ? (
               <Button variant="primary" onClick={() => void takeOver()} disabled={busy}>
-                <Icon name="hand" /> Take over the browser
+                <Icon name="hand" /> {S.takeOver}
               </Button>
             ) : null}
-            {desktopTakeover ? (
-              <p className="muted">
-                You have this computer’s desktop. Return control there to take over the browser.
-              </p>
-            ) : null}
+            {desktopTakeover ? <p className="muted">{S.desktopTakeover}</p> : null}
             <Button variant="ghost" onClick={() => setConfirmClose(true)} disabled={busy}>
-              <Icon name="close" /> Close browser
+              <Icon name="close" /> {S.close}
             </Button>
           </div>
         </>
@@ -274,11 +313,11 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
         <EmptyState
           level={3}
           icon="external"
-          title="The browser is not open"
+          title={S.notOpen}
           description={
             status && !status.available
-              ? `The agent browser cannot run on this Hub: ${sentence(status.detail)}`
-              : 'It opens when an agent uses the browser on this computer.'
+              ? S.unavailable({ reason: sentence(status.detail) })
+              : S.opensWhenUsed
           }
         />
       )}
@@ -287,17 +326,13 @@ export function BrowserPanel({ computerId }: { computerId: string }) {
       <Dialog
         open={confirmClose}
         onClose={() => setConfirmClose(false)}
-        title="Close the agent browser?"
-        description={
-          session?.persistCookies
-            ? 'The open page closes. Its cookies are kept, so sign-ins last until they expire.'
-            : 'The open page closes and its cookies are cleared, so the agent must sign in again.'
-        }
+        title={S.closeTitle}
+        description={session?.persistCookies ? S.closeKeeps : S.closeClears}
         footer={
           <>
-            <Button onClick={() => setConfirmClose(false)}>Cancel</Button>
+            <Button onClick={() => setConfirmClose(false)}>{BROWSER_TEXT.cancel}</Button>
             <Button variant="danger" onClick={() => void close()}>
-              Close browser
+              {S.close}
             </Button>
           </>
         }

@@ -438,8 +438,13 @@ export class ExtensionEngine {
     return this.#broken;
   }
 
-  #slice<T>(fn: () => T): T {
-    this.#sliceStart = this.#now();
+  /**
+   * Run engine code under the CPU budget. A fresh slice starts the clock; the promise jobs an entry
+   * starts continue its slice (`fresh` false), so a chain of jobs that never ends runs out of the
+   * same budget instead of getting a new one per batch (M8 supply review).
+   */
+  #slice<T>(fn: () => T, fresh = true): T {
+    if (fresh) this.#sliceStart = this.#now();
     this.#inSlice = true;
     try {
       return fn();
@@ -599,14 +604,23 @@ export class ExtensionEngine {
   /** Run the promise jobs the last entry started, within the same CPU budget per batch. */
   #pump(): void {
     for (let i = 0; i < 10_000 && !this.#broken; i++) {
-      const r = this.#slice(() => this.#rt.executePendingJobs(256));
+      const r = this.#slice(() => this.#rt.executePendingJobs(256), false);
       if (r.error) {
         this.#failed(r.error, 'a promise job failed');
         if (this.#broken) return;
         continue;
       }
+      // The budget ran out inside a promise job, which turns the interrupt into a rejection: the
+      // slice still spent it, so the engine stops all the same.
+      if (this.#interrupted)
+        return this.#fault(
+          'cpu',
+          `the extension ran for more than ${this.#limits.sliceMs} ms without yielding`,
+        );
       if (r.value === 0) return;
     }
+    // Still jobs after this many batches: an endless chain, whatever the clock says.
+    if (!this.#broken) this.#fault('cpu', 'the extension kept scheduling promise jobs without end');
   }
 
   /** Evaluate the entry module and call its `activate(nova)`; the result arrives as `activated`. */

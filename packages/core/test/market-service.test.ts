@@ -122,7 +122,11 @@ describe('the built-in sample catalog', () => {
         location: SAMPLE_CATALOG,
         kind: 'builtin',
         signature: 'verified',
-        publisher: { name: null, key: SAMPLE_CATALOG_PUBLIC_KEY },
+        publisher: expect.objectContaining({
+          name: null,
+          key: SAMPLE_CATALOG_PUBLIC_KEY,
+          trusted: true,
+        }),
         commit: null,
         items: 5,
         error: null,
@@ -151,7 +155,21 @@ describe('the built-in sample catalog', () => {
     expect(theme.p.verification).toEqual({
       status: 'verified',
       reasons: [],
-      publisher: { name: null, key: SAMPLE_CATALOG_PUBLIC_KEY },
+      publisher: expect.objectContaining({
+        name: null,
+        key: SAMPLE_CATALOG_PUBLIC_KEY,
+        trusted: true,
+      }),
+      // A theme is no bundle: the catalog alone vouches, by the key it pins.
+      vouchedBy: {
+        catalog: {
+          id: SAMPLE_CATALOG_ID,
+          name: 'Sample catalog',
+          signedWith: 'pinned_key',
+          publisher: expect.objectContaining({ key: SAMPLE_CATALOG_PUBLIC_KEY, name: null }),
+        },
+        bundle: null,
+      },
     });
     expect(theme.view).toMatchObject({
       kind: 'theme',
@@ -162,7 +180,12 @@ describe('the built-in sample catalog', () => {
     expect(env.themes.map((t) => t.id)).toEqual(['com.examplelabs.aurora']);
 
     const plugin = await installFrom(SAMPLE_CATALOG_ID, 'plugin', 'com.examplelabs.release-notes');
-    expect(plugin.p.requires).toEqual({ sideloadConfirmation: false, permissionAcceptance: false });
+    expect(plugin.p.requires).toEqual({
+      sideloadConfirmation: false,
+      permissionAcceptance: false,
+      publisherChangeAcceptance: false,
+    });
+    expect(plugin.p.publisherChange).toBeNull();
     expect(plugin.p.warnings).toEqual([]);
     expect(plugin.p.details).toMatchObject({
       skills: expect.arrayContaining([expect.objectContaining({ name: 'release-notes' })]),
@@ -234,6 +257,16 @@ describe('a folder catalog', () => {
     signedPluginCatalog();
     const { p, view } = await installFrom('cat', 'plugin', 'com.test.notes');
     expect(p.verification.status).toBe('verified');
+    // No pinned key: a trusted publisher signs the index, and is named.
+    expect(p.verification.vouchedBy).toEqual({
+      catalog: {
+        id: 'cat',
+        name: 'Test catalog',
+        signedWith: 'trusted_publisher',
+        publisher: expect.objectContaining({ name: 'Test publisher', trusted: true }),
+      },
+      bundle: null,
+    });
     expect(view.verified).toBe(true);
     expect((await env.plugins.get(ACCOUNT, 'com.test.notes')).verified).toBe(true);
     await env.market.remove(ACCOUNT, 'plugin', 'com.test.notes');
@@ -291,6 +324,7 @@ describe('a folder catalog', () => {
       status: 'unverified',
       reasons: ['catalog_unsigned', 'no_checksum'],
       publisher: null,
+      vouchedBy: null,
     });
     expect(p.requires.sideloadConfirmation).toBe(true);
     expect(p.allowed).toBe(true);
@@ -925,7 +959,15 @@ describe('a remote catalog over HTTPS', () => {
     expect(p.verification).toEqual({
       status: 'verified',
       reasons: [],
-      publisher: { name: 'Test', key: key.publicKey },
+      publisher: expect.objectContaining({ name: 'Test', key: key.publicKey, trusted: true }),
+      vouchedBy: {
+        catalog: expect.objectContaining({
+          id: 'remote',
+          name: 'Remote',
+          signedWith: 'pinned_key',
+        }),
+        bundle: expect.objectContaining({ name: 'Test', trusted: true }),
+      },
     });
     await env.market.install(ACCOUNT, { previewId: p.previewId });
     expect((await env.plugins.get(ACCOUNT, 'com.test.notes')).verified).toBe(true);

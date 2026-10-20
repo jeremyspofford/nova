@@ -11,10 +11,20 @@ import type {
   DiffHunkView,
   ReviewFindingView,
 } from '@nova/shared';
-import { Button, Dialog, EmptyState, Icon, Spinner, VisuallyHidden, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  Icon,
+  Spinner,
+  VisuallyHidden,
+  spokenKey,
+  useToast,
+} from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { formatBinding } from '../keys.ts';
 import { useAnnounce, useServices } from '../services.tsx';
-import { plural } from '../settings/common.ts';
 import {
   CHANGE_KIND_TEXT,
   CHANGE_STATE_TEXT,
@@ -29,6 +39,77 @@ import {
   type Segment,
 } from './diff.ts';
 import { SEVERITY } from './ReviewPane.tsx';
+
+export const DIFF_TEXT = defineMessages('code.diff', {
+  hunkAccepted: 'Hunk {n} of {path} accepted.',
+  hunkRejected: 'Hunk {n} of {path} rejected.',
+  hunkAcceptFailed: 'Could not accept the hunk: {reason}',
+  hunkRejectFailed: 'Could not reject the hunk: {reason}',
+  fileAccepted: '{path}: accepted.',
+  fileRejected: '{path}: rejected.',
+  fileAcceptFailed: 'Could not accept {path}: {reason}',
+  fileRejectFailed: 'Could not reject {path}: {reason}',
+  allAccepted: 'All pending changes accepted.',
+  allRejected: 'All pending changes rejected.',
+  allAcceptFailed: 'Could not accept the changes: {reason}',
+  allRejectFailed: 'Could not reject the changes: {reason}',
+  commentAdded:
+    '{n, plural, one {Comment added. # comment ready to send.} other {Comment added. # comments ready to send.}}',
+  sent: '{n, plural, one {Sent # comment to the agent.} other {Sent # comments to the agent.}}',
+  notSent: 'Comments not sent: {reason}',
+  resolvedAnnounce: 'Comment resolved.',
+  resolveFailed: 'Could not resolve the comment: {reason}',
+  retry: 'Retry',
+  loading: 'Loading changes',
+  loadingDots: 'Loading changes…',
+  emptyTitle: 'No changes yet',
+  emptyBody: 'Edits the agent makes in this session show here, file by file.',
+  resolved: 'Resolved',
+  resolve: 'Resolve',
+  pending: 'Pending',
+  removePendingOnLine: 'Remove the pending comment on line {line} of {path}',
+  removePendingOnRemoved: 'Remove the pending comment on removed line {line} of {path}',
+  remove: 'Remove',
+  commentOnLine: 'Comment on line {line} of {path}',
+  commentOnRemoved: 'Comment on removed line {line} of {path}',
+  title: 'Diff',
+  layout: 'Diff layout',
+  unified: 'Unified',
+  split: 'Split',
+  files: '{n, plural, one {# file} other {# files}}',
+  acceptAll: 'Accept all',
+  rejectAll: 'Reject all',
+  pendingComments: 'Pending comments',
+  ready:
+    '{n, plural, one {# comment ready. {keys} sends them to the agent.} other {# comments ready. {keys} sends them to the agent.}}',
+  send: '{n, plural, one {Send # comment} other {Send # comments}}',
+  discard: 'Discard',
+  changedFiles: 'Changed files',
+  renamedFrom: '{kind} from {path}',
+  acceptFile: 'Accept {path}',
+  rejectFile: 'Reject {path}',
+  acceptFileButton: 'Accept file',
+  rejectFileButton: 'Reject file',
+  partial: 'Partly accepted: some hunks of this file are written, others are not.',
+  binary: 'Binary file: there is no text diff to show.',
+  rejectTitle: 'Reject all pending changes?',
+  rejectBody:
+    'Every pending hunk is reverted: those files go back to how they were before the agent changed them. Accepted hunks stay.',
+  cancel: 'Cancel',
+  hunk: 'hunk {n} of {path}',
+  acceptHunk: 'Accept hunk {n} of {path}',
+  rejectHunk: 'Reject hunk {n} of {path}',
+  accept: 'Accept',
+  reject: 'Reject',
+  linesOf: 'Lines of hunk {n} of {path}',
+  added: 'Added: ',
+  removed: 'Removed: ',
+  commentHint: 'Add it to the batch, or press {keys} to send every pending comment to the agent.',
+  addComment: 'Add comment',
+  reviewNote: 'Review {severity}',
+  counts:
+    '{add, plural, one {# addition} other {# additions}}, {del, plural, one {# deletion} other {# deletions}}',
+});
 
 export type DiffView = 'unified' | 'split';
 
@@ -84,8 +165,10 @@ export function DiffPane({
 
   const list = useMemo(() => changes ?? [], [changes]);
   const totals = diffTotals(list);
-  const modKey = mac ? '⌘' : 'Ctrl';
-  const sendKeys = `${modKey}+Enter`;
+  // Key caps with the modifier named in the active locale ("Ctrl+Enter", "⌘Enter").
+  const sendKeys = formatBinding('mod+enter', mac)
+    .map(spokenKey)
+    .join(mac ? '' : '+');
 
   // ---- decisions (FR-064) -----------------------------------------------------------------------
   const focusLater = (id: string) => setTimeout(() => document.getElementById(id)?.focus(), 0);
@@ -98,11 +181,13 @@ export function DiffPane({
         decisions: [{ hunkId: hunk.id, accept: ok }],
       });
       onChanged([updated]);
-      announce(`Hunk ${i + 1} of ${change.path} ${ok ? 'accepted' : 'rejected'}.`);
+      const p = { n: i + 1, path: change.path };
+      announce(ok ? DIFF_TEXT.hunkAccepted(p) : DIFF_TEXT.hunkRejected(p));
       // The buttons go away with the decision; keep focus on the hunk.
       focusLater(hunkDomId(base, change.id, hunk.id));
     } catch (err) {
-      toast.show(`Could not ${ok ? 'accept' : 'reject'} the hunk: ${errorMessage(err)}`, {
+      const p = { reason: errorMessage(err) };
+      toast.show(ok ? DIFF_TEXT.hunkAcceptFailed(p) : DIFF_TEXT.hunkRejectFailed(p), {
         tone: 'error',
       });
     } finally {
@@ -115,10 +200,15 @@ export function DiffPane({
     try {
       const { items } = await api.decideAll(sessionId, ok, [change.id]);
       onChanged(items);
-      announce(`${change.path}: ${ok ? 'accepted' : 'rejected'}.`);
+      announce(
+        ok
+          ? DIFF_TEXT.fileAccepted({ path: change.path })
+          : DIFF_TEXT.fileRejected({ path: change.path }),
+      );
       focusLater(fileDomId(base, change.id));
     } catch (err) {
-      toast.show(`Could not ${ok ? 'accept' : 'reject'} ${change.path}: ${errorMessage(err)}`, {
+      const p = { path: change.path, reason: errorMessage(err) };
+      toast.show(ok ? DIFF_TEXT.fileAcceptFailed(p) : DIFF_TEXT.fileRejectFailed(p), {
         tone: 'error',
       });
     } finally {
@@ -131,9 +221,10 @@ export function DiffPane({
     try {
       const { items } = await api.decideAll(sessionId, ok);
       onChanged(items);
-      announce(ok ? 'All pending changes accepted.' : 'All pending changes rejected.');
+      announce(ok ? DIFF_TEXT.allAccepted : DIFF_TEXT.allRejected);
     } catch (err) {
-      toast.show(`Could not ${ok ? 'accept' : 'reject'} the changes: ${errorMessage(err)}`, {
+      const p = { reason: errorMessage(err) };
+      toast.show(ok ? DIFF_TEXT.allAcceptFailed(p) : DIFF_TEXT.allRejectFailed(p), {
         tone: 'error',
       });
     } finally {
@@ -170,7 +261,7 @@ export function DiffPane({
     if (next === drafts) return;
     setDrafts(next);
     setBox(null);
-    announce(`Comment added. ${plural(next.length, 'comment')} ready to send.`);
+    announce(DIFF_TEXT.commentAdded({ n: next.length }));
   };
 
   const sendBatch = async () => {
@@ -190,15 +281,15 @@ export function DiffPane({
       onCommented(items);
       setDrafts([]);
       setBox(null);
-      announce(`Sent ${plural(batch.length, 'comment')} to the agent.`);
-      toast.show(`Sent ${plural(batch.length, 'comment')} to the agent.`, { tone: 'success' });
+      announce(DIFF_TEXT.sent({ n: batch.length }));
+      toast.show(DIFF_TEXT.sent({ n: batch.length }), { tone: 'success' });
     } catch (err) {
       // The batch stays, so nothing typed is lost.
       if (batch !== drafts) {
         setDrafts(batch);
         setBox(null);
       }
-      toast.show(`Comments not sent: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(DIFF_TEXT.notSent({ reason: errorMessage(err) }), { tone: 'error' });
     } finally {
       setSending(false);
     }
@@ -218,9 +309,9 @@ export function DiffPane({
     try {
       const updated = await api.resolveComment(sessionId, c.id);
       onCommented([updated]);
-      announce('Comment resolved.');
+      announce(DIFF_TEXT.resolvedAnnounce);
     } catch (err) {
-      toast.show(`Could not resolve the comment: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(DIFF_TEXT.resolveFailed({ reason: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -229,20 +320,20 @@ export function DiffPane({
     return (
       <div className="ws-error" role="alert">
         <p>{loadError}</p>
-        {onRetry ? <Button onClick={onRetry}>Retry</Button> : null}
+        {onRetry ? <Button onClick={onRetry}>{DIFF_TEXT.retry}</Button> : null}
       </div>
     );
   if (changes === null)
     return (
       <p className="muted pane-note">
-        <Spinner label="Loading changes" /> Loading changes…
+        <Spinner label={DIFF_TEXT.loading} /> {DIFF_TEXT.loadingDots}
       </p>
     );
   if (!changes.length)
     return (
       <EmptyState
-        title="No changes yet"
-        description="Edits the agent makes in this session show here, file by file."
+        title={DIFF_TEXT.emptyTitle}
+        description={DIFF_TEXT.emptyBody}
         icon="compare"
         level={3}
       />
@@ -267,31 +358,36 @@ export function DiffPane({
         ))}
         {here.map((c) => (
           <div key={c.id} className="code-note" data-resolved={c.resolved || undefined}>
-            <p>{c.body}</p>
+            <p dir="auto">{c.body}</p>
             {c.resolved ? (
-              <span className="muted">Resolved</span>
+              <span className="muted">{DIFF_TEXT.resolved}</span>
             ) : (
               <Button variant="ghost" onClick={() => void resolve(c)}>
-                Resolve
+                {DIFF_TEXT.resolve}
               </Button>
             )}
           </div>
         ))}
         {mine.map((d) => (
           <div key={d.key} className="code-note code-note-draft">
-            <span className="code-draft-tag">Pending</span> <p>{d.body}</p>
+            <span className="code-draft-tag">{DIFF_TEXT.pending}</span> <p dir="auto">{d.body}</p>
             <Button
               variant="ghost"
-              aria-label={`Remove the pending comment on ${d.side === 'old' ? 'removed line' : 'line'} ${d.line} of ${d.path}`}
+              aria-label={(d.side === 'old'
+                ? DIFF_TEXT.removePendingOnRemoved
+                : DIFF_TEXT.removePendingOnLine)({ line: String(d.line), path: d.path })}
               onClick={() => setDrafts((list) => list.filter((x) => x.key !== d.key))}
             >
-              Remove
+              {DIFF_TEXT.remove}
             </Button>
           </div>
         ))}
         {open ? (
           <CommentBox
-            label={`Comment on ${side === 'old' ? 'removed line' : 'line'} ${line} of ${change.path}`}
+            label={(side === 'old' ? DIFF_TEXT.commentOnRemoved : DIFF_TEXT.commentOnLine)({
+              line: String(line),
+              path: change.path,
+            })}
             text={box.text}
             sendKeys={sendKeys}
             onText={(text) => setBox({ key, text })}
@@ -314,7 +410,10 @@ export function DiffPane({
       <button
         type="button"
         className="code-ln-btn"
-        aria-label={`Comment on ${side === 'old' ? 'removed line' : 'line'} ${no} of ${change.path}`}
+        aria-label={(side === 'old' ? DIFF_TEXT.commentOnRemoved : DIFF_TEXT.commentOnLine)({
+          line: String(no),
+          path: change.path,
+        })}
         onClick={() => openBox({ change, side, line: no })}
       >
         {no}
@@ -323,9 +422,9 @@ export function DiffPane({
   };
 
   return (
-    <section className="code-diff" aria-label="Diff" onKeyDown={onPaneKey}>
+    <section className="code-diff" aria-label={DIFF_TEXT.title} onKeyDown={onPaneKey}>
       <div className="code-diff-bar">
-        <div className="code-seg" role="group" aria-label="Diff layout">
+        <div className="code-seg" role="group" aria-label={DIFF_TEXT.layout}>
           {(['unified', 'split'] as const).map((v) => (
             <Button
               key={v}
@@ -333,53 +432,53 @@ export function DiffPane({
               aria-pressed={view === v}
               onClick={() => setView(v)}
             >
-              {v === 'unified' ? 'Unified' : 'Split'}
+              {v === 'unified' ? DIFF_TEXT.unified : DIFF_TEXT.split}
             </Button>
           ))}
         </div>
         <span className="muted code-totals">
-          {plural(totals.files, 'file')}, <Counts add={totals.additions} del={totals.deletions} />
+          {DIFF_TEXT.files({ n: totals.files })},{' '}
+          <Counts add={totals.additions} del={totals.deletions} />
         </span>
         <span className="code-spacer" />
         <Button
           disabled={!totals.pendingHunks || busy !== null}
           onClick={() => void decideEverything(true)}
         >
-          <Icon name="check" /> Accept all
+          <Icon name="check" /> {DIFF_TEXT.acceptAll}
         </Button>
         <Button
           variant="danger"
           disabled={!totals.pendingHunks || busy !== null}
           onClick={() => setConfirmReject(true)}
         >
-          <Icon name="undo" /> Reject all
+          <Icon name="undo" /> {DIFF_TEXT.rejectAll}
         </Button>
       </div>
       {drafts.length ? (
-        <div className="code-batch" role="region" aria-label="Pending comments">
-          <p>
-            {plural(drafts.length, 'comment')} ready. {sendKeys} sends them to the agent.
-          </p>
+        <div className="code-batch" role="region" aria-label={DIFF_TEXT.pendingComments}>
+          <p>{DIFF_TEXT.ready({ n: drafts.length, keys: sendKeys })}</p>
           <Button
             variant="primary"
             disabled={sending}
             aria-keyshortcuts={mac ? 'Meta+Enter' : 'Control+Enter'}
             onClick={() => void sendBatch()}
           >
-            {sending ? <Spinner /> : <Icon name="send" />} Send {plural(drafts.length, 'comment')}
+            {sending ? <Spinner /> : <Icon name="send" />} {DIFF_TEXT.send({ n: drafts.length })}
           </Button>
           <Button onClick={() => setDrafts([])} disabled={sending}>
-            Discard
+            {DIFF_TEXT.discard}
           </Button>
         </div>
       ) : null}
-      <nav className="code-files" aria-label="Changed files">
+      <nav className="code-files" aria-label={DIFF_TEXT.changedFiles}>
         <ul>
           {list.map((c) => (
             <li key={c.id}>
               <button
                 type="button"
                 className="link code-file-link"
+                dir="ltr"
                 onClick={() => {
                   const el = document.getElementById(fileDomId(base, c.id));
                   el?.scrollIntoView?.({ block: 'start' });
@@ -414,8 +513,9 @@ export function DiffPane({
                 </span>
               </h3>
               <span className="muted">
-                {CHANGE_KIND_TEXT[c.kind]}
-                {c.kind === 'rename' && c.oldPath ? ` from ${c.oldPath}` : ''}
+                {c.kind === 'rename' && c.oldPath
+                  ? DIFF_TEXT.renamedFrom({ kind: CHANGE_KIND_TEXT[c.kind], path: c.oldPath })
+                  : CHANGE_KIND_TEXT[c.kind]}
               </span>
               <Counts add={c.additions} del={c.deletions} />
               <span className="code-state" data-state={c.state}>
@@ -424,30 +524,29 @@ export function DiffPane({
               <span className="code-spacer" />
               <Button
                 disabled={!pending || busy !== null}
-                aria-label={`Accept ${c.path}`}
+                aria-label={DIFF_TEXT.acceptFile({ path: c.path })}
                 onClick={() => void decideFile(c, true)}
               >
-                Accept file
+                {DIFF_TEXT.acceptFileButton}
               </Button>
               <Button
                 disabled={!pending || busy !== null}
-                aria-label={`Reject ${c.path}`}
+                aria-label={DIFF_TEXT.rejectFile({ path: c.path })}
                 onClick={() => void decideFile(c, false)}
               >
-                Reject file
+                {DIFF_TEXT.rejectFileButton}
               </Button>
             </header>
             {c.state === 'partial' ? (
               <p className="code-partial" role="note">
-                <Icon name="alert" /> Partly accepted: some hunks of this file are written, others
-                are not.
+                <Icon name="alert" /> {DIFF_TEXT.partial}
               </p>
             ) : null}
             {fileNotes.map((f) => (
               <ReviewNote key={f.id} finding={f} />
             ))}
             {c.binary ? (
-              <p className="muted code-binary">Binary file: there is no text diff to show.</p>
+              <p className="muted code-binary">{DIFF_TEXT.binary}</p>
             ) : (
               c.hunks.map((h, i) => (
                 <Hunk
@@ -469,12 +568,12 @@ export function DiffPane({
       })}
       <Dialog
         open={confirmReject}
-        title="Reject all pending changes?"
-        description="Every pending hunk is reverted: those files go back to how they were before the agent changed them. Accepted hunks stay."
+        title={DIFF_TEXT.rejectTitle}
+        description={DIFF_TEXT.rejectBody}
         onClose={() => setConfirmReject(false)}
         footer={
           <>
-            <Button onClick={() => setConfirmReject(false)}>Cancel</Button>
+            <Button onClick={() => setConfirmReject(false)}>{DIFF_TEXT.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -482,7 +581,7 @@ export function DiffPane({
                 void decideEverything(false);
               }}
             >
-              Reject all
+              {DIFF_TEXT.rejectAll}
             </Button>
           </>
         }
@@ -513,7 +612,8 @@ function Hunk({
   notes: (side: 'old' | 'new', line: number | null) => ReactNode;
 }) {
   const marks = useMemo(() => wordMarks(hunk.lines), [hunk.lines]);
-  const name = `hunk ${index + 1} of ${change.path}`;
+  const at = { n: index + 1, path: change.path };
+  const name = DIFF_TEXT.hunk(at);
   const lines = hunk.lines;
   return (
     <div
@@ -531,17 +631,25 @@ function Hunk({
         </span>
         {hunk.state === 'pending' ? (
           <>
-            <Button disabled={busy} aria-label={`Accept ${name}`} onClick={() => onDecide(true)}>
-              Accept
+            <Button
+              disabled={busy}
+              aria-label={DIFF_TEXT.acceptHunk(at)}
+              onClick={() => onDecide(true)}
+            >
+              {DIFF_TEXT.accept}
             </Button>
-            <Button disabled={busy} aria-label={`Reject ${name}`} onClick={() => onDecide(false)}>
-              Reject
+            <Button
+              disabled={busy}
+              aria-label={DIFF_TEXT.rejectHunk(at)}
+              onClick={() => onDecide(false)}
+            >
+              {DIFF_TEXT.reject}
             </Button>
           </>
         ) : null}
       </div>
-      <table className="code-lines" data-view={view}>
-        <caption className="nv-vh">{`Lines of ${name}`}</caption>
+      <table className="code-lines" data-view={view} dir="ltr">
+        <caption className="nv-vh">{DIFF_TEXT.linesOf(at)}</caption>
         <colgroup>
           {view === 'unified' ? (
             <>
@@ -623,11 +731,6 @@ function Hunk({
 }
 
 const SIGN: Record<DiffLine['kind'], string> = { add: '+', del: '−', context: ' ' };
-const KIND_TEXT: Record<DiffLine['kind'], string | null> = {
-  add: 'Added: ',
-  del: 'Removed: ',
-  context: null,
-};
 
 function LineText({
   line,
@@ -640,7 +743,7 @@ function LineText({
 }) {
   // In the split view a context line shows on both sides; its sign stays blank.
   const kind = side && line.kind === 'context' ? 'context' : line.kind;
-  const said = KIND_TEXT[kind];
+  const said = kind === 'add' ? DIFF_TEXT.added : kind === 'del' ? DIFF_TEXT.removed : null;
   return (
     <td className="code-text" data-kind={kind}>
       <span className="code-sign" aria-hidden="true">
@@ -712,14 +815,14 @@ function CommentBox({
         }}
       />
       <span id={`${id}-hint`} className="nv-field-hint">
-        Add it to the batch, or press {sendKeys} to send every pending comment to the agent.
+        {DIFF_TEXT.commentHint({ keys: sendKeys })}
       </span>
       <div className="code-comment-actions">
         <Button onClick={onAdd} disabled={!text.trim()}>
-          Add comment
+          {DIFF_TEXT.addComment}
         </Button>
         <Button variant="ghost" onClick={onCancel}>
-          Cancel
+          {DIFF_TEXT.cancel}
         </Button>
       </div>
     </div>
@@ -731,10 +834,11 @@ function ReviewNote({ finding: f }: { finding: ReviewFindingView }) {
   return (
     <div className="code-note code-note-review" data-severity={f.severity}>
       <span className="code-sev" data-severity={f.severity}>
-        <Icon name={SEVERITY[f.severity].icon} /> Review {SEVERITY[f.severity].text}
+        <Icon name={SEVERITY[f.severity].icon} />{' '}
+        {DIFF_TEXT.reviewNote({ severity: SEVERITY[f.severity].text })}
       </span>{' '}
-      <strong>{f.title}</strong>
-      <p>{f.reasoning}</p>
+      <strong dir="auto">{f.title}</strong>
+      <p dir="auto">{f.reasoning}</p>
     </div>
   );
 }
@@ -748,7 +852,7 @@ function Counts({ add, del }: { add: number; del: number }) {
       <span className="code-del" aria-hidden="true">
         −{del}
       </span>
-      <VisuallyHidden>{`${plural(add, 'addition')}, ${plural(del, 'deletion')}`}</VisuallyHidden>
+      <VisuallyHidden>{DIFF_TEXT.counts({ add, del })}</VisuallyHidden>
     </span>
   );
 }

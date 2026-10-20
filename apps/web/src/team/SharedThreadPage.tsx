@@ -5,6 +5,7 @@
 // memory or connectors are used here, and the page says so. The conversation follows the shared
 // thread's own stream; someone taken out of the chat stops hearing it and the page says why.
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type {
   EventEnvelope,
   MessageView,
@@ -25,11 +26,52 @@ import { useDebounced } from '../work/events.ts';
 import { followLink } from '../work/nav.tsx';
 import { useTeamApi } from './api.ts';
 import { SHARED_THREAD_EVENTS } from './events.ts';
-import { personName, sharedThreadPath, teamErrorMessage } from './format.ts';
+import { TEAM_TEXT, personName, sharedThreadPath, teamErrorMessage } from './format.ts';
 import { ConfirmDialog, FormError } from './parts.tsx';
 import { ShareDialog } from './ShareDialog.tsx';
 import '../workspace.css';
 import './team.css';
+
+const THREAD_TEXT = defineMessages('team.sharedThread', {
+  sharedChats: 'Shared chats',
+  askedBy: 'Nova, asked by {who}',
+  askedByYou: 'Nova, asked by you',
+  askedBySomeone: 'Nova, asked by someone',
+  queued: 'Queued: it is sent when the current reply ends.',
+  stopped: 'Stopped.',
+  stopFailed: 'Could not stop the reply.',
+  goneTitle: 'This chat is not shared with you',
+  goneDescription: 'It was never shared with you, its owner took you out, or it was deleted.',
+  loadFailed: 'Could not load this chat.',
+  loading: 'Loading the chat',
+  youShare: 'You share this chat. Shared {when}.',
+  sharesWithYou: '{name} shares this chat with you.',
+  nothingShared:
+    'Nobody’s memory or connectors are used here, and each message runs as the person who wrote it.',
+  people: 'People in this chat',
+  addPeople: 'Add people',
+  leave: 'Leave this chat',
+  startedBy: '{you, select, yes {{name} (you), started it} other {{name}, started it}}',
+  takeOutLabel: 'Take {name} out of this chat',
+  messages: 'Messages',
+  empty: 'Nothing has been said yet. Write the first message below.',
+  writing: 'Writing',
+  noText: 'No text in this reply.',
+  waiting: 'Waiting for your decision',
+  composer: 'Message everyone in this chat',
+  stop: 'Stop',
+  send: 'Send',
+  sendFailed: 'Could not send the message.',
+  leaveTitle: 'Leave this chat?',
+  leaveWhat: 'You stop seeing it. {name} can share it with you again.',
+  leaveButton: 'Leave',
+  left: 'You left the chat.',
+  takeOutTitle: 'Take {name} out of this chat?',
+  takeOutThem: 'Take them out of this chat?',
+  takeOutWhat:
+    'They stop seeing it at once, including what was said before. You can share it with them again.',
+  takeOut: 'Take out',
+});
 
 const RUNNING = new Set(['streaming', 'waiting_approval', 'waiting_input']);
 
@@ -47,18 +89,23 @@ export function authorLine(
   a: SharedAuthorView | undefined,
   you: string | null,
 ): string {
-  const who = a ? (a.accountId === you ? 'you' : personName(a, 'someone')) : null;
-  if (m.role === 'user') return who ? (who === 'you' ? 'You' : who) : 'Someone';
-  if (m.role === 'assistant') return who ? `Nova, asked by ${who}` : 'Nova';
+  const mine = a !== undefined && a.accountId === you;
+  if (m.role === 'user') return mine ? TEAM_TEXT.you : personName(a);
+  if (m.role === 'assistant') {
+    if (mine) return THREAD_TEXT.askedByYou;
+    if (!a) return 'Nova';
+    const who = personName(a, '');
+    return who ? THREAD_TEXT.askedBy({ who }) : THREAD_TEXT.askedBySomeone;
+  }
   return 'Nova';
 }
 
 function Breadcrumb() {
   const path = sharedThreadPath(null);
   return (
-    <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+    <nav aria-label={TEAM_TEXT.breadcrumb} className="ws-breadcrumb">
       <a href={path} onClick={(e) => followLink(e, path)}>
-        <Icon name="back" /> Shared chats
+        <Icon name="back" /> {THREAD_TEXT.sharedChats}
       </a>
     </nav>
   );
@@ -205,8 +252,7 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
     try {
       const out = await api.sendSharedMessage(threadId, { text: body });
       setText('');
-      if (out.disposition === 'queued')
-        toast.show('Queued: it is sent when the current reply ends.', { tone: 'info' });
+      if (out.disposition === 'queued') toast.show(THREAD_TEXT.queued, { tone: 'info' });
       else setRunning(true);
       refetch();
     } catch (err) {
@@ -220,9 +266,9 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
     setStopping(true);
     try {
       await api.cancelSharedThread(threadId);
-      announce('Stopped.');
+      announce(THREAD_TEXT.stopped);
     } catch (err) {
-      toast.show(teamErrorMessage(err, 'Could not stop the reply.'), { tone: 'error' });
+      toast.show(teamErrorMessage(err, THREAD_TEXT.stopFailed), { tone: 'error' });
     } finally {
       setStopping(false);
     }
@@ -237,24 +283,24 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
           gone ? (
             <EmptyState
               icon="chat"
-              title="This chat is not shared with you"
-              description="It was never shared with you, its owner took you out, or it was deleted."
+              title={THREAD_TEXT.goneTitle}
+              description={THREAD_TEXT.goneDescription}
             />
           ) : (
             <div role="alert" className="ws-error">
-              <p>{teamErrorMessage(loadError, 'Could not load this chat.')}</p>
-              <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+              <p>{teamErrorMessage(loadError, THREAD_TEXT.loadFailed)}</p>
+              <Button onClick={() => setAttempt((n) => n + 1)}>{TEAM_TEXT.retry}</Button>
             </div>
           )
         ) : (
-          <Spinner label="Loading the chat" />
+          <Spinner label={THREAD_TEXT.loading} />
         )}
       </div>
     );
   }
 
   const owner = detail.you === 'owner';
-  const title = detail.thread.title?.trim() || 'Untitled chat';
+  const title = detail.thread.title?.trim() || TEAM_TEXT.untitledChat;
   const messages = detail.messages.filter((m) => m.role === 'user' || m.role === 'assistant');
   const mine = approvals.filter((a) => a.status === 'pending');
 
@@ -262,7 +308,7 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
     <div className="ws-page team-page team-thread">
       <Breadcrumb />
       <header className="ws-page-header">
-        <h1>{title}</h1>
+        <h1 dir="auto">{title}</h1>
         {detail.thread.derived ? (
           <StatusChip
             status={detail.thread.derived.status}
@@ -272,39 +318,40 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
       </header>
       <p className="muted ws-flush">
         {owner
-          ? `You share this chat. Shared ${formatWhen(detail.sharedAt)}.`
-          : `${personName(detail.owner)} shares this chat with you.`}{' '}
-        Nobody’s memory or connectors are used here, and each message runs as the person who wrote
-        it.
+          ? THREAD_TEXT.youShare({ when: formatWhen(detail.sharedAt) })
+          : THREAD_TEXT.sharesWithYou({ name: personName(detail.owner) })}{' '}
+        {THREAD_TEXT.nothingShared}
       </p>
 
       <section className="ws-section team-people" aria-labelledby={peopleId}>
         <div className="ws-section-header">
-          <h2 id={peopleId}>People in this chat</h2>
+          <h2 id={peopleId}>{THREAD_TEXT.people}</h2>
           {owner ? (
             <Button onClick={() => setSharing(true)}>
-              <Icon name="plus" /> Add people
+              <Icon name="plus" /> {THREAD_TEXT.addPeople}
             </Button>
           ) : (
             <Button variant="ghost" onClick={() => setLeaving(true)}>
-              Leave this chat
+              {THREAD_TEXT.leave}
             </Button>
           )}
         </div>
-        <ul className="team-chips" aria-label="People in this chat">
+        <ul className="team-chips" aria-label={THREAD_TEXT.people}>
           <li className="ws-badge">
-            {personName(detail.owner)}
-            {detail.owner.accountId === you ? ' (you)' : ''}, started it
+            {THREAD_TEXT.startedBy({
+              name: personName(detail.owner),
+              you: detail.owner.accountId === you ? 'yes' : 'no',
+            })}
           </li>
           {detail.participants.map((p) => (
             <li key={p.accountId} className="ws-badge">
-              {personName(p)}
-              {p.accountId === you ? ' (you)' : ''}
+              <span dir="auto">{personName(p)}</span>
+              {p.accountId === you ? ` ${TEAM_TEXT.youMark}` : ''}
               {owner ? (
                 <button
                   type="button"
                   className="team-chip-x"
-                  aria-label={`Take ${personName(p)} out of this chat`}
+                  aria-label={THREAD_TEXT.takeOutLabel({ name: personName(p) })}
                   onClick={() => setRemoving({ accountId: p.accountId, name: personName(p) })}
                 >
                   <Icon name="close" />
@@ -317,13 +364,11 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
 
       <ol
         className="team-messages"
-        aria-label="Messages"
+        aria-label={THREAD_TEXT.messages}
         aria-live="polite"
         aria-relevant="additions"
       >
-        {messages.length === 0 ? (
-          <li className="muted">Nothing has been said yet. Write the first message below.</li>
-        ) : null}
+        {messages.length === 0 ? <li className="muted">{THREAD_TEXT.empty}</li> : null}
         {messages.map((m) => {
           const author = detail.authors[m.id];
           const body = streamed[m.id] ?? messageBody(m);
@@ -339,12 +384,14 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
                     <Markdown text={body} />
                   </div>
                 ) : m.status === 'streaming' || streamed[m.id] !== undefined ? (
-                  <Spinner label="Writing" />
+                  <Spinner label={THREAD_TEXT.writing} />
                 ) : (
-                  <p className="muted ws-flush">No text in this reply.</p>
+                  <p className="muted ws-flush">{THREAD_TEXT.noText}</p>
                 )
               ) : (
-                <p className="team-msg-body team-pre">{body}</p>
+                <p className="team-msg-body team-pre" dir="auto">
+                  {body}
+                </p>
               )}
             </li>
           );
@@ -352,7 +399,7 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
       </ol>
 
       {mine.length ? (
-        <section className="stack" aria-label="Waiting for your decision">
+        <section className="stack" aria-label={THREAD_TEXT.waiting}>
           {mine.map((a) => (
             <ApprovalCard
               key={a.id}
@@ -373,7 +420,7 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
         }}
       >
         <label id={`${formId}-l`} htmlFor={`${formId}-t`} className="nv-field-label">
-          Message everyone in this chat
+          {THREAD_TEXT.composer}
         </label>
         <textarea
           id={`${formId}-t`}
@@ -391,14 +438,14 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
         <div className="row team-actions">
           {running ? (
             <Button onClick={() => void stop()} disabled={stopping}>
-              {stopping ? <Spinner /> : <Icon name="stop" />} Stop
+              {stopping ? <Spinner /> : <Icon name="stop" />} {THREAD_TEXT.stop}
             </Button>
           ) : null}
           <Button type="submit" variant="primary" disabled={sending || !text.trim()}>
-            {sending ? <Spinner /> : <Icon name="send" />} Send
+            {sending ? <Spinner /> : <Icon name="send" />} {THREAD_TEXT.send}
           </Button>
         </div>
-        <FormError error={sendError} fallback="Could not send the message." />
+        <FormError error={sendError} fallback={THREAD_TEXT.sendFailed} />
       </form>
 
       {sharing ? (
@@ -412,24 +459,26 @@ export function SharedThreadPage({ threadId }: { threadId: string }) {
       ) : null}
       <ConfirmDialog
         open={leaving}
-        title="Leave this chat?"
-        description={`You stop seeing it. ${personName(detail.owner)} can share it with you again.`}
-        confirmLabel="Leave"
+        title={THREAD_TEXT.leaveTitle}
+        description={THREAD_TEXT.leaveWhat({ name: personName(detail.owner) })}
+        confirmLabel={THREAD_TEXT.leaveButton}
         danger
         onClose={() => setLeaving(false)}
         onConfirm={async () => {
           const self = you ?? (await api.getTeamMe()).accountId;
           await api.unshareThread(threadId, self);
           setLeaving(false);
-          toast.show('You left the chat.', { tone: 'success' });
+          toast.show(THREAD_TEXT.left, { tone: 'success' });
           navigate(sharedThreadPath(null));
         }}
       />
       <ConfirmDialog
         open={removing !== null}
-        title={`Take ${removing?.name ?? 'them'} out of this chat?`}
-        description="They stop seeing it at once, including what was said before. You can share it with them again."
-        confirmLabel="Take out"
+        title={
+          removing ? THREAD_TEXT.takeOutTitle({ name: removing.name }) : THREAD_TEXT.takeOutThem
+        }
+        description={THREAD_TEXT.takeOutWhat}
+        confirmLabel={THREAD_TEXT.takeOut}
         danger
         onClose={() => setRemoving(null)}
         onConfirm={async () => {

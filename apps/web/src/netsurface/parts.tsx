@@ -2,8 +2,20 @@
 // icon and text, an error box with Retry, a confirmation dialog
 // for destructive or outward-facing actions (docs/04 §4.4, §6, §7) and a copy button.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, Icon, Spinner, useToast } from '@nova/ui';
-import { netErrorMessage, type ChipSpec } from './format.ts';
+import { NET_TEXT, netErrorMessage, type ChipSpec } from './format.ts';
+
+export const PARTS_TEXT = defineMessages('netsurface.parts', {
+  retry: 'Retry',
+  cancel: 'Cancel',
+  failed: 'That did not work.',
+  copy: 'Copy',
+  copyWhat: 'Copy {what}',
+  copiedWhat: '{what} copied.',
+  copyFailedWhat: 'Could not copy. Select the {what} and copy it yourself.',
+});
+const S = PARTS_TEXT;
 
 export interface Loaded<T> {
   data: T | null;
@@ -54,7 +66,7 @@ export function Chip({ spec, detail }: { spec: ChipSpec; detail?: string | null 
   return (
     <span className="nv-chip" data-status={spec.tone === 'neutral' ? undefined : spec.tone}>
       {spec.icon ? <Icon name={spec.icon} /> : <Spinner />}
-      <span>{detail ? `${spec.text}: ${detail}` : spec.text}</span>
+      <span>{detail ? NET_TEXT.chipDetail({ text: spec.text, detail }) : spec.text}</span>
     </span>
   );
 }
@@ -71,7 +83,7 @@ export function LoadError({
   return (
     <div role="alert" className="ws-error">
       <p>{netErrorMessage(error, fallback)}</p>
-      <Button onClick={onRetry}>Retry</Button>
+      <Button onClick={onRetry}>{S.retry}</Button>
     </div>
   );
 }
@@ -155,7 +167,7 @@ function ConfirmBody({
       footer={
         <>
           <Button ref={cancelRef} onClick={onClose}>
-            Cancel
+            {S.cancel}
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}
@@ -170,26 +182,43 @@ function ConfirmBody({
       {children}
       {error ? (
         <p role="alert" className="nv-field-error">
-          {netErrorMessage(error, 'That did not work.')}
+          {netErrorMessage(error, S.failed)}
         </p>
       ) : null}
     </Dialog>
   );
 }
 
-/** Copy a value; when the browser refuses, say so (the value stays on the page to select). */
-export function CopyButton({ value, what }: { value: string; what: string }) {
+/** The words of a copy button: its accessible name and the two toasts. */
+export interface CopyText {
+  copy: string;
+  copied: string;
+  failed: string;
+}
+
+/**
+ * Copy a value; when the browser refuses, say so (the value stays on the page to select). Pass
+ * `text` (whole messages); `what` (a noun, put into "Copy {what}" lower-cased) is for callers
+ * not converted yet.
+ */
+export function CopyButton({
+  value,
+  what,
+  text,
+}: { value: string } & ({ text: CopyText; what?: never } | { what: string; text?: never })) {
   const toast = useToast();
+  const t: CopyText = text ?? {
+    copy: S.copyWhat({ what: (what ?? '').toLowerCase() }),
+    copied: S.copiedWhat({ what: what ?? '' }),
+    failed: S.copyFailedWhat({ what: (what ?? '').toLowerCase() }),
+  };
   return (
     <Button
       variant="ghost"
-      aria-label={`Copy ${what.toLowerCase()}`}
+      aria-label={t.copy}
       onClick={() => {
-        const done = () => toast.show(`${what} copied.`, { tone: 'success' });
-        const fail = () =>
-          toast.show(`Could not copy. Select the ${what.toLowerCase()} and copy it yourself.`, {
-            tone: 'error',
-          });
+        const done = () => toast.show(t.copied, { tone: 'success' });
+        const fail = () => toast.show(t.failed, { tone: 'error' });
         if (!navigator.clipboard) {
           fail();
           return;
@@ -197,7 +226,7 @@ export function CopyButton({ value, what }: { value: string; what: string }) {
         navigator.clipboard.writeText(value).then(done, fail);
       }}
     >
-      <Icon name="copy" /> Copy
+      <Icon name="copy" /> {S.copy}
     </Button>
   );
 }

@@ -5,6 +5,7 @@
 // resolved (once no markers are left) or aborted (the files go back as they were). A conflict is
 // never resolved silently; Ask the agent sends the conflicting paths to the session's agent.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { CodeMergeView, CodeSessionView, MergeConflictView } from '@nova/shared';
 import {
   Button,
@@ -19,7 +20,7 @@ import {
 } from '@nova/ui';
 import { useHubStream } from '../hub-events.ts';
 import { useAnnounce, useServices } from '../services.tsx';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { ConfirmAction, TextBlock, useLoad } from '../cloud/parts.tsx';
 import { TextArea } from '../cloud/CloudEnvironmentDialog.tsx';
 import { useCodeM7Api, type MergeConflictMode } from './api-m7.ts';
@@ -35,6 +36,92 @@ import {
   isConflict,
 } from './m7-format.ts';
 import { Badge } from './parts.tsx';
+
+export const MERGE_TEXT = defineMessages('code.merge', {
+  intro:
+    'Bring another session’s work or a patch into this session. Conflicts are shown with their three sides; nothing is resolved without you.',
+  mergeIn: 'Merge in…',
+  loadFailed: 'Could not load the merges.',
+  retry: 'Retry',
+  loading: 'Loading the merges',
+  emptyTitle: 'No merges yet',
+  emptyBody: 'Merge a worker’s or an attempt’s work, or apply a patch onto a branch that moved.',
+  list: 'Merges',
+  rowLabel: '{source}, {status}',
+  rowTitle: '{source} · {when}',
+  files: '{n, plural, one {# file} other {# files}}',
+  conflicts: '{n, plural, one {# conflict} other {# conflicts}}',
+  mergedConflicts:
+    '{n, plural, one {Merged with # conflict to resolve.} other {Merged with # conflicts to resolve.}}',
+  merged: 'Merged.',
+  refused:
+    '{n, plural, one {Nothing was written: # file conflicts with this session ({paths}). Open the merge to see the three sides.} other {Nothing was written: # files conflict with this session ({paths}). Open the merge to see the three sides.}}',
+  refusedAnnounce: 'The merge was refused because of conflicts.',
+  resolved: 'Merge resolved. Commits can go ahead.',
+  markersLeft: 'Conflict markers are still in {paths}. Edit them out, then try again.',
+  resolveFailed: 'Could not mark the merge resolved.',
+  mergeFailed: 'Could not merge.',
+  /** Sent to the agent by "Ask the agent to resolve". */
+  askAgent:
+    'Resolve the merge conflicts in {paths}: keep the intent of both sides, remove every conflict marker, and run the tests. Tell me what you chose where it was not obvious.',
+  sent: 'Sent to the agent.',
+  sendFailed: 'Could not send it: {reason}',
+  filesList: 'Files in this merge',
+  places: '{result} ({n} places)',
+  markersNote:
+    'The files have conflict markers. Edit them out (in the File tab, or ask the agent), then mark the merge resolved. Commits wait until then.',
+  markResolved: 'Mark resolved',
+  askResolve: 'Ask the agent to resolve',
+  abort: 'Abort merge…',
+  withMarkers: 'Merge with conflict markers',
+  abortTitle: 'Abort this merge?',
+  abortBody:
+    'The files go back to how they were before the merge, including any edits made to resolve it.',
+  abortConfirm: 'Abort merge',
+  abortFailed: 'Could not abort the merge.',
+  aborted: 'Merge aborted.',
+  binary:
+    'A binary file (or a link) changed on both sides. It is never merged; keep one side by hand.',
+  notThere: 'Not there on this side.',
+  sideOf: '{path}: {side}',
+  base: 'Base',
+  ours: 'This session',
+  theirs: 'The work',
+  withMarkersNow: 'With conflict markers, as in the file now',
+  markersOf: '{path} with conflict markers',
+  cutShort: 'Long sides are cut short here.',
+  chooseSession: 'Choose the session whose work to merge.',
+  pastePatch: 'Paste a unified patch (git diff output).',
+  commitHash: 'Enter a commit hash: 7 to 64 characters, 0-9 and a-f.',
+  dialogTitle: 'Merge into this session',
+  dialogBody: 'A three-way merge onto this session’s files. Nothing is committed.',
+  from: 'Merge from',
+  fromSession: 'Another session',
+  fromSessionRemote: 'Only when both sessions’ folders are on the Hub.',
+  fromSessionHint: 'A worker or another session in the same repository.',
+  fromPatch: 'A patch',
+  fromPatchHint: 'Unified diff text, such as git diff output.',
+  remote: 'Merging sessions needs both folders on the Hub. This session is on another machine.',
+  loadingSessions: 'Loading the sessions',
+  loadingSessionsDots: 'Loading sessions…',
+  session: 'Session',
+  choose: 'Choose a session',
+  sessionBranch: '{title} ({branch})',
+  noOthers: 'No other session works in this repository.',
+  patch: 'Patch',
+  madeAgainst: 'Made against commit (optional)',
+  madeAgainstHint: 'Without it, the session’s current commit.',
+  head: 'HEAD',
+  ifConflict: 'If files conflict',
+  refuse: 'Write nothing and show the conflicts',
+  refuseHint: 'The safe choice: the session’s files stay as they are.',
+  markers: 'Write conflict markers to resolve',
+  markersHint: 'Commits wait until you resolve or abort the merge.',
+  cancel: 'Cancel',
+  merge: 'Merge',
+});
+
+const joinPaths = (paths: readonly string[]) => fmt.list(paths, { type: 'unit', style: 'short' });
 
 export function MergePane({
   session,
@@ -70,12 +157,9 @@ export function MergePane({
   return (
     <div className="cm7-pane">
       <div className="cm7-pane-head">
-        <p className="muted ws-flush">
-          Bring another session’s work or a patch into this session. Conflicts are shown with their
-          three sides; nothing is resolved without you.
-        </p>
+        <p className="muted ws-flush">{MERGE_TEXT.intro}</p>
         <Button onClick={() => setMerging(true)}>
-          <Icon name="branch" /> Merge in…
+          <Icon name="branch" /> {MERGE_TEXT.mergeIn}
         </Button>
       </div>
       {notice ? (
@@ -86,26 +170,29 @@ export function MergePane({
       ) : null}
       {list.error && !items ? (
         <div className="ws-error" role="alert">
-          <p>{codeM7ErrorMessage(list.error, 'Could not load the merges.')}</p>
-          <Button onClick={list.reload}>Retry</Button>
+          <p>{codeM7ErrorMessage(list.error, MERGE_TEXT.loadFailed)}</p>
+          <Button onClick={list.reload}>{MERGE_TEXT.retry}</Button>
         </div>
       ) : null}
-      {list.loading ? <Spinner label="Loading the merges" /> : null}
+      {list.loading ? <Spinner label={MERGE_TEXT.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
           level={3}
-          title="No merges yet"
-          description="Merge a worker’s or an attempt’s work, or apply a patch onto a branch that moved."
+          title={MERGE_TEXT.emptyTitle}
+          description={MERGE_TEXT.emptyBody}
           icon="branch"
         />
       ) : null}
       {items?.length ? (
-        <ul className="cm7-list" aria-label="Merges">
+        <ul className="cm7-list" aria-label={MERGE_TEXT.list}>
           {items.map((m) => (
             <li
               key={m.id}
               className="cm7-row"
-              aria-label={`${MERGE_SOURCE[m.source.kind]}, ${MERGE_STATUS[m.status].text}`}
+              aria-label={MERGE_TEXT.rowLabel({
+                source: MERGE_SOURCE[m.source.kind],
+                status: MERGE_STATUS[m.status].text,
+              })}
             >
               <span className="cm7-row-title">
                 <button
@@ -114,15 +201,20 @@ export function MergePane({
                   aria-expanded={shown === m.id}
                   onClick={() => setOpen(shown === m.id ? '' : m.id)}
                 >
-                  {MERGE_SOURCE[m.source.kind]} · {formatWhen(m.createdAt)}
+                  {MERGE_TEXT.rowTitle({
+                    source: MERGE_SOURCE[m.source.kind],
+                    when: formatWhen(m.createdAt),
+                  })}
                 </button>
                 <Badge tone={MERGE_STATUS[m.status].tone} icon={MERGE_STATUS[m.status].icon}>
                   {MERGE_STATUS[m.status].text}
                 </Badge>
               </span>
               <span className="muted ws-row-meta">
-                <span>{plural(m.files.length, 'file')}</span>
-                {m.conflicts.length ? <span>{plural(m.conflicts.length, 'conflict')}</span> : null}
+                <span>{MERGE_TEXT.files({ n: m.files.length })}</span>
+                {m.conflicts.length ? (
+                  <span>{MERGE_TEXT.conflicts({ n: m.conflicts.length })}</span>
+                ) : null}
               </span>
               {shown === m.id ? (
                 <MergeDetail
@@ -155,19 +247,17 @@ export function MergePane({
           setOpen(m.id);
           announce(
             m.status === 'conflicted'
-              ? `Merged with ${plural(m.conflicts.length, 'conflict')} to resolve.`
-              : 'Merged.',
+              ? MERGE_TEXT.mergedConflicts({ n: m.conflicts.length })
+              : MERGE_TEXT.merged,
           );
           onChanged();
         }}
         onRefused={(mergeId, paths) => {
           setMerging(false);
-          setNotice(
-            `Nothing was written: ${plural(paths.length, 'file')} conflict${paths.length === 1 ? 's' : ''} with this session (${paths.join(', ')}). Open the merge to see the three sides.`,
-          );
+          setNotice(MERGE_TEXT.refused({ n: paths.length, paths: joinPaths(paths) }));
           list.reload();
           if (mergeId) setOpen(mergeId);
-          announce('The merge was refused because of conflicts.');
+          announce(MERGE_TEXT.refusedAnnounce);
         }}
       />
     </div>
@@ -200,13 +290,13 @@ function MergeDetail({
     try {
       const next = await m7.resolveMerge(session.id, merge.id);
       onChanged(next);
-      announce('Merge resolved. Commits can go ahead.');
+      announce(MERGE_TEXT.resolved);
     } catch (err) {
       const paths = conflictPaths(err);
       setError(
         paths.length
-          ? `Conflict markers are still in ${paths.join(', ')}. Edit them out, then try again.`
-          : codeM7ErrorMessage(err, 'Could not mark the merge resolved.'),
+          ? MERGE_TEXT.markersLeft({ paths: joinPaths(paths) })
+          : codeM7ErrorMessage(err, MERGE_TEXT.resolveFailed),
       );
     } finally {
       setBusy(false);
@@ -220,7 +310,7 @@ function MergeDetail({
     try {
       onRemerged(await m7.mergeIntoSession(session.id, { sessionId: merge.source.ref }, 'markers'));
     } catch (err) {
-      setError(codeM7ErrorMessage(err, 'Could not merge.'));
+      setError(codeM7ErrorMessage(err, MERGE_TEXT.mergeFailed));
     } finally {
       setBusy(false);
     }
@@ -230,24 +320,25 @@ function MergeDetail({
     const paths = conflictFiles.map((f) => f.path);
     try {
       await api.sendMessage(session.threadId, {
-        text: `Resolve the merge conflicts in ${paths.join(', ')}: keep the intent of both sides, remove every conflict marker, and run the tests. Tell me what you chose where it was not obvious.`,
+        text: MERGE_TEXT.askAgent({ paths: joinPaths(paths) }),
       });
-      toast.show('Sent to the agent.', { tone: 'success' });
+      toast.show(MERGE_TEXT.sent, { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not send it: ${codeM7ErrorMessage(err)}`, { tone: 'error' });
+      toast.show(MERGE_TEXT.sendFailed({ reason: codeM7ErrorMessage(err) }), { tone: 'error' });
     }
   };
 
   return (
     <div className="cm7-detail">
-      <ul className="cm7-files" aria-label="Files in this merge">
+      <ul className="cm7-files" aria-label={MERGE_TEXT.filesList}>
         {merge.files.map((f) => (
           <li key={f.path} data-conflict={isConflict(f.result) || undefined}>
             <Icon name={isConflict(f.result) ? 'alert' : 'file'} />
             <code className="cl-break">{f.path}</code>
             <span className="muted cl-small">
-              {FILE_RESULT[f.result]}
-              {f.conflicts > 1 ? ` (${f.conflicts} places)` : ''}
+              {f.conflicts > 1
+                ? MERGE_TEXT.places({ result: FILE_RESULT[f.result], n: f.conflicts })
+                : FILE_RESULT[f.result]}
             </span>
           </li>
         ))}
@@ -256,10 +347,7 @@ function MergeDetail({
         <ThreeWay key={c.path} c={c} status={merge.status} />
       ))}
       {merge.status === 'conflicted' ? (
-        <p className="muted cl-small">
-          The files have conflict markers. Edit them out (in the File tab, or ask the agent), then
-          mark the merge resolved. Commits wait until then.
-        </p>
+        <p className="muted cl-small">{MERGE_TEXT.markersNote}</p>
       ) : null}
       {error ? (
         <p className="nv-field-error" role="alert">
@@ -270,35 +358,35 @@ function MergeDetail({
         {merge.status === 'conflicted' ? (
           <>
             <Button variant="primary" disabled={busy} onClick={() => void resolve()}>
-              {busy ? <Spinner /> : <Icon name="check" />} Mark resolved
+              {busy ? <Spinner /> : <Icon name="check" />} {MERGE_TEXT.markResolved}
             </Button>
             <Button onClick={() => void askAgent()}>
-              <Icon name="send" /> Ask the agent to resolve
+              <Icon name="send" /> {MERGE_TEXT.askResolve}
             </Button>
             <Button variant="danger" onClick={() => setAborting(true)}>
-              <Icon name="undo" /> Abort merge…
+              <Icon name="undo" /> {MERGE_TEXT.abort}
             </Button>
           </>
         ) : null}
         {merge.status === 'refused' && merge.source.ref && merge.source.kind !== 'patch' ? (
           <Button disabled={busy} onClick={() => void remergeWithMarkers()}>
-            {busy ? <Spinner /> : null} Merge with conflict markers
+            {busy ? <Spinner /> : null} {MERGE_TEXT.withMarkers}
           </Button>
         ) : null}
       </div>
       <ConfirmAction
         open={aborting}
-        title="Abort this merge?"
-        description="The files go back to how they were before the merge, including any edits made to resolve it."
-        confirmLabel="Abort merge"
+        title={MERGE_TEXT.abortTitle}
+        description={MERGE_TEXT.abortBody}
+        confirmLabel={MERGE_TEXT.abortConfirm}
         danger
-        errorText={(err) => codeM7ErrorMessage(err, 'Could not abort the merge.')}
+        errorText={(err) => codeM7ErrorMessage(err, MERGE_TEXT.abortFailed)}
         onClose={() => setAborting(false)}
         onConfirm={async () => {
           const next = await m7.abortMerge(session.id, merge.id);
           setAborting(false);
           onChanged(next);
-          announce('Merge aborted.');
+          announce(MERGE_TEXT.aborted);
         }}
       />
     </div>
@@ -314,19 +402,16 @@ function ThreeWay({ c, status }: { c: MergeConflictView; status: CodeMergeView['
         <h4 id={id} className="cm7-file-title">
           <code className="cl-break">{c.path}</code>
         </h4>
-        <p className="muted cl-small">
-          A binary file (or a link) changed on both sides. It is never merged; keep one side by
-          hand.
-        </p>
+        <p className="muted cl-small">{MERGE_TEXT.binary}</p>
       </section>
     );
   const side = (label: string, text: string | null) => (
     <div className="cm7-side">
       <span className="cm7-side-label">{label}</span>
       {text === null ? (
-        <p className="muted cl-small">Not there on this side.</p>
+        <p className="muted cl-small">{MERGE_TEXT.notThere}</p>
       ) : (
-        <TextBlock text={text} label={`${c.path}: ${label}`} />
+        <TextBlock text={text} label={MERGE_TEXT.sideOf({ path: c.path, side: label })} />
       )}
     </div>
   );
@@ -336,17 +421,17 @@ function ThreeWay({ c, status }: { c: MergeConflictView; status: CodeMergeView['
         <code className="cl-break">{c.path}</code>
       </h4>
       <div className="cm7-sides">
-        {side('Base', c.base)}
-        {side('This session', c.ours)}
-        {side('The work', c.theirs)}
+        {side(MERGE_TEXT.base, c.base)}
+        {side(MERGE_TEXT.ours, c.ours)}
+        {side(MERGE_TEXT.theirs, c.theirs)}
       </div>
       {c.merged !== null && status === 'conflicted' ? (
         <details className="ws-advanced">
-          <summary>With conflict markers, as in the file now</summary>
-          <TextBlock text={c.merged} label={`${c.path} with conflict markers`} />
+          <summary>{MERGE_TEXT.withMarkersNow}</summary>
+          <TextBlock text={c.merged} label={MERGE_TEXT.markersOf({ path: c.path })} />
         </details>
       ) : null}
-      {c.truncated ? <p className="muted cl-small">Long sides are cut short here.</p> : null}
+      {c.truncated ? <p className="muted cl-small">{MERGE_TEXT.cutShort}</p> : null}
     </section>
   );
 }
@@ -429,11 +514,10 @@ function MergeForm({
   }, [api, remote, session]);
 
   const problems: Record<string, string> = {};
-  if (source === 'session' && !from) problems.from = 'Choose the session whose work to merge.';
-  if (source === 'patch' && !patch.trim())
-    problems.patch = 'Paste a unified patch (git diff output).';
+  if (source === 'session' && !from) problems.from = MERGE_TEXT.chooseSession;
+  if (source === 'patch' && !patch.trim()) problems.patch = MERGE_TEXT.pastePatch;
   if (source === 'patch' && base.trim() && !/^[0-9a-f]{7,64}$/.test(base.trim()))
-    problems.base = 'Enter a commit hash: 7 to 64 characters, 0-9 and a-f.';
+    problems.base = MERGE_TEXT.commitHash;
   const shown = tried ? problems : {};
 
   const submit = async () => {
@@ -456,7 +540,7 @@ function MergeForm({
         onRefused(conflictMergeId(err), conflictPaths(err));
         return;
       }
-      setError(codeM7ErrorMessage(err, 'Could not merge.'));
+      setError(codeM7ErrorMessage(err, MERGE_TEXT.mergeFailed));
       setBusy(false);
     }
   };
@@ -464,8 +548,8 @@ function MergeForm({
   return (
     <Dialog
       open
-      title="Merge into this session"
-      description="A three-way merge onto this session’s files. Nothing is committed."
+      title={MERGE_TEXT.dialogTitle}
+      description={MERGE_TEXT.dialogBody}
       onClose={onClose}
       className="ws-wide-dialog"
     >
@@ -478,22 +562,20 @@ function MergeForm({
         }}
       >
         <RadioGroup
-          legend="Merge from"
+          legend={MERGE_TEXT.from}
           name={`${id}-src`}
           value={source}
           onChange={(v) => setSource(v as Source)}
           options={[
             {
               value: 'session',
-              label: 'Another session',
-              description: remote
-                ? 'Only when both sessions’ folders are on the Hub.'
-                : 'A worker or another session in the same repository.',
+              label: MERGE_TEXT.fromSession,
+              description: remote ? MERGE_TEXT.fromSessionRemote : MERGE_TEXT.fromSessionHint,
             },
             {
               value: 'patch',
-              label: 'A patch',
-              description: 'Unified diff text, such as git diff output.',
+              label: MERGE_TEXT.fromPatch,
+              description: MERGE_TEXT.fromPatchHint,
             },
           ]}
         />
@@ -501,68 +583,69 @@ function MergeForm({
           remote ? (
             <p className="ws-callout" role="note">
               <Icon name="alert" />
-              <span>
-                Merging sessions needs both folders on the Hub. This session is on another machine.
-              </span>
+              <span>{MERGE_TEXT.remote}</span>
             </p>
           ) : others === null ? (
             <p className="muted">
-              <Spinner label="Loading the sessions" /> Loading sessions…
+              <Spinner label={MERGE_TEXT.loadingSessions} /> {MERGE_TEXT.loadingSessionsDots}
             </p>
           ) : others.length ? (
             <SelectField
-              label="Session"
+              label={MERGE_TEXT.session}
               value={from}
               onChange={setFrom}
               options={[
-                { value: '', label: 'Choose a session' },
+                { value: '', label: MERGE_TEXT.choose },
                 ...others.map((s) => ({
                   value: s.id,
-                  label: `${sessionTitle(s)}${s.repo?.branch ? ` (${s.repo.branch})` : ''}`,
+                  label: s.repo?.branch
+                    ? MERGE_TEXT.sessionBranch({ title: sessionTitle(s), branch: s.repo.branch })
+                    : sessionTitle(s),
                 })),
               ]}
               error={shown.from}
             />
           ) : (
-            <p className="muted">No other session works in this repository.</p>
+            <p className="muted">{MERGE_TEXT.noOthers}</p>
           )
         ) : (
           <>
             <TextArea
               id={`${id}-patch`}
-              label="Patch"
+              label={MERGE_TEXT.patch}
               value={patch}
               rows={6}
               error={shown.patch}
               onChange={setPatch}
             />
             <TextField
-              label="Made against commit (optional)"
+              label={MERGE_TEXT.madeAgainst}
               value={base}
               autoComplete="off"
               spellCheck={false}
-              placeholder={session.repo?.head ?? 'HEAD'}
-              hint="Without it, the session’s current commit."
+              dir="ltr"
+              placeholder={session.repo?.head ?? MERGE_TEXT.head}
+              hint={MERGE_TEXT.madeAgainstHint}
               error={shown.base}
               onChange={(e) => setBase(e.target.value)}
             />
           </>
         )}
         <RadioGroup
-          legend="If files conflict"
+          legend={MERGE_TEXT.ifConflict}
           name={`${id}-mode`}
           value={mode}
           onChange={(v) => setMode(v as MergeConflictMode)}
           options={[
             {
               value: 'refuse',
-              label: 'Write nothing and show the conflicts',
-              description: 'The safe choice: the session’s files stay as they are.',
+              label: MERGE_TEXT.refuse,
+              description: MERGE_TEXT.refuseHint,
             },
             {
               value: 'markers',
-              label: 'Write conflict markers to resolve',
-              description: 'Commits wait until you resolve or abort the merge.',
+              label: MERGE_TEXT.markers,
+              description: MERGE_TEXT.markersHint,
             },
           ]}
         />
@@ -572,13 +655,13 @@ function MergeForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{MERGE_TEXT.cancel}</Button>
           <Button
             type="submit"
             variant="primary"
             disabled={busy || (source === 'session' && remote)}
           >
-            {busy ? <Spinner /> : null} Merge
+            {busy ? <Spinner /> : null} {MERGE_TEXT.merge}
           </Button>
         </div>
       </form>

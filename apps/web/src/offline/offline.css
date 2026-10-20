@@ -12,15 +12,15 @@
   gap: var(--u-space-2) var(--u-space-3);
   padding: var(--u-space-2) var(--u-space-4);
   border-bottom: 1px solid var(--u-border);
-  border-left: 4px solid var(--u-info);
+  border-inline-start: 4px solid var(--u-info);
   background: var(--u-surface-2);
   font-size: var(--u-text-sm);
 }
 .of-banner[data-tone='offline'] {
-  border-left-color: var(--u-warn);
+  border-inline-start-color: var(--u-warn);
 }
 .of-banner[data-tone='failed'] {
-  border-left-color: var(--u-danger);
+  border-inline-start-color: var(--u-danger);
 }
 .of-banner > .nv-icon,
 .of-banner > svg {
@@ -66,7 +66,7 @@
   margin: 0;
   max-width: 100%;
   padding: var(--u-space-2) var(--u-space-3);
-  border-left: 3px solid var(--u-border);
+  border-inline-start: 3px solid var(--u-border);
   font-size: var(--u-text-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;

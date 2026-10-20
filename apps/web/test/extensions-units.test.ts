@@ -8,6 +8,7 @@ import {
   extensionCommandKey,
   extensionErrorMessage,
   parseExtensionCommand,
+  publisherText,
   readBundleFile,
   registeredText,
 } from '../src/extensions/format.ts';
@@ -19,7 +20,7 @@ import {
   newCatalogId,
   parseMarketTab,
 } from '../src/market/format.ts';
-import { managedSourceText } from '../src/market/policy.tsx';
+import { lockChannel } from '../src/managed/format.ts';
 
 const refusal = (
   status: number,
@@ -167,7 +168,24 @@ describe('marketplace words', () => {
     expect(marketTabPath('catalogs')).toBe('/marketplace/catalogs');
   });
 
-  it('says where managed policy comes from', () => {
+  it('names an extension’s publisher only when trusted, else by its key’s fingerprint', () => {
+    const key = 'KWyGeoNcQVUoD7fIgkwppFWhQZbPo5ynx1JyVjt5-O0';
+    expect(publisherText({ key: null, name: null, fingerprint: null, trusted: false })).toBe(
+      'Not signed',
+    );
+    expect(
+      publisherText({ key, name: 'Example Labs', fingerprint: '1a2b:3c4d', trusted: true }),
+    ).toBe('Example Labs');
+    // A name for a key nobody trusts is never shown.
+    expect(
+      publisherText({ key, name: 'Example Labs', fingerprint: '1a2b:3c4d', trusted: false }),
+    ).toBe('Key 1a2b:3c4d, not trusted');
+    expect(publisherText({ key, name: null, fingerprint: null, trusted: false })).toBe(
+      'A publisher you do not trust',
+    );
+  });
+
+  it('says where managed policy comes from (the shared lock note’s source)', () => {
     const view: ManagedPolicyView = {
       active: true,
       failClosed: null,
@@ -203,22 +221,16 @@ describe('marketplace words', () => {
         { channel: 'local', restrict: { unverifiedInstalls: false } },
         { channel: 'remote', restrict: { unverifiedInstalls: false, extensions: { deny: ['x'] } } },
       ],
+      egress: null,
       ignored: [],
       checkedAt: '2026-10-19T09:00:00.000Z',
     };
-    expect(managedSourceText(view, 'sdk.enabled')).toBe(
-      'set by the policy file /etc/nova/managed-settings.json',
-    );
-    expect(managedSourceText(view, 'market.allowSideload')).toBe(
-      'set by the policy file and the remote policy',
-    );
-    expect(managedSourceText(view, 'restrict.unverifiedInstalls')).toBe(
-      'set by the policy file and the remote policy',
-    );
-    expect(managedSourceText(view, 'restrict.extensions')).toBe(
-      'set by the remote policy from https://policy.example.com/p.json',
-    );
-    expect(managedSourceText(view, 'appearance.theme')).toBeNull();
-    expect(managedSourceText(null, 'sdk.enabled')).toBeNull();
+    expect(lockChannel(view, 'sdk.enabled')).toBe('local');
+    expect(lockChannel(view, 'market.allowSideload')).toBe('both');
+    expect(lockChannel(view, 'restrict.unverifiedInstalls')).toBe('both');
+    expect(lockChannel(view, 'restrict.extensions')).toBe('remote');
+    // Not named by the policy: the sources in force.
+    expect(lockChannel(view, 'appearance.theme')).toBe('both');
+    expect(lockChannel(null, 'sdk.enabled')).toBeNull();
   });
 });

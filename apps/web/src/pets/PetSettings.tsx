@@ -2,6 +2,7 @@
 // from the marketplace (M8, `market:<id>`), which corner it sits in, and Keep still. Saved to the
 // Hub like the rest of Appearance; managed values are locked. More pets are a link away, in the
 // marketplace's Pets tab.
+import { defineMessages } from '@nova/i18n';
 import { RadioGroup, useToast } from '@nova/ui';
 import type { SettingKey } from '@nova/shared';
 import { errorMessage } from '../api.ts';
@@ -12,22 +13,24 @@ import { navigate } from '../router.ts';
 import { useSettings, type SettingValue } from '../settings.tsx';
 import { SwitchField } from '../settings/controls.tsx';
 
-const PETS = [
-  { value: 'off', label: 'Off' },
-  { value: 'sprout', label: 'Sprout', description: 'A round friend with a leaf.' },
-  { value: 'spark', label: 'Spark', description: 'A small star.' },
-] as const;
-
-const POSITIONS = [
-  { value: 'bottom-right', label: 'Bottom right' },
-  { value: 'bottom-left', label: 'Bottom left' },
-] as const;
-
-export const PET_TEXT = {
+export const PET_TEXT = defineMessages('pets', {
+  off: 'Off',
+  sprout: { name: 'Sprout', description: 'A round friend with a leaf.' },
+  spark: { name: 'Spark', description: 'A small star.' },
+  position: { bottomRight: 'Bottom right', bottomLeft: 'Bottom left' },
   installed: 'Installed from the marketplace',
   gone: 'A pet that is no longer installed',
   more: 'Get more pets in the Marketplace',
-} as const;
+  saveFailed: 'Could not save: {reason}',
+  title: 'Companion',
+  intro:
+    'A small companion in a corner of the window that reacts to what Nova is doing. It never takes clicks or focus, and it holds still when motion is reduced.',
+  where: 'Where it sits',
+  keepStill: 'Keep still',
+  keepStillHint: 'It stays in its resting pose instead of reacting.',
+});
+
+const POSITIONS = ['bottom-right', 'bottom-left'] as const;
 
 export function PetSettings() {
   const settings = useSettings();
@@ -40,12 +43,14 @@ export function PetSettings() {
 
   const save = <K extends SettingKey>(key: K, value: SettingValue<K>) => {
     settings.set(key, value).catch((err: unknown) => {
-      toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(PET_TEXT.saveFailed({ reason: errorMessage(err) }), { tone: 'error' });
     });
   };
 
   const options: { value: string; label: string; description?: string }[] = [
-    ...PETS,
+    { value: 'off', label: PET_TEXT.off },
+    { value: 'sprout', label: PET_TEXT.sprout.name, description: PET_TEXT.sprout.description },
+    { value: 'spark', label: PET_TEXT.spark.name, description: PET_TEXT.spark.description },
     ...installed.map((p) => ({
       value: `market:${p.id}`,
       label: p.name,
@@ -58,13 +63,10 @@ export function PetSettings() {
 
   return (
     <section className="settings-section" aria-labelledby="appearance-pet">
-      <h3 id="appearance-pet">Companion</h3>
-      <p className="muted">
-        A small companion in a corner of the window that reacts to what Nova is doing. It never
-        takes clicks or focus, and it holds still when motion is reduced.
-      </p>
+      <h3 id="appearance-pet">{PET_TEXT.title}</h3>
+      <p className="muted">{PET_TEXT.intro}</p>
       <RadioGroup
-        legend="Companion"
+        legend={PET_TEXT.title}
         name="pet"
         value={pet.value}
         locked={pet.locked}
@@ -91,19 +93,22 @@ export function PetSettings() {
       {pet.value === 'off' ? null : (
         <>
           <RadioGroup
-            legend="Where it sits"
+            legend={PET_TEXT.where}
             name="pet-position"
             value={position.value}
             locked={position.locked}
-            options={[...POSITIONS]}
+            options={[
+              { value: 'bottom-right', label: PET_TEXT.position.bottomRight },
+              { value: 'bottom-left', label: PET_TEXT.position.bottomLeft },
+            ]}
             onChange={(v) => {
-              const next = POSITIONS.find((p) => p.value === v);
-              if (next) save('appearance.petPosition', next.value);
+              const next = POSITIONS.find((p) => p === v);
+              if (next) save('appearance.petPosition', next);
             }}
           />
           <SwitchField
-            label="Keep still"
-            description="It stays in its resting pose instead of reacting."
+            label={PET_TEXT.keepStill}
+            description={PET_TEXT.keepStillHint}
             checked={muted.value}
             locked={muted.locked}
             onChange={(v) => save('appearance.petMuted', v)}

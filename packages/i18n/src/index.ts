@@ -1,0 +1,56 @@
+// @nova/i18n: typed messages, the ICU subset formatter, the active locale, catalogs,
+// pseudo-locales and formatting helpers (FR-016, ADR-097 D9). No dependencies beyond Intl.
+export {
+  defineMessages,
+  declaredMessages,
+  messageFor,
+  richMessage,
+  KEY_PATTERN,
+  NAMESPACE_PATTERN,
+  type MessageArgNames,
+  type MessageParamsOf,
+  type Messages,
+  type MessageTree,
+} from './messages.ts';
+export {
+  formatSource,
+  getLocale,
+  intlLocale,
+  loadLocale,
+  localeDirection,
+  lookupTranslation,
+  registerCatalog,
+  resetI18n,
+  setCatalogLoader,
+  setLocale,
+  SOURCE_LOCALE,
+  subscribe,
+  translate,
+  type CatalogEntries,
+  type CatalogLoader,
+  type Direction,
+} from './locale.ts';
+export {
+  accent,
+  isPseudoLocale,
+  mirror,
+  PDF,
+  PSEUDO_LOCALES,
+  pseudoLocalize,
+  pseudoText,
+  RLM,
+  RLO,
+  type PseudoLocale,
+} from './pseudo.ts';
+export {
+  formatNodes,
+  messageArgs,
+  MessageSyntaxError,
+  parseMessage,
+  pluralKeys,
+  serializeMessage,
+  type ArgKind,
+  type MessageNode,
+  type MessageParams,
+} from './icu.ts';
+export { fmt, type DateInput } from './fmt.ts';

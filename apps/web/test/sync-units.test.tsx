@@ -2,9 +2,10 @@
 // device's copy and of other devices, merge-log values as text (never HTML), who set a value, the
 // Hub's refusals as sentences, waits and sizes, and the active path the copy shows for a chat.
 import { describe, expect, it } from 'vitest';
+import { fmt } from '@nova/i18n';
 import type { MessageView } from '@nova/shared';
 import { ApiError } from '../src/api.ts';
-import { bytesText, changesText, inText, rejectionText } from '../src/offline/format.ts';
+import { changesText, inText, rejectionText } from '../src/offline/format.ts';
 import type { ReplicaState } from '../src/replica/engine.ts';
 import { activePath } from '../src/replica/views.ts';
 import {
@@ -116,10 +117,11 @@ describe('words for sync', () => {
     expect(inText(800)).toBe('in 1 s');
     expect(inText(300_000)).toBe('in 5 min');
     expect(changesText(1)).toBe('1 change');
-    expect(bytesText(512)).toBe('512 B');
-    expect(bytesText(3500)).toBe('3.4 KB');
-    expect(bytesText(5 * 1024 ** 2)).toBe('5.0 MB');
-    expect(bytesText(3 * 1024 ** 3)).toBe('3.0 GB');
+    // Sizes go through the locale's formatter (FR-016).
+    expect(fmt.bytes(512)).toBe('512 B');
+    expect(fmt.bytes(3500)).toBe('3.4 KB');
+    expect(fmt.bytes(5 * 1024 ** 2)).toBe('5 MB');
+    expect(fmt.bytes(3 * 1024 ** 3)).toBe('3 GB');
   });
 });
 

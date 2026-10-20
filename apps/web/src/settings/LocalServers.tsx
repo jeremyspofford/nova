@@ -2,6 +2,7 @@
 // addresses the Hub is told to check) and connect one as a provider with its address filled in.
 // The probe only asks each server for its model list and never sends a credential.
 import { useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { DetectedServer, ProviderAccountView } from '@nova/shared';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -9,7 +10,33 @@ import { PROVIDER_NAMES } from '../providers/names.ts';
 import { ProviderSetup } from '../providers/ProviderSetup.tsx';
 import { useServices } from '../services.tsx';
 import { useModels } from '../stores.tsx';
-import { plural } from './common.ts';
+
+const S = defineMessages('settings.localServers', {
+  lookFailed: 'Could not look for servers.',
+  intro:
+    'Find model servers running on this computer, such as Ollama or a llama.cpp server. Nova ' +
+    'only asks each one for its list of models.',
+  detect: 'Detect',
+  detecting: 'Looking for local model servers…',
+  tryAgain: 'Try again',
+  noneFound:
+    'No local model servers found. Start Ollama or a llama.cpp server and detect again, or add ' +
+    'any OpenAI-compatible server in Accounts.',
+  found: '{n, plural, one {Found # server.} other {Found # servers.}}',
+  detected: 'Detected servers',
+  serverAt: '{name} at {url}',
+  models: '{n, plural, one {# model: {names}} other {# models: {names}}}',
+  modelsMore:
+    '{n, plural, one {# model: {names} and {more} more} other {# models: {names} and {more} more}}',
+  noModels: 'No models installed yet',
+  alreadyConnected: 'Already connected',
+  connectAgain: 'Connect again',
+  connect: 'Connect',
+  connectDetected: 'Connect a detected server',
+  connected: '{name} connected.',
+  connectedModels: '{name} connected with {n, plural, one {# model} other {# models}}.',
+  cancel: 'Cancel',
+});
 
 type State =
   | { kind: 'idle' }
@@ -45,66 +72,64 @@ export function LocalServers() {
       setAccounts(providers.items);
       setState({ kind: 'done', items: found.items });
     } catch (err) {
-      setState({ kind: 'error', message: errorMessage(err, 'Could not look for servers.') });
+      setState({ kind: 'error', message: errorMessage(err, S.lookFailed) });
     }
   };
 
   return (
     <div className="stack">
-      <p className="muted">
-        Find model servers running on this computer, such as Ollama or a llama.cpp server. Nova only
-        asks each one for its list of models.
-      </p>
+      <p className="muted">{S.intro}</p>
       <div className="row">
         <Button onClick={() => void detect()} disabled={state.kind === 'detecting'}>
-          {state.kind === 'detecting' ? <Spinner /> : <Icon name="search" />} Detect
+          {state.kind === 'detecting' ? <Spinner /> : <Icon name="search" />} {S.detect}
         </Button>
         {state.kind === 'detecting' ? (
           <span role="status" className="muted">
-            Looking for local model servers…
+            {S.detecting}
           </span>
         ) : null}
       </div>
       {state.kind === 'error' ? (
         <div role="alert" className="ws-error">
           <p>{state.message}</p>
-          <Button onClick={() => void detect()}>Try again</Button>
+          <Button onClick={() => void detect()}>{S.tryAgain}</Button>
         </div>
       ) : null}
       {state.kind === 'done' && state.items.length === 0 ? (
         <p role="status" className="muted">
-          No local model servers found. Start Ollama or a llama.cpp server and detect again, or add
-          any OpenAI-compatible server in Accounts.
+          {S.noneFound}
         </p>
       ) : null}
       {state.kind === 'done' && state.items.length > 0 ? (
         <>
           <p role="status" className="muted">
-            Found {plural(state.items.length, 'server')}.
+            {S.found({ n: state.items.length })}
           </p>
-          <ul className="ws-list" aria-label="Detected servers">
+          <ul className="ws-list" aria-label={S.detected}>
             {state.items.map((s) => {
               const name = PROVIDER_NAMES[s.kind] ?? s.kind;
               const connected = accounts.some((a) => sameServer(a.baseUrl, s.baseUrl));
-              const names = s.models.slice(0, MAX_NAMES).join(', ');
+              const names = fmt.list(s.models.slice(0, MAX_NAMES), { type: 'unit' });
               const more = s.models.length - MAX_NAMES;
               return (
                 <li
                   key={`${s.kind}:${s.baseUrl}`}
                   className="ws-list-row"
-                  aria-label={`${name} at ${s.baseUrl}`}
+                  aria-label={S.serverAt({ name, url: s.baseUrl })}
                 >
                   <div className="ws-source-main">
                     <strong>{name}</strong>
                     <code className="ws-code-inline">{s.baseUrl}</code>
                     <span className="muted ws-row-meta">
-                      {s.models.length
-                        ? `${plural(s.models.length, 'model')}: ${names}${more > 0 ? ` and ${more} more` : ''}`
-                        : 'No models installed yet'}
+                      {!s.models.length
+                        ? S.noModels
+                        : more > 0
+                          ? S.modelsMore({ n: s.models.length, names, more })
+                          : S.models({ n: s.models.length, names })}
                     </span>
                     {connected ? (
                       <span className="nv-chip" data-status="ready">
-                        <Icon name="check" /> <span>Already connected</span>
+                        <Icon name="check" /> <span>{S.alreadyConnected}</span>
                       </span>
                     ) : null}
                   </div>
@@ -113,7 +138,7 @@ export function LocalServers() {
                     onClick={() => setConnecting(s)}
                     disabled={connecting === s}
                   >
-                    {connected ? 'Connect again' : 'Connect'}
+                    {connected ? S.connectAgain : S.connect}
                   </Button>
                 </li>
               );
@@ -122,7 +147,7 @@ export function LocalServers() {
         </>
       ) : null}
       {connecting ? (
-        <div className="panel-inset" aria-label="Connect a detected server" role="group">
+        <div className="panel-inset" aria-label={S.connectDetected} role="group">
           <ProviderSetup
             key={`${connecting.kind}:${connecting.baseUrl}`}
             initial={{ kind: connecting.kind, baseUrl: connecting.baseUrl }}
@@ -130,7 +155,9 @@ export function LocalServers() {
               setConnecting(null);
               setAccounts((list) => [...list, account]);
               toast.show(
-                `${account.label} connected${test.models !== undefined ? ` with ${plural(test.models, 'model')}` : ''}.`,
+                test.models !== undefined
+                  ? S.connectedModels({ name: account.label, n: test.models })
+                  : S.connected({ name: account.label }),
                 { tone: 'success' },
               );
               void models.refresh();
@@ -138,7 +165,7 @@ export function LocalServers() {
           />
           <div className="row">
             <Button variant="ghost" onClick={() => setConnecting(null)}>
-              Cancel
+              {S.cancel}
             </Button>
           </div>
         </div>

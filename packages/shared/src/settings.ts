@@ -16,6 +16,13 @@ import {
   retentionDaysSchema,
 } from './m8/datactl.ts';
 
+/**
+ * Interface locales (FR-016, D9): `en` (the source), `ar` (partial) and the two pseudo-locales
+ * used for testing, `en-XA` (accented, longer) and `ar-XB` (right to left).
+ */
+export const LOCALE_TAGS = ['en', 'ar', 'en-XA', 'ar-XB'] as const;
+export type LocaleTag = (typeof LOCALE_TAGS)[number];
+
 export type SettingSource = 'default' | 'global' | 'project' | 'managed';
 
 export interface SettingDefinition<T = unknown> {
@@ -41,6 +48,15 @@ const fontStack = z
   .string()
   .max(200)
   .regex(/^[\w\s,'"-]+$/, 'letters, digits, spaces, quotes, commas and hyphens only');
+
+/** A theme id (contracts/schemas/theme.json): lowercase words joined by dots. */
+export const THEME_ID = /^[a-z0-9]+(\.[a-z0-9-]+)+$/;
+/**
+ * A theme token or font value: a plain CSS value, nothing that could leave its custom property
+ * (no `;`, `{`, `}`, `:`, `/`, `\`, `@`, `<`). The marketplace (core market/installers.ts) and the
+ * extension SDK (core sdk/manifest.ts) check theme values with this rule (FR-011, FR-049, FR-117).
+ */
+export const SAFE_THEME_VALUE = /^[\w\s#%.,'"()+-]{1,200}$/;
 
 export const SETTINGS = {
   'appearance.theme': def({
@@ -90,6 +106,13 @@ export const SETTINGS = {
     schema: fontStack.nullable(),
     default: null,
     description: 'Code font family; null uses the bundled monospace stack (FR-010).',
+  }),
+  'appearance.locale': def({
+    key: 'appearance.locale',
+    schema: z.enum(['system', ...LOCALE_TAGS]),
+    default: 'system',
+    description:
+      'Interface language: `system` follows the device (the first supported of its languages) or a supported locale tag (FR-016).',
   }),
   'keyboard.bindings': def({
     key: 'keyboard.bindings',
@@ -280,6 +303,13 @@ export const SETTINGS = {
     default: [] as Record<string, unknown>[],
     description:
       'Imported themes (contracts/schemas/theme.json), available in Appearance (FR-011).',
+  }),
+  'appearance.customTheme': def({
+    key: 'appearance.customTheme',
+    schema: z.string().max(200).regex(THEME_ID, 'expected a theme id').nullable(),
+    default: null,
+    description:
+      'The saved theme in use: the id of a theme in appearance.customThemes, applied token for token over its base theme; null (or an id no longer saved) uses appearance.theme and the color overrides (FR-011).',
   }),
   'plugins.catalogs': def({
     key: 'plugins.catalogs',
@@ -1422,6 +1452,15 @@ export const SETTINGS = {
     security: true,
     description:
       "Days a removed member's data (chats, files, memory, settings, tokens) is kept before it is purged, so the owner can export it first; 0 keeps it until the owner purges it (decision 5, ADR-097).",
+  }),
+  // ---- M8 sites
+  'sites.remoteTargets': def({
+    key: 'sites.remoteTargets',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Let the owner publish sites to remote hosting targets (WebDAV) besides the Hub folder and a zip; uploads still pass the egress policy (FR-037).',
   }),
   'privacy.telemetry': def({
     key: 'privacy.telemetry',

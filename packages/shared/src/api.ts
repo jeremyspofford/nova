@@ -306,6 +306,11 @@ export interface MessageView {
     | 'offline';
   /** The `@`-mentions sent with a user message (FR-022). */
   mentions?: { kind: MentionKind; ref: string; label: string }[];
+  /**
+   * Who wrote a user message of a shared thread (FR-217): the person's account and display
+   * name, nothing else. Absent in a thread that is not shared and on Nova's own messages.
+   */
+  author?: { accountId: string; displayName: string | null };
 }
 
 export interface ThreadDetail {
@@ -1216,6 +1221,21 @@ export interface PluginPreview {
   warnings: string[];
   /** Set when a plugin with this id is installed: the update replaces it. */
   replaces: { version: string } | null;
+  /**
+   * Set when this plugin would replace an installed extension signed by a publisher (M8 supply
+   * review #3): who signed the extension and who signs this (a folder or Git plugin: nobody).
+   * Installing it needs `acceptPublisherChange: true` and clears the extension's secrets and data.
+   */
+  publisherChange: { from: PluginPublisherSide; to: PluginPublisherSide } | null;
+}
+
+/** One side of a change of publisher: a key (null: not signed), named only when trusted. */
+export interface PluginPublisherSide {
+  key: string | null;
+  /** The owner's name for a trusted key; null otherwise. */
+  name: string | null;
+  fingerprint: string | null;
+  trusted: boolean;
 }
 
 export const pluginSourceSchema = z.discriminatedUnion('kind', [
@@ -1243,6 +1263,11 @@ export const installPluginSchema = z.object({
     .array(z.object({ id: z.string().max(300), contentHash: z.string().max(200) }))
     .max(50)
     .optional(),
+  /**
+   * Replace an installed extension signed by a publisher with this unsigned plugin: required
+   * then, and its secrets and data are cleared (M8 supply review #3).
+   */
+  acceptPublisherChange: z.boolean().optional(),
 });
 
 export interface CatalogView {

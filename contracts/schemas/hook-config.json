@@ -86,8 +86,8 @@
             "type": { "const": "mcp_tool" },
             "tool": {
               "type": "string",
-              "pattern": "^mcp:",
-              "description": "Canonical MCP tool name; the call passes the policy engine with origin hook."
+              "pattern": "^(mcp:|ext:[a-z0-9]+(\\.[a-z0-9-]+)+/hooks/[a-z0-9][a-z0-9-]{0,63}$)",
+              "description": "Canonical MCP tool name; the call passes the policy engine with origin hook. M8 (ADR-097 D3): an SDK hook's stored handler names its extension's hook tool, ext:<extensionId>/hooks/<hookId>, which the extension's worker answers."
             },
             "arguments": { "type": "object", "description": "Merged with the event payload." },
             "timeoutMs": { "$ref": "#/$defs/timeoutMs" }

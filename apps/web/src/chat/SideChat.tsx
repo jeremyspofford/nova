@@ -2,6 +2,7 @@
 // that adds nothing to the main chat. The first question creates the side thread; later ones are
 // normal sends to it. The side thread outlives this panel until the main chat changes.
 import { useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useAnnounce, useServices } from '../services.tsx';
@@ -9,6 +10,22 @@ import { modelLabel, useModels } from '../stores.tsx';
 import { MessageItem } from './MessageItem.tsx';
 import { isStreaming } from './thread-state.ts';
 import { useThreadFeed } from './useThreadFeed.ts';
+
+export const SIDE_CHAT_TEXT = defineMessages('chat.side', {
+  title: 'Side chat',
+  answered: 'Side chat answer complete.',
+  failed: 'The side chat answer failed.',
+  openChat: 'Open a chat to ask a side question about it.',
+  notSent: 'Not sent: {reason} Your question is back in the box.',
+  stopFailed: 'Could not stop: {reason}',
+  note: 'Answers use this chat as context and add nothing to it.',
+  log: 'Side chat messages',
+  you: 'You',
+  question: 'Side question',
+  placeholder: 'Ask about this chat',
+  stop: 'Stop',
+  ask: 'Ask',
+});
 
 export interface SideChatProps {
   /** The main chat the questions are about; null when no chat is open. */
@@ -26,8 +43,8 @@ export function SideChat({ parentId, sideId, onSideId }: SideChatProps) {
   const { state, refetch } = useThreadFeed(sideId, null, {
     onEvent: (env) => {
       if (env.name !== 'chat.message.completed') return;
-      if (env.payload.status === 'complete') announce('Side chat answer complete.');
-      else if (env.payload.status === 'error') announce('The side chat answer failed.');
+      if (env.payload.status === 'complete') announce(SIDE_CHAT_TEXT.answered);
+      else if (env.payload.status === 'error') announce(SIDE_CHAT_TEXT.failed);
     },
   });
   const [text, setText] = useState('');
@@ -37,7 +54,7 @@ export function SideChat({ parentId, sideId, onSideId }: SideChatProps) {
   const streaming = isStreaming(state);
 
   if (!parentId) {
-    return <p className="muted">Open a chat to ask a side question about it.</p>;
+    return <p className="muted">{SIDE_CHAT_TEXT.openChat}</p>;
   }
 
   const ask = async () => {
@@ -56,7 +73,7 @@ export function SideChat({ parentId, sideId, onSideId }: SideChatProps) {
       }
     } catch (err) {
       setText((now) => now || q);
-      setError(`Not sent: ${errorMessage(err)} Your question is back in the box.`);
+      setError(SIDE_CHAT_TEXT.notSent({ reason: errorMessage(err) }));
     } finally {
       setAsking(null);
     }
@@ -66,16 +83,15 @@ export function SideChat({ parentId, sideId, onSideId }: SideChatProps) {
     if (!sideId) return;
     api.cancel(sideId).then(
       () => refetch(),
-      (err: unknown) => toast.show(`Could not stop: ${errorMessage(err)}`, { tone: 'error' }),
+      (err: unknown) =>
+        toast.show(SIDE_CHAT_TEXT.stopFailed({ reason: errorMessage(err) }), { tone: 'error' }),
     );
   };
 
   return (
-    <section className="side-chat" aria-label="Side chat">
-      <p className="muted side-chat-note">
-        Answers use this chat as context and add nothing to it.
-      </p>
-      <div className="side-chat-log" role="log" aria-label="Side chat messages" aria-live="off">
+    <section className="side-chat" aria-label={SIDE_CHAT_TEXT.title}>
+      <p className="muted side-chat-note">{SIDE_CHAT_TEXT.note}</p>
+      <div className="side-chat-log" role="log" aria-label={SIDE_CHAT_TEXT.log} aria-live="off">
         {state.messages.map((m) => (
           <MessageItem
             key={m.id}
@@ -89,8 +105,10 @@ export function SideChat({ parentId, sideId, onSideId }: SideChatProps) {
           />
         ))}
         {asking !== null && !state.messages.length ? (
-          <article className="msg" data-role="user" aria-label="You">
-            <p className="msg-text">{asking}</p>
+          <article className="msg" data-role="user" aria-label={SIDE_CHAT_TEXT.you}>
+            <p className="msg-text" dir="auto">
+              {asking}
+            </p>
           </article>
         ) : null}
         {state.status === 'error' ? (
@@ -112,14 +130,14 @@ export function SideChat({ parentId, sideId, onSideId }: SideChatProps) {
           </p>
         ) : null}
         <label htmlFor="side-chat-input" className="nv-vh">
-          Side question
+          {SIDE_CHAT_TEXT.question}
         </label>
         <textarea
           id="side-chat-input"
           ref={box}
           className="nv-input side-chat-input"
           rows={2}
-          placeholder="Ask about this chat"
+          placeholder={SIDE_CHAT_TEXT.placeholder}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -132,7 +150,7 @@ export function SideChat({ parentId, sideId, onSideId }: SideChatProps) {
         <div className="row">
           {streaming ? (
             <Button onClick={stop}>
-              <Icon name="stop" /> Stop
+              <Icon name="stop" /> {SIDE_CHAT_TEXT.stop}
             </Button>
           ) : null}
           <Button
@@ -141,7 +159,7 @@ export function SideChat({ parentId, sideId, onSideId }: SideChatProps) {
             disabled={!text.trim() || asking !== null || streaming}
           >
             {asking !== null ? <Spinner /> : null}
-            Ask
+            {SIDE_CHAT_TEXT.ask}
           </Button>
         </div>
       </form>

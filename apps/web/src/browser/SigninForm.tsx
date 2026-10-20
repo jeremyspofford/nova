@@ -5,6 +5,7 @@
 // time; an answer after that gets the Hub's 410 and says so. The password is cleared from the
 // form as soon as it is sent.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { BrowserSigninView } from '@nova/shared';
 import { Button, Icon, RadioGroup, TextField, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
@@ -15,6 +16,38 @@ import { useBrowserApi } from './api.ts';
 import { countdown } from './format.ts';
 
 export type SigninOutcome = 'completed' | 'failed' | 'cancelled' | 'gone';
+
+/** The private sign-in form. {site} is the site's host, {user} a saved username (data). */
+export const SIGNIN_TEXT = defineMessages('browser.signin', {
+  expiredAnnounce: 'The sign-in to {site} expired.',
+  signedIn: 'Signed in to {site}.',
+  /** {reason} is the browser's own words (English). */
+  didNotWork: 'Signing in did not work: {reason}',
+  sendFailed: 'The sign-in could not be sent.',
+  notSignedIn: 'You did not sign in to {site}. The agent was told.',
+  cancelFailed: 'Could not cancel the sign-in.',
+  heading: 'Sign in to {site}',
+  intro:
+    'The agent asked to sign in. What you enter goes only to the agent browser, never to the agent or its model. CAPTCHAs and codes are yours to complete in the browser.',
+  how: 'How to sign in',
+  typeIt: 'Enter a username and password',
+  savedLogin: 'Use the saved login for {user}',
+  confirmSaved: 'Yes, sign in to {site} as {user} with the saved password',
+  username: 'Username or email',
+  password: 'Password',
+  save: 'Save this login to your passwords (kept in the vault, asked before reuse)',
+  expired: 'This sign-in expired. The agent can ask again.',
+  /** {time} is the time left, such as "4:59". */
+  waits: 'Waits for {time} more.',
+  signIn: 'Sign in',
+  signInAs: 'Sign in as {user}',
+  dontSignIn: 'Don’t sign in',
+  /** A finished sign-in: "Sign in to shop.example.com:" before what happened. */
+  resultTitle: 'Sign in to {site}:',
+  dismiss: 'Dismiss',
+  loadFailed: 'Could not load sign-in requests.',
+  loading: 'Loading sign-in requests',
+});
 
 export function SigninForm({
   signin,
@@ -46,12 +79,14 @@ export function SigninForm({
   useInterval(() => setNow(Date.now()), 1000, !closed && !expired);
 
   useEffect(() => {
-    if (expired && !closed) announce(`The sign-in to ${signin.host} expired.`);
+    if (expired && !closed) announce(SIGNIN_TEXT.expiredAnnounce({ site: signin.host }));
   }, [expired, closed, announce, signin.host]);
 
   const saved = signin.savedLogins.find((l) => l.id === mode) ?? null;
   const ready = saved ? confirmed : username.trim() !== '' && password !== '';
 
+  const S = SIGNIN_TEXT;
+  const site = signin.host;
   const finish = (outcome: SigninOutcome, message: string) => {
     setClosed(message);
     announce(message);
@@ -70,12 +105,12 @@ export function SigninForm({
     try {
       const out = await api.submitBrowserSignin(signin.id, body);
       if (out.state === 'completed') {
-        toast.show(`Signed in to ${signin.host}.`, { tone: 'success' });
+        toast.show(S.signedIn({ site }), { tone: 'success' });
         finish('completed', sentence(out.message));
-      } else finish('failed', `Signing in did not work: ${sentence(out.message)}`);
+      } else finish('failed', S.didNotWork({ reason: sentence(out.message) }));
     } catch (err) {
       if (err instanceof ApiError && err.status === 410) finish('gone', sentence(err.body.message));
-      else setProblem(sentence(errorMessage(err, 'The sign-in could not be sent.')));
+      else setProblem(sentence(errorMessage(err, S.sendFailed)));
     } finally {
       setBusy(false);
     }
@@ -86,10 +121,10 @@ export function SigninForm({
     setPassword('');
     try {
       await api.cancelBrowserSignin(signin.id);
-      finish('cancelled', `You did not sign in to ${signin.host}. The agent was told.`);
+      finish('cancelled', S.notSignedIn({ site }));
     } catch (err) {
       if (err instanceof ApiError && err.status === 410) finish('gone', sentence(err.body.message));
-      else setProblem(sentence(errorMessage(err, 'Could not cancel the sign-in.')));
+      else setProblem(sentence(errorMessage(err, S.cancelFailed)));
     } finally {
       setBusy(false);
     }
@@ -98,7 +133,7 @@ export function SigninForm({
   return (
     <section className="brw-signin" aria-labelledby={headingId} data-signin={signin.id}>
       <h4 id={headingId} className="ws-subhead">
-        <Icon name="shield" /> Sign in to {signin.host}
+        <Icon name="shield" /> {S.heading({ site })}
       </h4>
       {closed ? (
         <p role="status" className="brw-signin-closed">
@@ -112,14 +147,15 @@ export function SigninForm({
             void submit();
           }}
         >
-          <p className="muted ws-flush">
-            The agent asked to sign in. What you enter goes only to the agent browser, never to the
-            agent or its model. CAPTCHAs and codes are yours to complete in the browser.
-          </p>
-          {signin.url ? <p className="muted ws-flush brw-url">{signin.url}</p> : null}
+          <p className="muted ws-flush">{S.intro}</p>
+          {signin.url ? (
+            <p className="muted ws-flush brw-url" dir="ltr">
+              {signin.url}
+            </p>
+          ) : null}
           {signin.savedLogins.length ? (
             <RadioGroup
-              legend="How to sign in"
+              legend={S.how}
               name={`signin-${signin.id}`}
               value={mode}
               onChange={(v) => {
@@ -127,10 +163,10 @@ export function SigninForm({
                 setConfirmed(false);
               }}
               options={[
-                { value: 'type', label: 'Enter a username and password' },
+                { value: 'type', label: S.typeIt },
                 ...signin.savedLogins.map((l) => ({
                   value: l.id,
-                  label: `Use the saved login for ${l.username}`,
+                  label: S.savedLogin({ user: l.username }),
                 })),
               ]}
             />
@@ -142,14 +178,12 @@ export function SigninForm({
                 checked={confirmed}
                 onChange={(e) => setConfirmed(e.target.checked)}
               />
-              <span>
-                Yes, sign in to {signin.host} as {saved.username} with the saved password
-              </span>
+              <span>{S.confirmSaved({ site, user: saved.username })}</span>
             </label>
           ) : (
             <>
               <TextField
-                label="Username or email"
+                label={S.username}
                 value={username}
                 autoComplete="username"
                 maxLength={500}
@@ -158,7 +192,7 @@ export function SigninForm({
                 onChange={(e) => setUsername(e.target.value)}
               />
               <TextField
-                label="Password"
+                label={S.password}
                 type="password"
                 value={password}
                 autoComplete="current-password"
@@ -173,9 +207,7 @@ export function SigninForm({
                   disabled={expired}
                   onChange={(e) => setSave(e.target.checked)}
                 />
-                <span>
-                  Save this login to your passwords (kept in the vault, asked before reuse)
-                </span>
+                <span>{S.save}</span>
               </label>
             </>
           )}
@@ -186,17 +218,17 @@ export function SigninForm({
           ) : null}
           {expired ? (
             <p className="ws-warning" role="alert">
-              <Icon name="clock" /> This sign-in expired. The agent can ask again.
+              <Icon name="clock" /> {S.expired}
             </p>
           ) : left !== null ? (
-            <p className="muted ws-flush">Waits for {countdown(left)} more.</p>
+            <p className="muted ws-flush">{S.waits({ time: countdown(left) })}</p>
           ) : null}
           <div className="row">
             <Button type="submit" variant="primary" disabled={!ready || busy || expired}>
-              {saved ? `Sign in as ${saved.username}` : 'Sign in'}
+              {saved ? S.signInAs({ user: saved.username }) : S.signIn}
             </Button>
             <Button onClick={() => void cancel()} disabled={busy}>
-              Don’t sign in
+              {S.dontSignIn}
             </Button>
           </div>
         </form>

@@ -4,9 +4,14 @@
 // indicator never stays blind for long.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ComputerView, ScreenStatusView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { errorMessage } from '../api.ts';
 import { useScreenApi } from './api.ts';
 import { eventComputerId, useHubEvents } from './events.ts';
+
+export const STATUSES_TEXT = defineMessages('screen.statuses', {
+  loadFailed: 'Could not load your computers.',
+});
 
 /** Events after which a computer's control state may differ (not every recorded action). */
 export const STATUS_EVENTS = [
@@ -85,7 +90,7 @@ export function useScreenStatuses(): ScreenStatuses {
       })
       .catch((err: unknown) => {
         if (!live) return;
-        setError(errorMessage(err, 'Could not load your computers.'));
+        setError(errorMessage(err, STATUSES_TEXT.loadFailed));
         retry = setTimeout(() => setAttempt((n) => n + 1), STATUS_RETRY_MS);
       });
     return () => {

@@ -5,6 +5,7 @@
 // when the browser area wires its opener. `code.devserver.*` events keep it current.
 import { useCallback, useEffect, useState } from 'react';
 import type { DevServerCandidateView, DevServerView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { useAnnounce } from '../services.tsx';
@@ -21,6 +22,45 @@ import {
   safeHttpUrl,
 } from './m6-format.ts';
 import { Badge, ErrorBanner } from './parts.tsx';
+
+export const SERVERS_TEXT = defineMessages('code.servers', {
+  loadFailed: 'Could not load the dev servers.',
+  state:
+    '{status, select, starting {{name} is starting.} running {{name} is serving.} stopped {{name} is stopped.} other {{name} failed.}}',
+  exited: '{name} stopped as soon as it started.',
+  tooMany: 'At most 4 dev servers run per session. Stop one first.',
+  noSandbox: 'No sandbox is available on the Hub, so dev servers cannot run.',
+  startFailed: 'Could not start {name}.',
+  stopped: '{name} stopped.',
+  stopFailed: 'Could not stop {name}: {reason}',
+  allStopped: 'All dev servers stopped.',
+  stopAllFailed: 'Could not stop the dev servers: {reason}',
+  title: 'Dev servers',
+  unavailable: 'Dev servers are not available here',
+  looking: 'Looking for dev servers',
+  started: 'Started',
+  stopAll: 'Stop all',
+  startedList: 'Started dev servers',
+  port: 'Port {port}',
+  startedAt: 'Started {when}',
+  exitCode: 'Exit code {code}',
+  noAddress: 'No address yet.',
+  openPreview: 'Open preview',
+  stop: 'Stop',
+  addressNote:
+    'The address is on the Hub. It opens in a new tab, which loads only when this browser can reach the Hub at that address.',
+  noneTitle: 'No dev server found',
+  noneBody:
+    'Nova looks for a dev script in package.json, manage.py, Rails, a Go main package, or .nova/launch.json in the session folder.',
+  detected: 'Detected',
+  detectedHere: 'Detected in this folder',
+  detectedList: 'Detected dev servers',
+  from: 'From {source}',
+  in: 'in {folder}',
+  usualPort: 'Usually port {port}',
+  alreadyStarted: 'Already started.',
+  start: 'Start',
+});
 
 /** Opens a dev server's address; a new tab until the browser pane can take it. */
 export type PreviewOpener = (url: string) => void;
@@ -69,7 +109,7 @@ export function DevServersPane({
           setServers(r.items);
           setError(null);
         },
-        (err: unknown) => setError(errorMessage(err, 'Could not load the dev servers.')),
+        (err: unknown) => setError(errorMessage(err, SERVERS_TEXT.loadFailed)),
       ),
     [m6, sessionId],
   );
@@ -97,7 +137,7 @@ export function DevServersPane({
       const v = await m6.startDevServer(sessionId, { candidateId: c.id });
       upsert(v);
       onChanged?.();
-      announce(`${c.label} is ${SERVER_TEXT[v.status].toLowerCase()}.`);
+      announce(SERVERS_TEXT.state({ name: c.label, status: v.status }));
     } catch (err) {
       const reason = errorReason(err);
       const d = errorDetails(err);
@@ -106,12 +146,12 @@ export function DevServersPane({
       setFailure({
         message:
           reason === 'dev_server_exited'
-            ? `${c.label} stopped as soon as it started.`
+            ? SERVERS_TEXT.exited({ name: c.label })
             : reason === 'too_many_dev_servers'
-              ? 'At most 4 dev servers run per session. Stop one first.'
+              ? SERVERS_TEXT.tooMany
               : err instanceof ApiError && err.body.code === 'sandbox_unavailable'
-                ? 'No sandbox is available on the Hub, so dev servers cannot run.'
-                : errorMessage(err, `Could not start ${c.label}.`),
+                ? SERVERS_TEXT.noSandbox
+                : errorMessage(err, SERVERS_TEXT.startFailed({ name: c.label })),
         output: typeof d.output === 'string' && d.output ? d.output : null,
       });
     } finally {
@@ -124,9 +164,11 @@ export function DevServersPane({
     try {
       upsert(await m6.stopDevServer(sessionId, s.id));
       onChanged?.();
-      announce(`${s.label} stopped.`);
+      announce(SERVERS_TEXT.stopped({ name: s.label }));
     } catch (err) {
-      toast.show(`Could not stop ${s.label}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(SERVERS_TEXT.stopFailed({ name: s.label, reason: errorMessage(err) }), {
+        tone: 'error',
+      });
     } finally {
       mark(s.id, false);
     }
@@ -138,9 +180,9 @@ export function DevServersPane({
       const { items } = await m6.stopAllDevServers(sessionId);
       for (const v of items) upsert(v);
       onChanged?.();
-      announce('All dev servers stopped.');
+      announce(SERVERS_TEXT.allStopped);
     } catch (err) {
-      toast.show(`Could not stop the dev servers: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(SERVERS_TEXT.stopAllFailed({ reason: errorMessage(err) }), { tone: 'error' });
     } finally {
       mark('all', false);
     }
@@ -148,12 +190,8 @@ export function DevServersPane({
 
   if (unavailable)
     return (
-      <section className="code-servers" aria-label="Dev servers">
-        <EmptyState
-          level={3}
-          title="Dev servers are not available here"
-          description={unavailable}
-        />
+      <section className="code-servers" aria-label={SERVERS_TEXT.title}>
+        <EmptyState level={3} title={SERVERS_TEXT.unavailable} description={unavailable} />
       </section>
     );
 
@@ -161,9 +199,9 @@ export function DevServersPane({
   const shown = [...servers].sort((a, b) => Number(isLive(b)) - Number(isLive(a)));
 
   return (
-    <section className="code-servers" aria-label="Dev servers">
+    <section className="code-servers" aria-label={SERVERS_TEXT.title}>
       {error ? <ErrorBanner message={error} onRetry={reload} /> : null}
-      {candidates === null && !error ? <Spinner label="Looking for dev servers" /> : null}
+      {candidates === null && !error ? <Spinner label={SERVERS_TEXT.looking} /> : null}
       {failure ? (
         <div className="code-callout" data-tone="danger" role="alert">
           <p>
@@ -174,48 +212,56 @@ export function DevServersPane({
       ) : null}
 
       {shown.length ? (
-        <section className="code-server-group" aria-label="Started">
+        <section className="code-server-group" aria-label={SERVERS_TEXT.started}>
           <div className="code-subhead">
-            <h3>Started</h3>
+            <h3>{SERVERS_TEXT.started}</h3>
             {live.length ? (
               <Button disabled={busy.has('all')} onClick={() => void stopAll()}>
-                <Icon name="stop" /> Stop all
+                <Icon name="stop" /> {SERVERS_TEXT.stopAll}
               </Button>
             ) : null}
           </div>
-          <ul className="ws-list" aria-label="Started dev servers">
+          <ul className="ws-list" aria-label={SERVERS_TEXT.startedList}>
             {shown.map((s) => {
               const url = safeHttpUrl(s.url);
               return (
                 <li key={s.id} className="ws-list-row code-server" aria-label={s.label}>
                   <div className="code-env-main">
                     <div className="code-row-title">
-                      <span className="code-env-name">{s.label}</span>
+                      <span className="code-env-name" dir="auto">
+                        {s.label}
+                      </span>
                       <Badge tone={SERVER_TONE[s.status]} icon={SERVER_ICON[s.status]}>
                         {SERVER_TEXT[s.status]}
                       </Badge>
                     </div>
                     <code className="code-cmd">{s.command}</code>
                     <span className="muted code-row-meta">
-                      {url && isLive(s) ? <span className="code-path">{url}</span> : null}
-                      {s.port ? <span>Port {s.port}</span> : null}
-                      <span>Started {formatWhen(s.startedAt)}</span>
-                      {s.exitCode !== null ? <span>Exit code {s.exitCode}</span> : null}
+                      {url && isLive(s) ? (
+                        <span className="code-path" dir="ltr">
+                          {url}
+                        </span>
+                      ) : null}
+                      {s.port ? <span>{SERVERS_TEXT.port({ port: String(s.port) })}</span> : null}
+                      <span>{SERVERS_TEXT.startedAt({ when: formatWhen(s.startedAt) })}</span>
+                      {s.exitCode !== null ? (
+                        <span>{SERVERS_TEXT.exitCode({ code: String(s.exitCode) })}</span>
+                      ) : null}
                     </span>
                   </div>
                   {isLive(s) ? (
                     <div className="ws-row-actions code-actions">
                       <Button
                         disabled={!url || s.status !== 'running'}
-                        title={url ? undefined : 'No address yet.'}
+                        title={url ? undefined : SERVERS_TEXT.noAddress}
                         onClick={() => {
                           if (url) openPreview(url);
                         }}
                       >
-                        <Icon name="external" /> Open preview
+                        <Icon name="external" /> {SERVERS_TEXT.openPreview}
                       </Button>
                       <Button disabled={busy.has(s.id)} onClick={() => void stop(s)}>
-                        <Icon name="stop" /> Stop
+                        <Icon name="stop" /> {SERVERS_TEXT.stop}
                       </Button>
                     </div>
                   ) : null}
@@ -223,48 +269,47 @@ export function DevServersPane({
               );
             })}
           </ul>
-          <p className="muted ws-flush">
-            The address is on the Hub. It opens in a new tab, which loads only when this browser can
-            reach the Hub at that address.
-          </p>
+          <p className="muted ws-flush">{SERVERS_TEXT.addressNote}</p>
         </section>
       ) : null}
 
       {candidates?.length === 0 && !shown.length ? (
-        <EmptyState
-          level={3}
-          title="No dev server found"
-          description="Nova looks for a dev script in package.json, manage.py, Rails, a Go main package, or .nova/launch.json in the session folder."
-        />
+        <EmptyState level={3} title={SERVERS_TEXT.noneTitle} description={SERVERS_TEXT.noneBody} />
       ) : null}
       {candidates?.length ? (
-        <section className="code-server-group" aria-label="Detected">
-          <h3>Detected in this folder</h3>
-          <ul className="ws-list" aria-label="Detected dev servers">
+        <section className="code-server-group" aria-label={SERVERS_TEXT.detected}>
+          <h3>{SERVERS_TEXT.detectedHere}</h3>
+          <ul className="ws-list" aria-label={SERVERS_TEXT.detectedList}>
             {candidates.map((c) => {
               const running = servers.find((s) => s.candidateId === c.id && isLive(s));
               return (
                 <li key={c.id} className="ws-list-row" aria-label={c.label}>
                   <div className="code-env-main">
                     <div className="code-row-title">
-                      <span className="code-env-name">{c.label}</span>
+                      <span className="code-env-name" dir="auto">
+                        {c.label}
+                      </span>
                       <span className="code-kind">{c.framework}</span>
                     </div>
                     <code className="code-cmd">{c.command}</code>
                     <span className="muted code-row-meta">
-                      <span>From {c.source}</span>
-                      {c.cwd ? <span className="code-path">in {c.cwd}</span> : null}
-                      {c.port ? <span>Usually port {c.port}</span> : null}
+                      <span>{SERVERS_TEXT.from({ source: c.source })}</span>
+                      {c.cwd ? (
+                        <span className="code-path">{SERVERS_TEXT.in({ folder: c.cwd })}</span>
+                      ) : null}
+                      {c.port ? (
+                        <span>{SERVERS_TEXT.usualPort({ port: String(c.port) })}</span>
+                      ) : null}
                     </span>
                   </div>
                   <div className="ws-row-actions code-actions">
                     <Button
                       variant="primary"
                       disabled={busy.has(c.id) || !!running}
-                      title={running ? 'Already started.' : undefined}
+                      title={running ? SERVERS_TEXT.alreadyStarted : undefined}
                       onClick={() => void start(c)}
                     >
-                      {busy.has(c.id) ? <Spinner /> : null} Start
+                      {busy.has(c.id) ? <Spinner /> : null} {SERVERS_TEXT.start}
                     </Button>
                   </div>
                 </li>

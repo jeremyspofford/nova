@@ -30,7 +30,7 @@ describe('the sample extension in the test host', () => {
     await (await hello()).activate(host.nova);
     expect([...host.commands.keys()]).toEqual(['hello.greet']);
     expect([...host.panels.keys()]).toEqual(['hello.panel']);
-    expect([...host.tools.keys()].sort()).toEqual(['greet', 'save_note']);
+    expect([...host.tools.keys()].sort()).toEqual(['check_status', 'greet', 'save_note']);
     expect(host.denied).toEqual([]);
     expect(await host.run('hello.greet', { name: 'Ada' })).toEqual({
       text: 'Hi, Ada!',
@@ -47,6 +47,23 @@ describe('the sample extension in the test host', () => {
     expect(host.keybindings).toEqual([{ command: 'hello.greet', key: 'mod+shift+h' }]);
     expect(host.menus[0]?.where).toBe('thread');
     expect(host.logs[0]).toContain('hello is ready');
+  });
+
+  it('reaches the host it declared, and is refused any other', async () => {
+    const host = createTestHost(manifest, {
+      extensionId: 'com.example.hello',
+      fetch: () => Promise.resolve({ status: 200, body: 'ok' }),
+    });
+    await (await hello()).activate(host.nova);
+    expect(await host.callTool('check_status', { host: 'api.example.com' })).toBe(
+      'api.example.com answered 200.',
+    );
+    expect(host.denied).toEqual([]);
+    await expect(host.callTool('check_status', { host: 'status.example.net' })).rejects.toThrow(
+      PermissionDeniedError,
+    );
+    expect(host.denied).toHaveLength(1);
+    expect(host.denied[0]).toContain('status.example.net');
   });
 });
 

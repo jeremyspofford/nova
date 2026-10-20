@@ -8,7 +8,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DevicesView } from '../src/devices/DevicesView.tsx';
-import { HUB_ONLY_TEXT } from '../src/firmware/HubOnlyApproval.tsx';
+import { hubOnlyText } from '../src/firmware/HubOnlyApproval.tsx';
 import { FakeEventSource } from './fakes.ts';
 import { deviceView } from './fakes-m6-devices.ts';
 import {
@@ -104,7 +104,7 @@ describe('the Firmware tab', () => {
     const approval = await screen.findByRole('group', {
       name: 'Approve this firmware change on Desk PC',
     });
-    expect(within(approval).getByText(HUB_ONLY_TEXT)).toBeTruthy();
+    expect(within(approval).getByText(hubOnlyText())).toBeTruthy();
     await waitFor(() =>
       expect(document.activeElement).toBe(
         within(approval).getByRole('heading', { name: 'Approve this firmware change on Desk PC' }),

@@ -47,7 +47,7 @@ describe('catalog index signatures', () => {
   it('verifies with the pinned key, or with a trusted publisher', () => {
     expect(verifyCatalogIndex(index, sig, { pinned: a.publicKey, trusted: [] })).toEqual({
       status: 'verified',
-      publisher: { name: null, key: a.publicKey },
+      publisher: expect.objectContaining({ name: null, key: a.publicKey, trusted: true }),
       reason: null,
     });
     expect(
@@ -270,7 +270,7 @@ describe('permission lines and diffs', () => {
       'Reach api.example.com on the network',
       'Offer the tool plugin:a.b.read (read)',
       'A read action runs without asking by default',
-      'Add the MCP server s, which runs node',
+      'Add the MCP server s, which runs node server.js',
       'Run the hook hook:a.b.h on tool.pre (node h.mjs)',
     ]);
     expect(skillPermissionLines(['fs.read'])[0]!.text).toBe('Ask to use the tool fs.read');

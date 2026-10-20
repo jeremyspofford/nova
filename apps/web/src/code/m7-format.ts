@@ -9,9 +9,63 @@ import type {
   MergeFileResult,
   SessionHandoffView,
 } from '@nova/shared';
+import { defineMessages, messageFor } from '@nova/i18n';
 import type { IconName } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { errorReason, type Tone } from './m6-format.ts';
+
+/** The words of the specs below; each spec reads its word at render time. */
+export const M7_TEXT = defineMessages('code.m7', {
+  handoff: {
+    pending: 'Waiting',
+    running: 'Moving',
+    completed: 'Moved',
+    refused: 'Refused',
+    failed: 'Failed',
+  },
+  merge: {
+    applied: 'Merged',
+    conflicted: 'Conflicts to resolve',
+    resolved: 'Resolved',
+    refused: 'Refused: conflicts',
+    aborted: 'Aborted',
+  },
+  set: {
+    running: 'Attempts running',
+    ready: 'Ready to compare',
+    applied: 'Applied',
+    discarded: 'Discarded',
+  },
+  attempt: {
+    running: 'Working',
+    done: 'Done',
+    failed: 'Failed',
+    applied: 'Applied',
+    discarded: 'Discarded',
+  },
+  didNotWork: 'That did not work.',
+  /** A refusal of an M7 Code request, by the Hub's reason code. */
+  error: {
+    handoff_running: 'This session is already moving. Wait for that move to finish.',
+    same_location: 'The session already works there.',
+    worktree_unavailable: 'Worktrees are only available for folders on the Hub.',
+    worktree_repo: 'That worktree belongs to another repository.',
+    remote_environment: 'This works only for sessions whose folder is on the Hub.',
+    no_commits: 'Attempts need a Git repository with at least one commit.',
+    other_repository: 'The two sessions work in different repositories.',
+    other_folder: 'The two sessions work in different folders of the repository.',
+    same_session: 'A session cannot merge into itself.',
+    patch_mismatch: 'The patch does not apply to its base commit.',
+    missing_base: 'The repository does not have the patch’s base commit.',
+    too_large: 'The work is too large to merge.',
+    merge_conflict: 'The work conflicts with the session’s files, so nothing was written.',
+    merge_conflicts: 'Conflict markers are still in some files. Resolve them first.',
+    merge_settled: 'That merge is already settled.',
+    attempts_settled: 'These attempts were already applied or discarded.',
+    turns_unavailable: 'Attempts cannot start right now. Try again in a moment.',
+    unknown_device: 'That device is not one of yours, or it was revoked.',
+  },
+});
 
 export interface Spec {
   text: string;
@@ -30,16 +84,27 @@ export const CODE_M7_EVENTS = [
   'worktree.released',
 ] as const;
 
+/** A spec whose word is read when it is shown, so it follows the active locale. */
+function spec(words: Record<string, string>, key: string, icon: IconName, tone: Tone): Spec {
+  return {
+    get text() {
+      return words[key] ?? key;
+    },
+    icon,
+    tone,
+  };
+}
+
 export const HANDOFF_STATUS: Record<SessionHandoffView['status'], Spec> = {
-  pending: { text: 'Waiting', icon: 'clock', tone: 'warn' },
-  running: { text: 'Moving', icon: 'refresh', tone: 'warn' },
-  completed: { text: 'Moved', icon: 'check', tone: 'ok' },
-  refused: { text: 'Refused', icon: 'slash', tone: 'danger' },
-  failed: { text: 'Failed', icon: 'alert', tone: 'danger' },
+  pending: spec(M7_TEXT.handoff, 'pending', 'clock', 'warn'),
+  running: spec(M7_TEXT.handoff, 'running', 'refresh', 'warn'),
+  completed: spec(M7_TEXT.handoff, 'completed', 'check', 'ok'),
+  refused: spec(M7_TEXT.handoff, 'refused', 'slash', 'danger'),
+  failed: spec(M7_TEXT.handoff, 'failed', 'alert', 'danger'),
 };
 
 /** Why a move was refused or failed, and what to do about it. */
-export const HANDOFF_REASON: Record<HandoffReason, string> = {
+export const HANDOFF_REASON = defineMessages('code.handoffReason', {
   turn_running:
     'A turn was still running. Wait for it to end, or move again and choose to interrupt it.',
   same_location: 'The session already works there.',
@@ -65,7 +130,7 @@ export const HANDOFF_REASON: Record<HandoffReason, string> = {
   remote_state_unavailable: 'The session’s Git state on its machine could not be read.',
   environment_unavailable: 'That environment cannot take sessions right now.',
   failed: 'The move failed. The session stayed where it was.',
-};
+}) satisfies Record<HandoffReason, string>;
 
 export function handoffReasonText(v: SessionHandoffView): string | null {
   if (v.status !== 'refused' && v.status !== 'failed') return null;
@@ -79,14 +144,14 @@ export function shortHash(h: string | null | undefined, n = 12): string {
 }
 
 export const MERGE_STATUS: Record<CodeMergeView['status'], Spec> = {
-  applied: { text: 'Merged', icon: 'check', tone: 'ok' },
-  conflicted: { text: 'Conflicts to resolve', icon: 'alert', tone: 'danger' },
-  resolved: { text: 'Resolved', icon: 'check', tone: 'ok' },
-  refused: { text: 'Refused: conflicts', icon: 'slash', tone: 'muted' },
-  aborted: { text: 'Aborted', icon: 'undo', tone: 'muted' },
+  applied: spec(M7_TEXT.merge, 'applied', 'check', 'ok'),
+  conflicted: spec(M7_TEXT.merge, 'conflicted', 'alert', 'danger'),
+  resolved: spec(M7_TEXT.merge, 'resolved', 'check', 'ok'),
+  refused: spec(M7_TEXT.merge, 'refused', 'slash', 'muted'),
+  aborted: spec(M7_TEXT.merge, 'aborted', 'undo', 'muted'),
 };
 
-export const FILE_RESULT: Record<MergeFileResult, string> = {
+export const FILE_RESULT = defineMessages('code.fileResult', {
   applied: 'Taken from the work',
   merged: 'Merged',
   conflict: 'Conflict',
@@ -94,75 +159,40 @@ export const FILE_RESULT: Record<MergeFileResult, string> = {
   deleted: 'Deleted',
   unchanged: 'Unchanged',
   binary_conflict: 'Conflict (binary, not merged)',
-};
+}) satisfies Record<MergeFileResult, string>;
 
 export function isConflict(r: MergeFileResult): boolean {
   return r === 'conflict' || r === 'binary_conflict';
 }
 
-export const MERGE_SOURCE: Record<CodeMergeView['source']['kind'], string> = {
+export const MERGE_SOURCE = defineMessages('code.mergeSource', {
   session: 'Another session',
   attempt: 'An attempt',
   patch: 'A patch',
-};
+}) satisfies Record<CodeMergeView['source']['kind'], string>;
 
 export const SET_STATUS: Record<CodeAttemptSetView['status'], Spec> = {
-  running: { text: 'Attempts running', icon: 'refresh', tone: 'warn' },
-  ready: { text: 'Ready to compare', icon: 'compare', tone: 'ok' },
-  applied: { text: 'Applied', icon: 'check', tone: 'ok' },
-  discarded: { text: 'Discarded', icon: 'trash', tone: 'muted' },
+  running: spec(M7_TEXT.set, 'running', 'refresh', 'warn'),
+  ready: spec(M7_TEXT.set, 'ready', 'compare', 'ok'),
+  applied: spec(M7_TEXT.set, 'applied', 'check', 'ok'),
+  discarded: spec(M7_TEXT.set, 'discarded', 'trash', 'muted'),
 };
 
 export const ATTEMPT_STATUS: Record<CodeAttemptView['status'], Spec> = {
-  running: { text: 'Working', icon: 'refresh', tone: 'warn' },
-  done: { text: 'Done', icon: 'check', tone: 'ok' },
-  failed: { text: 'Failed', icon: 'alert', tone: 'danger' },
-  applied: { text: 'Applied', icon: 'check', tone: 'ok' },
-  discarded: { text: 'Discarded', icon: 'trash', tone: 'muted' },
+  running: spec(M7_TEXT.attempt, 'running', 'refresh', 'warn'),
+  done: spec(M7_TEXT.attempt, 'done', 'check', 'ok'),
+  failed: spec(M7_TEXT.attempt, 'failed', 'alert', 'danger'),
+  applied: spec(M7_TEXT.attempt, 'applied', 'check', 'ok'),
+  discarded: spec(M7_TEXT.attempt, 'discarded', 'trash', 'muted'),
 };
 
 /** A refusal of an M7 Code request, in plain words. */
-export function codeM7ErrorMessage(err: unknown, fallback = 'That did not work.'): string {
-  switch (errorReason(err)) {
-    case 'handoff_running':
-      return 'This session is already moving. Wait for that move to finish.';
-    case 'same_location':
-      return 'The session already works there.';
-    case 'worktree_unavailable':
-      return 'Worktrees are only available for folders on the Hub.';
-    case 'worktree_repo':
-      return 'That worktree belongs to another repository.';
-    case 'remote_environment':
-      return 'This works only for sessions whose folder is on the Hub.';
-    case 'no_commits':
-      return 'Attempts need a Git repository with at least one commit.';
-    case 'other_repository':
-      return 'The two sessions work in different repositories.';
-    case 'other_folder':
-      return 'The two sessions work in different folders of the repository.';
-    case 'same_session':
-      return 'A session cannot merge into itself.';
-    case 'patch_mismatch':
-      return 'The patch does not apply to its base commit.';
-    case 'missing_base':
-      return 'The repository does not have the patch’s base commit.';
-    case 'too_large':
-      return 'The work is too large to merge.';
-    case 'merge_conflict':
-      return 'The work conflicts with the session’s files, so nothing was written.';
-    case 'merge_conflicts':
-      return 'Conflict markers are still in some files. Resolve them first.';
-    case 'merge_settled':
-      return 'That merge is already settled.';
-    case 'attempts_settled':
-      return 'These attempts were already applied or discarded.';
-    case 'turns_unavailable':
-      return 'Attempts cannot start right now. Try again in a moment.';
-    case 'unknown_device':
-      return 'That device is not one of yours, or it was revoked.';
-    default:
-      return errorMessage(err, fallback);
-  }
+export function codeM7ErrorMessage(err: unknown, fallback?: string): string {
+  const reason = errorReason(err);
+  return (
+    (reason ? messageFor(M7_TEXT.error, reason) : undefined) ??
+    errorMessage(err, fallback ?? M7_TEXT.didNotWork)
+  );
 }
 
 /** The paths a 409 merge refusal names. */

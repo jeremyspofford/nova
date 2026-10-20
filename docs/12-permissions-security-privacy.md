@@ -58,6 +58,12 @@ account-scoped route shows a caller only its own account's data; on top of that:
   M7.5 adds out-of-band management (`/api/v1/oob`); firmware, boot, PXE tokens, decommission and
   the extension bridge's grants sit under `/api/v1/devices`, already on the list. The firmware,
   out-of-band and bridge areas also check for the owner themselves.
+  *Since M8* (ADR-097 D7, closing R-032) the list is no longer kept by hand: every route is
+  classified exactly once (`public`, `owner`, `member`, `device`, `node` or `app`) in
+  `packages/core/src/team/routes.ts`, a route nobody classified is refused to members anywhere,
+  and a test over the fully wired Hub fails on an unclassified route or an owner route a member can
+  reach (`contracts/hub-api.md` §1). Members learn what they are refused from
+  `GET /api/v1/team/me/access`.
 - **Folders.** Every non-owner account's chats, runs and tools work in
   `<dataDir>/members/<id>/workspace`, never the Hub's workspace or configured roots, including tool
   calls with no thread (the policy sources are asked with thread id `''`). The browser's fallback
@@ -72,7 +78,10 @@ account-scoped route shows a caller only its own account's data; on top of that:
 - **Removal.** Removing a member revokes their sessions, closes their open sockets (4401
   `account_closed`) and event streams, disables their schedules, triggers, channel bindings and
   MCP servers, ends their MCP event and push subscriptions and stops their agents; turns, runs,
-  triggers and sign-ins of a closed account are refused (`account_closed`).
+  triggers and sign-ins of a closed account are refused (`account_closed`). *Since M8* it also
+  stops their channel pollers at once and revokes their email mailboxes' OAuth tokens at the
+  provider (audited `channel.oauth.revoke`, reason `member_removed`), and their data is purged
+  after `team.removedMemberPurgeDays` (30) or on the owner's request (`docs/13` §7).
 - **Events.** Account-less system events (network, trust, Relay) go only to the owner's streams.
 - **Shared threads** use an allow-list of built-in tools, not tainting (`docs/13` §7): nothing in
   them reaches the host, and another participant's words never run under the caller's authority
@@ -710,6 +719,26 @@ tool plans, approves or applies such a change, and every route is the owner's.
     `~/.config/nova/bridge-token`, 0600) never leaves the device; the redactor's `nova-token` rule
     covers it all the same, as it covers every Nova token prefix (`nvs`, `nvx`, `nvd`, `nvm`,
     `nva`, `nve`, `nvb`, `nvbr`, `nvc`, `nvn`, `nvdm`, `nvi`, `nvr`, `nvlr`).
+- *As of M8* (ADR-097):
+  - **Extension secrets** the owner stores for an extension are
+    `secret://extension/<accountId>/<extensionId>/<name>`, only for names its `extension.json`
+    declares; the extension reads them through `nova.secrets.get` (each read audited
+    `extension.secret.read`), the API never returns them, and uninstalling deletes them. An update by
+    another publisher clears them.
+  - **Email OAuth** (FR-110): under the mailbox's prefix `secret://channel/<bindingId>/` the vault
+    holds `oauthClientSecret` (optional), `oauthAccessToken`, `oauthRefreshToken` and `oauthState`
+    (the pending sign-in, no token); there is no table. Signing out, removing the last binding or
+    removing the member revokes the tokens at the provider and deletes them.
+  - **OTLP headers** (FR-223): each header value is `secret://telemetry/otlp/header/<name>`; the
+    setting holds only the references and the API returns names only.
+  - **App tokens** (FR-222): access and refresh tokens (`nva_`), authorization codes and the unused
+    token of an app's `app_authorization` row are stored only as SHA-256 hashes.
+  - **Exports**: only a sealed export (with a passphrase) carries vault entries (§9.1); the Hub's
+    own entries (`secret://hub/…`) are never listed as secrets to enter again, and an import refuses
+    references that would reach them (§9.3).
+  - **Publisher keys** for signing extensions and catalogs are never on the Hub: `nova keys` keeps
+    them in the author's config folder (0600). The remote managed policy's key is pinned in the
+    root-owned policy file.
 
 ## 6. Prompt-injection defense (FR-103)
 
@@ -962,6 +991,37 @@ fails open; an optional OS container mode; kill-on-close job objects. AppContain
   a helper checked by SHA-256 before every start and run by that absolute path, `--` before the
   host, quoted options, and remote writes that never follow a symlink (`docs/10` §2).
 
+### 7.5 Extensions (M8, FR-117)
+
+*As built in M8 (ADR-097 D3; `packages/core/src/sdk`).* Extension code is not a sandboxed process
+but an interpreter with nothing to reach:
+
+- **Engine.** QuickJS (WebAssembly) inside a Node worker thread per account and extension, with an
+  empty environment and worker resource limits. The engine has no Node APIs, files, network,
+  processes or host objects; only strings (JSON) cross the boundary. 64 MiB heap, 1 MiB stack, 2 s
+  of CPU per entry into the engine (promise jobs it starts share that budget; an endless chain
+  faults), at most 100 timers, 8 MB per message. A fault (`cpu`, `memory`, `crash`) ends the worker;
+  it restarts at most 3 times in 10 minutes. Modules may import only the extension's own files and
+  a built-in `@nova/sdk`.
+- **Capabilities** come only through the `nova` object, each checked on the Hub against
+  `extension.json`: registrations of declared commands, panels, tools, hooks and keybindings;
+  `fs` inside declared scopes on real paths (a scope inside or containing the Hub's data folder is
+  refused at install, links out of a scope at run time); `net.fetch` to declared hosts on public
+  addresses with manual redirects, within the egress policy (§8; `off` refuses all, `limited`
+  allows only GET, HEAD and OPTIONS, deny lists win, a host must be in every managed allow list),
+  at most 8 in flight and 16 MiB being received; declared secrets only. Undeclared access is
+  denied, audited and turns the extension off (the plugin rule, `docs/20` defaults); an egress
+  refusal of a declared host is audited and leaves it on.
+- **Everything it does passes the policy engine**: its tools are `ext:<id>/<name>` plugin tools
+  under the gate, approval defaults and agent plugin connections; its hooks are trusted by hash and
+  allowed only while managed policy allows the extension and its hook tool; panels are MCP Apps
+  frames with a CSP within the declared hosts.
+- **Integrity.** A bundle whose signature does not match is refused; a worker starts only when the
+  installed files match the recorded digest; `.git`, `.env` files and private keys are refused in
+  bundles.
+- **Managed policy** can deny extensions by id, forbid unverified ones and turn the SDK off; a
+  refused extension stops at once (`managed.policy.changed`) and its hooks are turned off.
+
 ## 8. Egress control (FR-102, FR-193)
 
 Every sandbox, container and VM reaches the network only through the egress proxy. The proxy
@@ -1075,6 +1135,142 @@ loopback that the browser must use for every request, loopback included.
 - Third-party request minimization: redact IP by default where the provider allows; document
   each provider's data handling and link to their policy.
 
+*As built in M8 (ADR-097 D5; `packages/core/src/datactl`, `apps/hub/src/datactl.ts`; routes in
+`contracts/hub-api.md`, "Data controls").* Everything below is the owner's (members get 403
+`owner_only`), audited (kind `settings`) and reachable from Settings → Data (`docs/04` §2.16) and
+from `nova data` (`docs/26` §9).
+
+### 9.1 Export
+
+- **One archive for the whole Hub.** A `.novaexport` is a zip (written by Nova's own streaming
+  ZIP64 writer, so neither the file count nor the size is capped at the classic zip limits)
+  holding `tables/<name>.jsonl` (one lossless JSON line per row: big integers, whole reals and
+  blobs are tagged), `files/<path>` (the data folder's files), `secrets.json` in a sealed archive,
+  and `manifest.json` last ([`export-manifest.json`](../contracts/schemas/export-manifest.json):
+  format 1, Hub and schema version, the data folder, every table's rows and SHA-256, every file's
+  SHA-256 and size, what was left out and the secrets to enter again). `accountScope` is `hub`:
+  the owner exports every account on the Hub. It streams; the database is never held in memory.
+  Search indexes are rebuilt rather than exported.
+- **Sealed export.** With a passphrase (at least 12 characters) the whole zip is sealed: scrypt
+  (N = 2^17, r = 8, p = 1, a 16-byte salt) derives an AES-256-GCM key, and each 1 MiB chunk is its
+  own GCM message whose nonce is a random prefix, the chunk number and a last-chunk flag, with the
+  header as associated data, so chunks cannot be reordered, dropped or cut off and each is checked
+  before its plaintext is written. Only a sealed archive carries the vault (every secret, the
+  Hub's data key among them). Because it hands over every secret, a sealed export also needs the
+  Hub's name typed (`confirm`) and is refused from a paired device's session (403 `hub_only`), on
+  the direct route and on the download ticket alike.
+- **Without a passphrase** nothing secret travels: vault entries are left out and every
+  `secret://` reference the vault or the rows hold is listed in `toReEnter` (except what the Hub
+  makes itself: `secret://hub/`, `push/`, `relay/`); the Hub's own key tables (`trust_identity`,
+  `trust_ca`, `trust_certificate`, `relay_registration`) and what depends on them
+  (`relay_client`, `push_subscription`) are left out, so the importing Hub keeps its own identity
+  and paired devices are added again; cookie jars (`browser-state:` files and browser `state.json`
+  files) and files sealed under an unknown label are left out and listed in `omitted`. Files
+  sealed with the data key under a known label travel decrypted with their label and are sealed
+  again on import.
+- **Data folders.** Exported: `blobs`, `plugins`, `plugins-drafts`, `skills`, `themes`, `mcp`,
+  `hooks.json`, `instructions.md`, `firmware`, `sites`, `members`, `computers`, `browser`, `code`,
+  `workspace`, `extensions` and `market` (install staging folders skipped, links not followed).
+  `managed/` (the cached remote policy) is never exported or deleted: losing it would loosen
+  policy until the next fetch. A test fails on any data folder in none of the lists.
+- **Downloads in a browser** use a one-use ticket (`POST /api/v1/data/export/ticket`, 2 minutes,
+  held in memory with the passphrase).
+- **One account's data** (a removed member's, before the purge; `docs/13` §7): the owner's
+  `GET /api/v1/team/removed/:id/export` writes the same format with `accountScope: {accountId}`. It
+  is built on a private copy of the database from which everything that is not the account's is
+  deleted (rows naming the account and the rows hanging off them at any depth, its account row,
+  blobs and folders; never other accounts' rows, Hub-wide tables, its words in someone else's shared
+  chat, team-agent tasks or vault secrets), is never sealed (a passphrase is refused,
+  `account_scope`), lists only the references its own rows hold to enter again, and is audited as
+  `data.export` with `scope: {accountId}`. An import refuses it (`account_scope`).
+
+### 9.2 Delete everything
+
+`POST /api/v1/data/delete-all {confirm: <the Hub's name>}` (compared trimmed and ignoring case;
+the name is `network.lan.mdnsName`, else the host name's first label, else `nova-hub`) first
+quiesces the Hub (no new turns, schedulers and node checks stopped, every area but data controls
+and ops closed, pending writes flushed), then in one transaction clears every table, the audit log
+included, keeping only the bare owner account (no avatar, username or email), the owner row and
+the current session. It deletes every vault entry and the data folders (`backups`, `egress`,
+`network`, `cache`, `import`, `datactl`, `crash`, `cloud-mock` and `boot-images` besides the
+exported ones), empties the logs, runs `VACUUM`, makes a new data key and writes
+`data.delete_all` as the first entry of the new audit log. The Hub then restarts in-process.
+Entries of the data folder it does not know are left alone and listed (`keptPaths`). Device
+replicas are not told (`docs/13` §2).
+
+### 9.3 Import
+
+- **Only into an empty Hub**: one holding nothing but what setup and housekeeping write (the
+  owner, sessions, the mock provider, settings, the audit and event logs, the Hub's own keys and
+  network checks); otherwise 409 `hub_not_empty` with the tables. Run after a fresh setup or after
+  delete-all. Upload (`POST /api/v1/data/import/upload`, raw body, 1 hour), check (nothing written)
+  and import (`confirm: true`) are separate steps.
+- **Checks**, each refused with `validation` and a reason: the format (`unsupported_format`),
+  the schema version (an older archive is migrated forward through a staging database; a newer
+  one is `newer_schema`), the passphrase (`passphrase_required`, `wrong_passphrase`), the archive's
+  structure and every entry listed exactly once (`archive_damaged`), every table's and file's
+  checksum (`checksum_mismatch`), foreign keys on the staged copy (`archive_inconsistent`),
+  unknown tables, free disk space before decrypting and before staging (`disk_full`, nothing
+  written) and the declared size (`too_large`, at most 512 GiB and 5 million entries).
+- **What an archive cannot vouch for** (an unsealed archive is unauthenticated):
+  - `secret://` references in any text column (settings and JSON included, the two log tables
+    excepted) are refused when they point under `hub/`, `push/` or `relay/` (the owner-pasted
+    `secret://relay/registration/…` token counts as a secret to enter again, and a push
+    subscription's own `secret://push/<id>/auth` is allowed), when an unsealed archive does not
+    list them in `toReEnter`, or when they would resolve to a secret this Hub holds that the
+    archive does not carry (`foreign_secret`), so a crafted row cannot make the Hub hand out its
+    own keys;
+  - ids that name folders (accounts, computers, Code sessions, MCP servers, handoffs, firmware
+    snapshots), blob and avatar paths, and plugin and extension rows (a valid manifest whose id and
+    version match, installed at exactly `<data>/plugins/<id>/<version>`) are checked
+    (`unsafe_path`); uninstalling a plugin or removing an extension's folder refuses any path
+    outside its own folder anyway;
+  - absolute paths under the exporting Hub's data folder (`manifest.dataDir`) are moved to the new
+    one (log tables untouched).
+- **Comes back off.** stdio MCP servers, plugins (and so their extensions) and external agent
+  programs are disabled, hooks go back to `needs_trust`, and every sign-in session in the archive
+  is revoked except the importing one, which stays signed in as the archive's owner. The result
+  lists these counts (`restoredOff`). Device, MCP client and app tokens are restored as exported.
+- **All or nothing.** Files and secrets are placed first and taken back on failure; rows are
+  replaced in one transaction, each table compared with the vetted staging copy before the commit;
+  the `data.import` audit entry lands on the archive's chain and records the first entries of the
+  log it replaced. A sealed archive brings its own data key. Without a passphrase, secrets in
+  `toReEnter` must be entered again (provider keys, MCP server environment, channel and runner
+  tokens); the Hub restarts after answering. The round trip is lossless table by table (J10 step
+  3; a test requires every stored table to be carried or on a named exclusion list).
+
+### 9.4 Retention and the audit anchor
+
+- **Settings** (`docs/14` §1.1, M8 table): `retention.threadsDays`, `runsDays`, `auditDays`,
+  `artifactsDays`, `tracesDays`, each null (keep everything) by default, at most 36,500 days;
+  `retention.auditDays` is never below 365. Managed policy can cap each one (§10).
+- **Sweep.** The Hub checks hourly and sweeps once a day (and on "Sweep now"): chats untouched and
+  unpinned are soft-deleted and purged 30 days later; ended runs outside pinned chats are purged
+  with their sub-runs, steps and threads; unchanged artifacts outside pinned chats go with their
+  versions and files; the event log, agent browser traces, network checks, sent notification
+  deliveries, push deliveries and trigger events older than the cutoff are pruned. A failure skips
+  that item and is reported (`skipped`); nothing is forced. Each sweep is a `retention_sweep` row,
+  `data.retention.swept` and a `data.retention.sweep` audit entry.
+- **The audit anchor.** Pruning the audit log deletes the oldest entries, upserts the
+  `audit_anchor` row (the last pruned entry's sequence number and hash) and, in the same
+  transaction, appends `data.retention.audit_pruned` with the anchor hash as its input hash and the
+  anchor's sequence number in its detail. Verification (`GET /api/v1/audit/verify`) starts from the
+  anchor and requires that entry to vouch for it, so dropping the head of the log and writing an
+  anchor is detected. Without an owner or an audit sink nothing is pruned.
+
+### 9.5 Crash reports (FR-121)
+
+The Hub process (`apps/hub/src/main.ts`) observes `uncaughtExceptionMonitor` (uncaught exceptions
+and fatal rejections) and writes a local report to `<data>/crash/<id>.json` (0600): the error's
+name and code when they look like identifiers, at most 40 stack frames with paths made relative
+(`<data>`, `~`, the install root removed) and passed through the redactor, never the error's
+message or anything that follows it, plus the Hub version, Node version, platform, architecture,
+uptime and memory. Nothing is sent unless `privacy.crashReports` is on and
+`privacy.crashReportEndpoint` names an https endpoint (http only to this machine); the owner can
+preview a report and the body sent is exactly the preview (`POST`, JSON, no redirects, 10 s).
+Unsent reports go out when the Hub starts with sending on. Reports go only to an endpoint the
+owner configures; Nova has no crash service of its own (ADR-097 D8).
+
 ## 10. Managed policy (FR-106, ADR-078)
 
 An administrator delivers policy through an OS-protected channel, trusted because only an
@@ -1082,8 +1278,8 @@ administrator can write it, or as a signed remote policy:
 
 | Channel | Location | Trust |
 | --- | --- | --- |
-| Linux | `/etc/nova/managed-policy.json`, owned by root, not group- or world-writable, in a root-owned directory | file ownership and mode |
-| macOS | a device-management configuration profile for Nova's preference domain, or `/Library/Application Support/Nova/managed-policy.json` owned by root | OS profile management / ownership |
+| Linux | `/etc/nova/managed-settings.json` (M8; the design's `managed-policy.json`), owned by root, not group- or world-writable, in a root-owned directory | file ownership and mode |
+| macOS | a device-management configuration profile for Nova's preference domain, or `/Library/Application Support/Nova/managed-settings.json` owned by root | OS profile management / ownership |
 | Windows | the machine policy registry (`HKLM\SOFTWARE\Policies\Nova`) | registry ACL (administrators only) |
 | Remote | delivered by the Hub to devices, or fetched by the Hub from an admin URL | Ed25519 signature by an admin key pinned through one of the channels above |
 
@@ -1130,6 +1326,87 @@ administrator can write it, or as a signed remote policy:
   badly signed remote policy are ignored with a warning; the last valid policy stays in force.
 - A policy from a trusted channel that fails to parse or validate fails closed: agent tools are
   denied and Diagnostics names the error until it is fixed.
+
+*As built in M8 (ADR-097 D4; `packages/core/src/managed`, `apps/hub/src/managed.ts`; routes in
+`contracts/hub-api.md`, "Managed policy"; precedence in `docs/14` §1.3).* The sketch above is the
+design; the built format is [`managed-settings.json`](../contracts/schemas/managed-settings.json):
+`{version: 1, serial?, settings?, restrict?, remote?}`, every object strict.
+
+- **Sources** (`local`, `remote`, `test`):
+  - **Local file**: Linux `/etc/nova/managed-settings.json`, macOS
+    `/Library/Application Support/Nova/managed-settings.json`, Windows
+    `%ProgramData%\Nova\managed-settings.json`, at most 1 MB. Accepted only when it is a regular file
+    (after resolving links) owned by root (uid 0), with no group or other write bit, and every folder
+    above it (given and real path) owned by root and not writable by group or others unless sticky.
+    A file owned by the Hub's own user is ignored. A Hub running as root still applies it and says
+    that nothing separates the policy from the Hub. On Windows the file is ignored until an ACL check
+    exists; the macOS profile and the Windows registry channel are not built.
+  - **Remote policy**: named only by the local file's `remote {url, publicKey, refreshMinutes?
+    (5–1,440, default 60), minSerial?}`. The URL serves `{v: 1, policy: <base64 of the document>,
+    signature}` (Ed25519 by the pinned key over `"nova-managed-policy-v1\n"` + the hex SHA-256 of
+    the document), fetched over https only, without redirects, 15 s, at most 2 MiB. A document with a
+    lower `serial` than the one in force, or below `minSerial`, is refused as a rollback; a remote
+    document naming `remote` itself is invalid. The last good copy is kept in
+    `<data>/managed/remote-policy.json` (0600) and verified again against the pinned key whenever it
+    is read; `minSerial`, set in the root-owned file, keeps anyone who can write the data folder from
+    swapping in an older copy. **Until a pinned remote policy has verified once, the policy fails
+    closed**; afterwards an outage keeps the last good copy in force. The data folder's `managed/` is
+    never exported or deleted (§9).
+  - **Test layer**: `NOVA_MANAGED_SETTINGS_FILE` is read only when `NODE_ENV=test` or the Hub was
+    started with `--allow-test-policy`, never in place of the protected file: it is a further layer
+    (source `test`) that must belong to the Hub's own user. Otherwise it is ignored and reported.
+- **Statuses**: `absent`, `active`, `ignored` (failed its ownership checks; never partially
+  applied), `invalid` (did not parse or validate), `refused` (bad signature or serial), `unreachable`.
+  An ignored, refused or unreachable source keeps its last good document in force.
+- **Combining.** Every source's `restrict` applies; for settings, `docs/14` §1.3 (the tighter value
+  for a security key, locked; the remote policy's value for others). Ignored keys are reported, never
+  fail the policy: `unknown_key`, `invalid_value`, `loosens`, `unordered`, `manual_mode`.
+- **Fail closed.** A local or test file that cannot be read or does not validate (an unknown key or
+  restriction included), an invalid remote document, or a pinned remote policy never verified:
+  every agent tool is denied at the gate and extensions stop, and the reason is in
+  `GET /api/v1/managed` (`failClosed`), the settings banner and Diagnostics.
+- **Restrictions** (`restrict`), each optional, enforced where the action happens:
+  - `permissionModes {allow?, deny?}`: Code session modes are refused; a refused approval policy runs
+    as `ask_always` at the gate; an explicitly requested refused run or agent autonomy is refused and
+    a refused default runs as Standard. Manual can never be denied (a policy that tries is reported
+    `manual_mode`). Denying Bypass locks `code.allowBypass` off and caps `tools.approvalPolicy`.
+  - `tools {allow?, deny?}`: tool-name globs (`screen.*`, `mcp:*`, `ext:*`) at the gate, including
+    SDK hook tools.
+  - `plugins`, `extensions {allow?, deny?}`: install, enable and start (an extension is a plugin, so
+    both lists apply to it), the plugin's tools and MCP servers, marketplace items.
+  - `mcpServers {allow?, deny?, userAdded?, localStdio?}`: `userAdded: false` refuses servers the user
+    adds, imports or installs from a bundle; `localStdio: false` refuses stdio servers on the Hub;
+    every server is checked again when the policy changes.
+  - `sessions {local?, ssh?, sshHosts?}`: new Hub-local Code sessions are refused and existing ones
+    keep no roots; SSH and its hosts are checked at create and every connect.
+  - `folders {allow?, deny?}`: every resolved root (project folders, session folders and the
+    permission profile's own entries such as `/`, `~` or `:home`) is narrowed to the allowed folders,
+    denied folders become deny entries, in the gate and in the sandbox's tool scope alike; Nova's own
+    workspace is left.
+  - `browserDomains {allow?, deny?}`: sites the agent browser may open.
+  - `egress {mode?, allow?, deny?}`: locks `network.egressMode` (the tighter mode) and
+    `network.egressDeny` (deny lists merge) and `cloud.runner.unrestrictedNetwork` off; the allow
+    list is a ceiling over the owner's own `network.egressAllow`, which stays editable within it
+    (unset or empty: the policy's hosts apply; `docs/14` §1.3), enforced at the gate, the browser and
+    the egress proxy (scope grants, profile hosts and external agents' hosts included); with `off`,
+    network tools and remote MCP servers are denied at the gate as well as at the proxy, and
+    extensions' fetch and sites' remote publishing are cut.
+  - `telemetryExport: false`: OTLP export stays off. `routing {allowCloud?, providers?}`: model
+    targets (and image generation) only from the allowed provider kinds (`node` for compute nodes).
+  - `unverifiedInstalls: false`: plugins, extensions, MCP bundles and marketplace items install only
+    when verified, `market.allowSideload` is locked off and `plugins.trustedPublishers` is exactly the
+    policy's list (so a key the owner adds cannot make their own package Verified).
+  - `apps: false`: no third-party app or MCP client may be authorized and existing app tokens stop.
+- **Refusals** are 403 `policy_denied` `{reason: managed}` with "Ask your administrator", audited once
+  as `managed.denied` (kind `policy`); tool calls are denied by the gate with source `managed`.
+  Loading and changes are audited (`managed.policy.loaded`, `managed.policy.changed`,
+  `managed.policy.reload`) and announced (`managed.policy.changed`, `settings.changed` with scope
+  `managed`).
+- **Managed hooks** are the `hooks` key of `settings` (a hooks file or a list), trusted through the
+  policy channel and re-read on every policy change without a restart.
+- **Not built**: per-agent capabilities, ambient capture, retention of screenshots, appearance and sync
+  locks from the sketch (retention days are capped through the `retention.*` settings, §9.4); the
+  macOS profile and Windows registry; `novad` reading its own device's policy file.
 
 ## 11. Audit log (FR-104)
 
@@ -1465,3 +1742,44 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
     non-proxied UDP) is tested only against a fake browser; local network discovery by a real
     Chromium has not been checked.
   - A LAN client can tell that PXE is on: past the rate limit it gets 429 instead of 404.
+
+
+### 15.1 Third-party apps (M8, FR-222)
+
+*As built in M8 (ADR-097 D6; `packages/core/src/appauth`, `apps/hub/src/appauth.ts`; routes in
+`contracts/hub-api.md`, "Third-party apps").* An app on the owner's device reads the owner's data
+through OAuth 2.0 with PKCE. What the design defends against, and how:
+
+- **A malicious or impersonating app.** Registration grants nothing; the owner approves every app on
+  the consent page, which warns that the app chose its own name and shows where the browser returns.
+  Scopes are read-only (seven), and a token reaches only the 23 `GET` routes listed for its scopes
+  (each a member route, so never Hub administration, writes, `/mcp`, devices, nodes, streams or the
+  WebSocket); anything else is `not_app_scoped`. Only typed user instructions authorize actions
+  (FR-189), so apps get no write scopes. Only the owner authorizes apps.
+- **Code interception.** Public clients use PKCE with S256 only; codes last 5 minutes, are bound to
+  the client, the redirect URI and the challenge, and are burned by any failed attempt; reusing a
+  code revokes what it issued. Redirects are loopback (`127.0.0.1`, `[::1]`, any port) or a
+  private-use reverse-domain scheme, never `localhost`, https or a fragment, so only an app on the
+  device can receive the code (RFC 8252). Every redirect carries `iss` (RFC 9207).
+- **The Hub as a forwarder.** A loopback redirect whose path is one of the Hub's own (`/api`,
+  `/node`, `/agent`, `/boot`, `/mcp`, `/.well-known`) or whose port is one of the Hub's is refused at
+  registration and at consent, so a member cannot have an owner-approved code delivered to a Hub
+  callback that forwards it (the access review's finding); the email OAuth callback exchanges a
+  code only when `iss` is absent or names the mailbox's own authorization server and not the Hub,
+  and the MCP OAuth callback refuses an `iss` naming the Hub.
+- **Token theft and replay.** Access tokens (`nva_`) last 1 hour; refresh tokens 30 days and rotate
+  on every use; presenting a used refresh token revokes the whole chain; all are stored as SHA-256
+  hashes; an app token works only as a Bearer header (never a cookie, so the consent page's
+  SameSite=Strict session cookie, Origin check and JSON body keep cross-site requests out); logs and
+  spans carry route patterns, never URLs or tokens.
+- **Revocation and kill switches.** Per app (Settings, `DELETE /api/v1/apps/:id`,
+  `POST /api/v1/oauth/revoke`), for every app (`apps.enabled` off) or by the organization
+  (`restrict.apps: false`), each effective at once for existing tokens. A narrowed grant narrows
+  every chain at its next call.
+- **Abuse of registration.** Self-registration (`apps.openRegistration`, on by default) is limited to
+  10 an hour per address and 100 waiting apps, each lapsing after an hour; the owner can close it and
+  delete waiting apps. Behind a proxy the limit is shared by everyone (the Hub does not trust
+  forwarded addresses), which a flood can exhaust: close registration in that case.
+- **Audit.** Registration, consent, every token issue, refresh, reuse and revocation are audited; a
+  refused call is audited at once (`app.call`) and allowed calls once an hour per app with counts by
+  route (`app.calls`).

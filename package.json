@@ -16,7 +16,9 @@
     "services/runner"
   ],
   "scripts": {
-    "lint": "node --max-old-space-size=8192 node_modules/eslint/bin/eslint.js . && prettier --check .",
+    "lint": "node --max-old-space-size=8192 node_modules/eslint/bin/eslint.js . && prettier --check . && npm run i18n:check",
+    "i18n:check": "node scripts/i18n.mjs",
+    "i18n:write": "node scripts/i18n.mjs --write",
     "format": "prettier --write .",
     "typecheck": "turbo run typecheck && tsc --noEmit -p tsconfig.json",
     "test": "turbo run test --concurrency=4",

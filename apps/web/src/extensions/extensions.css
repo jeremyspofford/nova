@@ -91,3 +91,41 @@ button.ext-status-item {
   display: grid;
   gap: var(--u-space-2);
 }
+
+/* Items extensions place in the sidebar: one menu row at its foot, opening upward. */
+.ext-sidebar-menu {
+  display: flex;
+  width: 100%;
+}
+.ext-sidebar-menu .ext-sidebar-trigger[data-size] {
+  width: 100%;
+  justify-content: flex-start;
+  padding: var(--u-space-2);
+}
+.ext-sidebar-menu .nv-menu {
+  top: auto;
+  inset-inline-end: auto;
+  bottom: 100%;
+  inset-inline-start: 0;
+  margin: 0 0 var(--u-space-1);
+}
+
+/* A command's whole result: scrolls inside the dialog, long text keeps its lines. */
+.ext-result {
+  max-block-size: 60vh;
+  overflow: auto;
+}
+.ext-result pre {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.ext-result-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Why the Hub stopped an extension, under its description. */
+.ext-stopped .mg-note {
+  display: block;
+}

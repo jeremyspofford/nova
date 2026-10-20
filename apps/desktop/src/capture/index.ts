@@ -12,6 +12,7 @@ import type { ShellCaptureDraftView } from '@nova/shared';
 import { AtspiReader, type Gdbus } from './atspi.ts';
 import type { FrontWindow } from './identity.ts';
 import { redactJob, type RedactJob, type RedactResult } from './redact.ts';
+import { CAPTURE_TEXT } from '../text.ts';
 
 export type { FrontWindow } from './identity.ts';
 export { redactText } from './redact.ts';
@@ -95,9 +96,6 @@ export function pickSource<S extends { id: string; name: string }>(
   return exact.length === 1 ? (exact[0] ?? null) : null;
 }
 
-const UNKNOWN_APP =
-  'Nova cannot tell which app this window belongs to, so it does not capture it (excluded apps must never be captured).';
-
 /** Capture the frontmost window into a draft. */
 export async function captureFrontmost(
   locator: WindowLocator,
@@ -105,11 +103,10 @@ export async function captureFrontmost(
   opts: CaptureOptions,
 ): Promise<CaptureResult> {
   const front = await locator.frontmost();
-  if (!front)
-    return { ok: false, reason: 'no_window', message: 'No window is in front to attach.' };
+  if (!front) return { ok: false, reason: 'no_window', message: CAPTURE_TEXT.noWindow };
   const win = front.window;
   if (!win.appName.trim() && !win.appId)
-    return { ok: false, reason: 'unknown_app', message: UNKNOWN_APP };
+    return { ok: false, reason: 'unknown_app', message: CAPTURE_TEXT.unknownApp };
   const own = opts.ownNames.map((n) => n.toLowerCase());
   const ids = [win.appName, win.appId ?? '', win.title].map((f) => f.toLowerCase());
   if (
@@ -119,18 +116,23 @@ export async function captureFrontmost(
     return {
       ok: false,
       reason: 'own_window',
-      message: 'That is a Nova window. Bring the window you want to attach to the front first.',
+      message: CAPTURE_TEXT.ownWindow,
     };
   if (isExcluded(win, opts.excludedApps))
     return {
       ok: false,
       reason: 'excluded',
-      message: `${win.appName || win.appId || 'This app'} is excluded from attach window, so nothing was captured.`,
+      message:
+        win.appName || win.appId
+          ? CAPTURE_TEXT.excluded({ app: win.appName || win.appId || '' })
+          : CAPTURE_TEXT.excludedUnknown,
     };
   const [shot, textResult] = await Promise.all([
     screenshot(win).catch(() => null),
     front.readText().catch((err: unknown): WindowTextResult => ({
-      unavailable: `The window's text could not be read (${err instanceof Error ? err.message : 'unknown error'}).`,
+      unavailable: CAPTURE_TEXT.unreadable({
+        detail: err instanceof Error ? err.message : CAPTURE_TEXT.unknownError,
+      }),
     })),
   ]);
   const raw = 'unavailable' in textResult ? null : textResult;
@@ -141,22 +143,28 @@ export async function captureFrontmost(
     red = await redact({ title: win.title, text: raw?.text ?? null });
   } catch {
     // Unchecked text never reaches the preview: leave it (and the title) out.
-    red = { title: win.appName || win.appId || 'Window', text: null, redactions: [] };
-    if (raw)
-      textNote = 'The window’s text could not be checked for secrets in time, so it is left out.';
+    red = {
+      title: win.appName || win.appId || CAPTURE_TEXT.windowFallback,
+      text: null,
+      redactions: [],
+    };
+    if (raw) textNote = CAPTURE_TEXT.notChecked;
   }
   const text = red.text !== null && red.text.length > 0 ? red.text : null;
   if (raw && red.text !== null) {
-    if (!text) textNote = 'The window offers no text.';
-    else if (!raw.complete)
-      textNote =
-        'Some of the window’s text was left out: it has more parts than the app reads at once.';
+    if (!text) textNote = CAPTURE_TEXT.noText;
+    else if (!raw.complete) textNote = CAPTURE_TEXT.partial;
   }
   if (!shot && !text)
     return {
       ok: false,
       reason: 'nothing_to_attach',
-      message: `Nothing could be captured from ${win.appName || 'this window'}: ${textNote ?? 'no image and no text.'}`,
+      message: win.appName
+        ? CAPTURE_TEXT.nothingFrom({
+            app: win.appName,
+            why: textNote ?? CAPTURE_TEXT.noImageNoText,
+          })
+        : CAPTURE_TEXT.nothingFromWindow({ why: textNote ?? CAPTURE_TEXT.noImageNoText }),
     };
   return {
     ok: true,
@@ -228,11 +236,9 @@ export function draftAttachments(
 
 /** Text providers for systems the shell cannot read yet: says so in the attachment. */
 export function noTextReason(platform: string): string {
-  if (platform === 'darwin')
-    return 'Reading window text is not available on macOS yet, so only the image is attached.';
-  if (platform === 'win32')
-    return 'Reading window text is not available on Windows yet, so only the image is attached.';
-  return 'This desktop does not offer window text (its accessibility service is off), so only the image is attached.';
+  if (platform === 'darwin') return CAPTURE_TEXT.noTextMac;
+  if (platform === 'win32') return CAPTURE_TEXT.noTextWindows;
+  return CAPTURE_TEXT.noTextLinux;
 }
 
 /**

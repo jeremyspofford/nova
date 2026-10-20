@@ -5,7 +5,7 @@ import { Icon, StatusChip, VisuallyHidden } from '@nova/ui';
 import { followLink } from '../work/nav.tsx';
 import { AgentAvatar } from './AgentAvatar.tsx';
 import { sortAgents, useAgentList } from './AgentList.tsx';
-import { agentPath, agentStateBadge } from './format.ts';
+import { AGENTS_TEXT, agentPath, agentStateBadge } from './format.ts';
 import './agents.css';
 
 /** At most this many agents show; the Agents list has the rest. */
@@ -23,7 +23,7 @@ export function SidebarAgents({
   if (!agents?.length) return null;
   const shown = sortAgents(agents).slice(0, SIDEBAR_AGENTS);
   return (
-    <ul className="threads sidebar-agents" aria-label="Agents">
+    <ul className="threads sidebar-agents" aria-label={AGENTS_TEXT.agents}>
       {shown.map((a) => {
         const selected = a.id === selectedId;
         const badge = agentStateBadge(a);
@@ -45,7 +45,7 @@ export function SidebarAgents({
                   <span className="thread-mark" title={badge.text}>
                     <Icon name={badge.icon} />
                   </span>
-                  <VisuallyHidden>, {badge.text.toLowerCase()}</VisuallyHidden>
+                  <VisuallyHidden>{badge.after}</VisuallyHidden>
                 </>
               ) : null}
               {a.derived.status !== 'ready' ? (

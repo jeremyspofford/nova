@@ -61,7 +61,10 @@ import { appPath, windowMayShow } from '../routes.ts';
 import { RequestHold } from '../hold.ts';
 import { runEventLoop, type HubEvent } from '../sse.ts';
 import { parseAccelerator, registerShortcuts, shortcutProblems } from '../shortcuts.ts';
-import { statusItems, statusMenuLabel, statusSummary } from '../status.ts';
+import { quickRows, statusItems, statusMenuLabel, statusSummary } from '../status.ts';
+import { getLocale, loadLocale, localeDirection, setCatalogLoader, setLocale } from '@nova/i18n';
+import { CATALOG_DIR, catalogDirLoader, resolveDesktopLocale } from '../locale.ts';
+import { MENU_TEXT, PAGE_TEXT, SHELL_TEXT, draftNotes, pageText } from '../text.ts';
 import {
   currentThread,
   lastUsed,
@@ -87,12 +90,12 @@ const DRAFT_TTL_MS = 15 * 60_000;
 
 type LocalKind = 'connect' | 'quick' | 'attach';
 
+// Titles come from SHELL_TEXT.windows when a window opens (and follow the language after).
 const LOCAL_WINDOWS: Record<LocalKind, Electron.BrowserWindowConstructorOptions> = {
-  connect: { width: 640, height: 780, title: 'Connect to your Hub' },
+  connect: { width: 640, height: 780 },
   quick: {
     width: 560,
     height: 540,
-    title: 'Quick chat',
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -100,7 +103,7 @@ const LOCAL_WINDOWS: Record<LocalKind, Electron.BrowserWindowConstructorOptions>
     alwaysOnTop: true,
     skipTaskbar: true,
   },
-  attach: { width: 780, height: 860, title: 'Attach window' },
+  attach: { width: 780, height: 860 },
 };
 
 interface ConnectPageState {
@@ -114,10 +117,10 @@ type Who = 'hub' | LocalKind[];
 
 function messageOf(err: unknown): string {
   if (err instanceof HubError) {
-    if (err.status === 401) return 'Sign in to Nova first: open Nova and sign in.';
+    if (err.status === 401) return SHELL_TEXT.signInFirst;
     return err.message;
   }
-  if (err && typeof err === 'object' && 'issues' in err) return 'That request was not valid.';
+  if (err && typeof err === 'object' && 'issues' in err) return SHELL_TEXT.invalidRequest;
   return errorText(err);
 }
 
@@ -163,6 +166,8 @@ export class Shell {
       }),
   });
   #localChats = 0;
+  /** The Hub's `appearance.locale` while it can be read (FR-016); null follows the OS. */
+  #hubLocale: string | null = null;
   // Requests to a Hub not verified yet wait here (docs/21 §9): released once it passes, failed
   // when the check fails, after 8 s, or beyond 64 waiting.
   readonly #hold = new RequestHold({
@@ -196,6 +201,8 @@ export class Shell {
   // ---- start and stop --------------------------------------------------------------------------
 
   async start(argv: readonly string[]): Promise<void> {
+    setCatalogLoader(catalogDirLoader(CATALOG_DIR));
+    await this.#applyLocale();
     hardenLocalSession(session.defaultSession, RENDERER_URL);
     this.#hubSession = session.fromPartition(HUB_PARTITION);
     hardenHubSession(this.#hubSession, {
@@ -347,7 +354,7 @@ export class Shell {
         const current = this.#hub;
         // Said once per problem, not once per refused connection.
         if (!res.ok && res.message !== this.#trustProblem)
-          this.#notify('Nova did not trust the Hub', res.message);
+          this.#notify(SHELL_TEXT.distrust, res.message);
         this.#trustProblem = res.ok ? null : res.message;
         if (!res.ok || !current || res.origin !== current.origin) return null;
         current.trust = res.trust;
@@ -565,6 +572,7 @@ export class Shell {
     }
     const win = new BrowserWindow({
       ...LOCAL_WINDOWS[kind],
+      title: SHELL_TEXT.windows[kind],
       show: false,
       icon: this.#icon(128),
       autoHideMenuBar: true,
@@ -644,10 +652,7 @@ export class Shell {
   async attachWindow(from: 'shortcut' | 'tray' | 'overlay'): Promise<void> {
     if (!this.#hub) return this.showConnect({});
     if (from === 'shortcut' && BrowserWindow.getFocusedWindow()) {
-      this.#notify(
-        'Attach window',
-        'A Nova window is in front. Bring the window you want to attach to the front, then press the shortcut again.',
-      );
+      this.#notify(SHELL_TEXT.attachWindow, SHELL_TEXT.novaInFront);
       return;
     }
     if (from === 'overlay') this.#local.get('quick')?.hide();
@@ -662,7 +667,7 @@ export class Shell {
       ...(this.#redaction ? { redact: this.#redaction.redact } : {}),
     });
     if (!res.ok) {
-      this.#notify('Attach window', res.message);
+      this.#notify(SHELL_TEXT.attachWindow, res.message);
       return;
     }
     this.#purgeDrafts();
@@ -690,7 +695,10 @@ export class Shell {
     if (!client) return;
     try {
       this.#status = statusItems(await client.statusSources());
+      const was = this.#signedIn;
       this.#signedIn = true;
+      // Signed in now: the Hub's language setting can be read.
+      if (!was) void this.#syncHubLocale();
     } catch (err) {
       if (err instanceof HubError && err.status === 401) {
         this.#signedIn = false;
@@ -710,7 +718,57 @@ export class Shell {
       status: this.#status,
       currentThreadId: currentThread(this.#infos()),
       problems: shortcutProblems(this.#shortcuts),
+      // Each status row's words, in the shell's language (FR-016).
+      rows: quickRows(this.#status),
     };
+  }
+
+  // ---- language (FR-016) ---------------------------------------------------------------------------
+
+  /** The Hub's language setting, read again (sign-in, `settings.changed`). */
+  async #syncHubLocale(): Promise<void> {
+    const client = this.#client;
+    if (!client) return;
+    try {
+      this.#hubLocale = await client.localeSetting();
+    } catch (err) {
+      log('the language setting did not load', err);
+      return;
+    }
+    await this.#applyLocale();
+  }
+
+  #systemLanguages(): string[] {
+    try {
+      const list = app.getPreferredSystemLanguages();
+      if (list.length) return list;
+    } catch {
+      // older platforms: the app locale below
+    }
+    return [app.getLocale()];
+  }
+
+  /** Switch to the locale the Hub setting or the OS asks for; menus, tray and pages follow. */
+  async #applyLocale(): Promise<void> {
+    const tag = resolveDesktopLocale(this.#hubLocale, this.#systemLanguages());
+    if (tag === getLocale()) return;
+    await loadLocale(tag).catch((err: unknown) => log('the translations did not load', err));
+    setLocale(tag);
+    if (!this.#started) return;
+    this.#buildAppMenu();
+    this.#updateTray();
+    for (const [kind, win] of this.#local) {
+      if (win.isDestroyed()) continue;
+      win.setTitle(SHELL_TEXT.windows[kind]);
+      win.webContents.send('shell.text', this.#pageText(kind));
+    }
+    const quick = this.#local.get('quick');
+    if (quick && !quick.isDestroyed()) quick.webContents.send('quick.status', this.#quickState());
+  }
+
+  #pageText(kind: LocalKind) {
+    const locale = getLocale();
+    return { ok: true as const, lang: locale, dir: localeDirection(locale), text: pageText(kind) };
   }
 
   #startEvents(): void {
@@ -751,6 +809,7 @@ export class Shell {
       });
     }
     if (changesStatus(e)) this.#scheduleStatus();
+    if (e.name === 'settings.changed') void this.#syncHubLocale();
   }
 
   #notify(title: string, body: string, path?: string): void {
@@ -804,10 +863,10 @@ export class Shell {
     if (rows.length === 0)
       rows.push({
         label: !this.#hub
-          ? 'Not connected to a Hub'
+          ? MENU_TEXT.notConnected
           : this.#signedIn
-            ? 'Nothing waiting'
-            : 'Sign in to see your work',
+            ? MENU_TEXT.nothingWaiting
+            : MENU_TEXT.signInToSee,
         enabled: false,
       });
     const problems: MenuItemConstructorOptions[] = shortcutProblems(this.#shortcuts).map((p) => ({
@@ -816,15 +875,15 @@ export class Shell {
     }));
     tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: 'Quick chat', click: () => this.toggleQuick() },
-        { label: 'New task', click: () => this.newTask() },
-        { label: 'Attach window', click: () => void this.attachWindow('tray') },
+        { label: MENU_TEXT.quickChat, click: () => this.toggleQuick() },
+        { label: MENU_TEXT.newTask, click: () => this.newTask() },
+        { label: MENU_TEXT.attachWindow, click: () => void this.attachWindow('tray') },
         { type: 'separator' },
         ...rows,
         { type: 'separator' },
         ...(problems.length ? [...problems, { type: 'separator' as const }] : []),
-        { label: 'Open Nova', click: () => this.openHome() },
-        { label: 'Quit Nova', click: () => this.quit() },
+        { label: MENU_TEXT.openNova, click: () => this.openHome() },
+        { label: MENU_TEXT.quitNova, click: () => this.quit() },
       ]),
     );
   }
@@ -839,15 +898,19 @@ export class Shell {
     const template: MenuItemConstructorOptions[] = [
       ...(mac ? [{ role: 'appMenu' as const }] : []),
       {
-        label: mac ? 'File' : 'Nova',
+        label: mac ? MENU_TEXT.file : 'Nova',
         submenu: [
-          { id: 'quick-chat', label: 'Quick chat', click: () => this.toggleQuick() },
-          { id: 'new-task', label: 'New task', click: () => this.newTask() },
-          { id: 'new-window', label: 'New window', click: () => this.openDetached(current()) },
+          { id: 'quick-chat', label: MENU_TEXT.quickChat, click: () => this.toggleQuick() },
+          { id: 'new-task', label: MENU_TEXT.newTask, click: () => this.newTask() },
+          {
+            id: 'new-window',
+            label: MENU_TEXT.newWindow,
+            click: () => this.openDetached(current()),
+          },
           { type: 'separator' },
           {
             id: 'change-hub',
-            label: 'Change Hub…',
+            label: MENU_TEXT.changeHub,
             click: () =>
               this.showConnect({
                 url: this.#config.hub?.url ?? '',
@@ -856,7 +919,9 @@ export class Shell {
               }),
           },
           { type: 'separator' },
-          mac ? { role: 'close' } : { id: 'quit', label: 'Quit Nova', click: () => this.quit() },
+          mac
+            ? { role: 'close' }
+            : { id: 'quit', label: MENU_TEXT.quitNova, click: () => this.quit() },
         ],
       },
       { role: 'editMenu' },
@@ -909,7 +974,7 @@ export class Shell {
     fn: (payload: unknown, event: IpcMainInvokeEvent) => unknown,
   ): void {
     ipcMain.handle(channel, async (event, payload: unknown) => {
-      if (!this.#allowed(event, who)) return { ok: false, message: 'Not allowed from this page.' };
+      if (!this.#allowed(event, who)) return { ok: false, message: SHELL_TEXT.notAllowed };
       try {
         return await fn(payload, event);
       } catch (err) {
@@ -919,17 +984,27 @@ export class Shell {
   }
 
   #requireClient(): HubClient {
-    if (!this.#client) throw new Error('Not connected to a Hub.');
+    if (!this.#client) throw new Error(SHELL_TEXT.notConnected);
     return this.#client;
   }
 
   #registerIpc(): void {
+    // Every page's words in the shell's language, with `lang` and `dir` (FR-016).
+    this.#handle('shell.text', ['connect', 'quick', 'attach'], (_payload, event) => {
+      const kind = [...this.#local].find(([, w]) => w.webContents === event.sender)?.[0];
+      return kind ? this.#pageText(kind) : { ok: false, message: SHELL_TEXT.notAllowed };
+    });
+
     // The first-run page.
-    this.#handle('shell.connect.state', ['connect'], () => ({
-      ok: true,
-      ...this.#connectState,
-      current: this.#config.hub?.url ?? null,
-    }));
+    this.#handle('shell.connect.state', ['connect'], () => {
+      const current = this.#config.hub?.url ?? null;
+      return {
+        ok: true,
+        ...this.#connectState,
+        current,
+        currentText: current ? PAGE_TEXT.connect.usesHub({ url: current }) : null,
+      };
+    });
     this.#handle('shell.connect', ['connect'], async (payload) => {
       const req = shellConnectSchema.parse(payload);
       const target = parseConnectInput(req);
@@ -942,6 +1017,10 @@ export class Shell {
           reason: 'confirm_replace',
           replace: replacing,
           message: replacementMessage(replacing),
+          confirmLabel: PAGE_TEXT.connect.replaceWith({
+            current: replacing.current,
+            next: replacing.next,
+          }),
         };
       const res = await connectHub(target);
       if (!res.ok) {
@@ -968,7 +1047,7 @@ export class Shell {
     });
     this.#handle('quick.open', ['quick', 'attach'], (payload) => {
       const path = appPath(shellOpenWindowSchema.parse(payload).path);
-      if (!path) return { ok: false, message: 'That is not a place in Nova.' };
+      if (!path) return { ok: false, message: SHELL_TEXT.notAPlace };
       this.openLink(path);
       return { ok: true };
     });
@@ -989,13 +1068,17 @@ export class Shell {
     this.#handle('window.capture.draft', ['attach'], (payload) => {
       const { draftId } = shellDraftRefSchema.parse(payload);
       const d = this.#drafts.get(draftId);
-      if (!d) return { ok: false, message: 'This capture has expired. Capture the window again.' };
-      return { ok: true, draft: draftView(d.draft, currentThread(this.#infos())) };
+      if (!d) return { ok: false, message: SHELL_TEXT.captureExpired };
+      return {
+        ok: true,
+        draft: draftView(d.draft, currentThread(this.#infos())),
+        notes: draftNotes(d.draft),
+      };
     });
     this.#handle('window.capture.attach', ['attach'], async (payload) => {
       const req = shellCaptureAttachSchema.parse(payload);
       const d = this.#drafts.get(req.draftId);
-      if (!d) return { ok: false, message: 'This capture has expired. Capture the window again.' };
+      if (!d) return { ok: false, message: SHELL_TEXT.captureExpired };
       const sent = await sendCapture(
         this.#requireClient(),
         d.draft,
@@ -1018,7 +1101,7 @@ export class Shell {
     // The bridge for the Hub's web UI (window.novaShell).
     this.#handle('shell.openWindow', 'hub', (payload) => {
       const path = appPath(shellOpenWindowSchema.parse(payload).path);
-      if (!path) return { ok: false, message: 'That is not a place in Nova.' };
+      if (!path) return { ok: false, message: SHELL_TEXT.notAPlace };
       this.openDetached(path);
       return { ok: true };
     });
@@ -1033,7 +1116,7 @@ export class Shell {
     this.#handle('localRuntime.chat', 'hub', async (payload, event) => {
       const req = shellLocalChatSchema.parse(payload);
       if (this.#localChats >= 4)
-        return { ok: false, reason: 'failed', message: 'Four local answers are already running.' };
+        return { ok: false, reason: 'failed', message: SHELL_TEXT.tooManyLocal };
       const wc = event.sender;
       const ctl = new AbortController();
       // The page that asked is gone: stop the model.

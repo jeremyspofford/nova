@@ -7,6 +7,7 @@
 // listed (by name and push service only: the endpoint is a capability the Hub never returns), each
 // with Remove, which asks first.
 import { useCallback, useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { PushDetailLevel, PushSubscriptionView, PushTestView } from '@nova/shared';
 import { Button, Icon, RadioGroup, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -32,9 +33,11 @@ import {
   type PushSubscriptionLike,
   type PushSupport,
 } from './browser.ts';
+import { PUSH_TEXT as S } from './strings.ts';
 import './push.css';
 
-export const DETAIL_TEXT: Record<PushDetailLevel, { label: string; description: string }> = {
+/** How much a push may say (`push.detail`). */
+export const DETAIL_TEXT = defineMessages('push.detail', {
   none: {
     label: 'Nothing',
     description: 'Every notification says only “Nova”. Open it to see what happened.',
@@ -49,13 +52,9 @@ export const DETAIL_TEXT: Record<PushDetailLevel, { label: string; description: 
     description:
       'The notification’s title, such as the name of a run. Never message text, secrets or file contents.',
   },
-};
+});
 
-const STATUS_TEXT: Record<PushSubscriptionView['status'], string> = {
-  active: 'Working',
-  failing: 'Failing',
-  gone: 'Gone',
-};
+const DETAIL_LEVELS: PushDetailLevel[] = ['none', 'redacted', 'titles'];
 
 function hostOf(origin: string): string {
   try {
@@ -65,19 +64,15 @@ function hostOf(origin: string): string {
   }
 }
 
+/** What the push service said about a test, in the active locale (the detail is its own text). */
 function testText(r: PushTestView): { ok: boolean; text: string } {
   const one = r.results[0];
-  if (!one) return { ok: false, text: 'There was nothing to send to.' };
-  if (one.status === 'sent')
-    return { ok: true, text: 'Sent. It should appear on this device in a few seconds.' };
-  if (one.status === 'gone')
-    return {
-      ok: false,
-      text: 'The push service says this device’s subscription is gone. Turn notifications on again.',
-    };
+  if (!one) return { ok: false, text: S.test.nobody };
+  if (one.status === 'sent') return { ok: true, text: S.test.sent };
+  if (one.status === 'gone') return { ok: false, text: S.test.gone };
   return {
     ok: false,
-    text: `The push service did not take it${one.detail ? `: ${one.detail}` : ''}.`,
+    text: one.detail ? S.test.refusedDetail({ detail: one.detail }) : S.test.refused,
   };
 }
 
@@ -112,7 +107,7 @@ export function PushSection({
   const [mineId, setMineId] = useState<string | null>(null);
   const [busy, setBusy] = useState<'on' | 'off' | 'test' | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const [tested, setTested] = useState<{ ok: boolean; text: string } | null>(null);
+  const [tested, setTested] = useState<PushTestView | null>(null);
   const [removing, setRemoving] = useState<PushSubscriptionView | null>(null);
 
   const enabled = settings.get('push.enabled');
@@ -170,11 +165,7 @@ export function PushSection({
       const perm = permission === 'granted' ? permission : await env.requestPermission();
       setPermission(perm);
       if (perm !== 'granted') {
-        setFailure(
-          perm === 'denied'
-            ? 'Notifications are blocked for this site. Allow them in the browser’s site settings, then reload.'
-            : 'Nova needs your permission to show notifications on this device.',
-        );
+        setFailure(perm === 'denied' ? S.permissionBlocked : S.permissionNeeded);
         return;
       }
       const pm = support.registration.pushManager;
@@ -194,18 +185,18 @@ export function PushSection({
         current,
         detectPlatform(navigator.userAgent, navigator.maxTouchPoints || 0).name,
       );
-      if (!body) throw new Error('The browser gave a subscription without keys.');
+      if (!body) throw new Error(S.noKeys);
       const view = await api.subscribePush(body);
       made = null;
       await rememberMine(env, view.id, current.endpoint);
       setSub(current);
       setMineId(view.id);
       upsert(view);
-      announce('Notifications are on for this device.');
+      announce(S.turnedOn);
     } catch (err) {
       // A subscription the Hub did not take is not left behind in the browser.
       if (made) await made.unsubscribe().catch(() => false);
-      setFailure(`Could not turn on notifications: ${errorMessage(err)}`);
+      setFailure(S.turnOnError({ error: errorMessage(err) }));
     } finally {
       setBusy(null);
     }
@@ -225,7 +216,7 @@ export function PushSection({
         drop(mineId);
       }
       setMineId(null);
-      announce('Notifications are off for this device.');
+      announce(S.turnedOff);
     } finally {
       setBusy(null);
     }
@@ -239,10 +230,10 @@ export function PushSection({
     try {
       const r = await api.testPush(mineId);
       // The result line is a status region: it announces itself.
-      setTested(testText(r));
+      setTested(r);
       if (r.results[0]?.status === 'gone') drop(mineId);
     } catch (err) {
-      setFailure(`Could not send a test: ${errorMessage(err)}`);
+      setFailure(S.testError({ error: errorMessage(err) }));
     } finally {
       setBusy(null);
     }
@@ -250,20 +241,18 @@ export function PushSection({
 
   const saved = (p: Promise<void>) =>
     void p.catch((err: unknown) =>
-      toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' }),
+      toast.show(S.saveError({ error: errorMessage(err) }), { tone: 'error' }),
     );
 
   const others = hub?.items ?? [];
+  const testResult = tested ? testText(tested) : null;
 
   return (
     <section className="settings-section push-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>Notifications on this device</h3>
-      <p className="muted ws-flush">
-        Push notifications reach this device even when Nova is closed, for the categories turned on
-        above. Opening one goes to the run, the Code session or the approval in its conversation.
-      </p>
+      <h3 id={headingId}>{S.heading}</h3>
+      <p className="muted ws-flush">{S.intro}</p>
 
-      {support === null ? <Spinner label="Checking this browser" /> : null}
+      {support === null ? <Spinner label={S.checking} /> : null}
       {support && !support.ok ? (
         <p className="push-state" role="status">
           <Icon name="alert" /> {SUPPORT_TEXT[support.reason]}
@@ -272,42 +261,37 @@ export function PushSection({
 
       {loadError ? (
         <div role="alert" className="ws-error">
-          <p>{errorMessage(loadError, 'Could not load push notifications.')}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <p>{errorMessage(loadError, S.loadError)}</p>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{S.retry}</Button>
         </div>
       ) : null}
 
-      {support?.ok && !hub && !loadError ? <Spinner label="Loading push notifications" /> : null}
+      {support?.ok && !hub && !loadError ? <Spinner label={S.loading} /> : null}
 
       {support?.ok && hub ? (
         <>
           <p className="push-state" role="status" data-on={on || undefined}>
             <Icon name={on ? 'check' : 'bell'} />{' '}
-            {on
-              ? 'On for this device.'
-              : permission === 'denied'
-                ? 'Blocked on this device. Allow notifications in the browser’s site settings, then reload.'
-                : 'Off for this device.'}
+            {on ? S.stateOn : permission === 'denied' ? S.stateBlocked : S.stateOff}
           </p>
           {!enabled.value && !hubSettingsNote ? (
             <p className="ws-warning">
-              <Icon name="alert" /> This Hub sends no push notifications now. Turn on “Send push
-              notifications” under For every device.
+              <Icon name="alert" /> {S.hubOff}
             </p>
           ) : null}
           <div className="row push-actions">
             {on ? (
               <>
                 <Button onClick={() => void test()} disabled={busy !== null}>
-                  {busy === 'test' ? <Spinner /> : <Icon name="bell" />} Send a test
+                  {busy === 'test' ? <Spinner /> : <Icon name="bell" />} {S.sendTest}
                 </Button>
                 <Button variant="ghost" onClick={() => void turnOff()} disabled={busy !== null}>
-                  {busy === 'off' ? <Spinner /> : null} Turn off
+                  {busy === 'off' ? <Spinner /> : null} {S.turnOff}
                 </Button>
               </>
             ) : permission === 'denied' ? null : (
               <Button variant="primary" onClick={() => void turnOn()} disabled={busy !== null}>
-                {busy === 'on' ? <Spinner /> : null} Turn on for this device
+                {busy === 'on' ? <Spinner /> : null} {S.turnOn}
               </Button>
             )}
           </div>
@@ -316,9 +300,9 @@ export function PushSection({
               {failure}
             </p>
           ) : null}
-          {tested ? (
-            <p role="status" className={tested.ok ? 'push-ok' : 'nv-field-error'}>
-              {tested.text}
+          {testResult ? (
+            <p role="status" className={testResult.ok ? 'push-ok' : 'nv-field-error'}>
+              {testResult.text}
             </p>
           ) : null}
         </>
@@ -326,37 +310,38 @@ export function PushSection({
 
       {hub ? (
         <div className="stack push-devices">
-          <h4 className="push-subhead">Devices that get notifications</h4>
+          <h4 className="push-subhead">{S.devices}</h4>
           {others.length === 0 ? (
-            <p className="muted ws-flush">No device gets push notifications yet.</p>
+            <p className="muted ws-flush">{S.noDevices}</p>
           ) : (
-            <ul className="ws-list" aria-label="Devices that get notifications">
+            <ul className="ws-list" aria-label={S.devices}>
               {others.map((s) => (
                 <li key={s.id} className="ws-list-row push-row">
                   <div className="push-row-main">
                     <span className="push-row-name">
-                      {s.label ?? 'A browser'}
-                      {s.id === mineId ? <span className="ws-badge">This device</span> : null}
+                      <span dir="auto">{s.label ?? S.aBrowser}</span>
+                      {s.id === mineId ? <span className="ws-badge">{S.thisDevice}</span> : null}
                     </span>
                     <span className="muted ws-row-meta">
-                      <span>Through {hostOf(s.endpointOrigin)}</span>
+                      <span>{S.through({ host: hostOf(s.endpointOrigin) })}</span>
                       <span data-status={s.status}>
-                        {STATUS_TEXT[s.status]}
-                        {s.status !== 'active' && s.lastError ? `: ${s.lastError}` : ''}
+                        {s.status !== 'active' && s.lastError
+                          ? S.statusError({ status: s.status, error: s.lastError })
+                          : S.status[s.status]}
                       </span>
                       <span>
                         {s.lastSuccessAt
-                          ? `Last delivered ${formatWhen(s.lastSuccessAt)}`
-                          : 'Nothing delivered yet'}
+                          ? S.lastDelivered({ when: formatWhen(s.lastSuccessAt) })
+                          : S.nothingDelivered}
                       </span>
                     </span>
                   </div>
                   <Button
                     variant="ghost"
                     onClick={() => setRemoving(s)}
-                    aria-label={`Remove ${s.label ?? 'this browser'}`}
+                    aria-label={s.label ? S.removeNamed({ name: s.label }) : S.removeThisBrowser}
                   >
-                    Remove
+                    {S.remove}
                   </Button>
                 </li>
               ))}
@@ -365,26 +350,26 @@ export function PushSection({
         </div>
       ) : null}
 
-      <h4 className="push-subhead">For every device</h4>
+      <h4 className="push-subhead">{S.forEvery}</h4>
       {hubSettingsNote ? (
         <p className="muted ws-flush">{hubSettingsNote}</p>
       ) : (
         <>
           <SwitchField
-            label="Send push notifications"
-            description="From this Hub to every device above. Off: no device gets pushes, and Nova shows notifications only while it is open."
+            label={S.sendPush}
+            description={S.sendPushDescription}
             checked={enabled.value}
             locked={enabled.locked}
             onChange={(v) => saved(settings.set('push.enabled', v))}
           />
           <RadioGroup
-            legend="What a notification says"
+            legend={S.whatSays}
             name="push-detail"
             value={detail.value}
             locked={detail.locked}
             onChange={(v) => saved(settings.set('push.detail', v as PushDetailLevel))}
-            hint="Notifications to the Nova phone app go through the Relay and never say more than the kind and where."
-            options={(['none', 'redacted', 'titles'] as const).map((k) => ({
+            hint={S.detailHint}
+            options={DETAIL_LEVELS.map((k) => ({
               value: k,
               label: DETAIL_TEXT[k].label,
               description: DETAIL_TEXT[k].description,
@@ -395,9 +380,9 @@ export function PushSection({
 
       <ConfirmDialog
         open={removing !== null}
-        title={`Stop notifications on ${removing?.label ?? 'this browser'}?`}
-        description="It stops getting push notifications from this Hub. They can be turned on again on that device."
-        confirmLabel="Remove"
+        title={removing?.label ? S.stopTitle({ name: removing.label }) : S.stopTitleThis}
+        description={S.stopBody}
+        confirmLabel={S.remove}
         danger
         onClose={() => setRemoving(null)}
         onConfirm={async () => {
@@ -412,7 +397,7 @@ export function PushSection({
             setMineId(null);
           }
           setRemoving(null);
-          announce(`${target.label ?? 'The browser'} no longer gets notifications.`);
+          announce(target.label ? S.stopped({ name: target.label }) : S.stoppedBrowser);
         }}
       />
     </section>

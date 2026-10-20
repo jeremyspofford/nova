@@ -6,6 +6,7 @@
 import { useId, useState } from 'react';
 import type { AddDeviceRequestView } from '@nova/shared';
 import { Button, Spinner, TextField, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { ApiError } from '../api.ts';
 import { formatWhen, useInterval } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
@@ -20,12 +21,34 @@ import {
 } from './format.ts';
 import { LoadError, useLoad } from './parts.tsx';
 
+export const REQUESTS_TEXT = defineMessages('devices.requests', {
+  asRole: 'as {role}',
+  wantsToJoin: '{name} wants to join',
+  scopes: 'Scopes: {scopes}',
+  throughRelay: 'through the Relay',
+  expired: 'This request has expired. Add the device again with a new code.',
+  sixDigits: 'Type the six digits the device shows.',
+  approveFailed: 'Could not approve the device.',
+  denyFailed: 'Could not deny the device.',
+  codeLabel: 'Code shown on the device',
+  codeHint:
+    'Type the six digits the device shows. Approve only if it is the device you are adding.',
+  approve: 'Approve',
+  deny: 'Deny',
+  added: '{name} is added.',
+  notAdded: '{name} was not added.',
+  requestExpired: 'The request from {name} expired.',
+  loadFailed: 'Could not load the requests to join.',
+  waiting: 'Waiting for approval',
+});
+const S = REQUESTS_TEXT;
+
 /** "Web browser · iOS · as Client · 2 min ago". */
 export function requestMeta(r: AddDeviceRequestView, now = Date.now()): string {
   return [
     JOIN_KIND_LABEL[r.kind],
     r.platform,
-    `as ${ROLE_LABEL[r.role] ?? r.role}`,
+    S.asRole({ role: ROLE_LABEL[r.role] ?? r.role }),
     formatWhen(r.createdAt, now),
   ].join(' · ');
 }
@@ -67,7 +90,7 @@ export function AddRequestCard({
   const approve = async () => {
     const digits = code.replace(/\s/g, '');
     if (!/^\d{6}$/.test(digits)) {
-      setError('Type the six digits the device shows.');
+      setError(S.sixDigits);
       return;
     }
     setBusy('approve');
@@ -75,7 +98,7 @@ export function AddRequestCard({
     try {
       onDecided(await api.approveAddRequest(request.id, digits));
     } catch (err) {
-      setError(deviceErrorMessage(err, 'Could not approve the device.'));
+      setError(deviceErrorMessage(err, S.approveFailed));
       setBusy(null);
       settle(err);
     }
@@ -87,7 +110,7 @@ export function AddRequestCard({
     try {
       onDecided(await api.denyAddRequest(request.id));
     } catch (err) {
-      setError(deviceErrorMessage(err, 'Could not deny the device.'));
+      setError(deviceErrorMessage(err, S.denyFailed));
       setBusy(null);
       settle(err);
     }
@@ -95,17 +118,17 @@ export function AddRequestCard({
 
   return (
     <section className="ws-card devices-join-request" aria-labelledby={`${id}-h`}>
-      <H id={`${id}-h`} className="devices-join-title">
-        {request.name} wants to join
+      <H id={`${id}-h`} className="devices-join-title" dir="auto">
+        {S.wantsToJoin({ name: request.name })}
       </H>
       <p className="muted ws-flush ws-card-meta">{requestMeta(request, now)}</p>
       <p className="muted ws-flush ws-card-meta">
-        Scopes: {scopesText(request.scopes)}
-        {request.via === 'relay' ? ' · through the Relay' : ''}
+        {S.scopes({ scopes: scopesText(request.scopes) })}
+        {request.via === 'relay' ? ` · ${S.throughRelay}` : ''}
       </p>
       {expired ? (
         <p role="alert" className="nv-field-error ws-flush">
-          This request has expired. Add the device again with a new code.
+          {S.expired}
         </p>
       ) : (
         <form
@@ -116,8 +139,8 @@ export function AddRequestCard({
           }}
         >
           <TextField
-            label="Code shown on the device"
-            hint="Type the six digits the device shows. Approve only if it is the device you are adding."
+            label={S.codeLabel}
+            hint={S.codeHint}
             value={code}
             inputMode="numeric"
             autoComplete="off"
@@ -128,10 +151,10 @@ export function AddRequestCard({
           />
           <div className="row">
             <Button type="submit" variant="primary" disabled={busy !== null}>
-              {busy === 'approve' ? <Spinner /> : null} Approve
+              {busy === 'approve' ? <Spinner /> : null} {S.approve}
             </Button>
             <Button onClick={() => void deny()} disabled={busy !== null}>
-              {busy === 'deny' ? <Spinner /> : null} Deny
+              {busy === 'deny' ? <Spinner /> : null} {S.deny}
             </Button>
           </div>
         </form>
@@ -150,27 +173,21 @@ export function PendingRequests({ onChange }: { onChange: () => void }) {
 
   const decided = (r: AddDeviceRequestView) => {
     list.setData((cur) => cur?.filter((x) => x.id !== r.id) ?? null);
-    if (r.status === 'approved') toast.show(`${r.name} is added.`, { tone: 'success' });
-    else if (r.status === 'denied') toast.show(`${r.name} was not added.`, { tone: 'info' });
-    else toast.show(`The request from ${r.name} expired.`, { tone: 'info' });
+    if (r.status === 'approved') toast.show(S.added({ name: r.name }), { tone: 'success' });
+    else if (r.status === 'denied') toast.show(S.notAdded({ name: r.name }), { tone: 'info' });
+    else toast.show(S.requestExpired({ name: r.name }), { tone: 'info' });
     onChange();
     reload();
   };
 
   if (list.error && !list.data)
-    return (
-      <LoadError
-        error={list.error}
-        fallback="Could not load the requests to join."
-        onRetry={list.reload}
-      />
-    );
+    return <LoadError error={list.error} fallback={S.loadFailed} onRetry={list.reload} />;
   const items = list.data ?? [];
   if (!items.length) return null;
   return (
     <section className="ws-section devices-flat" aria-labelledby="devices-waiting-h">
-      <h2 id="devices-waiting-h">Waiting for approval</h2>
-      <ul className="ws-list" aria-label="Waiting for approval">
+      <h2 id="devices-waiting-h">{S.waiting}</h2>
+      <ul className="ws-list" aria-label={S.waiting}>
         {items.map((r) => (
           <li key={r.id}>
             <AddRequestCard request={r} onDecided={decided} level={3} />

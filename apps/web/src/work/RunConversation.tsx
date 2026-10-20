@@ -2,6 +2,7 @@
 // so its messages, tool cards and approval cards render with the chat's own components, read-only.
 // The user steers the run through Redirect in the header, never by typing here.
 import { useId } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Icon, Spinner } from '@nova/ui';
 import { ApprovalCard } from '../chat/ApprovalCard.tsx';
 import { MessageItem, type CallApproval } from '../chat/MessageItem.tsx';
@@ -15,6 +16,16 @@ import { ToolAppsProvider } from '../chat/tool-apps.tsx';
 import { useThreadFeed } from '../chat/useThreadFeed.ts';
 import { useServices } from '../services.tsx';
 import { modelLabel, useModels } from '../stores.tsx';
+import { WORK_TEXT } from './format.ts';
+
+/** A run's thread. */
+export const CONVERSATION_TEXT = defineMessages('work.conversation', {
+  heading: 'Conversation',
+  loading: 'Loading the conversation',
+  loadFailed: 'Could not load the conversation.',
+  empty: 'Nothing has been said in this run yet.',
+  log: 'Run conversation',
+});
 
 export function RunConversation({
   threadId,
@@ -57,24 +68,25 @@ export function RunConversation({
     (a) => awaitsUser(a) && !(a.callId && shownCalls.has(a.callId)),
   );
   const live = liveCallsByMessage(state);
+  const S = CONVERSATION_TEXT;
 
   return (
     <section className="work-conversation" aria-labelledby={headingId}>
-      <h2 id={headingId}>Conversation</h2>
+      <h2 id={headingId}>{S.heading}</h2>
       {/* The feed starts without a thread view; it arrives with the first load. */}
       {state.status === 'loading' || (state.status === 'ready' && state.thread === null) ? (
         <p className="muted">
-          <Spinner label="Loading the conversation" /> Loading…
+          <Spinner label={S.loading} /> {WORK_TEXT.loading}
         </p>
       ) : state.status === 'error' ? (
         <p className="ws-error" role="alert">
-          <Icon name="alert" /> {state.loadError ?? 'Could not load the conversation.'}
+          <Icon name="alert" /> {state.loadError ?? S.loadFailed}
         </p>
       ) : state.messages.length === 0 ? (
-        <p className="muted">Nothing has been said in this run yet.</p>
+        <p className="muted">{S.empty}</p>
       ) : (
         <ToolAppsProvider>
-          <div className="work-log" role="log" aria-label="Run conversation">
+          <div className="work-log" role="log" aria-label={S.log}>
             {state.messages.map((m) => (
               <MessageItem
                 key={m.id}

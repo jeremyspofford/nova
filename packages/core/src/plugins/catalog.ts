@@ -18,10 +18,17 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
-import { unzipSync } from 'fflate';
 import { z } from 'zod';
 import { NovaError, uuidv7, type CatalogView } from '@nova/shared';
-import { realInside, resolveInside } from './paths.ts';
+import { readZip, type ZipLimits } from '../documents/zip.ts';
+import { PLUGIN_LIMITS, realInside, resolveInside } from './paths.ts';
+
+/** What a plugin archive may unpack to: the plugin limits (docs/08 §9). */
+const ARCHIVE_LIMITS: ZipLimits = {
+  maxEntries: PLUGIN_LIMITS.files,
+  maxEntryBytes: PLUGIN_LIMITS.bytes,
+  maxTotalBytes: PLUGIN_LIMITS.bytes,
+};
 
 export interface CatalogConfig {
   id: string;
@@ -528,21 +535,12 @@ export class PluginCatalogs {
     const parent = join(this.#opts.cacheDir, 'archives');
     const dir = join(parent, sha.slice(0, 32));
     if (!existsSync(dir)) {
-      let files: Record<string, Uint8Array>;
-      try {
-        files = unzipSync(bytes);
-      } catch {
-        throw new NovaError('validation', 'the plugin archive is not a valid zip file');
-      }
+      // Bounded before anything is inflated: the plugin limits (docs/08 §9).
+      const files = readZip(bytes, () => true, ARCHIVE_LIMITS);
       const tmp = join(parent, `.tmp-${uuidv7()}`);
       mkdirSync(tmp, { recursive: true, mode: 0o700 });
-      let total = 0;
       try {
-        for (const [name, data] of Object.entries(files)) {
-          if (name.endsWith('/')) continue;
-          total += data.byteLength;
-          if (total > 100 * 1024 * 1024)
-            throw new NovaError('validation', 'the plugin archive unpacks to more than 100 MB');
+        for (const [name, data] of files) {
           const to = resolveInside(tmp, name, 'archive entry');
           mkdirSync(join(to, '..'), { recursive: true, mode: 0o700 });
           writeFileSync(to, data, { mode: 0o600 });

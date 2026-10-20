@@ -11,11 +11,13 @@
 // denial, so they offer a plain "Deny" without a reason for an agent.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ApprovalDecisionKind, ApprovalView, DecideApprovalRequest } from '@nova/shared';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Button, Icon, Spinner, StatusChip } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
-import { HUB_ONLY_TEXT, approvalDevice } from '../firmware/format.ts';
+import { approvalDevice, hubOnlyText } from '../firmware/format.ts';
 import { useAnnounce, useServices } from '../services.tsx';
 import { followLink } from '../work/nav.tsx';
+import { rich } from './rich.tsx';
 import { awaitsUser, type ClientApproval } from './thread-state.ts';
 
 type Decision = Exclude<ApprovalDecisionKind, 'timeout'>;
@@ -32,16 +34,16 @@ const ORDER: readonly Decision[] = [
   'handoff',
 ];
 
-const BUTTON_TEXT: Record<Decision, string> = {
+const BUTTON_TEXT = defineMessages('chat.approvalButton', {
   allow_once: 'Allow once',
   allow_session: 'Allow for this session',
   allow_always: 'Always allow…',
   deny_continue: 'Deny and continue…',
   deny_stop: 'Deny and stop',
   handoff: 'Hand off',
-};
+}) satisfies Record<Decision, string>;
 
-export const DECISION_TEXT: Record<ApprovalDecisionKind, string> = {
+export const DECISION_TEXT = defineMessages('chat.approvalDecision', {
   allow_once: 'Allowed once',
   allow_session: 'Allowed for this session',
   allow_always: 'Always allowed',
@@ -49,19 +51,62 @@ export const DECISION_TEXT: Record<ApprovalDecisionKind, string> = {
   deny_stop: 'Denied and stopped',
   handoff: 'Handed off',
   timeout: 'Expired: nobody answered in time',
-};
+}) satisfies Record<ApprovalDecisionKind, string>;
 
-const TIER_TEXT: Record<ApprovalView['tier'], string> = {
-  pre_approvable: 'Pre-approvable',
-  confirm_at_action: 'Asked every time; cannot be pre-approved',
-  handoff_required: 'You need to do this step',
-};
-
-const RISK_TEXT: Record<NonNullable<ApprovalView['risk']>, string> = {
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-};
+export const APPROVAL_TEXT = defineMessages('chat.approval', {
+  tier: {
+    pre_approvable: 'Pre-approvable',
+    confirm_at_action: 'Asked every time; cannot be pre-approved',
+    handoff_required: 'You need to do this step',
+  },
+  risk: { low: 'Low', medium: 'Medium', high: 'High' },
+  expired: 'Expired',
+  expiresIn: 'Expires in {duration}',
+  handedOffDone: 'Handed off, marked done',
+  cancelled: 'Cancelled',
+  answered: 'Answered',
+  answeredElsewhere: 'Approval answered on another device: {outcome}.',
+  handoffAnnounce: 'Handed off. Do the step, then mark it done.',
+  decided: '{decision}.',
+  notSent: 'Your answer was not sent: {reason}',
+  markedDone: 'Marked done. The run continues.',
+  markDoneFailed: 'Could not mark it done: {reason}',
+  outcome: 'Approval: {outcome}',
+  elsewhere: '(answered on another device)',
+  yourStep: 'Your step',
+  doThisStep: 'You need to do this step',
+  needed: 'Approval needed',
+  action: 'Action',
+  where: 'Where',
+  onDevice: 'On {name}',
+  onADevice: 'On a device',
+  target: 'Target',
+  arguments: 'Arguments',
+  why: 'Why',
+  asked: 'Asked',
+  youAsked: 'You asked for this',
+  notYours:
+    'Not from your message. It came from a tool, page or file, which cannot authorize actions.',
+  tierLabel: 'Tier',
+  riskLabel: 'Risk',
+  rule: 'Rule',
+  toolDefault: 'Tool default',
+  handoffNote: 'Do this step yourself. When you finish, mark it done and the run continues.',
+  markDone: 'Mark done',
+  alwaysAllow: 'Always allow',
+  ruleToAdd: 'Rule to add',
+  ruleLine: 'Rule: commands starting with {pattern}',
+  matches: 'Matches:',
+  notMatches: 'Does not match:',
+  remembered: 'Remembered until you revoke it in Settings, Permissions.',
+  cancel: 'Cancel',
+  denyContinue: 'Deny and continue',
+  reason: 'Reason (optional)',
+  reasonHint: 'Returned to the agent as the tool result; the run continues.',
+  decision: 'Decision',
+  deny: 'Deny',
+  sending: 'Sending your answer',
+});
 
 /** A suggested scope as the decision body takes it (the label is only for the chooser). */
 export function toAlwaysScope(s: Scope): AlwaysScope {
@@ -83,19 +128,16 @@ export function patternText(pattern: (string | string[])[]): string {
 export function expiryText(expiresAt: string, now: number): string {
   const ms = Date.parse(expiresAt) - now;
   if (!Number.isFinite(ms)) return '';
-  if (ms <= 0) return 'Expired';
+  if (ms <= 0) return APPROVAL_TEXT.expired;
   const min = Math.ceil(ms / 60_000);
-  if (min < 60) return `Expires in ${min} min`;
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  return m ? `Expires in ${h} h ${m} min` : `Expires in ${h} h`;
+  return APPROVAL_TEXT.expiresIn({ duration: fmt.duration(min * 60_000) });
 }
 
 function outcomeText(a: ClientApproval): string {
-  if (a.handoffDone) return 'Handed off, marked done';
+  if (a.handoffDone) return APPROVAL_TEXT.handedOffDone;
   if (a.status === 'expired') return DECISION_TEXT.timeout;
-  if (a.status === 'cancelled') return 'Cancelled';
-  return a.decision ? DECISION_TEXT[a.decision] : 'Answered';
+  if (a.status === 'cancelled') return APPROVAL_TEXT.cancelled;
+  return a.decision ? DECISION_TEXT[a.decision] : APPROVAL_TEXT.answered;
 }
 
 function useNow(everyMs: number): number {
@@ -137,7 +179,7 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
   // Another client answered (FR-188): say so once, since the card's buttons just went away.
   const elsewhere = settled && !a.answeredHere && !busy && (taken || a.status === 'decided');
   useEffect(() => {
-    if (elsewhere) announce(`Approval answered on another device: ${outcome}.`);
+    if (elsewhere) announce(APPROVAL_TEXT.answeredElsewhere({ outcome }));
   }, [announce, elsewhere, outcome]);
 
   useEffect(() => {
@@ -171,8 +213,8 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
       setMode('choose');
       announce(
         decision === 'handoff'
-          ? 'Handed off. Do the step, then mark it done.'
-          : `${DECISION_TEXT[decision]}.`,
+          ? APPROVAL_TEXT.handoffAnnounce
+          : APPROVAL_TEXT.decided({ decision: DECISION_TEXT[decision] }),
       );
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -180,7 +222,7 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
         setTaken(true);
         api.getApproval(a.id).then(onChange, () => undefined);
       } else {
-        setError(`Your answer was not sent: ${errorMessage(err)}`);
+        setError(APPROVAL_TEXT.notSent({ reason: errorMessage(err) }));
       }
     } finally {
       setBusy(false);
@@ -194,12 +236,12 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
     try {
       const view = await api.handoffDone(a.id);
       onChange({ ...view, answeredHere: true, handoffDone: true });
-      announce('Marked done. The run continues.');
+      announce(APPROVAL_TEXT.markedDone);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         onChange({ ...a, status: 'decided', handoffDone: true });
       } else {
-        setError(`Could not mark it done: ${errorMessage(err)}`);
+        setError(APPROVAL_TEXT.markDoneFailed({ reason: errorMessage(err) }));
       }
     } finally {
       setBusy(false);
@@ -209,8 +251,8 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
   if (settled) {
     return (
       <p className="approval-outcome" data-outcome={a.decision ?? a.status}>
-        <Icon name="shield" /> Approval: {outcome}
-        {elsewhere ? <span className="muted"> (answered on another device)</span> : null}
+        <Icon name="shield" /> {APPROVAL_TEXT.outcome({ outcome })}
+        {elsewhere ? <span className="muted"> {APPROVAL_TEXT.elsewhere}</span> : null}
       </p>
     );
   }
@@ -226,10 +268,10 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
   // A device's own card: no run waits on it, so a denial needs no reason for an agent.
   const plainDeny = hubOnly || device !== null;
   const title = handingOff
-    ? 'Your step'
+    ? APPROVAL_TEXT.yourStep
     : a.tier === 'handoff_required'
-      ? 'You need to do this step'
-      : 'Approval needed';
+      ? APPROVAL_TEXT.doThisStep
+      : APPROVAL_TEXT.needed;
 
   return (
     <div
@@ -258,26 +300,35 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
       </div>
       <dl className="approval-facts">
         <div>
-          <dt>Action</dt>
-          <dd id={`${id}-action`}>{a.action}</dd>
+          <dt>{APPROVAL_TEXT.action}</dt>
+          <dd id={`${id}-action`} dir="auto">
+            {a.action}
+          </dd>
         </div>
         {device && devicePath ? (
           <div>
-            <dt>Where</dt>
+            <dt>{APPROVAL_TEXT.where}</dt>
             <dd>
               <a href={devicePath} onClick={(e) => followLink(e, devicePath)}>
-                On {device.name ?? 'a device'}
+                {device.name
+                  ? APPROVAL_TEXT.onDevice({ name: device.name })
+                  : APPROVAL_TEXT.onADevice}
               </a>
             </dd>
           </div>
         ) : null}
         {a.tool || a.argsPreview ? (
           <div>
-            <dt>Target</dt>
+            <dt>{APPROVAL_TEXT.target}</dt>
             <dd>
               {a.tool ? <code>{a.tool}</code> : null}
               {a.argsPreview ? (
-                <pre className="approval-args" tabIndex={0} aria-label="Arguments">
+                <pre
+                  role="group"
+                  className="approval-args"
+                  tabIndex={0}
+                  aria-label={APPROVAL_TEXT.arguments}
+                >
                   {a.argsPreview}
                 </pre>
               ) : null}
@@ -285,64 +336,61 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
           </div>
         ) : null}
         <div>
-          <dt>Why</dt>
-          <dd>{a.reason}</dd>
+          <dt>{APPROVAL_TEXT.why}</dt>
+          <dd dir="auto">{a.reason}</dd>
         </div>
         <div>
-          <dt>Asked</dt>
+          <dt>{APPROVAL_TEXT.asked}</dt>
           <dd data-provenance={a.userAsked ? 'user' : 'other'}>
             {a.userAsked ? (
-              'You asked for this'
+              APPROVAL_TEXT.youAsked
             ) : (
               <>
-                <Icon name="alert" /> Not from your message. It came from a tool, page or file,
-                which cannot authorize actions.
+                <Icon name="alert" /> {APPROVAL_TEXT.notYours}
               </>
             )}
           </dd>
         </div>
         <div>
-          <dt>Tier</dt>
-          <dd>{TIER_TEXT[a.tier]}</dd>
+          <dt>{APPROVAL_TEXT.tierLabel}</dt>
+          <dd>{APPROVAL_TEXT.tier[a.tier]}</dd>
         </div>
         {a.risk ? (
           <div>
-            <dt>Risk</dt>
-            <dd data-risk={a.risk}>{RISK_TEXT[a.risk]}</dd>
+            <dt>{APPROVAL_TEXT.riskLabel}</dt>
+            <dd data-risk={a.risk}>{APPROVAL_TEXT.risk[a.risk]}</dd>
           </div>
         ) : null}
         <div>
-          <dt>Rule</dt>
-          <dd>{a.ruleId ? <code>{a.ruleId}</code> : 'Tool default'}</dd>
+          <dt>{APPROVAL_TEXT.rule}</dt>
+          <dd>{a.ruleId ? <code>{a.ruleId}</code> : APPROVAL_TEXT.toolDefault}</dd>
         </div>
       </dl>
       {hubOnly ? (
         <p className="muted approval-note" data-answer-in="hub">
-          <Icon name="shield" /> {HUB_ONLY_TEXT}
+          <Icon name="shield" /> {hubOnlyText()}
         </p>
       ) : null}
 
       {handingOff ? (
         <div className="approval-actions">
-          <p className="approval-note">
-            Do this step yourself. When you finish, mark it done and the run continues.
-          </p>
+          <p className="approval-note">{APPROVAL_TEXT.handoffNote}</p>
           <Button variant="primary" onClick={() => void markDone()} disabled={busy}>
             {busy ? <Spinner /> : <Icon name="check" />}
-            Mark done
+            {APPROVAL_TEXT.markDone}
           </Button>
         </div>
       ) : mode === 'always' && scope ? (
         <form
           className="approval-form"
-          aria-label="Always allow"
+          aria-label={APPROVAL_TEXT.alwaysAllow}
           onSubmit={(e) => {
             e.preventDefault();
             void decide('allow_always', { alwaysScope: toAlwaysScope(scope) });
           }}
         >
           <fieldset className="approval-scopes">
-            <legend>Always allow</legend>
+            <legend>{APPROVAL_TEXT.alwaysAllow}</legend>
             {a.alwaysScopes.map((s, i) => (
               <label key={`${s.kind}-${i}`} className="approval-scope">
                 <input
@@ -351,18 +399,20 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
                   checked={i === scopeIdx}
                   onChange={() => setScopeIdx(i)}
                 />
-                <span>{s.label}</span>
+                <span dir="auto">{s.label}</span>
               </label>
             ))}
           </fieldset>
           {scope.kind === 'prefix_rule' ? (
-            <div className="approval-rule" aria-label="Rule to add" role="group">
+            <div className="approval-rule" aria-label={APPROVAL_TEXT.ruleToAdd} role="group">
               <p>
-                Rule: commands starting with <code>{patternText(scope.rule.pattern)}</code>
+                {rich(APPROVAL_TEXT.ruleLine, {
+                  pattern: <code>{patternText(scope.rule.pattern)}</code>,
+                })}
               </p>
               {scope.rule.matchExamples.length ? (
                 <p>
-                  Matches:{' '}
+                  {APPROVAL_TEXT.matches}{' '}
                   {scope.rule.matchExamples.map((x, i) => (
                     <code key={i}>{x}</code>
                   ))}
@@ -370,7 +420,7 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
               ) : null}
               {scope.rule.notMatchExamples.length ? (
                 <p>
-                  Does not match:{' '}
+                  {APPROVAL_TEXT.notMatches}{' '}
                   {scope.rule.notMatchExamples.map((x, i) => (
                     <code key={i}>{x}</code>
                   ))}
@@ -378,26 +428,24 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
               ) : null}
             </div>
           ) : null}
-          <p className="muted approval-note">
-            Remembered until you revoke it in Settings, Permissions.
-          </p>
+          <p className="muted approval-note">{APPROVAL_TEXT.remembered}</p>
           <div className="approval-actions">
             <Button type="submit" disabled={busy}>
               {busy ? <Spinner /> : null}
-              Always allow
+              {APPROVAL_TEXT.alwaysAllow}
             </Button>
             <Button
               onClick={() => switchMode('choose', '[data-decision="allow_always"]')}
               disabled={busy}
             >
-              Cancel
+              {APPROVAL_TEXT.cancel}
             </Button>
           </div>
         </form>
       ) : mode === 'deny' ? (
         <form
           className="approval-form"
-          aria-label="Deny and continue"
+          aria-label={APPROVAL_TEXT.denyContinue}
           onSubmit={(e) => {
             e.preventDefault();
             const why = reason.trim();
@@ -405,7 +453,7 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
           }}
         >
           <label htmlFor={`${id}-reason`} className="nv-field-label">
-            Reason (optional)
+            {APPROVAL_TEXT.reason}
           </label>
           <textarea
             id={`${id}-reason`}
@@ -417,23 +465,23 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
             onChange={(e) => setReason(e.target.value)}
           />
           <span id={`${id}-reason-hint`} className="nv-field-hint">
-            Returned to the agent as the tool result; the run continues.
+            {APPROVAL_TEXT.reasonHint}
           </span>
           <div className="approval-actions">
             <Button type="submit" variant="danger" disabled={busy}>
               {busy ? <Spinner /> : null}
-              Deny and continue
+              {APPROVAL_TEXT.denyContinue}
             </Button>
             <Button
               onClick={() => switchMode('choose', '[data-decision="deny_continue"]')}
               disabled={busy}
             >
-              Cancel
+              {APPROVAL_TEXT.cancel}
             </Button>
           </div>
         </form>
       ) : (
-        <div className="approval-actions" role="group" aria-label="Decision">
+        <div className="approval-actions" role="group" aria-label={APPROVAL_TEXT.decision}>
           {options.map((o) => (
             <Button
               key={o}
@@ -448,10 +496,10 @@ export function ApprovalCard({ approval: a, onChange, focusKey = 0 }: ApprovalCa
                 else void decide(o);
               }}
             >
-              {o === 'deny_continue' && plainDeny ? 'Deny' : BUTTON_TEXT[o]}
+              {o === 'deny_continue' && plainDeny ? APPROVAL_TEXT.deny : BUTTON_TEXT[o]}
             </Button>
           ))}
-          {busy ? <Spinner label="Sending your answer" /> : null}
+          {busy ? <Spinner label={APPROVAL_TEXT.sending} /> : null}
         </div>
       )}
       {error ? (

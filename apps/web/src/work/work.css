@@ -31,8 +31,8 @@
   border: 0;
 }
 .work-filter > legend {
-  float: left;
-  margin-right: var(--u-space-2);
+  float: inline-start;
+  margin-inline-end: var(--u-space-2);
 }
 .work-row {
   align-items: flex-start;
@@ -101,7 +101,7 @@
   gap: var(--u-space-2);
   padding: var(--u-space-4);
   border: 1px solid var(--u-danger);
-  border-left: 4px solid var(--u-danger);
+  border-inline-start: 4px solid var(--u-danger);
   border-radius: var(--u-radius-md);
   background: var(--u-surface-2);
 }
@@ -146,7 +146,7 @@
   display: grid;
   gap: var(--u-space-2);
   margin: 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
 }
 .work-step {
   display: grid;
@@ -212,7 +212,7 @@
 }
 .work-evidence {
   margin: var(--u-space-1) 0 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
   overflow-wrap: anywhere;
 }
 .work-activity:focus-visible {
@@ -231,8 +231,8 @@
   font-weight: 600;
 }
 .work-trace .activity-item[aria-current='step'] {
-  border-left: 3px solid var(--u-accent);
-  padding-left: var(--u-space-2);
+  border-inline-start: 3px solid var(--u-accent);
+  padding-inline-start: var(--u-space-2);
 }
 .work-trace-step {
   display: flex;
@@ -245,11 +245,12 @@
   background: none;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .work-trace-detail {
-  margin: var(--u-space-1) 0 var(--u-space-2) var(--u-space-6);
+  margin-block: var(--u-space-1) var(--u-space-2);
+  margin-inline: var(--u-space-6) 0;
 }
 
 /* ---- forms -------------------------------------------------------------------------------- */
@@ -277,7 +278,7 @@
   display: grid;
   gap: var(--u-space-2);
   margin: 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
 }
 .work-fire {
   display: flex;
@@ -295,17 +296,17 @@
   min-width: 0;
   padding: var(--u-space-3);
   border: 1px solid var(--u-border);
-  border-left: 4px solid var(--u-accent);
+  border-inline-start: 4px solid var(--u-accent);
   border-radius: var(--u-radius-sm);
   background: var(--u-surface);
   font-size: var(--u-text-sm);
 }
 .run-card[data-status='output_missing'],
 .run-card[data-status='failed'] {
-  border-left-color: var(--u-danger);
+  border-inline-start-color: var(--u-danger);
 }
 .ask-card[data-state='pending'] {
-  border-left-color: var(--u-warn);
+  border-inline-start-color: var(--u-warn);
 }
 .run-card-head,
 .ask-card-question {
@@ -319,7 +320,7 @@
   font-weight: 600;
 }
 .run-card-head > .nv-chip {
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 .run-card p,
 .ask-card p {
@@ -327,7 +328,7 @@
 }
 .run-card-plan {
   margin: 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
 }
 .run-card-actions,
 .ask-card-choices {

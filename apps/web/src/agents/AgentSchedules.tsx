@@ -5,6 +5,7 @@
 // only its time can change here. A new schedule wakes the agent with the user's instructions.
 // Pausing the agent pauses all of them until it resumes.
 import { useEffect, useId, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { AgentView, ScheduleView } from '@nova/shared';
 import { Button, Dialog, Icon, SelectField, Spinner, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -24,12 +25,75 @@ import {
   type WhenDraft,
 } from '../work/schedule-when.ts';
 import { useAgentsApi } from './api.ts';
+import { AGENTS_TEXT } from './format.ts';
+import { rich } from '../i18n/rich.tsx';
+
+export const SCHEDULES_TEXT = defineMessages('agents.schedules', {
+  setBy: 'Set by {name}',
+  createdBy: 'Created by {name}',
+  setByYou: 'Set by you',
+  loadFailed: 'Could not load the schedules.',
+  heading: 'Schedules and wakes',
+  new: 'New schedule',
+  intro:
+    'Each fire wakes the agent in its main thread. It can also set its own next wake-up; those show here and in {link}.',
+  scheduledLink: 'Work, Scheduled',
+  pausedNote: 'Paused with the agent. They go on when you resume it.',
+  loading: 'Loading the schedules',
+  empty: 'Nothing scheduled. Add a schedule to wake the agent every morning, on weekdays or once.',
+  list: 'Agent schedules',
+  /** When it fires and in which timezone: "Every day at 09:00 (Europe/Paris)". */
+  when: '{when} ({timezone})',
+  paused: 'Paused',
+  reason: 'Reason:',
+  next: 'Next: {when}',
+  nextPaused: 'Next: Paused',
+  last: 'Last: {when}',
+  pause: 'Pause',
+  resume: 'Resume',
+  pauseOf: 'Pause {title}',
+  resumeOf: 'Resume {title}',
+  changeFailed: 'Could not change it: {reason}',
+  changeOf: 'Change {title}',
+  changeTime: 'Change time',
+  cancelOf: 'Cancel {title}',
+  saved: 'Schedule saved.',
+  scheduled: 'Scheduled “{title}”.',
+  cancelTitle: 'Cancel this schedule?',
+  cancelBody: '“{title}” will not wake {name} again.',
+  keep: 'Keep it',
+  cancelled: 'Schedule cancelled.',
+  cancelFailed: 'Could not cancel it: {reason}',
+  cancelSchedule: 'Cancel schedule',
+  saveFailed: 'Could not save the schedule.',
+  changeTitle: 'Change the time',
+  editTitle: 'Edit schedule',
+  newTitle: 'New schedule',
+  timeOnlyBody: '{name} set this. You can change when it happens or cancel it.',
+  newBody: 'Each time it fires, {name} wakes with these instructions.',
+  schedule: 'Schedule',
+  instructionsLabel: 'Instructions:',
+  titleOptional: 'Title (optional)',
+  whenLegend: 'When',
+  repeat: 'Repeat',
+  day: 'Day',
+  time: 'Time',
+  every: 'Every',
+  unit: 'Unit',
+  minutes: 'Minutes',
+  hours: 'Hours',
+  dateTime: 'Date and time',
+  expr: 'Cron expression or RRULE',
+  exprHint: 'For example 30 7 * * 1 (Mondays at 07:30) or FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=9.',
+  timezone: 'Timezone',
+  timezoneHint: 'An IANA name, for example Europe/Paris.',
+});
 
 /** Who set a schedule of an agent, in words. */
 export function scheduleOrigin(s: Pick<ScheduleView, 'origin'>, agentName: string): string {
-  if (s.origin === 'agent_self') return `Set by ${agentName}`;
-  if (s.origin === 'agent') return `Created by ${agentName}`;
-  return 'Set by you';
+  if (s.origin === 'agent_self') return SCHEDULES_TEXT.setBy({ name: agentName });
+  if (s.origin === 'agent') return SCHEDULES_TEXT.createdBy({ name: agentName });
+  return SCHEDULES_TEXT.setByYou;
 }
 
 export function AgentSchedules({ agent, version }: { agent: AgentView; version: number }) {
@@ -51,7 +115,7 @@ export function AgentSchedules({ agent, version }: { agent: AgentView; version: 
         setItems(list);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the schedules.')),
+      (err: unknown) => alive && setError(errorMessage(err, SCHEDULES_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -60,102 +124,111 @@ export function AgentSchedules({ agent, version }: { agent: AgentView; version: 
 
   const replace = (s: ScheduleView) =>
     setItems((list) => (list ?? []).map((x) => (x.id === s.id ? s : x)));
-  const fail = (what: string) => (err: unknown) =>
-    toast.show(`${what}: ${errorMessage(err)}`, { tone: 'error' });
+  const fail = (failed: (p: { reason: string }) => string) => (err: unknown) =>
+    toast.show(failed({ reason: errorMessage(err) }), { tone: 'error' });
   const paused = agent.status === 'paused';
 
   return (
     <section className="agent-section" aria-labelledby={headingId}>
       <div className="ws-section-header">
-        <h2 id={headingId}>Schedules and wakes</h2>
+        <h2 id={headingId}>{SCHEDULES_TEXT.heading}</h2>
         <Button onClick={() => setDialog({ editing: null })}>
-          <Icon name="plus" /> New schedule
+          <Icon name="plus" /> {SCHEDULES_TEXT.new}
         </Button>
       </div>
       <p className="muted ws-flush">
-        Each fire wakes the agent in its main thread. It can also set its own next wake-up; those
-        show here and in{' '}
-        <a href={SCHEDULED_PATH} onClick={(e) => followLink(e, SCHEDULED_PATH)}>
-          Work, Scheduled
-        </a>
-        .
+        {rich(SCHEDULES_TEXT.intro, {
+          link: (
+            <a href={SCHEDULED_PATH} onClick={(e) => followLink(e, SCHEDULED_PATH)}>
+              {SCHEDULES_TEXT.scheduledLink}
+            </a>
+          ),
+        })}
       </p>
       {paused ? (
         <p className="ws-callout" role="note">
           <Icon name="clock" />
-          <span>Paused with the agent. They go on when you resume it.</span>
+          <span>{SCHEDULES_TEXT.pausedNote}</span>
         </p>
       ) : null}
       {error ? (
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => setManual((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setManual((n) => n + 1)}>{AGENTS_TEXT.retry}</Button>
         </div>
       ) : items === null ? (
-        <Spinner label="Loading the schedules" />
+        <Spinner label={SCHEDULES_TEXT.loading} />
       ) : items.length === 0 ? (
-        <p className="muted">
-          Nothing scheduled. Add a schedule to wake the agent every morning, on weekdays or once.
-        </p>
+        <p className="muted">{SCHEDULES_TEXT.empty}</p>
       ) : (
-        <ul className="ws-list" aria-label="Agent schedules">
+        <ul className="ws-list" aria-label={SCHEDULES_TEXT.list}>
           {items.map((s) => {
             const byAgent = s.origin !== 'user';
             return (
               <li key={s.id} className="ws-list-row agent-schedule" aria-label={s.title}>
                 <div className="work-row-main">
-                  <span className="ws-card-link" data-untrusted={byAgent || undefined}>
+                  <span className="ws-card-link" data-untrusted={byAgent || undefined} dir="auto">
                     {s.title}
                   </span>
                   <span className="muted ws-row-meta">
                     <span>
-                      {whenText(s.when)} ({s.timezone})
+                      {SCHEDULES_TEXT.when({ when: whenText(s.when), timezone: s.timezone })}
                     </span>
                     <span className="ws-badge" data-origin={s.origin}>
                       <Icon name={byAgent ? 'agents' : 'clock'} /> {scheduleOrigin(s, agent.name)}
                     </span>
                     {s.enabled ? null : (
                       <span className="ws-badge">
-                        <Icon name="stop" /> Paused
+                        <Icon name="stop" /> {SCHEDULES_TEXT.paused}
                       </span>
                     )}
                   </span>
                   {s.wakeReason ? (
                     <span className="agent-text">
-                      <span className="muted">Reason: </span>
-                      <span data-untrusted="true">{s.wakeReason}</span>
+                      <span className="muted">{SCHEDULES_TEXT.reason}</span>{' '}
+                      <span data-untrusted="true" dir="auto">
+                        {s.wakeReason}
+                      </span>
                     </span>
                   ) : null}
                   <span className="ws-row-meta">
-                    <span>Next: {s.enabled ? formatDateTime(s.nextRunAt) : 'Paused'}</span>
-                    {s.lastRunAt ? <span>Last: {formatDateTime(s.lastRunAt)}</span> : null}
+                    <span>
+                      {s.enabled
+                        ? SCHEDULES_TEXT.next({ when: formatDateTime(s.nextRunAt) })
+                        : SCHEDULES_TEXT.nextPaused}
+                    </span>
+                    {s.lastRunAt ? (
+                      <span>{SCHEDULES_TEXT.last({ when: formatDateTime(s.lastRunAt) })}</span>
+                    ) : null}
                   </span>
                 </div>
                 <div className="ws-row-actions ws-toolbar">
                   <Button
-                    aria-label={`${s.enabled ? 'Pause' : 'Resume'} ${s.title}`}
+                    aria-label={(s.enabled ? SCHEDULES_TEXT.pauseOf : SCHEDULES_TEXT.resumeOf)({
+                      title: s.title,
+                    })}
                     disabled={paused}
-                    title={paused ? 'Resume the agent first' : undefined}
+                    title={paused ? AGENTS_TEXT.resumeFirst : undefined}
                     onClick={() => {
                       core
                         .updateSchedule(s.id, { enabled: !s.enabled })
-                        .then(replace, fail('Could not change it'));
+                        .then(replace, fail(SCHEDULES_TEXT.changeFailed));
                     }}
                   >
-                    {s.enabled ? 'Pause' : 'Resume'}
+                    {s.enabled ? SCHEDULES_TEXT.pause : SCHEDULES_TEXT.resume}
                   </Button>
                   <Button
-                    aria-label={`Change ${s.title}`}
+                    aria-label={SCHEDULES_TEXT.changeOf({ title: s.title })}
                     onClick={() => setDialog({ editing: s })}
                   >
-                    {byAgent ? 'Change time' : 'Edit'}
+                    {byAgent ? SCHEDULES_TEXT.changeTime : AGENTS_TEXT.edit}
                   </Button>
                   <Button
                     variant="danger"
-                    aria-label={`Cancel ${s.title}`}
+                    aria-label={SCHEDULES_TEXT.cancelOf({ title: s.title })}
                     onClick={() => setCancelling(s)}
                   >
-                    Cancel
+                    {AGENTS_TEXT.cancel}
                   </Button>
                 </div>
               </li>
@@ -172,14 +245,14 @@ export function AgentSchedules({ agent, version }: { agent: AgentView; version: 
             const editing = dialog.editing;
             if (editing) {
               replace(await core.updateSchedule(editing.id, body));
-              toast.show('Schedule saved.', { tone: 'success' });
+              toast.show(SCHEDULES_TEXT.saved, { tone: 'success' });
             } else {
               const s = await api.createAgentSchedule(agent.id, {
                 ...body,
                 instructions: body.instructions ?? '',
               });
               setItems((list) => [...(list ?? []), s]);
-              toast.show(`Scheduled “${s.title}”.`, { tone: 'success' });
+              toast.show(SCHEDULES_TEXT.scheduled({ title: s.title }), { tone: 'success' });
             }
             setDialog(null);
           }}
@@ -187,14 +260,16 @@ export function AgentSchedules({ agent, version }: { agent: AgentView; version: 
       ) : null}
       <Dialog
         open={cancelling !== null}
-        title="Cancel this schedule?"
+        title={SCHEDULES_TEXT.cancelTitle}
         description={
-          cancelling ? `“${cancelling.title}” will not wake ${agent.name} again.` : undefined
+          cancelling
+            ? SCHEDULES_TEXT.cancelBody({ title: cancelling.title, name: agent.name })
+            : undefined
         }
         onClose={() => setCancelling(null)}
         footer={
           <>
-            <Button onClick={() => setCancelling(null)}>Keep it</Button>
+            <Button onClick={() => setCancelling(null)}>{SCHEDULES_TEXT.keep}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -203,11 +278,11 @@ export function AgentSchedules({ agent, version }: { agent: AgentView; version: 
                 if (!s) return;
                 core.deleteSchedule(s.id).then(() => {
                   setItems((list) => list?.filter((x) => x.id !== s.id) ?? null);
-                  toast.show('Schedule cancelled.', { tone: 'success' });
-                }, fail('Could not cancel it'));
+                  toast.show(SCHEDULES_TEXT.cancelled, { tone: 'success' });
+                }, fail(SCHEDULES_TEXT.cancelFailed));
               }}
             >
-              Cancel schedule
+              {SCHEDULES_TEXT.cancelSchedule}
             </Button>
           </>
         }
@@ -268,7 +343,7 @@ function AgentScheduleDialog({
             }),
       });
     } catch (err) {
-      setFailure(errorMessage(err, 'Could not save the schedule.'));
+      setFailure(errorMessage(err, SCHEDULES_TEXT.saveFailed));
       setBusy(false);
     }
   };
@@ -276,20 +351,26 @@ function AgentScheduleDialog({
   return (
     <Dialog
       open
-      title={editing ? (timeOnly ? 'Change the time' : 'Edit schedule') : 'New schedule'}
+      title={
+        editing
+          ? timeOnly
+            ? SCHEDULES_TEXT.changeTitle
+            : SCHEDULES_TEXT.editTitle
+          : SCHEDULES_TEXT.newTitle
+      }
       description={
         timeOnly
-          ? `${agentName} set this. You can change when it happens or cancel it.`
-          : `Each time it fires, ${agentName} wakes with these instructions.`
+          ? SCHEDULES_TEXT.timeOnlyBody({ name: agentName })
+          : SCHEDULES_TEXT.newBody({ name: agentName })
       }
       onClose={onClose}
       initialFocusRef={first}
       className="ws-wide-dialog"
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{AGENTS_TEXT.cancel}</Button>
           <Button type="submit" form={formId} variant="primary" disabled={invalid || busy}>
-            {busy ? <Spinner /> : null} {editing ? 'Save' : 'Schedule'}
+            {busy ? <Spinner /> : null} {editing ? AGENTS_TEXT.save : SCHEDULES_TEXT.schedule}
           </Button>
         </>
       }
@@ -304,14 +385,16 @@ function AgentScheduleDialog({
       >
         {timeOnly && editing ? (
           <p className="ws-flush agent-text">
-            <span className="muted">Instructions: </span>
-            <span data-untrusted="true">{editing.instructions}</span>
+            <span className="muted">{SCHEDULES_TEXT.instructionsLabel}</span>{' '}
+            <span data-untrusted="true" dir="auto">
+              {editing.instructions}
+            </span>
           </p>
         ) : (
           <>
             <TextField
               ref={first}
-              label="Title (optional)"
+              label={SCHEDULES_TEXT.titleOptional}
               value={title}
               maxLength={200}
               autoComplete="off"
@@ -319,13 +402,14 @@ function AgentScheduleDialog({
             />
             <div className="nv-field">
               <label className="nv-field-label" htmlFor={`${formId}-instr`}>
-                Instructions
+                {AGENTS_TEXT.instructions}
               </label>
               <textarea
                 id={`${formId}-instr`}
                 className="nv-input ws-textarea"
                 rows={3}
                 maxLength={8000}
+                dir="auto"
                 value={instructions}
                 onChange={(e) => setInstructions(e.target.value)}
               />
@@ -333,16 +417,16 @@ function AgentScheduleDialog({
           </>
         )}
         <fieldset className="ws-fieldset">
-          <legend>When</legend>
+          <legend>{SCHEDULES_TEXT.whenLegend}</legend>
           <SelectField
-            label="Repeat"
+            label={SCHEDULES_TEXT.repeat}
             value={when.repeat}
             onChange={(v) => setW({ repeat: v as Repeat })}
             options={REPEATS.map((r) => ({ value: r, label: REPEAT_TEXT[r] }))}
           />
           {when.repeat === 'weekly' ? (
             <SelectField
-              label="Day"
+              label={SCHEDULES_TEXT.day}
               value={String(when.day)}
               onChange={(v) => setW({ day: Number(v) })}
               options={WEEKDAYS.map((d, i) => ({ value: String(i), label: d }))}
@@ -350,7 +434,7 @@ function AgentScheduleDialog({
           ) : null}
           {timed ? (
             <TextField
-              label="Time"
+              label={SCHEDULES_TEXT.time}
               type="time"
               className="ws-number"
               value={when.time}
@@ -360,7 +444,7 @@ function AgentScheduleDialog({
           {when.repeat === 'interval' ? (
             <div className="agent-budget-fields">
               <TextField
-                label="Every"
+                label={SCHEDULES_TEXT.every}
                 type="number"
                 inputMode="numeric"
                 className="ws-number"
@@ -370,12 +454,12 @@ function AgentScheduleDialog({
                 onChange={(e) => setW({ every: e.target.value })}
               />
               <SelectField
-                label="Unit"
+                label={SCHEDULES_TEXT.unit}
                 value={when.unit}
                 onChange={(v) => setW({ unit: v === 'minutes' ? 'minutes' : 'hours' })}
                 options={[
-                  { value: 'minutes', label: 'Minutes' },
-                  { value: 'hours', label: 'Hours' },
+                  { value: 'minutes', label: SCHEDULES_TEXT.minutes },
+                  { value: 'hours', label: SCHEDULES_TEXT.hours },
                 ]}
               />
             </div>
@@ -383,7 +467,7 @@ function AgentScheduleDialog({
           {when.repeat === 'once' ? (
             <TextField
               ref={timeOnly ? first : undefined}
-              label="Date and time"
+              label={SCHEDULES_TEXT.dateTime}
               type="datetime-local"
               value={when.at}
               onChange={(e) => setW({ at: e.target.value })}
@@ -391,11 +475,12 @@ function AgentScheduleDialog({
           ) : null}
           {when.repeat === 'advanced' ? (
             <TextField
-              label="Cron expression or RRULE"
+              label={SCHEDULES_TEXT.expr}
               value={when.expr}
               spellCheck={false}
               autoComplete="off"
-              hint="For example 30 7 * * 1 (Mondays at 07:30) or FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=9."
+              dir="ltr"
+              hint={SCHEDULES_TEXT.exprHint}
               onChange={(e) => setW({ expr: e.target.value })}
             />
           ) : null}
@@ -406,8 +491,11 @@ function AgentScheduleDialog({
           ) : null}
           {zones ? (
             <SelectField
-              label="Timezone"
+              label={SCHEDULES_TEXT.timezone}
               value={timezone}
+              // IANA names are identifiers, never translated.
+              translate="no"
+              dir="ltr"
               onChange={setTimezone}
               options={(zones.includes(timezone) ? zones : [timezone, ...zones]).map((z) => ({
                 value: z,
@@ -416,9 +504,10 @@ function AgentScheduleDialog({
             />
           ) : (
             <TextField
-              label="Timezone"
+              label={SCHEDULES_TEXT.timezone}
               value={timezone}
-              hint="An IANA name, for example Europe/Paris."
+              dir="ltr"
+              hint={SCHEDULES_TEXT.timezoneHint}
               onChange={(e) => setTimezone(e.target.value)}
             />
           )}

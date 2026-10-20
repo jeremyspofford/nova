@@ -30,6 +30,7 @@ import {
   EgressProxyService,
   EgressStore,
   detectSandbox,
+  managedRestrictions,
   proxyEgress,
   type AuditSink,
   type BrowserFactory,
@@ -104,11 +105,17 @@ export async function setupComputers(ctx: HubContext & ComputersDeps): Promise<C
     log: log.child('egress'),
     ...(ctx.proxy ?? {}),
   });
-  const globalPolicy = async () => ({
-    mode: await ctx.setting('network.egressMode'),
-    allow: await ctx.setting('network.egressAllow'),
-    deny: await ctx.setting('network.egressDeny'),
-  });
+  // Managed policy's egress allow lists are a ceiling over the owner's list (ADR-097): the hosts in
+  // force, and no scope or profile host beyond them.
+  const globalPolicy = async () => {
+    const managed = managedRestrictions(await ctx.setting('managed.restrict'));
+    return {
+      mode: await ctx.setting('network.egressMode'),
+      allow: managed.egressAllow(await ctx.setting('network.egressAllow')),
+      deny: await ctx.setting('network.egressDeny'),
+      ceilings: managed.egressCeilings(),
+    };
+  };
   const egress = proxyEgress({ proxy, store, db: ctx.db, global: globalPolicy });
   const limits = await ctx.setting('computers.limits');
   const microVm = await ctx.setting('computers.microVm');
@@ -262,8 +269,10 @@ export async function setupComputers(ctx: HubContext & ComputersDeps): Promise<C
     // ---- egress policy (Settings > Network, FR-102, FR-193) ----
     app.get('/api/v1/egress', async (req): Promise<EgressView> => {
       const accountId = await ctx.accountOf(req);
+      // The hosts in force: under managed policy, its ceiling over the owner's list (ADR-097).
+      const { mode, allow, deny } = await globalPolicy();
       return {
-        global: await globalPolicy(),
+        global: { mode, allow, deny },
         scopes: store.listScopes(accountId),
         inspection: { https: proxy.inspects, caCertPem: proxy.caCertPem },
       };

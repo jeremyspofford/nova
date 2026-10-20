@@ -8,7 +8,6 @@ import { useId, useRef, useState } from 'react';
 import type { RemovedMemberView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, TextField, useToast } from '@nova/ui';
 import { useSettings } from '../settings.tsx';
-import { ManagedNote } from '../managed/ManagedNote.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
 import { useTeamM8Api, type TeamM8Api } from './api-m8.ts';
@@ -30,13 +29,15 @@ export function removedChip(m: RemovedMemberView): ChipSpec {
       return { text: REMOVED_TEXT.status.kept, tone: 'neutral', icon: 'clock' };
     case 'scheduled':
       return {
-        text: REMOVED_TEXT.status.scheduled(m.purgeAfter ? untilText(m.purgeAfter) : 'soon'),
+        text: m.purgeAfter
+          ? REMOVED_TEXT.status.scheduled({ when: untilText(m.purgeAfter) })
+          : REMOVED_TEXT.status.scheduledSoon,
         tone: 'running',
         icon: 'clock',
       };
     case 'purged':
       return {
-        text: REMOVED_TEXT.status.purged(formatWhen(m.purgedAt)),
+        text: REMOVED_TEXT.status.purged({ when: formatWhen(m.purgedAt) }),
         tone: 'ready',
         icon: 'check',
       };
@@ -116,21 +117,25 @@ function RemovedRow({ member: m, onPurge }: { member: RemovedMemberView; onPurge
   return (
     <li className="ws-list-row team-person" aria-label={name}>
       <span className="team-person-main">
-        <span className="team-strong">{name}</span>
+        <span className="team-strong" dir="auto">
+          {name}
+        </span>
         <span className="ws-row-meta muted">
           <Chip spec={removedChip(m)} />
-          <span>{REMOVED_TEXT.removedWhen(formatWhen(m.removedAt))}</span>
+          <span>{REMOVED_TEXT.removedWhen({ when: formatWhen(m.removedAt) })}</span>
           {m.status === 'purged' && m.cause ? (
             <span>{m.cause === 'request' ? REMOVED_TEXT.byRequest : REMOVED_TEXT.afterGrace}</span>
           ) : null}
         </span>
         {m.status === 'failed' && m.error ? (
           <span className="ws-warning">
-            <Icon name="alert" /> {REMOVED_TEXT.failedWhy(m.error)}
+            <Icon name="alert" /> {REMOVED_TEXT.failedWhy({ why: m.error })}
           </span>
         ) : null}
         {m.status === 'purged' && totals ? (
-          <span className="muted">{REMOVED_TEXT.counts(totals.rows, totals.files)}</span>
+          <span className="muted">
+            {REMOVED_TEXT.counts({ rows: totals.rows, files: totals.files })}
+          </span>
         ) : null}
         {m.status === 'purged' && m.cleanupPending ? (
           <span className="muted">{REMOVED_TEXT.cleanupPending}</span>
@@ -147,12 +152,12 @@ function RemovedRow({ member: m, onPurge }: { member: RemovedMemberView; onPurge
               data-variant="ghost"
               href={api.removedMemberExportUrl(m.accountId)}
               download
-              aria-label={REMOVED_TEXT.exportLabel(name)}
+              aria-label={REMOVED_TEXT.exportLabel({ name })}
             >
               <Icon name="download" /> {REMOVED_TEXT.export}
             </a>
           ) : null}
-          <Button variant="ghost" aria-label={REMOVED_TEXT.purgeLabel(name)} onClick={onPurge}>
+          <Button variant="ghost" aria-label={REMOVED_TEXT.purgeLabel({ name })} onClick={onPurge}>
             <Icon name="trash" /> {REMOVED_TEXT.purge}
           </Button>
         </span>
@@ -185,17 +190,17 @@ function PurgeDialog({
       const out = await api.purgeRemovedMember(member.accountId);
       onDone(out);
       const ok = out.status === 'purged';
-      const text = ok ? REMOVED_TEXT.purged(name) : REMOVED_TEXT.purgeFailed(name);
+      const text = ok ? REMOVED_TEXT.purged({ name }) : REMOVED_TEXT.purgeFailed({ name });
       toast.show(text, { tone: ok ? 'success' : 'error' });
     } catch (err) {
-      setError(removedErrorMessage(err, 'Could not delete the data.'));
+      setError(removedErrorMessage(err, REMOVED_TEXT.purgeError));
       setBusy(false);
     }
   };
   return (
     <Dialog
       open
-      title={REMOVED_TEXT.purgeTitle(name)}
+      title={REMOVED_TEXT.purgeTitle({ name })}
       description={REMOVED_TEXT.purgeWhat}
       onClose={onClose}
       initialFocusRef={cancelRef}
@@ -220,7 +225,7 @@ function PurgeDialog({
             checked={sure}
             onChange={(e) => setSure(e.target.checked)}
           />
-          <span>{REMOVED_TEXT.purgeConfirm(name)}</span>
+          <span>{REMOVED_TEXT.purgeConfirm({ name })}</span>
         </label>
         {error ? (
           <p role="alert" className="nv-field-error">
@@ -256,9 +261,9 @@ function KeepDays() {
     setBusy(true);
     try {
       await settings.set('team.removedMemberPurgeDays', n);
-      toast.show(REMOVED_TEXT.keepSaved(n), { tone: 'success' });
+      toast.show(REMOVED_TEXT.keepSaved({ days: n }), { tone: 'success' });
     } catch (err) {
-      setError(removedErrorMessage(err, 'Could not save it.'));
+      setError(removedErrorMessage(err, REMOVED_TEXT.saveFailed));
     } finally {
       setBusy(false);
     }
@@ -280,7 +285,8 @@ function KeepDays() {
         max={3650}
         className="ws-number"
         value={value}
-        disabled={entry.locked}
+        locked={entry.locked}
+        setting="team.removedMemberPurgeDays"
         hint={REMOVED_TEXT.keepHint}
         error={error ?? undefined}
         onChange={(e) => setValue(e.target.value)}
@@ -288,7 +294,6 @@ function KeepDays() {
       <Button type="submit" disabled={entry.locked || busy || value.trim() === String(entry.value)}>
         {REMOVED_TEXT.save}
       </Button>
-      {entry.locked ? <ManagedNote setting="team.removedMemberPurgeDays" as="p" /> : null}
     </form>
   );
 }

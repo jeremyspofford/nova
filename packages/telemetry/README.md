@@ -30,9 +30,13 @@ levels, bound correlation fields, and a size-rotated file sink (10 MB × 5 by de
     `nova.content.`, the GenAI message attributes (`gen_ai.prompt`, `gen_ai.completion`,
     `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`,
     `gen_ai.tool.call.arguments|result`), and keys whose last segment is one of `prompt`,
-    `completion`, `content`, `text`, `body`, `args`, `arguments`, `result`, `input`, `output`,
-    `query`, `messages`, `transcript`, `snippet`, `preview` (`isContentAttribute`). Producers
-    that attach user content should use the `content.` prefix.
+    `prompts`, `completion`, `content`, `text`, `body`, `args`, `arguments`, `result`, `results`,
+    `input`, `output`, `query`, `messages`, `transcript`, `snippet`, `preview` or `message`
+    (`isContentAttribute`; `message` makes an error object go out with its name only). Producers
+    that attach user content should use the `content.` prefix; a log record's own message and
+    plain string fields are exported redacted either way.
+  - `close()` stops the timers, collects and flushes once, and is bounded to 5 s in all (requests
+    still running are cancelled).
   - Each signal has a bounded queue (default 2,048 items; the oldest is dropped and counted).
     Batches go every 5 s (`flushIntervalMs`), metrics are collected every 60 s from the
     `metrics` source. A failed send (network error, timeout, 429, 502, 503, 504) keeps the batch

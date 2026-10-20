@@ -3,26 +3,25 @@
 // CSV project sources as data, and publish a chosen version to a target. Publishing is explicit
 // (the route demands `confirm`) and reversible: every publish is recorded, and unpublish reverts
 // the live one so the previous publish is live again. M6 targets are a folder under the publish
-// root and a zip download; remote hosting targets come later.
-import { randomUUID } from 'node:crypto';
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+// root and a zip download; M8 adds a folder on a remote hosting target (hosting.ts), shows what a
+// publish will do before it happens (`plan`), and compares a build from another source with the
+// latest version before the source changes (`previewSource`). A remote write happens before the
+// publish is recorded, so a target that cannot be reached changes nothing.
+import { join, resolve } from 'node:path';
 import { strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import {
   NovaError,
   uuidv7,
   type SiteDataConnection,
   type SiteDataSourceView,
+  type SiteFileChange,
+  type SiteFileView,
+  type SitePublishPlanView,
+  type SitePublishResult,
   type SitePublishView,
+  type SiteRemoteRef,
   type SiteSource,
+  type SiteSourcePreviewView,
   type SiteTarget,
   type SiteVersionView,
   type SiteView,
@@ -33,11 +32,16 @@ import type { EventSink } from '../events.ts';
 import type { ArtifactService } from '../tools/artifacts.ts';
 import { noopAudit, type AuditSink } from '../tools/types.ts';
 import { dataFormatOf, parseData, type DataRow } from './data.ts';
+import {
+  HubFolderTarget,
+  type HostedFile,
+  type HostingTarget,
+  type SiteTargetService,
+} from './hosting.ts';
 import type { SpaceService } from './service.ts';
 import { renderArtifactSite, renderSpaceSite, type RenderedSite } from './site-render.ts';
 
-/** The marker a published folder carries, so Nova only ever replaces or removes its own. */
-export const SITE_MARKER = '.nova-site';
+export { SITE_MARKER } from './marker.ts';
 const MAX_PAGES = 200;
 
 export interface SiteServiceOptions {
@@ -50,6 +54,8 @@ export interface SiteServiceOptions {
   now?: () => Date;
   /** The folder site folders go into (setting `sites.publishRoot`); null uses <dataDir>/sites. */
   publishRoot?: () => Promise<string | null>;
+  /** M8 remote hosting targets; without them a `remote` target is `capability_missing`. */
+  targets?: SiteTargetService;
 }
 
 interface SiteRow {
@@ -83,8 +89,9 @@ interface PublishRow {
   site_id: string;
   account_id: string;
   version: number;
-  target_kind: 'folder' | 'zip';
+  target_kind: 'folder' | 'zip' | 'remote';
   target_ref: string | null;
+  target_id: string | null;
   reverted_at: string | null;
   created_at: string;
 }
@@ -101,21 +108,38 @@ export interface PublishOutcome {
   publish: SitePublishView | null;
   /** The folder written for a folder target. */
   folderPath: string | null;
+  /** An earlier copy a remote target kept because it could not be reached (M8). */
+  leftBehind: NonNullable<SitePublishResult['leftBehind']> | null;
+}
+
+/** Where a publish puts files: a target and the folder on it; a zip has none. */
+interface Place {
+  host: HostingTarget;
+  folder: string;
 }
 
 export class SiteService {
   readonly #o: SiteServiceOptions;
   #audit: AuditSink;
   readonly #now: () => Date;
+  readonly #hub: HubFolderTarget;
+  #targets: SiteTargetService | null;
 
   constructor(opts: SiteServiceOptions) {
     this.#o = opts;
     this.#audit = opts.audit ?? noopAudit;
     this.#now = opts.now ?? (() => new Date());
+    this.#hub = new HubFolderTarget(() => this.publishRoot());
+    this.#targets = opts.targets ?? null;
   }
 
   useAudit(audit: AuditSink): void {
     this.#audit = audit;
+  }
+
+  /** The remote hosting targets (M8), when they are set up after this service. */
+  useTargets(targets: SiteTargetService): void {
+    this.#targets = targets;
   }
 
   list(accountId: string): Promise<SiteView[]> {
@@ -238,6 +262,67 @@ export class SiteService {
     await this.#emit('site.deleted', accountId, { siteId: id });
   }
 
+  /**
+   * What a build from another source (or other data) would make, file by file, against the latest
+   * built version (M8): nothing is stored, the site keeps its source until it is changed.
+   */
+  async previewSource(
+    accountId: string,
+    id: string,
+    input: { source?: SiteSource | undefined; data?: SiteDataConnection[] | undefined },
+  ): Promise<SiteSourcePreviewView> {
+    const row = this.#site(accountId, id);
+    const source = input.source ?? sourceOf(row);
+    await this.#checkSource(accountId, source);
+    const data = input.data ?? parseConnections(row.data_json);
+    this.#checkData(accountId, data);
+    const next: SiteRow = {
+      ...row,
+      source_kind: source.kind,
+      source_ref: refOf(source),
+      data_json: JSON.stringify(data),
+    };
+    const rendered = await this.#render(accountId, next, this.#loadData(accountId, data));
+    const latest =
+      row.latest_version !== null
+        ? this.#get<VersionRow>(
+            'SELECT * FROM site_version WHERE site_id = ? AND version = ?',
+            id,
+            row.latest_version,
+          )
+        : undefined;
+    const old = latest
+      ? unzipSync(new Uint8Array(readAttachmentBlob(this.#o.dataDir, latest.blob_path)))
+      : null;
+    const files: (SiteFileView & { change: SiteFileChange })[] = [];
+    let size = 0;
+    for (const [path, bytes] of [...rendered.files].sort(([a], [b]) => a.localeCompare(b))) {
+      const before = old?.[path];
+      size += bytes.length;
+      files.push({
+        path,
+        size: bytes.length,
+        change: !before ? 'added' : Buffer.from(before).equals(bytes) ? 'same' : 'changed',
+      });
+    }
+    for (const [path, bytes] of Object.entries(old ?? {}).sort(([a], [b]) => a.localeCompare(b)))
+      if (!path.endsWith('/') && !rendered.files.has(path))
+        files.push({ path, size: bytes.length, change: 'removed' });
+    return {
+      siteId: id,
+      current: {
+        source: sourceOf(row),
+        sourceLabel: this.#label(row.source_kind, row.source_ref),
+        data: parseConnections(row.data_json),
+      },
+      next: { source, sourceLabel: this.#label(source.kind, refOf(source)), data },
+      comparedWith: latest?.version ?? null,
+      files,
+      size,
+      scripts: rendered.scripts,
+    };
+  }
+
   // ---- versions ----------------------------------------------------------------------------------
 
   /** Generate a new version from the source as it is now. */
@@ -337,13 +422,59 @@ export class SiteService {
       return this.#all<PublishRow>(
         'SELECT * FROM site_publish WHERE site_id = ? ORDER BY created_at DESC, rowid DESC',
         id,
-      ).map((r) => publishView(r, live?.id === r.id));
+      ).map((r) => this.#publishView(r, live?.id === r.id));
     });
   }
 
   /**
+   * What publishing a version to a target would do (M8), for the user to confirm: where the files
+   * go, which files, what is live now and is replaced or taken down, whether unpublishing takes it
+   * back, and whether the network policy lets Nova reach a remote target. Nothing is written.
+   */
+  async plan(
+    accountId: string,
+    id: string,
+    input: { version: number; target: SiteTarget },
+  ): Promise<SitePublishPlanView> {
+    this.#site(accountId, id);
+    const v = this.#version(id, input.version);
+    const t = input.target;
+    let location: string | null = null;
+    let remote: SiteRemoteRef | null = null;
+    let egress: SitePublishPlanView['egress'] = null;
+    const place = await this.#place(accountId, t, 'write');
+    if (place) location = await place.host.location(place.folder);
+    if (t.kind === 'remote') {
+      const targets = this.#needTargets();
+      remote = targets.ref(t.targetId, t.folder);
+      egress = await targets.egressFor(accountId, t.targetId);
+    }
+    const files = parseFiles(v.files_json);
+    const prev = this.#live(id);
+    return {
+      siteId: id,
+      version: input.version,
+      target: t,
+      remote,
+      location,
+      files,
+      size: files.reduce((n, f) => n + f.size, 0),
+      live: prev
+        ? { version: prev.version, target: targetOf(prev), remote: this.#remoteRef(prev) }
+        : null,
+      takesDown:
+        prev && prev.target_kind !== 'zip' && !samePlace(prev, t)
+          ? { target: targetOf(prev), remote: this.#remoteRef(prev) }
+          : null,
+      reversible: t.kind !== 'zip',
+      egress,
+    };
+  }
+
+  /**
    * Publish a version to a target (an earlier version is a rollback). The caller has the user's
-   * explicit confirmation. A folder is replaced atomically and only when Nova made it.
+   * explicit confirmation. A folder is replaced in one swap and only when Nova made it; a remote
+   * upload that fails leaves the publish unrecorded.
    */
   async publish(
     accountId: string,
@@ -353,29 +484,26 @@ export class SiteService {
     const row = this.#site(accountId, id);
     const v = this.#version(id, input.version);
     const prev = this.#live(id);
-    let folderPath: string | null = null;
-    if (input.target.kind === 'folder') {
-      folderPath = await this.#writeFolder(id, input.target.folder, v);
-    }
-    // Moving to another folder takes the site out of the old one (unpublish puts it back).
-    if (
-      prev?.target_kind === 'folder' &&
-      prev.target_ref &&
-      !(input.target.kind === 'folder' && input.target.folder === prev.target_ref)
-    )
-      await this.#removeFolder(id, prev.target_ref);
+    const place = await this.#place(accountId, input.target, 'write');
+    let location: string | null = null;
+    if (place) location = await place.host.put(id, place.folder, this.#files(v));
+    // Moving to another place takes the site out of the old one (unpublish puts it back).
+    const leftBehind =
+      prev && !samePlace(prev, input.target) ? await this.#takeDown(accountId, id, prev) : null;
     const pid = uuidv7();
     const now = this.#stamp();
+    const t = input.target;
     await this.#o.db.transaction(() => {
       this.#run(
-        `INSERT INTO site_publish (id, site_id, account_id, version, target_kind, target_ref, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO site_publish (id, site_id, account_id, version, target_kind, target_ref,
+           target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         pid,
         id,
         accountId,
         input.version,
-        input.target.kind,
-        input.target.kind === 'folder' ? input.target.folder : null,
+        t.kind,
+        t.kind === 'zip' ? null : t.folder,
+        t.kind === 'remote' ? t.targetId : null,
         now,
       );
       this.#run('UPDATE site SET updated_at = ? WHERE id = ?', now, id);
@@ -385,15 +513,17 @@ export class SiteService {
       actor: 'user',
       kind: 'space',
       action: 'site.published',
-      resource: folderPath ?? `site:${id}`,
+      resource: location ?? `site:${id}`,
       decision: 'allow',
       result: 'ok',
       detail: {
         siteId: id,
         name: row.name,
         version: input.version,
-        target: input.target.kind,
+        target: t.kind,
+        ...(t.kind === 'remote' ? { targetId: t.targetId, folder: t.folder } : {}),
         previousVersion: prev?.version ?? null,
+        ...(leftBehind ? { leftBehind: leftBehind.location } : {}),
       },
     });
     await this.#emit('site.published', accountId, {
@@ -404,12 +534,16 @@ export class SiteService {
     const publish = this.#get<PublishRow>('SELECT * FROM site_publish WHERE id = ?', pid);
     return {
       site: await this.get(accountId, id),
-      publish: publish ? publishView(publish, true) : null,
-      folderPath,
+      publish: publish ? this.#publishView(publish, true) : null,
+      folderPath: t.kind === 'folder' ? location : null,
+      leftBehind,
     };
   }
 
-  /** Undo the live publish: the previous publish is live again, or nothing is published. */
+  /**
+   * Undo the live publish: the previous publish is live again (its files put back first, so a
+   * target that cannot be reached changes nothing), or nothing is published.
+   */
   async unpublish(accountId: string, id: string): Promise<PublishOutcome> {
     const row = this.#site(accountId, id);
     const live = this.#live(id);
@@ -417,21 +551,22 @@ export class SiteService {
       throw new NovaError('conflict', 'this site is not published', {
         details: { reason: 'not_published' },
       });
+    const back = this.#live(id, live.id);
+    let location: string | null = null;
+    const backPlace = back ? await this.#place(accountId, targetOf(back), 'write') : null;
+    if (back && backPlace)
+      location = await backPlace.host.put(
+        id,
+        backPlace.folder,
+        this.#files(this.#version(id, back.version)),
+      );
+    const leftBehind =
+      back && samePlace(live, targetOf(back)) ? null : await this.#takeDown(accountId, id, live);
     const now = this.#stamp();
     await this.#o.db.transaction(() => {
       this.#run('UPDATE site_publish SET reverted_at = ? WHERE id = ?', now, live.id);
       this.#run('UPDATE site SET updated_at = ? WHERE id = ?', now, id);
     });
-    const back = this.#live(id);
-    let folderPath: string | null = null;
-    if (
-      live.target_kind === 'folder' &&
-      live.target_ref &&
-      !(back?.target_kind === 'folder' && back.target_ref === live.target_ref)
-    )
-      await this.#removeFolder(id, live.target_ref);
-    if (back?.target_kind === 'folder' && back.target_ref)
-      folderPath = await this.#writeFolder(id, back.target_ref, this.#version(id, back.version));
     await this.#audit.append({
       accountId,
       actor: 'user',
@@ -445,13 +580,15 @@ export class SiteService {
         name: row.name,
         version: live.version,
         restoredVersion: back?.version ?? null,
+        ...(leftBehind ? { leftBehind: leftBehind.location } : {}),
       },
     });
     await this.#emit('site.unpublished', accountId, { siteId: id, version: back?.version ?? null });
     return {
       site: await this.get(accountId, id),
-      publish: back ? publishView(back, true) : null,
-      folderPath,
+      publish: back ? this.#publishView(back, true) : null,
+      folderPath: back?.target_kind === 'folder' ? location : null,
+      leftBehind,
     };
   }
 
@@ -463,71 +600,81 @@ export class SiteService {
 
   // ---- internals ---------------------------------------------------------------------------------
 
-  async #folder(folder: string): Promise<{ root: string; dir: string }> {
-    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(folder))
-      throw new NovaError('validation', 'not a folder name');
-    const root = await this.publishRoot();
-    const dir = resolve(root, folder);
-    if (!dir.startsWith(root + sep)) throw new NovaError('validation', 'not a folder name');
-    return { root, dir };
-  }
-
-  /** Whether `dir` is free or Nova's folder for this site; anything else is refused. */
-  #claim(siteId: string, dir: string): boolean {
-    if (!existsSync(dir)) return false;
-    const st = lstatSync(dir);
-    const mine =
-      st.isDirectory() &&
-      !st.isSymbolicLink() &&
-      existsSync(join(dir, SITE_MARKER)) &&
-      readFileSync(join(dir, SITE_MARKER), 'utf8').trim() === siteId;
-    if (!mine)
+  #needTargets(): SiteTargetService {
+    if (!this.#targets)
       throw new NovaError(
-        'conflict',
-        'that folder already holds something Nova did not publish there',
-        {
-          details: { reason: 'folder_in_use' },
-        },
+        'capability_missing',
+        'remote hosting targets are not set up on this Hub',
       );
-    return true;
+    return this.#targets;
   }
 
-  async #writeFolder(siteId: string, folder: string, v: VersionRow): Promise<string> {
-    const { root, dir } = await this.#folder(folder);
-    mkdirSync(root, { recursive: true });
-    const exists = this.#claim(siteId, dir);
+  /** The target and folder a publish writes to (or takes down); null for a zip. */
+  async #place(
+    accountId: string,
+    t: SiteTarget,
+    purpose: 'write' | 'remove',
+  ): Promise<Place | null> {
+    if (t.kind === 'zip') return null;
+    if (t.kind === 'folder') return { host: this.#hub, folder: t.folder };
+    return {
+      host: await this.#needTargets().open(accountId, t.targetId, purpose),
+      folder: t.folder,
+    };
+  }
+
+  /**
+   * Take a publish's files down. A remote target that cannot be reached (or the network policy
+   * refuses) keeps its copy: the outcome says where, and the publish goes on.
+   */
+  async #takeDown(
+    accountId: string,
+    siteId: string,
+    r: PublishRow,
+  ): Promise<PublishOutcome['leftBehind']> {
+    if (r.target_kind === 'zip' || !r.target_ref) return null;
+    try {
+      const place = await this.#place(accountId, targetOf(r), 'remove');
+      if (place) await place.host.remove(siteId, place.folder);
+      return null;
+    } catch (err) {
+      if (r.target_kind !== 'remote' || !(err instanceof NovaError)) throw err;
+      return {
+        target: targetOf(r),
+        location: this.#remoteRef(r)?.location ?? null,
+        reason: err.message,
+      };
+    }
+  }
+
+  /** A version's files from its zip, in path order. */
+  #files(v: VersionRow): HostedFile[] {
     const files = unzipSync(new Uint8Array(readAttachmentBlob(this.#o.dataDir, v.blob_path)));
-    const tmp = join(root, `.${folder}.tmp-${randomUUID()}`);
-    try {
-      mkdirSync(tmp, { recursive: true });
-      for (const [path, bytes] of Object.entries(files)) {
-        const target = resolve(tmp, path);
-        // Paths come from Nova's own zip; still, nothing may land outside the folder.
-        if (!target.startsWith(tmp + sep) || path.endsWith('/')) continue;
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, bytes);
-      }
-      writeFileSync(join(tmp, SITE_MARKER), `${siteId}\n`);
-      // Swap: the old folder moves aside, the new one takes its name, the old one goes.
-      const old = join(root, `.${folder}.old-${randomUUID()}`);
-      if (exists) renameSync(dir, old);
-      renameSync(tmp, dir);
-      if (exists) rmSync(old, { recursive: true, force: true });
-    } catch (err) {
-      rmSync(tmp, { recursive: true, force: true });
-      throw err;
-    }
-    return dir;
+    return Object.entries(files)
+      .filter(([path]) => !path.endsWith('/'))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([path, bytes]) => ({ path, bytes }));
   }
 
-  async #removeFolder(siteId: string, folder: string): Promise<void> {
-    const { dir } = await this.#folder(folder);
-    try {
-      if (this.#claim(siteId, dir)) rmSync(dir, { recursive: true, force: true });
-    } catch (err) {
-      // Someone else's folder by now: leave it alone.
-      if (!(err instanceof NovaError)) throw err;
-    }
+  #remoteRef(r: PublishRow): SiteRemoteRef | null {
+    if (r.target_kind !== 'remote' || !r.target_id) return null;
+    return this.#targets
+      ? this.#targets.ref(r.target_id, r.target_ref)
+      : { targetId: r.target_id, name: null, location: null, publicUrl: null };
+  }
+
+  #publishView(r: PublishRow, current: boolean): SitePublishView {
+    return { ...publishView(r, current), remote: this.#remoteRef(r) };
+  }
+
+  #label(kind: SiteRow['source_kind'], ref: string): string | null {
+    return kind === 'space'
+      ? (this.#get<{ name: string }>(
+          'SELECT name FROM space WHERE id = ? AND deleted_at IS NULL',
+          ref,
+        )?.name ?? null)
+      : (this.#get<{ title: string | null }>('SELECT title FROM artifact WHERE id = ?', ref)
+          ?.title ?? null);
   }
 
   async #render(
@@ -628,10 +775,12 @@ export class SiteService {
     return out;
   }
 
-  #live(siteId: string): PublishRow | undefined {
+  /** The live publish: the newest not reverted (other than `except`, for unpublish). */
+  #live(siteId: string, except?: string): PublishRow | undefined {
     return this.#get<PublishRow>(
-      'SELECT * FROM site_publish WHERE site_id = ? AND reverted_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 1',
-      siteId,
+      `SELECT * FROM site_publish WHERE site_id = ? AND reverted_at IS NULL${except ? ' AND id <> ?' : ''}
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      ...(except ? [siteId, except] : [siteId]),
     );
   }
 
@@ -657,29 +806,17 @@ export class SiteService {
 
   #view(r: SiteRow): SiteView {
     const live = this.#live(r.id);
-    const sourceLabel =
-      r.source_kind === 'space'
-        ? (this.#get<{ name: string }>(
-            'SELECT name FROM space WHERE id = ? AND deleted_at IS NULL',
-            r.source_ref,
-          )?.name ?? null)
-        : (this.#get<{ title: string | null }>(
-            'SELECT title FROM artifact WHERE id = ?',
-            r.source_ref,
-          )?.title ?? null);
     return {
       id: r.id,
       name: r.name,
       description: r.description,
-      source:
-        r.source_kind === 'space'
-          ? { kind: 'space', spaceId: r.source_ref }
-          : { kind: 'artifact', artifactId: r.source_ref },
-      sourceLabel,
+      source: sourceOf(r),
+      sourceLabel: this.#label(r.source_kind, r.source_ref),
       data: parseConnections(r.data_json),
       latestVersion: r.latest_version,
       publishedVersion: live?.version ?? null,
       publishedTarget: live ? targetOf(live) : null,
+      publishedRemote: live ? this.#remoteRef(live) : null,
       publishedAt: live?.created_at ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -687,17 +824,11 @@ export class SiteService {
   }
 
   #versionView(r: VersionRow, live: PublishRow | undefined): SiteVersionView {
-    let files: { path: string; size: number }[] = [];
-    try {
-      files = JSON.parse(r.files_json) as { path: string; size: number }[];
-    } catch {
-      // keep empty
-    }
     return {
       siteId: r.site_id,
       version: r.version,
       note: r.note,
-      files,
+      files: parseFiles(r.files_json),
       size: r.size,
       sha256: r.sha256,
       scripts: r.scripts === 1,
@@ -737,9 +868,39 @@ export class SiteService {
 }
 
 function targetOf(r: PublishRow): SiteTarget {
+  if (r.target_kind === 'remote' && r.target_id && r.target_ref)
+    return { kind: 'remote', targetId: r.target_id, folder: r.target_ref };
   return r.target_kind === 'folder' && r.target_ref
     ? { kind: 'folder', folder: r.target_ref }
     : { kind: 'zip' };
+}
+
+/** Whether a publish went to the same folder of the same target as `t`. */
+function samePlace(r: PublishRow, t: SiteTarget): boolean {
+  const a = targetOf(r);
+  if (a.kind !== t.kind) return false;
+  if (a.kind === 'zip' || t.kind === 'zip') return true;
+  if (a.folder !== t.folder) return false;
+  return a.kind !== 'remote' || (t.kind === 'remote' && a.targetId === t.targetId);
+}
+
+function sourceOf(r: Pick<SiteRow, 'source_kind' | 'source_ref'>): SiteSource {
+  return r.source_kind === 'space'
+    ? { kind: 'space', spaceId: r.source_ref }
+    : { kind: 'artifact', artifactId: r.source_ref };
+}
+
+function refOf(s: SiteSource): string {
+  return s.kind === 'space' ? s.spaceId : s.artifactId;
+}
+
+function parseFiles(json: string): SiteFileView[] {
+  try {
+    const v = JSON.parse(json) as unknown;
+    return Array.isArray(v) ? (v as SiteFileView[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function publishView(r: PublishRow, current: boolean): SitePublishView {

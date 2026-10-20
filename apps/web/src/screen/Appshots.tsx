@@ -4,23 +4,53 @@
 import { useEffect, useId, useState } from 'react';
 import type { AppshotView, ScreenWindowView } from '@nova/shared';
 import { Button, Icon, SelectField, Spinner, TextField, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { errorMessage } from '../api.ts';
 import { useAnnounce } from '../services.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useScreenApi } from './api.ts';
-import { sentence } from './format.ts';
+import { coord, sentence } from './format.ts';
 
 type Source = AppshotView['source'];
 
-const SOURCE_TEXT: Record<Source, string> = {
-  window: 'A window',
-  screen: 'The whole screen',
-  browser: 'The agent browser page',
-};
+export const APPSHOTS_TEXT = defineMessages('screen.appshots', {
+  title: 'Appshots',
+  intro: 'Save what an app shows as an image, to look at later or share in a chat.',
+  sources: {
+    window: 'A window',
+    screen: 'The whole screen',
+    browser: 'The agent browser page',
+  },
+  /** An appshot without an app's name. */
+  unnamed: '{source, select, screen {Screen} other {Browser}}',
+  /** An app (or "Screen") and its window title. */
+  withTitle: '{what} – {title}',
+  loadFailed: 'Could not load the appshots.',
+  savedSaid: 'Appshot saved: {label}.',
+  saved: 'Appshot saved. It is also in the Library.',
+  notTaken: 'The appshot could not be taken.',
+  capture: 'Capture',
+  app: 'App',
+  inFront: 'The one in front',
+  take: 'Take appshot',
+  retry: 'Retry',
+  loading: 'Loading appshots',
+  empty: 'No appshots of this computer yet.',
+  size: '{width}×{height}',
+  byYou: 'By you',
+  byNova: 'By Nova',
+  hide: 'Hide',
+  view: 'View',
+  openImage: 'Open image',
+  image: 'Appshot: {label}',
+});
+const S = APPSHOTS_TEXT;
+
+const SOURCES = ['window', 'screen', 'browser'] as const satisfies readonly Source[];
 
 export function appshotLabel(s: AppshotView): string {
-  const what = s.app ?? (s.source === 'screen' ? 'Screen' : 'Browser');
-  return s.windowTitle ? `${what} – ${s.windowTitle}` : what;
+  const what = s.app ?? S.unnamed({ source: s.source });
+  return s.windowTitle ? S.withTitle({ what, title: s.windowTitle }) : what;
 }
 
 export function Appshots({
@@ -53,7 +83,7 @@ export function Appshots({
         setItems(list);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the appshots.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -70,10 +100,10 @@ export function Appshots({
       });
       setItems((list) => [shot, ...(list ?? []).filter((s) => s.id !== shot.id)]);
       setShown(shot.id);
-      announce(`Appshot saved: ${appshotLabel(shot)}.`);
-      toast.show('Appshot saved. It is also in the Library.', { tone: 'success' });
+      announce(S.savedSaid({ label: appshotLabel(shot) }));
+      toast.show(S.saved, { tone: 'success' });
     } catch (err) {
-      setProblem(sentence(errorMessage(err, 'The appshot could not be taken.')));
+      setProblem(sentence(errorMessage(err, S.notTaken)));
     } finally {
       setBusy(false);
     }
@@ -82,11 +112,9 @@ export function Appshots({
   return (
     <section className="ws-section scr-appshots" aria-labelledby={headingId}>
       <div className="ws-section-header">
-        <h3 id={headingId}>Appshots</h3>
+        <h3 id={headingId}>{S.title}</h3>
       </div>
-      <p className="muted ws-flush">
-        Save what an app shows as an image, to look at later or share in a chat.
-      </p>
+      <p className="muted ws-flush">{S.intro}</p>
       <form
         className="ws-toolbar"
         onSubmit={(e) => {
@@ -95,23 +123,20 @@ export function Appshots({
         }}
       >
         <SelectField
-          label="Capture"
+          label={S.capture}
           value={source}
           onChange={(v) => setSource(v as Source)}
-          options={(Object.keys(SOURCE_TEXT) as Source[]).map((s) => ({
-            value: s,
-            label: SOURCE_TEXT[s],
-          }))}
+          options={SOURCES.map((s) => ({ value: s, label: S.sources[s] }))}
         />
         {source === 'window' ? (
           <>
             <TextField
-              label="App"
+              label={S.app}
               value={app}
               list={listId}
               maxLength={200}
               autoComplete="off"
-              placeholder="The one in front"
+              placeholder={S.inFront}
               onChange={(e) => setApp(e.target.value)}
             />
             <datalist id={listId}>
@@ -122,7 +147,7 @@ export function Appshots({
           </>
         ) : null}
         <Button type="submit" disabled={busy}>
-          <Icon name="image" /> Take appshot
+          <Icon name="image" /> {S.take}
         </Button>
       </form>
       {problem ? (
@@ -133,28 +158,26 @@ export function Appshots({
       {error ? (
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading appshots" /> : null}
-      {items?.length === 0 ? <p className="muted">No appshots of this computer yet.</p> : null}
+      {items === null && !error ? <Spinner label={S.loading} /> : null}
+      {items?.length === 0 ? <p className="muted">{S.empty}</p> : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="Appshots">
+        <ul className="ws-list" aria-label={S.title}>
           {items.map((s) => {
             const label = appshotLabel(s);
             const src = api.appshotImageUrl(s.artifactId);
             return (
               <li key={s.id} className="ws-list-row" aria-label={label}>
                 <div className="ws-source-main">
-                  <strong>{label}</strong>
+                  <strong dir="auto">{label}</strong>
                   <span className="muted ws-row-meta">
-                    <span>{SOURCE_TEXT[s.source]}</span>
+                    <span>{S.sources[s.source]}</span>
                     {s.width && s.height ? (
-                      <span>
-                        {s.width}×{s.height}
-                      </span>
+                      <span>{S.size({ width: coord(s.width), height: coord(s.height) })}</span>
                     ) : null}
-                    <span>{s.capturedBy === 'user' ? 'By you' : 'By Nova'}</span>
+                    <span>{s.capturedBy === 'user' ? S.byYou : S.byNova}</span>
                     <span>{formatWhen(s.capturedAt)}</span>
                   </span>
                 </div>
@@ -163,7 +186,7 @@ export function Appshots({
                     aria-expanded={shown === s.id}
                     onClick={() => setShown((v) => (v === s.id ? null : s.id))}
                   >
-                    {shown === s.id ? 'Hide' : 'View'}
+                    {shown === s.id ? S.hide : S.view}
                   </Button>
                   <a
                     className="nv-btn"
@@ -172,13 +195,17 @@ export function Appshots({
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    <Icon name="external" /> Open image
+                    <Icon name="external" /> {S.openImage}
                   </a>
                 </div>
                 {shown === s.id ? (
                   <figure className="scr-appshot-figure">
-                    <img src={src} alt={`Appshot: ${label}`} />
-                    {s.url ? <figcaption className="muted">{s.url}</figcaption> : null}
+                    <img src={src} alt={S.image({ label })} />
+                    {s.url ? (
+                      <figcaption className="muted" dir="ltr">
+                        {s.url}
+                      </figcaption>
+                    ) : null}
                   </figure>
                 ) : null}
               </li>

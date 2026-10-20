@@ -157,6 +157,48 @@ describe('multi-pane layout (FR-005)', () => {
     await waitFor(() => expect(savedLayouts(hub).chat).toEqual(defaultLayout()));
   });
 
+  it('resizes panes and the bottom panel without dragging (WCAG 2.5.7)', async () => {
+    const hub = createHub();
+    hub.state.settings['workspace.layout'] = {
+      chat: setBottom(splitPane(defaultLayout(), 'main', 'row', 'editor').layout, {
+        open: true,
+        size: 0.3,
+      }),
+    };
+    await renderApp({ hub });
+    const splitter = screen.getByRole('separator', { name: 'Resize Chat and Editor' });
+    expect(splitter.getAttribute('aria-valuenow')).toBe('50');
+    const menu = within(pane('Chat')).getByRole('button', { name: 'More actions for Chat' });
+    await userEvent.click(menu);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Make larger' }));
+    expect(splitter.getAttribute('aria-valuenow')).toBe('60');
+    await userEvent.click(menu);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Make smaller' }));
+    await userEvent.click(menu);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Make smaller' }));
+    expect(splitter.getAttribute('aria-valuenow')).toBe('40');
+
+    // The bottom panel's own menu (its splitter's value is where the panel starts).
+    const bottom = screen.getByRole('separator', { name: 'Resize the bottom panel' });
+    expect(bottom.getAttribute('aria-valuenow')).toBe('70');
+    const more = screen.getByRole('button', { name: 'More actions for the bottom panel' });
+    await userEvent.click(more);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Make taller' }));
+    expect(bottom.getAttribute('aria-valuenow')).toBe('60');
+    await userEvent.click(more);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Make shorter' }));
+    await userEvent.click(more);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Make shorter' }));
+    expect(bottom.getAttribute('aria-valuenow')).toBe('80');
+    // At the smallest size, Make shorter is off.
+    await userEvent.click(more);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Make shorter' }));
+    await userEvent.click(more);
+    expect(
+      screen.getByRole('menuitem', { name: 'Make shorter' }).getAttribute('aria-disabled'),
+    ).toBe('true');
+  });
+
   it('keeps the chat mounted while panes change around it', async () => {
     const t = thread({ title: 'Kept' });
     const hub = createHub({ threads: [t] });

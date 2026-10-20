@@ -8,11 +8,13 @@
 import { useEffect, useState } from 'react';
 import type { BrowserFallbackConsentView } from '@nova/shared';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
+import { rich } from '../i18n/rich.tsx';
 import { chatPath } from '../router.ts';
 import { agentPath } from '../agents/format.ts';
 import { useAnnounce, useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
-import { MANAGED, formatWhen } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { SwitchField } from '../settings/controls.tsx';
 import { useHubEvents } from '../spaces/events.ts';
 import { useDebounced } from '../work/events.ts';
@@ -24,6 +26,55 @@ import { ConfirmAction } from './parts.tsx';
 import './browserdevice.css';
 
 const DEVICES_PATH = '/devices';
+
+export const FALLBACK_SETTINGS_TEXT = defineMessages('browserDevice.settings', {
+  loadFailed: 'Could not load the sites you agreed to.',
+  saveFailed: 'Could not save: {error}',
+  goneComputer: 'a computer that left',
+  oneChat: 'One chat',
+  anAgent: 'An agent',
+  fallbackTitle: 'Continue on your computer',
+  fallbackIntro:
+    'When a site blocks an agent’s own browser, an agent with a connected computer can continue that site in the computer’s browser, after you agree for that site. You choose a clean profile there, or your own browser through the Nova extension. What it does there is marked in the computer’s browser actions.',
+  offer: 'Offer to continue on the agent’s computer',
+  offerHelp:
+    'Off: a blocked site stays blocked, nothing is offered, and the sites below are not used.',
+  agreed: 'Sites you agreed to',
+  retry: 'Retry',
+  loading: 'Loading the sites you agreed to',
+  none: 'None yet. When an agent asks to continue a blocked site on your computer, your answer is remembered here.',
+  sites: 'Sites agents may continue on a computer',
+  siteOn: '{site} on {device}',
+  forScope: 'For {scope}',
+  agreedAt: 'Agreed {when}',
+  lastUsed: 'Last used {when}',
+  revoke: 'Revoke',
+  revokeSite: 'Revoke {site} on {device}',
+  showRevoked: 'Show revoked',
+  hideRevoked: 'Hide revoked',
+  revokedSites: 'Revoked sites',
+  revokedAt: 'Revoked {when}',
+  nothingRevoked: 'Nothing revoked.',
+  revokeTitle: 'Revoke {site} on {device}?',
+  revokeHelp:
+    'The agent can no longer continue {site} in {device}’s browser without asking you again. A session running on it stops now.',
+  revoked: '{site} revoked.',
+  revokedToast: '{site} revoked. The agent asks again next time.',
+  bridgeTitle: 'Your own browser (extension bridge)',
+  bridgeIntro:
+    'With the Nova extension in your browser, agents can act in tabs you share, signed in as you, on sites you grant. Cookies, passwords and tokens never leave your browser, and every change still follows the site’s level above. Sites and shared tabs are set for each computer on its page under {link}.',
+  devices: 'Devices',
+  bridge: 'Let agents use your own browser through the extension',
+  bridgeHelp:
+    'Off: the bridge refuses every call on every computer, and a blocked site is offered only with a clean profile.',
+  allSites: 'Allow the “all sites” grant',
+  allSitesHelp:
+    'It lets agents act on any site in a tab you share, a much larger risk, and still needs its own confirmation on the computer’s page. Off: only sites granted one by one count, and an existing “all sites” grant stops working.',
+  managedOff: 'Managed by your organization: the bridge is off on every computer.',
+  history:
+    'History searches have no standing access: each search an agent asks for opens a prompt in your browser, and nothing is read without your yes. Each computer’s page lists its recent searches.',
+});
+const S = FALLBACK_SETTINGS_TEXT;
 
 /** Both M7.5 sections of Settings → Browser; nothing when the client lacks the calls. */
 export function BrowserDeviceSettings() {
@@ -75,8 +126,7 @@ function FallbackSection({ api }: { api: BrowserDeviceApi }) {
         setItems(list);
         setError(null);
       },
-      (err: unknown) =>
-        alive && setError(browserDeviceError(err, 'Could not load the sites you agreed to.')),
+      (err: unknown) => alive && setError(browserDeviceError(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -86,21 +136,21 @@ function FallbackSection({ api }: { api: BrowserDeviceApi }) {
   useHubEvents(FALLBACK_EVENTS, () => reload());
 
   const fail = (err: unknown) =>
-    toast.show(`Could not save: ${browserDeviceError(err)}`, { tone: 'error' });
-  const deviceOf = (c: BrowserFallbackConsentView) => c.deviceName ?? 'a computer that left';
+    toast.show(S.saveFailed({ error: browserDeviceError(err) }), { tone: 'error' });
+  const deviceOf = (c: BrowserFallbackConsentView) => c.deviceName ?? S.goneComputer;
   const scopeOf = (c: BrowserFallbackConsentView) => {
     if (c.scopeKind === 'thread') {
       const path = chatPath(c.scopeRef);
       return (
         <a href={path} onClick={(e) => followLink(e, path)}>
-          One chat
+          {S.oneChat}
         </a>
       );
     }
     const path = agentPath(c.scopeRef);
     return (
       <a href={path} onClick={(e) => followLink(e, path)}>
-        {agents.get(c.scopeRef) ?? 'An agent'}
+        {agents.get(c.scopeRef) ?? S.anAgent}
       </a>
     );
   };
@@ -109,55 +159,52 @@ function FallbackSection({ api }: { api: BrowserDeviceApi }) {
 
   return (
     <section className="settings-section" aria-labelledby="bdv-fallback">
-      <h3 id="bdv-fallback">Continue on your computer</h3>
-      <p className="muted">
-        When a site blocks an agent’s own browser, an agent with a connected computer can continue
-        that site in the computer’s browser, after you agree for that site. You choose a clean
-        profile there, or your own browser through the Nova extension. What it does there is marked
-        in the computer’s browser actions.
-      </p>
+      <h3 id="bdv-fallback">{S.fallbackTitle}</h3>
+      <p className="muted">{S.fallbackIntro}</p>
       <SwitchField
-        label="Offer to continue on the agent’s computer"
-        description="Off: a blocked site stays blocked, nothing is offered, and the sites below are not used."
+        label={S.offer}
+        description={S.offerHelp}
         checked={offer.value}
         locked={offer.locked}
         onChange={(v) => void settings.set('browser.localFallback', v).catch(fail)}
       />
-      <h4 className="ws-subhead">Sites you agreed to</h4>
+      <h4 className="ws-subhead">{S.agreed}</h4>
       {error ? (
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading the sites you agreed to" /> : null}
-      {items && active.length === 0 ? (
-        <p className="muted">
-          None yet. When an agent asks to continue a blocked site on your computer, your answer is
-          remembered here.
-        </p>
-      ) : null}
+      {items === null && !error ? <Spinner label={S.loading} /> : null}
+      {items && active.length === 0 ? <p className="muted">{S.none}</p> : null}
       {active.length ? (
-        <ul className="ws-list" aria-label="Sites agents may continue on a computer">
+        <ul className="ws-list" aria-label={S.sites}>
           {active.map((c) => (
-            <li key={c.id} className="ws-list-row" aria-label={`${c.site} on ${deviceOf(c)}`}>
+            <li
+              key={c.id}
+              className="ws-list-row"
+              aria-label={S.siteOn({ site: c.site, device: deviceOf(c) })}
+            >
               <div className="ws-source-main">
                 <span>
-                  <code className="ws-code-inline">{c.site}</code> on <strong>{deviceOf(c)}</strong>
+                  {rich(S.siteOn, {
+                    site: <code className="ws-code-inline">{c.site}</code>,
+                    device: <strong dir="auto">{deviceOf(c)}</strong>,
+                  })}
                 </span>
                 <span className="muted ws-row-meta">
                   <span>{PROFILE_TEXT[c.profile]}</span>
-                  <span>For {scopeOf(c)}</span>
-                  <span>Agreed {formatWhen(c.createdAt)}</span>
-                  <span>Last used {formatWhen(c.lastUsedAt)}</span>
+                  <span>{rich(S.forScope, { scope: scopeOf(c) })}</span>
+                  <span>{S.agreedAt({ when: formatWhen(c.createdAt) })}</span>
+                  <span>{S.lastUsed({ when: formatWhen(c.lastUsedAt) })}</span>
                 </span>
               </div>
               <Button
                 variant="ghost"
                 onClick={() => setRevoking(c)}
-                aria-label={`Revoke ${c.site} on ${deviceOf(c)}`}
+                aria-label={S.revokeSite({ site: c.site, device: deviceOf(c) })}
               >
-                Revoke
+                {S.revoke}
               </Button>
             </li>
           ))}
@@ -166,34 +213,41 @@ function FallbackSection({ api }: { api: BrowserDeviceApi }) {
       {items ? (
         <div className="row">
           <Button aria-pressed={all} onClick={() => setAll((v) => !v)}>
-            {all ? 'Hide revoked' : 'Show revoked'}
+            {all ? S.hideRevoked : S.showRevoked}
           </Button>
         </div>
       ) : null}
       {all && revoked.length ? (
-        <ul className="ws-list" aria-label="Revoked sites">
+        <ul className="ws-list" aria-label={S.revokedSites}>
           {revoked.map((c) => (
-            <li key={c.id} className="ws-list-row" aria-label={`${c.site} on ${deviceOf(c)}`}>
+            <li
+              key={c.id}
+              className="ws-list-row"
+              aria-label={S.siteOn({ site: c.site, device: deviceOf(c) })}
+            >
               <div className="ws-source-main">
                 <span>
-                  <code className="ws-code-inline">{c.site}</code> on {deviceOf(c)}
+                  {rich(S.siteOn, {
+                    site: <code className="ws-code-inline">{c.site}</code>,
+                    device: deviceOf(c),
+                  })}
                 </span>
                 <span className="muted ws-row-meta">
                   <span>{PROFILE_TEXT[c.profile]}</span>
-                  <span>Revoked {formatWhen(c.revokedAt)}</span>
+                  <span>{S.revokedAt({ when: formatWhen(c.revokedAt) })}</span>
                 </span>
               </div>
             </li>
           ))}
         </ul>
       ) : all && items ? (
-        <p className="muted">Nothing revoked.</p>
+        <p className="muted">{S.nothingRevoked}</p>
       ) : null}
       {revoking ? (
         <ConfirmAction
-          title={`Revoke ${revoking.site} on ${deviceOf(revoking)}?`}
-          description={`The agent can no longer continue ${revoking.site} in ${deviceOf(revoking)}’s browser without asking you again. A session running on it stops now.`}
-          confirmLabel="Revoke"
+          title={S.revokeTitle({ site: revoking.site, device: deviceOf(revoking) })}
+          description={S.revokeHelp({ site: revoking.site, device: deviceOf(revoking) })}
+          confirmLabel={S.revoke}
           danger
           onClose={() => setRevoking(null)}
           onConfirm={async () => {
@@ -207,8 +261,8 @@ function FallbackSection({ api }: { api: BrowserDeviceApi }) {
                   )
                 : (list ?? []).filter((x) => x.id !== revoking.id),
             );
-            announce(`${site} revoked.`);
-            toast.show(`${site} revoked. The agent asks again next time.`, { tone: 'success' });
+            announce(S.revoked({ site }));
+            toast.show(S.revokedToast({ site }), { tone: 'success' });
             setAttempt((n) => n + 1);
           }}
         />
@@ -223,30 +277,29 @@ function BridgeSettingsSection() {
   const bridge = settings.get('browser.extensionBridge');
   const allSites = settings.get('browser.extensionBridgeAllSites');
   const fail = (err: unknown) =>
-    toast.show(`Could not save: ${browserDeviceError(err)}`, { tone: 'error' });
+    toast.show(S.saveFailed({ error: browserDeviceError(err) }), { tone: 'error' });
   return (
     <section className="settings-section" aria-labelledby="bdv-bridge-settings">
-      <h3 id="bdv-bridge-settings">Your own browser (extension bridge)</h3>
+      <h3 id="bdv-bridge-settings">{S.bridgeTitle}</h3>
       <p className="muted">
-        With the Nova extension in your browser, agents can act in tabs you share, signed in as you,
-        on sites you grant. Cookies, passwords and tokens never leave your browser, and every change
-        still follows the site’s level above. Sites and shared tabs are set for each computer on its
-        page under{' '}
-        <a href={DEVICES_PATH} onClick={(e) => followLink(e, DEVICES_PATH)}>
-          Devices
-        </a>
-        .
+        {rich(S.bridgeIntro, {
+          link: (
+            <a href={DEVICES_PATH} onClick={(e) => followLink(e, DEVICES_PATH)}>
+              {S.devices}
+            </a>
+          ),
+        })}
       </p>
       <SwitchField
-        label="Let agents use your own browser through the extension"
-        description="Off: the bridge refuses every call on every computer, and a blocked site is offered only with a clean profile."
+        label={S.bridge}
+        description={S.bridgeHelp}
         checked={bridge.value}
         locked={bridge.locked}
         onChange={(v) => void settings.set('browser.extensionBridge', v).catch(fail)}
       />
       <SwitchField
-        label="Allow the “all sites” grant"
-        description="It lets agents act on any site in a tab you share, a much larger risk, and still needs its own confirmation on the computer’s page. Off: only sites granted one by one count, and an existing “all sites” grant stops working."
+        label={S.allSites}
+        description={S.allSitesHelp}
         checked={allSites.value}
         locked={allSites.locked}
         disabled={!bridge.value}
@@ -254,14 +307,10 @@ function BridgeSettingsSection() {
       />
       {bridge.locked && !bridge.value ? (
         <p className="ws-warning" role="note">
-          <Icon name="shield" /> {MANAGED}: the bridge is off on every computer.
+          <Icon name="shield" /> {S.managedOff}
         </p>
       ) : null}
-      <p className="muted ws-flush">
-        History searches have no standing access: each search an agent asks for opens a prompt in
-        your browser, and nothing is read without your yes. Each computer’s page lists its recent
-        searches.
-      </p>
+      <p className="muted ws-flush">{S.history}</p>
     </section>
   );
 }

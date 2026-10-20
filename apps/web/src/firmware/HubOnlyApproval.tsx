@@ -7,32 +7,58 @@
 // appears, never on Allow, so Enter alone never approves.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { ApprovalView } from '@nova/shared';
+import { defineMessages, messageFor } from '@nova/i18n';
 import { Button, Icon, Spinner } from '@nova/ui';
 import { ApiError } from '../api.ts';
 import { expiryText } from '../chat/ApprovalCard.tsx';
 import { APPROVALS_PATH } from '../dispatch/ApprovalsPage.tsx';
 import { useHubStream } from '../hub-events.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useAnnounce, useServices } from '../services.tsx';
 import { useInterval } from '../settings/common.ts';
 import { followLink } from '../work/nav.tsx';
-import { HUB_ONLY_TEXT, firmwareErrorMessage } from './format.ts';
+import { firmwareErrorMessage, hubOnlyText } from './format.ts';
 import './firmware.css';
 
-const OUTCOME: Record<string, string> = {
-  allow_once: 'Allowed once',
-  allow_session: 'Allowed',
-  allow_always: 'Allowed',
-  deny_continue: 'Denied',
-  deny_stop: 'Denied',
-  timeout: 'Expired: nobody answered in time',
-};
+export const HUB_ONLY_APPROVAL_TEXT = defineMessages('firmware.hubOnly', {
+  /** An answered card's outcome, by decision. */
+  outcome: {
+    allow_once: 'Allowed once',
+    allow_session: 'Allowed',
+    allow_always: 'Allowed',
+    deny_continue: 'Denied',
+    deny_stop: 'Denied',
+  },
+  expired: 'Expired: nobody answered in time',
+  cancelled: 'Cancelled',
+  answered: 'Answered',
+  /** The heading of an answered card; `outcome` is one of the words above. */
+  answeredTitle: 'Approval: {outcome}',
+  decided: '{decision, select, allow_once {Allowed once.} other {Denied.}}',
+  answeredHere: 'Answered here.',
+  answeredInNova: 'Answered in Nova.',
+  decision: 'Decision',
+  allowOnce: 'Allow once',
+  deny: 'Deny',
+  sending: 'Sending your answer',
+  loading: 'Loading the approval',
+  loadFailed: 'Could not load the approval.',
+  retry: 'Retry',
+  openInApprovals: 'Open in Approvals',
+  /** When the card expires, then the link to the Approvals page. */
+  expiresLine: '{expiry}. {link}',
+  notSent: 'Your answer was not sent: {reason}',
+  notSentRetry: 'Your answer was not sent: try again.',
+});
 
-export { HUB_ONLY_TEXT };
+const S = HUB_ONLY_APPROVAL_TEXT;
+
+export { hubOnlyText };
 
 function outcomeOf(a: ApprovalView): string {
-  if (a.status === 'expired') return OUTCOME.timeout!;
-  if (a.status === 'cancelled') return 'Cancelled';
-  return (a.decision && OUTCOME[a.decision]) || 'Answered';
+  if (a.status === 'expired') return S.expired;
+  if (a.status === 'cancelled') return S.cancelled;
+  return (a.decision && messageFor(S.outcome, a.decision)) || S.answered;
 }
 
 export function approvalLink(approvalId: string): string {
@@ -106,7 +132,7 @@ export function HubOnlyApproval({
       const view = await api.decideApproval({ approvalId: a.id, decision });
       setA(view);
       setHere(true);
-      announce(`${OUTCOME[decision]}.`);
+      announce(S.decided({ decision }));
       decidedRef.current?.(view);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -119,7 +145,8 @@ export function HubOnlyApproval({
           () => undefined,
         );
       } else {
-        setError(`Your answer was not sent: ${firmwareErrorMessage(err, 'try again.')}`);
+        const reason = firmwareErrorMessage(err, '');
+        setError(reason ? S.notSent({ reason }) : S.notSentRetry);
       }
     } finally {
       setBusy(false);
@@ -132,21 +159,20 @@ export function HubOnlyApproval({
         {loadError ? (
           <>
             <p role="alert">
-              <Icon name="alert" />{' '}
-              {firmwareErrorMessage(loadError, 'Could not load the approval.')}
+              <Icon name="alert" /> {firmwareErrorMessage(loadError, S.loadFailed)}
             </p>
             <div className="row">
-              <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+              <Button onClick={() => setAttempt((n) => n + 1)}>{S.retry}</Button>
               <a
                 href={approvalLink(approvalId)}
                 onClick={(e) => followLink(e, approvalLink(approvalId))}
               >
-                Open in Approvals
+                {S.openInApprovals}
               </a>
             </div>
           </>
         ) : (
-          <Spinner label="Loading the approval" />
+          <Spinner label={S.loading} />
         )}
       </div>
     );
@@ -161,35 +187,42 @@ export function HubOnlyApproval({
       data-answer-in={a.answerIn ?? undefined}
     >
       <h3 id={`${id}-title`} ref={heading} tabIndex={-1}>
-        <Icon name="shield" /> {pending ? title : `Approval: ${outcomeOf(a)}`}
+        <Icon name="shield" /> {pending ? title : S.answeredTitle({ outcome: outcomeOf(a) })}
       </h3>
       {pending ? (
         <p id={`${id}-only`} className="muted">
-          {HUB_ONLY_TEXT}
+          {hubOnlyText()}
         </p>
       ) : (
         <p id={`${id}-only`} className="muted">
-          {here ? 'Answered here.' : 'Answered in Nova.'}
+          {here ? S.answeredHere : S.answeredInNova}
         </p>
       )}
       {children}
       {pending ? (
         <>
-          <p className="muted">{a.action}</p>
-          <div className="row" role="group" aria-label="Decision">
+          {/* What the Hub says the card approves: its own words (D9). */}
+          <p className="muted" dir="auto">
+            {a.action}
+          </p>
+          <div className="row" role="group" aria-label={S.decision}>
             <Button disabled={busy} onClick={() => void decide('allow_once')}>
-              Allow once
+              {S.allowOnce}
             </Button>
             <Button variant="danger" disabled={busy} onClick={() => void decide('deny_continue')}>
-              Deny
+              {S.deny}
             </Button>
-            {busy ? <Spinner label="Sending your answer" /> : null}
+            {busy ? <Spinner label={S.sending} /> : null}
           </div>
           <p className="muted">
-            {expiryText(a.expiresAt, now)}.{' '}
-            <a href={approvalLink(a.id)} onClick={(e) => followLink(e, approvalLink(a.id))}>
-              Open in Approvals
-            </a>
+            {rich(S.expiresLine, {
+              expiry: expiryText(a.expiresAt, now),
+              link: (
+                <a href={approvalLink(a.id)} onClick={(e) => followLink(e, approvalLink(a.id))}>
+                  {S.openInApprovals}
+                </a>
+              ),
+            })}
           </p>
         </>
       ) : null}

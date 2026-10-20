@@ -49,17 +49,21 @@ these channels, each accepted only from the page named:
 
 | Channel | Page | Payload → result |
 | --- | --- | --- |
-| `shell.connect.state` | connect | `{}` → the link, address or pin last tried and the problem |
-| `shell.connect` | connect | `{link?, url?, pin?, replace?}` (an Add Device link, or the Hub address and its 43-character fingerprint) → `{ok, origin}` after the pinning check of `docs/22` §5 (`apps/desktop/src/pinning.ts`), or `{ok: false, reason, message}`. Connecting to a Hub other than the current one needs `replace: true`, sent only after the page's "Replace your Hub?" confirmation; without it the answer is `{ok: false, reason: 'confirm_replace', replace: {current, next, fingerprint}, message}` and nothing is contacted. Plain `http://` only to a Hub on this computer |
-| `quick.state` | quick | `{}` → the Hub's state, the status list (`ShellStatusItemView[]`, Needs input first) and the current chat |
+| `shell.text` | connect, quick, attach | `{}` → `{ok, lang, dir, text}`: the page's words in the shell's language (FR-016), filled into its `data-t`, `data-t-placeholder`, `data-t-alt` and `data-t-aria-label` elements; the page sets `<html lang dir>` from it |
+| `shell.connect.state` | connect | `{}` → the link, address or pin last tried, the problem, and `currentText` (the sentence naming the current Hub) |
+| `shell.connect` | connect | `{link?, url?, pin?, replace?}` (an Add Device link, or the Hub address and its 43-character fingerprint) → `{ok, origin}` after the pinning check of `docs/22` §5 (`apps/desktop/src/pinning.ts`), or `{ok: false, reason, message}`. Connecting to a Hub other than the current one needs `replace: true`, sent only after the page's "Replace your Hub?" confirmation; without it the answer is `{ok: false, reason: 'confirm_replace', replace: {current, next, fingerprint}, message, confirmLabel}` and nothing is contacted. Plain `http://` only to a Hub on this computer |
+| `quick.state` | quick | `{}` → the Hub's state, the status list (`ShellStatusItemView[]`, Needs input first), `rows` (each item's status, detail and accessible name in the shell's language) and the current chat |
 | `quick.send` | quick | `{text, target: current\|new}` → the chat it went to (FR-008) |
 | `quick.open` | quick, attach | `{path}`: open an app route in the last used window |
 | `quick.newTask`, `quick.home`, `quick.attach` | quick | `{}`: New task, focus Nova, capture the frontmost window |
-| `window.capture.draft` | attach | `{draftId}` → `ShellCaptureDraftView` (FR-214): the screenshot, the redacted accessibility text (Linux AT-SPI; macOS and Windows offer none yet) and what was left out |
+| `window.capture.draft` | attach | `{draftId}` → `{draft: ShellCaptureDraftView, notes: {source, redactions}}` (FR-214): the screenshot, the redacted accessibility text (Linux AT-SPI; macOS and Windows offer none yet) and what was left out, with the sentences about it in the shell's language |
 | `window.capture.attach` | attach | `{draftId, includeImage, includeText, note, target: current\|new}` → sent: two message attachments (PNG and text) on the Hub, no `window_capture` origin |
 | `window.capture.discard` | attach | `{draftId}`: drop it; nothing left the computer |
 
-The overlay also receives `quick.status` events. `window.capture` itself is never exposed to a
+The overlay also receives `quick.status` events, and every page `shell.text` events (the same
+payload as the channel) when the shell's language changes. The shell's language is the Hub's
+`appearance.locale` while the signed-in session can read it (re-read on `settings.changed`), else
+the operating system's preferred languages, the first one Nova has (FR-016). `window.capture` itself is never exposed to a
 page: a capture starts only from the global shortcut (default Ctrl+Alt+A), the tray or the
 overlay (security rule 6). The quick overlay opens with Ctrl+Alt+N. OS notifications are raised
 by the main process for `notification.created` with `os: true`; the page's own notification

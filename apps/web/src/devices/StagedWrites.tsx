@@ -5,7 +5,9 @@
 import { useState } from 'react';
 import type { StagedWriteView } from '@nova/shared';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
-import { formatWhen, plural } from '../settings/common.ts';
+import { defineMessages, messageFor } from '@nova/i18n';
+import { rich } from '../i18n/rich.tsx';
+import { formatWhen } from '../settings/common.ts';
 import { useAnnounce } from '../services.tsx';
 import { useDevicesApi } from './api.ts';
 import type { PanelProps } from './DevicePage.tsx';
@@ -24,13 +26,60 @@ import { Chip, ConfirmDialog, LoadError, Unavailable, useLoad } from './parts.ts
 /** Longer diffs are cut here, with a note. */
 export const MAX_DIFF_ROWS = 4000;
 
-const OUTCOME: Partial<Record<StagedWriteView['status'], string>> = {
-  conflict:
-    'The file changed on the device after this write was staged, so nothing was written. Ask for the change again against the current file.',
-  expired: 'This write expired on the device before it was committed. Nothing was written.',
-  failed: 'The device could not write the file. Nothing was changed.',
-  discarded: 'Discarded. Nothing was written.',
-};
+/** Staged writes' words (FR-016). */
+export const STAGED_TEXT = defineMessages('devices.staged', {
+  /** What happened to a write that was not committed. */
+  outcome: {
+    conflict:
+      'The file changed on the device after this write was staged, so nothing was written. Ask for the change again against the current file.',
+    expired: 'This write expired on the device before it was committed. Nothing was written.',
+    failed: 'The device could not write the file. Nothing was changed.',
+    discarded: 'Discarded. Nothing was written.',
+  },
+  /** An outcome with the device's own words about it. */
+  withDetail: '{text} ({detail})',
+  title: 'Staged writes',
+  show: 'Show',
+  waiting: 'Waiting',
+  all: 'All',
+  intro:
+    'Changes agents and sessions want to make to files on this device. Nothing is written until you commit it.',
+  loadFailed: 'Could not load staged writes.',
+  loading: 'Loading staged writes',
+  noneWaiting: 'Nothing is waiting for review.',
+  none: 'No staged writes yet.',
+  review: 'Review {path}',
+  binaryFile: 'Binary file',
+  written: 'Written to {path}.',
+  commitFailed: 'Could not commit the write.',
+  writeFailed: 'Could not load the write.',
+  loadingWrite: 'Loading the write',
+  from: 'From {who}',
+  existing: 'Changes an existing file',
+  newFile: 'A new file',
+  stagedWhen: 'Staged {when}',
+  writtenWhen: 'Written {when}',
+  commit: 'Commit',
+  discard: 'Discard',
+  discardTitle: 'Discard this write?',
+  discardBody:
+    'Nothing is written to {path}. The agent or session that staged it is told it was discarded.',
+  discarded: 'Discarded.',
+  binary: 'Binary content, not shown: {diff}',
+  counts:
+    '{added, plural, one {# line added} other {# lines added}}, {removed, plural, one {# line removed} other {# lines removed}}.',
+  changesTo: 'Changes to {path}',
+  added: 'Added:',
+  removed: 'Removed:',
+  noChanges: 'No changes to the text.',
+  cut: 'Showing the first {shown} of {total, plural, one {# line} other {# lines}}.',
+});
+
+const S = STAGED_TEXT;
+
+function outcomeText(status: StagedWriteView['status']): string | undefined {
+  return messageFor(S.outcome, status);
+}
 
 export function StagedWrites({
   device,
@@ -76,8 +125,8 @@ export function StagedWrites({
   return (
     <section className="ws-section devices-flat" aria-labelledby="staged-h">
       <div className="ws-section-header">
-        <h2 id="staged-h">Staged writes</h2>
-        <div className="devices-segmented" role="group" aria-label="Show">
+        <h2 id="staged-h">{S.title}</h2>
+        <div className="devices-segmented" role="group" aria-label={S.show}>
           <button
             type="button"
             className="nv-btn"
@@ -85,7 +134,7 @@ export function StagedWrites({
             aria-pressed={filter === 'staged'}
             onClick={() => setFilter('staged')}
           >
-            Waiting
+            {S.waiting}
           </button>
           <button
             type="button"
@@ -94,29 +143,20 @@ export function StagedWrites({
             aria-pressed={filter === 'all'}
             onClick={() => setFilter('all')}
           >
-            All
+            {S.all}
           </button>
         </div>
       </div>
-      <p className="muted ws-flush">
-        Changes agents and sessions want to make to files on this device. Nothing is written until
-        you commit it.
-      </p>
+      <p className="muted ws-flush">{S.intro}</p>
       {list.error ? (
-        <LoadError
-          error={list.error}
-          fallback="Could not load staged writes."
-          onRetry={list.reload}
-        />
+        <LoadError error={list.error} fallback={S.loadFailed} onRetry={list.reload} />
       ) : null}
-      {list.loading ? <Spinner label="Loading staged writes" /> : null}
+      {list.loading ? <Spinner label={S.loading} /> : null}
       {items?.length === 0 ? (
-        <p className="muted ws-flush">
-          {filter === 'staged' ? 'Nothing is waiting for review.' : 'No staged writes yet.'}
-        </p>
+        <p className="muted ws-flush">{filter === 'staged' ? S.noneWaiting : S.none}</p>
       ) : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="Staged writes">
+        <ul className="ws-list" aria-label={S.title}>
           {items.map((w) => {
             const s = STAGED_STATUS[w.status];
             return (
@@ -127,14 +167,15 @@ export function StagedWrites({
                       type="button"
                       className="link devices-path"
                       onClick={() => setOpen(w.id)}
-                      aria-label={`Review ${w.path}`}
+                      aria-label={S.review({ path: w.path })}
+                      dir="ltr"
                     >
                       {w.path}
                     </button>
                     <Chip tone={s.tone} icon={s.icon} text={s.text} />
                   </div>
                   <span className="muted ws-row-meta">
-                    <span>{w.binary ? 'Binary file' : changeCount(w)}</span>
+                    <span>{w.binary ? S.binaryFile : changeCount(w)}</span>
                     <span>{granteeText(w.grantee, agentName)}</span>
                     <span>{formatWhen(w.createdAt)}</span>
                   </span>
@@ -175,6 +216,7 @@ function StagedDetail({
   });
   const w = write.data ?? initial;
   const blocked = capabilityBlocked(device, 'staged_writes');
+  const outcome = w ? outcomeText(w.status) : undefined;
 
   const update = (next: StagedWriteView) => {
     write.setData(() => next);
@@ -188,15 +230,15 @@ function StagedDetail({
     try {
       const next = await api.commitStagedWrite(device.id, w.id);
       update(next);
-      announce(`Written to ${next.path}.`);
-      toast.show(`Written to ${next.path}.`, { tone: 'success' });
+      announce(S.written({ path: next.path }));
+      toast.show(S.written({ path: next.path }), { tone: 'success' });
     } catch (err) {
       // A conflict or expiry is recorded on the write; show it as the write now stands.
       const fresh = await api.getStagedWrite(device.id, w.id).catch(() => null);
       if (fresh && fresh.status !== 'staged') {
         update(fresh);
         announce(STAGED_STATUS[fresh.status].text);
-      } else setError(deviceErrorMessage(err, 'Could not commit the write.'));
+      } else setError(deviceErrorMessage(err, S.commitFailed));
     } finally {
       setBusy(false);
     }
@@ -206,23 +248,19 @@ function StagedDetail({
     <section className="ws-section devices-flat" aria-labelledby="staged-detail-h">
       <div>
         <Button variant="ghost" onClick={onBack}>
-          <Icon name="back" /> Staged writes
+          <Icon name="back" /> {S.title}
         </Button>
       </div>
       {!w ? (
         write.error ? (
-          <LoadError
-            error={write.error}
-            fallback="Could not load the write."
-            onRetry={write.reload}
-          />
+          <LoadError error={write.error} fallback={S.writeFailed} onRetry={write.reload} />
         ) : (
-          <Spinner label="Loading the write" />
+          <Spinner label={S.loadingWrite} />
         )
       ) : (
         <>
           <div className="devices-row-head">
-            <h2 id="staged-detail-h" className="devices-path">
+            <h2 id="staged-detail-h" className="devices-path" dir="ltr">
               {w.path}
             </h2>
             <Chip
@@ -232,21 +270,24 @@ function StagedDetail({
             />
           </div>
           <span className="muted ws-row-meta">
-            <span>From {granteeText(w.grantee, agentName)}</span>
+            <span>{S.from({ who: granteeText(w.grantee, agentName) })}</span>
             <span>{formatBytes(w.size)}</span>
-            <span>{w.baseSha256 ? 'Changes an existing file' : 'A new file'}</span>
-            <span>Staged {formatWhen(w.createdAt)}</span>
-            {w.committedAt ? <span>Written {formatWhen(w.committedAt)}</span> : null}
+            <span>{w.baseSha256 ? S.existing : S.newFile}</span>
+            <span>{S.stagedWhen({ when: formatWhen(w.createdAt) })}</span>
+            {w.committedAt ? (
+              <span>{S.writtenWhen({ when: formatWhen(w.committedAt) })}</span>
+            ) : null}
           </span>
-          {OUTCOME[w.status] ? (
+          {outcome ? (
             <p
               className="devices-note"
               data-tone={w.status === 'conflict' || w.status === 'failed' ? 'bad' : undefined}
               role="status"
             >
               <Icon name={w.status === 'conflict' || w.status === 'failed' ? 'alert' : 'stop'} />{' '}
-              {OUTCOME[w.status]}
-              {w.error && w.status !== 'discarded' ? ` (${w.error})` : ''}
+              {w.error && w.status !== 'discarded'
+                ? S.withDetail({ text: outcome, detail: w.error })
+                : outcome}
             </p>
           ) : null}
           <DiffBlock write={w} />
@@ -264,26 +305,26 @@ function StagedDetail({
                   disabled={busy || Boolean(blocked)}
                   onClick={() => void commit()}
                 >
-                  {busy ? <Spinner /> : null} Commit
+                  {busy ? <Spinner /> : null} {S.commit}
                 </Button>
                 <Button disabled={busy} onClick={() => setDiscarding(true)}>
-                  Discard
+                  {S.discard}
                 </Button>
               </div>
             </>
           ) : null}
           <ConfirmDialog
             open={discarding}
-            title="Discard this write?"
-            description={`Nothing is written to ${w.path}. The agent or session that staged it is told it was discarded.`}
-            confirmLabel="Discard"
+            title={S.discardTitle}
+            description={S.discardBody({ path: w.path })}
+            confirmLabel={S.discard}
             danger
             onClose={() => setDiscarding(false)}
             onConfirm={async () => {
               const next = await api.discardStagedWrite(device.id, w.id);
               setDiscarding(false);
               update(next);
-              toast.show('Discarded.', { tone: 'success' });
+              toast.show(S.discarded, { tone: 'success' });
             }}
           />
         </>
@@ -296,7 +337,7 @@ function DiffBlock({ write }: { write: StagedWriteView }) {
   if (write.binary)
     return (
       <p className="ws-flush">
-        Binary content, not shown: <span className="muted">{write.diff}</span>
+        {rich(S.binary, { diff: <span className="muted">{write.diff}</span> })}
       </p>
     );
   const rows = parseUnifiedDiff(write.diff);
@@ -304,16 +345,21 @@ function DiffBlock({ write }: { write: StagedWriteView }) {
   return (
     <div className="stack devices-diff-wrap">
       <p className="muted ws-flush">
-        {plural(write.additions, 'line')} added, {plural(write.deletions, 'line')} removed.
+        {S.counts({ added: write.additions, removed: write.deletions })}
       </p>
       {rows.length ? (
-        <pre className="devices-diff" aria-label={`Changes to ${write.path}`} tabIndex={0}>
+        <pre
+          role="group"
+          className="devices-diff"
+          aria-label={S.changesTo({ path: write.path })}
+          tabIndex={0}
+        >
           {shown.map((r, i) => (
             <span key={i} className="devices-diff-line" data-kind={r.kind}>
               {r.kind === 'add' || r.kind === 'del' ? (
                 <>
                   <span aria-hidden="true">{r.kind === 'add' ? '+ ' : '- '}</span>
-                  <span className="nv-vh">{r.kind === 'add' ? 'Added: ' : 'Removed: '}</span>
+                  <span className="nv-vh">{r.kind === 'add' ? S.added : S.removed} </span>
                 </>
               ) : r.kind === 'same' ? (
                 <span aria-hidden="true">{'  '}</span>
@@ -323,13 +369,10 @@ function DiffBlock({ write }: { write: StagedWriteView }) {
           ))}
         </pre>
       ) : (
-        <p className="muted ws-flush">No changes to the text.</p>
+        <p className="muted ws-flush">{S.noChanges}</p>
       )}
       {rows.length > shown.length ? (
-        <p className="muted ws-flush">
-          Showing the first {shown.length.toLocaleString('en-US')} of{' '}
-          {rows.length.toLocaleString('en-US')} lines.
-        </p>
+        <p className="muted ws-flush">{S.cut({ shown: shown.length, total: rows.length })}</p>
       ) : null}
     </div>
   );

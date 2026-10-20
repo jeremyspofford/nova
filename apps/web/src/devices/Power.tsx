@@ -6,42 +6,100 @@
 // cut is read from the firmware (M7.5) and changed in the Firmware tab (FR-146).
 import { useState } from 'react';
 import { Button, Spinner, useToast } from '@nova/ui';
+import { defineMessages, messageFor } from '@nova/i18n';
 import { firmwareTabPath } from '../firmware/format.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useSetting } from '../settings.tsx';
-import { plural } from '../settings/common.ts';
 import { followLink } from '../work/nav.tsx';
 import { useDevicesApi, type DevicePowerResult } from './api.ts';
 import type { PanelProps } from './DevicePage.tsx';
-import { addDevicePath, capabilityBlocked, deviceErrorMessage, wakeSentText } from './format.ts';
+import {
+  addDevicePath,
+  capabilityBlocked,
+  deviceErrorMessage,
+  listText,
+  wakeSentText,
+} from './format.ts';
 import { ConfirmDialog, LoadError, Unavailable, useLoad } from './parts.tsx';
 
-type PowerAction = 'sleep' | 'restart' | 'shutdown';
-
-const POWER_TEXT: Record<PowerAction, { label: string; title: string; description: string }> = {
-  sleep: {
-    label: 'Sleep',
-    title: 'Put the device to sleep?',
-    description: 'Work running on it pauses. Wake it from here if it reports Wake-on-LAN.',
+/** The Power tab's words (FR-016). */
+export const POWER_TEXT = defineMessages('devices.power', {
+  actions: {
+    sleep: {
+      label: 'Sleep',
+      title: 'Put the device to sleep?',
+      description: 'Work running on it pauses. Wake it from here if it reports Wake-on-LAN.',
+    },
+    restart: {
+      label: 'Restart',
+      title: 'Restart the device?',
+      description: 'Anything open on it closes, and work running on it stops.',
+    },
+    shutdown: {
+      label: 'Shut down',
+      title: 'Shut down the device?',
+      description:
+        'Anything open on it closes and work on it stops. It comes back only when it is turned on, or woken if it supports Wake-on-LAN.',
+    },
   },
-  restart: {
-    label: 'Restart',
-    title: 'Restart the device?',
-    description: 'Anything open on it closes, and work running on it stops.',
+  sent: '{action, select, sleep {Sleep: sent to {device}.} restart {Restart: sent to {device}.} other {Shut down: sent to {device}.}}',
+  confirm: 'Confirm',
+  afterLoss: {
+    on: 'Turns back on',
+    off: 'Stays off',
+    last: 'Returns to its last state',
+    unknown: 'Unknown',
   },
-  shutdown: {
-    label: 'Shut down',
-    title: 'Shut down the device?',
-    description:
-      'Anything open on it closes and work on it stops. It comes back only when it is turned on, or woken if it supports Wake-on-LAN.',
-  },
-};
-
-const AFTER_LOSS: Record<string, string> = {
-  on: 'Turns back on',
-  off: 'Stays off',
-  last: 'Returns to its last state',
+  yes: 'Yes',
+  no: 'No',
   unknown: 'Unknown',
-};
+  wakeFailed: 'Could not send the wake signal.',
+  stepsFailed: 'Could not get the steps.',
+  title: 'Power',
+  lastReported: '{why} Showing what it last reported.',
+  readFailed: 'Could not read the power state.',
+  reading: 'Reading the power state',
+  wol: 'Wake-on-LAN',
+  on: 'On',
+  offOrUnsupported: 'Off or not supported',
+  addresses: 'Network addresses',
+  noneReported: 'None reported',
+  mains: 'On mains power',
+  afterCut: 'After a power cut',
+  firmware:
+    'What happens after a power cut, and Wake-on-LAN in the firmware, are firmware settings: {link}, with your approval and a snapshot to roll back to.',
+  firmwareLink: 'change them in Firmware',
+  wake: 'Wake',
+  revoked: 'This device was revoked.',
+  wakeHow:
+    "Sends a Wake-on-LAN signal through a Wake helper on the device's network, or from the Hub when it is on that network.",
+  onlineNow: 'The device is online now.',
+  wakeLimit: 'At most {n, plural, one {# wake} other {# wakes}} an hour for a device; {link}.',
+  limitLink: 'change the limit in Settings',
+  wakeDevice: 'Wake {name}',
+  noHelper:
+    'No Wake helper on its network yet? {link}: an always-on device there, such as a NAS or a mini PC.',
+  addHelper: 'Add one',
+  notWakeable: 'This device does not report Wake-on-LAN, so it cannot be woken from here.',
+  turnOn: 'Turn on Wake-on-LAN',
+  stepsFirst:
+    'See the steps first. novad applies them only when you ask, and some need it to run with elevated rights.',
+  showSteps: 'Show the steps',
+  apply: 'Apply on the device',
+  steps: 'Steps',
+  alreadyOn: 'Nothing to change: Wake-on-LAN is already on.',
+  elevation: 'These steps need administrator rights.',
+  powerActions: 'Sleep, restart or shut down',
+  enableTitle: 'Turn on Wake-on-LAN?',
+  enableBody: 'novad runs the steps shown on the device.',
+  enableConfirm: 'Apply',
+  enabled: 'Wake-on-LAN is on.',
+  notApplied: 'The device did not apply the steps. Run them on the device yourself.',
+});
+
+const S = POWER_TEXT;
+
+type PowerAction = 'sleep' | 'restart' | 'shutdown';
 
 /** One planned step as text: a command's arguments, or the step's own words. */
 export function planStepText(step: unknown): string {
@@ -53,7 +111,7 @@ export function planStepText(step: unknown): string {
   return JSON.stringify(step);
 }
 
-const yesNo = (v: unknown) => (v === true ? 'Yes' : v === false ? 'No' : 'Unknown');
+const yesNo = (v: unknown) => (v === true ? S.yes : v === false ? S.no : S.unknown);
 
 export function PowerPanel({ device, deviceName }: PanelProps) {
   const api = useDevicesApi();
@@ -82,7 +140,7 @@ export function PowerPanel({ device, deviceName }: PanelProps) {
       const w = await api.wakeDevice(device.id);
       toast.show(wakeSentText(device.name, w, deviceName), { tone: 'success' });
     } catch (err) {
-      toast.show(deviceErrorMessage(err, 'Could not send the wake signal.'), { tone: 'error' });
+      toast.show(deviceErrorMessage(err, S.wakeFailed), { tone: 'error' });
     } finally {
       setWaking(false);
     }
@@ -98,7 +156,7 @@ export function PowerPanel({ device, deviceName }: PanelProps) {
         elevation: r.needsElevation === true,
       });
     } catch (err) {
-      setPlanError(deviceErrorMessage(err, 'Could not get the steps.'));
+      setPlanError(deviceErrorMessage(err, S.stepsFailed));
     } finally {
       setPlanBusy(false);
     }
@@ -107,105 +165,99 @@ export function PowerPanel({ device, deviceName }: PanelProps) {
   return (
     <div className="stack">
       <section className="ws-section devices-flat" aria-labelledby="power-h">
-        <h2 id="power-h">Power</h2>
-        {blocked && !revoked ? (
-          <Unavailable>{blocked} Showing what it last reported.</Unavailable>
-        ) : null}
+        <h2 id="power-h">{S.title}</h2>
+        {blocked && !revoked ? <Unavailable>{S.lastReported({ why: blocked })}</Unavailable> : null}
         {power.error ? (
-          <LoadError
-            error={power.error}
-            fallback="Could not read the power state."
-            onRetry={power.reload}
-          />
+          <LoadError error={power.error} fallback={S.readFailed} onRetry={power.reload} />
         ) : null}
-        {power.loading ? <Spinner label="Reading the power state" /> : null}
+        {power.loading ? <Spinner label={S.reading} /> : null}
         <dl className="devices-facts">
           <div>
-            <dt>Wake-on-LAN</dt>
-            <dd>{wakeable ? 'On' : 'Off or not supported'}</dd>
+            <dt>{S.wol}</dt>
+            <dd>{wakeable ? S.on : S.offOrUnsupported}</dd>
           </div>
           <div>
-            <dt>Network addresses</dt>
-            <dd>{macs.length ? macs.join(', ') : 'None reported'}</dd>
+            <dt>{S.addresses}</dt>
+            <dd dir="ltr">{macs.length ? listText(macs) : S.noneReported}</dd>
           </div>
           {power.data ? (
             <>
               <div>
-                <dt>On mains power</dt>
+                <dt>{S.mains}</dt>
                 <dd>{yesNo(p.ac)}</dd>
               </div>
               <div>
-                <dt>After a power cut</dt>
+                <dt>{S.afterCut}</dt>
                 <dd>
                   {typeof p.afterPowerLoss === 'string'
-                    ? (AFTER_LOSS[p.afterPowerLoss] ?? p.afterPowerLoss)
-                    : 'Unknown'}
+                    ? (messageFor(S.afterLoss, p.afterPowerLoss) ?? p.afterPowerLoss)
+                    : S.unknown}
                 </dd>
               </div>
             </>
           ) : null}
         </dl>
         <p className="muted ws-flush">
-          What happens after a power cut, and Wake-on-LAN in the firmware, are firmware settings:{' '}
-          <a
-            href={firmwareTabPath(device.id)}
-            onClick={(e) => followLink(e, firmwareTabPath(device.id))}
-          >
-            change them in Firmware
-          </a>
-          , with your approval and a snapshot to roll back to.
+          {rich(S.firmware, {
+            link: (
+              <a
+                href={firmwareTabPath(device.id)}
+                onClick={(e) => followLink(e, firmwareTabPath(device.id))}
+              >
+                {S.firmwareLink}
+              </a>
+            ),
+          })}
         </p>
       </section>
 
       <section className="ws-section devices-flat" aria-labelledby="wake-h">
-        <h2 id="wake-h">Wake</h2>
+        <h2 id="wake-h">{S.wake}</h2>
         {revoked ? (
-          <p className="muted ws-flush">This device was revoked.</p>
+          <p className="muted ws-flush">{S.revoked}</p>
         ) : wakeable ? (
           <>
             <p className="muted ws-flush">
-              Sends a Wake-on-LAN signal through a Wake helper on the device&apos;s network, or from
-              the Hub when it is on that network.
-              {device.status === 'active' ? ' The device is online now.' : ''} At most{' '}
-              {plural(limit, 'wake')} an hour for a device;{' '}
-              <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
-                change the limit in Settings
-              </a>
-              .
+              {S.wakeHow} {device.status === 'active' ? `${S.onlineNow} ` : ''}
+              {/* The count is a plural argument, so it goes in directly; only the link is rich. */}
+              {rich((v: { link: string }) => S.wakeLimit({ n: limit, link: v.link }), {
+                link: (
+                  <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
+                    {S.limitLink}
+                  </a>
+                ),
+              })}
             </p>
             <div className="row">
               <Button variant="primary" onClick={() => void wake()} disabled={waking}>
-                {waking ? <Spinner /> : null} Wake {device.name}
+                {waking ? <Spinner /> : null} {S.wakeDevice({ name: device.name })}
               </Button>
             </div>
             <p className="muted ws-flush">
-              No Wake helper on its network yet?{' '}
-              <a
-                href={addDevicePath('wake-helper')}
-                onClick={(e) => followLink(e, addDevicePath('wake-helper'))}
-              >
-                Add one
-              </a>
-              : an always-on device there, such as a NAS or a mini PC.
+              {rich(S.noHelper, {
+                link: (
+                  <a
+                    href={addDevicePath('wake-helper')}
+                    onClick={(e) => followLink(e, addDevicePath('wake-helper'))}
+                  >
+                    {S.addHelper}
+                  </a>
+                ),
+              })}
             </p>
           </>
         ) : (
-          <p className="muted ws-flush">
-            This device does not report Wake-on-LAN, so it cannot be woken from here.
-          </p>
+          <p className="muted ws-flush">{S.notWakeable}</p>
         )}
         {!revoked && !blocked ? (
           <div className="stack devices-wol">
-            <h3>Turn on Wake-on-LAN</h3>
-            <p className="muted ws-flush">
-              See the steps first. novad applies them only when you ask, and some need it to run
-              with elevated rights.
-            </p>
+            <h3>{S.turnOn}</h3>
+            <p className="muted ws-flush">{S.stepsFirst}</p>
             <div className="row">
               <Button onClick={() => void showPlan()} disabled={planBusy}>
-                {planBusy ? <Spinner /> : null} Show the steps
+                {planBusy ? <Spinner /> : null} {S.showSteps}
               </Button>
-              {plan ? <Button onClick={() => setEnabling(true)}>Apply on the device</Button> : null}
+              {plan ? <Button onClick={() => setEnabling(true)}>{S.apply}</Button> : null}
             </div>
             {planError ? (
               <p role="alert" className="nv-field-error">
@@ -215,15 +267,13 @@ export function PowerPanel({ device, deviceName }: PanelProps) {
             {plan ? (
               <div aria-live="polite">
                 {plan.steps.length ? (
-                  <pre className="ws-command" aria-label="Steps">
+                  <pre role="group" className="ws-command" aria-label={S.steps} dir="ltr">
                     {plan.steps.join('\n')}
                   </pre>
                 ) : (
-                  <p className="ws-flush">Nothing to change: Wake-on-LAN is already on.</p>
+                  <p className="ws-flush">{S.alreadyOn}</p>
                 )}
-                {plan.elevation ? (
-                  <p className="muted ws-flush">These steps need administrator rights.</p>
-                ) : null}
+                {plan.elevation ? <p className="muted ws-flush">{S.elevation}</p> : null}
               </div>
             ) : null}
           </div>
@@ -231,12 +281,12 @@ export function PowerPanel({ device, deviceName }: PanelProps) {
       </section>
 
       <section className="ws-section devices-flat" aria-labelledby="power-actions-h">
-        <h2 id="power-actions-h">Sleep, restart or shut down</h2>
+        <h2 id="power-actions-h">{S.powerActions}</h2>
         {blocked ? <Unavailable>{blocked}</Unavailable> : null}
         <div className="row">
           {(['sleep', 'restart', 'shutdown'] as const).map((a) => (
             <Button key={a} disabled={Boolean(blocked)} onClick={() => setAsking(a)}>
-              {POWER_TEXT[a].label}
+              {S.actions[a].label}
             </Button>
           ))}
         </div>
@@ -244,28 +294,26 @@ export function PowerPanel({ device, deviceName }: PanelProps) {
 
       <ConfirmDialog
         open={enabling}
-        title="Turn on Wake-on-LAN?"
-        description="novad runs the steps shown on the device."
-        confirmLabel="Apply"
+        title={S.enableTitle}
+        description={S.enableBody}
+        confirmLabel={S.enableConfirm}
         onClose={() => setEnabling(false)}
         onConfirm={async () => {
           const r = await api.devicePowerAction(device.id, { action: 'wol-enable', apply: true });
           setEnabling(false);
           if (r.applied === true) {
-            toast.show('Wake-on-LAN is on.', { tone: 'success' });
+            toast.show(S.enabled, { tone: 'success' });
             power.reload();
           } else {
-            toast.show('The device did not apply the steps. Run them on the device yourself.', {
-              tone: 'error',
-            });
+            toast.show(S.notApplied, { tone: 'error' });
           }
         }}
       />
       <ConfirmDialog
         open={asking !== null}
-        title={asking ? POWER_TEXT[asking].title : ''}
-        description={asking ? POWER_TEXT[asking].description : undefined}
-        confirmLabel={asking ? POWER_TEXT[asking].label : 'Confirm'}
+        title={asking ? S.actions[asking].title : ''}
+        description={asking ? S.actions[asking].description : undefined}
+        confirmLabel={asking ? S.actions[asking].label : S.confirm}
         danger
         onClose={() => setAsking(null)}
         onConfirm={async () => {
@@ -273,7 +321,7 @@ export function PowerPanel({ device, deviceName }: PanelProps) {
           if (!a) return;
           await api.devicePowerAction(device.id, { action: a });
           setAsking(null);
-          toast.show(`${POWER_TEXT[a].label}: sent to ${device.name}.`, { tone: 'success' });
+          toast.show(S.sent({ action: a, device: device.name }), { tone: 'success' });
         }}
       />
     </div>

@@ -34,6 +34,16 @@ export interface EgressGlobal {
   mode: EgressMode;
   allow: string[];
   deny: string[];
+  /**
+   * Managed policy's egress allow lists (FR-106, ADR-097): no allow entry of any scope, profile or
+   * explicit policy reaches past them. Absent: none.
+   */
+  ceilings?: readonly (readonly string[])[];
+}
+
+/** Whether a host pattern stays within every ceiling. */
+function withinCeilings(global: EgressGlobal, h: string): boolean {
+  return (global.ceilings ?? []).every((c) => patternCovered(c, h));
 }
 
 interface ScopeRow {
@@ -126,7 +136,7 @@ export function effectivePolicy(input: {
   }
   return {
     mode,
-    allow: [...allow].filter((h) => h !== '*'),
+    allow: [...allow].filter((h) => h !== '*' && withinCeilings(input.global, h)),
     deny: [...deny],
     credentials: input.credentials,
     allowLocalBinding: local,
@@ -429,7 +439,10 @@ export function proxyEgress(o: ProxyEgressOptions): ProxySandboxEgress {
         const policy: ProxyPolicy = {
           mode: narrowMode(global.mode, ctx.network),
           allow: ctx.policy.allow.filter(
-            (h) => h !== '*' && (!narrowOnly || patternCovered(global.allow, h)),
+            (h) =>
+              h !== '*' &&
+              withinCeilings(global, h) &&
+              (!narrowOnly || patternCovered(global.allow, h)),
           ),
           deny: [...global.deny],
           credentials: [],

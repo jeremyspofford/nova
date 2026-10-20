@@ -3,18 +3,26 @@
 // against a cap with its warning and capped state, a confirmation for destructive or
 // outward-facing actions that keeps its failure on screen, and a back link for sub-pages.
 import { useId, useRef, useState, type ReactNode } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Button, Dialog, Icon, Spinner } from '@nova/ui';
 import { Badge } from '../code/parts.tsx';
 import { followLink } from '../work/nav.tsx';
-import { formatSeconds, type StateSpec, type UsageLine } from './format.ts';
+import { CLOUD_TEXT, formatSeconds, type StateSpec, type UsageLine } from './format.ts';
 import './cloud.css';
+
+/** A usage meter's state against its cap. */
+export const METER_TEXT = defineMessages('cloud.meter', {
+  capped: 'Stopped at this cap',
+  /** {share} is a percentage, such as "83%". */
+  near: 'Near the cap ({share})',
+});
 
 export { useLoad, type Loaded } from '../netsurface/parts.tsx';
 
 export function StateBadge({ spec, detail }: { spec: StateSpec; detail?: string | null }) {
   return (
     <Badge tone={spec.tone} icon={spec.icon}>
-      {detail ? `${spec.text}: ${detail}` : spec.text}
+      {detail ? CLOUD_TEXT.stateDetail({ state: spec.text, detail }) : spec.text}
     </Badge>
   );
 }
@@ -33,9 +41,9 @@ export function Fact({ term, children }: { term: string; children: ReactNode }) 
 export function UsageMeter({ line }: { line: UsageLine }) {
   const id = `um${useId()}`;
   const state = line.capped
-    ? 'Stopped at this cap'
+    ? METER_TEXT.capped
     : line.warn
-      ? `Near the cap (${Math.round(line.share * 100)} %)`
+      ? METER_TEXT.near({ share: fmt.percent(line.share) })
       : null;
   return (
     <div className="cl-meter" data-state={line.capped ? 'capped' : line.warn ? 'warn' : undefined}>
@@ -53,7 +61,7 @@ export function UsageMeter({ line }: { line: UsageLine }) {
         aria-describedby={`${id}-t`}
       />
       <span id={`${id}-t`} className="cl-meter-text">
-        {formatSeconds(line.used)} of {formatSeconds(line.cap)}
+        {CLOUD_TEXT.usedOf({ used: formatSeconds(line.used), cap: formatSeconds(line.cap) })}
         {state ? (
           <span className="cl-meter-state">
             <Icon name={line.capped ? 'stop' : 'alert'} /> {state}
@@ -148,7 +156,7 @@ function ConfirmBody({
       footer={
         <>
           <Button ref={cancelRef} onClick={onClose}>
-            Cancel
+            {CLOUD_TEXT.cancel}
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}
@@ -173,7 +181,7 @@ function ConfirmBody({
 /** "← Cloud runner": the way back from a sub-page (full pages on phones, docs/04 §4.3). */
 export function BackLink({ to, label }: { to: string; label: string }) {
   return (
-    <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+    <nav aria-label={CLOUD_TEXT.breadcrumb} className="ws-breadcrumb">
       <a href={to} onClick={(e) => followLink(e, to)}>
         <Icon name="back" /> {label}
       </a>
@@ -201,7 +209,7 @@ export function InAppLink({
 /** Untrusted text (logs, file contents, agent output) shown as text, never as HTML. */
 export function TextBlock({ text, label }: { text: string; label: string }) {
   return (
-    <pre className="cl-pre" aria-label={label} tabIndex={0}>
+    <pre role="group" className="cl-pre" aria-label={label} tabIndex={0}>
       {text}
     </pre>
   );

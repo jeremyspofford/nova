@@ -14,9 +14,237 @@ import type {
   DeviceView,
   StagedWriteView,
 } from '@nova/shared';
+import { defineMessages, fmt, messageFor } from '@nova/i18n';
 import { ApiError, errorMessage } from '../api.ts';
-import { plural } from '../settings/common.ts';
 import type { DeviceWakeResult } from './api.ts';
+
+/**
+ * The Devices area's shared words (FR-016). Groups are read through the exported maps below
+ * (`ROLE_LABEL`, `CAPABILITY_LABEL`, ...), whose values are getters: each read translates in the
+ * active locale. The views' own sentences live next to them, in `devices.<view>` namespaces.
+ */
+export const DEVICES_TEXT = defineMessages('devices', {
+  status: {
+    active: 'Online',
+    unreachable: 'Offline',
+    pending: 'Waiting for first contact',
+    revoked: 'Revoked',
+  },
+  roles: {
+    hub: 'Hub',
+    client: 'Client',
+    compute: 'Compute node',
+    'wake-helper': 'Wake helper',
+  },
+  noRole: 'No role',
+  roleHelp: {
+    client: 'A phone, tablet or computer you use Nova on.',
+    compute: 'Runs models and other heavy work for this Hub.',
+    'wake-helper': 'Always on, on the same network as your other devices, so it can wake them.',
+  },
+  scopes: {
+    'offline-replica': {
+      label: 'Offline copy',
+      help: 'Keeps a copy of your chats and files on the device, to use without the Hub.',
+    },
+    'local-runtime': {
+      label: 'Local models',
+      help: 'May run models on the device itself when it has them.',
+    },
+    files: {
+      label: 'Files',
+      help: 'Agents may ask for its folders. Each folder is still shared only when you allow it.',
+    },
+    browser: { label: 'Browser', help: 'Agents may use its browser when you allow it.' },
+    computer_use: {
+      label: 'Computer use',
+      help: 'Agents may use its screen and keyboard when you allow it.',
+    },
+    exec: { label: 'Commands', help: 'Agents may run commands on it, in a sandbox.' },
+  },
+  noScopes: 'No extra scopes',
+  joinKinds: {
+    browser: 'Web browser',
+    native: 'Nova app',
+    novad: 'novad',
+    compute: 'nova-compute',
+  },
+  runs: {
+    hub: 'This Hub',
+    novad: 'novad {version}',
+    novadUnknown: 'novad, version unknown',
+    compute: 'nova-compute',
+    unknown: 'Unknown',
+  },
+  wake: {
+    sentMac: 'Wake signal sent to {name} ({mac}).',
+    sentByHub: 'Wake signal sent to {name} by the Hub.',
+    sentThrough: 'Wake signal sent to {name} through {helper}.',
+    sentThroughHelper: 'Wake signal sent to {name} through a Wake helper.',
+  },
+  capabilityNames: {
+    files: 'Files',
+    staged_writes: 'Staged writes',
+    exec: 'Commands',
+    mcp: 'Local MCP servers',
+    power: 'Power',
+    services: 'Services',
+    updates: 'Updates',
+    computer_use: 'Computer use',
+    browser: 'Browser',
+    capture: 'Ambient capture',
+  },
+  /** A capability's name inside a sentence ("This device does not report files."). */
+  capabilityNouns: {
+    files: 'files',
+    staged_writes: 'staged writes',
+    exec: 'commands',
+    mcp: 'local MCP servers',
+    power: 'power',
+    services: 'services',
+    updates: 'updates',
+    computer_use: 'computer use',
+    browser: 'browser',
+    capture: 'ambient capture',
+  },
+  moduleNames: {
+    management: 'Management',
+    compute: 'Compute',
+    browser: 'Browser',
+    screen: 'Screen',
+    storage: 'Storage',
+    capture: 'Capture',
+  },
+  /** A module's name inside a sentence ("This device has no capture module."). */
+  moduleNouns: {
+    management: 'management',
+    compute: 'compute',
+    browser: 'browser',
+    screen: 'screen',
+    storage: 'storage',
+    capture: 'capture',
+  },
+  modulePurpose: {
+    management: 'Power, services and updates',
+    compute: 'Runs models',
+    browser: 'Browser automation for agents',
+    screen: 'Computer use',
+    storage: 'Files, staged writes and local MCP servers',
+    capture: 'Ambient capture, with no network access',
+  },
+  capabilityReason: {
+    update: 'Needs novad {version}',
+    notAllowed: '{module} module not allowed by policy',
+    missing: 'No {module} module',
+  },
+  summary: {
+    none: 'No capabilities yet',
+    needUpdate: '{capabilities} · {n, plural, one {# needs an update} other {# need an update}}',
+  },
+  moduleStates: {
+    running: 'Running',
+    stopped: 'Stopped',
+    backoff: 'Restarting after a crash',
+    disabled: 'Disabled',
+  },
+  stagedStatus: {
+    staged: 'Waiting for review',
+    committed: 'Written',
+    discarded: 'Discarded',
+    conflict: 'Conflict',
+    expired: 'Expired',
+    failed: 'Failed',
+  },
+  updateStatus: {
+    applied: 'Applied',
+    staged: 'Staged',
+    rolled_back: 'Rolled back',
+    refused: 'Refused',
+    failed: 'Failed',
+  },
+  granteeKinds: {
+    user: 'You',
+    agent: 'Agent',
+    session: 'Code session',
+    run: 'Work run',
+    thread: 'Chat',
+  },
+  grantee: {
+    you: 'You',
+    agent: 'Agent {name}',
+    other:
+      '{kind, select, session {Code session {id}} run {Work run {id}} thread {Chat {id}} other {{id}}}',
+  },
+  access: {
+    mcp: 'Can call its tools',
+    write: 'Read and change',
+    read: 'Read only',
+  },
+  unreachable: {
+    revoked: 'This device was revoked.',
+    pending: 'The device has not connected yet.',
+    offline: 'The device is offline.',
+  },
+  blocked: {
+    notReported: 'This device does not report {capability}.',
+    update: 'Needs novad {version}; this device has {have}.',
+    updateUnknown: 'Needs novad {version}; this device has an unknown version.',
+    notAllowed: "The {module} module is not allowed by this device's policy.",
+    missing: 'This device has no {module} module.',
+  },
+  errors: {
+    generic: 'Something went wrong.',
+    offline: 'The device is offline. Try again when it reconnects.',
+    updateHas: 'This device needs novad {version} for that (it has {have}).',
+    update: 'This device needs novad {version} for that.',
+    newerHas: 'This device needs a newer novad for that (it has {have}).',
+    newer: 'This device needs a newer novad for that.',
+    moduleMissing: 'This device has no {module} module.',
+    moduleNotAllowed: "The {module} module is not allowed by this device's policy.",
+    notWakeable: 'This device does not report Wake-on-LAN. Enable it on the device first.',
+    wakeLimit:
+      'This device was woken {limit, plural, one {# time} other {# times}} in the last hour, the most allowed. Try again later.',
+    wakeLimited:
+      'This device was woken too many times in the last hour, the most allowed. Try again later.',
+    powerOff: 'Power actions are off in this device’s novad settings.',
+    elevation:
+      'novad needs elevated rights to change Wake-on-LAN. Run the steps on the device yourself.',
+    protectedPath: 'That path is protected and is never shared or written.',
+    folderAccess: 'That folder is not shared with you on this device.',
+    notRouting: 'This device is kept out of agent work by its policy.',
+    agentConnected: 'This agent already has a connected computer.',
+    firmwareOff: 'Firmware changes are off.',
+    noWakeHelper:
+      'Nothing on this device’s network can wake it: there is no Wake helper there, and the Hub is not on that network. Add an always-on device there as a Wake helper.',
+    mismatch:
+      'That code does not match the one on the device. Compare the six digits on both screens.',
+    decided:
+      '{status, select, approved {This request was already approved.} denied {This request was already denied.} expired {This request has already expired.} other {This request was already decided.}}',
+    expired: 'This request has expired. Add the device again with a new code.',
+    keyRevoked:
+      'This device’s key was revoked. Reset the device so it makes a new key, then add it again.',
+    keyInUse: 'This device’s key is already registered.',
+    addOff: 'Adding devices with a code is turned off. Turn it on in Settings → Devices.',
+    codesLimit: 'Too many codes were made in the last hour (at most {limit}). Try again later.',
+    codesLimited: 'Too many codes were made in the last hour. Try again later.',
+    noRelay:
+      'The Relay is not set up on this Hub. Add the device directly, or set up a Relay in Network.',
+    revoked: 'This device was revoked.',
+  },
+  unknownSize: 'unknown size',
+  paths: {
+    empty: 'Enter a folder path.',
+    relative: 'Enter a full path, starting with / (or a drive like C:\\).',
+    dots: 'The path cannot contain . or .. parts.',
+  },
+});
+
+const S = DEVICES_TEXT;
+
+/** Items joined the locale's way, without "and": "Files, Staged writes, Commands". */
+export function listText(items: readonly string[]): string {
+  return fmt.list(items, { type: 'unit', style: 'short' });
+}
 
 const enc = encodeURIComponent;
 
@@ -60,34 +288,57 @@ export function tabFrom(search: string): DeviceTab {
 
 export type ChipTone = 'ready' | 'running' | 'needs_input' | 'blocked' | 'neutral';
 
+/** A status's chip: its words (read in the active locale when shown), tone and icon. */
+export interface StatusChip<I> {
+  readonly text: string;
+  readonly tone: ChipTone;
+  readonly icon: I;
+}
+
 export const DEVICE_STATUS: Record<
   DeviceView['status'],
-  { text: string; tone: ChipTone; icon: 'check' | 'alert' | 'stop' | null }
+  StatusChip<'check' | 'alert' | 'stop' | null>
 > = {
-  active: { text: 'Online', tone: 'ready', icon: 'check' },
-  unreachable: { text: 'Offline', tone: 'needs_input', icon: 'alert' },
-  pending: { text: 'Waiting for first contact', tone: 'running', icon: null },
-  revoked: { text: 'Revoked', tone: 'blocked', icon: 'stop' },
+  active: {
+    get text() {
+      return S.status.active;
+    },
+    tone: 'ready',
+    icon: 'check',
+  },
+  unreachable: {
+    get text() {
+      return S.status.unreachable;
+    },
+    tone: 'needs_input',
+    icon: 'alert',
+  },
+  pending: {
+    get text() {
+      return S.status.pending;
+    },
+    tone: 'running',
+    icon: null,
+  },
+  revoked: {
+    get text() {
+      return S.status.revoked;
+    },
+    tone: 'blocked',
+    icon: 'stop',
+  },
 };
 
-export const ROLE_LABEL: Record<string, string> = {
-  hub: 'Hub',
-  client: 'Client',
-  compute: 'Compute node',
-  'wake-helper': 'Wake helper',
-};
+/** A role's name; read `ROLE_LABEL[role] ?? role` at render time. */
+export const ROLE_LABEL: Readonly<Record<string, string>> = S.roles;
 
 export function rolesText(roles: readonly string[]): string {
-  return roles.length ? roles.map((r) => ROLE_LABEL[r] ?? r).join(', ') : 'No role';
+  return roles.length ? listText(roles.map((r) => messageFor(S.roles, r) ?? r)) : S.noRole;
 }
 
 // ---- Add Device: roles, scopes and kinds (FR-132, docs/22 §4.2) --------------------------------
 
-export const ROLE_HELP: Record<AddDeviceRole, string> = {
-  client: 'A phone, tablet or computer you use Nova on.',
-  compute: 'Runs models and other heavy work for this Hub.',
-  'wake-helper': 'Always on, on the same network as your other devices, so it can wake them.',
-};
+export const ROLE_HELP: Readonly<Record<AddDeviceRole, string>> = S.roleHelp;
 
 /**
  * The scopes each role can be given at add time and later (docs/22 §4.2). They are recorded on the
@@ -99,26 +350,10 @@ export const SCOPES_BY_ROLE: Record<AddDeviceRole, readonly string[]> = {
   'wake-helper': [],
 };
 
-export const SCOPE_TEXT: Record<string, { label: string; help: string }> = {
-  'offline-replica': {
-    label: 'Offline copy',
-    help: 'Keeps a copy of your chats and files on the device, to use without the Hub.',
-  },
-  'local-runtime': {
-    label: 'Local models',
-    help: 'May run models on the device itself when it has them.',
-  },
-  files: {
-    label: 'Files',
-    help: 'Agents may ask for its folders. Each folder is still shared only when you allow it.',
-  },
-  browser: { label: 'Browser', help: 'Agents may use its browser when you allow it.' },
-  computer_use: {
-    label: 'Computer use',
-    help: 'Agents may use its screen and keyboard when you allow it.',
-  },
-  exec: { label: 'Commands', help: 'Agents may run commands on it, in a sandbox.' },
-};
+/** A scope's label and help; `SCOPE_TEXT[scope]` is undefined for a scope Nova has no words for. */
+export const SCOPE_TEXT: Readonly<
+  Record<string, { readonly label: string; readonly help: string } | undefined>
+> = S.scopes;
 
 export function scopeLabel(scope: string): string {
   return SCOPE_TEXT[scope]?.label ?? scope;
@@ -126,7 +361,7 @@ export function scopeLabel(scope: string): string {
 
 /** "Offline copy, Files", or "No extra scopes". */
 export function scopesText(scopes: readonly string[]): string {
-  return scopes.length ? scopes.map(scopeLabel).join(', ') : 'No extra scopes';
+  return scopes.length ? listText(scopes.map(scopeLabel)) : S.noScopes;
 }
 
 /** The scopes a device with these roles can have, then any others it already has. */
@@ -139,25 +374,20 @@ export function scopeChoices(roles: readonly string[], current: readonly string[
   return out;
 }
 
-export const JOIN_KIND_LABEL: Record<AddDeviceKind, string> = {
-  browser: 'Web browser',
-  native: 'Nova app',
-  novad: 'novad',
-  compute: 'nova-compute',
-};
+export const JOIN_KIND_LABEL: Readonly<Record<AddDeviceKind, string>> = S.joinKinds;
 
 /** What the device runs: "novad 0.7.0", "Web browser", "nova-compute", "This Hub". */
 export function runsText(
   d: DeviceSummaryView,
   novad: Pick<DeviceView, 'novadVersion'> | null,
 ): string {
-  if (d.kind === 'hub') return 'This Hub';
-  if (novad || d.addedAs === 'novad' || d.novadVersion)
-    return (novad?.novadVersion ?? d.novadVersion)
-      ? `novad ${novad?.novadVersion ?? d.novadVersion}`
-      : 'novad, version unknown';
+  if (d.kind === 'hub') return S.runs.hub;
+  if (novad || d.addedAs === 'novad' || d.novadVersion) {
+    const version = novad?.novadVersion ?? d.novadVersion;
+    return version ? S.runs.novad({ version }) : S.runs.novadUnknown;
+  }
   if (d.addedAs) return JOIN_KIND_LABEL[d.addedAs];
-  return d.kind === 'compute' ? 'nova-compute' : 'Unknown';
+  return d.kind === 'compute' ? S.runs.compute : S.runs.unknown;
 }
 
 /** A browser or the app: it signs in with a session instead of being reached by the Hub. */
@@ -171,72 +401,81 @@ export function wakeSentText(
   w: Pick<DeviceWakeResult, 'mac' | 'via'>,
   helperName: (id: string) => string | null = () => null,
 ): string {
-  if (!w.via) return `Wake signal sent to ${name} (${w.mac}).`;
-  if (w.via === 'hub') return `Wake signal sent to ${name} by the Hub.`;
-  return `Wake signal sent to ${name} through ${helperName(w.via) ?? 'a Wake helper'}.`;
+  if (!w.via) return S.wake.sentMac({ name, mac: w.mac });
+  if (w.via === 'hub') return S.wake.sentByHub({ name });
+  const helper = helperName(w.via);
+  return helper ? S.wake.sentThrough({ name, helper }) : S.wake.sentThroughHelper({ name });
 }
 
-export const CAPABILITY_LABEL: Record<DeviceCapabilityName, string> = {
-  files: 'Files',
-  staged_writes: 'Staged writes',
-  exec: 'Commands',
-  mcp: 'Local MCP servers',
-  power: 'Power',
-  services: 'Services',
-  updates: 'Updates',
-  computer_use: 'Computer use',
-  browser: 'Browser',
-  capture: 'Ambient capture',
-};
+export const CAPABILITY_LABEL: Readonly<Record<DeviceCapabilityName, string>> = S.capabilityNames;
 
-export const MODULE_LABEL: Record<DeviceModuleName, string> = {
-  management: 'Management',
-  compute: 'Compute',
-  browser: 'Browser',
-  screen: 'Screen',
-  storage: 'Storage',
-  capture: 'Capture',
-};
+/** A capability's name inside a sentence: "files", "local MCP servers". */
+export function capabilityNoun(name: string): string {
+  return messageFor(S.capabilityNouns, name) ?? name;
+}
 
-export const MODULE_PURPOSE: Record<DeviceModuleName, string> = {
-  management: 'Power, services and updates',
-  compute: 'Runs models',
-  browser: 'Browser automation for agents',
-  screen: 'Computer use',
-  storage: 'Files, staged writes and local MCP servers',
-  capture: 'Ambient capture, with no network access',
-};
+export const MODULE_LABEL: Readonly<Record<DeviceModuleName, string>> = S.moduleNames;
+
+export const MODULE_PURPOSE: Readonly<Record<DeviceModuleName, string>> = S.modulePurpose;
 
 export function moduleLabel(name: string): string {
-  return MODULE_LABEL[name as DeviceModuleName] ?? name;
+  return messageFor(S.moduleNames, name) ?? name;
+}
+
+/** A module's name inside a sentence: "capture", "management". */
+export function moduleNoun(name: string): string {
+  return messageFor(S.moduleNouns, name) ?? name;
 }
 
 /** Why a capability is not available, in a few words. */
 export function capabilityReason(s: DeviceCapabilityStatus): string | null {
   if (s.available || !s.reason) return null;
-  if (s.reason === 'update_required') return `Needs novad ${s.minVersion}`;
+  if (s.reason === 'update_required') return S.capabilityReason.update({ version: s.minVersion });
   if (s.reason === 'module_not_allowed')
-    return `${moduleLabel(s.module)} module not allowed by policy`;
-  return `No ${moduleLabel(s.module).toLowerCase()} module`;
+    return S.capabilityReason.notAllowed({ module: moduleLabel(s.module) });
+  return S.capabilityReason.missing({ module: moduleNoun(s.module) });
 }
 
 /** "Files, Staged writes, Commands · 2 need an update". */
 export function capabilitySummary(d: DeviceView): string {
   const on = d.capabilities.filter((c) => c.available).map((c) => CAPABILITY_LABEL[c.name]);
   const update = d.capabilities.filter((c) => c.reason === 'update_required').length;
-  const parts = [on.length ? on.join(', ') : 'No capabilities yet'];
-  if (update) parts.push(`${update} ${update === 1 ? 'needs' : 'need'} an update`);
-  return parts.join(' · ');
+  const capabilities = on.length ? listText(on) : S.summary.none;
+  return update ? S.summary.needUpdate({ capabilities, n: update }) : capabilities;
 }
 
 export const MODULE_STATE: Record<
   DeviceModuleView['state'],
-  { text: string; tone: ChipTone; icon: 'check' | 'alert' | 'stop' | null }
+  StatusChip<'check' | 'alert' | 'stop' | null>
 > = {
-  running: { text: 'Running', tone: 'ready', icon: 'check' },
-  stopped: { text: 'Stopped', tone: 'neutral', icon: 'stop' },
-  backoff: { text: 'Restarting after a crash', tone: 'needs_input', icon: 'alert' },
-  disabled: { text: 'Disabled', tone: 'blocked', icon: 'stop' },
+  running: {
+    get text() {
+      return S.moduleStates.running;
+    },
+    tone: 'ready',
+    icon: 'check',
+  },
+  stopped: {
+    get text() {
+      return S.moduleStates.stopped;
+    },
+    tone: 'neutral',
+    icon: 'stop',
+  },
+  backoff: {
+    get text() {
+      return S.moduleStates.backoff;
+    },
+    tone: 'needs_input',
+    icon: 'alert',
+  },
+  disabled: {
+    get text() {
+      return S.moduleStates.disabled;
+    },
+    tone: 'blocked',
+    icon: 'stop',
+  },
 };
 
 /** A module the supervisor gave up on after repeated crashes. */
@@ -246,51 +485,76 @@ export function crashLooped(m: DeviceModuleView): boolean {
 
 export const STAGED_STATUS: Record<
   StagedWriteView['status'],
-  { text: string; tone: ChipTone; icon: 'hand' | 'check' | 'alert' | 'stop' | 'clock' }
+  StatusChip<'hand' | 'check' | 'alert' | 'stop' | 'clock'>
 > = {
-  staged: { text: 'Waiting for review', tone: 'needs_input', icon: 'hand' },
-  committed: { text: 'Written', tone: 'ready', icon: 'check' },
-  discarded: { text: 'Discarded', tone: 'neutral', icon: 'stop' },
-  conflict: { text: 'Conflict', tone: 'blocked', icon: 'alert' },
-  expired: { text: 'Expired', tone: 'neutral', icon: 'clock' },
-  failed: { text: 'Failed', tone: 'blocked', icon: 'alert' },
+  staged: {
+    get text() {
+      return S.stagedStatus.staged;
+    },
+    tone: 'needs_input',
+    icon: 'hand',
+  },
+  committed: {
+    get text() {
+      return S.stagedStatus.committed;
+    },
+    tone: 'ready',
+    icon: 'check',
+  },
+  discarded: {
+    get text() {
+      return S.stagedStatus.discarded;
+    },
+    tone: 'neutral',
+    icon: 'stop',
+  },
+  conflict: {
+    get text() {
+      return S.stagedStatus.conflict;
+    },
+    tone: 'blocked',
+    icon: 'alert',
+  },
+  expired: {
+    get text() {
+      return S.stagedStatus.expired;
+    },
+    tone: 'neutral',
+    icon: 'clock',
+  },
+  failed: {
+    get text() {
+      return S.stagedStatus.failed;
+    },
+    tone: 'blocked',
+    icon: 'alert',
+  },
 };
 
-export const UPDATE_STATUS_TEXT: Record<string, string> = {
-  applied: 'Applied',
-  staged: 'Staged',
-  rolled_back: 'Rolled back',
-  refused: 'Refused',
-  failed: 'Failed',
-};
+/** An update's status in words; `UPDATE_STATUS_TEXT[status] ?? status`. */
+export const UPDATE_STATUS_TEXT: Readonly<Record<string, string | undefined>> = S.updateStatus;
 
-export const GRANTEE_KIND_LABEL: Record<DeviceGrantee['kind'], string> = {
-  user: 'You',
-  agent: 'Agent',
-  session: 'Code session',
-  run: 'Work run',
-  thread: 'Chat',
-};
+export const GRANTEE_KIND_LABEL: Readonly<Record<DeviceGrantee['kind'], string>> = S.granteeKinds;
 
 /** "You", "Agent Scout", "Work run 0193…". */
 export function granteeText(g: DeviceGrantee, agentName?: (id: string) => string | null): string {
-  if (g.kind === 'user') return 'You';
-  if (g.kind === 'agent') return `Agent ${agentName?.(g.id) ?? g.id}`;
-  return `${GRANTEE_KIND_LABEL[g.kind]} ${g.id}`;
+  if (g.kind === 'user') return S.grantee.you;
+  if (g.kind === 'agent') return S.grantee.agent({ name: agentName?.(g.id) ?? g.id });
+  return S.grantee.other({ kind: g.kind, id: g.id });
 }
 
 export function accessText(r: Pick<DeviceAccessRequestView, 'access' | 'kind'>): string {
-  if (r.kind === 'mcp') return 'Can call its tools';
-  return r.access === 'write' ? 'Read and change' : 'Read only';
+  if (r.kind === 'mcp') return S.access.mcp;
+  return r.access === 'write' ? S.access.write : S.access.read;
 }
 
 // ---- why something is unavailable --------------------------------------------------------------
 
 /** Why actions that reach the device cannot run now, or null when they can. */
 export function deviceUnreachable(d: Pick<DeviceView, 'status'>): string | null {
-  if (d.status === 'revoked') return 'This device was revoked.';
-  if (d.status === 'pending') return 'The device has not connected yet.';
-  if (d.status === 'unreachable') return 'The device is offline.';
+  if (d.status === 'revoked') return S.unreachable.revoked;
+  if (d.status === 'pending') return S.unreachable.pending;
+  if (d.status === 'unreachable') return S.unreachable.offline;
   return null;
 }
 
@@ -299,13 +563,15 @@ export function capabilityBlocked(d: DeviceView, name: DeviceCapabilityName): st
   const off = deviceUnreachable(d);
   if (off) return off;
   const s = d.capabilities.find((c) => c.name === name);
-  if (!s) return `This device does not report ${CAPABILITY_LABEL[name].toLowerCase()}.`;
+  if (!s) return S.blocked.notReported({ capability: capabilityNoun(name) });
   if (s.available) return null;
   if (s.reason === 'update_required')
-    return `Needs novad ${s.minVersion}; this device has ${d.novadVersion ?? 'an unknown version'}.`;
+    return d.novadVersion
+      ? S.blocked.update({ version: s.minVersion, have: d.novadVersion })
+      : S.blocked.updateUnknown({ version: s.minVersion });
   if (s.reason === 'module_not_allowed')
-    return `The ${moduleLabel(s.module).toLowerCase()} module is not allowed by this device's policy.`;
-  return `This device has no ${moduleLabel(s.module).toLowerCase()} module.`;
+    return S.blocked.notAllowed({ module: moduleNoun(s.module) });
+  return S.blocked.missing({ module: moduleNoun(s.module) });
 }
 
 export function errorReason(err: unknown): string | null {
@@ -319,78 +585,74 @@ export function errorCode(err: unknown): string | null {
 }
 
 /** A Hub error about a device, in plain words. */
-export function deviceErrorMessage(err: unknown, fallback = 'Something went wrong.'): string {
-  if (!(err instanceof ApiError)) return errorMessage(err, fallback);
+export function deviceErrorMessage(err: unknown, fallback?: string): string {
+  const otherwise = fallback ?? S.errors.generic;
+  if (!(err instanceof ApiError)) return errorMessage(err, otherwise);
   const d = err.body.details ?? {};
   const str = (v: unknown) => (typeof v === 'string' ? v : null);
+  const E = S.errors;
   switch (str(d.reason) ?? err.body.code) {
     case 'node_unavailable':
     case 'unreachable':
-      return 'The device is offline. Try again when it reconnects.';
-    case 'update_required':
-      return `This device needs novad ${str(d.minVersion) ?? 'a newer version'} for that${
-        str(d.novadVersion) ? ` (it has ${str(d.novadVersion)})` : ''
-      }.`;
+      return E.offline;
+    case 'update_required': {
+      const version = str(d.minVersion);
+      const have = str(d.novadVersion);
+      if (version) return have ? E.updateHas({ version, have }) : E.update({ version });
+      return have ? E.newerHas({ have }) : E.newer;
+    }
     case 'module_missing':
-      return `This device has no ${moduleLabel(str(d.module) ?? '').toLowerCase()} module.`;
+      return E.moduleMissing({ module: moduleNoun(str(d.module) ?? '') });
     case 'module_not_allowed':
-      return `The ${moduleLabel(str(d.module) ?? '').toLowerCase()} module is not allowed by this device's policy.`;
+      return E.moduleNotAllowed({ module: moduleNoun(str(d.module) ?? '') });
     case 'not_wakeable':
-      return 'This device does not report Wake-on-LAN. Enable it on the device first.';
+      return E.notWakeable;
     case 'wake_rate_limited':
-      return `This device was woken ${typeof d.limit === 'number' ? plural(d.limit, 'time') : 'too many times'} in the last hour, the most allowed. Try again later.`;
+      return typeof d.limit === 'number' ? E.wakeLimit({ limit: d.limit }) : E.wakeLimited;
     case 'power_actions_disabled':
-      return 'Power actions are off in this device’s novad settings.';
+      return E.powerOff;
     case 'elevation_required':
-      return 'novad needs elevated rights to change Wake-on-LAN. Run the steps on the device yourself.';
+      return E.elevation;
     case 'protected_path':
-      return 'That path is protected and is never shared or written.';
+      return E.protectedPath;
     case 'folder_access_required':
-      return 'That folder is not shared with you on this device.';
+      return E.folderAccess;
     case 'not_routing_eligible':
-      return 'This device is kept out of agent work by its policy.';
+      return E.notRouting;
     case 'agent_connected':
-      return 'This agent already has a connected computer.';
+      return E.agentConnected;
     case 'firmware_disabled':
-      return 'Firmware changes are off.';
+      return E.firmwareOff;
     case 'no_wake_helper':
-      return 'Nothing on this device’s network can wake it: there is no Wake helper there, and the Hub is not on that network. Add an always-on device there as a Wake helper.';
+      return E.noWakeHelper;
     case 'confirmation_mismatch':
-      return 'That code does not match the one on the device. Compare the six digits on both screens.';
+      return E.mismatch;
     case 'decided':
-      return `This request was already ${str(d.status) ?? 'decided'}.`;
+      return E.decided({ status: str(d.status) ?? '' });
     case 'expired':
-      return 'This request has expired. Add the device again with a new code.';
+      return E.expired;
     case 'key_revoked':
-      return 'This device’s key was revoked. Reset the device so it makes a new key, then add it again.';
+      return E.keyRevoked;
     case 'key_in_use':
-      return 'This device’s key is already registered.';
+      return E.keyInUse;
     case 'add_device_disabled':
-      return 'Adding devices with a code is turned off. Turn it on in Settings → Devices.';
+      return E.addOff;
     case 'start_rate_limited':
-      return `Too many codes were made in the last hour${typeof d.limit === 'number' ? ` (at most ${d.limit})` : ''}. Try again later.`;
+      return typeof d.limit === 'number' ? E.codesLimit({ limit: d.limit }) : E.codesLimited;
     case 'relay_unavailable':
-      return 'The Relay is not set up on this Hub. Add the device directly, or set up a Relay in Network.';
+      return E.noRelay;
     case 'revoked':
-      return 'This device was revoked.';
+      return E.revoked;
     default:
-      return errorMessage(err, fallback);
+      return errorMessage(err, otherwise);
   }
 }
 
 // ---- numbers, times and quiet hours --------------------------------------------------------------
 
 export function formatBytes(n: number | null | undefined): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return 'unknown size';
-  if (n < 1024) return `${n} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v >= 10 ? Math.round(v) : Math.round(v * 10) / 10} ${units[i]}`;
+  if (n === null || n === undefined || !Number.isFinite(n)) return S.unknownSize;
+  return fmt.bytes(n);
 }
 
 export const QUIET_RANGE = /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/;
@@ -438,10 +700,10 @@ export const ABSOLUTE_PATH = /^(\/|[A-Za-z]:[\\/])/;
 
 /** The Hub's rule: absolute, no `.` or `..` segments, no NUL. */
 export function pathProblem(p: string): string | null {
-  if (!p.trim()) return 'Enter a folder path.';
-  if (!ABSOLUTE_PATH.test(p)) return 'Enter a full path, starting with / (or a drive like C:\\).';
+  if (!p.trim()) return S.paths.empty;
+  if (!ABSOLUTE_PATH.test(p)) return S.paths.relative;
   if (p.includes('\0') || p.split(/[\\/]/).some((s) => s === '.' || s === '..'))
-    return 'The path cannot contain . or .. parts.';
+    return S.paths.dots;
   return null;
 }
 
@@ -488,5 +750,5 @@ export function parseUnifiedDiff(diff: string): DiffRow[] {
 
 /** "+3 −1". */
 export function changeCount(w: Pick<StagedWriteView, 'additions' | 'deletions'>): string {
-  return `+${w.additions} −${w.deletions}`;
+  return `+${fmt.number(w.additions)} −${fmt.number(w.deletions)}`;
 }

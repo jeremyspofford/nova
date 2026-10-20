@@ -5,6 +5,7 @@
 // it. `?fromRun=<id>` opens New schedule filled in from a finished run ("Schedule it"); `?new=1`
 // opens it blank.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { ProjectView, ScheduleFireView, ScheduleView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { useAgentsApi } from '../agents/api.ts';
@@ -14,7 +15,14 @@ import { navigate, useLocation } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useDebounced, useWorkEvents } from './events.ts';
-import { formatDateTime, OUTCOME_ICON, OUTCOME_TEXT, runPath, SCHEDULED_PATH } from './format.ts';
+import {
+  formatDateTime,
+  OUTCOME_ICON,
+  OUTCOME_TEXT,
+  runPath,
+  SCHEDULED_PATH,
+  WORK_TEXT,
+} from './format.ts';
 import { followLink, WorkNav } from './nav.tsx';
 import { ScheduleDialog, type ScheduleSeed } from './ScheduleDialog.tsx';
 import { whenText } from './schedule-when.ts';
@@ -23,14 +31,82 @@ import './work.css';
 
 type DialogState = { editing: ScheduleView | null; seed?: ScheduleSeed } | null;
 
+/** Scheduled. `{title}` is a schedule's title and `{name}` an agent's name (data). */
+export const SCHEDULED_TEXT = defineMessages('work.scheduled', {
+  origin: {
+    setBy: 'Set by {name}',
+    setByAgent: 'Set by agent',
+    createdBy: 'Created by {name}',
+    createdByAgent: 'Created by an agent',
+    for: 'For {name}',
+    forAgent: 'For an agent',
+  },
+  /** Toasts; {reason} is the Hub's own words (English, D9). */
+  readRunFailed: 'Could not read the run: {reason}',
+  loadFailed: 'Could not load schedules.',
+  resumed: '“{title}” resumed.',
+  paused: '“{title}” paused.',
+  changeFailed: 'Could not change the schedule: {reason}',
+  started: '“{title}” started a run.',
+  openRun: 'Open run',
+  startFailed: 'Could not start the run: {reason}',
+  heading: 'Scheduled',
+  newSchedule: 'New schedule',
+  intro:
+    'Each time a schedule fires it starts a Work run with its instructions. Wake-ups that agents set for themselves are listed here too.',
+  loading: 'Loading schedules',
+  empty: 'Nothing scheduled',
+  emptyHint: 'Schedule a task to run every morning, on weekdays, every few hours or once.',
+  scheduleTask: 'Schedule a task',
+  list: 'Schedules',
+  /** The rule and its timezone: "Every day at 09:00 (UTC)". */
+  rule: '{when} ({timezone})',
+  reason: 'Reason:',
+  /** {when} is a date and time, or "Paused". */
+  nextRun: 'Next run: {when}',
+  lastRun: 'Last run: {when}',
+  lastOutcome: 'Last outcome:',
+  runNow: 'Run now',
+  runNowOf: 'Run now: {title}',
+  editOf: 'Edit {title}',
+  pause: 'Pause',
+  resume: 'Resume',
+  pauseOf: 'Pause {title}',
+  resumeOf: 'Resume {title}',
+  history: 'History',
+  historyOf: 'History of {title}',
+  deleteOf: 'Delete {title}',
+  created: 'Scheduled “{title}”.',
+  saved: 'Schedule saved.',
+  deleteTitle: 'Delete this schedule?',
+  deleteBody: '“{title}” will not run again. Runs it already started are kept.',
+  deleted: 'Schedule deleted.',
+  deleteFailed: 'Could not delete it: {reason}',
+  /** A history line: when the schedule fired. */
+  ran: 'Ran {when}',
+  /** {n} missed times between {first} and {last}. */
+  catchUp:
+    '{n, plural, one {Catch-up run: # missed time, {first} to {last}} other {Catch-up run: # missed times, {first} to {last}}}',
+  skipped:
+    '{n, plural, one {Skipped: # missed time, {first} to {last}} other {Skipped: # missed times, {first} to {last}}}',
+  catchUpNone: 'Catch-up run',
+  skippedNone: 'Skipped',
+  historyFailed: 'Could not load the history.',
+  historyLoading: 'Loading the history',
+  notRun: 'It has not run yet.',
+  inProgress: 'In progress',
+  openRunTrace: 'Open run and its trace',
+});
+
 /** Who set a schedule, when an agent did or it wakes one; the agent's name when it is known. */
 export function scheduleOriginText(
   s: Pick<ScheduleView, 'origin' | 'agentId'>,
   agentName: string | undefined,
 ): string | null {
-  if (s.origin === 'agent_self') return agentName ? `Set by ${agentName}` : 'Set by agent';
-  if (s.origin === 'agent') return agentName ? `Created by ${agentName}` : 'Created by an agent';
-  if (s.agentId) return agentName ? `For ${agentName}` : 'For an agent';
+  const S = SCHEDULED_TEXT.origin;
+  if (s.origin === 'agent_self') return agentName ? S.setBy({ name: agentName }) : S.setByAgent;
+  if (s.origin === 'agent') return agentName ? S.createdBy({ name: agentName }) : S.createdByAgent;
+  if (s.agentId) return agentName ? S.for({ name: agentName }) : S.forAgent;
   return null;
 }
 
@@ -93,7 +169,9 @@ export function ScheduledView() {
       },
       (err: unknown) => {
         if (!alive) return;
-        toast.show(`Could not read the run: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(SCHEDULED_TEXT.readRunFailed({ reason: errorMessage(err) }), {
+          tone: 'error',
+        });
         navigate(SCHEDULED_PATH, { replace: true });
       },
     );
@@ -110,7 +188,7 @@ export function ScheduledView() {
         setItems(list);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load schedules.')),
+      (err: unknown) => alive && setError(errorMessage(err, SCHEDULED_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -143,12 +221,15 @@ export function ScheduledView() {
     api.updateSchedule(s.id, { enabled: !s.enabled }).then(
       (next) => {
         replace(next);
-        toast.show(next.enabled ? `“${next.title}” resumed.` : `“${next.title}” paused.`, {
-          tone: 'success',
-        });
+        toast.show(
+          next.enabled
+            ? SCHEDULED_TEXT.resumed({ title: next.title })
+            : SCHEDULED_TEXT.paused({ title: next.title }),
+          { tone: 'success' },
+        );
       },
       (err: unknown) =>
-        toast.show(`Could not change the schedule: ${errorMessage(err)}`, { tone: 'error' }),
+        toast.show(SCHEDULED_TEXT.changeFailed({ reason: errorMessage(err) }), { tone: 'error' }),
     );
   };
 
@@ -156,50 +237,48 @@ export function ScheduledView() {
     api.runScheduleNow(s.id).then(
       ({ runId }) => {
         setHistoryVersion((v) => v + 1);
-        toast.show(`“${s.title}” started a run.`, {
+        toast.show(SCHEDULED_TEXT.started({ title: s.title }), {
           tone: 'success',
-          action: { label: 'Open run', onClick: () => navigate(runPath(runId)) },
+          action: { label: SCHEDULED_TEXT.openRun, onClick: () => navigate(runPath(runId)) },
         });
       },
       (err: unknown) =>
-        toast.show(`Could not start the run: ${errorMessage(err)}`, { tone: 'error' }),
+        toast.show(SCHEDULED_TEXT.startFailed({ reason: errorMessage(err) }), { tone: 'error' }),
     );
   };
 
   const projectName = (id: string | null) =>
     id ? (projects.find((p) => p.id === id)?.name ?? null) : null;
+  const S = SCHEDULED_TEXT;
 
   return (
     <div className="ws-page work-page">
       <header className="ws-page-header">
-        <h1>Scheduled</h1>
+        <h1>{S.heading}</h1>
         <Button variant="primary" onClick={() => setDialog({ editing: null })}>
-          <Icon name="plus" /> New schedule
+          <Icon name="plus" /> {S.newSchedule}
         </Button>
       </header>
       <WorkNav current="scheduled" />
-      <p className="muted ws-flush">
-        Each time a schedule fires it starts a Work run with its instructions. Wake-ups that agents
-        set for themselves are listed here too.
-      </p>
+      <p className="muted ws-flush">{S.intro}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{WORK_TEXT.retry}</Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading schedules" /> : null}
+      {items === null && !error ? <Spinner label={S.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
-          title="Nothing scheduled"
-          description="Schedule a task to run every morning, on weekdays, every few hours or once."
+          title={S.empty}
+          description={S.emptyHint}
           icon="clock"
           level={2}
-          action={<Button onClick={() => setDialog({ editing: null })}>Schedule a task</Button>}
+          action={<Button onClick={() => setDialog({ editing: null })}>{S.scheduleTask}</Button>}
         />
       ) : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="Schedules">
+        <ul className="ws-list" aria-label={S.list}>
           {items.map((s) => {
             const agentName = s.agentId ? agentNames.get(s.agentId) : undefined;
             const origin = scheduleOriginText(s, agentName);
@@ -208,14 +287,14 @@ export function ScheduledView() {
             return (
               <li key={s.id} className="ws-list-row work-schedule" aria-label={s.title}>
                 <div className="work-row-main">
-                  <span className="ws-card-link">{s.title}</span>
+                  <span className="ws-card-link" dir="auto">
+                    {s.title}
+                  </span>
                   <span className="muted ws-row-meta">
-                    <span>
-                      {whenText(s.when)} ({s.timezone})
-                    </span>
+                    <span>{S.rule({ when: whenText(s.when), timezone: s.timezone })}</span>
                     {s.enabled ? null : (
                       <span className="ws-badge">
-                        <Icon name="stop" /> Paused
+                        <Icon name="stop" /> {WORK_TEXT.paused}
                       </span>
                     )}
                     {origin ? (
@@ -235,45 +314,56 @@ export function ScheduledView() {
                     ) : null}
                     {project ? (
                       <span>
-                        <Icon name="folder" /> {project}
+                        <Icon name="folder" /> <span dir="auto">{project}</span>
                       </span>
                     ) : null}
                   </span>
                   {s.wakeReason ? (
                     <span className="ws-row-meta">
                       <span>
-                        <span className="muted">Reason: </span>
-                        <span data-untrusted="true">{s.wakeReason}</span>
+                        <span className="muted">{S.reason} </span>
+                        <span data-untrusted="true" dir="auto">
+                          {s.wakeReason}
+                        </span>
                       </span>
                     </span>
                   ) : null}
                   <span className="ws-row-meta">
-                    <span>Next run: {s.enabled ? formatDateTime(s.nextRunAt) : 'Paused'}</span>
-                    <span>Last run: {formatWhen(s.lastRunAt)}</span>
+                    <span>
+                      {S.nextRun({
+                        when: s.enabled ? formatDateTime(s.nextRunAt) : WORK_TEXT.paused,
+                      })}
+                    </span>
+                    <span>{S.lastRun({ when: formatWhen(s.lastRunAt) })}</span>
                     {s.lastOutcome ? (
                       <span className="work-badge" data-outcome={s.lastOutcome}>
                         <Icon name={OUTCOME_ICON[s.lastOutcome]} />
-                        <span className="nv-vh">Last outcome:</span> {OUTCOME_TEXT[s.lastOutcome]}
+                        <span className="nv-vh">{S.lastOutcome}</span> {OUTCOME_TEXT[s.lastOutcome]}
                       </span>
                     ) : null}
                   </span>
                 </div>
                 <div className="ws-row-actions">
-                  <Button onClick={() => runNow(s)} aria-label={`Run now: ${s.title}`}>
-                    Run now
+                  <Button onClick={() => runNow(s)} aria-label={S.runNowOf({ title: s.title })}>
+                    {S.runNow}
                   </Button>
-                  <Button onClick={() => setDialog({ editing: s })} aria-label={`Edit ${s.title}`}>
-                    Edit
+                  <Button
+                    onClick={() => setDialog({ editing: s })}
+                    aria-label={S.editOf({ title: s.title })}
+                  >
+                    {WORK_TEXT.edit}
                   </Button>
                   <Button
                     onClick={() => toggle(s)}
-                    aria-label={`${s.enabled ? 'Pause' : 'Resume'} ${s.title}`}
+                    aria-label={
+                      s.enabled ? S.pauseOf({ title: s.title }) : S.resumeOf({ title: s.title })
+                    }
                   >
-                    {s.enabled ? 'Pause' : 'Resume'}
+                    {s.enabled ? S.pause : S.resume}
                   </Button>
                   <Button
                     aria-expanded={showHistory}
-                    aria-label={`History of ${s.title}`}
+                    aria-label={S.historyOf({ title: s.title })}
                     onClick={() =>
                       setHistory((h) => {
                         const next = new Set(h);
@@ -283,14 +373,14 @@ export function ScheduledView() {
                       })
                     }
                   >
-                    History
+                    {S.history}
                   </Button>
                   <Button
                     variant="danger"
-                    aria-label={`Delete ${s.title}`}
+                    aria-label={S.deleteOf({ title: s.title })}
                     onClick={() => setConfirmDelete(s)}
                   >
-                    Delete
+                    {WORK_TEXT.delete}
                   </Button>
                 </div>
                 {showHistory ? (
@@ -312,21 +402,17 @@ export function ScheduledView() {
           setItems((list) =>
             created ? [...(list ?? []), s] : (list ?? []).map((x) => (x.id === s.id ? s : x)),
           );
-          toast.show(created ? `Scheduled “${s.title}”.` : 'Schedule saved.', { tone: 'success' });
+          toast.show(created ? S.created({ title: s.title }) : S.saved, { tone: 'success' });
         }}
       />
       <Dialog
         open={confirmDelete !== null}
-        title="Delete this schedule?"
-        description={
-          confirmDelete
-            ? `“${confirmDelete.title}” will not run again. Runs it already started are kept.`
-            : undefined
-        }
+        title={S.deleteTitle}
+        description={confirmDelete ? S.deleteBody({ title: confirmDelete.title }) : undefined}
         onClose={() => setConfirmDelete(null)}
         footer={
           <>
-            <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
+            <Button onClick={() => setConfirmDelete(null)}>{WORK_TEXT.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -336,14 +422,14 @@ export function ScheduledView() {
                 api.deleteSchedule(s.id).then(
                   () => {
                     setItems((list) => list?.filter((x) => x.id !== s.id) ?? null);
-                    toast.show('Schedule deleted.', { tone: 'success' });
+                    toast.show(S.deleted, { tone: 'success' });
                   },
                   (err: unknown) =>
-                    toast.show(`Could not delete it: ${errorMessage(err)}`, { tone: 'error' }),
+                    toast.show(S.deleteFailed({ reason: errorMessage(err) }), { tone: 'error' }),
                 );
               }}
             >
-              Delete
+              {WORK_TEXT.delete}
             </Button>
           </>
         }
@@ -352,17 +438,17 @@ export function ScheduledView() {
   );
 }
 
-const KIND_TEXT: Record<ScheduleFireView['kind'], string> = {
-  fire: 'Ran',
-  catch_up: 'Catch-up run',
-  skipped: 'Skipped',
-};
-
-function windowText(f: ScheduleFireView): string {
-  if (!f.window) return '';
-  const n = f.window.count;
-  const times = n === 1 ? '1 missed time' : `${n} missed times`;
-  return `${times}, ${formatDateTime(f.window.first)} to ${formatDateTime(f.window.last)}`;
+/** A history line: when it ran, or the window of missed times it caught up on or skipped. */
+function fireText(f: ScheduleFireView): string {
+  const S = SCHEDULED_TEXT;
+  if (f.kind === 'fire') return S.ran({ when: formatDateTime(f.firedAt) });
+  if (!f.window) return f.kind === 'catch_up' ? S.catchUpNone : S.skippedNone;
+  const p = {
+    n: f.window.count,
+    first: formatDateTime(f.window.first),
+    last: formatDateTime(f.window.last),
+  };
+  return f.kind === 'catch_up' ? S.catchUp(p) : S.skipped(p);
 }
 
 function ScheduleHistory({ scheduleId, version }: { scheduleId: string; version: number }) {
@@ -378,43 +464,41 @@ function ScheduleHistory({ scheduleId, version }: { scheduleId: string; version:
         setFires([...items].sort((a, b) => b.firedAt.localeCompare(a.firedAt)));
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the history.')),
+      (err: unknown) => alive && setError(errorMessage(err, SCHEDULED_TEXT.historyFailed)),
     );
     return () => {
       alive = false;
     };
   }, [api, scheduleId, version]);
+  const S = SCHEDULED_TEXT;
   return (
     <section className="work-history" aria-labelledby={headingId}>
       <h3 id={headingId} className="ws-subhead">
-        History
+        {S.history}
       </h3>
       {error ? (
         <p role="alert" className="nv-field-error">
           {error}
         </p>
       ) : fires === null ? (
-        <Spinner label="Loading the history" />
+        <Spinner label={S.historyLoading} />
       ) : fires.length === 0 ? (
-        <p className="muted ws-flush">It has not run yet.</p>
+        <p className="muted ws-flush">{S.notRun}</p>
       ) : (
         <ol className="work-fires">
           {fires.map((f) => (
             <li key={f.id} className="work-fire" data-kind={f.kind}>
-              <span>
-                {KIND_TEXT[f.kind]}
-                {f.kind === 'fire' ? ` ${formatDateTime(f.firedAt)}` : `: ${windowText(f)}`}
-              </span>
+              <span>{fireText(f)}</span>
               {f.outcome ? (
                 <span className="work-badge" data-outcome={f.outcome}>
                   <Icon name={OUTCOME_ICON[f.outcome]} /> {OUTCOME_TEXT[f.outcome]}
                 </span>
               ) : f.runId ? (
-                <span className="muted">In progress</span>
+                <span className="muted">{S.inProgress}</span>
               ) : null}
               {f.runId ? (
                 <a href={runPath(f.runId)} onClick={(e) => followLink(e, runPath(f.runId ?? ''))}>
-                  Open run{f.outcome === 'output_missing' ? ' and its trace' : ''}
+                  {f.outcome === 'output_missing' ? S.openRunTrace : S.openRun}
                 </a>
               ) : null}
             </li>

@@ -22,11 +22,14 @@ import {
   TextField,
   useToast,
 } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { ApiError, errorMessage } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { navigate } from '../router.ts';
 import { useAnnounce, useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
-import { MANAGED, formatWhen, plural } from '../settings/common.ts';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
+import { formatWhen } from '../settings/common.ts';
 import { SwitchField } from '../settings/controls.tsx';
 import { useDebounced } from '../work/events.ts';
 import { followLink } from '../work/nav.tsx';
@@ -34,9 +37,7 @@ import { useComputersApi, type AgentRef } from './api.ts';
 import { COMPUTER_EVENTS, eventComputerId, useHubEvents } from './events.ts';
 import {
   KIND_TEXT,
-  MODE_TEXT,
   NETWORK_PATH,
-  STATE_TEXT,
   agentPath,
   computerPath,
   computerTitle,
@@ -45,10 +46,143 @@ import {
   formatMemory,
   formatSeconds,
   hubSandboxText,
+  stateText,
   substrateText,
 } from './format.ts';
 import '../workspace.css';
 import './computers.css';
+
+export const VIEW_TEXT = defineMessages('computers.view', {
+  breadcrumb: 'Breadcrumb',
+  computers: 'Computers',
+  loadFailed: 'Could not load the computers.',
+  intro:
+    'Each agent works on a computer of its own. Its files, installed software and browser sign-ins are kept between runs, and it reaches the network only through Nova’s egress proxy.',
+  retry: 'Retry',
+  loading: 'Loading computers',
+  emptyTitle: 'No computers yet',
+  emptyHelp:
+    'An agent gets its own computer the first time it needs one. Create an agent to get started.',
+  goToAgents: 'Go to Agents',
+  snapshots: '{n, plural, one {# snapshot} other {# snapshots}}',
+  lastUsed: 'Last used {when}',
+  sandbox: {
+    checkFailed: 'Could not check the sandbox.',
+    title: 'Sandbox on this Hub',
+    checking: 'Checking the sandbox',
+    runsIn: 'Commands run in: {sandbox}',
+    cannotRun: 'Commands cannot run on this Hub.',
+    never:
+      'Nova never runs agent commands outside a sandbox. Agents can still read and write their files.',
+  },
+  saveFailed: 'Could not save: {error}',
+  settings: {
+    title: 'Settings for all computers',
+    where: "Where a new agent's computer runs",
+    localHelp: 'An isolated sandbox on the Hub. Its files stay on the Hub.',
+    cloudHelp:
+      'Keeps working while your devices are off. In this version a mock cloud runner on the Hub stands in for it.',
+    keep: 'Agents that already have a computer keep it.',
+    saved: 'Saved.',
+    microVm: 'Micro-VM sandboxes (experimental)',
+    microVmHelp:
+      'Off by default. Used when this Hub runs its sandboxes as micro-VMs, which needs a hypervisor and a KVM runner on the host; without them commands are unavailable, never run outside a sandbox. Takes effect after the Hub restarts.',
+    network: 'Where computers can reach on the network: {link}.',
+    networkLink: 'Settings, Network',
+  },
+  limits: {
+    fields: {
+      cpus: 'CPU cores',
+      memoryMb: 'Memory (MB)',
+      wallClockSeconds: 'Time per command (seconds)',
+    },
+    number: 'Enter a number.',
+    between: 'Between {min} and {max}.',
+    whole: 'Enter a whole number.',
+    saved: 'Limits saved.',
+    legend: 'Limits for every command',
+    restart:
+      'CPU and memory apply after the Hub restarts; the time limit applies to the next command.',
+    save: 'Save limits',
+    discard: 'Discard changes',
+  },
+  page: {
+    loadFailed: 'Could not load this computer.',
+    notFound: 'Computer not found',
+    notFoundHelp: 'It may have been removed with its agent.',
+    all: 'All computers',
+    stopped: 'Computer stopped. It starts again the next time it is needed.',
+    stopFailed: 'Could not stop it: {error}',
+    loading: 'Loading the computer',
+    stop: 'Stop',
+    facts: {
+      kind: 'Kind',
+      runsIn: 'Runs commands in',
+      agent: 'Agent',
+      device: 'Device',
+      baseImage: 'Base image',
+      created: 'Created',
+      lastUsed: 'Last used',
+    },
+    openAgent: 'Open the agent',
+    manageDevice: 'Manage in Settings, Devices',
+  },
+  resources: {
+    title: 'Resource limits',
+    cpu: 'CPU',
+    cores: '{n, plural, one {# core} other {# cores}}',
+    memory: 'Memory',
+    time: 'Time per command',
+    help: 'Every command on this computer runs within these limits; one that goes over is stopped. They are the same for all computers: {link}.',
+    change: 'change them on the Computers page',
+  },
+  snapshot: {
+    title: 'Snapshots',
+    take: 'Take a snapshot',
+    deviceNote:
+      'Snapshots are not available for a connected device: its files are managed on the device.',
+    note: 'A snapshot keeps a copy of this computer’s files. Restoring one puts them back as they were.',
+    loading: 'Loading snapshots',
+    none: 'No snapshots yet. Take one before a change you may want to undo.',
+    untitled: 'Snapshot',
+    restoreLabel: 'Restore {name} from {when}',
+    restore: 'Restore',
+    deleteLabel: 'Delete {name} from {when}',
+    delete: 'Delete',
+    deleteTitle: 'Delete this snapshot?',
+    deleteHelp:
+      '“{name}” from {when} is deleted. The computer’s files now are not changed. This cannot be undone.',
+    cancel: 'Cancel',
+    deleted: 'Snapshot deleted.',
+    deleteFailed: 'Could not delete it: {error}',
+    deleteConfirm: 'Delete snapshot',
+    taken: 'Snapshot “{name}” taken.',
+    takeFailed: 'Could not take the snapshot.',
+    label: 'Label (optional)',
+    labelHint: 'For example, “Before the upgrade”.',
+    takeConfirm: 'Take snapshot',
+    before: 'Before restoring {name}',
+    restored: 'Restored the snapshot from {when}.',
+    restoreFailed: 'Could not restore the snapshot.',
+    restoreTitle: 'Restore this snapshot?',
+    restoreHelp:
+      'The computer’s files go back to how they were in “{name}” ({when}). Changes made since then are lost, and browser and screen sessions on this computer stop.',
+    keep: 'Take a snapshot of the current files first',
+  },
+  network: {
+    title: 'Network',
+    device:
+      'Commands on a connected device reach the network through the device’s own egress proxy.',
+    proxy: 'This computer reaches the network only through Nova’s egress proxy.',
+    noRule: 'There is no rule for {who}, so the rules for every sandbox apply.',
+    noRuleAgent: 'There is no rule for its agent, so the rules for every sandbox apply.',
+    rule: '{who} has its own rule: {mode, select, off {off} allowlist {allowed hosts only} limited {read-only} other {the same access as every sandbox}}{allow, plural, =0 {} one {, # more allowed host} other {, # more allowed hosts}}{deny, plural, =0 {} one {, # blocked host} other {, # blocked hosts}}.',
+    ruleAgent:
+      'Its agent has its own rule: {mode, select, off {off} allowlist {allowed hosts only} limited {read-only} other {the same access as every sandbox}}{allow, plural, =0 {} one {, # more allowed host} other {, # more allowed hosts}}{deny, plural, =0 {} one {, # blocked host} other {, # blocked hosts}}.',
+    link: 'Network settings and the decision log',
+  },
+});
+const S = VIEW_TEXT;
 
 /** Where the browser and screen views of a computer mount (render props, given the computer). */
 export interface ComputerPanels {
@@ -66,9 +200,9 @@ export function ComputersView({
 
 function Breadcrumb() {
   return (
-    <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+    <nav aria-label={S.breadcrumb} className="ws-breadcrumb">
       <a href={computerPath()} onClick={(e) => followLink(e, computerPath())}>
-        <Icon name="back" /> Computers
+        <Icon name="back" /> {S.computers}
       </a>
     </nav>
   );
@@ -94,7 +228,7 @@ function useAgentNames(): Map<string, string> {
 }
 
 export function StateBadge({ state }: { state: ComputerView['state'] }) {
-  const s = STATE_TEXT[state];
+  const s = stateText(state);
   return (
     <span className="ws-badge computers-state" data-tone={s.tone ?? undefined}>
       <Icon name={s.icon} /> {s.label}
@@ -109,10 +243,14 @@ function StatusDetail({ computer: c }: { computer: ComputerView }) {
     return (
       <div className="ws-callout computers-detail" role="note">
         <Icon name="alert" />
-        <p>{c.detail}</p>
+        <p dir="auto">{c.detail}</p>
       </div>
     );
-  return <p className="muted ws-flush computers-detail">{c.detail}</p>;
+  return (
+    <p className="muted ws-flush computers-detail" dir="auto">
+      {c.detail}
+    </p>
+  );
 }
 
 // ---- the list --------------------------------------------------------------------------------
@@ -132,7 +270,7 @@ export function ComputerList() {
         setItems(list);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the computers.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -145,32 +283,28 @@ export function ComputerList() {
   return (
     <div className="ws-page computers-page">
       <header className="ws-page-header">
-        <h1>Computers</h1>
+        <h1>{S.computers}</h1>
       </header>
-      <p className="muted ws-flush">
-        Each agent works on a computer of its own. Its files, installed software and browser
-        sign-ins are kept between runs, and it reaches the network only through Nova&apos;s egress
-        proxy.
-      </p>
+      <p className="muted ws-flush">{S.intro}</p>
       <HubSandbox />
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading computers" /> : null}
+      {items === null && !error ? <Spinner label={S.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
-          title="No computers yet"
-          description="An agent gets its own computer the first time it needs one. Create an agent to get started."
+          title={S.emptyTitle}
+          description={S.emptyHelp}
           icon="agents"
           level={2}
-          action={<Button onClick={() => navigate('/agents')}>Go to Agents</Button>}
+          action={<Button onClick={() => navigate('/agents')}>{S.goToAgents}</Button>}
         />
       ) : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="Computers">
+        <ul className="ws-list" aria-label={S.computers}>
           {items.map((c) => {
             const owner = c.agentId ? (names.get(c.agentId) ?? null) : null;
             return (
@@ -186,12 +320,14 @@ export function ComputerList() {
                   <span className="muted ws-row-meta">
                     <span>{KIND_TEXT[c.kind].label}</span>
                     <span>{substrateText(c.substrate)}</span>
-                    <span>{plural(c.snapshotCount, 'snapshot')}</span>
-                    <span>Last used {formatWhen(c.lastUsedAt)}</span>
+                    <span>{S.snapshots({ n: c.snapshotCount })}</span>
+                    <span>{S.lastUsed({ when: formatWhen(c.lastUsedAt) })}</span>
                   </span>
                   {c.detail &&
                   (c.state === 'degraded' || c.state === 'error' || c.kind === 'local_host') ? (
-                    <p className="computers-row-detail">{c.detail}</p>
+                    <p className="computers-row-detail" dir="auto">
+                      {c.detail}
+                    </p>
                   ) : null}
                 </div>
                 <StateBadge state={c.state} />
@@ -219,7 +355,7 @@ function HubSandbox() {
         setSnap(d.sandbox);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not check the sandbox.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.sandbox.checkFailed)),
     );
     return () => {
       alive = false;
@@ -229,34 +365,37 @@ function HubSandbox() {
   return (
     <section className="computers-sandbox ws-card" aria-labelledby="hub-sandbox">
       <h2 id="hub-sandbox" className="ws-subhead">
-        Sandbox on this Hub
+        {S.sandbox.title}
       </h2>
       {error ? (
         <div className="computers-inline-error" role="alert">
           <span>{error}</span>
           <Button variant="ghost" onClick={() => setAttempt((n) => n + 1)}>
-            Retry
+            {S.retry}
           </Button>
         </div>
       ) : snap === null ? (
-        <Spinner label="Checking the sandbox" />
+        <Spinner label={S.sandbox.checking} />
       ) : snap.available ? (
         <>
           <p className="ws-ok ws-flush">
-            <Icon name="check" /> Commands run in: {hubSandboxText(snap.substrate)}
+            <Icon name="check" /> {S.sandbox.runsIn({ sandbox: hubSandboxText(snap.substrate) })}
           </p>
-          {snap.detail ? <p className="muted ws-flush">{snap.detail}</p> : null}
+          {snap.detail ? (
+            <p className="muted ws-flush" dir="auto">
+              {snap.detail}
+            </p>
+          ) : null}
         </>
       ) : (
         <>
           <p className="ws-warning">
-            <Icon name="alert" /> Commands cannot run on this Hub.
+            <Icon name="alert" /> {S.sandbox.cannotRun}
           </p>
-          <p className="ws-flush">{snap.detail}</p>
-          <p className="muted ws-flush">
-            Nova never runs agent commands outside a sandbox. Agents can still read and write their
-            files.
+          <p className="ws-flush" dir="auto">
+            {snap.detail}
           </p>
+          <p className="muted ws-flush">{S.sandbox.never}</p>
         </>
       )}
     </section>
@@ -266,9 +405,9 @@ function HubSandbox() {
 // ---- settings every computer shares (computers.*) --------------------------------------------
 
 const LIMIT_FIELDS = [
-  { key: 'cpus', label: 'CPU cores', min: 0.25, max: 64, step: 0.25 },
-  { key: 'memoryMb', label: 'Memory (MB)', min: 256, max: 262_144, step: 256 },
-  { key: 'wallClockSeconds', label: 'Time per command (seconds)', min: 10, max: 86_400, step: 1 },
+  { key: 'cpus', min: 0.25, max: 64, step: 0.25 },
+  { key: 'memoryMb', min: 256, max: 262_144, step: 256 },
+  { key: 'wallClockSeconds', min: 10, max: 86_400, step: 1 },
 ] as const;
 type LimitKey = (typeof LIMIT_FIELDS)[number]['key'];
 type Limits = Record<LimitKey, number>;
@@ -280,13 +419,13 @@ function ComputerSettings() {
   const place = settings.get('computers.agentComputer');
   const microVm = settings.get('computers.microVm');
   const fail = (err: unknown) =>
-    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+    toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' });
 
   return (
     <section className="ws-section" aria-labelledby="computers-settings">
-      <h2 id="computers-settings">Settings for all computers</h2>
+      <h2 id="computers-settings">{S.settings.title}</h2>
       <RadioGroup
-        legend="Where a new agent's computer runs"
+        legend={S.settings.where}
         name="computers-agent-computer"
         value={place.value}
         locked={place.locked}
@@ -294,28 +433,27 @@ function ComputerSettings() {
           {
             value: 'local_container',
             label: KIND_TEXT.local_container.label,
-            description: 'An isolated sandbox on the Hub. Its files stay on the Hub.',
+            description: S.settings.localHelp,
           },
           {
             value: 'cloud',
             label: KIND_TEXT.cloud.label,
-            description:
-              'Keeps working while your devices are off. In this version a mock cloud runner on the Hub stands in for it.',
+            description: S.settings.cloudHelp,
           },
         ]}
-        hint="Agents that already have a computer keep it."
+        hint={S.settings.keep}
         onChange={(v) => {
           const next = v === 'cloud' ? 'cloud' : 'local_container';
           settings.set('computers.agentComputer', next).then(
-            () => announce('Saved.'),
+            () => announce(S.settings.saved),
             (err: unknown) => fail(err),
           );
         }}
       />
       <LimitsForm />
       <SwitchField
-        label="Micro-VM sandboxes (experimental)"
-        description="Off by default. Used when this Hub runs its sandboxes as micro-VMs, which needs a hypervisor and a KVM runner on the host; without them commands are unavailable, never run outside a sandbox. Takes effect after the Hub restarts."
+        label={S.settings.microVm}
+        description={S.settings.microVmHelp}
         checked={microVm.value.enabled}
         locked={microVm.locked}
         onChange={(on) =>
@@ -325,11 +463,13 @@ function ComputerSettings() {
         }
       />
       <p className="ws-flush">
-        Where computers can reach on the network:{' '}
-        <a href={NETWORK_PATH} onClick={(e) => followLink(e, NETWORK_PATH)}>
-          Settings, Network
-        </a>
-        .
+        {rich(S.settings.network, {
+          link: (
+            <a href={NETWORK_PATH} onClick={(e) => followLink(e, NETWORK_PATH)}>
+              {S.settings.networkLink}
+            </a>
+          ),
+        })}
       </p>
     </section>
   );
@@ -351,9 +491,9 @@ function LimitsForm() {
   for (const f of LIMIT_FIELDS) {
     const raw = shown[f.key].trim();
     const n = Number(raw);
-    if (!raw || !Number.isFinite(n)) errors[f.key] = 'Enter a number.';
-    else if (n < f.min || n > f.max) errors[f.key] = `Between ${f.min} and ${f.max}.`;
-    else if (f.key !== 'cpus' && !Number.isInteger(n)) errors[f.key] = 'Enter a whole number.';
+    if (!raw || !Number.isFinite(n)) errors[f.key] = S.limits.number;
+    else if (n < f.min || n > f.max) errors[f.key] = S.limits.between({ min: f.min, max: f.max });
+    else if (f.key !== 'cpus' && !Number.isInteger(n)) errors[f.key] = S.limits.whole;
   }
   const valid = Object.keys(errors).length === 0;
   const dirty = draft !== null;
@@ -370,9 +510,9 @@ function LimitsForm() {
     try {
       await settings.set('computers.limits', next);
       setDraft(null);
-      toast.show('Limits saved.', { tone: 'success' });
+      toast.show(S.limits.saved, { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -382,20 +522,21 @@ function LimitsForm() {
     <form
       className="ws-fieldset computers-limits"
       aria-labelledby={`${id}-legend`}
+      aria-describedby={limits.locked ? `${id}-lock` : undefined}
       onSubmit={(e) => {
         e.preventDefault();
         void save();
       }}
     >
       <span id={`${id}-legend`} className="nv-field-label">
-        Limits for every command
+        {S.limits.legend}
       </span>
-      {limits.locked ? <span className="nv-field-hint nv-field-lock">{MANAGED}</span> : null}
+      {limits.locked ? <ManagedNote id={`${id}-lock`} setting="computers.limits" /> : null}
       <div className="ws-preset-grid">
         {LIMIT_FIELDS.map((f) => (
           <TextField
             key={f.key}
-            label={f.label}
+            label={S.limits.fields[f.key]}
             type="number"
             inputMode="decimal"
             min={f.min}
@@ -408,20 +549,18 @@ function LimitsForm() {
           />
         ))}
       </div>
-      <p className="nv-field-hint ws-flush">
-        CPU and memory apply after the Hub restarts; the time limit applies to the next command.
-      </p>
+      <p className="nv-field-hint ws-flush">{S.limits.restart}</p>
       <div className="ws-toolbar">
         <Button
           type="submit"
           variant="primary"
           disabled={!dirty || !valid || busy || limits.locked}
         >
-          {busy ? <Spinner /> : null} Save limits
+          {busy ? <Spinner /> : null} {S.limits.save}
         </Button>
         {dirty ? (
           <Button variant="ghost" onClick={() => setDraft(null)}>
-            Discard changes
+            {S.limits.discard}
           </Button>
         ) : null}
       </div>
@@ -465,7 +604,7 @@ export function ComputerPage({
       (err: unknown) => {
         if (!alive) return;
         if (err instanceof ApiError && err.status === 404) setGone(true);
-        else setError(errorMessage(err, 'Could not load this computer.'));
+        else setError(errorMessage(err, S.page.loadFailed));
       },
     );
     return () => {
@@ -483,10 +622,10 @@ export function ComputerPage({
       <div className="ws-page computers-page">
         <Breadcrumb />
         <EmptyState
-          title="Computer not found"
-          description="It may have been removed with its agent."
+          title={S.page.notFound}
+          description={S.page.notFoundHelp}
           level={2}
-          action={<Button onClick={() => navigate(computerPath())}>All computers</Button>}
+          action={<Button onClick={() => navigate(computerPath())}>{S.page.all}</Button>}
         />
       </div>
     );
@@ -504,9 +643,10 @@ export function ComputerPage({
       .then(
         (v) => {
           setComputer(v);
-          toast.show('Computer stopped. It starts again the next time it is needed.');
+          toast.show(S.page.stopped);
         },
-        (err: unknown) => toast.show(`Could not stop it: ${errorMessage(err)}`, { tone: 'error' }),
+        (err: unknown) =>
+          toast.show(S.page.stopFailed({ error: errorMessage(err) }), { tone: 'error' }),
       )
       .finally(() => setStopping(false));
   };
@@ -517,10 +657,10 @@ export function ComputerPage({
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {!c && !error ? <Spinner label="Loading the computer" /> : null}
+      {!c && !error ? <Spinner label={S.page.loading} /> : null}
       {c ? (
         <>
           <header className="ws-page-header">
@@ -529,54 +669,54 @@ export function ComputerPage({
               <StateBadge state={c.state} />
               {canStop ? (
                 <Button disabled={stopping} onClick={stop}>
-                  {stopping ? <Spinner /> : <Icon name="stop" />} Stop
+                  {stopping ? <Spinner /> : <Icon name="stop" />} {S.page.stop}
                 </Button>
               ) : null}
             </div>
           </header>
           <StatusDetail computer={c} />
           <dl className="ws-dl computers-facts">
-            <dt>Kind</dt>
+            <dt>{S.page.facts.kind}</dt>
             <dd>
               {KIND_TEXT[c.kind].label}
               <span className="muted"> · {KIND_TEXT[c.kind].description}</span>
             </dd>
-            <dt>Runs commands in</dt>
+            <dt>{S.page.facts.runsIn}</dt>
             <dd>{substrateText(c.substrate)}</dd>
             {c.agentId ? (
               <>
-                <dt>Agent</dt>
+                <dt>{S.page.facts.agent}</dt>
                 <dd>
                   <a
                     href={agentPath(c.agentId)}
                     onClick={(e) => followLink(e, agentPath(c.agentId ?? ''))}
                   >
-                    {owner ?? 'Open the agent'}
+                    {owner ?? S.page.openAgent}
                   </a>
                 </dd>
               </>
             ) : null}
             {c.deviceId ? (
               <>
-                <dt>Device</dt>
+                <dt>{S.page.facts.device}</dt>
                 <dd>
                   <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
-                    Manage in Settings, Devices
+                    {S.page.manageDevice}
                   </a>
                 </dd>
               </>
             ) : null}
             {c.baseImage ? (
               <>
-                <dt>Base image</dt>
+                <dt>{S.page.facts.baseImage}</dt>
                 <dd>
                   <code className="ws-code-inline">{c.baseImage}</code>
                 </dd>
               </>
             ) : null}
-            <dt>Created</dt>
+            <dt>{S.page.facts.created}</dt>
             <dd>{formatDateTime(c.createdAt)}</dd>
-            <dt>Last used</dt>
+            <dt>{S.page.facts.lastUsed}</dt>
             <dd>{formatWhen(c.lastUsedAt)}</dd>
           </dl>
 
@@ -585,28 +725,29 @@ export function ComputerPage({
 
           {device ? null : (
             <section className="ws-section" aria-labelledby="computer-limits">
-              <h2 id="computer-limits">Resource limits</h2>
+              <h2 id="computer-limits">{S.resources.title}</h2>
               <dl className="ws-stats">
                 <div>
-                  <dt>CPU</dt>
-                  <dd>{plural(limits.cpus, 'core')}</dd>
+                  <dt>{S.resources.cpu}</dt>
+                  <dd>{S.resources.cores({ n: limits.cpus })}</dd>
                 </div>
                 <div>
-                  <dt>Memory</dt>
+                  <dt>{S.resources.memory}</dt>
                   <dd>{formatMemory(limits.memoryMb)}</dd>
                 </div>
                 <div>
-                  <dt>Time per command</dt>
+                  <dt>{S.resources.time}</dt>
                   <dd>{formatSeconds(limits.wallClockSeconds)}</dd>
                 </div>
               </dl>
               <p className="muted ws-flush">
-                Every command on this computer runs within these limits; one that goes over is
-                stopped. They are the same for all computers:{' '}
-                <a href={computerPath()} onClick={(e) => followLink(e, computerPath())}>
-                  change them on the Computers page
-                </a>
-                .
+                {rich(S.resources.help, {
+                  link: (
+                    <a href={computerPath()} onClick={(e) => followLink(e, computerPath())}>
+                      {S.resources.change}
+                    </a>
+                  ),
+                })}
               </p>
             </section>
           )}
@@ -645,16 +786,19 @@ export function ComputerPage({
           ) : null}
           <Dialog
             open={dialog?.kind === 'delete'}
-            title="Delete this snapshot?"
+            title={S.snapshot.deleteTitle}
             description={
               dialog?.kind === 'delete'
-                ? `“${snapshotName(dialog.snap)}” from ${formatDateTime(dialog.snap.createdAt)} is deleted. The computer's files now are not changed. This cannot be undone.`
+                ? S.snapshot.deleteHelp({
+                    name: snapshotName(dialog.snap),
+                    when: formatDateTime(dialog.snap.createdAt),
+                  })
                 : undefined
             }
             onClose={() => setDialog(null)}
             footer={
               <>
-                <Button onClick={() => setDialog(null)}>Cancel</Button>
+                <Button onClick={() => setDialog(null)}>{S.snapshot.cancel}</Button>
                 <Button
                   variant="danger"
                   onClick={() => {
@@ -663,15 +807,17 @@ export function ComputerPage({
                     setDialog(null);
                     api.deleteComputerSnapshot(c.id, snap.id).then(
                       () => {
-                        toast.show('Snapshot deleted.', { tone: 'success' });
+                        toast.show(S.snapshot.deleted, { tone: 'success' });
                         reload();
                       },
                       (err: unknown) =>
-                        toast.show(`Could not delete it: ${errorMessage(err)}`, { tone: 'error' }),
+                        toast.show(S.snapshot.deleteFailed({ error: errorMessage(err) }), {
+                          tone: 'error',
+                        }),
                     );
                   }}
                 >
-                  Delete snapshot
+                  {S.snapshot.deleteConfirm}
                 </Button>
               </>
             }
@@ -683,7 +829,7 @@ export function ComputerPage({
 }
 
 function snapshotName(s: ComputerSnapshotView): string {
-  return s.label?.trim() || 'Snapshot';
+  return s.label?.trim() || S.snapshot.untitled;
 }
 
 function Snapshots({
@@ -703,33 +849,28 @@ function Snapshots({
   return (
     <section className="ws-section" aria-labelledby="computer-snapshots">
       <div className="ws-section-header">
-        <h2 id="computer-snapshots">Snapshots</h2>
+        <h2 id="computer-snapshots">{S.snapshot.title}</h2>
         {device ? null : (
           <Button onClick={onCreate}>
-            <Icon name="save" /> Take a snapshot
+            <Icon name="save" /> {S.snapshot.take}
           </Button>
         )}
       </div>
       {device ? (
-        <p className="muted ws-flush">
-          Snapshots are not available for a connected device: its files are managed on the device.
-        </p>
+        <p className="muted ws-flush">{S.snapshot.deviceNote}</p>
       ) : (
-        <p className="muted ws-flush">
-          A snapshot keeps a copy of this computer&apos;s files. Restoring one puts them back as
-          they were.
-        </p>
+        <p className="muted ws-flush">{S.snapshot.note}</p>
       )}
-      {snapshots === null ? <Spinner label="Loading snapshots" /> : null}
-      {snapshots?.length === 0 && !device ? (
-        <p className="ws-flush">No snapshots yet. Take one before a change you may want to undo.</p>
-      ) : null}
+      {snapshots === null ? <Spinner label={S.snapshot.loading} /> : null}
+      {snapshots?.length === 0 && !device ? <p className="ws-flush">{S.snapshot.none}</p> : null}
       {snapshots?.length ? (
-        <ul className="ws-list" aria-label="Snapshots">
+        <ul className="ws-list" aria-label={S.snapshot.title}>
           {snapshots.map((s) => (
             <li key={s.id} className="ws-list-row">
               <div className="computers-row-main">
-                <span className="ws-card-link">{snapshotName(s)}</span>
+                <span className="ws-card-link" dir="auto">
+                  {snapshotName(s)}
+                </span>
                 <span className="muted ws-row-meta">
                   <span>{formatDateTime(s.createdAt)}</span>
                   <span>{formatBytes(s.sizeBytes)}</span>
@@ -738,18 +879,24 @@ function Snapshots({
               <span className="computers-actions">
                 {device ? null : (
                   <Button
-                    aria-label={`Restore ${snapshotName(s)} from ${formatDateTime(s.createdAt)}`}
+                    aria-label={S.snapshot.restoreLabel({
+                      name: snapshotName(s),
+                      when: formatDateTime(s.createdAt),
+                    })}
                     onClick={() => onRestore(s)}
                   >
-                    <Icon name="undo" /> Restore
+                    <Icon name="undo" /> {S.snapshot.restore}
                   </Button>
                 )}
                 <Button
                   variant="ghost"
-                  aria-label={`Delete ${snapshotName(s)} from ${formatDateTime(s.createdAt)}`}
+                  aria-label={S.snapshot.deleteLabel({
+                    name: snapshotName(s),
+                    when: formatDateTime(s.createdAt),
+                  })}
                   onClick={() => onDelete(s)}
                 >
-                  <Icon name="trash" /> Delete
+                  <Icon name="trash" /> {S.snapshot.delete}
                 </Button>
               </span>
             </li>
@@ -784,15 +931,15 @@ function SnapshotDialog({
         computerId,
         label.trim() ? { label: label.trim() } : {},
       );
-      toast.show(`Snapshot “${snapshotName(s)}” taken.`, { tone: 'success' });
+      toast.show(S.snapshot.taken({ name: snapshotName(s) }), { tone: 'success' });
       onDone();
     } catch (err) {
-      setError(errorMessage(err, 'Could not take the snapshot.'));
+      setError(errorMessage(err, S.snapshot.takeFailed));
       setBusy(false);
     }
   };
   return (
-    <Dialog open title="Take a snapshot" onClose={onClose} initialFocusRef={ref}>
+    <Dialog open title={S.snapshot.take} onClose={onClose} initialFocusRef={ref}>
       <form
         className="stack"
         onSubmit={(e) => {
@@ -802,10 +949,10 @@ function SnapshotDialog({
       >
         <TextField
           ref={ref}
-          label="Label (optional)"
+          label={S.snapshot.label}
           value={label}
           maxLength={200}
-          hint="For example, “Before the upgrade”."
+          hint={S.snapshot.labelHint}
           onChange={(e) => setLabel(e.target.value)}
         />
         {error ? (
@@ -814,9 +961,9 @@ function SnapshotDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.snapshot.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Take snapshot
+            {busy ? <Spinner /> : null} {S.snapshot.takeConfirm}
           </Button>
         </div>
       </form>
@@ -849,21 +996,21 @@ function RestoreDialog({
     try {
       if (keep)
         await api.createComputerSnapshot(computerId, {
-          label: `Before restoring ${snapshotName(snap)}`.slice(0, 200),
+          label: S.snapshot.before({ name: snapshotName(snap) }).slice(0, 200),
         });
       const v = await api.restoreComputer(computerId, snap.id);
-      toast.show(`Restored the snapshot from ${when}.`, { tone: 'success' });
+      toast.show(S.snapshot.restored({ when }), { tone: 'success' });
       onDone(v);
     } catch (err) {
-      setError(errorMessage(err, 'Could not restore the snapshot.'));
+      setError(errorMessage(err, S.snapshot.restoreFailed));
       setBusy(false);
     }
   };
   return (
     <Dialog
       open
-      title="Restore this snapshot?"
-      description={`The computer's files go back to how they were in “${snapshotName(snap)}” (${when}). Changes made since then are lost, and browser and screen sessions on this computer stop.`}
+      title={S.snapshot.restoreTitle}
+      description={S.snapshot.restoreHelp({ name: snapshotName(snap), when })}
       onClose={onClose}
     >
       <form
@@ -880,7 +1027,7 @@ function RestoreDialog({
             checked={keep}
             onChange={(e) => setKeep(e.target.checked)}
           />
-          Take a snapshot of the current files first
+          {S.snapshot.keep}
         </label>
         {error ? (
           <p className="nv-field-error" role="alert">
@@ -888,9 +1035,9 @@ function RestoreDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.snapshot.cancel}</Button>
           <Button type="submit" variant="danger" disabled={busy}>
-            {busy ? <Spinner /> : null} Restore
+            {busy ? <Spinner /> : null} {S.snapshot.restore}
           </Button>
         </div>
       </form>
@@ -917,31 +1064,28 @@ function ComputerNetwork({ computer: c, owner }: { computer: ComputerView; owner
     };
   }, [api, agentId]);
 
-  const who = owner ?? 'its agent';
+  const N = S.network;
   let summary: string | null = null;
-  if (rule === null) summary = `There is no rule for ${who}, so the rules for every sandbox apply.`;
-  else if (rule)
-    summary = [
-      `${who === 'its agent' ? 'Its agent' : who} has its own rule: ${
-        rule.mode ? MODE_TEXT[rule.mode].label.toLowerCase() : 'the same access as every sandbox'
-      }`,
-      rule.allow.length ? `, ${plural(rule.allow.length, 'more allowed host')}` : '',
-      rule.deny.length ? `, ${plural(rule.deny.length, 'blocked host')}` : '',
-      '.',
-    ].join('');
+  if (rule === null) summary = owner ? N.noRule({ who: owner }) : N.noRuleAgent;
+  else if (rule) {
+    const params = {
+      mode: rule.mode ?? 'same',
+      allow: rule.allow.length,
+      deny: rule.deny.length,
+    };
+    summary = owner ? N.rule({ who: owner, ...params }) : N.ruleAgent(params);
+  }
 
   return (
     <section className="ws-section" aria-labelledby="computer-network">
-      <h2 id="computer-network">Network</h2>
+      <h2 id="computer-network">{N.title}</h2>
       <p className="ws-flush">
-        {c.kind === 'local_host'
-          ? "Commands on a connected device reach the network through the device's own egress proxy."
-          : "This computer reaches the network only through Nova's egress proxy."}
+        {c.kind === 'local_host' ? N.device : N.proxy}
         {summary ? ` ${summary}` : ''}
       </p>
       <p className="ws-flush">
         <a href={NETWORK_PATH} onClick={(e) => followLink(e, NETWORK_PATH)}>
-          Network settings and the decision log
+          {N.link}
         </a>
       </p>
     </section>

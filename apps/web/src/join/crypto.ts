@@ -7,6 +7,7 @@
 // whose SHA-256 is the pin. The rules match packages/core/src/pairing/code.ts: the same code
 // reading (Crockford: O is 0, I and L are 1), the same digits (SHA-256 of the joined fields as one
 // big-endian integer, mod 10^6) and the same signed messages.
+import { JOIN_TEXT } from './strings.ts';
 
 /** Crockford base32 without I, L, O and U (as the Hub makes codes). */
 export const PAIRING_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -63,7 +64,7 @@ function utf8(text: string): Uint8Array<ArrayBuffer> {
 
 function subtle(): SubtleCrypto {
   const s = globalThis.crypto?.subtle as SubtleCrypto | undefined;
-  if (!s) throw new Error('This browser cannot make a device key here (no Web Crypto).');
+  if (!s) throw new Error(JOIN_TEXT.noWebCrypto);
   return s;
 }
 

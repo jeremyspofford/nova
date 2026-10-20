@@ -9,6 +9,8 @@ import {
   normalize,
   openInPane,
   parseLayout,
+  RESIZE_STEP,
+  resizePane,
   setActive,
   setBottom,
   setSizes,
@@ -92,6 +94,24 @@ describe('pane layout model (FR-005)', () => {
     expect(setSizes(l, 'missing', [1, 1])).toBe(l);
     expect(normalize([0, 0])).toEqual([0.5, 0.5]);
     expect(normalize([Number.NaN, 1])).toEqual([0, 1]);
+  });
+
+  it('makes a pane larger or smaller without dragging (WCAG 2.5.7)', () => {
+    const two = splitPane(defaultLayout(), 'main', 'row', 'editor').layout;
+    const three = splitPane(two, 'p1', 'row', 'preview').layout;
+    const shares = (l: ModeLayout) => (l.root as PaneSplit).sizes.map((s) => Math.round(s * 100));
+    expect(shares(three)).toEqual([50, 25, 25]);
+    // Larger takes from the siblings by what each can spare; smaller gives back by size.
+    const larger = resizePane(three, 'main', RESIZE_STEP)!;
+    expect(shares(larger)).toEqual([60, 20, 20]);
+    expect(shares(resizePane(larger, 'main', -RESIZE_STEP)!)).toEqual([50, 25, 25]);
+    // Never below the minimum share; null when nothing can change.
+    let l = three;
+    for (let i = 0; i < 10; i++) l = resizePane(l, 'main', RESIZE_STEP) ?? l;
+    expect(shares(l)).toEqual([80, 10, 10]);
+    expect(resizePane(l, 'main', RESIZE_STEP)).toBeNull();
+    expect(resizePane(l, 'p1', -RESIZE_STEP)).toBeNull();
+    expect(resizePane(defaultLayout(), 'main', RESIZE_STEP)).toBeNull();
   });
 
   it('moves panes among siblings and swaps any two', () => {

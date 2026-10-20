@@ -5,6 +5,7 @@
 // question shows the answer. The question is the model's text and is shown as plain text.
 import { useEffect, useId, useState } from 'react';
 import type { ServerRequestView, ToolCallStatus } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, Spinner } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { useAnnounce, useServices } from '../services.tsx';
@@ -12,6 +13,26 @@ import { eventCorrelation, useDebounced, useWorkEvents } from '../work/events.ts
 import { isTerminal, type DisplayCall } from './thread-state.ts';
 import { previewArgs } from './tool-apps.tsx';
 import '../work/work.css';
+
+export const ASK_TEXT = defineMessages('chat.ask', {
+  fallbackQuestion: 'The assistant has a question.',
+  sent: 'Answer sent.',
+  alreadyAnswered: 'This question was already answered on another device.',
+  expiredBeforeAnswer: 'This question expired before your answer arrived.',
+  sendFailed: 'Could not send the answer.',
+  /** Read by screen readers before the question. */
+  fromAssistant: 'Question from the assistant:',
+  loading: 'Loading the question',
+  choices: 'Choices',
+  yourAnswer: 'Your answer',
+  orType: 'Or type an answer',
+  type: 'Type your answer',
+  send: 'Send answer',
+  answered: 'Answered:',
+  expired: 'This question expired without an answer.',
+  noAnswer: 'No answer was recorded.',
+  waiting: 'Waiting for the question…',
+});
 
 /** The tool that asks the user a question (docs/08 §1). */
 export const ASK_TOOLS: readonly string[] = ['ask_user'];
@@ -75,7 +96,7 @@ export function UserAskCard({ call }: { call: DisplayCall }) {
   const question =
     (typeof payload.question === 'string' && payload.question) ||
     (typeof args.question === 'string' && args.question) ||
-    'The assistant has a question.';
+    ASK_TEXT.fallbackQuestion;
   const choices = strings(payload.choices).length
     ? strings(payload.choices)
     : strings(args.choices);
@@ -104,16 +125,16 @@ export function UserAskCard({ call }: { call: DisplayCall }) {
       const view = await api.respondRequest(req.id, result);
       setReq(view);
       setText('');
-      announce('Answer sent.');
+      announce(ASK_TEXT.sent);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        setError('This question was already answered on another device.');
+        setError(ASK_TEXT.alreadyAnswered);
         setVersion((v) => v + 1);
       } else if (err instanceof ApiError && err.status === 410) {
-        setError('This question expired before your answer arrived.');
+        setError(ASK_TEXT.expiredBeforeAnswer);
         setVersion((v) => v + 1);
       } else {
-        setError(errorMessage(err, 'Could not send the answer.'));
+        setError(errorMessage(err, ASK_TEXT.sendFailed));
       }
     } finally {
       setBusy(false);
@@ -130,13 +151,13 @@ export function UserAskCard({ call }: { call: DisplayCall }) {
     >
       <p id={`${id}-q`} className="ask-card-question">
         <Icon name="hand" />
-        <span className="nv-vh">Question from the assistant:</span> {question}
+        <span className="nv-vh">{ASK_TEXT.fromAssistant}</span> <span dir="auto">{question}</span>
       </p>
-      {state === 'loading' ? <Spinner label="Loading the question" /> : null}
+      {state === 'loading' ? <Spinner label={ASK_TEXT.loading} /> : null}
       {state === 'pending' ? (
         <>
           {choices.length ? (
-            <div className="ask-card-choices" role="group" aria-label="Choices">
+            <div className="ask-card-choices" role="group" aria-label={ASK_TEXT.choices}>
               {choices.map((c) => (
                 <Button key={c} disabled={busy} onClick={() => void send({ choice: c })}>
                   {c}
@@ -153,7 +174,7 @@ export function UserAskCard({ call }: { call: DisplayCall }) {
               }}
             >
               <label className="nv-vh" htmlFor={`${id}-a`}>
-                Your answer
+                {ASK_TEXT.yourAnswer}
               </label>
               {multiline ? (
                 <textarea
@@ -162,7 +183,7 @@ export function UserAskCard({ call }: { call: DisplayCall }) {
                   rows={3}
                   maxLength={8000}
                   value={text}
-                  placeholder={choices.length ? 'Or type an answer' : 'Type your answer'}
+                  placeholder={choices.length ? ASK_TEXT.orType : ASK_TEXT.type}
                   onChange={(e) => setText(e.target.value)}
                 />
               ) : (
@@ -171,12 +192,12 @@ export function UserAskCard({ call }: { call: DisplayCall }) {
                   className="nv-input"
                   maxLength={8000}
                   value={text}
-                  placeholder={choices.length ? 'Or type an answer' : 'Type your answer'}
+                  placeholder={choices.length ? ASK_TEXT.orType : ASK_TEXT.type}
                   onChange={(e) => setText(e.target.value)}
                 />
               )}
               <Button type="submit" variant="primary" disabled={busy || !text.trim()}>
-                {busy ? <Spinner /> : null} Send answer
+                {busy ? <Spinner /> : null} {ASK_TEXT.send}
               </Button>
             </form>
           ) : null}
@@ -186,19 +207,17 @@ export function UserAskCard({ call }: { call: DisplayCall }) {
         <p className="ask-card-answer">
           <Icon name="check" />
           <span>
-            Answered: <strong>{answered ?? fromCall}</strong>
+            {ASK_TEXT.answered} <strong dir="auto">{answered ?? fromCall}</strong>
           </span>
         </p>
       ) : null}
       {state === 'expired' ? (
         <p className="muted">
-          <Icon name="clock" /> This question expired without an answer.
+          <Icon name="clock" /> {ASK_TEXT.expired}
         </p>
       ) : null}
       {state === 'waiting' ? (
-        <p className="muted">
-          {isTerminal(call.status) ? 'No answer was recorded.' : 'Waiting for the question…'}
-        </p>
+        <p className="muted">{isTerminal(call.status) ? ASK_TEXT.noAnswer : ASK_TEXT.waiting}</p>
       ) : null}
       {error ? (
         <p role="alert" className="nv-field-error">

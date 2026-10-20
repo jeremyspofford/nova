@@ -2,6 +2,7 @@
 // budgets of each piece of work, proactive research and the model, edited later. Only what changed
 // is sent. Memory is turned on and off in its own section, which says what turning it off deletes.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { AgentView, RunAutonomy } from '@nova/shared';
 import { Button, SelectField, Spinner, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -18,6 +19,20 @@ import {
   parseBudgets,
   type BudgetDraft,
 } from './fields.tsx';
+import { AGENTS_TEXT } from './format.ts';
+
+export const PROFILE_TEXT = defineMessages('agents.profile', {
+  saved: 'Profile saved.',
+  saveFailed: 'Could not save the profile.',
+  heading: 'Profile',
+  instructionsHint: 'Changes apply from its next turn.',
+  proactiveHint:
+    'While idle it reads your connected sources with read-only tools and brings you suggestions.',
+  proactiveHintLast:
+    'While idle it reads your connected sources with read-only tools and brings you suggestions. Last research {when}.',
+  save: 'Save profile',
+  discard: 'Discard changes',
+});
 
 export function AgentProfile({
   agent,
@@ -75,7 +90,7 @@ export function AgentProfile({
 
   const save = async () => {
     const next: typeof errors = {};
-    if (!name.trim()) next.name = 'Give the agent a name.';
+    if (!name.trim()) next.name = AGENTS_TEXT.nameRequired;
     if ('errors' in parsed) next.budgets = parsed.errors;
     setErrors(next);
     setFailure(null);
@@ -85,9 +100,9 @@ export function AgentProfile({
       const saved = await api.updateAgent(agent.id, body);
       onAgent(saved);
       setAvatar(undefined);
-      toast.show('Profile saved.', { tone: 'success' });
+      toast.show(PROFILE_TEXT.saved, { tone: 'success' });
     } catch (err) {
-      setFailure(errorMessage(err, 'Could not save the profile.'));
+      setFailure(errorMessage(err, PROFILE_TEXT.saveFailed));
     } finally {
       setBusy(false);
     }
@@ -103,9 +118,9 @@ export function AgentProfile({
         void save();
       }}
     >
-      <h2 id={`${id}-h`}>Profile</h2>
+      <h2 id={`${id}-h`}>{PROFILE_TEXT.heading}</h2>
       <TextField
-        label="Name"
+        label={AGENTS_TEXT.name}
         value={name}
         maxLength={100}
         autoComplete="off"
@@ -121,19 +136,20 @@ export function AgentProfile({
       />
       <div className="nv-field">
         <label className="nv-field-label" htmlFor={`${id}-instr`}>
-          Instructions
+          {AGENTS_TEXT.instructions}
         </label>
         <textarea
           id={`${id}-instr`}
           className="nv-input ws-textarea"
           rows={6}
           maxLength={16_000}
+          dir="auto"
           value={instructions}
           aria-describedby={`${id}-instr-hint`}
           onChange={(e) => setInstructions(e.target.value)}
         />
         <span id={`${id}-instr-hint`} className="nv-field-hint">
-          Changes apply from its next turn.
+          {PROFILE_TEXT.instructionsHint}
         </span>
       </div>
       <AutonomyField value={autonomy} onChange={setAutonomy} disabled={busy} />
@@ -147,22 +163,22 @@ export function AgentProfile({
         disabled={busy}
       />
       <SwitchField
-        label="Proactive research"
+        label={AGENTS_TEXT.proactive}
         description={
           agent.proactive.lastRunAt
-            ? `While idle it reads your connected sources with read-only tools and brings you suggestions. Last research ${formatWhen(agent.proactive.lastRunAt)}.`
-            : 'While idle it reads your connected sources with read-only tools and brings you suggestions.'
+            ? PROFILE_TEXT.proactiveHintLast({ when: formatWhen(agent.proactive.lastRunAt) })
+            : PROFILE_TEXT.proactiveHint
         }
         checked={proactive}
         onChange={setProactive}
         disabled={busy}
       />
       <SelectField
-        label="Model"
+        label={AGENTS_TEXT.model}
         value={model}
         onChange={setModel}
         options={[
-          { value: '', label: 'The default chat model' },
+          { value: '', label: AGENTS_TEXT.defaultModel },
           ...(model && !models.some((m) => m.ref === model)
             ? [{ value: model, label: model }]
             : []),
@@ -176,10 +192,10 @@ export function AgentProfile({
       ) : null}
       <div className="ws-toolbar">
         <Button type="submit" variant="primary" disabled={busy || !dirty}>
-          {busy ? <Spinner /> : null} Save profile
+          {busy ? <Spinner /> : null} {PROFILE_TEXT.save}
         </Button>
         <Button onClick={reset} disabled={busy || !dirty}>
-          Discard changes
+          {PROFILE_TEXT.discard}
         </Button>
       </div>
     </form>

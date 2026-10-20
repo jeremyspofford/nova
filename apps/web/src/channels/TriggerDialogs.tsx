@@ -4,6 +4,7 @@
 // in the browser, stored by the Hub and shown once. Bodies are checked with the Hub's schemas
 // before they are sent; the Hub's field errors land on their fields.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import {
   createMcpSubscriptionSchema,
   createTriggerSchema,
@@ -19,25 +20,87 @@ import { Button, Dialog, Icon, RadioGroup, SelectField, TextField, useToast } fr
 import { errorMessage } from '../api.ts';
 import { SwitchField } from '../settings/controls.tsx';
 import { useChannelsApi } from './api.ts';
-import { absoluteUrl, errorField, issueErrors, randomSecret } from './format.ts';
+import { CREDENTIAL_TEXT, absoluteUrl, errorField, issueErrors, randomSecret } from './format.ts';
 import { CopyValue, SecretsOnce, SigningHelp, TextAreaField } from './parts.tsx';
 
 export type NewTriggerKind = 'webhook' | 'mcp_event' | 'connector_event';
 
-const NEW_TITLE: Record<NewTriggerKind, string> = {
-  webhook: 'New webhook trigger',
-  mcp_event: 'New MCP event trigger',
-  connector_event: 'New channel watch',
-};
+/** The trigger dialogs' words (FR-016). Names, event names and the Hub's errors are data. */
+export const TRIGGER_DIALOG_TEXT = defineMessages('channels.triggerDialogs', {
+  newTitle: {
+    webhook: 'New webhook trigger',
+    mcp_event: 'New MCP event trigger',
+    connector_event: 'New channel watch',
+  },
+  newDescription: {
+    webhook:
+      'A private address another service calls to start work. Calls must carry the token and a signature.',
+    mcp_event:
+      'Subscribe to an event a connected MCP server offers. Nova renews the subscription before it expires.',
+    connector_event:
+      'Start work when a message arrives in a Slack conversation. Only this watch reads it; joining a channel never does.',
+  },
+  notObject: 'Enter a JSON object, like {example}.',
+  notJson: 'This is not valid JSON.',
+  noSources: 'No connected MCP server offers events. Connect one in Settings → Tools & MCP.',
+  noSlack: 'Add a Slack channel first: a watch reads a conversation through it.',
+  chooseAgent: 'Choose the agent to wake.',
+  subscribed: 'Subscribed.',
+  savedPending: 'Saved. Nova subscribes once the server answers.',
+  added: '{name} added.',
+  addFailed: 'Could not add the trigger.',
+  webhookAdded: 'Webhook trigger added',
+  webhookAddedWhat: 'Give the address, token and secret to the service that will call it.',
+  done: 'Done',
+  address: 'Webhook address',
+  addressHint: 'POST the event here; JSON or plain text.',
+  cancel: 'Cancel',
+  adding: 'Adding…',
+  subscribe: 'Subscribe',
+  add: 'Add trigger',
+  server: 'MCP server',
+  event: 'Event',
+  filter: 'Filter (optional)',
+  filterLabel: 'Filter as JSON',
+  filterHint: 'Sent to the server with the subscription; it decides which events match.',
+  slackChannel: 'Slack channel',
+  slackChannelHint: "Messages arrive through this channel's Slack app.",
+  conversation: 'Conversation to watch (optional)',
+  conversationHint: "Another conversation of the same app; empty watches the channel's own.",
+  contains: 'Only messages containing (optional)',
+  duplicates: 'Duplicate events',
+  eventId: 'Event id field (optional)',
+  eventIdHint:
+    'The field of the JSON body that names the event, like id or event.id. An event seen before starts nothing.',
+  starts: 'What it starts',
+  when: 'When it fires',
+  run: { label: 'Start a Work run', description: 'A new run with these instructions.' },
+  wake: {
+    label: 'Wake an agent',
+    description: 'A turn in the agent’s thread.',
+    noAgents: 'No agents yet; create one in Agents first.',
+  },
+  agent: 'Agent',
+  noAgents: 'No agents',
+  project: 'Project (optional)',
+  noProject: 'No project',
+  instructions: 'Instructions',
+  instructionsExample: 'Triage the new issue and label it.',
+  instructionsHint:
+    'What to do with each event. The event itself is passed along as untrusted data, never as your instruction.',
+  name: 'Name (optional)',
+  askFirst: 'Ask before acting',
+  askFirstHint: 'The run or the agent asks you before each action.',
+  editTitle: 'Edit {name}',
+  editName: 'Name',
+  saving: 'Saving…',
+  save: 'Save',
+  saved: '{name} saved.',
+  saveFailed: 'Could not save the trigger.',
+});
 
-const NEW_DESCRIPTION: Record<NewTriggerKind, string> = {
-  webhook:
-    'A private address another service calls to start work. Calls must carry the token and a signature.',
-  mcp_event:
-    'Subscribe to an event a connected MCP server offers. Nova renews the subscription before it expires.',
-  connector_event:
-    'Start work when a message arrives in a Slack conversation. Only this watch reads it; joining a channel never does.',
-};
+/** Examples shown in empty fields: JSON and field names, not translated. */
+const EXAMPLE = { filter: '{"repo": "nova"}', eventId: 'id' } as const;
 
 interface Form {
   title: string;
@@ -101,9 +164,9 @@ export function triggerBody(
           const v = JSON.parse(f.filter) as unknown;
           if (v && typeof v === 'object' && !Array.isArray(v))
             filter = v as Record<string, unknown>;
-          else filterError = 'Enter a JSON object, like {"repo": "nova"}.';
+          else filterError = TRIGGER_DIALOG_TEXT.notObject({ example: EXAMPLE.filter });
         } catch {
-          filterError = 'This is not valid JSON.';
+          filterError = TRIGGER_DIALOG_TEXT.notJson;
         }
       }
       return {
@@ -141,6 +204,7 @@ export function NewTriggerDialog({
 }) {
   const api = useChannelsApi();
   const toast = useToast();
+  const S = TRIGGER_DIALOG_TEXT;
   const [form, setForm] = useState<Form>(() => ({
     title: '',
     instructions: '',
@@ -170,10 +234,10 @@ export function NewTriggerDialog({
   const blocked =
     kind === 'mcp_event'
       ? !sources?.length
-        ? 'No connected MCP server offers events. Connect one in Settings → Tools & MCP.'
+        ? S.noSources
         : null
       : kind === 'connector_event' && !slackBindings.length
-        ? 'Add a Slack channel first: a watch reads a conversation through it.'
+        ? S.noSlack
         : null;
 
   const submit = async () => {
@@ -186,7 +250,7 @@ export function NewTriggerDialog({
         : createTriggerSchema.safeParse(body);
     const next = parsed.success ? {} : issueErrors(parsed.error.issues);
     if (filterError) next.filter = filterError;
-    if (form.action === 'wake' && !form.agentId) next.agentId = 'Choose the agent to wake.';
+    if (form.action === 'wake' && !form.agentId) next.agentId = S.chooseAgent;
     if (Object.keys(next).length || !parsed.success) {
       setErrors(next);
       return;
@@ -200,12 +264,7 @@ export function NewTriggerDialog({
           parsed.data as Parameters<typeof api.createMcpSubscription>[0],
         );
         onCreated(null);
-        toast.show(
-          sub.status === 'active'
-            ? 'Subscribed.'
-            : 'Saved. Nova subscribes once the server answers.',
-          { tone: 'success' },
-        );
+        toast.show(sub.status === 'active' ? S.subscribed : S.savedPending, { tone: 'success' });
         onClose();
         return;
       }
@@ -213,12 +272,12 @@ export function NewTriggerDialog({
       onCreated(t);
       if (kind === 'webhook') setCreated({ trigger: t, secrets: credentials });
       else {
-        toast.show(`${t.title} added.`, { tone: 'success' });
+        toast.show(S.added({ name: t.title }), { tone: 'success' });
         onClose();
       }
     } catch (err) {
       const field = errorField(err);
-      const message = errorMessage(err, 'Could not add the trigger.');
+      const message = errorMessage(err, S.addFailed);
       if (field) setErrors({ [field]: message });
       else setFailure(message);
     } finally {
@@ -231,27 +290,27 @@ export function NewTriggerDialog({
       <Dialog
         open
         className="ch-dialog"
-        title="Webhook trigger added"
-        description="Give the address, token and secret to the service that will call it."
+        title={S.webhookAdded}
+        description={S.webhookAddedWhat}
         onClose={onClose}
         footer={
           <Button variant="primary" onClick={onClose}>
-            Done
+            {S.done}
           </Button>
         }
       >
         <div className="stack">
           {created.trigger.webhookPath ? (
             <CopyValue
-              label="Webhook address"
+              label={S.address}
               value={absoluteUrl(created.trigger.webhookPath, publicUrl)}
-              hint="POST the event here; JSON or plain text."
+              hint={S.addressHint}
             />
           ) : null}
           <SecretsOnce
             items={[
-              { label: 'Bearer token', value: created.secrets.token },
-              { label: 'Signing secret', value: created.secrets.secret },
+              { label: CREDENTIAL_TEXT.token, value: created.secrets.token },
+              { label: CREDENTIAL_TEXT.secret, value: created.secrets.secret },
             ]}
           />
           <SigningHelp eventId />
@@ -264,21 +323,21 @@ export function NewTriggerDialog({
     <Dialog
       open
       className="ch-dialog"
-      title={NEW_TITLE[kind]}
-      description={NEW_DESCRIPTION[kind]}
+      title={S.newTitle[kind]}
+      description={S.newDescription[kind]}
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.cancel}</Button>
           <Button variant="primary" disabled={busy || !!blocked} onClick={() => void submit()}>
-            {busy ? 'Adding…' : kind === 'mcp_event' ? 'Subscribe' : 'Add trigger'}
+            {busy ? S.adding : kind === 'mcp_event' ? S.subscribe : S.add}
           </Button>
         </>
       }
     >
       <form
         className="stack"
-        aria-label={NEW_TITLE[kind]}
+        aria-label={S.newTitle[kind]}
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
@@ -293,7 +352,7 @@ export function NewTriggerDialog({
         {kind === 'mcp_event' && sources?.length ? (
           <>
             <SelectField
-              label="MCP server"
+              label={S.server}
               value={form.serverId}
               error={errors.serverId}
               onChange={(v) => {
@@ -303,7 +362,7 @@ export function NewTriggerDialog({
               options={sources.map((s) => ({ value: s.serverId, label: s.name }))}
             />
             <SelectField
-              label="Event"
+              label={S.event}
               value={form.event}
               error={errors.event}
               hint={event?.description ?? undefined}
@@ -311,13 +370,13 @@ export function NewTriggerDialog({
               options={(server?.events ?? []).map((e) => ({ value: e.name, label: e.name }))}
             />
             <details className="ws-advanced">
-              <summary>Filter (optional)</summary>
+              <summary>{S.filter}</summary>
               <TextAreaField
-                label="Filter as JSON"
+                label={S.filterLabel}
                 value={form.filter}
                 spellCheck={false}
-                placeholder='{"repo": "nova"}'
-                hint="Sent to the server with the subscription; it decides which events match."
+                placeholder={EXAMPLE.filter}
+                hint={S.filterHint}
                 error={errors.filter}
                 onChange={(v) => set({ filter: v })}
               />
@@ -327,25 +386,25 @@ export function NewTriggerDialog({
         {kind === 'connector_event' && slackBindings.length ? (
           <>
             <SelectField
-              label="Slack channel"
+              label={S.slackChannel}
               value={form.bindingId}
               error={errors.bindingId}
               onChange={(v) => set({ bindingId: v })}
               options={slackBindings.map((b) => ({ value: b.id, label: b.label }))}
-              hint="Messages arrive through this channel's Slack app."
+              hint={S.slackChannelHint}
             />
             <TextField
-              label="Conversation to watch (optional)"
+              label={S.conversation}
               value={form.conversation}
               spellCheck={false}
               autoComplete="off"
               placeholder={slackBindings.find((b) => b.id === form.bindingId)?.externalRef}
-              hint="Another conversation of the same app; empty watches the channel's own."
+              hint={S.conversationHint}
               error={errors.conversation}
               onChange={(e) => set({ conversation: e.target.value })}
             />
             <TextField
-              label="Only messages containing (optional)"
+              label={S.contains}
               value={form.contains}
               error={errors.contains}
               onChange={(e) => set({ contains: e.target.value })}
@@ -355,14 +414,14 @@ export function NewTriggerDialog({
         <WhatItStarts form={form} set={set} errors={errors} agents={agents} projects={projects} />
         {kind === 'webhook' ? (
           <details className="ws-advanced">
-            <summary>Duplicate events</summary>
+            <summary>{S.duplicates}</summary>
             <TextField
-              label="Event id field (optional)"
+              label={S.eventId}
               value={form.dedupeKey}
               spellCheck={false}
               autoComplete="off"
-              placeholder="id"
-              hint="The field of the JSON body that names the event, like id or event.id. An event seen before starts nothing."
+              placeholder={EXAMPLE.eventId}
+              hint={S.eventIdHint}
               error={errors.dedupeKey}
               onChange={(e) => set({ dedupeKey: e.target.value })}
             />
@@ -394,73 +453,68 @@ function WhatItStarts({
 }) {
   const id = useId();
   const noAgents = !agents?.length;
+  const S = TRIGGER_DIALOG_TEXT;
   return (
     <fieldset className="ws-fieldset">
-      <legend>What it starts</legend>
+      <legend>{S.starts}</legend>
       <RadioGroup
-        legend="When it fires"
+        legend={S.when}
         name={`${id}-action`}
         value={form.action}
         onChange={(v) => set({ action: v as TriggerAction })}
         options={[
-          {
-            value: 'run',
-            label: 'Start a Work run',
-            description: 'A new run with these instructions.',
-          },
+          { value: 'run', label: S.run.label, description: S.run.description },
           {
             value: 'wake',
-            label: 'Wake an agent',
-            description: noAgents
-              ? 'No agents yet; create one in Agents first.'
-              : 'A turn in the agent’s thread.',
+            label: S.wake.label,
+            description: noAgents ? S.wake.noAgents : S.wake.description,
           },
         ]}
       />
       {form.action === 'wake' ? (
         <SelectField
-          label="Agent"
+          label={S.agent}
           value={form.agentId}
           error={errors.agentId}
           disabled={noAgents}
           onChange={(v) => set({ agentId: v })}
           options={
             noAgents
-              ? [{ value: '', label: 'No agents' }]
+              ? [{ value: '', label: S.noAgents }]
               : (agents ?? []).map((a) => ({ value: a.id, label: a.name }))
           }
         />
       ) : (
         <SelectField
-          label="Project (optional)"
+          label={S.project}
           value={form.projectId}
           error={errors.projectId}
           onChange={(v) => set({ projectId: v })}
           options={[
-            { value: '', label: 'No project' },
+            { value: '', label: S.noProject },
             ...projects.map((p) => ({ value: p.id, label: p.name })),
           ]}
         />
       )}
       <TextAreaField
-        label="Instructions"
+        label={S.instructions}
         value={form.instructions}
         maxLength={8000}
-        placeholder="Triage the new issue and label it."
-        hint="What to do with each event. The event itself is passed along as untrusted data, never as your instruction."
+        placeholder={S.instructionsExample}
+        hint={S.instructionsHint}
         error={errors.instructions}
         onChange={(v) => set({ instructions: v })}
       />
       <TextField
-        label="Name (optional)"
+        label={S.name}
         value={form.title}
         maxLength={200}
         error={errors.title}
         onChange={(e) => set({ title: e.target.value })}
       />
       <SwitchField
-        label="Ask before acting"
-        description="The run or the agent asks you before each action."
+        label={S.askFirst}
+        description={S.askFirstHint}
         checked={form.askFirst}
         onChange={(v) => set({ askFirst: v })}
       />
@@ -488,6 +542,7 @@ export function EditTriggerDialog({
   const [contains, setContains] = useState(contains0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const S = TRIGGER_DIALOG_TEXT;
 
   const patch: Record<string, unknown> = {};
   if (title.trim() !== trigger.title) patch.title = title.trim();
@@ -512,11 +567,11 @@ export function EditTriggerDialog({
     try {
       const t = await api.updateTrigger(trigger.id, parsed.data);
       onSaved(t);
-      toast.show(`${t.title} saved.`, { tone: 'success' });
+      toast.show(S.saved({ name: t.title }), { tone: 'success' });
       onClose();
     } catch (err) {
       const field = errorField(err);
-      const message = errorMessage(err, 'Could not save the trigger.');
+      const message = errorMessage(err, S.saveFailed);
       setErrors({ [field ?? '_']: message });
     } finally {
       setBusy(false);
@@ -527,20 +582,20 @@ export function EditTriggerDialog({
     <Dialog
       open
       className="ch-dialog"
-      title={`Edit ${trigger.title}`}
+      title={S.editTitle({ name: trigger.title })}
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.cancel}</Button>
           <Button variant="primary" disabled={!dirty || busy} onClick={() => void save()}>
-            {busy ? 'Saving…' : 'Save'}
+            {busy ? S.saving : S.save}
           </Button>
         </>
       }
     >
       <form
         className="stack"
-        aria-label={`Edit ${trigger.title}`}
+        aria-label={S.editTitle({ name: trigger.title })}
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
@@ -548,39 +603,39 @@ export function EditTriggerDialog({
         }}
       >
         <TextField
-          label="Name"
+          label={S.editName}
           value={title}
           maxLength={200}
           error={errors.title}
           onChange={(e) => setTitle(e.target.value)}
         />
         <TextAreaField
-          label="Instructions"
+          label={S.instructions}
           value={instructions}
           maxLength={8000}
           error={errors.instructions}
           onChange={setInstructions}
         />
         <SwitchField
-          label="Ask before acting"
-          description="The run or the agent asks you before each action."
+          label={S.askFirst}
+          description={S.askFirstHint}
           checked={askFirst}
           onChange={setAskFirst}
         />
         {trigger.kind === 'webhook' ? (
           <TextField
-            label="Event id field (optional)"
+            label={S.eventId}
             value={dedupeKey}
             spellCheck={false}
             autoComplete="off"
-            placeholder="id"
+            placeholder={EXAMPLE.eventId}
             error={errors.dedupeKey}
             onChange={(e) => setDedupeKey(e.target.value)}
           />
         ) : null}
         {trigger.kind === 'connector_event' ? (
           <TextField
-            label="Only messages containing (optional)"
+            label={S.contains}
             value={contains}
             error={errors.contains}
             onChange={(e) => setContains(e.target.value)}

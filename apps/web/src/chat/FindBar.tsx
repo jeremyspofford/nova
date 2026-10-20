@@ -1,7 +1,17 @@
 // Find bar over a chat (FR-025): type to mark matches, "3 of 12", Enter and Shift+Enter (or the
 // buttons) step through them, Escape closes and hands focus back.
 import type { RefObject } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Icon, IconButton } from '@nova/ui';
+
+export const FIND_TEXT = defineMessages('chat.find', {
+  find: 'Find in chat',
+  position: '{current} of {count}',
+  none: 'No matches',
+  previous: 'Previous match',
+  next: 'Next match',
+  close: 'Close find',
+});
 
 export interface FindBarProps {
   query: string;
@@ -25,12 +35,16 @@ export function FindBar({
   onClose,
   inputRef,
 }: FindBarProps) {
-  const status = !query.trim() ? '' : count ? `${index + 1} of ${count}` : 'No matches';
+  const status = !query.trim()
+    ? ''
+    : count
+      ? FIND_TEXT.position({ current: index + 1, count })
+      : FIND_TEXT.none;
   return (
     <div
       className="find-bar"
       role="search"
-      aria-label="Find in chat"
+      aria-label={FIND_TEXT.find}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.preventDefault();
@@ -40,14 +54,14 @@ export function FindBar({
       }}
     >
       <label htmlFor="find-in-chat" className="nv-vh">
-        Find in chat
+        {FIND_TEXT.find}
       </label>
       <input
         id="find-in-chat"
         ref={inputRef}
         type="search"
         className="nv-input find-input"
-        placeholder="Find in chat"
+        placeholder={FIND_TEXT.find}
         autoComplete="off"
         value={query}
         aria-describedby="find-status"
@@ -63,21 +77,21 @@ export function FindBar({
         {status}
       </span>
       <IconButton
-        label="Previous match"
+        label={FIND_TEXT.previous}
         icon={<Icon name="back" />}
         variant="ghost"
         disabled={count === 0}
         onClick={onPrevious}
       />
       <IconButton
-        label="Next match"
+        label={FIND_TEXT.next}
         icon={<Icon name="forward" />}
         variant="ghost"
         disabled={count === 0}
         onClick={onNext}
       />
       <IconButton
-        label="Close find"
+        label={FIND_TEXT.close}
         icon={<Icon name="close" />}
         variant="ghost"
         onClick={onClose}

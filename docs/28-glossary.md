@@ -38,7 +38,10 @@ layer. Product brand: **Nova**. Domain: **arialabs.ai**.
 | **Automation** | A versioned trigger → condition → action rule. |
 | **Entity** | A smart-home device/state (light, sensor, lock, …). |
 | **Area / Scene** | A room grouping / a named set of entity actions. |
-| **Catalog** | The signed registry of community extensions. |
+| **Catalog** | The signed registry of community extensions: an index (`catalog.json`) of plugins, skills, themes, pets and MCP servers, signed by its publisher (`<index>.sig`), served from a folder, a Git repository pinned to a commit, or an https location (FR-049). |
+| **Extension** | A plugin with an SDK part (`.nova-plugin/extension.json`): code that registers commands, panels, tools (`ext:<id>/<name>`), hooks, themes, keybindings, menus and status items and observes events, run in a worker of its own with only the permissions it declared (FR-117). |
+| **`.novax`** | An extension bundle: a zip of the extension folder plus `META-INF/nova-signature.json`, the publisher's Ed25519 signature over a digest of every file (ADR-097 D2). Verified only when the publisher is trusted. |
+| **Trusted publisher** | A publisher key the owner (or managed policy) trusts (`plugins.trustedPublishers`); what it signs installs as Verified. Anything else installs only through the sideload confirmation and stays **Unverified**. |
 | **Plugin** | A bundle of skills, MCP servers, lifecycle hooks, sub-agent roles, commands and optional UI (FR-045). |
 | **Skill** | A reusable instruction bundle: a folder with `SKILL.md` and optional files; only its name and description sit in context until it is used (ADR-067). |
 | **Hook** | A lifecycle hook: a sandboxed command or MCP tool that runs on a runtime event (for example before a tool call or at stop), trusted by content hash, and able only to tighten a decision (FR-197, ADR-068). |
@@ -66,6 +69,9 @@ layer. Product brand: **Nova**. Domain: **arialabs.ai**.
 | **Capability Declaration** | The document `novad` reports describing hardware/OS/services/models/limits. |
 | **Audit Log** | The append-only, hash-chained record of every consequential action (`audit_event`). Formerly "Flight recorder" (ADR-057). |
 | **Learning Level** | L0 memory · L1 skills · L2 workflow optimization · L3 self-tuning · L4 code self-modification · L5 local fine-tuning. |
+| **Managed policy** | Settings and restrictions an administrator sets for a Hub through an OS-protected file or a signed remote policy; it only tightens, locks what it sets ("Managed by your organization") and fails closed when it cannot be read (FR-106, ADR-097 D4). |
+| **Sealed export** | A data export (`.novaexport`) protected with a passphrase (scrypt, then AES-256-GCM); only a sealed export carries the vault's secrets (FR-105, ADR-097 D5). |
+| **App token** | An `nva_` access token a third-party app gets through OAuth sign-in and the owner's consent: read-only scopes, one hour, refreshed with a rotating refresh token, revocable per app (FR-222, ADR-097 D6). |
 | **Guardrail** | The on-by-default protection that prevents the agent from modifying policy/safety/permissions/audit/signing/self-improvement gates. |
 
 ## Models & runtime

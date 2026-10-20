@@ -1,6 +1,6 @@
 // M8 Hub client calls for third-party apps and the OTLP export (FR-222, FR-223; ADR-097 D6), in
 // the conventions of src/api.ts: the consent page's details and the owner's decision, the apps the
-// owner authorized (revoke), and the telemetry export's settings, status and test. `createApi`
+// owner authorized (revoke), the registered apps no one authorizes (remove), and the telemetry export's settings, status and test. `createApi`
 // spreads `appAuthApi(call)` into the client; until then `useAppAuthApi` reads them from the
 // services object.
 import type {
@@ -8,6 +8,7 @@ import type {
   AppAuthorizeResultView,
   AppConsentView,
   AppGrantView,
+  AppPendingView,
   OtlpStatusView,
   OtlpTestResultView,
   PutOtlpRequest,
@@ -37,6 +38,18 @@ export function appAuthApi(call: HubCall) {
     listApps: () => call<{ items: AppGrantView[] }>('GET', `${V1}/apps`),
     /** Revoke an app: its authorization and every token it holds stop at once. */
     revokeApp: (id: string) => call<{ ok: true }>('DELETE', `${V1}/apps/${enc(id)}`),
+    /**
+     * Registered apps no one authorizes now, newest first: ones waiting for their first approval
+     * (`expiresAt`: their registration lapses then) and ones revoked or registered by the owner
+     * (`expiresAt: null`). Owner only.
+     */
+    listPendingApps: () => call<{ items: AppPendingView[] }>('GET', `${V1}/apps/pending`),
+    /**
+     * Delete such a registration, with its leftover codes and tokens. 409 `{reason: authorized}`
+     * while someone authorizes it (revoke it first); 404 for an unknown app. Owner only.
+     */
+    removePendingApp: (clientId: string) =>
+      call<{ ok: true }>('DELETE', `${V1}/apps/pending/${enc(clientId)}`),
 
     /** The OTLP export's settings (header names only) and how it is doing. Owner only. */
     getOtlp: () => call<OtlpStatusView>('GET', `${V1}/telemetry/otlp`),

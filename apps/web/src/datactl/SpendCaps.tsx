@@ -12,7 +12,6 @@ import { StateChip } from '../settings/badges.tsx';
 import { SwitchField } from '../settings/controls.tsx';
 import { useDatactlApi } from './api-m8.ts';
 import {
-  PERIOD_OPTIONS,
   SPEND_STRINGS as S,
   capDraft,
   capRulesText,
@@ -20,19 +19,12 @@ import {
   capState,
   dataErrorMessage,
   parseCapDraft,
+  periodOptions,
   providerName,
   type CapDraft,
 } from './format.ts';
 import { ConfirmDialog, ErrorBox, useFetched } from './parts.tsx';
 import './datactl.css';
-
-const CAP_TEXT = {
-  editTitle: (provider: string) => `Spend cap for ${provider}`,
-  removeBody: (provider: string) =>
-    `Calls to ${provider} are no longer stopped or warned about by a cap. Usage is still counted.`,
-  cleared: (n: number) => (n === 1 ? '1 usage record cleared.' : `${n} usage records cleared.`),
-  meter: (provider: string) => `${provider} spend against its cap`,
-};
 
 /** The cap the page was opened for (`?cap=<provider>`), once. */
 function requestedCap(): string | null {
@@ -108,7 +100,7 @@ export function SpendCapsSection({ onCleared }: { onCleared?: () => void }) {
         {data.error ? (
           <ErrorBox message={dataErrorMessage(data.error, S.loadError)} onRetry={data.reload} />
         ) : null}
-        {data.loading ? <Spinner label="Loading spend caps" /> : null}
+        {data.loading ? <Spinner label={S.loading} /> : null}
         {data.data && providers.length === 0 ? <p className="muted">{S.none}</p> : null}
         {providers.length ? (
           <ul className="dc-caps">
@@ -135,7 +127,7 @@ export function SpendCapsSection({ onCleared }: { onCleared?: () => void }) {
           title={S.removeTitle}
           confirmLabel={S.removeConfirm}
           danger
-          errorText={(err) => dataErrorMessage(err, 'Could not remove the cap.')}
+          errorText={(err) => dataErrorMessage(err, S.removeFailed)}
           onClose={() => setRemoving(null)}
           onConfirm={async () => {
             const p = removing!;
@@ -145,7 +137,7 @@ export function SpendCapsSection({ onCleared }: { onCleared?: () => void }) {
             toast.show(S.removed, { tone: 'success' });
           }}
         >
-          {removing ? <p>{CAP_TEXT.removeBody(providerName(removing))}</p> : null}
+          {removing ? <p>{S.removeBody({ provider: providerName(removing) })}</p> : null}
         </ConfirmDialog>
       </section>
       {api.clearUsage ? (
@@ -205,7 +197,7 @@ function CapRow({
             low={cap.limitUsd * cap.warnAt}
             high={cap.limitUsd * 0.999}
             optimum={0}
-            aria-label={CAP_TEXT.meter(name)}
+            aria-label={S.meter({ provider: name })}
             aria-valuetext={capSpentText(cap)}
           />
           <p>{capSpentText(cap)}</p>
@@ -264,7 +256,7 @@ function CapEditor({
     try {
       onSaved(await api.setSpendCap!(provider, parsed.body));
     } catch (err) {
-      setFailure(dataErrorMessage(err, 'Could not save the cap.'));
+      setFailure(dataErrorMessage(err, S.saveFailed));
     } finally {
       setBusy(false);
     }
@@ -279,7 +271,7 @@ function CapEditor({
         void save();
       }}
     >
-      <strong id={headId}>{CAP_TEXT.editTitle(providerName(provider))}</strong>
+      <strong id={headId}>{S.editTitle({ provider: providerName(provider) })}</strong>
       <TextField
         ref={first}
         label={S.limit}
@@ -291,7 +283,7 @@ function CapEditor({
       <SelectField
         label={S.period}
         value={draft.period}
-        options={PERIOD_OPTIONS}
+        options={periodOptions()}
         onChange={(v) => setDraft({ ...draft, period: v === 'day' ? 'day' : 'month' })}
       />
       <TextField
@@ -343,12 +335,12 @@ function ClearUsageSection({ onCleared }: { onCleared: () => void }) {
         title={S.clearConfirmTitle}
         confirmLabel={S.clearConfirm}
         danger
-        errorText={(err) => dataErrorMessage(err, 'Could not clear usage data.')}
+        errorText={(err) => dataErrorMessage(err, S.clearFailed)}
         onClose={() => setOpen(false)}
         onConfirm={async () => {
           const { removed } = await api.clearUsage!();
           setOpen(false);
-          toast.show(CAP_TEXT.cleared(removed), { tone: 'success' });
+          toast.show(S.cleared({ n: removed }), { tone: 'success' });
           onCleared();
         }}
       >

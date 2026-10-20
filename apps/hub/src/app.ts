@@ -874,6 +874,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       ? { restart: deps.restart, quiesce: () => quiesceHub?.() ?? Promise.resolve() }
       : {}),
   });
+  // A removed member's data, offered to the owner as an account-scoped export before the purge.
+  team.useExporter(datactl.memberExporter);
   const appAuth = await setupAppAuth(ctx, { auth, audit: ops.audit });
   const otlp = await setupOtlp(ctx, {
     audit: ops.audit,

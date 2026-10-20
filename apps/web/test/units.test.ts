@@ -198,7 +198,7 @@ describe('attachments (FR-021)', () => {
     );
     expect(accepted.map((a) => a.file.name)).toEqual(['ok.txt']);
     expect(rejected[0]!.reason).toMatch(/not a supported file type/);
-    expect(rejected[1]!.reason).toMatch(/big\.pdf is 20\.0 MB; the limit is 20\.0 MB/);
+    expect(rejected[1]!.reason).toMatch(/big\.pdf is 20 MB; the limit is 20 MB/);
     const many = checkFiles([file('a.txt', 'text/plain'), file('b.txt', 'text/plain')], 9);
     expect(many.accepted).toHaveLength(1);
     expect(many.rejected[0]!.reason).toMatch(/up to 10 attachments/);
@@ -210,7 +210,7 @@ describe('attachments (FR-021)', () => {
     const p = pendingFromText('a.md', 'text/markdown', 'hi');
     expect(p).toMatchObject({ name: 'a.md', data: 'aGk=', size: 2 });
     expect(formatBytes(512)).toBe('512 B');
-    expect(formatBytes(2048)).toBe('2.0 KB');
+    expect(formatBytes(2048)).toBe('2 KB');
     expect(formatBytes(50 * 1024)).toBe('50 KB');
   });
 });

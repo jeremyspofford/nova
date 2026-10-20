@@ -11,6 +11,7 @@ import {
 } from 'drizzle-orm/sqlite-core';
 import { project } from './chat.ts';
 import { account } from './core.ts';
+import { siteTarget } from './sites_m8.ts';
 
 const AUTHOR = ['user', 'agent'] as const;
 
@@ -177,7 +178,10 @@ export const siteVersion = sqliteTable(
   (t) => [primaryKey({ columns: [t.siteId, t.version] })],
 );
 
-/** A publish; the live one is the newest not reverted. */
+/**
+ * A publish; the live one is the newest not reverted. Rebuilt by 0052_sites_m8.sql: a `remote`
+ * publish names its hosting target (`targetId`) and the folder on it (`targetRef`).
+ */
 export const sitePublish = sqliteTable(
   'site_publish',
   {
@@ -189,8 +193,9 @@ export const sitePublish = sqliteTable(
       .notNull()
       .references(() => account.id),
     version: integer('version').notNull(),
-    targetKind: text('target_kind', { enum: ['folder', 'zip'] }).notNull(),
+    targetKind: text('target_kind', { enum: ['folder', 'zip', 'remote'] }).notNull(),
     targetRef: text('target_ref'),
+    targetId: text('target_id').references(() => siteTarget.id),
     revertedAt: text('reverted_at'),
     createdAt: text('created_at').notNull(),
   },

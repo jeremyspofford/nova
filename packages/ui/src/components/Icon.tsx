@@ -196,14 +196,41 @@ export type IconName = keyof typeof PATHS;
 
 export const ICON_NAMES = Object.keys(PATHS) as IconName[];
 
+/**
+ * The icons that point along the reading direction: back and forward (also the chevrons of trees
+ * and disclosures), undo and redo, the sidebar and inspector toggles, and splitting toward the
+ * end. They mirror where the text runs right to left (FR-016) through one rule in tokens.css.
+ * Every other icon keeps its drawing: `send` points up, the terminal prompt and code stay
+ * left-to-right, clocks and refresh turn clockwise everywhere.
+ */
+export const MIRRORED_ICONS: ReadonlySet<IconName> = new Set<IconName>([
+  'back',
+  'forward',
+  'undo',
+  'redo',
+  'sidebar',
+  'inspector',
+  'split-right',
+]);
+
 export interface IconProps {
   name: IconName;
   /** CSS size; defaults to 1em so the icon follows the surrounding text size. */
   size?: string;
   className?: string;
+  /**
+   * Mirror under right-to-left; defaults to whether the icon bears a direction
+   * (`MIRRORED_ICONS`). Pass `false` where the icon depicts something physical.
+   */
+  mirror?: boolean;
 }
 
-export function Icon({ name, size = '1em', className }: IconProps) {
+export function Icon({
+  name,
+  size = '1em',
+  className,
+  mirror = MIRRORED_ICONS.has(name),
+}: IconProps) {
   return (
     <svg
       className={className ? `nv-icon ${className}` : 'nv-icon'}
@@ -218,6 +245,7 @@ export function Icon({ name, size = '1em', className }: IconProps) {
       aria-hidden="true"
       focusable="false"
       data-icon={name}
+      data-mirror={mirror ? 'true' : undefined}
     >
       {PATHS[name]}
     </svg>

@@ -69,6 +69,23 @@ export class HubClient {
     return body as T;
   }
 
+  /**
+   * The Hub's `appearance.locale` setting (FR-016), or null when it cannot be read: signed out, or
+   * a member, whose Hub keeps its settings to the owner.
+   */
+  async localeSetting(): Promise<string | null> {
+    try {
+      const { settings } = await this.json<{ settings: { key: string; value: unknown }[] }>(
+        '/api/v1/settings',
+      );
+      const value = settings.find((s) => s.key === 'appearance.locale')?.value;
+      return typeof value === 'string' ? value : null;
+    } catch (err) {
+      if (err instanceof HubError && (err.status === 401 || err.status === 403)) return null;
+      throw err;
+    }
+  }
+
   /** Whether the shell's Hub session is signed in. */
   async signedIn(): Promise<boolean> {
     try {

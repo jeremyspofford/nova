@@ -3,8 +3,9 @@
 // already has its own windows and tabs, so they never show there. The shell checks the path again
 // and opens only app routes on the Hub's origin.
 import { useEffect } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, useToast } from '@nova/ui';
-import type { Command } from '../commands.ts';
+import { CATEGORY, type Command } from '../commands.ts';
 import { useServices } from '../services.tsx';
 import {
   currentPath,
@@ -16,15 +17,22 @@ import {
 
 export const OPEN_WINDOW_COMMAND = 'window.openCurrent';
 
-const REFUSED = 'This view cannot open in a window of its own.';
+export const OPEN_WINDOW_TEXT = defineMessages('shellbridge.window', {
+  open: 'Open in new window',
+  /** `{what}` is the name of what opens: a thread title, an agent's name. */
+  openWhat: 'Open {what} in a new window',
+  command: 'Open this view in a new window',
+  refused: 'This view cannot open in a window of its own.',
+  failed: 'The desktop app could not open the window.',
+});
 
 /** Open `path` in a window of its own; the outcome in words for a toast, or null when it opened. */
 export async function openInWindow(shell: ShellBridge, path: string): Promise<string | null> {
-  if (!isWindowPath(path)) return REFUSED;
+  if (!isWindowPath(path)) return OPEN_WINDOW_TEXT.refused;
   try {
-    return (await shell.openWindow(path)) ? null : REFUSED;
+    return (await shell.openWindow(path)) ? null : OPEN_WINDOW_TEXT.refused;
   } catch (err) {
-    return shellErrorMessage(err, 'The desktop app could not open the window.');
+    return shellErrorMessage(err, OPEN_WINDOW_TEXT.failed);
   }
 }
 
@@ -35,12 +43,13 @@ export async function openInWindow(shell: ShellBridge, path: string): Promise<st
 export function OpenInWindowButton({
   path,
   what,
-  label = 'Open in new window',
+  label,
   compact = false,
 }: {
   path: string;
   /** What opens, for the accessible name ("Open Trip planning in a new window"). */
   what?: string;
+  /** The button's text; "Open in new window" by default. */
   label?: string;
   /** Icon only, with the label as its accessible name and tooltip. */
   compact?: boolean;
@@ -48,7 +57,8 @@ export function OpenInWindowButton({
   const shell = useShell();
   const toast = useToast();
   if (!shell || !isWindowPath(path)) return null;
-  const name = what ? `Open ${what} in a new window` : label;
+  const text = label ?? OPEN_WINDOW_TEXT.open;
+  const name = what ? OPEN_WINDOW_TEXT.openWhat({ what }) : text;
   return (
     <Button
       variant="ghost"
@@ -61,7 +71,7 @@ export function OpenInWindowButton({
       }}
     >
       <Icon name="external" />
-      {compact ? null : ` ${label}`}
+      {compact ? null : ` ${text}`}
     </Button>
   );
 }
@@ -74,8 +84,8 @@ export function openWindowCommand(
   const path = deps.path ?? currentPath;
   return {
     id: OPEN_WINDOW_COMMAND,
-    title: 'Open this view in a new window',
-    category: 'View',
+    title: OPEN_WINDOW_TEXT.command,
+    category: CATEGORY.view,
     run: () => {
       void openInWindow(shell, path()).then((problem) => {
         if (problem) deps.report(problem);

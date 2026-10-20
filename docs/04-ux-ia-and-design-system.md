@@ -40,8 +40,8 @@ and browser), with a bottom panel for terminals (§4.3).
    list (FR-041)
 9. **Apps** — global MCP Apps from plugins and MCP servers (§2.9)
 10. **Activity** — global audit/notification stream
-11. **Marketplace** — plugins, skills, themes (in M4 the plugin catalog lives in Settings →
-    Plugins & skills, §2.12)
+11. **Marketplace** — plugins, skills, themes, pets and MCP servers (in M4 the plugin catalog
+    lived in Settings → Plugins & skills, §2.12; M8 makes it a page of its own, §2.14)
 12. **Settings**
 
 Every thread, run, session and agent row carries a status chip (§1.1).
@@ -64,13 +64,30 @@ management is a page under Devices (`/devices/oob`), a device page gains the **F
 and **Out-of-band** tabs, Settings → Devices gains **Firmware and boot**, and Settings → Browser
 gains **Continue on your computer** and **Your own browser (extension bridge)** (§9).
 
+**In M8** (ADR-097) the sidebar adds **Marketplace** (`/marketplace`, a download icon) after
+Apps, and the shell gains a status bar for extension items at the bottom of the main workspace
+(§2.14). Settings adds **Extensions** (after Plugins & skills), **Authorized apps** (after Apps &
+clients), **Managed policy** (after Permissions), **Data**
+(after Import) and **Telemetry export** (before Diagnostics). The consent page an app sends the
+owner to is `/authorize` (§2.15); it is a page of its own, and onboarding never redirects away from
+it. While a managed policy is in force, every Settings section opens with a banner naming its
+sources, and each control it locks says "Managed by your organization" with the source (§2.16).
+
 **Members** (FR-217). Someone the owner invited signs in to an account of their own. For a member
-the sidebar hides Code, Library, Devices and Network, and Settings lists seven sections: Account,
-Members, Profile & usage, Accounts, Memory, Appearance and Keyboard (Appearance, Keyboard and
-onboarding are the member's own settings). A hidden surface or section reached by its address
-shows "Only the owner of this Hub can change this." with what it is, never a dead control. Tools &
-MCP, Notifications and Channels are hidden for members too: they read the Hub's settings and have
-no member mode yet.
+the sidebar hides Code, Library, Devices, Network and (M8) Marketplace, and Settings lists eleven
+sections: Account, Members, Profile & usage, Accounts, Memory, Tools & MCP, Notifications,
+Channels, Appearance, Keyboard and Managed policy (Appearance, Keyboard and onboarding are the
+member's own settings). A hidden surface or section reached by its address shows "Only the owner
+of this Hub can change this." with what it is, never a dead control. *As of M8* Tools & MCP,
+Notifications and Channels have a member mode: the web app asks `GET /api/v1/team/me/access` which
+routes the member is refused (failing closed when it cannot tell) and hides those parts or says
+"The owner of this Hub sets…" in their place. A member adds only remote MCP servers ("Running a
+command on the Hub is for its owner only."), sees no Hub-wide notification or channel settings,
+reads the managed policy without "Check for changes", and keeps their own spend caps (Profile &
+usage). Extensions, Authorized apps, Data and Telemetry export stay owner-only, extension
+contributions are not shown to members, and the composer's "Find apps in the Marketplace" is
+hidden. In a shared chat (M8) each person's message shows their display name ("Someone"
+when they have none) and your own say "You"; private chats show no names.
 
 **In M5** (ADR-092) the sidebar's Work entry lists the active runs with live status chips; the
 Work list (`/work`) shows every run and **Scheduled** (`/work/scheduled`) the schedules. Code mode
@@ -605,10 +622,11 @@ work). M7.5 adds the local browser fallback and the extension bridge to these vi
 
 ### 2.9 MCP Apps (FR-198)
 
-Plugin and MCP-server UI renders in an **App frame**: a sandboxed iframe with a header showing
-the app name, its server or plugin, a Verified/Unverified badge, the allowed domains (from the
-resource's CSP metadata), mode buttons and Close. In M4 the header does not list the allowed
-domains yet (ADR-091).
+Plugin, extension and MCP-server UI renders in an **App frame**: a sandboxed iframe with a header
+showing the app name, its server or plugin, a Verified/Unverified badge, the allowed domains (from
+the resource's CSP metadata), mode buttons and Close. In M4 the header did not list the allowed
+domains (ADR-091); *as of M8* it says "Can reach a, b" or "Reaches no outside sites" whenever the
+entry point carries its domains (`UiEntryPointView.domains`), which every extension panel does.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -634,7 +652,10 @@ Entry points:
   **Open app…** in the command palette.
 - **Thread:** the Inspector's **Apps** tab (**Open** next to each app), or a tool result whose
   tool declares a UI. A chat's apps keep running while you switch Inspector tabs or close the
-  Inspector. The composer's + menu → Apps comes later.
+  Inspector. *As of M8* the main chat's composer has a + menu, **Apps and more**, listing
+  "Open <app>" for each of the chat's apps, the extensions' composer items and "Find apps in the
+  Marketplace" (hidden for members); "Show the chat's apps" in the command palette opens the
+  Inspector's Apps tab. Embedded chats have no + menu.
 - **File:** **Open with <app>** in the file preview pane (§2.13), for apps registered for that
   extension; file apps are view-only in M4.
 
@@ -749,9 +770,10 @@ address, opens the install screen. Nothing is installed before **Install**:
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-- Until publishers are verified (M8) every plugin is **Unverified**, and **Install** stays
-  disabled until the sideload box is ticked. The Hub refuses an install without that
-  confirmation.
+- A plugin installed from a folder or Git here is always **Unverified**, and **Install** stays
+  disabled until the sideload box is ticked; the Hub refuses an install without that
+  confirmation. *As of M8* a plugin or extension signed by a trusted publisher installs
+  **Verified** from the Marketplace (§2.14) or from Settings → Extensions.
 - Permissions are listed in plain words. An update shows "Permission changes" (new and no longer)
   and "Replaces version x".
 - Hooks are trusted here only when ticked; unticked hooks stay off until trusted under Hooks.
@@ -793,6 +815,183 @@ fields stored in the vault), the hosts and files it may use, and the sideload bo
   Unsaved text survives closing the pane.
 - **Library** (`/library`) filters by kind (All, Artifacts, Attachments, Sources, Images,
   Files), searches titles and pages with **Show more**; each item links to where it opens.
+
+### 2.14 Marketplace and extensions (FR-049, FR-117)
+
+*As shipped in M8 (ADR-097; `apps/web/src/market`, `apps/web/src/extensions`).* Both are the
+owner's; a member reaching them sees the owner-only notice.
+
+- **Marketplace** (`/marketplace/<tab>`): tabs **Plugins** (the default), **Skills**, **Themes**,
+  **Pets**, **MCP servers**, **Installed** and **Catalogs**. The five kind tabs have a search
+  ("Search by name or description") and cards with the author, version, Verified or Unverified,
+  "It can" (the declared permissions in plain words), a screenshot, the installed version,
+  **Install**, **Update to <v>**, **Remove…** and **Details**, and your rating. **Details** shows
+  screenshots, changelog, what it brings (hooks, sub-agent roles, browser extensions, app
+  screens), homepage, catalog and versions, and "Your rating" ("Ratings stay on this Hub. Nothing
+  is sent anywhere."). A kind the install rules turn off says "Installing <kinds> is turned off."
+- **Install and update** (one dialog): a blocked item says "This cannot be installed." and why
+  (managed policy, unverified items off, kind off). An Unverified item lists why, one plain
+  sentence per reason, and needs "I trust its source; install it unverified". A Verified item says what
+  vouches for it ("Verified: listed in <catalog>, signed with the key this catalog pins", and for a
+  bundle "Its bundle is signed by <publisher>, a publisher you trust"). An update lists
+  "Permission changes" (New, No longer, Changed) and needs "I accept these permission changes"
+  when anything was added or changed. Hooks to trust are ticked one by one; an MCP bundle shows
+  its settings form; "Turn it on after installing". The button stays off until the required
+  boxes are ticked. **Remove…** asks first (for the pet in use: "If it is your companion, the
+  companion turns off.").
+- **Catalogs tab**: each catalog with its kind (Built in, Folder on the Hub, Git repository, Web
+  address) and its signature; **Add a catalog** (name, location, optional publisher key, "Commit
+  (Git only, optional)"; at most 20); removing a catalog takes effect at once. **Trusted
+  publishers**: adding one asks "Trust <name>?" (**Trust this publisher**), removing one asks
+  "Stop trusting <name>?". **Install rules**: "Allow unverified items" and "What may be
+  installed". This tab is the Catalog settings of `docs/14` §7.
+- **Settings → Extensions**: the "Run extensions" switch (`sdk.enabled`); each installed extension
+  with its status (Running, Starting, Stopped, Off, Error; a stopped one says why: "Managed by your
+  organization (<source>)", an unreadable policy, or the SDK switch off), publisher, Verified or
+  Unverified and
+  its signature in words ("Signed by a publisher you trust", "Not signed by a publisher you
+  trust", "Loaded by nova dev from a folder"), "It can" with sensitive lines marked, a "Run
+  <name>" switch, its hooks (Trusted, Needs trust, Trust revoked, Disabled) with **Trust…** (the
+  dialog shows the new hash if the hook changed while it was open), its secrets (Stored or Not
+  set; Set, Replace, Clear after asking; values are never shown), its app screens with **Open**,
+  and **Uninstall…** with "Also remove its data (the files it keeps on the Hub)". **Install from
+  a file** takes a `.novax` (32 MB) or a path on the Hub and opens the same kind of preview. "For developers" explains `nova dev`,
+  `nova validate` and `nova pack` (`docs/26` §9).
+- **What extensions add to the shell**: their commands in the command palette under the
+  extension's name (bindable in Keyboard), "Open the marketplace" and "Manage extensions"; a
+  status bar ("Extension status") whose items with a command are buttons; menu items on a chat's
+  row menu, under "More actions from extensions" on a message, in the file preview's "More
+  actions for <file>" menu and in the composer's + menu, each described "From <extension>"; their
+  themes in Appearance → Themes under "From your extensions" (**Save to your themes**, **Save and
+  use**) and their shortcuts in Keyboard under "Suggested by extensions" (**Use this shortcut**).
+  Nothing an extension offers is applied until the user picks it.
+- **Pets**: installed pets are choices in Appearance → Companion ("Installed from the
+  marketplace"); a saved pet that is no longer installed shows as such and the companion is off.
+- **Who signed it** (cards, details, install dialogs, catalogs, Settings → Extensions): a publisher
+  is named only for a key the owner trusts; a pinned key without a name reads "Signed with a key you
+  trust (<fingerprint>)", any other key "Signed with the key <fingerprint>, not trusted", with a
+  warning that the name a catalog gives it is not checked. An item with no author shows no "By …".
+- **Updates** word each changed permission part by part (a tool's approval, an MCP server's program
+  and arguments, hosts, folders, tools), never raw JSON; anything that lets the item do more without
+  asking (ask → allow, a new program, more sites, files or tools), or that cannot be worded, is bold
+  and marked **Sensitive**.
+- **A change of publisher** (an update signed by another key, or unsigned over signed) comes first
+  in the extension preview, the marketplace update dialog and the plugin install dialog (from the
+  plugin preview's `publisherChange`, before the first Install; an older Hub's refusal still leads
+  there): "I accept the new publisher; delete
+  its stored secrets and data" must be ticked before Install; the request then carries
+  `acceptPublisherChange`.
+- **Sidebar**: when extensions place menu items there, a **From extensions** menu sits at the foot
+  of the sidebar above Settings and opens upward.
+
+### 2.15 Allow an app (FR-222)
+
+*As shipped in M8 (ADR-097 D6; `apps/web/src/appauth`).* An app that signs in with OAuth sends the
+owner's browser to `/authorize?…`:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Allow Notes Sync to use your Hub?                                │
+│ Apps can only read. The app chose this name itself; Nova cannot  │
+│ check it.                                                        │
+│ After you answer, your browser goes back to 127.0.0.1:53682      │
+│ It asks to                                                       │
+│   [x] Read your chats        [x] See your projects               │
+│   (untick anything you do not want it to have)                   │
+│                                              [Deny]   [Allow]    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- A request the Hub cannot trust (unknown app, a return address it did not register or none) says
+  "This sign-in request cannot be answered" and never sends the browser anywhere. Other refusals
+  (app access off, managed policy, a malformed request) are explained with "Go back to the app".
+  At least one scope stays ticked. The seven scopes read: "See your name and picture", "See your
+  projects", "Read your chats", "See your Work runs", "Read what Nova remembers", "See your
+  notifications" and "See your usage". Members see "Only the owner of this Hub can allow apps to
+  use it."
+- **Settings → Authorized apps**: "Let apps ask for access" (`apps.enabled`), "How an app signs in"
+  (the `/.well-known/oauth-authorization-server` address), "Apps you allowed" with what each may
+  read, where it sends sign-ins back to, how many devices are signed in and when it was last used,
+  **Revoke** after asking, and **Registered, not allowed**: every registered app nobody authorizes
+  (a revoked one moves here), by name, with what it asks to read, where sign-ins return and when an
+  unapproved one lapses (or that it stays until removed), and **Remove** after asking.
+- **Settings → Telemetry export**: "Export telemetry" (off, and disabled until a collector is
+  saved), "Collector address" (https, or http only to this computer), write-only **Headers**,
+  "What to send" (Traces, Metrics, Logs), "Include content" (asks first, naming the collector),
+  **Send a test** and the status (exporting now, or why not).
+
+### 2.16 Managed policy, data and usage (FR-106, FR-105, FR-116, FR-121)
+
+*As shipped in M8 (ADR-097 D4-D5; `apps/web/src/managed`, `apps/web/src/datactl`).*
+
+- **Managed policy** (Settings → Managed policy): "How a setting is decided", each source with its
+  status (Not present, In force, Ignored, Cannot be read, Refused, Unreachable) and why, the
+  restrictions in plain sentences, "Settings it sets" (setting, value, source) and "Not applied"
+  (ignored keys with the reason). **Check for changes** is the owner's. The page follows
+  `managed.policy.changed`. A locked switch reads "Managed by your organization (policy file)"
+  (or "(remote policy)", "(policy file and remote policy)", "(test policy file)"); the
+  Marketplace and Extensions pages name the file or address. When the policy fails closed the
+  banner says "Your organization's policy could not be read" and that every agent tool is denied
+  until it is fixed.
+- **Data** (Settings → Data, owner only), in order: what the Hub holds; **Export** with an
+  optional passphrase (at least 12 characters, typed twice), downloaded through a one-use ticket;
+  **Import** (only into an empty Hub: upload, **Check the file**, what it holds, what to enter
+  again, then "Replace this Hub with the export?" → **Import and restart**, and afterwards what
+  was turned off); **How long data is kept** (Chats, Work runs, Audit log, Artifacts, Activity
+  history: Forever, 7 days, 30 days, 90 days, 6 months, 1 year, 2 years or 5 years; the audit log
+  never less than 1 year; keeping less asks first; **Sweep now…** says what it will delete);
+  **Crash reports** (sending asks first; **Preview** shows "exactly what is sent, byte for byte"
+  and **Send this report** sends that; delete one or all after asking); **Delete all data…**
+  ("Type the Hub's name, <name>, to confirm", compared trimmed and ignoring case, then **Delete
+  everything and restart**). A sealed export also asks for the Hub's name. Every refusal reads in
+  plain words. After an import or delete-all the page waits for the Hub to come back and reloads;
+  onboarding's first screen offers **Restore from an export file** (`/settings/data#import`), so a
+  fresh or wiped Hub can be restored without finishing setup first.
+- **Spend caps** (Profile & usage, `#spend-caps`; members set their own): per provider an amount
+  in US dollars, "Each month (UTC)" or "Each day (UTC)", "Warn at" (5 to 99 %, default 80) and
+  "Stop at the cap" (default on); the state (Under the cap, Near the cap, Cap reached: calls
+  stopped, Cap reached: warning only); **Clear usage data…** asks first. `?cap=<provider>` opens
+  that provider's cap. **Accounts** shows each provider's plan, the last limit it reported, this
+  month's spend and its cap with a link to set or change it ("Local: no cost and no cap." for a
+  local server). A reply a cap stopped shows **Raise the cap**.
+- **Channels** (M8 additions): an email mailbox chooses "With a password" or "With OAuth"; OAuth
+  shows the redirect URI to register with the provider, **Authorize** (or **Authorize again**),
+  the state (Not authorized yet, Authorized, Authorization expired, Sign-in failed) and **Sign
+  out** after asking. The message log lists each entry's files with name, size, state ("Kept with
+  the chat", Sent, Held back, Not delivered, or "Not kept" for a refused inbound file) and the
+  reason in words (not repeated when the entry says it); the old **File** badge remains only for
+  entries logged before files were recorded.
+- **Members** (owner): "Keep a removed member's data for" N days (0 keeps it until you delete it),
+  then per removed member **Export their data** and **Delete now** ("I understand <name>'s data
+  cannot be recovered" → **Delete for good**); the removal dialog says how long data is kept.
+
+### 2.17 Spaces and sites (FR-036, FR-037, M8)
+
+*As shipped in M8 (ADR-097; `apps/web/src/spaces`; routes in `contracts/hub-api.md`, "Spaces,
+sites & visualizations").*
+
+- **Page order.** Drag a page in the space's list, or use Up and Down and the row menu's **Move
+  to…**, **Move to the top** and **Move to the bottom**. Each move sends the whole order in one
+  write; if the list went stale, the page says so in plain words and shows the Hub's order.
+- **Deleting a page** asks first and says what goes with it: its versions, comment threads and
+  replies, open agent proposals (they end rejected) and the sites whose next build leaves it out.
+  The toast offers **Undo**, and the space's **Recently deleted pages** list has **Restore**, which
+  puts the page back where it was with its history and comments. The page editor uses the same
+  dialog.
+- **Change source…** on a site builds from the new source without storing anything and lists the
+  files added, changed, removed and unchanged against the latest version; **Save** stays off until
+  that preview has run.
+- **Publishing** asks the Hub for a plan first: where the files go (a folder on the Hub, a zip, or a
+  folder on a remote hosting target), which files, what is live and is replaced or taken down,
+  whether it can be undone (a zip cannot) and whether the network policy lets Nova reach the target.
+  A copy that could not be taken down is named afterwards ("left behind") so it can be removed by
+  hand.
+- **Publishing targets** (`/sites/targets`, linked from Sites and from the publish dialog; owner only):
+  add a WebDAV target with its address, optional public address and a write-only credential (none,
+  a user name and password, or a token), **Check** it, rename, change or remove it (not while a site
+  is live there), and the **Allow publishing to hosting targets** switch (`sites.remoteTargets`,
+  with the managed lock). Members see the owner-only notice there and "Only the owner of this Hub can publish sites"
+  instead of Publish buttons.
 
 ## 3. Composer specification
 
@@ -935,6 +1134,129 @@ kind is still a placeholder: a Code session shows its diff in its own Diff tab (
   approvals.
 - Contrast ≥ 4.5:1 body, ≥ 3:1 large text; tested in high-contrast theme.
 - Reduced motion, reduced transparency, and font-scaling support.
+
+*As audited in M8 (FR-015, ADR-097; `e2e/a11y-sweep.spec.ts`, `e2e/support/a11y-probes.ts`).*
+
+- **The sweep.** axe runs with every WCAG 2.0, 2.1 and 2.2 A and AA rule and fails on any impact,
+  with no exclusions, over setup, every onboarding step, every top-level surface (each Marketplace
+  tab, Network section and Team tab), every Settings section, the command palette, the account menu,
+  the notification center, the delete-chat confirmation, the extension install preview, delete-all,
+  the theme import check, the app consent page and Add a provider, in a member's view, at 390×844,
+  in forced dark and in both high-contrast themes. It also checks what axe cannot: a keyboard walk
+  (skip link, region order, Shift+Tab reverses Tab, no trap) and Escape returning focus to the opener;
+  a focus ring of at least 2 px and 3:1 that is never hidden (with the companion on); target size;
+  drag alternatives; reduced motion; reflow at 320 px; text spacing; paste and autofill on the
+  sign-in and pairing fields; live regions for toasts and streaming; placeholder and field-edge
+  contrast; and, with every setting locked by the test policy file, that every lock note names
+  "(test policy file)" and is linked to its control. Each check was shown to catch a deliberately
+  injected fault.
+- **Behaviour that changed with it:**
+  - **Toasts**: a toast with an action (such as **Undo**) never times out, and every toast holds
+    while hovered or focused (2.2.1).
+  - **Tooltips** can be hovered (the pointer may move onto them) and Escape dismisses them wherever
+    focus is (1.4.13).
+  - **Backdrops** of dialogs and the command palette close only on a press that starts and ends on
+    the backdrop (2.5.2); focus returns to the opener even when it was disabled while it worked.
+  - **Drag alternatives** (2.5.7): each pane menu has **Make larger** and **Make smaller**, the
+    bottom panel's menu **Make taller** and **Make shorter**, and the picture-in-picture **Move**
+    button moves the app to the next corner on click.
+  - **Lock notes**: every managed lock note names its source ("Managed by your organization (policy
+    file)") and is linked to its control (`aria-describedby`): `ManagedLockNotes` (a provider around
+    the web app, through `@nova/ui`'s `LockNoteProvider`) gives every locked select, radio group and
+    color field its note, switches and text fields take the same note, and a `setting` prop names
+    the exact source.
+  - **Contrast**: field edges use the derived token `--u-control-border` (3:1 in every theme, 1.4.11)
+    and placeholders the muted text color.
+  - **Page titles**: each page names the browser tab "<page> - Nova" (2.4.2).
+  - Reflow at 320 px (the top bar wraps; grids and fields no longer widen the page), a 2 px focus
+    ring on the composer, roles on elements that carried a name screen readers ignored (the live
+    screen view is an `application` while you control it), and `one-time-code` autocomplete on the
+    setup code.
+
+#### WCAG 2.2 A and AA conformance (M8)
+
+| Level | Criteria |
+| --- | --- |
+| **Supports** | 1.1.1, 1.3.1, 1.3.2, 1.3.3, 1.3.4, 1.3.5, 1.4.1, 1.4.3 (built-in themes; custom colors are checked and warned about), 1.4.4, 1.4.5, 1.4.11, 1.4.12, 1.4.13, 2.1.1, 2.1.2 (in an empty composer Tab takes the first suggested follow-up once, as documented and announced; a second Tab or Shift+Tab leaves), 2.1.4, 2.2.1 (the pairing code's expiry falls under the security exception), 2.2.2, 2.3.1, 2.4.1, 2.4.2, 2.4.3, 2.4.4, 2.4.5, 2.4.6, 2.4.7, 2.4.11, 2.5.1, 2.5.2, 2.5.3, 2.5.7, 2.5.8, 3.1.1, 3.2.1, 3.2.2 (after a language change focus returns to the chosen option and the change is announced in the new language once the Hub saved it), 3.2.3, 3.2.4, 3.2.6, 3.3.1, 3.3.2, 3.3.3, 3.3.4, 3.3.7, 4.1.2, 4.1.3 |
+| **Partially supports** | 1.4.10 Reflow: chat and every Settings section are verified at 320 px; Work, Code, Devices, Network and the Marketplace pass axe at 390 px but are not checked for reflow at 320 px. 3.1.2 Language of parts: in the partial Arabic locale, English fallback strings do not carry `lang="en"`. 3.3.8 Accessible authentication: approving a device means typing the six digits shown on the other device; paste works, but not across devices (a compare-and-confirm alternative needs a security decision). The picture-in-picture corner resize is the browser's own handle; Inline and Full screen are the click alternatives |
+| **Not applicable** | 1.2.1-1.2.5 (no recorded media; the live screen view has no audio), 1.4.2, 2.5.4 |
+
+### 4.5 Right-to-left layout (FR-016, M8)
+
+Choosing a right-to-left language (Arabic, or the `ar-XB` pseudo-locale for testing) in
+Settings → Appearance → Language (`docs/14` §2.4; the messages are §4.6) sets `<html dir="rtl">` and
+the whole interface mirrors:
+
+- **Layout**: every stylesheet and inline style uses logical properties (`margin-inline-start`,
+  `inset-inline-end`, `border-inline-start`, `text-align: start`, `float: inline-start`,
+  `border-start-end-radius`), so the sidebar sits at the inline start (the right), the inspector
+  at the inline end, toasts and menus at the mirrored corners. A unit test
+  (`apps/web/test/rtl-css.test.ts`) fails on any physical left or right, except a short allowlist
+  with reasons: centring with `left: 50%`, a context menu at the pointer, a free-floating
+  picture-in-picture app, chart labels over an unmirrored drawing and a remote screen thumbnail.
+- **Icons**: direction-bearing icons (back, forward and the chevrons drawn with them, undo, redo,
+  the sidebar and inspector toggles, split right) mirror; all others (send, which points up,
+  search, clocks, refresh, the terminal prompt) never do. The list is `MIRRORED_ICONS` in
+  `packages/ui`.
+- **Left-to-right islands**: code blocks, diffs, the editor, terminals, logs and commands,
+  keyboard shortcuts, folder paths, URL and email fields, and tool and model ids (shown as code)
+  stay left to right (`dir="ltr"`, isolated inside right-to-left text). User content (messages,
+  thread and page titles, the composer and free-text fields) uses `dir="auto"`, so an English
+  message reads left to right in an Arabic interface and the other way round.
+- **Keys and drags**: Left and Right in tabs, toolbars and other horizontal lists, in trees
+  (Left opens a branch) and on splitters follow what the user sees.
+- **Checked**: `e2e/rtl-layout.spec.ts` visits the core screens in `ar-XB` and `ar` at desktop and
+  phone sizes and fails on a sideways page overflow, anything outside the viewport, text clipped
+  without an ellipsis, or two controls overlapping.
+
+### 4.6 Localization (FR-016, M8)
+
+*As built in M8 (ADR-097 D9; `packages/i18n`, `apps/web/src/i18n`; the setting is `docs/14` §2.4).*
+
+- **Messages.** UI text is declared with `defineMessages` from `@nova/i18n` next to the code that
+  shows it, one message per sentence or label (never a sentence built from fragments), in an ICU
+  MessageFormat subset: `{name}` placeholders, `{n, plural, =0 {…} one {# …} other {# …}}` and
+  `{x, select, … other {…}}`. Message ids are `<namespace>.<key>`; namespaces are unique in the
+  repository. A message without placeholders reads as a string and one with placeholders is a
+  function taking exactly those (checked by the compiler); every read translates in the active
+  locale, so text is read at render time, never copied at module load. Sentences with a link, a key
+  cap or code inside use `rich(…)` (`richMessage`), which passes strings and numbers through, so a
+  plural or select works inside a rich sentence. A message stays one literal when it has
+  placeholders (joining literals with `+` loses its typing), and a message key starting with `use`
+  trips the React hooks lint rule. Errors the Hub returns are shown through the client's own words
+  for their `code` where it has them.
+- **Locales.** `en` is the source, in code. `ar` is a partial machine-drafted translation (shell,
+  palette and commands, onboarding, layout, settings navigation and Appearance, chat, the language
+  picker, the marketplace and extensions, and `packages/ui`); anything missing falls back to
+  English, with English plural rules. `en-XA` and `ar-XB` are generated at run time from the source:
+  accented, about a third longer and bracketed, and (for `ar-XB`) right to left with every string
+  mirrored by bidi controls. Translations are JSON per locale and namespace in
+  `apps/web/src/i18n/locales/<locale>/<namespace>.json` (`{key: translation}`), loaded lazily; the
+  desktop shell reads the same files. Languages are always listed by their own names. After a
+  change the shell remounts and focus returns to the chosen language, which is announced in the new
+  language once the Hub has saved it; if the Hub refuses, focus returns to the language in force and
+  the error is in that language.
+- **Formatting.** Numbers, percentages, sizes ("2 KB"), dates, times, relative times, durations
+  ("1 h 1 min") and lists ("LAN, Mesh, and Relay") go through `fmt` in the active locale, never
+  `toLocaleString()` without a locale or hand-built English plurals. Key caps stay as printed; their
+  spoken names ("Ctrl plus K") are localized.
+- **Guards.** `npm run i18n:check` (part of `npm run lint`) collects every `defineMessages` call
+  with the TypeScript compiler API and verifies the committed English catalog
+  `apps/web/src/i18n/catalog.en.json` (for translators; `npm run i18n:write` regenerates it), and
+  fails on duplicate ids, translations of keys that no longer exist and placeholder mismatches; it
+  prints each locale's coverage. The ESLint rule `nova-i18n/no-literal-ui-text` (a local plugin)
+  forbids JSX text and literal `aria-label`, `title`, `placeholder`, `alt`, `label`, `hint`,
+  `description` and similar props (and the same keys in menu, tab and option objects) in the
+  folders listed in `I18N_CONVERTED` in `eslint.config.js`, which as of M8 covers `packages/ui`,
+  `apps/desktop` and every web area. Each area has a test
+  that renders its screens in `en-XA` and fails on any visible text or accessible name that is not
+  pseudo-localized (fixture data and Hub-written text are passed as data; addresses that contain
+  such data stay recognised), and `ar` tests check the right-to-left shell with Arabic words.
+- **Not localized in M8**: text the Hub writes (error and notification messages, statuses and
+  details, permission lines, diagnostics, audit fields), catalog and manifest text from extensions
+  and plugins, and the content of chats; protocol values (paths, commands, URLs, header and
+  environment names) and JSON-RPC error messages to MCP apps stay as written. MCP apps are told the
+  browser's `navigator.language`, not the locale chosen in Nova.
 
 ## 5. Keyboard map (defaults; all remappable)
 

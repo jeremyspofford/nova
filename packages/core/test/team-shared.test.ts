@@ -156,6 +156,33 @@ describe('shared threads (FR-217)', () => {
     expect(d.authors[d.messages[2]!.id]?.displayName).toBe('Bea');
   });
 
+  it("names who wrote each message in the owner's ordinary chat view, and nobody in a private one", async () => {
+    const bea = await env.addMember('Bea');
+    const t = await env.threads.create(ACCOUNT, {});
+    await turn(ACCOUNT, t.id, 'hello before sharing');
+    const quiet = await env.threads.create(ACCOUNT, {});
+    await turn(ACCOUNT, quiet.id, 'just me');
+    // Not shared yet: no names.
+    expect((await env.threads.detail(ACCOUNT, t.id)).messages.some((m) => m.author)).toBe(false);
+    await env.shared.share(ACCOUNT, t.id, [bea]);
+    await turn(bea, t.id, 'hi from Bea');
+
+    const d = await env.threads.detail(ACCOUNT, t.id);
+    expect(d.messages.map((m) => [m.role, m.author?.accountId ?? null])).toEqual([
+      ['user', ACCOUNT],
+      ['assistant', null],
+      ['user', bea],
+      ['assistant', null],
+    ]);
+    // Only the id and the display name.
+    expect(d.messages[2]!.author).toEqual({ accountId: bea, displayName: 'Bea' });
+    expect(Object.keys(d.messages[0]!.author!)).toEqual(['accountId', 'displayName']);
+    // A private chat names nobody.
+    expect((await env.threads.detail(ACCOUNT, quiet.id)).messages.some((m) => m.author)).toBe(
+      false,
+    );
+  });
+
   it('remembers nothing said there, for anyone', async () => {
     const bea = await env.addMember('Bea');
     const t = await env.threads.create(ACCOUNT, {});

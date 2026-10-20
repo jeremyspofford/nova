@@ -5,6 +5,7 @@
 // the call has none yet, by the chat's escalated runs. A failed or denied call keeps its tool card.
 import { useEffect, useId, useState } from 'react';
 import type { RunView, ToolCallStatus } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, Spinner, StatusChip, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
@@ -15,6 +16,34 @@ import { Markdown } from './Markdown.tsx';
 import type { DisplayCall } from './thread-state.ts';
 import { previewArgs } from './tool-apps.tsx';
 import '../work/work.css';
+
+export const RUN_CARD_TEXT = defineMessages('chat.run', {
+  loadFailed: 'Could not load the run.',
+  untitled: 'Work run',
+  openInWork: 'Open in Work',
+  /** Read after "Open in Work" by screen readers. */
+  openInWorkOf: ': {title}',
+  retry: 'Retry',
+  preparing: 'Preparing the run',
+  preparingDots: 'Preparing a Work run…',
+  dismissed: 'Dismissed. The run did not start.',
+  propose: 'This needs several steps. Run it as a Work run?',
+  plan: 'Plan',
+  planLater: 'The run writes its plan when it starts.',
+  budget: 'Budget: {budget}',
+  start: 'Start run',
+  startFailed: 'Could not start the run: {reason}',
+  dismiss: 'Dismiss',
+  dismissFailed: 'Could not dismiss the run: {reason}',
+  stop: 'Stop',
+  stopFailed: 'Could not stop the run: {reason}',
+  /** A finished run's status ("Completed."). */
+  finished: '{status}.',
+  outputMissing:
+    '{status}: the run could not verify its declared output. Open it to see the trace.',
+  /** Read before the run's title by screen readers. */
+  workRun: 'Work run:',
+});
 
 /** The tool a chat uses to hand a multi-step request to a Work run (FR-186). */
 export const RUN_TOOL = 'work.start';
@@ -99,7 +128,7 @@ export function RunCard({ call, chatThreadId }: { call: DisplayCall; chatThreadI
         setRun(r);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the run.')),
+      (err: unknown) => alive && setError(errorMessage(err, RUN_CARD_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -140,13 +169,17 @@ export function RunCard({ call, chatThreadId }: { call: DisplayCall; chatThreadI
     },
   );
 
-  const act = async (label: string, fn: () => Promise<RunView>, after?: () => void) => {
+  const act = async (
+    failed: (p: { reason: string }) => string,
+    fn: () => Promise<RunView>,
+    after?: () => void,
+  ) => {
     setBusy(true);
     try {
       setRun(await fn());
       after?.();
     } catch (err) {
-      toast.show(`${label}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(failed({ reason: errorMessage(err) }), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -154,12 +187,15 @@ export function RunCard({ call, chatThreadId }: { call: DisplayCall; chatThreadI
 
   const title =
     run?.title ??
-    (typeof args.title === 'string' && args.title ? args.title : objective || 'Work run');
+    (typeof args.title === 'string' && args.title
+      ? args.title
+      : objective || RUN_CARD_TEXT.untitled);
   const proposed = !!run && run.status === 'planning' && !run.planApproved;
   const steps = run?.plan?.length ? run.plan.map((s) => s.title) : planFromArgs(args);
   const link = run ? (
     <a href={runPath(run.id)} className="link" onClick={(e) => followLink(e, runPath(run.id))}>
-      Open in Work<span className="nv-vh">: {run.title}</span>
+      {RUN_CARD_TEXT.openInWork}
+      <span className="nv-vh">{RUN_CARD_TEXT.openInWorkOf({ title: run.title })}</span>
     </a>
   ) : null;
 
@@ -168,48 +204,50 @@ export function RunCard({ call, chatThreadId }: { call: DisplayCall; chatThreadI
     body = error ? (
       <div role="alert" className="run-card-actions">
         <p>{error}</p>
-        <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+        <Button onClick={() => setAttempt((n) => n + 1)}>{RUN_CARD_TEXT.retry}</Button>
       </div>
     ) : (
       <p className="muted">
-        <Spinner label="Preparing the run" /> Preparing a Work run…
+        <Spinner label={RUN_CARD_TEXT.preparing} /> {RUN_CARD_TEXT.preparingDots}
       </p>
     );
   } else if (dismissed && run.status === 'cancelled') {
-    body = <p className="muted">Dismissed. The run did not start.</p>;
+    body = <p className="muted">{RUN_CARD_TEXT.dismissed}</p>;
   } else if (proposed) {
     body = (
       <>
-        <p>This needs several steps. Run it as a Work run?</p>
+        <p>{RUN_CARD_TEXT.propose}</p>
         {steps.length ? (
-          <ol className="run-card-plan" aria-label="Plan">
+          <ol className="run-card-plan" aria-label={RUN_CARD_TEXT.plan}>
             {steps.map((s, i) => (
-              <li key={`${i}-${s}`}>{s}</li>
+              <li key={`${i}-${s}`} dir="auto">
+                {s}
+              </li>
             ))}
           </ol>
         ) : (
-          <p className="muted">The run writes its plan when it starts.</p>
+          <p className="muted">{RUN_CARD_TEXT.planLater}</p>
         )}
-        <p className="muted">Budget: {budgetLine(run.budgets)}</p>
+        <p className="muted">{RUN_CARD_TEXT.budget({ budget: budgetLine(run.budgets) })}</p>
         <div className="run-card-actions">
           <Button
             variant="primary"
             disabled={busy}
-            onClick={() => void act('Could not start the run', () => api.startRun(run.id))}
+            onClick={() => void act(RUN_CARD_TEXT.startFailed, () => api.startRun(run.id))}
           >
-            Start run
+            {RUN_CARD_TEXT.start}
           </Button>
           <Button
             disabled={busy}
             onClick={() =>
               void act(
-                'Could not dismiss the run',
+                RUN_CARD_TEXT.dismissFailed,
                 () => api.controlRun(run.id, 'cancel'),
                 () => setDismissed(true),
               )
             }
           >
-            Dismiss
+            {RUN_CARD_TEXT.dismiss}
           </Button>
           {link}
         </div>
@@ -226,10 +264,10 @@ export function RunCard({ call, chatThreadId }: { call: DisplayCall; chatThreadI
           <Button
             disabled={busy}
             onClick={() =>
-              void act('Could not stop the run', () => api.controlRun(run.id, 'cancel'))
+              void act(RUN_CARD_TEXT.stopFailed, () => api.controlRun(run.id, 'cancel'))
             }
           >
-            <Icon name="stop" /> Stop
+            <Icon name="stop" /> {RUN_CARD_TEXT.stop}
           </Button>
         </div>
       </>
@@ -238,10 +276,9 @@ export function RunCard({ call, chatThreadId }: { call: DisplayCall; chatThreadI
     body = (
       <>
         <p role="status">
-          {RUN_STATUS_TEXT[run.status]}
           {run.status === 'output_missing'
-            ? ': the run could not verify its declared output. Open it to see the trace.'
-            : '.'}
+            ? RUN_CARD_TEXT.outputMissing({ status: RUN_STATUS_TEXT[run.status] })
+            : RUN_CARD_TEXT.finished({ status: RUN_STATUS_TEXT[run.status] })}
         </p>
         {run.result?.summary ? <Markdown text={run.result.summary} /> : null}
         <div className="run-card-actions">{link}</div>
@@ -260,7 +297,7 @@ export function RunCard({ call, chatThreadId }: { call: DisplayCall; chatThreadI
       <div className="run-card-head">
         <Icon name="work" />
         <span id={titleId} className="run-card-title">
-          <span className="nv-vh">Work run:</span> {title}
+          <span className="nv-vh">{RUN_CARD_TEXT.workRun}</span> <span dir="auto">{title}</span>
         </span>
         {run ? (
           <StatusChip status={run.derived.status} reason={run.derived.reason ?? undefined} />

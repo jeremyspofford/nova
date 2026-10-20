@@ -9,6 +9,7 @@ import { useServices } from '../services.tsx';
 import { useDebounced, useWorkEvents } from '../work/events.ts';
 import { runPath, sortByStatus } from '../work/format.ts';
 import { followLink } from '../work/nav.tsx';
+import { SIDEBAR_TEXT } from './strings.ts';
 
 /** At most this many runs show; the Work list has the rest. */
 export const SIDEBAR_RUNS = 8;
@@ -45,7 +46,7 @@ export function SidebarRuns({
   if (runs.length === 0) return null;
   const shown = sortByStatus(runs).slice(0, SIDEBAR_RUNS);
   return (
-    <ul className="threads" aria-label="Active runs">
+    <ul className="threads" aria-label={SIDEBAR_TEXT.activeRuns}>
       {shown.map((r) => {
         const selected = r.id === selectedId;
         const paused = r.status === 'paused';
@@ -61,12 +62,12 @@ export function SidebarRuns({
               }}
             >
               {paused ? (
-                <span className="thread-mark" title="Paused">
+                <span className="thread-mark" title={SIDEBAR_TEXT.paused}>
                   <Icon name="clock" />
                 </span>
               ) : null}
               <span className="thread-title">{r.title}</span>
-              {paused ? <VisuallyHidden>, paused</VisuallyHidden> : null}
+              {paused ? <VisuallyHidden>{SIDEBAR_TEXT.pausedSuffix}</VisuallyHidden> : null}
               {r.derived.status !== 'ready' ? (
                 <StatusChip
                   status={r.derived.status}

@@ -2,14 +2,40 @@
 // (icon plus text, never color alone, docs/04 §7), a copyable value, and the block that shows a
 // secret once.
 import { useId, useRef } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
-import { SENDER_CHECK_OFF_TEXT, copyText, type ChipSpec } from './format.ts';
+import { rich } from '../i18n/rich.tsx';
+import { CHANNEL_TEXT, copyText, midSentence, type ChipSpec } from './format.ts';
+
+/** The shared pieces' words (FR-016). Header names and code stay as they are. */
+export const PARTS_TEXT = defineMessages('channels.parts', {
+  copied: '{label} copied.',
+  copyFailed: 'Could not copy. The {label} is selected; copy it with your keyboard.',
+  copyLabel: 'Copy {label}',
+  copy: 'Copy',
+  shownOnce: 'Shown once',
+  onceHead:
+    'Copy these now. They are shown only once; Nova keeps them in its secret store and never shows them again.',
+  signing: {
+    summary: 'How to sign a request',
+    bearer: 'Send {header}.',
+    timestamp:
+      'Send {header} with the current time in Unix seconds; requests more than five minutes off are refused.',
+    signature: 'Send {header}, the HMAC-SHA256 of {payload} made with the secret.',
+    eventId: 'Optionally send {header}; an id seen before starts nothing.',
+    messageId: 'Give each message its own {field}; a message id seen before is ignored.',
+  },
+  trustQuestion: 'Trust the From address?',
+  keepChecking: 'Keep checking senders',
+  trust: 'Trust the From address',
+  checkOff: 'The sender check is off: anyone can write as a known sender.',
+});
 
 export function Chip({ spec, detail }: { spec: ChipSpec; detail?: string | null }) {
   return (
     <span className="nv-chip" data-status={spec.tone}>
       {spec.icon ? <Icon name={spec.icon} /> : <Spinner />}
-      <span>{detail ? `${spec.text}: ${detail}` : spec.text}</span>
+      <span>{detail ? CHANNEL_TEXT.chipDetail({ status: spec.text, detail }) : spec.text}</span>
     </span>
   );
 }
@@ -32,7 +58,7 @@ export function CopyValue({
   const ref = useRef<HTMLElement>(null);
   const copy = async () => {
     if (await copyText(value)) {
-      toast.show(`${label} copied.`, { tone: 'success' });
+      toast.show(PARTS_TEXT.copied({ label }), { tone: 'success' });
       return;
     }
     const el = ref.current;
@@ -43,12 +69,7 @@ export function CopyValue({
       sel.removeAllRanges();
       sel.addRange(range);
     }
-    toast.show(
-      `Could not copy. The ${label.toLowerCase()} is selected; copy it with your keyboard.`,
-      {
-        tone: 'error',
-      },
-    );
+    toast.show(PARTS_TEXT.copyFailed({ label: midSentence(label) }), { tone: 'error' });
   };
   return (
     <div className="ch-copy" role="group" aria-labelledby={`${id}-label`}>
@@ -61,11 +82,15 @@ export function CopyValue({
           className="ch-copy-value"
           aria-describedby={hint ? `${id}-hint` : undefined}
           spellCheck={secret ? false : undefined}
+          dir="ltr"
         >
           {value}
         </code>
-        <Button onClick={() => void copy()} aria-label={`Copy ${label.toLowerCase()}`}>
-          <Icon name="copy" /> Copy
+        <Button
+          onClick={() => void copy()}
+          aria-label={PARTS_TEXT.copyLabel({ label: midSentence(label) })}
+        >
+          <Icon name="copy" /> {PARTS_TEXT.copy}
         </Button>
       </div>
       {hint ? (
@@ -80,10 +105,9 @@ export function CopyValue({
 /** Secrets generated in the browser and stored by the Hub: shown here once, never again. */
 export function SecretsOnce({ items }: { items: { label: string; value: string }[] }) {
   return (
-    <div className="ch-once" role="region" aria-label="Shown once">
+    <div className="ch-once" role="region" aria-label={PARTS_TEXT.shownOnce}>
       <p className="ch-once-head">
-        <Icon name="shield" /> Copy these now. They are shown only once; Nova keeps them in its
-        secret store and never shows them again.
+        <Icon name="shield" /> {PARTS_TEXT.onceHead}
       </p>
       {items.map((i) => (
         <CopyValue key={i.label} label={i.label} value={i.value} secret />
@@ -146,31 +170,37 @@ export function TextAreaField({
   );
 }
 
+/** The signing protocol's header names and formats: code, never translated. */
+export const SIGNING = {
+  bearer: 'Authorization: Bearer <token>',
+  timestamp: 'x-nova-timestamp',
+  signature: 'x-nova-signature: sha256=<hex>',
+  payload: '<timestamp>.<body>',
+  /** What a schedule's delivery signs. */
+  deliveryPayload: '<x-nova-timestamp>.<body>',
+  eventId: 'x-nova-event-id',
+  messageId: 'id',
+} as const;
+
 /** How a signed request is made (webhook channels and webhook triggers). */
 export function SigningHelp({ eventId }: { eventId?: boolean }) {
+  const S = PARTS_TEXT.signing;
   return (
     <details className="ws-advanced">
-      <summary>How to sign a request</summary>
+      <summary>{S.summary}</summary>
       <ul className="ch-help">
+        <li>{rich(S.bearer, { header: <code>{SIGNING.bearer}</code> })}</li>
+        <li>{rich(S.timestamp, { header: <code>{SIGNING.timestamp}</code> })}</li>
         <li>
-          Send <code>Authorization: Bearer &lt;token&gt;</code>.
-        </li>
-        <li>
-          Send <code>x-nova-timestamp</code> with the current time in Unix seconds; requests more
-          than five minutes off are refused.
-        </li>
-        <li>
-          Send <code>x-nova-signature: sha256=&lt;hex&gt;</code>, the HMAC-SHA256 of{' '}
-          <code>&lt;timestamp&gt;.&lt;body&gt;</code> made with the secret.
+          {rich(S.signature, {
+            header: <code>{SIGNING.signature}</code>,
+            payload: <code>{SIGNING.payload}</code>,
+          })}
         </li>
         {eventId ? (
-          <li>
-            Optionally send <code>x-nova-event-id</code>; an id seen before starts nothing.
-          </li>
+          <li>{rich(S.eventId, { header: <code>{SIGNING.eventId}</code> })}</li>
         ) : (
-          <li>
-            Give each message its own <code>id</code>; a message id seen before is ignored.
-          </li>
+          <li>{rich(S.messageId, { field: <code>{SIGNING.messageId}</code> })}</li>
         )}
       </ul>
     </details>
@@ -197,17 +227,17 @@ export function SenderCheckOffConfirm({
       aria-describedby={`${id}-d`}
     >
       <p id={`${id}-q`} className="ws-flush">
-        <strong>Trust the From address?</strong>
+        <strong>{PARTS_TEXT.trustQuestion}</strong>
       </p>
       <p id={`${id}-d`} className="ws-flush">
-        {SENDER_CHECK_OFF_TEXT}
+        {CHANNEL_TEXT.senderCheckOff}
       </p>
       <div className="row">
         <Button autoFocus onClick={onCancel}>
-          Keep checking senders
+          {PARTS_TEXT.keepChecking}
         </Button>
         <Button variant="danger" onClick={onConfirm}>
-          Trust the From address
+          {PARTS_TEXT.trust}
         </Button>
       </div>
     </div>
@@ -218,7 +248,7 @@ export function SenderCheckOffConfirm({
 export function SenderCheckOffNotice() {
   return (
     <p className="ws-warning ch-check-off" role="note">
-      <Icon name="alert" /> The sender check is off: anyone can write as a known sender.
+      <Icon name="alert" /> {PARTS_TEXT.checkOff}
     </p>
   );
 }

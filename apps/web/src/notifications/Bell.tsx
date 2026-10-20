@@ -5,6 +5,7 @@
 // Settings → Notifications are neither listed nor sent to the OS.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { NotificationKind, NotificationView } from '@nova/shared';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Button, Icon, IconButton, Spinner, VisuallyHidden, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { navigate } from '../router.ts';
@@ -18,13 +19,32 @@ import { subscribeHubEvents } from '../hub-events.ts';
 
 export { EVENTS_STREAM_URL } from '../hub-events.ts';
 
-export const KIND_TEXT: Record<NotificationKind, string> = {
+export const KIND_TEXT: Record<NotificationKind, string> = defineMessages('notifications.kind', {
   approval: 'Approval',
   completion: 'Finished',
   error: 'Error',
   attention: 'Needs attention',
   system: 'System',
-};
+});
+
+/** The bell's words (FR-016). Notification titles and bodies are the Hub's text, shown as-is. */
+export const BELL_TEXT = defineMessages('notifications', {
+  notifications: 'Notifications',
+  button: '{n, plural, =0 {Notifications} other {Notifications, # unread}}',
+  overflow: '{n}+',
+  announce: 'New notification: {title}',
+  loadFailed: 'Could not load notifications.',
+  markReadFailed: 'Could not mark it read: {error}',
+  markAllFailed: 'Could not mark them read: {error}',
+  deleteFailed: 'Could not delete it: {error}',
+  markAll: 'Mark all read',
+  retry: 'Retry',
+  loading: 'Loading notifications',
+  empty: 'No notifications.',
+  unread: 'Unread:',
+  markRead: 'Mark read',
+  delete: 'Delete {title}',
+});
 
 type Categories = Record<NotificationKind, boolean>;
 
@@ -70,7 +90,7 @@ export function NotificationsBell() {
       if (!fromEvent || !before) return;
       for (const n of list) {
         if (before.has(n.id) || n.read || !cats.current[n.kind]) continue;
-        announce(`New notification: ${n.title}`);
+        announce(BELL_TEXT.announce({ title: n.title }));
         // Routing or quiet hours said not to raise this one on the OS (FR-060).
         if (quietIds.current.has(n.id)) continue;
         void showOsNotification(n, () => {
@@ -104,7 +124,7 @@ export function NotificationsBell() {
           (err: unknown) => {
             loading.current = false;
             again.current = false;
-            setError(errorMessage(err, 'Could not load notifications.'));
+            setError(errorMessage(err, BELL_TEXT.loadFailed));
           },
         );
       };
@@ -162,7 +182,7 @@ export function NotificationsBell() {
       setServerUnread(r.unread);
       setItems((list) => list?.map((x) => (x.id === n.id ? { ...x, read: true } : x)) ?? null);
     } catch (err) {
-      toast.show(`Could not mark it read: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(BELL_TEXT.markReadFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -174,7 +194,7 @@ export function NotificationsBell() {
       // The button disables itself; keep focus in the panel.
       heading.current?.focus();
     } catch (err) {
-      toast.show(`Could not mark them read: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(BELL_TEXT.markAllFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -184,7 +204,7 @@ export function NotificationsBell() {
       setItems((list) => list?.filter((x) => x.id !== n.id) ?? null);
       if (!n.read) setServerUnread((u) => Math.max(0, u - 1));
     } catch (err) {
-      toast.show(`Could not delete it: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(BELL_TEXT.deleteFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -204,8 +224,8 @@ export function NotificationsBell() {
         type="button"
         className="nv-btn bell-button"
         data-variant="ghost"
-        aria-label={unread ? `Notifications, ${unread} unread` : 'Notifications'}
-        title="Notifications"
+        aria-label={BELL_TEXT.button({ n: unread })}
+        title={BELL_TEXT.notifications}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
@@ -214,7 +234,7 @@ export function NotificationsBell() {
         <Icon name="bell" />
         {unread ? (
           <span className="bell-count" aria-hidden="true">
-            {unread > 99 ? '99+' : unread}
+            {unread > 99 ? BELL_TEXT.overflow({ n: 99 }) : fmt.number(unread)}
           </span>
         ) : null}
       </button>
@@ -222,24 +242,24 @@ export function NotificationsBell() {
         <div id={panelId} role="dialog" aria-labelledby={`${panelId}-title`} className="bell-panel">
           <div className="bell-head">
             <h2 id={`${panelId}-title`} ref={heading} tabIndex={-1}>
-              Notifications
+              {BELL_TEXT.notifications}
             </h2>
             <Button variant="ghost" disabled={!unread} onClick={() => void markAll()}>
-              Mark all read
+              {BELL_TEXT.markAll}
             </Button>
           </div>
           {error ? (
             <div role="alert" className="ws-error">
               <p>{error}</p>
-              <Button onClick={() => refresh(false)}>Retry</Button>
+              <Button onClick={() => refresh(false)}>{BELL_TEXT.retry}</Button>
             </div>
           ) : null}
-          {items === null && !error ? <Spinner label="Loading notifications" /> : null}
+          {items === null && !error ? <Spinner label={BELL_TEXT.loading} /> : null}
           {items !== null && shown.length === 0 ? (
-            <p className="muted bell-empty">No notifications.</p>
+            <p className="muted bell-empty">{BELL_TEXT.empty}</p>
           ) : null}
           {shown.length ? (
-            <ul className="bell-list" aria-label="Notifications">
+            <ul className="bell-list" aria-label={BELL_TEXT.notifications}>
               {shown.map((n) => (
                 <li
                   key={n.id}
@@ -249,9 +269,14 @@ export function NotificationsBell() {
                 >
                   <button type="button" className="bell-item-main" onClick={() => follow(n)}>
                     <span className="bell-item-title">
-                      {!n.read ? <VisuallyHidden>Unread:</VisuallyHidden> : null} {n.title}
+                      {!n.read ? <VisuallyHidden>{BELL_TEXT.unread}</VisuallyHidden> : null}{' '}
+                      <span dir="auto">{n.title}</span>
                     </span>{' '}
-                    {n.body ? <span className="bell-item-body">{n.body}</span> : null}{' '}
+                    {n.body ? (
+                      <span className="bell-item-body" dir="auto">
+                        {n.body}
+                      </span>
+                    ) : null}{' '}
                     <span className="muted bell-item-meta">
                       {KIND_TEXT[n.kind]} · {formatWhen(n.createdAt)}
                     </span>
@@ -259,12 +284,12 @@ export function NotificationsBell() {
                   <div className="row bell-item-actions">
                     {!n.read ? (
                       <Button variant="ghost" onClick={() => void markRead(n)}>
-                        Mark read
+                        {BELL_TEXT.markRead}
                       </Button>
                     ) : null}
                     <IconButton
                       variant="ghost"
-                      label={`Delete ${n.title}`}
+                      label={BELL_TEXT.delete({ title: n.title })}
                       icon={<Icon name="trash" />}
                       onClick={() => void remove(n)}
                     />

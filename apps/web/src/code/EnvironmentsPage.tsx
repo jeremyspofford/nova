@@ -7,10 +7,11 @@
 // are created here or in Settings → Cloud runner and managed on their own page there.
 import { useCallback, useEffect, useState } from 'react';
 import type { DeviceView, SavedEnvironmentView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useAnnounce } from '../services.tsx';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { NewCloudEnvironmentButton } from '../cloud/NewCloudEnvironment.tsx';
 import { cloudEnvPath } from '../cloud/format.ts';
 import { navigate } from '../router.ts';
@@ -18,6 +19,47 @@ import { useCodeM6Api } from './api-m6.ts';
 import { CodeNav } from './CodeNav.tsx';
 import { EnvironmentDialog } from './EnvironmentDialog.tsx';
 import { useCodeEvents, useCoalesced } from './events.ts';
+
+export const ENV_TEXT = defineMessages('code.env', {
+  loadFailed: 'Could not load the environments.',
+  device: 'device {id}',
+  checked: '{name}: {status}.',
+  checkFailed: 'Could not check {name}: {reason}',
+  deleted: 'Deleted {name}.',
+  deleteFailed: 'Could not delete the environment.',
+  title: 'Environments',
+  new: 'New environment',
+  intro:
+    'Where Code sessions run: the Hub itself, a container image, an SSH host, a WSL distro, a device with the Nova device agent, or the cloud runner. Pick one when you start a session.',
+  loading: 'Loading the environments',
+  emptyTitle: 'No environments yet',
+  emptyBody: 'Sessions run on the Hub until you add another environment.',
+  builtIn: 'Built in',
+  checkedAt: 'Checked {when}',
+  sessions: '{n, plural, one {# active session} other {# active sessions}}',
+  noSessions: 'No active sessions',
+  keySet: 'Key: set',
+  keyNotSet: 'Key: not set',
+  passwordSet: 'Password: set',
+  passwordNotSet: 'Password: not set',
+  hostKeyPinned: 'Host key pinned',
+  checking: 'Checking {name}',
+  check: 'Check',
+  processes: 'Processes',
+  manage: 'Manage',
+  edit: 'Edit…',
+  delete: 'Delete…',
+  processesOn: 'Processes on {name}',
+  created: 'Created {name}.',
+  saved: 'Saved {name}.',
+  deleteTitle: 'Delete {name}?',
+  thisEnvironment: 'Delete this environment?',
+  deleteCloud:
+    'Sessions that used it keep their history. It is removed from the cloud runner with its files and snapshots.',
+  deleteOther:
+    'Sessions that used it keep their history. Its stored key or password is removed from the keychain.',
+  deleteConfirm: 'Delete',
+});
 import {
   HEALTH_ICON,
   HEALTH_TEXT,
@@ -54,7 +96,7 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
           setItems(list);
           setError(null);
         },
-        (err: unknown) => setError(errorMessage(err, 'Could not load the environments.')),
+        (err: unknown) => setError(errorMessage(err, ENV_TEXT.loadFailed)),
       ),
     [m6],
   );
@@ -79,7 +121,8 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
       alive = false;
     };
   }, [m6, needsDevices, visible]);
-  const deviceName = (id: string) => devices.find((x) => x.id === id)?.name ?? `device ${id}`;
+  const deviceName = (id: string) =>
+    devices.find((x) => x.id === id)?.name ?? ENV_TEXT.device({ id });
 
   const replace = (e: SavedEnvironmentView) =>
     setItems((list) =>
@@ -93,9 +136,11 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
     try {
       const next = await m6.checkEnvironment(e.id);
       replace(next);
-      announce(`${next.label}: ${HEALTH_TEXT[next.status]}.`);
+      announce(ENV_TEXT.checked({ name: next.label, status: HEALTH_TEXT[next.status] }));
     } catch (err) {
-      toast.show(`Could not check ${e.label}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(ENV_TEXT.checkFailed({ name: e.label, reason: errorMessage(err) }), {
+        tone: 'error',
+      });
     } finally {
       setChecking((s) => {
         const n = new Set(s);
@@ -114,9 +159,9 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
       await m6.deleteEnvironment(e.id);
       setItems((list) => list?.filter((x) => x.id !== e.id) ?? null);
       setDeleting(null);
-      toast.show(`Deleted ${e.label}.`, { tone: 'success' });
+      toast.show(ENV_TEXT.deleted({ name: e.label }), { tone: 'success' });
     } catch (err) {
-      setDeleteError(errorMessage(err, 'Could not delete the environment.'));
+      setDeleteError(errorMessage(err, ENV_TEXT.deleteFailed));
     } finally {
       setDeleteBusy(false);
     }
@@ -133,31 +178,28 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
   return (
     <div className="ws-page code-m6-page">
       <header className="ws-page-header">
-        <h1>Environments</h1>
+        <h1>{ENV_TEXT.title}</h1>
         <span className="ws-row-actions code-actions">
           <NewCloudEnvironmentButton />
           <Button variant="primary" onClick={() => setDialog({ editing: null })}>
-            <Icon name="plus" /> New environment
+            <Icon name="plus" /> {ENV_TEXT.new}
           </Button>
         </span>
       </header>
       <CodeNav current="environments" />
-      <p className="muted">
-        Where Code sessions run: the Hub itself, a container image, an SSH host, a WSL distro, a
-        device with the Nova device agent, or the cloud runner. Pick one when you start a session.
-      </p>
+      <p className="muted">{ENV_TEXT.intro}</p>
       {error ? <ErrorBanner message={error} onRetry={reload} /> : null}
-      {items === null && !error ? <Spinner label="Loading the environments" /> : null}
+      {items === null && !error ? <Spinner label={ENV_TEXT.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
-          title="No environments yet"
-          description="Sessions run on the Hub until you add another environment."
+          title={ENV_TEXT.emptyTitle}
+          description={ENV_TEXT.emptyBody}
           icon="server"
-          action={<Button onClick={() => setDialog({ editing: null })}>New environment</Button>}
+          action={<Button onClick={() => setDialog({ editing: null })}>{ENV_TEXT.new}</Button>}
         />
       ) : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="Environments">
+        <ul className="ws-list" aria-label={ENV_TEXT.title}>
           {items.map((e) => {
             const busy = checking.has(e.id);
             const remote = isRemoteKind(e.kind);
@@ -166,48 +208,65 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
               <li key={e.id} className="code-env-row" aria-label={e.label}>
                 <div className="code-env-main">
                   <div className="code-row-title">
-                    <span className="code-env-name">{e.label}</span>
-                    <span className="code-kind">{e.builtIn ? 'Built in' : KIND_LABEL[e.kind]}</span>
+                    <span className="code-env-name" dir="auto">
+                      {e.label}
+                    </span>
+                    <span className="code-kind">
+                      {e.builtIn ? ENV_TEXT.builtIn : KIND_LABEL[e.kind]}
+                    </span>
                     <Badge tone={HEALTH_TONE[e.status]} icon={HEALTH_ICON[e.status]}>
                       {HEALTH_TEXT[e.status]}
                     </Badge>
                   </div>
                   <span className="code-path">{connectionSummary(c, deviceName)}</span>
-                  {e.detail ? <span className="muted code-detail">{e.detail}</span> : null}
+                  {e.detail ? (
+                    <span className="muted code-detail" dir="auto">
+                      {e.detail}
+                    </span>
+                  ) : null}
                   <span className="muted code-row-meta">
-                    <span>Checked {formatWhen(e.checkedAt)}</span>
+                    <span>{ENV_TEXT.checkedAt({ when: formatWhen(e.checkedAt) })}</span>
                     <span>
-                      {e.sessions ? plural(e.sessions, 'active session') : 'No active sessions'}
+                      {e.sessions ? ENV_TEXT.sessions({ n: e.sessions }) : ENV_TEXT.noSessions}
                     </span>
                     {c.kind === 'ssh' ? (
                       <span>
-                        {c.auth === 'key' ? 'Key' : 'Password'}:{' '}
-                        {c.hasCredential ? 'set' : 'not set'}
+                        {c.auth === 'key'
+                          ? c.hasCredential
+                            ? ENV_TEXT.keySet
+                            : ENV_TEXT.keyNotSet
+                          : c.hasCredential
+                            ? ENV_TEXT.passwordSet
+                            : ENV_TEXT.passwordNotSet}
                       </span>
                     ) : null}
-                    {c.kind === 'ssh' && c.hostKey ? <span>Host key pinned</span> : null}
+                    {c.kind === 'ssh' && c.hostKey ? <span>{ENV_TEXT.hostKeyPinned}</span> : null}
                   </span>
                   {c.kind === 'ssh' ? <SshHostKey env={e} onChanged={replace} /> : null}
                 </div>
                 <div className="ws-row-actions code-actions">
                   <Button disabled={busy} onClick={() => void check(e)}>
-                    {busy ? <Spinner label={`Checking ${e.label}`} /> : <Icon name="refresh" />}{' '}
-                    Check
+                    {busy ? (
+                      <Spinner label={ENV_TEXT.checking({ name: e.label })} />
+                    ) : (
+                      <Icon name="refresh" />
+                    )}{' '}
+                    {ENV_TEXT.check}
                   </Button>
                   {remote ? (
                     <Button aria-expanded={open.has(e.id)} onClick={() => toggle(e.id)}>
-                      <Icon name="terminal" /> Processes
+                      <Icon name="terminal" /> {ENV_TEXT.processes}
                     </Button>
                   ) : null}
                   {e.builtIn ? null : (
                     <>
                       {e.kind === 'cloud' ? (
                         <Button onClick={() => navigate(cloudEnvPath(e.id))}>
-                          <Icon name="settings" /> Manage
+                          <Icon name="settings" /> {ENV_TEXT.manage}
                         </Button>
                       ) : (
                         <Button onClick={() => setDialog({ editing: e })}>
-                          <Icon name="edit" /> Edit…
+                          <Icon name="edit" /> {ENV_TEXT.edit}
                         </Button>
                       )}
                       <Button
@@ -217,7 +276,7 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
                           setDeleting(e);
                         }}
                       >
-                        <Icon name="trash" /> Delete…
+                        <Icon name="trash" /> {ENV_TEXT.delete}
                       </Button>
                     </>
                   )}
@@ -226,7 +285,7 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
                   <div className="code-env-procs">
                     <ProcessesPanel
                       environmentId={e.id}
-                      title={`Processes on ${e.label}`}
+                      title={ENV_TEXT.processesOn({ name: e.label })}
                       visible={visible}
                     />
                   </div>
@@ -243,20 +302,19 @@ export function EnvironmentsPage({ visible = true }: { visible?: boolean }) {
         onSaved={(e, created) => {
           setDialog(null);
           replace(e);
-          toast.show(created ? `Created ${e.label}.` : `Saved ${e.label}.`, { tone: 'success' });
+          toast.show(
+            created ? ENV_TEXT.created({ name: e.label }) : ENV_TEXT.saved({ name: e.label }),
+            { tone: 'success' },
+          );
           // A new or changed environment is checked at once, so its health is not a guess.
           void check(e);
         }}
       />
       <ConfirmDialog
         open={deleting !== null}
-        title={`Delete ${deleting?.label ?? 'this environment'}?`}
-        description={
-          deleting?.kind === 'cloud'
-            ? 'Sessions that used it keep their history. It is removed from the cloud runner with its files and snapshots.'
-            : 'Sessions that used it keep their history. Its stored key or password is removed from the keychain.'
-        }
-        confirmLabel="Delete"
+        title={deleting ? ENV_TEXT.deleteTitle({ name: deleting.label }) : ENV_TEXT.thisEnvironment}
+        description={deleting?.kind === 'cloud' ? ENV_TEXT.deleteCloud : ENV_TEXT.deleteOther}
+        confirmLabel={ENV_TEXT.deleteConfirm}
         danger
         busy={deleteBusy}
         error={deleteError}

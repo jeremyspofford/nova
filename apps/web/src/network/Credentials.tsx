@@ -3,6 +3,7 @@
 // sandboxes may use it. The value is write-only: it goes to the Hub's secret store, is never
 // returned or shown, and can only be replaced.
 import { useId, useRef, useState } from 'react';
+import { fmt } from '@nova/i18n';
 import { EGRESS_SCOPE_KINDS, type EgressCredentialView, type EgressScopeKind } from '@nova/shared';
 import {
   Button,
@@ -18,37 +19,23 @@ import { errorMessage } from '../api.ts';
 import { useComputersApi } from '../computers/api.ts';
 import { schemeText } from '../computers/format.ts';
 import { formatWhen } from '../settings/common.ts';
+import { embed } from '../settings/embed.tsx';
 import { HostListEditor } from './HostListEditor.tsx';
 import { RULE_SCOPES, type ScopeTargets } from './scopes.ts';
+import { CREDS_TEXT as S, EGRESS_TEXT } from './strings.ts';
 
 type Scheme = EgressCredentialView['scheme'];
 
-const SCHEMES: { value: Scheme; label: string; description: string }[] = [
-  {
-    value: 'bearer',
-    label: 'Bearer token',
-    description: 'Sent as “Authorization: Bearer” and the value.',
-  },
-  {
-    value: 'basic',
-    label: 'User name and password',
-    description: 'Sent as a Basic sign-in; the value is the password.',
-  },
-  {
-    value: 'header',
-    label: 'Custom header',
-    description: 'Sent in a header you name, for example X-Api-Key.',
-  },
-];
+const SCHEMES: Scheme[] = ['bearer', 'basic', 'header'];
 
 const RESERVED_HEADER =
   /^(host|connection|proxy-.*|content-length|transfer-encoding|te|upgrade|cookie)$/i;
 
 /** Why a header name cannot carry a credential (the Hub's rule), or null. */
 export function headerProblem(h: string): string | null {
-  if (!h.trim()) return 'Name the header, for example X-Api-Key.';
-  if (!/^[A-Za-z0-9-]{1,100}$/.test(h.trim())) return 'Letters, digits and hyphens only.';
-  if (RESERVED_HEADER.test(h.trim())) return 'This header cannot carry a credential.';
+  if (!h.trim()) return S.headerMissing;
+  if (!/^[A-Za-z0-9-]{1,100}$/.test(h.trim())) return S.headerChars;
+  if (RESERVED_HEADER.test(h.trim())) return S.headerReserved;
   return null;
 }
 
@@ -95,72 +82,71 @@ export function Credentials({
   >(null);
 
   const scopeText = (c: EgressCredentialView) =>
-    c.scope ? `Only for ${label(c.scope.kind, c.scope.id)}` : 'For every sandbox';
+    c.scope ? S.onlyFor({ scope: label(c.scope.kind, c.scope.id) }) : S.forEvery;
 
   return (
     <section className="settings-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>Credentials the proxy adds</h3>
-      <p className="muted">
-        Nova adds a credential to requests to its hosts, so the secret never enters a sandbox.
-        Values are kept in the Hub&apos;s secret store and are never shown again.
-      </p>
+      <h3 id={headingId}>{S.heading}</h3>
+      <p className="muted">{S.intro}</p>
       {inspects === false ? (
         <p className="ws-warning" role="note">
-          <Icon name="alert" /> HTTPS inspection is off, so credentials are added to plain HTTP
-          requests only.
+          <Icon name="alert" /> {S.httpOnly}
         </p>
       ) : null}
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={onRetry}>Retry</Button>
+          <Button onClick={onRetry}>{EGRESS_TEXT.retry}</Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading credentials" /> : null}
-      {items?.length === 0 ? <p className="ws-flush">No credentials yet.</p> : null}
+      {items === null && !error ? <Spinner label={S.loading} /> : null}
+      {items?.length === 0 ? <p className="ws-flush">{S.empty}</p> : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="Credentials">
+        <ul className="ws-list" aria-label={S.list}>
           {items.map((c) => (
             <li key={c.id} className="ws-list-row">
               <div className="network-row-main">
-                <span className="ws-card-link">{c.name}</span>
+                <span className="ws-card-link" dir="auto">
+                  {c.name}
+                </span>
                 <span className="muted ws-row-meta">
                   <span>{schemeText(c)}</span>
                   <span>{scopeText(c)}</span>
                   <span className="ws-badge" data-tone="ok">
-                    <Icon name="check" /> Value set
+                    <Icon name="check" /> {S.valueSet}
                   </span>
-                  <span>Updated {formatWhen(c.updatedAt)}</span>
+                  <span>{S.updated({ when: formatWhen(c.updatedAt) })}</span>
                 </span>
                 <span className="network-hosts">
-                  Sent to:{' '}
-                  {c.hosts.map((h, i) => (
-                    <span key={h}>
-                      {i ? ', ' : null}
-                      <code>{h}</code>
-                    </span>
-                  ))}
+                  {embed(S.sentToHosts, {
+                    hosts: c.hosts.map((h, i) => (
+                      <span key={h}>
+                        {i ? ', ' : null}
+                        <code dir="ltr">{h}</code>
+                      </span>
+                    )),
+                  })}
                 </span>
               </div>
               <span className="network-actions">
                 <Button
-                  aria-label={`Edit ${c.name}`}
+                  aria-label={S.editName({ name: c.name })}
                   onClick={() => setDialog({ kind: 'edit', cred: c })}
                 >
-                  <Icon name="edit" /> Edit
+                  <Icon name="edit" /> {EGRESS_TEXT.edit}
                 </Button>
                 <Button
-                  aria-label={`Replace the value of ${c.name}`}
+                  aria-label={S.replaceValueOf({ name: c.name })}
                   onClick={() => setDialog({ kind: 'value', cred: c })}
                 >
-                  Replace value
+                  {S.replaceValue}
                 </Button>
                 <Button
                   variant="ghost"
-                  aria-label={`Delete ${c.name}`}
+                  aria-label={S.deleteName({ name: c.name })}
                   onClick={() => setDialog({ kind: 'delete', cred: c })}
                 >
-                  <Icon name="trash" /> Delete
+                  <Icon name="trash" /> {EGRESS_TEXT.delete}
                 </Button>
               </span>
             </li>
@@ -169,7 +155,7 @@ export function Credentials({
       ) : null}
       <div>
         <Button onClick={() => setDialog({ kind: 'create' })}>
-          <Icon name="plus" /> Add a credential
+          <Icon name="plus" /> {S.add}
         </Button>
       </div>
       {dialog?.kind === 'create' || dialog?.kind === 'edit' ? (
@@ -180,7 +166,7 @@ export function Credentials({
           onClose={() => setDialog(null)}
           onSaved={(c, created) => {
             setDialog(null);
-            toast.show(created ? `Added “${c.name}”.` : `Saved “${c.name}”.`, {
+            toast.show(created ? S.added({ name: c.name }) : S.saved({ name: c.name }), {
               tone: 'success',
             });
             onChanged();
@@ -193,23 +179,23 @@ export function Credentials({
           onClose={() => setDialog(null)}
           onSaved={() => {
             setDialog(null);
-            toast.show(`Replaced the value of “${dialog.cred.name}”.`, { tone: 'success' });
+            toast.show(S.replaced({ name: dialog.cred.name }), { tone: 'success' });
             onChanged();
           }}
         />
       ) : null}
       <Dialog
         open={dialog?.kind === 'delete'}
-        title="Delete this credential?"
+        title={S.deleteTitle}
         description={
           dialog?.kind === 'delete'
-            ? `Requests to ${dialog.cred.hosts.join(', ')} no longer get “${dialog.cred.name}”, and its value is removed from the secret store. This cannot be undone.`
+            ? S.deleteBody({ hosts: fmt.list(dialog.cred.hosts), name: dialog.cred.name })
             : undefined
         }
         onClose={() => setDialog(null)}
         footer={
           <>
-            <Button onClick={() => setDialog(null)}>Cancel</Button>
+            <Button onClick={() => setDialog(null)}>{EGRESS_TEXT.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -218,15 +204,15 @@ export function Credentials({
                 setDialog(null);
                 api.deleteEgressCredential(c.id).then(
                   () => {
-                    toast.show(`Deleted “${c.name}”.`, { tone: 'success' });
+                    toast.show(S.deleted({ name: c.name }), { tone: 'success' });
                     onChanged();
                   },
                   (err: unknown) =>
-                    toast.show(`Could not delete it: ${errorMessage(err)}`, { tone: 'error' }),
+                    toast.show(S.couldNotDelete({ error: errorMessage(err) }), { tone: 'error' }),
                 );
               }}
             >
-              Delete credential
+              {S.deleteCredential}
             </Button>
           </>
         }
@@ -263,17 +249,17 @@ function CredentialDialog({
   const [error, setError] = useState<string | null>(null);
 
   const problems = {
-    name: name.trim() ? null : 'Give it a name.',
-    hosts: hosts.length ? null : 'Add at least one host.',
+    name: name.trim() ? null : S.giveName,
+    hosts: hosts.length ? null : S.addHost,
     header: scheme === 'header' ? headerProblem(header) : null,
-    value: editing || value ? null : 'Enter the value.',
+    value: editing || value ? null : S.enterValue,
   };
   const valid = Object.values(problems).every((p) => p === null);
 
   // Options: every sandbox, then agents, runs and sessions; keep a current scope of another kind.
   const current = editing?.scope ?? null;
   const groups = RULE_SCOPES.map((k) => ({
-    label: k === 'agent' ? 'Agents' : k === 'run' ? 'Work runs' : 'Code sessions',
+    label: k === 'agent' ? S.agents : k === 'run' ? S.runs : S.sessions,
     options: (targets[k] ?? []).map((o) => ({ value: `${k}:${o.id}`, label: o.name })),
   })).filter((g) => g.options.length);
   const known = new Set(groups.flatMap((g) => g.options.map((o) => o.value)));
@@ -310,7 +296,7 @@ function CredentialDialog({
       }
       onSaved(await api.updateEgressCredential(editing.id, patch), false);
     } catch (err) {
-      setError(errorMessage(err, 'Could not save the credential.'));
+      setError(errorMessage(err, S.saveError));
       setBusy(false);
     }
   };
@@ -318,7 +304,7 @@ function CredentialDialog({
   return (
     <Dialog
       open
-      title={editing ? `Edit “${editing.name}”` : 'Add a credential'}
+      title={editing ? S.editTitle({ name: editing.name }) : S.add}
       className="ws-wide-dialog"
       onClose={onClose}
       initialFocusRef={nameRef}
@@ -332,20 +318,21 @@ function CredentialDialog({
       >
         <TextField
           ref={nameRef}
-          label="Name"
+          label={S.name}
           value={name}
           maxLength={100}
-          placeholder="Weather API"
+          placeholder={S.namePlaceholder}
           error={touched ? (problems.name ?? undefined) : undefined}
           onChange={(e) => setName(e.target.value)}
         />
         <HostListEditor
-          label="Sent to"
-          inputLabel="Add a host that gets this credential"
-          hint="Only requests to these hosts get it. Use *.example.com for subdomains."
+          label={S.sentTo}
+          inputLabel={S.addSentTo}
+          removeLabel={(host) => S.removeSentTo({ host })}
+          hint={S.sentToHint}
           hosts={hosts}
           onChange={setHosts}
-          emptyText="No hosts yet."
+          emptyText={S.noHosts}
         />
         {touched && problems.hosts ? (
           <p className="nv-field-error" role="alert">
@@ -353,27 +340,31 @@ function CredentialDialog({
           </p>
         ) : null}
         <RadioGroup
-          legend="How it is sent"
+          legend={S.howSent}
           name={`${id}-scheme`}
           value={scheme}
-          options={SCHEMES}
+          options={SCHEMES.map((s) => ({
+            value: s,
+            label: S.scheme[s].label,
+            description: S.scheme[s].description,
+          }))}
           onChange={(v) => setScheme(v === 'basic' || v === 'header' ? v : 'bearer')}
         />
         {scheme === 'header' ? (
           <TextField
-            label="Header name"
+            label={S.headerName}
             value={header}
             maxLength={100}
             spellCheck={false}
             autoComplete="off"
-            placeholder="X-Api-Key"
+            placeholder={S.headerPlaceholder}
             error={touched ? (problems.header ?? undefined) : undefined}
             onChange={(e) => setHeader(e.target.value)}
           />
         ) : null}
         {scheme === 'basic' ? (
           <TextField
-            label="User name (optional)"
+            label={S.userName}
             value={username}
             maxLength={200}
             spellCheck={false}
@@ -382,12 +373,12 @@ function CredentialDialog({
           />
         ) : null}
         <SelectField
-          label="Who gets it"
+          label={S.whoGets}
           value={scope}
           onChange={setScope}
-          hint="Limit it to one agent, run or session, or let every sandbox use it."
+          hint={S.whoGetsHint}
           options={[
-            { value: '', label: 'Every sandbox' },
+            { value: '', label: EGRESS_TEXT.everySandbox },
             ...(current && !known.has(scopeKey(current))
               ? [{ value: scopeKey(current), label: label(current.kind, current.id) }]
               : []),
@@ -395,17 +386,15 @@ function CredentialDialog({
           groups={groups}
         />
         {editing ? (
-          <p className="muted ws-flush">
-            The value stays as it is. Use Replace value to change it.
-          </p>
+          <p className="muted ws-flush">{S.valueStays}</p>
         ) : (
           <TextField
-            label="Value"
+            label={S.value}
             type="password"
             autoComplete="new-password"
             value={value}
             maxLength={16_384}
-            hint="Write-only: it is never shown again after you save."
+            hint={S.writeOnly}
             error={touched ? (problems.value ?? undefined) : undefined}
             onChange={(e) => setValue(e.target.value)}
           />
@@ -416,9 +405,9 @@ function CredentialDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{EGRESS_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} {editing ? 'Save' : 'Add credential'}
+            {busy ? <Spinner /> : null} {editing ? EGRESS_TEXT.save : S.addCredential}
           </Button>
         </div>
       </form>
@@ -449,15 +438,15 @@ function ReplaceValueDialog({
       setValue('');
       onSaved();
     } catch (err) {
-      setError(errorMessage(err, 'Could not replace the value.'));
+      setError(errorMessage(err, S.replaceError));
       setBusy(false);
     }
   };
   return (
     <Dialog
       open
-      title={`Replace the value of “${cred.name}”`}
-      description="The new value replaces the stored one at once. The old value cannot be recovered."
+      title={S.replaceTitle({ name: cred.name })}
+      description={S.replaceBody}
       onClose={onClose}
       initialFocusRef={ref}
     >
@@ -470,12 +459,12 @@ function ReplaceValueDialog({
       >
         <TextField
           ref={ref}
-          label="New value"
+          label={S.newValue}
           type="password"
           autoComplete="new-password"
           value={value}
           maxLength={16_384}
-          hint="Write-only: it is never shown again after you save."
+          hint={S.writeOnly}
           onChange={(e) => setValue(e.target.value)}
         />
         {error ? (
@@ -484,9 +473,9 @@ function ReplaceValueDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{EGRESS_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !value}>
-            {busy ? <Spinner /> : null} Replace value
+            {busy ? <Spinner /> : null} {S.replaceValue}
           </Button>
         </div>
       </form>

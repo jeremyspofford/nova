@@ -32,7 +32,7 @@
 }
 .dc-list {
   margin: 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
 }
 .dc-file {
   max-width: 100%;

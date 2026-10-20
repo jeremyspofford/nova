@@ -37,6 +37,7 @@ const notes: FakeBundle = {
       kind: 'network',
       text: 'Reach api.notes.example on the network',
       sensitive: true,
+      detail: null,
     },
   ],
   hooks: [{ id: 'guard', event: 'tool.pre', matcher: 'fs.write' }],
@@ -249,7 +250,13 @@ describe('install from a file', () => {
       version: '2.0.0',
       permissions: [
         ...notes.permissions!,
-        { key: 'fs:/srv/notes', kind: 'fs', text: 'Write files in /srv/notes', sensitive: true },
+        {
+          key: 'fs:/srv/notes',
+          kind: 'fs',
+          text: 'Write files in /srv/notes',
+          sensitive: true,
+          detail: 'rw',
+        },
       ],
     });
     const dialog = await screen.findByRole('dialog', { name: 'Update Notes helper to 2.0.0?' });

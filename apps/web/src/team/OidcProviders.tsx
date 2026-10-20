@@ -5,15 +5,91 @@
 // or off switch. Test asks the Hub to reach the provider without signing anyone in. Nobody can
 // sign up through a provider without an invitation.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { createOidcProviderSchema, oidcIssuerSchema, type OidcProviderView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, TextField, useToast } from '@nova/ui';
+import { rich } from '../i18n/rich.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { SwitchField } from '../settings/controls.tsx';
 import { useAnnounce } from '../services.tsx';
 import { useTeamApi, type CreateOidcProviderBody, type UpdateOidcProviderBody } from './api.ts';
-import { ACCOUNT_SETTINGS_PATH, errorFields, providerChip, teamErrorMessage } from './format.ts';
+import {
+  ACCOUNT_SETTINGS_PATH,
+  TEAM_TEXT,
+  errorFields,
+  providerChip,
+  teamErrorMessage,
+} from './format.ts';
 import { Chip, ConfirmDialog, CopyButton, FormError, LoadError, useLoad } from './parts.tsx';
 import { followLink } from '../work/nav.tsx';
+
+const OIDC_TEXT = defineMessages('team.oidc', {
+  heading: 'Sign-in providers',
+  add: 'Add a provider',
+  intro:
+    'Let people sign in with an account they already have (OpenID Connect). Each person links their identity in {link}. Nobody can join through a provider without an invitation.',
+  register: 'Register this address at the provider as the redirect URI:',
+  copy: {
+    copy: 'Copy redirect URI',
+    copied: 'Redirect URI copied.',
+    failed: 'Could not copy. Select the redirect URI and copy it yourself.',
+  },
+  loadFailed: 'Could not load the sign-in providers.',
+  loading: 'Loading sign-in providers',
+  emptyTitle: 'No sign-in providers',
+  emptyDescription:
+    "People sign in with this Hub's own accounts. Add a provider to also allow signing in with it.",
+  saved: '{label} saved.',
+  removeTitle: 'Remove {label}?',
+  removeThis: 'Remove this provider?',
+  removeWhat:
+    "People can no longer sign in with it, the identities linked to it stop working, and its client secret leaves the Hub's vault.",
+  removed: 'Provider removed.',
+  isOn: '{label} is on.',
+  isOff: '{label} is off.',
+  changeFailed: 'Could not change the provider.',
+  reached: 'The Hub reached {issuer} and can send people there to sign in.',
+  testFailed: 'The test did not pass.',
+  issuer: 'Issuer',
+  clientId: 'Client id',
+  clientSecret: 'Client secret',
+  secretSet: 'Set',
+  secretNotSet: 'Not set',
+  scopes: 'Scopes',
+  changed: 'Changed',
+  allow: 'Allow signing in with it',
+  test: 'Test',
+  turnOnToTest: 'Turn it on to test it',
+  turnOnToTestNote: 'Turn it on to test it.',
+  edit: 'Edit',
+});
+
+const PROVIDER_FORM_TEXT = defineMessages('team.oidc.form', {
+  nameNeeded: 'Give it a name people recognize, like “Company sign-in”.',
+  issuerInvalid:
+    'Enter the issuer’s https:// address (http:// only on this machine), without a query.',
+  clientIdNeeded: 'Enter the client id the provider gave you.',
+  openidNeeded: 'The scopes must include openid.',
+  checkFields: 'Check the fields.',
+  editTitle: 'Edit {label}',
+  addTitle: 'Add a sign-in provider',
+  description: 'The client id and secret come from the app you register at the provider.',
+  name: 'Name',
+  nameHint: 'What the sign-in button says: “Continue with <name>”.',
+  issuerIs: 'Issuer:',
+  issuerFixed: '(to use another issuer, add a new provider)',
+  issuerHint: 'For example {example}',
+  secretReplaceHint: 'Replaces the stored secret. Leave empty to keep it.',
+  secretNewHint:
+    'Optional for public clients. It goes to the Hub’s vault and is never shown again.',
+  willBeRemoved: 'Will be removed',
+  replace: 'Replace',
+  keep: 'Keep it',
+  removeSecret: 'Remove secret',
+  scopesHint: 'Separated by spaces; openid is required.',
+  enableLater: 'You can turn it on later, after testing.',
+  saveFailed: 'Could not save the provider.',
+});
 
 const DEFAULT_SCOPES = 'openid profile email';
 
@@ -38,43 +114,44 @@ export function OidcProvidersSection() {
   return (
     <section className="settings-section" aria-labelledby={headingId}>
       <div className="ws-section-header">
-        <h3 id={headingId}>Sign-in providers</h3>
+        <h3 id={headingId}>{OIDC_TEXT.heading}</h3>
         <Button onClick={() => setEditing('new')}>
-          <Icon name="plus" /> Add a provider
+          <Icon name="plus" /> {OIDC_TEXT.add}
         </Button>
       </div>
       <p className="muted ws-flush">
-        Let people sign in with an account they already have (OpenID Connect). Each person links
-        their identity in{' '}
-        <a href={ACCOUNT_SETTINGS_PATH} onClick={(e) => followLink(e, ACCOUNT_SETTINGS_PATH)}>
-          Settings → Account
-        </a>
-        . Nobody can join through a provider without an invitation.
+        {rich(OIDC_TEXT.intro, {
+          link: (
+            <a href={ACCOUNT_SETTINGS_PATH} onClick={(e) => followLink(e, ACCOUNT_SETTINGS_PATH)}>
+              {TEAM_TEXT.accountLink}
+            </a>
+          ),
+        })}
       </p>
-      <p className="muted ws-flush">Register this address at the provider as the redirect URI:</p>
+      <p className="muted ws-flush">{OIDC_TEXT.register}</p>
       <div className="team-link-box">
         <code className="ws-code-inline team-break">{callbackUrl()}</code>
-        <CopyButton value={callbackUrl()} what="Redirect URI" />
+        <CopyButton value={callbackUrl()} text={OIDC_TEXT.copy} />
       </div>
       {list.error ? (
         <LoadError
           error={list.error}
-          fallback="Could not load the sign-in providers."
+          fallback={OIDC_TEXT.loadFailed}
           onRetry={list.reload}
-          what="Sign-in providers"
+          what={OIDC_TEXT.heading}
         />
       ) : null}
-      {list.loading ? <Spinner label="Loading sign-in providers" /> : null}
+      {list.loading ? <Spinner label={OIDC_TEXT.loading} /> : null}
       {list.data && list.data.length === 0 ? (
         <EmptyState
           level={3}
           icon="shield"
-          title="No sign-in providers"
-          description="People sign in with this Hub's own accounts. Add a provider to also allow signing in with it."
+          title={OIDC_TEXT.emptyTitle}
+          description={OIDC_TEXT.emptyDescription}
         />
       ) : null}
       {list.data && list.data.length > 0 ? (
-        <ul className="ws-list" aria-label="Sign-in providers">
+        <ul className="ws-list" aria-label={OIDC_TEXT.heading}>
           {list.data.map((p) => (
             <ProviderRow
               key={p.id}
@@ -93,15 +170,15 @@ export function OidcProvidersSection() {
           onSaved={(p) => {
             replace(p);
             setEditing(null);
-            toast.show(`${p.label} saved.`, { tone: 'success' });
+            toast.show(OIDC_TEXT.saved({ label: p.label }), { tone: 'success' });
           }}
         />
       ) : null}
       <ConfirmDialog
         open={deleting !== null}
-        title={`Remove ${deleting?.label ?? 'this provider'}?`}
-        description="People can no longer sign in with it, the identities linked to it stop working, and its client secret leaves the Hub's vault."
-        confirmLabel="Remove"
+        title={deleting ? OIDC_TEXT.removeTitle({ label: deleting.label }) : OIDC_TEXT.removeThis}
+        description={OIDC_TEXT.removeWhat}
+        confirmLabel={TEAM_TEXT.remove}
         danger
         onClose={() => setDeleting(null)}
         onConfirm={async () => {
@@ -110,7 +187,7 @@ export function OidcProvidersSection() {
           const gone = deleting.id;
           list.setData((prev) => prev?.filter((x) => x.id !== gone) ?? null);
           setDeleting(null);
-          toast.show('Provider removed.', { tone: 'success' });
+          toast.show(OIDC_TEXT.removed, { tone: 'success' });
         }}
       />
     </section>
@@ -139,9 +216,9 @@ function ProviderRow({
     setBusy(true);
     try {
       onChanged(await api.updateOidcProvider(p.id, { enabled }));
-      announce(enabled ? `${p.label} is on.` : `${p.label} is off.`);
+      announce(enabled ? OIDC_TEXT.isOn({ label: p.label }) : OIDC_TEXT.isOff({ label: p.label }));
     } catch (err) {
-      toast.show(teamErrorMessage(err, 'Could not change the provider.'), { tone: 'error' });
+      toast.show(teamErrorMessage(err, OIDC_TEXT.changeFailed), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -154,11 +231,11 @@ function ProviderRow({
     setResult(null);
     try {
       await api.startOidc({ providerId: p.id, flow: 'sign_in' });
-      const text = `The Hub reached ${p.issuer} and can send people there to sign in.`;
+      const text = OIDC_TEXT.reached({ issuer: p.issuer });
       setResult({ ok: true, text });
       announce(text);
     } catch (err) {
-      const text = teamErrorMessage(err, 'The test did not pass.');
+      const text = teamErrorMessage(err, OIDC_TEXT.testFailed);
       setResult({ ok: false, text });
       announce(text);
     } finally {
@@ -169,25 +246,31 @@ function ProviderRow({
   return (
     <li className="ws-card team-provider" aria-label={p.label}>
       <div className="ws-section-header">
-        <span className="team-strong">{p.label}</span>
+        <span className="team-strong" dir="auto">
+          {p.label}
+        </span>
         <Chip spec={providerChip(p)} />
       </div>
       <dl className="ws-dl">
-        <dt>Issuer</dt>
+        <dt>{OIDC_TEXT.issuer}</dt>
         <dd>
           <code className="ws-code-inline team-break">{p.issuer}</code>
         </dd>
-        <dt>Client id</dt>
-        <dd className="team-break">{p.clientId}</dd>
-        <dt>Client secret</dt>
-        <dd>{p.hasClientSecret ? 'Set' : 'Not set'}</dd>
-        <dt>Scopes</dt>
-        <dd>{p.scopes.join(' ')}</dd>
-        <dt>Changed</dt>
+        <dt>{OIDC_TEXT.clientId}</dt>
+        <dd className="team-break" dir="ltr">
+          {p.clientId}
+        </dd>
+        <dt>{OIDC_TEXT.clientSecret}</dt>
+        <dd>{p.hasClientSecret ? OIDC_TEXT.secretSet : OIDC_TEXT.secretNotSet}</dd>
+        <dt>{OIDC_TEXT.scopes}</dt>
+        <dd dir="ltr" translate="no">
+          {p.scopes.join(' ')}
+        </dd>
+        <dt>{OIDC_TEXT.changed}</dt>
         <dd>{formatWhen(p.updatedAt)}</dd>
       </dl>
       <SwitchField
-        label="Allow signing in with it"
+        label={OIDC_TEXT.allow}
         checked={p.enabled}
         disabled={busy}
         onChange={(v) => void toggle(v)}
@@ -196,18 +279,18 @@ function ProviderRow({
         <Button
           onClick={() => void test()}
           disabled={testing || !p.enabled}
-          title={p.enabled ? undefined : 'Turn it on to test it'}
+          title={p.enabled ? undefined : OIDC_TEXT.turnOnToTest}
         >
-          {testing ? <Spinner /> : <Icon name="refresh" />} Test
+          {testing ? <Spinner /> : <Icon name="refresh" />} {OIDC_TEXT.test}
         </Button>
         <Button variant="ghost" onClick={onEdit}>
-          <Icon name="edit" /> Edit
+          <Icon name="edit" /> {OIDC_TEXT.edit}
         </Button>
         <Button variant="ghost" onClick={onDelete}>
-          <Icon name="trash" /> Remove
+          <Icon name="trash" /> {TEAM_TEXT.remove}
         </Button>
       </div>
-      {!p.enabled ? <p className="muted ws-flush">Turn it on to test it.</p> : null}
+      {!p.enabled ? <p className="muted ws-flush">{OIDC_TEXT.turnOnToTestNote}</p> : null}
       {result ? (
         <p
           className="team-notice ws-flush"
@@ -263,16 +346,14 @@ function ProviderDialog({
 
   const check = (): Record<string, string> => {
     const out: Record<string, string> = {};
-    if (!d.label.trim()) out.label = 'Give it a name people recognize, like “Company sign-in”.';
+    if (!d.label.trim()) out.label = PROVIDER_FORM_TEXT.nameNeeded;
     if (!provider) {
       const iss = oidcIssuerSchema.safeParse(d.issuer);
-      if (!iss.success)
-        out.issuer =
-          'Enter the issuer’s https:// address (http:// only on this machine), without a query.';
+      if (!iss.success) out.issuer = PROVIDER_FORM_TEXT.issuerInvalid;
     }
-    if (!d.clientId.trim()) out.clientId = 'Enter the client id the provider gave you.';
+    if (!d.clientId.trim()) out.clientId = PROVIDER_FORM_TEXT.clientIdNeeded;
     const scopes = d.scopes.split(/\s+/).filter(Boolean);
-    if (!scopes.includes('openid')) out.scopes = 'The scopes must include openid.';
+    if (!scopes.includes('openid')) out.scopes = PROVIDER_FORM_TEXT.openidNeeded;
     return out;
   };
 
@@ -296,7 +377,7 @@ function ProviderDialog({
         };
         const parsed = createOidcProviderSchema.safeParse(body);
         if (!parsed.success) {
-          setError(new Error(parsed.error.issues[0]?.message ?? 'Check the fields.'));
+          setError(new Error(parsed.error.issues[0]?.message ?? PROVIDER_FORM_TEXT.checkFields));
           return;
         }
         onSaved(await api.createOidcProvider(body));
@@ -324,23 +405,27 @@ function ProviderDialog({
   return (
     <Dialog
       open
-      title={provider ? `Edit ${provider.label}` : 'Add a sign-in provider'}
-      description="The client id and secret come from the app you register at the provider."
+      title={
+        provider
+          ? PROVIDER_FORM_TEXT.editTitle({ label: provider.label })
+          : PROVIDER_FORM_TEXT.addTitle
+      }
+      description={PROVIDER_FORM_TEXT.description}
       onClose={onClose}
       className="ws-wide-dialog"
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{TEAM_TEXT.cancel}</Button>
           <Button variant="primary" type="submit" form="team-oidc-form" disabled={busy}>
-            {busy ? <Spinner /> : null} Save
+            {busy ? <Spinner /> : null} {TEAM_TEXT.save}
           </Button>
         </>
       }
     >
       <form id="team-oidc-form" className="stack" onSubmit={(e) => void save(e)} noValidate>
         <TextField
-          label="Name"
-          hint="What the sign-in button says: “Continue with <name>”."
+          label={PROVIDER_FORM_TEXT.name}
+          hint={PROVIDER_FORM_TEXT.nameHint}
           value={d.label}
           maxLength={100}
           onChange={(e) => set({ label: e.target.value })}
@@ -348,14 +433,14 @@ function ProviderDialog({
         />
         {provider ? (
           <p className="ws-flush">
-            <span className="muted">Issuer: </span>
-            <code className="ws-code-inline team-break">{provider.issuer}</code>
-            <span className="muted"> (to use another issuer, add a new provider)</span>
+            <span className="muted">{PROVIDER_FORM_TEXT.issuerIs}</span>{' '}
+            <code className="ws-code-inline team-break">{provider.issuer}</code>{' '}
+            <span className="muted">{PROVIDER_FORM_TEXT.issuerFixed}</span>
           </p>
         ) : (
           <TextField
-            label="Issuer"
-            hint="For example https://accounts.example.com"
+            label={OIDC_TEXT.issuer}
+            hint={PROVIDER_FORM_TEXT.issuerHint({ example: 'https://accounts.example.com' })}
             value={d.issuer}
             inputMode="url"
             autoComplete="off"
@@ -365,7 +450,7 @@ function ProviderDialog({
           />
         )}
         <TextField
-          label="Client id"
+          label={OIDC_TEXT.clientId}
           value={d.clientId}
           autoComplete="off"
           spellCheck={false}
@@ -374,12 +459,12 @@ function ProviderDialog({
         />
         {replacing ? (
           <TextField
-            label="Client secret"
+            label={OIDC_TEXT.clientSecret}
             type="password"
             hint={
               provider?.hasClientSecret
-                ? 'Replaces the stored secret. Leave empty to keep it.'
-                : 'Optional for public clients. It goes to the Hub’s vault and is never shown again.'
+                ? PROVIDER_FORM_TEXT.secretReplaceHint
+                : PROVIDER_FORM_TEXT.secretNewHint
             }
             value={d.secret}
             autoComplete="new-password"
@@ -388,26 +473,26 @@ function ProviderDialog({
         ) : (
           <div className="ws-secret-row">
             <span>
-              <span className="nv-field-label">Client secret</span>{' '}
-              <span>{d.removeSecret ? 'Will be removed' : 'Set'}</span>
+              <span className="nv-field-label">{OIDC_TEXT.clientSecret}</span>{' '}
+              <span>{d.removeSecret ? PROVIDER_FORM_TEXT.willBeRemoved : OIDC_TEXT.secretSet}</span>
             </span>
             <Button variant="ghost" onClick={() => setReplacing(true)}>
-              Replace
+              {PROVIDER_FORM_TEXT.replace}
             </Button>
             {d.removeSecret ? (
               <Button variant="ghost" onClick={() => set({ removeSecret: false })}>
-                Keep it
+                {PROVIDER_FORM_TEXT.keep}
               </Button>
             ) : (
               <Button variant="ghost" onClick={() => set({ removeSecret: true })}>
-                Remove secret
+                {PROVIDER_FORM_TEXT.removeSecret}
               </Button>
             )}
           </div>
         )}
         <TextField
-          label="Scopes"
-          hint="Separated by spaces; openid is required."
+          label={OIDC_TEXT.scopes}
+          hint={PROVIDER_FORM_TEXT.scopesHint}
           value={d.scopes}
           spellCheck={false}
           onChange={(e) => set({ scopes: e.target.value })}
@@ -415,13 +500,13 @@ function ProviderDialog({
         />
         {!provider ? (
           <SwitchField
-            label="Allow signing in with it"
-            description="You can turn it on later, after testing."
+            label={OIDC_TEXT.allow}
+            description={PROVIDER_FORM_TEXT.enableLater}
             checked={d.enabled}
             onChange={(v) => set({ enabled: v })}
           />
         ) : null}
-        <FormError error={error} fallback="Could not save the provider." />
+        <FormError error={error} fallback={PROVIDER_FORM_TEXT.saveFailed} />
       </form>
     </Dialog>
   );

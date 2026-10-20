@@ -9,12 +9,12 @@
 import { useState } from 'react';
 import type { OobAction, OobEndpointView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner, useToast, type TabItem } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { navigate, useLocation } from '../router.ts';
 import { MemberGate } from '../team/role.tsx';
-import { plural } from '../settings/common.ts';
 import { followLink } from '../work/nav.tsx';
 import { DEVICES_PATH, devicePath } from '../devices/format.ts';
-import { LoadError, useLoad } from '../devices/parts.tsx';
+import { LoadError, PARTS_TEXT, useLoad } from '../devices/parts.tsx';
 import { useDevicesApi } from '../devices/api.ts';
 import { useOobApi, type OobApi } from './api-m75.ts';
 import { EndpointView } from './Endpoint.tsx';
@@ -22,6 +22,7 @@ import { EndpointDialog } from './EndpointForm.tsx';
 import {
   KIND_LABEL,
   OOB_PATH,
+  OOB_TEXT,
   addressText,
   deviceOobPath,
   oobEndpointPath,
@@ -40,6 +41,47 @@ import {
 } from './parts.tsx';
 import './oob.css';
 
+export const OOB_PAGE_TEXT = defineMessages('oob.page', {
+  breadcrumb: 'Breadcrumb',
+  devices: 'Devices',
+  noClient: 'This version of the app cannot manage BMCs.',
+  addOff: 'Turn out-of-band management on first',
+  add: 'Add a BMC',
+  intro:
+    'Reach a computer through its BMC, the management controller built into servers and many business computers, over Redfish or IPMI: power it on or off, read its sensors, choose its next boot device or change BIOS settings, even when its operating system is down. Intel AMT is not available in this version.',
+  loadFailed: 'Could not load out-of-band management.',
+  loading: 'Loading out-of-band management',
+  bmcs: 'BMCs',
+  listFailed: 'Could not load the BMCs.',
+  listLoading: 'Loading the BMCs',
+  empty: 'No BMCs yet',
+  emptyOn: 'Add the address and credentials of a machine’s BMC to manage it here.',
+  emptyOff: 'Turn out-of-band management on, then add a machine’s BMC.',
+  added: '{name} added.',
+  manages: 'Manages {device}',
+  linked: 'Linked to a device',
+  notLinked: 'No device linked',
+  noCredentials: 'Credentials missing',
+  endpointFailed: 'Could not load the BMC.',
+  back: 'Back to out-of-band management',
+  endpointLoading: 'Loading the BMC',
+  open: 'Open out-of-band management',
+  stateOn: 'On, {n, plural, one {# BMC} other {# BMCs}}.',
+  stateOff: 'Off.',
+  about:
+    'Power, sensors, the next boot device and BIOS settings through a machine’s BMC (Redfish or IPMI), even when its operating system is down.',
+  tab: 'Out-of-band',
+  unlinked: 'That BMC is not linked to this device any more.',
+  noneLinked: 'No BMC is linked to this device.',
+  reachable: '{device} can be reached through its BMC, below the operating system.',
+  all: 'All BMCs',
+  ofDevice: 'BMCs of this device',
+  /** A BMC of the device: its name and kind ("Rack BMC (Redfish)"). */
+  choice: '{name} ({kind})',
+});
+
+const S = OOB_PAGE_TEXT;
+
 /** The device names by id, for showing which machine a BMC belongs to. */
 function useDeviceNames(): (id: string | null) => string | null {
   const api = useDevicesApi() as Partial<ReturnType<typeof useDevicesApi>>;
@@ -55,15 +97,15 @@ function useDeviceNames(): (id: string | null) => string | null {
 
 function Breadcrumb({ endpoint }: { endpoint?: boolean }) {
   return (
-    <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+    <nav aria-label={S.breadcrumb} className="ws-breadcrumb">
       <a href={DEVICES_PATH} onClick={(e) => followLink(e, DEVICES_PATH)}>
-        <Icon name="back" /> Devices
+        <Icon name="back" /> {S.devices}
       </a>
       {endpoint ? (
         <>
           {' / '}
           <a href={OOB_PATH} onClick={(e) => followLink(e, OOB_PATH)}>
-            Out-of-band management
+            {OOB_TEXT.title}
           </a>
         </>
       ) : null}
@@ -77,11 +119,11 @@ export function OobPage() {
   const where = parseOobLocation(loc);
   const api = useOobApi();
   return (
-    <MemberGate ownerOnly what="Out-of-band management">
+    <MemberGate ownerOnly what={OOB_TEXT.title}>
       <div className="ws-page devices-page oob-page">
         <Breadcrumb endpoint={Boolean(where?.endpointId)} />
         {!api ? (
-          <p className="muted">This version of the app cannot manage BMCs.</p>
+          <p className="muted">{S.noClient}</p>
         ) : where?.endpointId ? (
           <EndpointPage
             key={where.endpointId}
@@ -107,56 +149,43 @@ function Overview({ api }: { api: OobApi }) {
   return (
     <>
       <header className="ws-page-header">
-        <h1>Out-of-band management</h1>
+        <h1>{OOB_TEXT.title}</h1>
         <Button
           variant="primary"
           disabled={!on}
-          title={on ? undefined : 'Turn out-of-band management on first'}
+          title={on ? undefined : S.addOff}
           onClick={() => setAdding(true)}
         >
-          <Icon name="plus" /> Add a BMC
+          <Icon name="plus" /> {S.add}
         </Button>
       </header>
-      <p className="muted ws-flush">
-        Reach a computer through its BMC, the management controller built into servers and many
-        business computers, over Redfish or IPMI: power it on or off, read its sensors, choose its
-        next boot device or change BIOS settings, even when its operating system is down. Intel AMT
-        is not available in this version.
-      </p>
+      <p className="muted ws-flush">{S.intro}</p>
       {status.error ? (
-        <LoadError
-          error={status.error}
-          fallback="Could not load out-of-band management."
-          onRetry={status.reload}
-        />
+        <LoadError error={status.error} fallback={S.loadFailed} onRetry={status.reload} />
       ) : null}
       {status.data ? (
         <OobSwitch api={api} status={status.data} onChange={(s) => status.setData(() => s)} />
       ) : status.loading ? (
-        <Spinner label="Loading out-of-band management" />
+        <Spinner label={S.loading} />
       ) : null}
-      <Section id="oob-endpoints-h" title="BMCs">
+      <Section id="oob-endpoints-h" title={S.bmcs}>
         {list.error ? (
           <p role="alert" className="ws-error">
-            {oobErrorMessage(list.error, 'Could not load the BMCs.')}{' '}
-            <Button onClick={list.reload}>Retry</Button>
+            {oobErrorMessage(list.error, S.listFailed)}{' '}
+            <Button onClick={list.reload}>{PARTS_TEXT.retry}</Button>
           </p>
         ) : null}
-        {list.loading ? <Spinner label="Loading the BMCs" /> : null}
+        {list.loading ? <Spinner label={S.listLoading} /> : null}
         {list.data?.length === 0 ? (
           <EmptyState
-            title="No BMCs yet"
-            description={
-              on
-                ? 'Add the address and credentials of a machine’s BMC to manage it here.'
-                : 'Turn out-of-band management on, then add a machine’s BMC.'
-            }
+            title={S.empty}
+            description={on ? S.emptyOn : S.emptyOff}
             icon="server"
             level={3}
           />
         ) : null}
         {list.data?.length ? (
-          <ul className="ws-list" aria-label="BMCs">
+          <ul className="ws-list" aria-label={S.bmcs}>
             {list.data.map((ep) => (
               <EndpointRow key={ep.id} ep={ep} deviceName={nameOf(ep.deviceId)} />
             ))}
@@ -171,7 +200,7 @@ function Overview({ api }: { api: OobApi }) {
           onSaved={(ep) => {
             setAdding(false);
             list.setData((cur) => [...(cur ?? []), ep]);
-            toast.show(`${ep.name} added.`, { tone: 'success' });
+            toast.show(S.added({ name: ep.name }), { tone: 'success' });
             navigate(oobEndpointPath(ep.id));
           }}
         />
@@ -186,7 +215,7 @@ function EndpointRow({ ep, deviceName }: { ep: OobEndpointView; deviceName: stri
     <li className="ws-list-row devices-row" aria-label={ep.name}>
       <div className="devices-row-main">
         <div className="devices-row-head">
-          <a href={path} className="ws-card-link" onClick={(e) => followLink(e, path)}>
+          <a href={path} className="ws-card-link" dir="auto" onClick={(e) => followLink(e, path)}>
             {ep.name}
           </a>
           <KindChip kind={ep.kind} />
@@ -195,18 +224,14 @@ function EndpointRow({ ep, deviceName }: { ep: OobEndpointView; deviceName: stri
         <span className="muted ws-row-meta">
           <span>{addressText(ep)}</span>
           <span>
-            {deviceName
-              ? `Manages ${deviceName}`
-              : ep.deviceId
-                ? 'Linked to a device'
-                : 'No device linked'}
+            {deviceName ? S.manages({ device: deviceName }) : ep.deviceId ? S.linked : S.notLinked}
           </span>
           {ep.kind === 'redfish' ? (
             <span>
               <PinText ep={ep} />
             </span>
           ) : null}
-          {!ep.hasCredentials ? <span>Credentials missing</span> : null}
+          {!ep.hasCredentials ? <span>{S.noCredentials}</span> : null}
         </span>
       </div>
     </li>
@@ -232,11 +257,11 @@ function EndpointPage({
   if (ep.error && !ep.data)
     return (
       <div role="alert" className="ws-error">
-        <p>{oobErrorMessage(ep.error, 'Could not load the BMC.')}</p>
-        <Button onClick={() => navigate(OOB_PATH)}>Back to out-of-band management</Button>
+        <p>{oobErrorMessage(ep.error, S.endpointFailed)}</p>
+        <Button onClick={() => navigate(OOB_PATH)}>{S.back}</Button>
       </div>
     );
-  if (!ep.data) return <Spinner label="Loading the BMC" />;
+  if (!ep.data) return <Spinner label={S.endpointLoading} />;
   return (
     <EndpointView
       api={api}
@@ -265,15 +290,14 @@ export function OobEntry() {
   return (
     <section className="ws-section" aria-labelledby="oob-entry-h">
       <div className="ws-section-header">
-        <h2 id="oob-entry-h">Out-of-band management</h2>
+        <h2 id="oob-entry-h">{OOB_TEXT.title}</h2>
         <a href={OOB_PATH} onClick={(e) => followLink(e, OOB_PATH)}>
-          Open out-of-band management
+          {S.open}
         </a>
       </div>
       <p className="muted ws-flush">
-        {s ? (s.enabled ? `On, ${plural(s.endpoints, 'BMC')}. ` : 'Off. ') : ''}
-        Power, sensors, the next boot device and BIOS settings through a machine’s BMC (Redfish or
-        IPMI), even when its operating system is down.
+        {s ? `${s.enabled ? S.stateOn({ n: s.endpoints }) : S.stateOff} ` : ''}
+        {S.about}
       </p>
     </section>
   );
@@ -314,7 +338,7 @@ export function useDeviceOobTab(
     active: asked,
     item: {
       id: OOB_TAB,
-      label: 'Out-of-band',
+      label: S.tab,
       panel: (
         <DeviceOobPanel
           api={api}
@@ -361,18 +385,16 @@ function DeviceOobPanel({
   const status = useOobStatus(api);
   const [overrides, setOverrides] = useState<Record<string, OobEndpointView>>({});
   if (error && !linked.length)
-    return <LoadError error={error} fallback="Could not load the BMCs." onRetry={retry} />;
-  if (loading && !linked.length) return <Spinner label="Loading the BMCs" />;
+    return <LoadError error={error} fallback={S.listFailed} onRetry={retry} />;
+  if (loading && !linked.length) return <Spinner label={S.listLoading} />;
   const chosen = linked.find((e) => e.id === endpointId) ?? linked[0] ?? null;
   if (!chosen)
     return (
       <div className="stack">
         <p className="muted ws-flush">
-          {endpointId
-            ? 'That BMC is not linked to this device any more.'
-            : 'No BMC is linked to this device.'}{' '}
+          {endpointId ? S.unlinked : S.noneLinked}{' '}
           <a href={OOB_PATH} onClick={(e) => followLink(e, OOB_PATH)}>
-            Out-of-band management
+            {OOB_TEXT.title}
           </a>
         </p>
       </div>
@@ -381,13 +403,13 @@ function DeviceOobPanel({
   return (
     <div className="stack">
       <p className="muted ws-flush">
-        {deviceName} can be reached through its BMC, below the operating system.{' '}
+        {S.reachable({ device: deviceName })}{' '}
         <a href={OOB_PATH} onClick={(e) => followLink(e, OOB_PATH)}>
-          All BMCs
+          {S.all}
         </a>
       </p>
       {linked.length > 1 ? (
-        <nav aria-label="BMCs of this device" className="row">
+        <nav aria-label={S.ofDevice} className="row">
           {linked.map((e) => (
             <Button
               key={e.id}
@@ -395,7 +417,7 @@ function DeviceOobPanel({
               aria-current={e.id === ep.id ? 'true' : undefined}
               onClick={() => navigate(deviceOobPath(deviceId, e.id), { replace: true })}
             >
-              {e.name} ({KIND_LABEL[e.kind]})
+              {S.choice({ name: e.name, kind: KIND_LABEL[e.kind] })}
             </Button>
           ))}
         </nav>

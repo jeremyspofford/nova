@@ -5,13 +5,37 @@
 // where the last one stopped. Output is untrusted (FR-189) and only ever drawn as text.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { EnvironmentProcessView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, EmptyState, Icon, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
-import { formatWhen, plural, useInterval } from '../settings/common.ts';
+import { formatWhen, useInterval } from '../settings/common.ts';
 import { useCodeM6Api } from './api-m6.ts';
 import { sessionPath } from './labels.ts';
 import { AppLink } from './CodeNav.tsx';
 import { Badge, ErrorBanner } from './parts.tsx';
+
+export const PROCESSES_TEXT = defineMessages('code.processes', {
+  loadFailed: 'Could not load the processes.',
+  refresh: 'Refresh',
+  loading: 'Loading the processes',
+  emptyTitle: 'No processes',
+  emptyBody: 'Commands a session runs here show up with their output, even after you reconnect.',
+  readFailed: 'Could not read the output.',
+  running: 'Running',
+  ended: 'Ended',
+  exited: 'Exited with {code}',
+  started: 'Started {when}',
+  outputSize: '{n, plural, one {# byte of output} other {# bytes of output}}',
+  openSession: 'Open its session',
+  hideOutput: 'Hide output',
+  showOutput: 'Show output',
+  readNew: 'Read new output',
+  dropped:
+    '{n, plural, one {The helper kept only the newest output; # byte before this point was dropped.} other {The helper kept only the newest output; # bytes before this point were dropped.}}',
+  reading: 'Reading the output',
+  outputOf: 'Output of {command}',
+  noOutput: 'No output yet.',
+});
 
 /** How often open output of a running process is read again. */
 export const OUTPUT_POLL_MS = 2000;
@@ -42,7 +66,7 @@ export function ProcessesPanel({
           setItems(sessionId ? list.filter((p) => p.sessionId === sessionId) : list);
           setError(null);
         },
-        (err: unknown) => setError(errorMessage(err, 'Could not load the processes.')),
+        (err: unknown) => setError(errorMessage(err, PROCESSES_TEXT.loadFailed)),
       ),
     [environmentId, m6, sessionId],
   );
@@ -55,16 +79,16 @@ export function ProcessesPanel({
       <div className="code-subhead">
         <h3 id={headingId}>{title}</h3>
         <Button onClick={() => void load()}>
-          <Icon name="refresh" /> Refresh
+          <Icon name="refresh" /> {PROCESSES_TEXT.refresh}
         </Button>
       </div>
       {error ? <ErrorBanner message={error} onRetry={() => void load()} /> : null}
-      {items === null && !error ? <Spinner label="Loading the processes" /> : null}
+      {items === null && !error ? <Spinner label={PROCESSES_TEXT.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
           level={3}
-          title="No processes"
-          description="Commands a session runs here show up with their output, even after you reconnect."
+          title={PROCESSES_TEXT.emptyTitle}
+          description={PROCESSES_TEXT.emptyBody}
         />
       ) : null}
       {items?.length ? (
@@ -124,7 +148,7 @@ function ProcessRow({
         setExitCode(out.exitCode);
         setError(null);
       } catch (err) {
-        setError(errorMessage(err, 'Could not read the output.'));
+        setError(errorMessage(err, PROCESSES_TEXT.readFailed));
       } finally {
         busy.current = false;
         setReading(false);
@@ -142,12 +166,10 @@ function ProcessRow({
   );
 
   const state = running
-    ? 'Running'
+    ? PROCESSES_TEXT.running
     : exitCode === null
-      ? 'Ended'
-      : exitCode === 0
-        ? 'Exited with 0'
-        : `Exited with ${exitCode}`;
+      ? PROCESSES_TEXT.ended
+      : PROCESSES_TEXT.exited({ code: String(exitCode) });
 
   return (
     <li className="code-proc" aria-label={proc.cmd}>
@@ -161,11 +183,13 @@ function ProcessRow({
         </Badge>
       </div>
       <span className="muted code-row-meta">
-        <span className="code-path">{proc.cwd}</span>
-        <span>Started {formatWhen(proc.startedAt)}</span>
-        <span>{plural(proc.outputBytes, 'byte')} of output</span>
+        <span className="code-path" dir="ltr">
+          {proc.cwd}
+        </span>
+        <span>{PROCESSES_TEXT.started({ when: formatWhen(proc.startedAt) })}</span>
+        <span>{PROCESSES_TEXT.outputSize({ n: proc.outputBytes })}</span>
         {showSession && proc.sessionId ? (
-          <AppLink to={sessionPath(proc.sessionId)}>Open its session</AppLink>
+          <AppLink to={sessionPath(proc.sessionId)}>{PROCESSES_TEXT.openSession}</AppLink>
         ) : null}
       </span>
       <div className="ws-toolbar">
@@ -179,11 +203,11 @@ function ProcessRow({
             if (next && offset === null) void read(0);
           }}
         >
-          <Icon name="terminal" /> {open ? 'Hide output' : 'Show output'}
+          <Icon name="terminal" /> {open ? PROCESSES_TEXT.hideOutput : PROCESSES_TEXT.showOutput}
         </Button>
         {open && offset !== null ? (
           <Button disabled={reading} onClick={() => void read(offset)}>
-            <Icon name="refresh" /> Read new output
+            <Icon name="refresh" /> {PROCESSES_TEXT.readNew}
           </Button>
         ) : null}
       </div>
@@ -191,18 +215,22 @@ function ProcessRow({
         {error ? <ErrorBanner message={error} onRetry={() => void read(offset ?? 0)} /> : null}
         {dropped > 0 ? (
           <p className="ws-warning" role="note">
-            <Icon name="alert" /> The helper kept only the newest output; {plural(dropped, 'byte')}{' '}
-            before this point were dropped.
+            <Icon name="alert" /> {PROCESSES_TEXT.dropped({ n: dropped })}
           </p>
         ) : null}
-        {offset === null && reading ? <Spinner label="Reading the output" /> : null}
+        {offset === null && reading ? <Spinner label={PROCESSES_TEXT.reading} /> : null}
         {offset !== null ? (
           text ? (
-            <pre className="ws-log" aria-label={`Output of ${proc.cmd}`} tabIndex={0}>
+            <pre
+              role="group"
+              className="ws-log"
+              aria-label={PROCESSES_TEXT.outputOf({ command: proc.cmd })}
+              tabIndex={0}
+            >
               {text}
             </pre>
           ) : (
-            <p className="muted">No output yet.</p>
+            <p className="muted">{PROCESSES_TEXT.noOutput}</p>
           )
         ) : null}
       </div>

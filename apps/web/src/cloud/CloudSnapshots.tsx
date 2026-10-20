@@ -3,14 +3,43 @@
 // asks first and offers to snapshot the current state before), and delete one (asks first). Work
 // runs take one before they start. Caches are kept across restores.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { CloudSnapshotView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner, TextField, useToast } from '@nova/ui';
 import { useAnnounce } from '../services.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useCloudApi } from './api.ts';
 import { SNAPSHOT_EVENTS, eventEnvironmentId, useCloudEvents } from './events.ts';
-import { SNAPSHOT_REASON, cloudErrorMessage, formatBytes } from './format.ts';
+import { CLOUD_TEXT, SNAPSHOT_REASON, cloudErrorMessage, formatBytes } from './format.ts';
 import { ConfirmAction, useLoad } from './parts.tsx';
+
+/** An environment's snapshots. {when} is a time, such as "5 minutes ago". */
+export const SNAPSHOTS_TEXT = defineMessages('cloud.snapshots', {
+  heading: 'Snapshots',
+  intro: 'A snapshot keeps the work folder as it is now. Restoring one puts it back; caches stay.',
+  taken: 'Snapshot taken.',
+  takeFailed: 'Could not take a snapshot.',
+  label: 'Label (optional)',
+  take: 'Take a snapshot',
+  loadFailed: 'Could not load the snapshots.',
+  loading: 'Loading the snapshots',
+  empty: 'No snapshots yet',
+  emptyHint: 'Take one before a risky change. Work runs take one before they start.',
+  takenAt: 'Taken {when}',
+  restoredAt: 'Restored {when}',
+  restore: 'Restore…',
+  restoreTitle: 'Restore this snapshot?',
+  restoreBody:
+    'The work folder goes back to how it was {when}. Changes made since then are replaced.',
+  restoreConfirm: 'Restore',
+  restoreFailed: 'Could not restore the snapshot.',
+  restored: 'Snapshot restored.',
+  keepCurrent: 'Snapshot the current state first, so this can be undone',
+  deleteTitle: 'Delete this snapshot?',
+  deleteBody: 'It cannot be restored afterwards.',
+  deleteFailed: 'Could not delete the snapshot.',
+  deleted: 'Snapshot deleted.',
+});
 
 export function CloudSnapshots({
   environmentId,
@@ -42,6 +71,7 @@ export function CloudSnapshots({
   const [keepCurrent, setKeepCurrent] = useState(true);
   const [deleting, setDeleting] = useState<CloudSnapshotView | null>(null);
 
+  const S = SNAPSHOTS_TEXT;
   const take = async () => {
     setTaking(true);
     setTakeError(null);
@@ -49,9 +79,9 @@ export function CloudSnapshots({
       const s = await api.createCloudSnapshot(environmentId, label.trim() || undefined);
       list.setData((prev) => [s, ...(prev ?? []).filter((x) => x.id !== s.id)]);
       setLabel('');
-      announce('Snapshot taken.');
+      announce(S.taken);
     } catch (err) {
-      setTakeError(cloudErrorMessage(err, 'Could not take a snapshot.'));
+      setTakeError(cloudErrorMessage(err, S.takeFailed));
     } finally {
       setTaking(false);
     }
@@ -60,10 +90,8 @@ export function CloudSnapshots({
   const items = list.data;
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>Snapshots</h3>
-      <p className="muted">
-        A snapshot keeps the work folder as it is now. Restoring one puts it back; caches stay.
-      </p>
+      <h3 id={headingId}>{S.heading}</h3>
+      <p className="muted">{S.intro}</p>
       <form
         className="cl-inline-form"
         onSubmit={(e) => {
@@ -72,7 +100,7 @@ export function CloudSnapshots({
         }}
       >
         <TextField
-          label="Label (optional)"
+          label={S.label}
           value={label}
           maxLength={200}
           autoComplete="off"
@@ -80,7 +108,7 @@ export function CloudSnapshots({
           onChange={(e) => setLabel(e.target.value)}
         />
         <Button type="submit" disabled={taking || !!disabled} title={disabled ?? undefined}>
-          {taking ? <Spinner /> : <Icon name="save" />} Take a snapshot
+          {taking ? <Spinner /> : <Icon name="save" />} {S.take}
         </Button>
       </form>
       {disabled ? <p className="muted cl-small">{disabled}</p> : null}
@@ -91,21 +119,16 @@ export function CloudSnapshots({
       ) : null}
       {list.error && !items ? (
         <div className="ws-error" role="alert">
-          <p>{cloudErrorMessage(list.error, 'Could not load the snapshots.')}</p>
-          <Button onClick={list.reload}>Retry</Button>
+          <p>{cloudErrorMessage(list.error, S.loadFailed)}</p>
+          <Button onClick={list.reload}>{CLOUD_TEXT.retry}</Button>
         </div>
       ) : null}
-      {list.loading ? <Spinner label="Loading the snapshots" /> : null}
+      {list.loading ? <Spinner label={S.loading} /> : null}
       {items?.length === 0 ? (
-        <EmptyState
-          level={3}
-          title="No snapshots yet"
-          description="Take one before a risky change. Work runs take one before they start."
-          icon="save"
-        />
+        <EmptyState level={3} title={S.empty} description={S.emptyHint} icon="save" />
       ) : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="Snapshots">
+        <ul className="ws-list" aria-label={S.heading}>
           {items.map((s) => (
             <li
               key={s.id}
@@ -113,12 +136,16 @@ export function CloudSnapshots({
               aria-label={s.label ?? SNAPSHOT_REASON[s.reason]}
             >
               <span className="cl-row-main">
-                <span className="cl-strong">{s.label ?? SNAPSHOT_REASON[s.reason]}</span>
+                <span className="cl-strong" dir="auto">
+                  {s.label ?? SNAPSHOT_REASON[s.reason]}
+                </span>
                 <span className="muted ws-row-meta">
                   <span>{SNAPSHOT_REASON[s.reason]}</span>
                   <span>{formatBytes(s.sizeBytes)}</span>
-                  <span>Taken {formatWhen(s.createdAt)}</span>
-                  {s.restoredAt ? <span>Restored {formatWhen(s.restoredAt)}</span> : null}
+                  <span>{S.takenAt({ when: formatWhen(s.createdAt) })}</span>
+                  {s.restoredAt ? (
+                    <span>{S.restoredAt({ when: formatWhen(s.restoredAt) })}</span>
+                  ) : null}
                 </span>
               </span>
               <span className="ws-row-actions cl-actions">
@@ -130,10 +157,10 @@ export function CloudSnapshots({
                     setRestoring(s);
                   }}
                 >
-                  <Icon name="undo" /> Restore…
+                  <Icon name="undo" /> {S.restore}
                 </Button>
                 <Button variant="danger" onClick={() => setDeleting(s)}>
-                  <Icon name="trash" /> Delete…
+                  <Icon name="trash" /> {CLOUD_TEXT.deleteMore}
                 </Button>
               </span>
             </li>
@@ -142,18 +169,18 @@ export function CloudSnapshots({
       ) : null}
       <ConfirmAction
         open={restoring !== null}
-        title="Restore this snapshot?"
-        description={`The work folder goes back to how it was ${restoring ? formatWhen(restoring.createdAt) : ''}. Changes made since then are replaced.`}
-        confirmLabel="Restore"
+        title={S.restoreTitle}
+        description={S.restoreBody({ when: restoring ? formatWhen(restoring.createdAt) : '' })}
+        confirmLabel={S.restoreConfirm}
         danger
-        errorText={(err) => cloudErrorMessage(err, 'Could not restore the snapshot.')}
+        errorText={(err) => cloudErrorMessage(err, S.restoreFailed)}
         onClose={() => setRestoring(null)}
         onConfirm={async () => {
           if (!restoring) return;
           await api.restoreCloudSnapshot(restoring.id, keepCurrent);
           setRestoring(null);
           list.reload();
-          toast.show('Snapshot restored.', { tone: 'success' });
+          toast.show(S.restored, { tone: 'success' });
         }}
       >
         <label className="cl-check">
@@ -162,16 +189,16 @@ export function CloudSnapshots({
             checked={keepCurrent}
             onChange={(e) => setKeepCurrent(e.target.checked)}
           />
-          Snapshot the current state first, so this can be undone
+          {S.keepCurrent}
         </label>
       </ConfirmAction>
       <ConfirmAction
         open={deleting !== null}
-        title="Delete this snapshot?"
-        description="It cannot be restored afterwards."
-        confirmLabel="Delete"
+        title={S.deleteTitle}
+        description={S.deleteBody}
+        confirmLabel={CLOUD_TEXT.delete}
         danger
-        errorText={(err) => cloudErrorMessage(err, 'Could not delete the snapshot.')}
+        errorText={(err) => cloudErrorMessage(err, S.deleteFailed)}
         onClose={() => setDeleting(null)}
         onConfirm={async () => {
           if (!deleting) return;
@@ -179,7 +206,7 @@ export function CloudSnapshots({
           await api.deleteCloudSnapshot(gone);
           setDeleting(null);
           list.setData((prev) => prev?.filter((x) => x.id !== gone) ?? null);
-          announce('Snapshot deleted.');
+          announce(S.deleted);
         }}
       />
     </section>

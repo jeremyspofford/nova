@@ -36,7 +36,7 @@ export function useMailOAuthStart(): {
       }
       oauthRedirect.go(url);
     } catch (err) {
-      toast.show(MAIL_OAUTH_TEXT.startFailed(errorMessage(err)), { tone: 'error' });
+      toast.show(MAIL_OAUTH_TEXT.startFailed({ error: errorMessage(err) }), { tone: 'error' });
     } finally {
       // The page normally leaves for the provider; if it does not, the button works again.
       setBusy(null);
@@ -63,8 +63,8 @@ export function MailOAuthRowAction({ binding: b }: { binding: ChannelBindingView
       disabled={busy !== null}
       aria-label={
         again
-          ? MAIL_OAUTH_TEXT.authorizeAgainLabel(b.label)
-          : MAIL_OAUTH_TEXT.authorizeLabel(b.label)
+          ? MAIL_OAUTH_TEXT.authorizeAgainLabel({ label: b.label })
+          : MAIL_OAUTH_TEXT.authorizeLabel({ label: b.label })
       }
       onClick={() => void start(b)}
     >
@@ -112,24 +112,24 @@ export function MailOAuthPanel({
       const next = await api.revokeChannelOAuth(b.id);
       onSaved(next);
       setConfirm(false);
-      const text = MAIL_OAUTH_TEXT.signedOut(b.label);
+      const text = MAIL_OAUTH_TEXT.signedOut({ label: b.label });
       toast.show(text, { tone: 'success' });
     } catch (err) {
-      setError(MAIL_OAUTH_TEXT.signOutFailed(errorMessage(err)));
+      setError(MAIL_OAUTH_TEXT.signOutFailed({ error: errorMessage(err) }));
     } finally {
       setSigningOut(false);
     }
   };
 
   return (
-    <fieldset className="ws-fieldset" aria-label={MAIL_OAUTH_TEXT.panelLabel(b.label)}>
+    <fieldset className="ws-fieldset" aria-label={MAIL_OAUTH_TEXT.panelLabel({ label: b.label })}>
       <legend>{MAIL_OAUTH_TEXT.heading}</legend>
       <p className="nv-field-hint ws-flush">{MAIL_OAUTH_TEXT.intro}</p>
       <p className="ws-row-meta ws-flush" role="status">
         <Chip spec={OAUTH_STATUS[oauth.status]} />
         {oauth.status === 'connected' && oauth.authorizedAt ? (
           <span className="muted">
-            {MAIL_OAUTH_TEXT.authorizedWhen(formatWhen(oauth.authorizedAt))}
+            {MAIL_OAUTH_TEXT.authorizedWhen({ when: formatWhen(oauth.authorizedAt) })}
           </span>
         ) : null}
       </p>
@@ -142,11 +142,13 @@ export function MailOAuthPanel({
         </p>
       ) : null}
       {oauth.scopes.length ? (
-        <p className="muted ws-flush">{MAIL_OAUTH_TEXT.scopes(oauth.scopes.join(' '))}</p>
+        <p className="muted ws-flush">
+          {MAIL_OAUTH_TEXT.scopes({ scopes: oauth.scopes.join(' ') })}
+        </p>
       ) : null}
       {oauth.lastError ? (
         <p className="ws-warning">
-          <Icon name="alert" /> {MAIL_OAUTH_TEXT.lastError(oauth.lastError)}
+          <Icon name="alert" /> {MAIL_OAUTH_TEXT.lastError({ error: oauth.lastError })}
         </p>
       ) : null}
       <CopyValue
@@ -160,8 +162,8 @@ export function MailOAuthPanel({
           disabled={busy !== null}
           aria-label={
             again
-              ? MAIL_OAUTH_TEXT.authorizeAgainLabel(b.label)
-              : MAIL_OAUTH_TEXT.authorizeLabel(b.label)
+              ? MAIL_OAUTH_TEXT.authorizeAgainLabel({ label: b.label })
+              : MAIL_OAUTH_TEXT.authorizeLabel({ label: b.label })
           }
           onClick={() => void start(b)}
         >
@@ -171,7 +173,7 @@ export function MailOAuthPanel({
         {again ? (
           <Button
             variant="ghost"
-            aria-label={MAIL_OAUTH_TEXT.signOutLabel(b.label)}
+            aria-label={MAIL_OAUTH_TEXT.signOutLabel({ label: b.label })}
             onClick={() => setConfirm(true)}
           >
             {MAIL_OAUTH_TEXT.signOut}

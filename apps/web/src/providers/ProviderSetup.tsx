@@ -8,80 +8,69 @@ import type { ProviderAccountView, ProviderKind, ProviderTestResult } from '@nov
 import { Button, RadioGroup, Spinner, TextField } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
+import { embed } from '../settings/embed.tsx';
 import { PROVIDER_NAMES } from './names.ts';
+import { PROVIDER_TEXT } from './strings.ts';
 
-export interface ProviderOption {
+export { PROVIDER_TEXT };
+
+// Example addresses for the Base URL field: URLs, the same in every language.
+const GATEWAY_EXAMPLE = 'https://gateway.example.com';
+const SERVER_EXAMPLE = 'http://127.0.0.1:8000/v1';
+
+interface ProviderSpec {
   kind: ProviderKind;
-  name: string;
-  blurb: string;
-  help: string;
   key: 'none' | 'optional' | 'required';
   /** `advanced`: optional, behind an Advanced disclosure (hosted APIs rarely need it). */
   baseUrl: 'none' | 'optional' | 'required' | 'advanced';
   defaultBaseUrl?: string;
+  /** Runs on this computer or the network: the name says "(local)". */
+  local?: boolean;
 }
 
-const name = (kind: ProviderKind) => PROVIDER_NAMES[kind] ?? kind;
+export interface ProviderOption extends ProviderSpec {
+  /** The words, read in the active locale each time. */
+  readonly name: string;
+  readonly blurb: string;
+  readonly help: string;
+}
+
+function withText(spec: ProviderSpec): ProviderOption {
+  return {
+    ...spec,
+    get name() {
+      const name = PROVIDER_NAMES[spec.kind] ?? spec.kind;
+      return spec.local ? PROVIDER_TEXT.local({ name }) : name;
+    },
+    get blurb() {
+      return PROVIDER_TEXT.kinds[spec.kind].blurb;
+    },
+    get help() {
+      return PROVIDER_TEXT.kinds[spec.kind].help;
+    },
+  };
+}
 
 export const PROVIDER_OPTIONS: ProviderOption[] = [
-  {
-    kind: 'mock',
-    name: name('mock'),
-    blurb: 'Works offline. Gives canned replies, so you can try Nova without an account.',
-    help: 'No key needed. Switch to a real provider any time in Settings → Accounts.',
-    key: 'none',
-    baseUrl: 'none',
-  },
-  {
+  withText({ kind: 'mock', key: 'none', baseUrl: 'none' }),
+  withText({
     kind: 'ollama',
-    name: `${name('ollama')} (local)`,
-    blurb: 'Models running on this computer or your network. Nothing leaves your machines.',
-    help: 'Install Ollama and pull a model. Nova connects to the address below; change it if Ollama runs elsewhere.',
+    local: true,
     key: 'none',
     baseUrl: 'optional',
     defaultBaseUrl: 'http://127.0.0.1:11434',
-  },
-  {
+  }),
+  withText({
     kind: 'llamacpp',
-    name: `${name('llamacpp')} (local)`,
-    blurb: 'A llama.cpp server on this computer or your network. Nothing leaves your machines.',
-    help: 'Start llama-server with a model. Nova connects to the address below; change it if the server runs elsewhere. Add a key only if you started the server with one.',
+    local: true,
     key: 'optional',
     baseUrl: 'optional',
     defaultBaseUrl: 'http://127.0.0.1:8080',
-  },
-  {
-    kind: 'openai_compatible',
-    name: name('openai_compatible'),
-    blurb: 'Any server that speaks the OpenAI chat API, local or hosted.',
-    help: 'Use the base URL your server documents, usually ending in /v1. Add a key only if the server asks for one.',
-    key: 'optional',
-    baseUrl: 'required',
-  },
-  {
-    kind: 'anthropic',
-    name: name('anthropic'),
-    blurb: 'Hosted models with your Anthropic API key.',
-    help: 'Create a key in the API keys section of your Anthropic account, then paste it here.',
-    key: 'required',
-    baseUrl: 'advanced',
-  },
-  {
-    kind: 'openai',
-    name: name('openai'),
-    blurb: 'Hosted models with your OpenAI API key.',
-    help: 'Create a key on the API keys page of your OpenAI account, then paste it here.',
-    key: 'required',
-    baseUrl: 'advanced',
-  },
-  {
-    kind: 'openrouter',
-    name: name('openrouter'),
-    blurb: 'Many hosted models through one OpenRouter API key.',
-    help: 'Create a key on the Keys page of your OpenRouter account, then paste it here.',
-    key: 'required',
-    baseUrl: 'advanced',
-  },
+  }),
+  withText({ kind: 'openai_compatible', key: 'optional', baseUrl: 'required' }),
+  withText({ kind: 'anthropic', key: 'required', baseUrl: 'advanced' }),
+  withText({ kind: 'openai', key: 'required', baseUrl: 'advanced' }),
+  withText({ kind: 'openrouter', key: 'required', baseUrl: 'advanced' }),
 ];
 
 export function providerOption(kind: ProviderKind): ProviderOption {
@@ -111,7 +100,7 @@ export interface ProviderPrefill {
 
 export function ProviderSetup({
   onConnected,
-  submitLabel = 'Save and test',
+  submitLabel,
   initial,
 }: {
   onConnected: (c: ConnectedProvider) => void;
@@ -134,9 +123,7 @@ export function ProviderSetup({
 
   const url = baseUrl.trim() || option.defaultBaseUrl || '';
   const urlError =
-    option.baseUrl !== 'none' && url && !isHttpUrl(url)
-      ? 'Enter a full URL, like http://host:port/v1'
-      : undefined;
+    option.baseUrl !== 'none' && url && !isHttpUrl(url) ? PROVIDER_TEXT.urlInvalid : undefined;
   const missing =
     (option.baseUrl === 'required' && !url) || (option.key === 'required' && !apiKey.trim());
 
@@ -151,11 +138,11 @@ export function ProviderSetup({
       } else {
         setFailed({
           account,
-          detail: result.detail ?? 'The provider did not accept the connection.',
+          detail: result.detail ?? PROVIDER_TEXT.rejected,
         });
       }
     } catch (err) {
-      setFailed({ account, detail: errorMessage(err, 'The connection test failed.') });
+      setFailed({ account, detail: errorMessage(err, PROVIDER_TEXT.testFailed) });
     } finally {
       setBusy(null);
     }
@@ -173,7 +160,7 @@ export function ProviderSetup({
       });
       await test(account);
     } catch (err) {
-      setError(errorMessage(err, 'Could not save the provider.'));
+      setError(errorMessage(err, PROVIDER_TEXT.saveFailed));
       setBusy(null);
     }
   };
@@ -184,7 +171,7 @@ export function ProviderSetup({
       await api.deleteProvider(failed.account.id);
       setFailed(null);
     } catch (err) {
-      setError(errorMessage(err, 'Could not remove the provider.'));
+      setError(errorMessage(err, PROVIDER_TEXT.removeFailed));
     }
   };
 
@@ -192,7 +179,10 @@ export function ProviderSetup({
     return (
       <div className="stack provider-failed" role="alert">
         <p>
-          <strong>{failed.account.label}</strong> could not connect: {failed.detail}
+          {embed(PROVIDER_TEXT.couldNotConnect, {
+            name: <strong>{failed.account.label}</strong>,
+            detail: failed.detail,
+          })}
         </p>
         <div className="row">
           <Button
@@ -200,10 +190,10 @@ export function ProviderSetup({
             onClick={() => void test(failed.account)}
             disabled={busy !== null}
           >
-            {busy === 'testing' ? <Spinner /> : null} Test again
+            {busy === 'testing' ? <Spinner /> : null} {PROVIDER_TEXT.testAgain}
           </Button>
           <Button onClick={() => void removeFailed()} disabled={busy !== null}>
-            Remove and edit
+            {PROVIDER_TEXT.removeAndEdit}
           </Button>
         </div>
         {error ? <p className="nv-field-error">{error}</p> : null}
@@ -213,18 +203,19 @@ export function ProviderSetup({
 
   const urlField = (
     <TextField
-      label="Base URL"
+      label={PROVIDER_TEXT.baseUrl}
       hint={
         option.baseUrl === 'required'
           ? undefined
           : option.baseUrl === 'advanced'
-            ? 'Optional. Only for a proxy or a self-hosted gateway; leave empty to use the provider directly.'
-            : `Optional. Defaults to ${option.defaultBaseUrl ?? 'the provider address'}.`
+            ? PROVIDER_TEXT.baseUrlAdvancedHint
+            : option.defaultBaseUrl
+              ? PROVIDER_TEXT.baseUrlDefaultHint({ url: option.defaultBaseUrl })
+              : PROVIDER_TEXT.baseUrlProviderHint
       }
       value={baseUrl}
       placeholder={
-        option.defaultBaseUrl ??
-        (option.baseUrl === 'advanced' ? 'https://gateway.example.com' : 'http://127.0.0.1:8000/v1')
+        option.defaultBaseUrl ?? (option.baseUrl === 'advanced' ? GATEWAY_EXAMPLE : SERVER_EXAMPLE)
       }
       inputMode="url"
       autoComplete="off"
@@ -244,7 +235,7 @@ export function ProviderSetup({
       }}
     >
       <RadioGroup
-        legend="Provider"
+        legend={PROVIDER_TEXT.provider}
         name="provider-kind"
         value={kind}
         onChange={(v) => {
@@ -260,8 +251,8 @@ export function ProviderSetup({
       />
       <p className="muted">{option.help}</p>
       <TextField
-        label="Name"
-        hint={`Shown in model pickers. Defaults to “${option.name}”.`}
+        label={PROVIDER_TEXT.name}
+        hint={PROVIDER_TEXT.nameHint({ name: option.name })}
         value={label}
         maxLength={100}
         onChange={(e) => setLabel(e.target.value)}
@@ -269,11 +260,9 @@ export function ProviderSetup({
       {option.baseUrl === 'optional' || option.baseUrl === 'required' ? urlField : null}
       {option.key !== 'none' ? (
         <TextField
-          label="API key"
+          label={PROVIDER_TEXT.apiKey}
           hint={
-            option.key === 'optional'
-              ? "Optional. Stored in the Hub's secret vault; it is never shown again or kept in this browser."
-              : "Stored in the Hub's secret vault. It is never shown again or kept in this browser."
+            option.key === 'optional' ? PROVIDER_TEXT.apiKeyOptionalHint : PROVIDER_TEXT.apiKeyHint
           }
           type="password"
           autoComplete="off"
@@ -285,7 +274,7 @@ export function ProviderSetup({
       ) : null}
       {option.baseUrl === 'advanced' ? (
         <details className="ws-advanced" open={advancedOpen}>
-          <summary>Advanced</summary>
+          <summary>{PROVIDER_TEXT.advanced}</summary>
           {urlField}
         </details>
       ) : null}
@@ -297,7 +286,11 @@ export function ProviderSetup({
       <div className="row">
         <Button type="submit" variant="primary" disabled={busy !== null || missing || !!urlError}>
           {busy ? <Spinner /> : null}
-          {busy === 'testing' ? 'Testing connection…' : busy === 'saving' ? 'Saving…' : submitLabel}
+          {busy === 'testing'
+            ? PROVIDER_TEXT.testing
+            : busy === 'saving'
+              ? PROVIDER_TEXT.saving
+              : (submitLabel ?? PROVIDER_TEXT.saveAndTest)}
         </Button>
       </div>
     </form>

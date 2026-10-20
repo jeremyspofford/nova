@@ -3,9 +3,12 @@
 // with the item's own permissions and the verdict, installs and updates (the permission diff
 // accepted by its hash), removal, ratings kept on the Hub, and installed pets with their frames.
 // Every route needs a session, and all of them are the Hub owner's (installs are for everyone).
-// Plugins go through the plugins area's installer, skills into its skill index, themes into
-// `appearance.customThemes` through the settings writer; MCP servers come from the MCP area once
-// it hands over an installer (`useMcpInstaller`); until then MCP items answer `capability_missing`.
+// Plugins go through the plugins area's installer, and extensions (`.novax` bundles and plugins
+// holding `.nova-plugin/extension.json`) through the SDK area's (`useExtensionInstaller`); skills
+// go into the plugins area's skill index, themes into `appearance.customThemes` through the
+// settings writer, MCP registry entries and bundles through the MCP area's installer
+// (`useMcpInstaller`), all wired in app.ts. A Hub built without one of those seams answers
+// `capability_missing` for that kind (extensions then install as plain plugins).
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,11 +69,12 @@ export interface MarketDeps {
   plugins: { service: PluginService; index: SkillIndex };
   /**
    * Write a global setting the way `PATCH /api/v1/settings` does (a managed lock refuses with
-   * `policy_denied`); installing a theme writes `appearance.customThemes`.
+   * `policy_denied`); installing a theme writes `appearance.customThemes`, and removing the
+   * theme in use sets `appearance.customTheme` to null.
    */
   writeSetting: (
     accountId: string,
-    key: 'appearance.customThemes',
+    key: 'appearance.customThemes' | 'appearance.customTheme',
     value: unknown,
   ) => Promise<void>;
   audit?: AuditSink;
@@ -129,6 +133,8 @@ export function setupMarket(ctx: HubContext, deps: MarketDeps): Promise<MarketAr
     theme: new ThemeMarketInstaller({
       read: async () => (await ctx.setting('appearance.customThemes')).map((t) => ({ ...t })),
       write: (accountId, themes) => deps.writeSetting(accountId, 'appearance.customThemes', themes),
+      inUse: async () => await ctx.setting('appearance.customTheme'),
+      clearInUse: (accountId) => deps.writeSetting(accountId, 'appearance.customTheme', null),
     }),
     pet: pets,
   };

@@ -7,7 +7,7 @@ import type { McpServerView, ProviderAccountView } from '@nova/shared';
 import { Button, Icon, Kbd, RadioGroup, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { PROVIDER_NAMES } from '../providers/names.ts';
-import { formatBytes, pendingFromText } from '../chat/attachments.ts';
+import { pendingFromText } from '../chat/attachments.ts';
 import { formatBinding } from '../keys.ts';
 import { ProviderSetup } from '../providers/ProviderSetup.tsx';
 import { McpServerForm } from '../settings/McpServerForm.tsx';
@@ -15,16 +15,23 @@ import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useModels, useThreads } from '../stores.tsx';
-import { SAMPLE_DOCUMENT, SAMPLE_NAME, SAMPLE_PROMPT } from './sample.ts';
+import { fmt } from '@nova/i18n';
+import { rich } from '../i18n/rich.tsx';
+import { SAMPLE_DOCUMENT, SAMPLE_NAME } from './sample.ts';
+import { ONBOARDING_TEXT as T } from './strings.ts';
 
 type Step = 'provider' | 'model' | 'profile' | 'tool' | 'sample';
 
-const STEPS: { id: Step; title: string }[] = [
-  { id: 'provider', title: 'Connect a model provider' },
-  { id: 'model', title: 'Pick a default model' },
-  { id: 'profile', title: 'Choose your name' },
-  { id: 'tool', title: 'Connect a tool' },
-  { id: 'sample', title: 'Run a first task' },
+/** Settings → Data, at its import section. */
+export const DATA_IMPORT_PATH = '/settings/data#import';
+
+/** The steps in order; each one's title is T.steps[id]. */
+const STEPS: { id: Step }[] = [
+  { id: 'provider' },
+  { id: 'model' },
+  { id: 'profile' },
+  { id: 'tool' },
+  { id: 'sample' },
 ];
 
 export function Onboarding({
@@ -55,7 +62,7 @@ export function Onboarding({
 
   const save = (value: typeof state.value) =>
     settings.set('onboarding.state', value).catch((err: unknown) => {
-      toast.show(`Could not save your progress: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(T.saveProgressFailed({ reason: errorMessage(err) }), { tone: 'error' });
     });
 
   const go = (next: Step) => {
@@ -80,10 +87,10 @@ export function Onboarding({
 
   const nav = (
     <div className="onboarding-nav">
-      {index > 0 ? <Button onClick={back}>Back</Button> : null}
+      {index > 0 ? <Button onClick={back}>{T.back}</Button> : null}
       {step !== 'sample' ? (
         <Button variant="ghost" onClick={next}>
-          Skip this step
+          {T.skipStep}
         </Button>
       ) : null}
     </div>
@@ -92,26 +99,24 @@ export function Onboarding({
   return (
     <div className="onboarding">
       <header className="onboarding-header">
-        <p className="muted">
-          Step {index + 1} of {STEPS.length}
-        </p>
-        <ol className="onboarding-steps" aria-label="Setup steps">
+        <p className="muted">{T.stepOf({ n: index + 1, total: STEPS.length })}</p>
+        <ol className="onboarding-steps" aria-label={T.stepsLabel}>
           {STEPS.map((s, i) => (
             <li
               key={s.id}
               aria-current={s.id === step ? 'step' : undefined}
               data-done={i < index || undefined}
             >
-              {s.title}
+              {T.steps[s.id]}
             </li>
           ))}
         </ol>
         <button type="button" className="link onboarding-skip" onClick={skipAll}>
-          Skip setup
+          {T.skipSetup}
         </button>
       </header>
       <h1 ref={heading} tabIndex={-1} className="onboarding-title">
-        {STEPS[index]?.title}
+        {T.steps[step]}
       </h1>
       {step === 'provider' ? <ProviderStep onDone={next} nav={nav} /> : null}
       {step === 'model' ? <ModelStep onDone={next} nav={nav} /> : null}
@@ -149,12 +154,10 @@ function ProviderStep({ onDone, nav }: { onDone: () => void; nav: React.ReactNod
   const showForm = adding || existing?.length === 0;
   return (
     <div className="stack">
-      <p className="muted">
-        Nova sends your messages to the model provider you choose. Pick Mock to try it offline.
-      </p>
+      <p className="muted">{T.provider.intro}</p>
       {existing?.length ? (
         <div className="panel-inset">
-          <p>Already connected:</p>
+          <p>{T.provider.connected}</p>
           <ul>
             {existing.map((p) => (
               <li key={p.id}>
@@ -165,15 +168,30 @@ function ProviderStep({ onDone, nav }: { onDone: () => void; nav: React.ReactNod
           </ul>
           <div className="row">
             <Button variant="primary" onClick={onDone}>
-              Continue
+              {T.continue}
             </Button>
-            {!adding ? <Button onClick={() => setAdding(true)}>Add another</Button> : null}
+            {!adding ? (
+              <Button onClick={() => setAdding(true)}>{T.provider.addAnother}</Button>
+            ) : null}
           </div>
         </div>
       ) : null}
+      {/* After "Delete all data" a Hub starts empty: an owner can restore an export instead. The
+          setup state stays as it is; the imported settings decide it after the Hub restarts. */}
+      <div className="row">
+        <p className="muted" id="onboarding-restore-hint">
+          {T.provider.restoreHint}
+        </p>
+        <Button
+          aria-describedby="onboarding-restore-hint"
+          onClick={() => navigate(DATA_IMPORT_PATH)}
+        >
+          {T.provider.restore}
+        </Button>
+      </div>
       {showForm && existing !== null ? (
         <ProviderSetup
-          submitLabel="Connect and test"
+          submitLabel={T.provider.connectAndTest}
           onConnected={() => {
             void models.refresh();
             onDone();
@@ -196,7 +214,7 @@ function ModelStep({ onDone, nav }: { onDone: () => void; nav: React.ReactNode }
   if (!loading && models.length === 0) {
     return (
       <div className="stack">
-        <p>No models are available yet. Go back and connect a provider, or skip for now.</p>
+        <p>{T.model.none}</p>
         {nav}
       </div>
     );
@@ -210,12 +228,12 @@ function ModelStep({ onDone, nav }: { onDone: () => void; nav: React.ReactNode }
         settings
           .set('chat.defaultModel', selected)
           .then(onDone, (err: unknown) =>
-            toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' }),
+            toast.show(T.saveFailed({ reason: errorMessage(err) }), { tone: 'error' }),
           );
       }}
     >
       <RadioGroup
-        legend="Default model for new chats"
+        legend={T.model.legend}
         name="default-model"
         value={selected}
         onChange={setChoice}
@@ -227,7 +245,7 @@ function ModelStep({ onDone, nav }: { onDone: () => void; nav: React.ReactNode }
       />
       <div className="row">
         <Button type="submit" variant="primary" disabled={!selected}>
-          Continue
+          {T.continue}
         </Button>
       </div>
       {nav}
@@ -264,13 +282,13 @@ function ProfileStep({
             onDisplayName(res.displayName);
             onDone();
           },
-          (err: unknown) => setError(errorMessage(err, 'Could not save your name.')),
+          (err: unknown) => setError(errorMessage(err, T.profile.saveFailed)),
         );
       }}
     >
       <TextField
-        label="Display name"
-        hint="Shown in Nova on your devices. Add a username and avatar later in Settings, Profile & usage."
+        label={T.profile.displayName}
+        hint={T.profile.hint}
         value={name}
         maxLength={100}
         autoComplete="name"
@@ -279,7 +297,7 @@ function ProfileStep({
       />
       <div className="row">
         <Button type="submit" variant="primary">
-          Continue
+          {T.continue}
         </Button>
       </div>
       {nav}
@@ -292,13 +310,10 @@ function ToolStep({ onDone, nav }: { onDone: () => void; nav: React.ReactNode })
   const [added, setAdded] = useState<McpServerView[]>([]);
   return (
     <div className="stack">
-      <p>
-        Tools let Nova work with your files, issue trackers, calendars and other services through
-        MCP servers. Add one now, or skip this step.
-      </p>
+      <p>{T.tool.intro}</p>
       {added.length ? (
         <p role="status">
-          Added {added.map((s) => s.name).join(', ')}. It connects in the background.
+          {T.tool.added({ n: added.length, names: fmt.list(added.map((s) => s.name)) })}
         </p>
       ) : null}
       {adding ? (
@@ -314,26 +329,28 @@ function ToolStep({ onDone, nav }: { onDone: () => void; nav: React.ReactNode })
       ) : (
         <div className="row">
           <Button onClick={() => setAdding(true)}>
-            <Icon name="plus" /> {added.length ? 'Add another server' : 'Add an MCP server'}
+            <Icon name="plus" /> {added.length ? T.tool.addAnotherServer : T.tool.addServer}
           </Button>
           <Button variant="primary" onClick={onDone}>
-            Continue
+            {T.continue}
           </Button>
         </div>
       )}
-      <p className="muted">You can connect tools later in Settings, Tools &amp; MCP.</p>
+      <p className="muted">{T.tool.later}</p>
       <p className="muted">
-        Coming from another assistant?{' '}
-        <a
-          href="/settings/import"
-          onClick={(e) => {
-            e.preventDefault();
-            navigate('/settings/import');
-          }}
-        >
-          Import its skills, servers, memories and chats
-        </a>
-        .
+        {rich(T.tool.importPrompt, {
+          link: (
+            <a
+              href="/settings/import"
+              onClick={(e) => {
+                e.preventDefault();
+                navigate('/settings/import');
+              }}
+            >
+              {T.tool.importLink}
+            </a>
+          ),
+        })}
       </p>
       {nav}
     </div>
@@ -347,7 +364,7 @@ function SampleStep({ onFinish, nav }: { onFinish: () => Promise<void>; nav: Rea
   const { models } = useModels();
   const settings = useSettings();
   const defaultModel = settings.get('chat.defaultModel').value;
-  const [text, setText] = useState(SAMPLE_PROMPT);
+  const [text, setText] = useState(() => T.sample.prompt);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attachment] = useState(() =>
@@ -362,16 +379,16 @@ function SampleStep({ onFinish, nav }: { onFinish: () => Promise<void>; nav: Rea
     try {
       const thread = await api.createThread({
         mode: 'chat',
-        title: 'Sample: summarize a document',
+        title: T.sample.threadTitle,
         model: model ?? undefined,
       });
       memory.pending.set(thread.id, { text, attachments: [attachment] });
       threads.upsertLocal(thread);
       await onFinish();
       navigate(chatPath(thread.id));
-      toast.show('Setup complete. Your sample task is running.', { tone: 'success' });
+      toast.show(T.sample.done, { tone: 'success' });
     } catch (err) {
-      setError(errorMessage(err, 'Could not start the sample task.'));
+      setError(errorMessage(err, T.sample.startFailed));
       setBusy(false);
     }
   };
@@ -380,31 +397,22 @@ function SampleStep({ onFinish, nav }: { onFinish: () => Promise<void>; nav: Rea
     <div className="stack">
       <aside className="primer" aria-labelledby="primer-title">
         <h2 id="primer-title" className="primer-title">
-          <Icon name="stop" /> You stay in control
+          <Icon name="stop" /> {T.sample.control}
         </h2>
         <ul>
           <li>
-            Press <strong>Stop</strong> or <Kbd keys={formatBinding('escape', mac)} /> to stop a
-            reply at any time. What was written so far is kept and marked “Stopped”.
+            {rich(T.sample.stopTip, {
+              stop: <strong>{T.sample.stop}</strong>,
+              key: <Kbd keys={formatBinding('escape', mac)} />,
+            })}
           </li>
-          <li>
-            Before Nova takes a consequential action, it shows an approval card that says what it
-            will do and why. You can allow it once, for the session or always, deny it and let the
-            work continue, deny it and stop, or do the step yourself. Every decision is in the audit
-            log under Settings, Diagnostics.
-          </li>
-          <li>
-            Open the command palette with <Kbd keys={formatBinding('mod+k', mac)} /> to find any
-            action.
-          </li>
+          <li>{T.sample.approvalTip}</li>
+          <li>{rich(T.sample.paletteTip, { key: <Kbd keys={formatBinding('mod+k', mac)} /> })}</li>
         </ul>
       </aside>
-      <p>
-        Try a harmless first task: Nova summarizes a short sample document. This runs on the model
-        you picked{model ? '' : ' (connect a provider first)'}.
-      </p>
+      <p>{model ? T.sample.tryIt : T.sample.tryItNoModel}</p>
       <label className="nv-field-label" htmlFor="sample-message">
-        Message
+        {T.sample.message}
       </label>
       <textarea
         id="sample-message"
@@ -415,8 +423,8 @@ function SampleStep({ onFinish, nav }: { onFinish: () => Promise<void>; nav: Rea
       />
       <details className="sample-attachment">
         <summary>
-          <Icon name="file" /> {SAMPLE_NAME}{' '}
-          <span className="muted">({formatBytes(attachment.size)})</span>
+          <Icon name="file" /> <span translate="no">{SAMPLE_NAME}</span>{' '}
+          <span className="muted">({fmt.bytes(attachment.size)})</span>
         </summary>
         <pre>{SAMPLE_DOCUMENT}</pre>
       </details>
@@ -431,14 +439,14 @@ function SampleStep({ onFinish, nav }: { onFinish: () => Promise<void>; nav: Rea
           onClick={() => void run()}
           disabled={busy || !model || !text.trim()}
         >
-          Run this
+          {T.sample.run}
         </Button>
         <Button
           onClick={() => {
             void onFinish().then(() => navigate(chatPath(null)));
           }}
         >
-          Finish without the sample
+          {T.sample.finishWithout}
         </Button>
       </div>
       {nav}

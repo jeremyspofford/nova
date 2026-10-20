@@ -5,6 +5,7 @@
 // Idempotency-Key, which a resend reuses, so the Hub applies a change once however often it is
 // sent. A change the Hub refuses stays as failed until it is retried or discarded; nothing is
 // dropped silently. A retryable failure waits with exponential backoff and jitter.
+import { defineMessages } from '@nova/i18n';
 import { uuidv7, type SyncOp } from '@nova/shared';
 import { SealedStore, Vault, type KvBackend } from '../replica/vault.ts';
 
@@ -13,11 +14,66 @@ export type QueueStatus = 'queued' | 'sending' | 'failed' | 'done';
 /** What a change is: a message, a new chat, a chat's title or state, a project, a page, an answer. */
 export type QueueKind = 'message' | 'chat' | 'chat_edit' | 'project' | 'space' | 'page' | 'answer';
 
+/**
+ * What a change does and to what, kept as data so its label is worded in the active locale when
+ * shown (`itemLabel` in offline/format.ts): "Message in “Trip planning”".
+ */
+export interface QueueSubject {
+  action:
+    | 'newChat'
+    | 'message'
+    | 'renameChat'
+    | 'archiveChat'
+    | 'restoreChat'
+    | 'pinChat'
+    | 'unpinChat'
+    | 'moveChat'
+    | 'projectInstructions'
+    | 'renameProject'
+    | 'renameSpace'
+    | 'editPage'
+    | 'answer';
+  /** The chat's, project's, space's or page's name, when it has one. */
+  name: string | null;
+  /** The new name, for a rename. */
+  to?: string | null;
+}
+
+/**
+ * Why a change failed or waits, as a code `problemText` words when shown; `rejected`: the Hub
+ * refused it for the reason in `errorCode`.
+ */
+export type QueueProblem =
+  | 'rejected'
+  | 'no_replica'
+  | 'signed_out'
+  | 'sync_disabled'
+  | 'loading'
+  | 'in_flight'
+  | 'not_yet'
+  | 'answer_not_yet'
+  | 'send_failed';
+
+/** What became of a change once sent, as a code `noteText` words when shown. */
+export const QUEUE_NOTES = [
+  /** A newer change made elsewhere won; this one went to the merge log. */
+  'overwritten',
+  /** What came of asking the Hub to answer a message written offline. */
+  'requested',
+  'answered',
+  'not_last',
+  'turn_in_progress',
+  'shared_thread',
+  'not_user_message',
+  'answer_failed',
+] as const;
+export type QueueNote = (typeof QUEUE_NOTES)[number];
+
 export interface QueueItem {
   id: string;
   kind: QueueKind;
-  /** What it is, in words ("Message in “Trip planning”"). */
-  label: string;
+  /** What it is (worded when shown). */
+  subject: QueueSubject;
   /** The chat it belongs to, for messages, answers and chat changes. */
   threadId: string | null;
   /** The entity it changes (the new message's id for a message). */
@@ -34,31 +90,39 @@ export interface QueueItem {
   attempts: number;
   /** When a retryable failure is tried again. */
   nextAttemptAt: string | null;
-  /** Why it failed or waits, in a sentence. */
+  /** The Hub's own words for why it failed or waits (English, D9), when it gave some. */
   error: string | null;
+  /** Our code for why it failed or waits, worded when shown; null when `error` says it. */
+  problem: QueueProblem | null;
   errorCode: string | null;
   /** What happened once sent (a newer change won, so this one went to the merge log). */
-  note: string | null;
+  note: QueueNote | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export type NewQueueItem = Pick<
   QueueItem,
-  'kind' | 'label' | 'threadId' | 'entityId' | 'text' | 'model' | 'deviceId' | 'ops'
+  'kind' | 'subject' | 'threadId' | 'entityId' | 'text' | 'model' | 'deviceId' | 'ops'
 >;
+
+/** Why, for an outcome that did not send: our code, or the Hub's own words. */
+interface Why {
+  problem: QueueProblem | null;
+  error?: string | null;
+}
 
 /** How one send went. */
 export type SendOutcome =
-  | { kind: 'done'; note?: string | null }
+  | { kind: 'done'; note?: QueueNote | null }
   /** Refused for good: kept as failed until retried or discarded; the next item goes on. */
-  | { kind: 'failed'; code: string; message: string }
+  | ({ kind: 'failed'; code: string } & Why)
   /** The Hub is unreachable: everything waits for it to come back. */
   | { kind: 'unreachable' }
   /** Worth trying again (busy, a server error): it waits with backoff, and so does what follows. */
-  | { kind: 'later'; message: string }
+  | ({ kind: 'later' } & Why)
   /** Nothing can go until the user acts (signed out): it stays queued with the reason. */
-  | { kind: 'blocked'; message: string };
+  | ({ kind: 'blocked' } & Why);
 
 export interface QueueDeps {
   kv: () => KvBackend | null;
@@ -72,8 +136,9 @@ export interface QueueDeps {
   keepDone?: number;
 }
 
-export const NO_STORAGE_TEXT =
-  'This browser cannot keep changes to send later: it needs IndexedDB and WebCrypto.';
+const STORAGE_TEXT = defineMessages('offline.storage', {
+  none: 'This browser cannot keep changes to send later: it needs IndexedDB and WebCrypto.',
+});
 
 /** The wait before attempt `attempts + 1`: exponential, capped, with "equal jitter". */
 export function backoffMs(
@@ -170,7 +235,7 @@ export class OutboundQueue {
     await this.load();
     if (this.#store) return this.#store;
     const kv = this.#deps.kv();
-    if (!kv) throw new Error(NO_STORAGE_TEXT);
+    if (!kv) throw new Error(STORAGE_TEXT.none);
     this.#store = new SealedStore(kv, 'queue', await Vault.create(kv, 'queue'));
     return this.#store;
   }
@@ -187,6 +252,7 @@ export class OutboundQueue {
       attempts: 0,
       nextAttemptAt: null,
       error: null,
+      problem: null,
       errorCode: null,
       note: null,
       createdAt: at,
@@ -203,7 +269,13 @@ export class OutboundQueue {
     const item = this.#items.find((i) => i.id === id);
     if (!item || item.status === 'sending' || item.status === 'done') return;
     // The code stays until the next outcome: a change refused for its clock is stamped again.
-    await this.#update(id, { status: 'queued', attempts: 0, nextAttemptAt: null, error: null });
+    await this.#update(id, {
+      status: 'queued',
+      attempts: 0,
+      nextAttemptAt: null,
+      error: null,
+      problem: null,
+    });
     await this.drain();
   }
 
@@ -274,10 +346,8 @@ export class OutboundQueue {
       try {
         outcome = await this.#deps.send(this.#items.find((i) => i.id === current.id) ?? current);
       } catch (err) {
-        outcome = {
-          kind: 'later',
-          message: err instanceof Error ? err.message : 'Sending failed.',
-        };
+        const said = err instanceof Error && err.message ? err.message : null;
+        outcome = { kind: 'later', problem: said ? null : 'send_failed', error: said };
       }
       if (outcome.kind === 'done') {
         await this.#store?.delete([current.id]);
@@ -288,6 +358,7 @@ export class OutboundQueue {
                   ...i,
                   status: 'done' as const,
                   error: null,
+                  problem: null,
                   errorCode: null,
                   nextAttemptAt: null,
                   note: outcome.note ?? null,
@@ -302,7 +373,8 @@ export class OutboundQueue {
       if (outcome.kind === 'failed') {
         await this.#update(current.id, {
           status: 'failed',
-          error: outcome.message,
+          error: outcome.error ?? null,
+          problem: outcome.problem,
           errorCode: outcome.code,
           nextAttemptAt: null,
         });
@@ -313,7 +385,11 @@ export class OutboundQueue {
         return;
       }
       if (outcome.kind === 'blocked') {
-        await this.#update(current.id, { status: 'queued', error: outcome.message });
+        await this.#update(current.id, {
+          status: 'queued',
+          error: outcome.error ?? null,
+          problem: outcome.problem,
+        });
         return;
       }
       const attempts = current.attempts + 1;
@@ -321,7 +397,8 @@ export class OutboundQueue {
       await this.#update(current.id, {
         status: 'queued',
         attempts,
-        error: outcome.message,
+        error: outcome.error ?? null,
+        problem: outcome.problem,
         nextAttemptAt: new Date(this.#now() + delay).toISOString(),
       });
       this.#schedule(delay);

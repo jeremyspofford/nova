@@ -11,23 +11,13 @@ import {
 } from '@nova/shared';
 import { Button, Dialog, Spinner, TextField, useToast } from '@nova/ui';
 import { useHubStream } from '../hub-events.ts';
-import { ManagedNote } from '../managed/ManagedNote.tsx';
+import { rich } from '../i18n/rich.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { SwitchField } from '../settings/controls.tsx';
 import { useSettings } from '../settings.tsx';
 import { useDatactlApi } from './api-m8.ts';
 import { CRASH_KIND, DATA_STRINGS as S, dataErrorMessage } from './format.ts';
 import { ConfirmDialog, ErrorBox, useFetched } from './parts.tsx';
-
-const CRASH_TEXT = {
-  sentAt: (when: string) => `Sent ${when}.`,
-  failed: (why: string) => `Not sent: ${why}`,
-  title: (name: string, when: string) => `${name}, ${when}`,
-  endpointSaved: 'Endpoint saved.',
-  deleted: 'Crash report deleted.',
-  deletedAll: (n: number) => (n === 1 ? '1 crash report deleted.' : `${n} crash reports deleted.`),
-  endpointLabel: (endpoint: string) => `Endpoint: ${endpoint}`,
-};
 
 export function CrashReportsSection() {
   const api = useDatactlApi();
@@ -58,9 +48,9 @@ export function CrashReportsSection() {
     try {
       await settings.set('privacy.crashReportEndpoint', value);
       setDraft(null);
-      toast.show(CRASH_TEXT.endpointSaved, { tone: 'success' });
+      toast.show(S.crashEndpointSaved, { tone: 'success' });
     } catch (err) {
-      setEndpointError(dataErrorMessage(err, 'Could not save the endpoint.'));
+      setEndpointError(dataErrorMessage(err, S.crashEndpointFailed));
     }
   };
 
@@ -84,7 +74,7 @@ export function CrashReportsSection() {
             void settings
               .set('privacy.crashReports', false)
               .catch((err: unknown) =>
-                toast.show(`Could not save: ${dataErrorMessage(err)}`, { tone: 'error' }),
+                toast.show(S.saveFailedWhy({ why: dataErrorMessage(err) }), { tone: 'error' }),
               );
         }}
       />
@@ -100,9 +90,12 @@ export function CrashReportsSection() {
           type="url"
           inputMode="url"
           spellCheck={false}
+          // eslint-disable-next-line nova-i18n/no-literal-ui-text -- a URL scheme, not words
           placeholder="https://"
+          dir="ltr"
           value={shown}
-          disabled={endpoint.locked}
+          locked={endpoint.locked}
+          setting="privacy.crashReportEndpoint"
           hint={S.crashEndpointHint}
           error={endpointError ?? undefined}
           onChange={(e) => {
@@ -110,7 +103,6 @@ export function CrashReportsSection() {
             setEndpointError(null);
           }}
         />
-        {endpoint.locked ? <ManagedNote as="p" setting="privacy.crashReportEndpoint" /> : null}
         <Button type="submit" disabled={endpoint.locked || draft === null}>
           {S.crashEndpointSave}
         </Button>
@@ -118,20 +110,22 @@ export function CrashReportsSection() {
       {list.error ? (
         <ErrorBox message={dataErrorMessage(list.error, S.crashLoadError)} onRetry={list.reload} />
       ) : null}
-      {list.loading ? <Spinner label="Loading crash reports" /> : null}
+      {list.loading ? <Spinner label={S.crashLoading} /> : null}
       {list.data && items.length === 0 ? <p className="muted">{S.crashNone}</p> : null}
       {items.length ? (
         <ul className="dc-reports">
           {items.map((r) => (
             <li key={r.id} className="dc-report">
               <div className="stack">
-                <strong>{CRASH_TEXT.title(r.errorName, formatWhen(r.createdAt))}</strong>
+                <strong>
+                  {S.crashReportTitle({ name: r.errorName, when: formatWhen(r.createdAt) })}
+                </strong>
                 <span className="muted">{CRASH_KIND[r.kind]}</span>
                 <span className="muted">
                   {r.sentAt
-                    ? CRASH_TEXT.sentAt(formatWhen(r.sentAt))
+                    ? S.crashSentAt({ when: formatWhen(r.sentAt) })
                     : r.lastError
-                      ? CRASH_TEXT.failed(r.lastError)
+                      ? S.crashFailed({ why: r.lastError })
                       : S.notSent}
                 </span>
               </div>
@@ -156,7 +150,7 @@ export function CrashReportsSection() {
         open={asking}
         title={S.crashOnTitle}
         confirmLabel={S.crashOnConfirm}
-        errorText={(err) => dataErrorMessage(err, 'Could not save.')}
+        errorText={(err) => dataErrorMessage(err, S.saveFailed)}
         onClose={() => setAsking(false)}
         onConfirm={async () => {
           await settings.set('privacy.crashReports', true);
@@ -167,7 +161,9 @@ export function CrashReportsSection() {
         <div className="stack">
           <p>{S.crashIntro}</p>
           <p>{S.crashOnBody}</p>
-          <p>{endpoint.value ? CRASH_TEXT.endpointLabel(endpoint.value) : S.crashOnNoEndpoint}</p>
+          <p>
+            {endpoint.value ? S.crashEndpointIs({ endpoint: endpoint.value }) : S.crashOnNoEndpoint}
+          </p>
         </div>
       </ConfirmDialog>
       <ConfirmDialog
@@ -175,22 +171,27 @@ export function CrashReportsSection() {
         title={deleting === 'all' ? S.crashDeleteAllTitle : S.crashDeleteTitle}
         confirmLabel={S.crashDelete}
         danger
-        errorText={(err) => dataErrorMessage(err, 'Could not delete.')}
+        errorText={(err) => dataErrorMessage(err, S.crashDeleteFailed)}
         onClose={() => setDeleting(null)}
         onConfirm={async () => {
           if (deleting === 'all') {
             const { deleted } = await api.deleteAllCrashReports!();
-            toast.show(CRASH_TEXT.deletedAll(deleted), { tone: 'success' });
+            toast.show(S.crashDeletedAll({ n: deleted }), { tone: 'success' });
           } else if (deleting) {
             await api.deleteCrashReport!(deleting.id);
-            toast.show(CRASH_TEXT.deleted, { tone: 'success' });
+            toast.show(S.crashDeleted, { tone: 'success' });
           }
           setDeleting(null);
           list.reload();
         }}
       >
         {deleting && deleting !== 'all' ? (
-          <p>{CRASH_TEXT.title(deleting.errorName, formatWhen(deleting.createdAt))}</p>
+          <p>
+            {S.crashReportTitle({
+              name: deleting.errorName,
+              when: formatWhen(deleting.createdAt),
+            })}
+          </p>
         ) : null}
       </ConfirmDialog>
       {preview ? (
@@ -219,7 +220,7 @@ function PreviewDialog({
     let alive = true;
     api.previewCrashReport!(report.id).then(
       (v) => alive && setView(v),
-      (err: unknown) => alive && setError(dataErrorMessage(err, 'Could not load the preview.')),
+      (err: unknown) => alive && setError(dataErrorMessage(err, S.crashPreviewFailed)),
     );
     return () => {
       alive = false;
@@ -234,7 +235,7 @@ function PreviewDialog({
       onSent(r);
       setSent(true);
     } catch (err) {
-      setError(dataErrorMessage(err, 'The report was not sent.'));
+      setError(dataErrorMessage(err, S.crashSendFailed));
     } finally {
       setBusy(false);
     }
@@ -253,7 +254,7 @@ function PreviewDialog({
       footer={
         <>
           <Button ref={closeRef} onClick={onClose}>
-            Close
+            {S.close}
           </Button>
           <Button
             variant="primary"
@@ -265,15 +266,21 @@ function PreviewDialog({
         </>
       }
     >
-      {!view && !error ? <Spinner label="Loading the preview" /> : null}
+      {!view && !error ? <Spinner label={S.crashPreviewLoading} /> : null}
       {view ? (
         <div className="stack">
-          <pre className="dc-pre" tabIndex={0} aria-label={S.crashPreviewTitle}>
+          <pre role="group" className="dc-pre" tabIndex={0} aria-label={S.crashPreviewTitle}>
             {view.body}
           </pre>
           {view.wouldSend && view.endpoint ? (
             <p>
-              {S.crashWouldSend}: <code className="dc-mono">{view.endpoint}</code>
+              {rich(S.crashWouldSend, {
+                endpoint: (
+                  <code className="dc-mono" dir="ltr">
+                    {view.endpoint}
+                  </code>
+                ),
+              })}
             </p>
           ) : (
             <p className="muted">{why}</p>

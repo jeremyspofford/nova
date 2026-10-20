@@ -10,7 +10,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MarketplacePage } from '../src/market/MarketplacePage.tsx';
 import { useLocation } from '../src/router.ts';
 import { FakeEventSource } from './fakes.ts';
-import { item, pet, renderWithMarket, sampleItems, type FakeItem } from './fakes-m8-market.ts';
+import { fakeFingerprint } from './fakes-m8-extensions.ts';
+import {
+  SAMPLE_KEY,
+  item,
+  pet,
+  renderWithMarket,
+  sampleItems,
+  type FakeItem,
+} from './fakes-m8-market.ts';
 import { resetDom } from './render.tsx';
 
 afterEach(() => {
@@ -142,7 +150,11 @@ describe('installing', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Install Release notes' }));
     let dialog = await screen.findByRole('dialog', { name: 'Install Release notes 1.0.0?' });
     expect(within(dialog).getByText('Verified')).toBeTruthy();
-    expect(dialog.textContent).toContain('Signed by Example Labs.');
+    // The sample catalog pins its key: the dialog says what vouches, not a bare key (J10 #6).
+    expect(dialog.textContent).toContain(
+      `Verified: listed in Sample catalog, signed with the key this catalog pins (${fakeFingerprint(SAMPLE_KEY)}).`,
+    );
+    expect(dialog.textContent).not.toContain('Its bundle is signed');
     expect(within(dialog).getByRole('list', { name: 'It can' }).textContent).toContain(
       'Its tools that change data ask you first',
     );
@@ -268,7 +280,15 @@ describe('installing', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Update Release notes to 2.0.0?' });
     const diff = within(dialog).getByRole('heading', { name: 'Permission changes' }).parentElement!;
     expect(diff.textContent).toContain('New: Reach api.github.com on the network');
-    expect(diff.textContent).toContain('Changed: Its tools that change data: ask → allow');
+    // Worded, never raw: a looser default stands out as sensitive.
+    const changed = within(diff).getByText('Its tools that change data', {
+      exact: false,
+    }).parentElement!;
+    expect(changed.getAttribute('data-sensitive')).toBe('true');
+    expect(changed.textContent).toContain('Sensitive');
+    expect(
+      within(changed).getByText('By default it: asks you first → runs without asking').tagName,
+    ).toBe('STRONG');
     expect(diff.textContent).toContain('No longer: Read the secret token');
     expect(dialog.textContent).toContain('Replaces version 1.0.0.');
     const update = within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Update' });
@@ -347,34 +367,33 @@ describe('policy and install rules', () => {
       market: {
         catalogStates: { loose: { signature: 'unsigned' } },
         items: [...sampleItems(), loose],
-        managed: {
-          active: true,
-          failClosed: null,
-          sources: [
-            {
-              channel: 'local',
-              location: '/etc/nova/managed-settings.json',
-              status: 'active',
-              problem: null,
-              inForce: true,
-              cached: false,
-              serial: 3,
-              loadedAt: '2026-10-19T08:00:00.000Z',
-              checkedAt: '2026-10-19T09:00:00.000Z',
-            },
-          ],
-          settings: [],
-          restrict: [{ channel: 'local', restrict: { unverifiedInstalls: false } }],
-          ignored: [],
-          checkedAt: '2026-10-19T09:00:00.000Z',
-        },
+      },
+      policy: {
+        active: true,
+        failClosed: null,
+        sources: [
+          {
+            channel: 'local',
+            location: '/etc/nova/managed-settings.json',
+            status: 'active',
+            problem: null,
+            inForce: true,
+            cached: false,
+            serial: 3,
+            loadedAt: '2026-10-19T08:00:00.000Z',
+            checkedAt: '2026-10-19T09:00:00.000Z',
+          },
+        ],
+        settings: [],
+        restrict: [{ channel: 'local', restrict: { unverifiedInstalls: false } }],
+        egress: null,
+        ignored: [],
+        checkedAt: '2026-10-19T09:00:00.000Z',
       },
     });
-    expect(
-      await screen.findByText(
-        'Managed by your organization (set by the policy file /etc/nova/managed-settings.json)',
-      ),
-    ).toBeTruthy();
+    expect((await screen.findByText('(policy file)')).parentElement!.textContent).toBe(
+      'Managed by your organization(policy file)',
+    );
     expect(screen.getByText(/Unverified items cannot be installed/)).toBeTruthy();
     await userEvent.type(screen.getByLabelText('Search the marketplace'), 'Notes');
     await userEvent.click(await screen.findByRole('button', { name: 'Install Notes' }));

@@ -12,22 +12,24 @@ import type {
   FirmwarePolicyView,
   FirmwareValue,
 } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { ApiError } from '../api.ts';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
 import { Chip, ConfirmDialog, Unavailable } from '../devices/parts.tsx';
 import { minutesText } from '../boot/format.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useAnnounce } from '../services.tsx';
 import { useSetting } from '../settings.tsx';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { followLink } from '../work/nav.tsx';
 import { useFirmwareApi } from './api-m75.ts';
 import {
   CHANGE_STATUS,
   FIRMWARE_SETTINGS_PATH,
+  FIRMWARE_TEXT,
   OPEN_STATUSES,
   REFUSAL_TEXT,
   changeErrorText,
-  changeKindText,
   firmwareErrorMessage,
   inPlainWords,
   keyLabel,
@@ -36,6 +38,64 @@ import {
 } from './format.ts';
 import { HubOnlyApproval } from './HubOnlyApproval.tsx';
 import './firmware.css';
+
+export const FIRMWARE_CHANGE_TEXT = defineMessages('firmware.change', {
+  nothingChanges: 'Nothing changes.',
+  onDeviceNow: 'On the device now',
+  security: 'Security',
+  notRead: 'Not read',
+  weakensSecurity: 'Weakens security',
+  /** The tag next to a security-degrading change in the Apply dialog's list. */
+  weakensSecurityTag: 'weakens security',
+  /** "Change planned 5 min ago", "Rollback applied just now". */
+  applied: '{kind, select, rollback {Rollback applied {when}} other {Change applied {when}}}',
+  planned: '{kind, select, rollback {Rollback planned {when}} other {Change planned {when}}}',
+  lastExpired: 'The last approval request expired.',
+  lastDenied: 'Your last approval request was denied.',
+  asked: 'Approval requested. Answer it below or on the Approvals page.',
+  askFailed: 'Could not ask for approval.',
+  rollbackRestores: 'What the rollback restores on {device}',
+  unsafe:
+    'These settings may not be safe: the watchdog could not restore everything, so {device} may still hold some of the new values. Check what it holds now, and roll the change back from here.',
+  leftOut: 'Left out of the plan:',
+  leftOutItem: '{setting}: {reason}',
+  afterRestart: 'Takes effect after the device restarts.',
+  weakensOff:
+    'This change weakens security, and “Allow changes that weaken security” is off. {link}.',
+  changeInSettings: 'Change it in Settings → Devices',
+  approveRollback: 'Approve restoring the firmware settings of {device}',
+  approveChange: 'Approve this firmware change on {device}',
+  approved: 'Approved. Nothing has changed yet: apply it when you are ready.',
+  applyRollback: 'Apply the rollback…',
+  apply: 'Apply…',
+  rollBackAt: 'Roll back the change applied {when}',
+  rollBack: 'Roll back…',
+  snapshotOf: 'Snapshot of {when}',
+  rollbackTitle: 'Roll back the firmware settings of {device}?',
+  applyTitle: 'Apply this firmware change to {device}?',
+  rollbackBody:
+    '{n, plural, one {# setting on {device} goes back to its value in the snapshot.} other {# settings on {device} go back to their values in the snapshot.}} A rollback does not restart the device: restart it yourself for the settings to take effect.',
+  applyBody:
+    '{n, plural, one {# setting changes on {device}.} other {# settings change on {device}.}} The values before are kept in a snapshot, so you can roll back.',
+  rollbackConfirm: 'Roll back {device}',
+  applyConfirm: 'Apply to {device}',
+  rolledBackOn: 'Rolled back on {device}.',
+  appliedRestarting: 'Applied. {device} is restarting with the watchdog armed.',
+  appliedTo: 'Applied to {device}.',
+  changesToApply: 'Changes to apply',
+  changeItem: '{setting}: {from} → {to}',
+  noWatchdog:
+    '{device} has a BIOS admin password, which novad never keeps, so its watchdog could not restore the settings: Nova does not restart it.',
+  restartYourself:
+    'Restart it yourself for the settings to take effect, and roll back from here if it misbehaves.',
+  restartNow: 'Restart {device} now, with the watchdog',
+  restartHint:
+    'If {device} does not come back within {duration}, it restores the previous settings and restarts once.',
+  nextRestart: 'The settings take effect at its next restart, without the watchdog.',
+  noRestart: 'These settings take effect without a restart.',
+});
+
+const S = FIRMWARE_CHANGE_TEXT;
 
 /** The diff as a table: one row per setting, before and after, security-degrading rows marked. */
 export function DiffTable({
@@ -48,19 +108,20 @@ export function DiffTable({
   /** What the device reports now, per setting (shown when a revert did not complete). */
   held?: Record<string, FirmwareValue | null> | null;
 }) {
-  if (!change.diff.length) return <p className="muted">Nothing changes.</p>;
+  if (!change.diff.length) return <p className="muted">{S.nothingChanges}</p>;
   const marked = change.diff.some((e) => e.securityDegrading);
+  const C = FIRMWARE_TEXT.columns;
   return (
     <div className="fw-table-wrap">
       <table className="ws-table">
         <caption>{caption}</caption>
         <thead>
           <tr>
-            <th scope="col">Setting</th>
-            <th scope="col">Before</th>
-            <th scope="col">After</th>
-            {held ? <th scope="col">On the device now</th> : null}
-            {marked ? <th scope="col">Security</th> : null}
+            <th scope="col">{C.setting}</th>
+            <th scope="col">{C.before}</th>
+            <th scope="col">{C.after}</th>
+            {held ? <th scope="col">{S.onDeviceNow}</th> : null}
+            {marked ? <th scope="col">{S.security}</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -69,12 +130,12 @@ export function DiffTable({
               <th scope="row">{keyLabel(e.key)}</th>
               <td>{valueText(e.from)}</td>
               <td>{valueText(e.to)}</td>
-              {held ? <td>{e.key in held ? valueText(held[e.key]) : 'Not read'}</td> : null}
+              {held ? <td>{e.key in held ? valueText(held[e.key]) : S.notRead}</td> : null}
               {marked ? (
                 <td>
                   {e.securityDegrading ? (
                     <span className="fw-degrading">
-                      <Icon name="alert" /> Weakens security
+                      <Icon name="alert" /> {S.weakensSecurity}
                     </span>
                   ) : null}
                 </td>
@@ -89,9 +150,8 @@ export function DiffTable({
 
 /** "Change planned 5 min ago", "Rollback applied just now". */
 function headline(c: FirmwareChangeView): string {
-  const kind = changeKindText(c);
-  if (c.appliedAt) return `${kind} applied ${formatWhen(c.appliedAt)}`;
-  return `${kind} planned ${formatWhen(c.createdAt)}`;
+  if (c.appliedAt) return S.applied({ kind: c.kind, when: formatWhen(c.appliedAt) });
+  return S.planned({ kind: c.kind, when: formatWhen(c.createdAt) });
 }
 
 export function ChangeCard({
@@ -156,9 +216,9 @@ export function ChangeCard({
   const last = c.approval;
   const lastNote =
     last?.status === 'expired'
-      ? 'The last approval request expired.'
+      ? S.lastExpired
       : last?.status === 'decided' && last.decision !== 'allow_once'
-        ? 'Your last approval request was denied.'
+        ? S.lastDenied
         : null;
 
   const ask = async () => {
@@ -167,9 +227,9 @@ export function ChangeCard({
     try {
       const view = await api.requestFirmwareApproval(device.id, c.id);
       onChanged(view, 'asked');
-      announce('Approval requested. Answer it below or on the Approvals page.');
+      announce(S.asked);
     } catch (e) {
-      setAskError(firmwareErrorMessage(e, 'Could not ask for approval.'));
+      setAskError(firmwareErrorMessage(e, S.askFailed));
     } finally {
       setAsking(false);
     }
@@ -190,32 +250,33 @@ export function ChangeCard({
         change={c}
         caption={
           isRollback
-            ? `What the rollback restores on ${device.name}`
-            : `What changes on ${device.name}`
+            ? S.rollbackRestores({ device: device.name })
+            : FIRMWARE_TEXT.whatChanges({ device: device.name })
         }
         held={c.status === 'revert_failed' ? (held ?? {}) : null}
       />
       {c.status === 'revert_failed' ? (
         <p className="fw-degrading" data-unsafe>
-          <Icon name="alert" /> These settings may not be safe: the watchdog could not restore
-          everything, so {device.name} may still hold some of the new values. Check what it holds
-          now, and roll the change back from here.
+          <Icon name="alert" /> {S.unsafe({ device: device.name })}
         </p>
       ) : null}
       {c.refused.length ? (
         <div>
-          <p>Left out of the plan:</p>
+          <p>{S.leftOut}</p>
           <ul>
             {c.refused.map((r) => (
               <li key={r.key}>
-                {keyLabel(r.key)}: {REFUSAL_TEXT[r.reason] ?? r.reason}
+                {S.leftOutItem({
+                  setting: keyLabel(r.key),
+                  reason: REFUSAL_TEXT[r.reason] ?? r.reason,
+                })}
               </li>
             ))}
           </ul>
         </div>
       ) : null}
       {c.requiresReboot && OPEN_STATUSES.includes(c.status) ? (
-        <p className="muted">Takes effect after the device restarts.</p>
+        <p className="muted">{S.afterRestart}</p>
       ) : null}
       {wd ? (
         <p data-watchdog={c.watchdog?.state}>
@@ -237,19 +298,21 @@ export function ChangeCard({
           {lastNote ? <p className="muted">{lastNote}</p> : null}
           {blockedBySecurity ? (
             <Unavailable>
-              This change weakens security, and “Allow changes that weaken security” is off.{' '}
-              <a
-                href={FIRMWARE_SETTINGS_PATH}
-                onClick={(e) => followLink(e, FIRMWARE_SETTINGS_PATH)}
-              >
-                Change it in Settings → Devices
-              </a>
-              .
+              {rich(S.weakensOff, {
+                link: (
+                  <a
+                    href={FIRMWARE_SETTINGS_PATH}
+                    onClick={(e) => followLink(e, FIRMWARE_SETTINGS_PATH)}
+                  >
+                    {S.changeInSettings}
+                  </a>
+                ),
+              })}
             </Unavailable>
           ) : null}
           <div className="row">
             <Button variant="primary" disabled={asking || !on} onClick={() => void ask()}>
-              {asking ? <Spinner /> : <Icon name="shield" />} Ask for approval
+              {asking ? <Spinner /> : <Icon name="shield" />} {FIRMWARE_TEXT.askForApproval}
             </Button>
           </div>
           {askError ? (
@@ -266,8 +329,8 @@ export function ChangeCard({
           focusOnShow={focusApproval}
           title={
             isRollback
-              ? `Approve restoring the firmware settings of ${device.name}`
-              : `Approve this firmware change on ${device.name}`
+              ? S.approveRollback({ device: device.name })
+              : S.approveChange({ device: device.name })
           }
           onDecided={onReload}
         />
@@ -276,7 +339,7 @@ export function ChangeCard({
       {current && c.status === 'approved' ? (
         <div className="stack">
           <p>
-            <Icon name="check" /> Approved. Nothing has changed yet: apply it when you are ready.
+            <Icon name="check" /> {S.approved}
           </p>
           <div className="row">
             <Button
@@ -287,7 +350,7 @@ export function ChangeCard({
                 setApplying(true);
               }}
             >
-              {isRollback ? 'Apply the rollback…' : 'Apply…'}
+              {isRollback ? S.applyRollback : S.apply}
             </Button>
           </div>
         </div>
@@ -302,12 +365,12 @@ export function ChangeCard({
           <Button
             disabled={!on}
             onClick={() => onRollback(c)}
-            aria-label={`Roll back the change applied ${formatWhen(c.appliedAt)}`}
+            aria-label={S.rollBackAt({ when: formatWhen(c.appliedAt) })}
           >
-            <Icon name="undo" /> Roll back…
+            <Icon name="undo" /> {S.rollBack}
           </Button>
           {snapshotTakenAt ? (
-            <span className="muted">Snapshot of {formatWhen(snapshotTakenAt)}</span>
+            <span className="muted">{S.snapshotOf({ when: formatWhen(snapshotTakenAt) })}</span>
           ) : null}
         </div>
       ) : null}
@@ -316,15 +379,19 @@ export function ChangeCard({
         open={applying}
         title={
           isRollback
-            ? `Roll back the firmware settings of ${device.name}?`
-            : `Apply this firmware change to ${device.name}?`
+            ? S.rollbackTitle({ device: device.name })
+            : S.applyTitle({ device: device.name })
         }
         description={
           isRollback
-            ? `${plural(c.diff.length, 'setting')} on ${device.name} go back to their values in the snapshot. A rollback does not restart the device: restart it yourself for the settings to take effect.`
-            : `${plural(c.diff.length, 'setting')} change on ${device.name}. The values before are kept in a snapshot, so you can roll back.`
+            ? S.rollbackBody({ n: c.diff.length, device: device.name })
+            : S.applyBody({ n: c.diff.length, device: device.name })
         }
-        confirmLabel={isRollback ? `Roll back ${device.name}` : `Apply to ${device.name}`}
+        confirmLabel={
+          isRollback
+            ? S.rollbackConfirm({ device: device.name })
+            : S.applyConfirm({ device: device.name })
+        }
         danger
         onClose={() => setApplying(false)}
         onConfirm={async () => {
@@ -342,22 +409,26 @@ export function ChangeCard({
           setApplying(false);
           onChanged(view, 'applied');
           const msg = isRollback
-            ? `Rolled back on ${device.name}.`
+            ? S.rolledBackOn({ device: device.name })
             : view.watchdog?.state === 'pending'
-              ? `Applied. ${device.name} is restarting with the watchdog armed.`
-              : `Applied to ${device.name}.`;
+              ? S.appliedRestarting({ device: device.name })
+              : S.appliedTo({ device: device.name });
           toast.show(msg, { tone: 'success' });
           announce(msg);
         }}
       >
-        <ul aria-label="Changes to apply">
+        <ul aria-label={S.changesToApply}>
           {c.diff.map((e) => (
             <li key={e.key}>
-              {keyLabel(e.key)}: {valueText(e.from)} → {valueText(e.to)}
+              {S.changeItem({
+                setting: keyLabel(e.key),
+                from: valueText(e.from),
+                to: valueText(e.to),
+              })}
               {e.securityDegrading ? (
                 <span className="fw-degrading">
                   {' '}
-                  <Icon name="alert" /> weakens security
+                  <Icon name="alert" /> {S.weakensSecurityTag}
                 </span>
               ) : null}
             </li>
@@ -365,11 +436,8 @@ export function ChangeCard({
         </ul>
         {!isRollback && watchdogOff ? (
           <p className="muted">
-            {device.name} has a BIOS admin password, which novad never keeps, so its watchdog could
-            not restore the settings: Nova does not restart it.{' '}
-            {c.requiresReboot
-              ? 'Restart it yourself for the settings to take effect, and roll back from here if it misbehaves.'
-              : ''}
+            {S.noWatchdog({ device: device.name })}
+            {c.requiresReboot ? ` ${S.restartYourself}` : null}
           </p>
         ) : null}
         {!isRollback && !watchdogOff ? (
@@ -381,13 +449,16 @@ export function ChangeCard({
               aria-describedby={`${id}-reboot`}
             />
             <span>
-              Restart {device.name} now, with the watchdog
+              {S.restartNow({ device: device.name })}
               <span id={`${id}-reboot`} className="nv-field-hint">
                 {reboot
-                  ? `If ${device.name} does not come back within ${minutesText(watchdogSeconds)}, it restores the previous settings and restarts once.`
+                  ? S.restartHint({
+                      device: device.name,
+                      duration: minutesText(watchdogSeconds),
+                    })
                   : c.requiresReboot
-                    ? 'The settings take effect at its next restart, without the watchdog.'
-                    : 'These settings take effect without a restart.'}
+                    ? S.nextRestart
+                    : S.noRestart}
               </span>
             </span>
           </label>

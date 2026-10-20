@@ -7,7 +7,9 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import type { ScreenStatusView, ScreenWindowView } from '@nova/shared';
 import { Button, Dialog, Icon, Kbd, Spinner, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { ApiError, errorMessage } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useAnnounce } from '../services.tsx';
 import { SwitchField } from '../settings/controls.tsx';
 import { useDebounced } from '../work/events.ts';
@@ -23,6 +25,59 @@ import { STATUS_EVENTS } from './statuses.ts';
 import '../workspace.css';
 import './screen.css';
 
+export const PANEL_TEXT = defineMessages('screen.panel', {
+  title: 'Computer use',
+  retry: 'Retry',
+  loading: 'Loading computer use',
+  notFound: 'This computer does not exist or was removed.',
+  loadFailed: 'Could not load computer use for this computer.',
+  noDesktop: 'This computer has no controlled desktop, so there is no screen to see or control.',
+  notSeen: 'The screen could not be seen.',
+  turnOnFailed: 'Could not turn on computer use: {error}',
+  turnOffFailed: 'Could not turn off computer use: {error}',
+  resumeFailed: 'Could not resume control: {error}',
+  stopFailed: 'Could not stop computer use: {error} Press Stop again.',
+  stoppedSaid: 'Computer use stopped. Nova waits until you resume control.',
+  onSaid: 'Computer use is on.',
+  offSaid: 'Computer use is off.',
+  resumedSaid: 'Control resumed. Nova looks at the screen again before it acts.',
+  takenSaid: 'You have control. Nova waits until you return control.',
+  takeOverFailed: 'Could not take over: {error}',
+  returnedSaid: 'Control returned. Nova looks at the screen again before it acts.',
+  returned: 'Control returned to Nova.',
+  returnFailed: 'Could not return control: {error}',
+  indicator: 'Control indicator',
+  controllingHere: 'Nova is controlling apps on this computer.',
+  stop: 'Stop',
+  stoppedGroup: 'Control stopped',
+  stoppedTitle: 'Control stopped by you.',
+  stoppedBody: 'Nothing is sent to the screen and the work waits until you resume control.',
+  resume: 'Resume control',
+  takeoverGroup: 'Takeover',
+  youHaveBrowser: 'You have the agent browser.',
+  youHaveControl: 'You have control.',
+  waits: 'Nova waits until you return control.',
+  giveBack: 'Return control',
+  allow: 'Allow computer use on this computer',
+  allowHelp:
+    'Nova can then ask to control apps here. Each app needs your permission, and {key} or Stop ends control at once.',
+  stopAll: 'Stop computer use',
+  screen: 'Screen',
+  watch: 'Watch live',
+  takeOver: 'Take over',
+  takeOverHelp:
+    'Take over to use the keyboard and mouse yourself, for example to sign in or pass a check. Nova pauses until you return control, and your takeover is logged.',
+  confirmTitle: 'Turn on computer use?',
+  confirmHelp: 'Nova can then ask to see the screen and control apps on this computer.',
+  cancel: 'Cancel',
+  turnOn: 'Turn on',
+  confirmAllowed: 'Nova acts only in apps you allow, each for a limited time.',
+  confirmNever: 'It never controls system settings, password managers, banking or payment apps.',
+  confirmKey: 'Press {key} or Stop to end control at once.',
+  confirmRecorded: 'Every action is recorded with a screenshot before and after.',
+});
+const S = PANEL_TEXT;
+
 export function ScreenStateChip({ status }: { status: ScreenStatusView }) {
   const c = STATE_CHIP[status.state];
   return (
@@ -35,17 +90,17 @@ export function ScreenStateChip({ status }: { status: ScreenStatusView }) {
 
 function loadError(err: unknown): string {
   return err instanceof ApiError && err.status === 404
-    ? 'This computer does not exist or was removed.'
-    : errorMessage(err, 'Could not load computer use for this computer.');
+    ? S.notFound
+    : errorMessage(err, S.loadFailed);
 }
 
 /** The Hub's reason a screen cannot be seen, in words. */
 function desktopProblem(err: unknown): string {
   if (err instanceof ApiError && err.status === 409)
     return /no controlled desktop/i.test(err.body.message)
-      ? 'This computer has no controlled desktop, so there is no screen to see or control.'
+      ? S.noDesktop
       : sentence(err.body.message);
-  return errorMessage(err, 'The screen could not be seen.');
+  return errorMessage(err, S.notSeen);
 }
 
 export function ScreenPanel({ computerId }: { computerId: string }) {
@@ -83,14 +138,17 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
     if (eventComputerId(env) === computerId) reload();
   });
 
-  const run = async (what: () => Promise<ScreenStatusView>, fail: string) => {
+  const run = async (
+    what: () => Promise<ScreenStatusView>,
+    fail: (p: { error: string }) => string,
+  ) => {
     setBusy(true);
     try {
       const s = await what();
       setStatus(s);
       return s;
     } catch (err) {
-      toast.show(`${fail}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(fail({ error: errorMessage(err) }), { tone: 'error' });
       reload();
       return null;
     } finally {
@@ -102,12 +160,9 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
     try {
       const s = await api.killScreen(computerId);
       setStatus(s);
-      announce('Computer use stopped. Nova waits until you resume control.');
+      announce(S.stoppedSaid);
     } catch (err) {
-      toast.show(`Could not stop computer use: ${errorMessage(err)} Press Stop again.`, {
-        tone: 'error',
-        duration: 0,
-      });
+      toast.show(S.stopFailed({ error: errorMessage(err) }), { tone: 'error', duration: 0 });
     }
   }, [api, computerId, announce, toast]);
 
@@ -122,24 +177,24 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
     setConfirmEnable(false);
     const s = await run(
       () => api.setScreenControl(computerId, enabled),
-      enabled ? 'Could not turn on computer use' : 'Could not turn off computer use',
+      enabled ? S.turnOnFailed : S.turnOffFailed,
     );
-    if (s) announce(enabled ? 'Computer use is on.' : 'Computer use is off.');
+    if (s) announce(enabled ? S.onSaid : S.offSaid);
   };
 
   const resume = async () => {
-    const s = await run(() => api.resumeScreen(computerId), 'Could not resume control');
-    if (s) announce('Control resumed. Nova looks at the screen again before it acts.');
+    const s = await run(() => api.resumeScreen(computerId), S.resumeFailed);
+    if (s) announce(S.resumedSaid);
   };
 
   const takeOver = async () => {
     setBusy(true);
     try {
       await api.startTakeover(computerId, 'desktop');
-      announce('You have control. Nova waits until you return control.');
+      announce(S.takenSaid);
       reload();
     } catch (err) {
-      toast.show(`Could not take over: ${sentence(errorMessage(err))}`, { tone: 'error' });
+      toast.show(S.takeOverFailed({ error: sentence(errorMessage(err)) }), { tone: 'error' });
       reload();
     } finally {
       setBusy(false);
@@ -151,11 +206,11 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
     try {
       await api.endTakeover(computerId);
       setWatching(false);
-      announce('Control returned. Nova looks at the screen again before it acts.');
-      toast.show('Control returned to Nova.', { tone: 'success' });
+      announce(S.returnedSaid);
+      toast.show(S.returned, { tone: 'success' });
       reload();
     } catch (err) {
-      toast.show(`Could not return control: ${sentence(errorMessage(err))}`, { tone: 'error' });
+      toast.show(S.returnFailed({ error: sentence(errorMessage(err)) }), { tone: 'error' });
       reload();
     } finally {
       setBusy(false);
@@ -180,18 +235,18 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
   if (error)
     return (
       <section className="scr-panel" aria-labelledby={headingId}>
-        <h2 id={headingId}>Computer use</h2>
+        <h2 id={headingId}>{S.title}</h2>
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{S.retry}</Button>
         </div>
       </section>
     );
   if (!status)
     return (
       <section className="scr-panel" aria-labelledby={headingId}>
-        <h2 id={headingId}>Computer use</h2>
-        <Spinner label="Loading computer use" />
+        <h2 id={headingId}>{S.title}</h2>
+        <Spinner label={S.loading} />
       </section>
     );
 
@@ -203,15 +258,16 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
   return (
     <section className="scr-panel" aria-labelledby={headingId} data-state={status.state}>
       <header className="ws-section-header">
-        <h2 id={headingId}>Computer use</h2>
+        <h2 id={headingId}>{S.title}</h2>
         <ScreenStateChip status={status} />
       </header>
 
       {status.state === 'controlling' ? (
-        <div className="scr-banner" data-tone="active" role="group" aria-label="Control indicator">
+        <div className="scr-banner" data-tone="active" role="group" aria-label={S.indicator}>
           <Icon name="eye" />
           <p>
-            <strong>{status.indicator.text ?? 'Nova is controlling apps on this computer.'}</strong>
+            {/* The Hub's indicator text (English in M8, D9); ours when it sends none. */}
+            <strong>{status.indicator.text ?? S.controllingHere}</strong>
           </p>
           <Button
             variant="danger"
@@ -219,31 +275,29 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
             onClick={() => void kill()}
             aria-keyshortcuts={ariaKeys(killKey)}
           >
-            <Icon name="stop" /> Stop
+            <Icon name="stop" /> {S.stop}
           </Button>
         </div>
       ) : null}
       {status.state === 'stopped' ? (
-        <div className="scr-banner" data-tone="stopped" role="group" aria-label="Control stopped">
+        <div className="scr-banner" data-tone="stopped" role="group" aria-label={S.stoppedGroup}>
           <Icon name="stop" />
           <p>
-            <strong>Control stopped by you.</strong> Nothing is sent to the screen and the work
-            waits until you resume control.
+            <strong>{S.stoppedTitle}</strong> {S.stoppedBody}
           </p>
           <Button variant="primary" onClick={() => void resume()} disabled={busy}>
-            Resume control
+            {S.resume}
           </Button>
         </div>
       ) : null}
       {takeover ? (
-        <div className="scr-banner" data-tone="user" role="group" aria-label="Takeover">
+        <div className="scr-banner" data-tone="user" role="group" aria-label={S.takeoverGroup}>
           <Icon name="hand" />
           <p>
-            <strong>{browserTakeover ? 'You have the agent browser.' : 'You have control.'}</strong>{' '}
-            Nova waits until you return control.
+            <strong>{browserTakeover ? S.youHaveBrowser : S.youHaveControl}</strong> {S.waits}
           </p>
           <Button variant="primary" onClick={() => void giveBack()} disabled={busy}>
-            Return control
+            {S.giveBack}
           </Button>
         </div>
       ) : null}
@@ -254,13 +308,8 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
       ) : null}
 
       <SwitchField
-        label="Allow computer use on this computer"
-        description={
-          <>
-            Nova can then ask to control apps here. Each app needs your permission, and{' '}
-            <Kbd keys={keyCaps(killKey)} /> or Stop ends control at once.
-          </>
-        }
+        label={S.allow}
+        description={rich(S.allowHelp, { key: <Kbd keys={keyCaps(killKey)} /> })}
         checked={status.enabled}
         disabled={busy}
         onChange={(next) => (next ? setConfirmEnable(true) : void setEnabled(false))}
@@ -272,31 +321,28 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
             onClick={() => void kill()}
             aria-keyshortcuts={ariaKeys(killKey)}
           >
-            <Icon name="stop" /> Stop computer use
+            <Icon name="stop" /> {S.stopAll}
           </Button>
         </div>
       ) : null}
 
-      <section className="ws-section scr-live-section" aria-label="Screen">
+      <section className="ws-section scr-live-section" aria-label={S.screen}>
         <div className="ws-section-header">
-          <h3>Screen</h3>
+          <h3>{S.screen}</h3>
           <div className="ws-toolbar">
             {!showLive ? (
               <Button onClick={() => setWatching(true)}>
-                <Icon name="eye" /> Watch live
+                <Icon name="eye" /> {S.watch}
               </Button>
             ) : null}
             {!takeover ? (
               <Button variant="primary" onClick={() => void takeOver()} disabled={busy}>
-                <Icon name="hand" /> Take over
+                <Icon name="hand" /> {S.takeOver}
               </Button>
             ) : null}
           </div>
         </div>
-        <p className="muted ws-flush">
-          Take over to use the keyboard and mouse yourself, for example to sign in or pass a check.
-          Nova pauses until you return control, and your takeover is logged.
-        </p>
+        <p className="muted ws-flush">{S.takeOverHelp}</p>
         {showLive ? (
           <LiveView
             key={desktopTakeover ? 'control' : 'watch'}
@@ -324,24 +370,22 @@ export function ScreenPanel({ computerId }: { computerId: string }) {
       <Dialog
         open={confirmEnable}
         onClose={() => setConfirmEnable(false)}
-        title="Turn on computer use?"
-        description="Nova can then ask to see the screen and control apps on this computer."
+        title={S.confirmTitle}
+        description={S.confirmHelp}
         footer={
           <>
-            <Button onClick={() => setConfirmEnable(false)}>Cancel</Button>
+            <Button onClick={() => setConfirmEnable(false)}>{S.cancel}</Button>
             <Button variant="primary" onClick={() => void setEnabled(true)}>
-              Turn on
+              {S.turnOn}
             </Button>
           </>
         }
       >
         <ul className="ws-plain-list">
-          <li>Nova acts only in apps you allow, each for a limited time.</li>
-          <li>It never controls system settings, password managers, banking or payment apps.</li>
-          <li>
-            Press <Kbd keys={keyCaps(killKey)} /> or Stop to end control at once.
-          </li>
-          <li>Every action is recorded with a screenshot before and after.</li>
+          <li>{S.confirmAllowed}</li>
+          <li>{S.confirmNever}</li>
+          <li>{rich(S.confirmKey, { key: <Kbd keys={keyCaps(killKey)} /> })}</li>
+          <li>{S.confirmRecorded}</li>
         </ul>
       </Dialog>
     </section>

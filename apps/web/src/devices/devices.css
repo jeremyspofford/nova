@@ -64,7 +64,7 @@
   margin: 0;
 }
 .devices-note > ul {
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
 }
 .devices-unavailable {
   display: flex;
@@ -171,7 +171,7 @@
   gap: var(--u-space-3);
 }
 .devices-indent {
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
 }
 .devices-roles,
 .devices-roles .nv-radio {
@@ -305,7 +305,7 @@ h3.devices-join-title {
   display: grid;
   gap: var(--u-space-1);
   margin: 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
 }
 
 /* ---- power ----------------------------------------------------------------------------------- */
@@ -336,7 +336,7 @@ h3.devices-join-title {
 .devices-roots .nv-btn {
   max-width: 100%;
   overflow-wrap: anywhere;
-  text-align: left;
+  text-align: start;
 }
 .devices-folder {
   gap: var(--u-space-2);
@@ -352,7 +352,7 @@ h3.devices-join-title {
   font-size: var(--u-text-sm);
 }
 .devices-crumbs li + li::before {
-  margin-right: var(--u-space-1);
+  margin-inline-end: var(--u-space-1);
   color: var(--u-text-muted);
   content: '/';
 }
@@ -382,7 +382,7 @@ h3.devices-join-title {
   background: none;
   color: var(--u-text);
   font: inherit;
-  text-align: left;
+  text-align: start;
 }
 button.devices-entry {
   cursor: pointer;
@@ -417,7 +417,7 @@ button.devices-entry[aria-pressed='true'] {
 .devices-path {
   font-family: var(--u-font-code);
   overflow-wrap: anywhere;
-  text-align: left;
+  text-align: start;
 }
 h2.devices-path {
   margin: 0;
@@ -475,12 +475,12 @@ h2.devices-path {
   display: grid;
   gap: var(--u-space-1);
   margin: 0;
-  padding-left: var(--u-space-4);
+  padding-inline-start: var(--u-space-4);
   overflow-wrap: anywhere;
 }
 .devices-bundles {
   margin: 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
 }
 
 /* ---- Settings → Devices: rules for every device ------------------------------------------------ */

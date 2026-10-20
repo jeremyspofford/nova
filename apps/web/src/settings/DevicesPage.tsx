@@ -8,6 +8,7 @@
 // refreshes every 5 s while the page is open. Each node links to its device page for its policy
 // (quiet hours, routing), GPU memory and services (M7.5).
 import { useEffect, useId, useRef, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import { DEVICE_CAPABILITIES, type NodeEnrollToken, type NodeView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, TextField, useToast, type IconName } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -23,10 +24,91 @@ import { followLink } from '../work/nav.tsx';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useModels } from '../stores.tsx';
-import { MANAGED, formatWhen, plural, useInterval } from './common.ts';
+import { formatWhen, useInterval } from './common.ts';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
 import { SwitchField } from './controls.tsx';
+import { embed } from './embed.tsx';
 import '../workspace.css';
 import '../devices/devices.css';
+
+export const DEVICES_TEXT = defineMessages('settings.devices', {
+  status: {
+    active: 'Active',
+    pending: 'Waiting for first contact',
+    unreachable: 'Unreachable',
+    revoked: 'Revoked',
+  },
+  vram: '{size} VRAM',
+  loadFailed: 'Could not load compute nodes.',
+  revoked: '{name} revoked. Its models are no longer offered.',
+  revokeFailed: 'Could not revoke {name}: {error}',
+  title: 'Devices',
+  yourDevices: 'Your devices',
+  yourDevicesHint:
+    'Browsers, phones, computers running novad and compute nodes: their roles and scopes, what ' +
+    'each one can do, its power and updates, the folders it shares and the agents that use it.',
+  openDevices: 'Open Devices',
+  addDevice: 'Add a device',
+  nodes: 'Compute nodes',
+  nodesHint:
+    'Computers that run models for this Hub. A node only runs work this Hub sends it, and it ' +
+    'never connects to your other devices.',
+  nodesAddHint:
+    'Add one with a code, like any device, or with a one-use token for scripted installs.',
+  addWithCode: 'Add with a code',
+  addNode: 'Add compute node',
+  retry: 'Retry',
+  loading: 'Loading compute nodes',
+  none: 'No compute nodes yet.',
+  gpus: '{n, plural, =0 {No GPU} one {# GPU} other {# GPUs}}',
+  jobs: '{n, plural, one {up to # job at once} other {up to # jobs at once}}',
+  models: '{n, plural, one {# model: {names}} other {# models: {names}}}',
+  noModels: 'No models reported',
+  load: '{running} running, {queued} queued',
+  noLoad: 'Load not reported',
+  lastSeen: 'last seen {when}',
+  policyOf: 'Policy and services of {name}',
+  policy: 'Policy and services',
+  revoke: 'Revoke',
+  revokeTitle: 'Revoke {name}?',
+  revokeThis: 'Revoke this node?',
+  revokeBody:
+    'Its credential stops working at once and its models leave the model list. To use it ' +
+    'again, enroll it with a new token.',
+  cancel: 'Cancel',
+  tokenFailed: 'Could not create a token.',
+  copied: 'Command copied.',
+  copyFailed: 'Could not copy. The command is selected; copy it with your keyboard.',
+  addTitle: 'Add a compute node',
+  addBody: 'Run this command on the computer you want to add. The token works once.',
+  done: 'Done',
+  tryAgain: 'Try again',
+  creating: 'Creating a token',
+  copy: 'Copy command',
+  newToken: 'Create a new token',
+  expired: 'This token has expired. Create a new one to add the node.',
+  expiresIn:
+    'Expires in {time}. Change --backend if the node’s model server is not Ollama on its default address.',
+  appears: 'The node appears in the list once it registers. Close this when you are done.',
+  saveFailed: 'Could not save: {error}',
+  adding: 'Adding devices',
+  addEnabled: 'Add devices with a code',
+  addEnabledHint:
+    'Off, new codes and requests to join are refused. Devices already added keep working.',
+  sessionDays: 'Days an added browser or app stays signed in',
+  sessionDaysHint: 'After this it must be added again. {min} to {max}.',
+  wholeRange: 'Enter a whole number from {min} to {max}.',
+  rules: 'Rules for every device',
+  wakes: 'Wakes per hour, per device',
+  wakesHint: 'How many Wake-on-LAN signals a device may get in an hour. {min} to {max}.',
+  minVersions: 'Minimum novad versions',
+  minVersionsHint:
+    'Raise the novad version a device needs for a capability. A device below it loses only ' +
+    'that capability and shows Update required. Leave blank to use the built-in minimum.',
+  builtIn: 'Built-in',
+  versionInvalid: 'Enter a version like 0.7.0.',
+});
+const S = DEVICES_TEXT;
 
 export const NODE_POLL_MS = 5000;
 /** The backend a fresh node talks to; Ollama's default address on that machine. */
@@ -37,14 +119,11 @@ export function enrollCommand(hubOrigin: string, token: string): string {
   return `nova-compute enroll --hub ${hubOrigin} --token ${token} --backend ${DEFAULT_NODE_BACKEND}`;
 }
 
-const NODE_STATUS: Record<
-  NodeView['status'],
-  { text: string; icon: IconName | null; tone: string }
-> = {
-  active: { text: 'Active', icon: 'check', tone: 'ready' },
-  pending: { text: 'Waiting for first contact', icon: null, tone: 'running' },
-  unreachable: { text: 'Unreachable', icon: 'alert', tone: 'needs_input' },
-  revoked: { text: 'Revoked', icon: 'stop', tone: 'blocked' },
+const NODE_STATUS: Record<NodeView['status'], { icon: IconName | null; tone: string }> = {
+  active: { icon: 'check', tone: 'ready' },
+  pending: { icon: null, tone: 'running' },
+  unreachable: { icon: 'alert', tone: 'needs_input' },
+  revoked: { icon: 'stop', tone: 'blocked' },
 };
 
 function NodeStatusChip({ status }: { status: NodeView['status'] }) {
@@ -52,14 +131,14 @@ function NodeStatusChip({ status }: { status: NodeView['status'] }) {
   return (
     <span className="nv-chip" data-status={s.tone}>
       {s.icon ? <Icon name={s.icon} /> : <Spinner />}
-      <span>{s.text}</span>
+      <span>{S.status[status]}</span>
     </span>
   );
 }
 
 function formatVram(bytes: number | null): string | null {
   if (!bytes) return null;
-  return `${(bytes / 1024 ** 3).toFixed(bytes >= 10 * 1024 ** 3 ? 0 : 1)} GB VRAM`;
+  return S.vram({ size: fmt.bytes(bytes) });
 }
 
 export function DevicesPage() {
@@ -80,7 +159,7 @@ export function DevicesPage() {
         setNodes(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load compute nodes.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -95,63 +174,55 @@ export function DevicesPage() {
       setNodes(
         (list) => list?.map((x) => (x.id === n.id ? { ...x, status: 'revoked' } : x)) ?? null,
       );
-      toast.show(`${n.name} revoked. Its models are no longer offered.`, { tone: 'success' });
+      toast.show(S.revoked({ name: n.name }), { tone: 'success' });
       void models.refresh();
     } catch (err) {
-      toast.show(`Could not revoke ${n.name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.revokeFailed({ name: n.name, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
   return (
     <div className="settings-page">
-      <h2>Devices</h2>
+      <h2>{S.title}</h2>
       <section className="settings-section" aria-labelledby="devices-novad">
-        <h3 id="devices-novad">Your devices</h3>
-        <p className="muted">
-          Browsers, phones, computers running novad and compute nodes: their roles and scopes, what
-          each one can do, its power and updates, the folders it shares and the agents that use it.
-        </p>
+        <h3 id="devices-novad">{S.yourDevices}</h3>
+        <p className="muted">{S.yourDevicesHint}</p>
         <div className="row">
           <Button variant="primary" onClick={() => navigate(DEVICES_PATH)}>
-            Open Devices
+            {S.openDevices}
           </Button>
           <Button onClick={() => navigate(DEVICES_ADD_PATH)}>
-            <Icon name="plus" /> Add a device
+            <Icon name="plus" /> {S.addDevice}
           </Button>
         </div>
       </section>
       <AddDeviceRules />
       <DeviceRules />
       <section className="settings-section" aria-labelledby="devices-nodes">
-        <h3 id="devices-nodes">Compute nodes</h3>
-        <p className="muted">
-          Computers that run models for this Hub. A node only runs work this Hub sends it, and it
-          never connects to your other devices.
-        </p>
-        <p className="muted">
-          Add one with a code, like any device, or with a one-use token for scripted installs.
-        </p>
+        <h3 id="devices-nodes">{S.nodes}</h3>
+        <p className="muted">{S.nodesHint}</p>
+        <p className="muted">{S.nodesAddHint}</p>
         <div className="row">
           <Button variant="primary" onClick={() => navigate(addDevicePath('compute'))}>
-            <Icon name="plus" /> Add with a code
+            <Icon name="plus" /> {S.addWithCode}
           </Button>
-          <Button onClick={() => setAdding(true)}>Add compute node</Button>
+          <Button onClick={() => setAdding(true)}>{S.addNode}</Button>
         </div>
         {error ? (
           <div role="alert" className="ws-error">
             <p>{error}</p>
-            <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+            <Button onClick={() => setVersion((v) => v + 1)}>{S.retry}</Button>
           </div>
         ) : null}
-        {nodes === null && !error ? <Spinner label="Loading compute nodes" /> : null}
-        {nodes?.length === 0 ? <p className="muted">No compute nodes yet.</p> : null}
+        {nodes === null && !error ? <Spinner label={S.loading} /> : null}
+        {nodes?.length === 0 ? <p className="muted">{S.none}</p> : null}
         {nodes?.length ? (
-          <ul className="ws-list" aria-label="Compute nodes">
+          <ul className="ws-list" aria-label={S.nodes}>
             {nodes.map((n) => {
               const caps = [
-                n.capabilities.gpus ? plural(n.capabilities.gpus, 'GPU') : 'No GPU',
+                S.gpus({ n: n.capabilities.gpus }),
                 formatVram(n.capabilities.vramBytes),
-                `up to ${plural(n.capabilities.maxConcurrentJobs, 'job')} at once`,
+                S.jobs({ n: n.capabilities.maxConcurrentJobs }),
               ].filter(Boolean);
               return (
                 <li key={n.id} className="ws-list-row ws-node" aria-label={n.name}>
@@ -162,27 +233,31 @@ export function DevicesPage() {
                     <span className="muted ws-row-meta">{caps.join(' · ')}</span>
                     <span className="muted ws-row-meta">
                       {n.models.length
-                        ? `${plural(n.models.length, 'model')}: ${n.models.join(', ')}`
-                        : 'No models reported'}
+                        ? S.models({
+                            n: n.models.length,
+                            names: fmt.list(n.models, { type: 'unit' }),
+                          })
+                        : S.noModels}
                     </span>
                     <span className="muted ws-row-meta">
                       {n.load
-                        ? `${n.load.running} running, ${n.load.queued} queued`
-                        : 'Load not reported'}{' '}
-                      · last seen {formatWhen(n.lastSeenAt)}
+                        ? S.load({ running: n.load.running, queued: n.load.queued })
+                        : S.noLoad}
+                      {' · '}
+                      {S.lastSeen({ when: formatWhen(n.lastSeenAt) })}
                     </span>
                   </div>
                   {n.status !== 'revoked' ? (
                     <div className="row ws-row-actions">
                       <a
                         href={devicePath(n.id)}
-                        aria-label={`Policy and services of ${n.name}`}
+                        aria-label={S.policyOf({ name: n.name })}
                         onClick={(e) => followLink(e, devicePath(n.id))}
                       >
-                        Policy and services
+                        {S.policy}
                       </a>
                       <Button variant="ghost" onClick={() => setRevoking(n)}>
-                        Revoke
+                        {S.revoke}
                       </Button>
                     </div>
                   ) : null}
@@ -201,14 +276,14 @@ export function DevicesPage() {
       />
       <Dialog
         open={revoking !== null}
-        title={revoking ? `Revoke ${revoking.name}?` : 'Revoke this node?'}
-        description="Its credential stops working at once and its models leave the model list. To use it again, enroll it with a new token."
+        title={revoking ? S.revokeTitle({ name: revoking.name }) : S.revokeThis}
+        description={S.revokeBody}
         onClose={() => setRevoking(null)}
         footer={
           <>
-            <Button onClick={() => setRevoking(null)}>Cancel</Button>
+            <Button onClick={() => setRevoking(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => revoking && void revoke(revoking)}>
-              Revoke
+              {S.revoke}
             </Button>
           </>
         }
@@ -245,7 +320,7 @@ function AddNode({ onClose }: { onClose: () => void }) {
         setError(null);
         setNow(Date.now());
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not create a token.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.tokenFailed)),
     );
     return () => {
       alive = false;
@@ -261,7 +336,7 @@ function AddNode({ onClose }: { onClose: () => void }) {
     try {
       if (!navigator.clipboard) throw new Error('no clipboard');
       await navigator.clipboard.writeText(command);
-      toast.show('Command copied.', { tone: 'success' });
+      toast.show(S.copied, { tone: 'success' });
     } catch {
       // Select the text so the user can copy it by hand.
       const el = commandRef.current;
@@ -272,31 +347,29 @@ function AddNode({ onClose }: { onClose: () => void }) {
         sel.removeAllRanges();
         sel.addRange(range);
       }
-      toast.show('Could not copy. The command is selected; copy it with your keyboard.', {
-        tone: 'error',
-      });
+      toast.show(S.copyFailed, { tone: 'error' });
     }
   };
 
   return (
     <Dialog
       open
-      title="Add a compute node"
-      description="Run this command on the computer you want to add. The token works once."
+      title={S.addTitle}
+      description={S.addBody}
       onClose={onClose}
       footer={
         <Button variant="primary" onClick={onClose}>
-          Done
+          {S.done}
         </Button>
       }
     >
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((a) => a + 1)}>Try again</Button>
+          <Button onClick={() => setAttempt((a) => a + 1)}>{S.tryAgain}</Button>
         </div>
       ) : null}
-      {!token && !error ? <Spinner label="Creating a token" /> : null}
+      {!token && !error ? <Spinner label={S.creating} /> : null}
       {token ? (
         <div className="stack">
           <pre className="ws-command">
@@ -304,27 +377,24 @@ function AddNode({ onClose }: { onClose: () => void }) {
           </pre>
           <div className="row">
             <Button onClick={() => void copy()} disabled={expired}>
-              Copy command
+              {S.copy}
             </Button>
             {expired ? (
               <Button variant="primary" onClick={() => setAttempt((a) => a + 1)}>
-                Create a new token
+                {S.newToken}
               </Button>
             ) : null}
           </div>
           {expired ? (
             <p role="alert" className="nv-field-error">
-              This token has expired. Create a new one to add the node.
+              {S.expired}
             </p>
           ) : (
             <p className="muted">
-              Expires in <span role="timer">{formatCountdown(left)}</span>. Change --backend if the
-              node&apos;s model server is not Ollama on its default address.
+              {embed(S.expiresIn, { time: <span role="timer">{formatCountdown(left)}</span> })}
             </p>
           )}
-          <p className="muted">
-            The node appears in the list once it registers. Close this when you are done.
-          </p>
+          <p className="muted">{S.appears}</p>
         </div>
       ) : null}
     </Dialog>
@@ -341,7 +411,7 @@ function AddDeviceRules() {
   const enabled = settings.get('devices.add.enabled');
   const days = settings.get('devices.add.sessionDays');
   const fail = (err: unknown) =>
-    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+    toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' });
   const [draft, setDraft] = useState<{ base: number; text: string } | null>(null);
   const text = draft && draft.base === days.value ? draft.text : String(days.value);
   const n = Number(text);
@@ -353,17 +423,19 @@ function AddDeviceRules() {
   };
   return (
     <section className="settings-section" aria-labelledby="devices-adding">
-      <h3 id="devices-adding">Adding devices</h3>
+      <h3 id="devices-adding">{S.adding}</h3>
       <SwitchField
-        label="Add devices with a code"
-        description="Off, new codes and requests to join are refused. Devices already added keep working."
+        label={S.addEnabled}
+        description={S.addEnabledHint}
         checked={enabled.value}
         locked={enabled.locked}
         onChange={(v) => void settings.set('devices.add.enabled', v).catch(fail)}
       />
       <TextField
-        label="Days an added browser or app stays signed in"
-        hint={`${days.locked ? `${MANAGED}. ` : ''}After this it must be added again. ${DAYS_MIN} to ${DAYS_MAX}.`}
+        label={S.sessionDays}
+        hint={S.sessionDaysHint({ min: DAYS_MIN, max: DAYS_MAX })}
+        locked={days.locked}
+        setting="devices.add.sessionDays"
         type="number"
         className="ws-number"
         inputMode="numeric"
@@ -371,8 +443,7 @@ function AddDeviceRules() {
         max={DAYS_MAX}
         step={1}
         value={text}
-        disabled={days.locked}
-        error={invalid ? `Enter a whole number from ${DAYS_MIN} to ${DAYS_MAX}.` : undefined}
+        error={invalid ? S.wholeRange({ min: DAYS_MIN, max: DAYS_MAX }) : undefined}
         onChange={(e) => setDraft({ base: days.value, text: e.target.value })}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -397,7 +468,7 @@ function DeviceRules() {
   const wakes = settings.get('devices.wakesPerHour');
   const mins = settings.get('devices.minNovadVersions');
   const fail = (err: unknown) =>
-    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+    toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' });
   const [draft, setDraft] = useState<{ base: number; text: string } | null>(null);
   // A draft belongs to the value it was typed against; a new value from the Hub discards it.
   const text = draft && draft.base === wakes.value ? draft.text : String(wakes.value);
@@ -416,10 +487,12 @@ function DeviceRules() {
   };
   return (
     <section className="settings-section" aria-labelledby="devices-rules">
-      <h3 id="devices-rules">Rules for every device</h3>
+      <h3 id="devices-rules">{S.rules}</h3>
       <TextField
-        label="Wakes per hour, per device"
-        hint={`${wakes.locked ? `${MANAGED}. ` : ''}How many Wake-on-LAN signals a device may get in an hour. ${WAKES_MIN} to ${WAKES_MAX}.`}
+        label={S.wakes}
+        hint={S.wakesHint({ min: WAKES_MIN, max: WAKES_MAX })}
+        locked={wakes.locked}
+        setting="devices.wakesPerHour"
         type="number"
         className="ws-number"
         inputMode="numeric"
@@ -427,8 +500,7 @@ function DeviceRules() {
         max={WAKES_MAX}
         step={1}
         value={text}
-        disabled={wakes.locked}
-        error={invalid ? `Enter a whole number from ${WAKES_MIN} to ${WAKES_MAX}.` : undefined}
+        error={invalid ? S.wholeRange({ min: WAKES_MIN, max: WAKES_MAX }) : undefined}
         onChange={(e) => setDraft({ base: wakes.value, text: e.target.value })}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -439,12 +511,11 @@ function DeviceRules() {
         }}
       />
       <details className="ws-advanced">
-        <summary>Minimum novad versions</summary>
-        <p className="muted">
-          Raise the novad version a device needs for a capability. A device below it loses only that
-          capability and shows Update required. Leave blank to use the built-in minimum.
-          {mins.locked ? ` ${MANAGED}.` : ''}
-        </p>
+        <summary>{S.minVersions}</summary>
+        <p className="muted">{S.minVersionsHint}</p>
+        {mins.locked ? (
+          <ManagedNote as="p" id="devices-min-lock" setting="devices.minNovadVersions" />
+        ) : null}
         <div className="devices-min-versions">
           {DEVICE_CAPABILITIES.map((c) => (
             <MinVersionField
@@ -486,10 +557,11 @@ function MinVersionField({
       id={`mv${id}`}
       label={label}
       value={text}
-      placeholder="Built-in"
+      placeholder={S.builtIn}
       className="ws-number"
       disabled={locked}
-      error={invalid ? 'Enter a version like 0.7.0.' : undefined}
+      aria-describedby={locked ? 'devices-min-lock' : undefined}
+      error={invalid ? S.versionInvalid : undefined}
       onChange={(e) => setText(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {

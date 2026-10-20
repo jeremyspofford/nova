@@ -9,14 +9,7 @@ import { baseName } from '../files/types.ts';
 import { TerminalPanel } from '../terminal/TerminalPanel.tsx';
 import { ADDABLE_KINDS, type AddableKind, type FileRef, type PaneLeaf } from './model.ts';
 import type { PaneInfo } from './PaneWorkspace.tsx';
-
-export const KIND_LABEL: Record<AddableKind, string> = {
-  editor: 'Editor',
-  preview: 'Preview',
-  terminal: 'Terminal',
-  diff: 'Diff',
-  browser: 'Browser',
-};
+import { LAYOUT_TEXT } from './strings.ts';
 
 export const KIND_ICON: Record<AddableKind, IconName> = {
   editor: 'edit',
@@ -31,19 +24,22 @@ export function paneInfo(pane: PaneLeaf, main: { title: string; icon: IconName }
     case 'main':
       return main;
     case 'empty':
-      return { title: 'New pane', icon: 'plus' };
+      return { title: LAYOUT_TEXT.newPane, icon: 'plus' };
     case 'editor':
     case 'preview':
       return {
         title: pane.file
-          ? `${KIND_LABEL[pane.kind]}: ${baseName(pane.file.path)}`
-          : KIND_LABEL[pane.kind],
+          ? LAYOUT_TEXT.fileTitle({
+              kind: LAYOUT_TEXT.kind[pane.kind],
+              file: baseName(pane.file.path),
+            })
+          : LAYOUT_TEXT.kind[pane.kind],
         icon: KIND_ICON[pane.kind],
       };
     case 'terminal':
     case 'diff':
     case 'browser':
-      return { title: KIND_LABEL[pane.kind], icon: KIND_ICON[pane.kind] };
+      return { title: LAYOUT_TEXT.kind[pane.kind], icon: KIND_ICON[pane.kind] };
   }
 }
 
@@ -96,14 +92,14 @@ export function PaneContent({
           viewKey={`pane:${viewKey}`}
           visible={shown}
           threadId={threadId}
-          label="Terminal pane"
+          label={LAYOUT_TEXT.terminalPane}
         />
       );
     case 'diff':
       return (
         <EmptyState
-          title="Diffs arrive with Code sessions"
-          description="This pane will show the changes a coding session makes, file by file."
+          title={LAYOUT_TEXT.diffLater}
+          description={LAYOUT_TEXT.diffLaterDetail}
           icon="compare"
           level={3}
         />
@@ -111,8 +107,8 @@ export function PaneContent({
     case 'browser':
       return (
         <EmptyState
-          title="The browser pane arrives in a later milestone"
-          description="This pane will show the pages an agent opens while it works."
+          title={LAYOUT_TEXT.browserLater}
+          description={LAYOUT_TEXT.browserLaterDetail}
           icon="external"
           level={3}
         />
@@ -123,12 +119,12 @@ export function PaneContent({
 function PaneChooser({ onChoose }: { onChoose: (kind: AddableKind) => void }) {
   return (
     <div className="pane-chooser">
-      <p className="pane-chooser-title">Choose what this pane shows</p>
+      <p className="pane-chooser-title">{LAYOUT_TEXT.choose}</p>
       <ul className="pane-chooser-list">
         {ADDABLE_KINDS.map((k, i) => (
           <li key={k}>
             <Button onClick={() => onChoose(k)} {...(i === 0 ? { 'data-pane-focus': true } : {})}>
-              <Icon name={KIND_ICON[k]} /> {KIND_LABEL[k]}
+              <Icon name={KIND_ICON[k]} /> {LAYOUT_TEXT.kind[k]}
             </Button>
           </li>
         ))}

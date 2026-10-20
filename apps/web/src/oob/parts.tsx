@@ -4,13 +4,64 @@
 import { useCallback, useState, type ReactNode } from 'react';
 import type { OobActionView, OobEndpointView, OobStatusView } from '@nova/shared';
 import { Button, Icon, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { useHubStream } from '../hub-events.ts';
 import { useSettings } from '../settings.tsx';
-import { MANAGED, formatWhen } from '../settings/common.ts';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
+import { formatWhen } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
 import { Chip, ConfirmDialog, useLoad, type Loaded } from '../devices/parts.tsx';
 import type { OobApi } from './api-m75.ts';
-import { KIND_LABEL, oobErrorMessage, shortPin } from './format.ts';
+import { KIND_LABEL, OOB_TEXT, oobErrorMessage, shortPin } from './format.ts';
+
+export const OOB_PARTS_TEXT = defineMessages('oob.parts', {
+  amtUnavailable: 'Intel AMT: not available',
+  amtNotBuilt: 'Intel AMT is not available in this version.',
+  pin: {
+    ipmi: 'None (IPMI has no certificate)',
+    notRead: 'Not read yet: the first check reads it',
+    confirmed: 'Confirmed',
+    unconfirmed: 'Waiting for your confirmation',
+  },
+  notChecked: 'Not checked yet',
+  answered: 'Answered {when}',
+  checkFailed: 'Failed {when}',
+  consent: {
+    connects:
+      'The Hub connects to the BMCs you add (the management controller built into a server or a business computer), with the user name and password you give it.',
+    allows:
+      'Through them it can power a machine on, off, cycle or reset it, pick its next boot device and change its BIOS settings for the next restart, even when its operating system is down or unreachable.',
+    approvals:
+      'Every change waits for your approval in Nova and cannot be answered from a channel. Reading the power state, the sensors and the BIOS settings does not ask.',
+    audit: 'Everything is recorded in the audit log. Only the owner of this Hub can use it.',
+  },
+  on: 'On',
+  off: 'Off',
+  onHelp: 'The Hub may reach the BMCs below. Every change still asks for your approval.',
+  offHelp:
+    'Off by default: a BMC controls the hardware below the operating system, so a mistake can turn a machine off or keep it from starting. Nothing reaches a BMC while it is off.',
+  turnOff: 'Turn off',
+  turnOn: 'Turn on…',
+  enable: {
+    title: 'Turn on out-of-band management?',
+    description: 'Read what it allows before you turn it on.',
+    confirm: 'Turn on out-of-band management',
+    done: 'Out-of-band management is on.',
+  },
+  disable: {
+    title: 'Turn off out-of-band management?',
+    description:
+      'Approvals still waiting are withdrawn. The BMCs and their credentials are kept, but nothing reaches them until you turn it on again.',
+    confirm: 'Turn off',
+    done: 'Out-of-band management is off.',
+  },
+  confirmPinFirst:
+    'Confirm the BMC’s certificate first (above): the Hub sends it nothing else before that.',
+  checkFirst:
+    'Check the connection first, then confirm the BMC’s certificate: the Hub sends it nothing else before that.',
+});
+
+const S = OOB_PARTS_TEXT;
 
 export const OOB_SETTING = 'devices.oob.enabled';
 
@@ -80,7 +131,7 @@ export function useOobActions(api: OobApi, endpointId: string): Loaded<OobAction
 
 export function KindChip({ kind }: { kind: OobEndpointView['kind'] }) {
   return kind === 'amt' ? (
-    <Chip tone="blocked" icon="stop" text="Intel AMT: not available" />
+    <Chip tone="blocked" icon="stop" text={S.amtUnavailable} />
   ) : (
     <span className="ws-badge">{KIND_LABEL[kind]}</span>
   );
@@ -88,12 +139,14 @@ export function KindChip({ kind }: { kind: OobEndpointView['kind'] }) {
 
 /** The certificate a Redfish BMC is held to; IPMI has none. */
 export function PinText({ ep }: { ep: OobEndpointView }) {
-  if (ep.kind !== 'redfish') return <span className="muted">None (IPMI has no certificate)</span>;
-  if (!ep.tlsPin) return <span>Not read yet: the first check reads it</span>;
+  if (ep.kind !== 'redfish') return <span className="muted">{S.pin.ipmi}</span>;
+  if (!ep.tlsPin) return <span>{S.pin.notRead}</span>;
   return (
     <span>
-      {ep.tlsPinConfirmed ? 'Confirmed' : 'Waiting for your confirmation'}{' '}
-      <code className="ws-code-inline">{shortPin(ep.tlsPin)}</code>
+      {ep.tlsPinConfirmed ? S.pin.confirmed : S.pin.unconfirmed}{' '}
+      <code className="ws-code-inline" dir="ltr">
+        {shortPin(ep.tlsPin)}
+      </code>
       {ep.tlsPinConfirmed && ep.tlsPinConfirmedAt ? (
         <span className="muted"> {formatWhen(ep.tlsPinConfirmedAt)}</span>
       ) : null}
@@ -103,11 +156,11 @@ export function PinText({ ep }: { ep: OobEndpointView }) {
 
 /** "Last check: OK, 5 min ago". */
 export function LastCheck({ ep }: { ep: OobEndpointView }) {
-  if (!ep.lastCheckAt) return <span className="muted">Not checked yet</span>;
+  if (!ep.lastCheckAt) return <span className="muted">{S.notChecked}</span>;
   return ep.lastCheckOk ? (
-    <Chip tone="ready" icon="check" text={`Answered ${formatWhen(ep.lastCheckAt)}`} />
+    <Chip tone="ready" icon="check" text={S.answered({ when: formatWhen(ep.lastCheckAt) })} />
   ) : (
-    <Chip tone="blocked" icon="alert" text={`Failed ${formatWhen(ep.lastCheckAt)}`} />
+    <Chip tone="blocked" icon="alert" text={S.checkFailed({ when: formatWhen(ep.lastCheckAt) })} />
   );
 }
 
@@ -115,20 +168,10 @@ export function LastCheck({ ep }: { ep: OobEndpointView }) {
 export function ConsentList() {
   return (
     <ul className="oob-consent">
-      <li>
-        The Hub connects to the BMCs you add (the management controller built into a server or a
-        business computer), with the user name and password you give it.
-      </li>
-      <li>
-        Through them it can power a machine on, off, cycle or reset it, pick its next boot device
-        and change its BIOS settings for the next restart, even when its operating system is down or
-        unreachable.
-      </li>
-      <li>
-        Every change waits for your approval in Nova and cannot be answered from a channel. Reading
-        the power state, the sensors and the BIOS settings does not ask.
-      </li>
-      <li>Everything is recorded in the audit log. Only the owner of this Hub can use it.</li>
+      <li>{S.consent.connects}</li>
+      <li>{S.consent.allows}</li>
+      <li>{S.consent.approvals}</li>
+      <li>{S.consent.audit}</li>
     </ul>
   );
 }
@@ -154,57 +197,62 @@ export function OobSwitch({
   return (
     <div className="oob-switch">
       <div className="devices-row-head">
-        <strong>Out-of-band management</strong>
+        <strong>{OOB_TEXT.title}</strong>
         {status.enabled ? (
-          <Chip tone="ready" icon="check" text="On" />
+          <Chip tone="ready" icon="check" text={S.on} />
         ) : (
-          <Chip tone="neutral" icon="stop" text="Off" />
+          <Chip tone="neutral" icon="stop" text={S.off} />
         )}
       </div>
-      <p className="muted ws-flush">
-        {status.enabled
-          ? 'The Hub may reach the BMCs below. Every change still asks for your approval.'
-          : 'Off by default: a BMC controls the hardware below the operating system, so a mistake can turn a machine off or keep it from starting. Nothing reaches a BMC while it is off.'}
-        {locked ? ` ${MANAGED}.` : ''}
-      </p>
+      <p className="muted ws-flush">{status.enabled ? S.onHelp : S.offHelp}</p>
+      {locked ? <ManagedNote as="p" id="oob-lock" setting={OOB_SETTING} /> : null}
       <div className="row">
         {status.enabled ? (
-          <Button disabled={locked} onClick={() => setAsking('off')}>
-            Turn off
+          <Button
+            disabled={locked}
+            aria-describedby={locked ? 'oob-lock' : undefined}
+            onClick={() => setAsking('off')}
+          >
+            {S.turnOff}
           </Button>
         ) : (
-          <Button variant="primary" disabled={locked} onClick={() => setAsking('on')}>
-            <Icon name="shield" /> Turn on…
+          <Button
+            variant="primary"
+            disabled={locked}
+            aria-describedby={locked ? 'oob-lock' : undefined}
+            onClick={() => setAsking('on')}
+          >
+            <Icon name="shield" /> {S.turnOn}
           </Button>
         )}
       </div>
       <ConfirmDialog
         open={asking === 'on'}
-        title="Turn on out-of-band management?"
-        description="Read what it allows before you turn it on."
-        confirmLabel="Turn on out-of-band management"
+        title={S.enable.title}
+        description={S.enable.description}
+        confirmLabel={S.enable.confirm}
         danger
         onClose={close}
         onConfirm={async () => {
           const next = await plainly(() => api.enableOob({ confirm: true }));
           setAsking(null);
           onChange(next);
-          toast.show('Out-of-band management is on.', { tone: 'success' });
+          toast.show(S.enable.done, { tone: 'success' });
         }}
       >
         <ConsentList />
       </ConfirmDialog>
       <ConfirmDialog
         open={asking === 'off'}
-        title="Turn off out-of-band management?"
-        description="Approvals still waiting are withdrawn. The BMCs and their credentials are kept, but nothing reaches them until you turn it on again."
-        confirmLabel="Turn off"
+        title={S.disable.title}
+        description={S.disable.description}
+        confirmLabel={S.disable.confirm}
         onClose={close}
         onConfirm={async () => {
           const next = await plainly(() => api.disableOob());
           setAsking(null);
           onChange(next);
-          toast.show('Out-of-band management is off.', { tone: 'success' });
+          toast.show(S.disable.done, { tone: 'success' });
         }}
       />
     </div>
@@ -216,8 +264,8 @@ export function checkBlocked(
   status: OobStatusView | null,
   ep: Pick<OobEndpointView, 'kind'>,
 ): string | null {
-  if (ep.kind === 'amt') return 'Intel AMT is not available in this version.';
-  if (status && !status.enabled) return 'Out-of-band management is off. Turn it on first.';
+  if (ep.kind === 'amt') return S.amtNotBuilt;
+  if (status && !status.enabled) return OOB_TEXT.reasons.oob_disabled;
   return null;
 }
 
@@ -232,11 +280,9 @@ export function actionBlocked(
 ): string | null {
   const off = checkBlocked(status, ep);
   if (off) return off;
-  if (!ep.hasCredentials) return 'The Hub has no credentials for this BMC. Enter them again.';
+  if (!ep.hasCredentials) return OOB_TEXT.reasons.credentials_missing;
   if (ep.kind === 'redfish' && !(ep.tlsPin && ep.tlsPinConfirmed))
-    return ep.tlsPin
-      ? 'Confirm the BMC’s certificate first (above): the Hub sends it nothing else before that.'
-      : 'Check the connection first, then confirm the BMC’s certificate: the Hub sends it nothing else before that.';
+    return ep.tlsPin ? S.confirmPinFirst : S.checkFirst;
   return null;
 }
 

@@ -3,21 +3,38 @@
 // suggestions. Needs input sorts first, then Blocked, Running and Ready. The list follows agent
 // events and the derived status of their threads. `/agents/new` creates one.
 import { useEffect, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { AgentView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner, StatusChip } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { navigate } from '../router.ts';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
 import { statusRank } from '../work/format.ts';
 import { followLink } from '../work/nav.tsx';
 import { AgentAvatar } from './AgentAvatar.tsx';
 import { useAgentsApi } from './api.ts';
 import { useAgentEvents } from './events.ts';
-import { agentPath, agentStateBadge, NEW_AGENT_PATH } from './format.ts';
+import { AGENTS_TEXT, agentPath, agentStateBadge, NEW_AGENT_PATH } from './format.ts';
 import '../workspace.css';
 import '../work/work.css';
 import './agents.css';
+
+export const LIST_TEXT = defineMessages('agents.list', {
+  loadFailed: 'Could not load agents.',
+  newAgent: 'New agent',
+  intro:
+    'An agent keeps working on its responsibilities in the background, with its own computer, ' +
+    'memory and rules. It asks you when an action needs a decision.',
+  loading: 'Loading agents',
+  emptyTitle: 'No agents yet',
+  emptyBody:
+    'Create an agent to watch an inbox, follow a project or prepare a weekly report. You choose ' +
+    'what it may do on its own.',
+  create: 'Create an agent',
+  responsibilities: '{n, plural, one {# responsibility} other {# responsibilities}}',
+  suggestions: '{n, plural, one {# suggestion} other {# suggestions}}',
+});
 
 /** Needs input first, then Blocked, Running and Ready; most recently active first within each. */
 export function sortAgents(list: readonly AgentView[]): AgentView[] {
@@ -51,7 +68,7 @@ export function useAgentList(): {
           setAgents(items);
           setError(null);
         },
-        (err: unknown) => alive && setError(errorMessage(err, 'Could not load agents.')),
+        (err: unknown) => alive && setError(errorMessage(err, LIST_TEXT.loadFailed)),
       );
     return () => {
       alive = false;
@@ -66,7 +83,9 @@ export function useAgentList(): {
 }
 
 export function lastActiveText(a: Pick<AgentView, 'lastActiveAt'>): string {
-  return a.lastActiveAt ? `Active ${formatWhen(a.lastActiveAt)}` : 'Not active yet';
+  return a.lastActiveAt
+    ? AGENTS_TEXT.active({ when: formatWhen(a.lastActiveAt) })
+    : AGENTS_TEXT.notActive;
 }
 
 export function AgentStateBadge({ agent }: { agent: Pick<AgentView, 'status' | 'pauseReason'> }) {
@@ -86,33 +105,30 @@ export function AgentList() {
   return (
     <div className="ws-page agents-page">
       <header className="ws-page-header">
-        <h1>Agents</h1>
+        <h1>{AGENTS_TEXT.agents}</h1>
         <Button variant="primary" onClick={() => navigate(NEW_AGENT_PATH)}>
-          <Icon name="plus" /> New agent
+          <Icon name="plus" /> {LIST_TEXT.newAgent}
         </Button>
       </header>
-      <p className="muted ws-flush">
-        An agent keeps working on its responsibilities in the background, with its own computer,
-        memory and rules. It asks you when an action needs a decision.
-      </p>
+      <p className="muted ws-flush">{LIST_TEXT.intro}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={retry}>Retry</Button>
+          <Button onClick={retry}>{AGENTS_TEXT.retry}</Button>
         </div>
       ) : null}
-      {shown === null && !error ? <Spinner label="Loading agents" /> : null}
+      {shown === null && !error ? <Spinner label={LIST_TEXT.loading} /> : null}
       {shown?.length === 0 ? (
         <EmptyState
-          title="No agents yet"
-          description="Create an agent to watch an inbox, follow a project or prepare a weekly report. You choose what it may do on its own."
+          title={LIST_TEXT.emptyTitle}
+          description={LIST_TEXT.emptyBody}
           icon="agents"
           level={2}
-          action={<Button onClick={() => navigate(NEW_AGENT_PATH)}>Create an agent</Button>}
+          action={<Button onClick={() => navigate(NEW_AGENT_PATH)}>{LIST_TEXT.create}</Button>}
         />
       ) : null}
       {shown?.length ? (
-        <ul className="ws-list" aria-label="Agents">
+        <ul className="ws-list" aria-label={AGENTS_TEXT.agents}>
           {shown.map((a) => (
             <li key={a.id} className="ws-list-row agent-row">
               <AgentAvatar agent={a} />
@@ -128,13 +144,11 @@ export function AgentList() {
                   <AgentStateBadge agent={a} />
                   <span>{lastActiveText(a)}</span>
                   {a.responsibilities.length ? (
-                    <span>
-                      {plural(a.responsibilities.length, 'responsibility', 'responsibilities')}
-                    </span>
+                    <span>{LIST_TEXT.responsibilities({ n: a.responsibilities.length })}</span>
                   ) : null}
                   {a.openSuggestions ? (
                     <span className="ws-badge">
-                      <Icon name="bell" /> {plural(a.openSuggestions, 'suggestion')}
+                      <Icon name="bell" /> {LIST_TEXT.suggestions({ n: a.openSuggestions })}
                     </span>
                   ) : null}
                 </span>

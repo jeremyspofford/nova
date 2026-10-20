@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { useState } from 'react';
 import {
@@ -7,6 +7,7 @@ import {
   EmptyState,
   ICON_NAMES,
   Icon,
+  LockNoteProvider,
   MANAGED_TEXT,
   RadioGroup,
   SelectField,
@@ -94,14 +95,24 @@ describe('StatusChip', () => {
 });
 
 describe('Toast', () => {
-  function Trigger({ tone }: { tone?: 'info' | 'success' | 'error' }) {
+  function Trigger({
+    tone,
+    withAction = true,
+  }: {
+    tone?: 'info' | 'success' | 'error';
+    withAction?: boolean;
+  }) {
     const toast = useToast();
     return (
       <button
         onClick={() =>
           toast.show('Chat deleted', {
             tone,
-            action: { label: 'Undo', onClick: () => document.body.classList.add('undone') },
+            ...(withAction
+              ? {
+                  action: { label: 'Undo', onClick: () => document.body.classList.add('undone') },
+                }
+              : {}),
           })
         }
       >
@@ -132,7 +143,7 @@ describe('Toast', () => {
     vi.useFakeTimers();
     render(
       <ToastProvider defaultDuration={1000}>
-        <Trigger tone="error" />
+        <Trigger tone="error" withAction={false} />
       </ToastProvider>,
     );
     act(() => screen.getByRole('button', { name: 'Go' }).click());
@@ -142,6 +153,47 @@ describe('Toast', () => {
       vi.advanceTimersByTime(1100);
     });
     expect(urgent.textContent).toBe('');
+    vi.useRealTimers();
+  });
+
+  it('never times out an action and holds a toast while pointed at or focused (WCAG 2.2.1)', () => {
+    vi.useFakeTimers();
+    render(
+      <ToastProvider defaultDuration={1000}>
+        <Trigger />
+        <Trigger withAction={false} />
+      </ToastProvider>,
+    );
+    const [withAction, plain] = screen.getAllByRole('button', { name: 'Go' });
+    const region = () => document.querySelector('[aria-live="polite"]')!;
+    // The Undo toast stays until it is used or dismissed.
+    act(() => withAction!.click());
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
+    act(() => screen.getByRole('button', { name: 'Dismiss notification' }).click());
+    // A plain toast holds while the pointer is on it, and counts down again after.
+    act(() => plain!.click());
+    const toast = region().querySelector('.nv-toast')!;
+    fireEvent.mouseEnter(toast);
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(region().textContent).toContain('Chat deleted');
+    fireEvent.mouseLeave(toast);
+    act(() => {
+      vi.advanceTimersByTime(1100);
+    });
+    expect(region().textContent).toBe('');
+    // Focus inside holds it too.
+    act(() => plain!.click());
+    act(() => screen.getByRole('button', { name: 'Dismiss notification' }).focus());
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(region().textContent).toContain('Chat deleted');
+    vi.useRealTimers();
   });
 
   it('throws outside a provider', () => {
@@ -293,6 +345,41 @@ describe('RadioGroup', () => {
     );
     expect(screen.getByRole<HTMLFieldSetElement>('group').disabled).toBe(true);
     expect(screen.getByText(MANAGED_TEXT)).toBeTruthy();
+  });
+
+  it("links every locked field to the app's lock note, which names the setting", () => {
+    // The app draws the note (with the policy's source); the fields point to it by id.
+    render(
+      <LockNoteProvider
+        render={({ id, setting }) => (
+          <span id={id}>Managed by your organization (policy file) [{setting ?? 'any'}]</span>
+        )}
+      >
+        <RadioGroup
+          legend="When to ask"
+          name="p"
+          value="always"
+          onChange={() => undefined}
+          options={[{ value: 'always', label: 'Always', description: 'Every tool asks' }]}
+          locked
+          setting="tools.approvalPolicy"
+        />
+        <SelectField label="Model" value="" onChange={() => undefined} locked />
+      </LockNoteProvider>,
+    );
+    const note = (el: HTMLElement) =>
+      (el.getAttribute('aria-describedby') ?? '')
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent ?? '')
+        .join(' | ');
+    expect(note(screen.getByRole('group', { name: 'When to ask' }))).toContain(
+      '(policy file) [tools.approvalPolicy]',
+    );
+    // Each choice says it too, after its own description.
+    expect(note(screen.getByRole('radio', { name: 'Always' }))).toBe(
+      'Every tool asks | Managed by your organization (policy file) [tools.approvalPolicy]',
+    );
+    expect(note(screen.getByRole('combobox', { name: 'Model' }))).toContain('(policy file) [any]');
   });
 });
 

@@ -6,6 +6,7 @@
 // the Work and Code views. On narrow screens the sheet fills the bottom of the screen.
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import type { ProjectFolderView, ProjectView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, RadioGroup, SelectField, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { sessionPath } from '../code/labels.ts';
@@ -23,6 +24,44 @@ export interface StartedTask {
 }
 
 const NO_PROJECT = '';
+
+/** The New task sheet's words (FR-016). Project names, folder paths and Hub errors are data. */
+export const NEW_TASK_TEXT = defineMessages('dispatch.newTask', {
+  title: 'New task',
+  description: 'Start it here and review the result on a computer later.',
+  cancel: 'Cancel',
+  start: 'Start',
+  kind: 'Kind',
+  work: {
+    label: 'Work run',
+    description: 'A multi-step task it works through on its own, within its budgets.',
+  },
+  code: {
+    label: 'Code session',
+    description: 'Changes in a project folder, with a diff to review.',
+  },
+  retry: 'Retry',
+  loading: 'Loading projects',
+  loadFailed: 'Could not load your projects.',
+  project: 'Project',
+  noProject: 'No project',
+  choose: 'Choose…',
+  noFolder:
+    'No project has a folder yet. On a computer, open Projects, choose a project and add a ' +
+    'folder; then start Code sessions from here.',
+  folder: 'Folder',
+  folderIs: 'Folder:',
+  instructions: 'What should it do?',
+  workHint: 'The run’s goal, for example “Summarize this week’s support tickets into a report”.',
+  codeHint: 'The first message of the session, for example “Fix the failing date tests”.',
+  needText: 'Say what the task should do.',
+  needFolder: 'Choose a project with a folder for the Code session.',
+  runStarted: 'Run “{title}” started.',
+  codeStarted: 'Code session started.',
+  notSent:
+    'The Code session started, but your instructions were not sent: {error} Send them in the session.',
+  failed: 'The task did not start: {error}',
+});
 
 export function NewTaskSheet({
   open,
@@ -78,7 +117,7 @@ function NewTaskForm({
         setFolders(new Map(pairs));
         setLoadError(null);
       },
-      (err: unknown) => alive && setLoadError(errorMessage(err, 'Could not load your projects.')),
+      (err: unknown) => alive && setLoadError(errorMessage(err, NEW_TASK_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -101,11 +140,11 @@ function NewTaskForm({
     if (busy) return;
     const instructions = text.trim();
     if (!instructions) {
-      setTextError('Say what the task should do.');
+      setTextError(NEW_TASK_TEXT.needText);
       return;
     }
     if (kind === 'code' && !folder) {
-      setFailure('Choose a project with a folder for the Code session.');
+      setFailure(NEW_TASK_TEXT.needFolder);
       return;
     }
     setTextError(null);
@@ -117,7 +156,7 @@ function NewTaskForm({
           objective: instructions,
           ...(project ? { projectId: project.id } : {}),
         });
-        toast.show(`Run “${run.title}” started.`, { tone: 'success' });
+        toast.show(NEW_TASK_TEXT.runStarted({ title: run.title }), { tone: 'success' });
         const path = runPath(run.id);
         navigate(path);
         onStarted?.({ kind, id: run.id, path });
@@ -128,13 +167,10 @@ function NewTaskForm({
         });
         try {
           await api.sendMessage(s.threadId, { text: instructions });
-          toast.show('Code session started.', { tone: 'success' });
+          toast.show(NEW_TASK_TEXT.codeStarted, { tone: 'success' });
         } catch (err) {
           // The session exists; say so and keep the instructions where they can be sent again.
-          toast.show(
-            `The Code session started, but your instructions were not sent: ${errorMessage(err)} Send them in the session.`,
-            { tone: 'error' },
-          );
+          toast.show(NEW_TASK_TEXT.notSent({ error: errorMessage(err) }), { tone: 'error' });
         }
         const path = sessionPath(s.id);
         navigate(path);
@@ -142,7 +178,7 @@ function NewTaskForm({
       }
       onClose();
     } catch (err) {
-      setFailure(`The task did not start: ${errorMessage(err)}`);
+      setFailure(NEW_TASK_TEXT.failed({ error: errorMessage(err) }));
     } finally {
       setBusy(false);
     }
@@ -151,27 +187,27 @@ function NewTaskForm({
   return (
     <Dialog
       open
-      title="New task"
-      description="Start it here and review the result on a computer later."
+      title={NEW_TASK_TEXT.title}
+      description={NEW_TASK_TEXT.description}
       onClose={onClose}
       className="dispatch-sheet"
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{NEW_TASK_TEXT.cancel}</Button>
           <Button
             type="submit"
             form={`${id}-form`}
             variant="primary"
             disabled={busy || projects === null || noFolder}
           >
-            {busy ? <Spinner /> : null} Start
+            {busy ? <Spinner /> : null} {NEW_TASK_TEXT.start}
           </Button>
         </>
       }
     >
       <form id={`${id}-form`} className="stack" onSubmit={(e) => void submit(e)} noValidate>
         <RadioGroup
-          legend="Kind"
+          legend={NEW_TASK_TEXT.kind}
           name={`${id}-kind`}
           value={kind}
           onChange={(v) => {
@@ -181,47 +217,48 @@ function NewTaskForm({
           options={[
             {
               value: 'work',
-              label: 'Work run',
-              description: 'A multi-step task it works through on its own, within its budgets.',
+              label: NEW_TASK_TEXT.work.label,
+              description: NEW_TASK_TEXT.work.description,
             },
             {
               value: 'code',
-              label: 'Code session',
-              description: 'Changes in a project folder, with a diff to review.',
+              label: NEW_TASK_TEXT.code.label,
+              description: NEW_TASK_TEXT.code.description,
             },
           ]}
         />
         {loadError ? (
           <div role="alert" className="ws-error">
             <p>{loadError}</p>
-            <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+            <Button onClick={() => setAttempt((n) => n + 1)}>{NEW_TASK_TEXT.retry}</Button>
           </div>
         ) : null}
-        {projects === null && !loadError ? <Spinner label="Loading projects" /> : null}
+        {projects === null && !loadError ? <Spinner label={NEW_TASK_TEXT.loading} /> : null}
         {projects !== null && !noFolder ? (
           <SelectField
-            label="Project"
+            label={NEW_TASK_TEXT.project}
             value={project ? project.id : NO_PROJECT}
             onChange={(v) => {
               setProjectId(v);
               setFolderId('');
             }}
             options={[
-              ...(kind === 'work' ? [{ value: NO_PROJECT, label: 'No project' }] : []),
-              ...(kind === 'code' && !project ? [{ value: NO_PROJECT, label: 'Choose…' }] : []),
+              ...(kind === 'work' ? [{ value: NO_PROJECT, label: NEW_TASK_TEXT.noProject }] : []),
+              ...(kind === 'code' && !project
+                ? [{ value: NO_PROJECT, label: NEW_TASK_TEXT.choose }]
+                : []),
               ...choices.map((p) => ({ value: p.id, label: p.name })),
             ]}
           />
         ) : null}
         {noFolder ? (
           <p className="ws-warning" role="status">
-            No project has a folder yet. On a computer, open Projects, choose a project and add a
-            folder; then start Code sessions from here.
+            {NEW_TASK_TEXT.noFolder}
           </p>
         ) : null}
         {kind === 'code' && projectFolders.length > 1 ? (
           <SelectField
-            label="Folder"
+            label={NEW_TASK_TEXT.folder}
             value={folder?.id ?? ''}
             onChange={setFolderId}
             options={projectFolders.map((f) => ({ value: f.id, label: f.path }))}
@@ -229,12 +266,15 @@ function NewTaskForm({
         ) : null}
         {kind === 'code' && projectFolders.length === 1 && folder ? (
           <p className="muted ws-flush">
-            Folder: <code className="ws-code-inline">{folder.path}</code>
+            {NEW_TASK_TEXT.folderIs}{' '}
+            <code className="ws-code-inline" dir="ltr">
+              {folder.path}
+            </code>
           </p>
         ) : null}
         <div className="nv-field">
           <label htmlFor={`${id}-text`} className="nv-field-label">
-            What should it do?
+            {NEW_TASK_TEXT.instructions}
           </label>
           <textarea
             id={`${id}-text`}
@@ -255,9 +295,7 @@ function NewTaskForm({
             </span>
           ) : (
             <span id={`${id}-text-hint`} className="nv-field-hint">
-              {kind === 'work'
-                ? 'The run’s goal, for example “Summarize this week’s support tickets into a report”.'
-                : 'The first message of the session, for example “Fix the failing date tests”.'}
+              {kind === 'work' ? NEW_TASK_TEXT.workHint : NEW_TASK_TEXT.codeHint}
             </span>
           )}
         </div>

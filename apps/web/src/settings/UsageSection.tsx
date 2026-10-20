@@ -3,29 +3,79 @@
 // project, for a chosen range. The Hub computes them from its own usage records; nothing leaves
 // the device.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { UsageSummary } from '@nova/shared';
 import { Button, SelectField, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
-import { plural } from './common.ts';
 import { formatSeconds } from './plugin-text.ts';
+
+export const USAGE_TEXT = defineMessages('settings.usage', {
+  lastDays: '{n, plural, one {Last day} other {Last # days}}',
+  lastYear: 'Last year',
+  under: 'under {amount}',
+  summary: 'Total {total}. Highest on {day}: {max}.',
+  noUsage: 'No usage in this range.',
+  /** A chart's accessible name: its title, then its summary. */
+  chart: '{title}. {summary}',
+  bar: '{day}: {value}',
+  showTable: 'Show as a table',
+  day: 'Day',
+  loadFailed: 'Could not load usage.',
+  title: 'Usage',
+  intro:
+    'Counted on your Hub from your own chats; nothing about it leaves this device. Costs are ' +
+    'estimates from each provider’s list prices.',
+  range: 'Range',
+  retry: 'Retry',
+  loading: 'Loading usage',
+  totals: 'Totals',
+  tokensIn: 'Tokens in',
+  tokensOut: 'Tokens out',
+  fromCache: 'From cache',
+  estimatedCost: 'Estimated cost',
+  replies: 'Replies',
+  activeDays: 'Active days',
+  streak: 'Streak',
+  streakDays: '{n, plural, one {# day} other {# days}}',
+  longestTask: 'Longest task',
+  noneYet: 'none yet',
+  noUsageYet: 'No usage in this range yet.',
+  tokensByDay: 'Tokens by day',
+  tokens: 'Tokens',
+  tokenCount: '{n, plural, one {# token} other {# tokens}}',
+  costByDay: 'Cost by day',
+  cost: 'Cost',
+  byModel: 'By model',
+  model: 'Model',
+  noneInRange: 'None in this range.',
+  byProject: 'By project',
+  project: 'Project',
+  deletedProject: 'Deleted project',
+  noProject: 'No project',
+});
+const S = USAGE_TEXT;
 
 const DAY_MS = 86_400_000;
 
-export const RANGES = [
-  { value: '7', label: 'Last 7 days' },
-  { value: '30', label: 'Last 30 days' },
-  { value: '90', label: 'Last 90 days' },
-  { value: '365', label: 'Last year' },
-];
-
-export function formatCost(usd: number): string {
-  if (usd > 0 && usd < 0.01) return 'under $0.01';
-  return `$${usd.toFixed(2)}`;
+/** The ranges to pick from, in days; read at render (their labels follow the locale). */
+export function rangeOptions(): { value: string; label: string }[] {
+  return [7, 30, 90, 365].map((n) => ({
+    value: String(n),
+    label: n === 365 ? S.lastYear : S.lastDays({ n }),
+  }));
 }
 
-const num = (n: number) => n.toLocaleString('en-US');
+const USD = { style: 'currency', currency: 'USD' } as const;
+
+/** An estimated cost in US dollars, in the active locale: "$12.35", "under $0.01". */
+export function formatCost(usd: number): string {
+  if (usd > 0 && usd < 0.01) return S.under({ amount: fmt.number(0.01, USD) });
+  return fmt.number(usd, USD);
+}
+
+const num = (n: number) => fmt.number(n);
 
 /** `YYYY-MM-DD` for a time, in UTC (the Hub's day buckets). */
 export function dayKey(t: number): string {
@@ -54,20 +104,19 @@ export function fillDays(
 }
 
 const shortDay = (day: string) =>
-  new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
+  fmt.date(`${day}T12:00:00Z`, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 
 /** One series of bars, one per day, with a hover title per bar and a table view. */
 export function DayBars({
   title,
+  column,
   days,
   value,
   format,
 }: {
   title: string;
+  /** The table's value column. */
+  column: string;
   days: { day: string }[];
   value: (i: number) => number;
   format: (v: number) => string;
@@ -83,8 +132,8 @@ export function DayBars({
   const bar = Math.max(1, slot - Math.min(4, slot * 0.3));
   const summary =
     max > 0 && days[peak]
-      ? `Total ${format(total)}. Highest on ${shortDay(days[peak].day)}: ${format(max)}.`
-      : 'No usage in this range.';
+      ? S.summary({ total: format(total), day: shortDay(days[peak].day), max: format(max) })
+      : S.noUsage;
   return (
     <figure className="ws-chart" aria-labelledby={`${id}-t`}>
       <figcaption id={`${id}-t`} className="ws-chart-title">
@@ -96,7 +145,7 @@ export function DayBars({
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
         role="img"
-        aria-label={`${title}. ${summary}`}
+        aria-label={S.chart({ title, summary })}
       >
         {values.map((v, i) => {
           const h = max > 0 ? (v / max) * (H - 4) : 0;
@@ -111,7 +160,7 @@ export function DayBars({
               height={h}
               rx={Math.min(2, bar / 2)}
             >
-              <title>{`${shortDay(d.day)}: ${format(v)}`}</title>
+              <title>{S.bar({ day: shortDay(d.day), value: format(v) })}</title>
             </rect>
           );
         })}
@@ -124,13 +173,13 @@ export function DayBars({
         </div>
       ) : null}
       <details className="ws-advanced">
-        <summary>Show as a table</summary>
+        <summary>{S.showTable}</summary>
         <table className="ws-table">
           <caption className="nv-vh">{title}</caption>
           <thead>
             <tr>
-              <th scope="col">Day</th>
-              <th scope="col">{title.split(' by ')[0]}</th>
+              <th scope="col">{S.day}</th>
+              <th scope="col">{column}</th>
             </tr>
           </thead>
           <tbody>
@@ -168,7 +217,7 @@ export function UsageSection() {
           setUsage(u);
           setError(null);
         },
-        (err: unknown) => alive && setError(errorMessage(err, 'Could not load usage.')),
+        (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
       );
     return () => {
       alive = false;
@@ -180,52 +229,49 @@ export function UsageSection() {
 
   return (
     <section className="settings-section" aria-labelledby="profile-usage">
-      <h3 id="profile-usage">Usage</h3>
-      <p className="muted">
-        Counted on your Hub from your own chats; nothing about it leaves this device. Costs are
-        estimates from each provider&apos;s list prices.
-      </p>
-      <SelectField label="Range" value={range} onChange={setRange} options={RANGES} />
+      <h3 id="profile-usage">{S.title}</h3>
+      <p className="muted">{S.intro}</p>
+      <SelectField label={S.range} value={range} onChange={setRange} options={rangeOptions()} />
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setRetry((r) => r + 1)}>Retry</Button>
+          <Button onClick={() => setRetry((r) => r + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {!usage && !error ? <Spinner label="Loading usage" /> : null}
+      {!usage && !error ? <Spinner label={S.loading} /> : null}
       {usage && t ? (
         <>
-          <dl className="ws-stats" aria-label="Totals">
+          <dl className="ws-stats" aria-label={S.totals}>
             <div>
-              <dt>Tokens in</dt>
+              <dt>{S.tokensIn}</dt>
               <dd>{num(t.inputTokens)}</dd>
             </div>
             <div>
-              <dt>Tokens out</dt>
+              <dt>{S.tokensOut}</dt>
               <dd>{num(t.outputTokens)}</dd>
             </div>
             <div>
-              <dt>From cache</dt>
+              <dt>{S.fromCache}</dt>
               <dd>{num(t.cachedTokens)}</dd>
             </div>
             <div>
-              <dt>Estimated cost</dt>
+              <dt>{S.estimatedCost}</dt>
               <dd>{formatCost(t.costUsd)}</dd>
             </div>
             <div>
-              <dt>Replies</dt>
+              <dt>{S.replies}</dt>
               <dd>{num(t.turns)}</dd>
             </div>
             <div>
-              <dt>Active days</dt>
+              <dt>{S.activeDays}</dt>
               <dd>{num(usage.activeDays)}</dd>
             </div>
             <div>
-              <dt>Streak</dt>
-              <dd>{plural(usage.streak, 'day')}</dd>
+              <dt>{S.streak}</dt>
+              <dd>{S.streakDays({ n: usage.streak })}</dd>
             </div>
             <div>
-              <dt>Longest task</dt>
+              <dt>{S.longestTask}</dt>
               <dd>
                 {usage.longestTurn ? (
                   <a
@@ -238,35 +284,37 @@ export function UsageSection() {
                     {formatSeconds(usage.longestTurn.seconds)}
                   </a>
                 ) : (
-                  'none yet'
+                  S.noneYet
                 )}
               </dd>
             </div>
           </dl>
           {t.turns === 0 && usage.byDay.length === 0 ? (
-            <p className="muted">No usage in this range yet.</p>
+            <p className="muted">{S.noUsageYet}</p>
           ) : null}
           <DayBars
-            title="Tokens by day"
+            title={S.tokensByDay}
+            column={S.tokens}
             days={days}
             value={(i) => days[i]?.tokens ?? 0}
-            format={(v) => `${num(v)} tokens`}
+            format={(v) => S.tokenCount({ n: v })}
           />
           <DayBars
-            title="Cost by day"
+            title={S.costByDay}
+            column={S.cost}
             days={days}
             value={(i) => days[i]?.costUsd ?? 0}
             format={formatCost}
           />
           <table className="ws-table">
-            <caption>By model</caption>
+            <caption>{S.byModel}</caption>
             <thead>
               <tr>
-                <th scope="col">Model</th>
-                <th scope="col">Tokens in</th>
-                <th scope="col">Tokens out</th>
-                <th scope="col">Cost</th>
-                <th scope="col">Replies</th>
+                <th scope="col">{S.model}</th>
+                <th scope="col">{S.tokensIn}</th>
+                <th scope="col">{S.tokensOut}</th>
+                <th scope="col">{S.cost}</th>
+                <th scope="col">{S.replies}</th>
               </tr>
             </thead>
             <tbody>
@@ -285,29 +333,27 @@ export function UsageSection() {
               ) : (
                 <tr>
                   <td colSpan={5} className="muted">
-                    None in this range.
+                    {S.noneInRange}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
           <table className="ws-table">
-            <caption>By project</caption>
+            <caption>{S.byProject}</caption>
             <thead>
               <tr>
-                <th scope="col">Project</th>
-                <th scope="col">Tokens in</th>
-                <th scope="col">Tokens out</th>
-                <th scope="col">Cost</th>
+                <th scope="col">{S.project}</th>
+                <th scope="col">{S.tokensIn}</th>
+                <th scope="col">{S.tokensOut}</th>
+                <th scope="col">{S.cost}</th>
               </tr>
             </thead>
             <tbody>
               {usage.byProject.length ? (
                 usage.byProject.map((p) => (
                   <tr key={p.projectId ?? 'none'}>
-                    <th scope="row">
-                      {p.projectId ? (p.name ?? 'Deleted project') : 'No project'}
-                    </th>
+                    <th scope="row">{p.projectId ? (p.name ?? S.deletedProject) : S.noProject}</th>
                     <td>{num(p.inputTokens)}</td>
                     <td>{num(p.outputTokens)}</td>
                     <td>{formatCost(p.costUsd)}</td>
@@ -316,7 +362,7 @@ export function UsageSection() {
               ) : (
                 <tr>
                   <td colSpan={4} className="muted">
-                    None in this range.
+                    {S.noneInRange}
                   </td>
                 </tr>
               )}

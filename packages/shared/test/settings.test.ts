@@ -4,6 +4,7 @@ import {
   isSettingKey,
   resolveAll,
   resolveSetting,
+  SAFE_THEME_VALUE,
   SETTINGS,
 } from '../src/settings.ts';
 
@@ -112,5 +113,52 @@ describe('setting value types', () => {
     // @ts-expect-error 'neon' is not a theme
     const bad: typeof r.value = 'neon';
     expect([r.value, bad]).toEqual(['system', 'neon']);
+  });
+});
+
+describe('appearance.locale (FR-016)', () => {
+  it('defaults to the system language and accepts only supported tags', () => {
+    expect(resolveSetting('appearance.locale', {}).value).toBe('system');
+    for (const tag of ['system', 'en', 'ar', 'en-XA', 'ar-XB'])
+      expect(checkSettingWrite('appearance.locale', tag, 'global', {})).toMatchObject({ ok: true });
+    for (const bad of ['fr', 'AR', '', 3])
+      expect(checkSettingWrite('appearance.locale', bad, 'global', {})).toMatchObject({
+        ok: false,
+      });
+  });
+});
+
+describe('appearance.customTheme (FR-011)', () => {
+  it('is a saved theme id or null, managed policy locks it, and it is a plain setting', () => {
+    expect(resolveSetting('appearance.customTheme', {})).toMatchObject({
+      value: null,
+      source: 'default',
+      locked: false,
+    });
+    for (const id of ['com.examplelabs.aurora', 'user.my-theme', null])
+      expect(checkSettingWrite('appearance.customTheme', id, 'global', {})).toMatchObject({
+        ok: true,
+      });
+    for (const bad of ['Aurora', 'aurora', 'a.b;c', 'x'.repeat(201), 3, {}])
+      expect(checkSettingWrite('appearance.customTheme', bad, 'global', {})).toMatchObject({
+        ok: false,
+      });
+    expect(
+      checkSettingWrite('appearance.customTheme', 'user.mine', 'global', {
+        managed: { 'appearance.customTheme': null },
+      }),
+    ).toMatchObject({ ok: false, error: 'managed' });
+    // Not security-relevant: a project may set it, and export carries it like any setting row.
+    expect(SETTINGS['appearance.customTheme'].security).toBeUndefined();
+    expect(
+      resolveSetting('appearance.customTheme', { global: { 'appearance.customTheme': 'a.b' } }),
+    ).toMatchObject({ value: 'a.b', source: 'global' });
+  });
+
+  it('checks theme values with the marketplace and SDK rule', () => {
+    for (const ok of ['#0b1020', '6px', '"Fira Code", monospace', 'rgb(1, 2, 3)', '0.5rem'])
+      expect(SAFE_THEME_VALUE.test(ok), ok).toBe(true);
+    for (const bad of ['', 'red; background: x', 'url(https://x/y)', '}', 'a{b', 'x'.repeat(201)])
+      expect(SAFE_THEME_VALUE.test(bad), bad).toBe(false);
   });
 });

@@ -32,6 +32,46 @@ describe('rule table', () => {
     expect(ruleFor('relay.url')).toBeNull();
     expect(ruleFor('toString')).toBeNull();
   });
+
+  it('decides every security setting: a rule, or listed as having no safe direction', () => {
+    // Addresses, paths, tokens and similar values have no order, so a policy cannot set them
+    // (securityValueProblem: unordered). A new security setting must land in one of the two.
+    const UNORDERED = new Set([
+      'search.searxngUrl',
+      'instructions.files',
+      'code.autoVerify',
+      'channels.publicUrl',
+      'screen.tierOverrides',
+      'computers.agentComputer',
+      'computers.microVm',
+      'sites.publishRoot',
+      'browser.executablePath',
+      'devices.minNovadVersions',
+      'network.lan.mdnsName',
+      'network.directPublic.url',
+      'network.wakeHelpers',
+      'trust.mode',
+      'trust.meshCerts',
+      'relay.url',
+      'relay.selfHosted',
+      'push.webPushHosts',
+      'relay.registrationTokenRef',
+      'cloud.runner.url',
+      'cloud.runner.token',
+      'cloud.runner.caps',
+      'devices.boot.watchdogSeconds',
+      'devices.firmware.watchdogSeconds',
+      'telemetry.otlp.endpoint',
+      'telemetry.otlp.headers',
+      'managed.restrict',
+    ]);
+    const undecided = Object.entries(SETTINGS as Record<string, { security?: boolean }>)
+      .filter(([k, d]) => d.security && !Object.hasOwn(SECURITY_RULES, k) && !UNORDERED.has(k))
+      .map(([k]) => k);
+    expect(undecided).toEqual([]);
+    for (const k of UNORDERED) expect(ruleFor(k), k).toBeNull();
+    expect(securityValueProblem('relay.url', 'https://relay.example')?.reason).toBe('unordered');
+  });
 });
 
 describe('comparable', () => {
@@ -200,10 +240,36 @@ describe('data controls, extensions, publishers and the reviewer', () => {
     expect(meet(pub, [a], null)).toEqual([a]);
     const pin = ruleFor('review.model')!;
     expect(comparable(pin, 'acct/model')).toBe(true);
-    expect(comparable(pin, 3)).toBe(false);
+    expect(comparable(pin, { model: 'x' })).toBe(false);
     expect(looser(pin, 'x', null)).toBe(false);
     expect(tightenSetting('review.model', 'acct/judge', 'acct/other')).toBe('acct/judge');
     expect(tightenSetting('review.model', null, 'acct/other')).toBeNull();
+  });
+});
+
+describe('app registration, the crash report address and the member purge', () => {
+  it('only turns open registration off', () => {
+    expect(securityValueProblem('apps.openRegistration', false)).toBeNull();
+    expect(tightenSetting('apps.openRegistration', false, true)).toBe(false);
+    // True is the default: it locks whatever the user chose, never turns it back on.
+    expect(securityValueProblem('apps.openRegistration', true)).toBeNull();
+    expect(tightenSetting('apps.openRegistration', true, false)).toBe(false);
+  });
+
+  it('pins the crash report address and the purge days', () => {
+    expect(securityValueProblem('privacy.crashReportEndpoint', '')).toBeNull();
+    expect(tightenSetting('privacy.crashReportEndpoint', '', 'https://mine.example/c')).toBe('');
+    expect(
+      tightenSetting(
+        'privacy.crashReportEndpoint',
+        'https://corp.example/c',
+        'https://mine.example/c',
+      ),
+    ).toBe('https://corp.example/c');
+    expect(securityValueProblem('team.removedMemberPurgeDays', 7)).toBeNull();
+    expect(tightenSetting('team.removedMemberPurgeDays', 7, 90)).toBe(7);
+    expect(tightenSetting('team.removedMemberPurgeDays', 0, 30)).toBe(0);
+    expect(comparable(ruleFor('team.removedMemberPurgeDays')!, Number.NaN)).toBe(false);
   });
 });
 

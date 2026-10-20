@@ -5,7 +5,7 @@ import type { CloudRunnerView } from '@nova/shared';
 import { Button, Icon, Spinner } from '@nova/ui';
 import { navigate } from '../router.ts';
 import { useCloudApi } from './api.ts';
-import { CloudEnvironmentDialog } from './CloudEnvironmentDialog.tsx';
+import { CloudEnvironmentDialog, NEW_ENVIRONMENT_TEXT } from './CloudEnvironmentDialog.tsx';
 import { cloudEnvPath } from './format.ts';
 
 export function NewCloudEnvironmentButton() {
@@ -32,7 +32,7 @@ export function NewCloudEnvironmentButton() {
   return (
     <>
       <Button disabled={loading} onClick={start}>
-        {loading ? <Spinner /> : <Icon name="plus" />} New cloud environment
+        {loading ? <Spinner /> : <Icon name="plus" />} {NEW_ENVIRONMENT_TEXT.title}
       </Button>
       <CloudEnvironmentDialog
         open={open}

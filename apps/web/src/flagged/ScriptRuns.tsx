@@ -4,10 +4,12 @@
 // call is a tool call of its own, gated and audited). Only shown while the feature is on; when it
 // is off the view says where to turn it on. The script's code is kept only as a hash.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { ScriptRunView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner } from '@nova/ui';
 import { useHubStream } from '../hub-events.ts';
-import { formatWhen, plural } from '../settings/common.ts';
+import { rich } from '../i18n/rich.tsx';
+import { formatWhen } from '../settings/common.ts';
 import { useSettings } from '../settings.tsx';
 import { Badge } from '../code/parts.tsx';
 import { InAppLink, useLoad } from '../cloud/parts.tsx';
@@ -15,9 +17,9 @@ import { formatDuration } from '../code/m6-format.ts';
 import { useFlaggedApi, type ScriptRunSummary } from './api.ts';
 import {
   CALL_STATUS,
-  EXPERIMENTAL_LABEL,
   EXPERIMENTAL_PATH,
   FLAGGED_EVENTS,
+  FLAGGED_TEXT,
   SCRIPT_STATUS,
   decisionText,
   flaggedErrorMessage,
@@ -25,31 +27,78 @@ import {
 } from './format.ts';
 import './flagged.css';
 
+/** What a flagged feature's view says while the feature is off. */
+export const FLAG_OFF_TEXT = defineMessages('flagged.off', {
+  scripts: 'Scripted tool calls are off',
+  agents: 'External coding agents are off',
+  /** {link} is a link to the Settings page, named "Settings → Experimental". */
+  turnOn: 'Turn them on in {link}.',
+});
+
 /** Where to turn a flagged feature on, for a view shown while it is off. */
-export function FlagOff({ what }: { what: string }) {
+export function FlagOff({ feature }: { feature: 'scripts' | 'agents' }) {
   return (
     <div className="nv-empty">
       <span className="nv-empty-icon">
         <Icon name="slash" size="32px" />
       </span>
-      <h3 className="nv-empty-title">{what} are off</h3>
+      <h3 className="nv-empty-title">{FLAG_OFF_TEXT[feature]}</h3>
       <div className="nv-empty-description">
-        Turn them on in <InAppLink to={EXPERIMENTAL_PATH}>{EXPERIMENTAL_LABEL}</InAppLink>.
+        {rich(FLAG_OFF_TEXT.turnOn, {
+          link: <InAppLink to={EXPERIMENTAL_PATH}>{FLAGGED_TEXT.where}</InAppLink>,
+        })}
       </div>
     </div>
   );
 }
 
+/** The words of the script runs. */
+export const SCRIPTS_TEXT = defineMessages('flagged.scripts', {
+  introThread:
+    'Short scripts the model wrote to call tools. Each call inside a script passed the policy ' +
+    'gate on its own, like a direct call.',
+  introAll:
+    'Every script the model ran, in all chats and sessions, newest first. Each call inside a ' +
+    'script passed the policy gate on its own.',
+  loadFailed: 'Could not load the script runs.',
+  loadMoreFailed: 'Could not load more script runs.',
+  loading: 'Loading the script runs',
+  empty: 'No script runs yet',
+  emptyThread: 'When the model uses script.run here, each run and its tool calls show up.',
+  emptyAll: 'When the model uses script.run anywhere, each run and its tool calls show up here.',
+  list: 'Script runs',
+  loadMore: 'Load more',
+  /** A run's name for screen readers: "Script run, 5 minutes ago". */
+  runLabel: 'Script run, {when}',
+  /** The button that opens a run: "Script run 5 minutes ago". */
+  run: 'Script run {when}',
+  calls: '{n, plural, one {# tool call} other {# tool calls}}',
+  /** "140 ms of script time": the CPU time the script used. */
+  cpu: '{duration} of script time',
+  /** The first characters of the script's hash: "Code 3f2a9c…". */
+  code: 'Code {hash}',
+  runLoadFailed: 'Could not load the run.',
+  callsLoading: 'Loading the calls',
+  nestedHeading: 'Tool calls in this script',
+  noCalls: 'It called no tools.',
+  nestedList: 'Nested tool calls',
+  notFinished: 'Not finished',
+  /** A nested call that has not finished and for which an approval was asked. */
+  notFinishedAsked: 'Not finished, an approval was asked',
+  /** "12 ms, an approval was asked": how long the call took. */
+  tookAsked: '{duration}, an approval was asked',
+});
+
 export function ScriptRuns({ threadId }: { threadId: string }) {
   const settings = useSettings();
-  if (!settings.get('scripts.enabled').value) return <FlagOff what="Scripted tool calls" />;
+  if (!settings.get('scripts.enabled').value) return <FlagOff feature="scripts" />;
   return <ScriptRunList threadId={threadId} />;
 }
 
 /** The account's script runs across chats and sessions, newest first, with Load more. */
 export function AllScriptRuns() {
   const settings = useSettings();
-  if (!settings.get('scripts.enabled').value) return <FlagOff what="Scripted tool calls" />;
+  if (!settings.get('scripts.enabled').value) return <FlagOff feature="scripts" />;
   return <ScriptRunList threadId={null} />;
 }
 
@@ -91,7 +140,7 @@ function ScriptRunList({ threadId }: { threadId: string | null }) {
       const r = await api.listScriptRuns({ ...(threadId ? { threadId } : {}), cursor: next });
       setMore((m) => ({ items: [...(m?.items ?? []), ...r.items], next: r.nextCursor }));
     } catch (err) {
-      setMoreError(flaggedErrorMessage(err, 'scripts', 'Could not load more script runs.'));
+      setMoreError(flaggedErrorMessage(err, 'scripts', SCRIPTS_TEXT.loadMoreFailed));
     } finally {
       setLoadingMore(false);
     }
@@ -99,31 +148,25 @@ function ScriptRunList({ threadId }: { threadId: string | null }) {
   return (
     <div className="fl-pane">
       <p className="muted ws-flush">
-        {threadId
-          ? 'Short scripts the model wrote to call tools. Each call inside a script passed the policy gate on its own, like a direct call.'
-          : 'Every script the model ran, in all chats and sessions, newest first. Each call inside a script passed the policy gate on its own.'}
+        {threadId ? SCRIPTS_TEXT.introThread : SCRIPTS_TEXT.introAll}
       </p>
       {runs.error && !items ? (
         <div className="ws-error" role="alert">
-          <p>{flaggedErrorMessage(runs.error, 'scripts', 'Could not load the script runs.')}</p>
-          <Button onClick={runs.reload}>Retry</Button>
+          <p>{flaggedErrorMessage(runs.error, 'scripts', SCRIPTS_TEXT.loadFailed)}</p>
+          <Button onClick={runs.reload}>{FLAGGED_TEXT.retry}</Button>
         </div>
       ) : null}
-      {runs.loading ? <Spinner label="Loading the script runs" /> : null}
+      {runs.loading ? <Spinner label={SCRIPTS_TEXT.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
           level={3}
-          title="No script runs yet"
-          description={
-            threadId
-              ? 'When the model uses script.run here, each run and its tool calls show up.'
-              : 'When the model uses script.run anywhere, each run and its tool calls show up here.'
-          }
+          title={SCRIPTS_TEXT.empty}
+          description={threadId ? SCRIPTS_TEXT.emptyThread : SCRIPTS_TEXT.emptyAll}
           icon="tool"
         />
       ) : null}
       {items?.length ? (
-        <ul className="fl-list" aria-label="Script runs">
+        <ul className="fl-list" aria-label={SCRIPTS_TEXT.list}>
           {items.map((r) => (
             <ScriptRunRow
               key={r.id}
@@ -142,7 +185,7 @@ function ScriptRunList({ threadId }: { threadId: string | null }) {
       {next ? (
         <div>
           <Button disabled={loadingMore} onClick={() => void loadMore()}>
-            {loadingMore ? <Spinner /> : null} Load more
+            {loadingMore ? <Spinner /> : null} {SCRIPTS_TEXT.loadMore}
           </Button>
         </div>
       ) : null}
@@ -161,20 +204,29 @@ function ScriptRunRow({
 }) {
   const s = SCRIPT_STATUS[r.status];
   const why = scriptErrorText(r.errorCode);
+  const when = formatWhen(r.createdAt);
   return (
-    <li className="fl-row" aria-label={`Script run, ${formatWhen(r.createdAt)}`}>
+    <li className="fl-row" aria-label={SCRIPTS_TEXT.runLabel({ when })}>
       <span className="fl-row-title">
         <button type="button" className="cl-link" aria-expanded={open} onClick={onToggle}>
-          Script run {formatWhen(r.createdAt)}
+          {SCRIPTS_TEXT.run({ when })}
         </button>
         <Badge tone={s.tone} icon={s.icon}>
           {s.text}
         </Badge>
       </span>
       <span className="muted ws-row-meta">
-        <span>{plural(r.calls, 'tool call')}</span>
-        <span>{formatDuration(r.cpuMs)} of script time</span>
-        <span title={r.codeSha256}>Code {r.codeSha256.slice(0, 12)}</span>
+        <span>{SCRIPTS_TEXT.calls({ n: r.calls })}</span>
+        <span>{SCRIPTS_TEXT.cpu({ duration: formatDuration(r.cpuMs) })}</span>
+        <span>
+          {rich(SCRIPTS_TEXT.code, {
+            hash: (
+              <code title={r.codeSha256} dir="ltr">
+                {r.codeSha256.slice(0, 12)}
+              </code>
+            ),
+          })}
+        </span>
       </span>
       {why ? <span className="fl-why">{why}</span> : null}
       {open ? <NestedCalls id={r.id} /> : null}
@@ -190,21 +242,21 @@ function NestedCalls({ id }: { id: string }) {
   if (!r)
     return run.error ? (
       <div className="ws-error" role="alert">
-        <p>{flaggedErrorMessage(run.error, 'scripts', 'Could not load the run.')}</p>
-        <Button onClick={run.reload}>Retry</Button>
+        <p>{flaggedErrorMessage(run.error, 'scripts', SCRIPTS_TEXT.runLoadFailed)}</p>
+        <Button onClick={run.reload}>{FLAGGED_TEXT.retry}</Button>
       </div>
     ) : (
-      <Spinner label="Loading the calls" />
+      <Spinner label={SCRIPTS_TEXT.callsLoading} />
     );
   return (
     <section className="fl-nested" aria-labelledby={headingId}>
       <h4 id={headingId} className="fl-nested-title">
-        Tool calls in this script
+        {SCRIPTS_TEXT.nestedHeading}
       </h4>
       {r.nested.length === 0 ? (
-        <p className="muted cl-small">It called no tools.</p>
+        <p className="muted cl-small">{SCRIPTS_TEXT.noCalls}</p>
       ) : (
-        <ol className="fl-calls" aria-label="Nested tool calls">
+        <ol className="fl-calls" aria-label={SCRIPTS_TEXT.nestedList}>
           {r.nested.map((c) => {
             const st = CALL_STATUS[c.status];
             return (
@@ -216,10 +268,7 @@ function NestedCalls({ id }: { id: string }) {
                 <span className="fl-decision">
                   <Icon name="shield" /> {decisionText(c.decision)}
                 </span>
-                <span className="muted cl-small">
-                  {c.durationMs !== null ? formatDuration(c.durationMs) : 'Not finished'}
-                  {c.approvalId ? ', an approval was asked' : ''}
-                </span>
+                <span className="muted cl-small">{callTime(c.durationMs, !!c.approvalId)}</span>
               </li>
             );
           })}
@@ -227,4 +276,11 @@ function NestedCalls({ id }: { id: string }) {
       )}
     </section>
   );
+}
+
+/** How long a nested call took (or that it has not finished), and whether it asked first. */
+function callTime(durationMs: number | null, asked: boolean): string {
+  if (durationMs === null) return asked ? SCRIPTS_TEXT.notFinishedAsked : SCRIPTS_TEXT.notFinished;
+  const duration = formatDuration(durationMs);
+  return asked ? SCRIPTS_TEXT.tookAsked({ duration }) : duration;
 }

@@ -206,7 +206,7 @@ main.quick {
   width: 100%;
   border: none;
   border-radius: 0;
-  text-align: left;
+  text-align: start;
   background: transparent;
   padding: 8px 12px;
 }

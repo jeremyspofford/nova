@@ -2080,13 +2080,37 @@ CREATE TABLE site_publish (         -- publishes, newest last; the live one is t
   id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES site(id),
   account_id TEXT NOT NULL REFERENCES account(id),
   version INTEGER NOT NULL,
-  target_kind TEXT NOT NULL,       -- folder|zip
-  target_ref TEXT,                 -- the folder name under the publish root; NULL for a zip
+  target_kind TEXT NOT NULL,       -- folder|zip|remote (M8)
+  target_ref TEXT,                 -- the folder name under the publish root or on the remote
+                                   -- target; NULL for a zip
+  target_id TEXT REFERENCES site_target(id), -- M8: the remote hosting target, for remote only
   reverted_at TEXT,                -- an unpublish reverts it; the previous one is live again
   created_at TEXT NOT NULL,
-  CHECK ((target_kind = 'folder') = (target_ref IS NOT NULL))
+  CHECK ((target_kind = 'zip') = (target_ref IS NULL)),
+  CHECK ((target_kind = 'remote') = (target_id IS NOT NULL))
+);
+
+CREATE TABLE site_target (          -- M8 (0052): a remote hosting target the owner set up (FR-037)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  name TEXT NOT NULL,              -- 1..100
+  kind TEXT NOT NULL,              -- webdav
+  url TEXT NOT NULL,               -- the collection site folders go into (https, or http to this machine)
+  public_url TEXT,                 -- where visitors see them, when another address
+  auth TEXT NOT NULL,              -- none|basic|bearer
+  username TEXT,                   -- basic only
+  secret_ref TEXT,                 -- secret://sites/target/<id>/credential; NULL for none
+  checked_at TEXT, check_ok INTEGER, check_reason TEXT, check_message TEXT, -- the last check
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  deleted_at TEXT                  -- removal is a soft delete, so publish history keeps it (unnamed)
 );
 ```
+
+Migration 0052 (M8, ADR-097) adds `site_target` and rebuilds `site_publish` (row order kept) for
+the `remote` kind. Deleted pages keep their rows (`space_page.deleted_at`) until their space is
+deleted, so they can be restored with their versions and comments; there is no retention sweep for
+them. Audit actions added: `space.page.undeleted` and `site.target.created`, `.updated` and
+`.deleted` (kind `space`), `site.egress.denied` (kind `network`, decision `deny`); `site.published`
+adds `targetId`, `folder` and `leftBehind` to its detail.
 
 Visualizations (FR-076) need no table: they are `chart` artifacts holding a
 `nova.visualization` JSON document.
@@ -2425,6 +2449,122 @@ Only the writes a client queues offline keep their answer (`REPLAYABLE_ROUTES` i
 so the effect still never happens twice. An answer marked `no-store`, larger than 256 KiB or
 carrying a credential is never written. A 5xx or 429 answer forgets the key, so a retry runs.
 
+### extensions, marketplace, data controls, apps and team (M8)
+
+*ADR-097; migrations 0045-0051. Managed policy (0047) has no table: it lives in the policy files and
+`<data>/managed/remote-policy.json`. Email OAuth tokens and state live in the vault, not a table.*
+
+```sql
+CREATE TABLE extension_install (    -- an installed SDK extension (FR-117); its plugin row holds the files
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  plugin_id TEXT NOT NULL, version TEXT NOT NULL, api INTEGER NOT NULL,
+  signature TEXT NOT NULL,         -- verified|unverified|dev, as installed; "Verified" is recomputed live
+  publisher_key TEXT,              -- base64url Ed25519 key that signed it, or NULL
+  digest TEXT NOT NULL,            -- D2 digest of its files; a worker starts only when they still match
+  manifest_json TEXT NOT NULL,     -- extension.json
+  last_error TEXT,                 -- why it is stopped (policy refusal, digest mismatch, faults)
+  installed_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);                                 -- UNIQUE (account_id, plugin_id)
+
+CREATE TABLE market_install (       -- what the marketplace installed (FR-049)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  kind TEXT NOT NULL,              -- plugin|skill|theme|pet|mcp
+  item_id TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL,
+  catalog_id TEXT NOT NULL, origin TEXT NOT NULL, -- <catalog>/<id>@<version>[#<commit>]
+  signature TEXT NOT NULL,         -- verified|unverified
+  publisher_key TEXT, sha256 TEXT, commit_sha TEXT,
+  permissions_json TEXT NOT NULL DEFAULT '[]', -- the permission lines accepted
+  installed_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);                                 -- UNIQUE (account_id, kind, item_id)
+
+CREATE TABLE market_rating (        -- ratings stay on the Hub; never sent anywhere
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  kind TEXT NOT NULL, item_id TEXT NOT NULL,
+  stars INTEGER NOT NULL,          -- 1..5
+  review TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);                                 -- UNIQUE (account_id, kind, item_id)
+
+CREATE TABLE spend_cap (            -- FR-116, per account and provider kind
+  account_id TEXT NOT NULL REFERENCES account(id), provider TEXT NOT NULL,
+  limit_usd REAL NOT NULL,         -- > 0
+  period TEXT NOT NULL DEFAULT 'month', -- day|month (UTC)
+  warn_at REAL NOT NULL DEFAULT 0.8, -- 0 < warn_at < 1
+  hard_stop INTEGER NOT NULL DEFAULT 1,
+  carried_usd REAL NOT NULL DEFAULT 0, -- spend carried over by "Clear usage data"
+  carried_period_start TEXT,       -- the period it belongs to
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, provider)
+);
+CREATE TABLE spend_alert (          -- each alert once per period
+  account_id TEXT NOT NULL, provider TEXT NOT NULL, period_start TEXT NOT NULL,
+  level TEXT NOT NULL,             -- warning|reached
+  spent_usd REAL NOT NULL, limit_usd REAL NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, provider, period_start, level)
+);
+CREATE TABLE retention_sweep (      -- FR-105, one row per sweep
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, -- schedule|manual
+  started_at TEXT NOT NULL, finished_at TEXT, result_json TEXT, error TEXT
+);
+CREATE TABLE audit_anchor (         -- where a pruned audit chain continues (docs/12 §9.4)
+  id INTEGER PRIMARY KEY,          -- always 1
+  seq INTEGER NOT NULL, hash TEXT NOT NULL, pruned_at TEXT NOT NULL
+);
+
+CREATE TABLE app_client (           -- a registered third-party app (FR-222); public client, no secret
+  id TEXT PRIMARY KEY, name TEXT NOT NULL,
+  redirect_uris TEXT NOT NULL, scopes TEXT NOT NULL, -- JSON lists
+  created_at TEXT NOT NULL,
+  approved_at TEXT                 -- first approval (or the owner registered it); unapproved
+                                   -- registrations lapse after 1 hour
+);
+CREATE TABLE app_consent (          -- which app an app_authorization row (kind app) belongs to
+  authorization_id TEXT PRIMARY KEY REFERENCES app_authorization(id),
+  account_id TEXT NOT NULL REFERENCES account(id), client_id TEXT NOT NULL REFERENCES app_client(id),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE app_code (             -- one-use authorization codes, 5 minutes
+  code_hash TEXT PRIMARY KEY,      -- SHA-256; never the code
+  client_id TEXT NOT NULL, account_id TEXT NOT NULL, authorization_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL, scopes TEXT NOT NULL, code_challenge TEXT NOT NULL, -- S256
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT,
+  family_id TEXT                   -- the token chain it started (revoked if the code is reused)
+);
+CREATE TABLE app_token (            -- nva_ access (1 h) and refresh (30 d, rotated) tokens
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, -- access|refresh
+  token_hash TEXT NOT NULL UNIQUE, family_id TEXT NOT NULL,
+  authorization_id TEXT NOT NULL, client_id TEXT NOT NULL, account_id TEXT NOT NULL,
+  scopes TEXT NOT NULL,            -- this chain's own scopes, narrowed by the grant at each use
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, revoked_at TEXT
+);
+
+CREATE TABLE channel_message_file ( -- the files a channel message carried (FR-110); no content
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES channel_message(id) ON DELETE CASCADE,
+  idx INTEGER NOT NULL,            -- UNIQUE (message_id, idx)
+  direction TEXT NOT NULL,         -- in|out
+  status TEXT NOT NULL,            -- received|sent|withheld|failed
+  name TEXT NOT NULL, size INTEGER, content_type TEXT,
+  attachment_id TEXT, artifact_id TEXT, reason TEXT, created_at TEXT NOT NULL
+);
+
+CREATE TABLE member_purge (         -- a removed member's purge (FR-217, decision 5)
+  account_id TEXT PRIMARY KEY REFERENCES account(id),
+  status TEXT NOT NULL,            -- cleaning (rows gone, files and vault entries pending)|purged|failed
+  cause TEXT NOT NULL,             -- grace|request
+  requested_by TEXT REFERENCES account(id),
+  attempted_at TEXT NOT NULL, purged_at TEXT,
+  counts_json TEXT,                -- rows by table, blobs, secrets, folders
+  cleanup_json TEXT,               -- what is left to remove after the commit
+  error TEXT
+);
+```
+
+0051 also rebuilds `tool_call` so `origin` allows `script` (nested calls of `script.run`). 0052
+(sites hosting targets) is under "spaces & sites" above.
+`provider_account.entitlements` (JSON) keeps what a provider reported about its plan and limits and
+its last limit error (FR-115). An app's approval is an `app_authorization` row of kind `app` whose
+`scopes` hold the MCP-shaped scopes plus the app scope names.
+
 ## 3. Blob storage layout
 
 ```
@@ -2468,6 +2608,17 @@ carrying a credential is never written. A 5xx or 429 answer forgets the key, so 
 ├── import/<import-id>/             # staging copies of imported skills and plugins
 ├── workspace/hook-context/<thread-id>/  # hook context over 2,500 tokens
 ├── themes/<theme-id>.json
+├── extensions/data/<account-id>/<extension-id>/  # an extension's ${extensionData} (M8, FR-117)
+├── extensions/bundles/<account-id>/<extension-id>.novax  # the signed bytes it was installed
+│                                   # from, for rollback (0600)
+├── extensions/.staging/<id>/       # previews being checked
+├── market/pets/<pet-id>/           # installed pets (M8, FR-049)
+├── cache/market/                   # marketplace staging and backups, wiped at start
+├── managed/remote-policy.json      # the last good signed remote policy (M8, FR-106; 0600); never
+│                                   # exported or deleted
+├── datactl/uploads/<id>.novaexport # import uploads, 1 hour (M8, FR-105; 0600)
+├── crash/<id>.json                 # local crash reports (M8, FR-121; 0600)
+├── members/<account-id>/           # a non-owner account's own folder (M7)
 ├── logs/
 └── backups/                # pre-migration backups
 ```
@@ -2502,7 +2653,13 @@ carrying a credential is never written. A 5xx or 429 answer forgets the key, so 
   bridge grants and decommissions are kept (`novad` keeps its own last 20 firmware snapshots). A
   fallback trace mark goes with its `browser_action` row.
 - Export: a single `.nova` archive (SQLite + blobs + manifest) plus a JSONL audit export.
-  Uncertified ambient rows are never exported (FR-227).
+  Uncertified ambient rows are never exported (FR-227). *As built in M8*: a `.novaexport` zip with
+  one JSON-lines file per table, the data folder's files and a manifest
+  (`contracts/schemas/export-manifest.json`), sealed with a passphrase when it carries secrets
+  (`docs/12` §9.1).
+- *M8 retention* (`docs/12` §9.4): `retention.*Days` per item (chats, runs, audit at least 365 days,
+  artifacts, activity history), null by default, swept daily; pinned chats and their runs and
+  artifacts are kept, and a deleted chat is recoverable for 30 days before it is purged.
 - Delete: cascading soft-delete then hard-delete job with a 30-day recovery window.
 
 ## 6. Invariants

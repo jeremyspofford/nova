@@ -4,14 +4,39 @@
 // Terminal output is untrusted data (FR-189) and is only ever drawn as text.
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import type { CodeSessionView, TerminalView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, IconButton, Spinner, rovingIndex, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { useAnnounce, useServices } from '../services.tsx';
 import { formatWhen } from '../settings/common.ts';
-import { SANDBOX_UNAVAILABLE } from '../terminal/session.ts';
+import { TERMINAL_TEXT, exitCodeArg } from '../terminal/session.ts';
 import { useTerminalHub, useTerminals } from '../terminal/TerminalPanel.tsx';
 import { useCoalesced, useThreadBusEvents } from './events.ts';
 import { useCodeExtras, type ExecSessionView } from './extras.ts';
+
+export const CODE_TERMINAL_TEXT = defineMessages('code.terminal', {
+  title: 'Terminal',
+  started: 'Terminal started in the session folder.',
+  tabs: 'Session terminals',
+  sessionTerminal: 'Session terminal',
+  clear: 'Clear',
+  new: 'New terminal in this session',
+  none: 'No terminal is open in this session.',
+  notListed: 'This Hub does not list agent commands yet.',
+  commandsFailed: 'Could not load the agent’s commands.',
+  stopped: 'Stopped {command}.',
+  stopFailed: 'Could not stop the command: {reason}',
+  commands: 'Agent commands',
+  refresh: 'Refresh',
+  loadingCommands: 'Loading agent commands',
+  noCommands: 'The agent has no commands running in this session.',
+  /** The chip on a command the agent started. */
+  agent: 'agent',
+  toolCall: 'Tool call',
+  runningSince: 'Running since {when}',
+  killLabel: 'Kill {command}',
+  kill: 'Kill',
+});
 
 export function TerminalPane({
   session,
@@ -21,7 +46,7 @@ export function TerminalPane({
   visible: boolean;
 }) {
   return (
-    <section className="code-terminal" aria-label="Terminal">
+    <section className="code-terminal" aria-label={CODE_TERMINAL_TEXT.title}>
       <SessionTerminals session={session} visible={visible} />
       <ExecSessions threadId={session.threadId} visible={visible} />
     </section>
@@ -68,7 +93,8 @@ function SessionTerminals({
     (t) => !closed.has(t.id),
   );
   const selected = items.some((t) => t.id === picked) ? picked : (items.at(-1)?.id ?? null);
-  const label = (id: string) => `Terminal ${items.findIndex((t) => t.id === id) + 1}`;
+  const label = (id: string) =>
+    TERMINAL_TEXT.numbered({ n: items.findIndex((t) => t.id === id) + 1 });
 
   const start = async () => {
     setStarting(true);
@@ -77,13 +103,13 @@ function SessionTerminals({
       setCreated((list) => [...list, view]);
       setPicked(view.id);
       setUnavailable(null);
-      announce('Terminal started in the session folder.');
+      announce(CODE_TERMINAL_TEXT.started);
       // Focus once its screen exists.
       setTimeout(() => hub.session(view.id).focus(), 0);
     } catch (err) {
       if (err instanceof ApiError && err.body.code === 'sandbox_unavailable')
-        setUnavailable(SANDBOX_UNAVAILABLE);
-      else toast.show(`Could not start a terminal: ${errorMessage(err)}`, { tone: 'error' });
+        setUnavailable(TERMINAL_TEXT.sandboxUnavailable);
+      else toast.show(TERMINAL_TEXT.createFailed({ reason: errorMessage(err) }), { tone: 'error' });
     } finally {
       setStarting(false);
     }
@@ -94,10 +120,12 @@ function SessionTerminals({
     hub.close(id).then(
       () => {
         setClosed((s) => new Set([...s, id]));
-        announce(`${name} closed.`);
+        announce(TERMINAL_TEXT.closed({ name }));
       },
       (err: unknown) =>
-        toast.show(`Could not close ${name}: ${errorMessage(err)}`, { tone: 'error' }),
+        toast.show(TERMINAL_TEXT.closeFailed({ name, reason: errorMessage(err) }), {
+          tone: 'error',
+        }),
     );
   };
 
@@ -119,7 +147,7 @@ function SessionTerminals({
           <div
             ref={tabs}
             role="tablist"
-            aria-label="Session terminals"
+            aria-label={CODE_TERMINAL_TEXT.tabs}
             className="terminal-tabs"
             onKeyDown={onTabKey}
           >
@@ -135,7 +163,7 @@ function SessionTerminals({
                     id={`${base}-tab-${t.id}`}
                     aria-selected={on}
                     aria-controls={`${base}-panel`}
-                    aria-label={exited ? `${name} (exited)` : name}
+                    aria-label={exited ? TERMINAL_TEXT.exitedName({ name }) : name}
                     tabIndex={on ? 0 : -1}
                     className="terminal-tab-button"
                     onClick={() => setPicked(t.id)}
@@ -143,7 +171,7 @@ function SessionTerminals({
                     <Icon name="terminal" /> {name}
                   </button>
                   <IconButton
-                    label={`Close ${name}`}
+                    label={TERMINAL_TEXT.close({ name })}
                     icon={<Icon name="close" />}
                     variant="ghost"
                     onClick={() => close(t.id)}
@@ -153,16 +181,16 @@ function SessionTerminals({
             })}
           </div>
         ) : (
-          <span className="muted terminal-none">Session terminal</span>
+          <span className="muted terminal-none">{CODE_TERMINAL_TEXT.sessionTerminal}</span>
         )}
         <span className="terminal-bar-spacer" />
         {selected ? (
           <Button variant="ghost" onClick={() => hub.session(selected).clear()}>
-            Clear
+            {CODE_TERMINAL_TEXT.clear}
           </Button>
         ) : null}
         <IconButton
-          label="New terminal in this session"
+          label={CODE_TERMINAL_TEXT.new}
           icon={<Icon name="plus" />}
           variant="ghost"
           disabled={starting || !!unavailable}
@@ -185,9 +213,9 @@ function SessionTerminals({
         </div>
       ) : unavailable ? null : (
         <div className="terminal-empty">
-          <p className="muted">No terminal is open in this session.</p>
+          <p className="muted">{CODE_TERMINAL_TEXT.none}</p>
           <Button onClick={() => void start()} disabled={starting}>
-            {starting ? <Spinner /> : <Icon name="terminal" />} Start a terminal
+            {starting ? <Spinner /> : <Icon name="terminal" />} {TERMINAL_TEXT.start}
           </Button>
         </div>
       )}
@@ -218,7 +246,7 @@ function Screen({ id, visible, name }: { id: string; visible: boolean; name: str
   }, [hub, id, owner, visible]);
   const state = snap.sessions[id];
   return (
-    <div className="terminal-screen-wrap">
+    <div className="terminal-screen-wrap" dir="ltr">
       <div
         ref={box}
         className="terminal-screen"
@@ -229,17 +257,17 @@ function Screen({ id, visible, name }: { id: string; visible: boolean; name: str
       <p className="terminal-status muted" role="status">
         {!state || state.state === 'starting' || state.state === 'connecting' ? (
           <>
-            <Spinner label="Connecting" /> Connecting…
+            <Spinner label={TERMINAL_TEXT.connecting} /> {TERMINAL_TEXT.connectingDots}
           </>
         ) : state.state === 'disconnected' ? (
           <>
-            {state.error ?? 'Disconnected from the terminal.'}{' '}
+            {state.error ?? TERMINAL_TEXT.disconnected}{' '}
             <button type="button" className="link" onClick={() => hub.session(id).connect()}>
-              Reconnect
+              {TERMINAL_TEXT.reconnect}
             </button>
           </>
         ) : state.state === 'exited' ? (
-          `The shell exited${state.exitCode === null ? '' : ` with code ${state.exitCode}`}.`
+          TERMINAL_TEXT.shellExited({ code: exitCodeArg(state.exitCode) })
         ) : null}
       </p>
     </div>
@@ -266,8 +294,8 @@ function ExecSessions({ threadId, visible }: { threadId: string; visible: boolea
         (err: unknown) =>
           setError(
             err instanceof ApiError && err.status === 404
-              ? 'This Hub does not list agent commands yet.'
-              : errorMessage(err, 'Could not load the agent’s commands.'),
+              ? CODE_TERMINAL_TEXT.notListed
+              : errorMessage(err, CODE_TERMINAL_TEXT.commandsFailed),
           ),
       ),
     [extras, threadId],
@@ -291,10 +319,10 @@ function ExecSessions({ threadId, visible }: { threadId: string; visible: boolea
     setKilling(s.id);
     try {
       await extras.killExecSession(s.id);
-      announce(`Stopped ${s.cmd}.`);
+      announce(CODE_TERMINAL_TEXT.stopped({ command: s.cmd }));
       reload();
     } catch (err) {
-      toast.show(`Could not stop the command: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(CODE_TERMINAL_TEXT.stopFailed({ reason: errorMessage(err) }), { tone: 'error' });
     } finally {
       setKilling(null);
     }
@@ -303,9 +331,9 @@ function ExecSessions({ threadId, visible }: { threadId: string; visible: boolea
   return (
     <section className="code-exec" aria-labelledby={headingId}>
       <div className="code-exec-head">
-        <h3 id={headingId}>Agent commands</h3>
+        <h3 id={headingId}>{CODE_TERMINAL_TEXT.commands}</h3>
         <Button variant="ghost" onClick={reload}>
-          <Icon name="refresh" /> Refresh
+          <Icon name="refresh" /> {CODE_TERMINAL_TEXT.refresh}
         </Button>
       </div>
       {error ? (
@@ -313,31 +341,31 @@ function ExecSessions({ threadId, visible }: { threadId: string; visible: boolea
           {error}
         </p>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading agent commands" /> : null}
-      {items?.length === 0 ? (
-        <p className="muted">The agent has no commands running in this session.</p>
-      ) : null}
+      {items === null && !error ? <Spinner label={CODE_TERMINAL_TEXT.loadingCommands} /> : null}
+      {items?.length === 0 ? <p className="muted">{CODE_TERMINAL_TEXT.noCommands}</p> : null}
       {items?.length ? (
-        <ul className="code-exec-list" aria-label="Agent commands">
+        <ul className="code-exec-list" aria-label={CODE_TERMINAL_TEXT.commands}>
           {items.map((s) => (
             <li key={s.id} className="code-exec-row" aria-label={s.cmd}>
-              <span className="code-agent-chip">agent</span>
+              <span className="code-agent-chip">{CODE_TERMINAL_TEXT.agent}</span>
               {s.callId ? (
-                <code className="muted code-call" title="Tool call">
+                <code className="muted code-call" title={CODE_TERMINAL_TEXT.toolCall}>
                   {s.callId}
                 </code>
               ) : null}
               <code className="code-exec-cmd" title={s.cwd}>
                 {s.cmd}
               </code>
-              <span className="muted">Running since {formatWhen(s.startedAt)}</span>
+              <span className="muted">
+                {CODE_TERMINAL_TEXT.runningSince({ when: formatWhen(s.startedAt) })}
+              </span>
               <Button
                 variant="danger"
                 disabled={killing !== null}
-                aria-label={`Kill ${s.cmd}`}
+                aria-label={CODE_TERMINAL_TEXT.killLabel({ command: s.cmd })}
                 onClick={() => void kill(s)}
               >
-                {killing === s.id ? <Spinner /> : <Icon name="stop" />} Kill
+                {killing === s.id ? <Spinner /> : <Icon name="stop" />} {CODE_TERMINAL_TEXT.kill}
               </Button>
             </li>
           ))}

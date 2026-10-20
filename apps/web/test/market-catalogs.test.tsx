@@ -183,42 +183,39 @@ describe('install rules', () => {
         'market.allowedKinds': ['plugin'],
         'managed.restrict': { layers: [{ unverifiedInstalls: false }], failClosed: null },
       },
-      market: {
-        managed: {
-          active: true,
-          failClosed: null,
-          sources: [
-            {
-              channel: 'remote',
-              location: 'https://policy.example.com/nova.json',
-              status: 'active',
-              problem: null,
-              inForce: true,
-              cached: false,
-              serial: 7,
-              loadedAt: '2026-10-19T08:00:00.000Z',
-              checkedAt: '2026-10-19T09:00:00.000Z',
-            },
-          ],
-          settings: [
-            { key: 'market.allowedKinds', value: ['plugin'], channel: 'remote', derivedFrom: null },
-          ],
-          restrict: [{ channel: 'remote', restrict: { unverifiedInstalls: false } }],
-          ignored: [],
-          checkedAt: '2026-10-19T09:00:00.000Z',
-        },
+      policy: {
+        active: true,
+        failClosed: null,
+        sources: [
+          {
+            channel: 'remote',
+            location: 'https://policy.example.com/nova.json',
+            status: 'active',
+            problem: null,
+            inForce: true,
+            cached: false,
+            serial: 7,
+            loadedAt: '2026-10-19T08:00:00.000Z',
+            checkedAt: '2026-10-19T09:00:00.000Z',
+          },
+        ],
+        settings: [
+          { key: 'market.allowedKinds', value: ['plugin'], channel: 'remote', derivedFrom: null },
+        ],
+        restrict: [{ channel: 'remote', restrict: { unverifiedInstalls: false } }],
+        egress: null,
+        ignored: [],
+        checkedAt: '2026-10-19T09:00:00.000Z',
       },
     });
     const sw = await screen.findByRole('switch', { name: 'Allow unverified items' });
     expect((sw as HTMLButtonElement).disabled).toBe(true);
     expect(sw.getAttribute('aria-checked')).toBe('false');
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Themes' }).disabled).toBe(true);
-    expect(
-      (
-        await screen.findAllByText(
-          'Managed by your organization (set by the remote policy from https://policy.example.com/nova.json)',
-        )
-      ).length,
-    ).toBeGreaterThanOrEqual(2);
+    // The shared lock note, with the source the managed policy client read.
+    const sources = await screen.findAllByText('(remote policy)');
+    expect(sources.length).toBeGreaterThanOrEqual(2);
+    for (const s of sources)
+      expect(s.parentElement!.textContent).toBe('Managed by your organization(remote policy)');
   });
 });

@@ -13,14 +13,64 @@ import type {
   DeviceView,
 } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, TextField, useToast, type IconName } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { useHubStream } from '../hub-events.ts';
 import { formatWhen } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
 import { InlineApproval } from '../oob/HubApproval.tsx';
 import { useDeviceOpsApi, type DeviceOpsApi } from './api-m75.ts';
-import type { ChipTone } from './format.ts';
+import type { ChipTone, StatusChip } from './format.ts';
 import { opsErrorMessage } from './ops.tsx';
 import { Chip, useLoad } from './parts.tsx';
+
+export const DECOMMISSION_TEXT = defineMessages('devices.decommission', {
+  status: {
+    awaiting_approval: 'Waiting for your approval',
+    running: 'Decommissioning',
+    done: 'Decommissioned',
+    denied: 'Denied',
+    expired: 'Expired: nobody answered in time',
+    cancelled: 'Withdrawn',
+    failed: 'Failed',
+  },
+  result: {
+    wipedPurged:
+      'The device wiped its credentials, deleted its Nova data and removed its service, then was revoked.',
+    wiped: 'The device wiped its credentials and removed its service, then was revoked.',
+    unreachable:
+      'The device did not answer. It is revoked, and wipes its credentials the next time it reaches the Hub.',
+    refused: 'The device refused. It was revoked anyway.',
+    notTold:
+      'The Hub could not sign the instruction, so the device was revoked without being told.',
+  },
+  steps: {
+    online:
+      'novad on the device stops its modules, deletes its key, credentials and certificate, and removes its service, so it stops running.',
+    offline:
+      'The device is offline: it wipes its key and credentials the next time it reaches the Hub.',
+    revoke:
+      'The Hub revokes the device and its certificate, whether or not the device could be told. Agents lose it as their computer and every folder it shared is closed.',
+    final: 'It cannot be undone. To use the computer again, add it with a new code.',
+  },
+  button: 'Decommission…',
+  requested: 'Approve the decommission on its card to go ahead.',
+  requestFailed: 'Could not ask to decommission the device.',
+  title: 'Decommission {name}?',
+  description:
+    'For a computer you are giving away, selling or retiring. After you approve it on the card that follows:',
+  purge: 'Also delete its Nova data',
+  purgeHelp:
+    'novad also deletes its data folder on that computer: its logs, settings, modules, staged writes and anything else it kept there. Your own files elsewhere are not touched. Without this, that folder stays on the computer. An offline device deletes nothing until it reaches the Hub, and only its credentials then.',
+  typeName: 'Type {name} to confirm',
+  cancel: 'Cancel',
+  ask: 'Ask to decommission {name}',
+  heading: 'Decommission',
+  asked: 'Asked {when}',
+  dataDeleted: 'its Nova data is deleted too',
+  dataStays: 'its Nova data stays on the computer',
+  ended: 'ended {when}',
+});
+const S = DECOMMISSION_TEXT;
 
 export const DECOMMISSION_EVENTS: readonly string[] = [
   'device.decommission.requested',
@@ -30,18 +80,20 @@ export const DECOMMISSION_EVENTS: readonly string[] = [
   'approval.cancelled',
 ];
 
-export const DECOMMISSION_STATUS: Record<
-  DeviceDecommissionStatus,
-  { text: string; tone: ChipTone; icon: IconName | null }
-> = {
-  awaiting_approval: { text: 'Waiting for your approval', tone: 'needs_input', icon: 'hand' },
-  running: { text: 'Decommissioning', tone: 'running', icon: null },
-  done: { text: 'Decommissioned', tone: 'ready', icon: 'check' },
-  denied: { text: 'Denied', tone: 'neutral', icon: 'stop' },
-  expired: { text: 'Expired: nobody answered in time', tone: 'neutral', icon: 'clock' },
-  cancelled: { text: 'Withdrawn', tone: 'neutral', icon: 'stop' },
-  failed: { text: 'Failed', tone: 'blocked', icon: 'alert' },
+const STATUS_LOOK: Record<DeviceDecommissionStatus, { tone: ChipTone; icon: IconName | null }> = {
+  awaiting_approval: { tone: 'needs_input', icon: 'hand' },
+  running: { tone: 'running', icon: null },
+  done: { tone: 'ready', icon: 'check' },
+  denied: { tone: 'neutral', icon: 'stop' },
+  expired: { tone: 'neutral', icon: 'clock' },
+  cancelled: { tone: 'neutral', icon: 'stop' },
+  failed: { tone: 'blocked', icon: 'alert' },
 };
+
+/** A decommission's chip; its words read in the active locale. */
+export function decommissionChip(status: DeviceDecommissionStatus): StatusChip<IconName | null> {
+  return { ...STATUS_LOOK[status], text: S.status[status] };
+}
 
 /** What the device did, in a sentence. */
 export function decommissionResultText(
@@ -50,15 +102,13 @@ export function decommissionResultText(
 ): string | null {
   switch (result) {
     case 'wiped':
-      return purge
-        ? 'The device wiped its credentials, deleted its Nova data and removed its service, then was revoked.'
-        : 'The device wiped its credentials and removed its service, then was revoked.';
+      return purge ? S.result.wipedPurged : S.result.wiped;
     case 'unreachable':
-      return 'The device did not answer. It is revoked, and wipes its credentials the next time it reaches the Hub.';
+      return S.result.unreachable;
     case 'refused':
-      return 'The device refused. It was revoked anyway.';
+      return S.result.refused;
     case 'not_told':
-      return 'The Hub could not sign the instruction, so the device was revoked without being told.';
+      return S.result.notTold;
     default:
       return null;
   }
@@ -68,16 +118,9 @@ export function decommissionResultText(
 export function DecommissionSteps({ online }: { online: boolean }) {
   return (
     <ul className="oob-consent">
-      <li>
-        {online
-          ? 'novad on the device stops its modules, deletes its key, credentials and certificate, and removes its service, so it stops running.'
-          : 'The device is offline: it wipes its key and credentials the next time it reaches the Hub.'}
-      </li>
-      <li>
-        The Hub revokes the device and its certificate, whether or not the device could be told.
-        Agents lose it as their computer and every folder it shared is closed.
-      </li>
-      <li>It cannot be undone. To use the computer again, add it with a new code.</li>
+      <li>{online ? S.steps.online : S.steps.offline}</li>
+      <li>{S.steps.revoke}</li>
+      <li>{S.steps.final}</li>
     </ul>
   );
 }
@@ -96,7 +139,7 @@ export function DecommissionButton({
   return (
     <>
       <Button variant="danger" onClick={() => setOpen(true)}>
-        Decommission…
+        {S.button}
       </Button>
       {open ? (
         <DecommissionDialog
@@ -139,18 +182,18 @@ function DecommissionDialog({
     setError(null);
     try {
       const v = await api.requestDecommission(device.id, { purge });
-      toast.show('Approve the decommission on its card to go ahead.', { tone: 'success' });
+      toast.show(S.requested, { tone: 'success' });
       onRequested(v);
     } catch (err) {
-      setError(opsErrorMessage(err, 'Could not ask to decommission the device.'));
+      setError(opsErrorMessage(err, S.requestFailed));
       setBusy(false);
     }
   };
   return (
     <Dialog
       open
-      title={`Decommission ${device.name}?`}
-      description="For a computer you are giving away, selling or retiring. After you approve it on the card that follows:"
+      title={S.title({ name: device.name })}
+      description={S.description}
       onClose={onClose}
       initialFocusRef={cancelRef}
     >
@@ -170,17 +213,14 @@ function DecommissionDialog({
             onChange={(e) => setPurge(e.target.checked)}
           />
           <span className="nv-radio-text">
-            <span>Also delete its Nova data</span>
+            <span>{S.purge}</span>
             <span id={`${base}-purge`} className="nv-field-hint">
-              novad also deletes its data folder on that computer: its logs, settings, modules,
-              staged writes and anything else it kept there. Your own files elsewhere are not
-              touched. Without this, that folder stays on the computer. An offline device deletes
-              nothing until it reaches the Hub, and only its credentials then.
+              {S.purgeHelp}
             </span>
           </span>
         </label>
         <TextField
-          label={`Type ${device.name} to confirm`}
+          label={S.typeName({ name: device.name })}
           value={typed}
           autoComplete="off"
           spellCheck={false}
@@ -193,10 +233,10 @@ function DecommissionDialog({
         ) : null}
         <div className="nv-dialog-footer">
           <Button ref={cancelRef} onClick={onClose}>
-            Cancel
+            {S.cancel}
           </Button>
           <Button type="submit" variant="danger" disabled={!matches || busy}>
-            {busy ? <Spinner /> : null} Ask to decommission {device.name}
+            {busy ? <Spinner /> : null} {S.ask({ name: device.name })}
           </Button>
         </div>
       </form>
@@ -241,18 +281,17 @@ export function DecommissionStatus({
       reload();
   });
   if (!api || !v) return null;
-  const s = DECOMMISSION_STATUS[v.status];
+  const s = decommissionChip(v.status);
   const result = decommissionResultText(v.deviceResult, v.purge);
   return (
     <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
       <div className="devices-row-head">
-        <h2 id={`${base}-h`}>Decommission</h2>
+        <h2 id={`${base}-h`}>{S.heading}</h2>
         <Chip tone={s.tone} icon={s.icon} text={s.text} />
       </div>
       <p className="muted ws-flush">
-        Asked {formatWhen(v.createdAt)} ·{' '}
-        {v.purge ? 'its Nova data is deleted too' : 'its Nova data stays on the computer'}
-        {v.finishedAt ? ` · ended ${formatWhen(v.finishedAt)}` : ''}
+        {S.asked({ when: formatWhen(v.createdAt) })} · {v.purge ? S.dataDeleted : S.dataStays}
+        {v.finishedAt ? ` · ${S.ended({ when: formatWhen(v.finishedAt) })}` : ''}
       </p>
       {v.status === 'awaiting_approval' && v.approvalId ? (
         <InlineApproval approvalId={v.approvalId} onSettled={reload} />
@@ -264,7 +303,9 @@ export function DecommissionStatus({
           </p>
         ) : null}
         {v.detail && v.deviceResult !== 'unreachable' ? (
-          <p className="muted ws-flush">{v.detail}</p>
+          <p className="muted ws-flush" dir="auto">
+            {v.detail}
+          </p>
         ) : null}
       </div>
     </section>

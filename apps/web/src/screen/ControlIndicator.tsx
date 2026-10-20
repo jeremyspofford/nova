@@ -5,13 +5,43 @@
 import { useEffect, useRef } from 'react';
 import type { ScreenStatusView } from '@nova/shared';
 import { Button, Icon, Kbd, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { errorMessage } from '../api.ts';
+import { listText } from '../devices/format.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useAnnounce } from '../services.tsx';
 import { useScreenApi } from './api.ts';
 import { ariaKeys, computerText, keyCaps } from './format.ts';
 import { claimKill, useKillKey } from './killkey.ts';
 import { useScreenStatuses } from './statuses.ts';
 import './screen.css';
+
+export const INDICATOR_TEXT = defineMessages('screen.indicator', {
+  region: 'Computer control',
+  stopped: 'Computer use stopped. Nothing more is sent until you resume it.',
+  stopFailed: 'Could not stop computer use: {error} Press Stop again.',
+  renewed: 'Renewed control of {apps}.',
+  renewFailed: 'Could not renew: {error}',
+  ended: 'Nova stopped controlling the screen.',
+  controlling: 'Nova is controlling {apps}',
+  controllingApps: 'Nova is controlling apps',
+  controllingOn: 'Nova is controlling {apps} on {computer}',
+  controllingAppsOn: 'Nova is controlling apps on {computer}',
+  /** After the apps, with the kill key's caps: "· Esc to stop". */
+  toStop: '{key} to stop',
+  stop: 'Stop',
+  renew: 'Renew',
+  open: 'Open',
+});
+const S = INDICATOR_TEXT;
+
+/** "Nova is controlling Mail, Notes", with the computer when more than one is controlled. */
+function controllingText(s: ScreenStatusView, computer: string | null): string {
+  const apps = s.indicator.apps.length ? listText(s.indicator.apps) : null;
+  if (computer)
+    return apps ? S.controllingOn({ apps, computer }) : S.controllingAppsOn({ computer });
+  return apps ? S.controlling({ apps }) : S.controllingApps;
+}
 
 export function ControlIndicator({
   onOpenComputer,
@@ -32,16 +62,11 @@ export function ControlIndicator({
       api.killScreen(s.computerId).then(
         (next) => {
           put(next);
-          toast.show('Computer use stopped. Nothing more is sent until you resume it.', {
-            tone: 'success',
-          });
+          toast.show(S.stopped, { tone: 'success' });
         },
         (err: unknown) => {
           refresh(s.computerId);
-          toast.show(`Could not stop computer use: ${errorMessage(err)} Press Stop again.`, {
-            tone: 'error',
-            duration: 0,
-          });
+          toast.show(S.stopFailed({ error: errorMessage(err) }), { tone: 'error', duration: 0 });
         },
       );
     }
@@ -54,11 +79,11 @@ export function ControlIndicator({
     Promise.all(active.map((g) => api.renewScreenGrant(s.computerId, g.id))).then(
       () => {
         refresh(s.computerId);
-        toast.show(`Renewed control of ${s.indicator.apps.join(', ')}.`, { tone: 'success' });
+        toast.show(S.renewed({ apps: listText(s.indicator.apps) }), { tone: 'success' });
       },
       (err: unknown) => {
         refresh(s.computerId);
-        toast.show(`Could not renew: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(S.renewFailed({ error: errorMessage(err) }), { tone: 'error' });
       },
     );
   };
@@ -71,23 +96,25 @@ export function ControlIndicator({
     const before = last.current;
     last.current = said;
     if (said) announce(`${said}.`);
-    else if (before) announce('Nova stopped controlling the screen.');
+    else if (before) announce(S.ended);
   }, [said, announce]);
 
   if (!controlling.length) return null;
   return (
-    <div className="scr-indicators" role="region" aria-label="Computer control">
+    <div className="scr-indicators" role="region" aria-label={S.region}>
       {controlling.map((s) => (
         <div key={s.computerId} className="scr-indicator" data-computer={s.computerId}>
           <Icon name="eye" />
           <span className="scr-indicator-text">
-            Nova is controlling {s.indicator.apps.join(', ') || 'apps'}
-            {controlling.length > 1
-              ? ` on ${computerText(computers.get(s.computerId), s.computerId)}`
-              : ''}
+            {controllingText(
+              s,
+              controlling.length > 1
+                ? computerText(computers.get(s.computerId), s.computerId)
+                : null,
+            )}
             <span className="scr-indicator-key">
-              {' '}
-              · <Kbd keys={keyCaps(s.indicator.killKey)} /> to stop
+              {' · '}
+              {rich(S.toStop, { key: <Kbd keys={keyCaps(s.indicator.killKey)} /> })}
             </span>
           </span>
           <Button
@@ -95,14 +122,14 @@ export function ControlIndicator({
             onClick={() => stop([s])}
             aria-keyshortcuts={ariaKeys(s.indicator.killKey)}
           >
-            <Icon name="stop" /> Stop
+            <Icon name="stop" /> {S.stop}
           </Button>
           <Button variant="ghost" onClick={() => renew(s)}>
-            Renew
+            {S.renew}
           </Button>
           {onOpenComputer ? (
             <Button variant="ghost" onClick={() => onOpenComputer(s.computerId)}>
-              Open
+              {S.open}
             </Button>
           ) : null}
         </div>

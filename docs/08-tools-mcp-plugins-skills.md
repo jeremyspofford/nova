@@ -365,7 +365,9 @@ not listed and the script routes answer 404.
   `tool.search`, `skill.load`, `context.fresh`, `context.remaining` and `run.complete`.
 - **Origin.** Nested calls record the script caller's origin, with `ui` recorded as `model` (a
   script started from the UI is still code the model wrote). The `script` origin of
-  `ToolContext` (§1) is not recorded yet, because `tool_call` allows only four origins.
+  `ToolContext` (§1) is not recorded yet, because `tool_call` allows only four origins. *Since M8*
+  (ADR-097, migration 0051) nested calls are recorded with origin `script`, and the gate treats
+  them like a model's calls.
 - **Not served to MCP clients.** `script.run` is itself read-only but calls write tools, so
   Nova's MCP server never serves it (§2.2).
 - **Records and UI.** `script_run` keeps each run's status, error code, call count, CPU time and
@@ -431,7 +433,12 @@ delegation routes answer 404, except reading and cancelling a delegation.
 - **Terminals.** At most 8 per delegation, and at most 1 MiB of output kept per terminal (the
   newest), whatever the agent asks for. Every command the agent started is killed when the
   delegation ends, directly in the sandbox, without waiting on an approval. Environment variables
-  the agent asks for on a terminal are ignored.
+  the agent asks for on a terminal are ignored. *Since M8* (ADR-097) they pass only through an
+  allowlist of names (`acp/env.ts`: `CI`, `TERM`, `LANG`, `TZ`, `LC_*`, colour, pager, language
+  runtime and Git author names and the like; at most 32, values at most 4,096 characters, no control
+  characters, vault references or anything the redactor would change), and they are run as leading
+  `NAME=value` assignments the policy engine sees, so an allow rule for the bare command does not
+  match and the user is asked.
 - **Events and audit.** `delegation.started`, `delegation.updated` and `delegation.finished`,
   correlated by thread. `delegation.updated` is not persisted and is coalesced to at most one
   event per 250 ms: `message` and `thought` text joined (up to 4,000 characters each), at most 10
@@ -524,6 +531,11 @@ server API takes the three remaining fields of the table above.
   starts it. A device still waiting for approval cannot be chosen, and every call refuses a device
   that is not active. A server the device lists with an error, or does not list, fails the
   connection. Device servers expose tools only; their resources and prompts are not listed.
+  *Since M8* (ADR-097) they also offer resources and prompts: `novad` as built in M8 answers
+  `POST /agent/v1/mcp/request` for five read-only methods (`resources/list`,
+  `resources/templates/list`, `resources/read`, `prompts/list`, `prompts/get`) under the same `mcp`
+  grant (`contracts/hub-api.md` §3); `resources/read` and `prompts/get` are audited as
+  `device.mcp.request`. A `novad` without that route still offers tools only.
 - **`auth`** (sse and http only, not together with `oauth`). The value goes to the vault as
   `secret://mcp/<id>/auth/header` and is sent as the `Authorization` header; a value with no
   scheme is sent as `Bearer <value>`. An empty string keeps the saved value, `null` removes it, and
@@ -607,7 +619,8 @@ prompts and the `nova mcp stdio` launcher arrive in M7 (below).
   from `NOVA_MCP_TOKEN` or a file (`--token-file` or `NOVA_MCP_TOKEN_FILE`). The launcher never
   prints or logs the token and holds no scope of its own: the Hub authenticates, scopes, gates and
   audits every call as it does for an HTTP client. No `nova` command is installed yet, so it runs
-  as `node packages/mcp/src/launcher-main.ts mcp stdio`.
+  as `node packages/mcp/src/launcher-main.ts mcp stdio`. *Since M8* it is `nova mcp stdio` of the
+  `nova` command (`packages/cli`, ADR-097 D1).
 
 ### 2.3 Configuration
 
@@ -897,6 +910,33 @@ An imported plugin (§4.2) takes the same path: choosing it on the import screen
 confirmation, and it is installed disabled. Signature checks, browser-extension install and a UI
 for plugin secrets come later.
 
+*As shipped in M8 (ADR-097 D2-D3; `packages/core/src/sdk`, `packages/core/src/market`).*
+
+- **Signed bundles.** A plugin can now arrive signed: as a `.novax` (an extension, below) or from a
+  verified catalog with a matching checksum (§7). The **D2 digest** of a set of files is the SHA-256
+  over the sorted lines `"<path>\n<sha256 of the file>\n"` (paths relative, `/`-separated, never
+  holding a control character); a `.novax` carries `META-INF/nova-signature.json` with the
+  publisher's Ed25519 signature over `"nova-extension-v1\n"` + that digest
+  ([`extension-signature.json`](../contracts/schemas/extension-signature.json)), and a catalog lists
+  a folder's digest. A publisher in `plugins.trustedPublishers` makes it **Verified**; anything else
+  installs only with the sideload confirmation, and a signature that does not match is refused.
+- **Provenance.** `PluginService.install` takes `{verified, publisher, source, origin, via}` from
+  the marketplace and the extension installer, so the `plugin_install` row and the `plugin.install`
+  audit entry carry the real verdict, publisher and catalog. `POST /api/v1/plugins` never passes
+  it: a folder or Git install stays Unverified ("Unverified: a plugin installed from a folder or Git
+  is not signed by a publisher you trust…").
+- **Extensions.** A plugin folder with `.nova-plugin/extension.json`
+  ([`extension-manifest.json`](../contracts/schemas/extension-manifest.json)) is an extension: its
+  code runs in the SDK's worker (`docs/14` §4.4) and its tools are `ext:<id>/<name>` with source
+  `plugin`. It installs through `POST /api/v1/extensions` or the marketplace; one installed through
+  `/api/v1/plugins` is adopted as an Unverified extension. An extension's plugin part (its skills,
+  roles, MCP servers, hooks and UI) is an ordinary plugin.
+- **Managed policy** may refuse a plugin by id or any unverified install (`policy_denied`
+  `{reason: managed}`, `docs/12` §10); the installer checks it on every path.
+- **Paths.** Uninstalling a plugin, or removing an unused version folder, refuses any path outside
+  `<data>/plugins` before anything changes (an imported row cannot point elsewhere).
+- **Not built:** browser-extension install and a UI for plugin secrets.
+
 ## 4. Skills
 
 A **skill** is a folder containing `SKILL.md` (YAML front-matter plus Markdown instructions)
@@ -949,6 +989,8 @@ unquoted description are tolerated.
 - The **body** loads only on use: a slash command (`/code-review`), a mention (`@code-review`),
   or auto-selection, where the model calls `skill.load` based on the catalog.
   `skill.load {name, file?}` returns `SKILL.md` (or the named file) and the skill's file list.
+  *Since M8* an agent's catalog lists only the skills of plugins connected to that agent (and
+  `skill.load` refuses the others), like its plugin tools.
 - Scripts in a skill never run on load. They run only through `exec.run` in the sandbox,
   under policy.
 - A skill's `allowed_tools` further restricts the policy engine, and those tools are always
@@ -1060,6 +1102,20 @@ sits inside the plugin or project folder. A new or changed hook is listed as
 `needs_trust` (Settings → Plugins & skills → Hooks) and does not run until the user trusts it
 (`trusted`). Revoking trust (`revoked`) stops it at once. Managed hooks are trusted through the
 policy channel.
+
+*As of M8 (ADR-097).* A **plugin** hook's hash also covers the D2 digest of the plugin's files
+(§3.2), leaving out only what the Hub reads and shows apart (the manifest, its hooks file, role and
+command files, and the commands the installer writes): a script can import helpers its command line
+never names, so an update that changes any file a hook could load needs trust again, while one that
+only bumps the version or adds a role keeps the trust of hooks it did not touch. An **SDK hook** (an
+extension's, `docs/14` §4.4) is stored with source `extension` and an `mcp_tool` handler on
+`ext:<extensionId>/hooks/<hookId>`, answered by the extension's worker; its hash is SHA-256 over the
+canonical JSON of `{hook: <definition>, bundle: <the bundle's D2 digest>}`, so every update of the
+extension needs trust again. SDK hooks never answer asks, run only while the extension runs (a
+stopped, refused or disabled extension's hook rows are turned off; one that cannot be reached fails
+closed like any hook) and are allowed by the gate only while managed policy allows the extension and
+its hook tool. Hooks in another assistant's plugin layout are converted when imported and arrive
+untrusted (§4.2).
 
 *As shipped in M4 (ADR-091).* Hook ids are `hook:<origin>.<hookId>`; a project hook is
 `hook:project:<projectId>.<hookId>` and a plugin hook `hook:<pluginId>.<hookId>`. The hash leaves
@@ -1177,6 +1233,14 @@ followed and every size is capped. Where M4 differs from the mapping above:
   failed item is recorded as failed and never blocks a retry; a name in use is imported under
   the next free name.
 
+
+*As of M8 (ADR-097).* Archives (chat exports and other zips) are read with the bounded zip reader of
+`documents/zip.ts` (overlapping entries, stored entries whose sizes disagree, data past the end and
+ZIP64 are refused; each entry counts its larger size), allowing up to 65,535 entries because chat
+exports hold many images; only JSON entries count toward the caps, and one that is too large is
+skipped rather than refusing the archive. Hooks in another assistant's plugin layout are converted
+and arrive untrusted.
+
 ## 5. Browser & computer tools (summary; detail in 11)
 
 | Tool | Input | Output |
@@ -1259,6 +1323,48 @@ names a plugin id, name, version, description and its folder. A URL catalog's in
 shallow with repository hooks off; https, ssh and git URLs only; without Git the Hub answers
 400 `capability_missing`. Entries that point to other repositories, catalog signatures and the
 remote catalog come later, so every entry is **Unverified** and installs as a sideload (§3.2).
+
+*As shipped in M8 (ADR-097 D2; `packages/core/src/market`; the Marketplace in `docs/14` §5).*
+
+- **Index.** `catalog.json` (or `nova-catalog.json`) keeps the M4 `plugins` list and adds `items`
+  of every kind (`plugin`, `skill`, `theme`, `pet`, `mcp`) with card fields (author, publisher,
+  categories, screenshots, changelog, declared permissions and components) and the artifact:
+  `path` inside the catalog, `url` next to a remote index, `repo` + `commit` for a folder of
+  another Git repository, or `server` for an MCP registry entry. `sha256` is a file artifact's
+  checksum and `digest` a folder's (the D2 digest of §3.2, since the M4 reader already gave
+  `sha256` the meaning of an archive checksum). Schema:
+  [`catalog-index.json`](../contracts/schemas/catalog-index.json).
+- **Signature.** `<index>.sig` ([`catalog-signature.json`](../contracts/schemas/catalog-signature.json))
+  is `{v: 1, publisher, digest, signature}`: Ed25519 over `"nova-catalog-v1\n"` + the hex SHA-256
+  of the index bytes, by a key the catalog pins (`plugins.catalogs[].publisherKey`) or one in
+  `plugins.trustedPublishers`. The domain line keeps a catalog signature from passing for a
+  bundle's (`"nova-extension-v1\n"`). Outcomes: `verified`; `untrusted` (a good signature by an
+  unknown key, no pin); `unsigned` (no `.sig`, no pin); `invalid` (damaged, not matching, another
+  key than the pinned one, or no `.sig` under a pin), which refuses the whole catalog. The
+  built-in sample catalog is signed by a test key whose public half is pinned in code for that
+  catalog only and never added to the trusted publishers; its private half is a test fixture
+  (`packages/core/test/fixtures/market/sample-key.ts`, marked fake), and
+  `packages/core/test/fixtures/market/sign-sample-catalog.ts` re-signs it after an edit (a test
+  fails otherwise).
+- **Git.** With `commit`, the Hub runs `git init`, fetches that one commit (`--depth 1`) and checks
+  it out detached with `core.hooksPath=/dev/null` and `protocol.file.allow=never`, then requires
+  `HEAD` to equal the commit; without it, a shallow clone of the ref. Git runs with a clean
+  environment and a 120 s limit. The index and `.sig` are read only when they are regular files
+  inside the checkout.
+- **Remote.** https only; the index is the location (when it ends in `.json`) or
+  `<location>/catalog.json`; artifacts must be https on the same host; at most 3 redirects, same
+  host; 30 s per request; Content-Length and a streaming cap. Indexes are cached 5 minutes and the
+  cache is dropped when `plugins.catalogs` or `plugins.trustedPublishers` changes.
+- **Archives** are read with the bounded zip reader (`documents/zip.ts`, also used by `.novax`
+  bundles and Office files): before anything is copied or inflated the central directory is
+  walked, and an archive is refused when it has over 5,000 entries, a stored entry's two sizes
+  disagree, the entries' compressed data add up to more than the archive, two entries share bytes,
+  or it is ZIP64; each entry counts the larger of its sizes toward the 50 MiB per entry and 100 MiB
+  in all. File names with a control character are refused, here and in folder digests.
+- The sample catalog holds a plugin (`com.example.sample`), a third-party plugin
+  (`com.examplelabs.release-notes`), an extension (`com.examplelabs.word-count`, a `.novax` signed
+  by a made-up "Example Labs" key that is not trusted by default), a theme
+  (`com.examplelabs.aurora`) and a skill (`standup`).
 
 ## 8. Namespacing & conflicts
 

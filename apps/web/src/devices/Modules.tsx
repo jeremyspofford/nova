@@ -11,7 +11,9 @@ import {
   type DeviceView,
 } from '@nova/shared';
 import { Button, Spinner, TextField, useToast } from '@nova/ui';
-import { formatWhen, plural } from '../settings/common.ts';
+import { defineMessages } from '@nova/i18n';
+import { rich } from '../i18n/rich.tsx';
+import { formatWhen } from '../settings/common.ts';
 import { useDevicesApi, type DeviceServiceResult } from './api.ts';
 import type { PanelProps } from './DevicePage.tsx';
 import {
@@ -20,19 +22,75 @@ import {
   capabilityBlocked,
   crashLooped,
   deviceErrorMessage,
+  listText,
   moduleLabel,
 } from './format.ts';
 import { Chip, ConfirmDialog, Unavailable } from './parts.tsx';
 import { ServiceList } from './Services.tsx';
+
+/** The Modules tab's words (FR-016): the supervisor's modules and services by name. */
+export const MODULES_TEXT = defineMessages('devices.modules', {
+  title: 'Modules',
+  intro:
+    'novad runs each module on its own, sandboxed. A module that keeps crashing is stopped until you start it again.',
+  notAllowed: 'Not allowed by this device’s policy',
+  /** A module's new state, after an action. */
+  nowState:
+    '{module}: {state, select, running {running.} stopped {stopped.} backoff {restarting after a crash.} disabled {disabled.} other {{state}.}}',
+  actionFailed:
+    '{action, select, start {Could not start {module}.} stop {Could not stop {module}.} restart {Could not restart {module}.} other {Could not roll back {module}.}}',
+  crashLoop: 'Stopped after repeated crashes',
+  module: 'Module',
+  version: 'Version {version}',
+  versionUnknown: 'Version unknown',
+  restarts: '{n, plural, one {# restart} other {# restarts}}',
+  started: 'Started {when}',
+  lastExit: 'Last exit: {exit}',
+  disabled: 'Disabled: {reason}',
+  restart: 'Restart',
+  restartModule: 'Restart {module}',
+  stop: 'Stop',
+  stopModule: 'Stop {module}',
+  start: 'Start',
+  startModule: 'Start {module}',
+  rollBack: 'Roll back',
+  rollBackModule: 'Roll back {module}',
+  rollBackTitle: 'Roll back {module}?',
+  rollBackBare: 'Roll back?',
+  rollBackTo: 'It goes back from version {from} to {to} and restarts.',
+  rollBackPrevious: 'It goes back from version {from} to the previous one and restarts.',
+  rolledBack: '{module} is back on version {version}.',
+  none: 'The device has not reported its modules yet.',
+  notInstalled: 'Not installed: {modules}. Install them with novad on the device.',
+  services: {
+    title: 'Services',
+    intro:
+      'Start, stop or restart a service novad manages on this device, such as its model server.',
+    field: 'Service',
+    badName: 'Letters, digits and . _ : @ - only.',
+    actions: {
+      status: 'Status',
+      start: 'Start',
+      stop: 'Stop',
+      restart: 'Restart',
+    },
+    failed:
+      '{action, select, start {Could not start {name}.} stop {Could not stop {name}.} restart {Could not restart {name}.} other {Could not get the status of {name}.}}',
+    /** The device's own words for the state and kind are shown as they are. */
+    result: '{name}: {state}',
+    resultKind: '{name}: {state} ({kind})',
+    noState: 'no state reported',
+  },
+});
+
+const S = MODULES_TEXT;
 
 type ModuleAction = 'start' | 'stop' | 'restart' | 'rollback';
 
 /** Why the policy keeps a module from starting, or null. */
 function notAllowed(d: DeviceView, name: string): string | null {
   const allowed = d.policy.allowedModules;
-  return allowed && !allowed.includes(name as DeviceModuleName)
-    ? 'Not allowed by this device’s policy'
-    : null;
+  return allowed && !allowed.includes(name as DeviceModuleName) ? S.notAllowed : null;
 }
 
 export function ModulesPanel({ device, onDevice, reload }: PanelProps) {
@@ -60,11 +118,11 @@ function ModuleList({ device, onDevice, reload }: PanelProps) {
         ...device,
         modules: device.modules.map((x) => (x.name === module.name ? module : x)),
       });
-      toast.show(`${moduleLabel(m.name)}: ${MODULE_STATE[module.state].text.toLowerCase()}.`, {
+      toast.show(S.nowState({ module: moduleLabel(m.name), state: module.state }), {
         tone: 'success',
       });
     } catch (err) {
-      toast.show(deviceErrorMessage(err, `Could not ${action} ${moduleLabel(m.name)}.`), {
+      toast.show(deviceErrorMessage(err, S.actionFailed({ action, module: moduleLabel(m.name) })), {
         tone: 'error',
       });
       reload();
@@ -80,14 +138,11 @@ function ModuleList({ device, onDevice, reload }: PanelProps) {
   );
   return (
     <section className="ws-section devices-flat" aria-labelledby="modules-h">
-      <h2 id="modules-h">Modules</h2>
-      <p className="muted ws-flush">
-        novad runs each module on its own, sandboxed. A module that keeps crashing is stopped until
-        you start it again.
-      </p>
+      <h2 id="modules-h">{S.title}</h2>
+      <p className="muted ws-flush">{S.intro}</p>
       {blocked ? <Unavailable>{blocked}</Unavailable> : null}
       {device.modules.length ? (
-        <ul className="ws-list" aria-label="Modules">
+        <ul className="ws-list" aria-label={S.title}>
           {[...device.modules]
             .sort((a, b) => a.name.localeCompare(b.name))
             .map((m) => {
@@ -96,6 +151,7 @@ function ModuleList({ device, onDevice, reload }: PanelProps) {
               const disallowed = notAllowed(device, m.name);
               const running = m.state === 'running' || m.state === 'backoff';
               const off = Boolean(blocked) || busy !== null;
+              const module = moduleLabel(m.name);
               return (
                 <li
                   key={m.name}
@@ -108,22 +164,26 @@ function ModuleList({ device, onDevice, reload }: PanelProps) {
                       <Chip
                         tone={looped ? 'blocked' : s.tone}
                         icon={looped ? 'alert' : s.icon}
-                        text={looped ? 'Stopped after repeated crashes' : s.text}
+                        text={looped ? S.crashLoop : s.text}
                       />
                     </div>
                     <span className="muted ws-row-meta">
-                      <span>{MODULE_PURPOSE[m.name as DeviceModuleName] ?? 'Module'}</span>
-                      <span>Version {m.version || 'unknown'}</span>
-                      <span>{plural(m.restarts, 'restart')}</span>
+                      <span>{MODULE_PURPOSE[m.name as DeviceModuleName] ?? S.module}</span>
+                      <span>
+                        {m.version ? S.version({ version: m.version }) : S.versionUnknown}
+                      </span>
+                      <span>{S.restarts({ n: m.restarts })}</span>
                       {m.startedAt && m.state === 'running' ? (
-                        <span>Started {formatWhen(m.startedAt)}</span>
+                        <span>{S.started({ when: formatWhen(m.startedAt) })}</span>
                       ) : null}
                     </span>
                     {m.lastExit ? (
-                      <span className="muted ws-row-meta">Last exit: {m.lastExit}</span>
+                      <span className="muted ws-row-meta">{S.lastExit({ exit: m.lastExit })}</span>
                     ) : null}
                     {m.disabledReason && !looped ? (
-                      <span className="muted ws-row-meta">Disabled: {m.disabledReason}</span>
+                      <span className="muted ws-row-meta">
+                        {S.disabled({ reason: m.disabledReason })}
+                      </span>
                     ) : null}
                     {disallowed ? <span className="muted ws-row-meta">{disallowed}</span> : null}
                   </div>
@@ -134,16 +194,16 @@ function ModuleList({ device, onDevice, reload }: PanelProps) {
                           disabled={off || Boolean(disallowed)}
                           title={disallowed ?? undefined}
                           onClick={() => void act(m, 'restart')}
-                          aria-label={`Restart ${moduleLabel(m.name)}`}
+                          aria-label={S.restartModule({ module })}
                         >
-                          {busy === `${m.name}:restart` ? <Spinner /> : null} Restart
+                          {busy === `${m.name}:restart` ? <Spinner /> : null} {S.restart}
                         </Button>
                         <Button
                           disabled={off}
                           onClick={() => void act(m, 'stop')}
-                          aria-label={`Stop ${moduleLabel(m.name)}`}
+                          aria-label={S.stopModule({ module })}
                         >
-                          {busy === `${m.name}:stop` ? <Spinner /> : null} Stop
+                          {busy === `${m.name}:stop` ? <Spinner /> : null} {S.stop}
                         </Button>
                       </>
                     ) : (
@@ -151,9 +211,9 @@ function ModuleList({ device, onDevice, reload }: PanelProps) {
                         disabled={off || Boolean(disallowed)}
                         title={disallowed ?? undefined}
                         onClick={() => void act(m, 'start')}
-                        aria-label={`Start ${moduleLabel(m.name)}`}
+                        aria-label={S.startModule({ module })}
                       >
-                        {busy === `${m.name}:start` ? <Spinner /> : null} Start
+                        {busy === `${m.name}:start` ? <Spinner /> : null} {S.start}
                       </Button>
                     )}
                     {m.previousVersion ? (
@@ -161,9 +221,9 @@ function ModuleList({ device, onDevice, reload }: PanelProps) {
                         variant="ghost"
                         disabled={off}
                         onClick={() => setRollingBack(m)}
-                        aria-label={`Roll back ${moduleLabel(m.name)}`}
+                        aria-label={S.rollBackModule({ module })}
                       >
-                        Roll back
+                        {S.rollBack}
                       </Button>
                     ) : null}
                   </div>
@@ -172,23 +232,26 @@ function ModuleList({ device, onDevice, reload }: PanelProps) {
             })}
         </ul>
       ) : (
-        <p className="muted ws-flush">The device has not reported its modules yet.</p>
+        <p className="muted ws-flush">{S.none}</p>
       )}
       {missing.length && device.modules.length ? (
         <p className="muted ws-flush">
-          Not installed: {missing.map((n) => moduleLabel(n)).join(', ')}. Install them with novad on
-          the device.
+          {S.notInstalled({ modules: listText(missing.map((n) => moduleLabel(n))) })}
         </p>
       ) : null}
       <ConfirmDialog
         open={rollingBack !== null}
-        title={rollingBack ? `Roll back ${moduleLabel(rollingBack.name)}?` : 'Roll back?'}
+        title={
+          rollingBack ? S.rollBackTitle({ module: moduleLabel(rollingBack.name) }) : S.rollBackBare
+        }
         description={
           rollingBack
-            ? `It goes back from version ${rollingBack.version} to ${rollingBack.previousVersion ?? 'the previous one'} and restarts.`
+            ? rollingBack.previousVersion
+              ? S.rollBackTo({ from: rollingBack.version, to: rollingBack.previousVersion })
+              : S.rollBackPrevious({ from: rollingBack.version })
             : undefined
         }
-        confirmLabel="Roll back"
+        confirmLabel={S.rollBack}
         onClose={() => setRollingBack(null)}
         onConfirm={async () => {
           const m = rollingBack;
@@ -199,7 +262,7 @@ function ModuleList({ device, onDevice, reload }: PanelProps) {
             ...device,
             modules: device.modules.map((x) => (x.name === module.name ? module : x)),
           });
-          toast.show(`${moduleLabel(m.name)} is back on version ${module.version}.`, {
+          toast.show(S.rolledBack({ module: moduleLabel(m.name), version: module.version }), {
             tone: 'success',
           });
         }}
@@ -218,13 +281,6 @@ export function serviceSuggestions(d: DeviceView): string[] {
   const names = Array.isArray(backends) ? backends.filter((x) => typeof x === 'string') : [];
   return [...new Set(['compute', ...names])];
 }
-
-const SERVICE_ACTION_LABEL = {
-  status: 'Status',
-  start: 'Start',
-  stop: 'Stop',
-  restart: 'Restart',
-} as const;
 
 const SERVICE_NAME = /^[A-Za-z0-9@._:-]{1,100}$/;
 
@@ -248,19 +304,19 @@ function Services({ device }: { device: DeviceView }) {
       setResult({ name: trimmed, service });
     } catch (err) {
       setResult(null);
-      setError(deviceErrorMessage(err, `Could not ${action} ${trimmed}.`));
+      setError(deviceErrorMessage(err, S.services.failed({ action, name: trimmed })));
     } finally {
       setBusy(null);
     }
   };
 
   const state = result ? result.service.state : null;
+  const kind = result ? result.service.kind : null;
+  const V = S.services;
   return (
     <section className="ws-section devices-flat" aria-labelledby="services-h">
-      <h2 id="services-h">Services</h2>
-      <p className="muted ws-flush">
-        Start, stop or restart a service novad manages on this device, such as its model server.
-      </p>
+      <h2 id="services-h">{V.title}</h2>
+      <p className="muted ws-flush">{V.intro}</p>
       {blocked ? <Unavailable>{blocked}</Unavailable> : null}
       <form
         className="row"
@@ -270,12 +326,12 @@ function Services({ device }: { device: DeviceView }) {
         }}
       >
         <TextField
-          label="Service"
+          label={V.field}
           value={name}
           list={`${base}-names`}
           autoComplete="off"
           disabled={Boolean(blocked)}
-          error={bad ? 'Letters, digits and . _ : @ - only.' : undefined}
+          error={bad ? V.badName : undefined}
           onChange={(e) => setName(e.target.value)}
         />
         <datalist id={`${base}-names`}>
@@ -290,16 +346,23 @@ function Services({ device }: { device: DeviceView }) {
             disabled={Boolean(blocked) || !trimmed || Boolean(bad) || busy !== null}
             onClick={a === 'status' ? undefined : () => void act(a)}
           >
-            {busy === a ? <Spinner /> : null} {SERVICE_ACTION_LABEL[a]}
+            {busy === a ? <Spinner /> : null} {V.actions[a]}
           </Button>
         ))}
       </form>
       <div aria-live="polite">
         {result ? (
           <p className="ws-flush">
-            <strong>{result.name}</strong>:{' '}
-            {typeof state === 'string' ? state : 'no state reported'}
-            {typeof result.service.kind === 'string' ? ` (${result.service.kind})` : ''}
+            {typeof kind === 'string'
+              ? rich(V.resultKind, {
+                  name: <strong>{result.name}</strong>,
+                  state: typeof state === 'string' ? state : V.noState,
+                  kind,
+                })
+              : rich(V.result, {
+                  name: <strong>{result.name}</strong>,
+                  state: typeof state === 'string' ? state : V.noState,
+                })}
           </p>
         ) : null}
         {error ? (

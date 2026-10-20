@@ -13,6 +13,7 @@
     "test:shell": "node scripts/test-shell.mjs"
   },
   "dependencies": {
+    "@nova/i18n": "^0.0.0",
     "@nova/security": "^0.0.0",
     "@nova/shared": "^0.0.0"
   },

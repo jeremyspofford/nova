@@ -46,6 +46,11 @@ kbd {
   outline: 2px solid var(--u-focus);
   outline-offset: 2px;
 }
+/* Hints in empty fields read at body contrast (the browser's default grey does not, WCAG 1.4.3). */
+::placeholder {
+  color: var(--u-text-muted);
+  opacity: 1;
+}
 .muted {
   color: var(--u-text-muted);
 }
@@ -71,7 +76,7 @@ kbd {
 .skip-link {
   position: absolute;
   top: -100px;
-  left: var(--u-space-2);
+  inset-inline-start: var(--u-space-2);
   z-index: var(--u-z-toast);
   padding: var(--u-space-2) var(--u-space-3);
   border-radius: var(--u-radius-sm);
@@ -115,10 +120,13 @@ kbd {
   position: fixed;
   inset: 0;
   display: grid;
+  /* One column no wider than the window: content reflows at 320 px (WCAG 1.4.10). */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
 }
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--u-space-2);
   min-height: 48px;
@@ -132,6 +140,7 @@ kbd {
   letter-spacing: 0.02em;
 }
 .topbar-title {
+  min-width: 0;
   color: var(--u-text-muted);
 }
 .topbar-spacer {
@@ -179,7 +188,7 @@ kbd {
   width: 280px;
   min-height: 0;
   overflow: auto;
-  border-right: 1px solid var(--u-border);
+  border-inline-end: 1px solid var(--u-border);
   background: var(--u-surface);
 }
 .sidebar-top {
@@ -262,6 +271,8 @@ kbd {
 .thread-title {
   flex: 1;
   overflow: hidden;
+  /* dir="auto" orders a title in its own direction; it still lines up with the sidebar. */
+  text-align: match-parent;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -350,7 +361,7 @@ kbd {
   width: 300px;
   padding: var(--u-space-3);
   overflow: auto;
-  border-left: 1px solid var(--u-border);
+  border-inline-start: 1px solid var(--u-border);
   background: var(--u-surface);
 }
 
@@ -376,7 +387,7 @@ kbd {
   white-space: nowrap;
 }
 .chat-model {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-size: var(--u-text-sm);
 }
 .chat-log {
@@ -503,7 +514,8 @@ kbd {
   align-items: center;
   gap: var(--u-space-1);
   max-width: 100%;
-  padding: 0 0 0 var(--u-space-2);
+  padding-block: 0;
+  padding-inline: var(--u-space-2) 0;
   border: 1px solid var(--u-border);
   border-radius: var(--u-radius-sm);
   background: var(--u-surface);
@@ -520,12 +532,17 @@ kbd {
   margin: 0 max(var(--u-space-4), calc((100% - 760px) / 2)) var(--u-space-3);
   padding: var(--u-space-2) var(--u-space-3);
   padding-bottom: max(var(--u-space-2), env(safe-area-inset-bottom));
-  border: 1px solid var(--u-border);
+  border: 1px solid var(--u-control-border);
   border-radius: var(--u-radius-lg);
   background: var(--u-surface);
 }
 .composer:focus-within {
   border-color: var(--u-focus);
+}
+/* The message box draws no ring of its own; the composer around it shows a 2 px one. */
+.composer:has(.composer-input:focus-visible) {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 2px;
 }
 .composer-input {
   width: 100%;
@@ -565,7 +582,7 @@ kbd {
 .composer-error ul {
   flex: 1;
   margin: 0;
-  padding-left: var(--u-space-4);
+  padding-inline-start: var(--u-space-4);
 }
 .composer-note {
   margin: 0 0 var(--u-space-3);
@@ -649,7 +666,7 @@ mark.find-hit[data-current='true'] {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 .msg-versions .nv-btn {
   min-height: 24px;
@@ -717,7 +734,7 @@ mark.find-hit[data-current='true'] {
   display: grid;
   gap: var(--u-space-2);
   margin: 0;
-  padding-left: var(--u-space-4);
+  padding-inline-start: var(--u-space-4);
 }
 .msg-source-snippet {
   margin: 2px 0 0;
@@ -819,7 +836,7 @@ mark.find-hit[data-current='true'] {
   overflow: auto;
 }
 .compare-col + .compare-col {
-  border-left: 1px solid var(--u-border);
+  border-inline-start: 1px solid var(--u-border);
 }
 .compare-title {
   margin: 0 0 var(--u-space-3);
@@ -839,7 +856,7 @@ mark.find-hit[data-current='true'] {
   position: relative;
 }
 .msg-source-host {
-  margin-left: var(--u-space-2);
+  margin-inline-start: var(--u-space-2);
   color: var(--u-text-muted);
   font-size: var(--u-text-xs);
 }
@@ -871,7 +888,7 @@ mark.find-hit[data-current='true'] {
   background: transparent;
   color: var(--u-text);
   font: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .tool-card-head:hover {
@@ -896,7 +913,7 @@ mark.find-hit[data-current='true'] {
   display: inline-flex;
   align-items: center;
   gap: var(--u-space-1);
-  margin-left: auto;
+  margin-inline-start: auto;
   color: var(--u-text-muted);
   font-size: var(--u-text-xs);
 }
@@ -974,7 +991,7 @@ mark.find-hit[data-current='true'] {
   outline-offset: 2px;
 }
 .approval-head .nv-chip {
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 .approval-facts {
   display: grid;
@@ -1091,7 +1108,7 @@ mark.find-hit[data-current='true'] {
   background: var(--u-surface);
   color: var(--u-text);
   font: inherit;
-  text-align: left;
+  text-align: start;
 }
 button.artifact-card {
   cursor: pointer;
@@ -1109,7 +1126,7 @@ button.artifact-card:hover {
   display: inline-flex;
   align-items: center;
   gap: var(--u-space-1);
-  margin-left: auto;
+  margin-inline-start: auto;
   color: var(--u-accent);
   font-size: var(--u-text-sm);
 }
@@ -1149,7 +1166,7 @@ button.artifact-card:hover {
   background: transparent;
   color: var(--u-text);
   font: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .artifact-row:hover {
@@ -1218,7 +1235,7 @@ button.artifact-card:hover {
   font-size: var(--u-text-xs);
 }
 .activity-time {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-size: var(--u-text-xs);
 }
 .activity-detail {
@@ -1227,9 +1244,9 @@ button.artifact-card:hover {
 }
 .mention-popover {
   position: absolute;
-  right: var(--u-space-3);
+  inset-inline-end: var(--u-space-3);
   bottom: calc(100% + var(--u-space-1));
-  left: var(--u-space-3);
+  inset-inline-start: var(--u-space-3);
   z-index: var(--u-z-overlay);
   display: grid;
   max-height: 300px;
@@ -1263,7 +1280,7 @@ button.artifact-card:hover {
   white-space: nowrap;
 }
 .mention-detail {
-  margin-left: auto;
+  margin-inline-start: auto;
   overflow: hidden;
   font-size: var(--u-text-xs);
   text-overflow: ellipsis;
@@ -1336,7 +1353,7 @@ button.artifact-card:hover {
 }
 .contrast-warning ul {
   margin: 0;
-  padding-left: var(--u-space-4);
+  padding-inline-start: var(--u-space-4);
 }
 .font-preview {
   margin: 0;
@@ -1361,7 +1378,7 @@ button.artifact-card:hover {
 .keyboard-table td {
   padding: var(--u-space-2);
   border-bottom: 1px solid var(--u-border);
-  text-align: left;
+  text-align: start;
   font-weight: normal;
   vertical-align: middle;
 }
@@ -1385,7 +1402,7 @@ button.artifact-card:hover {
   display: inline-flex;
   align-items: center;
   gap: var(--u-space-1);
-  margin-left: var(--u-space-2);
+  margin-inline-start: var(--u-space-2);
   color: var(--u-warn);
   font-size: var(--u-text-xs);
 }
@@ -1470,7 +1487,7 @@ button.artifact-card:hover {
 .primer {
   padding: var(--u-space-4);
   border: 1px solid var(--u-border);
-  border-left: 4px solid var(--u-accent);
+  border-inline-start: 4px solid var(--u-accent);
   border-radius: var(--u-radius-md);
   background: var(--u-surface);
 }
@@ -1484,7 +1501,7 @@ button.artifact-card:hover {
   display: grid;
   gap: var(--u-space-2);
   margin: 0;
-  padding-left: var(--u-space-4);
+  padding-inline-start: var(--u-space-4);
 }
 .sample-message {
   width: 100%;
@@ -1910,11 +1927,12 @@ button.artifact-card:hover {
 .editor-gutter {
   flex: none;
   min-width: 3ch;
-  padding: var(--u-space-2) var(--u-space-2) var(--u-space-2) var(--u-space-3);
+  padding-block: var(--u-space-2);
+  padding-inline: var(--u-space-3) var(--u-space-2);
   overflow: hidden;
-  border-right: 1px solid var(--u-border);
+  border-inline-end: 1px solid var(--u-border);
   color: var(--u-text-muted);
-  text-align: right;
+  text-align: end;
   user-select: none;
 }
 .editor-text {
@@ -2054,7 +2072,7 @@ button.artifact-card:hover {
 .apps-park {
   position: fixed;
   top: 0;
-  left: 0;
+  inset-inline-start: 0;
   width: 0;
   height: 0;
   overflow: hidden;
@@ -2106,17 +2124,18 @@ button.artifact-card:hover {
 /* Below 1100 px the sidebar collapses and opens over the content. */
 .app[data-layout='compact'] .sidebar {
   position: absolute;
-  inset: 0 auto 0 0;
+  inset-block: 0;
+  inset-inline: 0 auto;
   z-index: var(--u-z-overlay);
-  border-right: 1px solid var(--u-border);
+  border-inline-end: 1px solid var(--u-border);
 }
 /* Phones: one column; the open sidebar is a full-screen menu page, not a modal. */
 .app[data-layout='phone'] .sidebar {
   width: 100%;
-  border-right: 0;
+  border-inline-end: 0;
 }
 .app[data-layout='phone'] .settings {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   padding: var(--u-space-4);
 }
 .app[data-layout='phone'] .topbar-title {
@@ -2128,14 +2147,14 @@ button.artifact-card:hover {
   inset: 0;
   z-index: var(--u-z-overlay);
   width: 100%;
-  border-left: 0;
+  border-inline-start: 0;
 }
 .app[data-layout='phone'] .compare-cols {
   grid-template-columns: 1fr;
 }
 .app[data-layout='phone'] .compare-col + .compare-col {
   border-top: 1px solid var(--u-border);
-  border-left: 0;
+  border-inline-start: 0;
 }
 @media (max-width: 640px) {
   .shell .main {

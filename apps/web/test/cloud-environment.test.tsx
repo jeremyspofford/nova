@@ -237,7 +237,7 @@ describe('files (FR-108)', () => {
     });
     const files = section('Files');
     const list = await within(files).findByRole('list', { name: 'Files in /workspace/app' });
-    expect(within(list).getByText('2.0 KB')).toBeTruthy();
+    expect(within(list).getByText('2 KB')).toBeTruthy();
     expect(within(list).getByText('link')).toBeTruthy();
     expect(within(list).getByText('More entries are not shown.')).toBeTruthy();
     await userEvent.click(within(list).getByRole('button', { name: /README\.md/ }));

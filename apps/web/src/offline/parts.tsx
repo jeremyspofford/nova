@@ -2,15 +2,28 @@
 // alone, docs/04 §7), a confirmation for destructive or outward-facing actions whose failure stays
 // in the dialog (docs/04 §4.4), and a copy button that says when the browser refuses.
 import { useRef, useState, type ReactNode } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, Icon, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import type { StatusSpec } from './format.ts';
+
+export const PARTS_TEXT = defineMessages('offline.parts', {
+  /** A chip's status with a detail: "Pending: 3 changes to pull". */
+  withDetail: '{status}: {detail}',
+  failed: 'That did not work.',
+  cancel: 'Cancel',
+  copy: 'Copy',
+  copyThe: '{kind, select, answer {Copy the answer} other {Copy the text}}',
+  copied: 'Copied.',
+  notCopied:
+    '{kind, select, answer {Could not copy. Select the answer and copy it yourself.} other {Could not copy. Select the text and copy it yourself.}}',
+});
 
 export function Chip({ spec, detail }: { spec: StatusSpec; detail?: string | null }) {
   return (
     <span className="nv-chip" data-status={spec.tone === 'neutral' ? undefined : spec.tone}>
       {spec.icon ? <Icon name={spec.icon} /> : <Spinner />}
-      <span>{detail ? `${spec.text}: ${detail}` : spec.text}</span>
+      <span>{detail ? PARTS_TEXT.withDetail({ status: spec.text, detail }) : spec.text}</span>
     </span>
   );
 }
@@ -41,7 +54,7 @@ export function Confirm({
     try {
       await onConfirm();
     } catch (err) {
-      setError(errorMessage(err, 'That did not work.'));
+      setError(errorMessage(err, PARTS_TEXT.failed));
       setBusy(false);
     }
   };
@@ -56,7 +69,7 @@ export function Confirm({
       footer={
         <>
           <Button ref={cancel} onClick={onClose}>
-            Cancel
+            {PARTS_TEXT.cancel}
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}
@@ -79,25 +92,24 @@ export function Confirm({
 }
 
 /** Copy text; when the browser refuses, say so (the text stays on the page to select). */
-export function CopyText({ text, what }: { text: string; what: string }) {
+export function CopyText({ text, kind }: { text: string; kind: 'text' | 'answer' }) {
   const toast = useToast();
   return (
     <Button
       variant="ghost"
-      aria-label={`Copy the ${what}`}
+      aria-label={PARTS_TEXT.copyThe({ kind })}
       onClick={() => {
-        const fail = () =>
-          toast.show(`Could not copy. Select the ${what} and copy it yourself.`, { tone: 'error' });
+        const fail = () => toast.show(PARTS_TEXT.notCopied({ kind }), { tone: 'error' });
         if (!navigator.clipboard) {
           fail();
           return;
         }
         navigator.clipboard
           .writeText(text)
-          .then(() => toast.show('Copied.', { tone: 'success' }), fail);
+          .then(() => toast.show(PARTS_TEXT.copied, { tone: 'success' }), fail);
       }}
     >
-      <Icon name="copy" /> Copy
+      <Icon name="copy" /> {PARTS_TEXT.copy}
     </Button>
   );
 }

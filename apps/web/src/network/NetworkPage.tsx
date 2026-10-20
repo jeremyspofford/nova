@@ -6,6 +6,7 @@
 // the Relay, Wake helpers) is the top-level Network surface (/network, M6.5), linked from here.
 import { useCallback, useEffect, useId, useState } from 'react';
 import type { EgressCredentialView, EgressModeView, EgressView } from '@nova/shared';
+import { fmt } from '@nova/i18n';
 import { Button, Icon, RadioGroup, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useComputersApi } from '../computers/api.ts';
@@ -13,6 +14,7 @@ import { useHubEvents } from '../computers/events.ts';
 import { MODE_TEXT } from '../computers/format.ts';
 import { useAnnounce } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
+import { embed } from '../settings/embed.tsx';
 import { useDebounced } from '../work/events.ts';
 import { followLink } from '../work/nav.tsx';
 import { Credentials } from './Credentials.tsx';
@@ -20,6 +22,7 @@ import { DecisionLog } from './DecisionLog.tsx';
 import { HostListEditor } from './HostListEditor.tsx';
 import { ScopeRules } from './ScopeRules.tsx';
 import { useScopeTargets } from './scopes.ts';
+import { ACCESS_TEXT, EGRESS_TEXT as S, INSPECTION_TEXT } from './strings.ts';
 import '../workspace.css';
 import '../computers/computers.css';
 
@@ -43,8 +46,7 @@ export function NetworkPage() {
         setEgress(v);
         setEgressError(null);
       },
-      (err: unknown) =>
-        alive && setEgressError(errorMessage(err, 'Could not load the network rules.')),
+      (err: unknown) => alive && setEgressError(errorMessage(err, S.loadError)),
     );
     return () => {
       alive = false;
@@ -59,8 +61,7 @@ export function NetworkPage() {
         setCreds(items);
         setCredsError(null);
       },
-      (err: unknown) =>
-        alive && setCredsError(errorMessage(err, 'Could not load the credentials.')),
+      (err: unknown) => alive && setCredsError(errorMessage(err, S.credsLoadError)),
     );
     return () => {
       alive = false;
@@ -73,24 +74,25 @@ export function NetworkPage() {
 
   return (
     <div className="settings-page network-page">
-      <h2>Network</h2>
+      <h2>{S.title}</h2>
+      <p className="muted">{S.intro}</p>
       <p className="muted">
-        Sandboxes, containers and agent computers reach the network only through Nova&apos;s egress
-        proxy. These rules decide where they can go; every request is logged below.
+        {embed(S.devicesNote, {
+          link: (
+            <a href="/network" onClick={(e) => followLink(e, '/network')}>
+              {S.networkPage}
+            </a>
+          ),
+        })}
       </p>
-      <p className="muted">
-        How your devices reach this Hub (transports, certificates, the Relay and Wake helpers) is on
-        the{' '}
-        <a href="/network" onClick={(e) => followLink(e, '/network')}>
-          Network page
-        </a>
-        .
-      </p>
-      <GlobalAccess inspects={egress?.inspection.https ?? null} />
+      <GlobalAccess
+        inspects={egress?.inspection.https ?? null}
+        inForce={egress?.global.allow ?? null}
+      />
       {egressError ? (
         <div role="alert" className="ws-error">
           <p>{egressError}</p>
-          <Button onClick={reloadEgress}>Retry</Button>
+          <Button onClick={reloadEgress}>{S.retry}</Button>
         </div>
       ) : null}
       <Inspection egress={egress} />
@@ -103,7 +105,7 @@ export function NetworkPage() {
           onChanged={reloadEgress}
         />
       ) : egressError ? null : (
-        <Spinner label="Loading the network rules" />
+        <Spinner label={S.loadingRules} />
       )}
       <Credentials
         items={creds}
@@ -119,8 +121,18 @@ export function NetworkPage() {
   );
 }
 
-/** The access level and host lists for every sandbox (the `network.*` settings). */
-function GlobalAccess({ inspects }: { inspects: boolean | null }) {
+/**
+ * The access level and host lists for every sandbox (the `network.*` settings). `inForce` is the
+ * allow list the proxy uses (`GET /egress`): with a managed ceiling over the owner's own list it
+ * differs from it, and the page says which hosts are reachable now (ADR-097).
+ */
+function GlobalAccess({
+  inspects,
+  inForce,
+}: {
+  inspects: boolean | null;
+  inForce: readonly string[] | null;
+}) {
   const settings = useSettings();
   const toast = useToast();
   const announce = useAnnounce();
@@ -128,15 +140,19 @@ function GlobalAccess({ inspects }: { inspects: boolean | null }) {
   const mode = settings.get('network.egressMode');
   const allow = settings.get('network.egressAllow');
   const deny = settings.get('network.egressDeny');
+  const ceiling =
+    inForce !== null &&
+    (inForce.length !== allow.value.length || inForce.some((h) => !allow.value.includes(h)));
 
   return (
     <section className="settings-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>Access for every sandbox</h3>
+      <h3 id={headingId}>{ACCESS_TEXT.heading}</h3>
       <RadioGroup
-        legend="Network access"
+        legend={ACCESS_TEXT.legend}
         name="network-egress-mode"
         value={mode.value}
         locked={mode.locked}
+        setting="network.egressMode"
         options={MODE_ORDER.map((m) => ({
           value: m,
           label: MODE_TEXT[m].label,
@@ -146,36 +162,50 @@ function GlobalAccess({ inspects }: { inspects: boolean | null }) {
           const next = MODE_ORDER.find((m) => m === v);
           if (!next) return;
           settings.set('network.egressMode', next).then(
-            () => announce(`Network access: ${MODE_TEXT[next].label}.`),
-            (err: unknown) => toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' }),
+            () => announce(ACCESS_TEXT.announced({ mode: MODE_TEXT[next].label })),
+            (err: unknown) =>
+              toast.show(S.couldNotSave({ error: errorMessage(err) }), { tone: 'error' }),
           );
         }}
       />
       {mode.value === 'limited' && inspects === false ? (
         <p className="ws-warning" role="note">
-          <Icon name="alert" /> HTTPS inspection is not set up on this Hub, so read-only access
-          blocks every HTTPS request.
+          <Icon name="alert" /> {ACCESS_TEXT.readOnlyBlocksHttps}
         </p>
       ) : null}
-      {mode.value === 'off' ? (
-        <p className="muted ws-flush">The host lists below apply when network access is on.</p>
-      ) : null}
+      {mode.value === 'off' ? <p className="muted ws-flush">{ACCESS_TEXT.offNote}</p> : null}
       <HostListEditor
-        label="Allowed hosts"
-        inputLabel="Add an allowed host"
-        hint="A host name or IP address. Use *.example.com for its subdomains; a bare * is not allowed."
+        label={ACCESS_TEXT.allowed}
+        inputLabel={ACCESS_TEXT.addAllowed}
+        removeLabel={(host) => ACCESS_TEXT.removeAllowed({ host })}
+        hint={ACCESS_TEXT.allowedHint}
         hosts={allow.value}
         locked={allow.locked}
-        annotate={(h) => (deny.value.includes(h) ? 'Also blocked: blocking wins' : null)}
-        emptyText="None yet: sandboxes cannot reach any host."
+        setting="network.egressAllow"
+        annotate={(h) => (deny.value.includes(h) ? ACCESS_TEXT.alsoBlocked : null)}
+        emptyText={
+          ceiling && inForce.length ? ACCESS_TEXT.allowedNoneOwn : ACCESS_TEXT.allowedEmpty
+        }
         onChange={(next) => settings.set('network.egressAllow', next)}
       />
+      {ceiling ? (
+        <div className="muted ws-flush" role="note" aria-label={ACCESS_TEXT.inForceLabel}>
+          <p>
+            {inForce.length
+              ? ACCESS_TEXT.inForce({ list: fmt.list(inForce, { type: 'unit', style: 'short' }) })
+              : ACCESS_TEXT.inForceNone}
+          </p>
+          <p>{ACCESS_TEXT.inForceWhy}</p>
+        </div>
+      ) : null}
       <HostListEditor
-        label="Blocked hosts"
-        inputLabel="Add a blocked host"
-        hint="Always blocked, even when the host is also allowed here or in a rule."
+        label={ACCESS_TEXT.blocked}
+        inputLabel={ACCESS_TEXT.addBlocked}
+        removeLabel={(host) => ACCESS_TEXT.removeBlocked({ host })}
+        hint={ACCESS_TEXT.blockedHint}
         hosts={deny.value}
         locked={deny.locked}
+        setting="network.egressDeny"
         onChange={(next) => settings.set('network.egressDeny', next)}
       />
     </section>
@@ -189,17 +219,13 @@ function Inspection({ egress }: { egress: EgressView | null }) {
   const ins = egress?.inspection;
   return (
     <section className="settings-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>HTTPS inspection</h3>
+      <h3 id={headingId}>{INSPECTION_TEXT.heading}</h3>
       {!ins ? null : ins.https ? (
         <>
           <p className="ws-ok ws-flush">
-            <Icon name="check" /> On. The proxy can check HTTPS requests and add credentials to
-            them.
+            <Icon name="check" /> {INSPECTION_TEXT.on}
           </p>
-          <p className="muted ws-flush">
-            Commands in sandboxes already trust this Hub&apos;s inspection certificate. Download it
-            to check it, or to trust it in another tool you route through the proxy.
-          </p>
+          <p className="muted ws-flush">{INSPECTION_TEXT.trusted}</p>
           {ins.caCertPem ? (
             <div>
               <a
@@ -208,15 +234,14 @@ function Inspection({ egress }: { egress: EgressView | null }) {
                 href={api.egressCaUrl()}
                 download="nova-egress-ca.pem"
               >
-                <Icon name="download" /> Download the certificate
+                <Icon name="download" /> {INSPECTION_TEXT.download}
               </a>
             </div>
           ) : null}
         </>
       ) : (
         <p className="ws-warning">
-          <Icon name="alert" /> Off. This Hub has no inspection certificate, so read-only access
-          blocks HTTPS and credentials are added to plain HTTP requests only.
+          <Icon name="alert" /> {INSPECTION_TEXT.off}
         </p>
       )}
     </section>

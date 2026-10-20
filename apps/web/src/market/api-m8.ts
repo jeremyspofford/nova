@@ -6,7 +6,6 @@
 // calls from the services object, or null for a client without them.
 import type { z } from 'zod';
 import type {
-  ManagedPolicyView,
   MarketCatalogView,
   MarketInstallView,
   MarketItemDetail,
@@ -81,8 +80,6 @@ export function marketApi(call: HubCall) {
     /** A pet frame's image URL. */
     marketPetFrameUrl: (petId: string, frame: string) =>
       `${M}/pets/${enc(petId)}/files/${frame.split('/').map(enc).join('/')}`,
-    /** What managed policy applies and where it comes from (for "Managed by your organization"). */
-    marketPolicySources: () => call<ManagedPolicyView>('GET', `${V1}/managed`),
   };
 }
 

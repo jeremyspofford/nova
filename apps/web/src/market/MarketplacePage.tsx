@@ -23,13 +23,13 @@ import { MemberGate } from '../team/role.tsx';
 import { useMarketApi, type MarketApi } from './api-m8.ts';
 import { CatalogsTab } from './CatalogsTab.tsx';
 import {
-  KIND_TEXT,
   MARKET_TABS,
   MARKET_TEXT,
   PERMISSION_ICON,
   TAB_KIND,
   TAB_LABEL,
   marketErrorMessage,
+  marketPublisherText,
   marketTabPath,
   parseMarketTab,
   type MarketTab,
@@ -37,13 +37,8 @@ import {
 import { InstallDialog, type InstallTarget } from './InstallDialog.tsx';
 import { InstalledTab, RemoveDialog, type RemoveTarget } from './InstalledTab.tsx';
 import { ItemDetails } from './ItemDetails.tsx';
-import {
-  ManagedNote,
-  POLICY_TEXT,
-  unverifiedForbidden,
-  useManagedSources,
-  useRestrictions,
-} from './policy.tsx';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
+import { POLICY_TEXT, unverifiedForbidden, useRestrictions } from './policy.tsx';
 import './market.css';
 
 /** Events after which the lists are read again. */
@@ -68,10 +63,7 @@ function MarketBody({ tab }: { tab: MarketTab }) {
   const market = useMarketApi();
   const settings = useSettings();
   const restrictions = useRestrictions();
-  const sideload = settings.get('market.allowSideload');
   const kinds = settings.get('market.allowedKinds');
-  const managedAny = sideload.locked || kinds.locked || unverifiedForbidden(restrictions.layers);
-  const sources = useManagedSources(managedAny);
   const [q, setQ] = useState('');
   const [catalogs, setCatalogs] = useState<MarketCatalogView[] | null>(null);
   const [catalogsAttempt, setCatalogsAttempt] = useState(0);
@@ -113,14 +105,7 @@ function MarketBody({ tab }: { tab: MarketTab }) {
         />
       );
     if (t === 'installed') return <InstalledTab market={market} />;
-    return (
-      <CatalogsTab
-        market={market}
-        catalogs={catalogs}
-        sources={sources}
-        onChanged={reloadCatalogs}
-      />
-    );
+    return <CatalogsTab market={market} catalogs={catalogs} onChanged={reloadCatalogs} />;
   };
   const items = MARKET_TABS.map((t) => ({ id: t, label: TAB_LABEL[t], panel: panel(t) }));
 
@@ -147,7 +132,7 @@ function MarketBody({ tab }: { tab: MarketTab }) {
         {unverifiedForbidden(restrictions.layers) ? (
           <p className="market-policy">
             <Icon name="shield" /> <span>{POLICY_TEXT.unverifiedOff}</span>{' '}
-            <ManagedNote view={sources} sourceKey="restrict.unverifiedInstalls" />
+            <ManagedNote setting="restrict.unverifiedInstalls" />
           </p>
         ) : null}
         {restrictions.failClosed ? (
@@ -239,7 +224,7 @@ function KindTab({
     body = (
       <EmptyState
         title={
-          query.trim() ? MARKET_TEXT.noMatch(query.trim()) : MARKET_TEXT.empty(KIND_TEXT[kind].many)
+          query.trim() ? MARKET_TEXT.noMatch({ query: query.trim() }) : MARKET_TEXT.empty({ kind })
         }
         level={3}
       />
@@ -272,8 +257,8 @@ function KindTab({
     <div className="market-tab">
       {off ? (
         <p className="market-policy" role="note">
-          <Icon name="stop" /> <span>{MARKET_TEXT.kindOff(KIND_TEXT[kind].many)}</span>{' '}
-          {kinds.locked ? <ManagedNote view={null} sourceKey="market.allowedKinds" /> : null}
+          <Icon name="stop" /> <span>{MARKET_TEXT.kindOff({ kind })}</span>{' '}
+          {kinds.locked ? <ManagedNote setting="market.allowedKinds" /> : null}
         </p>
       ) : null}
       {kind === 'pet' ? <p className="muted">{MARKET_TEXT.petsHint}</p> : null}
@@ -310,7 +295,9 @@ function KindTab({
           onInstalled={(view, update) => {
             setInstalling(null);
             done(
-              update ? MARKET_TEXT.updatedToast(view.name) : MARKET_TEXT.installedToast(view.name),
+              update
+                ? MARKET_TEXT.updatedToast({ name: view.name })
+                : MARKET_TEXT.installedToast({ name: view.name }),
             );
           }}
         />
@@ -322,7 +309,7 @@ function KindTab({
           onClose={() => setRemoving(null)}
           onRemoved={() => {
             setRemoving(null);
-            done(MARKET_TEXT.removed(removing.name));
+            done(MARKET_TEXT.removed({ name: removing.name }));
           }}
         />
       ) : null}
@@ -340,12 +327,12 @@ function kindTab(kind: MarketItemKind): MarketTab {
 export function Stars({ rating }: { rating: MarketRatingView | null }) {
   if (!rating) return <span className="muted">{MARKET_TEXT.unrated}</span>;
   return (
-    <span className="market-stars" title={MARKET_TEXT.stars(rating.stars)}>
+    <span className="market-stars" title={MARKET_TEXT.stars({ n: rating.stars })}>
       <span aria-hidden="true">
         {'★'.repeat(rating.stars)}
         {'☆'.repeat(5 - rating.stars)}
       </span>
-      <span className="nv-vh">{MARKET_TEXT.stars(rating.stars)}</span>
+      <span className="nv-vh">{MARKET_TEXT.stars({ n: rating.stars })}</span>
     </span>
   );
 }
@@ -373,28 +360,37 @@ function ItemCard({
   return (
     <li className="ws-card market-card" aria-labelledby={headingId} data-item={it.id}>
       <div className="market-card-head">
-        <h3 id={headingId} className="market-card-title">
+        <h3 id={headingId} className="market-card-title" dir="auto">
           {it.name}
         </h3>
         <VerifiedBadge verified={it.verified} />
       </div>
       <p className="ws-row-meta">
-        {it.author ? <span>{MARKET_TEXT.by(it.author)}</span> : null}
-        <span>{MARKET_TEXT.version(it.version)}</span>
-        <span className="muted">{catalogName}</span>
+        {/* The item's own author only, when its catalog names one. */}
+        {it.author ? <span dir="auto">{MARKET_TEXT.by({ author: it.author })}</span> : null}
+        {/* Who signed: named only for a key the owner trusts (never the catalog's claim). */}
+        {it.publisher ? <span>{marketPublisherText(it.publisher)}</span> : null}
+        <span>{MARKET_TEXT.version({ version: it.version })}</span>
+        <span className="muted" dir="auto">
+          {catalogName}
+        </span>
         <Stars rating={it.rating} />
       </p>
       {screenshot ? (
         <img
           className="market-thumb"
           src={screenshot}
-          alt={MARKET_TEXT.screenshot(1, it.name)}
+          alt={MARKET_TEXT.screenshot({ n: 1, name: it.name })}
           loading="lazy"
         />
       ) : null}
-      {it.description ? <p className="market-desc">{it.description}</p> : null}
+      {it.description ? (
+        <p className="market-desc" dir="auto">
+          {it.description}
+        </p>
+      ) : null}
       {it.permissions.length ? (
-        <ul className="market-perms" aria-label={`${MARKET_TEXT.canAccess}: ${it.name}`}>
+        <ul className="market-perms" aria-label={MARKET_TEXT.canAccessOf({ name: it.name })}>
           {it.permissions.map((l) => (
             <li key={l.key}>
               <Icon name={PERMISSION_ICON[l.kind]} />
@@ -405,11 +401,16 @@ function ItemCard({
       ) : null}
       {installed ? (
         <p className="market-installed">
-          <Icon name="check" /> {MARKET_TEXT.installedVersion(it.installedVersion ?? it.version)}
+          <Icon name="check" />{' '}
+          {MARKET_TEXT.installedVersion({ version: it.installedVersion ?? it.version })}
         </p>
       ) : null}
       <div className="row ws-row-actions">
-        <Button variant="ghost" onClick={onDetails} aria-label={MARKET_TEXT.detailsOf(it.name)}>
+        <Button
+          variant="ghost"
+          onClick={onDetails}
+          aria-label={MARKET_TEXT.detailsOf({ name: it.name })}
+        >
           {MARKET_TEXT.details}
         </Button>
         {!installed ? (
@@ -417,7 +418,7 @@ function ItemCard({
             variant="primary"
             disabled={off}
             onClick={onInstall}
-            aria-label={MARKET_TEXT.installOf(it.name)}
+            aria-label={MARKET_TEXT.installOf({ name: it.name })}
           >
             {MARKET_TEXT.install}
           </Button>
@@ -426,13 +427,17 @@ function ItemCard({
             variant="primary"
             disabled={off}
             onClick={onInstall}
-            aria-label={MARKET_TEXT.updateOf(it.name)}
+            aria-label={MARKET_TEXT.updateOf({ name: it.name })}
           >
-            {MARKET_TEXT.updateTo(it.version)}
+            {MARKET_TEXT.updateTo({ version: it.version })}
           </Button>
         ) : null}
         {installed ? (
-          <Button variant="ghost" onClick={onRemove} aria-label={MARKET_TEXT.removeOf(it.name)}>
+          <Button
+            variant="ghost"
+            onClick={onRemove}
+            aria-label={MARKET_TEXT.removeOf({ name: it.name })}
+          >
             {MARKET_TEXT.remove}
           </Button>
         ) : null}

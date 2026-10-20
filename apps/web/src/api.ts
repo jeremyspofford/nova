@@ -1,6 +1,7 @@
 // Thin client for the Hub API (contracts/hub-api.md; M1 shapes in @nova/shared api.ts). The
 // session lives in an HttpOnly cookie, so the UI never sees or stores a credential (FR-125).
 import type { z } from 'zod';
+import { defineMessages } from '@nova/i18n';
 import type {
   AccountView,
   AppAuthorizationCreated,
@@ -810,12 +811,17 @@ export function createApi(fetchImpl: Fetch = hubFetch, opts: { offline?: Offline
 
 export type Api = ReturnType<typeof createApi>;
 
-/** A short, user-facing reason for a failed call. */
-export function errorMessage(err: unknown, fallback = 'Something went wrong.'): string {
+const API_TEXT = defineMessages('api', {
+  generic: 'Something went wrong.',
+  unreachable: 'Cannot reach the Hub. Check your connection and try again.',
+});
+
+/** A short, user-facing reason for a failed call (the Hub's own message stays English, D9). */
+export function errorMessage(err: unknown, fallback: string = API_TEXT.generic): string {
   if (err instanceof ApiError) return err.body.message || fallback;
   if (err instanceof Error && err.message) {
     return /failed to fetch|networkerror|load failed/i.test(err.message)
-      ? 'Cannot reach the Hub. Check your connection and try again.'
+      ? API_TEXT.unreachable
       : err.message;
   }
   return fallback;

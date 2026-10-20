@@ -1,11 +1,17 @@
 // What an extension may do, in plain words, for the install preview, the update diff and the
 // extension's settings page (docs/14 §5, docs/26 §3: the permission preview is mandatory). Each
-// line has a stable key, so two versions can be compared line by line.
+// line has a stable `key` (what it is) and a `detail` (what can change under that key: a tool's
+// action and default, a server's command line and approval default, a hook's handler), so two
+// versions compare as added, removed and changed lines. Both parts are listed: the SDK part
+// (extension.json) and the plugin part (plugin.json: its tools and defaults, MCP servers, hooks,
+// roles, UI and browser extensions), since an update may change either (M8 supply review #2).
 import type { ExtensionPermissionLine } from '@nova/shared';
+import { canonicalJson } from '../nodes/crypto.ts';
 import type { PluginManifest } from '../plugins/types.ts';
 import {
   EXTENSION_DATA_VAR,
   EXTENSION_ROOT_VAR,
+  observableEventsFor,
   resolveEventName,
   type ExtensionManifest,
 } from './manifest.ts';
@@ -24,138 +30,276 @@ const DEFAULT_TEXT: Record<string, string> = {
   deny: 'refused',
 };
 
+/** The plugin parts a manifest only names by path: its hooks (from a hooks file) and roles. */
+export interface PluginParts {
+  hooks?: readonly {
+    id: string;
+    event: string;
+    matcher?: string | string[];
+    handler: unknown;
+    failClosed?: boolean;
+  }[];
+  roles?: readonly { key: string; tools: readonly string[]; modelHint: string | null }[];
+}
+
+/** A canonical JSON detail with the undefined fields left out. */
+function detail(value: Record<string, unknown>): string {
+  return canonicalJson(
+    Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)),
+  );
+}
+
+/** Whether observing an event pattern lets an extension see what people write (sensitive). */
+function readsConversations(pattern: string): boolean {
+  return observableEventsFor(pattern).some((e) => e.startsWith('chat.message.'));
+}
+
 /** Every permission of an extension and its plugin, as lines in plain words. */
 export function extensionPermissionLines(
   m: ExtensionManifest,
   plugin: PluginManifest,
+  parts: PluginParts = {},
 ): ExtensionPermissionLine[] {
   const out: ExtensionPermissionLine[] = [];
+  const line = (
+    key: string,
+    kind: ExtensionPermissionLine['kind'],
+    text: string,
+    sensitive: boolean,
+    d: string | null = null,
+  ) => out.push({ key, kind, text, sensitive, detail: d });
   const p = m.permissions;
+
+  // ---- the SDK part (extension.json) ----
   for (const host of p.network ?? [])
-    out.push({
-      key: `network:${host}`,
-      kind: 'network',
-      text: host === '*' ? 'Reach any host on the network' : `Reach ${host} over the network`,
-      sensitive: true,
-    });
+    line(
+      `network:${host}`,
+      'network',
+      host === '*' ? 'Reach any host on the network' : `Reach ${host} over the network`,
+      true,
+    );
   for (const s of p.fs ?? []) {
     const path = typeof s === 'string' ? s : s.path;
     const write = typeof s === 'string' ? path === EXTENSION_DATA_VAR : s.write === true;
+    const own = path === EXTENSION_DATA_VAR || path === EXTENSION_ROOT_VAR;
     const where =
       path === EXTENSION_DATA_VAR
         ? 'its own data folder'
         : path === EXTENSION_ROOT_VAR
           ? 'its own files'
           : path;
-    out.push({
-      key: `fs:${path}:${write ? 'rw' : 'r'}`,
-      kind: 'fs',
-      text: `${write ? 'Read and write' : 'Read'} ${where}`,
-      sensitive: path !== EXTENSION_DATA_VAR && path !== EXTENSION_ROOT_VAR,
-    });
+    line(
+      `fs:${path}`,
+      'fs',
+      `${write ? 'Read and write' : 'Read'} ${where}`,
+      !own,
+      write ? 'rw' : 'r',
+    );
   }
   for (const name of p.secrets ?? [])
-    out.push({
-      key: `secret:${name}`,
-      kind: 'secret',
-      text: `Read the secret "${name}" you store for it`,
-      sensitive: true,
-    });
+    line(`secret:${name}`, 'secret', `Read the secret "${name}" you store for it`, true);
   for (const id of p.commands ?? [])
-    out.push({
-      key: `command:${id}`,
-      kind: 'command',
-      text: `Add the command ${id}`,
-      sensitive: false,
-    });
+    line(`command:${id}`, 'command', `Add the command ${id}`, false);
   for (const panel of p.panels ?? []) {
     const domains = [
       ...(panel.connectDomains ?? []),
       ...(panel.resourceDomains ?? []),
       ...(panel.frameDomains ?? []),
     ];
-    out.push({
-      key: `panel:${panel.id}:${panel.entryPoint}`,
-      kind: 'panel',
-      text: `Show the panel "${panel.title}" (${panel.entryPoint})${domains.length ? `, which may reach ${[...new Set(domains)].join(', ')}` : ''}`,
-      sensitive: domains.length > 0,
-    });
+    line(
+      `panel:${panel.id}`,
+      'panel',
+      `Show the panel "${panel.title}" (${panel.entryPoint})${domains.length ? `, which may reach ${[...new Set(domains)].join(', ')}` : ''}`,
+      domains.length > 0,
+      detail({
+        entryPoint: panel.entryPoint,
+        resource: panel.resource,
+        file: panel.file,
+        extensions: panel.extensions,
+        connectDomains: panel.connectDomains,
+        resourceDomains: panel.resourceDomains,
+        frameDomains: panel.frameDomains,
+      }),
+    );
   }
   const defaults = { ...(plugin.permissions.actionDefaults ?? {}), ...(p.actionDefaults ?? {}) };
   for (const [name, t] of Object.entries(p.tools ?? {})) {
     const d = t.default ?? defaults[t.action] ?? 'ask';
-    out.push({
-      key: `tool:${name}:${t.action}:${d}`,
-      kind: 'tool',
-      text: `Offer the tool ${name} to models (${ACTION_TEXT[t.action]}; ${DEFAULT_TEXT[d]})`,
-      sensitive: t.action !== 'read' || d === 'allow',
-    });
+    line(
+      `tool:${name}`,
+      'tool',
+      `Offer the tool ${name} to models (${ACTION_TEXT[t.action]}; ${DEFAULT_TEXT[d]})`,
+      t.action !== 'read' || d === 'allow',
+      `${t.action}:${d}`,
+    );
   }
+  for (const [action, effect] of Object.entries(p.actionDefaults ?? {}))
+    line(
+      `action_default:${action}`,
+      'action_default',
+      `Its tools that ${ACTION_TEXT[action] ?? action}: ${DEFAULT_TEXT[effect] ?? effect}`,
+      effect === 'allow' && action !== 'read',
+      effect,
+    );
   for (const h of p.hooks ?? []) {
     const matcher = h.matcher === undefined ? '' : ` for ${[h.matcher].flat().join(', ')}`;
-    out.push({
-      key: `hook:${h.id}:${h.event}`,
-      kind: 'hook',
-      text: `Run the hook ${h.id} at ${h.event}${matcher} (after you trust it)`,
-      sensitive: true,
-    });
+    line(
+      `hook:${h.id}`,
+      'hook',
+      `Run the hook ${h.id} at ${h.event}${matcher} (after you trust it)`,
+      true,
+      detail({
+        event: h.event,
+        matcher: h.matcher,
+        failClosed: h.failClosed,
+        timeoutMs: h.timeoutMs,
+      }),
+    );
   }
-  for (const e of p.events ?? [])
-    out.push({
-      key: `event:${resolveEventName(e)}`,
-      kind: 'event',
-      text: `Observe ${resolveEventName(e)} events`,
-      sensitive: false,
-    });
-  // What the plugin part brings beyond the SDK part.
+  for (const e of p.events ?? []) {
+    const name = resolveEventName(e);
+    const chats = readsConversations(e);
+    line(
+      `event:${name}`,
+      'event',
+      chats ? `Observe ${name} events (it sees your conversations)` : `Observe ${name} events`,
+      chats,
+    );
+  }
+
+  // ---- the plugin part (plugin.json) ----
   const pp = plugin.permissions;
   for (const host of pp.network ?? [])
-    out.push({
-      key: `plugin.network:${host}`,
-      kind: 'plugin',
-      text: `Its plugin servers and hooks may reach ${host}`,
-      sensitive: true,
-    });
+    line(
+      `plugin.network:${host}`,
+      'network',
+      `Its plugin servers and hooks may reach ${host}`,
+      true,
+    );
   for (const path of pp.fs ?? [])
-    out.push({
-      key: `plugin.fs:${path}`,
-      kind: 'plugin',
-      text: `Its plugin may use ${path}`,
-      sensitive: true,
-    });
+    line(`plugin.fs:${path}`, 'fs', `Its plugin may use ${path}`, true);
   for (const name of pp.secrets ?? [])
-    out.push({
-      key: `plugin.secret:${name}`,
-      kind: 'plugin',
-      text: `Its plugin asks for the secret "${name}"`,
-      sensitive: true,
-    });
-  for (const key of Object.keys(plugin.mcpServers ?? {}))
-    out.push({
-      key: `plugin.server:${key}`,
-      kind: 'plugin',
-      text: `Start the MCP server ${key} on this Hub`,
-      sensitive: true,
-    });
+    line(`plugin.secret:${name}`, 'secret', `Its plugin asks for the secret "${name}"`, true);
+  for (const [name, t] of Object.entries(pp.tools ?? {})) {
+    const d = t.default ?? pp.actionDefaults?.[t.action] ?? 'ask';
+    line(
+      `plugin.tool:${name}`,
+      'tool',
+      `Its plugin's tool ${name} (${ACTION_TEXT[t.action]}; ${DEFAULT_TEXT[d]})`,
+      t.action !== 'read' || d === 'allow',
+      `${t.action}:${d}`,
+    );
+  }
+  for (const [action, effect] of Object.entries(pp.actionDefaults ?? {}))
+    line(
+      `plugin.action_default:${action}`,
+      'action_default',
+      `Its plugin's tools that ${ACTION_TEXT[action] ?? action}: ${DEFAULT_TEXT[effect] ?? effect}`,
+      effect === 'allow' && action !== 'read',
+      effect,
+    );
+  for (const [key, c] of Object.entries(plugin.mcpServers ?? {})) {
+    const run = c.transport === 'stdio' ? [c.command ?? '', ...(c.args ?? [])].join(' ') : c.url;
+    line(
+      `plugin.server:${key}`,
+      'mcp_server',
+      `Start the MCP server ${key} on this Hub${run ? ` (${run})` : ''}${c.defaultApproval ? `; its tools: ${DEFAULT_TEXT[c.defaultApproval]}` : ''}`,
+      true,
+      // The marketplace's shape for a plain plugin's server (market/permissions.ts), so the web
+      // shows both alike: what runs or where it connects, and how its tools are approved.
+      JSON.stringify({
+        transport: c.transport ?? null,
+        command: c.command ?? null,
+        url: c.url ?? null,
+        args: c.args ?? [],
+        defaultApproval: c.defaultApproval ?? null,
+        policy: c.policy ?? null,
+        enabledTools: c.enabledTools ?? null,
+        disabledTools: c.disabledTools ?? [],
+      }),
+    );
+  }
   if (pp.hooks?.answersAsks)
-    out.push({
-      key: 'plugin.answersAsks',
-      kind: 'plugin',
-      text: 'Its plugin hooks may answer approval questions your rules raise',
-      sensitive: true,
-    });
+    line(
+      'plugin.answersAsks',
+      'hooks_answer_asks',
+      'Its plugin hooks may answer approval questions your rules raise',
+      true,
+    );
+  for (const h of parts.hooks ?? []) {
+    const handler = h.handler as { type?: string; command?: string[]; tool?: string };
+    const what =
+      handler.type === 'command'
+        ? `runs ${(handler.command ?? []).join(' ')}`
+        : `calls ${handler.tool ?? 'a tool'}`;
+    line(
+      `plugin.hook:${h.id}`,
+      'hook',
+      `Its plugin hook ${h.id} at ${h.event} ${what} (after you trust it)`,
+      true,
+      detail({ event: h.event, matcher: h.matcher, handler: h.handler, failClosed: h.failClosed }),
+    );
+  }
+  for (const r of parts.roles ?? [])
+    line(
+      `plugin.role:${r.key}`,
+      'role',
+      `Adds the sub-agent role ${r.key}${r.tools.length ? ` (tools: ${r.tools.join(', ')})` : ''}`,
+      r.tools.length > 0,
+      detail({ tools: [...r.tools], modelHint: r.modelHint }),
+    );
+  for (const e of plugin.ui?.entryPoints ?? [])
+    line(
+      `plugin.ui:${e.kind}:${e.resource}`,
+      'ui_entry',
+      `Shows ${e.title ?? e.resource} (${e.kind})`,
+      false,
+      detail({ title: e.title, extensions: e.extensions }),
+    );
+  for (const field of ['connectDomains', 'resourceDomains', 'frameDomains'] as const)
+    for (const d of pp.ui?.[field] ?? [])
+      line(`plugin.ui_domain:${field}:${d}`, 'ui_domain', `Its plugin's UI may reach ${d}`, true);
+  for (const b of plugin.browserExtensions ?? [])
+    line(
+      `plugin.browser_extension:${b.id}`,
+      'browser_extension',
+      `Asks to install the browser extension ${b.id} (with your separate consent)`,
+      true,
+      detail({ path: b.path, browsers: b.browsers, hosts: b.hosts }),
+    );
   return out;
 }
 
-/** What a new version adds and drops, by line key (docs/14 §5 permission diff). */
+export interface ExtensionPermissionChange {
+  key: string;
+  text: string;
+  before: string | null;
+  after: string | null;
+}
+
+/**
+ * What a new version adds, drops and changes, by line key and detail (docs/14 §5 permission
+ * diff). Anything added or changed needs the owner's acceptance in the marketplace.
+ */
 export function extensionPermissionDiff(
   before: readonly ExtensionPermissionLine[],
   after: readonly ExtensionPermissionLine[],
-): { added: ExtensionPermissionLine[]; removed: ExtensionPermissionLine[] } {
-  const was = new Set(before.map((l) => l.key));
+): {
+  added: ExtensionPermissionLine[];
+  removed: ExtensionPermissionLine[];
+  changed: ExtensionPermissionChange[];
+} {
+  const was = new Map(before.map((l) => [l.key, l]));
   const now = new Set(after.map((l) => l.key));
+  const changed: ExtensionPermissionChange[] = [];
+  for (const l of after) {
+    const b = was.get(l.key);
+    if (b && (b.detail ?? null) !== (l.detail ?? null))
+      changed.push({ key: l.key, text: l.text, before: b.detail ?? null, after: l.detail ?? null });
+  }
   return {
     added: after.filter((l) => !was.has(l.key)),
     removed: before.filter((l) => !now.has(l.key)),
+    changed,
   };
 }

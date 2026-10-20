@@ -56,6 +56,8 @@ export function resetDom() {
   document.documentElement.removeAttribute('data-motion');
   try {
     window.localStorage.removeItem('nova.theme');
+    window.localStorage.removeItem('nova.look');
+    window.localStorage.removeItem('nova.locale');
   } catch {
     // storage unavailable
   }

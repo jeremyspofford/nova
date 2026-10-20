@@ -1,11 +1,35 @@
 // Form parts shared by creating an agent and editing its profile (FR-079, FR-182): the autonomy
 // choice (Autonomous needs a reviewer model, FR-085) and the budgets of each turn chain.
 import { useId } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { AgentView, RunAutonomy } from '@nova/shared';
 import { RadioGroup, TextField } from '@nova/ui';
 import { useSetting } from '../settings.tsx';
 import { followLink } from '../work/nav.tsx';
 import { AGENT_AUTONOMY_TEXT } from './format.ts';
+import { rich } from '../i18n/rich.tsx';
+
+export const FIELDS_TEXT = defineMessages('agents.fields', {
+  minutesError:
+    'Enter whole minutes, from {min} to {max} ({days, plural, one {# day} other {# days}}).',
+  tokensError: 'Enter tokens from {min} to {max}.',
+  costError: 'Enter US dollars from {min} to {max}, or leave it blank.',
+  budgets: 'Budgets for each piece of work',
+  budgetsHint:
+    'A turn and what follows from it stop at the first limit reached; the agent then waits ' +
+    'for you.',
+  minutes: 'Time (minutes)',
+  tokens: 'Tokens',
+  cost: 'Cost (US dollars)',
+  costHint: "Blank: your provider's spend cap.",
+  autonomy: 'Autonomy',
+  noReviewer:
+    'No reviewer model is chosen yet. Choose one in {link} before saving an autonomous agent.',
+  codeSettings: 'Settings, Code',
+});
+
+/** The longest a piece of work may run, in minutes (7 days, the Hub's limit). */
+const MAX_MINUTES = 7 * 24 * 60;
 
 export interface BudgetDraft {
   minutes: string;
@@ -28,14 +52,14 @@ export function parseBudgets(
 ): { budgets: AgentView['budgets'] } | { errors: Partial<Record<keyof BudgetDraft, string>> } {
   const errors: Partial<Record<keyof BudgetDraft, string>> = {};
   const m = Number(d.minutes);
-  if (!/^\d+$/.test(d.minutes.trim()) || m < 1 || m > 7 * 24 * 60)
-    errors.minutes = 'Enter whole minutes, from 1 to 10,080 (7 days).';
+  if (!/^\d+$/.test(d.minutes.trim()) || m < 1 || m > MAX_MINUTES)
+    errors.minutes = FIELDS_TEXT.minutesError({ min: 1, max: MAX_MINUTES, days: 7 });
   const t = Number(d.tokens);
   if (!/^\d+$/.test(d.tokens.trim()) || t < 1_000 || t > 100_000_000)
-    errors.tokens = 'Enter tokens from 1,000 to 100,000,000.';
+    errors.tokens = FIELDS_TEXT.tokensError({ min: 1_000, max: 100_000_000 });
   const c = d.cost.trim() ? Number(d.cost) : null;
   if (c !== null && (!Number.isFinite(c) || c < 0 || c > 100_000))
-    errors.cost = 'Enter US dollars from 0 to 100,000, or leave it blank.';
+    errors.cost = FIELDS_TEXT.costError({ min: 0, max: 100_000 });
   if (Object.keys(errors).length) return { errors };
   return { budgets: { timeSeconds: m * 60, tokens: t, costUsd: c } };
 }
@@ -53,14 +77,11 @@ export function BudgetFields({
 }) {
   return (
     <fieldset className="ws-fieldset agent-budgets" disabled={disabled}>
-      <legend>Budgets for each piece of work</legend>
-      <p className="nv-field-hint ws-flush">
-        A turn and what follows from it stop at the first limit reached; the agent then waits for
-        you.
-      </p>
+      <legend>{FIELDS_TEXT.budgets}</legend>
+      <p className="nv-field-hint ws-flush">{FIELDS_TEXT.budgetsHint}</p>
       <div className="agent-budget-fields">
         <TextField
-          label="Time (minutes)"
+          label={FIELDS_TEXT.minutes}
           inputMode="numeric"
           className="ws-number"
           value={value.minutes}
@@ -68,7 +89,7 @@ export function BudgetFields({
           onChange={(e) => onChange({ ...value, minutes: e.target.value })}
         />
         <TextField
-          label="Tokens"
+          label={FIELDS_TEXT.tokens}
           inputMode="numeric"
           className="ws-number"
           value={value.tokens}
@@ -76,11 +97,11 @@ export function BudgetFields({
           onChange={(e) => onChange({ ...value, tokens: e.target.value })}
         />
         <TextField
-          label="Cost (US dollars)"
+          label={FIELDS_TEXT.cost}
           inputMode="decimal"
           className="ws-number"
           value={value.cost}
-          hint="Blank: your provider's spend cap."
+          hint={FIELDS_TEXT.costHint}
           error={errors.cost}
           onChange={(e) => onChange({ ...value, cost: e.target.value })}
         />
@@ -103,7 +124,7 @@ export function AutonomyField({
   return (
     <div className="stack">
       <RadioGroup
-        legend="Autonomy"
+        legend={FIELDS_TEXT.autonomy}
         name={`autonomy${hintId}`}
         value={value}
         locked={disabled}
@@ -116,11 +137,13 @@ export function AutonomyField({
       />
       {value === 'autonomous' && !reviewer ? (
         <p className="ws-warning" role="note">
-          No reviewer model is chosen yet. Choose one in{' '}
-          <a href="/settings/code" onClick={(e) => followLink(e, '/settings/code')}>
-            Settings, Code
-          </a>{' '}
-          before saving an autonomous agent.
+          {rich(FIELDS_TEXT.noReviewer, {
+            link: (
+              <a href="/settings/code" onClick={(e) => followLink(e, '/settings/code')}>
+                {FIELDS_TEXT.codeSettings}
+              </a>
+            ),
+          })}
         </p>
       ) : null}
     </div>

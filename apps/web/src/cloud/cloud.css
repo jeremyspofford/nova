@@ -94,7 +94,7 @@
   margin: 0;
   padding: var(--u-space-2) var(--u-space-3);
   border: 1px solid var(--u-border);
-  border-left: 4px solid var(--u-info);
+  border-inline-start: 4px solid var(--u-info);
   border-radius: var(--u-radius-sm);
   background: var(--u-surface-2);
   overflow-wrap: anywhere;
@@ -104,19 +104,19 @@
   margin-top: 3px;
 }
 .cl-notice[data-tone='ok'] {
-  border-left-color: var(--u-success);
+  border-inline-start-color: var(--u-success);
 }
 .cl-notice[data-tone='ok'] > .nv-icon {
   color: var(--u-success);
 }
 .cl-notice[data-tone='warn'] {
-  border-left-color: var(--u-warn);
+  border-inline-start-color: var(--u-warn);
 }
 .cl-notice[data-tone='warn'] > .nv-icon {
   color: var(--u-warn);
 }
 .cl-notice[data-tone='danger'] {
-  border-left-color: var(--u-danger);
+  border-inline-start-color: var(--u-danger);
 }
 .cl-notice[data-tone='danger'] > .nv-icon {
   color: var(--u-danger);
@@ -176,10 +176,10 @@
   background: var(--u-surface);
 }
 .cl-run[data-state='warn'] {
-  border-left: 4px solid var(--u-warn);
+  border-inline-start: 4px solid var(--u-warn);
 }
 .cl-run[data-state='capped'] {
-  border-left: 4px solid var(--u-danger);
+  border-inline-start: 4px solid var(--u-danger);
 }
 .cl-run-head {
   display: flex;
@@ -264,7 +264,7 @@
   background: transparent;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
 }
 button.cl-file {
   cursor: pointer;
@@ -303,7 +303,7 @@ button.cl-file:focus-visible {
   color: var(--u-accent);
   font: inherit;
   font-weight: 600;
-  text-align: left;
+  text-align: start;
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;

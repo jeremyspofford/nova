@@ -4,6 +4,7 @@
 // copy pulls on `sync.changed` and whenever the Hub comes back. A 409 `replica_reset` or
 // `cursor_ahead` (and `sync.replica.reset` for this device) loads it again. `sync.replica.revoked`
 // for this device, a 401, or a refused grant wipe it, key and all. One job runs at a time.
+import { defineMessages } from '@nova/i18n';
 import type { EventEnvelope, SyncKind, SyncOp, SyncPushResult } from '@nova/shared';
 import { ApiError } from '../api.ts';
 import { REPLICA_SCOPE, type SyncApi, type SyncSession } from './api.ts';
@@ -33,7 +34,10 @@ export interface ReplicaState {
   /** The session grants this device an offline copy; null until the session is known. */
   granted: boolean | null;
   deviceId: string | null;
-  /** Why it is paused, failed or was removed, in a sentence. */
+  /**
+   * The Hub's own words when syncing failed (English, D9), or null. `replicaReason` words every
+   * state at render time.
+   */
   reason: string | null;
   removal: RemovalReason | null;
   syncing: boolean;
@@ -46,14 +50,37 @@ export interface ReplicaState {
   version: number;
 }
 
-export const REMOVAL_TEXT: Record<RemovalReason, string> = {
+export const REMOVAL_TEXT = defineMessages('replica.removal', {
   revoked: 'The Hub revoked this device, so its offline copy was removed.',
   scope_removed: 'The Hub no longer lets this device keep an offline copy, so it was removed.',
   signed_out: 'This device is signed out of the Hub, so its offline copy was removed.',
-};
+});
 
-export const UNSUPPORTED_TEXT =
-  'This browser cannot keep an encrypted offline copy: it needs IndexedDB and WebCrypto, which need HTTPS or this computer.';
+export const REPLICA_TEXT = defineMessages('replica', {
+  unsupported:
+    'This browser cannot keep an encrypted offline copy: it needs IndexedDB and WebCrypto, ' +
+    'which need HTTPS or this computer.',
+  paused: 'Sync is turned off on the Hub, so this copy is not updated.',
+  failed: 'Sync failed.',
+});
+
+/** Why the copy is unavailable, paused, failed or was removed, in the active locale; else null. */
+export function replicaReason(
+  s: Pick<ReplicaState, 'phase' | 'removal' | 'reason'>,
+): string | null {
+  switch (s.phase) {
+    case 'removed':
+      return s.removal ? REMOVAL_TEXT[s.removal] : null;
+    case 'unsupported':
+      return REPLICA_TEXT.unsupported;
+    case 'paused':
+      return REPLICA_TEXT.paused;
+    case 'error':
+      return s.reason ?? REPLICA_TEXT.failed;
+    default:
+      return null;
+  }
+}
 
 type Client = Pick<SyncApi, 'syncSnapshot' | 'syncChanges' | 'syncPush'>;
 
@@ -168,7 +195,7 @@ export class SyncEngine {
         return;
       }
       if (!kv) {
-        this.#set({ granted: true, deviceId, phase: 'unsupported', reason: UNSUPPORTED_TEXT });
+        this.#set({ granted: true, deviceId, phase: 'unsupported', reason: null });
         return;
       }
       const r = this.#replica ?? (await Replica.open(kv, true));
@@ -235,7 +262,7 @@ export class SyncEngine {
         phase: had ? 'removed' : 'off',
         granted: false,
         removal: had ? reason : null,
-        reason: had ? REMOVAL_TEXT[reason] : null,
+        reason: null,
       });
     });
   }
@@ -375,10 +402,7 @@ export class SyncEngine {
       return true;
     }
     if (err.status === 403 && reason === 'sync_disabled') {
-      this.#set({
-        phase: 'paused',
-        reason: 'Sync is turned off on the Hub, so this copy is not updated.',
-      });
+      this.#set({ phase: 'paused', reason: null });
       return true;
     }
     return false;
@@ -388,7 +412,7 @@ export class SyncEngine {
     if (await this.#refused(err)) return;
     // The Hub went away mid-sync: the copy stays as it is; the offline layer notices.
     if (!(err instanceof ApiError)) return;
-    this.#set({ phase: 'error', reason: err.body.message || 'Sync failed.' });
+    this.#set({ phase: 'error', reason: err.body.message || null });
   }
 
   async #removeNow(reason: RemovalReason): Promise<void> {
@@ -398,7 +422,7 @@ export class SyncEngine {
       phase: 'removed',
       granted: false,
       removal: reason,
-      reason: REMOVAL_TEXT[reason],
+      reason: null,
     });
   }
 

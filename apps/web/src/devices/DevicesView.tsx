@@ -9,7 +9,9 @@
 import { useState } from 'react';
 import type { DeviceSummaryView, DeviceView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
-import { formatWhen, plural, useInterval } from '../settings/common.ts';
+import { defineMessages } from '@nova/i18n';
+import { rich } from '../i18n/rich.tsx';
+import { formatWhen, useInterval } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
 import { followLink } from '../work/nav.tsx';
 import { navigate } from '../router.ts';
@@ -38,6 +40,36 @@ import '../workspace.css';
 import '../work/work.css';
 import './devices.css';
 
+export const LIST_TEXT = defineMessages('devices.list', {
+  title: 'Devices',
+  add: 'Add device',
+  intro:
+    'Everything that uses this Hub: browsers and phones, computers running novad, and compute nodes. Open one to change its scopes, wake it or revoke it. The models and load of compute nodes are in {link}.',
+  settingsDevices: 'Settings → Devices',
+  loadFailed: 'Could not load devices.',
+  novadFailed: 'Could not load what the novad devices report.',
+  loading: 'Loading devices',
+  emptyTitle: 'No devices yet',
+  emptyHelp:
+    'Add a phone, a browser or a computer with a QR code or a short code. Computers can then share folders with agents, run modules and wake on request.',
+  addFirst: 'Add a device',
+  keptOut: 'Kept out of agent work',
+  changesWaiting: 'Changes waiting for the device',
+  scopes: 'Scopes: {scopes}',
+  wake: 'Wake',
+  wakeName: 'Wake {name}',
+  wakeFailed: 'Could not wake {name}.',
+  heartbeat: 'last heartbeat {when}',
+  noHeartbeat: 'no heartbeat yet',
+  seen: 'last seen {when}',
+  notSeen: 'not seen yet',
+  signedIn: '{n, plural, one {Signed in (# session)} other {Signed in (# sessions)}}',
+  signedOut: 'Signed out',
+  reachedAt: 'Reached at {endpoint}',
+  notReachable: 'Not reachable now',
+});
+const S = LIST_TEXT;
+
 export function DevicesView({ deviceId }: { deviceId: string | null }) {
   return (
     <DeviceEventsProvider>
@@ -61,7 +93,7 @@ export function sortDevices<T extends { status: string }>(list: readonly T[]): T
 
 /** "last heartbeat 5 min ago" or "no heartbeat yet". */
 export function heartbeatText(d: Pick<DeviceView, 'lastSeenAt'>, now: number): string {
-  return d.lastSeenAt ? `last heartbeat ${formatWhen(d.lastSeenAt, now)}` : 'no heartbeat yet';
+  return d.lastSeenAt ? S.heartbeat({ when: formatWhen(d.lastSeenAt, now) }) : S.noHeartbeat;
 }
 
 /** novad devices report heartbeats; everything else is "last seen". */
@@ -71,16 +103,15 @@ export function seenText(
   now: number,
 ): string {
   if (novad) return heartbeatText(novad, now);
-  return d.lastSeenAt ? `last seen ${formatWhen(d.lastSeenAt, now)}` : 'not seen yet';
+  return d.lastSeenAt ? S.seen({ when: formatWhen(d.lastSeenAt, now) }) : S.notSeen;
 }
 
 /** How the Hub reaches it, or how it reaches the Hub (FR-140). */
 export function reachText(d: DeviceSummaryView, novad: DeviceView | null): string | null {
   if (d.status === 'revoked') return null;
-  if (isSessionDevice(d))
-    return d.sessions ? `Signed in (${plural(d.sessions, 'session')})` : 'Signed out';
-  if (novad?.endpoint && d.status === 'active') return `Reached at ${novad.endpoint}`;
-  if (d.status === 'unreachable') return 'Not reachable now';
+  if (isSessionDevice(d)) return d.sessions ? S.signedIn({ n: d.sessions }) : S.signedOut;
+  if (novad?.endpoint && d.status === 'active') return S.reachedAt({ endpoint: novad.endpoint });
+  if (d.status === 'unreachable') return S.notReachable;
   return null;
 }
 
@@ -126,7 +157,7 @@ function DeviceList() {
       const w = await api.wakeDevice(d.id);
       toast.show(wakeSentText(d.name, w, nameOf), { tone: 'success' });
     } catch (err) {
-      toast.show(deviceErrorMessage(err, `Could not wake ${d.name}.`), { tone: 'error' });
+      toast.show(deviceErrorMessage(err, S.wakeFailed({ name: d.name })), { tone: 'error' });
     } finally {
       setWaking(null);
     }
@@ -137,43 +168,39 @@ function DeviceList() {
   return (
     <div className="ws-page devices-page">
       <header className="ws-page-header">
-        <h1>Devices</h1>
+        <h1>{S.title}</h1>
         <Button variant="primary" onClick={() => navigate(DEVICES_ADD_PATH)}>
-          <Icon name="plus" /> Add device
+          <Icon name="plus" /> {S.add}
         </Button>
       </header>
       <p className="muted ws-flush">
-        Everything that uses this Hub: browsers and phones, computers running novad, and compute
-        nodes. Open one to change its scopes, wake it or revoke it. The models and load of compute
-        nodes are in{' '}
-        <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
-          Settings → Devices
-        </a>
-        .
+        {rich(S.intro, {
+          link: (
+            <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
+              {S.settingsDevices}
+            </a>
+          ),
+        })}
       </p>
       <PendingRequests onChange={reload} />
       {list.error ? (
-        <LoadError error={list.error} fallback="Could not load devices." onRetry={list.reload} />
+        <LoadError error={list.error} fallback={S.loadFailed} onRetry={list.reload} />
       ) : null}
       {list.data?.novadError ? (
-        <LoadError
-          error={list.data.novadError}
-          fallback="Could not load what the novad devices report."
-          onRetry={list.reload}
-        />
+        <LoadError error={list.data.novadError} fallback={S.novadFailed} onRetry={list.reload} />
       ) : null}
-      {list.loading ? <Spinner label="Loading devices" /> : null}
+      {list.loading ? <Spinner label={S.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
-          title="No devices yet"
-          description="Add a phone, a browser or a computer with a QR code or a short code. Computers can then share folders with agents, run modules and wake on request."
+          title={S.emptyTitle}
+          description={S.emptyHelp}
           icon="server"
           level={2}
-          action={<Button onClick={() => navigate(DEVICES_ADD_PATH)}>Add a device</Button>}
+          action={<Button onClick={() => navigate(DEVICES_ADD_PATH)}>{S.addFirst}</Button>}
         />
       ) : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="Devices">
+        <ul className="ws-list" aria-label={S.title}>
           {items.map((d) => {
             const n = novad?.get(d.id) ?? null;
             const wakeable = n !== null && n.wake.wakeable && d.status === 'unreachable';
@@ -187,6 +214,7 @@ function DeviceList() {
                       href={devicePath(d.id)}
                       className="ws-card-link"
                       onClick={(e) => followLink(e, devicePath(d.id))}
+                      dir="auto"
                     >
                       {d.name}
                     </a>
@@ -203,10 +231,12 @@ function DeviceList() {
                   {d.status !== 'revoked' ? (
                     <span className="muted ws-row-meta">
                       {n ? <span>{capabilitySummary(n)}</span> : null}
-                      {n && !n.routingEligible ? <span>Kept out of agent work</span> : null}
-                      {n?.configPending ? <span>Changes waiting for the device</span> : null}
+                      {n && !n.routingEligible ? <span>{S.keptOut}</span> : null}
+                      {n?.configPending ? <span>{S.changesWaiting}</span> : null}
                       {reach ? <span>{reach}</span> : null}
-                      {d.scopes.length ? <span>Scopes: {scopesText(d.scopes)}</span> : null}
+                      {d.scopes.length ? (
+                        <span>{S.scopes({ scopes: scopesText(d.scopes) })}</span>
+                      ) : null}
                     </span>
                   ) : null}
                 </div>
@@ -214,9 +244,9 @@ function DeviceList() {
                   <Button
                     onClick={() => void wake(d)}
                     disabled={waking === d.id}
-                    aria-label={`Wake ${d.name}`}
+                    aria-label={S.wakeName({ name: d.name })}
                   >
-                    {waking === d.id ? <Spinner /> : null} Wake
+                    {waking === d.id ? <Spinner /> : null} {S.wake}
                   </Button>
                 ) : null}
               </li>

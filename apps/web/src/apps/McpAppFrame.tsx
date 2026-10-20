@@ -16,11 +16,13 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { ToolDescriptor, UiEntryPointView } from '@nova/shared';
 import { Button, Icon, IconButton, trapTab } from '@nova/ui';
 import { errorMessage, type ToolInvokeResult } from '../api.ts';
 import { ApprovalCard } from '../chat/ApprovalCard.tsx';
 import type { ClientApproval } from '../chat/thread-state.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useAnnounce, useServices } from '../services.tsx';
 import {
   HostBridge,
@@ -60,8 +62,46 @@ export const MAX_APP_CALLS = 4;
 /** Host-context key of Nova's file extension (file entry points). */
 export const FILE_CONTEXT_KEY = 'nova/file';
 const APPROVALS_KEPT = 5;
-const WAITING_TEXT =
-  'The call is waiting for your approval in Nova. Its result will not reach the app; run it again after you answer.';
+
+/**
+ * The frame's chrome. `{title}` is the app's name (data). Errors the frame answers an app's
+ * JSON-RPC requests with are protocol (for the app's developer) and stay English; the tool
+ * results below reach the app's user, so they are messages.
+ */
+export const FRAME_TEXT = defineMessages('apps.frame', {
+  mode: {
+    inline: 'Inline',
+    fullscreen: 'Full screen',
+    pip: 'Picture in picture',
+  },
+  /** Read when the display mode changes: "Weather: Full screen." */
+  modeChanged: '{title}: {mode}.',
+  verified: 'Verified',
+  unverified: 'Unverified',
+  /** The group of display buttons: "Weather display". */
+  display: '{title} display',
+  exitFullscreen: 'Exit full screen',
+  move: 'Move',
+  close: 'Close {title}',
+  stopped: 'The app left its page, so Nova stopped it.',
+  reload: 'Reload app',
+  /** The iframe's accessible name. */
+  frame: 'App: {title}',
+  /** `{link}` is the address, shown as code. */
+  wantsToOpen: '{title} wants to open {link}',
+  openLink: 'Open link',
+  dismiss: 'Dismiss',
+  approvals: 'Approvals for {title}',
+  needsApproval: '{title} needs your approval.',
+  addedText: '{title} added text to your message. Review it before you send.',
+  shared: 'Shared with the model',
+  privateStays: 'Anything the app marks private stays in this window.',
+  /** A tool result the app receives (and may show) while the call waits for approval. */
+  waiting:
+    'The call is waiting for your approval in Nova. Its result will not reach the app; run it ' +
+    'again after you answer.',
+  toolFailed: 'The tool call failed.',
+});
 
 /** A tool result as an app receives it (an MCP `CallToolResult`). */
 export interface AppToolResult {
@@ -97,17 +137,12 @@ export interface McpAppFrameProps {
   approvalPollMs?: number;
 }
 
-const MODE_TEXT: Record<DisplayMode, string> = {
-  inline: 'Inline',
-  fullscreen: 'Full screen',
-  pip: 'Picture in picture',
-};
-
 /** The header's allowed domains (FR-198, M8): what the app's frame may reach outside Nova. */
-export const DOMAINS_TEXT = {
-  some: (hosts: string) => `Can reach ${hosts}`,
+export const DOMAINS_TEXT = defineMessages('apps.domains', {
+  /** `{hosts}` is a list of host names. */
+  some: 'Can reach {hosts}',
   none: 'Reaches no outside sites',
-} as const;
+});
 
 function toolResult(ok: boolean, text: string): AppToolResult {
   return ok
@@ -122,6 +157,29 @@ function clampPos(p: { right: number; bottom: number }) {
     right: Math.round(Math.min(Math.max(0, p.right), Math.max(0, w - 160))),
     bottom: Math.round(Math.min(Math.max(0, p.bottom), Math.max(0, h - 80))),
   };
+}
+
+/** The picture-in-picture panel's Move button: a click goes to the next corner (WCAG 2.5.7). */
+const MOVE_TEXT = defineMessages('apps.move', {
+  label: 'Move panel (to the next corner, or with the arrow keys)',
+  title: 'Click to move to the next corner, drag the header, or use the arrow keys',
+});
+
+/** The corners a click on Move cycles through, as the panel's right and bottom offsets. */
+function nextCorner(
+  p: { right: number; bottom: number },
+  size: { width: number; height: number },
+): { right: number; bottom: number } {
+  const w = typeof window.innerWidth === 'number' ? window.innerWidth : 1024;
+  const h = typeof window.innerHeight === 'number' ? window.innerHeight : 768;
+  const far = { right: w - size.width - 16, bottom: h - size.height - 16 };
+  const atRight = p.right < far.right / 2;
+  const atBottom = p.bottom < far.bottom / 2;
+  // Bottom right, bottom left, top left, top right, and round again.
+  if (atRight && atBottom) return clampPos({ right: far.right, bottom: 16 });
+  if (!atRight && atBottom) return clampPos({ right: far.right, bottom: far.bottom });
+  if (!atRight && !atBottom) return clampPos({ right: 16, bottom: far.bottom });
+  return clampPos({ right: 16, bottom: 16 });
 }
 
 const MOVE_KEYS: Record<string, [number, number]> = {
@@ -238,7 +296,7 @@ export function McpAppFrame(props: McpAppFrameProps) {
     if (next === 'pip') claimPip(pipKey);
     else releasePip(pipKey);
     bridge.current?.notify('ui/notifications/host-context-changed', { displayMode: next });
-    announce(`${entry.title}: ${MODE_TEXT[next]}.`);
+    announce(FRAME_TEXT.modeChanged({ title: entry.title, mode: FRAME_TEXT.mode[next] }));
     return next;
   }
 
@@ -268,7 +326,7 @@ export function McpAppFrame(props: McpAppFrameProps) {
     // The newest card takes focus (never an Allow button; ApprovalCard focuses its heading).
     const first = fresh[0];
     if (first) setFocusFor((f) => ({ ...f, [first.id]: 1 }));
-    announce(`${entry.title} needs your approval.`);
+    announce(FRAME_TEXT.needsApproval({ title: entry.title }));
   }
 
   function updateApproval(view: ClientApproval): void {
@@ -359,11 +417,11 @@ export function McpAppFrame(props: McpAppFrameProps) {
           (a) => mergeApprovals([a]),
           () => undefined,
         );
-        return toolResult(false, WAITING_TEXT);
+        return toolResult(false, FRAME_TEXT.waiting);
       }
       return toolResult(res.ok, res.text || res.error?.message || '');
     } catch (err) {
-      return toolResult(false, errorMessage(err, 'The tool call failed.'));
+      return toolResult(false, errorMessage(err, FRAME_TEXT.toolFailed));
     }
   }
 
@@ -382,7 +440,7 @@ export function McpAppFrame(props: McpAppFrameProps) {
     const text = messageText(params);
     if (!props.onMessage?.(text))
       throw new RpcError(RPC.refused, 'there is no message box to fill here');
-    announce(`${entry.title} added text to your message. Review it before you send.`);
+    announce(FRAME_TEXT.addedText({ title: entry.title }));
     return {};
   }
 
@@ -557,6 +615,8 @@ export function McpAppFrame(props: McpAppFrameProps) {
 
   const ownerName = owner?.name ?? null;
   const verified = owner?.verified === true;
+  const S = FRAME_TEXT;
+  const title = entry.title;
 
   return (
     <section
@@ -579,36 +639,52 @@ export function McpAppFrame(props: McpAppFrameProps) {
         onPointerCancel={endDrag}
       >
         <div className="app-frame-id">
-          <h3 id={titleId} className="app-frame-title">
-            {entry.title}
+          <h3 id={titleId} className="app-frame-title" dir="auto">
+            {title}
           </h3>
-          {ownerName ? <span className="app-frame-owner muted">{ownerName}</span> : null}
+          {ownerName ? (
+            <span className="app-frame-owner muted" dir="auto">
+              {ownerName}
+            </span>
+          ) : null}
           <span className="app-frame-badge" data-verified={verified ? 'true' : 'false'}>
-            {verified ? 'Verified' : 'Unverified'}
+            {verified ? S.verified : S.unverified}
           </span>
           {entry.domains ? (
-            <span className="app-frame-domains muted" title={entry.domains.join(', ') || undefined}>
+            <span
+              className="app-frame-domains muted"
+              title={entry.domains.join(', ') || undefined}
+              dir="auto"
+            >
               {entry.domains.length
-                ? DOMAINS_TEXT.some(entry.domains.join(', '))
+                ? DOMAINS_TEXT.some({
+                    hosts: fmt.list(entry.domains, { type: 'unit', style: 'short' }),
+                  })
                 : DOMAINS_TEXT.none}
             </span>
           ) : null}
         </div>
-        <div className="app-frame-actions" role="group" aria-label={`${entry.title} display`}>
+        <div className="app-frame-actions" role="group" aria-label={S.display({ title })}>
           {page ? null : (
             <>
               {mode === 'fullscreen' ? (
                 <Button ref={exitButton} onClick={() => changeMode('inline')}>
-                  Exit full screen
+                  {S.exitFullscreen}
                 </Button>
               ) : null}
               {mode === 'pip' ? (
                 <Button
-                  aria-label="Move panel (arrow keys)"
-                  title="Drag the header or use the arrow keys"
+                  aria-label={MOVE_TEXT.label}
+                  title={MOVE_TEXT.title}
                   onKeyDown={onMoveKey}
+                  onClick={() => {
+                    const box = root.current?.getBoundingClientRect();
+                    setPos((p) =>
+                      nextCorner(p, { width: box?.width ?? 380, height: box?.height ?? 360 }),
+                    );
+                  }}
                 >
-                  Move
+                  {S.move}
                 </Button>
               ) : null}
               {DISPLAY_MODES.map((m) => (
@@ -619,12 +695,12 @@ export function McpAppFrame(props: McpAppFrameProps) {
                   data-display={m}
                   onClick={() => changeMode(m)}
                 >
-                  {MODE_TEXT[m]}
+                  {S.mode[m]}
                 </Button>
               ))}
             </>
           )}
-          <IconButton icon={<Icon name="close" />} label={`Close ${entry.title}`} onClick={close} />
+          <IconButton icon={<Icon name="close" />} label={S.close({ title })} onClick={close} />
         </div>
       </header>
       <div
@@ -633,9 +709,9 @@ export function McpAppFrame(props: McpAppFrameProps) {
       >
         {navigated ? (
           <div className="app-frame-stopped" role="status">
-            <p>The app left its page, so Nova stopped it.</p>
+            <p>{S.stopped}</p>
             <Button onClick={reload}>
-              <Icon name="refresh" /> Reload app
+              <Icon name="refresh" /> {S.reload}
             </Button>
           </div>
         ) : (
@@ -643,7 +719,7 @@ export function McpAppFrame(props: McpAppFrameProps) {
             key={frameKey}
             ref={frame}
             className="app-frame-iframe"
-            title={`App: ${entry.title}`}
+            title={S.frame({ title })}
             src={api.uiResourceUrl(entry.id)}
             sandbox="allow-scripts"
             referrerPolicy="no-referrer"
@@ -653,21 +729,20 @@ export function McpAppFrame(props: McpAppFrameProps) {
       </div>
       {link ? (
         <p className="app-frame-notice" role="status">
-          {entry.title} wants to open <code>{link}</code>{' '}
+          {rich(S.wantsToOpen, {
+            title,
+            link: <code dir="ltr">{link}</code>,
+          })}{' '}
           <a href={link} target="_blank" rel="noopener noreferrer" onClick={() => setLink(null)}>
-            Open link <Icon name="external" />
+            {S.openLink} <Icon name="external" />
           </a>{' '}
           <Button variant="ghost" onClick={() => setLink(null)}>
-            Dismiss
+            {S.dismiss}
           </Button>
         </p>
       ) : null}
       {approvals.length ? (
-        <div
-          className="app-frame-approvals"
-          role="group"
-          aria-label={`Approvals for ${entry.title}`}
-        >
+        <div className="app-frame-approvals" role="group" aria-label={S.approvals({ title })}>
           {approvals.map((a) => (
             <ApprovalCard
               key={a.id}
@@ -680,9 +755,9 @@ export function McpAppFrame(props: McpAppFrameProps) {
       ) : null}
       {shared ? (
         <details className="app-frame-shared">
-          <summary>Shared with the model</summary>
+          <summary>{S.shared}</summary>
           <pre>{shared}</pre>
-          <p className="muted">Anything the app marks private stays in this window.</p>
+          <p className="muted">{S.privateStays}</p>
         </details>
       ) : null}
     </section>

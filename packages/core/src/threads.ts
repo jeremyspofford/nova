@@ -173,9 +173,47 @@ export class ThreadService {
     const path = await this.activePath(row);
     return {
       thread: toThreadView(row),
-      messages: await this.messageViews(row.id, path),
+      messages: this.#withAuthors(row, await this.messageViews(row.id, path)),
       queue: queueViews(this.#db, row.id),
     };
+  }
+
+  /**
+   * In a thread shared with other people of the Hub (FR-217), who wrote each user message: the
+   * writer recorded with it (`shared_message`), else the thread's owner; only their account id and
+   * display name. A thread that is not shared gets nothing.
+   */
+  #withAuthors(row: ThreadRow, messages: MessageView[]): MessageView[] {
+    const users = messages.filter((m) => m.role === 'user');
+    if (!users.length) return messages;
+    const shared = this.#db.raw
+      .prepare('SELECT 1 FROM thread_share WHERE thread_id = ? LIMIT 1')
+      .get(row.id);
+    if (!shared) return messages;
+    const marks = users.map(() => '?').join(', ');
+    const by = new Map(
+      (
+        this.#db.raw
+          .prepare(
+            `SELECT message_id, account_id FROM shared_message WHERE message_id IN (${marks})`,
+          )
+          .all(...users.map((m) => m.id)) as { message_id: string; account_id: string }[]
+      ).map((r) => [r.message_id, r.account_id]),
+    );
+    const names = new Map<string, string | null>();
+    const nameOf = (id: string): string | null => {
+      if (!names.has(id)) {
+        const r = this.#db.raw.prepare('SELECT display_name FROM account WHERE id = ?').get(id) as
+          { display_name: string | null } | undefined;
+        names.set(id, r?.display_name ?? null);
+      }
+      return names.get(id) ?? null;
+    };
+    return messages.map((m) => {
+      if (m.role !== 'user') return m;
+      const accountId = by.get(m.id) ?? row.accountId;
+      return { ...m, author: { accountId, displayName: nameOf(accountId) } };
+    });
   }
 
   /** Visible messages on the thread's active path, oldest first. */

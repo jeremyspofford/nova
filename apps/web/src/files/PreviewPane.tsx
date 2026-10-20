@@ -7,6 +7,7 @@
 // M8: the file actions running extensions add sit in a menu beside Download.
 import { useEffect, useState } from 'react';
 import type { FileContentView, UiEntryPointView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, CodeBlock, Icon, Menu, Spinner } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { formatBytes } from '../chat/attachments.ts';
@@ -17,6 +18,28 @@ import { useExtensionMenuItems } from '../extensions/shell.tsx';
 import { useServices } from '../services.tsx';
 import { baseName, extensionOf, previewKind } from './types.ts';
 
+export const PREVIEW_TEXT = defineMessages('files.preview', {
+  openFile: 'Open a file from the Files panel to preview it.',
+  gone: 'This file no longer exists.',
+  openFailed: 'Could not open the file.',
+  retry: 'Retry',
+  opening: 'Opening {name}',
+  openingDots: 'Opening…',
+  code: 'Code: {name}',
+  text: 'Text: {name}',
+  noPdf: 'This browser cannot show the PDF here.',
+  openPdf: 'Open the PDF',
+  binary: 'No preview for this type of file. Download it to open it.',
+  preview: 'Preview: {name}',
+  /** The file's type and size: "text/plain, 2 KB". */
+  meta: '{mime}, {size}',
+  edit: 'Edit',
+  openWith: 'Open with {app}',
+  moreActions: 'More actions for {name}',
+  download: 'Download',
+  tooLarge: 'Too large to preview here. Download it to open it.',
+});
+
 export interface PreviewPaneProps {
   file: FileRef | null;
   onEdit?: (file: FileRef) => void;
@@ -25,8 +48,7 @@ export interface PreviewPaneProps {
 }
 
 export function PreviewPane({ file, onEdit, threadId = null }: PreviewPaneProps) {
-  if (!file)
-    return <p className="muted pane-note">Open a file from the Files panel to preview it.</p>;
+  if (!file) return <p className="muted pane-note">{PREVIEW_TEXT.openFile}</p>;
   return (
     <Preview key={`${file.root}::${file.path}`} file={file} onEdit={onEdit} threadId={threadId} />
   );
@@ -65,8 +87,8 @@ function Preview({
         if (alive)
           setError(
             err instanceof ApiError && err.status === 404
-              ? 'This file no longer exists.'
-              : errorMessage(err, 'Could not open the file.'),
+              ? PREVIEW_TEXT.gone
+              : errorMessage(err, PREVIEW_TEXT.openFailed),
           );
       },
     );
@@ -79,13 +101,13 @@ function Preview({
     return (
       <div className="pane-note" role="alert">
         <p>{error}</p>
-        <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+        <Button onClick={() => setAttempt((n) => n + 1)}>{PREVIEW_TEXT.retry}</Button>
       </div>
     );
   if (!content)
     return (
       <p className="muted pane-note">
-        <Spinner label={`Opening ${name}`} /> Opening…
+        <Spinner label={PREVIEW_TEXT.opening({ name })} /> {PREVIEW_TEXT.openingDots}
       </p>
     );
 
@@ -108,7 +130,7 @@ function Preview({
         content.text === null ? (
           <TooLarge />
         ) : (
-          <CodeBlock code={content.text} language={ext} label={`Code: ${name}`} />
+          <CodeBlock code={content.text} language={ext} label={PREVIEW_TEXT.code({ name })} />
         );
       break;
     case 'text':
@@ -116,7 +138,12 @@ function Preview({
         content.text === null ? (
           <TooLarge />
         ) : (
-          <pre className="preview-text" tabIndex={0} aria-label={`Text: ${name}`}>
+          <pre
+            role="group"
+            className="preview-text"
+            tabIndex={0}
+            aria-label={PREVIEW_TEXT.text({ name })}
+          >
             {content.text}
           </pre>
         );
@@ -128,32 +155,32 @@ function Preview({
       body = (
         <object className="preview-frame" data={raw} type="application/pdf" aria-label={name}>
           <p>
-            This browser cannot show the PDF here.{' '}
+            {PREVIEW_TEXT.noPdf}{' '}
             <a href={raw} target="_blank" rel="noopener noreferrer">
-              Open the PDF
+              {PREVIEW_TEXT.openPdf}
             </a>
           </p>
         </object>
       );
       break;
     case 'binary':
-      body = <p className="muted">No preview for this type of file. Download it to open it.</p>;
+      body = <p className="muted">{PREVIEW_TEXT.binary}</p>;
       break;
   }
 
   return (
-    <article className="preview" aria-label={`Preview: ${name}`} data-kind={kind}>
+    <article className="preview" aria-label={PREVIEW_TEXT.preview({ name })} data-kind={kind}>
       <div className="preview-bar">
-        <span className="preview-file" title={file.path}>
+        <span className="preview-file" title={file.path} dir="auto">
           {name}
         </span>
         <span className="muted">
-          {content.mime}, {formatBytes(content.size)}
+          {PREVIEW_TEXT.meta({ mime: content.mime, size: formatBytes(content.size) })}
         </span>
         <span className="editor-spacer" />
         {onEdit && content.text !== null ? (
           <Button variant="ghost" onClick={() => onEdit(file)}>
-            <Icon name="edit" /> Edit
+            <Icon name="edit" /> {PREVIEW_TEXT.edit}
           </Button>
         ) : null}
         {apps.map((a) => (
@@ -163,18 +190,18 @@ function Preview({
             aria-pressed={app?.id === a.id}
             onClick={() => setApp(app?.id === a.id ? null : a)}
           >
-            <Icon name="external" /> Open with {a.title}
+            <Icon name="external" /> {PREVIEW_TEXT.openWith({ app: a.title })}
           </Button>
         ))}
         {extensionItems.length ? (
           <Menu
-            label={`More actions for ${name}`}
+            label={PREVIEW_TEXT.moreActions({ name })}
             trigger={<Icon name="more" />}
             items={extensionItems}
           />
         ) : null}
         <a className="link preview-download" href={raw} download={name}>
-          <Icon name="download" /> Download
+          <Icon name="download" /> {PREVIEW_TEXT.download}
         </a>
       </div>
       <div className="preview-body">
@@ -195,5 +222,5 @@ function Preview({
 }
 
 function TooLarge() {
-  return <p className="muted">Too large to preview here. Download it to open it.</p>;
+  return <p className="muted">{PREVIEW_TEXT.tooLarge}</p>;
 }

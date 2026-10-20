@@ -7,13 +7,82 @@
 //   (or returns the open one); the same guards apply to its push.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { CodeSessionView, GitHostView, PullRequestView, PushResultView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, Icon, SelectField, Spinner, TextField } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { rich } from '../chat/rich.tsx';
 import { useCodeM6Api } from './api-m6.ts';
 import { AppLink } from './CodeNav.tsx';
 import { onDefaultBranch, shortSha, slugify } from './git.ts';
 import { sessionTitle } from './labels.ts';
 import { errorDetails, errorReason } from './m6-format.ts';
+
+export const GIT_TEXT = defineMessages('code.git', {
+  branchFailed: 'Could not create the branch.',
+  newBranch: 'New branch',
+  startsAt: 'Starts at the current commit. Nova switches to it without changing any file.',
+  startsAtOf:
+    'Starts at the current commit of {branch}. Nova switches to it without changing any file.',
+  branchName: 'Branch name',
+  willBe: 'The branch will be nova/{slug} (with a short suffix if that is taken).',
+  useLetters: 'Use letters and digits; Nova adds the nova/ prefix.',
+  cancel: 'Cancel',
+  createBranch: 'Create branch',
+  pushRemote: 'Pushing works only for sessions whose folder is on the Hub.',
+  detached: 'HEAD is detached. Commit on a branch first.',
+  protectedBranch: '{branch} is a protected branch.',
+  defaultBranch: '{branch} is the repository’s default branch.',
+  confirmNote:
+    'Pushing there changes what everyone works from. Type the branch name exactly to confirm.',
+  typeToConfirm: 'Type {branch} to confirm',
+  noMatch: 'The name does not match.',
+  secrets:
+    'Nothing was pushed: the commits look like they contain secrets. Remove them from the commits, then push again.',
+  possibleSecrets: 'Possible secrets',
+  atLine: '{path}, line {line}',
+  secret: 'secret',
+  forceProtected: 'Force-pushing {branch} is never allowed: it is protected.',
+  forceDefault: 'Force-pushing {branch} is never allowed: it is the default branch.',
+  pushFailed: 'Could not push.',
+  pushed: 'Pushed',
+  pushTitle: 'Push branch',
+  pushBody:
+    'Sends the commits of {branch} to the remote. Commits you have not made yet are not included.',
+  done: 'Done',
+  pushedTo: 'Pushed {branch} to {remote} at {commit}.',
+  remote: 'Remote',
+  remoteName: 'Use the remote’s name, for example origin.',
+  force: 'Force push (only if the remote has not changed since you last fetched)',
+  forceNever: 'Never allowed for a protected or the default branch.',
+  forceHint: 'Replaces the remote branch with yours. Use it only on your own branches.',
+  push: 'Push',
+  hostsFailed: 'Could not load the Git hosts.',
+  repoUnknown: 'The remote does not say which repository it is. Enter it as owner/name.',
+  noHost: 'No connected Git host matches this repository’s remote.',
+  sameBranch: 'The branch to merge into is the branch the session works on. Create a branch first.',
+  prFailed: 'Could not open the pull request.',
+  prTitle: 'Open a pull request',
+  prBody: 'Pushes {branch} and opens a pull request for it on the connected Git host.',
+  loadingHosts: 'Loading the Git hosts',
+  loadingHostsDots: 'Loading Git hosts…',
+  noHosts: 'No Git host is connected yet.',
+  connectHost: 'Connect a Git host in Settings → Code',
+  close: 'Close',
+  onDefault: 'The session is on {branch}, the default branch. A pull request needs its own branch.',
+  newBranchButton: 'New branch…',
+  title: 'Title',
+  description: 'Description (optional)',
+  mergeInto: 'Merge into (optional)',
+  defaultBase: 'The repository’s default branch',
+  host: 'Git host',
+  matchingHost: 'The one that matches the remote',
+  hostOption: '{name} ({url})',
+  repo: 'Repository (owner/name)',
+  repoExample: 'team/app',
+  repoFormat: 'Use owner/name, for example team/app.',
+  draft: 'Open it as a draft',
+  pushAndOpen: 'Push and open',
+});
 
 // ---- branch ---------------------------------------------------------------------------------
 
@@ -54,7 +123,7 @@ function BranchForm({
     try {
       onCreated(await m6.createCodeBranch(session.id, name.trim()));
     } catch (err) {
-      setError(errorMessage(err, 'Could not create the branch.'));
+      setError(errorMessage(err, GIT_TEXT.branchFailed));
       setBusy(false);
     }
   };
@@ -62,8 +131,12 @@ function BranchForm({
   return (
     <Dialog
       open
-      title="New branch"
-      description={`Starts at the current commit${session.repo?.branch ? ` of ${session.repo.branch}` : ''}. Nova switches to it without changing any file.`}
+      title={GIT_TEXT.newBranch}
+      description={
+        session.repo?.branch
+          ? GIT_TEXT.startsAtOf({ branch: session.repo.branch })
+          : GIT_TEXT.startsAt
+      }
       onClose={onClose}
       initialFocusRef={first}
     >
@@ -76,16 +149,13 @@ function BranchForm({
       >
         <TextField
           ref={first}
-          label="Branch name"
+          label={GIT_TEXT.branchName}
           value={name}
           maxLength={200}
           autoComplete="off"
           spellCheck={false}
-          hint={
-            slug
-              ? `The branch will be nova/${slug} (with a short suffix if that is taken).`
-              : 'Use letters and digits; Nova adds the nova/ prefix.'
-          }
+          dir="ltr"
+          hint={slug ? GIT_TEXT.willBe({ slug }) : GIT_TEXT.useLetters}
           onChange={(e) => setName(e.target.value)}
         />
         {error ? (
@@ -94,9 +164,9 @@ function BranchForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{GIT_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !slug}>
-            {busy ? <Spinner /> : null} Create branch
+            {busy ? <Spinner /> : null} {GIT_TEXT.createBranch}
           </Button>
         </div>
       </form>
@@ -162,17 +232,16 @@ export function readRefusal(err: unknown, fallback: string): PushRefusal {
   if (reason === 'remote_environment')
     return {
       kind: 'other',
-      message: 'Pushing works only for sessions whose folder is on the Hub.',
+      message: GIT_TEXT.pushRemote,
     };
-  if (reason === 'detached_head')
-    return { kind: 'other', message: 'HEAD is detached. Commit on a branch first.' };
+  if (reason === 'detached_head') return { kind: 'other', message: GIT_TEXT.detached };
   return { kind: 'other', message: errorMessage(err, fallback) };
 }
 
 function guardText(g: GuardedBranch): string {
   return g.protected
-    ? `${g.branch} is a protected branch.`
-    : `${g.branch} is the repository’s default branch.`;
+    ? GIT_TEXT.protectedBranch({ branch: g.branch })
+    : GIT_TEXT.defaultBranch({ branch: g.branch });
 }
 
 /** Type-to-confirm for a protected or default branch. */
@@ -189,15 +258,15 @@ function ConfirmBranch({
   return (
     <div className="code-callout" data-tone="warn">
       <p>
-        <Icon name="alert" /> {guardText(guard)} Pushing there changes what everyone works from.
-        Type the branch name exactly to confirm.
+        <Icon name="alert" /> {guardText(guard)} {GIT_TEXT.confirmNote}
       </p>
       <TextField
-        label={`Type ${guard.branch} to confirm`}
+        label={GIT_TEXT.typeToConfirm({ branch: guard.branch })}
         value={value}
         autoComplete="off"
         spellCheck={false}
-        error={value && !ok ? 'The name does not match.' : undefined}
+        dir="ltr"
+        error={value && !ok ? GIT_TEXT.noMatch : undefined}
         onChange={(e) => onChange(e.target.value)}
       />
     </div>
@@ -209,18 +278,16 @@ function SecretFindings({ findings }: { findings: SecretFinding[] }) {
   return (
     <div className="code-callout" data-tone="danger" role="alert">
       <p>
-        <Icon name="shield" /> Nothing was pushed: the commits look like they contain secrets.
-        Remove them from the commits, then push again.
+        <Icon name="shield" /> {GIT_TEXT.secrets}
       </p>
       {findings.length ? (
-        <ul className="code-findings-list" aria-label="Possible secrets">
+        <ul className="code-findings-list" aria-label={GIT_TEXT.possibleSecrets}>
           {findings.map((f, i) => (
             <li key={`${f.path}:${f.line}:${i}`}>
               <span className="code-path">
-                {f.path}
-                {f.line ? `, line ${f.line}` : ''}
+                {f.line ? GIT_TEXT.atLine({ path: f.path, line: String(f.line) }) : f.path}
               </span>{' '}
-              <span className="muted">({f.rule || 'secret'})</span>
+              <span className="muted">({f.rule || GIT_TEXT.secret})</span>
               {f.preview ? <code className="code-preview">{f.preview}</code> : null}
             </li>
           ))}
@@ -238,8 +305,9 @@ function RefusalView({ refusal }: { refusal: PushRefusal | null }): ReactNode {
     case 'force':
       return (
         <p className="nv-field-error" role="alert">
-          Force-pushing {refusal.guard.branch} is never allowed:{' '}
-          {refusal.guard.protected ? 'it is protected' : 'it is the default branch'}.
+          {refusal.guard.protected
+            ? GIT_TEXT.forceProtected({ branch: refusal.guard.branch })
+            : GIT_TEXT.forceDefault({ branch: refusal.guard.branch })}
         </p>
       );
     case 'secrets':
@@ -323,7 +391,7 @@ function PushForm({
       setDone(r);
       onPushed(r);
     } catch (err) {
-      const r = readRefusal(err, 'Could not push.');
+      const r = readRefusal(err, GIT_TEXT.pushFailed);
       if (r.kind === 'confirm' || r.kind === 'force') {
         setGuard(r.guard);
         if (r.kind === 'force') setForce(false);
@@ -337,19 +405,13 @@ function PushForm({
   return (
     <Dialog
       open
-      title={done ? 'Pushed' : 'Push branch'}
-      description={
-        done
-          ? undefined
-          : branch
-            ? `Sends the commits of ${branch} to the remote. Commits you have not made yet are not included.`
-            : 'HEAD is detached. Commit on a branch first.'
-      }
+      title={done ? GIT_TEXT.pushed : GIT_TEXT.pushTitle}
+      description={done ? undefined : branch ? GIT_TEXT.pushBody({ branch }) : GIT_TEXT.detached}
       onClose={onClose}
       footer={
         done ? (
           <Button ref={doneRef} variant="primary" onClick={onClose}>
-            Done
+            {GIT_TEXT.done}
           </Button>
         ) : undefined
       }
@@ -357,8 +419,12 @@ function PushForm({
       {done ? (
         <>
           <p role="status">
-            <Icon name="check" /> Pushed {done.branch} to {done.remote} at{' '}
-            <code title={done.sha}>{shortSha(done.sha)}</code>.
+            <Icon name="check" />{' '}
+            {rich(GIT_TEXT.pushedTo, {
+              branch: done.branch,
+              remote: done.remote,
+              commit: <code title={done.sha}>{shortSha(done.sha)}</code>,
+            })}
           </p>
           {!done.hooksRan && done.hooksNote ? (
             <p className="code-hooks-note" role="note">
@@ -375,12 +441,13 @@ function PushForm({
           }}
         >
           <TextField
-            label="Remote"
+            label={GIT_TEXT.remote}
             value={remote}
             maxLength={100}
             autoComplete="off"
             spellCheck={false}
-            error={remoteOk ? undefined : 'Use the remote’s name, for example origin.'}
+            dir="ltr"
+            error={remoteOk ? undefined : GIT_TEXT.remoteName}
             onChange={(e) => setRemote(e.target.value)}
           />
           {guard ? <ConfirmBranch guard={guard} value={typed} onChange={setTyped} /> : null}
@@ -392,22 +459,20 @@ function PushForm({
               onChange={(e) => setForce(e.target.checked)}
               aria-describedby={hintId}
             />
-            Force push (only if the remote has not changed since you last fetched)
+            {GIT_TEXT.force}
           </label>
           <span id={hintId} className="nv-field-hint">
-            {guard
-              ? 'Never allowed for a protected or the default branch.'
-              : 'Replaces the remote branch with yours. Use it only on your own branches.'}
+            {guard ? GIT_TEXT.forceNever : GIT_TEXT.forceHint}
           </span>
           <RefusalView refusal={refusal} />
           <div className="nv-dialog-footer">
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={onClose}>{GIT_TEXT.cancel}</Button>
             <Button
               type="submit"
               variant="primary"
               disabled={busy || !branch || !confirmed || !remoteOk}
             >
-              {busy ? <Spinner /> : null} Push
+              {busy ? <Spinner /> : null} {GIT_TEXT.push}
             </Button>
           </div>
         </form>
@@ -479,7 +544,7 @@ function PullRequestForm({
       (err: unknown) => {
         if (!alive) return;
         setHosts([]);
-        setHostsError(errorMessage(err, 'Could not load the Git hosts.'));
+        setHostsError(errorMessage(err, GIT_TEXT.hostsFailed));
       },
     );
     return () => {
@@ -513,21 +578,20 @@ function PullRequestForm({
         setNeedsRepo(true);
         setRefusal({
           kind: 'other',
-          message: 'The remote does not say which repository it is. Enter it as owner/name.',
+          message: GIT_TEXT.repoUnknown,
         });
       } else if (reason === 'no_git_host') {
         setRefusal({
           kind: 'other',
-          message: 'No connected Git host matches this repository’s remote.',
+          message: GIT_TEXT.noHost,
         });
       } else if (reason === 'same_branch') {
         setRefusal({
           kind: 'other',
-          message:
-            'The branch to merge into is the branch the session works on. Create a branch first.',
+          message: GIT_TEXT.sameBranch,
         });
       } else {
-        const r = readRefusal(err, 'Could not open the pull request.');
+        const r = readRefusal(err, GIT_TEXT.prFailed);
         if (r.kind === 'confirm') setGuard(r.guard);
         setRefusal(r);
       }
@@ -538,29 +602,25 @@ function PullRequestForm({
   return (
     <Dialog
       open
-      title="Open a pull request"
-      description={
-        branch
-          ? `Pushes ${branch} and opens a pull request for it on the connected Git host.`
-          : 'HEAD is detached. Commit on a branch first.'
-      }
+      title={GIT_TEXT.prTitle}
+      description={branch ? GIT_TEXT.prBody({ branch }) : GIT_TEXT.detached}
       onClose={onClose}
       initialFocusRef={first}
     >
       {hosts === null ? (
         <p className="muted">
-          <Spinner label="Loading the Git hosts" /> Loading Git hosts…
+          <Spinner label={GIT_TEXT.loadingHosts} /> {GIT_TEXT.loadingHostsDots}
         </p>
       ) : !hosts.length ? (
         <div className="stack">
           <p className="ws-warning" role="note">
-            <Icon name="alert" /> {hostsError ?? 'No Git host is connected yet.'}
+            <Icon name="alert" /> {hostsError ?? GIT_TEXT.noHosts}
           </p>
           <p>
-            <AppLink to="/settings/code">Connect a Git host in Settings → Code</AppLink>
+            <AppLink to="/settings/code">{GIT_TEXT.connectHost}</AppLink>
           </p>
           <div className="nv-dialog-footer">
-            <Button onClick={onClose}>Close</Button>
+            <Button onClick={onClose}>{GIT_TEXT.close}</Button>
           </div>
         </div>
       ) : (
@@ -575,17 +635,16 @@ function PullRequestForm({
           {onDefault ? (
             <div className="code-callout" data-tone="warn" role="note">
               <p>
-                <Icon name="alert" /> The session is on {branch}, the default branch. A pull request
-                needs its own branch.
+                <Icon name="alert" /> {GIT_TEXT.onDefault({ branch: branch ?? '' })}
               </p>
               <Button onClick={onNewBranch}>
-                <Icon name="branch" /> New branch…
+                <Icon name="branch" /> {GIT_TEXT.newBranchButton}
               </Button>
             </div>
           ) : null}
           <TextField
             ref={first}
-            label="Title"
+            label={GIT_TEXT.title}
             value={title}
             maxLength={256}
             required
@@ -594,7 +653,7 @@ function PullRequestForm({
           />
           <div className="nv-field">
             <label className="nv-field-label" htmlFor={`${id}-body`}>
-              Description (optional)
+              {GIT_TEXT.description}
             </label>
             <textarea
               id={`${id}-body`}
@@ -606,46 +665,50 @@ function PullRequestForm({
             />
           </div>
           <TextField
-            label="Merge into (optional)"
+            label={GIT_TEXT.mergeInto}
             value={base}
             maxLength={250}
             autoComplete="off"
             spellCheck={false}
-            placeholder="The repository’s default branch"
+            placeholder={GIT_TEXT.defaultBase}
             onChange={(e) => setBase(e.target.value)}
           />
           {hosts.length > 1 ? (
             <SelectField
-              label="Git host"
+              label={GIT_TEXT.host}
               value={hostId}
               onChange={setHostId}
               options={[
-                { value: '', label: 'The one that matches the remote' },
-                ...hosts.map((h) => ({ value: h.id, label: `${h.label} (${h.webUrl})` })),
+                { value: '', label: GIT_TEXT.matchingHost },
+                ...hosts.map((h) => ({
+                  value: h.id,
+                  label: GIT_TEXT.hostOption({ name: h.label, url: h.webUrl }),
+                })),
               ]}
             />
           ) : null}
           {needsRepo ? (
             <TextField
-              label="Repository (owner/name)"
+              label={GIT_TEXT.repo}
               value={repo}
               autoComplete="off"
               spellCheck={false}
-              placeholder="team/app"
-              error={repo && !repoOk ? 'Use owner/name, for example team/app.' : undefined}
+              dir="ltr"
+              placeholder={GIT_TEXT.repoExample}
+              error={repo && !repoOk ? GIT_TEXT.repoFormat : undefined}
               onChange={(e) => setRepo(e.target.value)}
             />
           ) : null}
           <label className="code-check">
             <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} />
-            Open it as a draft
+            {GIT_TEXT.draft}
           </label>
           {guard ? <ConfirmBranch guard={guard} value={typed} onChange={setTyped} /> : null}
           <RefusalView refusal={refusal} />
           <div className="nv-dialog-footer">
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={onClose}>{GIT_TEXT.cancel}</Button>
             <Button type="submit" variant="primary" disabled={!canOpen}>
-              {busy ? <Spinner /> : null} Push and open
+              {busy ? <Spinner /> : null} {GIT_TEXT.pushAndOpen}
             </Button>
           </div>
         </form>

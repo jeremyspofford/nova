@@ -4,20 +4,58 @@
 // step; it reads the record and never runs anything again. Browser and screen actions (kind
 // `computer`) show their before/after screenshots under the step (FR-098).
 import { useCallback, useEffect, useId, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { ActivityItemView } from '@nova/shared';
 import { Button, Icon, Spinner, type IconName } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { Shots } from '../computers/Shots.tsx';
 import { useServices } from '../services.tsx';
 import { useInterval } from '../settings/common.ts';
+import { WORK_TEXT } from './format.ts';
 
-const KIND: Record<ActivityItemView['kind'], { icon: IconName; text: string }> = {
-  turn: { icon: 'chat', text: 'Turn' },
-  tool_call: { icon: 'tool', text: 'Tool call' },
-  approval: { icon: 'shield', text: 'Approval' },
-  policy: { icon: 'shield', text: 'Policy' },
-  notice: { icon: 'alert', text: 'Notice' },
-  computer: { icon: 'eye', text: 'Computer' },
+/** The activity trace. Step titles and statuses are the Hub's record (English, D9). */
+export const ACTIVITY_TEXT = defineMessages('work.activity', {
+  kind: {
+    turn: 'Turn',
+    tool_call: 'Tool call',
+    approval: 'Approval',
+    policy: 'Policy',
+    notice: 'Notice',
+    computer: 'Computer',
+  },
+  loadFailed: 'Could not load the activity.',
+  heading: 'Activity',
+  refresh: 'Refresh',
+  replay: 'Replay',
+  replayHint: 'Replay shows the recorded steps one at a time. Nothing runs again.',
+  previous: 'Previous step',
+  next: 'Next step',
+  pause: 'Pause replay',
+  play: 'Play',
+  exit: 'Exit replay',
+  step: 'Step {n} of {total}',
+  /** The replayed step with its kind and title: "Step 2 of 5: Tool call, Read the report". */
+  stepOf: 'Step {n} of {total}: {kind}, {title}',
+  loading: 'Loading the activity',
+  empty: 'Nothing has happened in this run yet.',
+  trace: 'Activity trace',
+  /** Read before a step's title: "Tool call:". */
+  kindLabel: '{kind}:',
+  kindTerm: 'Kind',
+  status: 'Status',
+  time: 'Time',
+  turn: 'Turn',
+  call: 'Call',
+  details: 'Details',
+});
+
+const KIND_ICON: Record<ActivityItemView['kind'], IconName> = {
+  turn: 'chat',
+  tool_call: 'tool',
+  approval: 'shield',
+  policy: 'shield',
+  notice: 'alert',
+  computer: 'eye',
 };
 
 export const REPLAY_STEP_MS = 1200;
@@ -26,7 +64,14 @@ function timeOf(ts: string): string {
   const d = new Date(ts);
   return Number.isNaN(d.getTime())
     ? ts
-    : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    : fmt.time(d, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function dateTimeOf(ts: string): string {
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime())
+    ? ts
+    : fmt.dateTime(d, { dateStyle: 'medium', timeStyle: 'medium' });
 }
 
 /** The id of the trace's section, the target of "See the trace" links. */
@@ -57,7 +102,7 @@ export function ActivityTrace({
         setItems(list);
         setError(null);
       },
-      (err: unknown) => setError(errorMessage(err, 'Could not load the activity.')),
+      (err: unknown) => setError(errorMessage(err, ACTIVITY_TEXT.loadFailed)),
     );
   }, [api, refId]);
 
@@ -86,14 +131,15 @@ export function ActivityTrace({
 
   const shown = items && at !== null ? items.slice(0, at + 1) : (items ?? []);
   const current = at !== null ? items?.[at] : undefined;
+  const S = ACTIVITY_TEXT;
 
   return (
     <section id={ACTIVITY_ID} className="work-activity" aria-labelledby={headingId} tabIndex={-1}>
       <div className="ws-section-header">
-        <h2 id={headingId}>Activity</h2>
+        <h2 id={headingId}>{S.heading}</h2>
         <div className="ws-toolbar">
           <Button variant="ghost" onClick={() => setManual((n) => n + 1)}>
-            <Icon name="refresh" /> Refresh
+            <Icon name="refresh" /> {S.refresh}
           </Button>
           {at === null ? (
             <Button
@@ -103,16 +149,14 @@ export function ActivityTrace({
                 setPlaying(false);
               }}
             >
-              Replay
+              {S.replay}
             </Button>
           ) : null}
         </div>
       </div>
       {at !== null && items ? (
-        <div className="work-replay" role="group" aria-label="Replay">
-          <p className="muted ws-flush">
-            Replay shows the recorded steps one at a time. Nothing runs again.
-          </p>
+        <div className="work-replay" role="group" aria-label={S.replay}>
+          <p className="muted ws-flush">{S.replayHint}</p>
           <div className="ws-toolbar">
             <Button
               disabled={at <= 0}
@@ -121,7 +165,7 @@ export function ActivityTrace({
                 setAt(Math.max(0, at - 1));
               }}
             >
-              <Icon name="back" /> Previous step
+              <Icon name="back" /> {S.previous}
             </Button>
             <Button
               disabled={at >= count - 1}
@@ -130,14 +174,14 @@ export function ActivityTrace({
                 setAt(Math.min(count - 1, at + 1));
               }}
             >
-              Next step <Icon name="forward" />
+              {S.next} <Icon name="forward" />
             </Button>
             <Button
               aria-pressed={playing}
               disabled={!playing && at >= count - 1}
               onClick={() => setPlaying((p) => !p)}
             >
-              {playing ? 'Pause replay' : 'Play'}
+              {playing ? S.pause : S.play}
             </Button>
             <Button
               variant="ghost"
@@ -146,28 +190,34 @@ export function ActivityTrace({
                 setAt(null);
               }}
             >
-              Exit replay
+              {S.exit}
             </Button>
           </div>
           <p role="status" className="work-replay-status">
-            Step {at + 1} of {count}
-            {current ? `: ${KIND[current.kind].text}, ${current.title}` : ''}
+            {current
+              ? S.stepOf({
+                  n: at + 1,
+                  total: count,
+                  kind: S.kind[current.kind],
+                  title: current.title,
+                })
+              : S.step({ n: at + 1, total: count })}
           </p>
         </div>
       ) : null}
       {error ? (
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => setManual((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setManual((n) => n + 1)}>{WORK_TEXT.retry}</Button>
         </div>
       ) : items === null ? (
         <p className="muted">
-          <Spinner label="Loading the activity" /> Loading…
+          <Spinner label={S.loading} /> {WORK_TEXT.loading}
         </p>
       ) : items.length === 0 ? (
-        <p className="muted">Nothing has happened in this run yet.</p>
+        <p className="muted">{S.empty}</p>
       ) : (
-        <ol className="activity-list work-trace" aria-label="Activity trace">
+        <ol className="activity-list work-trace" aria-label={S.trace}>
           {shown.map((it, i) => {
             const expanded = open.has(it.id) || i === at;
             return (
@@ -183,8 +233,8 @@ export function ActivityTrace({
                   aria-expanded={expanded}
                   onClick={() => toggle(it.id)}
                 >
-                  <Icon name={KIND[it.kind].icon} />
-                  <span className="nv-vh">{KIND[it.kind].text}:</span>{' '}
+                  <Icon name={KIND_ICON[it.kind]} />
+                  <span className="nv-vh">{S.kindLabel({ kind: S.kind[it.kind] })}</span>{' '}
                   <span className="activity-title">{it.title}</span>
                   {it.status ? <span className="activity-status">{it.status}</span> : null}
                   <time className="muted activity-time" dateTime={it.ts}>
@@ -196,19 +246,19 @@ export function ActivityTrace({
                 ) : null}
                 {expanded ? (
                   <dl className="ws-dl work-trace-detail">
-                    <dt>Kind</dt>
-                    <dd>{KIND[it.kind].text}</dd>
+                    <dt>{S.kindTerm}</dt>
+                    <dd>{S.kind[it.kind]}</dd>
                     {it.status ? (
                       <>
-                        <dt>Status</dt>
+                        <dt>{S.status}</dt>
                         <dd>{it.status}</dd>
                       </>
                     ) : null}
-                    <dt>Time</dt>
-                    <dd>{new Date(it.ts).toLocaleString()}</dd>
+                    <dt>{S.time}</dt>
+                    <dd>{dateTimeOf(it.ts)}</dd>
                     {it.turnId ? (
                       <>
-                        <dt>Turn</dt>
+                        <dt>{S.turn}</dt>
                         <dd>
                           <code>{it.turnId}</code>
                         </dd>
@@ -216,7 +266,7 @@ export function ActivityTrace({
                     ) : null}
                     {it.callId ? (
                       <>
-                        <dt>Call</dt>
+                        <dt>{S.call}</dt>
                         <dd>
                           <code>{it.callId}</code>
                         </dd>
@@ -224,7 +274,7 @@ export function ActivityTrace({
                     ) : null}
                     {it.detail ? (
                       <>
-                        <dt>Details</dt>
+                        <dt>{S.details}</dt>
                         <dd>
                           <pre className="tool-card-pre" data-untrusted="true">
                             {it.detail}

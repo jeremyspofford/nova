@@ -5,11 +5,15 @@ import { contracts } from '@nova/contracts';
 import {
   BUILTIN_THEMES,
   COLOR_TOKENS,
+  RADIUS_TOKENS,
+  THEME_FONTS,
+  THEME_TOKENS,
   applyTheme,
   contrastRatio,
   dark,
   light,
   mergeTheme,
+  mixHex,
   parseHex,
   resolveTheme,
   type Theme,
@@ -60,8 +64,21 @@ describe('built-in themes', () => {
         contrastRatio(t['--u-accent-contrast']!, t['--u-accent']!),
         'accent text',
       ).toBeGreaterThanOrEqual(4.5);
+      // The edge of a field (--u-control-border in tokens.css: 70 % text-muted, 30 % border)
+      // stands out 3:1 from every surface it sits on (WCAG 1.4.11).
+      const edge = mixHex(t['--u-border']!, t['--u-text-muted']!, 0.7);
+      for (const bg of ['--u-bg', '--u-surface', '--u-surface-2'] as const)
+        expect(contrastRatio(edge, t[bg]!), `field edge on ${bg}`).toBeGreaterThanOrEqual(3);
     },
   );
+
+  it('derives the field edge in tokens.css from the theme', () => {
+    const css = readFileSync(join(here, '../src/tokens.css'), 'utf8');
+    expect(css).toContain(
+      '--u-control-border: color-mix(in srgb, var(--u-text-muted) 70%, var(--u-border));',
+    );
+    expect(css).toMatch(/\.nv-input \{[^}]*border: 1px solid var\(--u-control-border\)/);
+  });
 });
 
 describe('theme helpers', () => {
@@ -91,6 +108,16 @@ describe('theme helpers', () => {
     expect(mergeTheme({ ...custom, variant: 'light', fonts: undefined }).tokens['--u-text']).toBe(
       light.tokens['--u-text'],
     );
+  });
+
+  // FR-011: what a custom theme may set; every one is a token tokens.css defines.
+  it('lists the theme tokens: the color roles and the radii', () => {
+    expect(THEME_TOKENS).toEqual([...COLOR_TOKENS, ...RADIUS_TOKENS]);
+    const css = readFileSync(join(here, '../src/tokens.css'), 'utf8');
+    for (const token of [...THEME_TOKENS, ...THEME_FONTS])
+      expect(css, token).toContain(`${token}:`);
+    expect(THEME_TOKENS).not.toContain('--u-text-md');
+    expect(THEME_TOKENS).not.toContain('--u-dur');
   });
 
   it('applies tokens to an element', () => {

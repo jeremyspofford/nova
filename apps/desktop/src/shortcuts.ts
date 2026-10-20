@@ -4,6 +4,7 @@
 // registers what the OS grants and says which keys it could not have.
 import type { ShellShortcutAction, ShellShortcutView } from '@nova/shared';
 import { SHELL_SHORTCUT_ACTIONS } from '@nova/shared';
+import { SHORTCUT_TEXT } from './text.ts';
 
 export const DEFAULT_SHORTCUTS: Record<ShellShortcutAction, string> = {
   quickChat: 'Control+Alt+N',
@@ -69,32 +70,29 @@ export function parseAccelerator(raw: string): AcceleratorCheck {
   const parts = text.split('+').map((p) => p.trim());
   if (plusKey) parts.push('Plus');
   if (parts.length < 2 || parts.length > 5 || parts.some((p) => p === ''))
-    return { ok: false, reason: 'Use one or more modifiers and one key, like Control+Alt+N.' };
+    return { ok: false, reason: SHORTCUT_TEXT.format({ example: 'Control+Alt+N' }) };
   const keyRaw = parts.at(-1) ?? '';
   const key = normalizeKey(keyRaw);
-  if (!key) return { ok: false, reason: `${keyRaw || 'That'} is not a key the app can use.` };
+  if (!key)
+    return {
+      ok: false,
+      reason: keyRaw ? SHORTCUT_TEXT.notAKey({ key: keyRaw }) : SHORTCUT_TEXT.notAKeyEmpty,
+    };
   const mods: string[] = [];
   for (const m of parts.slice(0, -1)) {
     const mod = MODIFIERS[m.toLowerCase()];
-    if (!mod)
-      return {
-        ok: false,
-        reason: `${m} is not a modifier (use Control, Alt, Shift, Super or Command).`,
-      };
+    if (!mod) return { ok: false, reason: SHORTCUT_TEXT.notAModifier({ key: m }) };
     if (!mods.includes(mod)) mods.push(mod);
   }
   // Two modifiers besides Shift: a global key is taken from every other app, so the everyday
   // keys (Ctrl+C, Ctrl+V, Alt+Tab, Alt+F4, Super+L…) are never available to it.
   if (mods.filter((m) => m !== 'Shift').length < 2)
-    return {
-      ok: false,
-      reason: 'A global shortcut needs two of Control, Alt, Super and Command, like Control+Alt+N.',
-    };
+    return { ok: false, reason: SHORTCUT_TEXT.twoModifiers({ example: 'Control+Alt+N' }) };
   const order = ['CommandOrControl', 'Command', 'Control', 'Alt', 'AltGr', 'Shift', 'Super'];
   mods.sort((a, b) => order.indexOf(a) - order.indexOf(b));
   const accelerator = [...mods, key].join('+');
   if (reservedBySystem(accelerator))
-    return { ok: false, reason: `${accelerator} belongs to the operating system.` };
+    return { ok: false, reason: SHORTCUT_TEXT.reserved({ key: accelerator }) };
   return { ok: true, accelerator };
 }
 
@@ -206,20 +204,14 @@ export function registerShortcuts(
   });
 }
 
-const ACTION_LABEL: Record<ShellShortcutAction, string> = {
-  quickChat: 'Open quick chat',
-  attachWindow: 'Attach window',
-};
-
 /** One sentence per shortcut that did not register, for the tray and Settings → Keyboard. */
 export function shortcutProblems(views: readonly ShellShortcutView[]): string[] {
   return views.flatMap((v) => {
     if (!v.problem) return [];
     const key = v.label ?? v.accelerator ?? '';
-    if (v.problem === 'conflict')
-      return [`${ACTION_LABEL[v.action]}: ${key} is used by another app. Choose another key.`];
-    if (v.problem === 'duplicate')
-      return [`${ACTION_LABEL[v.action]}: ${key} is already used by another Nova shortcut.`];
-    return [`${ACTION_LABEL[v.action]}: ${key} is not a valid shortcut.`];
+    const action = SHORTCUT_TEXT.action[v.action];
+    if (v.problem === 'conflict') return [SHORTCUT_TEXT.conflict({ action, key })];
+    if (v.problem === 'duplicate') return [SHORTCUT_TEXT.duplicate({ action, key })];
+    return [SHORTCUT_TEXT.invalid({ action, key })];
   });
 }

@@ -4,6 +4,7 @@
 // dialog; `/code?new=1` opens it too. The Code tabs lead to Environments and Worktrees (M6).
 import { useCallback, useEffect, useState } from 'react';
 import type { CodeSessionView, EnvironmentView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, EmptyState, Icon, Spinner, StatusChip, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { navigate, useLocation } from '../router.ts';
@@ -14,6 +15,24 @@ import { useCodeEvents, useCoalesced } from './events.ts';
 import { branchText, sessionPath, sessionTitle, sortSessions } from './labels.ts';
 import { MODE_LABEL } from './modes.ts';
 import { NewSessionDialog } from './NewSessionDialog.tsx';
+
+export const SESSIONS_TEXT = defineMessages('code.sessions', {
+  loadFailed: 'Could not load Code sessions.',
+  title: 'Code',
+  new: 'New session',
+  intro:
+    'A Code session works in one folder on the Hub with a permission mode you choose. Its edits show as diffs you accept or reject.',
+  retry: 'Retry',
+  loading: 'Loading Code sessions',
+  emptyTitle: 'No Code sessions yet',
+  emptyBody: 'Start a session in a project folder or any folder on the Hub.',
+  start: 'Start a session',
+  list: 'Code sessions',
+  mode: 'Mode: {mode}',
+  on: 'On {environment}',
+  updated: 'Updated {when}',
+  started: 'Session “{title}” started.',
+});
 
 export function SessionList({ visible }: { visible: boolean }) {
   const { api } = useServices();
@@ -39,7 +58,7 @@ export function SessionList({ visible }: { visible: boolean }) {
           setSessions(sortSessions(items));
           setError(null);
         },
-        (err: unknown) => setError(errorMessage(err, 'Could not load Code sessions.')),
+        (err: unknown) => setError(errorMessage(err, SESSIONS_TEXT.loadFailed)),
       ),
     [api],
   );
@@ -68,34 +87,31 @@ export function SessionList({ visible }: { visible: boolean }) {
   return (
     <div className="ws-page code-sessions-page">
       <header className="ws-page-header">
-        <h1>Code</h1>
+        <h1>{SESSIONS_TEXT.title}</h1>
         <Button variant="primary" onClick={() => setCreating(true)}>
-          <Icon name="plus" /> New session
+          <Icon name="plus" /> {SESSIONS_TEXT.new}
         </Button>
       </header>
       <CodeNav current="sessions" />
-      <p className="muted">
-        A Code session works in one folder on the Hub with a permission mode you choose. Its edits
-        show as diffs you accept or reject.
-      </p>
+      <p className="muted">{SESSIONS_TEXT.intro}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={reload}>Retry</Button>
+          <Button onClick={reload}>{SESSIONS_TEXT.retry}</Button>
         </div>
       ) : null}
-      {sessions === null && !error ? <Spinner label="Loading Code sessions" /> : null}
+      {sessions === null && !error ? <Spinner label={SESSIONS_TEXT.loading} /> : null}
       {sessions?.length === 0 ? (
         <EmptyState
-          title="No Code sessions yet"
-          description="Start a session in a project folder or any folder on the Hub."
+          title={SESSIONS_TEXT.emptyTitle}
+          description={SESSIONS_TEXT.emptyBody}
           icon="code"
           level={2}
-          action={<Button onClick={() => setCreating(true)}>Start a session</Button>}
+          action={<Button onClick={() => setCreating(true)}>{SESSIONS_TEXT.start}</Button>}
         />
       ) : null}
       {sessions?.length ? (
-        <ul className="code-session-list" aria-label="Code sessions">
+        <ul className="code-session-list" aria-label={SESSIONS_TEXT.list}>
           {sessions.map((s) => {
             const title = sessionTitle(s);
             const env = envOf(s);
@@ -105,6 +121,7 @@ export function SessionList({ visible }: { visible: boolean }) {
                   <a
                     href={sessionPath(s.id)}
                     className="code-session-link"
+                    dir="auto"
                     onClick={(e) => {
                       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
                       e.preventDefault();
@@ -116,17 +133,19 @@ export function SessionList({ visible }: { visible: boolean }) {
                   <StatusChip status={s.derived.status} reason={s.derived.reason ?? undefined} />
                 </div>
                 <span className="muted code-session-meta">
-                  <span className="code-path">{s.folder.path}</span>
+                  <span className="code-path" dir="ltr">
+                    {s.folder.path}
+                  </span>
                   <span>
                     <Icon name="branch" /> {branchText(s.repo)}
                   </span>
-                  <span>Mode: {MODE_LABEL[s.permissionMode]}</span>
+                  <span>{SESSIONS_TEXT.mode({ mode: MODE_LABEL[s.permissionMode] })}</span>
                   {env ? (
                     <span>
-                      <Icon name="server" /> On {env.label}
+                      <Icon name="server" /> {SESSIONS_TEXT.on({ environment: env.label })}
                     </span>
                   ) : null}
-                  <span>Updated {formatWhen(s.updatedAt)}</span>
+                  <span>{SESSIONS_TEXT.updated({ when: formatWhen(s.updatedAt) })}</span>
                 </span>
               </li>
             );
@@ -138,7 +157,7 @@ export function SessionList({ visible }: { visible: boolean }) {
         onClose={() => setCreating(false)}
         onCreated={(s) => {
           setCreating(false);
-          toast.show(`Session “${sessionTitle(s)}” started.`, { tone: 'success' });
+          toast.show(SESSIONS_TEXT.started({ title: sessionTitle(s) }), { tone: 'success' });
           navigate(sessionPath(s.id));
         }}
       />

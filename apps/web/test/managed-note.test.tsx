@@ -5,7 +5,9 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ManagedBanner, ManagedNote } from '../src/managed/ManagedNote.tsx';
+import { RadioGroup, TextField } from '@nova/ui';
+import { ManagedBanner, ManagedLockNotes, ManagedNote } from '../src/managed/ManagedNote.tsx';
+import { HostListEditor } from '../src/network/HostListEditor.tsx';
 import { SwitchField } from '../src/settings/controls.tsx';
 import { useSetting } from '../src/settings.tsx';
 import {
@@ -105,6 +107,58 @@ describe('the lock note', () => {
     const note = document.getElementById('lock-1')!;
     expect(note.tagName).toBe('P');
     expect(await within(note).findByText('(policy file)')).toBeTruthy();
+  });
+});
+
+describe('locked fields across Settings (WCAG 1.3.1, FR-106)', () => {
+  /** The ids a control's aria-describedby names, read as text. */
+  const described = (el: HTMLElement) =>
+    (el.getAttribute('aria-describedby') ?? '')
+      .split(' ')
+      .map((id) => document.getElementById(id)?.textContent ?? '')
+      .join(' | ');
+
+  it('a locked radio group, text field and host list name the source and are linked', async () => {
+    // Every @nova/ui field draws the app's note through ManagedLockNotes (App.tsx does this).
+    const view = lockPolicy({
+      settings: [
+        { key: 'tools.approvalPolicy', value: 'always', channel: 'local', derivedFrom: null },
+        { key: 'network.egressAllow', value: ['a.test'], channel: 'local', derivedFrom: null },
+      ],
+    });
+    await renderWithManaged(
+      <ManagedLockNotes>
+        <RadioGroup
+          legend="When to ask"
+          name="p"
+          value="always"
+          onChange={() => undefined}
+          options={[{ value: 'always', label: 'Always' }]}
+          locked
+          setting="tools.approvalPolicy"
+        />
+        <TextField label="SearXNG address" locked setting="search.searxngUrl" hint="An address" />
+        <HostListEditor
+          label="Allowed hosts"
+          inputLabel="Add an allowed host"
+          removeLabel={(h) => `Remove ${h}`}
+          hosts={['a.test']}
+          locked
+          setting="network.egressAllow"
+          onChange={() => undefined}
+        />
+      </ManagedLockNotes>,
+      { managed: { view } },
+    );
+    await waitFor(() => expect(screen.getAllByText('(policy file)')).toHaveLength(3));
+    const note = 'Managed by your organization(policy file)';
+    expect(described(screen.getByRole('group', { name: 'When to ask' }))).toContain(note);
+    expect(described(screen.getByRole('radio', { name: 'Always' }))).toContain(note);
+    const field = screen.getByRole('textbox', { name: 'SearXNG address' });
+    expect(field.hasAttribute('disabled')).toBe(true);
+    expect(described(field)).toBe(`${note} | An address`);
+    expect(described(screen.getByRole('group', { name: 'Allowed hosts' }))).toContain(note);
+    expect(described(screen.getByRole('textbox', { name: 'Add an allowed host' }))).toContain(note);
   });
 });
 

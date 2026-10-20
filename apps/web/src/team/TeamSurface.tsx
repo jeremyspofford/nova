@@ -3,8 +3,10 @@
 // agents (/team/agents, one at /team/agents/:id, a new one at /team/agents/new). On desktop the
 // sections are tabs; on phones /team lists them and each one is a full page with a way back
 // (docs/04 §4.3). The people themselves and their invitations live in Settings → Members.
+import { defineMessages } from '@nova/i18n';
 import { Icon, Tabs } from '@nova/ui';
 import { useLayout } from '../hooks.ts';
+import { rich } from '../i18n/rich.tsx';
 import { navigate } from '../router.ts';
 import { followLink } from '../work/nav.tsx';
 import {
@@ -13,6 +15,7 @@ import {
   TEAM_PATH,
   TEAM_SECTIONS,
   TEAM_SECTION_INFO,
+  TEAM_TEXT,
   teamPath,
   teamSectionFrom,
   type TeamSection,
@@ -24,6 +27,13 @@ import { NewTeamAgent, TeamAgentsList } from './TeamAgentsList.tsx';
 import '../workspace.css';
 import './team.css';
 
+const SURFACE_TEXT = defineMessages('team.surface', {
+  title: 'Team',
+  intro: 'What the people of this Hub do together.',
+  sections: 'Team sections',
+  members: 'The people of this Hub and their invitations are in {link}.',
+});
+
 function panel(section: TeamSection) {
   return section === 'shared' ? <SharedList /> : <TeamAgentsList />;
 }
@@ -31,11 +41,13 @@ function panel(section: TeamSection) {
 function MembersLink() {
   return (
     <p className="muted ws-flush">
-      The people of this Hub and their invitations are in{' '}
-      <a href={MEMBERS_SETTINGS_PATH} onClick={(e) => followLink(e, MEMBERS_SETTINGS_PATH)}>
-        Settings → Members
-      </a>
-      .
+      {rich(SURFACE_TEXT.members, {
+        link: (
+          <a href={MEMBERS_SETTINGS_PATH} onClick={(e) => followLink(e, MEMBERS_SETTINGS_PATH)}>
+            {TEAM_TEXT.membersLink}
+          </a>
+        ),
+      })}
     </p>
   );
 }
@@ -53,10 +65,10 @@ export function TeamSurface({ section, id }: { section: string | null; id?: stri
       return (
         <div className="ws-page team-page">
           <header className="ws-page-header">
-            <h1>Team</h1>
+            <h1>{SURFACE_TEXT.title}</h1>
           </header>
-          <p className="muted ws-flush">What the people of this Hub do together.</p>
-          <nav aria-label="Team sections">
+          <p className="muted ws-flush">{SURFACE_TEXT.intro}</p>
+          <nav aria-label={SURFACE_TEXT.sections}>
             <ul className="team-menu">
               {TEAM_SECTIONS.map((s) => (
                 <li key={s}>
@@ -77,9 +89,9 @@ export function TeamSurface({ section, id }: { section: string | null; id?: stri
     }
     return (
       <div className="ws-page team-page">
-        <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+        <nav aria-label={TEAM_TEXT.breadcrumb} className="ws-breadcrumb">
           <a href={TEAM_PATH} onClick={(e) => followLink(e, TEAM_PATH)}>
-            <Icon name="back" /> Team
+            <Icon name="back" /> {SURFACE_TEXT.title}
           </a>
         </nav>
         <header className="ws-page-header">
@@ -94,11 +106,11 @@ export function TeamSurface({ section, id }: { section: string | null; id?: stri
   return (
     <div className="ws-page team-page">
       <header className="ws-page-header">
-        <h1>Team</h1>
+        <h1>{SURFACE_TEXT.title}</h1>
       </header>
       <MembersLink />
       <Tabs
-        label="Team sections"
+        label={SURFACE_TEXT.sections}
         className="team-tabs"
         value={value}
         onChange={(t) => navigate(teamPath(teamSectionFrom(t)), { replace: true })}

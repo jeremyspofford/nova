@@ -47,7 +47,7 @@ describe('library (FR-041)', () => {
     await renderApp({ hub, path: '/library' });
     expect(screen.getByRole('heading', { name: 'Library', level: 1 })).toBeTruthy();
     expect(await titles()).toEqual(['Launch plan', 'invoice.pdf', 'Handbook', 'Logo']);
-    expect(screen.getByText('Attachment, 2.0 KB')).toBeTruthy();
+    expect(screen.getByText('Attachment, 2 KB')).toBeTruthy();
     expect(screen.getByText('Source')).toBeTruthy();
 
     const kinds = screen.getByRole('radiogroup', { name: 'Kind' });

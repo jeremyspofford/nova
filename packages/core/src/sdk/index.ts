@@ -13,6 +13,7 @@ export {
   packBundle,
   readBundleEntries,
   safeBundlePath,
+  secretFileProblems,
   verifyBundle,
   type BundleCheck,
   type BundleReason,
@@ -41,6 +42,7 @@ export {
   EXTENSION_ROOT_VAR,
   EXTENSION_SOURCE_MAX_CHARS,
   EXTENSION_TOOL_NAME,
+  SAFE_THEME_VALUE,
   OBSERVABLE_EVENTS,
   domainCovered,
   eventAllowed,
@@ -86,6 +88,7 @@ export {
 export {
   ExtensionHost,
   MENU_PLACES,
+  extensionSecretPrefix,
   extensionSecretRef,
   toToolResult,
   type ExtensionEgress,

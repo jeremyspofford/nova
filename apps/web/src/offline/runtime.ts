@@ -5,14 +5,9 @@
 // write, on a device with a copy, is queued as a sync change. While the Hub is away it checks back
 // with growing pauses; when the Hub answers again it pulls the copy first and then sends what
 // waits, in order. It also follows the sync events on the app's one event stream.
+import { defineMessages } from '@nova/i18n';
 import { SETTINGS, isSettingKey, uuidv7, type SyncOp } from '@nova/shared';
-import {
-  ApiError,
-  errorMessage,
-  type HubRequest,
-  type LowLevelCall,
-  type OfflineHandler,
-} from '../api.ts';
+import { ApiError, type HubRequest, type LowLevelCall, type OfflineHandler } from '../api.ts';
 import { subscribeHubEvents } from '../hub-events.ts';
 import type { EventSourceFactory } from '../sse.ts';
 import { syncApi, type SyncApi, type SyncSession } from '../replica/api.ts';
@@ -20,12 +15,13 @@ import { SYNC_EVENTS, SyncEngine, type ReplicaState } from '../replica/engine.ts
 import type { Replica } from '../replica/replica.ts';
 import { indexedDbBackend, type KvBackend } from '../replica/vault.ts';
 import { threadView, type ViewSource } from '../replica/views.ts';
-import { ANSWER_NOTE, rejectionText } from './format.ts';
 import {
   answerParent,
   backoffMs,
   OutboundQueue,
+  QUEUE_NOTES,
   type QueueItem,
+  type QueueNote,
   type SendOutcome,
 } from './queue.ts';
 import { answerRead, BOOT_PATHS, ReadCache, SESSION_PATH, splitPath, V1 } from './reads.ts';
@@ -60,7 +56,13 @@ export interface RuntimeOptions {
   windowEvents?: boolean;
 }
 
-const quoted = (s: string | null) => (s?.trim() ? `“${s.trim()}”` : 'a chat');
+const RUNTIME_TEXT = defineMessages('offline.runtime', {
+  /** Thrown when a local answer cannot be kept (shown by the local answer panel). */
+  noCopy: 'This device has no offline copy.',
+});
+
+const isNote = (v: unknown): v is QueueNote =>
+  typeof v === 'string' && (QUEUE_NOTES as readonly string[]).includes(v);
 
 function isCacheable(path: string): boolean {
   const base = path.split('?')[0] ?? path;
@@ -286,7 +288,7 @@ export class OfflineRuntime implements OfflineHandler {
     const deviceId = this.engine.deviceId;
     const src = this.viewSource();
     const hlc = this.engine.tick();
-    if (!deviceId || !src || !hlc) throw new Error('This device has no offline copy.');
+    if (!deviceId || !src || !hlc) throw new Error(RUNTIME_TEXT.noCopy);
     const id = uuidv7();
     const op: SyncOp = {
       kind: 'message',
@@ -305,7 +307,7 @@ export class OfflineRuntime implements OfflineHandler {
     };
     const item = await this.queue.add({
       kind: 'answer',
-      label: `Answer from this computer's model in ${quoted(threadView(src, input.threadId)?.title ?? null)}`,
+      subject: { action: 'answer', name: threadView(src, input.threadId)?.title?.trim() || null },
       threadId: input.threadId,
       entityId: id,
       text: input.text,
@@ -389,7 +391,7 @@ export class OfflineRuntime implements OfflineHandler {
       queue: this.queue,
       tick: () => {
         const v = this.engine.tick();
-        if (!v) throw new Error('This device has no offline copy.');
+        if (!v) throw new Error(RUNTIME_TEXT.noCopy);
         return v;
       },
     };
@@ -459,18 +461,11 @@ export class OfflineRuntime implements OfflineHandler {
     const st = this.engine.state();
     const deviceId = this.engine.deviceId;
     if (!deviceId || !this.engine.replica) {
-      if (st.phase === 'loading')
-        return { kind: 'later', message: 'Waiting for the offline copy to finish loading.' };
-      return {
-        kind: 'failed',
-        code: 'no_replica',
-        message:
-          st.reason ??
-          'This device has no offline copy now, so the Hub will not take its changes. Copy what you need, then discard it.',
-      };
+      if (st.phase === 'loading') return { kind: 'later', problem: 'loading' };
+      return { kind: 'failed', code: 'no_replica', problem: 'no_replica' };
     }
     if (st.phase === 'paused')
-      return { kind: 'failed', code: 'sync_disabled', message: st.reason ?? 'Sync is off.' };
+      return { kind: 'failed', code: 'sync_disabled', problem: 'sync_disabled' };
     let ready = item;
     // Clocked for another device, or refused for its clock: stamp it again, with a new key.
     if (
@@ -491,14 +486,10 @@ export class OfflineRuntime implements OfflineHandler {
       // The copy takes the Hub's result before the change leaves the queue.
       await this.engine.pull().catch(() => undefined);
       const refused = res.results.find((r) => r.status === 'rejected');
-      if (refused) {
-        const reason = refused.reason ?? 'rejected';
-        return { kind: 'failed', code: reason, message: rejectionText(item, reason) };
-      }
+      if (refused)
+        return { kind: 'failed', code: refused.reason ?? 'rejected', problem: 'rejected' };
       const lost = res.results.some((r) => r.status === 'overwritten');
-      let note = lost
-        ? 'A newer change made elsewhere won. Yours is kept in Settings → Sync → History.'
-        : null;
+      let note: QueueNote | null = lost ? 'overwritten' : null;
       if (item.kind === 'message' && item.threadId) {
         const asked = await this.#askForAnswer(ready, item.threadId);
         if (typeof asked !== 'string' && asked !== null) return asked;
@@ -508,31 +499,23 @@ export class OfflineRuntime implements OfflineHandler {
     } catch (err) {
       if (!(err instanceof ApiError)) return { kind: 'unreachable' };
       const reason = err.body.details?.reason;
-      if (err.status === 401)
-        return {
-          kind: 'failed',
-          code: 'signed_out',
-          message:
-            'This device is signed out of the Hub, so it cannot send this. Copy what you need, then discard it.',
-        };
+      if (err.status === 401) return { kind: 'failed', code: 'signed_out', problem: 'signed_out' };
       if (err.status === 403 && reason === 'replica_not_granted')
-        return {
-          kind: 'failed',
-          code: 'no_replica',
-          message:
-            'This device no longer has an offline copy, so the Hub refuses its changes. Copy what you need, then discard it.',
-        };
+        return { kind: 'failed', code: 'no_replica', problem: 'no_replica' };
       if (err.status === 403 && reason === 'sync_disabled')
-        return {
-          kind: 'failed',
-          code: 'sync_disabled',
-          message: 'Sync is turned off on the Hub. Retry once it is on again.',
-        };
+        return { kind: 'failed', code: 'sync_disabled', problem: 'sync_disabled' };
       if (err.status === 409 && reason === 'idempotency_in_flight')
-        return { kind: 'later', message: 'The Hub is still working on it.' };
+        return { kind: 'later', problem: 'in_flight' };
+      // The Hub's own words when it gave some (English, D9), else this app's by code.
+      const said = err.body.message || null;
       if (err.status === 429 || err.status >= 500)
-        return { kind: 'later', message: errorMessage(err, 'The Hub could not take it yet.') };
-      return { kind: 'failed', code: err.body.code, message: errorMessage(err) };
+        return { kind: 'later', problem: said ? null : 'not_yet', error: said };
+      return {
+        kind: 'failed',
+        code: err.body.code,
+        problem: said ? null : 'rejected',
+        error: said,
+      };
     }
   }
 
@@ -542,7 +525,7 @@ export class OfflineRuntime implements OfflineHandler {
    * later message of the same chat waits (that one is answered, with this one in view), nor when
    * this computer's model already answered it. A note says how it went.
    */
-  async #askForAnswer(item: QueueItem, threadId: string): Promise<SendOutcome | string | null> {
+  async #askForAnswer(item: QueueItem, threadId: string): Promise<SendOutcome | QueueNote | null> {
     const items = this.queue.items();
     const after = items.slice(items.findIndex((i) => i.id === item.id) + 1);
     if (after.some((i) => i.status !== 'done' && i.kind === 'message' && i.threadId === threadId))
@@ -550,13 +533,15 @@ export class OfflineRuntime implements OfflineHandler {
     if (items.some((i) => i.kind === 'answer' && answerParent(i) === item.entityId)) return null;
     try {
       await this.#sync().answerMessage(threadId, item.entityId, `${item.idempotencyKey}-answer`);
-      return ANSWER_NOTE.requested!;
+      return 'requested';
     } catch (err) {
       if (!(err instanceof ApiError)) return { kind: 'unreachable' };
       if (err.status === 429 || err.status >= 500)
-        return { kind: 'later', message: 'The Hub could not start an answer yet.' };
+        return { kind: 'later', problem: 'answer_not_yet' };
       const reason = err.body.details?.reason;
-      return (typeof reason === 'string' ? ANSWER_NOTE[reason] : undefined) ?? ANSWER_NOTE.failed!;
+      return isNote(reason) && reason !== 'overwritten' && reason !== 'requested'
+        ? reason
+        : 'answer_failed';
     }
   }
 

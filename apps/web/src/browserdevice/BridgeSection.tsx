@@ -20,10 +20,13 @@ import {
   type DeviceView,
 } from '@nova/shared';
 import { Button, Icon, Spinner, TextField, useToast, type IconName } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { ApiError } from '../api.ts';
+import { listText } from '../devices/format.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useAnnounce, useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { useHubEvents } from '../spaces/events.ts';
 import { isOwnerOnly } from '../team/format.ts';
 import { OwnerOnlyNotice } from '../team/parts.tsx';
@@ -31,9 +34,9 @@ import { useDebounced } from '../work/events.ts';
 import { useBrowserDeviceApi, type BrowserDeviceApi } from './api-m75.ts';
 import { BRIDGE_EVENTS, eventDevice } from './events.ts';
 import {
-  BRIDGE_AUDIT_TEXT,
-  GRANT_CHIP,
+  bridgeAuditText,
   browserDeviceError,
+  grantChip,
   grantLabel,
   isDeviceActivity,
   type Tone,
@@ -41,11 +44,155 @@ import {
 import { Chip, ConfirmAction } from './parts.tsx';
 import './browserdevice.css';
 
-const HOST_HINT = 'Enter a host name such as github.com';
+export const BRIDGE_TEXT = defineMessages('browserDevice.bridge', {
+  hostHint: 'Enter a host name such as github.com',
+  chip: { off: 'Turned off', connected: 'Connected', notConnected: 'Not connected' },
+  title: 'Browser bridge',
+  summary: {
+    tabs: '{n, plural, one {# shared tab} other {# shared tabs}}',
+    sites: '{n, plural, one {# site granted} other {# sites granted}}',
+    allSites: 'all sites granted',
+    waiting: '{n, plural, other {# waiting for you}}',
+  },
+  waitingSince: 'Your browser allowed the extension here {when}',
+  confirmedAt: 'Confirmed {when}',
+  revokedAt: 'Revoked {when}',
+  notAllowedYet: 'Your browser has not allowed it yet: sharing a tab there asks',
+  confirm: 'Confirm',
+  confirmLabel: 'Confirm {label}',
+  refuse: 'Refuse',
+  refuseLabel: 'Refuse {label}',
+  revoke: 'Revoke',
+  revokeLabel: 'Revoke {label}',
+  showDetails: 'Show details',
+  hideDetails: 'Hide details',
+  intro:
+    'Lets agents act in your own browser on {name}, through the Nova extension: only in tabs you share, and only on sites you grant here. The agent’s own browser is separate and never gets your sign-ins.',
+  now: 'Now: {summary}.',
+  loadFailed: 'Could not load the browser bridge.',
+  retry: 'Retry',
+  retryBridge: 'Retry the browser bridge',
+  loading: 'Loading the browser bridge',
+  offManaged:
+    'Turned off by your organization: nothing can act in your browser, and no site can be granted. The grants below stay and count again when it is turned on.',
+  offSettings:
+    'Turned off in Settings → Browser: nothing can act in your browser, and no site can be granted. The grants below stay and count again when it is turned on.',
+  facts: {
+    browser: 'Browser',
+    extension: 'Extension',
+    user: 'User',
+    since: 'Connected since',
+  },
+  unknown: 'Unknown',
+  extensionVersion: 'Nova {version}',
+  notConnected:
+    'Not connected. The extension connects when your browser runs it and the bridge is set up on {name}.',
+  notConnectedSince:
+    'Not connected since {when}. The extension connects when your browser runs it and the bridge is set up on {name}.',
+  tabs: 'Shared tabs',
+  untitled: 'Untitled tab',
+  youShared: 'You shared it',
+  agentOpened: 'Opened by the agent in the Nova tab group',
+  inBrowserOf: 'In {user}’s browser',
+  since: 'Since {when}',
+  noTabs:
+    'No tab is shared. Share one with the Nova button in your browser; the agent sees nothing else.',
+  banner:
+    'Every tab the agent controls shows the browser’s own banner and a NOVA badge. To stop, choose Stop sharing in the extension, cancel the banner or close the tab.',
+  sites: 'Sites',
+  sitesIntro:
+    'Agents act only on sites granted here. When your browser allows the extension on a site (sharing a tab there asks), the site waits here until you confirm it.',
+  sitesWaiting: 'Sites waiting for you',
+  sitesGranted: 'Granted sites',
+  noSites: 'No site is granted.',
+  siteField: 'Site to grant',
+  siteExample: 'github.com',
+  siteHint:
+    'An exact host name. This Hub’s own addresses are never granted: the bridge never acts on the Hub itself.',
+  grant: 'Grant',
+  allSites: 'All sites',
+  elevated: 'Elevated risk',
+  allSitesIntro:
+    'Off by default. With it, agents can act on any site in a tab you share on {name}, signed in as you, so a page that tries to trick the agent reaches much more. Prefer granting sites one by one.',
+  allSitesGrant: 'All sites grant',
+  allNotInUseManaged: 'Not in use: turned off by your organization.',
+  allNotInUseSettings: 'Not in use: the “all sites” grant is turned off in Settings → Browser.',
+  grantAll: 'Grant all sites…',
+  allUnavailableOff: 'Not available while the bridge is turned off.',
+  allUnavailableManaged: 'Turned off by your organization.',
+  allUnavailableSettings: 'Turned off in Settings → Browser (Allow the “all sites” grant).',
+  showRevoked: 'Show revoked grants',
+  hideRevoked: 'Hide revoked grants',
+  revokedGrants: 'Revoked grants',
+  noneRevoked: 'No grant was revoked.',
+  setupOn: 'How to set up the bridge on {name}',
+  grantDialog: {
+    title: 'Grant {host} on {name}?',
+    description:
+      'Agents can then act on {host} in tabs you share in your browser on {name}, signed in as you. Each change still follows the site’s level in Settings → Browser, and cookies and passwords never leave the browser.',
+    confirm: 'Grant {host}',
+    done: '{host} granted on {name}.',
+  },
+  allDialog: {
+    title: 'Grant all sites on {name}?',
+    description: 'This is the elevated grant, off by default. What changes:',
+    confirm: 'Grant all sites',
+    acknowledge: 'I understand that agents can then act on any site in tabs I share on {name}.',
+    done: 'All sites granted on {name}.',
+    every: 'Agents may act on every site in a tab you share on {name}, signed in as you.',
+    level:
+      'Each change still follows the site’s level and asks where it must; cookies and passwords never leave the browser.',
+    hub: 'It never covers this Hub’s own addresses.',
+    revoke:
+      'Revoke it here at any time; turning off “Allow the all sites grant” in Settings → Browser stops it at once.',
+  },
+  confirmDialog: {
+    title: 'Confirm {host} on {name}?',
+    description:
+      'Your browser allowed the extension on {host}. Confirmed, agents can act on it in tabs you share on {name}, signed in as you. Each change still follows the site’s level, and cookies and passwords never leave the browser.',
+    confirm: 'Confirm {host}',
+  },
+  refuseDialog: {
+    title: 'Refuse {site} on {name}?',
+    description:
+      'Agents will not act on {site} in your browser on {name}. Your browser may still list its own permission; remove it there if you like.',
+    done: '{site} refused on {name}.',
+  },
+  revokeDialog: {
+    title: 'Revoke {site} on {name}?',
+    description:
+      'Agents stop acting on {site} in your browser on {name} at once. Grant it again here to undo.',
+    done: '{site} revoked on {name}.',
+  },
+  activity: {
+    loadFailed: 'Could not load the recent activity.',
+    title: 'Recent activity',
+    intro: 'History searches have no standing access: each one asks you in your browser first.',
+    retry: 'Retry the recent activity',
+    loading: 'Loading the recent activity',
+    none: 'Nothing yet. Connections, history searches and sessions the Hub closed show here.',
+    list: 'Recent bridge activity',
+    row: '{what}, {when}',
+  },
+  setup: {
+    installTitle: 'Install the extension.',
+    install:
+      'For now it is the unpacked build in {dist} of Nova’s source ({build} makes it). In a Chromium-based browser on {name}, open the extensions page, turn on Developer mode, choose Load unpacked and pick that folder. Note the extension’s id it shows.',
+    idTitle: 'Tell novad the extension’s id.',
+    id: 'On {name}, in novad’s {config} (in its data folder, {dataDir} by default), set {setting} and make sure your user name is in {users}. Then restart novad. Its browser module must be on (Modules tab).',
+    enableTitle: 'Enable the bridge for yourself.',
+    enable:
+      'On {name}, as yourself and not as root, run {enable}. It registers the extension’s helper for your own browsers only; {disable} removes it.',
+    shareTitle: 'Share a tab.',
+    share:
+      'Use the Nova button in your browser. The tab shows here, and its site waits under Sites for your confirmation.',
+  },
+});
+const S = BRIDGE_TEXT;
 
 /** Why a host typed into the grant form is not usable, or null. */
 export function hostProblem(raw: string): string | null {
-  return bridgeHostSchema.safeParse(raw).success ? null : HOST_HINT;
+  return bridgeHostSchema.safeParse(raw).success ? null : S.hostHint;
 }
 
 /** The connection chip: off, connected, or not connected. */
@@ -54,10 +201,10 @@ export function bridgeChip(s: Pick<BrowserBridgeStatusView, 'connected' | 'enabl
   icon: IconName;
   tone: Tone;
 } {
-  if (!s.enabled) return { text: 'Turned off', icon: 'slash', tone: 'neutral' };
+  if (!s.enabled) return { text: S.chip.off, icon: 'slash', tone: 'neutral' };
   return s.connected
-    ? { text: 'Connected', icon: 'check', tone: 'ready' }
-    : { text: 'Not connected', icon: 'slash', tone: 'neutral' };
+    ? { text: S.chip.connected, icon: 'check', tone: 'ready' }
+    : { text: S.chip.notConnected, icon: 'slash', tone: 'neutral' };
 }
 
 export function BrowserBridgeSection({ device }: { device: DeviceView }) {
@@ -124,7 +271,7 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
   const heading = (chip: ReactNode, toggle: ReactNode = null) => (
     <div className="ws-section-header">
       <div className="bdv-bridge-head">
-        <h2 id={headingId}>Browser bridge</h2>
+        <h2 id={headingId}>{S.title}</h2>
         {chip}
       </div>
       {toggle}
@@ -135,7 +282,7 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
     return (
       <section className="ws-section devices-flat bdv-bridge" aria-labelledby={headingId}>
         {heading(null)}
-        <OwnerOnlyNotice what="Browser bridge" />
+        <OwnerOnlyNotice what={S.title} />
       </section>
     );
 
@@ -153,14 +300,14 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
   // Collapsed to its summary unless a site waits for the owner (or the owner opened it).
   const open = expanded ?? waiting > 0;
   const summary = status
-    ? [
-        plural(status.tabs.length, 'shared tab'),
-        `${plural(active.length, 'site')} granted`,
-        ...(all?.state === 'active' ? ['all sites granted'] : []),
-        ...(waiting ? [`${waiting} waiting for you`] : []),
-      ].join(', ')
+    ? listText([
+        S.summary.tabs({ n: status.tabs.length }),
+        S.summary.sites({ n: active.length }),
+        ...(all?.state === 'active' ? [S.summary.allSites] : []),
+        ...(waiting ? [S.summary.waiting({ n: waiting })] : []),
+      ])
     : null;
-  const problem = host.trim() ? hostProblem(host.trim()) : HOST_HINT;
+  const problem = host.trim() ? hostProblem(host.trim()) : S.hostHint;
 
   const done = (text: string) => {
     setAsk(null);
@@ -173,7 +320,7 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
 
   const grantRow = (g: BrowserBridgeGrantView) => {
     const label = grantLabel(g);
-    const chip = GRANT_CHIP[g.state];
+    const chip = grantChip(g.state);
     return (
       <li key={g.id} className="ws-list-row" aria-label={label}>
         <div className="ws-source-main">
@@ -183,15 +330,13 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
           </span>
           <span className="muted ws-row-meta">
             {g.state === 'pending' ? (
-              <span>Your browser allowed the extension here {formatWhen(g.createdAt)}</span>
+              <span>{S.waitingSince({ when: formatWhen(g.createdAt) })}</span>
             ) : g.state === 'active' ? (
-              <span>Confirmed {formatWhen(g.confirmedAt)}</span>
+              <span>{S.confirmedAt({ when: formatWhen(g.confirmedAt) })}</span>
             ) : (
-              <span>Revoked {formatWhen(g.revokedAt)}</span>
+              <span>{S.revokedAt({ when: formatWhen(g.revokedAt) })}</span>
             )}
-            {g.state === 'active' && !g.browserPermission ? (
-              <span>Your browser has not allowed it yet: sharing a tab there asks</span>
-            ) : null}
+            {g.state === 'active' && !g.browserPermission ? <span>{S.notAllowedYet}</span> : null}
           </span>
         </div>
         {g.state === 'pending' ? (
@@ -200,25 +345,25 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
               variant="primary"
               disabled={!enabled}
               onClick={() => setAsk({ kind: 'confirm', grant: g })}
-              aria-label={`Confirm ${label}`}
+              aria-label={S.confirmLabel({ label })}
             >
-              Confirm
+              {S.confirm}
             </Button>
             <Button
               variant="ghost"
               onClick={() => setAsk({ kind: 'revoke', grant: g })}
-              aria-label={`Refuse ${label}`}
+              aria-label={S.refuseLabel({ label })}
             >
-              Refuse
+              {S.refuse}
             </Button>
           </div>
         ) : g.state === 'active' ? (
           <Button
             variant="ghost"
             onClick={() => setAsk({ kind: 'revoke', grant: g })}
-            aria-label={`Revoke ${label}`}
+            aria-label={S.revokeLabel({ label })}
           >
-            Revoke
+            {S.revoke}
           </Button>
         ) : null}
       </li>
@@ -237,121 +382,102 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
           aria-controls={bodyId}
           onClick={() => setExpanded(!open)}
         >
-          <Icon name={open ? 'down' : 'forward'} /> {open ? 'Hide details' : 'Show details'}
+          <Icon name={open ? 'down' : 'forward'} /> {open ? S.hideDetails : S.showDetails}
         </Button>,
       )}
       <p className="muted ws-flush">
-        Lets agents act in your own browser on {name}, through the Nova extension: only in tabs you
-        share, and only on sites you grant here. The agent’s own browser is separate and never gets
-        your sign-ins.
-        {summary && status?.enabled ? ` Now: ${summary}.` : ''}
+        {S.intro({ name })}
+        {summary && status?.enabled ? ` ${S.now({ summary })}` : ''}
       </p>
       {error ? (
         <div role="alert" className="ws-error">
-          <p>{browserDeviceError(error, 'Could not load the browser bridge.')}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)} aria-label="Retry the browser bridge">
-            Retry
+          <p>{browserDeviceError(error, S.loadFailed)}</p>
+          <Button onClick={() => setAttempt((n) => n + 1)} aria-label={S.retryBridge}>
+            {S.retry}
           </Button>
         </div>
       ) : null}
-      {!data && !error ? <Spinner label="Loading the browser bridge" /> : null}
+      {!data && !error ? <Spinner label={S.loading} /> : null}
       {open ? (
         <div id={bodyId} className="bdv-bridge-body">
           {status ? (
             <>
               {!status.enabled ? (
                 <p className="devices-unavailable" role="note">
-                  <Icon name="slash" />{' '}
-                  <span>
-                    {managed
-                      ? 'Turned off by your organization'
-                      : 'Turned off in Settings → Browser'}
-                    : nothing can act in your browser, and no site can be granted. The grants below
-                    stay and count again when it is turned on.
-                  </span>
+                  <Icon name="slash" /> <span>{managed ? S.offManaged : S.offSettings}</span>
                 </p>
               ) : null}
               {status.connected ? (
                 <dl className="devices-facts">
                   <div>
-                    <dt>Browser</dt>
-                    <dd>{status.browser ?? 'Unknown'}</dd>
+                    <dt>{S.facts.browser}</dt>
+                    <dd>{status.browser ?? S.unknown}</dd>
                   </div>
                   <div>
-                    <dt>Extension</dt>
-                    <dd>{status.extensionVersion ? `Nova ${status.extensionVersion}` : 'Nova'}</dd>
+                    <dt>{S.facts.extension}</dt>
+                    <dd>
+                      {status.extensionVersion
+                        ? S.extensionVersion({ version: status.extensionVersion })
+                        : 'Nova'}
+                    </dd>
                   </div>
                   <div>
-                    <dt>User</dt>
-                    <dd>{status.user ?? 'Unknown'}</dd>
+                    <dt>{S.facts.user}</dt>
+                    <dd>{status.user ?? S.unknown}</dd>
                   </div>
                   <div>
-                    <dt>Connected since</dt>
+                    <dt>{S.facts.since}</dt>
                     <dd>{formatWhen(status.since)}</dd>
                   </div>
                 </dl>
               ) : (
                 <p className="muted ws-flush">
-                  Not connected{status.since ? ` since ${formatWhen(status.since)}` : ''}. The
-                  extension connects when your browser runs it and the bridge is set up on {name}.
+                  {status.since
+                    ? S.notConnectedSince({ when: formatWhen(status.since), name })
+                    : S.notConnected({ name })}
                 </p>
               )}
 
-              <h3 className="ws-subhead">Shared tabs</h3>
+              <h3 className="ws-subhead">{S.tabs}</h3>
               {status.tabs.length ? (
-                <ul className="ws-list" aria-label="Shared tabs">
+                <ul className="ws-list" aria-label={S.tabs}>
                   {status.tabs.map((t) => (
-                    <li
-                      key={t.tabId}
-                      className="ws-list-row"
-                      aria-label={t.title || 'Untitled tab'}
-                    >
+                    <li key={t.tabId} className="ws-list-row" aria-label={t.title || S.untitled}>
                       <div className="ws-source-main">
                         {/* Titles and hosts come from the web: text only. */}
-                        <strong className="bdv-tab-title">{t.title || 'Untitled tab'}</strong>
+                        <strong className="bdv-tab-title" dir="auto">
+                          {t.title || S.untitled}
+                        </strong>
                         <span className="muted ws-row-meta">
                           {t.host ? <code className="ws-code-inline">{t.host}</code> : null}
-                          <span>
-                            {t.origin === 'shared'
-                              ? 'You shared it'
-                              : 'Opened by the agent in the Nova tab group'}
-                          </span>
+                          <span>{t.origin === 'shared' ? S.youShared : S.agentOpened}</span>
                           {t.user && t.user !== status.user ? (
-                            <span>In {t.user}’s browser</span>
+                            <span>{S.inBrowserOf({ user: t.user })}</span>
                           ) : null}
-                          <span>Since {formatWhen(t.since)}</span>
+                          <span>{S.since({ when: formatWhen(t.since) })}</span>
                         </span>
                       </div>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="muted ws-flush">
-                  No tab is shared. Share one with the Nova button in your browser; the agent sees
-                  nothing else.
-                </p>
+                <p className="muted ws-flush">{S.noTabs}</p>
               )}
-              <p className="muted ws-flush">
-                Every tab the agent controls shows the browser’s own banner and a NOVA badge. To
-                stop, choose Stop sharing in the extension, cancel the banner or close the tab.
-              </p>
+              <p className="muted ws-flush">{S.banner}</p>
 
-              <h3 className="ws-subhead">Sites</h3>
-              <p className="muted ws-flush">
-                Agents act only on sites granted here. When your browser allows the extension on a
-                site (sharing a tab there asks), the site waits here until you confirm it.
-              </p>
+              <h3 className="ws-subhead">{S.sites}</h3>
+              <p className="muted ws-flush">{S.sitesIntro}</p>
               {pending.length ? (
-                <ul className="ws-list" aria-label="Sites waiting for you">
+                <ul className="ws-list" aria-label={S.sitesWaiting}>
                   {pending.map(grantRow)}
                 </ul>
               ) : null}
               {active.length ? (
-                <ul className="ws-list" aria-label="Granted sites">
+                <ul className="ws-list" aria-label={S.sitesGranted}>
                   {active.map(grantRow)}
                 </ul>
               ) : (
-                <p className="muted ws-flush">No site is granted.</p>
+                <p className="muted ws-flush">{S.noSites}</p>
               )}
               <form
                 className="ws-toolbar bdv-grant-form"
@@ -362,9 +488,9 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
                 }}
               >
                 <TextField
-                  label="Site to grant"
+                  label={S.siteField}
                   value={host}
-                  placeholder="github.com"
+                  placeholder={S.siteExample}
                   autoComplete="off"
                   spellCheck={false}
                   maxLength={253}
@@ -373,46 +499,37 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
                     setHost(e.target.value);
                     setFormError(null);
                   }}
-                  hint="An exact host name. This Hub’s own addresses are never granted: the bridge never acts on the Hub itself."
+                  hint={S.siteHint}
                   error={formError ?? (touched && problem ? problem : undefined)}
                 />
                 <Button type="submit" disabled={!enabled}>
-                  <Icon name="plus" /> Grant
+                  <Icon name="plus" /> {S.grant}
                 </Button>
               </form>
 
               <h3 className="ws-subhead bdv-elevated-head">
-                All sites{' '}
+                {S.allSites}{' '}
                 <span className="ws-badge" data-tone="warn">
-                  <Icon name="alert" /> Elevated risk
+                  <Icon name="alert" /> {S.elevated}
                 </span>
               </h3>
-              <p className="muted ws-flush">
-                Off by default. With it, agents can act on any site in a tab you share on {name},
-                signed in as you, so a page that tries to trick the agent reaches much more. Prefer
-                granting sites one by one.
-              </p>
+              <p className="muted ws-flush">{S.allSitesIntro({ name })}</p>
               {all ? (
-                <ul className="ws-list" aria-label="All sites grant">
+                <ul className="ws-list" aria-label={S.allSitesGrant}>
                   {grantRow(all)}
                 </ul>
               ) : null}
               {all?.state === 'active' && !status.allSitesAllowed ? (
                 <p className="devices-unavailable" role="note">
                   <Icon name="slash" />{' '}
-                  <span>
-                    Not in use:{' '}
-                    {allManaged
-                      ? 'turned off by your organization.'
-                      : 'the “all sites” grant is turned off in Settings → Browser.'}
-                  </span>
+                  <span>{allManaged ? S.allNotInUseManaged : S.allNotInUseSettings}</span>
                 </p>
               ) : null}
               {!all ? (
                 status.allSitesAllowed && enabled ? (
                   <div className="row">
                     <Button variant="danger" onClick={() => setAsk({ kind: 'all' })}>
-                      Grant all sites…
+                      {S.grantAll}
                     </Button>
                   </div>
                 ) : (
@@ -420,10 +537,10 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
                     <Icon name="slash" />{' '}
                     <span>
                       {!enabled
-                        ? 'Not available while the bridge is turned off.'
+                        ? S.allUnavailableOff
                         : allManaged
-                          ? 'Turned off by your organization.'
-                          : 'Turned off in Settings → Browser (Allow the “all sites” grant).'}
+                          ? S.allUnavailableManaged
+                          : S.allUnavailableSettings}
                     </span>
                   </p>
                 )
@@ -431,16 +548,16 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
 
               <div className="row">
                 <Button aria-pressed={showRevoked} onClick={() => setShowRevoked((v) => !v)}>
-                  {showRevoked ? 'Hide revoked grants' : 'Show revoked grants'}
+                  {showRevoked ? S.hideRevoked : S.showRevoked}
                 </Button>
               </div>
               {showRevoked ? (
                 revoked.length ? (
-                  <ul className="ws-list" aria-label="Revoked grants">
+                  <ul className="ws-list" aria-label={S.revokedGrants}>
                     {revoked.map(grantRow)}
                   </ul>
                 ) : (
-                  <p className="muted ws-flush">No grant was revoked.</p>
+                  <p className="muted ws-flush">{S.noneRevoked}</p>
                 )
               ) : null}
               <BridgeActivity deviceId={device.id} refresh={attempt} />
@@ -454,7 +571,7 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
               aria-controls={setupId}
               onClick={() => setSetup(!setupOpen)}
             >
-              <Icon name={setupOpen ? 'down' : 'forward'} /> How to set up the bridge on {name}
+              <Icon name={setupOpen ? 'down' : 'forward'} /> {S.setupOn({ name })}
             </Button>
             {setupOpen ? <SetupSteps id={setupId} name={name} /> : null}
           </div>
@@ -463,9 +580,9 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
 
       {ask?.kind === 'grant' ? (
         <ConfirmAction
-          title={`Grant ${ask.host} on ${name}?`}
-          description={`Agents can then act on ${ask.host} in tabs you share in your browser on ${name}, signed in as you. Each change still follows the site’s level in Settings → Browser, and cookies and passwords never leave the browser.`}
-          confirmLabel={`Grant ${ask.host}`}
+          title={S.grantDialog.title({ host: ask.host, name })}
+          description={S.grantDialog.description({ host: ask.host, name })}
+          confirmLabel={S.grantDialog.confirm({ host: ask.host })}
           onClose={() => setAsk(null)}
           onConfirm={async () => {
             try {
@@ -485,17 +602,17 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
             }
             setHost('');
             setTouched(false);
-            done(`${ask.host} granted on ${name}.`);
+            done(S.grantDialog.done({ host: ask.host, name }));
           }}
         />
       ) : null}
       {ask?.kind === 'all' || (ask?.kind === 'confirm' && ask.grant.allSites) ? (
         <ConfirmAction
-          title={`Grant all sites on ${name}?`}
-          description="This is the elevated grant, off by default. What changes:"
-          confirmLabel="Grant all sites"
+          title={S.allDialog.title({ name })}
+          description={S.allDialog.description}
+          confirmLabel={S.allDialog.confirm}
           danger
-          acknowledge={`I understand that agents can then act on any site in tabs I share on ${name}.`}
+          acknowledge={S.allDialog.acknowledge({ name })}
           onClose={() => setAsk(null)}
           onConfirm={async () => {
             if (ask.kind === 'confirm')
@@ -509,50 +626,49 @@ function BridgeBody({ api, device }: { api: BrowserDeviceApi; device: DeviceView
                 confirm: true,
                 acknowledgeElevatedRisk: true,
               });
-            done(`All sites granted on ${name}.`);
+            done(S.allDialog.done({ name }));
           }}
         >
           <ul className="bdv-changes">
-            <li>Agents may act on every site in a tab you share on {name}, signed in as you.</li>
-            <li>
-              Each change still follows the site’s level and asks where it must; cookies and
-              passwords never leave the browser.
-            </li>
-            <li>It never covers this Hub’s own addresses.</li>
-            <li>
-              Revoke it here at any time; turning off “Allow the all sites grant” in Settings →
-              Browser stops it at once.
-            </li>
+            <li>{S.allDialog.every({ name })}</li>
+            <li>{S.allDialog.level}</li>
+            <li>{S.allDialog.hub}</li>
+            <li>{S.allDialog.revoke}</li>
           </ul>
         </ConfirmAction>
       ) : null}
       {ask?.kind === 'confirm' && !ask.grant.allSites ? (
         <ConfirmAction
-          title={`Confirm ${ask.grant.host} on ${name}?`}
-          description={`Your browser allowed the extension on ${ask.grant.host}. Confirmed, agents can act on it in tabs you share on ${name}, signed in as you. Each change still follows the site’s level, and cookies and passwords never leave the browser.`}
-          confirmLabel={`Confirm ${ask.grant.host}`}
+          title={S.confirmDialog.title({ host: ask.grant.host, name })}
+          description={S.confirmDialog.description({ host: ask.grant.host, name })}
+          confirmLabel={S.confirmDialog.confirm({ host: ask.grant.host })}
           onClose={() => setAsk(null)}
           onConfirm={async () => {
             await api.confirmBridgeGrant(device.id, ask.grant.id, { confirm: true });
-            done(`${ask.grant.host} granted on ${name}.`);
+            done(S.grantDialog.done({ host: ask.grant.host, name }));
           }}
         />
       ) : null}
       {ask?.kind === 'revoke' ? (
         <ConfirmAction
-          title={`${ask.grant.state === 'pending' ? 'Refuse' : 'Revoke'} ${grantLabel(ask.grant)} on ${name}?`}
-          description={
-            ask.grant.state === 'pending'
-              ? `Agents will not act on ${grantLabel(ask.grant)} in your browser on ${name}. Your browser may still list its own permission; remove it there if you like.`
-              : `Agents stop acting on ${grantLabel(ask.grant)} in your browser on ${name} at once. Grant it again here to undo.`
-          }
-          confirmLabel={ask.grant.state === 'pending' ? 'Refuse' : 'Revoke'}
+          title={(ask.grant.state === 'pending' ? S.refuseDialog : S.revokeDialog).title({
+            site: grantLabel(ask.grant),
+            name,
+          })}
+          description={(ask.grant.state === 'pending'
+            ? S.refuseDialog
+            : S.revokeDialog
+          ).description({ site: grantLabel(ask.grant), name })}
+          confirmLabel={ask.grant.state === 'pending' ? S.refuse : S.revoke}
           danger
           onClose={() => setAsk(null)}
           onConfirm={async () => {
             await api.revokeBridgeGrant(device.id, ask.grant.id);
             done(
-              `${grantLabel(ask.grant)} ${ask.grant.state === 'pending' ? 'refused' : 'revoked'} on ${name}.`,
+              (ask.grant.state === 'pending' ? S.refuseDialog : S.revokeDialog).done({
+                site: grantLabel(ask.grant),
+                name,
+              }),
             );
           }}
         />
@@ -583,8 +699,7 @@ function BridgeActivity({ deviceId, refresh }: { deviceId: string; refresh: numb
         setItems(page.items.filter((e) => isDeviceActivity(e, deviceId)).slice(0, ACTIVITY_SHOWN));
         setError(null);
       },
-      (err: unknown) =>
-        alive && setError(browserDeviceError(err, 'Could not load the recent activity.')),
+      (err: unknown) => alive && setError(browserDeviceError(err, S.activity.loadFailed)),
     );
     return () => {
       alive = false;
@@ -592,30 +707,26 @@ function BridgeActivity({ deviceId, refresh }: { deviceId: string; refresh: numb
   }, [api, deviceId, refresh, attempt]);
   return (
     <>
-      <h3 className="ws-subhead">Recent activity</h3>
-      <p className="muted ws-flush">
-        History searches have no standing access: each one asks you in your browser first.
-      </p>
+      <h3 className="ws-subhead">{S.activity.title}</h3>
+      <p className="muted ws-flush">{S.activity.intro}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)} aria-label="Retry the recent activity">
-            Retry
+          <Button onClick={() => setAttempt((n) => n + 1)} aria-label={S.activity.retry}>
+            {S.retry}
           </Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading the recent activity" /> : null}
-      {items?.length === 0 ? (
-        <p className="muted ws-flush">
-          Nothing yet. Connections, history searches and sessions the Hub closed show here.
-        </p>
-      ) : null}
+      {items === null && !error ? <Spinner label={S.activity.loading} /> : null}
+      {items?.length === 0 ? <p className="muted ws-flush">{S.activity.none}</p> : null}
       {items?.length ? (
-        <ul className="ws-plain-list" aria-label="Recent bridge activity">
+        <ul className="ws-plain-list" aria-label={S.activity.list}>
           {items.map((e) => (
             <li key={e.id}>
-              {BRIDGE_AUDIT_TEXT[e.action]},{' '}
-              <time dateTime={e.createdAt}>{formatWhen(e.createdAt)}</time>
+              {rich(S.activity.row, {
+                what: bridgeAuditText(e.action) ?? e.action,
+                when: <time dateTime={e.createdAt}>{formatWhen(e.createdAt)}</time>,
+              })}
             </li>
           ))}
         </ul>
@@ -626,32 +737,37 @@ function BridgeActivity({ deviceId, refresh }: { deviceId: string; refresh: numb
 
 /** How to set up the bridge on a computer (FR-096; apps/extension/README.md). */
 export function SetupSteps({ id, name }: { id: string; name: string }) {
+  const code = (text: string) => <code className="ws-code-inline">{text}</code>;
   return (
     <ol id={id} className="bdv-steps">
       <li>
-        <strong>Install the extension.</strong> For now it is the unpacked build in{' '}
-        <code className="ws-code-inline">apps/extension/dist</code> of Nova’s source (
-        <code className="ws-code-inline">npm run build -w @nova/extension</code> makes it). In a
-        Chromium-based browser on {name}, open the extensions page, turn on Developer mode, choose
-        Load unpacked and pick that folder. Note the extension’s id it shows.
+        <strong>{S.setup.installTitle}</strong>{' '}
+        {rich(S.setup.install, {
+          dist: code('apps/extension/dist'),
+          build: code('npm run build -w @nova/extension'),
+          name,
+        })}
       </li>
       <li>
-        <strong>Tell novad the extension’s id.</strong> On {name}, in novad’s{' '}
-        <code className="ws-code-inline">config.json</code> (in its data folder,{' '}
-        <code className="ws-code-inline">/var/lib/nova</code> by default), set{' '}
-        <code className="ws-code-inline">{'"bridge": { "extensionId": "<the id>" }'}</code> and make
-        sure your user name is in <code className="ws-code-inline">localRuntime.users</code>. Then
-        restart novad. Its browser module must be on (Modules tab).
+        <strong>{S.setup.idTitle}</strong>{' '}
+        {rich(S.setup.id, {
+          name,
+          config: code('config.json'),
+          dataDir: code('/var/lib/nova'),
+          setting: code('"bridge": { "extensionId": "<the id>" }'),
+          users: code('localRuntime.users'),
+        })}
       </li>
       <li>
-        <strong>Enable the bridge for yourself.</strong> On {name}, as yourself and not as root, run{' '}
-        <code className="ws-code-inline">novad bridge enable</code>. It registers the extension’s
-        helper for your own browsers only;{' '}
-        <code className="ws-code-inline">novad bridge disable</code> removes it.
+        <strong>{S.setup.enableTitle}</strong>{' '}
+        {rich(S.setup.enable, {
+          name,
+          enable: code('novad bridge enable'),
+          disable: code('novad bridge disable'),
+        })}
       </li>
       <li>
-        <strong>Share a tab.</strong> Use the Nova button in your browser. The tab shows here, and
-        its site waits under Sites for your confirmation.
+        <strong>{S.setup.shareTitle}</strong> {S.setup.share}
       </li>
     </ol>
   );

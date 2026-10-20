@@ -9,6 +9,7 @@
 // extracts (GET /artifacts/:id/preview), so a large file is never parsed in the browser.
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { ArtifactKind, ArtifactView, EventEnvelope } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, CodeBlock, Icon, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
@@ -18,7 +19,7 @@ import { Markdown } from './Markdown.tsx';
 import type { ArtifactPart } from './thread-state.ts';
 import '../workspace.css';
 
-export const ARTIFACT_KIND_TEXT: Record<ArtifactKind, string> = {
+export const ARTIFACT_KIND_TEXT = defineMessages('chat.artifactKind', {
   markdown: 'Document',
   code: 'Code',
   html: 'Web page',
@@ -27,7 +28,53 @@ export const ARTIFACT_KIND_TEXT: Record<ArtifactKind, string> = {
   chart: 'Chart',
   pdf: 'PDF',
   file: 'File',
-};
+}) satisfies Record<ArtifactKind, string>;
+
+export const ARTIFACT_TEXT = defineMessages('chat.artifacts', {
+  title: 'Artifacts',
+  open: 'Open',
+  openArtifact: 'Open artifact: {title} ({kind})',
+  loadFailed: 'Could not load artifacts.',
+  openFailed: 'Could not open that artifact.',
+  openChat: 'Open a chat to see its artifacts.',
+  all: 'All artifacts',
+  loadingOne: 'Loading the artifact',
+  loadingAll: 'Loading artifacts',
+  loadingDots: 'Loading…',
+  retry: 'Retry',
+  empty:
+    'No artifacts in this chat yet. Documents, code and pages the assistant makes appear here.',
+  list: 'Artifacts in this chat',
+  withVersion: '{kind}, version {version}',
+  code: 'Code: {title}',
+  frame: 'Artifact: {title}',
+  noPdf: 'This browser cannot show the PDF here.',
+  openPdf: 'Open the PDF',
+  noPreview: 'This file cannot be previewed. Download it to open it.',
+  meta: '{live, select, live {{kind}, version {version}, {size}, live} other {{kind}, version {version}, {size}}}',
+  metaLanguage:
+    '{live, select, live {{kind}, {language}, version {version}, {size}, live} other {{kind}, {language}, version {version}, {size}}}',
+  download: 'Download',
+  gone: 'The artifact is gone.',
+  loadOneFailed: 'Could not load the artifact.',
+  tooLarge: 'Too large to preview here. Download it to open it.',
+  emptyTable: 'Empty.',
+  table: 'Table {n} of {title}',
+  slides: 'Slides',
+  slide: 'Slide {n}',
+  notes: 'Notes: {notes}',
+  sheet: 'Sheet {name}',
+  cells: 'Cells of {name}',
+  sheetTruncated: 'Only the first rows and columns are shown.',
+  page: 'Page {n}',
+  noText: '(no text)',
+  startOnly: 'This preview shows the start only. Download the file for all of it.',
+  previewFailed: 'Could not load the preview.',
+  previewFailedBecause: 'The preview could not be loaded: {reason}',
+  loadingPreview: 'Loading the preview',
+  hideText: 'Hide the text',
+  showText: 'Show the text',
+});
 
 /** Text artifacts larger than this are offered as a download instead of a preview. */
 export const TEXT_PREVIEW_LIMIT = 2 * 1024 * 1024;
@@ -40,12 +87,12 @@ const DOCUMENT_MIMES: Record<string, DocumentFormat> = {
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
 };
 
-export const DOCUMENT_KIND_TEXT: Record<DocumentFormat, string> = {
+export const DOCUMENT_KIND_TEXT = defineMessages('chat.documentKind', {
   docx: 'Document (DOCX)',
   pptx: 'Presentation (PPTX)',
   xlsx: 'Spreadsheet (XLSX)',
   pdf: 'PDF',
-};
+}) satisfies Record<DocumentFormat, string>;
 
 /** The document format of an artifact (FR-219): a PDF, or a file with an Office media type or name. */
 export function documentFormatOf(a: {
@@ -87,7 +134,9 @@ export function ArtifactCard({
   const body = (
     <>
       <Icon name="artifact" />
-      <span className="artifact-card-title">{title}</span>
+      <span className="artifact-card-title" dir="auto">
+        {title}
+      </span>
       <span className="muted artifact-card-kind">{kind}</span>
     </>
   );
@@ -102,12 +151,12 @@ export function ArtifactCard({
       type="button"
       className="artifact-card"
       data-kind={part.kind}
-      aria-label={`Open artifact: ${title} (${kind})`}
+      aria-label={ARTIFACT_TEXT.openArtifact({ title, kind })}
       onClick={() => onOpen(part.artifactId)}
     >
       {body}
       <span className="artifact-card-open">
-        Open <Icon name="forward" />
+        {ARTIFACT_TEXT.open} <Icon name="forward" />
       </span>
     </button>
   );
@@ -142,7 +191,7 @@ export function ArtifactsPanel({ threadId, selectedId, onSelect }: ArtifactsPane
         setItems(list);
         setError(null);
       },
-      (err: unknown) => setError(errorMessage(err, 'Could not load artifacts.')),
+      (err: unknown) => setError(errorMessage(err, ARTIFACT_TEXT.loadFailed)),
     );
   }, [api, threadId]);
 
@@ -181,7 +230,7 @@ export function ArtifactsPanel({ threadId, selectedId, onSelect }: ArtifactsPane
         if (alive) setExtra(view);
       },
       (err: unknown) => {
-        if (alive) setError(errorMessage(err, 'Could not open that artifact.'));
+        if (alive) setError(errorMessage(err, ARTIFACT_TEXT.openFailed));
       },
     );
     return () => {
@@ -189,14 +238,14 @@ export function ArtifactsPanel({ threadId, selectedId, onSelect }: ArtifactsPane
     };
   }, [api, missing, selectedId]);
 
-  if (!threadId) return <p className="muted">Open a chat to see its artifacts.</p>;
+  if (!threadId) return <p className="muted">{ARTIFACT_TEXT.openChat}</p>;
   const selected = listed ?? (extra && extra.id === selectedId ? extra : null);
 
   if (selectedId) {
     return (
-      <section className="artifacts" aria-label="Artifacts">
+      <section className="artifacts" aria-label={ARTIFACT_TEXT.title}>
         <Button variant="ghost" className="artifacts-back" onClick={() => onSelect(null)}>
-          <Icon name="back" /> All artifacts
+          <Icon name="back" /> {ARTIFACT_TEXT.all}
         </Button>
         {selected ? (
           <ArtifactViewer artifact={selected} rev={revs[selected.id] ?? 0} />
@@ -206,7 +255,7 @@ export function ArtifactsPanel({ threadId, selectedId, onSelect }: ArtifactsPane
           </p>
         ) : (
           <p className="muted">
-            <Spinner label="Loading the artifact" /> Loading…
+            <Spinner label={ARTIFACT_TEXT.loadingOne} /> {ARTIFACT_TEXT.loadingDots}
           </p>
         )}
       </section>
@@ -214,30 +263,31 @@ export function ArtifactsPanel({ threadId, selectedId, onSelect }: ArtifactsPane
   }
 
   return (
-    <section className="artifacts" aria-label="Artifacts">
+    <section className="artifacts" aria-label={ARTIFACT_TEXT.title}>
       {error ? (
         <div className="artifacts-error" role="alert">
           <p>{error}</p>
-          <Button onClick={load}>Retry</Button>
+          <Button onClick={load}>{ARTIFACT_TEXT.retry}</Button>
         </div>
       ) : items === null ? (
         <p className="muted">
-          <Spinner label="Loading artifacts" /> Loading…
+          <Spinner label={ARTIFACT_TEXT.loadingAll} /> {ARTIFACT_TEXT.loadingDots}
         </p>
       ) : items.length === 0 ? (
-        <p className="muted">
-          No artifacts in this chat yet. Documents, code and pages the assistant makes appear here.
-        </p>
+        <p className="muted">{ARTIFACT_TEXT.empty}</p>
       ) : (
-        <ul className="artifact-list" aria-label="Artifacts in this chat">
+        <ul className="artifact-list" aria-label={ARTIFACT_TEXT.list}>
           {items.map((a) => (
             <li key={a.id}>
               <button type="button" className="artifact-row" onClick={() => onSelect(a.id)}>
                 <Icon name="artifact" />
-                <span className="artifact-row-title">{artifactTitle(a)}</span>
+                <span className="artifact-row-title" dir="auto">
+                  {artifactTitle(a)}
+                </span>
                 <span className="muted">
-                  {artifactKindText(a)}
-                  {a.version > 1 ? `, version ${a.version}` : ''}
+                  {a.version > 1
+                    ? ARTIFACT_TEXT.withVersion({ kind: artifactKindText(a), version: a.version })
+                    : artifactKindText(a)}
                 </span>
               </button>
             </li>
@@ -272,7 +322,7 @@ export function ArtifactViewer({ artifact: a, rev = 0 }: { artifact: ArtifactVie
             <CodeBlock
               code={t}
               language={a.language ?? extension(a.title)}
-              label={`Code: ${title}`}
+              label={ARTIFACT_TEXT.code({ title })}
             />
           )}
         />
@@ -282,7 +332,7 @@ export function ArtifactViewer({ artifact: a, rev = 0 }: { artifact: ArtifactVie
       body = (
         <iframe
           className="artifact-frame"
-          title={`Artifact: ${title}`}
+          title={ARTIFACT_TEXT.frame({ title })}
           src={url}
           sandbox="allow-scripts"
           referrerPolicy="no-referrer"
@@ -309,9 +359,9 @@ export function ArtifactViewer({ artifact: a, rev = 0 }: { artifact: ArtifactVie
         <>
           <object className="artifact-frame" data={url} type="application/pdf" aria-label={title}>
             <p>
-              This browser cannot show the PDF here.{' '}
+              {ARTIFACT_TEXT.noPdf}{' '}
               <a href={download} target="_blank" rel="noopener noreferrer">
-                Open the PDF
+                {ARTIFACT_TEXT.openPdf}
               </a>
             </p>
           </object>
@@ -323,25 +373,35 @@ export function ArtifactViewer({ artifact: a, rev = 0 }: { artifact: ArtifactVie
       body = format ? (
         <DocumentPreview url={previewUrl} title={title} />
       ) : (
-        <p className="muted">This file cannot be previewed. Download it to open it.</p>
+        <p className="muted">{ARTIFACT_TEXT.noPreview}</p>
       );
       break;
   }
   return (
     <article className="artifact-viewer" aria-labelledby={titleId} data-kind={a.kind}>
-      <h3 id={titleId} className="artifact-viewer-title" tabIndex={-1}>
+      <h3 id={titleId} className="artifact-viewer-title" tabIndex={-1} dir="auto">
         {title}
       </h3>
       <p className="muted artifact-meta">
-        {artifactKindText(a)}
-        {a.language && a.kind === 'code' ? `, ${a.language}` : ''}, version {a.version},{' '}
-        {formatBytes(a.size)}
-        {a.live ? ', live' : ''}
+        {a.language && a.kind === 'code'
+          ? ARTIFACT_TEXT.metaLanguage({
+              kind: artifactKindText(a),
+              language: a.language,
+              version: a.version,
+              size: formatBytes(a.size),
+              live: a.live ? 'live' : 'no',
+            })
+          : ARTIFACT_TEXT.meta({
+              kind: artifactKindText(a),
+              version: a.version,
+              size: formatBytes(a.size),
+              live: a.live ? 'live' : 'no',
+            })}
       </p>
       {body}
       <p className="artifact-actions">
         <a href={download} download={a.title ?? `artifact-${a.id}`} className="link">
-          <Icon name="download" /> Download
+          <Icon name="download" /> {ARTIFACT_TEXT.download}
         </a>
       </p>
     </article>
@@ -371,7 +431,7 @@ function TextContent({
     let alive = true;
     fetch(url, { credentials: 'same-origin', cache: 'no-store' })
       .then(async (res) => {
-        if (!res.ok) throw new Error(res.status === 404 ? 'The artifact is gone.' : res.statusText);
+        if (!res.ok) throw new Error(res.status === 404 ? ARTIFACT_TEXT.gone : res.statusText);
         return res.text();
       })
       .then(
@@ -379,7 +439,7 @@ function TextContent({
           if (alive) setState({ url, text });
         },
         (err: unknown) => {
-          if (alive) setState({ url, error: errorMessage(err, 'Could not load the artifact.') });
+          if (alive) setState({ url, error: errorMessage(err, ARTIFACT_TEXT.loadOneFailed) });
         },
       );
     return () => {
@@ -387,7 +447,7 @@ function TextContent({
     };
   }, [url, attempt, tooBig]);
 
-  if (tooBig) return <p className="muted">Too large to preview here. Download it to open it.</p>;
+  if (tooBig) return <p className="muted">{ARTIFACT_TEXT.tooLarge}</p>;
   // Until the new version arrives, the previous text stays on screen.
   if (state?.error && state.url === url)
     return (
@@ -399,14 +459,14 @@ function TextContent({
             setAttempt((n) => n + 1);
           }}
         >
-          Retry
+          {ARTIFACT_TEXT.retry}
         </Button>
       </div>
     );
   if (state?.text === undefined)
     return (
       <p className="muted">
-        <Spinner label="Loading the artifact" /> Loading…
+        <Spinner label={ARTIFACT_TEXT.loadingOne} /> {ARTIFACT_TEXT.loadingDots}
       </p>
     );
   return <>{render(state.text)}</>;
@@ -439,7 +499,7 @@ export interface DocumentPreviewView {
 
 function Rows({ rows, label }: { rows: string[][]; label: string }) {
   const [head, ...rest] = rows;
-  if (!head) return <p className="muted">Empty.</p>;
+  if (!head) return <p className="muted">{ARTIFACT_TEXT.emptyTable}</p>;
   const cols = Math.max(...rows.map((r) => r.length));
   const cells = (r: string[]) => Array.from({ length: cols }, (_, i) => r[i] ?? '');
   return (
@@ -497,14 +557,14 @@ function DocumentBody({ doc, title }: { doc: DocumentPreviewView; title: string 
             return b.ordered ? <ol key={i}>{items}</ol> : <ul key={i}>{items}</ul>;
           }
           case 'table':
-            return <Rows key={i} rows={b.rows} label={`Table ${i + 1} of ${title}`} />;
+            return <Rows key={i} rows={b.rows} label={ARTIFACT_TEXT.table({ n: i + 1, title })} />;
         }
       })}
       {doc.slides?.length ? (
-        <ol aria-label="Slides">
+        <ol aria-label={ARTIFACT_TEXT.slides}>
           {doc.slides.map((sl) => (
             <li key={sl.index}>
-              <strong>{sl.title ?? `Slide ${sl.index}`}</strong>
+              <strong>{sl.title ?? ARTIFACT_TEXT.slide({ n: sl.index })}</strong>
               {sl.paragraphs.length ? (
                 <ul>
                   {sl.paragraphs.map((p, j) => (
@@ -514,29 +574,27 @@ function DocumentBody({ doc, title }: { doc: DocumentPreviewView; title: string 
                   ))}
                 </ul>
               ) : null}
-              {sl.notes ? <p className="muted ws-summary">Notes: {sl.notes}</p> : null}
+              {sl.notes ? (
+                <p className="muted ws-summary">{ARTIFACT_TEXT.notes({ notes: sl.notes })}</p>
+              ) : null}
             </li>
           ))}
         </ol>
       ) : null}
       {doc.sheets?.map((sh) => (
-        <section key={sh.name} aria-label={`Sheet ${sh.name}`}>
+        <section key={sh.name} aria-label={ARTIFACT_TEXT.sheet({ name: sh.name })}>
           <h4>{sh.name}</h4>
-          <Rows rows={sh.rows} label={`Cells of ${sh.name}`} />
-          {sh.truncated ? (
-            <p className="muted">Only the first rows and columns are shown.</p>
-          ) : null}
+          <Rows rows={sh.rows} label={ARTIFACT_TEXT.cells({ name: sh.name })} />
+          {sh.truncated ? <p className="muted">{ARTIFACT_TEXT.sheetTruncated}</p> : null}
         </section>
       ))}
       {doc.pages?.map((pg) => (
-        <section key={pg.index} aria-label={`Page ${pg.index}`}>
-          <h4>Page {pg.index}</h4>
-          <p className="ws-summary">{pg.text || '(no text)'}</p>
+        <section key={pg.index} aria-label={ARTIFACT_TEXT.page({ n: pg.index })}>
+          <h4>{ARTIFACT_TEXT.page({ n: pg.index })}</h4>
+          <p className="ws-summary">{pg.text || ARTIFACT_TEXT.noText}</p>
         </section>
       ))}
-      {doc.truncated ? (
-        <p className="muted">This preview shows the start only. Download the file for all of it.</p>
-      ) : null}
+      {doc.truncated ? <p className="muted">{ARTIFACT_TEXT.startOnly}</p> : null}
     </div>
   );
 }
@@ -555,7 +613,7 @@ function DocumentPreview({ url, title }: { url: string; title: string }) {
       .then(async (res) => {
         const text = await res.text();
         if (!res.ok) {
-          let message = res.status === 404 ? 'The artifact is gone.' : res.statusText;
+          let message = res.status === 404 ? ARTIFACT_TEXT.gone : res.statusText;
           try {
             const body = JSON.parse(text) as { error?: { message?: unknown } };
             if (res.status !== 404 && typeof body.error?.message === 'string')
@@ -563,7 +621,7 @@ function DocumentPreview({ url, title }: { url: string; title: string }) {
           } catch {
             // not JSON: keep the status text
           }
-          throw new Error(message || 'Could not load the preview.');
+          throw new Error(message || ARTIFACT_TEXT.previewFailed);
         }
         return JSON.parse(text) as DocumentPreviewView;
       })
@@ -572,7 +630,7 @@ function DocumentPreview({ url, title }: { url: string; title: string }) {
           if (alive) setState({ url, doc });
         },
         (err: unknown) => {
-          if (alive) setState({ url, error: errorMessage(err, 'Could not load the preview.') });
+          if (alive) setState({ url, error: errorMessage(err, ARTIFACT_TEXT.previewFailed) });
         },
       );
     return () => {
@@ -582,21 +640,21 @@ function DocumentPreview({ url, title }: { url: string; title: string }) {
   if (state?.error && state.url === url)
     return (
       <div className="artifacts-error" role="alert">
-        <p>The preview could not be loaded: {state.error}</p>
+        <p>{ARTIFACT_TEXT.previewFailedBecause({ reason: state.error })}</p>
         <Button
           onClick={() => {
             setState(null);
             setAttempt((n) => n + 1);
           }}
         >
-          Retry
+          {ARTIFACT_TEXT.retry}
         </Button>
       </div>
     );
   if (!state?.doc)
     return (
       <p className="muted">
-        <Spinner label="Loading the preview" /> Loading…
+        <Spinner label={ARTIFACT_TEXT.loadingPreview} /> {ARTIFACT_TEXT.loadingDots}
       </p>
     );
   return <DocumentBody doc={state.doc} title={title} />;
@@ -609,7 +667,7 @@ function PdfText({ url, title }: { url: string; title: string }) {
     <>
       <p className="artifact-actions">
         <Button variant="ghost" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-          {open ? 'Hide the text' : 'Show the text'}
+          {open ? ARTIFACT_TEXT.hideText : ARTIFACT_TEXT.showText}
         </Button>
       </p>
       {open ? <DocumentPreview url={url} title={title} /> : null}

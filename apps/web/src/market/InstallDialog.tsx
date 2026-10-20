@@ -4,9 +4,12 @@
 // of an update (added, changed and removed), what it brings (a plugin's skills, servers, roles,
 // app screens and hooks to trust; a theme's colors; a pet's states; an MCP server's settings) and
 // whether policy refuses it. Nothing is installed until Install. An Unverified item needs the
-// explicit sideload confirmation, and an update that adds or changes permissions needs them
-// accepted (the diff's hash goes back to the Hub). A refusal stays in the dialog in plain words.
-import { useEffect, useState, type ReactNode } from 'react';
+// explicit sideload confirmation, an update that adds or changes permissions needs them accepted
+// (the diff's hash goes back to the Hub; changed lines are worded part by part, sensitive ones
+// marked), and an extension update by another publisher needs the new publisher accepted (its
+// stored secrets and data are cleared). Who signed is named only for a key the owner trusts;
+// otherwise its fingerprint and "not trusted". A refusal stays in the dialog in plain words.
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import type {
   BundleConfigField,
   MarketInstallView,
@@ -17,6 +20,7 @@ import type {
 import { Button, Dialog, Icon, Spinner, TextField } from '@nova/ui';
 import { VerifiedBadge } from '../settings/badges.tsx';
 import { configValues, initialConfig, type ConfigDraft } from '../settings/BundleInstall.tsx';
+import { rich } from '../i18n/rich.tsx';
 import { HOOK_EVENT_TEXT } from '../settings/plugin-text.ts';
 import { checkTheme } from '../settings/theme-file.ts';
 import { useSettings } from '../settings.tsx';
@@ -27,10 +31,14 @@ import {
   KIND_TEXT,
   PERMISSION_ICON,
   UNVERIFIED_TEXT,
+  entryPointText,
   marketErrorMessage,
-  shortKey,
+  marketPublisherText,
+  permissionDetail,
+  vouchText,
 } from './format.ts';
-import { ManagedNote, useManagedSources } from './policy.tsx';
+import { ChangedPermission, PublisherChangeNotice } from './Changes.tsx';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
 
 export interface InstallTarget {
   catalogId: string;
@@ -54,7 +62,7 @@ export function MarketPermissions({
           <Icon name={PERMISSION_ICON[l.kind]} />
           <span>
             {l.text}
-            {l.detail ? <span className="muted"> ({l.detail})</span> : null}
+            {l.detail ? <span className="muted"> ({permissionDetail(l)})</span> : null}
           </span>
         </li>
       ))}
@@ -98,7 +106,7 @@ export function InstallDialog({
     return (
       <Dialog
         open
-        title={INSTALL_TEXT.checkingTitle(target.name)}
+        title={INSTALL_TEXT.checkingTitle({ name: target.name })}
         onClose={onClose}
         footer={
           <>
@@ -175,9 +183,9 @@ function PreviewDialog({
 }) {
   const settings = useSettings();
   const kindsLocked = settings.get('market.allowedKinds').locked;
-  const sources = useManagedSources(p.blockedBy !== null);
   const [sideload, setSideload] = useState(false);
   const [accept, setAccept] = useState(false);
+  const [newPublisher, setNewPublisher] = useState(false);
   const [enable, setEnable] = useState(true);
   const [trust, setTrust] = useState<Set<string>>(() => new Set());
   const fields: BundleConfigField[] =
@@ -192,7 +200,8 @@ function PreviewDialog({
   const blocked =
     !p.allowed ||
     (p.requires.sideloadConfirmation && !sideload) ||
-    (p.requires.permissionAcceptance && !accept);
+    (p.requires.permissionAcceptance && !accept) ||
+    (p.requires.publisherChangeAcceptance && !newPublisher);
 
   const install = async () => {
     let userConfig: Record<string, unknown> | undefined;
@@ -212,6 +221,7 @@ function PreviewDialog({
         previewId: p.previewId,
         ...(p.requires.sideloadConfirmation ? { confirmSideload: sideload } : {}),
         ...(p.requires.permissionAcceptance && p.diff ? { acceptPermissions: p.diff.hash } : {}),
+        ...(p.requires.publisherChangeAcceptance ? { acceptPublisherChange: newPublisher } : {}),
         enable,
         ...(hooks.length
           ? {
@@ -234,7 +244,9 @@ function PreviewDialog({
     <Dialog
       open
       title={
-        update ? INSTALL_TEXT.update(p.name, p.version) : INSTALL_TEXT.install(p.name, p.version)
+        update
+          ? INSTALL_TEXT.update({ name: p.name, version: p.version })
+          : INSTALL_TEXT.install({ name: p.name, version: p.version })
       }
       onClose={onClose}
       className="ws-wide-dialog"
@@ -254,13 +266,25 @@ function PreviewDialog({
           <span>{KIND_TEXT[p.kind].one}</span>
           <code className="ws-code-inline">{p.id}</code>
           {p.replaces ? (
-            <span className="muted">{INSTALL_TEXT.replaces(p.replaces.version)}</span>
+            <span className="muted">{INSTALL_TEXT.replaces({ version: p.replaces.version })}</span>
           ) : null}
         </p>
-        {publisher && !unverified ? (
-          <p className="muted">
-            {INSTALL_TEXT.verifiedBy(publisher.name ?? shortKey(publisher.key))}
-          </p>
+        {p.verification.vouchedBy ? (
+          // Who vouches, by name: the catalog, and a bundle's own trusted publisher.
+          vouchText(p.verification.vouchedBy).map((t) => (
+            <p key={t} className="muted market-vouch">
+              {t}
+            </p>
+          ))
+        ) : publisher ? (
+          <p className="muted">{marketPublisherText(publisher)}</p>
+        ) : null}
+        {p.publisherChange ? (
+          <PublisherChangeNotice
+            change={p.publisherChange}
+            accepted={newPublisher}
+            onAccept={setNewPublisher}
+          />
         ) : null}
 
         {!p.allowed && p.blockedBy ? (
@@ -268,12 +292,12 @@ function PreviewDialog({
             <Icon name="stop" />
             <div className="stack">
               <p>
-                <strong>{INSTALL_TEXT.blocked}.</strong> {BLOCKED_TEXT[p.blockedBy]}
+                <strong>{INSTALL_TEXT.blocked}</strong> {BLOCKED_TEXT[p.blockedBy]}
               </p>
               {p.blockedBy === 'managed' ? (
-                <ManagedNote view={sources} sourceKey="restrict.unverifiedInstalls" />
+                <ManagedNote setting="restrict.unverifiedInstalls" />
               ) : p.blockedBy === 'kind_not_allowed' && kindsLocked ? (
-                <ManagedNote view={sources} sourceKey="market.allowedKinds" />
+                <ManagedNote setting="market.allowedKinds" />
               ) : null}
             </div>
           </div>
@@ -284,7 +308,7 @@ function PreviewDialog({
             <Icon name="alert" />
             <div className="stack">
               <p>
-                <strong>{INSTALL_TEXT.unverifiedTitle}.</strong> {INSTALL_TEXT.unverifiedBody}
+                <strong>{INSTALL_TEXT.unverifiedTitle}</strong> {INSTALL_TEXT.unverifiedBody}
               </p>
               {p.verification.reasons.length ? (
                 <ul className="ws-plain-list" aria-label={INSTALL_TEXT.why}>
@@ -328,10 +352,12 @@ function PreviewDialog({
                   </li>
                 ))}
                 {p.diff.changed.map((c) => (
-                  <li key={`~${c.key}`}>
-                    <strong>{INSTALL_TEXT.diffChanged}:</strong>{' '}
-                    {INSTALL_TEXT.diffChangedLine(c.text, c.before, c.after)}
-                  </li>
+                  <ChangedPermission
+                    key={`~${c.key}`}
+                    change={c}
+                    kind={p.permissions.find((l) => l.key === c.key)?.kind}
+                    label={INSTALL_TEXT.diffChanged}
+                  />
                 ))}
                 {p.diff.removed.map((l) => (
                   <li key={`-${l.key}`}>
@@ -375,17 +401,20 @@ function PreviewDialog({
             <p className="muted">{INSTALL_TEXT.hooksHint}</p>
             <ul className="ws-list">
               {hooks.map((h) => (
-                <li key={h.id} className="ws-list-row" aria-label={INSTALL_TEXT.hookRow(h.id)}>
+                <li
+                  key={h.id}
+                  className="ws-list-row"
+                  aria-label={INSTALL_TEXT.hookRow({ id: h.id })}
+                >
                   <dl className="ws-dl">
                     <dt>{INSTALL_TEXT.hookEvent}</dt>
                     <dd>
-                      {eventText(h.event)}
-                      {h.matcher ? (
-                        <>
-                          {' '}
-                          {INSTALL_TEXT.matches} <code className="ws-code-inline">{h.matcher}</code>
-                        </>
-                      ) : null}
+                      {h.matcher
+                        ? rich(INSTALL_TEXT.eventMatches, {
+                            event: eventText(h.event),
+                            matcher: <code className="ws-code-inline">{h.matcher}</code>,
+                          })
+                        : eventText(h.event)}
                     </dd>
                     {h.runs ? (
                       <>
@@ -413,7 +442,7 @@ function PreviewDialog({
                         })
                       }
                     />
-                    <span>{INSTALL_TEXT.trustNow(h.id)}</span>
+                    <span>{INSTALL_TEXT.trustNow({ id: h.id })}</span>
                   </label>
                 </li>
               ))}
@@ -437,7 +466,7 @@ function PreviewDialog({
               ) : (
                 <TextField
                   key={f.key}
-                  label={f.required ? `${f.title} (required)` : f.title}
+                  label={f.required ? INSTALL_TEXT.required({ title: f.title }) : f.title}
                   type={f.sensitive ? 'password' : 'text'}
                   autoComplete="off"
                   hint={f.description ?? undefined}
@@ -480,7 +509,7 @@ function KindDetails({ preview: p }: { preview: MarketPreview }) {
     );
     const roles = list(d.roles).map(String);
     const entries = list(d.uiEntryPoints).flatMap((e) =>
-      isRecord(e) ? [`${str(e.title) ?? str(e.resource) ?? ''} (${str(e.kind) ?? ''})`] : [],
+      isRecord(e) ? [entryPointText(str(e.title) ?? str(e.resource) ?? '', str(e.kind) ?? '')] : [],
     );
     return (
       <>
@@ -537,8 +566,8 @@ function KindDetails({ preview: p }: { preview: MarketPreview }) {
               ) : null,
             )}
           </span>
-          <span>{check.theme.name}</span>
-          <span className="muted">{check.theme.variant}</span>
+          <span dir="auto">{check.theme.name}</span>
+          <span className="muted">{INSTALL_TEXT.variant({ variant: check.theme.variant })}</span>
         </p>
       </section>
     );
@@ -548,7 +577,7 @@ function KindDetails({ preview: p }: { preview: MarketPreview }) {
     return states.length ? (
       <Section title={INSTALL_TEXT.petStates}>
         {states.map((s) => (
-          <li key={s}>{s}</li>
+          <li key={s}>{INSTALL_TEXT.petState({ state: s })}</li>
         ))}
       </Section>
     ) : null;
@@ -572,12 +601,14 @@ function KindDetails({ preview: p }: { preview: MarketPreview }) {
   }
   // MCP: a registry entry (a remote server) or a bundle.
   if (d.form === 'registry' && str(d.url))
-    return <p>{INSTALL_TEXT.serverAt(str(d.transport) ?? 'http', str(d.url)!)}</p>;
+    return (
+      <p>{INSTALL_TEXT.serverAt({ transport: str(d.transport) ?? 'http', url: str(d.url)! })}</p>
+    );
   return str(d.description) ? <p>{str(d.description)}</p> : null;
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
-  const id = `market-${title.toLowerCase().replace(/[^a-z]+/g, '-')}`;
+  const id = useId();
   return (
     <section aria-labelledby={id}>
       <h3 id={id} className="ws-subhead">

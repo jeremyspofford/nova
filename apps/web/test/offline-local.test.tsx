@@ -7,6 +7,7 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
+import { itemLabel, problemText } from '../src/offline/format.ts';
 import { LocalFallback } from '../src/offline/LocalFallback.tsx';
 import { FakeEventSource, fakeEventSource } from './fakes.ts';
 import {
@@ -76,8 +77,8 @@ describe('answering with this computer’s model (FR-128)', () => {
       text: 'Take the night train.',
       model: 'qwen3:8b',
       threadId: 't1',
-      label: "Answer from this computer's model in “Trip planning”",
     });
+    expect(itemLabel(answer)).toBe("Answer from this computer's model in “Trip planning”");
     expect(answer.ops[0]!.value).toEqual({
       threadId: 't1',
       role: 'assistant',
@@ -146,7 +147,7 @@ describe('answering with this computer’s model (FR-128)', () => {
     });
     const kept = env.runtime.queue.items().find((i) => i.kind === 'answer')!;
     expect(kept).toMatchObject({ status: 'failed', errorCode: 'local_runtime_not_granted' });
-    expect(kept.error).toMatch(/has not given this device Local models.*Copy the answer/);
+    expect(problemText(kept)).toMatch(/has not given this device Local models.*Copy the answer/);
     expect(env.runtime.getState().scopes).toEqual(['offline-replica']);
 
     env.hub.down = true;

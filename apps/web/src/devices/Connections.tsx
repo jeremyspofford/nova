@@ -11,7 +11,9 @@ import {
   type DeviceView,
 } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, SelectField, Spinner, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { ApiError } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { followLink } from '../work/nav.tsx';
 import { useDevicesApi } from './api.ts';
@@ -23,8 +25,81 @@ import {
   deviceErrorMessage,
   devicePath,
   errorReason,
+  listText,
 } from './format.ts';
-import { ConfirmDialog, LoadError, useLoad } from './parts.tsx';
+import { ConfirmDialog, LoadError, PARTS_TEXT, useLoad } from './parts.tsx';
+
+/** The agents tab and an agent's connected computer (FR-016). */
+export const CONNECTIONS_TEXT = defineMessages('devices.connections', {
+  title: 'Agents using this device',
+  connectAgent: 'Connect an agent',
+  intro:
+    'An agent can use one of your computers at a time, only after you connect it here. It still needs folders shared with it to see your files.',
+  keptOut: 'This device is kept out of agent work by its policy.',
+  loadFailed: 'Could not load connections.',
+  loading: 'Loading connections',
+  none: 'No agent uses this device as its computer.',
+  connected: 'Connected agents',
+  /** An agent whose name could not be loaded. */
+  someAgent: 'An agent',
+  mayUse: 'May use: {capabilities}',
+  connectedWhen: 'Connected {when}',
+  disconnect: 'Disconnect',
+  disconnectName: 'Disconnect {name}',
+  disconnectNamed: 'Disconnect {name}?',
+  disconnectBare: 'Disconnect?',
+  disconnectThis: 'Disconnect this computer?',
+  disconnectAgent:
+    'The agent can no longer use this device, and every folder shared with it here is closed.',
+  disconnectComputer:
+    '{agent} can no longer use it, and every folder shared with it there is closed.',
+  disconnected: 'Disconnected.',
+  earlier: 'Earlier connections',
+  earlierCount: 'Earlier connections ({n})',
+  earlierRow: '{name} · disconnected {when}',
+  nowUses: '{agent} now uses {device} as its computer.',
+  dialog: {
+    titleDevice: 'Connect an agent to {device}',
+    titleComputer: 'Connect a computer',
+    description: 'The agent can use this device for the work you allow below, and nothing else.',
+    replaceNamed:
+      'This agent already uses {device} as its computer. Replace it? The agent loses access to {device}, and the folders shared with it there are closed.',
+    replaceUnnamed:
+      'This agent already uses another device as its computer. Replace it? The agent loses access to it, and the folders shared with it there are closed.',
+    back: 'Back',
+    replace: 'Replace',
+    agent: 'Agent',
+    chooseAgent: 'Choose an agent',
+    agentsFailed: 'Could not load agents.',
+    noAgents: 'You have no agents yet. {link} first.',
+    createOne: 'Create one',
+    loadingAgents: 'Loading agents',
+    device: 'Device',
+    chooseDevice: 'Choose a device',
+    deviceKeptOut: '{name} (kept out of agent work)',
+    mayUse: 'It may use',
+    chooseOne: 'Choose at least one.',
+    cannotServe:
+      '{n, plural, one {This device cannot serve {capabilities} yet; uncheck it.} other {This device cannot serve {capabilities} yet; uncheck them.}}',
+    connectFailed: 'Could not connect.',
+    connect: 'Connect',
+  },
+  computer: {
+    title: 'Your computer',
+    change: 'Change computer',
+    connect: 'Connect a computer',
+    intro: '{agent} can use one of your devices at a time, for the work you allow.',
+    loadFailed: 'Could not load the connection.',
+    loading: 'Loading the connection',
+    noneTitle: 'No computer connected',
+    noneHelp: 'Connect a device running novad, or let the agent use its cloud computer.',
+    device: 'Device',
+    devicesFailed: 'Could not load devices.',
+    loadingDevices: 'Loading devices',
+  },
+});
+
+const S = CONNECTIONS_TEXT;
 
 type ConnCap = (typeof DEVICE_CONNECTION_CAPABILITIES)[number];
 const DEFAULT_CAPS: ConnCap[] = ['files', 'staged_writes', 'exec'];
@@ -47,7 +122,7 @@ export function useAgentChoices(): {
 }
 
 function capsText(caps: readonly string[]): string {
-  return caps.map((c) => CAPABILITY_LABEL[c as DeviceCapabilityName] ?? c).join(', ');
+  return listText(caps.map((c) => CAPABILITY_LABEL[c as DeviceCapabilityName] ?? c));
 }
 
 export function DeviceAgentsPanel({ device }: PanelProps) {
@@ -63,7 +138,7 @@ export function DeviceAgentsPanel({ device }: PanelProps) {
   useDeviceEvents(['device.connection.changed'], (env) => {
     if (eventDeviceId(env) === device.id) conns.reload();
   });
-  const name = (id: string) => agents.name(id) ?? 'An agent';
+  const name = (id: string) => agents.name(id) ?? S.someAgent;
   const active = conns.data?.filter((c) => c.status === 'active') ?? [];
   const past = conns.data?.filter((c) => c.status !== 'active') ?? [];
   const revoked = device.status === 'revoked';
@@ -72,46 +147,40 @@ export function DeviceAgentsPanel({ device }: PanelProps) {
   return (
     <section className="ws-section devices-flat" aria-labelledby="agents-h">
       <div className="ws-section-header">
-        <h2 id="agents-h">Agents using this device</h2>
+        <h2 id="agents-h">{S.title}</h2>
         {!revoked ? (
           <Button onClick={() => setConnecting(true)} disabled={ineligible}>
-            <Icon name="plus" /> Connect an agent
+            <Icon name="plus" /> {S.connectAgent}
           </Button>
         ) : null}
       </div>
-      <p className="muted ws-flush">
-        An agent can use one of your computers at a time, only after you connect it here. It still
-        needs folders shared with it to see your files.
-      </p>
+      <p className="muted ws-flush">{S.intro}</p>
       {ineligible && !revoked ? (
         <p className="devices-unavailable">
-          <Icon name="alert" /> This device is kept out of agent work by its policy.
+          <Icon name="alert" /> {S.keptOut}
         </p>
       ) : null}
       {conns.error ? (
-        <LoadError
-          error={conns.error}
-          fallback="Could not load connections."
-          onRetry={conns.reload}
-        />
+        <LoadError error={conns.error} fallback={S.loadFailed} onRetry={conns.reload} />
       ) : null}
-      {conns.loading ? <Spinner label="Loading connections" /> : null}
-      {conns.data && !active.length ? (
-        <p className="muted ws-flush">No agent uses this device as its computer.</p>
-      ) : null}
+      {conns.loading ? <Spinner label={S.loading} /> : null}
+      {conns.data && !active.length ? <p className="muted ws-flush">{S.none}</p> : null}
       {active.length ? (
-        <ul className="ws-list" aria-label="Connected agents">
+        <ul className="ws-list" aria-label={S.connected}>
           {active.map((c) => (
             <li key={c.id} className="ws-list-row" aria-label={name(c.agentId)}>
               <div className="devices-row-main">
-                <strong>{name(c.agentId)}</strong>
+                <strong dir="auto">{name(c.agentId)}</strong>
                 <span className="muted ws-row-meta">
-                  <span>May use: {capsText(c.capabilities)}</span>
-                  <span>Connected {formatWhen(c.createdAt)}</span>
+                  <span>{S.mayUse({ capabilities: capsText(c.capabilities) })}</span>
+                  <span>{S.connectedWhen({ when: formatWhen(c.createdAt) })}</span>
                 </span>
               </div>
-              <Button onClick={() => setEnding(c)} aria-label={`Disconnect ${name(c.agentId)}`}>
-                Disconnect
+              <Button
+                onClick={() => setEnding(c)}
+                aria-label={S.disconnectName({ name: name(c.agentId) })}
+              >
+                {S.disconnect}
               </Button>
             </li>
           ))}
@@ -119,12 +188,12 @@ export function DeviceAgentsPanel({ device }: PanelProps) {
       ) : null}
       {past.length ? (
         <details className="ws-advanced">
-          <summary>Earlier connections ({past.length})</summary>
-          <ul className="ws-list" aria-label="Earlier connections">
+          <summary>{S.earlierCount({ n: past.length })}</summary>
+          <ul className="ws-list" aria-label={S.earlier}>
             {past.map((c) => (
               <li key={c.id} className="ws-list-row">
                 <span>
-                  {name(c.agentId)} · disconnected {formatWhen(c.revokedAt)}
+                  {S.earlierRow({ name: name(c.agentId), when: formatWhen(c.revokedAt) })}
                 </span>
               </li>
             ))}
@@ -139,7 +208,7 @@ export function DeviceAgentsPanel({ device }: PanelProps) {
           onDone={(c) => {
             setConnecting(false);
             conns.reload();
-            toast.show(`${name(c.agentId)} now uses ${device.name} as its computer.`, {
+            toast.show(S.nowUses({ agent: name(c.agentId), device: device.name }), {
               tone: 'success',
             });
           }}
@@ -147,9 +216,9 @@ export function DeviceAgentsPanel({ device }: PanelProps) {
       ) : null}
       <ConfirmDialog
         open={ending !== null}
-        title={ending ? `Disconnect ${name(ending.agentId)}?` : 'Disconnect?'}
-        description="The agent can no longer use this device, and every folder shared with it here is closed."
-        confirmLabel="Disconnect"
+        title={ending ? S.disconnectNamed({ name: name(ending.agentId) }) : S.disconnectBare}
+        description={S.disconnectAgent}
+        confirmLabel={S.disconnect}
         danger
         onClose={() => setEnding(null)}
         onConfirm={async () => {
@@ -157,7 +226,7 @@ export function DeviceAgentsPanel({ device }: PanelProps) {
           await api.disconnectDevice(ending.id);
           setEnding(null);
           conns.reload();
-          toast.show('Disconnected.', { tone: 'success' });
+          toast.show(S.disconnected, { tone: 'success' });
         }}
       />
     </section>
@@ -216,31 +285,31 @@ function ConnectDialog({
       if (err instanceof ApiError && errorReason(err) === 'agent_connected') {
         const other = err.body.details?.deviceId;
         setReplace({ deviceId: typeof other === 'string' ? other : '' });
-      } else setError(deviceErrorMessage(err, 'Could not connect.'));
+      } else setError(deviceErrorMessage(err, S.dialog.connectFailed));
       setBusy(false);
     }
   };
 
+  const D = S.dialog;
   const otherName = replace
-    ? (devices?.find((d) => d.id === replace.deviceId)?.name ?? 'another device')
-    : '';
+    ? (devices?.find((d) => d.id === replace.deviceId)?.name ?? null)
+    : null;
   return (
     <Dialog
       open
-      title={device ? `Connect an agent to ${device.name}` : 'Connect a computer'}
-      description="The agent can use this device for the work you allow below, and nothing else."
+      title={device ? D.titleDevice({ device: device.name }) : D.titleComputer}
+      description={D.description}
       onClose={onClose}
     >
       {replace ? (
         <div className="stack">
           <p role="alert" className="ws-flush">
-            This agent already uses {otherName} as its computer. Replace it? The agent loses access
-            to {otherName}, and the folders shared with it there are closed.
+            {otherName ? D.replaceNamed({ device: otherName }) : D.replaceUnnamed}
           </p>
           <div className="nv-dialog-footer">
-            <Button onClick={() => setReplace(null)}>Back</Button>
+            <Button onClick={() => setReplace(null)}>{D.back}</Button>
             <Button variant="danger" disabled={busy} onClick={() => void submit(true)}>
-              Replace
+              {D.replace}
             </Button>
           </div>
         </div>
@@ -255,51 +324,49 @@ function ConnectDialog({
           {!fixedAgent ? (
             agents?.agents?.length ? (
               <SelectField
-                label="Agent"
+                label={D.agent}
                 value={agentId}
                 onChange={setAgentId}
                 options={[
-                  { value: '', label: 'Choose an agent' },
+                  { value: '', label: D.chooseAgent },
                   ...agents.agents.map((a) => ({ value: a.id, label: a.name })),
                 ]}
               />
             ) : agents?.error ? (
-              <LoadError
-                error={agents.error}
-                fallback="Could not load agents."
-                onRetry={agents.reload}
-              />
+              <LoadError error={agents.error} fallback={D.agentsFailed} onRetry={agents.reload} />
             ) : agents?.agents ? (
               <p className="ws-flush">
-                You have no agents yet.{' '}
-                <a href="/agents" onClick={(e) => followLink(e, '/agents')}>
-                  Create one
-                </a>{' '}
-                first.
+                {rich(D.noAgents, {
+                  link: (
+                    <a href="/agents" onClick={(e) => followLink(e, '/agents')}>
+                      {D.createOne}
+                    </a>
+                  ),
+                })}
               </p>
             ) : (
-              <Spinner label="Loading agents" />
+              <Spinner label={D.loadingAgents} />
             )
           ) : null}
           {!device ? (
             <SelectField
-              label="Device"
+              label={D.device}
               value={deviceId}
               onChange={setDeviceId}
               options={[
-                { value: '', label: 'Choose a device' },
+                { value: '', label: D.chooseDevice },
                 ...(devices ?? [])
                   .filter((d) => d.status !== 'revoked')
                   .map((d) => ({
                     value: d.id,
-                    label: d.routingEligible ? d.name : `${d.name} (kept out of agent work)`,
+                    label: d.routingEligible ? d.name : D.deviceKeptOut({ name: d.name }),
                     disabled: !d.routingEligible,
                   })),
               ]}
             />
           ) : null}
           <fieldset className="nv-radios">
-            <legend className="nv-field-label">It may use</legend>
+            <legend className="nv-field-label">{D.mayUse}</legend>
             {DEVICE_CONNECTION_CAPABILITIES.map((c) => {
               const reason = why(c);
               return (
@@ -331,13 +398,12 @@ function ConnectDialog({
           </fieldset>
           {!caps.length ? (
             <p className="nv-field-error" role="alert">
-              Choose at least one.
+              {D.chooseOne}
             </p>
           ) : null}
           {refused.length ? (
             <p className="nv-field-error" role="alert">
-              This device cannot serve {capsText(refused)} yet; uncheck{' '}
-              {refused.length === 1 ? 'it' : 'them'}.
+              {D.cannotServe({ n: refused.length, capabilities: capsText(refused) })}
             </p>
           ) : null}
           {error ? (
@@ -346,9 +412,9 @@ function ConnectDialog({
             </p>
           ) : null}
           <div className="nv-dialog-footer">
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={onClose}>{PARTS_TEXT.cancel}</Button>
             <Button type="submit" variant="primary" disabled={!ready || busy}>
-              {busy ? <Spinner /> : null} Connect
+              {busy ? <Spinner /> : null} {D.connect}
             </Button>
           </div>
         </form>
@@ -375,35 +441,23 @@ export function AgentComputerPanel({ agentId, agentName }: { agentId: string; ag
     if (env.payload.agentId === agentId) conns.reload();
   });
   const active = conns.data?.find((c) => c.status === 'active') ?? null;
+  const C = S.computer;
 
   return (
     <section className="ws-section devices-flat" aria-labelledby={`computer-${agentId}`}>
       <div className="ws-section-header">
-        <h2 id={`computer-${agentId}`}>Your computer</h2>
+        <h2 id={`computer-${agentId}`}>{C.title}</h2>
         {conns.data ? (
-          <Button onClick={() => setConnecting(true)}>
-            {active ? 'Change computer' : 'Connect a computer'}
-          </Button>
+          <Button onClick={() => setConnecting(true)}>{active ? C.change : C.connect}</Button>
         ) : null}
       </div>
-      <p className="muted ws-flush">
-        {agentName} can use one of your devices at a time, for the work you allow.
-      </p>
+      <p className="muted ws-flush">{C.intro({ agent: agentName })}</p>
       {conns.error ? (
-        <LoadError
-          error={conns.error}
-          fallback="Could not load the connection."
-          onRetry={conns.reload}
-        />
+        <LoadError error={conns.error} fallback={C.loadFailed} onRetry={conns.reload} />
       ) : null}
-      {conns.loading ? <Spinner label="Loading the connection" /> : null}
+      {conns.loading ? <Spinner label={C.loading} /> : null}
       {conns.data && !active ? (
-        <EmptyState
-          title="No computer connected"
-          description="Connect a device running novad, or let the agent use its cloud computer."
-          icon="server"
-          level={3}
-        />
+        <EmptyState title={C.noneTitle} description={C.noneHelp} icon="server" level={3} />
       ) : null}
       {active ? (
         <div className="ws-list-row">
@@ -413,14 +467,14 @@ export function AgentComputerPanel({ agentId, agentName }: { agentId: string; ag
               className="ws-card-link"
               onClick={(e) => followLink(e, devicePath(active.deviceId))}
             >
-              {active.deviceName || 'Device'}
+              {active.deviceName || C.device}
             </a>
             <span className="muted ws-row-meta">
-              <span>May use: {capsText(active.capabilities)}</span>
-              <span>Connected {formatWhen(active.createdAt)}</span>
+              <span>{S.mayUse({ capabilities: capsText(active.capabilities) })}</span>
+              <span>{S.connectedWhen({ when: formatWhen(active.createdAt) })}</span>
             </span>
           </div>
-          <Button onClick={() => setEnding(active)}>Disconnect</Button>
+          <Button onClick={() => setEnding(active)}>{S.disconnect}</Button>
         </div>
       ) : null}
       {connecting ? (
@@ -432,30 +486,32 @@ export function AgentComputerPanel({ agentId, agentName }: { agentId: string; ag
             onDone={(c) => {
               setConnecting(false);
               conns.reload();
-              toast.show(`${agentName} now uses ${c.deviceName} as its computer.`, {
+              toast.show(S.nowUses({ agent: agentName, device: c.deviceName }), {
                 tone: 'success',
               });
             }}
           />
         ) : (
-          <Dialog open title="Connect a computer" onClose={() => setConnecting(false)}>
+          <Dialog open title={C.connect} onClose={() => setConnecting(false)}>
             {devices.error ? (
               <LoadError
                 error={devices.error}
-                fallback="Could not load devices."
+                fallback={C.devicesFailed}
                 onRetry={devices.reload}
               />
             ) : (
-              <Spinner label="Loading devices" />
+              <Spinner label={C.loadingDevices} />
             )}
           </Dialog>
         )
       ) : null}
       <ConfirmDialog
         open={ending !== null}
-        title={`Disconnect ${ending?.deviceName || 'this computer'}?`}
-        description={`${agentName} can no longer use it, and every folder shared with it there is closed.`}
-        confirmLabel="Disconnect"
+        title={
+          ending?.deviceName ? S.disconnectNamed({ name: ending.deviceName }) : S.disconnectThis
+        }
+        description={S.disconnectComputer({ agent: agentName })}
+        confirmLabel={S.disconnect}
         danger
         onClose={() => setEnding(null)}
         onConfirm={async () => {
@@ -463,7 +519,7 @@ export function AgentComputerPanel({ agentId, agentName }: { agentId: string; ag
           await api.disconnectDevice(ending.id);
           setEnding(null);
           conns.reload();
-          toast.show('Disconnected.', { tone: 'success' });
+          toast.show(S.disconnected, { tone: 'success' });
         }}
       />
     </section>

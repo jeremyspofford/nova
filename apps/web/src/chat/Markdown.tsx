@@ -12,7 +12,11 @@ const components: Components = {
       {children}
     </a>
   ),
-  pre: ({ children }) => <pre className="md-pre">{children}</pre>,
+  pre: ({ children }) => (
+    <pre className="md-pre" dir="ltr">
+      {children}
+    </pre>
+  ),
   code: ({ className, children }) => <code className={className}>{children}</code>,
   table: ({ children }) => (
     <div className="md-table">
@@ -29,7 +33,7 @@ export const Markdown = memo(function Markdown({ text, find }: { text: string; f
     [find],
   );
   return (
-    <div className="md">
+    <div className="md" dir="auto">
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}

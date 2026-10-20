@@ -15,6 +15,9 @@
   --u-danger: #ff7b72;
   --u-info: #79b8ff;
   --u-focus: #9cb2ff;
+  /* The edge of a field: 3:1 against the surfaces around it in every built-in theme (WCAG 1.4.11),
+     derived from the theme, so custom themes get one too. */
+  --u-control-border: color-mix(in srgb, var(--u-text-muted) 70%, var(--u-border));
 
   --u-radius-sm: 6px;
   --u-radius-md: 10px;
@@ -115,9 +118,11 @@
 }
 
 .nv-input {
+  /* A field never pushes its column wider than the window (WCAG 1.4.10 reflow). */
+  max-width: 100%;
   min-height: 32px;
   padding: 0 var(--u-space-3);
-  border: 1px solid var(--u-border);
+  border: 1px solid var(--u-control-border);
   border-radius: var(--u-radius-sm);
   background: var(--u-surface);
   color: var(--u-text);
@@ -129,6 +134,7 @@
 }
 .nv-field {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--u-space-1);
 }
 .nv-field-label {
@@ -166,7 +172,7 @@
   width: 36px;
   height: 20px;
   padding: 0;
-  border: 1px solid var(--u-border);
+  border: 1px solid var(--u-control-border);
   border-radius: 999px;
   background: var(--u-surface-2);
   cursor: pointer;
@@ -175,19 +181,19 @@
   content: '';
   position: absolute;
   top: 2px;
-  left: 2px;
+  inset-inline-start: 2px;
   width: 14px;
   height: 14px;
   border-radius: 50%;
   background: var(--u-text-muted);
-  transition: transform var(--u-dur-fast) var(--u-ease);
+  transition: inset-inline-start var(--u-dur-fast) var(--u-ease);
 }
 .nv-switch[aria-checked='true'] {
   background: var(--u-accent);
   border-color: var(--u-accent);
 }
 .nv-switch[aria-checked='true']::after {
-  transform: translateX(16px);
+  inset-inline-start: 18px;
   background: var(--u-accent-contrast);
 }
 
@@ -211,6 +217,31 @@
 .nv-icon {
   flex: none;
   vertical-align: -0.125em;
+}
+/* Code, logs, commands and keyboard shortcuts read left to right in every language (FR-016); in
+   right-to-left text they are isolated so neither reorders the other. Components also mark their
+   code, terminals, paths and ids dir="ltr", which the :dir() rules below see. */
+code,
+pre,
+kbd,
+samp {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+input[type='url'],
+input[type='email'] {
+  direction: ltr;
+}
+/* A free-text field takes the direction of what is typed (dir="auto"); while empty, its
+   placeholder reads in the interface's direction. */
+[dir='auto']:placeholder-shown {
+  direction: inherit;
+}
+/* Direction-bearing icons (MIRRORED_ICONS in Icon.tsx) mirror where the text runs right to left,
+   including inside a nested dir="rtl" and never inside a dir="ltr" island. `scale` composes with
+   any `transform` a component sets (an open tree chevron's rotation). */
+.nv-icon[data-mirror='true']:dir(rtl) {
+  scale: -1 1;
 }
 
 .nv-spinner-wrap {
@@ -332,7 +363,7 @@
 .nv-menu {
   position: absolute;
   top: 100%;
-  right: 0;
+  inset-inline-end: 0;
   z-index: var(--u-z-overlay);
   min-width: 180px;
   margin: var(--u-space-1) 0 0;
@@ -393,6 +424,7 @@
 .nv-tooltip {
   position: absolute;
   bottom: calc(100% + 6px);
+  /* Centred over the anchor, which is the same in both directions (an allowed physical left). */
   left: 50%;
   z-index: var(--u-z-overlay);
   transform: translateX(-50%);
@@ -403,7 +435,15 @@
   color: var(--u-text);
   font-size: var(--u-text-xs);
   white-space: nowrap;
-  pointer-events: none;
+}
+/* The pointer can move onto the tooltip without it going away (WCAG 1.4.13): a bridge over the
+   gap between the anchor and the tooltip keeps the pointer inside the anchor. */
+.nv-tooltip::after {
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  height: 8px;
+  content: '';
 }
 .nv-tooltip[hidden] {
   display: none;
@@ -411,7 +451,7 @@
 
 .nv-toasts {
   position: fixed;
-  right: var(--u-space-4);
+  inset-inline-end: var(--u-space-4);
   bottom: var(--u-space-4);
   z-index: var(--u-z-toast);
   display: grid;
@@ -426,25 +466,26 @@
   display: flex;
   align-items: center;
   gap: var(--u-space-2);
-  padding: var(--u-space-2) var(--u-space-2) var(--u-space-2) var(--u-space-4);
+  padding-block: var(--u-space-2);
+  padding-inline: var(--u-space-4) var(--u-space-2);
   border: 1px solid var(--u-border);
-  border-left: 4px solid var(--u-info);
+  border-inline-start: 4px solid var(--u-info);
   border-radius: var(--u-radius-md);
   background: var(--u-surface);
   color: var(--u-text);
 }
 .nv-toast[data-tone='success'] {
-  border-left-color: var(--u-success);
+  border-inline-start-color: var(--u-success);
 }
 .nv-toast[data-tone='error'] {
-  border-left-color: var(--u-danger);
+  border-inline-start-color: var(--u-danger);
 }
 .nv-toast-message {
   flex: 1;
 }
 
 .nv-select {
-  padding-right: var(--u-space-2);
+  padding-inline-end: var(--u-space-2);
 }
 .nv-field-lock {
   color: var(--u-warn);
@@ -522,8 +563,8 @@
   content: '';
   position: absolute;
   top: 9px;
-  right: 8px;
-  left: 8px;
+  inset-inline-end: 8px;
+  inset-inline-start: 8px;
   border-top: 2px solid var(--u-border);
 }
 .nv-preset-stop {

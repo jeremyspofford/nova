@@ -69,6 +69,8 @@ import {
   type DisplayCall,
 } from './thread-state.ts';
 import { threadStatus } from './status.ts';
+import { rich } from './rich.tsx';
+import { CHAT_TEXT } from './strings.ts';
 import { TOOL_STATUS_TEXT } from './ToolCard.tsx';
 import { ToolAppsProvider } from './tool-apps.tsx';
 import { threadStateOf, useThreadFeed } from './useThreadFeed.ts';
@@ -160,7 +162,7 @@ export function ChatView({
     switch (env.name) {
       case 'turn.started':
         progress.current = { last: Date.now(), words: 0 };
-        announce('Assistant is responding.');
+        announce(CHAT_TEXT.announce.responding);
         if (threadId) threads.upsertLocal({ id: threadId, state: 'streaming' });
         break;
       case 'turn.completed':
@@ -175,18 +177,17 @@ export function ChatView({
           const now = Date.now();
           if (now - pr.last >= announceEveryMs) {
             pr.last = now;
-            announce(`Still responding, about ${pr.words} words so far.`);
+            announce(CHAT_TEXT.announce.stillResponding({ words: pr.words }));
           }
         }
         break;
       case 'chat.message.completed':
-        if (p.status === 'complete') announce('Response complete.');
-        else if (p.status === 'incomplete')
-          announce('Response stopped. The partial reply is kept.');
-        else if (p.status === 'error') announce('The response failed. Retry is available.');
+        if (p.status === 'complete') announce(CHAT_TEXT.announce.complete);
+        else if (p.status === 'incomplete') announce(CHAT_TEXT.announce.stopped);
+        else if (p.status === 'error') announce(CHAT_TEXT.announce.failed);
         break;
       case 'chat.followup.started':
-        announce('A queued message started.');
+        announce(CHAT_TEXT.announce.followupStarted);
         break;
       case 'chat.branch.created':
         void threads.refresh();
@@ -199,25 +200,33 @@ export function ChatView({
         break;
       }
       case 'tool.call.started':
-        if (typeof p.tool === 'string' && p.tool) announce(`Running ${p.tool}.`);
+        if (typeof p.tool === 'string' && p.tool)
+          announce(CHAT_TEXT.announce.running({ tool: p.tool }));
         break;
       case 'tool.call.completed': {
         const st = p.status as keyof typeof TOOL_STATUS_TEXT;
-        const name = typeof p.tool === 'string' && p.tool ? p.tool : 'The tool call';
-        if (st in TOOL_STATUS_TEXT && st !== 'ok') announce(`${name}: ${TOOL_STATUS_TEXT[st]}.`);
+        const name = typeof p.tool === 'string' && p.tool ? p.tool : CHAT_TEXT.announce.theToolCall;
+        if (st in TOOL_STATUS_TEXT && st !== 'ok')
+          announce(CHAT_TEXT.announce.toolStatus({ tool: name, status: TOOL_STATUS_TEXT[st] }));
         break;
       }
       case 'approval.requested': {
         if (typeof p.approvalId !== 'string') break;
-        const what = typeof p.action === 'string' && p.action ? `: ${p.action}` : '';
+        const action = typeof p.action === 'string' && p.action ? p.action : null;
         // Focus moves to the card (docs/04 §2.6) unless that would pull the user out of typing.
         const el = document.activeElement;
         const typing =
           isEditable(el) && !!(el as HTMLInputElement | HTMLTextAreaElement).value?.trim();
         if (typing) {
-          announce(`Approval needed${what}. It is in the chat, above the message box.`);
+          announce(
+            action
+              ? CHAT_TEXT.announce.approvalForTyping({ action })
+              : CHAT_TEXT.announce.approvalTyping,
+          );
         } else {
-          announce(`Approval needed${what}.`);
+          announce(
+            action ? CHAT_TEXT.announce.approvalFor({ action }) : CHAT_TEXT.announce.approval,
+          );
           const aid = p.approvalId;
           setFocusTarget((f) => ({ id: aid, n: (f?.n ?? 0) + 1 }));
         }
@@ -316,10 +325,10 @@ export function ChatView({
         });
         dispatch({ type: 'accepted', tempId, res });
         if (res.disposition === 'queued') {
-          announce('Queued. It sends when the current reply finishes.');
+          announce(CHAT_TEXT.announce.queued);
           refreshQueue();
         } else if (res.disposition === 'steered') {
-          announce('Sent. The running reply takes it into account at its next step.');
+          announce(CHAT_TEXT.announce.steered);
         } else {
           threads.upsertLocal({ id, state: 'streaming', updatedAt: new Date().toISOString() });
         }
@@ -328,8 +337,8 @@ export function ChatView({
         restore(
           d,
           err instanceof ApiError && err.status === 409
-            ? 'A reply is still running in this chat. Stop it or wait, then send again. Your message is back in the box.'
-            : `Message not sent: ${errorMessage(err)} Your message is back in the box.`,
+            ? CHAT_TEXT.busy
+            : CHAT_TEXT.notSent({ reason: errorMessage(err) }),
         );
       }
     },
@@ -409,7 +418,7 @@ export function ChatView({
       memory.drafts.delete('new');
       navigate(chatPath(created.id));
     } catch (err) {
-      restore(d, `Could not start the chat: ${errorMessage(err)} Your message is back in the box.`);
+      restore(d, CHAT_TEXT.startFailed({ reason: errorMessage(err) }));
     }
   };
 
@@ -420,7 +429,8 @@ export function ChatView({
       .cancel(threadId)
       .then(
         () => refetch(),
-        (err: unknown) => toast.show(`Could not stop: ${errorMessage(err)}`, { tone: 'error' }),
+        (err: unknown) =>
+          toast.show(CHAT_TEXT.stopFailed({ reason: errorMessage(err) }), { tone: 'error' }),
       )
       .finally(() => setStopping(false));
   }, [api, refetch, stopping, threadId, toast]);
@@ -430,17 +440,17 @@ export function ChatView({
     api.cancelQueued(threadId, queuedId).then(
       () => {
         dispatch({ type: 'dequeued', queuedId });
-        announce('Queued message cancelled.');
+        announce(CHAT_TEXT.announce.queuedCancelled);
       },
       (err: unknown) => {
         if (err instanceof ApiError && err.status === 404) {
           // It started (or was removed elsewhere) before the cancel arrived.
           dispatch({ type: 'dequeued', queuedId });
-          toast.show('That message already started.', { tone: 'info' });
+          toast.show(CHAT_TEXT.alreadyStarted, { tone: 'info' });
           refreshQueue();
           refetch();
         } else {
-          toast.show(`Could not cancel the queued message: ${errorMessage(err)}`, {
+          toast.show(CHAT_TEXT.cancelQueuedFailed({ reason: errorMessage(err) }), {
             tone: 'error',
           });
         }
@@ -471,7 +481,7 @@ export function ChatView({
       }
       await sendTo(threadId, { text: messageText(lastUser, undefined), attachments });
     } catch (err) {
-      toast.show(`Retry failed: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(CHAT_TEXT.retryFailed({ reason: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -486,7 +496,7 @@ export function ChatView({
       (view) => dispatch({ type: 'thread', thread: view }),
       (err: unknown) => {
         dispatch({ type: 'thread', thread: before });
-        toast.show(`Could not change the model: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(CHAT_TEXT.modelFailed({ reason: errorMessage(err) }), { tone: 'error' });
       },
     );
   };
@@ -500,7 +510,7 @@ export function ChatView({
     threads.update(threadId, { reasoningLevel: level }).then(
       (view) => dispatch({ type: 'thread', thread: view }),
       (err: unknown) =>
-        toast.show(`Could not change the reasoning level: ${errorMessage(err)}`, { tone: 'error' }),
+        toast.show(CHAT_TEXT.reasoningFailed({ reason: errorMessage(err) }), { tone: 'error' }),
     );
   };
 
@@ -512,14 +522,11 @@ export function ChatView({
     threads.update(threadId, { memoryOptOut: optOut }).then(
       (view) => {
         dispatch({ type: 'thread', thread: view });
-        toast.show(
-          optOut ? 'This chat will not be used for memory.' : 'This chat can be used for memory.',
-          { tone: 'success' },
-        );
+        toast.show(optOut ? CHAT_TEXT.memoryOff : CHAT_TEXT.memoryOn, { tone: 'success' });
       },
       (err: unknown) => {
         dispatch({ type: 'thread', thread: before });
-        toast.show(`Could not change memory use: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(CHAT_TEXT.memoryFailed({ reason: errorMessage(err) }), { tone: 'error' });
       },
     );
   };
@@ -540,12 +547,12 @@ export function ChatView({
   const copy = (text: string) => {
     const clip = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
     if (!clip) {
-      toast.show('Could not copy: the clipboard is not available here.', { tone: 'error' });
+      toast.show(CHAT_TEXT.noClipboard, { tone: 'error' });
       return;
     }
     clip.writeText(text).then(
-      () => toast.show('Copied.', { tone: 'success' }),
-      () => toast.show('Could not copy: the browser blocked clipboard access.', { tone: 'error' }),
+      () => toast.show(CHAT_TEXT.copied, { tone: 'success' }),
+      () => toast.show(CHAT_TEXT.clipboardBlocked, { tone: 'error' }),
     );
   };
 
@@ -571,7 +578,7 @@ export function ChatView({
   };
 
   const edit = async (m: ClientMessage, text: string): Promise<string | null> => {
-    if (!threadId) return 'This chat is not saved yet.';
+    if (!threadId) return CHAT_TEXT.notSaved;
     try {
       const res = await api.editMessage(threadId, m.id, { text });
       const add: ClientMessage[] = [
@@ -587,8 +594,8 @@ export function ChatView({
       return null;
     } catch (err) {
       return err instanceof ApiError && err.status === 409
-        ? 'A reply is still running. Wait for it to finish, then save again.'
-        : `Could not save the edit: ${errorMessage(err)}`;
+        ? CHAT_TEXT.editBusy
+        : CHAT_TEXT.editFailed({ reason: errorMessage(err) });
     }
   };
 
@@ -609,7 +616,7 @@ export function ChatView({
       });
       markStreaming();
     } catch (err) {
-      toast.show(`Could not regenerate: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(CHAT_TEXT.regenerateFailed({ reason: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -618,10 +625,10 @@ export function ChatView({
     try {
       const view = await api.branch(threadId, m.id);
       threads.upsertLocal(view);
-      toast.show('Branch created.', { tone: 'success' });
+      toast.show(CHAT_TEXT.branched, { tone: 'success' });
       navigate(chatPath(view.id));
     } catch (err) {
-      toast.show(`Could not branch: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(CHAT_TEXT.branchFailed({ reason: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -630,10 +637,10 @@ export function ChatView({
     try {
       await api.deleteMessage(threadId, m.id);
       dispatch({ type: 'removed', ids: deletionIds(state.messages, m.id) });
-      toast.show('Message deleted.', { tone: 'success' });
+      toast.show(CHAT_TEXT.deleted, { tone: 'success' });
       refetch();
     } catch (err) {
-      toast.show(`Could not delete the message: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(CHAT_TEXT.deleteFailed({ reason: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -642,7 +649,7 @@ export function ChatView({
     api.selectVersion(threadId, id).then(
       (detail) => dispatch({ type: 'loaded', detail }),
       (err: unknown) =>
-        toast.show(`Could not switch versions: ${errorMessage(err)}`, { tone: 'error' }),
+        toast.show(CHAT_TEXT.versionFailed({ reason: errorMessage(err) }), { tone: 'error' }),
     );
   };
 
@@ -815,10 +822,10 @@ export function ChatView({
         } else if (view.status === 'pending') {
           dispatch({ type: 'approvals', items: [view] });
         } else {
-          toast.show('That approval was already answered.', { tone: 'info' });
+          toast.show(CHAT_TEXT.approvalAnswered, { tone: 'info' });
         }
       },
-      () => toast.show('That approval no longer exists.', { tone: 'info' }),
+      () => toast.show(CHAT_TEXT.approvalGone, { tone: 'info' }),
     );
   }, [api, approvalId, approvalsLoaded, dispatch, linkedHere, threadId, toast]);
 
@@ -852,7 +859,8 @@ export function ChatView({
   // ---- render ------------------------------------------------------------------------------------
 
   const title =
-    thread?.title || (threadId ? 'Untitled chat' : isTemporary ? 'New temporary chat' : 'New chat');
+    thread?.title ||
+    (threadId ? CHAT_TEXT.untitled : isTemporary ? CHAT_TEXT.newTemporaryChat : CHAT_TEXT.newChat);
   const status = thread ? (needsInput ? 'needs_input' : threadStatus(thread, streaming)) : null;
   // While the list loads there is no model yet, but that is not "no provider".
   const noModel = !modelsLoading && models.length === 0;
@@ -877,7 +885,7 @@ export function ChatView({
   ];
   const titleOf = (id: string) => {
     const t = threads.threads.find((x) => x.id === id);
-    return t ? threadTitle(t) : 'the original chat';
+    return t ? threadTitle(t) : CHAT_TEXT.theOriginalChat;
   };
   const findQuery = find.open ? find.query : '';
 
@@ -885,17 +893,25 @@ export function ChatView({
   const share = useShareMenu(thread ?? null);
   const menu: MenuItem[] = thread
     ? [
-        { id: 'find', label: 'Find in chat', onSelect: openFind },
+        { id: 'find', label: CHAT_TEXT.menu.find, onSelect: openFind },
         ...(onOpenPanel
           ? [
-              { id: 'side', label: 'Ask in a side chat', onSelect: () => onOpenPanel('side') },
-              { id: 'branches', label: 'Show branches', onSelect: () => onOpenPanel('branches') },
+              { id: 'side', label: CHAT_TEXT.menu.side, onSelect: () => onOpenPanel('side') },
+              {
+                id: 'branches',
+                label: CHAT_TEXT.menu.branches,
+                onSelect: () => onOpenPanel('branches'),
+              },
               {
                 id: 'artifacts',
-                label: 'Show artifacts',
+                label: CHAT_TEXT.menu.artifacts,
                 onSelect: () => onOpenPanel('artifacts'),
               },
-              { id: 'activity', label: 'Show activity', onSelect: () => onOpenPanel('activity') },
+              {
+                id: 'activity',
+                label: CHAT_TEXT.menu.activity,
+                onSelect: () => onOpenPanel('activity'),
+              },
             ]
           : []),
         ...(thread.temporary
@@ -903,7 +919,7 @@ export function ChatView({
           : [
               {
                 id: 'memory',
-                label: "Don't use for memory",
+                label: CHAT_TEXT.menu.noMemory,
                 checked: thread.memoryOptOut,
                 onSelect: toggleMemory,
               },
@@ -930,15 +946,17 @@ export function ChatView({
         }}
       >
         <header className="chat-header" hidden={embedded}>
-          <h1 className="chat-title">{title}</h1>
+          <h1 className="chat-title" dir="auto">
+            {title}
+          </h1>
           {status ? <StatusChip status={status} /> : null}
           {thread?.parentThreadId && !thread.side ? (
             <span className="chat-flag">
-              <Icon name="branch" /> Branch
+              <Icon name="branch" /> {CHAT_TEXT.branch}
             </span>
           ) : null}
           {thread?.memoryOptOut && !thread.temporary ? (
-            <span className="chat-flag">Not used for memory</span>
+            <span className="chat-flag">{CHAT_TEXT.notForMemory}</span>
           ) : null}
           <span className="chat-header-spacer" />
           {threadId ? <OpenInWindowButton path={chatPath(threadId)} what={title} compact /> : null}
@@ -949,21 +967,20 @@ export function ChatView({
             <span className="chat-temp-toggle">
               <Switch
                 id="temporary-switch"
-                label="Temporary chat"
+                label={CHAT_TEXT.temporaryChat}
                 checked={temporary}
                 onChange={(on) => navigate(on ? '/chat?temporary=1' : '/chat')}
               />
-              <label htmlFor="temporary-switch">Temporary</label>
+              <label htmlFor="temporary-switch">{CHAT_TEXT.temporary}</label>
             </span>
           ) : null}
           {menu.length ? (
-            <Menu label="Chat options" trigger={<Icon name="more" />} items={menu} />
+            <Menu label={CHAT_TEXT.options} trigger={<Icon name="more" />} items={menu} />
           ) : null}
         </header>
         {isTemporary ? (
           <p className="temp-banner" role="note">
-            <Icon name="clock" /> Temporary chat: not saved to memory or search, deleted when you
-            leave
+            <Icon name="clock" /> {CHAT_TEXT.temporaryBanner}
           </p>
         ) : null}
         {find.open ? (
@@ -982,7 +999,7 @@ export function ChatView({
           ref={log}
           className="chat-log"
           role="log"
-          aria-label="Messages"
+          aria-label={CHAT_TEXT.messages}
           aria-live="off"
           tabIndex={0}
           onScroll={(e) => {
@@ -993,27 +1010,25 @@ export function ChatView({
         >
           {state.status === 'loading' ? (
             <p className="muted chat-loading">
-              <Spinner label="Loading messages" /> Loading messages…
+              <Spinner label={CHAT_TEXT.loading} /> {CHAT_TEXT.loadingDots}
             </p>
           ) : null}
           {state.status === 'error' ? (
             <div className="chat-error" role="alert">
               <p>{state.loadError}</p>
-              <Button onClick={() => navigate(chatPath(null))}>Start a new chat</Button>
+              <Button onClick={() => navigate(chatPath(null))}>{CHAT_TEXT.startNew}</Button>
             </div>
           ) : null}
           {state.status === 'ready' && shown.length === 0 ? (
             <EmptyState
-              title={threadId ? 'No messages yet' : 'Start a conversation'}
-              description={
-                noModel
-                  ? 'Connect a model provider in Settings → Accounts to start chatting.'
-                  : 'Ask a question, paste text to work on, or attach a file.'
-              }
+              title={threadId ? CHAT_TEXT.empty.title : CHAT_TEXT.empty.newTitle}
+              description={noModel ? CHAT_TEXT.empty.noModel : CHAT_TEXT.empty.hint}
               icon="chat"
               action={
                 noModel ? (
-                  <Button onClick={() => navigate('/settings/accounts')}>Connect a provider</Button>
+                  <Button onClick={() => navigate('/settings/accounts')}>
+                    {CHAT_TEXT.empty.connect}
+                  </Button>
                 ) : undefined
               }
             />
@@ -1026,22 +1041,26 @@ export function ChatView({
               <Fragment key={m.id}>
                 {inherited && (!prev || prev.threadId !== m.threadId) ? (
                   <p className="msg-divider">
-                    <Icon name="branch" /> From{' '}
-                    <a
-                      href={chatPath(m.threadId, m.id)}
-                      onClick={(e) => {
-                        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                        e.preventDefault();
-                        navigate(chatPath(m.threadId, m.id));
-                      }}
-                    >
-                      {titleOf(m.threadId)}
-                    </a>
-                    <span className="muted"> (read-only here)</span>
+                    <Icon name="branch" />{' '}
+                    {rich(CHAT_TEXT.inheritedFrom, {
+                      chat: (
+                        <a
+                          href={chatPath(m.threadId, m.id)}
+                          dir="auto"
+                          onClick={(e) => {
+                            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                            e.preventDefault();
+                            navigate(chatPath(m.threadId, m.id));
+                          }}
+                        >
+                          {titleOf(m.threadId)}
+                        </a>
+                      ),
+                    })}
                   </p>
                 ) : null}
                 {!inherited && prevInherited ? (
-                  <p className="msg-divider">This branch continues here</p>
+                  <p className="msg-divider">{CHAT_TEXT.continues}</p>
                 ) : null}
                 <MessageItem
                   message={m}
@@ -1068,10 +1087,7 @@ export function ChatView({
         </div>
         {needsInput ? (
           <p className="approval-pending" role="note">
-            <Icon name="hand" />{' '}
-            {pending.length === 1
-              ? 'An approval is waiting for you.'
-              : `${pending.length} approvals are waiting for you.`}{' '}
+            <Icon name="hand" /> {CHAT_TEXT.pending({ n: pending.length })}{' '}
             <button
               type="button"
               className="link"
@@ -1080,7 +1096,7 @@ export function ChatView({
                 if (first) setFocusTarget((f) => ({ id: first.id, n: (f?.n ?? 0) + 1 }));
               }}
             >
-              Go to {pending.length === 1 ? 'it' : 'the first'}
+              {CHAT_TEXT.goToPending({ n: pending.length })}
             </button>
           </p>
         ) : null}
@@ -1118,9 +1134,9 @@ export function ChatView({
           inputRef={input}
           noModelHint={
             noModel
-              ? 'Connect a model provider to start'
+              ? CHAT_TEXT.noModelHint
               : modelsLoading && !model
-                ? 'Loading models…'
+                ? CHAT_TEXT.loadingModels
                 : undefined
           }
           modelLoading={modelsLoading}
@@ -1138,9 +1154,9 @@ export function ChatView({
           idBase={embedded ? `composer-${threadId ?? 'new'}` : undefined}
           onTurnOffSuggestions={() => {
             settings.set('chat.suggestions', false).then(
-              () => announce('Suggested follow-ups are off. Turn them on in Settings → General.'),
+              () => announce(CHAT_TEXT.announce.suggestionsOff),
               (err: unknown) =>
-                toast.show(`Could not turn off suggestions: ${errorMessage(err)}`, {
+                toast.show(CHAT_TEXT.suggestionsFailed({ reason: errorMessage(err) }), {
                   tone: 'error',
                 }),
             );
@@ -1148,7 +1164,7 @@ export function ChatView({
         />
         {!threadId && defaultModel === null && auto && model === auto.ref ? (
           <p className="muted composer-note">
-            Using {auto.label}.{' '}
+            {CHAT_TEXT.using({ model: auto.label })}{' '}
             <button
               type="button"
               className="link"
@@ -1156,23 +1172,21 @@ export function ChatView({
                 settings.set('chat.defaultModel', auto.ref).catch(() => undefined);
               }}
             >
-              Make it the default
+              {CHAT_TEXT.makeDefault}
             </button>
           </p>
         ) : null}
         <Dialog
           open={confirmDelete !== null}
-          title="Delete this message?"
+          title={CHAT_TEXT.deleteTitle}
           description={
-            confirmDelete?.role === 'user'
-              ? 'The message and the reply to it leave this chat, the model’s context and search.'
-              : 'The reply leaves this chat, the model’s context and search.'
+            confirmDelete?.role === 'user' ? CHAT_TEXT.deleteUser : CHAT_TEXT.deleteReply
           }
           onClose={() => setConfirmDelete(null)}
           fallbackFocus={() => input.current}
           footer={
             <>
-              <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
+              <Button onClick={() => setConfirmDelete(null)}>{CHAT_TEXT.cancel}</Button>
               <Button
                 variant="danger"
                 onClick={() => {
@@ -1181,7 +1195,7 @@ export function ChatView({
                   if (m) void remove(m);
                 }}
               >
-                Delete
+                {CHAT_TEXT.delete}
               </Button>
             </>
           }

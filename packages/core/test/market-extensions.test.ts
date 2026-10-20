@@ -57,9 +57,37 @@ describe('the sample catalog’s signed .novax', () => {
     expect(p.verification).toEqual({
       status: 'verified',
       reasons: [],
-      publisher: { key: EXAMPLE_LABS_PUBLIC_KEY, name: 'Example Labs' },
+      publisher: expect.objectContaining({
+        key: EXAMPLE_LABS_PUBLIC_KEY,
+        name: 'Example Labs',
+        trusted: true,
+      }),
+      // Both vouch: the catalog (its pinned key) and the bundle's own trusted publisher.
+      vouchedBy: {
+        catalog: {
+          id: SAMPLE_CATALOG_ID,
+          name: 'Sample catalog',
+          signedWith: 'pinned_key',
+          publisher: expect.objectContaining({ key: SAMPLE_CATALOG_PUBLIC_KEY, trusted: true }),
+        },
+        bundle: expect.objectContaining({
+          key: EXAMPLE_LABS_PUBLIC_KEY,
+          name: 'Example Labs',
+          trusted: true,
+        }),
+      },
     });
     expect(p.permissions.map((l) => l.kind)).toEqual(expect.arrayContaining(['command', 'tool']));
+    // The extension installer's lines keep their kind, key and detail (the tool's action:default).
+    expect(p.permissions.find((l) => l.kind === 'tool')).toMatchObject({
+      key: expect.stringMatching(/^tool:/),
+      detail: 'read:allow',
+    });
+    expect(p.permissions.find((l) => l.key.startsWith('plugin.action_default:'))).toMatchObject({
+      kind: 'action_default',
+    });
+    expect(p.publisherChange).toBeNull();
+    expect(p.requires.publisherChangeAcceptance).toBe(false);
     expect(p.details).toMatchObject({ extension: { verified: true, api: 1 } });
     const view = await env.market.install(ACCOUNT, { previewId: p.previewId });
     expect(view).toMatchObject({ verified: true, publisherKey: EXAMPLE_LABS_PUBLIC_KEY });

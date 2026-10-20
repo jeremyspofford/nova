@@ -5,11 +5,12 @@
 // the files, its runs, and a Work run started here. Follows the environment and run events, and
 // checks again every few seconds while the runner is still setting it up.
 import { useId, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { CloudEnvironmentView } from '@nova/shared';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
 import { navigate } from '../router.ts';
 import { useAnnounce } from '../services.tsx';
-import { formatWhen, plural, useInterval } from '../settings/common.ts';
+import { formatWhen, useInterval } from '../settings/common.ts';
 import { useCloudApi } from './api.ts';
 import { CloudFiles } from './CloudFiles.tsx';
 import { CloudRunsList } from './CloudRunsList.tsx';
@@ -18,6 +19,7 @@ import { CloudWorkDialog } from './CloudWorkDialog.tsx';
 import { ENVIRONMENT_EVENTS, eventEnvironmentId, useCloudEvents } from './events.ts';
 import {
   CLOUD_SETTINGS_PATH,
+  CLOUD_TEXT,
   NETWORK_TEXT,
   SETUP_TEXT,
   cloudErrorMessage,
@@ -27,6 +29,78 @@ import {
   runnerUsable,
 } from './format.ts';
 import { BackLink, ConfirmAction, Fact, StateBadge, TextBlock, useLoad } from './parts.tsx';
+
+/** One cloud environment's page. `{name}` is the environment's name. */
+export const ENVIRONMENT_TEXT = defineMessages('cloud.environment', {
+  loadFailed: 'Could not load the environment.',
+  loading: 'Loading the environment',
+  offline: 'The cloud runner is off or not set up, so this environment cannot be used now.',
+  unreachable: 'The runner cannot be reached right now.',
+  unavailable: 'Not available while the runner cannot be used.',
+  provisioning: 'The runner is still setting this environment up.',
+  deleting: 'The runner is removing this environment.',
+  notReady: 'The environment is not ready yet.',
+  newWork: 'New Work run here…',
+  newCode: 'New Code session…',
+  rebuild: 'Rebuild…',
+  about: 'About this environment',
+  network: 'Network',
+  folder: 'Folder for sessions',
+  disk: 'Disk',
+  /** {mb} is a number of megabytes. */
+  diskUpTo: 'Up to {mb} MB',
+  baseImage: 'Base image',
+  defaultImage: 'The runner’s default',
+  caches: 'Caches',
+  usedBy: 'Used by',
+  sessions:
+    '{n, plural, =0 {No active Code sessions} one {# active Code session} other {# active Code sessions}}',
+  runningNow: 'Running now',
+  /** What runs in the environment now: "2 runs, 1 command". */
+  runningNowValue:
+    '{runs, plural, =0 {No runs} one {# run} other {# runs}}, {commands, plural, =0 {no commands} one {# command} other {# commands}}',
+  readySince: 'Ready since',
+  runsHere: 'Runs here',
+  runsHereEmpty: 'Runs start when a Code session or Work run uses this environment.',
+  rebuildTitle: 'Rebuild {name}?',
+  rebuildBody:
+    'The runner clones the repositories again and runs the setup script again. Changes in the work folder that are not pushed or in a snapshot are lost; caches stay.',
+  rebuildConfirm: 'Rebuild',
+  rebuildFailed: 'Could not rebuild the environment.',
+  rebuilding: 'Rebuilding {name}.',
+  deleteTitle: 'Delete {name}?',
+  deleteBody:
+    'It is removed from the runner with its files and snapshots. Sessions that used it keep their history.',
+  deleteFailed: 'Could not delete the environment.',
+  deleted: 'Deleted {name}.',
+  repos: {
+    heading: 'Repositories',
+    none: 'No repositories. Sessions work in an empty /workspace folder.',
+    /** {ref} is a branch name. */
+    branch: 'Branch {ref}',
+    defaultBranch: 'Default branch',
+    /** {commit} is a short commit hash. */
+    at: 'At {commit}',
+    notCloned: 'Not cloned yet',
+  },
+  setup: {
+    heading: 'Setup',
+    script: 'The setup script',
+    notReported: 'The runner has not reported the setup yet.',
+    log: 'The end of the setup log',
+  },
+});
+
+/** The setup script's result in a sentence, with when it ended. */
+function setupSentence(s: NonNullable<NonNullable<CloudEnvironmentView['runner']>['setup']>) {
+  const when = s.endedAt ? formatWhen(s.endedAt) : null;
+  if (s.status === 'failed' && s.exitCode !== null)
+    return when
+      ? SETUP_TEXT.failedCodeAt({ code: s.exitCode, when })
+      : SETUP_TEXT.failedCode({ code: s.exitCode });
+  if (when && s.status !== 'none') return SETUP_TEXT.statusAt[s.status]({ when });
+  return SETUP_TEXT.status[s.status];
+}
 
 /** How often a provisioning environment is checked again (besides its events). */
 export const PROVISIONING_POLL_MS = 5000;
@@ -52,43 +126,38 @@ export function CloudEnvironmentPage({ id }: { id: string }) {
   const e = env.data;
   useInterval(env.reload, PROVISIONING_POLL_MS, e?.runner?.status === 'provisioning');
 
+  const S = ENVIRONMENT_TEXT;
   if (!e)
     return (
       <div className="stack cl-page">
-        <BackLink to={CLOUD_SETTINGS_PATH} label="Cloud runner" />
+        <BackLink to={CLOUD_SETTINGS_PATH} label={CLOUD_TEXT.cloudRunner} />
         {env.error ? (
           <div className="ws-error" role="alert">
-            <p>{cloudErrorMessage(env.error, 'Could not load the environment.')}</p>
-            <Button onClick={env.reload}>Retry</Button>
+            <p>{cloudErrorMessage(env.error, S.loadFailed)}</p>
+            <Button onClick={env.reload}>{CLOUD_TEXT.retry}</Button>
           </div>
         ) : (
-          <Spinner label="Loading the environment" />
+          <Spinner label={S.loading} />
         )}
       </div>
     );
 
   const r = e.runner;
   const usable = runner.data ? runnerUsable(runner.data) : true;
-  const offline = !usable
-    ? 'The cloud runner is off or not set up, so this environment cannot be used now.'
-    : !r
-      ? 'The runner cannot be reached right now.'
-      : null;
+  const offline = !usable ? S.offline : !r ? S.unreachable : null;
   // Sections say briefly why they wait; the notice above explains an unusable runner.
   const busy =
-    (offline ? 'Not available while the runner cannot be used.' : null) ??
-    (r?.status === 'provisioning'
-      ? 'The runner is still setting this environment up.'
-      : r?.status === 'deleting'
-        ? 'The runner is removing this environment.'
-        : null);
+    (offline ? S.unavailable : null) ??
+    (r?.status === 'provisioning' ? S.provisioning : r?.status === 'deleting' ? S.deleting : null);
   const c = e.connection;
 
   return (
     <div className="stack cl-page">
-      <BackLink to={CLOUD_SETTINGS_PATH} label="Cloud runner" />
+      <BackLink to={CLOUD_SETTINGS_PATH} label={CLOUD_TEXT.cloudRunner} />
       <header className="ws-page-header">
-        <h2 className="cl-title">{e.label}</h2>
+        <h2 className="cl-title" dir="auto">
+          {e.label}
+        </h2>
         <StateBadge spec={environmentState(e)} />
       </header>
       {e.detail && e.status !== 'ok' ? <p className="muted ws-flush">{e.detail}</p> : null}
@@ -102,45 +171,51 @@ export function CloudEnvironmentPage({ id }: { id: string }) {
         <Button
           variant="primary"
           disabled={r?.status !== 'ready' || !usable}
-          title={r?.status !== 'ready' ? 'The environment is not ready yet.' : undefined}
+          title={r?.status !== 'ready' ? S.notReady : undefined}
           onClick={() => setWorking(true)}
         >
-          <Icon name="work" /> New Work run here…
+          <Icon name="work" /> {S.newWork}
         </Button>
         <Button onClick={() => navigate('/code?new=1')}>
-          <Icon name="code" /> New Code session…
+          <Icon name="code" /> {S.newCode}
         </Button>
         <Button disabled={!!busy} title={busy ?? undefined} onClick={() => setRebuilding(true)}>
-          <Icon name="refresh" /> Rebuild…
+          <Icon name="refresh" /> {S.rebuild}
         </Button>
         <Button variant="danger" onClick={() => setDeleting(true)}>
-          <Icon name="trash" /> Delete…
+          <Icon name="trash" /> {CLOUD_TEXT.deleteMore}
         </Button>
       </div>
 
-      <section className="ws-section" aria-label="About this environment">
+      <section className="ws-section" aria-label={S.about}>
         <dl className="cl-facts">
-          <Fact term="Network">{NETWORK_TEXT[c.network]}</Fact>
-          <Fact term="Folder for sessions">
-            <code className="ws-code-inline cl-break">{c.folder}</code>
+          <Fact term={S.network}>{NETWORK_TEXT[c.network]}</Fact>
+          <Fact term={S.folder}>
+            <code className="ws-code-inline cl-break" dir="ltr">
+              {c.folder}
+            </code>
           </Fact>
-          <Fact term="Disk">
+          <Fact term={S.disk}>
             {r
-              ? `${formatBytes(r.usage.diskBytes)} of ${formatBytes(r.caps.diskBytes)}`
-              : `Up to ${c.diskMb.toLocaleString()} MB`}
+              ? CLOUD_TEXT.usedOf({
+                  used: formatBytes(r.usage.diskBytes),
+                  cap: formatBytes(r.caps.diskBytes),
+                })
+              : S.diskUpTo({ mb: c.diskMb })}
           </Fact>
-          <Fact term="Base image">{c.baseImage ?? 'The runner’s default'}</Fact>
-          <Fact term="Caches">{c.caches.length ? c.caches.join(', ') : 'None'}</Fact>
-          <Fact term="Used by">
-            {e.sessions ? plural(e.sessions, 'active Code session') : 'No active Code sessions'}
+          <Fact term={S.baseImage}>{c.baseImage ?? S.defaultImage}</Fact>
+          <Fact term={S.caches}>
+            {c.caches.length
+              ? fmt.list(c.caches, { type: 'unit', style: 'short' })
+              : CLOUD_TEXT.none}
           </Fact>
+          <Fact term={S.usedBy}>{S.sessions({ n: e.sessions })}</Fact>
           {r ? (
-            <Fact term="Running now">
-              {r.runs.active ? plural(r.runs.active, 'run') : 'No runs'},{' '}
-              {r.processes.running ? plural(r.processes.running, 'command') : 'no commands'}
+            <Fact term={S.runningNow}>
+              {S.runningNowValue({ runs: r.runs.active, commands: r.processes.running })}
             </Fact>
           ) : null}
-          {r?.readyAt ? <Fact term="Ready since">{formatWhen(r.readyAt)}</Fact> : null}
+          {r?.readyAt ? <Fact term={S.readySince}>{formatWhen(r.readyAt)}</Fact> : null}
         </dl>
       </section>
 
@@ -151,8 +226,8 @@ export function CloudEnvironmentPage({ id }: { id: string }) {
       <CloudRunsList
         query={{ environmentId: id }}
         environments={[e]}
-        title="Runs here"
-        empty="Runs start when a Code session or Work run uses this environment."
+        title={S.runsHere}
+        empty={S.runsHereEmpty}
       />
 
       <CloudWorkDialog
@@ -167,31 +242,31 @@ export function CloudEnvironmentPage({ id }: { id: string }) {
       />
       <ConfirmAction
         open={rebuilding}
-        title={`Rebuild ${e.label}?`}
-        description="The runner clones the repositories again and runs the setup script again. Changes in the work folder that are not pushed or in a snapshot are lost; caches stay."
-        confirmLabel="Rebuild"
+        title={S.rebuildTitle({ name: e.label })}
+        description={S.rebuildBody}
+        confirmLabel={S.rebuildConfirm}
         danger
-        errorText={(err) => cloudErrorMessage(err, 'Could not rebuild the environment.')}
+        errorText={(err) => cloudErrorMessage(err, S.rebuildFailed)}
         onClose={() => setRebuilding(false)}
         onConfirm={async () => {
           const next = await api.rebuildCloudEnvironment(id);
           setRebuilding(false);
           env.setData(() => next);
-          announce(`Rebuilding ${e.label}.`);
+          announce(S.rebuilding({ name: e.label }));
         }}
       />
       <ConfirmAction
         open={deleting}
-        title={`Delete ${e.label}?`}
-        description="It is removed from the runner with its files and snapshots. Sessions that used it keep their history."
-        confirmLabel="Delete"
+        title={S.deleteTitle({ name: e.label })}
+        description={S.deleteBody}
+        confirmLabel={CLOUD_TEXT.delete}
         danger
-        errorText={(err) => cloudErrorMessage(err, 'Could not delete the environment.')}
+        errorText={(err) => cloudErrorMessage(err, S.deleteFailed)}
         onClose={() => setDeleting(false)}
         onConfirm={async () => {
           await api.deleteCloudEnvironment(id);
           setDeleting(false);
-          toast.show(`Deleted ${e.label}.`, { tone: 'success' });
+          toast.show(S.deleted({ name: e.label }), { tone: 'success' });
           navigate(CLOUD_SETTINGS_PATH);
         }}
       />
@@ -202,13 +277,14 @@ export function CloudEnvironmentPage({ id }: { id: string }) {
 function Repositories({ e }: { e: CloudEnvironmentView }) {
   const headingId = useId();
   const reported = e.runner?.repos ?? [];
+  const S = ENVIRONMENT_TEXT.repos;
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>Repositories</h3>
+      <h3 id={headingId}>{S.heading}</h3>
       {e.connection.repoUrls.length === 0 ? (
-        <p className="muted">No repositories. Sessions work in an empty /workspace folder.</p>
+        <p className="muted">{S.none}</p>
       ) : (
-        <ul className="ws-list" aria-label="Repositories">
+        <ul className="ws-list" aria-label={S.heading}>
           {e.connection.repoUrls.map((url) => {
             const name = repoName(url);
             const r = reported.find((x) => x.name === name) ?? null;
@@ -216,16 +292,18 @@ function Repositories({ e }: { e: CloudEnvironmentView }) {
               <li key={url} className="ws-list-row" aria-label={name}>
                 <span className="cl-row-main">
                   <span className="cl-strong">{name}</span>
-                  <code className="ws-code-inline cl-break cl-small">{url}</code>
+                  <code className="ws-code-inline cl-break cl-small" dir="ltr">
+                    {url}
+                  </code>
                   <span className="muted ws-row-meta">
                     {r ? (
                       <>
-                        <span>{r.path}</span>
-                        <span>{r.ref ? `Branch ${r.ref}` : 'Default branch'}</span>
-                        {r.head ? <span>At {r.head.slice(0, 7)}</span> : null}
+                        <span dir="ltr">{r.path}</span>
+                        <span>{r.ref ? S.branch({ ref: r.ref }) : S.defaultBranch}</span>
+                        {r.head ? <span>{S.at({ commit: r.head.slice(0, 7) })}</span> : null}
                       </>
                     ) : (
-                      <span>Not cloned yet</span>
+                      <span>{S.notCloned}</span>
                     )}
                   </span>
                 </span>
@@ -241,13 +319,14 @@ function Repositories({ e }: { e: CloudEnvironmentView }) {
 function Setup({ e }: { e: CloudEnvironmentView }) {
   const headingId = useId();
   const s = e.runner?.setup ?? null;
+  const S = ENVIRONMENT_TEXT.setup;
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>Setup</h3>
+      <h3 id={headingId}>{S.heading}</h3>
       {e.connection.setupScript ? (
         <details className="ws-advanced">
-          <summary>The setup script</summary>
-          <TextBlock text={e.connection.setupScript} label="The setup script" />
+          <summary>{S.script}</summary>
+          <TextBlock text={e.connection.setupScript} label={S.script} />
         </details>
       ) : null}
       {s ? (
@@ -260,16 +339,14 @@ function Setup({ e }: { e: CloudEnvironmentView }) {
             name={s.status === 'failed' ? 'alert' : s.status === 'running' ? 'refresh' : 'check'}
           />
           <span>
-            {SETUP_TEXT[s.status]}
-            {s.exitCode !== null && s.status === 'failed' ? ` (exit code ${s.exitCode})` : ''}
-            {s.endedAt ? `, ${formatWhen(s.endedAt)}` : ''}.
-            {s.status === 'failed' ? ' Fix the script or the repositories, then rebuild.' : ''}
+            {setupSentence(s)}
+            {s.status === 'failed' ? ` ${SETUP_TEXT.fixIt}` : null}
           </span>
         </p>
       ) : (
-        <p className="muted">The runner has not reported the setup yet.</p>
+        <p className="muted">{S.notReported}</p>
       )}
-      {s?.log ? <TextBlock text={s.log} label="The end of the setup log" /> : null}
+      {s?.log ? <TextBlock text={s.log} label={S.log} /> : null}
     </section>
   );
 }

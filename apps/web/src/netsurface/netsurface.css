@@ -140,7 +140,7 @@
   gap: var(--u-space-2);
   padding: var(--u-space-3);
   border: 1px solid var(--u-border);
-  border-left: 4px solid var(--u-info);
+  border-inline-start: 4px solid var(--u-info);
   border-radius: var(--u-radius-sm);
   background: var(--u-surface-2);
 }
@@ -153,19 +153,19 @@
   overflow-wrap: anywhere;
 }
 .net-notice[data-tone='ok'] {
-  border-left-color: var(--u-success);
+  border-inline-start-color: var(--u-success);
 }
 .net-notice[data-tone='ok'] > svg {
   color: var(--u-success);
 }
 .net-notice[data-tone='warn'] {
-  border-left-color: var(--u-warn);
+  border-inline-start-color: var(--u-warn);
 }
 .net-notice[data-tone='warn'] > svg {
   color: var(--u-warn);
 }
 .net-notice[data-tone='bad'] {
-  border-left-color: var(--u-danger);
+  border-inline-start-color: var(--u-danger);
 }
 .net-notice[data-tone='bad'] > svg {
   color: var(--u-danger);
@@ -188,7 +188,7 @@
 }
 .net-unavailable-text .nv-btn {
   margin-top: var(--u-space-1);
-  margin-left: calc(-1 * var(--u-space-3));
+  margin-inline-start: calc(-1 * var(--u-space-3));
 }
 .net-cuts {
   display: flex;
@@ -223,11 +223,11 @@
   display: grid;
   gap: var(--u-space-1);
   margin: 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
   font-size: var(--u-text-sm);
 }
 .net-paths {
-  padding-left: 0;
+  padding-inline-start: 0;
   list-style: none;
 }
 .net-advertised li,
@@ -253,7 +253,7 @@
   gap: var(--u-space-2);
   padding: var(--u-space-3);
   border: 1px solid var(--u-border);
-  border-left: 4px solid var(--u-warn);
+  border-inline-start: 4px solid var(--u-warn);
   border-radius: var(--u-radius-md);
   background: var(--u-surface);
 }
@@ -391,14 +391,14 @@
 }
 .net-step[data-status='rollback_failed'],
 .net-step[data-status='failed'] {
-  border-left: 4px solid var(--u-danger);
+  border-inline-start: 4px solid var(--u-danger);
 }
 .net-step[data-status='rolled_back'] {
-  border-left: 4px solid var(--u-warn);
+  border-inline-start: 4px solid var(--u-warn);
 }
 .net-step[data-status='verified'],
 .net-step[data-status='skipped'] {
-  border-left: 4px solid var(--u-success);
+  border-inline-start: 4px solid var(--u-success);
 }
 .net-step-head {
   display: flex;
@@ -435,7 +435,7 @@
 .net-consent {
   margin: 0;
   padding: var(--u-space-3);
-  border-left: 4px solid var(--u-accent);
+  border-inline-start: 4px solid var(--u-accent);
   background: var(--u-surface-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;

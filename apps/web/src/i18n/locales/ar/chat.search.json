@@ -1,0 +1,11 @@
+{
+  "close": "إغلاق",
+  "failed": "فشل البحث.",
+  "label": "البحث في المحادثات",
+  "list": "نتائج البحث",
+  "none": "لا توجد رسائل تطابق «{query}».",
+  "results": "{n, plural, zero {لا نتائج} one {نتيجة واحدة} two {نتيجتان} few {# نتائج} many {# نتيجة} other {# نتيجة}}",
+  "role": "{role, select, user {أنت} assistant {المساعد} system {النظام} tool {أداة} summary {ملخص} other {أخرى}}",
+  "searching": "جارٍ البحث",
+  "untitled": "محادثة بلا عنوان"
+}

@@ -1,6 +1,14 @@
 // The bundled sample for the first task (docs/04 §8): an original, harmless document to summarize.
 
-export const SAMPLE_PROMPT = 'Summarize this sample document';
+// The document is sample content and stays as written; the prompt the UI fills in is a message
+// (ONBOARDING_TEXT.sample.prompt), so it follows the language.
+import { ONBOARDING_TEXT } from './strings.ts';
+
+/**
+ * The prompt as read when this module loads, which is before any locale is active: English. For
+ * tests and tooling only; the UI reads ONBOARDING_TEXT.sample.prompt at render time.
+ */
+export const SAMPLE_PROMPT: string = ONBOARDING_TEXT.sample.prompt;
 
 export const SAMPLE_NAME = 'sample-garden-notes.md';
 

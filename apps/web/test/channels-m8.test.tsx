@@ -7,7 +7,14 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import type { ChannelBindingViewM7 } from '@nova/shared';
 import { ChannelsPage } from '../src/channels/ChannelsPage.tsx';
-import { MAIL_OAUTH_TEXT, isFileRow, mailOAuthRedirectUri } from '../src/channels/format.ts';
+import {
+  MAIL_OAUTH_TEXT,
+  entryFiles,
+  fileReason,
+  fileSize,
+  isFileRow,
+  mailOAuthRedirectUri,
+} from '../src/channels/format.ts';
 import { mailOAuthRowNote, usesMailOAuth } from '../src/channels/MailOAuth.tsx';
 import { oauthRedirect } from '../src/settings/McpAuth.tsx';
 import { MEMBER_MODE_TEXT } from '../src/team/format.ts';
@@ -111,7 +118,7 @@ describe('email OAuth (FR-110, M8)', () => {
     expect(channels.secrets[`${made.id}/password`]).toBeUndefined();
     expect(done.getByText('Not authorized yet')).toBeTruthy();
     await userEvent.click(
-      done.getByRole('button', { name: MAIL_OAUTH_TEXT.authorizeLabel(made.label) }),
+      done.getByRole('button', { name: MAIL_OAUTH_TEXT.authorizeLabel({ label: made.label }) }),
     );
     await waitFor(() => expect(go).toHaveBeenCalledTimes(1));
     expect(api.startChannelOAuth).toHaveBeenCalledWith(made.id);
@@ -126,7 +133,9 @@ describe('email OAuth (FR-110, M8)', () => {
     expect(within(row).getByText(MAIL_OAUTH_TEXT.rowNeeds)).toBeTruthy();
     expect(within(row).getByText('Needs setup')).toBeTruthy();
     await userEvent.click(
-      within(row).getByRole('button', { name: MAIL_OAUTH_TEXT.authorizeLabel('Email with Sam') }),
+      within(row).getByRole('button', {
+        name: MAIL_OAUTH_TEXT.authorizeLabel({ label: 'Email with Sam' }),
+      }),
     );
     await waitFor(() => expect(go).toHaveBeenCalledTimes(1));
     // The provider sends the browser back; the Hub stored the tokens.
@@ -170,24 +179,28 @@ describe('email OAuth (FR-110, M8)', () => {
       await screen.findByRole('button', { name: 'Settings of Email with Sam' }),
     );
     const panel = await screen.findByRole('group', {
-      name: MAIL_OAUTH_TEXT.panelLabel('Email with Sam'),
+      name: MAIL_OAUTH_TEXT.panelLabel({ label: 'Email with Sam' }),
     });
     expect(within(panel).getByText('Authorized')).toBeTruthy();
-    expect(within(panel).getByText(MAIL_OAUTH_TEXT.scopes('imap smtp'))).toBeTruthy();
+    expect(within(panel).getByText(MAIL_OAUTH_TEXT.scopes({ scopes: 'imap smtp' }))).toBeTruthy();
     expect(within(panel).getByText(MAIL_OAUTH_TEXT.renews)).toBeTruthy();
     // The provider's settings show because this mailbox uses OAuth.
     expect(screen.getByLabelText<HTMLInputElement>('Authorization URL').value).toBe(
       OAUTH.oauthAuthUrl,
     );
     await userEvent.click(
-      within(panel).getByRole('button', { name: MAIL_OAUTH_TEXT.signOutLabel('Email with Sam') }),
+      within(panel).getByRole('button', {
+        name: MAIL_OAUTH_TEXT.signOutLabel({ label: 'Email with Sam' }),
+      }),
     );
     const dialog = screen.getByRole('dialog', { name: MAIL_OAUTH_TEXT.signOutTitle });
     expect(dialog.textContent).toContain(MAIL_OAUTH_TEXT.signOutWhat);
     expect(api.revokeChannelOAuth).not.toHaveBeenCalled();
     await userEvent.click(within(dialog).getByRole('button', { name: MAIL_OAUTH_TEXT.signOut }));
     await waitFor(() => expect(api.revokeChannelOAuth).toHaveBeenCalledWith('em1'));
-    expect(await screen.findByText(MAIL_OAUTH_TEXT.signedOut('Email with Sam'))).toBeTruthy();
+    expect(
+      await screen.findByText(MAIL_OAUTH_TEXT.signedOut({ label: 'Email with Sam' })),
+    ).toBeTruthy();
     expect(state.mailOAuth.em1?.status).toBe('needs_auth');
     expect(await within(panel).findByText('Not authorized yet')).toBeTruthy();
   });
@@ -211,19 +224,21 @@ describe('email OAuth (FR-110, M8)', () => {
     expect(within(row).getByText(MAIL_OAUTH_TEXT.rowExpired)).toBeTruthy();
     expect(
       within(row).getByRole('button', {
-        name: MAIL_OAUTH_TEXT.authorizeAgainLabel('Email with Sam'),
+        name: MAIL_OAUTH_TEXT.authorizeAgainLabel({ label: 'Email with Sam' }),
       }),
     ).toBeTruthy();
     await userEvent.click(within(row).getByRole('button', { name: 'Settings of Email with Sam' }));
     const panel = await screen.findByRole('group', {
-      name: MAIL_OAUTH_TEXT.panelLabel('Email with Sam'),
+      name: MAIL_OAUTH_TEXT.panelLabel({ label: 'Email with Sam' }),
     });
     expect(within(panel).getByText('Authorization expired')).toBeTruthy();
     expect(within(panel).getByText(MAIL_OAUTH_TEXT.expiredHelp)).toBeTruthy();
-    expect(within(panel).getByText(MAIL_OAUTH_TEXT.lastError('invalid_grant'))).toBeTruthy();
+    expect(
+      within(panel).getByText(MAIL_OAUTH_TEXT.lastError({ error: 'invalid_grant' })),
+    ).toBeTruthy();
     await userEvent.click(
       within(panel).getByRole('button', {
-        name: MAIL_OAUTH_TEXT.authorizeAgainLabel('Email with Sam'),
+        name: MAIL_OAUTH_TEXT.authorizeAgainLabel({ label: 'Email with Sam' }),
       }),
     );
     await waitFor(() => expect(go).toHaveBeenCalledTimes(1));
@@ -267,7 +282,9 @@ describe('email OAuth (FR-110, M8)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(await screen.findByText('Email with Kim saved.')).toBeTruthy();
     expect(
-      await screen.findByRole('group', { name: MAIL_OAUTH_TEXT.panelLabel('Email with Kim') }),
+      await screen.findByRole('group', {
+        name: MAIL_OAUTH_TEXT.panelLabel({ label: 'Email with Kim' }),
+      }),
     ).toBeTruthy();
   });
 
@@ -276,7 +293,9 @@ describe('email OAuth (FR-110, M8)', () => {
     state.providerUrl = 'http://login.mail.example.com/authorize?x=1';
     const row = await screen.findByRole('listitem', { name: 'Email with Sam' });
     await userEvent.click(
-      within(row).getByRole('button', { name: MAIL_OAUTH_TEXT.authorizeLabel('Email with Sam') }),
+      within(row).getByRole('button', {
+        name: MAIL_OAUTH_TEXT.authorizeLabel({ label: 'Email with Sam' }),
+      }),
     );
     expect(await screen.findByText(MAIL_OAUTH_TEXT.unsafeUrl)).toBeTruthy();
     expect(go).not.toHaveBeenCalled();
@@ -318,7 +337,138 @@ describe('email OAuth (FR-110, M8)', () => {
 });
 
 describe('files in the message log (FR-110, M8)', () => {
-  it('marks a file the agent sent and explains held-back files', async () => {
+  it('lists each entry’s files by name, size and state, with why in plain words', async () => {
+    const TG = bindingM7({ id: 'tg1', kind: 'telegram', label: 'Telegram family' });
+    const photo = {
+      name: 'photo.jpg',
+      size: 2048,
+      contentType: 'image/jpeg',
+      direction: 'in' as const,
+      status: 'received' as const,
+      attachmentId: 'att1',
+    };
+    const movie = {
+      name: 'holiday.mov',
+      size: null,
+      contentType: 'video/quicktime',
+      direction: 'in' as const,
+      status: 'failed' as const,
+      reason: '"holiday.mov" is 80.0 MB; the limit is 25.0 MB',
+    };
+    await open({
+      channels: { bindings: [TG] },
+      misc: {
+        messages: [
+          messageView({
+            bindingId: 'tg1',
+            direction: 'in',
+            status: 'started',
+            file: photo,
+            files: [photo, movie],
+          }),
+          messageView({
+            bindingId: 'tg1',
+            direction: 'out',
+            status: 'sent',
+            reason: 'file',
+            file: {
+              name: 'report.pdf',
+              size: 5 * 1024 * 1024,
+              contentType: 'application/pdf',
+              direction: 'out',
+              status: 'sent',
+              artifactId: 'art1',
+            },
+          }),
+          messageView({
+            bindingId: 'tg1',
+            direction: 'out',
+            status: 'withheld',
+            reason: 'rate_limited',
+            file: {
+              name: 'notes.txt',
+              size: 300,
+              contentType: 'text/plain',
+              direction: 'out',
+              status: 'withheld',
+              reason: 'rate_limited',
+            },
+          }),
+          messageView({
+            bindingId: 'tg1',
+            direction: 'out',
+            status: 'failed',
+            reason: 'connection reset by the service',
+            file: {
+              name: 'chart.png',
+              size: 40_000,
+              contentType: 'image/png',
+              direction: 'out',
+              status: 'failed',
+              reason: 'files are not read here',
+            },
+          }),
+        ],
+      },
+    });
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Messages of Telegram family' }),
+    );
+    const log = await screen.findByRole('list', { name: /Messages of Telegram family/ });
+
+    // Received with two files: one kept, one refused before it was read.
+    const two = within(log).getByRole('list', { name: '2 files of this message' });
+    const [kept, refused] = within(two).getAllByRole('listitem');
+    expect(kept!.textContent).toContain('photo.jpg');
+    expect(kept!.textContent).toContain('2 KB');
+    expect(within(kept!).getByText('Kept with the chat')).toBeTruthy();
+    expect(refused!.textContent).toContain('holiday.mov');
+    expect(refused!.textContent).toContain('size unknown');
+    expect(within(refused!).getByText('Not kept')).toBeTruthy();
+    expect(refused!.textContent).toContain('"holiday.mov" is 80.0 MB; the limit is 25.0 MB.');
+
+    // Sent from an artifact: its size and Sent; no old-style badge.
+    const sent = within(log).getByText('report.pdf').closest('.ch-log-file')!;
+    expect(sent.textContent).toContain('5 MB');
+    expect(within(sent as HTMLElement).getByText('Sent')).toBeTruthy();
+    expect(within(log).queryByText('File')).toBeNull();
+
+    // Held back: the reason is said once, on the entry.
+    const held = within(log).getByText('notes.txt').closest('li.ch-log-row')!;
+    expect(
+      within(held as HTMLElement).getAllByText('Over this channel’s rate limit.'),
+    ).toHaveLength(1);
+    expect(within(held as HTMLElement).getAllByText('Held back')).toHaveLength(2);
+
+    // Failed: the file's own reason in words, next to the entry's.
+    const failed = within(log).getByText('chart.png').closest('.ch-log-file')!;
+    expect(within(failed as HTMLElement).getByText('Not delivered')).toBeTruthy();
+    expect(failed.textContent).toContain('This channel cannot download files.');
+  });
+
+  it('words file sizes and reasons, and reads either file field', () => {
+    expect(fileSize(null)).toBe('size unknown');
+    expect(fileSize(900)).toBe('900 B');
+    expect(fileSize(15 * 1024)).toBe('15 KB');
+    expect(fileReason({ reason: 'too many files' })).toBe('Too many files in one message.');
+    expect(fileReason({ reason: 'not_allowed' })).toBe(
+      'It would share a private detail, and the policy says never.',
+    );
+    expect(fileReason({ reason: 'some_new_code' })).toBe('Some new code.');
+    expect(fileReason({})).toBeNull();
+    const f = {
+      name: 'a.txt',
+      size: 1,
+      contentType: null,
+      direction: 'in' as const,
+      status: 'received' as const,
+    };
+    expect(entryFiles({ file: f })).toEqual([f]);
+    expect(entryFiles({ file: f, files: [f, { ...f, name: 'b.txt' }] })).toHaveLength(2);
+    expect(entryFiles({})).toEqual([]);
+  });
+
+  it('marks a file row logged before files were kept, and explains held-back files', async () => {
     const TG = bindingM7({ id: 'tg1', kind: 'telegram', label: 'Telegram family' });
     await open({
       channels: { bindings: [TG] },

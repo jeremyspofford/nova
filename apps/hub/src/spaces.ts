@@ -2,7 +2,10 @@
 // routes over SpaceService and SiteService, and the tool source with `page.read`, `page.edit`,
 // `page.comment` (once the account has a space) and `visualize.create`, which joins the chat
 // loop's tool sources so every call passes the policy gate. A site's preview is served sandboxed
-// (an opaque origin, never same-origin); publishing needs the user's explicit `confirm`.
+// (an opaque origin, never same-origin); publishing needs the user's explicit `confirm`. M8 adds
+// the order of a space's pages in one write, deleted pages that come back, a preview of a site's
+// new source, the plan of a publish, and remote hosting targets (WebDAV) whose uploads pass the
+// egress policy and whose credentials live only in the vault.
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
@@ -11,13 +14,18 @@ import {
   createCommentSchema,
   createPageSchema,
   createSiteSchema,
+  createHostingTargetSchema,
   createSpaceSchema,
   idSchema,
+  publishPlanSchema,
   publishSiteSchema,
+  reorderPagesSchema,
   resolveCommentSchema,
   restorePageSchema,
   savePageSchema,
+  siteSourcePreviewSchema,
   unpublishSiteSchema,
+  updateHostingTargetSchema,
   updatePageSchema,
   updateSiteSchema,
   updateSpaceSchema,
@@ -26,7 +34,10 @@ import {
 import {
   ArtifactService,
   SiteService,
+  SiteTargetService,
   SpaceService,
+  hostingEgress,
+  managedRestrictions,
   noopAudit,
   spacesToolSource,
   type AuditSink,
@@ -37,6 +48,8 @@ import type { HubArea, HubContext } from './hub-context.ts';
 export interface SpacesArea extends HubArea {
   spaces: SpaceService;
   sites: SiteService;
+  /** M8 remote hosting targets for sites. */
+  targets: SiteTargetService;
   /** `visualize.create` and the page tools, for the chat loop's tool sources. */
   tools: ToolSourceProvider;
   /** The ops area's audit log (space edits, proposals, publishes). */
@@ -48,6 +61,10 @@ export interface SpacesDeps {
   /** The tools area's artifact service; by default the area makes its own over the same tables. */
   artifacts?: ArtifactService;
   now?: () => Date;
+  /** Tests: the HTTP client remote hosting targets use (under the egress check). */
+  fetch?: typeof fetch;
+  /** Tests: the per-request timeout of remote hosting targets. */
+  hostingTimeoutMs?: number;
 }
 
 /** A site preview: no script, nothing loads from elsewhere, framed only by Nova's own pages. */
@@ -67,6 +84,7 @@ const proposalsQuery = z.object({
   pageId: idSchema.optional(),
 });
 const siteParams = z.object({ id: idSchema });
+const targetParams = z.object({ targetId: idSchema });
 const siteVersionParams = z.object({ id: idSchema, version: z.coerce.number().int().min(1) });
 
 export function setupSpaces(ctx: HubContext, deps: SpacesDeps = {}): Promise<SpacesArea> {
@@ -80,6 +98,26 @@ export function setupSpaces(ctx: HubContext, deps: SpacesDeps = {}): Promise<Spa
   });
   const artifacts =
     deps.artifacts ?? new ArtifactService({ db: ctx.db, events: ctx.events, dataDir: ctx.dataDir });
+  // Uploads to remote targets pass the egress ceiling: the owner's mode and deny list narrowed by
+  // managed policy (an unreadable policy fails closed). `sites.remoteTargets` can turn them off.
+  const targets = new SiteTargetService({
+    db: ctx.db,
+    secrets: ctx.secrets,
+    events: ctx.events,
+    audit,
+    ...(deps.now ? { now: deps.now } : {}),
+    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    ...(deps.hostingTimeoutMs ? { timeoutMs: deps.hostingTimeoutMs } : {}),
+    enabled: () => ctx.setting('sites.remoteTargets'),
+    egress: async () =>
+      hostingEgress(
+        {
+          mode: await ctx.setting('network.egressMode'),
+          deny: await ctx.setting('network.egressDeny'),
+        },
+        managedRestrictions(await ctx.setting('managed.restrict')),
+      ),
+  });
   const sites = new SiteService({
     db: ctx.db,
     events: ctx.events,
@@ -89,6 +127,7 @@ export function setupSpaces(ctx: HubContext, deps: SpacesDeps = {}): Promise<Spa
     audit,
     ...(deps.now ? { now: deps.now } : {}),
     publishRoot: () => ctx.setting('sites.publishRoot'),
+    targets,
   });
   const tools = spacesToolSource(spaces, artifacts);
 
@@ -97,9 +136,10 @@ export function setupSpaces(ctx: HubContext, deps: SpacesDeps = {}): Promise<Spa
       .prepare(
         `SELECT (SELECT count(*) FROM space WHERE deleted_at IS NULL) AS spaces,
                 (SELECT count(*) FROM space_page WHERE deleted_at IS NULL) AS pages,
-                (SELECT count(*) FROM site WHERE deleted_at IS NULL) AS sites`,
+                (SELECT count(*) FROM site WHERE deleted_at IS NULL) AS sites,
+                (SELECT count(*) FROM site_target WHERE deleted_at IS NULL) AS targets`,
       )
-      .get() as { spaces: number; pages: number; sites: number };
+      .get() as { spaces: number; pages: number; sites: number; targets: number };
     return { ...row, publishRoot: await sites.publishRoot() };
   });
 
@@ -176,6 +216,34 @@ export function setupSpaces(ctx: HubContext, deps: SpacesDeps = {}): Promise<Spa
       const { id, pageId } = pageParams.parse(req.params);
       await spaces.deletePage(accountId, id, pageId);
       return { ok: true };
+    });
+
+    // M8: the whole order in one write; a list that misses a page is 409 `order_stale`.
+    app.put('/api/v1/spaces/:id/order', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { id } = spaceParams.parse(req.params);
+      const { pageIds } = reorderPagesSchema.parse(req.body);
+      return { items: await spaces.reorderPages(accountId, id, pageIds) };
+    });
+
+    // M8: what deleting a page takes with it, for the confirmation.
+    app.get('/api/v1/spaces/:id/pages/:pageId/deletion', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { id, pageId } = pageParams.parse(req.params);
+      return spaces.deletionImpact(accountId, id, pageId);
+    });
+
+    // M8: deleted pages the space keeps, and bringing one back.
+    app.get('/api/v1/spaces/:id/deleted-pages', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { id } = spaceParams.parse(req.params);
+      return { items: await spaces.listDeletedPages(accountId, id) };
+    });
+
+    app.post('/api/v1/spaces/:id/pages/:pageId/undelete', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { id, pageId } = pageParams.parse(req.params);
+      return spaces.undeletePage(accountId, id, pageId);
     });
 
     app.get('/api/v1/spaces/:id/pages/:pageId/versions', async (req) => {
@@ -288,6 +356,14 @@ export function setupSpaces(ctx: HubContext, deps: SpacesDeps = {}): Promise<Spa
       return { ok: true };
     });
 
+    // M8: what a build from another source would make, against the latest version; nothing is
+    // stored. The change itself is PATCH `{source}`.
+    app.post('/api/v1/sites/:id/source-preview', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { id } = siteParams.parse(req.params);
+      return sites.previewSource(accountId, id, siteSourcePreviewSchema.parse(req.body ?? {}));
+    });
+
     app.post('/api/v1/sites/:id/build', async (req, reply) => {
       const accountId = await ctx.accountOf(req);
       const { id } = siteParams.parse(req.params);
@@ -336,6 +412,14 @@ export function setupSpaces(ctx: HubContext, deps: SpacesDeps = {}): Promise<Spa
       return { items: await sites.publishes(accountId, id) };
     });
 
+    // M8: what a publish would do (where, which files, what it replaces or takes down, whether
+    // it can be undone, whether the network policy lets it through), before the user confirms.
+    app.post('/api/v1/sites/:id/publish-plan', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { id } = siteParams.parse(req.params);
+      return sites.plan(accountId, id, publishPlanSchema.parse(req.body));
+    });
+
     // Explicit: the body must carry `confirm: true`; an earlier version is a rollback.
     app.post('/api/v1/sites/:id/publish', async (req): Promise<SitePublishResult> => {
       const accountId = await ctx.accountOf(req);
@@ -367,15 +451,63 @@ export function setupSpaces(ctx: HubContext, deps: SpacesDeps = {}): Promise<Spa
             : null,
       };
     });
+
+    // ---- M8 hosting targets (owner) -------------------------------------------------------------
+    app.get('/api/v1/sites/targets', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      return { items: await targets.list(accountId) };
+    });
+
+    // The credential is write-only: it goes to the vault (`secret://sites/target/<id>/credential`).
+    app.post('/api/v1/sites/targets', async (req, reply) => {
+      const accountId = await ctx.accountOf(req);
+      const view = await targets.create(accountId, createHostingTargetSchema.parse(req.body));
+      void reply.status(201).header('Cache-Control', 'no-store');
+      return view;
+    });
+
+    app.get('/api/v1/sites/targets/:targetId', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { targetId } = targetParams.parse(req.params);
+      return targets.get(accountId, targetId);
+    });
+
+    app.patch('/api/v1/sites/targets/:targetId', async (req, reply) => {
+      const accountId = await ctx.accountOf(req);
+      const { targetId } = targetParams.parse(req.params);
+      const view = await targets.update(
+        accountId,
+        targetId,
+        updateHostingTargetSchema.parse(req.body),
+      );
+      void reply.header('Cache-Control', 'no-store');
+      return view;
+    });
+
+    app.delete('/api/v1/sites/targets/:targetId', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { targetId } = targetParams.parse(req.params);
+      await targets.delete(accountId, targetId);
+      return { ok: true };
+    });
+
+    // A connection check: a PROPFIND on the collection, through the egress policy.
+    app.post('/api/v1/sites/targets/:targetId/check', async (req) => {
+      const accountId = await ctx.accountOf(req);
+      const { targetId } = targetParams.parse(req.params);
+      return targets.check(accountId, targetId);
+    });
   }
 
   return Promise.resolve({
     spaces,
     sites,
+    targets,
     tools,
     useAudit: (a) => {
       spaces.useAudit(a);
       sites.useAudit(a);
+      targets.useAudit(a);
     },
     register,
     close: () => Promise.resolve(),

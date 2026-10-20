@@ -23,7 +23,9 @@ export const CodeBlock = memo(function CodeBlock({
   const lang = normalizeLanguage(language);
   return (
     <pre
+      role="group"
       className={className ? `nv-code ${className}` : 'nv-code'}
+      dir="ltr"
       data-language={lang ?? undefined}
       aria-label={label}
       tabIndex={0}

@@ -2,15 +2,13 @@
 // choice. The memory choice is fixed once the project exists, so the dialog says so up front.
 import { useId, useRef, useState } from 'react';
 import type { ProjectView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, RadioGroup, Spinner, TextField } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
 import { projectsChanged } from './events.ts';
 
-export const MEMORY_SCOPE_TEXT: Record<
-  ProjectView['memoryScope'],
-  { label: string; description: string }
-> = {
+export const MEMORY_SCOPE_TEXT = defineMessages('projects.memoryScope', {
   shared: {
     label: 'Shared with my memory',
     description: 'Chats here use your saved memories, and what they learn is saved there too.',
@@ -19,7 +17,21 @@ export const MEMORY_SCOPE_TEXT: Record<
     label: 'Project only',
     description: 'Chats here only use memories from this project, and what they learn stays in it.',
   },
-};
+}) satisfies Record<ProjectView['memoryScope'], { label: string; description: string }>;
+
+export const NEW_PROJECT_TEXT = defineMessages('projects.new', {
+  createFailed: 'Could not create the project.',
+  title: 'New project',
+  description: 'A project groups chats, sources and instructions.',
+  name: 'Name',
+  instructions: 'Instructions (optional)',
+  instructionsHint:
+    'Applied to every chat in the project, for example its goal, audience or style.',
+  memory: 'Memory',
+  memoryHint: 'You cannot change this after the project is created.',
+  cancel: 'Cancel',
+  create: 'Create project',
+});
 
 export function NewProjectDialog({
   open,
@@ -62,7 +74,7 @@ function NewProjectForm({
       projectsChanged();
       onCreated(p);
     } catch (err) {
-      setError(errorMessage(err, 'Could not create the project.'));
+      setError(errorMessage(err, NEW_PROJECT_TEXT.createFailed));
       setBusy(false);
     }
   };
@@ -70,8 +82,8 @@ function NewProjectForm({
   return (
     <Dialog
       open
-      title="New project"
-      description="A project groups chats, sources and instructions."
+      title={NEW_PROJECT_TEXT.title}
+      description={NEW_PROJECT_TEXT.description}
       onClose={onClose}
       initialFocusRef={nameRef}
     >
@@ -85,7 +97,7 @@ function NewProjectForm({
       >
         <TextField
           ref={nameRef}
-          label="Name"
+          label={NEW_PROJECT_TEXT.name}
           value={name}
           maxLength={200}
           required
@@ -94,7 +106,7 @@ function NewProjectForm({
         />
         <div className="nv-field">
           <label className="nv-field-label" htmlFor={`${formId}-instr`}>
-            Instructions (optional)
+            {NEW_PROJECT_TEXT.instructions}
           </label>
           <textarea
             id={`${formId}-instr`}
@@ -106,15 +118,15 @@ function NewProjectForm({
             onChange={(e) => setInstructions(e.target.value)}
           />
           <span id={`${formId}-instr-hint`} className="nv-field-hint">
-            Applied to every chat in the project, for example its goal, audience or style.
+            {NEW_PROJECT_TEXT.instructionsHint}
           </span>
         </div>
         <RadioGroup
-          legend="Memory"
+          legend={NEW_PROJECT_TEXT.memory}
           name={`${formId}-memory`}
           value={memoryScope}
           onChange={(v) => setMemoryScope(v as ProjectView['memoryScope'])}
-          hint="You cannot change this after the project is created."
+          hint={NEW_PROJECT_TEXT.memoryHint}
           options={(['shared', 'project_only'] as const).map((s) => ({
             value: s,
             label: MEMORY_SCOPE_TEXT[s].label,
@@ -128,9 +140,9 @@ function NewProjectForm({
         ) : null}
         {/* In the form, so Enter in a field submits it. */}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{NEW_PROJECT_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim()}>
-            {busy ? <Spinner /> : null} Create project
+            {busy ? <Spinner /> : null} {NEW_PROJECT_TEXT.create}
           </Button>
         </div>
       </form>

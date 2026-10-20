@@ -3,6 +3,7 @@
 // inline (a picture-in-picture app stays up when another chat opens); file entry points open a
 // file in an app registered for its extension (`FileApp`, for the file viewer).
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { McpServerView, PluginView, UiEntryPointView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -10,6 +11,26 @@ import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { McpAppFrame, type AppOwner } from './McpAppFrame.tsx';
 import './apps.css';
+
+/** The Apps page and the Inspector's Apps tab. `{title}` is an app's name (data). */
+export const APPS_TEXT = defineMessages('apps', {
+  title: 'Apps',
+  loadFailed: 'Could not load apps.',
+  tryAgain: 'Try again',
+  loading: 'Loading apps',
+  notFound: 'App not found',
+  notFoundHint: 'It may have been removed, or its plugin or MCP server is turned off.',
+  allApps: 'All apps',
+  none: 'No apps yet',
+  noneHint:
+    'Apps from your plugins and MCP servers appear here. Apps for a chat are in its Apps panel.',
+  open: 'Open',
+  opened: 'Opened',
+  openApp: 'Open {title}',
+  openChat: 'Open a chat to see its apps.',
+  noneForChats: 'No apps for chats yet. Plugins and MCP servers can add them.',
+  forThisChat: 'Apps for this chat',
+});
 
 /** The plugin or server behind each entry point, for the frame's header. */
 export function useAppOwners(): (entry: UiEntryPointView) => AppOwner | null {
@@ -57,7 +78,7 @@ function useEntryPoints(kind?: UiEntryPointView['kind']) {
         setItems(list);
         setError(null);
       },
-      (err: unknown) => setError(errorMessage(err, 'Could not load apps.')),
+      (err: unknown) => setError(errorMessage(err, APPS_TEXT.loadFailed)),
     );
   }, [api, kind]);
   useEffect(() => {
@@ -89,22 +110,23 @@ const instanceKey = () => `app-${Date.now().toString(36)}-${(++openSeq).toString
 export function AppsView({ entryId }: { entryId: string | null }) {
   const owners = useAppOwners();
   const { items, error, reload } = useEntryPoints();
+  const S = APPS_TEXT;
 
   if (error)
     return (
       <div className="apps-view">
         <EmptyState
-          title="Apps"
+          title={S.title}
           description={error}
           level={2}
-          action={<Button onClick={reload}>Try again</Button>}
+          action={<Button onClick={reload}>{S.tryAgain}</Button>}
         />
       </div>
     );
   if (items === null)
     return (
       <div className="apps-view">
-        <Spinner label="Loading apps" />
+        <Spinner label={S.loading} />
       </div>
     );
 
@@ -114,10 +136,10 @@ export function AppsView({ entryId }: { entryId: string | null }) {
       return (
         <div className="apps-view">
           <EmptyState
-            title="App not found"
-            description="It may have been removed, or its plugin or MCP server is turned off."
+            title={S.notFound}
+            description={S.notFoundHint}
             level={2}
-            action={<Button onClick={() => navigate('/apps')}>All apps</Button>}
+            action={<Button onClick={() => navigate('/apps')}>{S.allApps}</Button>}
           />
         </div>
       );
@@ -138,28 +160,28 @@ export function AppsView({ entryId }: { entryId: string | null }) {
   const global = items.filter((e) => e.kind === 'global');
   return (
     <div className="apps-view">
-      <h2 className="apps-title">Apps</h2>
+      <h2 className="apps-title">{S.title}</h2>
       {global.length === 0 ? (
-        <EmptyState
-          title="No apps yet"
-          description="Apps from your plugins and MCP servers appear here. Apps for a chat are in its Apps panel."
-          level={2}
-        />
+        <EmptyState title={S.none} description={S.noneHint} level={2} />
       ) : (
-        <ul className="apps-list" aria-label="Apps">
+        <ul className="apps-list" aria-label={S.title}>
           {global.map((e) => {
             const owner = owners(e);
             return (
               <li key={e.id}>
-                <span>
+                <span dir="auto">
                   {e.title}
-                  {owner ? <span className="muted apps-entry-owner">{owner.name}</span> : null}
+                  {owner ? (
+                    <span className="muted apps-entry-owner" dir="auto">
+                      {owner.name}
+                    </span>
+                  ) : null}
                 </span>
                 <Button
-                  aria-label={`Open ${e.title}`}
+                  aria-label={S.openApp({ title: e.title })}
                   onClick={() => navigate(`/apps/${encodeURIComponent(e.id)}`)}
                 >
-                  Open <Icon name="forward" />
+                  {S.open} <Icon name="forward" />
                 </Button>
               </li>
             );
@@ -218,31 +240,31 @@ export function ThreadApps({ threadId }: { threadId: string | null }) {
   const start = (entry: UiEntryPointView, tid: string) =>
     setOpen((list) => [...list, { key: instanceKey(), entry, threadId: tid }]);
 
+  const S = APPS_TEXT;
   let list;
-  if (!threadId) list = <p className="muted">Open a chat to see its apps.</p>;
+  if (!threadId) list = <p className="muted">{S.openChat}</p>;
   else if (error)
     list = (
       <p className="muted" role="alert">
-        {error} <Button onClick={reload}>Try again</Button>
+        {error} <Button onClick={reload}>{S.tryAgain}</Button>
       </p>
     );
-  else if (items === null) list = <Spinner label="Loading apps" />;
-  else if (items.length === 0)
-    list = <p className="muted">No apps for chats yet. Plugins and MCP servers can add them.</p>;
+  else if (items === null) list = <Spinner label={S.loading} />;
+  else if (items.length === 0) list = <p className="muted">{S.noneForChats}</p>;
   else
     list = (
-      <ul className="apps-list" aria-label="Apps for this chat">
+      <ul className="apps-list" aria-label={S.forThisChat}>
         {items.map((e) => {
           const isOpen = here.some((o) => o.entry.id === e.id);
           return (
             <li key={e.id}>
-              <span>{e.title}</span>
+              <span dir="auto">{e.title}</span>
               <Button
-                aria-label={`Open ${e.title}`}
+                aria-label={S.openApp({ title: e.title })}
                 disabled={isOpen}
                 onClick={() => start(e, threadId)}
               >
-                {isOpen ? 'Opened' : 'Open'}
+                {isOpen ? S.opened : S.open}
               </Button>
             </li>
           );

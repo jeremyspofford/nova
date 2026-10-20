@@ -16,6 +16,8 @@ import {
   type AddDeviceTransport,
 } from '@nova/shared';
 import { Button, Icon, RadioGroup, Spinner, TextField } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
+import { rich } from '../i18n/rich.tsx';
 import { formatCountdown } from '../settings/DevicesPage.tsx';
 import { useInterval } from '../settings/common.ts';
 import { navigate, useLocation } from '../router.ts';
@@ -38,11 +40,80 @@ import {
   devicePath,
   scopesText,
 } from './format.ts';
-import { LoadError, Unavailable, useCopy } from './parts.tsx';
+import { LoadError, Unavailable, useCopy, type CopyWhat } from './parts.tsx';
 import { QrCode } from './Qr.tsx';
 import { AddRequestCard } from './Requests.tsx';
 
 const TRUST_PATH = '/network/trust';
+
+export const ADD_TEXT = defineMessages('devices.add', {
+  breadcrumb: 'Breadcrumb',
+  devices: 'Devices',
+  title: 'Add a device',
+  codeReady: 'Code ready. Scan it with the device, or type it there.',
+  asksToJoin: '{name} asks to join. Type the code it shows to approve it.',
+  added: '{name} is added.',
+  lookupFailed: 'Could not load the request.',
+  lookingUp: 'Loading the request',
+  addedTitle: '{name} is added',
+  facts: { role: 'Role', scopes: 'Scopes', runs: 'Runs', platform: 'Platform' },
+  registers: 'It finishes joining when it registers with this Hub, usually within a minute.',
+  signedIn: 'It is signed in now.',
+  changeLater: 'Change its scopes or revoke it from its page.',
+  open: 'Open {name}',
+  another: 'Add another device',
+  denied: '{name} was not added. Its code is used up.',
+  expired: 'The request from {name} expired before it was approved.',
+  missing: 'This request is not on this Hub any more.',
+  addDevice: 'Add a device',
+  back: 'Back to devices',
+  scopes: 'Scopes: {scopes}',
+  throughRelay: 'through the Relay',
+  plainHttp:
+    'A phone or browser can join only over a secure connection, and this Hub is on plain HTTP. Turn on HTTPS in {link} first, or add the device with the Nova app.',
+  networkTrust: 'Network → Trust',
+  qr: 'QR code that adds a device to this Hub',
+  scan: 'Scan it with the device’s camera.',
+  typeCode: 'Or type this code on the device',
+  openPage: 'On the device, open {url} and type the code.',
+  copyCode: 'Copy code',
+  codeExpired: 'This code has expired. Make a new one to add the device.',
+  newCode: 'New code',
+  worksOnce: 'Works once. Expires in {time}.',
+  sendLink: 'Or send the device this link',
+  copyLink: 'Copy link',
+  headless: 'On a computer without a screen',
+  headlessQuestion: 'Adding a computer without a screen?',
+  waiting: 'Waiting for the device to ask to join. You approve it here.',
+  startOver: 'Start over',
+  cancel: 'Cancel',
+  off: 'Adding devices with a code is turned off. {link}',
+  offLocked: 'Adding devices with a code is turned off by your organization.',
+  turnOn: 'Turn it on in Settings → Devices',
+  roles: 'What will this device do?',
+  mayDo: 'What it may do',
+  wakeHelperOnly: 'A Wake helper only sends wake signals on its network. It has no other scopes.',
+  changeScopesLater: 'You can change these later on its page.',
+  name: 'Name (optional)',
+  nameHint: 'What this Hub calls it. Leave it empty to use the name the device suggests.',
+  connects: 'How it connects',
+  direct: 'Directly',
+  directHelp: 'The device reaches this Hub at its own address.',
+  relay: 'Through the Relay',
+  relayHelp: 'The device joins from anywhere, through your Relay.',
+  next: 'Next you get a QR code and a short code for the device. It works once, for 5 minutes. When the device asks to join, you approve it here.',
+  makeFailed: 'Could not make a code.',
+  create: 'Create code',
+  script: 'Installing novad from a script? {link}.',
+  useCommand: 'Use a one-use command instead',
+  noInstall: 'This Hub has no install command for this device.',
+  runThis:
+    'Run this in a terminal on the computer. It downloads novad from this Hub, checks its signature, and asks to join with this code.',
+  copyCommand: 'Copy command',
+  windows: 'Windows (PowerShell)',
+  copyWindows: 'Copy Windows command',
+});
+const S = ADD_TEXT;
 
 /**
  * Whether a join link is plain HTTP at an address other than this computer: browsers give the
@@ -74,9 +145,9 @@ export function AddDevicePage() {
   const request = q.get('request');
   return (
     <div className="ws-page devices-page">
-      <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+      <nav aria-label={S.breadcrumb} className="ws-breadcrumb">
         <a href={DEVICES_PATH} onClick={(e) => followLink(e, DEVICES_PATH)}>
-          <Icon name="back" /> Devices
+          <Icon name="back" /> {S.devices}
         </a>
       </nav>
       {q.get('method') === 'command' ? (
@@ -180,7 +251,7 @@ function PairingFlow({
       });
       setNow(Date.now());
       setStep({ kind: 'code', started: out });
-      announce('Code ready. Scan it with the device, or type it there.');
+      announce(S.codeReady);
     } catch (err) {
       setError(err);
       setStep({ kind: 'choose' });
@@ -197,7 +268,7 @@ function PairingFlow({
     const r = items.find((x) => x.pairingId === pairingId);
     if (!r) return;
     setStep((s) => (s.kind === 'code' && s.started.pairingId === pairingId ? stepFor(r) : s));
-    announce(`${r.name} asks to join. Type the code it shows to approve it.`);
+    announce(S.asksToJoin({ name: r.name }));
   }, [api, pairingId, announce]);
   const watchedRequest = step.kind === 'request' ? step.request.id : null;
   useDeviceEvents(ADD_REQUEST_EVENTS, (env) => {
@@ -218,7 +289,7 @@ function PairingFlow({
   const decided = (r: AddDeviceRequestView) => {
     if (r.status === 'approved' && !r.deviceId) setStep({ kind: 'lookup', requestId: r.id });
     else setStep(stepFor(r));
-    if (r.status === 'approved') announce(`${r.name} is added.`);
+    if (r.status === 'approved') announce(S.added({ name: r.name }));
   };
 
   const again = () => {
@@ -229,7 +300,7 @@ function PairingFlow({
 
   const header = (
     <header className="ws-page-header">
-      <h1>Add a device</h1>
+      <h1>{S.title}</h1>
     </header>
   );
 
@@ -240,14 +311,14 @@ function PairingFlow({
         {lookupError ? (
           <LoadError
             error={lookupError}
-            fallback="Could not load the request."
+            fallback={S.lookupFailed}
             onRetry={() => {
               setLookupError(null);
               setLookupTry((n) => n + 1);
             }}
           />
         ) : (
-          <Spinner label="Loading the request" />
+          <Spinner label={S.lookingUp} />
         )}
       </>
     );
@@ -259,39 +330,36 @@ function PairingFlow({
     return (
       <section className="devices-success" aria-labelledby={`${id}-done`}>
         <h1 id={`${id}-done`} ref={headingRef} tabIndex={-1}>
-          <Icon name="check" /> {r.name} is added
+          <Icon name="check" /> {S.addedTitle({ name: r.name })}
         </h1>
         <dl className="devices-facts">
           <div>
-            <dt>Role</dt>
+            <dt>{S.facts.role}</dt>
             <dd>{ROLE_LABEL[r.role] ?? r.role}</dd>
           </div>
           <div>
-            <dt>Scopes</dt>
+            <dt>{S.facts.scopes}</dt>
             <dd>{scopesText(r.scopes)}</dd>
           </div>
           <div>
-            <dt>Runs</dt>
+            <dt>{S.facts.runs}</dt>
             <dd>{JOIN_KIND_LABEL[r.kind]}</dd>
           </div>
           <div>
-            <dt>Platform</dt>
+            <dt>{S.facts.platform}</dt>
             <dd>{r.platform}</dd>
           </div>
         </dl>
         <p className="muted ws-flush">
-          {registers
-            ? 'It finishes joining when it registers with this Hub, usually within a minute.'
-            : 'It is signed in now.'}{' '}
-          Change its scopes or revoke it from its page.
+          {registers ? S.registers : S.signedIn} {S.changeLater}
         </p>
         <div className="row">
           {r.deviceId ? (
             <Button variant="primary" onClick={() => navigate(devicePath(r.deviceId))}>
-              Open {r.name}
+              {S.open({ name: r.name })}
             </Button>
           ) : null}
-          <Button onClick={again}>Add another device</Button>
+          <Button onClick={again}>{S.another}</Button>
         </div>
       </section>
     );
@@ -304,16 +372,16 @@ function PairingFlow({
         <p className="devices-note" role="status">
           <Icon name={step.kind === 'denied' ? 'stop' : 'clock'} />{' '}
           {step.kind === 'denied'
-            ? `${step.request.name} was not added. Its code is used up.`
+            ? S.denied({ name: step.request.name })
             : step.kind === 'expired'
-              ? `The request from ${step.request.name} expired before it was approved.`
-              : 'This request is not on this Hub any more.'}
+              ? S.expired({ name: step.request.name })
+              : S.missing}
         </p>
         <div className="row">
           <Button variant="primary" onClick={again}>
-            Add a device
+            {S.addDevice}
           </Button>
-          <Button onClick={() => navigate(DEVICES_PATH)}>Back to devices</Button>
+          <Button onClick={() => navigate(DEVICES_PATH)}>{S.back}</Button>
         </div>
       </>
     );
@@ -326,7 +394,7 @@ function PairingFlow({
         <AddRequestCard request={step.request} onDecided={decided} />
         <div className="row">
           <Button variant="ghost" onClick={() => navigate(DEVICES_PATH)}>
-            Back to devices
+            {S.back}
           </Button>
         </div>
       </>
@@ -341,52 +409,58 @@ function PairingFlow({
       <>
         {header}
         <p className="muted ws-flush">
-          {ROLE_LABEL[s.role]} · Scopes: {scopesText(s.scopes)}
-          {s.transport === 'relay' ? ' · through the Relay' : ''}
+          {ROLE_LABEL[s.role]} · {S.scopes({ scopes: scopesText(s.scopes) })}
+          {s.transport === 'relay' ? ` · ${S.throughRelay}` : ''}
         </p>
         {s.role === 'client' && s.transport !== 'relay' && plainHttpOnNetwork(s.pageUrl) ? (
           <p className="ws-flush" role="note">
-            <Icon name="alert" /> A phone or browser can join only over a secure connection, and
-            this Hub is on plain HTTP. Turn on HTTPS in{' '}
-            <a href={TRUST_PATH} onClick={(e) => followLink(e, TRUST_PATH)}>
-              Network → Trust
-            </a>{' '}
-            first, or add the device with the Nova app.
+            <Icon name="alert" />{' '}
+            {rich(S.plainHttp, {
+              link: (
+                <a href={TRUST_PATH} onClick={(e) => followLink(e, TRUST_PATH)}>
+                  {S.networkTrust}
+                </a>
+              ),
+            })}
           </p>
         ) : null}
         <div className="devices-pairing">
           <figure className="devices-qr-box">
-            <QrCode text={s.qr} label="QR code that adds a device to this Hub" />
-            <figcaption className="muted">Scan it with the device’s camera.</figcaption>
+            <QrCode text={s.qr} label={S.qr} />
+            <figcaption className="muted">{S.scan}</figcaption>
           </figure>
           <div className="stack devices-pairing-side">
             <section className="stack devices-code-box" aria-labelledby={`${id}-code`}>
-              <h2 id={`${id}-code`}>Or type this code on the device</h2>
-              <p className="devices-code" ref={codeRef}>
+              <h2 id={`${id}-code`}>{S.typeCode}</h2>
+              <p className="devices-code" ref={codeRef} dir="ltr">
                 {s.code}
               </p>
               <p className="muted ws-flush">
-                On the device, open{' '}
-                <code className="ws-code-inline devices-break">{s.pageUrl.split('?')[0]}</code> and
-                type the code.
+                {rich(S.openPage, {
+                  url: (
+                    <code className="ws-code-inline devices-break" dir="ltr">
+                      {s.pageUrl.split('?')[0]}
+                    </code>
+                  ),
+                })}
               </p>
               <div className="row">
                 <Button
-                  onClick={() => void copy(s.code, codeRef.current, 'Code')}
+                  onClick={() => void copy(s.code, codeRef.current, 'code')}
                   disabled={codeExpired}
                 >
-                  <Icon name="copy" /> Copy code
+                  <Icon name="copy" /> {S.copyCode}
                 </Button>
               </div>
             </section>
             {codeExpired ? (
               <div className="stack">
                 <p role="alert" className="nv-field-error ws-flush">
-                  This code has expired. Make a new one to add the device.
+                  {S.codeExpired}
                 </p>
                 <div className="row">
                   <Button variant="primary" onClick={() => void start()} disabled={busy}>
-                    {busy ? <Spinner /> : null} New code
+                    {busy ? <Spinner /> : null} {S.newCode}
                   </Button>
                 </div>
               </div>
@@ -394,21 +468,21 @@ function PairingFlow({
               <p className="muted ws-flush devices-expiry">
                 <Icon name="clock" />
                 <span>
-                  Works once. Expires in <span role="timer">{formatCountdown(left)}</span>.
+                  {rich(S.worksOnce, { time: <span role="timer">{formatCountdown(left)}</span> })}
                 </span>
               </p>
             )}
             <section className="stack devices-link-box" aria-labelledby={`${id}-link`}>
-              <h2 id={`${id}-link`}>Or send the device this link</h2>
-              <code ref={linkRef} className="ws-code-inline devices-break">
+              <h2 id={`${id}-link`}>{S.sendLink}</h2>
+              <code ref={linkRef} className="ws-code-inline devices-break" dir="ltr">
                 {s.qr}
               </code>
               <div className="row">
                 <Button
-                  onClick={() => void copy(s.qr, linkRef.current, 'Link')}
+                  onClick={() => void copy(s.qr, linkRef.current, 'link')}
                   disabled={codeExpired}
                 >
-                  <Icon name="copy" /> Copy link
+                  <Icon name="copy" /> {S.copyLink}
                 </Button>
               </div>
             </section>
@@ -416,27 +490,27 @@ function PairingFlow({
         </div>
         {headless ? (
           <section className="ws-section devices-flat" aria-labelledby={`${id}-headless`}>
-            <h2 id={`${id}-headless`}>On a computer without a screen</h2>
+            <h2 id={`${id}-headless`}>{S.headless}</h2>
             {install}
           </section>
         ) : (
           <details className="ws-advanced">
-            <summary>Adding a computer without a screen?</summary>
+            <summary>{S.headlessQuestion}</summary>
             {install}
           </details>
         )}
         {!codeExpired ? (
           <div className="devices-waiting" role="status">
             <Spinner />
-            <span>Waiting for the device to ask to join. You approve it here.</span>
+            <span>{S.waiting}</span>
           </div>
         ) : null}
         <div className="row">
           <Button variant="ghost" onClick={again}>
-            Start over
+            {S.startOver}
           </Button>
           <Button variant="ghost" onClick={() => navigate(DEVICES_PATH)}>
-            Cancel
+            {S.cancel}
           </Button>
         </div>
       </>
@@ -449,13 +523,15 @@ function PairingFlow({
       {header}
       {!enabled.value ? (
         <Unavailable>
-          Adding devices with a code is turned off
-          {enabled.locked ? ' by your organization' : ''}.{' '}
-          {!enabled.locked ? (
-            <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
-              Turn it on in Settings → Devices
-            </a>
-          ) : null}
+          {enabled.locked
+            ? S.offLocked
+            : rich(S.off, {
+                link: (
+                  <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
+                    {S.turnOn}
+                  </a>
+                ),
+              })}
         </Unavailable>
       ) : null}
       <form
@@ -466,7 +542,7 @@ function PairingFlow({
         }}
       >
         <RadioGroup
-          legend="What will this device do?"
+          legend={S.roles}
           name={`${id}-role`}
           value={role}
           className="ws-fieldset devices-roles"
@@ -482,7 +558,7 @@ function PairingFlow({
           }}
         />
         <fieldset className="ws-fieldset devices-roles">
-          <legend>What it may do</legend>
+          <legend>{S.mayDo}</legend>
           {choices.length ? (
             choices.map((sc) => (
               <label key={sc} className="nv-radio">
@@ -506,64 +582,51 @@ function PairingFlow({
               </label>
             ))
           ) : (
-            <p className="muted ws-flush">
-              A Wake helper only sends wake signals on its network. It has no other scopes.
-            </p>
+            <p className="muted ws-flush">{S.wakeHelperOnly}</p>
           )}
-          {choices.length ? (
-            <p className="nv-field-hint ws-flush">You can change these later on its page.</p>
-          ) : null}
+          {choices.length ? <p className="nv-field-hint ws-flush">{S.changeScopesLater}</p> : null}
         </fieldset>
         <TextField
-          label="Name (optional)"
-          hint="What this Hub calls it. Leave it empty to use the name the device suggests."
+          label={S.name}
+          hint={S.nameHint}
           value={name}
           maxLength={100}
           onChange={(e) => setName(e.target.value)}
         />
         {relay ? (
           <RadioGroup
-            legend="How it connects"
+            legend={S.connects}
             name={`${id}-transport`}
             value={transport}
             className="ws-fieldset devices-roles"
             options={[
-              {
-                value: 'direct',
-                label: 'Directly',
-                description: 'The device reaches this Hub at its own address.',
-              },
-              {
-                value: 'relay',
-                label: 'Through the Relay',
-                description: 'The device joins from anywhere, through your Relay.',
-              },
+              { value: 'direct', label: S.direct, description: S.directHelp },
+              { value: 'relay', label: S.relay, description: S.relayHelp },
             ]}
             onChange={(v) => setTransport(v as AddDeviceTransport)}
           />
         ) : null}
-        <p className="muted ws-flush">
-          Next you get a QR code and a short code for the device. It works once, for 5 minutes. When
-          the device asks to join, you approve it here.
-        </p>
+        <p className="muted ws-flush">{S.next}</p>
         {error ? (
           <div role="alert" className="ws-error">
-            <p>{deviceErrorMessage(error, 'Could not make a code.')}</p>
+            <p>{deviceErrorMessage(error, S.makeFailed)}</p>
           </div>
         ) : null}
         <div className="row">
           <Button type="submit" variant="primary" disabled={busy || !enabled.value}>
-            {busy ? <Spinner /> : null} Create code
+            {busy ? <Spinner /> : null} {S.create}
           </Button>
-          <Button onClick={() => navigate(DEVICES_PATH)}>Cancel</Button>
+          <Button onClick={() => navigate(DEVICES_PATH)}>{S.cancel}</Button>
         </div>
       </form>
       <p className="muted ws-flush">
-        Installing novad from a script?{' '}
-        <a href={ADD_COMMAND_PATH} onClick={(e) => followLink(e, ADD_COMMAND_PATH)}>
-          Use a one-use command instead
-        </a>
-        .
+        {rich(S.script, {
+          link: (
+            <a href={ADD_COMMAND_PATH} onClick={(e) => followLink(e, ADD_COMMAND_PATH)}>
+              {S.useCommand}
+            </a>
+          ),
+        })}
       </p>
     </>
   );
@@ -575,41 +638,34 @@ function InstallCommands({
   copy,
 }: {
   bootstrap: AddDeviceStarted['bootstrap'];
-  copy: (text: string, el: HTMLElement | null, what: string) => Promise<void>;
+  copy: (text: string, el: HTMLElement | null, what: CopyWhat) => Promise<void>;
 }) {
   const shRef = useRef<HTMLElement>(null);
   const psRef = useRef<HTMLElement>(null);
   const { command, powershell } = bootstrap;
   if (!command) {
-    return (
-      <p className="muted ws-flush">
-        {bootstrap.why ?? 'This Hub has no install command for this device.'}
-      </p>
-    );
+    return <p className="muted ws-flush">{bootstrap.why ?? S.noInstall}</p>;
   }
   return (
     <div className="stack devices-install">
-      <p className="ws-flush">
-        Run this in a terminal on the computer. It downloads novad from this Hub, checks its
-        signature, and asks to join with this code.
-      </p>
-      <pre className="ws-command">
+      <p className="ws-flush">{S.runThis}</p>
+      <pre className="ws-command" dir="ltr">
         <code ref={shRef}>{command}</code>
       </pre>
       <div className="row">
-        <Button onClick={() => void copy(command, shRef.current, 'Command')}>
-          <Icon name="copy" /> Copy command
+        <Button onClick={() => void copy(command, shRef.current, 'command')}>
+          <Icon name="copy" /> {S.copyCommand}
         </Button>
       </div>
       {powershell ? (
         <>
-          <h3 className="ws-flush">Windows (PowerShell)</h3>
-          <pre className="ws-command">
+          <h3 className="ws-flush">{S.windows}</h3>
+          <pre className="ws-command" dir="ltr">
             <code ref={psRef}>{powershell}</code>
           </pre>
           <div className="row">
-            <Button onClick={() => void copy(powershell, psRef.current, 'Windows command')}>
-              <Icon name="copy" /> Copy Windows command
+            <Button onClick={() => void copy(powershell, psRef.current, 'windowsCommand')}>
+              <Icon name="copy" /> {S.copyWindows}
             </Button>
           </div>
         </>

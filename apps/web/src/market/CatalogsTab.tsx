@@ -7,7 +7,7 @@
 // `plugins.trustedPublishers`, `market.allowSideload`, `market.allowedKinds`); managed policy locks
 // them and says so with its source.
 import { useState, type FormEvent } from 'react';
-import type { ManagedPolicyView, MarketCatalogView, MarketItemKind } from '@nova/shared';
+import type { MarketCatalogView, MarketItemKind } from '@nova/shared';
 import { MARKET_KINDS } from '@nova/shared';
 import { Button, Dialog, Spinner, TextField, useToast } from '@nova/ui';
 import { useAnnounce } from '../services.tsx';
@@ -26,27 +26,26 @@ import {
   isGitLocation,
   marketErrorMessage,
   newCatalogId,
-  shortKey,
+  marketPublisherText,
 } from './format.ts';
-import { ManagedNote, POLICY_TEXT, unverifiedForbidden, useRestrictions } from './policy.tsx';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
+import { POLICY_TEXT, unverifiedForbidden, useRestrictions } from './policy.tsx';
 
 const MAX_CATALOGS = 20;
 
 export function CatalogsTab({
   catalogs,
-  sources,
   onChanged,
 }: {
   market: MarketApi;
   catalogs: MarketCatalogView[] | null;
-  sources: ManagedPolicyView | null;
   onChanged: () => void;
 }) {
   return (
     <div className="market-tab stack">
-      <CatalogList catalogs={catalogs} sources={sources} onChanged={onChanged} />
-      <Publishers sources={sources} />
-      <InstallRules sources={sources} />
+      <CatalogList catalogs={catalogs} onChanged={onChanged} />
+      <Publishers />
+      <InstallRules />
     </div>
   );
 }
@@ -55,11 +54,9 @@ export function CatalogsTab({
 
 function CatalogList({
   catalogs,
-  sources,
   onChanged,
 }: {
   catalogs: MarketCatalogView[] | null;
-  sources: ManagedPolicyView | null;
   onChanged: () => void;
 }) {
   const settings = useSettings();
@@ -86,7 +83,7 @@ function CatalogList({
     <section className="settings-section" aria-labelledby="market-catalogs">
       <h3 id="market-catalogs">{CATALOG_TEXT.title}</h3>
       <p className="muted">{CATALOG_TEXT.intro}</p>
-      {entry.locked ? <ManagedNote view={sources} sourceKey="plugins.catalogs" /> : null}
+      {entry.locked ? <ManagedNote setting="plugins.catalogs" /> : null}
       {catalogs === null ? (
         <Spinner label={CATALOG_TEXT.loading} />
       ) : (
@@ -98,34 +95,40 @@ function CatalogList({
               <li key={c.id} className="ws-list-row" aria-label={c.name}>
                 <div className="ws-source-main">
                   <span className="ws-row-meta">
-                    <strong>{c.name}</strong>
+                    <strong dir="auto">{c.name}</strong>
                     <span>{CATALOG_KIND_TEXT[c.kind]}</span>
                     <StateChip text={sig.text} tone={sig.tone} icon={sig.icon} />
-                    <span className="muted">{CATALOG_TEXT.items(c.items)}</span>
+                    <span className="muted">{CATALOG_TEXT.items({ n: c.items })}</span>
                   </span>
-                  <code className="ws-code-inline">{c.location}</code>
+                  <code className="ws-code-inline" dir="ltr">
+                    {c.location}
+                  </code>
                   {c.kind === 'builtin' ? (
                     <span className="muted">{CATALOG_TEXT.builtinNote}</span>
                   ) : null}
                   {c.publisher ? (
+                    <span className="muted">{marketPublisherText(c.publisher)}</span>
+                  ) : null}
+                  {c.commit ? (
                     <span className="muted">
-                      {CATALOG_TEXT.signedWith(c.publisher.name, shortKey(c.publisher.key))}
+                      {CATALOG_TEXT.readAt({ commit: c.commit.slice(0, 12) })}
                     </span>
                   ) : null}
-                  {c.commit ? <span className="muted">{CATALOG_TEXT.readAt(c.commit)}</span> : null}
                   {c.error ? (
-                    <span className="nv-field-error">{CATALOG_TEXT.unreadable(c.error)}</span>
+                    <span className="nv-field-error">
+                      {CATALOG_TEXT.unreadable({ why: c.error })}
+                    </span>
                   ) : null}
                 </div>
                 {own ? (
                   <Button
                     variant="ghost"
                     disabled={entry.locked}
-                    aria-label={CATALOG_TEXT.remove(c.name)}
+                    aria-label={CATALOG_TEXT.remove({ name: c.name })}
                     onClick={() =>
                       void save(
                         entry.value.filter((x) => x.id !== c.id),
-                        CATALOG_TEXT.removed(c.name),
+                        CATALOG_TEXT.removed({ name: c.name }),
                       )
                     }
                   >
@@ -141,7 +144,7 @@ function CatalogList({
         disabled={entry.locked}
         taken={entry.value.map((c) => c.id)}
         full={entry.value.length >= MAX_CATALOGS}
-        onAdd={(c) => save([...entry.value, c], CATALOG_TEXT.added(c.name))}
+        onAdd={(c) => save([...entry.value, c], CATALOG_TEXT.added({ name: c.name }))}
       />
     </section>
   );
@@ -183,7 +186,7 @@ function AddCatalog({
     if (k && !PUBLISHER_KEY.test(k)) errs.key = CATALOG_TEXT.errKey;
     if (c && !COMMIT_SHA.test(c)) errs.commit = CATALOG_TEXT.errCommit;
     else if (c && !isGitLocation(loc)) errs.commit = CATALOG_TEXT.errCommitNotGit;
-    if (full) errs.name = CATALOG_TEXT.errFull;
+    if (full) errs.name = CATALOG_TEXT.errFull({ max: MAX_CATALOGS });
     setErrors(errs);
     if (Object.keys(errs).length) return;
     setBusy(true);
@@ -254,7 +257,7 @@ function AddCatalog({
 
 // ---- trusted publishers -------------------------------------------------------------------------
 
-function Publishers({ sources }: { sources: ManagedPolicyView | null }) {
+function Publishers() {
   const settings = useSettings();
   const toast = useToast();
   const announce = useAnnounce();
@@ -292,19 +295,21 @@ function Publishers({ sources }: { sources: ManagedPolicyView | null }) {
     <section className="settings-section" aria-labelledby="market-publishers">
       <h3 id="market-publishers">{CATALOG_TEXT.publishers}</h3>
       <p className="muted">{CATALOG_TEXT.publishersIntro}</p>
-      {entry.locked ? <ManagedNote view={sources} sourceKey="plugins.trustedPublishers" /> : null}
+      {entry.locked ? <ManagedNote setting="plugins.trustedPublishers" /> : null}
       {entry.value.length ? (
         <ul className="ws-list" aria-label={CATALOG_TEXT.publishers}>
           {entry.value.map((p) => (
             <li key={p.key} className="ws-list-row" aria-label={p.name}>
               <span className="ws-row-meta">
-                <strong>{p.name}</strong>
-                <code className="ws-code-inline">{p.key}</code>
+                <strong dir="auto">{p.name}</strong>
+                <code className="ws-code-inline" dir="ltr">
+                  {p.key}
+                </code>
               </span>
               <Button
                 variant="ghost"
                 disabled={entry.locked}
-                aria-label={CATALOG_TEXT.removePublisher(p.name)}
+                aria-label={CATALOG_TEXT.removePublisher({ name: p.name })}
                 onClick={() => setRemoving(p)}
               >
                 {CATALOG_TEXT.stopTrusting}
@@ -345,7 +350,7 @@ function Publishers({ sources }: { sources: ManagedPolicyView | null }) {
       {confirm ? (
         <Dialog
           open
-          title={CATALOG_TEXT.trustTitle(confirm.name)}
+          title={CATALOG_TEXT.trustTitle({ name: confirm.name })}
           description={CATALOG_TEXT.trustBody}
           onClose={() => setConfirm(null)}
           footer={
@@ -356,7 +361,10 @@ function Publishers({ sources }: { sources: ManagedPolicyView | null }) {
                 onClick={() => {
                   const c = confirm;
                   setConfirm(null);
-                  void save([...entry.value, c], CATALOG_TEXT.publisherAdded(c.name)).then(() => {
+                  void save(
+                    [...entry.value, c],
+                    CATALOG_TEXT.publisherAdded({ name: c.name }),
+                  ).then(() => {
                     setName('');
                     setKey('');
                   });
@@ -369,10 +377,12 @@ function Publishers({ sources }: { sources: ManagedPolicyView | null }) {
         >
           <dl className="ws-dl">
             <dt>{CATALOG_TEXT.publisherName}</dt>
-            <dd>{confirm.name}</dd>
+            <dd dir="auto">{confirm.name}</dd>
             <dt>{CATALOG_TEXT.publisherKey}</dt>
             <dd>
-              <code className="ws-code-inline">{confirm.key}</code>
+              <code className="ws-code-inline" dir="ltr">
+                {confirm.key}
+              </code>
             </dd>
           </dl>
         </Dialog>
@@ -380,7 +390,7 @@ function Publishers({ sources }: { sources: ManagedPolicyView | null }) {
       {removing ? (
         <Dialog
           open
-          title={CATALOG_TEXT.untrustTitle(removing.name)}
+          title={CATALOG_TEXT.untrustTitle({ name: removing.name })}
           description={CATALOG_TEXT.untrustBody}
           onClose={() => setRemoving(null)}
           footer={
@@ -393,7 +403,7 @@ function Publishers({ sources }: { sources: ManagedPolicyView | null }) {
                   setRemoving(null);
                   void save(
                     entry.value.filter((p) => p.key !== r.key),
-                    CATALOG_TEXT.publisherRemoved(r.name),
+                    CATALOG_TEXT.publisherRemoved({ name: r.name }),
                   );
                 }}
               >
@@ -409,7 +419,7 @@ function Publishers({ sources }: { sources: ManagedPolicyView | null }) {
 
 // ---- install rules ----------------------------------------------------------------------------
 
-function InstallRules({ sources }: { sources: ManagedPolicyView | null }) {
+function InstallRules() {
   const settings = useSettings();
   const toast = useToast();
   const restrictions = useRestrictions();
@@ -438,11 +448,11 @@ function InstallRules({ sources }: { sources: ManagedPolicyView | null }) {
           settings.set('market.allowSideload', v).catch(failed);
         }}
       />
-      {sideload.locked ? <ManagedNote view={sources} sourceKey="market.allowSideload" /> : null}
+      {sideload.locked ? <ManagedNote setting="market.allowSideload" /> : null}
       {orgForbids ? (
         <p className="ext-policy">
           <span>{POLICY_TEXT.unverifiedOff}</span>{' '}
-          <ManagedNote view={sources} sourceKey="restrict.unverifiedInstalls" />
+          <ManagedNote setting="restrict.unverifiedInstalls" />
         </p>
       ) : null}
       <fieldset className="market-kinds">
@@ -461,7 +471,7 @@ function InstallRules({ sources }: { sources: ManagedPolicyView | null }) {
             </label>
           ))}
         </div>
-        {kinds.locked ? <ManagedNote view={sources} sourceKey="market.allowedKinds" /> : null}
+        {kinds.locked ? <ManagedNote setting="market.allowedKinds" /> : null}
       </fieldset>
     </section>
   );

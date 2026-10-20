@@ -1,9 +1,11 @@
 // Tree view (docs/04 §4.2, WAI-ARIA tree pattern). One tab stop: Up/Down, Home/End move;
-// Right expands or enters a branch, Left collapses or goes to the parent; Enter (or a click)
-// activates; Space toggles selection when the tree is multiselectable. A branch whose children
-// load on demand is `expandable`; with `expanded` the owner controls which branches are open
-// (a file tree starts closed and loads a folder when it opens, FR-039).
+// Right expands or enters a branch, Left collapses or goes to the parent (the other way round in
+// right-to-left); Enter (or a click) activates; Space toggles selection when the tree is
+// multiselectable. A branch whose children load on demand is `expandable`; with `expanded` the
+// owner controls which branches are open (a file tree starts closed and loads a folder when it
+// opens, FR-039).
 import { useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { readingDirection } from '../focus.ts';
 import { Icon } from './Icon.tsx';
 
 export interface TreeNode {
@@ -121,6 +123,10 @@ export function Tree({
     const i = visible.indexOf(active);
     const hasKids = isBranch(active);
     const open = hasKids && isOpen(active);
+    // Right-to-left swaps them: the branch opens toward the left (FR-016).
+    const rtl = readingDirection(e.currentTarget) === 'rtl';
+    const inward = rtl ? 'ArrowLeft' : 'ArrowRight';
+    const outward = rtl ? 'ArrowRight' : 'ArrowLeft';
     let handled = true;
     if (e.key === 'ArrowDown') {
       const next = visible[i + 1];
@@ -133,13 +139,13 @@ export function Tree({
     } else if (e.key === 'End') {
       const last = visible.at(-1);
       if (last) focus(last);
-    } else if (e.key === 'ArrowRight') {
+    } else if (e.key === inward) {
       if (hasKids && !open) setOpen(active, true);
       else if (open) {
         const first = children.get(active)?.[0];
         if (first) focus(first.id);
       }
-    } else if (e.key === 'ArrowLeft') {
+    } else if (e.key === outward) {
       if (open) setOpen(active, false);
       else {
         const parent = parentOf.get(active);

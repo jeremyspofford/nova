@@ -18,10 +18,13 @@ import {
   type FirmwareSupportEntry,
   type FirmwareValue,
 } from '@nova/shared';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Button, Icon, SelectField, Spinner, TextField, useToast } from '@nova/ui';
 import type { PanelProps } from '../devices/DevicePage.tsx';
+import { listText } from '../devices/format.ts';
 import { Chip, ConfirmDialog, LoadError, useLoad } from '../devices/parts.tsx';
 import { useHubStream } from '../hub-events.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useAnnounce } from '../services.tsx';
 import { useSetting } from '../settings.tsx';
 import { focusMoved, formatWhen, moveItem, useInterval } from '../settings/common.ts';
@@ -32,6 +35,7 @@ import { useFirmwareApi, type FirmwareRead } from './api-m75.ts';
 import { ChangeCard } from './FirmwareChange.tsx';
 import {
   FIRMWARE_SETTINGS_PATH,
+  FIRMWARE_TEXT,
   methodText,
   OPEN_STATUSES,
   firmwareErrorMessage,
@@ -44,6 +48,126 @@ import {
 } from './format.ts';
 import './firmware.css';
 
+export const FIRMWARE_PANEL_TEXT = defineMessages('firmware.panel', {
+  /** What the owner-only notice names. */
+  ownerOnlyWhat: 'Device firmware',
+  title: 'Firmware',
+  revoked: 'This device was revoked: its firmware cannot be read.',
+  readAgainDone: 'Firmware settings read again.',
+  readFailed: 'Could not read the firmware settings.',
+  reading: 'Reading the firmware settings',
+  settings: 'Settings',
+  planned: 'Planned. Check the diff, then ask for approval.',
+  currentChange: 'Current change',
+  updates: 'Firmware updates',
+  updatesIntro:
+    'As listed by fwupd on the device. Nova shows them but does not install firmware updates.',
+  noUpdates: 'No firmware updates listed.',
+  history: 'History',
+  historyFailed: 'Could not load the firmware history.',
+  loadingHistory: 'Loading the history',
+  noChanges: 'No firmware changes yet.',
+  changes: 'Firmware changes',
+  rollbackTitle: 'Roll back this firmware change on {device}?',
+  rollbackBodyAt:
+    'Nova plans restoring the settings from before this change (its snapshot of {when}) and asks for your approval on that diff. Nothing changes on {device} until you approve and apply it.',
+  rollbackBody:
+    'Nova plans restoring the settings from before this change and asks for your approval on that diff. Nothing changes on {device} until you approve and apply it.',
+  planRollback: 'Plan the rollback',
+  rollbackPlanned: 'Rollback planned. Approve it, then apply it.',
+  toRestore: 'Settings to restore',
+  restoreItem: '{setting}: back to {value}',
+  offTitle: 'BIOS and firmware changes are off.',
+  offWhy:
+    'They are off by default: a wrong firmware setting can keep a machine from starting, or weaken its security.',
+  offWhat:
+    'Turned on, you can change the settings below on supported machines. Each change is a dry run first, shows exactly what will change, keeps a snapshot, needs your approval here in Nova, and can be rolled back. Nova never changes firmware by itself. Reading the settings works either way.',
+  supported: 'Supported',
+  notSupported: 'Not supported',
+  canChange: 'Nova can change the allowlisted settings below.',
+  /** `support` is the support matrix's name for the machine (from the Hub). */
+  canChangeAs: 'Nova can change the allowlisted settings below ({support}).',
+  platform: 'Platform',
+  machine: 'Machine',
+  firmware: 'Firmware',
+  reachedThrough: 'Reached through',
+  read: 'Read',
+  unknown: 'Unknown',
+  /** `bios` is the firmware's maker and version, `date` its date, as the device reports them. */
+  biosDated: '{bios} ({date}), {mode, select, uefi {UEFI} other {legacy BIOS}}',
+  bios: '{bios}, {mode, select, uefi {UEFI} other {legacy BIOS}}',
+  methodVia: '{method} ({driver})',
+  readCached: '{when} (kept for a minute)',
+  matrix: 'Hardware support matrix',
+  matrixFailed: 'Could not load the support matrix.',
+  loadingMatrix: 'Loading the support matrix',
+  matrixCaption: 'Which machines Nova can change firmware settings on (Linux only)',
+  maker: 'Maker',
+  notes: 'Notes',
+  yes: 'Yes',
+  noBecause: 'No: {reason}',
+  none: 'None',
+  noSettings: 'The device reports no settings.',
+  settingsCaption: 'The settings Nova may change (an allowlist); it never touches others',
+  value: 'Value',
+  canBe: 'Can be',
+  anyOrder: 'Any order of the same entries',
+  wholeNumber: 'A whole number',
+  text: 'Text',
+  readOnly: 'Read-only',
+  /** `values` are the values that weaken security, joined with "or". */
+  weakensWhen: 'Weakens security when {values}',
+  mustBeNumber: '{setting} must be a whole number.',
+  chooseOne: 'Choose at least one new value.',
+  planFailed: 'Could not plan the change.',
+  planTitle: 'Plan a change',
+  allReadOnly: 'Every setting on this machine is read-only.',
+  planIntro:
+    'Planning is a dry run: novad works out the diff and keeps a snapshot of the current values. Nothing changes on {device} until you approve and apply the plan.',
+  noChange: 'No change (now {value})',
+  weakensOption: '{value} (weakens security)',
+  nowHint: 'Now {value}. Leave empty to keep it.',
+  weakensLead: 'This weakens security:',
+  /** `lead` is the bold "This weakens security:", `changes` the chosen settings and values. */
+  weakensChosenOn:
+    '{lead} {changes}. Changes like this are blocked unless “Allow changes that weaken security” is on (it is on).',
+  weakensChosenOff:
+    '{lead} {changes}. Changes like this are blocked unless “Allow changes that weaken security” is on (it is off).',
+  /** A chosen value in the warning above: "Secure Boot Disabled". */
+  choice: '{setting} {value}',
+  planChange: 'Plan the change',
+  orderHint: 'Move entries up or down; the first is tried first.',
+  changed: 'Changed.',
+  unchanged: 'No change.',
+  orderItem: '{n}. {entry}',
+  moveUp: 'Move {entry} up',
+  moveDown: 'Move {entry} down',
+  up: 'Up',
+  down: 'Down',
+  keepOrder: 'Keep the current order',
+  passwordStored: 'BIOS admin password stored.',
+  passwordFailed: 'Could not store the password.',
+  password: 'BIOS admin password',
+  hasPassword: '{device} has a BIOS admin password: Nova needs it to apply changes.',
+  noPassword: '{device} reports no BIOS admin password.',
+  inVault: 'Stored in the Hub’s vault.',
+  notStored: 'Not stored yet.',
+  noneStored: 'None stored.',
+  passwordKept:
+    'It is kept in the Hub’s vault, sent to the device only with an approved change, and never shown again, here or anywhere.',
+  replacePassword: 'Replace the BIOS admin password',
+  store: 'Store',
+  removeMore: 'Remove…',
+  removeTitle: 'Remove the BIOS admin password of {device}?',
+  removeBodyHas:
+    'Nova forgets it. Changes to this machine are refused until you store it again. The password on the machine itself stays as it is.',
+  removeBody: 'Nova forgets it. The machine itself is not changed.',
+  remove: 'Remove',
+  passwordRemoved: 'BIOS admin password removed.',
+});
+
+const S = FIRMWARE_PANEL_TEXT;
+
 /** The events that change what the tab shows (contracts/events.md). */
 export const FIRMWARE_EVENTS = [
   'device.firmware.changed',
@@ -54,7 +178,7 @@ export const FIRMWARE_EVENTS = [
 
 export function FirmwarePanel(props: PanelProps) {
   return (
-    <MemberGate ownerOnly what="Device firmware">
+    <MemberGate ownerOnly what={S.ownerOnlyWhat}>
       <FirmwareBody {...props} />
     </MemberGate>
   );
@@ -110,8 +234,8 @@ function FirmwareBody({ device }: PanelProps) {
   if (revoked) {
     return (
       <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
-        <h2 id={`${base}-h`}>Firmware</h2>
-        <p className="muted ws-flush">This device was revoked: its firmware cannot be read.</p>
+        <h2 id={`${base}-h`}>{S.title}</h2>
+        <p className="muted ws-flush">{S.revoked}</p>
       </section>
     );
   }
@@ -130,9 +254,9 @@ function FirmwareBody({ device }: PanelProps) {
     try {
       const v = await api.readFirmware(device.id, { fresh: true });
       read.setData(() => v);
-      announce('Firmware settings read again.');
+      announce(S.readAgainDone);
     } catch (err) {
-      toast.show(firmwareErrorMessage(err, 'Could not read the firmware settings.'), {
+      toast.show(firmwareErrorMessage(err, S.readFailed), {
         tone: 'error',
       });
     } finally {
@@ -157,26 +281,22 @@ function FirmwareBody({ device }: PanelProps) {
     <div className="stack">
       <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
         <div className="ws-section-header">
-          <h2 id={`${base}-h`}>Firmware</h2>
+          <h2 id={`${base}-h`}>{S.title}</h2>
           <Button onClick={() => void refresh()} disabled={refreshing}>
-            {refreshing ? <Spinner /> : <Icon name="refresh" />} Read again
+            {refreshing ? <Spinner /> : <Icon name="refresh" />} {FIRMWARE_TEXT.readAgain}
           </Button>
         </div>
         {!on && !read.loading ? <OffNote /> : null}
         {read.error ? (
-          <LoadError
-            error={read.error}
-            fallback="Could not read the firmware settings."
-            onRetry={read.reload}
-          />
+          <LoadError error={read.error} fallback={S.readFailed} onRetry={read.reload} />
         ) : null}
-        {read.loading ? <Spinner label="Reading the firmware settings" /> : null}
+        {read.loading ? <Spinner label={S.reading} /> : null}
         {fw ? <SupportFacts fw={fw} /> : null}
       </section>
 
       {fw ? (
         <section className="ws-section devices-flat" aria-labelledby={`${base}-s`}>
-          <h2 id={`${base}-s`}>Settings</h2>
+          <h2 id={`${base}-s`}>{S.settings}</h2>
           <SettingsTable settings={fw.settings} />
         </section>
       ) : null}
@@ -190,14 +310,14 @@ function FirmwareBody({ device }: PanelProps) {
           onPlanned={(c) => {
             upsert(c);
             history.reload();
-            announce('Planned. Check the diff, then ask for approval.');
+            announce(S.planned);
           }}
         />
       ) : null}
 
       {current ? (
         <section className="ws-section devices-flat" aria-labelledby={`${base}-c`}>
-          <h2 id={`${base}-c`}>Current change</h2>
+          <h2 id={`${base}-c`}>{S.currentChange}</h2>
           <ChangeCard
             change={current}
             device={device}
@@ -227,15 +347,14 @@ function FirmwareBody({ device }: PanelProps) {
 
       {fw ? (
         <section className="ws-section devices-flat" aria-labelledby={`${base}-u`}>
-          <h2 id={`${base}-u`}>Firmware updates</h2>
-          <p className="muted ws-flush">
-            As listed by fwupd on the device. Nova shows them but does not install firmware updates.
-          </p>
+          <h2 id={`${base}-u`}>{S.updates}</h2>
+          <p className="muted ws-flush">{S.updatesIntro}</p>
           {fw.updates.length ? (
-            <ul className="ws-list" aria-label="Firmware updates">
+            <ul className="ws-list" aria-label={S.updates}>
+              {/* fwupd's names, versions and summaries, as the device reports them. */}
               {fw.updates.map((u, i) => (
                 <li key={`${u.device}-${i}`} className="ws-list-row">
-                  <span>
+                  <span dir="auto">
                     <strong>{u.device}</strong> {u.version}
                     {u.summary ? <span className="muted"> {u.summary}</span> : null}
                   </span>
@@ -243,26 +362,20 @@ function FirmwareBody({ device }: PanelProps) {
               ))}
             </ul>
           ) : (
-            <p className="ws-flush">No firmware updates listed.</p>
+            <p className="ws-flush">{S.noUpdates}</p>
           )}
         </section>
       ) : null}
 
       <section className="ws-section devices-flat" aria-labelledby={`${base}-hist`}>
-        <h2 id={`${base}-hist`}>History</h2>
+        <h2 id={`${base}-hist`}>{S.history}</h2>
         {history.error ? (
-          <LoadError
-            error={history.error}
-            fallback="Could not load the firmware history."
-            onRetry={history.reload}
-          />
+          <LoadError error={history.error} fallback={S.historyFailed} onRetry={history.reload} />
         ) : null}
-        {history.loading ? <Spinner label="Loading the history" /> : null}
-        {history.data && !changes.length ? (
-          <p className="muted ws-flush">No firmware changes yet.</p>
-        ) : null}
+        {history.loading ? <Spinner label={S.loadingHistory} /> : null}
+        {history.data && !changes.length ? <p className="muted ws-flush">{S.noChanges}</p> : null}
         {changes.length ? (
-          <ul className="fw-list" aria-label="Firmware changes">
+          <ul className="fw-list" aria-label={S.changes}>
             {changes
               .filter((c) => c.id !== current?.id)
               .map((c) => (
@@ -287,13 +400,16 @@ function FirmwareBody({ device }: PanelProps) {
 
       <ConfirmDialog
         open={rollingBack !== null}
-        title={`Roll back this firmware change on ${device.name}?`}
-        description={`Nova plans restoring the settings from before this change${
+        title={S.rollbackTitle({ device: device.name })}
+        description={
           rollingBack && snapshotTaken(rollingBack.snapshotId)
-            ? ` (its snapshot of ${formatWhen(snapshotTaken(rollingBack.snapshotId))})`
-            : ''
-        } and asks for your approval on that diff. Nothing changes on ${device.name} until you approve and apply it.`}
-        confirmLabel="Plan the rollback"
+            ? S.rollbackBodyAt({
+                when: formatWhen(snapshotTaken(rollingBack.snapshotId)),
+                device: device.name,
+              })
+            : S.rollbackBody({ device: device.name })
+        }
+        confirmLabel={S.planRollback}
         onClose={() => setRollingBack(null)}
         onConfirm={async () => {
           if (!rollingBack?.snapshotId) return;
@@ -302,14 +418,14 @@ function FirmwareBody({ device }: PanelProps) {
           );
           setRollingBack(null);
           onChanged(view, 'asked');
-          announce('Rollback planned. Approve it, then apply it.');
+          announce(S.rollbackPlanned);
         }}
       >
         {rollingBack ? (
-          <ul aria-label="Settings to restore">
+          <ul aria-label={S.toRestore}>
             {rollingBack.diff.map((e) => (
               <li key={e.key}>
-                {keyLabel(e.key)}: back to {valueText(e.from)}
+                {S.restoreItem({ setting: keyLabel(e.key), value: valueText(e.from) })}
               </li>
             ))}
           </ul>
@@ -326,18 +442,12 @@ function OffNote() {
       <Icon name="shield" />
       <div className="stack">
         <p>
-          <strong>BIOS and firmware changes are off.</strong> They are off by default: a wrong
-          firmware setting can keep a machine from starting, or weaken its security.
+          <strong>{S.offTitle}</strong> {S.offWhy}
         </p>
-        <p>
-          Turned on, you can change the settings below on supported machines. Each change is a dry
-          run first, shows exactly what will change, keeps a snapshot, needs your approval here in
-          Nova, and can be rolled back. Nova never changes firmware by itself. Reading the settings
-          works either way.
-        </p>
+        <p>{S.offWhat}</p>
         <p>
           <a href={FIRMWARE_SETTINGS_PATH} onClick={(e) => followLink(e, FIRMWARE_SETTINGS_PATH)}>
-            Turn it on in Settings → Devices
+            {FIRMWARE_TEXT.turnOnInSettings}
           </a>
         </p>
       </div>
@@ -351,52 +461,53 @@ function SupportFacts({ fw }: { fw: FirmwareRead }) {
     <div className="stack">
       <p className="row">
         {fw.supported ? (
-          <Chip tone="ready" icon="check" text="Supported" />
+          <Chip tone="ready" icon="check" text={S.supported} />
         ) : (
-          <Chip tone="blocked" icon="stop" text="Not supported" />
+          <Chip tone="blocked" icon="stop" text={S.notSupported} />
         )}
         {fw.supported ? (
           <span className="muted">
-            Nova can change the allowlisted settings below
-            {fw.support ? ` (${fw.support.label})` : ''}.
+            {fw.support ? S.canChangeAs({ support: fw.support.label }) : S.canChange}
           </span>
         ) : (
           <span>{supportReasonText(fw.reason)}</span>
         )}
       </p>
       <SupportMatrix />
-      <dl className="devices-facts" aria-label="Platform">
+      {/* The machine's maker, model and firmware version are as the device reports them. */}
+      <dl className="devices-facts" aria-label={S.platform}>
         <div>
-          <dt>Machine</dt>
-          <dd>{p ? `${p.vendor} ${p.product}`.trim() || 'Unknown' : 'Not reported'}</dd>
+          <dt>{S.machine}</dt>
+          <dd>{p ? `${p.vendor} ${p.product}`.trim() || S.unknown : FIRMWARE_TEXT.notReported}</dd>
         </div>
         <div>
-          <dt>Firmware</dt>
+          <dt>{S.firmware}</dt>
+          <dd>{p ? biosText(p) : FIRMWARE_TEXT.notReported}</dd>
+        </div>
+        <div>
+          <dt>{S.reachedThrough}</dt>
           <dd>
-            {p
-              ? `${p.biosVendor} ${p.biosVersion}`.trim() +
-                (p.biosDate ? ` (${p.biosDate})` : '') +
-                (p.uefi ? ', UEFI' : ', legacy BIOS')
-              : 'Not reported'}
+            {fw.support?.driver
+              ? S.methodVia({ method: methodText(fw.method), driver: fw.support.driver })
+              : methodText(fw.method)}
           </dd>
         </div>
         <div>
-          <dt>Reached through</dt>
+          <dt>{S.read}</dt>
           <dd>
-            {methodText(fw.method)}
-            {fw.support?.driver ? ` (${fw.support.driver})` : ''}
-          </dd>
-        </div>
-        <div>
-          <dt>Read</dt>
-          <dd>
-            {formatWhen(fw.readAt)}
-            {fw.cached ? ' (kept for a minute)' : ''}
+            {fw.cached ? S.readCached({ when: formatWhen(fw.readAt) }) : formatWhen(fw.readAt)}
           </dd>
         </div>
       </dl>
     </div>
   );
+}
+
+/** "Dell Inc. 1.21.0 (2025-04-11), UEFI": the firmware's maker, version and date, and its mode. */
+function biosText(p: NonNullable<FirmwareRead['platform']>): string {
+  const bios = `${p.biosVendor} ${p.biosVersion}`.trim();
+  const mode = p.uefi ? 'uefi' : 'legacy';
+  return p.biosDate ? S.biosDated({ bios, date: p.biosDate, mode }) : S.bios({ bios, mode });
 }
 
 /** The hardware support matrix, loaded when opened. */
@@ -418,34 +529,35 @@ function SupportMatrix() {
   }, [api, open, items]);
   return (
     <details onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
-      <summary>Hardware support matrix</summary>
-      {error ? (
-        <p role="alert">{firmwareErrorMessage(error, 'Could not load the support matrix.')}</p>
-      ) : null}
-      {open && !items && !error ? <Spinner label="Loading the support matrix" /> : null}
+      <summary>{S.matrix}</summary>
+      {error ? <p role="alert">{firmwareErrorMessage(error, S.matrixFailed)}</p> : null}
+      {open && !items && !error ? <Spinner label={S.loadingMatrix} /> : null}
       {items ? (
         <div className="fw-table-wrap">
           <table className="ws-table">
-            <caption>Which machines Nova can change firmware settings on (Linux only)</caption>
+            <caption>{S.matrixCaption}</caption>
             <thead>
               <tr>
-                <th scope="col">Maker</th>
-                <th scope="col">Supported</th>
-                <th scope="col">Settings</th>
-                <th scope="col">Notes</th>
+                <th scope="col">{S.maker}</th>
+                <th scope="col">{S.supported}</th>
+                <th scope="col">{S.settings}</th>
+                <th scope="col">{S.notes}</th>
               </tr>
             </thead>
             <tbody>
+              {/* Makers and their notes are the Hub's support matrix, in its own words (D9). */}
               {items.map((e) => (
                 <tr key={e.vendor}>
                   <th scope="row">{e.label}</th>
-                  <td>{e.supported ? 'Yes' : `No: ${supportReasonText(e.reason)}`}</td>
+                  <td>
+                    {e.supported ? S.yes : S.noBecause({ reason: supportReasonText(e.reason) })}
+                  </td>
                   <td>
                     {Object.keys(e.keys).length
-                      ? Object.keys(e.keys).map(keyLabel).join(', ')
-                      : 'None'}
+                      ? listText(Object.keys(e.keys).map(keyLabel))
+                      : S.none}
                   </td>
-                  <td>{e.notes}</td>
+                  <td dir="auto">{e.notes}</td>
                 </tr>
               ))}
             </tbody>
@@ -464,17 +576,17 @@ function degradingOf(s: FirmwareSettingView): string[] {
 }
 
 function SettingsTable({ settings }: { settings: FirmwareSettingView[] }) {
-  if (!settings.length) return <p className="muted ws-flush">The device reports no settings.</p>;
+  if (!settings.length) return <p className="muted ws-flush">{S.noSettings}</p>;
   return (
     <div className="fw-table-wrap">
       <table className="ws-table">
-        <caption>The settings Nova may change (an allowlist); it never touches others</caption>
+        <caption>{S.settingsCaption}</caption>
         <thead>
           <tr>
-            <th scope="col">Setting</th>
-            <th scope="col">Value</th>
-            <th scope="col">Can be</th>
-            <th scope="col">Notes</th>
+            <th scope="col">{FIRMWARE_TEXT.columns.setting}</th>
+            <th scope="col">{S.value}</th>
+            <th scope="col">{S.canBe}</th>
+            <th scope="col">{S.notes}</th>
           </tr>
         </thead>
         <tbody>
@@ -489,22 +601,23 @@ function SettingsTable({ settings }: { settings: FirmwareSettingView[] }) {
                 <td>{valueText(s.value)}</td>
                 <td>
                   {s.type === 'order'
-                    ? 'Any order of the same entries'
+                    ? S.anyOrder
                     : s.allowed?.length
-                      ? s.allowed.join(', ')
+                      ? listText(s.allowed)
                       : s.type === 'int'
-                        ? 'A whole number'
-                        : 'Text'}
+                        ? S.wholeNumber
+                        : S.text}
                 </td>
                 <td>
                   {s.readOnly ? (
                     <span>
-                      <Icon name="stop" /> Read-only
+                      <Icon name="stop" /> {S.readOnly}
                     </span>
                   ) : null}
                   {bad.length ? (
                     <span className="fw-degrading">
-                      <Icon name="alert" /> Weakens security when {bad.join(' or ')}
+                      <Icon name="alert" />{' '}
+                      {S.weakensWhen({ values: fmt.list(bad, { type: 'disjunction' }) })}
                     </span>
                   ) : null}
                 </td>
@@ -558,7 +671,7 @@ function PlanForm({
       if (!raw) continue;
       let value: FirmwareValue = raw;
       if (s.type === 'int') {
-        if (!/^-?\d+$/.test(raw)) return `${keyLabel(s.key)} must be a whole number.`;
+        if (!/^-?\d+$/.test(raw)) return S.mustBeNumber({ setting: keyLabel(s.key) });
         value = Number(raw);
       }
       if (!sameValue(value, s.value)) out.push({ key, value });
@@ -576,7 +689,7 @@ function PlanForm({
     e.preventDefault();
     const list = changes();
     if (typeof list === 'string' || !list.length) {
-      setError(typeof list === 'string' ? list : 'Choose at least one new value.');
+      setError(typeof list === 'string' ? list : S.chooseOne);
       errorRef.current?.focus();
       return;
     }
@@ -588,7 +701,7 @@ function PlanForm({
       setOrder(null);
       onPlanned(c);
     } catch (err) {
-      setError(firmwareErrorMessage(err, 'Could not plan the change.'));
+      setError(firmwareErrorMessage(err, S.planFailed));
     } finally {
       setBusy(false);
     }
@@ -597,18 +710,15 @@ function PlanForm({
   if (!writable.length)
     return (
       <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
-        <h2 id={`${base}-h`}>Plan a change</h2>
-        <p className="muted ws-flush">Every setting on this machine is read-only.</p>
+        <h2 id={`${base}-h`}>{S.planTitle}</h2>
+        <p className="muted ws-flush">{S.allReadOnly}</p>
       </section>
     );
 
   return (
     <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
-      <h2 id={`${base}-h`}>Plan a change</h2>
-      <p className="muted ws-flush">
-        Planning is a dry run: novad works out the diff and keeps a snapshot of the current values.
-        Nothing changes on {deviceName} until you approve and apply the plan.
-      </p>
+      <h2 id={`${base}-h`}>{S.planTitle}</h2>
+      <p className="muted ws-flush">{S.planIntro({ device: deviceName })}</p>
       <form className="stack" onSubmit={(e) => void submit(e)} aria-labelledby={`${base}-h`}>
         <div className="fw-plan-grid">
           {writable.map((s) =>
@@ -626,13 +736,13 @@ function PlanForm({
                 value={choices[s.key] ?? ''}
                 onChange={(v) => setChoices((c) => ({ ...c, [s.key]: v }))}
                 options={[
-                  { value: '', label: `No change (now ${valueText(s.value)})` },
+                  { value: '', label: S.noChange({ value: valueText(s.value) }) },
                   ...s.allowed
                     .filter((v) => v !== s.value)
                     .map((v) => ({
                       value: v,
                       label: weakensSecurity(s.key, v, s.securityDegrading)
-                        ? `${v} (weakens security)`
+                        ? S.weakensOption({ value: v })
                         : v,
                     })),
                 ]}
@@ -644,7 +754,7 @@ function PlanForm({
                 value={choices[s.key] ?? ''}
                 inputMode={s.type === 'int' ? 'numeric' : undefined}
                 placeholder={valueText(s.value)}
-                hint={`Now ${valueText(s.value)}. Leave empty to keep it.`}
+                hint={S.nowHint({ value: valueText(s.value) })}
                 onChange={(e) => setChoices((c) => ({ ...c, [s.key]: e.target.value }))}
               />
             ),
@@ -654,16 +764,20 @@ function PlanForm({
           <div className="ws-callout" role="note">
             <Icon name="alert" />
             <p>
-              <strong>This weakens security:</strong>{' '}
-              {chosenBad.map((s) => `${keyLabel(s.key)} ${choices[s.key]}`).join(', ')}. Changes
-              like this are blocked unless “Allow changes that weaken security” is on (it is{' '}
-              {policy.allowSecurityDegrading ? 'on' : 'off'}).
+              {rich(policy.allowSecurityDegrading ? S.weakensChosenOn : S.weakensChosenOff, {
+                lead: <strong>{S.weakensLead}</strong>,
+                changes: listText(
+                  chosenBad.map((s) =>
+                    S.choice({ setting: keyLabel(s.key), value: choices[s.key] ?? '' }),
+                  ),
+                ),
+              })}
             </p>
           </div>
         ) : null}
         <div className="row">
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Plan the change
+            {busy ? <Spinner /> : null} {S.planChange}
           </Button>
         </div>
         {error ? (
@@ -699,31 +813,30 @@ function OrderField({
     <fieldset className="ws-fieldset">
       <legend>{keyLabel(setting.key)}</legend>
       <p id={`${id}-hint`} className="nv-field-hint">
-        Move entries up or down; the first is tried first. {changed ? 'Changed.' : 'No change.'}
+        {S.orderHint} {changed ? S.changed : S.unchanged}
       </p>
       <ol ref={listRef} className="fw-order" aria-describedby={`${id}-hint`}>
         {value.map((entry, i) => (
           <li key={entry} data-move-key={entry}>
-            <span>
-              {i + 1}. {entry}
-            </span>
+            {/* A boot entry's name, as the device reports it. */}
+            <span dir="auto">{S.orderItem({ n: i + 1, entry })}</span>
             <Button
               variant="ghost"
               data-move="up"
-              aria-label={`Move ${entry} up`}
+              aria-label={S.moveUp({ entry })}
               disabled={i === 0}
               onClick={() => move(i, 'up')}
             >
-              Up
+              {S.up}
             </Button>
             <Button
               variant="ghost"
               data-move="down"
-              aria-label={`Move ${entry} down`}
+              aria-label={S.moveDown({ entry })}
               disabled={i === value.length - 1}
               onClick={() => move(i, 'down')}
             >
-              Down
+              {S.down}
             </Button>
           </li>
         ))}
@@ -733,7 +846,7 @@ function OrderField({
           variant="ghost"
           onClick={() => onChange(Array.isArray(setting.value) ? setting.value : [])}
         >
-          Keep the current order
+          {S.keepOrder}
         </Button>
       ) : null}
     </fieldset>
@@ -770,35 +883,32 @@ function BiosPassword({
       const r = await api.setBiosPassword(deviceId, password);
       setPassword('');
       onStored(r.stored);
-      toast.show('BIOS admin password stored.', { tone: 'success' });
+      toast.show(S.passwordStored, { tone: 'success' });
     } catch (err) {
-      setError(firmwareErrorMessage(err, 'Could not store the password.'));
+      setError(firmwareErrorMessage(err, S.passwordFailed));
     } finally {
       setBusy(false);
     }
   };
   return (
     <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
-      <h2 id={`${base}-h`}>BIOS admin password</h2>
+      <h2 id={`${base}-h`}>{S.password}</h2>
       <p className="ws-flush">
         {machineHasOne
-          ? `${deviceName} has a BIOS admin password: Nova needs it to apply changes.`
-          : `${deviceName} reports no BIOS admin password.`}{' '}
+          ? S.hasPassword({ device: deviceName })
+          : S.noPassword({ device: deviceName })}{' '}
         {stored ? (
-          <strong>Stored in the Hub’s vault.</strong>
+          <strong>{S.inVault}</strong>
         ) : machineHasOne ? (
-          <strong>Not stored yet.</strong>
+          <strong>{S.notStored}</strong>
         ) : (
-          'None stored.'
+          S.noneStored
         )}
       </p>
-      <p className="muted ws-flush">
-        It is kept in the Hub’s vault, sent to the device only with an approved change, and never
-        shown again, here or anywhere.
-      </p>
+      <p className="muted ws-flush">{S.passwordKept}</p>
       <form className="row" onSubmit={(e) => void save(e)}>
         <TextField
-          label={stored ? 'Replace the BIOS admin password' : 'BIOS admin password'}
+          label={stored ? S.replacePassword : S.password}
           type="password"
           autoComplete="new-password"
           value={password}
@@ -807,30 +917,26 @@ function BiosPassword({
           error={error ?? undefined}
         />
         <Button type="submit" disabled={!password || busy}>
-          {busy ? <Spinner /> : null} Store
+          {busy ? <Spinner /> : null} {S.store}
         </Button>
         {stored ? (
           <Button variant="danger" onClick={() => setClearing(true)}>
-            Remove…
+            {S.removeMore}
           </Button>
         ) : null}
       </form>
       <ConfirmDialog
         open={clearing}
-        title={`Remove the BIOS admin password of ${deviceName}?`}
-        description={
-          machineHasOne
-            ? 'Nova forgets it. Changes to this machine are refused until you store it again. The password on the machine itself stays as it is.'
-            : 'Nova forgets it. The machine itself is not changed.'
-        }
-        confirmLabel="Remove"
+        title={S.removeTitle({ device: deviceName })}
+        description={machineHasOne ? S.removeBodyHas : S.removeBody}
+        confirmLabel={S.remove}
         danger
         onClose={() => setClearing(false)}
         onConfirm={async () => {
           const r = await inPlainWords(api.clearBiosPassword(deviceId));
           setClearing(false);
           onStored(r.stored);
-          toast.show('BIOS admin password removed.', { tone: 'success' });
+          toast.show(S.passwordRemoved, { tone: 'success' });
         }}
       />
     </section>

@@ -10,6 +10,9 @@ export const SPACES_EVENTS = [
   'space.page.created',
   'space.page.updated',
   'space.page.deleted',
+  // M8: the whole order changed; a deleted page came back.
+  'space.pages.reordered',
+  'space.page.undeleted',
   'space.comment.created',
   'space.comment.updated',
   'space.comment.deleted',
@@ -24,6 +27,8 @@ export const SITES_EVENTS = [
   'site.version.created',
   'site.published',
   'site.unpublished',
+  // M8: a hosting target was added, changed, checked or removed.
+  'site.target.changed',
 ] as const;
 
 /** Follows the named events on the app's shared stream while mounted (src/hub-events.ts). */

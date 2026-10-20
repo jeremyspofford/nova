@@ -462,7 +462,24 @@ export const ROUTE_GROUPS: readonly RouteGroup[] = [
   {
     class: 'owner',
     why: "the Hub's shared publish folder",
-    routes: ['POST /api/v1/sites/:id/publish', 'POST /api/v1/sites/:id/unpublish'],
+    routes: [
+      'POST /api/v1/sites/:id/publish',
+      // M8: the plan names the Hub's folders and the owner's hosting targets.
+      'POST /api/v1/sites/:id/publish-plan',
+      'POST /api/v1/sites/:id/unpublish',
+    ],
+  },
+  {
+    class: 'owner',
+    why: "the Hub's hosting targets for sites, with their credentials (M8)",
+    routes: [
+      'GET /api/v1/sites/targets',
+      'POST /api/v1/sites/targets',
+      'DELETE /api/v1/sites/targets/:targetId',
+      'GET /api/v1/sites/targets/:targetId',
+      'PATCH /api/v1/sites/targets/:targetId',
+      'POST /api/v1/sites/targets/:targetId/check',
+    ],
   },
   {
     class: 'owner',
@@ -916,6 +933,7 @@ export const ROUTE_GROUPS: readonly RouteGroup[] = [
       'PATCH /api/v1/sites/:id',
       'POST /api/v1/sites/:id/build',
       'GET /api/v1/sites/:id/publishes',
+      'POST /api/v1/sites/:id/source-preview',
       'GET /api/v1/sites/:id/versions',
       'GET /api/v1/sites/:id/versions/:version/preview',
       'GET /api/v1/sites/:id/versions/:version/zip',
@@ -925,6 +943,8 @@ export const ROUTE_GROUPS: readonly RouteGroup[] = [
       'DELETE /api/v1/spaces/:id',
       'GET /api/v1/spaces/:id',
       'PATCH /api/v1/spaces/:id',
+      'GET /api/v1/spaces/:id/deleted-pages',
+      'PUT /api/v1/spaces/:id/order',
       'GET /api/v1/spaces/:id/pages',
       'POST /api/v1/spaces/:id/pages',
       'DELETE /api/v1/spaces/:id/pages/:pageId',
@@ -935,7 +955,9 @@ export const ROUTE_GROUPS: readonly RouteGroup[] = [
       'POST /api/v1/spaces/:id/pages/:pageId/comments',
       'DELETE /api/v1/spaces/:id/pages/:pageId/comments/:commentId',
       'POST /api/v1/spaces/:id/pages/:pageId/comments/:commentId/resolve',
+      'GET /api/v1/spaces/:id/pages/:pageId/deletion',
       'POST /api/v1/spaces/:id/pages/:pageId/restore',
+      'POST /api/v1/spaces/:id/pages/:pageId/undelete',
       'GET /api/v1/spaces/:id/pages/:pageId/versions',
       'GET /api/v1/spaces/:id/pages/:pageId/versions/:version',
       'GET /api/v1/spaces/:id/proposals',

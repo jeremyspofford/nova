@@ -3,6 +3,12 @@
 // packages/core/src/index.ts re-exports this module.
 export { DataControls, type DataControlsOptions } from './service.ts';
 export {
+  ACCOUNT_EXPORT_SKIPS,
+  narrowToAccount,
+  selectedFile,
+  type AccountSelection,
+} from './account.ts';
+export {
   HUB_KEY_DEPENDENTS,
   HUB_KEY_TABLES,
   HUB_SECRET_PREFIXES,

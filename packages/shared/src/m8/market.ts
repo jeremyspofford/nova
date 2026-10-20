@@ -22,9 +22,17 @@ export type MarketCatalogKind = 'builtin' | 'local' | 'git' | 'url';
 export type MarketCatalogSignature = 'verified' | 'untrusted' | 'unsigned' | 'invalid';
 
 export interface MarketPublisher {
+  /**
+   * The owner's name for a trusted key; null otherwise. A name a catalog claims for a key is
+   * never shown as the publisher's.
+   */
   name: string | null;
   /** base64url of the raw 32-byte Ed25519 public key. */
   key: string;
+  /** First 16 hex characters of SHA-256 over the raw key, grouped for reading aloud. */
+  fingerprint: string;
+  /** In the trusted publishers, or the key this catalog pins. */
+  trusted: boolean;
 }
 
 export interface MarketCatalogView {
@@ -130,6 +138,14 @@ export interface MarketItemDetail extends MarketItemView {
   commit: string | null;
 }
 
+/** One side of an extension's change of publisher (the extension installer's view of a key). */
+export interface MarketPublisherSide {
+  key: string | null;
+  name: string | null;
+  fingerprint: string | null;
+  trusted: boolean;
+}
+
 /**
  * Why an item is Unverified (docs/08 §7). A bundle whose signature does not match its contents is
  * not Unverified but refused (`validation` `{reason: bundle_invalid}`), like a catalog whose index
@@ -145,6 +161,25 @@ export const MARKET_UNVERIFIED_REASONS = [
 ] as const;
 export type MarketUnverifiedReason = (typeof MARKET_UNVERIFIED_REASONS)[number];
 
+/**
+ * Who vouches for a Verified item (docs/08 §7), so the install dialog can say it rather than a
+ * bare key: the catalog that lists it with its checksum, whose index is signed with the key the
+ * catalog pins (`pinned_key`, as the built-in catalog is) or by a trusted publisher
+ * (`trusted_publisher`, named); and for a `.novax` bundle the trusted publisher whose own
+ * signature it carries (the catalog never vouches for a bundle's signer).
+ */
+export interface MarketVouch {
+  catalog: {
+    id: string;
+    name: string;
+    signedWith: 'pinned_key' | 'trusted_publisher';
+    /** The key the index is signed with; named only when it is in the trusted publishers. */
+    publisher: MarketPublisher | null;
+  };
+  /** The trusted publisher that signed the bundle; null for an item that is not a bundle. */
+  bundle: MarketPublisher | null;
+}
+
 export interface MarketPreview {
   previewId: string;
   catalogId: string;
@@ -156,17 +191,27 @@ export interface MarketPreview {
     status: 'verified' | 'unverified';
     reasons: MarketUnverifiedReason[];
     publisher: MarketPublisher | null;
+    /** What vouches for a Verified item; null when it is Unverified. */
+    vouchedBy: MarketVouch | null;
   };
   /** The item's own permissions, read from the artifact. */
   permissions: MarketPermissionLine[];
   /** Set on an update: what changes against the installed version. */
   diff: MarketPermissionDiff | null;
+  /**
+   * An extension update signed by another publisher than the installed one (or by none): who it
+   * was and who it is. Installing needs `acceptPublisherChange: true` and clears the extension's
+   * secrets and data (FR-117).
+   */
+  publisherChange: { from: MarketPublisherSide; to: MarketPublisherSide } | null;
   replaces: { version: string } | null;
   requires: {
     /** Unverified: `confirmSideload: true` is needed (and allowed by policy). */
     sideloadConfirmation: boolean;
     /** The diff adds or changes something: `acceptPermissions: diff.hash` is needed. */
     permissionAcceptance: boolean;
+    /** `publisherChange` is set: `acceptPublisherChange: true` is needed. */
+    publisherChangeAcceptance: boolean;
   };
   /** False when policy refuses the install whatever is confirmed; `blockedBy` says why. */
   allowed: boolean;
@@ -226,6 +271,8 @@ export const marketInstallSchema = z.object({
   confirmSideload: z.boolean().optional(),
   /** The `diff.hash` of the preview: accepts the permission changes of an update. */
   acceptPermissions: z.string().max(100).optional(),
+  /** Accepts the preview's `publisherChange` (the extension's secrets and data are cleared). */
+  acceptPublisherChange: z.boolean().optional(),
   enable: z.boolean().default(true),
   /** Plugin hooks to trust now, with the hashes the preview showed (FR-197). */
   trustHooks: z

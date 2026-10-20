@@ -25,6 +25,7 @@ import {
   type HookView,
   type installPluginSchema,
   type PluginPreview,
+  type PluginPublisherSide,
   type PluginSource,
   type PluginView,
   type pluginSourceSchema,
@@ -283,9 +284,33 @@ function toolSegment(name: string, pluginId?: string): string {
   return name;
 }
 
+/**
+ * Another installer's say on an install through this one: the extension installer's check that
+ * a folder or Git install does not take over a signed extension's id, its secrets and data
+ * without the owner's confirmation (M8 supply review #3).
+ */
+export interface PluginInstallGuard {
+  /** Why installing this plugin needs `acceptPublisherChange`; null when nothing is in the way. */
+  confirmationNeeded(input: {
+    accountId: string;
+    pluginId: string;
+    /** The folder the preview read. */
+    root: string;
+  }): Promise<PluginPublisherChange | null>;
+}
+
+/** A change of publisher an install needs accepted: the Hub's sentence, and who it was and is. */
+export interface PluginPublisherChange {
+  /** The preview's first warning and the refusal's message. */
+  message: string;
+  from: PluginPublisherSide;
+  to: PluginPublisherSide;
+}
+
 export class PluginService implements PluginPermissionSource {
   readonly #db: NovaDatabase;
   readonly #o: PluginServiceOptions;
+  #guard: PluginInstallGuard | null = null;
   readonly #log: Logger;
   readonly #now: () => Date;
   readonly #previews = new Map<string, PreviewRecord>();
@@ -306,6 +331,11 @@ export class PluginService implements PluginPermissionSource {
         return () => this.#listeners.delete(listener);
       },
     };
+  }
+
+  /** Wire the extension installer's check (an install that takes over a signed extension). */
+  useInstallGuard(guard: PluginInstallGuard | null): void {
+    this.#guard = guard;
   }
 
   /** Wire the hooks area's trust state into PluginView.status. */
@@ -518,6 +548,12 @@ export class PluginService implements PluginPermissionSource {
     ];
     if (current && compareSemver(loaded.manifest.version, current.version) < 0)
       warnings.push(`This is an older version than the installed ${current.version}.`);
+    const takeover = await this.#guard?.confirmationNeeded({
+      accountId,
+      pluginId: loaded.manifest.id,
+      root,
+    });
+    if (takeover) warnings.unshift(takeover.message);
     for (const s of loaded.servers) {
       if (s.config.auth)
         warnings.push(`Server ${s.key}: \`auth\` is not used for plugin servers yet; use headers.`);
@@ -555,6 +591,7 @@ export class PluginService implements PluginPermissionSource {
       verified: false,
       warnings,
       replaces: current ? { version: current.version } : null,
+      publisherChange: takeover ? { from: takeover.from, to: takeover.to } : null,
     };
   }
 
@@ -628,6 +665,19 @@ export class PluginService implements PluginPermissionSource {
     const m = loaded.manifest;
     // Managed policy may refuse unverified installs, and any plugin it does not allow (FR-106).
     await this.#assertManaged(m.id, loaded.root, { verified });
+    // A signed extension under this id is not replaced without the owner's confirmation.
+    const takeover = await this.#guard?.confirmationNeeded({
+      accountId,
+      pluginId: m.id,
+      root: loaded.root,
+    });
+    if (takeover && req.acceptPublisherChange !== true)
+      throw new NovaError('validation', takeover.message, {
+        details: {
+          field: 'acceptPublisherChange',
+          reason: 'publisher_change_confirmation_required',
+        },
+      });
     const source = provenance?.source ?? p.source;
     const origin = provenance?.origin ?? p.origin;
     if (!existsSync(loaded.root))

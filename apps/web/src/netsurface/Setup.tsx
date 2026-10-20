@@ -5,6 +5,7 @@
 // changes are a security setting (`network.setup.allowSystemChanges`), switched here: off, Nova
 // only detects and plans, and no step offers an Apply it cannot do.
 import { useId, useState } from 'react';
+import { defineMessages, messageFor } from '@nova/i18n';
 import type {
   NetworkDetectionView,
   NetworkSetupConsentView,
@@ -22,15 +23,79 @@ import {
   progressText,
   providerLabel,
   runFrom,
+  runName,
   runStatusChip,
   setupRunPath,
   stepKindLabel,
   stepProviderLabel,
+  valuesText,
 } from './format.ts';
 import { HostChanges } from './HostChanges.tsx';
 import { Chip, ConfirmDialog, Fact, LoadError, useLoad } from './parts.tsx';
 import { SetupPlan } from './SetupPlan.tsx';
 import { SetupRun } from './SetupRun.tsx';
+
+const S = defineMessages('netsurface.setup', {
+  intro:
+    'Nova can set up a mesh so your devices reach the Hub from anywhere. It looks first, then plans the steps; nothing changes until you apply a step, and every step can be rolled back. ' +
+    'Nova never needs a mesh: the LAN and the Relay always work.',
+  kind: { loopback: 'Loopback', lan: 'LAN', mesh: 'Mesh', vpn: 'VPN', other: 'Other' },
+  detection: {
+    title: 'What Nova finds',
+    lookAgain: 'Look again',
+    failed: "Could not look at this computer's network.",
+    looking: "Looking at this computer's network",
+    platform: 'Platform',
+    lan: 'LAN',
+    noLan: 'No LAN address',
+    dns: 'DNS servers',
+    noneFound: 'None found',
+    dnsSearch: 'DNS search',
+    firewall: 'Firewall',
+    firewallState:
+      '{tool}, {state, select, active {active} inactive {inactive} other {state unknown}}',
+    noFirewall: 'No firewall Nova can manage',
+    packageManager: 'Package manager',
+    checked: 'Checked',
+    meshes: 'Meshes and VPNs',
+    meshesList: 'Meshes found',
+    notInstalled: 'Not installed',
+    connected: 'Connected',
+    notConnected: 'Installed, not connected',
+    version: 'version {version}',
+    tags: 'tags {tags}',
+    peers: '{online} of {total, plural, one {# peer} other {# peers}} online',
+    routes: 'routes {routes}',
+    exitNode: 'exit node',
+    interfaces: 'Network interfaces ({n})',
+    interfacesList: 'Network interfaces',
+    kindProvider: '{kind}, {provider}',
+  },
+  runs: {
+    title: 'Setup runs',
+    failed: 'Could not load the setup runs.',
+    loading: 'Loading setup runs',
+    none: 'No runs yet. Make a plan above to start one.',
+    planned: 'planned {when}',
+    updated: 'updated {when}',
+  },
+  consents: {
+    title: 'What you allowed',
+    help: 'Nova asks before the first change of each kind with each tool, then remembers your answer. Revoke one and it asks again.',
+    failed: 'Could not load what you allowed.',
+    loading: 'Loading what you allowed',
+    none: 'Nothing yet.',
+    list: 'Allowed changes',
+    name: '{kind} with {provider}',
+    allowed: 'allowed {when}',
+    revoke: 'Revoke',
+    revokeName: 'Revoke {name}',
+    revokeTitle: 'Revoke this permission?',
+    revokeText:
+      'Nova asks again before it next makes this kind of change ({kind}) with {provider}. Nothing already applied changes.',
+    revoked: 'Permission revoked.',
+  },
+});
 
 export function SetupSection() {
   const loc = useLocation();
@@ -43,11 +108,7 @@ function SetupHome() {
   const detection = useLoad(() => api.detectNetwork().then((r) => r.detection), 'detect');
   return (
     <div className="stack net-section">
-      <p className="muted ws-flush net-first">
-        Nova can set up a mesh so your devices reach the Hub from anywhere. It looks first, then
-        plans the steps; nothing changes until you apply a step, and every step can be rolled back.
-        Nova never needs a mesh: the LAN and the Relay always work.
-      </p>
+      <p className="muted ws-flush net-first">{S.intro}</p>
       <HostChanges />
       <Detection detection={detection.data} error={detection.error} onRetry={detection.reload} />
       <SetupPlan detection={detection.data} onPlanned={(run) => navigate(setupRunPath(run.id))} />
@@ -58,14 +119,6 @@ function SetupHome() {
 }
 
 // ---- detection (docs/22 §6 step 1) --------------------------------------------------------------
-
-const KIND_LABEL: Record<string, string> = {
-  loopback: 'Loopback',
-  lan: 'LAN',
-  mesh: 'Mesh',
-  vpn: 'VPN',
-  other: 'Other',
-};
 
 function Detection({
   detection,
@@ -81,54 +134,64 @@ function Detection({
   return (
     <section className="ws-section" aria-labelledby={headingId}>
       <div className="ws-section-header">
-        <h2 id={headingId}>What Nova finds</h2>
+        <h2 id={headingId}>{S.detection.title}</h2>
         <Button onClick={onRetry} disabled={!d && !error}>
-          <Icon name="refresh" /> Look again
+          <Icon name="refresh" /> {S.detection.lookAgain}
         </Button>
       </div>
-      {error ? (
-        <LoadError
-          error={error}
-          fallback="Could not look at this computer's network."
-          onRetry={onRetry}
-        />
-      ) : null}
+      {error ? <LoadError error={error} fallback={S.detection.failed} onRetry={onRetry} /> : null}
       {!d ? (
         error ? null : (
-          <Spinner label="Looking at this computer's network" />
+          <Spinner label={S.detection.looking} />
         )
       ) : (
         <>
           <dl className="net-facts">
-            <Fact term="Platform">{d.platform}</Fact>
-            <Fact term="LAN">{d.subnets.length ? d.subnets.join(', ') : 'No LAN address'}</Fact>
-            <Fact term="DNS servers">
-              {d.dns.nameservers.length ? d.dns.nameservers.join(', ') : 'None found'}
+            <Fact term={S.detection.platform}>{d.platform}</Fact>
+            <Fact term={S.detection.lan}>
+              {d.subnets.length ? valuesText(d.subnets) : S.detection.noLan}
             </Fact>
-            {d.dns.search.length ? <Fact term="DNS search">{d.dns.search.join(', ')}</Fact> : null}
-            <Fact term="Firewall">
+            <Fact term={S.detection.dns}>
+              {d.dns.nameservers.length ? valuesText(d.dns.nameservers) : S.detection.noneFound}
+            </Fact>
+            {d.dns.search.length ? (
+              <Fact term={S.detection.dnsSearch}>{valuesText(d.dns.search)}</Fact>
+            ) : null}
+            <Fact term={S.detection.firewall}>
               {d.firewall.tool
-                ? `${d.firewall.tool}, ${d.firewall.active === null ? 'state unknown' : d.firewall.active ? 'active' : 'inactive'}`
-                : 'No firewall Nova can manage'}
+                ? S.detection.firewallState({
+                    tool: d.firewall.tool,
+                    state:
+                      d.firewall.active === null
+                        ? 'unknown'
+                        : d.firewall.active
+                          ? 'active'
+                          : 'inactive',
+                  })
+                : S.detection.noFirewall}
             </Fact>
-            <Fact term="Package manager">{d.packageManager ?? 'None found'}</Fact>
-            <Fact term="Checked">{formatWhen(d.detectedAt)}</Fact>
+            <Fact term={S.detection.packageManager}>
+              {d.packageManager ?? S.detection.noneFound}
+            </Fact>
+            <Fact term={S.detection.checked}>{formatWhen(d.detectedAt)}</Fact>
           </dl>
-          <h3 className="ws-subhead">Meshes and VPNs</h3>
-          <ul className="ws-list" aria-label="Meshes found">
+          <h3 className="ws-subhead">{S.detection.meshes}</h3>
+          <ul className="ws-list" aria-label={S.detection.meshesList}>
             {d.meshes.map((m) => (
               <li key={m.provider} className="ws-list-row" aria-label={providerLabel(m.provider)}>
                 <div className="net-row-main">
                   <div className="net-row-head">
                     <span className="net-strong">{providerLabel(m.provider)}</span>
                     {!m.installed ? (
-                      <Chip spec={{ text: 'Not installed', tone: 'neutral', icon: 'stop' }} />
+                      <Chip
+                        spec={{ text: S.detection.notInstalled, tone: 'neutral', icon: 'stop' }}
+                      />
                     ) : m.loggedIn ? (
-                      <Chip spec={{ text: 'Connected', tone: 'ready', icon: 'check' }} />
+                      <Chip spec={{ text: S.detection.connected, tone: 'ready', icon: 'check' }} />
                     ) : (
                       <Chip
                         spec={{
-                          text: 'Installed, not connected',
+                          text: S.detection.notConnected,
                           tone: 'needs_input',
                           icon: 'alert',
                         }}
@@ -137,19 +200,28 @@ function Detection({
                   </div>
                   {m.installed ? (
                     <span className="muted ws-row-meta">
-                      {m.version ? <span>version {m.version}</span> : null}
+                      {m.version ? (
+                        <span>{S.detection.version({ version: m.version })}</span>
+                      ) : null}
                       {m.state ? <span>{m.state}</span> : null}
                       {m.controlUrl ? <span>{m.controlUrl}</span> : null}
-                      {m.ips.length ? <span>{m.ips.join(', ')}</span> : null}
+                      {m.ips.length ? <span>{valuesText(m.ips)}</span> : null}
                       {m.dnsName ? <span>{m.dnsName}</span> : null}
-                      {m.tags.length ? <span>tags {m.tags.join(', ')}</span> : null}
+                      {m.tags.length ? (
+                        <span>{S.detection.tags({ tags: valuesText(m.tags) })}</span>
+                      ) : null}
                       {m.peers.length ? (
                         <span>
-                          {m.peers.filter((p) => p.online).length} of {m.peers.length} peers online
+                          {S.detection.peers({
+                            online: m.peers.filter((p) => p.online).length,
+                            total: m.peers.length,
+                          })}
                         </span>
                       ) : null}
-                      {m.routes.length ? <span>routes {m.routes.join(', ')}</span> : null}
-                      {m.exitNode ? <span>exit node</span> : null}
+                      {m.routes.length ? (
+                        <span>{S.detection.routes({ routes: valuesText(m.routes) })}</span>
+                      ) : null}
+                      {m.exitNode ? <span>{S.detection.exitNode}</span> : null}
                     </span>
                   ) : null}
                   {m.installed && m.detail ? (
@@ -160,16 +232,20 @@ function Detection({
             ))}
           </ul>
           <details className="ws-advanced">
-            <summary>Network interfaces ({d.interfaces.length})</summary>
-            <ul className="ws-list" aria-label="Network interfaces">
+            <summary>{S.detection.interfaces({ n: d.interfaces.length })}</summary>
+            <ul className="ws-list" aria-label={S.detection.interfacesList}>
               {d.interfaces.map((i) => (
                 <li key={i.name} className="ws-list-row" aria-label={i.name}>
                   <div className="net-row-main">
                     <div className="net-row-head">
                       <code className="ws-code-inline">{i.name}</code>
                       <span className="muted">
-                        {KIND_LABEL[i.kind] ?? i.kind}
-                        {i.provider ? `, ${providerLabel(i.provider)}` : ''}
+                        {i.provider
+                          ? S.detection.kindProvider({
+                              kind: interfaceKind(i.kind),
+                              provider: providerLabel(i.provider),
+                            })
+                          : interfaceKind(i.kind)}
                       </span>
                     </div>
                     <span className="muted ws-row-meta">
@@ -188,6 +264,9 @@ function Detection({
   );
 }
 
+/** An interface's kind in words; a kind the Hub adds later keeps its id. */
+const interfaceKind = (k: string): string => messageFor(S.kind, k) ?? k;
+
 // ---- run history --------------------------------------------------------------------------------
 
 function Runs() {
@@ -198,20 +277,14 @@ function Runs() {
   useNetworkEvents(SETUP_EVENTS, reload, reload);
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>Setup runs</h2>
+      <h2 id={headingId}>{S.runs.title}</h2>
       {runs.error ? (
-        <LoadError
-          error={runs.error}
-          fallback="Could not load the setup runs."
-          onRetry={runs.reload}
-        />
+        <LoadError error={runs.error} fallback={S.runs.failed} onRetry={runs.reload} />
       ) : null}
-      {runs.loading ? <Spinner label="Loading setup runs" /> : null}
-      {runs.data?.length === 0 ? (
-        <p className="muted ws-flush">No runs yet. Make a plan above to start one.</p>
-      ) : null}
+      {runs.loading ? <Spinner label={S.runs.loading} /> : null}
+      {runs.data?.length === 0 ? <p className="muted ws-flush">{S.runs.none}</p> : null}
       {runs.data?.length ? (
-        <ul className="ws-list" aria-label="Setup runs">
+        <ul className="ws-list" aria-label={S.runs.title}>
           {runs.data.map((r) => (
             <RunRow key={r.id} run={r} />
           ))}
@@ -223,7 +296,7 @@ function Runs() {
 
 function RunRow({ run }: { run: NetworkSetupRunView }) {
   const path = setupRunPath(run.id);
-  const name = `${providerLabel(run.provider)} setup`;
+  const name = runName(run.provider);
   return (
     <li className="ws-list-row" aria-label={name}>
       <div className="net-row-main">
@@ -235,9 +308,9 @@ function RunRow({ run }: { run: NetworkSetupRunView }) {
         </div>
         <span className="muted ws-row-meta">
           <span>{progressText(run)}</span>
-          <span>planned {formatWhen(run.createdAt)}</span>
+          <span>{S.runs.planned({ when: formatWhen(run.createdAt) })}</span>
           {run.updatedAt !== run.createdAt ? (
-            <span>updated {formatWhen(run.updatedAt)}</span>
+            <span>{S.runs.updated({ when: formatWhen(run.updatedAt) })}</span>
           ) : null}
         </span>
       </div>
@@ -258,38 +331,36 @@ function Consents() {
   const [revoking, setRevoking] = useState<NetworkSetupConsentView | null>(null);
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>What you allowed</h2>
-      <p className="muted">
-        Nova asks before the first change of each kind with each tool, then remembers your answer.
-        Revoke one and it asks again.
-      </p>
+      <h2 id={headingId}>{S.consents.title}</h2>
+      <p className="muted">{S.consents.help}</p>
       {list.error ? (
-        <LoadError
-          error={list.error}
-          fallback="Could not load what you allowed."
-          onRetry={list.reload}
-        />
+        <LoadError error={list.error} fallback={S.consents.failed} onRetry={list.reload} />
       ) : null}
-      {list.loading ? <Spinner label="Loading what you allowed" /> : null}
-      {list.data?.length === 0 ? <p className="muted ws-flush">Nothing yet.</p> : null}
+      {list.loading ? <Spinner label={S.consents.loading} /> : null}
+      {list.data?.length === 0 ? <p className="muted ws-flush">{S.consents.none}</p> : null}
       {list.data?.length ? (
-        <ul className="ws-list" aria-label="Allowed changes">
+        <ul className="ws-list" aria-label={S.consents.list}>
           {list.data.map((c) => {
-            const name = `${stepKindLabel(c.kind)} with ${stepProviderLabel(c.provider)}`;
+            const name = S.consents.name({
+              kind: stepKindLabel(c.kind),
+              provider: stepProviderLabel(c.provider),
+            });
             return (
               <li key={c.id} className="ws-list-row" aria-label={name}>
                 <div className="net-row-main">
                   <span className="net-strong">{name}</span>
                   <span className="muted ws-row-meta">
-                    <span>allowed {formatWhen(c.grantedAt)}</span>
+                    <span>{S.consents.allowed({ when: formatWhen(c.grantedAt) })}</span>
                   </span>
                   <details className="ws-advanced">
-                    <summary>What you allowed</summary>
-                    <p className="net-step-desc">{c.description}</p>
+                    <summary>{S.consents.title}</summary>
+                    <p className="net-step-desc" dir="auto">
+                      {c.description}
+                    </p>
                   </details>
                 </div>
-                <Button onClick={() => setRevoking(c)} aria-label={`Revoke ${name}`}>
-                  Revoke
+                <Button onClick={() => setRevoking(c)} aria-label={S.consents.revokeName({ name })}>
+                  {S.consents.revoke}
                 </Button>
               </li>
             );
@@ -298,13 +369,16 @@ function Consents() {
       ) : null}
       <ConfirmDialog
         open={revoking !== null}
-        title="Revoke this permission?"
+        title={S.consents.revokeTitle}
         description={
           revoking
-            ? `Nova asks again before the next ${stepKindLabel(revoking.kind).toLowerCase()} change with ${stepProviderLabel(revoking.provider)}. Nothing already applied changes.`
+            ? S.consents.revokeText({
+                kind: stepKindLabel(revoking.kind),
+                provider: stepProviderLabel(revoking.provider),
+              })
             : undefined
         }
-        confirmLabel="Revoke"
+        confirmLabel={S.consents.revoke}
         danger
         onClose={() => setRevoking(null)}
         onConfirm={async () => {
@@ -312,8 +386,8 @@ function Consents() {
           await api.revokeNetworkSetupConsent(revoking.id);
           setRevoking(null);
           list.setData((prev) => prev?.filter((x) => x.id !== revoking.id) ?? null);
-          toast.show('Permission revoked.', { tone: 'success' });
-          announce('Permission revoked.');
+          toast.show(S.consents.revoked, { tone: 'success' });
+          announce(S.consents.revoked);
         }}
       />
     </section>

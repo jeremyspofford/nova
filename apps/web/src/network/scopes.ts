@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useServices } from '../services.tsx';
 import { useComputersApi } from '../computers/api.ts';
 import { scopeKindText } from '../computers/format.ts';
+import { EGRESS_TEXT } from './strings.ts';
 
 /** The scopes the proxy applies to a command (an agent, its run, a Code session). */
 export const RULE_SCOPES = ['agent', 'run', 'session'] as const;
@@ -66,9 +67,9 @@ export function useScopeTargets(): {
 
   const label = useCallback(
     (kind: string, id: string) => {
-      if (kind === 'sandbox') return 'A sandbox';
+      if (kind === 'sandbox') return EGRESS_TEXT.aSandbox;
       const name = isRuleScope(kind) ? targets[kind]?.find((o) => o.id === id)?.name : undefined;
-      return `${scopeKindText(kind)}: ${name ?? id.slice(0, 8)}`;
+      return EGRESS_TEXT.scopeName({ kind: scopeKindText(kind), name: name ?? id.slice(0, 8) });
     },
     [targets],
   );

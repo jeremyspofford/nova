@@ -4,6 +4,7 @@
 // image in a dialog, with a link to open it in a new tab.
 import { useState } from 'react';
 import { Button, Dialog, Icon } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import './computers.css';
 
 export interface ShotPaths {
@@ -16,33 +17,43 @@ export function isHubImagePath(src: string | null | undefined): src is string {
   return !!src && src.startsWith('/api/v1/') && !src.includes('..') && !src.includes('\\');
 }
 
-const WHICH = { before: 'Before', after: 'After' } as const;
+export const SHOTS_TEXT = defineMessages('computers.shots', {
+  group: 'Screenshots: {title}',
+  which: { before: 'Before', after: 'After' },
+  notCaptured: 'Not captured',
+  gone: 'Screenshot no longer kept',
+  open: '{which, select, before {Open the before screenshot full size} other {Open the after screenshot full size}}',
+  titled: '{which, select, before {Before: {title}} other {After: {title}}}',
+  screenshot: 'Screenshot',
+  newTab: 'Open in a new tab',
+  close: 'Close',
+});
+const S = SHOTS_TEXT;
 
 export function Shots({ shots, title }: { shots: ShotPaths; title: string }) {
   const [open, setOpen] = useState<'before' | 'after' | null>(null);
   const [missing, setMissing] = useState<Set<string>>(new Set());
   const src = open ? shots[open] : null;
   return (
-    <div className="shots" role="group" aria-label={`Screenshots: ${title}`}>
+    <div className="shots" role="group" aria-label={S.group({ title })}>
       {(['before', 'after'] as const).map((which) => {
         const path = shots[which];
-        const label = WHICH[which];
+        const label = S.which[which];
         let body;
-        if (!isHubImagePath(path)) body = <span className="shot-none">Not captured</span>;
-        else if (missing.has(which))
-          body = <span className="shot-none">Screenshot no longer kept</span>;
+        if (!isHubImagePath(path)) body = <span className="shot-none">{S.notCaptured}</span>;
+        else if (missing.has(which)) body = <span className="shot-none">{S.gone}</span>;
         else
           body = (
             <button
               type="button"
               className="shot-button"
-              aria-label={`Open the ${which} screenshot full size`}
+              aria-label={S.open({ which })}
               onClick={() => setOpen(which)}
             >
               <img
                 className="shot-img"
                 src={path}
-                alt={`${label}: ${title}`}
+                alt={S.titled({ which, title })}
                 loading="lazy"
                 decoding="async"
                 onError={() => setMissing((s) => new Set(s).add(which))}
@@ -58,7 +69,7 @@ export function Shots({ shots, title }: { shots: ShotPaths; title: string }) {
       })}
       <Dialog
         open={open !== null && isHubImagePath(src) && !missing.has(open)}
-        title={open ? `${WHICH[open]}: ${title}` : 'Screenshot'}
+        title={open ? S.titled({ which: open, title }) : S.screenshot}
         className="shot-dialog"
         onClose={() => setOpen(null)}
         footer={
@@ -71,10 +82,10 @@ export function Shots({ shots, title }: { shots: ShotPaths; title: string }) {
                 rel="noopener noreferrer"
                 data-variant="ghost"
               >
-                <Icon name="external" /> Open in a new tab
+                <Icon name="external" /> {S.newTab}
               </a>
             ) : null}
-            <Button onClick={() => setOpen(null)}>Close</Button>
+            <Button onClick={() => setOpen(null)}>{S.close}</Button>
           </>
         }
       >
@@ -82,7 +93,7 @@ export function Shots({ shots, title }: { shots: ShotPaths; title: string }) {
           <img
             className="shot-full"
             src={src}
-            alt={`${WHICH[open]}: ${title}`}
+            alt={S.titled({ which: open, title })}
             onError={() => {
               setMissing((s) => new Set(s).add(open));
               setOpen(null);

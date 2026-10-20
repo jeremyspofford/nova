@@ -1,6 +1,20 @@
 // A small line diff for pages (FR-036): what an agent's proposal would change, and how the user's
 // text differs from a newer version after a conflict. Longest common subsequence over lines,
 // after trimming the common start and end (most edits are local, so the table stays small).
+import { defineMessages } from '@nova/i18n';
+
+/** A diff's summary and its parts. */
+export const DIFF_TEXT = defineMessages('spaces.diff', {
+  none: 'No changes',
+  added: '{n, plural, one {# line added} other {# lines added}}',
+  removed: '{n, plural, one {# line removed} other {# lines removed}}',
+  both: '{add, plural, one {# line added} other {# lines added}}, {del, plural, other {# removed}}',
+  /** A fold of unchanged lines, after an ellipsis. */
+  unchanged: '{n, plural, one {# unchanged line} other {# unchanged lines}}',
+  /** Read before a line by screen readers. */
+  addedLine: 'Added:',
+  removedLine: 'Removed:',
+});
 
 export type DiffLine = { kind: 'same' | 'add' | 'del'; text: string };
 
@@ -100,10 +114,7 @@ export function foldDiff(diff: DiffLine[], context = 2): DiffItem[] {
 export function diffSummary(diff: DiffLine[]): string {
   const add = diff.filter((d) => d.kind === 'add').length;
   const del = diff.filter((d) => d.kind === 'del').length;
-  if (!add && !del) return 'No changes';
-  const parts: string[] = [];
-  if (add) parts.push(`${add} ${add === 1 ? 'line' : 'lines'} added`);
-  if (del)
-    parts.push(`${del} ${parts.length ? 'removed' : del === 1 ? 'line removed' : 'lines removed'}`);
-  return parts.join(', ');
+  if (!add && !del) return DIFF_TEXT.none;
+  if (add && del) return DIFF_TEXT.both({ add, del });
+  return add ? DIFF_TEXT.added({ n: add }) : DIFF_TEXT.removed({ n: del });
 }

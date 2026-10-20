@@ -5,6 +5,8 @@
 // deletes before it runs.
 import { useId, useState } from 'react';
 import {
+  AUDIT_RETENTION_FLOOR_DAYS,
+  DELETED_RECOVERY_DAYS,
   RETENTION_ITEMS,
   RETENTION_SETTING_KEYS,
   type RetentionItem,
@@ -12,7 +14,6 @@ import {
 } from '@nova/shared';
 import { Button, SelectField, Spinner, useToast } from '@nova/ui';
 import { useHubStream } from '../hub-events.ts';
-import { ManagedNote } from '../managed/ManagedNote.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useSettings } from '../settings.tsx';
 import { useDatactlApi } from './api-m8.ts';
@@ -21,7 +22,10 @@ import {
   RETENTION_TEXT,
   SWEEP_TEXT,
   dataErrorMessage,
+  retentionConfirmText,
+  retentionHint,
   retentionOptions,
+  retentionTitle,
   sweepCounts,
 } from './format.ts';
 import { ConfirmDialog, ErrorBox, useFetched } from './parts.tsx';
@@ -58,7 +62,7 @@ export function RetentionSection() {
       return;
     }
     write(item.item, days).catch((err: unknown) =>
-      toast.show(`Could not save: ${dataErrorMessage(err)}`, { tone: 'error' }),
+      toast.show(S.saveFailedWhy({ why: dataErrorMessage(err) }), { tone: 'error' }),
     );
   };
 
@@ -79,7 +83,7 @@ export function RetentionSection() {
           onRetry={view.reload}
         />
       ) : null}
-      {view.loading ? <Spinner label="Loading the retention settings" /> : null}
+      {view.loading ? <Spinner label={S.retentionLoading} /> : null}
       {RETENTION_ITEMS.map((key) => {
         const item = items.find((i) => i.item === key);
         if (!item) return null;
@@ -91,18 +95,23 @@ export function RetentionSection() {
               label={text.label}
               value={entry.value === null ? 'forever' : String(entry.value)}
               options={retentionOptions(item.floorDays, entry.value)}
-              disabled={entry.locked}
+              locked={entry.locked}
+              setting={RETENTION_SETTING_KEYS[key]}
               hint={
                 <>
-                  {text.hint} {key === 'audit' ? S.retentionAuditFloor : null}
-                  {key === 'threads' ? S.retentionRecovery : null}
-                  {entry.locked ? <ManagedNote setting={RETENTION_SETTING_KEYS[key]} /> : null}
+                  {retentionHint(key)}{' '}
+                  {key === 'audit'
+                    ? S.retentionAuditFloor({ days: AUDIT_RETENTION_FLOOR_DAYS })
+                    : null}
+                  {key === 'threads' ? S.retentionRecovery({ days: DELETED_RECOVERY_DAYS }) : null}
                 </>
               }
               onChange={(v) => choose(item, v)}
             />
             <p className="muted dc-due">
-              {entry.value === null ? SWEEP_TEXT.kept : SWEEP_TEXT.due(item.due, text.label)}
+              {entry.value === null
+                ? SWEEP_TEXT.kept
+                : SWEEP_TEXT.due({ item: text.label, n: item.due })}
             </p>
           </div>
         );
@@ -113,13 +122,15 @@ export function RetentionSection() {
           <dd>
             {last ? (
               <>
-                {SWEEP_TEXT.sweptAt(formatWhen(last.startedAt), last.trigger)}{' '}
+                {SWEEP_TEXT.sweptAt({ when: formatWhen(last.startedAt), trigger: last.trigger })}{' '}
                 {(() => {
                   const removed = sweepCounts(last.removed);
-                  return removed ? SWEEP_TEXT.removed(removed) : SWEEP_TEXT.removedNothing;
+                  return removed
+                    ? SWEEP_TEXT.removed({ what: removed })
+                    : SWEEP_TEXT.removedNothing;
                 })()}
                 {last.error ? (
-                  <span className="dc-warn"> {SWEEP_TEXT.failed(last.error)}</span>
+                  <span className="dc-warn"> {SWEEP_TEXT.failed({ why: last.error })}</span>
                 ) : null}
               </>
             ) : (
@@ -140,10 +151,10 @@ export function RetentionSection() {
       </p>
       <ConfirmDialog
         open={shorten !== null}
-        title={shorten ? RETENTION_TEXT[shorten.item].title(shorten.days) : ''}
+        title={shorten ? retentionTitle(shorten.item, shorten.days) : ''}
         confirmLabel={S.shortenConfirm}
         danger
-        errorText={(err) => dataErrorMessage(err, 'Could not save.')}
+        errorText={(err) => dataErrorMessage(err, S.saveFailed)}
         onClose={() => setShorten(null)}
         onConfirm={async () => {
           if (!shorten) return;
@@ -151,23 +162,24 @@ export function RetentionSection() {
           setShorten(null);
         }}
       >
-        {shorten ? <p>{RETENTION_TEXT[shorten.item].confirm(shorten.days)}</p> : null}
+        {shorten ? <p>{retentionConfirmText(shorten.item, shorten.days)}</p> : null}
       </ConfirmDialog>
       <ConfirmDialog
         open={sweeping}
         title={S.sweepTitle}
         confirmLabel={S.sweepConfirm}
         danger
-        errorText={(err) => dataErrorMessage(err, 'The sweep failed.')}
+        errorText={(err) => dataErrorMessage(err, S.sweepFailed)}
         onClose={() => setSweeping(false)}
         onConfirm={async () => {
           const r = await api.sweepRetention!();
           setSweeping(false);
-          setStatus(SWEEP_TEXT.swept(sweepCounts(r.removed)));
+          const removed = sweepCounts(r.removed);
+          setStatus(removed ? SWEEP_TEXT.sweptSome({ what: removed }) : SWEEP_TEXT.sweptNone);
           view.reload();
         }}
       >
-        <p>{dueText ? SWEEP_TEXT.willDelete(dueText) : S.sweepNothing}</p>
+        <p>{dueText ? SWEEP_TEXT.willDelete({ what: dueText }) : S.sweepNothing}</p>
       </ConfirmDialog>
     </section>
   );

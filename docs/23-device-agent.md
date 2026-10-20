@@ -316,7 +316,11 @@ files only through `novad`; there is no other path:
   staged.
 - **Local MCP pass-through**: `novad` can expose the device's local stdio MCP servers to Hub
   sessions under the device's grants. The servers run sandboxed under `novad`; every tool call
-  goes through the Hub's policy engine and audit; their output is untrusted.
+  goes through the Hub's policy engine and audit; their output is untrusted. *Since M8* (ADR-097)
+  `POST /agent/v1/mcp/request` also passes five read-only methods (`resources/list`,
+  `resources/templates/list`, `resources/read`, `prompts/list`, `prompts/get`; anything else is
+  refused) under the same `mcp` grant, so device servers offer their resources and prompts too
+  (`contracts/hub-api.md` §3; the Hub audits reads and prompt fetches as `device.mcp.request`).
 
 *As built in M6 (ADR-093).* Grants are per grantee (`user`, `agent`, `session`, `run`, `thread`)
 in `<data>/storage/grants.json` (0600, locked), with a copy on the Hub (`device_grant`). Paths are

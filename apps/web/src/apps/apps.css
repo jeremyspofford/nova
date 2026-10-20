@@ -35,7 +35,7 @@
   overflow-wrap: anywhere;
 }
 .apps-entry-owner {
-  margin-left: var(--u-space-2);
+  margin-inline-start: var(--u-space-2);
   font-size: var(--u-text-xs);
 }
 .thread-apps {

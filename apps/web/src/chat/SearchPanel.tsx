@@ -3,10 +3,23 @@
 // match and the date, and jumps to the message.
 import { useEffect, useRef, useState } from 'react';
 import type { SearchHit } from '@nova/shared';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
+
+export const SEARCH_TEXT = defineMessages('chat.search', {
+  label: 'Search chats',
+  close: 'Close',
+  searching: 'Searching',
+  failed: 'Search failed.',
+  results: '{n, plural, one {# result} other {# results}}',
+  none: 'No messages match “{query}”.',
+  list: 'Search results',
+  untitled: 'Untitled chat',
+  role: '{role, select, user {You} assistant {Assistant} system {System} tool {Tool} summary {Summary} other {Other}}',
+});
 
 export interface SearchPanelProps {
   onClose: () => void;
@@ -40,7 +53,7 @@ export function SearchPanel({ onClose, onOpen, debounceMs = 200 }: SearchPanelPr
         ({ items }) => alive && setResult({ kind: 'done', q: term, hits: items }),
         (err: unknown) =>
           alive &&
-          setResult({ kind: 'error', q: term, message: errorMessage(err, 'Search failed.') }),
+          setResult({ kind: 'error', q: term, message: errorMessage(err, SEARCH_TEXT.failed) }),
       );
     }, debounceMs);
     return () => {
@@ -72,7 +85,7 @@ export function SearchPanel({ onClose, onOpen, debounceMs = 200 }: SearchPanelPr
       }}
     >
       <label htmlFor="global-search" className="nv-vh">
-        Search chats
+        {SEARCH_TEXT.label}
       </label>
       <div className="search-box">
         <input
@@ -80,26 +93,26 @@ export function SearchPanel({ onClose, onOpen, debounceMs = 200 }: SearchPanelPr
           ref={input}
           type="search"
           className="nv-input"
-          placeholder="Search chats"
+          placeholder={SEARCH_TEXT.label}
           autoComplete="off"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
         <button type="button" className="link" onClick={onClose}>
-          Close
+          {SEARCH_TEXT.close}
         </button>
       </div>
       <div aria-live="polite" className="search-status">
-        {shown.kind === 'loading' ? <Spinner label="Searching" /> : null}
+        {shown.kind === 'loading' ? <Spinner label={SEARCH_TEXT.searching} /> : null}
         {shown.kind === 'done'
           ? shown.hits.length
-            ? `${shown.hits.length} ${shown.hits.length === 1 ? 'result' : 'results'}`
-            : `No messages match “${shown.q}”.`
+            ? SEARCH_TEXT.results({ n: shown.hits.length })
+            : SEARCH_TEXT.none({ query: shown.q })
           : null}
         {shown.kind === 'error' ? <span role="alert">{shown.message}</span> : null}
       </div>
       {shown.kind === 'done' && shown.hits.length ? (
-        <ul className="search-hits" aria-label="Search results">
+        <ul className="search-hits" aria-label={SEARCH_TEXT.list}>
           {shown.hits.map((h) => (
             <li key={h.messageId}>
               <a
@@ -121,8 +134,12 @@ export function SearchPanel({ onClose, onOpen, debounceMs = 200 }: SearchPanelPr
                   }
                 }}
               >
-                <span className="search-hit-title">{h.threadTitle?.trim() || 'Untitled chat'}</span>
-                {h.role ? <span className="search-hit-role">{roleName(h.role)}</span> : null}
+                <span className="search-hit-title" dir="auto">
+                  {h.threadTitle?.trim() || SEARCH_TEXT.untitled}
+                </span>
+                {h.role ? (
+                  <span className="search-hit-role">{SEARCH_TEXT.role({ role: h.role })}</span>
+                ) : null}
                 <Snippet text={h.snippet} />
                 <time className="muted search-hit-date" dateTime={h.createdAt}>
                   {formatDate(h.createdAt)}
@@ -143,7 +160,7 @@ export function SearchPanel({ onClose, onOpen, debounceMs = 200 }: SearchPanelPr
 export function Snippet({ text }: { text: string }) {
   const parts = text.split(/(<mark>.*?<\/mark>)/g).filter(Boolean);
   return (
-    <span className="search-hit-snippet">
+    <span className="search-hit-snippet" dir="auto">
       {parts.map((p, i) => {
         const m = /^<mark>(.*)<\/mark>$/.exec(p);
         return m ? <mark key={i}>{m[1]}</mark> : <span key={i}>{p}</span>;
@@ -152,14 +169,8 @@ export function Snippet({ text }: { text: string }) {
   );
 }
 
-function roleName(role: NonNullable<SearchHit['role']>): string {
-  if (role === 'user') return 'You';
-  if (role === 'assistant') return 'Assistant';
-  return role.charAt(0).toUpperCase() + role.slice(1);
-}
-
 export function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return fmt.date(d, { month: 'short', day: 'numeric', year: 'numeric' });
 }

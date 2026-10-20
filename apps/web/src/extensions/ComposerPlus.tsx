@@ -4,6 +4,7 @@
 // reached or the menu opens, so a chat that never uses it never asks for them. With nothing to offer, it points to the
 // marketplace.
 import { useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { UiEntryPointView } from '@nova/shared';
 import { Icon, Menu, useToast, type MenuItem } from '@nova/ui';
 import { SHOW_APPS_COMMAND, requestThreadApp } from '../apps/AppsView.tsx';
@@ -13,16 +14,16 @@ import { useServices } from '../services.tsx';
 import { useTeamRole } from '../team/role.tsx';
 import { useExtensionMenuItems } from './shell.tsx';
 
-export const PLUS_TEXT = {
+export const PLUS_TEXT = defineMessages('extensions.plus', {
   label: 'Apps and more',
-  openApp: (title: string) => `Open ${title}`,
+  openApp: 'Open {title}',
   loading: 'Loading apps…',
   noThread: 'Send a first message to open apps for this chat',
   noApps: 'No apps for chats yet',
   findApps: 'Find apps in the Marketplace',
-  appOpened: (title: string) => `${title} opens in the Inspector’s Apps tab.`,
+  appOpened: '{title} opens in the Inspector’s Apps tab.',
   failed: 'Could not load the apps.',
-} as const;
+});
 
 export function ComposerPlusMenu({ threadId }: { threadId: string | null }) {
   const { api, registry } = useServices();
@@ -49,7 +50,7 @@ export function ComposerPlusMenu({ threadId }: { threadId: string | null }) {
     requestThreadApp(entry, tid);
     // The shell's command shows the Apps tab; without it the app waits there until it is opened.
     if (!registry.run(SHOW_APPS_COMMAND))
-      toast.show(PLUS_TEXT.appOpened(entry.title), { tone: 'info' });
+      toast.show(PLUS_TEXT.appOpened({ title: entry.title }), { tone: 'info' });
   };
 
   const appItems: MenuItem[] = !threadId
@@ -76,7 +77,7 @@ export function ComposerPlusMenu({ threadId }: { threadId: string | null }) {
             ]
           : apps.map((e) => ({
               id: `app:${e.id}`,
-              label: PLUS_TEXT.openApp(e.title),
+              label: PLUS_TEXT.openApp({ title: e.title }),
               onSelect: () => openApp(e, threadId),
             }));
   const items: MenuItem[] = [

@@ -516,6 +516,76 @@ describe('data folders', () => {
   });
 });
 
+describe("a removed member's export (the team route)", () => {
+  it('serves the member export the data controls make, with nothing of the owner', async () => {
+    await makeData();
+    const M = '01920000-0000-7000-8000-0000000000b2';
+    const t = new Date().toISOString();
+    const run = (sql: string, ...args: string[]) => db.raw.prepare(sql).run(...args);
+    // A member with a chat (rows made directly: the invitation flow is the team tests').
+    run(
+      "INSERT INTO account (id, kind, display_name, created_at, updated_at) VALUES (?, 'local', 'Member', ?, ?)",
+      M,
+      t,
+      t,
+    );
+    run("INSERT INTO team_member (account_id, role, joined_at) VALUES (?, 'member', ?)", M, t);
+    run(
+      "INSERT INTO thread (id, account_id, mode, title, created_at, updated_at) VALUES ('tm', ?, 'chat', 'Member chat', ?, ?)",
+      M,
+      t,
+      t,
+    );
+    run(
+      "INSERT INTO message (id, thread_id, role, created_at, updated_at) VALUES ('mm', 'tm', 'user', ?, ?)",
+      t,
+      t,
+    );
+    run(
+      "INSERT INTO message_part (id, message_id, idx, type, content, created_at) VALUES ('pm', 'mm', 0, 'text', 'member chat words', ?)",
+      t,
+    );
+    await hub.team.team.removeMember(ownerId, M);
+    // The lead's wiring in app.ts: team.useExporter(datactl.memberExporter).
+    hub.team.useExporter(open[0]!.area.memberExporter);
+    const removed = (await api('GET', '/api/v1/team/removed')).json.items as Json[];
+    expect(removed.find((r) => r.accountId === M)).toMatchObject({ exportable: true });
+    const res = await hub.app.inject({
+      method: 'GET',
+      url: `/api/v1/team/removed/${M}/export`,
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('application/zip');
+    expect(res.headers['content-disposition']).toContain(`nova-account-${M}-`);
+    const path = join(dir, 'member.zip');
+    writeFileSync(path, res.rawPayload);
+    let text = '';
+    let manifest: Json = {};
+    for (const e of listZip(path, { maxEntries: 1e6, maxTotalBytes: 1e10 })) {
+      const parts: Buffer[] = [];
+      readZipEntry(path, e, (c) => parts.push(Buffer.from(c)));
+      const body = Buffer.concat(parts).toString('utf8');
+      if (e.name === 'manifest.json') manifest = JSON.parse(body) as Json;
+      text += body;
+    }
+    expect(manifest.accountScope).toEqual({ accountId: M });
+    expect(text).toContain('member chat words');
+    expect(text).not.toContain('remember the needle');
+    expect(text).not.toContain('Garden');
+    // Audited by both: the team route's entry and the export's own, with its scope.
+    const actions = db.raw
+      .prepare(
+        "SELECT action, detail_json FROM audit_event WHERE action IN ('team.member.export', 'data.export')",
+      )
+      .all() as { action: string; detail_json: string }[];
+    expect(actions.map((a) => a.action).sort()).toEqual(['data.export', 'team.member.export']);
+    expect(JSON.parse(actions.find((a) => a.action === 'data.export')!.detail_json)).toMatchObject({
+      scope: { accountId: M },
+    });
+  });
+});
+
 describe('the wiring in app.ts', () => {
   it('quiesces the Hub before delete-all and restarts it after', async () => {
     const config = loadConfig(

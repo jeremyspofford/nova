@@ -80,6 +80,37 @@ describe('ProviderRegistry', () => {
     });
   });
 
+  it('says a key is stored only while the vault holds it (an import without a passphrase)', async () => {
+    const view = await env.registry.create(ACCOUNT, {
+      provider: 'openai',
+      label: 'OpenAI',
+      apiKey: KEY,
+    });
+    expect(view.hasSecret).toBe(true);
+    const ref = `secret://provider/${view.id}/api_key`;
+    // What an import without a passphrase leaves: the reference in the row, nothing in the vault.
+    await env.secrets.delete(ref);
+    const listed = (await env.registry.list(ACCOUNT)).find((p) => p.id === view.id)!;
+    expect(listed).toMatchObject({ authKind: 'api_key', hasSecret: false });
+    expect((await env.registry.view(ACCOUNT, view.id)).hasSecret).toBe(false);
+    expect((await env.registry.setActive(ACCOUNT, view.id)).hasSecret).toBe(false);
+    const row = env.db.raw
+      .prepare('SELECT secret_ref FROM provider_account WHERE id = ?')
+      .get(view.id) as { secret_ref: string };
+    expect(row.secret_ref).toBe(ref);
+    // Entered again: stored.
+    await env.secrets.put(ref, KEY);
+    expect((await env.registry.view(ACCOUNT, view.id)).hasSecret).toBe(true);
+    // A vault that cannot answer reads as not stored, never as an error.
+    const has = env.secrets.has.bind(env.secrets);
+    env.secrets.has = () => Promise.reject(new Error('keychain locked'));
+    try {
+      expect((await env.registry.view(ACCOUNT, view.id)).hasSecret).toBe(false);
+    } finally {
+      env.secrets.has = has;
+    }
+  });
+
   it('validates provider requests', async () => {
     const create = (req: Parameters<ProviderRegistry['create']>[1]) =>
       env.registry.create(ACCOUNT, req);

@@ -4,6 +4,7 @@
 // (a table of connected data, filled in only when a site is built). A spec that does not parse
 // shows its error next to the code; its text never becomes markup.
 import { memo, type ReactNode } from 'react';
+import { defineMessages } from '@nova/i18n';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -17,6 +18,21 @@ import {
 import { CodeBlock, Icon } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { ChartView, DiagramView } from './Visualization.tsx';
+
+/** A page's drawn blocks. Errors from a spec's own checks are data (English). */
+export const MARKDOWN_TEXT = defineMessages('spaces.markdown', {
+  chartJson: 'The chart is not valid JSON.',
+  diagramJson: 'The diagram is not valid JSON.',
+  diagramUnreadable: 'The diagram could not be read.',
+  /** {error} says what is wrong with the spec. */
+  invalid:
+    '{kind, select, chart {This chart could not be drawn: {error}} other {This diagram could not be drawn: {error}}}',
+  /** The source of a block that could not be drawn. */
+  source: '{kind, select, chart {chart source} other {diagram source}}',
+  /** {name} is the connected data's name. */
+  table: 'Table from the connected data “{name}” (filled in when the site is built).',
+  tableName: 'A table of connected data needs a name, for example: {example}.',
+});
 
 type Element = NonNullable<ExtraProps['node']>;
 type ElementContent = Element['children'][number];
@@ -33,7 +49,7 @@ export function parseChartBlock(text: string): Parsed<ChartSpec> {
   try {
     raw = parseJson(text);
   } catch {
-    return { error: 'The chart is not valid JSON.' };
+    return { error: MARKDOWN_TEXT.chartJson };
   }
   const r = chartSpecSchema.safeParse(raw);
   return r.success ? { spec: r.data } : { error: vizIssues(r.error) };
@@ -46,7 +62,7 @@ export function parseDiagramBlock(text: string): Parsed<DiagramSpec> {
     try {
       raw = parseJson(text);
     } catch {
-      return { error: 'The diagram is not valid JSON.' };
+      return { error: MARKDOWN_TEXT.diagramJson };
     }
     const r = diagramSpecSchema.safeParse(raw);
     return r.success ? { spec: r.data } : { error: vizIssues(r.error) };
@@ -54,7 +70,7 @@ export function parseDiagramBlock(text: string): Parsed<DiagramSpec> {
   try {
     return { spec: parseDiagramText(text) };
   } catch (err) {
-    return { error: errorMessage(err, 'The diagram could not be read.') };
+    return { error: errorMessage(err, MARKDOWN_TEXT.diagramUnreadable) };
   }
 }
 
@@ -80,12 +96,12 @@ function fence(pre: Element | undefined): { lang: string; meta: string; text: st
 }
 
 function Invalid({
-  what,
+  kind,
   error,
   code,
   lang,
 }: {
-  what: string;
+  kind: 'chart' | 'diagram';
   error: string;
   code: string;
   lang: string;
@@ -93,9 +109,13 @@ function Invalid({
   return (
     <div className="viz-invalid">
       <p className="viz-note" role="note">
-        <Icon name="alert" /> This {what} could not be drawn: {error}
+        <Icon name="alert" /> {MARKDOWN_TEXT.invalid({ kind, error })}
       </p>
-      <CodeBlock code={code} language={lang === 'chart' ? 'json' : null} label={`${what} source`} />
+      <CodeBlock
+        code={code}
+        language={lang === 'chart' ? 'json' : null}
+        label={MARKDOWN_TEXT.source({ kind })}
+      />
     </div>
   );
 }
@@ -117,7 +137,7 @@ function Block({
       return p.spec ? (
         <ChartView spec={p.spec} />
       ) : (
-        <Invalid what="chart" error={p.error} code={text} lang={lang} />
+        <Invalid kind="chart" error={p.error} code={text} lang={lang} />
       );
     }
     case 'diagram': {
@@ -125,7 +145,7 @@ function Block({
       return p.spec ? (
         <DiagramView spec={p.spec} />
       ) : (
-        <Invalid what="diagram" error={p.error} code={text} lang={lang} />
+        <Invalid kind="diagram" error={p.error} code={text} lang={lang} />
       );
     }
     case 'nova-table': {
@@ -134,8 +154,8 @@ function Block({
         <p className="viz-note" role="note">
           <Icon name="file" />{' '}
           {name
-            ? `Table from the connected data “${name}” (filled in when the site is built).`
-            : 'A table of connected data needs a name, for example: nova-table sales.'}
+            ? MARKDOWN_TEXT.table({ name })
+            : MARKDOWN_TEXT.tableName({ example: 'nova-table sales' })}
         </p>
       );
     }

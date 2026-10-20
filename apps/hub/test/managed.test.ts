@@ -396,6 +396,34 @@ describe('what is ignored and reported', () => {
     ]);
   });
 
+  it('locks app registration, the crash report address and the purge days', async () => {
+    await start({
+      version: 1,
+      settings: {
+        'apps.openRegistration': false,
+        'privacy.crashReportEndpoint': '',
+        'team.removedMemberPurgeDays': 7,
+        // Turning crash reports on would loosen privacy: ignored for that key and reported.
+        'privacy.crashReports': true,
+      },
+    });
+    expect(await setting('apps.openRegistration')).toMatchObject({ value: false, locked: true });
+    expect(await setting('privacy.crashReportEndpoint')).toMatchObject({ value: '', locked: true });
+    expect(await setting('team.removedMemberPurgeDays')).toMatchObject({
+      value: 7,
+      source: 'managed',
+      locked: true,
+    });
+    expect(await setting('privacy.crashReports')).toMatchObject({ value: false, locked: false });
+    expectManaged(
+      await send('PATCH', '/api/v1/settings', { key: 'apps.openRegistration', value: true }),
+    );
+    const view = (await send('GET', '/api/v1/managed')).json;
+    expect(view.ignored).toEqual([
+      expect.objectContaining({ key: 'privacy.crashReports', reason: 'loosens' }),
+    ]);
+  });
+
   it('reloads on request, audits the reload and fails closed on an invalid file', async () => {
     await start(null);
     expect((await send('GET', '/api/v1/managed')).json.active).toBe(false);
@@ -419,6 +447,53 @@ describe('what is ignored and reported', () => {
     await start(null);
     const res = await hub.app.inject({ method: 'GET', url: '/api/v1/managed', headers: HOST });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('the egress allow list as a ceiling (ADR-097)', () => {
+  const CEILING: ManagedPolicyDocument = {
+    version: 1,
+    restrict: { egress: { mode: 'allowlist', allow: ['api.example.com'] } },
+  };
+  const inForce = async () => ({
+    network: ((await send('GET', '/api/v1/egress')).json.global as Json).allow as string[],
+    managed: (await send('GET', '/api/v1/managed')).json.egress as Json,
+  });
+  const ownerList = async (hosts: string[]) => {
+    writePolicy({ version: 1 });
+    await send('POST', '/api/v1/managed/reload', {});
+    expect(
+      (await send('PATCH', '/api/v1/settings', { key: 'network.egressAllow', value: hosts }))
+        .status,
+    ).toBe(200);
+    writePolicy(CEILING);
+    await send('POST', '/api/v1/managed/reload', {});
+  };
+
+  it("applies the policy's hosts when the owner never set a list", async () => {
+    await start(CEILING);
+    const r = await inForce();
+    expect(r.network).toEqual(['api.example.com']);
+    expect(r.managed).toMatchObject({ own: [], effective: ['api.example.com'], note: null });
+    // The owner's own list stays theirs to change, within the ceiling.
+    expect(await setting('network.egressAllow')).toMatchObject({ value: [], locked: false });
+    expectManaged(
+      await send('PATCH', '/api/v1/settings', { key: 'network.egressAllow', value: ['b.example'] }),
+    );
+  });
+
+  it("keeps the owner's hosts within the ceiling, and says when none is", async () => {
+    await start({ version: 1 });
+    await ownerList(['a.example', 'api.example.com']);
+    let r = await inForce();
+    expect(r.network).toEqual(['api.example.com']);
+    expect(r.managed.effective).toEqual(['api.example.com']);
+    expect(r.managed.note).toMatch(/a\.example/);
+    await ownerList(['a.example']);
+    r = await inForce();
+    expect(r.network).toEqual([]);
+    expect(r.managed).toMatchObject({ own: ['a.example'], effective: [] });
+    expect(r.managed.note).toMatch(/None of the hosts on your own allow list/);
   });
 });
 

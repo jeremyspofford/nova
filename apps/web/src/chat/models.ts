@@ -1,9 +1,18 @@
 // Model choices for the composer (FR-023, FR-024, FR-221): the picker's groups (presets first,
 // then models by provider), the stops of the Faster to Smarter control, and the model a new chat
 // starts with.
+import { defineMessages } from '@nova/i18n';
 import type { ModelView, Preset } from '@nova/shared';
 import type { SelectOption } from '@nova/ui';
 import { PROVIDER_NAMES } from '../providers/names.ts';
+
+export const MODEL_TEXT = defineMessages('chat.models', {
+  uses: 'Uses {model}',
+  presets: 'Presets',
+  unavailable: '{model} (unavailable)',
+  /** A second account of the same provider: "OpenAI (2)". */
+  nth: '{provider} ({n})',
+});
 
 export interface PresetStop {
   ref: string;
@@ -26,7 +35,7 @@ export function presetStops(models: ModelView[], presets: Preset[]): PresetStop[
         ref: m.ref,
         label: m.label,
         rank: rank.get(m.ref) ?? 1000 + i,
-        ...(runsOn ? { description: `Uses ${runsOn}` } : {}),
+        ...(runsOn ? { description: MODEL_TEXT.uses({ model: runsOn }) } : {}),
       };
     })
     .sort((a, b) => a.rank - b.rank);
@@ -43,14 +52,17 @@ export function modelGroups(models: ModelView[]): { label: string; options: Sele
           ? `node:${m.nodeId ?? m.providerAccountId}`
           : `acct:${m.providerAccountId}`;
     const g = groups.get(key) ?? {
-      label: m.kind === 'preset' ? 'Presets' : (PROVIDER_NAMES[m.provider] ?? String(m.provider)),
+      label:
+        m.kind === 'preset'
+          ? MODEL_TEXT.presets
+          : (PROVIDER_NAMES[m.provider] ?? String(m.provider)),
       options: [],
     };
     g.options.push(
       m.disabledReason
         ? {
             value: m.ref,
-            label: `${m.label} (unavailable)`,
+            label: MODEL_TEXT.unavailable({ model: m.label }),
             disabled: true,
             title: m.disabledReason,
           }
@@ -66,7 +78,7 @@ export function modelGroups(models: ModelView[]): { label: string; options: Sele
     .map(([, g]) => {
       const n = (seen.get(g.label) ?? 0) + 1;
       seen.set(g.label, n);
-      return n === 1 ? g : { ...g, label: `${g.label} (${n})` };
+      return n === 1 ? g : { ...g, label: MODEL_TEXT.nth({ provider: g.label, n }) };
     });
   return preset ? [preset, ...rest] : rest;
 }

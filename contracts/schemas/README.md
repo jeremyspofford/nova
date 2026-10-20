@@ -31,3 +31,12 @@ between files in this folder.
 | [`smart-home-entity.json`](smart-home-entity.json) | Normalized smart-home entity |
 | [`theme.json`](theme.json) | Theme file |
 | [`computer-exec.json`](computer-exec.json) | Sandbox exec request/result |
+| [`extension-manifest.json`](extension-manifest.json) | An extension's `.nova-plugin/extension.json` (FR-117, ADR-097 D2-D3) |
+| [`extension-signature.json`](extension-signature.json) | A `.novax` bundle's `META-INF/nova-signature.json` (FR-117, ADR-097 D2) |
+| [`catalog-index.json`](catalog-index.json) | A marketplace catalog index, `catalog.json` (FR-049) |
+| [`catalog-signature.json`](catalog-signature.json) | A catalog index's signature file, `<index>.sig` (FR-049, ADR-097 D2) |
+| [`managed-settings.json`](managed-settings.json) | The managed policy file and the signed remote envelope (FR-106, ADR-097 D4) |
+| [`export-manifest.json`](export-manifest.json) | `manifest.json` of a `.novaexport` archive (FR-105, ADR-097 D5) |
+
+`packages/core/test/contracts-m8.test.ts` checks the M8 schemas against the zod schemas they mirror
+on the same samples, and against the SDK's sample extension and the sample catalog.

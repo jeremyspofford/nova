@@ -4,6 +4,7 @@
 // readout on hover and on keyboard focus, and the same numbers are always one click away as a
 // table: nothing is reachable only by hovering.
 import { useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { defineMessages } from '@nova/i18n';
 import {
   layoutChart,
   layoutDiagram,
@@ -20,6 +21,31 @@ import { Button, CodeBlock, Icon, rovingIndex } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { Markdown } from '../chat/Markdown.tsx';
 import './spaces.css';
+
+/**
+ * A visualization's controls and notes. Titles, labels and values come from the spec, and the
+ * scene's summary from the layout in @nova/shared (data here).
+ */
+export const VIZ_TEXT = defineMessages('spaces.viz', {
+  /** The group of value points, for screen readers; {name} is the chart's title. */
+  valuesIn: 'Values in {name}; use the arrow keys to move',
+  valuesInChart: 'Values in the chart; use the arrow keys to move',
+  showData: 'Show data',
+  hideData: 'Hide data',
+  download: 'Download SVG',
+  data: 'Data',
+  /** The header of the first column when the spec names none. */
+  category: 'Category',
+  layoutFailed: 'The layout failed.',
+  /** {message} says what is wrong with the spec. */
+  notDrawn: 'This visualization could not be drawn: {message}',
+  /** A chart that reads connected data ({source}); {name} is its title. */
+  boundNamed:
+    '“{name}”: chart of the connected data “{source}”. It is drawn when a site is built from this page; connected data is not available here.',
+  bound:
+    'Chart of the connected data “{source}”. It is drawn when a site is built from this page; connected data is not available here.',
+  chartData: 'Chart data: {title}',
+});
 
 /** The file name a downloaded chart gets. */
 export function svgFileName(title: string | null | undefined): string {
@@ -189,7 +215,7 @@ export function VizSceneView({
               className="viz-hits"
               viewBox={viewBox}
               role="group"
-              aria-label={`Values in ${name ?? 'the chart'}; use the arrow keys to move`}
+              aria-label={name ? VIZ_TEXT.valuesIn({ name }) : VIZ_TEXT.valuesInChart}
               onKeyDown={onKey}
             >
               {scene.targets.map((t, i) => {
@@ -225,11 +251,11 @@ export function VizSceneView({
             aria-controls={showData ? tableId : undefined}
             onClick={() => setShowData((v) => !v)}
           >
-            {showData ? 'Hide data' : 'Show data'}
+            {showData ? VIZ_TEXT.hideData : VIZ_TEXT.showData}
           </Button>
         ) : null}
         <Button variant="ghost" onClick={download}>
-          <Icon name="download" /> Download SVG
+          <Icon name="download" /> {VIZ_TEXT.download}
         </Button>
       </div>
       {showData && scene.table ? (
@@ -237,7 +263,7 @@ export function VizSceneView({
           className="md-table viz-table"
           id={tableId}
           role="region"
-          aria-label="Data"
+          aria-label={VIZ_TEXT.data}
           tabIndex={0}
         >
           <table className="ws-table">
@@ -246,7 +272,7 @@ export function VizSceneView({
               <tr>
                 {scene.table.columns.map((c, i) => (
                   <th key={i} scope="col">
-                    {c || 'Category'}
+                    {c || VIZ_TEXT.category}
                   </th>
                 ))}
               </tr>
@@ -279,7 +305,7 @@ function lay(make: () => VizScene): Laid {
   try {
     return { scene: make() };
   } catch (err) {
-    return { error: errorMessage(err, 'The layout failed.') };
+    return { error: errorMessage(err, VIZ_TEXT.layoutFailed) };
   }
 }
 
@@ -291,7 +317,7 @@ export function boundSource(spec: ChartSpec): string | null {
 function VizError({ message }: { message: string }) {
   return (
     <p className="viz-note" role="note">
-      <Icon name="alert" /> This visualization could not be drawn: {message}
+      <Icon name="alert" /> {VIZ_TEXT.notDrawn({ message })}
     </p>
   );
 }
@@ -315,8 +341,8 @@ export function ChartView({
   if (source)
     return (
       <p className="viz-note" role="note">
-        <Icon name="file" /> {name ? `“${name}”: chart` : 'Chart'} of the connected data “{source}”.
-        It is drawn when a site is built from this page; connected data is not available here.
+        <Icon name="file" />{' '}
+        {name ? VIZ_TEXT.boundNamed({ name, source }) : VIZ_TEXT.bound({ source })}
       </p>
     );
   if (!laid) return null;
@@ -375,7 +401,7 @@ export function VisualizationView({
  */
 export function ChartArtifactBody({ text, title }: { text: string; title: string }) {
   const doc = useMemo(() => parseVisualizationDoc(text), [text]);
-  if (!doc) return <CodeBlock code={text} language="json" label={`Chart data: ${title}`} />;
+  if (!doc) return <CodeBlock code={text} language="json" label={VIZ_TEXT.chartData({ title })} />;
   // The viewer's heading already names the artifact; a caption only when the chart says more.
   const caption = doc.title ?? (doc.kind === 'chart' ? (doc.spec.title ?? null) : null);
   return <VisualizationView doc={doc} showTitle={!!caption && caption !== title} />;

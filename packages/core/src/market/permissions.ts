@@ -14,6 +14,13 @@ function line(kind: Line['kind'], value: string, text: string, detail: string | 
   return { key: `${kind}:${value}`, kind, text, detail };
 }
 
+/** How an MCP server's tools are approved by default (its manifest `defaultApproval`). */
+const SERVER_WORDS: Record<string, string> = {
+  allow: 'run without asking',
+  ask: 'ask you first',
+  deny: 'are refused',
+};
+
 const ACTION_WORDS: Record<string, string> = {
   allow: 'runs without asking',
   ask: 'asks you first',
@@ -34,7 +41,16 @@ export interface PluginPermissionInput {
   };
   mcpServers?: Record<
     string,
-    { transport?: string; command?: string; url?: string; args?: string[] }
+    {
+      transport?: string;
+      command?: string;
+      url?: string;
+      args?: string[];
+      defaultApproval?: string;
+      policy?: unknown;
+      enabledTools?: string[];
+      disabledTools?: string[];
+    }
   >;
   hooks?: { id: string; event: string; command?: string | null }[];
   roles?: string[];
@@ -84,14 +100,29 @@ export function pluginPermissionLines(p: PluginPermissionInput): Line[] {
   for (const [key, s] of Object.entries(p.mcpServers ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))) {
     const what =
       s.transport === 'stdio' || s.command
-        ? `runs ${s.command ?? 'a program'}`
+        ? `runs ${[s.command ?? 'a program', ...(s.args ?? [])].join(' ')}`
         : `connects to ${hostOf(s.url) ?? 'a server'}`;
+    const approval = s.defaultApproval
+      ? `; its tools ${SERVER_WORDS[s.defaultApproval] ?? s.defaultApproval}`
+      : '';
+    // Everything the gate and the launcher act on is in the detail, so changing what runs or
+    // how its tools are approved (ask to allow) shows as a change that must be accepted. Env
+    // and header values are left out: the installed copy holds vault references for them.
     out.push(
       line(
         'mcp_server',
         key,
-        `Add the MCP server ${key}, which ${what}`,
-        [s.command ?? s.url ?? '', ...(s.args ?? [])].join(' ').trim() || null,
+        `Add the MCP server ${key}, which ${what}${approval}`,
+        JSON.stringify({
+          transport: s.transport ?? null,
+          command: s.command ?? null,
+          url: s.url ?? null,
+          args: s.args ?? [],
+          defaultApproval: s.defaultApproval ?? null,
+          policy: s.policy ?? null,
+          enabledTools: s.enabledTools ?? null,
+          disabledTools: s.disabledTools ?? [],
+        }),
       ),
     );
   }

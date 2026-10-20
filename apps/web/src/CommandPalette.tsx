@@ -2,9 +2,21 @@
 // command's current binding, runs on Enter, and is fully keyboard-operable as a modal dialog. A
 // Picker uses the same dialog for a list a command offers, e.g. "Open app…" (FR-198).
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Kbd, trapTab } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
+import { Kbd, trapTab, useBackdropDismiss } from '@nova/ui';
 import { filterCommands, fuzzyScore, type CommandRegistry } from './commands.ts';
 import { formatBinding } from './keys.ts';
+
+const TEXT = defineMessages('palette', {
+  dialog: 'Command palette',
+  search: 'Search commands',
+  placeholder: 'Type a command',
+  list: 'Commands',
+  none: 'No commands yet',
+  noMatch: 'No matching commands',
+  loading: 'Loading…',
+  nothingMatches: 'Nothing matches',
+});
 
 export interface CommandPaletteProps {
   registry: CommandRegistry;
@@ -19,6 +31,8 @@ export function CommandPalette({ registry, open, onClose }: CommandPaletteProps)
 }
 
 function PaletteDialog({ registry, onClose }: Omit<CommandPaletteProps, 'open'>) {
+  // A press that starts and ends outside the palette closes it (WCAG 2.5.2).
+  const backdrop = useBackdropDismiss(onClose);
   const commands = useSyncExternalStore(
     (fn) => registry.subscribe(fn),
     () => registry.list(),
@@ -76,12 +90,12 @@ function PaletteDialog({ registry, onClose }: Omit<CommandPaletteProps, 'open'>)
   };
 
   return (
-    <div className="palette-backdrop" onMouseDown={onClose}>
+    <div className="palette-backdrop" {...backdrop}>
       <div
         ref={panel}
         role="dialog"
         aria-modal="true"
-        aria-label="Command palette"
+        aria-label={TEXT.dialog}
         className="palette"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
@@ -89,23 +103,24 @@ function PaletteDialog({ registry, onClose }: Omit<CommandPaletteProps, 'open'>)
         <input
           ref={input}
           className="palette-input"
+          dir="auto"
           role="combobox"
           aria-expanded="true"
           aria-controls="palette-list"
           aria-autocomplete="list"
           aria-activedescendant={results[active] ? `cmd-${results[active].id}` : undefined}
-          aria-label="Search commands"
-          placeholder="Type a command"
+          aria-label={TEXT.search}
+          placeholder={TEXT.placeholder}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
             setActive(0);
           }}
         />
-        <ul id="palette-list" role="listbox" aria-label="Commands" className="palette-list">
+        <ul id="palette-list" role="listbox" aria-label={TEXT.list} className="palette-list">
           {results.length === 0 ? (
             <li className="palette-empty" role="option" aria-selected="false" aria-disabled="true">
-              {commands.length === 0 ? 'No commands yet' : 'No matching commands'}
+              {commands.length === 0 ? TEXT.none : TEXT.noMatch}
             </li>
           ) : (
             results.map((c, i) => {
@@ -153,6 +168,7 @@ export interface PickerProps {
 
 /** A modal list to choose one item from, with the palette's search and keys. */
 export function Picker({ label, placeholder, options, empty, onPick, onClose }: PickerProps) {
+  const backdrop = useBackdropDismiss(onClose);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -206,7 +222,7 @@ export function Picker({ label, placeholder, options, empty, onPick, onClose }: 
 
   const optionId = (o: PickerOption) => `pick-${o.id}`;
   return (
-    <div className="palette-backdrop" onMouseDown={onClose}>
+    <div className="palette-backdrop" {...backdrop}>
       <div
         ref={panel}
         role="dialog"
@@ -219,6 +235,7 @@ export function Picker({ label, placeholder, options, empty, onPick, onClose }: 
         <input
           ref={input}
           className="palette-input"
+          dir="auto"
           role="combobox"
           aria-expanded="true"
           aria-controls="picker-list"
@@ -235,11 +252,11 @@ export function Picker({ label, placeholder, options, empty, onPick, onClose }: 
         <ul id="picker-list" role="listbox" aria-label={label} className="palette-list">
           {options === null ? (
             <li className="palette-empty" role="option" aria-selected="false" aria-disabled="true">
-              Loading…
+              {TEXT.loading}
             </li>
           ) : results.length === 0 ? (
             <li className="palette-empty" role="option" aria-selected="false" aria-disabled="true">
-              {options.length === 0 ? empty : 'Nothing matches'}
+              {options.length === 0 ? empty : TEXT.nothingMatches}
             </li>
           ) : (
             results.map((o, i) => (

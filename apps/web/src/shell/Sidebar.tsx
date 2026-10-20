@@ -14,13 +14,16 @@ import { useWorkCommands } from '../work/commands.ts';
 import { useSidebarStatus } from './SidebarStatus.ts';
 import '../workspace.css';
 import { SidebarAgents } from '../agents/SidebarAgents.tsx';
+import { SidebarExtensionMenu } from '../extensions/shell.tsx';
 import { surfaceHiddenFor, useTeamRole } from '../team/role.tsx';
+import { MODE_TEXT, SIDEBAR_TEXT } from './strings.ts';
 
-export const MODE_INFO: Record<Mode, { label: string; icon: IconName; command: string }> = {
-  chat: { label: 'Chat', icon: 'chat', command: 'mode.chat' },
-  work: { label: 'Work', icon: 'work', command: 'mode.work' },
-  code: { label: 'Code', icon: 'code', command: 'mode.code' },
-  agents: { label: 'Agents', icon: 'agents', command: 'mode.agents' },
+/** Each mode's icon and command; its words are MODE_TEXT[mode]. */
+export const MODE_INFO: Record<Mode, { icon: IconName; command: string }> = {
+  chat: { icon: 'chat', command: 'mode.chat' },
+  work: { icon: 'work', command: 'mode.work' },
+  code: { icon: 'code', command: 'mode.code' },
+  agents: { icon: 'agents', command: 'mode.agents' },
 };
 
 export interface SidebarProps {
@@ -68,7 +71,7 @@ export function Sidebar({
   };
 
   return (
-    <nav id={id} className="sidebar" aria-label="Sidebar" hidden={hidden}>
+    <nav id={id} className="sidebar" aria-label={SIDEBAR_TEXT.sidebar} hidden={hidden}>
       <div className="sidebar-top">
         <button
           type="button"
@@ -76,10 +79,10 @@ export function Sidebar({
           data-variant="primary"
           onClick={onNewChat}
         >
-          <Icon name="plus" /> New chat
+          <Icon name="plus" /> {SIDEBAR_TEXT.newChat}
         </button>
         <IconButton
-          label="New temporary chat"
+          label={SIDEBAR_TEXT.newTemporaryChat}
           icon={<Icon name="clock" />}
           variant="ghost"
           onClick={() => {
@@ -94,7 +97,7 @@ export function Sidebar({
           aria-expanded={searchOpen}
           onClick={() => onSearchOpen(!searchOpen)}
         >
-          <Icon name="search" /> Search
+          <Icon name="search" /> {SIDEBAR_TEXT.search}
         </button>
       </div>
       {searchOpen ? (
@@ -106,7 +109,7 @@ export function Sidebar({
           onOpen={onNavigated}
         />
       ) : null}
-      <ul className="modes" aria-label="Modes">
+      <ul className="modes" aria-label={SIDEBAR_TEXT.modes}>
         {(Object.keys(MODE_INFO) as Mode[])
           .filter((m) => shown(m))
           .map((m) => {
@@ -126,7 +129,7 @@ export function Sidebar({
                   }}
                 >
                   <Icon name={info.icon} />
-                  <span className="mode-label">{info.label}</span>
+                  <span className="mode-label">{MODE_TEXT[m].label}</span>
                   <span className="mode-keys">{keys(info.command)}</span>
                 </a>
                 {m === 'chat' ? (
@@ -169,10 +172,10 @@ export function Sidebar({
           }}
         >
           <Icon name="folder" />
-          <span className="mode-label">Projects</span>
+          <span className="mode-label">{SIDEBAR_TEXT.projects}</span>
         </a>
         {recentProjects.length ? (
-          <ul className="threads" aria-label="Recent projects">
+          <ul className="threads" aria-label={SIDEBAR_TEXT.recentProjects}>
             {recentProjects.map((p) => (
               <li
                 key={p.id}
@@ -209,7 +212,7 @@ export function Sidebar({
             }}
           >
             <Icon name="file" />
-            <span className="mode-label">Library</span>
+            <span className="mode-label">{SIDEBAR_TEXT.library}</span>
           </a>
         ) : null}
         <a
@@ -224,7 +227,7 @@ export function Sidebar({
           }}
         >
           <Icon name="edit" />
-          <span className="mode-label">Spaces</span>
+          <span className="mode-label">{SIDEBAR_TEXT.spaces}</span>
         </a>
         <a
           href="/sites"
@@ -238,7 +241,7 @@ export function Sidebar({
           }}
         >
           <Icon name="external" />
-          <span className="mode-label">Sites</span>
+          <span className="mode-label">{SIDEBAR_TEXT.sites}</span>
         </a>
         <a
           href="/apps"
@@ -252,7 +255,7 @@ export function Sidebar({
           }}
         >
           <Icon name="server" />
-          <span className="mode-label">Apps</span>
+          <span className="mode-label">{SIDEBAR_TEXT.apps}</span>
         </a>
         {shown('marketplace') ? (
           <a
@@ -267,7 +270,7 @@ export function Sidebar({
             }}
           >
             <Icon name="download" />
-            <span className="mode-label">Marketplace</span>
+            <span className="mode-label">{SIDEBAR_TEXT.marketplace}</span>
           </a>
         ) : null}
         <a
@@ -282,7 +285,7 @@ export function Sidebar({
           }}
         >
           <Icon name="terminal" />
-          <span className="mode-label">Computers</span>
+          <span className="mode-label">{SIDEBAR_TEXT.computers}</span>
         </a>
         {shown('devices') ? (
           <a
@@ -297,7 +300,7 @@ export function Sidebar({
             }}
           >
             <Icon name="server" />
-            <span className="mode-label">Devices</span>
+            <span className="mode-label">{SIDEBAR_TEXT.devices}</span>
           </a>
         ) : null}
         {shown('network') ? (
@@ -313,7 +316,7 @@ export function Sidebar({
             }}
           >
             <Icon name="network" />
-            <span className="mode-label">Network</span>
+            <span className="mode-label">{SIDEBAR_TEXT.network}</span>
           </a>
         ) : null}
         <a
@@ -328,7 +331,7 @@ export function Sidebar({
           }}
         >
           <Icon name="shield" />
-          <span className="mode-label">Approvals</span>
+          <span className="mode-label">{SIDEBAR_TEXT.approvals}</span>
         </a>
         <a
           href="/team"
@@ -342,10 +345,12 @@ export function Sidebar({
           }}
         >
           <Icon name="at" />
-          <span className="mode-label">Team</span>
+          <span className="mode-label">{SIDEBAR_TEXT.team}</span>
         </a>
       </div>
       <div className="sidebar-bottom">
+        {/* M8 (FR-117): what running extensions place in the sidebar. */}
+        <SidebarExtensionMenu />
         <a
           href="/settings/general"
           className="mode-link"
@@ -357,7 +362,7 @@ export function Sidebar({
           }}
         >
           <Icon name="settings" />
-          <span className="mode-label">Settings</span>
+          <span className="mode-label">{SIDEBAR_TEXT.settings}</span>
           <span className="mode-keys">{keys('settings.open')}</span>
         </a>
       </div>

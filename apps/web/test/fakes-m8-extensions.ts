@@ -8,12 +8,23 @@
 // - install needs a live preview (410 `request_expired`); managed policy that forbids unverified
 //   installs refuses an unverified one (403 `policy_denied` `{reason: managed}`); an unverified one
 //   needs `confirmSideload` (400 `validation` `{field, reason: sideload_confirmation_required}`); an
-//   update keeps the extension's place and shows the permission diff in its preview;
+//   update keeps the extension's place and shows the permission diff in its preview (added,
+//   removed, and lines whose `detail` changed); an update signed by another publisher than the
+//   installed one (or by none) carries `publisherChange` and a warning first, and installs only
+//   with `acceptPublisherChange: true` (400 `{field, reason: publisher_change_confirmation_required}`),
+//   which clears the extension's stored secrets;
 // - SDK hooks are hook rows (source `extension`) in the hooks area's list, so `POST /hooks/:id/trust`
 //   trusts them; an update changes their hashes (the bundle digest is part of it), so they need
 //   trust again; the extension's view reads their status from there;
+// - an enabled extension that managed policy refuses (`managed.restrict`: unreadable, its id among
+//   the refused extensions or plugins, or unverified while unverified installs are refused) is
+//   `stopped` with `stopped: {reason: managed | managed_unreadable, policy}` and the Hub's sentence
+//   as `error`, and turning it on is refused (403 `{reason: managed}`); with `sdk.enabled` off it
+//   is `stopped` with `{reason: sdk_off}`;
 // - a running extension (enabled, and `sdk.enabled` on) contributes its commands, panels, themes,
-//   keybindings, menus and status items; a command runs with `commandResults` (default ok);
+//   keybindings, menus and status items; a command runs with `commandResults` (default ok); a
+//   status item is clickable with a command or its own click handler, and clicking one without
+//   either does nothing;
 // - secrets: only declared names (400 otherwise), never returned; uninstall removes them, and
 //   `removeData` is recorded.
 //
@@ -32,6 +43,7 @@ import {
   type ExtensionHookView,
   type ExtensionPermissionLine,
   type ExtensionPreviewView,
+  type ExtensionStopView,
   type ExtensionView,
   type HookView,
   type InstallExtensionRequest,
@@ -83,6 +95,21 @@ export function bundleFile(b: FakeBundle, name = `${b.id}-${b.version}.novax`): 
 
 export const PUBLISHER_KEY = 'KWyGeoNcQVUoD7fIgkwppFWhQZbPo5ynx1JyVjt5-O0';
 
+/**
+ * A key's fingerprint as the Hub shows it (16 hex characters in groups of four, `1a2b:…`); the
+ * real one is SHA-256 of the raw key, this one a stable stand-in.
+ */
+export function fakeFingerprint(key: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (const c of key) {
+    a = Math.imul(a ^ c.charCodeAt(0), 0x01000193) >>> 0;
+    b = Math.imul(b ^ c.charCodeAt(0), 0x811c9dc5) >>> 0;
+  }
+  const hex = a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0');
+  return hex.match(/.{4}/g)!.join(':');
+}
+
 export function wordCount(over: Partial<FakeBundle> = {}): FakeBundle {
   return {
     id: 'com.examplelabs.word-count',
@@ -98,19 +125,23 @@ export function wordCount(over: Partial<FakeBundle> = {}): FakeBundle {
         kind: 'command',
         text: 'Add the command “Count words”',
         sensitive: false,
+        detail: null,
       },
       {
         key: 'tool:count',
         kind: 'tool',
         text: 'Offer the tool count, which reads data',
         sensitive: false,
+        detail: 'read:ask',
       },
     ],
     hooks: [],
     secrets: [],
     contributes: {
       commands: [{ extensionId: '', id: 'count', title: 'Count words' }],
-      statusItems: [{ extensionId: '', id: 'words', text: '120 words', command: 'count' }],
+      statusItems: [
+        { extensionId: '', id: 'words', text: '120 words', command: 'count', clickable: true },
+      ],
       menus: [
         {
           extensionId: '',
@@ -157,7 +188,10 @@ export interface M8ExtensionsState {
   /** Bundles and folders on the Hub's disk, by path. */
   bundlesOnHub: Record<string, FakeBundle>;
   previews: Map<string, { bundle: FakeBundle; dev: boolean }>;
-  /** `<extensionId>/<commandId>` → what running it answers (default: ok, no result). */
+  /**
+   * `<extensionId>/<commandId>` → what running it answers (default: ok, no result); a status
+   * item's own click handler is `<extensionId>/status:<itemId>`.
+   */
   commandResults: Record<string, ExtensionCommandResult>;
   /** Every uninstall, with whether its data went too. */
   uninstalls: { id: string; removeData: boolean }[];
@@ -197,13 +231,23 @@ const hashOf = (extId: string, h: FakeHookDef, digest: string) => {
   return `sha256:${x.toString(16).padStart(8, '0').repeat(8)}`;
 };
 
+/**
+ * Whether an update changes who stands behind an installed extension: it was signed by a key and
+ * the new bundle is signed by another or not at all (a dev load is unsigned).
+ */
+function changesPublisher(current: Installed | null, next: FakeBundle, dev: boolean): boolean {
+  const was = current?.bundle.publisher?.key ?? null;
+  const now = dev ? null : (next.publisher?.key ?? null);
+  return !!was && was !== now;
+}
+
 function publisherView(b: FakeBundle, trusted: { name: string; key: string }[]) {
   const key = b.publisher?.key ?? null;
   const t = key ? trusted.find((p) => p.key === key) : undefined;
   return {
     key,
     name: t?.name ?? null,
-    fingerprint: key ? key.slice(0, 16).toLowerCase() : null,
+    fingerprint: key ? fakeFingerprint(key) : null,
     trusted: !!t,
   };
 }
@@ -250,21 +294,71 @@ export function m8ExtensionsImpl(st: M8ExtensionsState, h: M8ExtensionsHelpers) 
       };
     });
   };
-  const running = (e: Installed) => e.view.enabled && sdkOn() && e.view.status !== 'error';
+  /**
+   * Why managed policy stops an enabled extension (the Hub's order): a policy it cannot read, its
+   * id refused among extensions or plugins, or unverified while unverified installs are refused.
+   */
+  const managedStop = (e: Installed): { text: string; stop: ExtensionStopView } | null => {
+    const r = h.setting('managed.restrict') as {
+      layers?: {
+        extensions?: { allow?: string[]; deny?: string[] };
+        plugins?: { allow?: string[]; deny?: string[] };
+      }[];
+      failClosed?: string | null;
+    } | null;
+    if (r?.failClosed)
+      return {
+        text: `Extensions are off: your organization's managed policy could not be read (${r.failClosed})`,
+        stop: { reason: 'managed_unreadable', policy: null },
+      };
+    const glob = (p: string) =>
+      new RegExp(
+        `^${p
+          .split('*')
+          .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+          .join('.*')}$`,
+        'i',
+      );
+    const refuses = (part?: { allow?: string[]; deny?: string[] }) =>
+      !!part &&
+      ((part.deny ?? []).some((p) => glob(p).test(e.view.id)) ||
+        (!!part.allow && !part.allow.some((p) => glob(p).test(e.view.id))));
+    for (const [policy, label] of [
+      ['extensions', 'The extension'],
+      ['plugins', 'The plugin'],
+    ] as const)
+      if ((r?.layers ?? []).some((l) => refuses(l[policy])))
+        return {
+          text: `${label} ${e.view.id} is not allowed by your organization's policy`,
+          stop: { reason: 'managed', policy },
+        };
+    if (!isLiveVerified(e) && unverifiedForbidden())
+      return {
+        text: "Installing an unverified extension is not allowed by your organization's policy: only signed ones from trusted publishers install",
+        stop: { reason: 'managed', policy: 'unverifiedInstalls' },
+      };
+    return null;
+  };
+  const isLiveVerified = (e: Installed) =>
+    e.view.signature === 'verified' && publisherView(e.bundle, trusted()).trusted;
+  const running = (e: Installed) => view(e).status === 'running';
   const view = (e: Installed): ExtensionView => {
     const c = e.bundle.contributes ?? {};
+    const managed = e.view.enabled ? managedStop(e) : null;
     const status: ExtensionView['status'] = !e.view.enabled
       ? 'disabled'
-      : !sdkOn()
+      : managed || !sdkOn()
         ? 'stopped'
         : e.view.status === 'error'
           ? 'error'
           : 'running';
     return {
       ...e.view,
-      verified: e.view.signature === 'verified' && publisherView(e.bundle, trusted()).trusted,
+      verified: isLiveVerified(e),
       publisher: publisherView(e.bundle, trusted()),
       status,
+      stopped: managed?.stop ?? (status === 'stopped' ? { reason: 'sdk_off', policy: null } : null),
+      error: managed?.text ?? (status === 'error' ? e.view.error : null),
       hooks: hookViews(e),
       secrets: (e.bundle.secrets ?? []).map((name) => ({ name, set: e.secretValues.has(name) })),
       registered: {
@@ -368,13 +462,23 @@ export function m8ExtensionsImpl(st: M8ExtensionsState, h: M8ExtensionsHelpers) 
           ? 'the bundle is not signed'
           : 'it is signed by a key you do not trust';
       const lines = b.permissions ?? [];
+      const before = current?.bundle.permissions ?? [];
       const diff = current
         ? {
-            added: lines.filter((l) => !current.bundle.permissions?.some((x) => x.key === l.key)),
-            removed: (current.bundle.permissions ?? []).filter(
-              (l) => !lines.some((x) => x.key === l.key),
-            ),
+            added: lines.filter((l) => !before.some((x) => x.key === l.key)),
+            removed: before.filter((l) => !lines.some((x) => x.key === l.key)),
+            changed: lines
+              .filter((l) => before.some((x) => x.key === l.key && x.detail !== l.detail))
+              .map((l) => ({
+                key: l.key,
+                text: l.text,
+                before: before.find((x) => x.key === l.key)?.detail ?? null,
+                after: l.detail,
+              })),
           }
+        : null;
+      const publisherChange = changesPublisher(current, b, false)
+        ? { from: publisherView(current!.bundle, trusted()), to: publisherView(b, trusted()) }
         : null;
       const pv: ExtensionPreviewView = {
         previewId,
@@ -390,6 +494,7 @@ export function m8ExtensionsImpl(st: M8ExtensionsState, h: M8ExtensionsHelpers) 
         sideloadReason,
         permissions: lines,
         diff,
+        publisherChange,
         hooks: (b.hooks ?? []).map((d) => ({
           id: hookRef(b.id, d.id),
           event: d.event,
@@ -401,12 +506,22 @@ export function m8ExtensionsImpl(st: M8ExtensionsState, h: M8ExtensionsHelpers) 
         })),
         pluginHooks: [],
         warnings: [
+          ...(publisherChange
+            ? [
+                publisherChange.to.key
+                  ? `Another publisher: the installed version is signed by ${publisherChange.from.name ?? publisherChange.from.fingerprint}, this one by ${publisherChange.to.name ?? publisherChange.to.fingerprint}. Installing it clears the extension's secrets and data.`
+                  : `Not signed by the publisher of the installed version (${publisherChange.from.name ?? publisherChange.from.fingerprint}). Installing it clears the extension's secrets and data.`,
+              ]
+            : []),
           ...(verified
             ? []
             : [`Unverified: ${sideloadReason}. Install it only if you trust where it came from.`]),
           ...(b.warnings ?? []),
           ...(diff?.added.length
             ? [`This update asks for more: ${diff.added.map((l) => l.text).join('; ')}.`]
+            : []),
+          ...(diff?.changed.length
+            ? [`This update changes: ${diff.changed.map((c) => c.text).join('; ')}.`]
             : []),
         ],
         replaces: current ? { version: current.view.version } : null,
@@ -431,12 +546,23 @@ export function m8ExtensionsImpl(st: M8ExtensionsState, h: M8ExtensionsHelpers) 
           field: 'confirmSideload',
           reason: 'sideload_confirmation_required',
         });
+      const current = st.installed.find((x) => x.view.id === b.id);
+      const newPublisher = changesPublisher(current ?? null, b, p.dev);
+      if (newPublisher && body.acceptPublisherChange !== true)
+        throw err(
+          400,
+          'validation',
+          b.publisher && !p.dev
+            ? 'this update is signed by another publisher than the installed extension; confirm the change of publisher'
+            : 'this update is not signed by the publisher of the installed extension; confirm the change of publisher',
+          { field: 'acceptPublisherChange', reason: 'publisher_change_confirmation_required' },
+        );
       st.previews.delete(body.previewId);
       const now = new Date().toISOString();
-      const current = st.installed.find((x) => x.view.id === b.id);
       const e: Installed = {
         bundle: b,
-        secretValues: current?.secretValues ?? new Map(),
+        // Another publisher starts over: the stored secrets (and data) are cleared.
+        secretValues: newPublisher ? new Map() : (current?.secretValues ?? new Map()),
         view: {
           id: b.id,
           name: b.name,
@@ -449,6 +575,7 @@ export function m8ExtensionsImpl(st: M8ExtensionsState, h: M8ExtensionsHelpers) 
           digest: b.digest ?? 'f'.repeat(64),
           enabled: body.enable ?? true,
           status: 'running',
+          stopped: null,
           error: null,
           permissions: b.permissions ?? [],
           hooks: [],
@@ -475,6 +602,9 @@ export function m8ExtensionsImpl(st: M8ExtensionsState, h: M8ExtensionsHelpers) 
     setExtensionEnabled: async (id, enabled) => {
       owner();
       const e = find(id);
+      // Turning on what managed policy refuses is refused (403 `policy_denied` `{reason: managed}`).
+      const refused = enabled ? managedStop(e) : null;
+      if (refused) throw err(403, 'policy_denied', refused.text, { reason: 'managed' });
       e.view = { ...e.view, enabled, status: enabled ? 'running' : 'disabled', error: null };
       h.hooks.set(
         h.hooks
@@ -532,7 +662,8 @@ export function m8ExtensionsImpl(st: M8ExtensionsState, h: M8ExtensionsHelpers) 
         e && running(e) ? e.bundle.contributes?.statusItems?.find((x) => x.id === item) : null;
       if (!e || !s) throw err(404, 'not_found', 'status item not found');
       if (s.command) return api.runExtensionCommand(id, s.command);
-      return { ok: true, result: null, error: null };
+      // The extension's own click handler (or nothing, when the item is not clickable).
+      return st.commandResults[`${id}/status:${item}`] ?? { ok: true, result: null, error: null };
     },
     setExtensionSecret: async (id, name, value) => {
       owner();

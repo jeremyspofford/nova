@@ -12,6 +12,8 @@ import { realInside } from '../plugins/paths.ts';
 import {
   EXTENSION_MANIFEST_PATH,
   extractBundle,
+  folderBundleFiles,
+  secretFileProblems,
   verifyBundle,
   type BundleCheck,
   type TrustedKey,
@@ -160,6 +162,13 @@ async function validateFolder(
     const commands = manifest.permissions.commands ?? [];
     if (new Set(commands).size !== commands.length)
       errors.push({ where: 'permissions.commands', message: 'a command id is listed twice' });
+  }
+  // Secrets that would ship with it (a .env file, a private key): never packed.
+  try {
+    for (const f of secretFileProblems(folderBundleFiles(root)))
+      errors.push({ where: f.path, message: `refusing to pack this file: ${f.why}` });
+  } catch (err) {
+    errors.push({ where: 'files', message: message(err) });
   }
   // The code: syntax of every module and imports that resolve inside the extension.
   let sources: Record<string, string> = {};

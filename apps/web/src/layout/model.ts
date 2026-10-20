@@ -214,6 +214,32 @@ export function setSizes(
   return { ...layout, root: replaceNode(layout.root, splitId, { ...at, sizes: next })! };
 }
 
+/** How much "Make larger" and "Make smaller" change a pane's share, and the bottom panel's. */
+export const RESIZE_STEP = 0.1;
+
+/**
+ * Grow (`by` > 0) or shrink (`by` < 0) a pane's share of its split; its siblings give or take the
+ * difference in proportion, and none goes below MIN_SHARE. The single-pointer alternative to
+ * dragging a splitter (WCAG 2.5.7). Null when the pane cannot change that way.
+ */
+export function resizePane(layout: ModeLayout, id: string, by: number): ModeLayout | null {
+  const at = parentOf(layout.root, id);
+  if (!at) return null;
+  const sizes = at.parent.sizes;
+  const own = sizes[at.index] ?? 0;
+  const spare = sizes.map((s, i) => (i === at.index ? 0 : Math.max(0, s - MIN_SHARE)));
+  const room = by > 0 ? spare.reduce((a, b) => a + b, 0) : Math.max(0, own - MIN_SHARE);
+  const d = Math.sign(by) * Math.min(Math.abs(by), room);
+  if (Math.abs(d) < 0.005) return null;
+  const others = sizes.reduce((a, s, i) => (i === at.index ? a : a + s), 0);
+  const next = sizes.map((s, i) => {
+    if (i === at.index) return s + d;
+    // Growing takes from what each sibling can spare; shrinking gives back by their size.
+    return d > 0 ? s - (d * spare[i]!) / room : s - (d * s) / others;
+  });
+  return setSizes(layout, at.parent.id, next);
+}
+
 function findSplit(node: LayoutNode, id: string): PaneSplit | null {
   if (node.type === 'pane') return null;
   if (node.id === id) return node;

@@ -4,15 +4,20 @@
 // - everything under /api/v1/data is the owner's (403 `policy_denied` `{reason: owner_only}` for a
 //   member); /api/v1/usage is every account's own;
 // - export: a ticket for a passphrase of at least 12 characters (400 `validation` with `issues`
-//   otherwise); the download address carries it;
+//   otherwise); a sealed export needs `confirm`, the Hub's name compared trimmed and ignoring case
+//   (400 `validation` `{reason: confirmation_mismatch, field: confirm}`), and is refused from a
+//   paired device's session (403 `policy_denied` `{reason: hub_only}`, `deviceSession`); the
+//   download address carries it;
 // - delete-all: the Hub's name typed, compared trimmed and ignoring case (400 `validation`
 //   `{reason: confirmation_mismatch}`), 409 `conflict` `{reason: busy}` while another runs; the Hub
 //   is then empty;
 // - import: an upload (400 `{reason: empty}` for an empty file), then a check and the import. What
 //   a file holds comes from `archives` by its name (default: a plain archive): a sealed one needs
 //   its passphrase (400 `{reason: passphrase_required}`, `{reason: wrong_passphrase}`), a broken one
-//   is refused with its reason; an import needs an empty Hub (409 `{reason: hub_not_empty}`); an
-//   unknown upload is 404;
+//   is refused with its reason at the check and the import (`refuse`: `archive_damaged`,
+//   `unsafe_path`, `foreign_secret`, `disk_full`…), and `refuseImport` only at the import (a
+//   secret this Hub holds found while applying, the disk filled up meanwhile); an import needs an
+//   empty Hub (409 `{reason: hub_not_empty}`); an unknown upload is 404;
 // - retention: each item's days from the Hub settings, the audit floor, what is due; a sweep
 //   removes what is due;
 // - crash reports: the preview is the body byte for byte; sending is refused while
@@ -50,6 +55,7 @@ import {
 import { ToastProvider } from '@nova/ui';
 import { ApiError } from '../src/api.ts';
 import type { DatactlApi } from '../src/datactl/api-m8.ts';
+import { ManagedLockNotes } from '../src/managed/ManagedNote.tsx';
 import { AnnouncerProvider, ServicesProvider } from '../src/services.tsx';
 import { SettingsProvider } from '../src/settings.tsx';
 import { DONE_ONBOARDING, createHub, fakeEventSource, testRegistry } from './fakes.ts';
@@ -67,7 +73,10 @@ const NOW = '2026-10-15T12:00:00.000Z';
 export interface FakeArchive {
   encrypted: boolean;
   passphrase?: string;
+  /** Refused at the check and the import (400 `validation` with this reason). */
   refuse?: { reason: string; message: string };
+  /** Refused only at the import, after a clean check. */
+  refuseImport?: { reason: string; message: string };
   check: Omit<DataImportCheckView, 'hubEmpty' | 'blockingTables' | 'encrypted'>;
 }
 
@@ -122,7 +131,9 @@ export interface M8DatactlState {
   overview: DataOverviewView;
   /** The next delete-all or import is refused as busy. */
   busy: boolean;
-  tickets: Map<string, { passphrase?: string }>;
+  /** The session is a paired device's (a sealed export is refused with `hub_only`). */
+  deviceSession: boolean;
+  tickets: Map<string, { passphrase?: string; confirm?: string }>;
   /** What a file holds, by its name (default: `plainArchive()`). */
   archives: Record<string, FakeArchive>;
   uploads: Map<string, { name: string; bytes: number; archive: FakeArchive }>;
@@ -176,6 +187,7 @@ export function m8DatactlState(init: Partial<M8DatactlState> = {}): M8DatactlSta
       blockingTables: ['thread', 'message'],
     },
     busy: false,
+    deviceSession: false,
     tickets: new Map(),
     archives: {},
     uploads: new Map(),
@@ -311,12 +323,34 @@ export function m8DatactlImpl(
       owner();
       return structuredClone(st.overview);
     },
-    createExportTicket: async (passphrase?: string) => {
+    createExportTicket: async (passphrase?: string, confirm?: string) => {
       owner();
-      const parsed = dataExportSchema.safeParse(passphrase !== undefined ? { passphrase } : {});
+      const body = {
+        ...(passphrase !== undefined ? { passphrase } : {}),
+        ...(confirm !== undefined ? { confirm } : {}),
+      };
+      const parsed = dataExportSchema.safeParse(body);
       if (!parsed.success) throw zodIssues(parsed.error.issues);
+      // A sealed export: Hub-only, then the Hub's name (DataControls.assertSealedExport).
+      if (passphrase !== undefined) {
+        if (st.deviceSession)
+          throw refuse(
+            'hub_only',
+            'a sealed export carries every secret: start it on the Hub itself, not from a paired device',
+            403,
+            'policy_denied',
+          );
+        const name = st.overview.hubName;
+        if ((confirm ?? '').trim().toLowerCase() !== name.trim().toLowerCase())
+          throw err(
+            400,
+            'validation',
+            `a sealed export carries every secret: type the Hub's name (${name}) to confirm`,
+            { reason: 'confirmation_mismatch', field: 'confirm' },
+          );
+      }
       const ticket = `ticket-${st.tickets.size + 1}-abcdefghijklmnopqrstuvwxyz`;
-      st.tickets.set(ticket, passphrase !== undefined ? { passphrase } : {});
+      st.tickets.set(ticket, body);
       return { ticket, expiresAt: '2026-10-15T12:02:00.000Z' };
     },
     exportDownloadUrl: (ticket: string) =>
@@ -394,6 +428,8 @@ export function m8DatactlImpl(
           { reason: 'hub_not_empty', tables: st.overview.blockingTables },
         );
       staged(u.archive, passphrase);
+      if (u.archive.refuseImport)
+        throw refuse(u.archive.refuseImport.reason, u.archive.refuseImport.message);
       const c = u.archive.check;
       st.uploads.delete(uploadId);
       st.overview = {
@@ -570,8 +606,11 @@ export async function renderWithDatactl(
   const managed = managedState ? m8ManagedImpl(managedState, { isMember: () => member }) : {};
   const api = { ...hub.api, ...managed, ...mocks };
   const { settings } = await hub.api.settings();
+  // As App.tsx: locked @nova/ui fields draw the note that names the policy's source.
   const inner = createElement(ToastProvider, {
-    children: createElement(AnnouncerProvider, { children: ui }),
+    children: createElement(AnnouncerProvider, {
+      children: createElement(ManagedLockNotes, { children: ui }),
+    }),
   });
   const utils = render(
     createElement(ServicesProvider, {

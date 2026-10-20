@@ -2,16 +2,10 @@
 // The quick overlay (FR-008, docs/04 §1.1): ask Nova in a new or the current chat, see what
 // needs input, start a task, attach a window, open Nova. Every row pairs icon and text.
 const api = window.novaLocal;
+const t = window.novaText.t;
 const $ = (id) => document.getElementById(id);
 const SVG = 'http://www.w3.org/2000/svg';
 
-const LABEL = {
-  needs_input: 'Needs input',
-  blocked: 'Blocked',
-  running: 'Running',
-  ready: 'Ready',
-};
-const KIND = { thread: 'Chat', run: 'Work run', session: 'Code', agent: 'Agent' };
 // Small original line icons, one per status (docs/04 §1.1: hand, stop, spinner, check).
 const ICON = {
   needs_input:
@@ -49,9 +43,11 @@ function showError(message) {
 }
 
 let current = null;
+let last = null;
 
 function render(state) {
   if (!state || state.ok !== true) return;
+  last = state;
   current = state.currentThreadId || null;
   const currentOption = $('current-option');
   const currentRadio = currentOption.querySelector('input');
@@ -61,29 +57,24 @@ function render(state) {
   const list = $('status-list');
   list.replaceChildren();
   if (!state.signedIn) {
-    list.append(el('li', 'status-empty', 'Sign in to Nova to see your chats and tasks.'));
+    list.append(el('li', 'status-empty', t('signIn')));
   } else if (state.status.length === 0) {
-    list.append(el('li', 'status-empty', 'Nothing yet.'));
+    list.append(el('li', 'status-empty', t('nothingYet')));
   }
-  for (const item of state.status) {
+  // The main process writes each row's words (status, detail, accessible name) in its language.
+  state.status.forEach((item, i) => {
+    const words = (state.rows && state.rows[i]) || { status: item.status, detail: '', label: '' };
     const li = el('li');
     const row = el('button', 'status-row');
     row.type = 'button';
     const chip = el('span', `chip ${item.status}`);
-    chip.append(icon(item.status), el('span', '', LABEL[item.status] || item.status));
-    row.append(
-      chip,
-      el('span', 'row-title', item.title),
-      el('span', 'row-detail', item.reason || KIND[item.kind] || ''),
-    );
-    row.setAttribute(
-      'aria-label',
-      `${LABEL[item.status]}: ${item.title}, ${item.reason || KIND[item.kind] || ''}`,
-    );
+    chip.append(icon(item.status), el('span', '', words.status));
+    row.append(chip, el('span', 'row-title', item.title), el('span', 'row-detail', words.detail));
+    row.setAttribute('aria-label', words.label);
     row.addEventListener('click', () => void api.invoke('quick.open', { path: item.path }));
     li.append(row);
     list.append(li);
-  }
+  });
 
   const problems = $('problems');
   problems.replaceChildren(...(state.problems || []).map((p) => el('li', '', p)));
@@ -113,21 +104,21 @@ async function send() {
   const target = document.querySelector('input[name="target"]:checked').value;
   const button = $('ask').querySelector('button');
   button.disabled = true;
-  $('sent').textContent = 'Sending…';
+  $('sent').textContent = t('sending');
   try {
     const res = await api.invoke('quick.send', { text, target });
     if (!res || res.ok !== true) {
       $('sent').textContent = '';
-      showError((res && res.message) || 'The message was not sent.');
+      showError((res && res.message) || t('notSent'));
       return;
     }
     $('text').value = '';
     const sent = $('sent');
     sent.replaceChildren();
-    const open = el('button', '', 'Open the chat');
+    const open = el('button', '', t('openChat'));
     open.type = 'button';
     open.addEventListener('click', () => void api.invoke('quick.open', { path: res.path }));
-    sent.append(el('span', '', target === 'new' ? 'Sent to a new chat. ' : 'Sent. '), open);
+    sent.append(el('span', '', t(target === 'new' ? 'sentNew' : 'sent')), ' ', open);
   } finally {
     button.disabled = false;
   }
@@ -138,5 +129,6 @@ $('attach').addEventListener('click', () => void api.invoke('quick.attach', {}))
 $('open').addEventListener('click', () => void api.invoke('quick.home', {}));
 
 api.on('quick.status', render);
-void api.invoke('quick.state', {}).then(render);
+window.novaText.onChange(() => render(last));
+void window.novaText.ready.then(() => api.invoke('quick.state', {})).then(render);
 $('text').focus();

@@ -48,6 +48,15 @@ function flat(part: string, times: number): string {
   return Buffer.from(part.repeat(times)).toString();
 }
 
+/**
+ * Clipped work is the same however large the input. One run needs well under 50 ms, but a loaded
+ * machine can take longer, so the bound is also relative to the same work on a small input (work
+ * that scans the whole input is hundreds of times slower there).
+ */
+function expectClippedFast(big: () => void, small: () => void): void {
+  expect(timed(big)).toBeLessThan(Math.max(50, 20 * timed(small)));
+}
+
 describe('1: hostile capture input is clipped before it is redacted', () => {
   it('a huge console message of BEGIN markers, or of anything, is recorded fast', () => {
     const log = new ConsoleLog({ now, redactor: new Redactor() });
@@ -56,9 +65,10 @@ describe('1: hostile capture input is clipped before it is redacted', () => {
       flat('a.', 1_000_000),
       flat('a', 50_000_000),
     ])
-      expect(
-        timed(() => log.push({ level: 'log', text: t, source: 'console' }, null)),
-      ).toBeLessThan(50);
+      expectClippedFast(
+        () => log.push({ level: 'log', text: t, source: 'console' }, null),
+        () => log.push({ level: 'log', text: flat(t.slice(0, 4_000), 1), source: 'console' }, null),
+      );
     expect(log.entries().items.every((e) => e.text.length <= 2_000)).toBe(true);
   });
 
@@ -68,31 +78,34 @@ describe('1: hostile capture input is clipped before it is redacted', () => {
     const url = flat(`https://blocked.example/x?q=${v}&token=${SECRET}`, 1);
     const net = new NetworkLog({ now, redactor: r });
     const big = flat('a.', 1_000_000);
-    expect(
-      timed(() => {
-        net.apply({
-          phase: 'request',
-          id: 'r1',
-          method: 'GET',
-          url,
-          resourceType: 'fetch',
-          navigation: false,
-          headers: { 'x-big': big, [big]: 'name' },
-        });
-        net.apply({
-          phase: 'response',
-          id: 'r1',
-          status: 200,
-          statusText: big,
-          headers: { location: url, 'x-big': big },
-        });
-        net.apply({ phase: 'done', id: 'r1', failure: big });
-      }),
-    ).toBeLessThan(50);
+    const cycle = (log: NetworkLog, id: string, url: string, big: string) => () => {
+      log.apply({
+        phase: 'request',
+        id,
+        method: 'GET',
+        url,
+        resourceType: 'fetch',
+        navigation: false,
+        headers: { 'x-big': big, [big]: 'name' },
+      });
+      log.apply({
+        phase: 'response',
+        id,
+        status: 200,
+        statusText: big,
+        headers: { location: url, 'x-big': big },
+      });
+      log.apply({ phase: 'done', id, failure: big });
+    };
+    const shortUrl = `https://blocked.example/x?q=a&token=${SECRET}`;
+    // The baseline runs on its own log, so the checks below read the large request's entry.
+    const baseline = new NetworkLog({ now, redactor: r });
+    expectClippedFast(cycle(net, 'r1', url, big), cycle(baseline, 's1', shortUrl, 'a.'.repeat(50)));
     const log = new ConsoleLog({ now, redactor: r });
-    expect(
-      timed(() => log.push({ level: 'log', text: 'hi', source: 'console', url }, url)),
-    ).toBeLessThan(50);
+    expectClippedFast(
+      () => log.push({ level: 'log', text: 'hi', source: 'console', url }, url),
+      () => log.push({ level: 'log', text: 'hi', source: 'console', url: shortUrl }, shortUrl),
+    );
     const e = net.entries().items[0]!;
     expect(e.url.length).toBeLessThanOrEqual(2_000);
     expect(e.statusText!.length).toBeLessThanOrEqual(100);

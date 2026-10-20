@@ -4,7 +4,7 @@
 // tampered (refused); an update's permission diff accepted by its hash; managed policy forbidding
 // unverified installs and denying a plugin; the owner's sideload switch; ratings; pets and their
 // frames; screenshots; MCP items only once the MCP area hands over its installer; sessions.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -22,7 +22,10 @@ import {
   PluginCatalogs,
   PluginService,
   SkillIndex,
+  extensionSecretRef,
+  folderBundleFiles,
   managedRestrictions,
+  packBundle,
   type AuditRecord,
 } from '@nova/core';
 import { MemorySecretStore } from '@nova/secrets';
@@ -32,6 +35,7 @@ import { EventStore } from '../src/event-store.ts';
 import { DiagnosticsRegistry, type HubContext } from '../src/hub-context.ts';
 import { setupMarket, type MarketArea } from '../src/market.ts';
 import {
+  SAMPLE_CATALOG,
   fakeMcpInstaller,
   folderDigest,
   petFolder,
@@ -293,6 +297,18 @@ describe('the built-in sample catalog', () => {
     ).toBe(404);
   });
 
+  it('stops using a theme it removes, so a reinstall does not quietly come back into use', async () => {
+    expect((await install('nova-sample', 'theme', 'com.examplelabs.aurora')).res.status).toBe(201);
+    putSetting('appearance.customTheme', 'com.examplelabs.aurora');
+    expect(
+      (await call('DELETE', '/api/v1/market/installed/theme/com.examplelabs.aurora')).status,
+    ).toBe(200);
+    expect(globalSettings()['appearance.customTheme']).toBeNull();
+    expect(globalSettings()['appearance.customThemes']).toEqual([]);
+    expect((await install('nova-sample', 'theme', 'com.examplelabs.aurora')).res.status).toBe(201);
+    expect(globalSettings()['appearance.customTheme']).toBeNull();
+  });
+
   it('a managed lock on the saved themes refuses the install and changes nothing', async () => {
     managed['appearance.customThemes'] = [];
     const theme = await install('nova-sample', 'theme', 'com.examplelabs.aurora');
@@ -550,14 +566,16 @@ describe('policy', () => {
 });
 
 describe('extensions', () => {
-  it('installs the sample catalog’s signed .novax through the extension installer, Verified with its publisher', async () => {
+  const WORD_COUNT = 'com.examplelabs.word-count';
+
+  /** The SDK area's extension installer, its workers off (the verdicts do not depend on them). */
+  function extensionInstaller(secrets = new MemorySecretStore()): ExtensionService {
     const ext = new ExtensionService({
       db,
-      secrets: new MemorySecretStore(),
+      secrets,
       dataDir: join(dir, 'data'),
       plugins,
       settings: {
-        // Workers stay off here; the verdict and the publisher do not depend on them.
         enabled: () => Promise.resolve(false),
         trustedPublishers: () =>
           Promise.resolve(
@@ -569,6 +587,94 @@ describe('extensions', () => {
       audit: { append: (r) => (audit.push(r), Promise.resolve()) },
     });
     area.useExtensionInstaller(ext);
+    return ext;
+  }
+
+  it('refuses an update from another publisher until the change is accepted, then clears its secrets', async () => {
+    const secrets = new MemorySecretStore();
+    const ext = extensionInstaller(secrets);
+    try {
+      const other = testPublisher();
+      putSetting('plugins.trustedPublishers', [
+        { name: 'Example Labs', key: EXAMPLE_LABS_PUBLIC_KEY },
+        { name: 'Other Labs', key: other.publicKey },
+      ]);
+      expect((await install('nova-sample', 'plugin', WORD_COUNT)).res.status).toBe(201);
+      const ref = extensionSecretRef(OWNER, WORD_COUNT, 'token');
+      await secrets.put(ref, 'kept until the publisher changes');
+
+      // The same extension, version 1.1.0, signed by another trusted publisher in another catalog.
+      const src = join(dir, 'wc-src');
+      cpSync(join(SAMPLE_CATALOG, 'src', 'word-count'), src, { recursive: true });
+      const manifest = join(src, '.nova-plugin', 'plugin.json');
+      writeFileSync(
+        manifest,
+        readFileSync(manifest, 'utf8').replace('"version": "1.0.0"', '"version": "1.1.0"'),
+      );
+      const bundle = packBundle(folderBundleFiles(src), { privateKey: other.privateKey }).bytes;
+      const root = join(dir, 'other');
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, 'wc.novax'), bundle);
+      folderCatalog(
+        'other',
+        [
+          {
+            kind: 'plugin',
+            id: WORD_COUNT,
+            name: 'Word count',
+            version: '1.1.0',
+            path: 'wc.novax',
+            sha256: sha256Hex(bundle),
+          },
+        ],
+        true,
+        root,
+      );
+
+      const p = await call('POST', '/api/v1/market/preview', {
+        catalogId: 'other',
+        kind: 'plugin',
+        id: WORD_COUNT,
+      });
+      expect(p.json).toMatchObject({
+        verification: { status: 'verified' },
+        publisherChange: {
+          from: { key: EXAMPLE_LABS_PUBLIC_KEY, name: 'Example Labs' },
+          to: { key: other.publicKey, name: 'Other Labs' },
+        },
+        requires: { publisherChangeAcceptance: true, permissionAcceptance: false },
+      });
+      expect(p.json.warnings[0]).toMatch(/Another publisher/);
+
+      const refused = await call('POST', '/api/v1/market/install', { previewId: p.json.previewId });
+      expect(refused.status).toBe(400);
+      expect(reason(refused)).toBe('publisher_change_confirmation_required');
+      expect((await ext.get(OWNER, WORD_COUNT)).version).toBe('1.0.0');
+      expect(await secrets.has(ref)).toBe(true);
+
+      const ok = await call('POST', '/api/v1/market/install', {
+        previewId: p.json.previewId,
+        acceptPublisherChange: true,
+      });
+      expect(ok.status, JSON.stringify(ok.json)).toBe(201);
+      expect(await ext.get(OWNER, WORD_COUNT)).toMatchObject({
+        version: '1.1.0',
+        verified: true,
+        publisher: { key: other.publicKey, name: 'Other Labs' },
+      });
+      expect(await secrets.has(ref)).toBe(false);
+      expect(audit.find((a) => a.action === 'market.update')?.detail).toMatchObject({
+        publisherChange: { from: EXAMPLE_LABS_PUBLIC_KEY, to: other.publicKey },
+      });
+      expect(audit.some((a) => a.action === 'extension.publisher.change')).toBe(true);
+    } finally {
+      area.useExtensionInstaller(null);
+      await ext.close();
+    }
+  });
+
+  it('installs the sample catalog’s signed .novax through the extension installer, Verified with its publisher', async () => {
+    const ext = extensionInstaller();
     try {
       putSetting('plugins.trustedPublishers', [
         { name: 'Example Labs', key: EXAMPLE_LABS_PUBLIC_KEY },

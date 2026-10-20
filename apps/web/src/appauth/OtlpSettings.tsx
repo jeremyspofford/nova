@@ -16,13 +16,14 @@ import {
   type PutOtlpRequest,
   type SettingKey,
 } from '@nova/shared';
+import { fmt } from '@nova/i18n';
 import { Button, Dialog, Icon, Spinner, TextField, useToast } from '@nova/ui';
 import { useHubStream } from '../hub-events.ts';
 import { useSettings } from '../settings.tsx';
 import { formatWhen, useInterval } from '../settings/common.ts';
 import { SwitchField } from '../settings/controls.tsx';
 import { useAppAuthApi } from './api-m8.ts';
-import { OTLP_TEXT, SIGNAL_TEXT, appErrorMessage } from './format.ts';
+import { OTLP_TEXT, SIGNAL_TEXT, appErrorMessage, savedSignalText, testOkText } from './format.ts';
 import { ManagedNote } from '../managed/ManagedNote.tsx';
 import '../workspace.css';
 import './appauth.css';
@@ -104,7 +105,7 @@ export function OtlpSettings() {
       toast.show(done, { tone: 'success' });
       return true;
     } catch (err) {
-      toast.show(appErrorMessage(err, 'Could not save.'), { tone: 'error' });
+      toast.show(appErrorMessage(err, OTLP_TEXT.saveFailed), { tone: 'error' });
       return false;
     } finally {
       setBusy(false);
@@ -118,15 +119,21 @@ export function OtlpSettings() {
       const r: OtlpTestResultView = await api.testOtlp();
       setTested(
         r.ok
-          ? { ok: true, text: OTLP_TEXT.testOk(r.status) }
+          ? { ok: true, text: testOkText(r.status) }
           : {
               ok: false,
-              text: OTLP_TEXT.testFailed(r.error ?? (r.status ? `HTTP ${r.status}` : 'no answer')),
+              text: OTLP_TEXT.testFailed({
+                why:
+                  r.error ??
+                  (r.status
+                    ? OTLP_TEXT.httpStatus({ status: String(r.status) })
+                    : OTLP_TEXT.noAnswer),
+              }),
             },
       );
       reload();
     } catch (err) {
-      setTested({ ok: false, text: appErrorMessage(err, 'The test did not run.') });
+      setTested({ ok: false, text: appErrorMessage(err, OTLP_TEXT.testDidNotRun) });
     } finally {
       setTesting(false);
     }
@@ -141,7 +148,7 @@ export function OtlpSettings() {
       {managedOff ? (
         <p className="ws-callout ws-flush" role="note">
           <Icon name="shield" />
-          <span>{OTLP_TEXT.managedOff}</span>
+          <span>{OTLP_TEXT.managedOff}</span> <ManagedNote setting="restrict.telemetryExport" />
         </p>
       ) : null}
       {loadError && !status ? (
@@ -198,12 +205,7 @@ export function OtlpSettings() {
                 locked={locked['telemetry.otlp.signals']}
                 setting="telemetry.otlp.signals"
                 disabled={busy}
-                onChange={(on) =>
-                  void put(
-                    { signals: { [k]: on } },
-                    OTLP_TEXT.savedSignal(SIGNAL_TEXT[k].label, on),
-                  )
-                }
+                onChange={(on) => void put({ signals: { [k]: on } }, savedSignalText(k, on))}
               />
             ))}
           </section>
@@ -251,7 +253,9 @@ export function OtlpSettings() {
       <Dialog
         open={askContent}
         title={OTLP_TEXT.contentConfirmTitle}
-        description={OTLP_TEXT.contentConfirm(status?.endpoint || OTLP_TEXT.yourCollector)}
+        description={OTLP_TEXT.contentConfirm({
+          where: status?.endpoint || OTLP_TEXT.yourCollector,
+        })}
         onClose={() => setAskContent(false)}
         footer={
           <>
@@ -315,7 +319,9 @@ function EndpointSection({
           label={OTLP_TEXT.endpointLabel}
           type="url"
           value={value}
+          // eslint-disable-next-line nova-i18n/no-literal-ui-text -- an example address, not words
           placeholder="https://collector.example.com:4318"
+          dir="ltr"
           spellCheck={false}
           autoComplete="off"
           disabled={locked}
@@ -376,7 +382,7 @@ function HeadersSection({
                 <div className="row ws-row-actions">
                   <Button
                     variant="ghost"
-                    aria-label={OTLP_TEXT.replaceLabel(h.name)}
+                    aria-label={OTLP_TEXT.replaceLabel({ name: h.name })}
                     onClick={() => {
                       setAdding(false);
                       setEditing(h.name);
@@ -386,7 +392,7 @@ function HeadersSection({
                   </Button>
                   <Button
                     variant="ghost"
-                    aria-label={OTLP_TEXT.removeLabel(h.name)}
+                    aria-label={OTLP_TEXT.removeLabel({ name: h.name })}
                     onClick={() => setRemoving(h.name)}
                   >
                     {OTLP_TEXT.remove}
@@ -399,7 +405,7 @@ function HeadersSection({
                   busy={busy}
                   onCancel={() => setEditing(null)}
                   onSave={async (name, value) => {
-                    if (await put({ headers: { [name]: value } }, OTLP_TEXT.headerSaved(name)))
+                    if (await put({ headers: { [name]: value } }, OTLP_TEXT.headerSaved({ name })))
                       setEditing(null);
                   }}
                 />
@@ -413,7 +419,7 @@ function HeadersSection({
           busy={busy}
           onCancel={() => setAdding(false)}
           onSave={async (name, value) => {
-            if (await put({ headers: { [name]: value } }, OTLP_TEXT.headerSaved(name)))
+            if (await put({ headers: { [name]: value } }, OTLP_TEXT.headerSaved({ name })))
               setAdding(false);
           }}
         />
@@ -431,7 +437,7 @@ function HeadersSection({
       )}
       <Dialog
         open={removing !== null}
-        title={removing ? OTLP_TEXT.removeTitle(removing) : OTLP_TEXT.remove}
+        title={removing ? OTLP_TEXT.removeTitle({ name: removing }) : OTLP_TEXT.remove}
         description={OTLP_TEXT.removeWhat}
         onClose={() => setRemoving(null)}
         footer={
@@ -443,7 +449,7 @@ function HeadersSection({
               onClick={() => {
                 const name = removing;
                 setRemoving(null);
-                if (name) void put({ headers: { [name]: null } }, OTLP_TEXT.removed(name));
+                if (name) void put({ headers: { [name]: null } }, OTLP_TEXT.removed({ name }));
               }}
             >
               {OTLP_TEXT.remove}
@@ -484,7 +490,7 @@ function HeaderForm({
     <form
       className="aa-header-form"
       noValidate
-      aria-label={fixedName ? OTLP_TEXT.replaceLabel(fixedName) : OTLP_TEXT.addHeader}
+      aria-label={fixedName ? OTLP_TEXT.replaceLabel({ name: fixedName }) : OTLP_TEXT.addHeader}
       onSubmit={(e) => {
         e.preventDefault();
         void submit();
@@ -497,7 +503,9 @@ function HeaderForm({
           spellCheck={false}
           autoComplete="off"
           maxLength={64}
+          // eslint-disable-next-line nova-i18n/no-literal-ui-text -- an HTTP header name, never translated
           placeholder="Authorization"
+          dir="ltr"
           hint={OTLP_TEXT.headerNameHint}
           error={errors.name}
           autoFocus
@@ -505,7 +513,7 @@ function HeaderForm({
         />
       )}
       <TextField
-        label={fixedName ? OTLP_TEXT.headerValueNew(fixedName) : OTLP_TEXT.headerValue}
+        label={fixedName ? OTLP_TEXT.headerValueNew({ name: fixedName }) : OTLP_TEXT.headerValue}
         type="password"
         autoComplete="new-password"
         value={value}
@@ -528,7 +536,7 @@ function StatusSection({ status: s }: { status: OtlpStatusView }) {
   const id = useId();
   const why = inactiveWhy(s);
   const per = (r: Record<OtlpSignal, number>) =>
-    OTLP_SIGNALS.map((k) => `${SIGNAL_TEXT[k].label} ${r[k]}`).join(' · ');
+    OTLP_SIGNALS.map((k) => OTLP_TEXT.count[k]({ n: r[k] })).join(' · ');
   return (
     <section className="settings-section" aria-labelledby={`${id}-h`}>
       <h3 id={`${id}-h`}>{OTLP_TEXT.statusHeading}</h3>
@@ -559,7 +567,7 @@ function StatusSection({ status: s }: { status: OtlpStatusView }) {
         {s.nextAttemptAt ? (
           <>
             <dt>{OTLP_TEXT.nextAttempt}</dt>
-            <dd>{new Date(s.nextAttemptAt).toLocaleTimeString()}</dd>
+            <dd>{fmt.time(s.nextAttemptAt, { timeStyle: 'medium' })}</dd>
           </>
         ) : null}
       </dl>

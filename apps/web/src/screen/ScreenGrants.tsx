@@ -6,6 +6,7 @@
 import { useEffect, useId, useState } from 'react';
 import type { ScreenControlTier, ScreenGrantView, ScreenWindowView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, TextField, useToast } from '@nova/ui';
+import { defineMessages, fmt } from '@nova/i18n';
 import { ApiError, errorMessage } from '../api.ts';
 import { useAnnounce } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
@@ -14,6 +15,65 @@ import { useScreenApi } from './api.ts';
 import { TIER_ALLOWS, TIER_TEXT, remainingText, secondsLeft, sentence, timeOf } from './format.ts';
 
 const MINUTES_MAX = 1_440;
+
+export const GRANTS_TEXT = defineMessages('screen.grants', {
+  title: 'Apps Nova may control',
+  intro:
+    'Nova acts only in apps you allow, for a limited time. Browsers are view only (Nova uses the browser tool instead), terminals and editors click only, other apps full control. Apps like system settings, password managers and banking are never controlled.',
+  historyFailed: 'Could not load past grants.',
+  neverControlled: '{app} is never controlled by Nova. Do this step yourself.',
+  allowedSaid:
+    '{n, plural, one {Nova may control {app} for # minute.} other {Nova may control {app} for # minutes.}}',
+  allowedToast: '{n, plural, other {Allowed {app} for # min.}}',
+  allowFailed: 'Could not allow {app}: {error}',
+  renewed: 'Renewed {app}.',
+  renewFailed: 'Could not renew {app}: {error}',
+  revoked: 'Nova can no longer control {app}.',
+  revokeFailed: 'Could not revoke {app}: {error}',
+  none: 'No apps allowed right now.',
+  allowedList: 'Allowed apps',
+  until: 'until {time}',
+  renew: 'Renew',
+  renewApp: 'Renew {app}',
+  revoke: 'Revoke',
+  revokeApp: 'Revoke {app}',
+  appToAllow: 'App to allow',
+  minutes: 'Minutes',
+  minutesRange: 'From 1 to {max}',
+  allow: 'Allow…',
+  allowApp: 'Allow {app}…',
+  lookAgain: 'Look again',
+  seeApps: 'See apps on screen',
+  looking: 'Looking at the screen',
+  noWindows: 'No app windows are open.',
+  onScreen: 'Apps on screen',
+  inFront: '(in front)',
+  allowed: 'Allowed',
+  youDo: 'You do this one',
+  showPast: 'Show past grants',
+  hidePast: 'Hide past grants',
+  loadingPast: 'Loading past grants',
+  noPast: 'No expired or revoked grants.',
+  pastList: 'Past grants',
+  pastRevoked: '{app}: revoked {time}',
+  pastExpired: '{app}: expired',
+  askTitle: 'Allow Nova to control “{app}”?',
+  askTitleAny: 'Allow this app?',
+  askHelp: 'Stop at any time with the kill key or the Stop button.',
+  cancel: 'Cancel',
+  allowFor: '{n, plural, other {Allow for # min}}',
+  level: 'Level',
+  /** A tier's name, then what Nova may do at it. */
+  levelIs: '{tier}. {allows}',
+  levelByKind:
+    'Set by the kind of app: full control for most apps, less for browsers, terminals and editors.',
+  expires: 'Expires',
+  expiresAfter: '{n, plural, one {# minute after you allow} other {# minutes after you allow}}',
+  revokeTitle: 'Revoke {app}?',
+  revokeTitleAny: 'Revoke this app?',
+  revokeHelp: 'Nova stops controlling the app at once. Allow it again when you want.',
+});
+const S = GRANTS_TEXT;
 
 export function ScreenGrants({
   computerId,
@@ -66,7 +126,7 @@ export function ScreenGrants({
         setHistory(items);
         setHistoryError(null);
       },
-      (err: unknown) => alive && setHistoryError(errorMessage(err, 'Could not load past grants.')),
+      (err: unknown) => alive && setHistoryError(errorMessage(err, S.historyFailed)),
     );
     return () => {
       alive = false;
@@ -83,7 +143,7 @@ export function ScreenGrants({
     if (!a || !minutesOk) return;
     const tier = tierOf(a);
     if (tier === 'none') {
-      setRefusal(`${a} is never controlled by Nova. Do this step yourself.`);
+      setRefusal(S.neverControlled({ app: a }));
       return;
     }
     setRefusal(null);
@@ -95,22 +155,23 @@ export function ScreenGrants({
     try {
       const g = await api.grantScreenApp(computerId, { app: a, minutes: mins });
       setApp('');
-      announce(`Nova may control ${g.app} for ${mins} minutes.`);
-      toast.show(`Allowed ${g.app} for ${mins} min.`, { tone: 'success' });
+      announce(S.allowedSaid({ app: g.app, n: mins }));
+      toast.show(S.allowedToast({ app: g.app, n: mins }), { tone: 'success' });
       onChanged();
     } catch (err) {
+      // The Hub's refusal (English in M8, D9), e.g. an app Nova never controls.
       if (err instanceof ApiError && err.status === 403) setRefusal(sentence(err.body.message));
-      else toast.show(`Could not allow ${a}: ${errorMessage(err)}`, { tone: 'error' });
+      else toast.show(S.allowFailed({ app: a, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
   const renew = async (g: ScreenGrantView) => {
     try {
       await api.renewScreenGrant(computerId, g.id);
-      toast.show(`Renewed ${g.app}.`, { tone: 'success' });
+      toast.show(S.renewed({ app: g.app }), { tone: 'success' });
       onChanged();
     } catch (err) {
-      toast.show(`Could not renew ${g.app}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.renewFailed({ app: g.app, error: errorMessage(err) }), { tone: 'error' });
       onChanged();
     }
   };
@@ -119,10 +180,10 @@ export function ScreenGrants({
     setRevoking(null);
     try {
       await api.revokeScreenGrant(computerId, g.id);
-      toast.show(`Nova can no longer control ${g.app}.`, { tone: 'success' });
+      toast.show(S.revoked({ app: g.app }), { tone: 'success' });
       onChanged();
     } catch (err) {
-      toast.show(`Could not revoke ${g.app}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.revokeFailed({ app: g.app, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -131,37 +192,33 @@ export function ScreenGrants({
   return (
     <section className="ws-section scr-grants" aria-labelledby={headingId}>
       <div className="ws-section-header">
-        <h3 id={headingId}>Apps Nova may control</h3>
+        <h3 id={headingId}>{S.title}</h3>
       </div>
-      <p className="muted ws-flush">
-        Nova acts only in apps you allow, for a limited time. Browsers are view only (Nova uses the
-        browser tool instead), terminals and editors click only, other apps full control. Apps like
-        system settings, password managers and banking are never controlled.
-      </p>
+      <p className="muted ws-flush">{S.intro}</p>
       {grants.length === 0 ? (
-        <p className="muted">No apps allowed right now.</p>
+        <p className="muted">{S.none}</p>
       ) : (
-        <ul className="ws-list" aria-label="Allowed apps">
+        <ul className="ws-list" aria-label={S.allowedList}>
           {grants.map((g) => (
             <li key={g.id} className="ws-list-row" aria-label={g.app}>
               <div className="ws-source-main">
-                <strong>{g.app}</strong>
+                <strong dir="auto">{g.app}</strong>
                 <span className="muted ws-row-meta">
                   <span>{TIER_TEXT[g.tier]}</span>
                   <span>{remainingText(secondsLeft(g.expiresAt, now))}</span>
-                  <span>until {timeOf(g.expiresAt)}</span>
+                  <span>{S.until({ time: timeOf(g.expiresAt) })}</span>
                 </span>
               </div>
               <div className="row ws-row-actions">
-                <Button onClick={() => void renew(g)} aria-label={`Renew ${g.app}`}>
-                  Renew
+                <Button onClick={() => void renew(g)} aria-label={S.renewApp({ app: g.app })}>
+                  {S.renew}
                 </Button>
                 <Button
                   variant="ghost"
                   onClick={() => setRevoking(g)}
-                  aria-label={`Revoke ${g.app}`}
+                  aria-label={S.revokeApp({ app: g.app })}
                 >
-                  Revoke
+                  {S.revoke}
                 </Button>
               </div>
             </li>
@@ -176,7 +233,7 @@ export function ScreenGrants({
         }}
       >
         <TextField
-          label="App to allow"
+          label={S.appToAllow}
           value={app}
           list={listId}
           maxLength={200}
@@ -192,14 +249,18 @@ export function ScreenGrants({
           ))}
         </datalist>
         <TextField
-          label="Minutes"
+          label={S.minutes}
           inputMode="numeric"
           value={minutes}
           onChange={(e) => setMinutes(e.target.value.trim())}
-          error={minutesOk ? undefined : `From 1 to ${MINUTES_MAX}`}
+          error={
+            minutesOk
+              ? undefined
+              : S.minutesRange({ max: fmt.number(MINUTES_MAX, { useGrouping: false }) })
+          }
         />
         <Button type="submit" variant="primary" disabled={!app.trim() || !minutesOk}>
-          Allow…
+          {S.allow}
         </Button>
       </form>
       {refusal ? (
@@ -211,23 +272,25 @@ export function ScreenGrants({
       <div className="scr-apps">
         <div className="row">
           <Button onClick={onLookAtApps} disabled={lookingAtApps || noDesktop !== null}>
-            <Icon name="eye" /> {windows ? 'Look again' : 'See apps on screen'}
+            <Icon name="eye" /> {windows ? S.lookAgain : S.seeApps}
           </Button>
-          {lookingAtApps ? <Spinner label="Looking at the screen" /> : null}
+          {lookingAtApps ? <Spinner label={S.looking} /> : null}
         </div>
         {noDesktop ? <p className="muted">{noDesktop}</p> : null}
-        {windows && windows.length === 0 ? <p className="muted">No app windows are open.</p> : null}
+        {windows && windows.length === 0 ? <p className="muted">{S.noWindows}</p> : null}
         {windows?.length ? (
-          <ul className="ws-list" aria-label="Apps on screen">
+          <ul className="ws-list" aria-label={S.onScreen}>
             {windows.map((w) => (
               <li key={w.id} className="ws-list-row" aria-label={w.app}>
                 <div className="ws-source-main">
                   <strong>
-                    {w.app}
-                    {w.focused ? <span className="muted"> (in front)</span> : null}
+                    <span dir="auto">{w.app}</span>
+                    {w.focused ? <span className="muted"> {S.inFront}</span> : null}
                   </strong>
                   {/* Window titles come from the screen: untrusted text, shown as text. */}
-                  <span className="muted ws-row-meta">{w.title}</span>
+                  <span className="muted ws-row-meta" dir="auto">
+                    {w.title}
+                  </span>
                   <span className="ws-row-meta">
                     <span className="ws-badge" data-tone={w.tier === 'none' ? 'warn' : undefined}>
                       {TIER_TEXT[w.tier]}
@@ -237,13 +300,13 @@ export function ScreenGrants({
                 </div>
                 {w.granted ? (
                   <span className="ws-badge" data-tone="ok">
-                    <Icon name="check" /> Allowed
+                    <Icon name="check" /> {S.allowed}
                   </span>
                 ) : w.tier === 'none' ? (
-                  <span className="muted">You do this one</span>
+                  <span className="muted">{S.youDo}</span>
                 ) : (
-                  <Button onClick={() => ask(w.app)} aria-label={`Allow ${w.app}…`}>
-                    Allow…
+                  <Button onClick={() => ask(w.app)} aria-label={S.allowApp({ app: w.app })}>
+                    {S.allow}
                   </Button>
                 )}
               </li>
@@ -253,7 +316,7 @@ export function ScreenGrants({
       </div>
       <div className="row">
         <Button variant="ghost" aria-pressed={showAll} onClick={() => setShowAll((v) => !v)}>
-          {showAll ? 'Hide past grants' : 'Show past grants'}
+          {showAll ? S.hidePast : S.showPast}
         </Button>
       </div>
       {showAll ? (
@@ -262,14 +325,16 @@ export function ScreenGrants({
             <p>{historyError}</p>
           </div>
         ) : history === null ? (
-          <Spinner label="Loading past grants" />
+          <Spinner label={S.loadingPast} />
         ) : past.length === 0 ? (
-          <p className="muted">No expired or revoked grants.</p>
+          <p className="muted">{S.noPast}</p>
         ) : (
-          <ul className="ws-plain-list" aria-label="Past grants">
+          <ul className="ws-plain-list" aria-label={S.pastList}>
             {past.map((g) => (
               <li key={g.id}>
-                {g.app}: {g.revokedAt ? `revoked ${timeOf(g.revokedAt)}` : 'expired'}
+                {g.revokedAt
+                  ? S.pastRevoked({ app: g.app, time: timeOf(g.revokedAt) })
+                  : S.pastExpired({ app: g.app })}
               </li>
             ))}
           </ul>
@@ -278,40 +343,40 @@ export function ScreenGrants({
       <Dialog
         open={asking !== null}
         onClose={() => setAsking(null)}
-        title={asking ? `Allow Nova to control “${asking.app}”?` : 'Allow this app?'}
-        description="Stop at any time with the kill key or the Stop button."
+        title={asking ? S.askTitle({ app: asking.app }) : S.askTitleAny}
+        description={S.askHelp}
         footer={
           <>
-            <Button onClick={() => setAsking(null)}>Cancel</Button>
+            <Button onClick={() => setAsking(null)}>{S.cancel}</Button>
             <Button variant="primary" onClick={() => asking && void grant(asking.app)}>
-              Allow for {minutesOk ? mins : defaultMinutes} min
+              {S.allowFor({ n: minutesOk ? mins : defaultMinutes })}
             </Button>
           </>
         }
       >
         {asking ? (
           <dl className="ws-dl">
-            <dt>Level</dt>
+            <dt>{S.level}</dt>
             <dd>
               {asking.tier
-                ? `${TIER_TEXT[asking.tier]}. ${TIER_ALLOWS[asking.tier]}`
-                : 'Set by the kind of app: full control for most apps, less for browsers, terminals and editors.'}
+                ? S.levelIs({ tier: TIER_TEXT[asking.tier], allows: TIER_ALLOWS[asking.tier] })
+                : S.levelByKind}
             </dd>
-            <dt>Expires</dt>
-            <dd>{minutesOk ? mins : defaultMinutes} minutes after you allow</dd>
+            <dt>{S.expires}</dt>
+            <dd>{S.expiresAfter({ n: minutesOk ? mins : defaultMinutes })}</dd>
           </dl>
         ) : null}
       </Dialog>
       <Dialog
         open={revoking !== null}
         onClose={() => setRevoking(null)}
-        title={revoking ? `Revoke ${revoking.app}?` : 'Revoke this app?'}
-        description="Nova stops controlling the app at once. Allow it again when you want."
+        title={revoking ? S.revokeTitle({ app: revoking.app }) : S.revokeTitleAny}
+        description={S.revokeHelp}
         footer={
           <>
-            <Button onClick={() => setRevoking(null)}>Cancel</Button>
+            <Button onClick={() => setRevoking(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => revoking && void revoke(revoking)}>
-              Revoke
+              {S.revoke}
             </Button>
           </>
         }

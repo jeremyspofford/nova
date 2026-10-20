@@ -1,6 +1,7 @@
 // Settings → Data (FR-105, FR-121; docs/12 §9; ADR-097 D5) at /settings/data, the Hub owner's:
 // what the Hub holds; Export (one file, sealed and carrying the stored keys when a passphrase is
-// given, downloaded by the browser through a one-use ticket); Import into an empty Hub (upload,
+// given, which also needs the Hub's name typed and a browser of the Hub itself, not a paired
+// device; downloaded by the browser through a one-use ticket); Import into an empty Hub (upload,
 // check what the file holds and what must be entered again, the passphrase, then an explicit
 // confirmation); Delete all (says exactly what goes, needs the Hub's name typed); how long each
 // kind of data is kept (the audit floor; managed policy can lock each); and crash reports (local
@@ -14,7 +15,9 @@ import type {
   DataImportUploadView,
   DataOverviewView,
 } from '@nova/shared';
+import { EXPORT_PASSPHRASE_MIN } from '@nova/shared';
 import { Button, Icon, Spinner, TextField } from '@nova/ui';
+import { rich } from '../i18n/rich.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { MemberGate } from '../team/role.tsx';
 import { useDatactlApi } from './api-m8.ts';
@@ -141,12 +144,14 @@ function Overview({
           onRetry={reasonOf(error) === 'owner_only' ? undefined : onRetry}
         />
       ) : null}
-      {!overview && !error ? <Spinner label="Loading what this Hub holds" /> : null}
+      {!overview && !error ? <Spinner label={S.overviewLoading} /> : null}
       {overview ? (
         <dl className="ws-stats">
           <div>
             <dt>{S.hubName}</dt>
-            <dd className="dc-name">{overview.hubName}</dd>
+            <dd className="dc-name" dir="auto">
+              {overview.hubName}
+            </dd>
           </div>
           <div>
             <dt>{S.rows}</dt>
@@ -184,9 +189,13 @@ function ExportSection({ overview }: { overview: DataOverviewView }) {
   const id = useId();
   const [pass, setPass] = useState('');
   const [repeat, setRepeat] = useState('');
-  const [fieldError, setFieldError] = useState<{ field: 'pass' | 'repeat'; text: string } | null>(
-    null,
-  );
+  // A sealed export carries every stored secret: the Hub wants its name typed (compared trimmed,
+  // ignoring case, as the Hub compares).
+  const [name, setName] = useState('');
+  const [fieldError, setFieldError] = useState<{
+    field: 'pass' | 'repeat' | 'name';
+    text: string;
+  } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
@@ -195,23 +204,33 @@ function ExportSection({ overview }: { overview: DataOverviewView }) {
     setFailure(null);
     setStatus('');
     if (pass && pass.length < 12) {
-      setFieldError({ field: 'pass', text: S.passphraseShort });
+      setFieldError({ field: 'pass', text: S.passphraseShort({ min: EXPORT_PASSPHRASE_MIN }) });
       return;
     }
     if (pass && pass !== repeat) {
       setFieldError({ field: 'repeat', text: S.passphraseMismatch });
       return;
     }
+    if (pass && name.trim().toLowerCase() !== overview.hubName.trim().toLowerCase()) {
+      setFieldError({ field: 'name', text: S.sealedNameMismatch });
+      return;
+    }
     setFieldError(null);
     setBusy(true);
     try {
-      const { ticket } = await api.createExportTicket!(pass ? pass : undefined);
+      const { ticket } = await api.createExportTicket!(
+        pass ? pass : undefined,
+        pass ? name.trim() : undefined,
+      );
       startDownload(api.exportDownloadUrl!(ticket));
       setPass('');
       setRepeat('');
+      setName('');
       setStatus(S.exportStarted);
     } catch (err) {
-      setFailure(dataErrorMessage(err, 'Could not start the export.'));
+      if (reasonOf(err) === 'confirmation_mismatch')
+        setFieldError({ field: 'name', text: S.sealedNameMismatch });
+      else setFailure(dataErrorMessage(err, S.exportFailed));
     } finally {
       setBusy(false);
     }
@@ -233,19 +252,30 @@ function ExportSection({ overview }: { overview: DataOverviewView }) {
           type="password"
           autoComplete="new-password"
           value={pass}
-          hint={S.passphraseHint}
+          hint={S.passphraseHint({ min: EXPORT_PASSPHRASE_MIN })}
           error={fieldError?.field === 'pass' ? fieldError.text : undefined}
           onChange={(e) => setPass(e.target.value)}
         />
         {pass ? (
-          <TextField
-            label={S.passphraseRepeat}
-            type="password"
-            autoComplete="new-password"
-            value={repeat}
-            error={fieldError?.field === 'repeat' ? fieldError.text : undefined}
-            onChange={(e) => setRepeat(e.target.value)}
-          />
+          <>
+            <TextField
+              label={S.passphraseRepeat}
+              type="password"
+              autoComplete="new-password"
+              value={repeat}
+              error={fieldError?.field === 'repeat' ? fieldError.text : undefined}
+              onChange={(e) => setRepeat(e.target.value)}
+            />
+            <TextField
+              label={T.typeName(overview.hubName)}
+              value={name}
+              autoComplete="off"
+              spellCheck={false}
+              hint={S.sealedConfirmHint}
+              error={fieldError?.field === 'name' ? fieldError.text : undefined}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </>
         ) : (
           <p className="muted">
             {S.withoutPassphrase}{' '}
@@ -280,9 +310,7 @@ function ReEnter({ refs }: { refs: readonly string[] }) {
       {groups.length ? (
         <ul className="dc-list">
           {groups.map((g) => (
-            <li key={g.label}>
-              {g.label}: {count(g.count)}
-            </li>
+            <li key={g.label}>{S.groupCount({ group: g.label, n: count(g.count) })}</li>
           ))}
         </ul>
       ) : (
@@ -308,6 +336,13 @@ function ImportSection({
   const [busy, setBusy] = useState<'upload' | 'check' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // Onboarding's "Restore from an export file" opens /settings/data#import: show this section.
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (window.location.hash !== '#import') return;
+    section.current?.scrollIntoView?.({ block: 'start' });
+    section.current?.querySelector<HTMLElement>('h3')?.focus();
+  }, []);
 
   const runCheck = async (u: DataImportUploadView, pass?: string) => {
     setBusy('check');
@@ -316,7 +351,7 @@ function ImportSection({
       setCheck(await api.checkImport!(u.uploadId, pass));
     } catch (err) {
       setCheck(null);
-      setError(dataErrorMessage(err, 'Could not check the file.'));
+      setError(dataErrorMessage(err, S.checkFailed));
     } finally {
       setBusy(null);
     }
@@ -335,7 +370,7 @@ function ImportSection({
       setBusy(null);
       if (!u.encrypted) await runCheck(u);
     } catch (err) {
-      setError(dataErrorMessage(err, 'Could not upload the file.'));
+      setError(dataErrorMessage(err, S.uploadFailed));
       setBusy(null);
     }
   };
@@ -353,8 +388,10 @@ function ImportSection({
   const pass = upload?.encrypted ? passphrase : undefined;
 
   return (
-    <section className="settings-section" aria-labelledby={id}>
-      <h3 id={id}>{S.importTitle}</h3>
+    <section ref={section} id="import" className="settings-section" aria-labelledby={id}>
+      <h3 id={id} tabIndex={-1}>
+        {S.importTitle}
+      </h3>
       <p>{S.importIntro}</p>
       {!empty ? (
         <div className="ws-callout" role="note">
@@ -364,7 +401,9 @@ function ImportSection({
             {blocking.length ? (
               <details className="ws-advanced">
                 <summary>{S.importBlocking}</summary>
-                <p className="dc-mono">{blocking.join(', ')}</p>
+                <p className="dc-mono" dir="ltr" translate="no">
+                  {blocking.join(', ')}
+                </p>
               </details>
             ) : null}
           </div>
@@ -391,8 +430,10 @@ function ImportSection({
       ) : (
         <div className="dc-upload">
           <p>
-            <Icon name="file" /> {S.uploaded}:{' '}
-            <strong>{T.uploadedFile(upload.name, upload.bytes)}</strong>
+            <Icon name="file" />{' '}
+            {rich(S.uploadedAs, {
+              file: <strong dir="auto">{T.uploadedFile(upload.name, upload.bytes)}</strong>,
+            })}
           </p>
           <Button variant="ghost" onClick={reset} disabled={busy !== null}>
             {S.cancelImport}
@@ -446,7 +487,7 @@ function ImportSection({
         title={S.importConfirmTitle}
         confirmLabel={S.importConfirm}
         danger
-        errorText={(err) => dataErrorMessage(err, 'The import failed. Nothing was changed.')}
+        errorText={(err) => dataErrorMessage(err, S.importFailed)}
         onClose={() => setConfirming(false)}
         onConfirm={async () => {
           const r = await api.importData!(upload!.uploadId, pass);
@@ -544,7 +585,7 @@ function DeleteAllSection({
         confirmLabel={S.deleteConfirm}
         danger
         ready={matches}
-        errorText={(err) => dataErrorMessage(err, 'Nothing was deleted.')}
+        errorText={(err) => dataErrorMessage(err, S.deleteFailed)}
         onClose={() => setOpen(false)}
         onConfirm={async () => {
           const r = await api.deleteAllData!(typed.trim());

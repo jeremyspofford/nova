@@ -5,14 +5,70 @@
 import { useId, useState } from 'react';
 import type { ScreenControlTier, ScreenGrantView } from '@nova/shared';
 import { Button, Dialog, Icon, Kbd, SelectField, Spinner, TextField, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { errorMessage } from '../api.ts';
 import { useSettings } from '../settings.tsx';
-import { MANAGED, useInterval } from '../settings/common.ts';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
+import { useInterval } from '../settings/common.ts';
 import { useScreenApi } from './api.ts';
 import { TIER_TEXT, computerText, keyCaps, remainingText, secondsLeft } from './format.ts';
 import { useScreenStatuses } from './statuses.ts';
 import '../workspace.css';
 import './screen.css';
+
+export const COMPUTER_USE_TEXT = defineMessages('screen.settings', {
+  title: 'Computer use',
+  saveFailed: 'Could not save: {error}',
+  killKey: 'Kill key',
+  killKeyHelp:
+    'Stops computer use at once, wherever you are. On a device with Nova installed it works even when Nova is in the background; in a browser tab, only while Nova has focus.',
+  currentKey: 'Current key:',
+  pressNew: 'Press the new kill key',
+  keyProblem: 'Use a letter, a digit or a named key such as Esc or F12.',
+  pressNow: 'Press the new key or combination now…',
+  cancel: 'Cancel',
+  change: 'Change the kill key',
+  useEsc: 'Use Esc',
+  limits: 'Limits',
+  grantMinutes: 'An app grant lasts (minutes)',
+  grantHint: 'Renew from the indicator to keep going.',
+  grantRange: 'From 1 to 1440 minutes',
+  save: 'Save',
+  keepDays: 'Keep action screenshots for (days)',
+  keepHint: 'Older screenshots are deleted; the actions stay listed.',
+  keepRange: 'From 1 to 3650 days',
+  levels: 'App levels',
+  levelsHelp:
+    'Lower what Nova may do in an app. Nothing raises an app above its kind: browsers stay view only and terminals and editors click only.',
+  noneLowered: 'No apps lowered.',
+  lowered: 'Lowered apps',
+  levelFor: 'Level for {app}',
+  remove: 'Remove',
+  removeApp: 'Remove {app}',
+  app: 'App',
+  level: 'Level',
+  lower: 'Lower',
+  grants: {
+    renewed: 'Renewed {app}.',
+    renewFailed: 'Could not renew: {error}',
+    revoked: 'Nova can no longer control {app}.',
+    revokeFailed: 'Could not revoke: {error}',
+    title: 'Apps Nova may control now',
+    retry: 'Retry',
+    loading: 'Loading grants',
+    none: 'None. Nova asks before it controls an app.',
+    list: 'Active grants',
+    renew: 'Renew',
+    renewApp: 'Renew {app}',
+    revoke: 'Revoke',
+    revokeApp: 'Revoke {app}',
+    revokeTitle: 'Revoke {app}?',
+    revokeThis: 'Revoke this app?',
+    revokeHelp: 'Nova stops controlling the app at once.',
+    cancel: 'Cancel',
+  },
+});
+const S = COMPUTER_USE_TEXT;
 
 const KEY_RE = /^[A-Za-z0-9]+([+ ][A-Za-z0-9]+){0,4}$/;
 const LOWER_TIERS: ScreenControlTier[] = ['none', 'view', 'click'];
@@ -44,7 +100,7 @@ export function ComputerUseSettings() {
   const [app, setApp] = useState('');
   const [tier, setTier] = useState<ScreenControlTier>('none');
   const fail = (err: unknown) =>
-    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+    toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' });
 
   const minText = mins ?? String(minutes.value);
   const minNum = Number(minText);
@@ -59,22 +115,19 @@ export function ComputerUseSettings() {
 
   return (
     <div className="settings-page scr-settings">
-      <h2>Computer use</h2>
+      <h2>{S.title}</h2>
       <section className="settings-section" aria-labelledby="scr-kill">
-        <h3 id="scr-kill">Kill key</h3>
-        <p className="muted">
-          Stops computer use at once, wherever you are. On a device with Nova installed it works
-          even when Nova is in the background; in a browser tab, only while Nova has focus.
-        </p>
+        <h3 id="scr-kill">{S.killKey}</h3>
+        <p className="muted">{S.killKeyHelp}</p>
         <p className="row">
-          <span>Current key:</span> <Kbd keys={keyCaps(killKey.value)} />
+          <span>{S.currentKey}</span> <Kbd keys={keyCaps(killKey.value)} />
         </p>
-        {killKey.locked ? <p className="muted">{MANAGED}</p> : null}
+        {killKey.locked ? <ManagedNote as="p" id="scr-kill-lock" setting="screen.killKey" /> : null}
         {recording ? (
           <div
             className="scr-record"
             role="group"
-            aria-label="Press the new kill key"
+            aria-label={S.pressNew}
             tabIndex={0}
             ref={(el) => el?.focus()}
             onKeyDown={(e) => {
@@ -83,7 +136,7 @@ export function ComputerUseSettings() {
               e.stopPropagation();
               const k = killKeyFromEvent(e.nativeEvent);
               if (!k) {
-                setKeyProblem('Use a letter, a digit or a named key such as Esc or F12.');
+                setKeyProblem(S.keyProblem);
                 return;
               }
               setRecording(false);
@@ -91,20 +144,24 @@ export function ComputerUseSettings() {
               void settings.set('screen.killKey', k).catch(fail);
             }}
           >
-            <p>Press the new key or combination now…</p>
-            <Button onClick={() => setRecording(false)}>Cancel</Button>
+            <p>{S.pressNow}</p>
+            <Button onClick={() => setRecording(false)}>{S.cancel}</Button>
           </div>
         ) : (
           <div className="row">
-            <Button onClick={() => setRecording(true)} disabled={killKey.locked}>
-              Change the kill key
+            <Button
+              onClick={() => setRecording(true)}
+              disabled={killKey.locked}
+              aria-describedby={killKey.locked ? 'scr-kill-lock' : undefined}
+            >
+              {S.change}
             </Button>
             <Button
               variant="ghost"
               onClick={() => void settings.set('screen.killKey', 'Escape').catch(fail)}
               disabled={killKey.locked || killKey.value === 'Escape'}
             >
-              Use Esc
+              {S.useEsc}
             </Button>
           </div>
         )}
@@ -116,7 +173,7 @@ export function ComputerUseSettings() {
       </section>
 
       <section className="settings-section" aria-labelledby="scr-limits">
-        <h3 id="scr-limits">Limits</h3>
+        <h3 id="scr-limits">{S.limits}</h3>
         <form
           className="ws-toolbar"
           onSubmit={(e) => {
@@ -125,16 +182,17 @@ export function ComputerUseSettings() {
           }}
         >
           <TextField
-            label="An app grant lasts (minutes)"
+            label={S.grantMinutes}
             inputMode="numeric"
             value={minText}
-            disabled={minutes.locked}
+            locked={minutes.locked}
+            setting="screen.grantMinutes"
             onChange={(e) => setMins(e.target.value.trim())}
-            hint={minutes.locked ? MANAGED : 'Renew from the indicator to keep going.'}
-            error={minOk ? undefined : 'From 1 to 1440 minutes'}
+            hint={S.grantHint}
+            error={minOk ? undefined : S.grantRange}
           />
           <Button type="submit" disabled={!minOk || mins === null || minutes.locked}>
-            Save
+            {S.save}
           </Button>
         </form>
         <form
@@ -148,39 +206,38 @@ export function ComputerUseSettings() {
           }}
         >
           <TextField
-            label="Keep action screenshots for (days)"
+            label={S.keepDays}
             inputMode="numeric"
             value={dayText}
-            disabled={keep.locked}
+            locked={keep.locked}
+            setting="screen.screenshotRetentionDays"
             onChange={(e) => setDays(e.target.value.trim())}
-            hint={keep.locked ? MANAGED : 'Older screenshots are deleted; the actions stay listed.'}
-            error={dayOk ? undefined : 'From 1 to 3650 days'}
+            hint={S.keepHint}
+            error={dayOk ? undefined : S.keepRange}
           />
           <Button type="submit" disabled={!dayOk || days === null || keep.locked}>
-            Save
+            {S.save}
           </Button>
         </form>
       </section>
 
       <section className="settings-section" aria-labelledby="scr-levels">
-        <h3 id="scr-levels">App levels</h3>
-        <p className="muted">
-          Lower what Nova may do in an app. Nothing raises an app above its kind: browsers stay view
-          only and terminals and editors click only.
-        </p>
-        {overrides.locked ? <p className="muted">{MANAGED}</p> : null}
-        {entries.length === 0 ? <p className="muted">No apps lowered.</p> : null}
+        <h3 id="scr-levels">{S.levels}</h3>
+        <p className="muted">{S.levelsHelp}</p>
+        {overrides.locked ? <ManagedNote as="p" setting="screen.tierOverrides" /> : null}
+        {entries.length === 0 ? <p className="muted">{S.noneLowered}</p> : null}
         {entries.length ? (
-          <ul className="ws-list" aria-label="Lowered apps">
+          <ul className="ws-list" aria-label={S.lowered}>
             {entries.map(([name, t]) => (
               <li key={name} className="ws-list-row" aria-label={name}>
-                <strong>{name}</strong>
+                <strong dir="auto">{name}</strong>
                 <div className="row ws-row-actions">
                   <SelectField
-                    label={`Level for ${name}`}
+                    label={S.levelFor({ app: name })}
                     hideLabel
                     value={t}
                     locked={overrides.locked}
+                    setting="screen.tierOverrides"
                     onChange={(v) =>
                       setOverrides({ ...overrides.value, [name]: v as ScreenControlTier })
                     }
@@ -189,14 +246,14 @@ export function ComputerUseSettings() {
                   <Button
                     variant="ghost"
                     disabled={overrides.locked}
-                    aria-label={`Remove ${name}`}
+                    aria-label={S.removeApp({ app: name })}
                     onClick={() => {
                       const next = { ...overrides.value };
                       delete next[name];
                       setOverrides(next);
                     }}
                   >
-                    Remove
+                    {S.remove}
                   </Button>
                 </div>
               </li>
@@ -214,21 +271,21 @@ export function ComputerUseSettings() {
           }}
         >
           <TextField
-            label="App"
+            label={S.app}
             value={app}
             maxLength={200}
             disabled={overrides.locked}
             onChange={(e) => setApp(e.target.value)}
           />
           <SelectField
-            label="Level"
+            label={S.level}
             value={tier}
             locked={overrides.locked}
             onChange={(v) => setTier(v as ScreenControlTier)}
             options={LOWER_TIERS.map((x) => ({ value: x, label: TIER_TEXT[x] }))}
           />
           <Button type="submit" disabled={!app.trim() || overrides.locked}>
-            Lower
+            {S.lower}
           </Button>
         </form>
       </section>
@@ -246,6 +303,7 @@ function ActiveGrants() {
   const { statuses, computers, error, refresh } = useScreenStatuses();
   const [now, setNow] = useState(() => Date.now());
   const [revoking, setRevoking] = useState<ScreenGrantView | null>(null);
+  const G = S.grants;
   const grants = (statuses ?? []).flatMap((s) => s.grants.filter((g) => g.active));
   useInterval(() => setNow(Date.now()), 15_000, grants.length > 0);
 
@@ -253,9 +311,9 @@ function ActiveGrants() {
     api.renewScreenGrant(g.computerId, g.id).then(
       () => {
         refresh(g.computerId);
-        toast.show(`Renewed ${g.app}.`, { tone: 'success' });
+        toast.show(G.renewed({ app: g.app }), { tone: 'success' });
       },
-      (err: unknown) => toast.show(`Could not renew: ${errorMessage(err)}`, { tone: 'error' }),
+      (err: unknown) => toast.show(G.renewFailed({ error: errorMessage(err) }), { tone: 'error' }),
     );
 
   const revoke = (g: ScreenGrantView) => {
@@ -263,30 +321,30 @@ function ActiveGrants() {
     api.revokeScreenGrant(g.computerId, g.id).then(
       () => {
         refresh(g.computerId);
-        toast.show(`Nova can no longer control ${g.app}.`, { tone: 'success' });
+        toast.show(G.revoked({ app: g.app }), { tone: 'success' });
       },
-      (err: unknown) => toast.show(`Could not revoke: ${errorMessage(err)}`, { tone: 'error' }),
+      (err: unknown) => toast.show(G.revokeFailed({ error: errorMessage(err) }), { tone: 'error' }),
     );
   };
 
   return (
     <section className="settings-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>Apps Nova may control now</h3>
+      <h3 id={headingId}>{G.title}</h3>
       {error && statuses === null ? (
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => refresh()}>Retry</Button>
+          <Button onClick={() => refresh()}>{G.retry}</Button>
         </div>
       ) : statuses === null ? (
-        <Spinner label="Loading grants" />
+        <Spinner label={G.loading} />
       ) : grants.length === 0 ? (
-        <p className="muted">None. Nova asks before it controls an app.</p>
+        <p className="muted">{G.none}</p>
       ) : (
-        <ul className="ws-list" aria-label="Active grants">
+        <ul className="ws-list" aria-label={G.list}>
           {grants.map((g) => (
             <li key={g.id} className="ws-list-row" aria-label={g.app}>
               <div className="ws-source-main">
-                <strong>{g.app}</strong>
+                <strong dir="auto">{g.app}</strong>
                 <span className="muted ws-row-meta">
                   <span>{TIER_TEXT[g.tier]}</span>
                   <span>{remainingText(secondsLeft(g.expiresAt, now))}</span>
@@ -294,15 +352,15 @@ function ActiveGrants() {
                 </span>
               </div>
               <div className="row ws-row-actions">
-                <Button onClick={() => void renew(g)} aria-label={`Renew ${g.app}`}>
-                  Renew
+                <Button onClick={() => void renew(g)} aria-label={G.renewApp({ app: g.app })}>
+                  {G.renew}
                 </Button>
                 <Button
                   variant="ghost"
                   onClick={() => setRevoking(g)}
-                  aria-label={`Revoke ${g.app}`}
+                  aria-label={G.revokeApp({ app: g.app })}
                 >
-                  Revoke
+                  {G.revoke}
                 </Button>
               </div>
             </li>
@@ -312,13 +370,13 @@ function ActiveGrants() {
       <Dialog
         open={revoking !== null}
         onClose={() => setRevoking(null)}
-        title={revoking ? `Revoke ${revoking.app}?` : 'Revoke this app?'}
-        description="Nova stops controlling the app at once."
+        title={revoking ? G.revokeTitle({ app: revoking.app }) : G.revokeThis}
+        description={G.revokeHelp}
         footer={
           <>
-            <Button onClick={() => setRevoking(null)}>Cancel</Button>
+            <Button onClick={() => setRevoking(null)}>{G.cancel}</Button>
             <Button variant="danger" onClick={() => revoking && revoke(revoking)}>
-              Revoke
+              {G.revoke}
             </Button>
           </>
         }

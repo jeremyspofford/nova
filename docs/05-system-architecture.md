@@ -174,10 +174,10 @@ Client (browser) → Hub POST /api/chat (HTTPS)
 
 | Concern | Approach |
 | --- | --- |
-| Config | Layered: defaults → Hub settings (DB) → managed policy → env. |
+| Config | Layered: defaults → Hub settings (DB: user global, then user project for keys that are not security-relevant) → managed policy, which wins and locks what it sets (`docs/14` §1.3). Managed policy is itself layered: the signed remote policy, the OS-protected file and, in tests only, a test file over them; it only tightens and fails closed (`docs/12` §10). Environment variables configure the process (ports, data folder, the test-only policy file behind `NODE_ENV=test` or `--allow-test-policy`) and never override a setting (as built in M8, ADR-097 D4). |
 | Feature flags | DB + env; each flag carries a stage: `experimental` (off, hidden), `beta` (off, visible in Advanced), `stable` (on), `deprecated`, `removed` (rejected at load). Diagnostics shows each flag's stage (ADR-082). No remote flags (ADR-080). |
 | Migrations | Drizzle, forward-only, backup before each Hub update. |
-| i18n | `i18next`; external strings; RTL-ready. |
+| i18n | `@nova/i18n` on the platform's `Intl` (no `i18next`; ADR-097 D9 replaces ADR-027): typed messages declared next to their code, lazy JSON catalogs per locale, pseudo-locales for tests, right-to-left layout with logical CSS (`docs/04` §4.5-§4.6). |
 | Theming | CSS variables + theme JSON; no hard-coded colors. |
 | Caching | Provider prompt cache hints; node-level model pre-warm. |
 | Concurrency | Hub serializes writes; agent workers isolated; per-node job limits. |

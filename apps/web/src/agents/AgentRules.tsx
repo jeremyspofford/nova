@@ -4,6 +4,7 @@
 // can be turned off, deleted (with a confirmation) and previewed: the preview lists the agent's
 // recent actions the rule would have matched. Rules never override built-in safety.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import {
   AGENT_ACTION_CLASSES,
   AGENT_RULE_EFFECTS,
@@ -32,6 +33,7 @@ import { formatDateTime } from '../work/format.ts';
 import { useAgentsApi, type AgentRuleBody } from './api.ts';
 import {
   ACTION_TEXT,
+  AGENTS_TEXT,
   CHANNEL_KIND_TEXT,
   EFFECTS_OF_ACTIONS,
   matchText,
@@ -39,6 +41,89 @@ import {
   RULE_EFFECT_TEXT,
   splitList,
 } from './format.ts';
+import { rich } from '../i18n/rich.tsx';
+
+export const RULES_TEXT = defineMessages('agents.rules', {
+  loadFailed: 'Could not load the rules.',
+  turnedOn: 'Rule turned on.',
+  turnedOff: 'Rule turned off.',
+  changeFailed: 'Could not change the rule: {reason}',
+  heading: 'Rules',
+  add: 'Add a rule',
+  intro:
+    'Rules are instructions this agent follows. They cannot give it access it does not have ' +
+    'and never override built-in safety: purchases, password changes and other confirmed ' +
+    'actions still ask.',
+  added: 'Rule added.',
+  loading: 'Loading the rules',
+  empty:
+    'No rules. The agent follows your permissions and its autonomy. Add a rule such as “Ask ' +
+    'before messaging customers” or “Hand off payments to me”.',
+  saved: 'Rule saved.',
+  list: 'Rules',
+  off: 'Off',
+  priority: 'Priority {n}',
+  appliesTo: 'Applies to: {match}',
+  commandsStarting: 'Commands starting with {pattern}',
+  /** The rule's on/off switch: "Ask before messaging customers: on". */
+  switchOf: '{rule}: on',
+  preview: 'Preview',
+  previewOf: 'Preview {rule}',
+  editOf: 'Edit {rule}',
+  deleteOf: 'Delete {rule}',
+  deleteTitle: 'Delete this rule?',
+  deleteBody: "“{rule}” no longer applies. The agent's permissions and autonomy decide instead.",
+  deleted: 'Rule deleted.',
+  deleteFailed: 'Could not delete it: {reason}',
+  previewFailed: 'Could not load the preview.',
+  previewHeading: 'Recent actions this rule matches',
+  previewLoading: 'Loading the preview',
+  previewEmpty: "None of the agent's recent actions match this rule.",
+  descriptionRequired: 'Say what the rule does, in a few words.',
+  toolsError: 'Use tool names or globs such as email.send or slack.*.',
+  hostsError: 'Use host names such as example.com or *.example.com.',
+  matchError: 'A rule names hosts or channels, not both.',
+  priorityError: 'Enter a whole number from {min} to {max}.',
+  matchExamplesError: 'Add at least one command this rule should match.',
+  notMatchExamplesError: 'Add at least one command it should not match.',
+  saveFailed: 'Could not save the rule.',
+  editForm: 'Edit rule: {rule}',
+  newForm: 'New rule',
+  rule: 'Rule',
+  placeholder: 'For example: Ask before messaging customers',
+  effect: 'What the agent does',
+  appliesLegend: 'Applies to',
+  appliesHint:
+    'Leave everything empty to cover every action. Each part you fill in narrows the rule.',
+  kinds: 'Kinds of action',
+  effects: 'Effects',
+  tools: 'Tools',
+  toolsHint: 'Tool names or globs, separated by commas: email.send, slack.*',
+  hosts: 'Hosts',
+  hostsHint: 'Web hosts, separated by commas: example.com, *.customer.com',
+  channels: 'Channels',
+  channelN: 'Channel {n}',
+  conversationN: 'Conversation for channel {n} (optional)',
+  conversationPlaceholder: '#general, a person, or an id',
+  removeChannelN: 'Remove channel {n}',
+  addChannel: 'Add a channel',
+  command: 'Command prefix rule',
+  useCommand: 'Match commands the agent runs by how they start',
+  /** Which effects can match commands; the placeholders are those effects' names. */
+  commandOnly: 'Only “{act}” and “{ask}” rules can match commands.',
+  startsWith: 'Command starts with',
+  startsWithHint: 'Words in order; use | for alternatives, for example: git status|diff',
+  matchEx: 'Commands it should match',
+  notMatchEx: 'Commands it should not match',
+  why: 'Why (optional)',
+  advanced: 'Advanced',
+  priorityLabel: 'Priority',
+  priorityHint: '{min} to {max}, default {byDefault}. Used to order rules when several match.',
+  enabled: 'Rule is on',
+  save: 'Save rule',
+  addRule: 'Add rule',
+  examplesHint: 'One command per line. Checked every time the rule is saved.',
+});
 
 type RuleChannel = NonNullable<AgentRuleMatch['channels']>[number];
 type ChannelKind = RuleChannel['kind'];
@@ -63,7 +148,7 @@ export function AgentRules({ agentId, version }: { agentId: string; version: num
         setRules(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the rules.')),
+      (err: unknown) => alive && setError(errorMessage(err, RULES_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -83,28 +168,26 @@ export function AgentRules({ agentId, version }: { agentId: string; version: num
     api.updateAgentRule(agentId, r.id, { enabled: !r.enabled }).then(
       (next) => {
         replace(next);
-        toast.show(next.enabled ? 'Rule turned on.' : 'Rule turned off.', { tone: 'success' });
+        toast.show(next.enabled ? RULES_TEXT.turnedOn : RULES_TEXT.turnedOff, {
+          tone: 'success',
+        });
       },
       (err: unknown) =>
-        toast.show(`Could not change the rule: ${errorMessage(err)}`, { tone: 'error' }),
+        toast.show(RULES_TEXT.changeFailed({ reason: errorMessage(err) }), { tone: 'error' }),
     );
   };
 
   return (
     <section className="agent-section" aria-labelledby={headingId}>
       <div className="ws-section-header">
-        <h2 id={headingId}>Rules</h2>
+        <h2 id={headingId}>{RULES_TEXT.heading}</h2>
         {editing === 'new' ? null : (
           <Button onClick={() => setEditing('new')}>
-            <Icon name="plus" /> Add a rule
+            <Icon name="plus" /> {RULES_TEXT.add}
           </Button>
         )}
       </div>
-      <p className="muted ws-flush">
-        Rules are instructions this agent follows. They cannot give it access it does not have and
-        never override built-in safety: purchases, password changes and other confirmed actions
-        still ask.
-      </p>
+      <p className="muted ws-flush">{RULES_TEXT.intro}</p>
       {editing === 'new' ? (
         <RuleForm
           rule={null}
@@ -112,24 +195,21 @@ export function AgentRules({ agentId, version }: { agentId: string; version: num
           onSave={async (body) => {
             replace(await api.createAgentRule(agentId, body));
             setEditing(null);
-            toast.show('Rule added.', { tone: 'success' });
+            toast.show(RULES_TEXT.added, { tone: 'success' });
           }}
         />
       ) : null}
       {error ? (
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => setManual((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setManual((n) => n + 1)}>{AGENTS_TEXT.retry}</Button>
         </div>
       ) : sorted === null ? (
-        <Spinner label="Loading the rules" />
+        <Spinner label={RULES_TEXT.loading} />
       ) : sorted.length === 0 ? (
-        <p className="muted">
-          No rules. The agent follows your permissions and its autonomy. Add a rule such as “Ask
-          before messaging customers” or “Hand off payments to me”.
-        </p>
+        <p className="muted">{RULES_TEXT.empty}</p>
       ) : (
-        <ul className="ws-list" aria-label="Rules">
+        <ul className="ws-list" aria-label={RULES_TEXT.list}>
           {sorted.map((r) =>
             editing === r.id ? (
               <li key={r.id} className="ws-list-row">
@@ -145,7 +225,7 @@ export function AgentRules({ agentId, version }: { agentId: string; version: num
                       }),
                     );
                     setEditing(null);
-                    toast.show('Rule saved.', { tone: 'success' });
+                    toast.show(RULES_TEXT.saved, { tone: 'success' });
                   }}
                 />
               </li>
@@ -157,34 +237,40 @@ export function AgentRules({ agentId, version }: { agentId: string; version: num
                 data-enabled={r.enabled}
               >
                 <div className="work-row-main">
-                  <span className="ws-card-link">{r.description}</span>
+                  <span className="ws-card-link" dir="auto">
+                    {r.description}
+                  </span>
                   <span className="ws-row-meta">
                     <span className="ws-badge agent-effect" data-effect={r.effect}>
                       <Icon name={RULE_EFFECT_ICON[r.effect]} /> {RULE_EFFECT_TEXT[r.effect].label}
                     </span>
                     {r.enabled ? null : (
                       <span className="ws-badge">
-                        <Icon name="stop" /> Off
+                        <Icon name="stop" /> {RULES_TEXT.off}
                       </span>
                     )}
-                    <span className="muted">Priority {r.priority}</span>
+                    <span className="muted">{RULES_TEXT.priority({ n: r.priority })}</span>
                   </span>
-                  <span className="muted agent-text">Applies to: {matchText(r.match)}</span>
+                  <span className="muted agent-text">
+                    {RULES_TEXT.appliesTo({ match: matchText(r.match) })}
+                  </span>
                   {r.command ? (
                     <span className="muted agent-text">
-                      Commands starting with <code>{patternText(r.command.pattern)}</code>
+                      {rich(RULES_TEXT.commandsStarting, {
+                        pattern: <code dir="ltr">{patternText(r.command.pattern)}</code>,
+                      })}
                     </span>
                   ) : null}
                 </div>
                 <div className="ws-row-actions ws-toolbar">
                   <Switch
                     checked={r.enabled}
-                    label={`${r.description}: on`}
+                    label={RULES_TEXT.switchOf({ rule: r.description })}
                     onChange={() => toggle(r)}
                   />
                   <Button
                     aria-expanded={previewing.has(r.id)}
-                    aria-label={`Preview ${r.description}`}
+                    aria-label={RULES_TEXT.previewOf({ rule: r.description })}
                     onClick={() =>
                       setPreviewing((s) => {
                         const next = new Set(s);
@@ -194,17 +280,20 @@ export function AgentRules({ agentId, version }: { agentId: string; version: num
                       })
                     }
                   >
-                    Preview
+                    {RULES_TEXT.preview}
                   </Button>
-                  <Button aria-label={`Edit ${r.description}`} onClick={() => setEditing(r.id)}>
-                    Edit
+                  <Button
+                    aria-label={RULES_TEXT.editOf({ rule: r.description })}
+                    onClick={() => setEditing(r.id)}
+                  >
+                    {AGENTS_TEXT.edit}
                   </Button>
                   <Button
                     variant="danger"
-                    aria-label={`Delete ${r.description}`}
+                    aria-label={RULES_TEXT.deleteOf({ rule: r.description })}
                     onClick={() => setDeleting(r)}
                   >
-                    Delete
+                    {AGENTS_TEXT.delete}
                   </Button>
                 </div>
                 {previewing.has(r.id) ? <RulePreview agentId={agentId} rule={r} /> : null}
@@ -215,16 +304,12 @@ export function AgentRules({ agentId, version }: { agentId: string; version: num
       )}
       <Dialog
         open={deleting !== null}
-        title="Delete this rule?"
-        description={
-          deleting
-            ? `“${deleting.description}” no longer applies. The agent's permissions and autonomy decide instead.`
-            : undefined
-        }
+        title={RULES_TEXT.deleteTitle}
+        description={deleting ? RULES_TEXT.deleteBody({ rule: deleting.description }) : undefined}
         onClose={() => setDeleting(null)}
         footer={
           <>
-            <Button onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button onClick={() => setDeleting(null)}>{AGENTS_TEXT.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -234,14 +319,16 @@ export function AgentRules({ agentId, version }: { agentId: string; version: num
                 api.deleteAgentRule(agentId, r.id).then(
                   () => {
                     setRules((list) => list?.filter((x) => x.id !== r.id) ?? null);
-                    toast.show('Rule deleted.', { tone: 'success' });
+                    toast.show(RULES_TEXT.deleted, { tone: 'success' });
                   },
                   (err: unknown) =>
-                    toast.show(`Could not delete it: ${errorMessage(err)}`, { tone: 'error' }),
+                    toast.show(RULES_TEXT.deleteFailed({ reason: errorMessage(err) }), {
+                      tone: 'error',
+                    }),
                 );
               }}
             >
-              Delete
+              {AGENTS_TEXT.delete}
             </Button>
           </>
         }
@@ -259,7 +346,7 @@ function RulePreview({ agentId, rule }: { agentId: string; rule: AgentRuleView }
     let alive = true;
     api.previewAgentRule(agentId, rule.id).then(
       ({ items: list }) => alive && setItems(list),
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the preview.')),
+      (err: unknown) => alive && setError(errorMessage(err, RULES_TEXT.previewFailed)),
     );
     return () => {
       alive = false;
@@ -268,21 +355,22 @@ function RulePreview({ agentId, rule }: { agentId: string; rule: AgentRuleView }
   return (
     <section className="agent-preview" aria-labelledby={headingId}>
       <h3 id={headingId} className="ws-subhead">
-        Recent actions this rule matches
+        {RULES_TEXT.previewHeading}
       </h3>
       {error ? (
         <p role="alert" className="nv-field-error">
           {error}
         </p>
       ) : items === null ? (
-        <Spinner label="Loading the preview" />
+        <Spinner label={RULES_TEXT.previewLoading} />
       ) : items.length === 0 ? (
-        <p className="muted ws-flush">None of the agent&apos;s recent actions match this rule.</p>
+        <p className="muted ws-flush">{RULES_TEXT.previewEmpty}</p>
       ) : (
         <ul className="ws-plain-list">
           {items.map((it) => (
             <li key={it.callId}>
-              <code>{it.tool}</code> · {it.status}
+              {/* The tool, its status and the decision are the runtime's own values. */}
+              <code dir="ltr">{it.tool}</code> · {it.status}
               {it.decision ? ` · ${it.decision}` : ''} · {formatDateTime(it.createdAt)}
             </li>
           ))}
@@ -338,7 +426,7 @@ function RuleForm({
 
   const submit = async () => {
     const next: Record<string, string> = {};
-    if (!description.trim()) next.description = 'Say what the rule does, in a few words.';
+    if (!description.trim()) next.description = RULES_TEXT.descriptionRequired;
     const toolList = splitList(tools);
     const hostList = splitList(hosts);
     const channelList = channels
@@ -351,22 +439,21 @@ function RuleForm({
           all.findIndex((x) => x.kind === c.kind && x.conversation === c.conversation) === i,
       );
     if (toolList.some((t) => !/^[A-Za-z0-9_.:*-]{1,200}$/.test(t)))
-      next.tools = 'Use tool names or globs such as email.send or slack.*.';
+      next.tools = RULES_TEXT.toolsError;
     if (hostList.some((h) => !/^(\*\.)?[A-Za-z0-9.-]{1,253}$/.test(h)))
-      next.hosts = 'Use host names such as example.com or *.example.com.';
-    if (hostList.length && channelList.length)
-      next.match = 'A rule names hosts or channels, not both.';
+      next.hosts = RULES_TEXT.hostsError;
+    if (hostList.length && channelList.length) next.match = RULES_TEXT.matchError;
     const prio = Number(priority);
     if (!/^\d+$/.test(priority.trim()) || prio > 1000)
-      next.priority = 'Enter a whole number from 0 to 1000.';
+      next.priority = RULES_TEXT.priorityError({ min: 0, max: 1000 });
     let command: AgentRuleBody['command'];
     if (useCommand && commandAllowed) {
       const parsed = parsePattern(pattern);
       const mx = lines(matchEx);
       const nx = lines(notMatchEx);
       if ('error' in parsed) next.pattern = parsed.error;
-      if (!mx.length) next.matchExamples = 'Add at least one command this rule should match.';
-      if (!nx.length) next.notMatchExamples = 'Add at least one command it should not match.';
+      if (!mx.length) next.matchExamples = RULES_TEXT.matchExamplesError;
+      if (!nx.length) next.notMatchExamples = RULES_TEXT.notMatchExamplesError;
       if (!('error' in parsed) && mx.length && nx.length)
         command = {
           pattern: parsed.pattern,
@@ -397,7 +484,7 @@ function RuleForm({
       });
     } catch (err) {
       const field = ruleErrorField(err);
-      const msg = errorMessage(err, 'Could not save the rule.');
+      const msg = errorMessage(err, RULES_TEXT.saveFailed);
       if (field) setErrors({ [field]: msg });
       else setFailure(msg);
       setBusy(false);
@@ -414,7 +501,7 @@ function RuleForm({
   return (
     <form
       className="stack agent-inline-form agent-rule-form"
-      aria-label={rule ? `Edit rule: ${rule.description}` : 'New rule'}
+      aria-label={rule ? RULES_TEXT.editForm({ rule: rule.description }) : RULES_TEXT.newForm}
       noValidate
       onSubmit={(e) => {
         e.preventDefault();
@@ -422,17 +509,17 @@ function RuleForm({
       }}
     >
       <TextField
-        label="Rule"
+        label={RULES_TEXT.rule}
         value={description}
         maxLength={300}
         autoComplete="off"
         autoFocus
-        placeholder="For example: Ask before messaging customers"
+        placeholder={RULES_TEXT.placeholder}
         error={errors.description}
         onChange={(e) => setDescription(e.target.value)}
       />
       <RadioGroup
-        legend="What the agent does"
+        legend={RULES_TEXT.effect}
         name={`${id}-effect`}
         value={effect}
         onChange={(v) => setEffect(v as AgentRuleEffect)}
@@ -444,12 +531,10 @@ function RuleForm({
       />
       {err('effect')}
       <fieldset className="ws-fieldset">
-        <legend>Applies to</legend>
-        <p className="nv-field-hint ws-flush">
-          Leave everything empty to cover every action. Each part you fill in narrows the rule.
-        </p>
+        <legend>{RULES_TEXT.appliesLegend}</legend>
+        <p className="nv-field-hint ws-flush">{RULES_TEXT.appliesHint}</p>
         <fieldset className="agent-checks">
-          <legend className="nv-field-label">Kinds of action</legend>
+          <legend className="nv-field-label">{RULES_TEXT.kinds}</legend>
           {AGENT_ACTION_CLASSES.map((a) => (
             <label key={a} className="ws-check">
               <input
@@ -462,7 +547,7 @@ function RuleForm({
           ))}
         </fieldset>
         <fieldset className="agent-checks">
-          <legend className="nv-field-label">Effects</legend>
+          <legend className="nv-field-label">{RULES_TEXT.effects}</legend>
           {AGENT_RULE_EFFECT_CLASSES.filter(
             // Sending, deleting and running commands are kinds of action above.
             (e) => !EFFECTS_OF_ACTIONS.includes(e) || effects.has(e),
@@ -478,29 +563,31 @@ function RuleForm({
           ))}
         </fieldset>
         <TextField
-          label="Tools"
+          label={RULES_TEXT.tools}
           value={tools}
           autoComplete="off"
           spellCheck={false}
-          hint="Tool names or globs, separated by commas: email.send, slack.*"
+          dir="ltr"
+          hint={RULES_TEXT.toolsHint}
           error={errors.tools}
           onChange={(e) => setTools(e.target.value)}
         />
         <TextField
-          label="Hosts"
+          label={RULES_TEXT.hosts}
           value={hosts}
           autoComplete="off"
           spellCheck={false}
-          hint="Web hosts, separated by commas: example.com, *.customer.com"
+          dir="ltr"
+          hint={RULES_TEXT.hostsHint}
           error={errors.hosts}
           onChange={(e) => setHosts(e.target.value)}
         />
         <fieldset className="agent-checks">
-          <legend className="nv-field-label">Channels</legend>
+          <legend className="nv-field-label">{RULES_TEXT.channels}</legend>
           {channels.map((c, i) => (
             <div key={i} className="agent-channel-row">
               <SelectField
-                label={`Channel ${i + 1}`}
+                label={RULES_TEXT.channelN({ n: i + 1 })}
                 value={c.kind}
                 onChange={(v) =>
                   setChannels((list) =>
@@ -510,10 +597,10 @@ function RuleForm({
                 options={CHANNEL_KINDS.map((k) => ({ value: k, label: CHANNEL_KIND_TEXT[k] }))}
               />
               <TextField
-                label={`Conversation for channel ${i + 1} (optional)`}
+                label={RULES_TEXT.conversationN({ n: i + 1 })}
                 value={c.conversation ?? ''}
                 autoComplete="off"
-                placeholder="#general, a person, or an id"
+                placeholder={RULES_TEXT.conversationPlaceholder}
                 onChange={(e) =>
                   setChannels((list) =>
                     list.map((x, j) => (j === i ? { ...x, conversation: e.target.value } : x)),
@@ -521,7 +608,7 @@ function RuleForm({
                 }
               />
               <IconButton
-                label={`Remove channel ${i + 1}`}
+                label={RULES_TEXT.removeChannelN({ n: i + 1 })}
                 icon={<Icon name="trash" />}
                 variant="ghost"
                 onClick={() => setChannels((list) => list.filter((_, j) => j !== i))}
@@ -531,7 +618,7 @@ function RuleForm({
           {channels.length < 20 ? (
             <div>
               <Button onClick={() => setChannels((list) => [...list, { kind: 'slack' }])}>
-                <Icon name="plus" /> Add a channel
+                <Icon name="plus" /> {RULES_TEXT.addChannel}
               </Button>
             </div>
           ) : null}
@@ -539,7 +626,7 @@ function RuleForm({
         {err('match')}
       </fieldset>
       <fieldset className="ws-fieldset">
-        <legend>Command prefix rule</legend>
+        <legend>{RULES_TEXT.command}</legend>
         <label className="ws-check">
           <input
             type="checkbox"
@@ -547,41 +634,44 @@ function RuleForm({
             disabled={!commandAllowed}
             onChange={(e) => setUseCommand(e.target.checked)}
           />
-          Match commands the agent runs by how they start
+          {RULES_TEXT.useCommand}
         </label>
         {commandAllowed ? null : (
           <p className="nv-field-hint ws-flush">
-            Only “Take action without asking” and “Ask before taking action” rules can match
-            commands.
+            {RULES_TEXT.commandOnly({
+              act: RULE_EFFECT_TEXT.act.label,
+              ask: RULE_EFFECT_TEXT.ask.label,
+            })}
           </p>
         )}
         {useCommand && commandAllowed ? (
           <>
             <TextField
-              label="Command starts with"
+              label={RULES_TEXT.startsWith}
               value={pattern}
               spellCheck={false}
               autoComplete="off"
-              hint="Words in order; use | for alternatives, for example: git status|diff"
+              dir="ltr"
+              hint={RULES_TEXT.startsWithHint}
               error={errors.pattern}
               onChange={(e) => setPattern(e.target.value)}
             />
             <ExampleField
               id={`${id}-mx`}
-              label="Commands it should match"
+              label={RULES_TEXT.matchEx}
               value={matchEx}
               onChange={setMatchEx}
               error={errors.matchExamples}
             />
             <ExampleField
               id={`${id}-nx`}
-              label="Commands it should not match"
+              label={RULES_TEXT.notMatchEx}
               value={notMatchEx}
               onChange={setNotMatchEx}
               error={errors.notMatchExamples}
             />
             <TextField
-              label="Why (optional)"
+              label={RULES_TEXT.why}
               value={justification}
               maxLength={500}
               autoComplete="off"
@@ -592,20 +682,20 @@ function RuleForm({
         {err('command')}
       </fieldset>
       <details className="ws-advanced">
-        <summary>Advanced</summary>
+        <summary>{RULES_TEXT.advanced}</summary>
         <TextField
-          label="Priority"
+          label={RULES_TEXT.priorityLabel}
           className="ws-number"
           inputMode="numeric"
           value={priority}
-          hint="0 to 1000, default 100. Used to order rules when several match."
+          hint={RULES_TEXT.priorityHint({ min: 0, max: 1000, byDefault: 100 })}
           error={errors.priority}
           onChange={(e) => setPriority(e.target.value)}
         />
       </details>
       <label className="ws-check">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        Rule is on
+        {RULES_TEXT.enabled}
       </label>
       {failure ? (
         <p className="nv-field-error" role="alert">
@@ -614,9 +704,9 @@ function RuleForm({
       ) : null}
       <div className="ws-toolbar">
         <Button type="submit" variant="primary" disabled={busy}>
-          {busy ? <Spinner /> : null} {rule ? 'Save rule' : 'Add rule'}
+          {busy ? <Spinner /> : null} {rule ? RULES_TEXT.save : RULES_TEXT.addRule}
         </Button>
-        <Button onClick={onCancel}>Cancel</Button>
+        <Button onClick={onCancel}>{AGENTS_TEXT.cancel}</Button>
       </div>
     </form>
   );
@@ -651,7 +741,7 @@ function ExampleField({
         onChange={(e) => onChange(e.target.value)}
       />
       <span id={`${id}-hint`} className="nv-field-hint">
-        One command per line. Checked every time the rule is saved.
+        {RULES_TEXT.examplesHint}
       </span>
       {error ? (
         <span id={`${id}-error`} className="nv-field-error" role="alert">

@@ -4,6 +4,7 @@
 // message and approval components: the user answers in that channel, and approvals still decide
 // here. Messages in those threads come from other people and agents: untrusted, shown as text.
 import { useId } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { AgentThreadView, AgentView, ChannelBindingView } from '@nova/shared';
 import { Button, Icon, Spinner } from '@nova/ui';
 import { ApprovalCard } from '../chat/ApprovalCard.tsx';
@@ -19,13 +20,30 @@ import { ToolAppsProvider } from '../chat/tool-apps.tsx';
 import { useThreadFeed } from '../chat/useThreadFeed.ts';
 import { useServices } from '../services.tsx';
 import { modelLabel, useModels } from '../stores.tsx';
-import { CHANNEL_KIND_TEXT, THREAD_KIND_TEXT } from './format.ts';
+import { AGENTS_TEXT, CHANNEL_KIND_TEXT, THREAD_KIND_TEXT } from './format.ts';
+
+export const CONVERSATION_TEXT = defineMessages('agents.conversation', {
+  /** A channel binding's thread: its channel kind and the binding's label ("Slack · #help"). */
+  binding: '{kind} · {label}',
+  settingUp: 'Setting up the main thread',
+  settingUpLong: "Setting up the agent's main thread…",
+  paused: 'Paused: it will not answer until you resume it.',
+  backToMain: 'Main thread',
+  readOnlyShared: 'Read-only here: answer in the channel. Shared with others in the channel.',
+  readOnlyPrivate: 'Read-only here: answer in the channel. Private to you.',
+  readOnlyResearch: 'Read-only: research the agent did on its own, with read-only tools.',
+  readOnly: 'Read-only.',
+  loading: 'Loading the thread',
+  loadFailed: 'Could not load the thread.',
+  empty: 'Nothing has been said in this thread yet.',
+  messages: '{label} messages',
+});
 
 /** How a thread of the agent is named: its channel binding's label, or its kind. */
 export function threadLabel(t: AgentThreadView, channels: readonly ChannelBindingView[]): string {
   if (t.kind === 'binding') {
     const b = channels.find((c) => c.id === t.bindingRef);
-    if (b) return `${CHANNEL_KIND_TEXT[b.kind]} · ${b.label}`;
+    if (b) return CONVERSATION_TEXT.binding({ kind: CHANNEL_KIND_TEXT[b.kind], label: b.label });
     return t.title ?? THREAD_KIND_TEXT.binding;
   }
   if (t.kind === 'main') return THREAD_KIND_TEXT.main;
@@ -56,7 +74,7 @@ export function AgentConversation({
   if (!agent.primaryThreadId)
     return (
       <p className="muted agent-conversation-empty">
-        <Spinner label="Setting up the main thread" /> Setting up the agent&apos;s main thread…
+        <Spinner label={CONVERSATION_TEXT.settingUp} /> {CONVERSATION_TEXT.settingUpLong}
       </p>
     );
   return (
@@ -64,7 +82,7 @@ export function AgentConversation({
       {agent.status === 'paused' ? (
         <p className="ws-callout agent-chat-note" role="note">
           <Icon name="clock" />
-          <span>Paused: it will not answer until you resume it.</span>
+          <span>{CONVERSATION_TEXT.paused}</span>
         </p>
       ) : null}
       <ChatView key={agent.primaryThreadId} threadId={agent.primaryThreadId} active embedded />
@@ -119,31 +137,35 @@ function AgentThreadLog({
   return (
     <section className="agent-thread-log" aria-labelledby={headingId}>
       <div className="ws-section-header">
-        <h2 id={headingId}>{label}</h2>
+        <h2 id={headingId} dir="auto">
+          {label}
+        </h2>
         <Button onClick={onMain}>
-          <Icon name="back" /> Main thread
+          <Icon name="back" /> {CONVERSATION_TEXT.backToMain}
         </Button>
       </div>
       <p className="muted ws-flush">
         {thread.kind === 'binding'
-          ? `Read-only here: answer in the channel. ${thread.audience === 'shared' ? 'Shared with others in the channel.' : 'Private to you.'}`
+          ? thread.audience === 'shared'
+            ? CONVERSATION_TEXT.readOnlyShared
+            : CONVERSATION_TEXT.readOnlyPrivate
           : thread.kind === 'proactive'
-            ? 'Read-only: research the agent did on its own, with read-only tools.'
-            : 'Read-only.'}
+            ? CONVERSATION_TEXT.readOnlyResearch
+            : CONVERSATION_TEXT.readOnly}
       </p>
       {state.status === 'loading' || (state.status === 'ready' && state.thread === null) ? (
         <p className="muted">
-          <Spinner label="Loading the thread" /> Loading…
+          <Spinner label={CONVERSATION_TEXT.loading} /> {AGENTS_TEXT.loading}
         </p>
       ) : state.status === 'error' ? (
         <p className="ws-error" role="alert">
-          <Icon name="alert" /> {state.loadError ?? 'Could not load the thread.'}
+          <Icon name="alert" /> {state.loadError ?? CONVERSATION_TEXT.loadFailed}
         </p>
       ) : state.messages.length === 0 ? (
-        <p className="muted">Nothing has been said in this thread yet.</p>
+        <p className="muted">{CONVERSATION_TEXT.empty}</p>
       ) : (
         <ToolAppsProvider>
-          <div className="work-log" role="log" aria-label={`${label} messages`}>
+          <div className="work-log" role="log" aria-label={CONVERSATION_TEXT.messages({ label })}>
             {state.messages.map((m) => (
               <MessageItem
                 key={m.id}

@@ -11,10 +11,10 @@
   user-select: none;
 }
 .pet[data-position='bottom-right'] {
-  right: var(--u-space-3);
+  inset-inline-end: var(--u-space-3);
 }
 .pet[data-position='bottom-left'] {
-  left: var(--u-space-3);
+  inset-inline-start: var(--u-space-3);
 }
 .pet svg {
   display: block;

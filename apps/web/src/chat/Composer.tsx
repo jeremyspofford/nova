@@ -27,9 +27,19 @@ import {
   type ModelView,
   type SlashCommandView,
 } from '@nova/shared';
-import { Button, Icon, IconButton, PresetScale, SelectField, Spinner } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
+import {
+  Button,
+  Icon,
+  IconButton,
+  PresetScale,
+  SelectField,
+  Spinner,
+  spokenKey,
+  spokenKeys,
+} from '@nova/ui';
 import { useAnnounce, type Draft, type MentionChip } from '../services.tsx';
-import { bindingText } from '../keys.ts';
+import { formatBinding } from '../keys.ts';
 import { navigate } from '../router.ts';
 import { checkFiles, formatBytes, toPending, type Rejection } from './attachments.ts';
 import {
@@ -55,7 +65,67 @@ export function otherMode(mode: InputMode): InputMode {
   return mode === 'steer' ? 'queue' : 'steer';
 }
 
-const MODE_LABEL: Record<InputMode, string> = { steer: 'Steer', queue: 'Queue' };
+export const COMPOSER_TEXT = defineMessages('chat.composer', {
+  mode: { steer: 'Steer', queue: 'Queue' },
+  send: 'Send',
+  queueHint: 'Queue: sends when the reply finishes. {key} steers the reply instead.',
+  steerHint: 'Steer: the reply takes this into account at its next step. {key} queues it instead.',
+  composer: 'Message composer',
+  waitingForModels: 'Waiting for the model list. Your message sends as soon as it has loaded.',
+  dontSend: "Don't send",
+  noModel:
+    'No model is available, so this cannot be sent yet. Connect a model provider in Settings → Accounts; your message stays here.',
+  dismiss: 'Dismiss',
+  queued: 'Queued messages',
+  queuedCount: 'Queued: {n}',
+  attachments: '{n, plural, one {# attachment} other {# attachments}}',
+  queuing: 'Queuing',
+  cancelQueued: 'Cancel queued message: {message}',
+  cancel: 'Cancel',
+  attachmentsList: 'Attachments',
+  remove: 'Remove {name}',
+  mentions: 'Mentions',
+  removeMention: 'Remove mention {name}',
+  suggestions: 'Suggested follow-ups',
+  turnOffSuggestions: 'Turn off suggested follow-ups',
+  message: 'Message',
+  placeholder: 'Message Nova',
+  help: {
+    enter: 'Enter sends, Shift+Enter adds a line.',
+    mod: '{key} sends, Enter adds a line.',
+    escape: 'Escape stops a reply.',
+    suggestion: 'Tab or Right arrow takes the first suggested follow-up.',
+    whileQueue: 'While the reply runs, {key} queues your message and {altKey} steers the reply.',
+    whileSteer: 'While the reply runs, {key} steers the reply and {altKey} queues your message.',
+  },
+  attach: 'Attach files',
+  mention: 'Mention a file, folder, tool or server',
+  slash: 'Use a slash command',
+  preset: 'Model preset',
+  advanced: 'Advanced…',
+  model: 'Model',
+  reasoning: 'Reasoning level',
+  reasoningLevel:
+    '{level, select, off {Reasoning: off} minimal {Reasoning: minimal} low {Reasoning: low} medium {Reasoning: medium} high {Reasoning: high} xhigh {Reasoning: extra high} max {Reasoning: max} other {Reasoning: {level}}}',
+  stopping: 'Stopping…',
+  stop: 'Stop',
+  unreadable: '{name} could not be read.',
+  aFile: 'A file',
+  tooManyMentions:
+    '{max, plural, one {A message can mention at most # item.} other {A message can mention at most # items.}}',
+  mentioned: 'Mentioned {name}.',
+  mentionList: 'Mention suggestions',
+  mentionsUnavailable: 'Suggestions are unavailable right now.',
+  searching: 'Searching…',
+  suggestionCount: '{n, plural, one {# suggestion} other {# suggestions}}',
+  noMatches: 'No matches',
+  command: 'Command /{name}.',
+  commands: 'Slash commands',
+  loadingCommands: 'Loading commands…',
+  commandsUnavailable: 'Commands are unavailable right now.',
+  commandCount: '{n, plural, one {# command} other {# commands}}',
+  noCommands: 'No matching commands',
+});
 
 /** Reads accepted files into the draft and collects per-file errors. */
 export function useAttachmentIntake(draft: Draft, setDraft: (d: Draft) => void) {
@@ -73,8 +143,8 @@ export function useAttachmentIntake(draft: Draft, setDraft: (d: Draft) => void) 
       const failed: Rejection[] = [];
       const added = read.flatMap((r, i) => {
         if (r.status === 'fulfilled') return [r.value];
-        const name = accepted[i]?.file.name ?? 'A file';
-        failed.push({ name, reason: `${name} could not be read.` });
+        const name = accepted[i]?.file.name ?? COMPOSER_TEXT.aFile;
+        failed.push({ name, reason: COMPOSER_TEXT.unreadable({ name }) });
         return [];
       });
       setErrors([...rejected, ...failed]);
@@ -238,23 +308,44 @@ export function Composer({
     }
   }, [held, model, modelLoading]);
 
-  const sendKey = enterToSend === 'enter' ? 'Enter' : bindingText('mod+enter', mac);
-  const altKey =
-    enterToSend === 'enter' ? bindingText('alt+enter', mac) : bindingText('mod+alt+enter', mac);
+  // Key names in words, in the active locale ("Alt plus Enter").
+  const sendBinding = enterToSend === 'enter' ? 'enter' : 'mod+enter';
+  const altBinding = enterToSend === 'enter' ? 'alt+enter' : 'mod+alt+enter';
+  // Key names in words for the screen-reader help ("Alt plus Enter"), and as caps with the
+  // modifiers named in the active locale for the tooltip ("Alt+Enter").
+  const keys = (binding: string) => spokenKeys(formatBinding(binding, mac));
+  const caps = (binding: string) =>
+    formatBinding(binding, mac)
+      .map(spokenKey)
+      .join(mac ? '' : '+');
+  const sendKey = keys(sendBinding);
+  const altKey = keys(altBinding);
   const selected = models.find((m) => m.ref === model);
   const groups = modelGroups(models);
   const onScale = presets.some((p) => p.ref === model) ? model : null;
-  const sendLabel = streaming ? MODE_LABEL[followUp] : 'Send';
+  const sendLabel = streaming ? COMPOSER_TEXT.mode[followUp] : COMPOSER_TEXT.send;
   const sendHint = streaming
     ? followUp === 'queue'
-      ? `Queue: sends when the reply finishes. ${altKey} steers the reply instead.`
-      : `Steer: the reply takes this into account at its next step. ${altKey} queues it instead.`
+      ? COMPOSER_TEXT.queueHint({ key: caps(altBinding) })
+      : COMPOSER_TEXT.steerHint({ key: caps(altBinding) })
     : undefined;
+  const help = [
+    enterToSend === 'enter' ? COMPOSER_TEXT.help.enter : COMPOSER_TEXT.help.mod({ key: sendKey }),
+    COMPOSER_TEXT.help.escape,
+    ...(suggested.length ? [COMPOSER_TEXT.help.suggestion] : []),
+    ...(streaming
+      ? [
+          followUp === 'queue'
+            ? COMPOSER_TEXT.help.whileQueue({ key: sendKey, altKey })
+            : COMPOSER_TEXT.help.whileSteer({ key: sendKey, altKey }),
+        ]
+      : []),
+  ].join(' ');
 
   return (
     <form
       className="composer"
-      aria-label="Message composer"
+      aria-label={COMPOSER_TEXT.composer}
       onSubmit={(e) => {
         e.preventDefault();
         send();
@@ -267,16 +358,15 @@ export function Composer({
       ) : null}
       {held && !model ? (
         <p className="composer-note composer-held" role="status">
-          <Spinner /> Waiting for the model list. Your message sends as soon as it has loaded.{' '}
+          <Spinner /> {COMPOSER_TEXT.waitingForModels}{' '}
           <button type="button" className="link" onClick={() => setHeld(null)}>
-            Don&apos;t send
+            {COMPOSER_TEXT.dontSend}
           </button>
         </p>
       ) : null}
       {noModelTried && !model && !held ? (
         <p className="composer-error" role="alert">
-          <Icon name="alert" /> No model is available, so this cannot be sent yet. Connect a model
-          provider in Settings → Accounts; your message stays here.
+          <Icon name="alert" /> {COMPOSER_TEXT.noModel}
         </p>
       ) : null}
       {attachmentErrors.length ? (
@@ -287,30 +377,30 @@ export function Composer({
             ))}
           </ul>
           <Button variant="ghost" onClick={onDismissAttachmentErrors}>
-            Dismiss
+            {COMPOSER_TEXT.dismiss}
           </Button>
         </div>
       ) : null}
       {queue.length ? (
-        <section className="queue-strip" aria-label="Queued messages">
-          <span className="queue-title">Queued: {queue.length}</span>
+        <section className="queue-strip" aria-label={COMPOSER_TEXT.queued}>
+          <span className="queue-title">{COMPOSER_TEXT.queuedCount({ n: queue.length })}</span>
           <ul className="queue-items">
             {queue.map((q) => {
-              const label =
-                q.text.trim() ||
-                `${q.attachmentCount} ${q.attachmentCount === 1 ? 'attachment' : 'attachments'}`;
+              const label = q.text.trim() || COMPOSER_TEXT.attachments({ n: q.attachmentCount });
               return (
                 <li key={q.id} className="queue-item">
-                  <span className="queue-text">{label}</span>
+                  <span className="queue-text" dir="auto">
+                    {label}
+                  </span>
                   {q.pending ? (
-                    <Spinner label="Queuing" />
+                    <Spinner label={COMPOSER_TEXT.queuing} />
                   ) : (
                     <Button
                       variant="ghost"
-                      aria-label={`Cancel queued message: ${label.slice(0, 80)}`}
+                      aria-label={COMPOSER_TEXT.cancelQueued({ message: label.slice(0, 80) })}
                       onClick={() => onCancelQueued?.(q.id)}
                     >
-                      Cancel
+                      {COMPOSER_TEXT.cancel}
                     </Button>
                   )}
                 </li>
@@ -320,14 +410,14 @@ export function Composer({
         </section>
       ) : null}
       {draft.attachments.length ? (
-        <ul className="chips" aria-label="Attachments">
+        <ul className="chips" aria-label={COMPOSER_TEXT.attachmentsList}>
           {draft.attachments.map((a) => (
             <li key={a.id} className="chip">
               <Icon name="file" />
               <span className="chip-name">{a.name}</span>
               <span className="muted">{formatBytes(a.size)}</span>
               <IconButton
-                label={`Remove ${a.name}`}
+                label={COMPOSER_TEXT.remove({ name: a.name })}
                 icon={<Icon name="close" />}
                 variant="ghost"
                 onClick={() =>
@@ -342,7 +432,7 @@ export function Composer({
         </ul>
       ) : null}
       {mentions.length ? (
-        <ul className="chips" aria-label="Mentions">
+        <ul className="chips" aria-label={COMPOSER_TEXT.mentions}>
           {mentions.map((m) => (
             <li key={m.ref} className="chip mention-chip" data-kind={m.kind}>
               <Icon name={MENTION_ICON[m.kind]} />
@@ -350,7 +440,7 @@ export function Composer({
                 {m.label}
               </span>
               <IconButton
-                label={`Remove mention ${m.label}`}
+                label={COMPOSER_TEXT.removeMention({ name: m.label })}
                 icon={<Icon name="close" />}
                 variant="ghost"
                 onClick={() => {
@@ -364,10 +454,16 @@ export function Composer({
       ) : null}
       {suggested.length ? (
         <div className="composer-suggestions">
-          <ul className="suggestions" aria-label="Suggested follow-ups">
+          <ul className="suggestions" aria-label={COMPOSER_TEXT.suggestions}>
             {suggested.map((t, i) => (
               <li key={`${i}-${t}`}>
-                <button type="button" className="suggestion" title={t} onClick={() => accept(t)}>
+                <button
+                  type="button"
+                  className="suggestion"
+                  title={t}
+                  dir="auto"
+                  onClick={() => accept(t)}
+                >
                   {t}
                 </button>
               </li>
@@ -375,7 +471,7 @@ export function Composer({
             {onTurnOffSuggestions ? (
               <li>
                 <IconButton
-                  label="Turn off suggested follow-ups"
+                  label={COMPOSER_TEXT.turnOffSuggestions}
                   icon={<Icon name="close" />}
                   variant="ghost"
                   onClick={onTurnOffSuggestions}
@@ -388,15 +484,16 @@ export function Composer({
       {mention.popover}
       {slash.popover}
       <label htmlFor={`${idBase}-input`} className="nv-vh">
-        Message
+        {COMPOSER_TEXT.message}
       </label>
       <textarea
         id={`${idBase}-input`}
         ref={textarea}
         className="composer-input"
+        dir="auto"
         rows={1}
         value={draft.text}
-        placeholder={noModelHint ?? 'Message Nova'}
+        placeholder={noModelHint ?? COMPOSER_TEXT.placeholder}
         aria-describedby={`${idBase}-help`}
         onChange={(e) => {
           onDraftChange({ ...draft, text: e.target.value });
@@ -443,14 +540,7 @@ export function Composer({
         }}
       />
       <span id={`${idBase}-help`} className="nv-vh">
-        {enterToSend === 'enter'
-          ? 'Enter sends, Shift+Enter adds a line.'
-          : `${sendKey} sends, Enter adds a line.`}{' '}
-        Escape stops a reply.
-        {suggested.length ? ' Tab or Right arrow takes the first suggested follow-up.' : ''}
-        {streaming
-          ? ` While the reply runs, ${sendKey} ${followUp === 'queue' ? 'queues your message' : 'steers the reply'} and ${altKey} ${followUp === 'queue' ? 'steers the reply' : 'queues your message'}.`
-          : ''}
+        {help}
       </span>
       <div className="composer-bar">
         <input
@@ -466,14 +556,14 @@ export function Composer({
           }}
         />
         <IconButton
-          label="Attach files"
+          label={COMPOSER_TEXT.attach}
           icon={<Icon name="attach" />}
           variant="ghost"
           onClick={() => fileInput.current?.click()}
         />
         {mentionSource ? (
           <IconButton
-            label="Mention a file, folder, tool or server"
+            label={COMPOSER_TEXT.mention}
             icon={<Icon name="at" />}
             variant="ghost"
             onClick={mention.insertAt}
@@ -481,7 +571,7 @@ export function Composer({
         ) : null}
         {slashSource ? (
           <IconButton
-            label="Use a slash command"
+            label={COMPOSER_TEXT.slash}
             icon={<Icon name="slash" />}
             variant="ghost"
             onClick={slash.insertSlash}
@@ -492,7 +582,7 @@ export function Composer({
         {presets.length ? (
           <PresetScale
             className="composer-presets"
-            label="Model preset"
+            label={COMPOSER_TEXT.preset}
             value={onScale}
             onChange={onModelChange}
             options={presets.map((p) => ({
@@ -510,14 +600,14 @@ export function Composer({
                 navigate('/settings/models');
               }}
             >
-              Advanced…
+              {COMPOSER_TEXT.advanced}
             </a>
           </PresetScale>
         ) : null}
         {models.length ? (
           <SelectField
             className="composer-model"
-            label="Model"
+            label={COMPOSER_TEXT.model}
             hideLabel
             value={model ?? ''}
             onChange={onModelChange}
@@ -527,11 +617,14 @@ export function Composer({
         {selected?.reasoning ? (
           <SelectField
             className="composer-reasoning"
-            label="Reasoning level"
+            label={COMPOSER_TEXT.reasoning}
             hideLabel
             value={reasoningLevel ?? 'medium'}
             onChange={(v) => onReasoningChange(v as (typeof REASONING_LEVELS)[number])}
-            options={REASONING_LEVELS.map((l) => ({ value: l, label: `Reasoning: ${l}` }))}
+            options={REASONING_LEVELS.map((l) => ({
+              value: l,
+              label: COMPOSER_TEXT.reasoningLevel({ level: l }),
+            }))}
           />
         ) : null}
         {accessory}
@@ -544,7 +637,7 @@ export function Composer({
             className="composer-stop"
           >
             {stopping ? <Spinner /> : <Icon name="stop" />}
-            {stopping ? 'Stopping…' : 'Stop'}
+            {stopping ? COMPOSER_TEXT.stopping : COMPOSER_TEXT.stop}
           </Button>
         ) : null}
         <Button
@@ -643,14 +736,14 @@ function useMentions(
     const list = draft.mentions ?? [];
     const exists = list.some((m) => m.ref === c.ref);
     if (!exists && list.length >= MAX_MENTIONS) {
-      announce(`A message can mention at most ${MAX_MENTIONS} items.`);
+      announce(COMPOSER_TEXT.tooManyMentions({ max: MAX_MENTIONS }));
       return;
     }
     const chip: MentionChip = { kind: c.kind, ref: c.ref, label: c.label };
     onDraftChange({ ...draft, text, mentions: exists ? list : [...list, chip] });
     setResults(null);
     place(token.start);
-    announce(`Mentioned ${c.label}.`);
+    announce(COMPOSER_TEXT.mentioned({ name: c.label }));
   };
 
   const insertAt = () => {
@@ -716,7 +809,12 @@ function useMentions(
   let n = 0;
   const popover = open ? (
     <div className="mention-popover">
-      <div id={listId} role="listbox" aria-label="Mention suggestions" className="mention-list">
+      <div
+        id={listId}
+        role="listbox"
+        aria-label={COMPOSER_TEXT.mentionList}
+        className="mention-list"
+      >
         {groups.map((g) => (
           <div key={g.kind} role="group" aria-labelledby={`${listId}-${g.kind}`}>
             <div id={`${listId}-${g.kind}`} role="presentation" className="mention-group">
@@ -746,12 +844,12 @@ function useMentions(
       </div>
       <p className="muted mention-status" role="status">
         {results?.failed && fresh
-          ? 'Suggestions are unavailable right now.'
+          ? COMPOSER_TEXT.mentionsUnavailable
           : !fresh && !options.length
-            ? 'Searching…'
+            ? COMPOSER_TEXT.searching
             : options.length
-              ? `${options.length} ${options.length === 1 ? 'suggestion' : 'suggestions'}`
-              : 'No matches'}
+              ? COMPOSER_TEXT.suggestionCount({ n: options.length })
+              : COMPOSER_TEXT.noMatches}
       </p>
     </div>
   ) : null;
@@ -826,7 +924,7 @@ function useSlash(
     const r = applySlash(draft.text, c.name, token.end);
     onDraftChange({ ...draft, text: r.text });
     place(r.caret);
-    announce(`Command /${c.name}.`);
+    announce(COMPOSER_TEXT.command({ name: c.name }));
   };
 
   const insertSlash = () => {
@@ -883,7 +981,7 @@ function useSlash(
 
   const popover = open ? (
     <div className="mention-popover">
-      <div id={listId} role="listbox" aria-label="Slash commands" className="mention-list">
+      <div id={listId} role="listbox" aria-label={COMPOSER_TEXT.commands} className="mention-list">
         {options.map((c, i) => (
           <div
             key={c.skillId}
@@ -903,12 +1001,12 @@ function useSlash(
       </div>
       <p className="muted mention-status" role="status">
         {!results
-          ? 'Loading commands…'
+          ? COMPOSER_TEXT.loadingCommands
           : results.failed
-            ? 'Commands are unavailable right now.'
+            ? COMPOSER_TEXT.commandsUnavailable
             : options.length
-              ? `${options.length} ${options.length === 1 ? 'command' : 'commands'}`
-              : 'No matching commands'}
+              ? COMPOSER_TEXT.commandCount({ n: options.length })
+              : COMPOSER_TEXT.noCommands}
       </p>
     </div>
   ) : null;

@@ -15,6 +15,7 @@ import {
   PolicyStore,
   Router,
   assertModeAvailable,
+  effectivePolicy,
   modePolicy,
   modeUnavailable,
   managedRestrictions,
@@ -104,6 +105,35 @@ describe('the agent browser', () => {
     expect(lists.allow).toEqual(['docs.corp.example', 'api.corp.example']);
     expect(lists.deny).toContain('*.bank.example');
     expect(lists.named).toEqual(['docs.corp.example']);
+  });
+});
+
+describe('the egress proxy under the policy ceiling', () => {
+  it('keeps every scope, profile and global host within the ceiling (ADR-097)', () => {
+    const p = effectivePolicy({
+      global: {
+        mode: 'allowlist',
+        allow: ['api.example.com'],
+        deny: [],
+        ceilings: [['*.example.com']],
+      },
+      network: 'allowlist',
+      scopes: [
+        {
+          kind: 'agent',
+          id: 'a',
+          mode: null,
+          allow: ['cdn.example.com', 'evil.test'],
+          deny: [],
+          hooks: [],
+          allowLocalBinding: false,
+          updatedAt: '',
+        },
+      ],
+      profile: { allow: ['registry.npmjs.org'] },
+      credentials: [],
+    });
+    expect(p.allow.sort()).toEqual(['api.example.com', 'cdn.example.com']);
   });
 });
 

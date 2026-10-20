@@ -1,0 +1,14 @@
+{
+  "chat.label": "الدردشة",
+  "work.label": "العمل",
+  "code.label": "البرمجة",
+  "agents.label": "الوكلاء",
+  "chat.switchTo": "الانتقال إلى الدردشة",
+  "chat.workspace": "منطقة الدردشة",
+  "work.switchTo": "الانتقال إلى العمل",
+  "work.workspace": "منطقة العمل",
+  "code.switchTo": "الانتقال إلى البرمجة",
+  "code.workspace": "منطقة البرمجة",
+  "agents.switchTo": "الانتقال إلى الوكلاء",
+  "agents.workspace": "منطقة الوكلاء"
+}

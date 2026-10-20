@@ -11,11 +11,44 @@ import {
   type DeviceView,
 } from '@nova/shared';
 import { Button, TextField, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { SwitchField } from '../settings/controls.tsx';
 import { useDevicesApi } from './api.ts';
 import type { PanelProps } from './DevicePage.tsx';
 import { MODULE_PURPOSE, deviceErrorMessage, moduleLabel, parseQuietHours } from './format.ts';
 import { OverridesSection } from './ops.tsx';
+
+/** The Policy tab's words (FR-016). */
+export const POLICY_TEXT = defineMessages('devices.policy', {
+  badRange: '“{text}” is not a time range like 22:00-07:00.',
+  wholeRange: 'Enter a whole number from {min} to {max}.',
+  invalid: 'Invalid',
+  saved: 'Policy saved.',
+  savedPending: 'Policy saved. The device takes it when it next checks in.',
+  saveFailed: 'Could not save the policy.',
+  form: 'Device policy',
+  routing: 'Routing',
+  routingLabel: 'Use this device for agent work and models',
+  routingHelp:
+    'Off keeps it out of routing: agents cannot use it as their computer and its models are not offered.',
+  modules: 'Allowed modules',
+  everyModule: 'Every module installed on the device',
+  noManagement:
+    "Without the management module, the Hub cannot manage this device's modules, power or updates.",
+  quiet: 'Quiet hours',
+  quietHelp:
+    "Background work for this device waits during these times, in the device's time zone. Like 22:00-07:00; separate several with commas.",
+  limits: 'Resource limits',
+  limitsIntro: 'For each module novad runs. Leave blank for no limit.',
+  memory: 'Memory (MB)',
+  cpu: 'CPU time (seconds)',
+  openFiles: 'Open files',
+  revoked: 'This device was revoked.',
+  save: 'Save policy',
+  discard: 'Discard changes',
+});
+
+const S = POLICY_TEXT;
 
 const MIB = 1024 * 1024;
 
@@ -47,15 +80,13 @@ export function policyFrom(
 ): { ok: true; value: DevicePolicy } | { ok: false; errors: Partial<Record<keyof Draft, string>> } {
   const errors: Partial<Record<keyof Draft, string>> = {};
   const q = parseQuietHours(d.quietHours);
-  if ('bad' in q) errors.quietHours = `“${q.bad}” is not a time range like 22:00-07:00.`;
+  if ('bad' in q) errors.quietHours = S.badRange({ text: q.bad });
   const caps: Record<string, number> = {};
   const num = (key: 'memoryMiB' | 'cpuSeconds' | 'openFiles', min: number, max: number) => {
     const t = d[key].trim();
     if (!t) return;
     const n = Number(t);
-    if (!Number.isInteger(n) || n < min || n > max)
-      errors[key] =
-        `Enter a whole number from ${min.toLocaleString('en-US')} to ${max.toLocaleString('en-US')}.`;
+    if (!Number.isInteger(n) || n < min || n > max) errors[key] = S.wholeRange({ min, max });
     else if (key === 'memoryMiB') caps.memoryBytes = n * MIB;
     else caps[key] = n;
   };
@@ -70,7 +101,7 @@ export function policyFrom(
     resourceCaps: caps,
   });
   if (!parsed.success)
-    return { ok: false, errors: { quietHours: parsed.error.issues[0]?.message ?? 'Invalid' } };
+    return { ok: false, errors: { quietHours: parsed.error.issues[0]?.message ?? S.invalid } };
   return { ok: true, value: parsed.data };
 }
 
@@ -114,15 +145,10 @@ function PolicyForm({
     setSaveError(null);
     try {
       const next = await api.updateNovadDevice(device.id, { policy: r.value });
-      toast.show(
-        next.configPending
-          ? 'Policy saved. The device takes it when it next checks in.'
-          : 'Policy saved.',
-        { tone: 'success' },
-      );
+      toast.show(next.configPending ? S.savedPending : S.saved, { tone: 'success' });
       onDevice(next);
     } catch (err) {
-      setSaveError(deviceErrorMessage(err, 'Could not save the policy.'));
+      setSaveError(deviceErrorMessage(err, S.saveFailed));
       setBusy(false);
     }
   };
@@ -130,17 +156,17 @@ function PolicyForm({
   return (
     <form
       className="stack"
-      aria-label="Device policy"
+      aria-label={S.form}
       onSubmit={(e) => {
         e.preventDefault();
         void save();
       }}
     >
       <section className="ws-section devices-flat" aria-labelledby={`${base}-route`}>
-        <h2 id={`${base}-route`}>Routing</h2>
+        <h2 id={`${base}-route`}>{S.routing}</h2>
         <SwitchField
-          label="Use this device for agent work and models"
-          description="Off keeps it out of routing: agents cannot use it as their computer and its models are not offered."
+          label={S.routingLabel}
+          description={S.routingHelp}
           checked={draft.routingEligible}
           disabled={revoked}
           onChange={(v) => set({ routingEligible: v })}
@@ -148,9 +174,9 @@ function PolicyForm({
       </section>
 
       <section className="ws-section devices-flat" aria-labelledby={`${base}-mods`}>
-        <h2 id={`${base}-mods`}>Allowed modules</h2>
+        <h2 id={`${base}-mods`}>{S.modules}</h2>
         <fieldset className="nv-radios" disabled={revoked}>
-          <legend className="nv-vh">Allowed modules</legend>
+          <legend className="nv-vh">{S.modules}</legend>
           <label className="nv-radio">
             <input
               type="checkbox"
@@ -164,7 +190,7 @@ function PolicyForm({
               }
             />
             <span className="nv-radio-text">
-              <span>Every module installed on the device</span>
+              <span>{S.everyModule}</span>
             </span>
           </label>
           {allowed !== null
@@ -194,32 +220,30 @@ function PolicyForm({
             : null}
         </fieldset>
         {allowed !== null && !allowed.includes('management') ? (
-          <p className="ws-warning">
-            Without the management module, the Hub cannot manage this device&apos;s modules, power
-            or updates.
-          </p>
+          <p className="ws-warning">{S.noManagement}</p>
         ) : null}
       </section>
 
       <section className="ws-section devices-flat" aria-labelledby={`${base}-quiet`}>
-        <h2 id={`${base}-quiet`}>Quiet hours</h2>
+        <h2 id={`${base}-quiet`}>{S.quiet}</h2>
         <TextField
-          label="Quiet hours"
+          label={S.quiet}
           value={draft.quietHours}
           disabled={revoked}
           placeholder="22:00-07:00"
-          hint="Background work for this device waits during these times, in the device's time zone. Like 22:00-07:00; separate several with commas."
+          dir="ltr"
+          hint={S.quietHelp}
           error={errors.quietHours}
           onChange={(e) => set({ quietHours: e.target.value })}
         />
       </section>
 
       <section className="ws-section devices-flat" aria-labelledby={`${base}-caps`}>
-        <h2 id={`${base}-caps`}>Resource limits</h2>
-        <p className="muted ws-flush">For each module novad runs. Leave blank for no limit.</p>
+        <h2 id={`${base}-caps`}>{S.limits}</h2>
+        <p className="muted ws-flush">{S.limitsIntro}</p>
         <div className="devices-fields">
           <TextField
-            label="Memory (MB)"
+            label={S.memory}
             value={draft.memoryMiB}
             inputMode="numeric"
             className="ws-number"
@@ -228,7 +252,7 @@ function PolicyForm({
             onChange={(e) => set({ memoryMiB: e.target.value })}
           />
           <TextField
-            label="CPU time (seconds)"
+            label={S.cpu}
             value={draft.cpuSeconds}
             inputMode="numeric"
             className="ws-number"
@@ -237,7 +261,7 @@ function PolicyForm({
             onChange={(e) => set({ cpuSeconds: e.target.value })}
           />
           <TextField
-            label="Open files"
+            label={S.openFiles}
             value={draft.openFiles}
             inputMode="numeric"
             className="ws-number"
@@ -253,10 +277,10 @@ function PolicyForm({
           {saveError}
         </p>
       ) : null}
-      {revoked ? <p className="muted ws-flush">This device was revoked.</p> : null}
+      {revoked ? <p className="muted ws-flush">{S.revoked}</p> : null}
       <div className="row">
         <Button type="submit" variant="primary" disabled={!dirty || busy || revoked}>
-          Save policy
+          {S.save}
         </Button>
         <Button
           disabled={!dirty || busy}
@@ -265,7 +289,7 @@ function PolicyForm({
             setErrors({});
           }}
         >
-          Discard changes
+          {S.discard}
         </Button>
       </div>
     </form>

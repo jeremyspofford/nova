@@ -446,6 +446,11 @@ export async function renderWithComputers(
     settings?: Record<string, unknown>;
     /** Values set by managed policy (locked). */
     managed?: Record<string, unknown>;
+    /**
+     * The allow list the proxy uses, when a managed ceiling makes it differ from the owner's
+     * `network.egressAllow` (the Hub's `GET /egress` `global.allow`, ADR-097).
+     */
+    egressInForce?: string[];
     sandbox?: DiagnosticsSnapshot['sandbox'];
     /** Errors the first call of each named method throws. */
     fail?: Partial<Record<keyof ComputersApi, Error>>;
@@ -459,7 +464,7 @@ export async function renderWithComputers(
   const layers = () => ({ global: hub.state.settings, managed: hub.state.managed });
   const computers = createComputersHub(opts.computers, () => ({
     mode: resolveSetting('network.egressMode', layers()).value,
-    allow: resolveSetting('network.egressAllow', layers()).value,
+    allow: opts.egressInForce ?? resolveSetting('network.egressAllow', layers()).value,
     deny: resolveSetting('network.egressDeny', layers()).value,
   }));
   Object.assign(computers.failNext, opts.fail);

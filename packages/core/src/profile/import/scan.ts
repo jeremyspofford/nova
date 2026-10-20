@@ -6,8 +6,8 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
-import { unzipSync } from 'fflate';
 import { NovaError, type ImportKind } from '@nova/shared';
+import { readZip, type ZipLimits } from '../../documents/zip.ts';
 import { canonicalJson } from '../../nodes/crypto.ts';
 import {
   loadPluginFolder,
@@ -382,6 +382,13 @@ function memoryItem(walk: Walk, path: string, text: string, json: boolean): void
   });
 }
 
+/** A chat export may hold many files (images); only its JSON entries are read and counted. */
+const ZIP_SCAN_LIMITS: ZipLimits = {
+  maxEntries: 65_535,
+  maxEntryBytes: SCAN_LIMITS.maxFileBytes,
+  maxTotalBytes: SCAN_LIMITS.maxZipUnpacked,
+};
+
 function scanZip(walk: Walk, file: string): void {
   let bytes: Buffer;
   try {
@@ -390,26 +397,27 @@ function scanZip(walk: Walk, file: string): void {
   } catch {
     return;
   }
-  const sizes = new Map<string, number>();
+  // The bounded reader refuses archives whose entries share bytes or misstate their sizes (a few
+  // megabytes that would unpack to gigabytes); each entry counts the larger of its two sizes.
+  // JSON entries too large to read, or past the archive's total, are skipped, not refused.
   let total = 0;
-  let entries: Record<string, Uint8Array>;
+  let entries: Map<string, Uint8Array>;
   try {
-    entries = unzipSync(bytes, {
-      filter: (f) => {
-        if (!f.name.toLowerCase().endsWith('.json') || f.name.includes('..')) return false;
-        if (f.originalSize > SCAN_LIMITS.maxFileBytes) return false;
-        total += f.originalSize;
-        if (total > SCAN_LIMITS.maxZipUnpacked) return false;
-        sizes.set(f.name, f.originalSize);
+    entries = readZip(
+      bytes,
+      (name, cost) => {
+        if (!name.toLowerCase().endsWith('.json') || name.includes('..')) return false;
+        if (cost > SCAN_LIMITS.maxFileBytes || total + cost > SCAN_LIMITS.maxZipUnpacked)
+          return false;
+        total += cost;
         return true;
       },
-    });
+      ZIP_SCAN_LIMITS,
+    );
   } catch {
     return;
   }
-  for (const [entry, data] of Object.entries(entries)) {
-    // A declared size that does not match is a damaged or hostile archive entry.
-    if (data.length !== sizes.get(entry)) continue;
+  for (const [entry, data] of entries) {
     let json: unknown;
     const text = Buffer.from(data).toString('utf8');
     try {

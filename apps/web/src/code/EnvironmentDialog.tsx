@@ -10,6 +10,7 @@ import {
   type SavedEnvironmentView,
   type WslDistroView,
 } from '@nova/shared';
+import { defineMessages, messageFor } from '@nova/i18n';
 import { Button, Dialog, RadioGroup, SelectField, Spinner, TextField } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useCodeM6Api } from './api-m6.ts';
@@ -82,22 +83,87 @@ function draftOf(e: SavedEnvironmentView): Draft {
   }
 }
 
-/** Friendly text for each field the schema can refuse. */
-const FIELD_TEXT: Record<string, string> = {
-  label: 'Enter a name, up to 100 characters.',
-  image: 'Enter an image reference in lowercase, such as node:22 or ghcr.io/team/app:1.2.',
-  setupScript: 'The setup script can be up to 20,000 characters.',
-  host: 'Enter a host name or address.',
-  port: 'Enter a port from 1 to 65535.',
-  user: 'Enter a user name: letters, digits, dots, hyphens and underscores.',
-  root: 'Enter a full path that starts with /.',
-  hostKey: 'The host key can be up to 2,000 characters.',
-  privateKey: 'Paste the private key.',
-  password: 'Enter the password.',
-  passphrase: 'The passphrase can be up to 1,000 characters.',
-  deviceId: 'Choose a device.',
-  distro: 'Enter a distro name: letters, digits, dots, hyphens and underscores.',
-};
+export const ENV_DIALOG_TEXT = defineMessages('code.envDialog', {
+  devicesFailed: 'Could not load the devices.',
+  distrosFailed: 'Could not list the distros on that device.',
+  credentialAgain: 'A new host, user or sign-in method needs the key or password again.',
+  saveFailed: 'Could not save the environment.',
+  editTitle: 'Edit {name}',
+  newTitle: 'New environment',
+  editBody: 'Changes reset its health until the next check.',
+  newBody: 'Saved environments can be picked for any new Code session.',
+  kind: 'Kind',
+  name: 'Name',
+  image: 'Container image',
+  imageExample: 'node:22',
+  imageHint: 'Commands of the session run in this image, with the session folder mounted.',
+  setup: 'Setup script (optional)',
+  setupHint: 'Runs once in the session folder when a session starts, for example npm ci.',
+  host: 'Host',
+  hostExample: 'build.example.com',
+  port: 'Port',
+  user: 'User',
+  signIn: 'Sign in with',
+  aKey: 'A private key',
+  aPassword: 'A password',
+  signInHint: 'Stored in the keychain on the Hub. It is never shown again.',
+  keyIsSet: 'A key is set. Leave the fields below empty to keep it.',
+  passwordIsSet: 'A password is set. Leave the fields below empty to keep it.',
+  noneSet: 'No key or password is set.',
+  changeNeeds: 'Changing the host, user or sign-in method needs them again.',
+  replaceKey: 'Replace the private key',
+  privateKey: 'Private key',
+  passphrase: 'Key passphrase (optional)',
+  replacePassword: 'Replace the password',
+  password: 'Password',
+  hostKey: 'Host key (optional)',
+  hostKeyHint: 'The host’s public key, to refuse a different machine at that address.',
+  folder: 'Folder for sessions (optional)',
+  folderExample: '/home/me/projects',
+  folderHint: 'Sessions may work in this folder. Without it, your home folder on the host.',
+  loadingDevices: 'Loading the devices',
+  loadingDevicesDots: 'Loading devices…',
+  device: 'Device',
+  chooseDevice: 'Choose a device',
+  deviceState: '{name} ({state})',
+  noWindows: 'No Windows device runs the Nova device agent yet.',
+  noDevice: 'No device runs the Nova device agent yet.',
+  addDevice: 'Add a device in Settings → Devices',
+  distro: 'Distro',
+  chooseDistro: 'Choose a distro',
+  distroDefault: '{name} (default)',
+  distroVersion: '{name}, WSL {version}',
+  distroDefaultVersion: '{name} (default), WSL {version}',
+  distroExample: 'Ubuntu',
+  noDistros: 'The device listed no distros; type the name.',
+  deviceFolderHint: 'Sessions work only where the device’s grants allow.',
+  cancel: 'Cancel',
+  save: 'Save',
+  create: 'Create environment',
+  state: {
+    unreachable: 'offline',
+    pending: 'not set up yet',
+    revoked: 'revoked',
+  },
+  /** Friendly text for each field the schema can refuse. */
+  field: {
+    label: 'Enter a name, up to 100 characters.',
+    image: 'Enter an image reference in lowercase, such as node:22 or ghcr.io/team/app:1.2.',
+    setupScript: 'The setup script can be up to 20,000 characters.',
+    host: 'Enter a host name or address.',
+    port: 'Enter a port from 1 to 65535.',
+    user: 'Enter a user name: letters, digits, dots, hyphens and underscores.',
+    root: 'Enter a full path that starts with /.',
+    hostKey: 'The host key can be up to 2,000 characters.',
+    privateKey: 'Paste the private key.',
+    password: 'Enter the password.',
+    passphrase: 'The passphrase can be up to 1,000 characters.',
+    deviceId: 'Choose a device.',
+    distro: 'Enter a distro name: letters, digits, dots, hyphens and underscores.',
+  },
+});
+
+const FIELD_TEXT = ENV_DIALOG_TEXT.field;
 
 function connectionOf(d: Draft): CreateBody['connection'] {
   const opt = (v: string) => (v.trim() ? v.trim() : null);
@@ -142,14 +208,14 @@ export function buildCreate(d: Draft): { body: CreateBody } | { errors: Record<s
   if (!parsed.success)
     for (const issue of parsed.error.issues) {
       const key = String(issue.path.at(-1) ?? 'label');
-      errors[key] ??= FIELD_TEXT[key] ?? issue.message;
+      errors[key] ??= messageFor(FIELD_TEXT, key) ?? issue.message;
     }
   if (d.kind === 'ssh') {
-    if (d.auth === 'key' && !d.privateKey) errors.privateKey = FIELD_TEXT.privateKey!;
-    if (d.auth === 'password' && !d.password) errors.password = FIELD_TEXT.password!;
+    if (d.auth === 'key' && !d.privateKey) errors.privateKey = FIELD_TEXT.privateKey;
+    if (d.auth === 'password' && !d.password) errors.password = FIELD_TEXT.password;
   }
   if ((d.kind === 'wsl' || d.kind === 'device') && !d.deviceId)
-    errors.deviceId = FIELD_TEXT.deviceId!;
+    errors.deviceId = FIELD_TEXT.deviceId;
   return Object.keys(errors).length ? { errors } : { body };
 }
 
@@ -203,7 +269,7 @@ function EnvironmentForm({
       (err: unknown) => {
         if (!alive) return;
         setDevices([]);
-        setDevicesError(errorMessage(err, 'Could not load the devices.'));
+        setDevicesError(errorMessage(err, ENV_DIALOG_TEXT.devicesFailed));
       },
     );
     return () => {
@@ -222,7 +288,7 @@ function EnvironmentForm({
         setDistros({
           deviceId: d.deviceId,
           items: [],
-          error: errorMessage(err, 'Could not list the distros on that device.'),
+          error: errorMessage(err, ENV_DIALOG_TEXT.distrosFailed),
         });
       },
     );
@@ -249,8 +315,7 @@ function EnvironmentForm({
     ...(tried && 'errors' in built ? built.errors : {}),
     ...(tried && credentialMissing
       ? {
-          [d.auth === 'key' ? 'privateKey' : 'password']:
-            'A new host, user or sign-in method needs the key or password again.',
+          [d.auth === 'key' ? 'privateKey' : 'password']: ENV_DIALOG_TEXT.credentialAgain,
         }
       : {}),
   };
@@ -275,7 +340,7 @@ function EnvironmentForm({
         onSaved(await m6.createEnvironment(built.body), true);
       }
     } catch (err) {
-      setError(errorMessage(err, 'Could not save the environment.'));
+      setError(errorMessage(err, ENV_DIALOG_TEXT.saveFailed));
       setBusy(false);
     }
   };
@@ -288,12 +353,10 @@ function EnvironmentForm({
   return (
     <Dialog
       open
-      title={editing ? `Edit ${editing.label}` : 'New environment'}
-      description={
-        editing
-          ? 'Changes reset its health until the next check.'
-          : 'Saved environments can be picked for any new Code session.'
+      title={
+        editing ? ENV_DIALOG_TEXT.editTitle({ name: editing.label }) : ENV_DIALOG_TEXT.newTitle
       }
+      description={editing ? ENV_DIALOG_TEXT.editBody : ENV_DIALOG_TEXT.newBody}
       onClose={onClose}
       initialFocusRef={first}
     >
@@ -308,7 +371,7 @@ function EnvironmentForm({
       >
         {editing ? null : (
           <RadioGroup
-            legend="Kind"
+            legend={ENV_DIALOG_TEXT.kind}
             name={`${id}-kind`}
             value={d.kind}
             onChange={(v) => set('kind', v as CreatableKind)}
@@ -321,7 +384,7 @@ function EnvironmentForm({
         )}
         <TextField
           ref={first}
-          label="Name"
+          label={ENV_DIALOG_TEXT.name}
           value={d.label}
           maxLength={100}
           autoComplete="off"
@@ -333,22 +396,23 @@ function EnvironmentForm({
         {d.kind === 'container' ? (
           <>
             <TextField
-              label="Container image"
+              label={ENV_DIALOG_TEXT.image}
               value={d.image}
               required
               autoComplete="off"
               spellCheck={false}
-              placeholder="node:22"
-              hint="Commands of the session run in this image, with the session folder mounted."
+              dir="ltr"
+              placeholder={ENV_DIALOG_TEXT.imageExample}
+              hint={ENV_DIALOG_TEXT.imageHint}
               error={errors.image}
               onChange={(e) => set('image', e.target.value)}
             />
             <TextArea
               id={`${id}-setup`}
-              label="Setup script (optional)"
+              label={ENV_DIALOG_TEXT.setup}
               value={d.setupScript}
               maxLength={20_000}
-              hint="Runs once in the session folder when a session starts, for example npm ci."
+              hint={ENV_DIALOG_TEXT.setupHint}
               error={errors.setupScript}
               onChange={(v) => set('setupScript', v)}
             />
@@ -359,17 +423,18 @@ function EnvironmentForm({
           <>
             <div className="code-form-row">
               <TextField
-                label="Host"
+                label={ENV_DIALOG_TEXT.host}
                 value={d.host}
                 required
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="build.example.com"
+                dir="ltr"
+                placeholder={ENV_DIALOG_TEXT.hostExample}
                 error={errors.host}
                 onChange={(e) => set('host', e.target.value)}
               />
               <TextField
-                label="Port"
+                label={ENV_DIALOG_TEXT.port}
                 type="number"
                 inputMode="numeric"
                 className="ws-number"
@@ -381,7 +446,7 @@ function EnvironmentForm({
               />
             </div>
             <TextField
-              label="User"
+              label={ENV_DIALOG_TEXT.user}
               value={d.user}
               required
               autoComplete="off"
@@ -390,29 +455,31 @@ function EnvironmentForm({
               onChange={(e) => set('user', e.target.value)}
             />
             <RadioGroup
-              legend="Sign in with"
+              legend={ENV_DIALOG_TEXT.signIn}
               name={`${id}-auth`}
               value={d.auth}
               onChange={(v) => set('auth', v as Draft['auth'])}
               options={[
-                { value: 'key', label: 'A private key' },
-                { value: 'password', label: 'A password' },
+                { value: 'key', label: ENV_DIALOG_TEXT.aKey },
+                { value: 'password', label: ENV_DIALOG_TEXT.aPassword },
               ]}
-              hint="Stored in the keychain on the Hub. It is never shown again."
+              hint={ENV_DIALOG_TEXT.signInHint}
             />
             {editing ? (
               <p className="muted" id={`${id}-cred`}>
                 {hasCredential
-                  ? `A ${editing.connection.kind === 'ssh' && editing.connection.auth === 'password' ? 'password' : 'key'} is set. Leave the fields below empty to keep it.`
-                  : 'No key or password is set.'}{' '}
-                Changing the host, user or sign-in method needs them again.
+                  ? editing.connection.kind === 'ssh' && editing.connection.auth === 'password'
+                    ? ENV_DIALOG_TEXT.passwordIsSet
+                    : ENV_DIALOG_TEXT.keyIsSet
+                  : ENV_DIALOG_TEXT.noneSet}{' '}
+                {ENV_DIALOG_TEXT.changeNeeds}
               </p>
             ) : null}
             {d.auth === 'key' ? (
               <>
                 <TextArea
                   id={`${id}-key`}
-                  label={editing ? 'Replace the private key' : 'Private key'}
+                  label={editing ? ENV_DIALOG_TEXT.replaceKey : ENV_DIALOG_TEXT.privateKey}
                   value={d.privateKey}
                   maxLength={20_000}
                   secret
@@ -420,7 +487,7 @@ function EnvironmentForm({
                   onChange={(v) => set('privateKey', v)}
                 />
                 <TextField
-                  label="Key passphrase (optional)"
+                  label={ENV_DIALOG_TEXT.passphrase}
                   type="password"
                   autoComplete="off"
                   value={d.passphrase}
@@ -430,7 +497,7 @@ function EnvironmentForm({
               </>
             ) : (
               <TextField
-                label={editing ? 'Replace the password' : 'Password'}
+                label={editing ? ENV_DIALOG_TEXT.replacePassword : ENV_DIALOG_TEXT.password}
                 type="password"
                 autoComplete="new-password"
                 value={d.password}
@@ -440,20 +507,21 @@ function EnvironmentForm({
             )}
             <TextArea
               id={`${id}-hostkey`}
-              label="Host key (optional)"
+              label={ENV_DIALOG_TEXT.hostKey}
               value={d.hostKey}
               maxLength={2000}
-              hint="The host's public key, to refuse a different machine at that address."
+              hint={ENV_DIALOG_TEXT.hostKeyHint}
               error={errors.hostKey}
               onChange={(v) => set('hostKey', v)}
             />
             <TextField
-              label="Folder for sessions (optional)"
+              label={ENV_DIALOG_TEXT.folder}
               value={d.root}
               autoComplete="off"
               spellCheck={false}
-              placeholder="/home/me/projects"
-              hint="Sessions may work in this folder. Without it, your home folder on the host."
+              dir="ltr"
+              placeholder={ENV_DIALOG_TEXT.folderExample}
+              hint={ENV_DIALOG_TEXT.folderHint}
               error={errors.root}
               onChange={(e) => set('root', e.target.value)}
             />
@@ -463,18 +531,22 @@ function EnvironmentForm({
         {needsDevice ? (
           devices === null ? (
             <p className="muted">
-              <Spinner label="Loading the devices" /> Loading devices…
+              <Spinner label={ENV_DIALOG_TEXT.loadingDevices} />{' '}
+              {ENV_DIALOG_TEXT.loadingDevicesDots}
             </p>
           ) : deviceChoices.length ? (
             <SelectField
-              label="Device"
+              label={ENV_DIALOG_TEXT.device}
               value={d.deviceId}
               onChange={(v) => setD((x) => ({ ...x, deviceId: v, distro: '' }))}
               options={[
-                { value: '', label: 'Choose a device' },
+                { value: '', label: ENV_DIALOG_TEXT.chooseDevice },
                 ...deviceChoices.map((x) => ({
                   value: x.id,
-                  label: x.status === 'active' ? x.name : `${x.name} (${deviceState(x)})`,
+                  label:
+                    x.status === 'active'
+                      ? x.name
+                      : ENV_DIALOG_TEXT.deviceState({ name: x.name, state: deviceState(x) }),
                   disabled: x.status === 'revoked',
                 })),
               ]}
@@ -483,10 +555,8 @@ function EnvironmentForm({
           ) : (
             <p className="ws-warning" role="note">
               {devicesError ??
-                (d.kind === 'wsl'
-                  ? 'No Windows device runs the Nova device agent yet.'
-                  : 'No device runs the Nova device agent yet.')}{' '}
-              <AppLink to="/settings/devices">Add a device in Settings → Devices</AppLink>
+                (d.kind === 'wsl' ? ENV_DIALOG_TEXT.noWindows : ENV_DIALOG_TEXT.noDevice)}{' '}
+              <AppLink to="/settings/devices">{ENV_DIALOG_TEXT.addDevice}</AppLink>
             </p>
           )
         ) : null}
@@ -494,29 +564,35 @@ function EnvironmentForm({
         {d.kind === 'wsl' && d.deviceId ? (
           distroList?.length ? (
             <SelectField
-              label="Distro"
+              label={ENV_DIALOG_TEXT.distro}
               value={d.distro}
               onChange={(v) => set('distro', v)}
               options={[
-                { value: '', label: 'Choose a distro' },
+                { value: '', label: ENV_DIALOG_TEXT.chooseDistro },
                 ...distroList.map((x) => ({
                   value: x.name,
-                  label: `${x.name}${x.default ? ' (default)' : ''}${x.version ? `, WSL ${x.version}` : ''}`,
+                  label: x.version
+                    ? (x.default
+                        ? ENV_DIALOG_TEXT.distroDefaultVersion
+                        : ENV_DIALOG_TEXT.distroVersion)({
+                        name: x.name,
+                        version: String(x.version),
+                      })
+                    : x.default
+                      ? ENV_DIALOG_TEXT.distroDefault({ name: x.name })
+                      : x.name,
                 })),
               ]}
               error={errors.distro}
             />
           ) : (
             <TextField
-              label="Distro"
+              label={ENV_DIALOG_TEXT.distro}
               value={d.distro}
               autoComplete="off"
               spellCheck={false}
-              placeholder="Ubuntu"
-              hint={
-                distroState?.error ??
-                (distroList ? 'The device listed no distros; type the name.' : undefined)
-              }
+              placeholder={ENV_DIALOG_TEXT.distroExample}
+              hint={distroState?.error ?? (distroList ? ENV_DIALOG_TEXT.noDistros : undefined)}
               error={errors.distro}
               onChange={(e) => set('distro', e.target.value)}
             />
@@ -525,11 +601,12 @@ function EnvironmentForm({
 
         {d.kind === 'device' ? (
           <TextField
-            label="Folder for sessions (optional)"
+            label={ENV_DIALOG_TEXT.folder}
             value={d.root}
             autoComplete="off"
             spellCheck={false}
-            hint="Sessions work only where the device's grants allow."
+            dir="ltr"
+            hint={ENV_DIALOG_TEXT.deviceFolderHint}
             error={errors.root}
             onChange={(e) => set('root', e.target.value)}
           />
@@ -541,9 +618,9 @@ function EnvironmentForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{ENV_DIALOG_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} {editing ? 'Save' : 'Create environment'}
+            {busy ? <Spinner /> : null} {editing ? ENV_DIALOG_TEXT.save : ENV_DIALOG_TEXT.create}
           </Button>
         </div>
       </form>
@@ -552,10 +629,7 @@ function EnvironmentForm({
 }
 
 function deviceState(x: DeviceView): string {
-  if (x.status === 'unreachable') return 'offline';
-  if (x.status === 'pending') return 'not set up yet';
-  if (x.status === 'revoked') return 'revoked';
-  return x.status;
+  return messageFor(ENV_DIALOG_TEXT.state, x.status) ?? x.status;
 }
 
 /** A labelled textarea in the field style; a secret one is never filled from a saved value. */

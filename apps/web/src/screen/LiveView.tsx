@@ -14,9 +14,50 @@ import {
 } from 'react';
 import type { ScreenStatusView } from '@nova/shared';
 import { Button, Icon, Spinner, TextField } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { useServices } from '../services.tsx';
 import { useScreenApi, type ScreenSurface } from './api.ts';
-import { controllerText, sentence, timeOf } from './format.ts';
+import { controllerText, coord, sentence, timeOf } from './format.ts';
+
+export const LIVE_TEXT = defineMessages('screen.live', {
+  region: 'Live view',
+  connecting: 'Connecting to the live view…',
+  refresh: 'Refresh',
+  close: 'Close live view',
+  disconnected: 'The live view is disconnected.',
+  reconnect: 'Reconnect',
+  problem: 'The live view had a problem.',
+  inputFailedWhy: 'The input did not work: {error}',
+  inputFailed: 'The input did not work.',
+  notConnected: 'The live view is not connected.',
+  /** The frame while the user is in control: an application region. */
+  frame:
+    "{surface, select, browser {Live view of the agent browser. Typing here goes to the computer.} other {Live view of the computer's screen. Typing here goes to the computer.}}",
+  image:
+    "{surface, select, browser {Live view of the agent browser} other {Live view of the computer's screen}}",
+  waitingLabel: 'Waiting for the first frame',
+  waiting: 'Waiting for the screen…',
+  updated: 'Updated {time}',
+  hint: 'Click the screen to click there. While the screen has focus, what you type goes to the computer; Tab and Esc stay in Nova, so use the buttons below to send them.',
+  typeText: 'Type text',
+  sendText: 'Send text',
+  sendKey: 'Send a key',
+  /** The key buttons, named as on a keyboard. */
+  keys: {
+    Enter: 'Enter',
+    Tab: 'Tab',
+    Escape: 'Esc',
+    Backspace: 'Backspace',
+  },
+  scrollUp: 'Scroll up',
+  scrollDown: 'Scroll down',
+  clickAtPoint: 'Click at a point',
+  x: 'X',
+  y: 'Y',
+  range: '{min} to {max}',
+  click: 'Click',
+});
+const S = LIVE_TEXT;
 
 /** A desktop input event (screenInputSchema) or a browser page event (takeoverBrowserInputSchema). */
 export type LiveInput =
@@ -161,15 +202,13 @@ export function LiveView({
         });
       } else if (msg.type === 'error') {
         const e = msg.error as { message?: unknown } | undefined;
-        setProblem(
-          typeof e?.message === 'string' ? sentence(e.message) : 'The live view had a problem.',
-        );
+        setProblem(typeof e?.message === 'string' ? sentence(e.message) : S.problem);
       } else if (msg.type === 'input.ack') {
         if (msg.ok === false)
           setProblem(
             typeof msg.error === 'string'
-              ? `The input did not work: ${sentence(msg.error)}`
-              : 'The input did not work.',
+              ? S.inputFailedWhy({ error: sentence(msg.error) })
+              : S.inputFailed,
           );
         else setProblem(null);
       }
@@ -206,7 +245,7 @@ export function LiveView({
     (i: LiveInput) => {
       if (!control) return;
       if (i.kind !== 'type') flushTyping();
-      if (!send(liveFrame(i, surface))) setProblem('The live view is not connected.');
+      if (!send(liveFrame(i, surface))) setProblem(S.notConnected);
     },
     [control, flushTyping, send, surface],
   );
@@ -264,7 +303,6 @@ export function LiveView({
     input({ kind: 'scroll', x, y, dy });
   };
 
-  const what = surface === 'browser' ? 'the agent browser' : "the computer's screen";
   const pointX = Number(point.x);
   const pointY = Number(point.y);
   const pointOk =
@@ -278,10 +316,10 @@ export function LiveView({
     (frame?.height === null || frame?.height === undefined || pointY < frame.height);
 
   return (
-    <section className="scr-live" data-control={control || undefined} aria-label="Live view">
+    <section className="scr-live" data-control={control || undefined} aria-label={S.region}>
       <div className="ws-section-header">
         <p className="scr-live-who" role="status">
-          {status ? controllerText(status) : 'Connecting to the live view…'}
+          {status ? controllerText(status) : S.connecting}
         </p>
         <div className="ws-toolbar">
           <Button
@@ -289,25 +327,25 @@ export function LiveView({
             onClick={() => send({ type: 'refresh' })}
             disabled={conn !== 'open'}
           >
-            <Icon name="refresh" /> Refresh
+            <Icon name="refresh" /> {S.refresh}
           </Button>
           {onClose ? (
             <Button variant="ghost" onClick={onClose}>
-              <Icon name="close" /> Close live view
+              <Icon name="close" /> {S.close}
             </Button>
           ) : null}
         </div>
       </div>
       {conn === 'closed' ? (
         <div className="ws-error" role="alert">
-          <p>The live view is disconnected.</p>
+          <p>{S.disconnected}</p>
           <Button
             onClick={() => {
               setConn('connecting');
               setAttempt((n) => n + 1);
             }}
           >
-            Reconnect
+            {S.reconnect}
           </Button>
         </div>
       ) : null}
@@ -319,7 +357,9 @@ export function LiveView({
       <div
         className="scr-live-frame"
         tabIndex={control ? 0 : -1}
-        aria-label={control ? `Live view of ${what}. Typing here goes to the computer.` : undefined}
+        // While in control, keys go to the remote computer: an application region.
+        role={control ? 'application' : undefined}
+        aria-label={control ? S.frame({ surface }) : undefined}
         aria-describedby={control ? hintId : undefined}
         onKeyDown={onKey}
         onBlur={flushTyping}
@@ -328,7 +368,7 @@ export function LiveView({
           <img
             ref={img}
             src={frame.src}
-            alt={`Live view of ${what}`}
+            alt={S.image({ surface })}
             draggable={false}
             onClick={(e) => {
               const p = toScreen(e.clientX, e.clientY);
@@ -344,18 +384,17 @@ export function LiveView({
           />
         ) : conn === 'closed' ? null : (
           <p className="muted scr-live-wait">
-            <Spinner label="Waiting for the first frame" /> Waiting for the screen…
+            <Spinner label={S.waitingLabel} /> {S.waiting}
           </p>
         )}
       </div>
       {frame?.takenAt ? (
-        <p className="muted scr-live-time">Updated {timeOf(frame.takenAt)}</p>
+        <p className="muted scr-live-time">{S.updated({ time: timeOf(frame.takenAt) })}</p>
       ) : null}
       {control ? (
         <div className="scr-live-controls">
           <p id={hintId} className="muted ws-flush">
-            Click the screen to click there. While the screen has focus, what you type goes to the
-            computer; Tab and Esc stay in Nova, so use the buttons below to send them.
+            {S.hint}
           </p>
           <form
             className="ws-toolbar"
@@ -367,27 +406,27 @@ export function LiveView({
             }}
           >
             <TextField
-              label="Type text"
+              label={S.typeText}
               value={text}
               maxLength={10_000}
               autoComplete="off"
               onChange={(e) => setText(e.target.value)}
             />
             <Button type="submit" disabled={!text}>
-              Send text
+              {S.sendText}
             </Button>
           </form>
-          <div className="ws-toolbar" role="group" aria-label="Send a key">
+          <div className="ws-toolbar" role="group" aria-label={S.sendKey}>
             {(['Enter', 'Tab', 'Escape', 'Backspace'] as const).map((k) => (
               <Button key={k} onClick={() => input({ kind: 'key', keys: k })}>
-                {k === 'Escape' ? 'Esc' : k}
+                {S.keys[k]}
               </Button>
             ))}
-            <Button onClick={() => scrollBy(-SCROLL_STEP)}>Scroll up</Button>
-            <Button onClick={() => scrollBy(SCROLL_STEP)}>Scroll down</Button>
+            <Button onClick={() => scrollBy(-SCROLL_STEP)}>{S.scrollUp}</Button>
+            <Button onClick={() => scrollBy(SCROLL_STEP)}>{S.scrollDown}</Button>
           </div>
           <details className="scr-live-point">
-            <summary>Click at a point</summary>
+            <summary>{S.clickAtPoint}</summary>
             <form
               className="ws-toolbar"
               onSubmit={(e) => {
@@ -396,21 +435,27 @@ export function LiveView({
               }}
             >
               <TextField
-                label="X"
+                label={S.x}
                 inputMode="numeric"
                 value={point.x}
                 onChange={(e) => setPoint((p) => ({ ...p, x: e.target.value.trim() }))}
-                hint={frame?.width ? `0 to ${frame.width - 1}` : undefined}
+                hint={
+                  frame?.width ? S.range({ min: coord(0), max: coord(frame.width - 1) }) : undefined
+                }
               />
               <TextField
-                label="Y"
+                label={S.y}
                 inputMode="numeric"
                 value={point.y}
                 onChange={(e) => setPoint((p) => ({ ...p, y: e.target.value.trim() }))}
-                hint={frame?.height ? `0 to ${frame.height - 1}` : undefined}
+                hint={
+                  frame?.height
+                    ? S.range({ min: coord(0), max: coord(frame.height - 1) })
+                    : undefined
+                }
               />
               <Button type="submit" disabled={!pointOk}>
-                Click
+                {S.click}
               </Button>
             </form>
           </details>

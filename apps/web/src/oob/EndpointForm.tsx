@@ -8,14 +8,88 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { DeviceSummaryView, OobEndpointView, OobKind } from '@nova/shared';
 import { Button, Dialog, SelectField, Spinner, TextField } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { useServices } from '../services.tsx';
+import { PARTS_TEXT } from '../devices/parts.tsx';
 import type { OobApi } from './api-m75.ts';
-import { DEFAULT_PORT, KIND_HELP, KIND_LABEL, normalizePin, oobErrorMessage } from './format.ts';
+import {
+  DEFAULT_PORT,
+  KIND_HELP,
+  KIND_LABEL,
+  OOB_TEXT,
+  normalizePin,
+  oobErrorMessage,
+} from './format.ts';
+
+export const ENDPOINT_FORM_TEXT = defineMessages('oob.form', {
+  errors: {
+    name: 'Enter a name.',
+    address: 'Enter the BMC’s host name or IP address.',
+    addressSpaces: 'The address cannot contain spaces.',
+    port: 'Enter a port from 1 to 65535.',
+    systemId: 'Letters, digits, dot, dash and underscore only.',
+    username: 'Enter the BMC user name.',
+    usernameBad: 'At most {n, plural, one {# character} other {# characters}}, with no colon.',
+    password: 'Enter the password.',
+    passwordLong: 'At most {n, plural, one {# character} other {# characters}}.',
+    pin: 'Enter the SHA-256 fingerprint: 64 hexadecimal digits, colons allowed.',
+  },
+  addTitle: 'Add a BMC',
+  editTitle: 'Edit {name}',
+  addDescription:
+    "A BMC is the management controller built into a server or a business computer. The Hub talks to it directly, never through the machine's operating system.",
+  editDescription:
+    'Saving withdraws its approvals still waiting and its approved BIOS plans: an approval names the BMC as it was.',
+  editForm: 'Edit the BMC',
+  name: 'Name',
+  namePlaceholder: 'Rack server BMC',
+  kind: 'Kind',
+  address: 'Address',
+  addressExample: 'bmc.lan or https://10.0.0.20',
+  addressHintRedfish: 'A host name or IP address; https:// with a port also works.',
+  addressHint: 'A host name or IP address.',
+  addressHintRepin: 'A new address is another BMC: its certificate is pinned again.',
+  port: 'Port',
+  portHint: 'Blank for {port}.',
+  systemId: 'System id',
+  systemIdHint: 'Only when the BMC manages several systems. Blank picks its only one.',
+  device: 'Device',
+  deviceHint: 'The machine this BMC manages, so its page offers these actions.',
+  noDevice: 'No device',
+  unlistedDevice: 'A device not listed',
+  credentials: 'Credentials',
+  replace: 'Replace the user name and password',
+  replaceKeep: 'The stored ones are never shown. Leave this off to keep them.',
+  replaceNone: 'The Hub has none stored for this BMC: enter them again.',
+  username: 'User name',
+  password: 'Password',
+  passwordHint: "Kept in the Hub's vault. Nova never shows it again.",
+  pin: 'Certificate fingerprint (SHA-256)',
+  pinPlaceholder: 'Blank: confirm it after the first check',
+  pinHint:
+    "Optional. From the BMC's own certificate page; entering it confirms it. Blank: the first check reads the certificate without credentials and you confirm its fingerprint, like an SSH host key. A different certificate later is refused.",
+  addFailed: 'Could not add the BMC.',
+  saveFailed: 'Could not save.',
+  add: 'Add BMC',
+  save: 'Save',
+  repin: {
+    title: 'Pin a new certificate for {name}',
+    description:
+      "Read the fingerprint on the BMC's own certificate page (or its console), not from this network. Only that certificate will be accepted from now on.",
+    label: 'New certificate fingerprint (SHA-256)',
+    failed: 'Could not pin it.',
+    save: 'Pin this certificate',
+  },
+});
+
+const S = ENDPOINT_FORM_TEXT;
 
 const SYSTEM_ID = /^[A-Za-z0-9._-]{1,100}$/;
 // HTTP Basic and ipmitool take no colon or control characters in a user name.
 // eslint-disable-next-line no-control-regex
 const BAD_USER = /[:\u0000-\u001f\u007f]/;
+const MAX_USER = 64;
+const MAX_PASSWORD = 256;
 
 interface Draft {
   name: string;
@@ -50,26 +124,26 @@ function draftOf(ep: OobEndpointView | null, deviceId: string | null): Draft {
 /** The problems with a draft, by field. */
 export function endpointDraftErrors(d: Draft, creating: boolean): Errors {
   const e: Errors = {};
-  if (!d.name.trim()) e.name = 'Enter a name.';
-  if (!d.address.trim()) e.address = 'Enter the BMC’s host name or IP address.';
-  else if (/\s/.test(d.address.trim())) e.address = 'The address cannot contain spaces.';
-  else if (d.address.includes('@'))
-    e.address = 'Put the user name and password in their own fields, never in the address.';
+  const E = S.errors;
+  if (!d.name.trim()) e.name = E.name;
+  if (!d.address.trim()) e.address = E.address;
+  else if (/\s/.test(d.address.trim())) e.address = E.addressSpaces;
+  else if (d.address.includes('@')) e.address = OOB_TEXT.reasons.credentials_in_address;
   if (d.port.trim()) {
     const n = Number(d.port.trim());
-    if (!Number.isInteger(n) || n < 1 || n > 65535) e.port = 'Enter a port from 1 to 65535.';
+    if (!Number.isInteger(n) || n < 1 || n > 65535) e.port = E.port;
   }
   if (d.kind === 'redfish' && d.systemId.trim() && !SYSTEM_ID.test(d.systemId.trim()))
-    e.systemId = 'Letters, digits, dot, dash and underscore only.';
+    e.systemId = E.systemId;
   if (creating || d.replaceCredentials) {
-    if (!d.username) e.username = 'Enter the BMC user name.';
-    else if (d.username.length > 64 || BAD_USER.test(d.username))
-      e.username = 'At most 64 characters, with no colon.';
-    if (!d.password) e.password = 'Enter the password.';
-    else if (d.password.length > 256) e.password = 'At most 256 characters.';
+    if (!d.username) e.username = E.username;
+    else if (d.username.length > MAX_USER || BAD_USER.test(d.username))
+      e.username = E.usernameBad({ n: MAX_USER });
+    if (!d.password) e.password = E.password;
+    else if (d.password.length > MAX_PASSWORD) e.password = E.passwordLong({ n: MAX_PASSWORD });
   }
   if (creating && d.kind === 'redfish' && d.tlsPin.trim() && !normalizePin(d.tlsPin))
-    e.tlsPin = 'Enter the SHA-256 fingerprint: 64 hexadecimal digits, colons allowed.';
+    e.tlsPin = E.pin;
   return e;
 }
 
@@ -153,7 +227,7 @@ export function EndpointDialog({
       }
       onSaved(saved);
     } catch (err) {
-      setError(oobErrorMessage(err, creating ? 'Could not add the BMC.' : 'Could not save.'));
+      setError(oobErrorMessage(err, creating ? S.addFailed : S.saveFailed));
       setBusy(false);
     }
   };
@@ -162,19 +236,15 @@ export function EndpointDialog({
   return (
     <Dialog
       open
-      title={creating ? 'Add a BMC' : `Edit ${endpoint.name}`}
-      description={
-        creating
-          ? "A BMC is the management controller built into a server or a business computer. The Hub talks to it directly, never through the machine's operating system."
-          : 'Saving withdraws its approvals still waiting and its approved BIOS plans: an approval names the BMC as it was.'
-      }
+      title={creating ? S.addTitle : S.editTitle({ name: endpoint.name })}
+      description={creating ? S.addDescription : S.editDescription}
       onClose={onClose}
       initialFocusRef={nameRef}
       className="oob-dialog"
     >
       <form
         className="stack"
-        aria-label={creating ? 'Add a BMC' : 'Edit the BMC'}
+        aria-label={creating ? S.addTitle : S.editForm}
         onSubmit={(e) => {
           e.preventDefault();
           void save();
@@ -182,16 +252,17 @@ export function EndpointDialog({
       >
         <TextField
           ref={nameRef}
-          label="Name"
+          label={S.name}
           value={draft.name}
           maxLength={100}
-          placeholder="Rack server BMC"
+          dir="auto"
+          placeholder={S.namePlaceholder}
           error={errors.name}
           onChange={(e) => set({ name: e.target.value })}
         />
         {creating ? (
           <fieldset className="nv-radios">
-            <legend className="nv-field-label">Kind</legend>
+            <legend className="nv-field-label">{S.kind}</legend>
             {(['redfish', 'ipmi', 'amt'] as const).map((k) => (
               <label key={k} className="nv-radio">
                 <input
@@ -215,19 +286,16 @@ export function EndpointDialog({
         ) : null}
         <div className="devices-fields">
           <TextField
-            label="Address"
+            label={S.address}
             value={draft.address}
             maxLength={300}
             autoComplete="off"
             spellCheck={false}
-            placeholder={kind === 'redfish' ? 'bmc.lan or https://10.0.0.20' : '10.0.0.20'}
+            dir="ltr"
+            placeholder={kind === 'redfish' ? S.addressExample : '10.0.0.20'}
             hint={[
-              kind === 'redfish'
-                ? 'A host name or IP address; https:// with a port also works.'
-                : 'A host name or IP address.',
-              !creating && kind === 'redfish'
-                ? 'A new address is another BMC: its certificate is pinned again.'
-                : '',
+              kind === 'redfish' ? S.addressHintRedfish : S.addressHint,
+              !creating && kind === 'redfish' ? S.addressHintRepin : '',
             ]
               .filter(Boolean)
               .join(' ')}
@@ -235,44 +303,45 @@ export function EndpointDialog({
             onChange={(e) => set({ address: e.target.value })}
           />
           <TextField
-            label="Port"
+            label={S.port}
             value={draft.port}
             inputMode="numeric"
             className="ws-number"
             placeholder={String(DEFAULT_PORT[kind])}
-            hint={`Blank for ${DEFAULT_PORT[kind]}.`}
+            hint={S.portHint({ port: String(DEFAULT_PORT[kind]) })}
             error={errors.port}
             onChange={(e) => set({ port: e.target.value })}
           />
         </div>
         {kind === 'redfish' ? (
           <TextField
-            label="System id"
+            label={S.systemId}
             value={draft.systemId}
             maxLength={100}
             spellCheck={false}
-            hint="Only when the BMC manages several systems. Blank picks its only one."
+            dir="ltr"
+            hint={S.systemIdHint}
             error={errors.systemId}
             onChange={(e) => set({ systemId: e.target.value })}
           />
         ) : null}
         {devices ? (
           <SelectField
-            label="Device"
+            label={S.device}
             value={draft.deviceId}
             onChange={(v) => set({ deviceId: v })}
-            hint="The machine this BMC manages, so its page offers these actions."
+            hint={S.deviceHint}
             options={[
-              { value: '', label: 'No device' },
+              { value: '', label: S.noDevice },
               ...devices.map((d) => ({ value: d.id, label: d.name })),
               ...(draft.deviceId && !devices.some((d) => d.id === draft.deviceId)
-                ? [{ value: draft.deviceId, label: 'A device not listed' }]
+                ? [{ value: draft.deviceId, label: S.unlistedDevice }]
                 : []),
             ]}
           />
         ) : null}
         <fieldset className="ws-fieldset">
-          <legend>Credentials</legend>
+          <legend>{S.credentials}</legend>
           {!creating ? (
             <label className="nv-radio">
               <input
@@ -281,11 +350,9 @@ export function EndpointDialog({
                 onChange={(e) => set({ replaceCredentials: e.target.checked })}
               />
               <span className="nv-radio-text">
-                <span>Replace the user name and password</span>
+                <span>{S.replace}</span>
                 <span className="nv-field-hint">
-                  {endpoint.hasCredentials
-                    ? 'The stored ones are never shown. Leave this off to keep them.'
-                    : 'The Hub has none stored for this BMC: enter them again.'}
+                  {endpoint.hasCredentials ? S.replaceKeep : S.replaceNone}
                 </span>
               </span>
             </label>
@@ -293,7 +360,7 @@ export function EndpointDialog({
           {draft.replaceCredentials ? (
             <div className="devices-fields">
               <TextField
-                label="User name"
+                label={S.username}
                 value={draft.username}
                 autoComplete="off"
                 spellCheck={false}
@@ -301,11 +368,11 @@ export function EndpointDialog({
                 onChange={(e) => set({ username: e.target.value })}
               />
               <TextField
-                label="Password"
+                label={S.password}
                 type="password"
                 value={draft.password}
                 autoComplete="new-password"
-                hint="Kept in the Hub's vault. Nova never shows it again."
+                hint={S.passwordHint}
                 error={errors.password}
                 onChange={(e) => set({ password: e.target.value })}
               />
@@ -314,12 +381,13 @@ export function EndpointDialog({
         </fieldset>
         {kind === 'redfish' && creating ? (
           <TextField
-            label="Certificate fingerprint (SHA-256)"
+            label={S.pin}
             value={draft.tlsPin}
             spellCheck={false}
             autoComplete="off"
-            placeholder="Blank: confirm it after the first check"
-            hint="Optional. From the BMC's own certificate page; entering it confirms it. Blank: the first check reads the certificate without credentials and you confirm its fingerprint, like an SSH host key. A different certificate later is refused."
+            dir="ltr"
+            placeholder={S.pinPlaceholder}
+            hint={S.pinHint}
             error={errors.tlsPin}
             onChange={(e) => set({ tlsPin: e.target.value })}
           />
@@ -330,9 +398,9 @@ export function EndpointDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{PARTS_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} {creating ? 'Add BMC' : 'Save'}
+            {busy ? <Spinner /> : null} {creating ? S.add : S.save}
           </Button>
         </div>
       </form>
@@ -359,7 +427,7 @@ export function RepinDialog({
   const save = async () => {
     const pin = normalizePin(text);
     if (!pin) {
-      setError('Enter the SHA-256 fingerprint: 64 hexadecimal digits, colons allowed.');
+      setError(S.errors.pin);
       return;
     }
     setBusy(true);
@@ -367,15 +435,15 @@ export function RepinDialog({
     try {
       onSaved(await api.updateOobEndpoint(endpoint.id, { tlsPin: pin }));
     } catch (err) {
-      setError(oobErrorMessage(err, 'Could not pin it.'));
+      setError(oobErrorMessage(err, S.repin.failed));
       setBusy(false);
     }
   };
   return (
     <Dialog
       open
-      title={`Pin a new certificate for ${endpoint.name}`}
-      description="Read the fingerprint on the BMC's own certificate page (or its console), not from this network. Only that certificate will be accepted from now on."
+      title={S.repin.title({ name: endpoint.name })}
+      description={S.repin.description}
       onClose={onClose}
       initialFocusRef={ref}
     >
@@ -388,17 +456,18 @@ export function RepinDialog({
       >
         <TextField
           ref={ref}
-          label="New certificate fingerprint (SHA-256)"
+          label={S.repin.label}
           value={text}
           spellCheck={false}
           autoComplete="off"
+          dir="ltr"
           error={error ?? undefined}
           onChange={(e) => setText(e.target.value)}
         />
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{PARTS_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Pin this certificate
+            {busy ? <Spinner /> : null} {S.repin.save}
           </Button>
         </div>
       </form>

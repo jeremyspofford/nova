@@ -4,6 +4,7 @@
 // name conflicts, and what stays off until confirmed. 4 Import: the result, with the import
 // records (the ledger) below. Nothing is written before step 4.
 import { useEffect, useRef, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type {
   ImportItemView,
   ImportKind,
@@ -14,35 +15,132 @@ import type {
 import { Button, Icon, Spinner } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
-import { formatWhen, plural } from './common.ts';
+import { formatWhen } from './common.ts';
+import { embed } from './embed.tsx';
 import { isAbsolutePath } from './PermissionsPage.tsx';
 import { shortHash } from './plugin-text.ts';
 import '../workspace.css';
 
-export const IMPORT_KINDS: { kind: ImportKind; label: string; note?: string }[] = [
-  { kind: 'instructions', label: 'Instruction files' },
-  { kind: 'skills', label: 'Skills' },
-  { kind: 'commands', label: 'Commands', note: 'become skills' },
-  { kind: 'plugins', label: 'Plugins', note: 'stay off until you confirm their permissions' },
-  { kind: 'mcp_servers', label: 'MCP servers', note: 'stay off until you confirm them' },
-  { kind: 'projects', label: 'Projects' },
-  { kind: 'memories', label: 'Memories', note: 'you review them before they are saved' },
-  { kind: 'chats', label: 'Chat exports' },
+export const IMPORT_TEXT = defineMessages('settings.import', {
+  kind: {
+    instructions: 'Instruction files',
+    skills: 'Skills',
+    commands: 'Commands',
+    plugins: 'Plugins',
+    mcp_servers: 'MCP servers',
+    projects: 'Projects',
+    memories: 'Memories',
+    chats: 'Chat exports',
+  },
+  kindNote: {
+    commands: 'become skills',
+    plugins: 'stay off until you confirm their permissions',
+    mcp_servers: 'stay off until you confirm them',
+    memories: 'you review them before they are saved',
+  },
+  status: {
+    new: 'New',
+    duplicate: 'Already imported',
+    conflict: 'Name in use',
+    unsupported: 'Not supported',
+  },
+  steps: { source: 'Source', choose: 'Choose', review: 'Review', import: 'Import' },
+  stepTitles: {
+    source: 'Where to look',
+    choose: 'Choose what to import',
+    review: 'Review before importing',
+    done: 'Done',
+  },
+  needPath: 'Enter at least one folder or file on the Hub.',
+  tooManyPaths: 'Scan at most {max} folders or files at a time.',
+  notFull: 'Use a full path: {path}',
+  needKind: 'Choose at least one kind of item.',
+  scanFailed: 'Could not scan those folders.',
+  applyFailed: 'The import failed. Nothing was changed.',
+  title: 'Import',
+  intro:
+    'Bring instructions, skills, commands, plugins, MCP servers, projects, memories and chats ' +
+    'from other assistants. Nova reads the files on the Hub and never changes them.',
+  stepsLabel: 'Import steps',
+  stepHeading: 'Step {n} of {total}: {title}',
+  paths: 'Folders or files on the Hub',
+  pathsExample: '/home/me/.config/assistant',
+  pathsExample2: '/home/me/Downloads/chat-export.zip',
+  pathsHint:
+    'One per line: a configuration folder, a skills folder, an MCP config file or a chat ' +
+    'export.',
+  lookFor: 'Look for',
+  withNote: '({note})',
+  scan: 'Scan',
+  nothingFound: 'Nothing to import was found there.',
+  group: '{kind}: {n}',
+  groupDupes: '{kind}: {n}, {dupes} already imported',
+  becomes: 'Becomes {target}',
+  secretsFound:
+    '{n, plural, one {# secret found; moved to the vault} other {# secrets found; moved to the vault}}',
+  back: 'Back',
+  reviewN: '{n, plural, one {Review # item} other {Review # items}}',
+  importN: '{n, plural, one {Import # item} other {Import # items}}',
+  finished: 'Import finished.',
+  imported: 'Imported',
+  skipped: 'Skipped as already imported',
+  leftOff: 'Left off until you confirm them',
+  secretsMoved: 'Secrets moved to the vault',
+  items: '{n, plural, one {# item} other {# items}}',
+  secrets: '{n, plural, one {# secret} other {# secrets}}',
+  tagged:
+    'Everything from this import is tagged with its id ({id}) in the {link}. Imported plugins and servers are off: turn them on in Plugins & skills or Tools & MCP once you have checked their permissions.',
+  recordsLink: 'import records',
+  again: 'Import something else',
+  willImport:
+    '{n, plural, one {# item will be imported: {kinds}.} other {# items will be imported: {kinds}.}}',
+  kindCount: '{kind} ({n})',
+  secretsTitle: 'Secrets',
+  secretsHint:
+    'These move into the vault. The imported configuration keeps only a secret:// reference.',
+  secretLine: '{name}: {secret}',
+  noSecrets: 'No secrets were found in what you chose.',
+  conflicts: 'Names already in use',
+  conflictsHint: 'Go back and untick any you want to skip.',
+  conflict: '{name} becomes {target}',
+  conflictNote: '{name} becomes {target}: {note}',
+  staysOff: 'Stays off',
+  staysOffHint:
+    'Imported plugins and MCP servers stay off until you declare and confirm their permissions.',
+  memoriesHint:
+    'Imported memories arrive as suggestions in Memory; they are used only after you keep them.',
+  recordsFailed: 'Could not load the import records.',
+  records: 'Import records',
+  recordsHint:
+    'Every imported item, by its content hash, so the same item is never imported twice.',
+  loadingRecords: 'Loading import records',
+  noRecords: 'Nothing imported yet.',
+  became: 'Became',
+  kindCol: 'Kind',
+  from: 'From',
+  hash: 'Hash',
+  when: 'When',
+});
+const S = IMPORT_TEXT;
+
+/** The kinds of item, in the wizard's order. */
+export const IMPORT_KINDS: readonly ImportKind[] = [
+  'instructions',
+  'skills',
+  'commands',
+  'plugins',
+  'mcp_servers',
+  'projects',
+  'memories',
+  'chats',
 ];
 
-const KIND_LABEL = Object.fromEntries(IMPORT_KINDS.map((k) => [k.kind, k.label])) as Record<
-  ImportKind,
-  string
->;
+const KIND_LABEL: Readonly<Record<ImportKind, string>> = S.kind;
+const KIND_NOTE = S.kindNote as Readonly<Partial<Record<ImportKind, string>>>;
+const STATUS_TEXT: Readonly<Record<ImportItemView['status'], string>> = S.status;
 
-const STATUS_TEXT: Record<ImportItemView['status'], string> = {
-  new: 'New',
-  duplicate: 'Already imported',
-  conflict: 'Name in use',
-  unsupported: 'Not supported',
-};
-
-const STEPS = ['Source', 'Choose', 'Review', 'Import'] as const;
+const STEPS = ['source', 'choose', 'review', 'import'] as const;
+const STEP_TITLES = ['source', 'choose', 'review', 'done'] as const;
 
 /** Folder lines to send, or what is wrong with them. */
 export function parsePaths(text: string): { paths: string[] } | { error: string } {
@@ -54,10 +152,10 @@ export function parsePaths(text: string): { paths: string[] } | { error: string 
         .filter(Boolean),
     ),
   ];
-  if (!paths.length) return { error: 'Enter at least one folder or file on the Hub.' };
-  if (paths.length > 20) return { error: 'Scan at most 20 folders or files at a time.' };
+  if (!paths.length) return { error: S.needPath };
+  if (paths.length > 20) return { error: S.tooManyPaths({ max: 20 }) };
   const bad = paths.find((p) => !isAbsolutePath(p));
-  if (bad) return { error: `Use a full path: ${bad}` };
+  if (bad) return { error: S.notFull({ path: bad }) };
   return { paths };
 }
 
@@ -65,7 +163,7 @@ export function parsePaths(text: string): { paths: string[] } | { error: string 
 export function groupItems(
   items: readonly ImportItemView[],
 ): { kind: ImportKind; items: ImportItemView[] }[] {
-  return IMPORT_KINDS.map(({ kind }) => ({
+  return IMPORT_KINDS.map((kind) => ({
     kind,
     items: items.filter((i) => i.kind === kind),
   })).filter((g) => g.items.length > 0);
@@ -84,9 +182,7 @@ export function ImportPage() {
   const { api } = useServices();
   const [step, setStep] = useState<Step>(0);
   const [pathsText, setPathsText] = useState('');
-  const [kinds, setKinds] = useState<Set<ImportKind>>(
-    () => new Set(IMPORT_KINDS.map((k) => k.kind)),
-  );
+  const [kinds, setKinds] = useState<Set<ImportKind>>(() => new Set(IMPORT_KINDS));
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -113,19 +209,19 @@ export function ImportPage() {
   const scan = async () => {
     const parsed = parsePaths(pathsText);
     if ('error' in parsed) return setError(parsed.error);
-    if (!kinds.size) return setError('Choose at least one kind of item.');
+    if (!kinds.size) return setError(S.needKind);
     setBusy(true);
     setError(null);
     try {
       const p = await api.importPreview({
         paths: parsed.paths,
-        kinds: IMPORT_KINDS.map((k) => k.kind).filter((k) => kinds.has(k)),
+        kinds: IMPORT_KINDS.filter((k) => kinds.has(k)),
       });
       setPreview(p);
       setSelected(defaultSelection(p.items));
       go(1);
     } catch (err) {
-      setError(errorMessage(err, 'Could not scan those folders.'));
+      setError(errorMessage(err, S.scanFailed));
     } finally {
       setBusy(false);
     }
@@ -140,7 +236,7 @@ export function ImportPage() {
       setRecordsVersion((v) => v + 1);
       go(3);
     } catch (err) {
-      setError(errorMessage(err, 'The import failed. Nothing was changed.'));
+      setError(errorMessage(err, S.applyFailed));
     } finally {
       setBusy(false);
     }
@@ -157,25 +253,26 @@ export function ImportPage() {
 
   return (
     <div className="settings-page">
-      <h2>Import</h2>
-      <p className="muted">
-        Bring instructions, skills, commands, plugins, MCP servers, projects, memories and chats
-        from other assistants. Nova reads the files on the Hub and never changes them.
-      </p>
+      <h2>{S.title}</h2>
+      <p className="muted">{S.intro}</p>
       <section className="settings-section ws-wizard" aria-labelledby="import-step">
-        <ol className="ws-steps" aria-label="Import steps">
+        <ol className="ws-steps" aria-label={S.stepsLabel}>
           {STEPS.map((s, i) => (
             <li
               key={s}
               aria-current={i === step ? 'step' : undefined}
               data-done={i < step || undefined}
             >
-              {s}
+              {S.steps[s]}
             </li>
           ))}
         </ol>
         <h3 id="import-step" ref={heading} tabIndex={-1}>
-          Step {step + 1} of 4: {STEP_TITLES[step]}
+          {S.stepHeading({
+            n: step + 1,
+            total: STEPS.length,
+            title: S.stepTitles[STEP_TITLES[step]],
+          })}
         </h3>
 
         {step === 0 ? (
@@ -188,43 +285,45 @@ export function ImportPage() {
           >
             <div className="nv-field">
               <label className="nv-field-label" htmlFor="import-paths">
-                Folders or files on the Hub
+                {S.paths}
               </label>
               <textarea
                 id="import-paths"
                 className="nv-input ws-textarea"
                 rows={3}
                 spellCheck={false}
+                dir="ltr"
                 value={pathsText}
-                placeholder={'/home/me/.config/assistant\n/home/me/Downloads/chat-export.zip'}
+                placeholder={`${S.pathsExample}\n${S.pathsExample2}`}
                 aria-describedby="import-paths-hint"
                 onChange={(e) => setPathsText(e.target.value)}
               />
               <span id="import-paths-hint" className="nv-field-hint">
-                One per line: a configuration folder, a skills folder, an MCP config file or a chat
-                export.
+                {S.pathsHint}
               </span>
             </div>
             <fieldset className="ws-fieldset">
-              <legend>Look for</legend>
+              <legend>{S.lookFor}</legend>
               <div className="ws-checks">
                 {IMPORT_KINDS.map((k) => (
-                  <label key={k.kind} className="ws-check">
+                  <label key={k} className="ws-check">
                     <input
                       type="checkbox"
-                      checked={kinds.has(k.kind)}
+                      checked={kinds.has(k)}
                       onChange={(e) =>
                         setKinds((s) => {
                           const next = new Set(s);
-                          if (e.target.checked) next.add(k.kind);
-                          else next.delete(k.kind);
+                          if (e.target.checked) next.add(k);
+                          else next.delete(k);
                           return next;
                         })
                       }
                     />
                     <span>
-                      {k.label}
-                      {k.note ? <span className="muted"> ({k.note})</span> : null}
+                      {KIND_LABEL[k]}
+                      {KIND_NOTE[k] ? (
+                        <span className="muted"> {S.withNote({ note: KIND_NOTE[k] })}</span>
+                      ) : null}
                     </span>
                   </label>
                 ))}
@@ -237,7 +336,7 @@ export function ImportPage() {
             ) : null}
             <div className="row">
               <Button type="submit" variant="primary" disabled={busy}>
-                {busy ? <Spinner /> : null} Scan
+                {busy ? <Spinner /> : null} {S.scan}
               </Button>
             </div>
           </form>
@@ -245,16 +344,15 @@ export function ImportPage() {
 
         {step === 1 && preview ? (
           <div className="stack">
-            {preview.items.length === 0 ? (
-              <p className="muted">Nothing to import was found there.</p>
-            ) : null}
+            {preview.items.length === 0 ? <p className="muted">{S.nothingFound}</p> : null}
             {groupItems(preview.items).map((g) => {
               const dupes = g.items.filter((i) => i.status === 'duplicate').length;
               return (
                 <fieldset key={g.kind} className="ws-fieldset">
                   <legend>
-                    {KIND_LABEL[g.kind]}: {g.items.length}
-                    {dupes ? `, ${dupes} already imported` : ''}
+                    {dupes
+                      ? S.groupDupes({ kind: KIND_LABEL[g.kind], n: g.items.length, dupes })
+                      : S.group({ kind: KIND_LABEL[g.kind], n: g.items.length })}
                   </legend>
                   <ul className="ws-list">
                     {g.items.map((i) => (
@@ -283,11 +381,13 @@ export function ImportPage() {
                                 {STATUS_TEXT[i.status]}
                               </span>
                             </span>
-                            <span className="muted">Becomes {i.target}</span>
-                            <code className="ws-code-inline">{i.sourcePath}</code>
+                            <span className="muted">{S.becomes({ target: i.target })}</span>
+                            <code className="ws-code-inline" dir="ltr">
+                              {i.sourcePath}
+                            </code>
                             {i.maskedSecrets.length ? (
                               <span className="muted">
-                                {plural(i.maskedSecrets.length, 'secret')} found; moved to the vault
+                                {S.secretsFound({ n: i.maskedSecrets.length })}
                               </span>
                             ) : null}
                             {i.note ? <span className="muted">{i.note}</span> : null}
@@ -300,9 +400,9 @@ export function ImportPage() {
               );
             })}
             <div className="row">
-              <Button onClick={() => go(0)}>Back</Button>
+              <Button onClick={() => go(0)}>{S.back}</Button>
               <Button variant="primary" disabled={selected.size === 0} onClick={() => go(2)}>
-                Review {plural(selected.size, 'item')}
+                {S.reviewN({ n: selected.size })}
               </Button>
             </div>
           </div>
@@ -317,13 +417,13 @@ export function ImportPage() {
               </p>
             ) : null}
             <div className="row">
-              <Button onClick={() => go(1)}>Back</Button>
+              <Button onClick={() => go(1)}>{S.back}</Button>
               <Button
                 variant="primary"
                 disabled={busy || chosen.length === 0}
                 onClick={() => void apply()}
               >
-                {busy ? <Spinner /> : null} Import {plural(chosen.length, 'item')}
+                {busy ? <Spinner /> : null} {S.importN({ n: chosen.length })}
               </Button>
             </div>
           </div>
@@ -332,34 +432,36 @@ export function ImportPage() {
         {step === 3 && result ? (
           <div className="stack" role="status">
             <p className="ws-ok">
-              <Icon name="check" /> Import finished.
+              <Icon name="check" /> {S.finished}
             </p>
             <dl className="ws-dl">
-              <dt>Imported</dt>
-              <dd>{plural(result.imported, 'item')}</dd>
-              <dt>Skipped as already imported</dt>
-              <dd>{plural(result.duplicates, 'item')}</dd>
-              <dt>Left off until you confirm them</dt>
-              <dd>{plural(result.disabled, 'item')}</dd>
-              <dt>Secrets moved to the vault</dt>
-              <dd>{plural(result.secretsMigrated, 'secret')}</dd>
+              <dt>{S.imported}</dt>
+              <dd>{S.items({ n: result.imported })}</dd>
+              <dt>{S.skipped}</dt>
+              <dd>{S.items({ n: result.duplicates })}</dd>
+              <dt>{S.leftOff}</dt>
+              <dd>{S.items({ n: result.disabled })}</dd>
+              <dt>{S.secretsMoved}</dt>
+              <dd>{S.secrets({ n: result.secretsMigrated })}</dd>
             </dl>
             <p className="muted">
-              Everything from this import is tagged with its id ({result.importId}) in the{' '}
-              <a
-                href="#import-records"
-                onClick={(e) => {
-                  e.preventDefault();
-                  document.getElementById('import-records')?.focus();
-                }}
-              >
-                import records
-              </a>
-              . Imported plugins and servers are off: turn them on in Plugins &amp; skills or Tools
-              &amp; MCP once you have checked their permissions.
+              {embed(S.tagged, {
+                id: <span translate="no">{result.importId}</span>,
+                link: (
+                  <a
+                    href="#import-records"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      document.getElementById('import-records')?.focus();
+                    }}
+                  >
+                    {S.recordsLink}
+                  </a>
+                ),
+              })}
             </p>
             <div className="row">
-              <Button onClick={restart}>Import something else</Button>
+              <Button onClick={restart}>{S.again}</Button>
             </div>
           </div>
         ) : null}
@@ -369,13 +471,6 @@ export function ImportPage() {
   );
 }
 
-const STEP_TITLES = [
-  'Where to look',
-  'Choose what to import',
-  'Review before importing',
-  'Done',
-] as const;
-
 function Review({ items }: { items: ImportItemView[] }) {
   const secrets = items.filter((i) => i.maskedSecrets.length);
   const conflicts = items.filter((i) => i.status === 'conflict');
@@ -384,43 +479,52 @@ function Review({ items }: { items: ImportItemView[] }) {
   return (
     <div className="stack">
       <p>
-        {plural(items.length, 'item')} will be imported:{' '}
-        {groupItems(items)
-          .map((g) => `${KIND_LABEL[g.kind]} (${g.items.length})`)
-          .join(', ')}
-        .
+        {S.willImport({
+          n: items.length,
+          kinds: fmt.list(
+            groupItems(items).map((g) =>
+              S.kindCount({ kind: KIND_LABEL[g.kind], n: g.items.length }),
+            ),
+            { type: 'unit' },
+          ),
+        })}
       </p>
       <section aria-labelledby="import-secrets">
-        <h4 id="import-secrets">Secrets</h4>
+        <h4 id="import-secrets">{S.secretsTitle}</h4>
         {secrets.length ? (
           <>
-            <p className="muted">
-              These move into the vault. The imported configuration keeps only a secret://
-              reference.
-            </p>
+            <p className="muted">{S.secretsHint}</p>
             <ul className="ws-plain-list">
               {secrets.map((i) =>
                 i.maskedSecrets.map((s) => (
                   <li key={`${i.id}-${s}`}>
-                    {i.name}: <code className="ws-code-inline">{s}</code>
+                    {embed(S.secretLine, {
+                      name: i.name,
+                      secret: (
+                        <code className="ws-code-inline" dir="ltr">
+                          {s}
+                        </code>
+                      ),
+                    })}
                   </li>
                 )),
               )}
             </ul>
           </>
         ) : (
-          <p className="muted">No secrets were found in what you chose.</p>
+          <p className="muted">{S.noSecrets}</p>
         )}
       </section>
       {conflicts.length ? (
         <section aria-labelledby="import-conflicts">
-          <h4 id="import-conflicts">Names already in use</h4>
-          <p className="muted">Go back and untick any you want to skip.</p>
+          <h4 id="import-conflicts">{S.conflicts}</h4>
+          <p className="muted">{S.conflictsHint}</p>
           <ul className="ws-plain-list">
             {conflicts.map((i) => (
               <li key={i.id}>
-                {i.name} becomes {i.target}
-                {i.note ? `: ${i.note}` : ''}
+                {i.note
+                  ? S.conflictNote({ name: i.name, target: i.target, note: i.note })
+                  : S.conflict({ name: i.name, target: i.target })}
               </li>
             ))}
           </ul>
@@ -428,11 +532,8 @@ function Review({ items }: { items: ImportItemView[] }) {
       ) : null}
       {off.length ? (
         <section aria-labelledby="import-off">
-          <h4 id="import-off">Stays off</h4>
-          <p className="muted">
-            Imported plugins and MCP servers stay off until you declare and confirm their
-            permissions.
-          </p>
+          <h4 id="import-off">{S.staysOff}</h4>
+          <p className="muted">{S.staysOffHint}</p>
           <ul className="ws-plain-list">
             {off.map((i) => (
               <li key={i.id}>{i.target}</li>
@@ -440,11 +541,7 @@ function Review({ items }: { items: ImportItemView[] }) {
           </ul>
         </section>
       ) : null}
-      {memories.length ? (
-        <p className="muted">
-          Imported memories arrive as suggestions in Memory; they are used only after you keep them.
-        </p>
-      ) : null}
+      {memories.length ? <p className="muted">{S.memoriesHint}</p> : null}
     </div>
   );
 }
@@ -462,7 +559,7 @@ function ImportRecords({ version }: { version: number }) {
         setRecords(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the import records.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.recordsFailed)),
     );
     return () => {
       alive = false;
@@ -472,28 +569,26 @@ function ImportRecords({ version }: { version: number }) {
   return (
     <section className="settings-section" aria-labelledby="import-records">
       <h3 id="import-records" tabIndex={-1}>
-        Import records
+        {S.records}
       </h3>
-      <p className="muted">
-        Every imported item, by its content hash, so the same item is never imported twice.
-      </p>
+      <p className="muted">{S.recordsHint}</p>
       {error ? (
         <p role="alert" className="nv-field-error">
           {error}
         </p>
       ) : null}
-      {records === null && !error ? <Spinner label="Loading import records" /> : null}
-      {records?.length === 0 ? <p className="muted">Nothing imported yet.</p> : null}
+      {records === null && !error ? <Spinner label={S.loadingRecords} /> : null}
+      {records?.length === 0 ? <p className="muted">{S.noRecords}</p> : null}
       {records?.length ? (
         <table className="ws-table">
-          <caption className="nv-vh">Import records</caption>
+          <caption className="nv-vh">{S.records}</caption>
           <thead>
             <tr>
-              <th scope="col">Became</th>
-              <th scope="col">Kind</th>
-              <th scope="col">From</th>
-              <th scope="col">Hash</th>
-              <th scope="col">When</th>
+              <th scope="col">{S.became}</th>
+              <th scope="col">{S.kindCol}</th>
+              <th scope="col">{S.from}</th>
+              <th scope="col">{S.hash}</th>
+              <th scope="col">{S.when}</th>
             </tr>
           </thead>
           <tbody>
@@ -502,9 +597,13 @@ function ImportRecords({ version }: { version: number }) {
                 <th scope="row">{r.target}</th>
                 <td>{KIND_LABEL[r.kind]}</td>
                 <td>
-                  <code className="ws-code-inline">{r.sourcePath}</code>
+                  <code className="ws-code-inline" dir="ltr">
+                    {r.sourcePath}
+                  </code>
                 </td>
-                <td title={r.sha256}>{shortHash(r.sha256)}</td>
+                <td title={r.sha256} translate="no">
+                  {shortHash(r.sha256)}
+                </td>
                 <td>{formatWhen(r.createdAt)}</td>
               </tr>
             ))}

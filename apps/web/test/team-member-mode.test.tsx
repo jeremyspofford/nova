@@ -255,8 +255,9 @@ describe('words', () => {
     expect(taskChip('running').icon).toBeNull();
     expect(taskChip('paused_by_someone').text).toBe('paused by someone');
     const now = Date.parse('2026-10-01T12:00:00Z');
-    expect(untilText('2026-10-01T12:30:00Z', now)).toBe('in 30 min');
-    expect(untilText('2026-10-02T00:00:00Z', now)).toBe('in 12 h');
+    // Relative time in the active locale (FR-016): Intl's words, not hand-built units.
+    expect(untilText('2026-10-01T12:30:00Z', now)).toBe('in 30 minutes');
+    expect(untilText('2026-10-02T00:00:00Z', now)).toBe('in 12 hours');
     expect(untilText('2026-10-08T12:00:00Z', now)).toBe('in 7 days');
     expect(untilText('2026-09-01T12:00:00Z', now)).toBe('now');
   });

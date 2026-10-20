@@ -1,7 +1,14 @@
 // Work mode navigation: the Runs and Scheduled tabs, and in-app links that keep the browser's
 // own behaviour for modified clicks (open in a new tab).
+import { defineMessages } from '@nova/i18n';
 import { navigate } from '../router.ts';
 import { SCHEDULED_PATH } from './format.ts';
+
+export const WORK_NAV_TEXT = defineMessages('work.nav', {
+  sections: 'Work sections',
+  runs: 'Runs',
+  scheduled: 'Scheduled',
+});
 
 /** Runs and Scheduled, the two lists of Work mode. */
 export function WorkNav({ current }: { current: 'runs' | 'scheduled' }) {
@@ -16,9 +23,9 @@ export function WorkNav({ current }: { current: 'runs' | 'scheduled' }) {
     </a>
   );
   return (
-    <nav className="work-tabs" aria-label="Work sections">
-      {link('/work', 'Runs', current === 'runs')}
-      {link(SCHEDULED_PATH, 'Scheduled', current === 'scheduled')}
+    <nav className="work-tabs" aria-label={WORK_NAV_TEXT.sections}>
+      {link('/work', WORK_NAV_TEXT.runs, current === 'runs')}
+      {link(SCHEDULED_PATH, WORK_NAV_TEXT.scheduled, current === 'scheduled')}
     </nav>
   );
 }

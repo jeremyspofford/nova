@@ -7,6 +7,7 @@
 // runner first, so the runner must be set up and on. The Hub checks the same rules; this form
 // explains them before a request fails.
 import { useId, useRef, useState } from 'react';
+import { defineMessages, messageFor } from '@nova/i18n';
 import type { z } from 'zod';
 import {
   createCloudEnvironmentSchema,
@@ -16,9 +17,11 @@ import {
 } from '@nova/shared';
 import { Button, Dialog, Icon, RadioGroup, Spinner, TextField } from '@nova/ui';
 import { useSettings } from '../settings.tsx';
+import { rich } from '../i18n/rich.tsx';
 import { useCloudApi } from './api.ts';
 import {
   CLOUD_SETTINGS_PATH,
+  CLOUD_TEXT,
   NETWORK_DESCRIPTION,
   NETWORK_TEXT,
   cloudErrorMessage,
@@ -51,15 +54,53 @@ export const EMPTY_CLOUD_DRAFT: CloudDraft = {
   folder: '',
 };
 
-const FIELD_TEXT: Record<string, string> = {
-  label: 'Enter a name, up to 100 characters.',
-  repoUrls: 'Enter each repository as an https:// address, one per line (at most 10).',
-  setupScript: 'The setup script can be up to 20,000 characters.',
-  baseImage: 'Enter an image reference in lowercase, such as node:22.',
-  caches: 'Name each cache with lowercase letters, digits, - or _ (at most 8).',
-  diskMb: 'Enter the disk size in whole MB.',
-  folder: 'Enter a folder under /workspace, such as /workspace/app.',
-};
+/** The new cloud environment dialog. */
+export const NEW_ENVIRONMENT_TEXT = defineMessages('cloud.newEnvironment', {
+  /** What a field needs, by the field the Hub would name. */
+  field: {
+    label: 'Enter a name, up to 100 characters.',
+    repoUrls: 'Enter each repository as an https:// address, one per line (at most 10).',
+    setupScript: 'The setup script can be up to 20,000 characters.',
+    baseImage: 'Enter an image reference in lowercase, such as node:22.',
+    caches: 'Name each cache with lowercase letters, digits, - or _ (at most 8).',
+    diskMb: 'Enter the disk size in whole MB.',
+    folder: 'Enter a folder under /workspace, such as /workspace/app.',
+  },
+  networkOff:
+    'Cloud environments get no network on this Hub. Turn on Unrestricted network in Settings → Cloud runner first.',
+  credentials:
+    'Leave user names and passwords out of repository addresses. Private repositories need access set up on the runner.',
+  /** {mb} is the disk cap in megabytes. */
+  overCap: 'At most {mb} MB, the cap in Settings → Cloud runner.',
+  createFailed: 'Could not create the environment.',
+  title: 'New cloud environment',
+  description:
+    'Repositories, a setup script and caches on the cloud runner. Code sessions and Work runs there keep going while your devices are off.',
+  noRunner: 'No cloud runner is set up yet.',
+  runnerOff: 'The cloud runner is turned off.',
+  runnerUnreachable: 'The cloud runner cannot be reached.',
+  openSettings: 'Open Settings → Cloud runner',
+  name: 'Name',
+  repos: 'Repositories',
+  reposHint:
+    'One https:// address per line; add #branch to pick a branch. They are cloned side by side under /workspace.',
+  setup: 'Setup script (optional)',
+  setupHint: 'Runs once in the first repository after cloning. Its result stays until you rebuild.',
+  network: 'Network',
+  /** {link} is a link named "Settings → Cloud runner". */
+  noNetwork:
+    'No network: cloud commands on this Hub never reach the network, because their traffic would not pass its egress rules. The owner can allow it under Unrestricted network in {link}.',
+  more: 'More options',
+  baseImage: 'Base image (optional)',
+  baseImageHint: 'The container image commands run in, when the runner uses containers.',
+  caches: 'Caches (optional)',
+  cachesHint: 'Folders kept across rebuilds, by name.',
+  disk: 'Disk (MB)',
+  diskHint: 'At most {mb} MB.',
+  folder: 'Folder for sessions (optional)',
+  folderHint: 'Without it, the first repository.',
+  create: 'Create environment',
+});
 
 /** The create body, or the field errors the Hub would answer with. */
 export function buildCloudEnvironment(
@@ -73,18 +114,14 @@ export function buildCloudEnvironment(
       .map((x) => x.trim())
       .filter(Boolean);
   const errors: Record<string, string> = {};
-  if (d.network !== 'off' && !networkAllowed)
-    errors.network =
-      'Cloud environments get no network on this Hub. Turn on Unrestricted network in Settings → Cloud runner first.';
-  if (lines(d.repos).some(repoUrlHasCredentials))
-    errors.repoUrls =
-      'Leave user names and passwords out of repository addresses. Private repositories need access set up on the runner.';
+  const S = NEW_ENVIRONMENT_TEXT;
+  if (d.network !== 'off' && !networkAllowed) errors.network = S.networkOff;
+  if (lines(d.repos).some(repoUrlHasCredentials)) errors.repoUrls = S.credentials;
   let diskMb: number | undefined;
   if (d.diskMb.trim()) {
     diskMb = Number(d.diskMb.trim());
-    if (!/^\d+$/.test(d.diskMb.trim())) errors.diskMb = FIELD_TEXT.diskMb!;
-    else if (diskMb > diskCapMb)
-      errors.diskMb = `At most ${diskCapMb.toLocaleString()} MB, the cap in Settings → Cloud runner.`;
+    if (!/^\d+$/.test(d.diskMb.trim())) errors.diskMb = S.field.diskMb;
+    else if (diskMb > diskCapMb) errors.diskMb = S.overCap({ mb: diskCapMb });
   }
   const body: Body = {
     kind: 'cloud',
@@ -102,9 +139,11 @@ export function buildCloudEnvironment(
   const parsed = createCloudEnvironmentSchema.safeParse(body);
   if (!parsed.success)
     for (const issue of parsed.error.issues) {
-      const key = String(issue.path.find((p) => typeof p === 'string' && p in FIELD_TEXT) ?? '');
+      const key = String(
+        issue.path.find((p) => typeof p === 'string' && messageFor(S.field, p) !== undefined) ?? '',
+      );
       const field = key || String(issue.path[issue.path.length - 1] ?? 'label');
-      errors[field] ??= FIELD_TEXT[field] ?? issue.message;
+      errors[field] ??= messageFor(S.field, field) ?? issue.message;
     }
   return Object.keys(errors).length
     ? { errors }
@@ -156,6 +195,7 @@ function CloudEnvironmentForm({
   );
   const errors = tried && 'errors' in built ? built.errors : {};
   const usable = runner ? runnerUsable(runner) : false;
+  const S = NEW_ENVIRONMENT_TEXT;
 
   const submit = async () => {
     setTried(true);
@@ -165,7 +205,7 @@ function CloudEnvironmentForm({
     try {
       onCreated(await api.createCloudEnvironment(built.label, built.connection));
     } catch (err) {
-      setError(cloudErrorMessage(err, 'Could not create the environment.'));
+      setError(cloudErrorMessage(err, S.createFailed));
       setBusy(false);
     }
   };
@@ -173,8 +213,8 @@ function CloudEnvironmentForm({
   return (
     <Dialog
       open
-      title="New cloud environment"
-      description="Repositories, a setup script and caches on the cloud runner. Code sessions and Work runs there keep going while your devices are off."
+      title={S.title}
+      description={S.description}
       onClose={onClose}
       initialFocusRef={first}
       className="ws-wide-dialog"
@@ -193,17 +233,17 @@ function CloudEnvironmentForm({
             <Icon name="alert" />
             <span>
               {runner?.state === 'unconfigured' || !runner
-                ? 'No cloud runner is set up yet.'
+                ? S.noRunner
                 : !runner.enabled
-                  ? 'The cloud runner is turned off.'
-                  : 'The cloud runner cannot be reached.'}{' '}
-              <InAppLink to={CLOUD_SETTINGS_PATH}>Open Settings → Cloud runner</InAppLink>
+                  ? S.runnerOff
+                  : S.runnerUnreachable}{' '}
+              <InAppLink to={CLOUD_SETTINGS_PATH}>{S.openSettings}</InAppLink>
             </span>
           </p>
         ) : null}
         <TextField
           ref={first}
-          label="Name"
+          label={S.name}
           value={d.label}
           maxLength={100}
           autoComplete="off"
@@ -213,28 +253,30 @@ function CloudEnvironmentForm({
         />
         <TextArea
           id={`${id}-repos`}
-          label="Repositories"
+          label={S.repos}
           value={d.repos}
           rows={3}
+          // eslint-disable-next-line nova-i18n/no-literal-ui-text -- an example address, not text
           placeholder="https://github.com/team/app.git"
-          hint="One https:// address per line; add #branch to pick a branch. They are cloned side by side under /workspace."
+          hint={S.reposHint}
           error={errors.repoUrls}
           onChange={(v) => set('repos', v)}
         />
         <TextArea
           id={`${id}-setup`}
-          label="Setup script (optional)"
+          label={S.setup}
           value={d.setupScript}
           rows={4}
+          // eslint-disable-next-line nova-i18n/no-literal-ui-text -- an example command, not text
           placeholder="npm ci"
-          hint="Runs once in the first repository after cloning. Its result stays until you rebuild."
+          hint={S.setupHint}
           error={errors.setupScript}
           onChange={(v) => set('setupScript', v)}
         />
         {networkAllowed ? (
           <>
             <RadioGroup
-              legend="Network"
+              legend={S.network}
               name={`${id}-net`}
               value={d.network}
               onChange={(v) => set('network', v as Network)}
@@ -252,37 +294,41 @@ function CloudEnvironmentForm({
           </>
         ) : (
           <p className="muted cl-small">
-            <Icon name="shield" /> No network: cloud commands on this Hub never reach the network,
-            because their traffic would not pass its egress rules. The owner can allow it under
-            Unrestricted network in{' '}
-            <InAppLink to={CLOUD_SETTINGS_PATH}>Settings → Cloud runner</InAppLink>.
+            <Icon name="shield" />{' '}
+            {rich(S.noNetwork, {
+              link: <InAppLink to={CLOUD_SETTINGS_PATH}>{CLOUD_TEXT.settingsLink}</InAppLink>,
+            })}
           </p>
         )}
         <details className="ws-advanced">
-          <summary>More options</summary>
+          <summary>{S.more}</summary>
           <div className="stack">
             <TextField
-              label="Base image (optional)"
+              label={S.baseImage}
               value={d.baseImage}
               autoComplete="off"
               spellCheck={false}
+              dir="ltr"
+              // eslint-disable-next-line nova-i18n/no-literal-ui-text -- an example image, not text
               placeholder="node:22"
-              hint="The container image commands run in, when the runner uses containers."
+              hint={S.baseImageHint}
               error={errors.baseImage}
               onChange={(e) => set('baseImage', e.target.value)}
             />
             <TextField
-              label="Caches (optional)"
+              label={S.caches}
               value={d.caches}
               autoComplete="off"
               spellCheck={false}
+              dir="ltr"
+              // eslint-disable-next-line nova-i18n/no-literal-ui-text -- example cache names, not text
               placeholder="npm, pip"
-              hint="Folders kept across rebuilds, by name."
+              hint={S.cachesHint}
               error={errors.caches}
               onChange={(e) => set('caches', e.target.value)}
             />
             <TextField
-              label="Disk (MB)"
+              label={S.disk}
               type="number"
               inputMode="numeric"
               className="ws-number"
@@ -290,17 +336,19 @@ function CloudEnvironmentForm({
               max={capMb}
               value={d.diskMb}
               placeholder={String(capMb)}
-              hint={`At most ${capMb.toLocaleString()} MB.`}
+              hint={S.diskHint({ mb: capMb })}
               error={errors.diskMb}
               onChange={(e) => set('diskMb', e.target.value)}
             />
             <TextField
-              label="Folder for sessions (optional)"
+              label={S.folder}
               value={d.folder}
               autoComplete="off"
               spellCheck={false}
+              dir="ltr"
+              // eslint-disable-next-line nova-i18n/no-literal-ui-text -- an example path, not text
               placeholder="/workspace/app"
-              hint="Without it, the first repository."
+              hint={S.folderHint}
               error={errors.folder}
               onChange={(e) => set('folder', e.target.value)}
             />
@@ -312,9 +360,9 @@ function CloudEnvironmentForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{CLOUD_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !usable}>
-            {busy ? <Spinner /> : null} Create environment
+            {busy ? <Spinner /> : null} {S.create}
           </Button>
         </div>
       </form>

@@ -3,6 +3,7 @@
 // responsibilities, instructions, autonomy, model) and binds their credentials on the agent's
 // page. Below the list, the recent tasks: your own, or every task for the owner.
 import { useId, useState, type FormEvent } from 'react';
+import { defineMessages } from '@nova/i18n';
 import {
   RUN_AUTONOMY,
   type RunAutonomy,
@@ -19,6 +20,7 @@ import { useTeamApi } from './api.ts';
 import { TEAM_AGENT_EVENTS, useTeamEvents } from './events.ts';
 import {
   NEW_TEAM_AGENT_ID,
+  TEAM_TEXT,
   errorFields,
   taskChip,
   teamAgentChip,
@@ -27,8 +29,47 @@ import {
 import { Chip, FormError, LoadError, OwnerOnlyNotice, TextAreaField, useLoad } from './parts.tsx';
 import { useTeamRole } from './role.tsx';
 
-export const TEAM_AGENT_IDENTITY_TEXT =
-  'A team agent works under an identity of its own: it never signs in, and it uses no person’s account, memory or connectors. Anyone on this Hub can give it a task, and its audit names the agent.';
+/** The team agents' words; `identity` also heads each agent's page. */
+export const TEAM_AGENTS_TEXT = defineMessages('team.agents', {
+  identity:
+    'A team agent works under an identity of its own: it never signs in, and it uses no person’s account, memory or connectors. Anyone on this Hub can give it a task, and its audit names the agent.',
+  heading: 'Team agents',
+  provision: 'Provision an agent',
+  loadFailed: 'Could not load the team agents.',
+  loading: 'Loading team agents',
+  emptyTitle: 'No team agents yet',
+  emptyOwner:
+    'Provision one for work the whole Hub shares, like answering support mail or keeping a shared calendar.',
+  emptyMember: 'The owner of this Hub has not set one up.',
+  someAgent: 'A team agent',
+  credentials: '{n, plural, one {# credential} other {# credentials}}',
+  recentTasks: 'Recent tasks',
+  yourRecentTasks: 'Your recent tasks',
+  tasksFailed: 'Could not load tasks.',
+  noTasks: 'No tasks yet. Open an agent to give it one.',
+});
+
+const PROVISION_TEXT = defineMessages('team.provision', {
+  ownerOnly: 'Provisioning team agents',
+  nameNeeded: 'Give the agent a name.',
+  ready: '{name} is ready. Give it credentials so it can work.',
+  title: 'Provision a team agent',
+  name: 'Name',
+  responsibilities: 'Responsibilities',
+  responsibilitiesIntro: 'What it looks after. Each one can carry its own instructions.',
+  responsibility: 'Responsibility {n}',
+  responsibilityInstructions: 'Instructions for responsibility {n} (optional)',
+  removeResponsibility: 'Remove responsibility {n}',
+  addResponsibility: 'Add a responsibility',
+  instructions: 'Instructions (optional)',
+  instructionsHint: 'How it should work and talk, for every task.',
+  autonomy: 'Autonomy',
+  model: 'Model (optional)',
+  modelHint:
+    'A model of a provider credential you give it, like {example}. Until then it answers with the offline mock.',
+  provision: 'Provision',
+  failed: 'Could not provision the agent.',
+});
 
 export function TeamAgentsList() {
   const api = useTeamApi();
@@ -43,15 +84,16 @@ export function TeamAgentsList() {
   }, 150);
   useTeamEvents(TEAM_AGENT_EVENTS, reload, reload);
   const newPath = teamAgentPath(NEW_TEAM_AGENT_ID);
-  const nameOf = (id: string) => agents.data?.find((a) => a.agentId === id)?.name ?? 'A team agent';
+  const nameOf = (id: string) =>
+    agents.data?.find((a) => a.agentId === id)?.name ?? TEAM_AGENTS_TEXT.someAgent;
 
   return (
     <section className="stack team-section" aria-labelledby={headingId}>
       <div className="ws-section-header">
         <h2 id={headingId} className="nv-vh">
-          Team agents
+          {TEAM_AGENTS_TEXT.heading}
         </h2>
-        <p className="muted ws-flush team-grow">{TEAM_AGENT_IDENTITY_TEXT}</p>
+        <p className="muted ws-flush team-grow">{TEAM_AGENTS_TEXT.identity}</p>
         {owner ? (
           <a
             className="nv-btn"
@@ -59,32 +101,28 @@ export function TeamAgentsList() {
             href={newPath}
             onClick={(e) => followLink(e, newPath)}
           >
-            <Icon name="plus" /> Provision an agent
+            <Icon name="plus" /> {TEAM_AGENTS_TEXT.provision}
           </a>
         ) : null}
       </div>
       {agents.error ? (
         <LoadError
           error={agents.error}
-          fallback="Could not load the team agents."
+          fallback={TEAM_AGENTS_TEXT.loadFailed}
           onRetry={agents.reload}
         />
       ) : null}
-      {agents.loading ? <Spinner label="Loading team agents" /> : null}
+      {agents.loading ? <Spinner label={TEAM_AGENTS_TEXT.loading} /> : null}
       {agents.data && agents.data.length === 0 ? (
         <EmptyState
           level={3}
           icon="agents"
-          title="No team agents yet"
-          description={
-            owner
-              ? 'Provision one for work the whole Hub shares, like answering support mail or keeping a shared calendar.'
-              : 'The owner of this Hub has not set one up.'
-          }
+          title={TEAM_AGENTS_TEXT.emptyTitle}
+          description={owner ? TEAM_AGENTS_TEXT.emptyOwner : TEAM_AGENTS_TEXT.emptyMember}
         />
       ) : null}
       {agents.data && agents.data.length > 0 ? (
-        <ul className="ws-list" aria-label="Team agents">
+        <ul className="ws-list" aria-label={TEAM_AGENTS_TEXT.heading}>
           {agents.data.map((a) => (
             <AgentRow key={a.agentId} a={a} owner={owner} />
           ))}
@@ -104,20 +142,21 @@ export function TeamAgentsList() {
 function AgentRow({ a, owner }: { a: TeamAgentView; owner: boolean }) {
   const path = teamAgentPath(a.agentId);
   const autonomy = AGENT_AUTONOMY_TEXT[a.autonomy as RunAutonomy] as { label: string } | undefined;
+  // Separate facts, each its own message, shown as a dotted row.
+  const facts = [
+    autonomy?.label,
+    TEAM_TEXT.made({ when: formatWhen(a.createdAt) }),
+    owner ? TEAM_AGENTS_TEXT.credentials({ n: a.credentials.length }) : undefined,
+  ].filter((f): f is string => Boolean(f));
   return (
     <li className="ws-card">
       <div className="ws-section-header">
-        <a className="ws-card-link" href={path} onClick={(e) => followLink(e, path)}>
+        <a className="ws-card-link" href={path} onClick={(e) => followLink(e, path)} dir="auto">
           {a.name}
         </a>
         <Chip spec={teamAgentChip(a.status)} />
       </div>
-      <span className="ws-card-meta muted">
-        {autonomy ? `${autonomy.label} · ` : ''}Made {formatWhen(a.createdAt)}
-        {owner
-          ? ` · ${a.credentials.length === 1 ? '1 credential' : `${a.credentials.length} credentials`}`
-          : ''}
-      </span>
+      <span className="ws-card-meta muted">{facts.join(' · ')}</span>
     </li>
   );
 }
@@ -138,25 +177,32 @@ function RecentTasks({
   const headingId = useId();
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>{owner ? 'Recent tasks' : 'Your recent tasks'}</h2>
+      <h2 id={headingId}>
+        {owner ? TEAM_AGENTS_TEXT.recentTasks : TEAM_AGENTS_TEXT.yourRecentTasks}
+      </h2>
       {error ? (
-        <LoadError error={error} fallback="Could not load tasks." onRetry={onRetry} />
+        <LoadError error={error} fallback={TEAM_AGENTS_TEXT.tasksFailed} onRetry={onRetry} />
       ) : null}
       {tasks && tasks.length === 0 ? (
-        <p className="muted ws-flush">No tasks yet. Open an agent to give it one.</p>
+        <p className="muted ws-flush">{TEAM_AGENTS_TEXT.noTasks}</p>
       ) : null}
       {tasks && tasks.length > 0 ? (
-        <ul className="ws-list" aria-label="Recent tasks">
+        <ul className="ws-list" aria-label={TEAM_AGENTS_TEXT.recentTasks}>
           {tasks.slice(0, 10).map((t) => {
             const path = teamAgentPath(t.agentId, 'tasks');
             return (
               <li key={t.id} className="ws-list-row">
                 <span className="team-person-main">
-                  <a href={path} onClick={(e) => followLink(e, path)} className="team-clamp">
+                  <a
+                    href={path}
+                    onClick={(e) => followLink(e, path)}
+                    className="team-clamp"
+                    dir="auto"
+                  >
                     {t.text}
                   </a>
                   <span className="ws-row-meta muted">
-                    <span>{nameOf(t.agentId)}</span>
+                    <span dir="auto">{nameOf(t.agentId)}</span>
                     <span>{formatWhen(t.createdAt)}</span>
                   </span>
                 </span>
@@ -195,14 +241,14 @@ export function NewTeamAgent() {
   if (role === 'member')
     return (
       <div className="ws-page team-page">
-        <OwnerOnlyNotice what="Provisioning team agents" />
+        <OwnerOnlyNotice what={PROVISION_TEXT.ownerOnly} />
       </div>
     );
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
-      setFields({ name: 'Give the agent a name.' });
+      setFields({ name: PROVISION_TEXT.nameNeeded });
       return;
     }
     const responsibilities = duties
@@ -221,7 +267,7 @@ export function NewTeamAgent() {
         ...(responsibilities.length ? { responsibilities } : {}),
         ...(model.trim() ? { model: model.trim() } : {}),
       });
-      toast.show(`${a.name} is ready. Give it credentials so it can work.`, { tone: 'success' });
+      toast.show(PROVISION_TEXT.ready({ name: a.name }), { tone: 'success' });
       navigate(teamAgentPath(a.agentId, 'credentials'));
     } catch (err) {
       setFields(errorFields(err));
@@ -236,18 +282,18 @@ export function NewTeamAgent() {
 
   return (
     <div className="ws-page team-page">
-      <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+      <nav aria-label={TEAM_TEXT.breadcrumb} className="ws-breadcrumb">
         <a href={back} onClick={(e) => followLink(e, back)}>
-          <Icon name="back" /> Team agents
+          <Icon name="back" /> {TEAM_AGENTS_TEXT.heading}
         </a>
       </nav>
       <header className="ws-page-header">
-        <h1>Provision a team agent</h1>
+        <h1>{PROVISION_TEXT.title}</h1>
       </header>
-      <p className="muted ws-flush">{TEAM_AGENT_IDENTITY_TEXT}</p>
+      <p className="muted ws-flush">{TEAM_AGENTS_TEXT.identity}</p>
       <form className="stack" onSubmit={(e) => void submit(e)} noValidate>
         <TextField
-          label="Name"
+          label={PROVISION_TEXT.name}
           value={name}
           maxLength={100}
           onChange={(e) => {
@@ -257,20 +303,18 @@ export function NewTeamAgent() {
           error={fields.name}
         />
         <fieldset className="ws-fieldset">
-          <legend>Responsibilities</legend>
-          <p className="muted ws-flush">
-            What it looks after. Each one can carry its own instructions.
-          </p>
+          <legend>{PROVISION_TEXT.responsibilities}</legend>
+          <p className="muted ws-flush">{PROVISION_TEXT.responsibilitiesIntro}</p>
           {duties.map((d, i) => (
             <div key={d.key} className="stack team-duty">
               <TextField
-                label={`Responsibility ${i + 1}`}
+                label={PROVISION_TEXT.responsibility({ n: i + 1 })}
                 value={d.title}
                 maxLength={200}
                 onChange={(e) => setDuty(d.key, { title: e.target.value })}
               />
               <TextAreaField
-                label={`Instructions for responsibility ${i + 1} (optional)`}
+                label={PROVISION_TEXT.responsibilityInstructions({ n: i + 1 })}
                 rows={2}
                 maxLength={4000}
                 value={d.instructions}
@@ -280,10 +324,10 @@ export function NewTeamAgent() {
                 <div className="row">
                   <Button
                     variant="ghost"
-                    aria-label={`Remove responsibility ${i + 1}`}
+                    aria-label={PROVISION_TEXT.removeResponsibility({ n: i + 1 })}
                     onClick={() => setDuties((prev) => prev.filter((x) => x.key !== d.key))}
                   >
-                    <Icon name="trash" /> Remove
+                    <Icon name="trash" /> {TEAM_TEXT.remove}
                   </Button>
                 </div>
               ) : null}
@@ -303,21 +347,21 @@ export function NewTeamAgent() {
                   ])
                 }
               >
-                <Icon name="plus" /> Add a responsibility
+                <Icon name="plus" /> {PROVISION_TEXT.addResponsibility}
               </Button>
             </div>
           ) : null}
         </fieldset>
         <TextAreaField
-          label="Instructions (optional)"
-          hint="How it should work and talk, for every task."
+          label={PROVISION_TEXT.instructions}
+          hint={PROVISION_TEXT.instructionsHint}
           rows={4}
           maxLength={16000}
           value={instructions}
           onChange={setInstructions}
         />
         <RadioGroup
-          legend="Autonomy"
+          legend={PROVISION_TEXT.autonomy}
           name="team-agent-autonomy"
           value={autonomy}
           onChange={(v) => setAutonomy(v as RunAutonomy)}
@@ -328,8 +372,8 @@ export function NewTeamAgent() {
           }))}
         />
         <TextField
-          label="Model (optional)"
-          hint="A model of a provider credential you give it, like gpt-5. Until then it answers with the offline mock."
+          label={PROVISION_TEXT.model}
+          hint={PROVISION_TEXT.modelHint({ example: 'gpt-5' })}
           value={model}
           maxLength={300}
           spellCheck={false}
@@ -338,13 +382,13 @@ export function NewTeamAgent() {
         />
         <div className="row">
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Provision
+            {busy ? <Spinner /> : null} {PROVISION_TEXT.provision}
           </Button>
           <a className="nv-btn" href={back} onClick={(e) => followLink(e, back)}>
-            Cancel
+            {TEAM_TEXT.cancel}
           </a>
         </div>
-        <FormError error={error} fallback="Could not provision the agent." />
+        <FormError error={error} fallback={PROVISION_TEXT.failed} />
       </form>
     </div>
   );

@@ -3,12 +3,24 @@
 // no run yet, and the view says so. A Code session shows it under its budget; a Work run page shows
 // it for a run on a cloud environment (`<ThreadCloudRun threadId=… environmentId={run.environmentId
 // ?? null} />`: a run on the Hub, `null`, asks the Hub nothing).
+import { defineMessages } from '@nova/i18n';
 import type { CloudRunView } from '@nova/shared';
 import { Button, Spinner } from '@nova/ui';
 import { useCloudApi } from './api.ts';
 import { CloudRunCard, useThreadCloudRun } from './CloudRunCard.tsx';
-import { CLOUD_SETTINGS_PATH, cloudErrorMessage, cloudRunPath } from './format.ts';
+import { rich } from '../i18n/rich.tsx';
+import { CLOUD_SETTINGS_PATH, CLOUD_TEXT, cloudErrorMessage, cloudRunPath } from './format.ts';
 import { InAppLink, useLoad } from './parts.tsx';
+
+/** A thread's cloud run. */
+export const THREAD_RUN_TEXT = defineMessages('cloud.threadRun', {
+  loading: 'Loading the cloud run',
+  loadingText: 'Loading the cloud run…',
+  loadFailed: 'Could not load the cloud run.',
+  /** {link} is a link named "Settings → Cloud runner". */
+  none: 'No cloud run yet. The first command starts one, with the caps set in {link}.',
+  open: 'Open the run’s page',
+});
 
 export function ThreadCloudRun({
   threadId,
@@ -59,23 +71,25 @@ function ThreadRun({
   );
   const run = useThreadCloudRun(threadId);
   const r: CloudRunView | null = run.data;
+  const S = THREAD_RUN_TEXT;
   if (quiet && !r) return null;
   if (run.loading)
     return (
       <p className="muted cl-thread-run">
-        <Spinner label="Loading the cloud run" /> Loading the cloud run…
+        <Spinner label={S.loading} /> {S.loadingText}
       </p>
     );
   if (!r)
     return run.error ? (
       <div className="ws-error cl-thread-run" role="alert">
-        <p>{cloudErrorMessage(run.error, 'Could not load the cloud run.')}</p>
-        <Button onClick={run.reload}>Retry</Button>
+        <p>{cloudErrorMessage(run.error, S.loadFailed)}</p>
+        <Button onClick={run.reload}>{CLOUD_TEXT.retry}</Button>
       </div>
     ) : (
       <p className="muted cl-thread-run">
-        No cloud run yet. The first command starts one, with the caps set in{' '}
-        <InAppLink to={CLOUD_SETTINGS_PATH}>Settings → Cloud runner</InAppLink>.
+        {rich(S.none, {
+          link: <InAppLink to={CLOUD_SETTINGS_PATH}>{CLOUD_TEXT.settingsLink}</InAppLink>,
+        })}
       </p>
     );
   return (
@@ -86,7 +100,7 @@ function ThreadRun({
         onChange={(next) => run.setData(() => next)}
       />
       <InAppLink to={cloudRunPath(r.id)} className="cl-small">
-        Open the run’s page
+        {S.open}
       </InAppLink>
     </div>
   );

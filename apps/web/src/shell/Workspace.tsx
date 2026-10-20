@@ -17,12 +17,8 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Button, Icon, IconButton, Menu, Tabs, type MenuItem } from '@nova/ui';
-import {
-  applyAppearance,
-  resolveAppearance,
-  toggledTheme,
-  writeCachedTheme,
-} from '../appearance.ts';
+import { toggledTheme } from '../appearance.ts';
+import { setLookByHand, useApplyAppearance } from '../use-appearance.ts';
 import { ActivityPanel } from '../chat/ActivityPanel.tsx';
 import { ArtifactsPanel } from '../chat/Artifacts.tsx';
 import { BranchesPanel } from '../chat/BranchesPanel.tsx';
@@ -92,12 +88,15 @@ import {
   type AddableKind,
   type FileRef,
 } from '../layout/model.ts';
-import { KIND_LABEL, PaneContent, paneInfo } from '../layout/panes.tsx';
+import { PaneContent, paneInfo } from '../layout/panes.tsx';
 import { PaneWorkspace, resetKeepingBottom } from '../layout/PaneWorkspace.tsx';
 import { useLayouts } from '../layout/useLayouts.ts';
 import { useThreads } from '../stores.tsx';
 import { TerminalPanel } from '../terminal/TerminalPanel.tsx';
 import { MODE_INFO, Sidebar } from './Sidebar.tsx';
+import { messageFor } from '@nova/i18n';
+import { CATEGORY } from '../commands.ts';
+import { COMMAND_TEXT, MODE_TEXT, SHELL_TEXT } from './strings.ts';
 
 export interface WorkspaceProps {
   displayName: string | null;
@@ -300,24 +299,8 @@ export function Workspace({
     };
   }, [panelFocus]);
 
-  // ---- appearance (FR-010) ---------------------------------------------------------------------
-  const appearance = {
-    theme: settings.get('appearance.theme').value,
-    accent: settings.get('appearance.accent').value,
-    background: settings.get('appearance.background').value,
-    foreground: settings.get('appearance.foreground').value,
-    uiFont: settings.get('appearance.uiFont').value,
-    codeFont: settings.get('appearance.codeFont').value,
-    fontScale: settings.get('appearance.fontScale').value,
-    reducedMotion: settings.get('appearance.reducedMotion').value,
-  };
-  // A string key, because the object changes identity on every render.
-  const appearanceKey = JSON.stringify(appearance);
-  useEffect(() => {
-    const a = JSON.parse(appearanceKey) as typeof appearance;
-    applyAppearance(resolveAppearance(a, prefersDark), document.documentElement);
-    writeCachedTheme(a.theme);
-  }, [appearanceKey, prefersDark]);
+  // ---- appearance (FR-010, FR-011: a saved theme applies token for token) -------------------------
+  const appearance = useApplyAppearance(prefersDark);
 
   // ---- user key bindings (FR-004) -----------------------------------------------------------------
   const userBindings = settings.get('keyboard.bindings').value;
@@ -328,6 +311,9 @@ export function Workspace({
   // ---- onboarding redirect (FR-014) ----------------------------------------------------------------
   const onboarding = settings.get('onboarding.state').value;
   const redirected = useRef(false);
+  // Restoring an export instead of setting up (onboarding's first screen links to Settings →
+  // Data): the import restarts the Hub and the imported settings decide whether setup is done.
+  const restoring = route.name === 'settings' && route.section === 'data';
   useEffect(() => {
     if (redirected.current) return;
     redirected.current = true;
@@ -336,10 +322,11 @@ export function Workspace({
       !onboarding.completed &&
       !onboarding.skipped &&
       route.name !== 'onboarding' &&
-      route.name !== 'authorize'
+      route.name !== 'authorize' &&
+      !restoring
     )
       navigate('/onboarding', { replace: true });
-  }, [onboarding.completed, onboarding.skipped, route.name]);
+  }, [onboarding.completed, onboarding.skipped, route.name, restoring]);
 
   // ---- deep links (FR-007): /open?url=<link> replaces itself with the route the link names --------
   const openTarget = route.name === 'open' ? route.target : null;
@@ -472,26 +459,34 @@ export function Workspace({
     const many = leaves(l.root).length > 1;
     const active = findPane(l, l.active);
     return [
-      { id: 'split-right', label: 'Split right', onSelect: () => addPane(m, 'empty', 'row') },
-      { id: 'split-down', label: 'Split down', onSelect: () => addPane(m, 'empty', 'column') },
+      {
+        id: 'split-right',
+        label: SHELL_TEXT.pane.splitRight,
+        onSelect: () => addPane(m, 'empty', 'row'),
+      },
+      {
+        id: 'split-down',
+        label: SHELL_TEXT.pane.splitDown,
+        onSelect: () => addPane(m, 'empty', 'column'),
+      },
       ...ADDABLE_KINDS.map((k) => ({
         id: `add-${k}`,
-        label: `Add ${KIND_LABEL[k].toLowerCase()} pane`,
+        label: SHELL_TEXT.pane.add({ kind: k }),
         onSelect: () => addPane(m, k),
       })),
       ...(many
         ? [
             {
               id: 'maximize',
-              label: l.maximized ? 'Restore pane sizes' : 'Maximize the active pane',
+              label: l.maximized ? SHELL_TEXT.pane.restore : SHELL_TEXT.pane.maximize,
               onSelect: () => updateLayout(m, (x) => toggleMaximize(x, l.maximized ?? x.active)),
             },
             ...(active && active.kind !== 'main'
-              ? [{ id: 'close', label: 'Close the active pane', onSelect: () => closeActive(m) }]
+              ? [{ id: 'close', label: SHELL_TEXT.pane.close, onSelect: () => closeActive(m) }]
               : []),
           ]
         : []),
-      { id: 'reset', label: 'Reset layout', onSelect: () => resetLayout(m) },
+      { id: 'reset', label: SHELL_TEXT.pane.reset, onSelect: () => resetLayout(m) },
     ];
   };
 
@@ -572,7 +567,8 @@ export function Workspace({
       },
       toggleTheme: () => {
         const next = toggledTheme(appearance.theme, prefersDark);
-        settings.set('appearance.theme', next).catch(() => undefined);
+        // A theme toggled by hand stops a saved theme (docs/14 §2.2).
+        setLookByHand(settings, 'appearance.theme', next).catch(() => undefined);
       },
       toggleInspector: () => setInspectorToggle({ fits: inspectorFits, open: !inspectorOpen }),
     };
@@ -583,235 +579,240 @@ export function Workspace({
     const commands: Command[] = [
       {
         id: 'palette.open',
-        title: 'Show command palette',
-        category: 'General',
+        title: COMMAND_TEXT.palette,
+        category: CATEGORY.general,
         binding: ['mod+k', 'mod+shift+p'],
         run: () => setPaletteOpen((o) => !o),
       },
       {
         id: 'chat.new',
-        title: 'New chat',
-        category: 'Chat',
+        title: COMMAND_TEXT.newChat,
+        category: CATEGORY.chat,
         binding: 'mod+n',
         run: () => a().newChat(),
       },
       {
         id: 'chat.newTemporary',
-        title: 'New temporary chat',
-        category: 'Chat',
+        title: COMMAND_TEXT.newTemporaryChat,
+        category: CATEGORY.chat,
         run: () => a().newTemporaryChat(),
       },
-      { id: 'chat.search', title: 'Search chats', category: 'Chat', run: () => a().openSearch() },
+      {
+        id: 'chat.search',
+        title: COMMAND_TEXT.searchChats,
+        category: CATEGORY.chat,
+        run: () => a().openSearch(),
+      },
       {
         id: 'chat.find',
-        title: 'Find in chat',
-        category: 'Chat',
+        title: COMMAND_TEXT.find,
+        category: CATEGORY.chat,
         binding: 'mod+f',
         when: 'mode == chat',
         run: () => chatControls.current?.openFind(),
       },
       {
         id: 'chat.sideChat',
-        title: 'Ask in a side chat',
-        category: 'Chat',
+        title: COMMAND_TEXT.sideChat,
+        category: CATEGORY.chat,
         run: () => a().openPanel('side'),
       },
       {
         id: 'chat.branches',
-        title: 'Show branches',
-        category: 'Chat',
+        title: COMMAND_TEXT.branches,
+        category: CATEGORY.chat,
         run: () => a().openPanel('branches'),
       },
       {
         id: 'chat.artifacts',
-        title: 'Show artifacts',
-        category: 'Chat',
+        title: COMMAND_TEXT.artifacts,
+        category: CATEGORY.chat,
         run: () => a().openPanel('artifacts'),
       },
       {
         id: 'chat.activity',
-        title: 'Show activity',
-        category: 'Chat',
+        title: COMMAND_TEXT.activity,
+        category: CATEGORY.chat,
         run: () => a().openPanel('activity'),
       },
       {
         id: 'chat.stop',
-        title: 'Stop generation',
-        category: 'Chat',
+        title: COMMAND_TEXT.stop,
+        category: CATEGORY.chat,
         binding: 'escape',
         when: 'streaming',
         run: () => chatControls.current?.stop(),
       },
       {
         id: 'chat.focusComposer',
-        title: 'Focus the message box',
-        category: 'Chat',
+        title: COMMAND_TEXT.focusComposer,
+        category: CATEGORY.chat,
         when: 'mode == chat',
         run: () => chatControls.current?.focusComposer(),
       },
       ...MODES.map((m, i) => ({
         id: MODE_INFO[m].command,
-        title: `Switch to ${MODE_INFO[m].label}`,
-        category: 'Modes',
+        title: MODE_TEXT[m].switchTo,
+        category: CATEGORY.modes,
         binding: `mod+${i + 1}`,
         run: () => a().switchMode(m),
       })),
       {
         id: 'settings.open',
-        title: 'Open settings',
-        category: 'Settings',
+        title: COMMAND_TEXT.openSettings,
+        category: CATEGORY.settings,
         binding: 'mod+,',
         run: () => navigate('/settings/general'),
       },
       ...SETTINGS_SECTIONS.map((s) => ({
         id: `settings.${s}`,
-        title: `Open ${SECTION_LABELS[s]} settings`,
-        category: 'Settings',
+        title: COMMAND_TEXT.openSection({ section: SECTION_LABELS[s] }),
+        category: CATEGORY.settings,
         run: () => navigate(`/settings/${s}`),
       })),
       {
         id: 'view.toggleTheme',
-        title: 'Toggle light and dark theme',
-        category: 'View',
+        title: COMMAND_TEXT.toggleTheme,
+        category: CATEGORY.view,
         run: () => a().toggleTheme(),
       },
       {
         id: 'view.toggleSidebar',
-        title: 'Toggle sidebar',
-        category: 'View',
+        title: COMMAND_TEXT.toggleSidebar,
+        category: CATEGORY.view,
         binding: 'mod+b',
         run: () => a().toggleSidebar(),
       },
       {
         id: 'view.toggleInspector',
-        title: 'Toggle inspector',
-        category: 'View',
+        title: COMMAND_TEXT.toggleInspector,
+        category: CATEGORY.view,
         run: () => a().toggleInspector(),
       },
       {
         id: 'nav.back',
-        title: 'Go back',
-        category: 'Navigation',
+        title: COMMAND_TEXT.back,
+        category: CATEGORY.navigation,
         binding: 'mod+[',
         run: () => history.back(),
       },
       {
         id: 'nav.forward',
-        title: 'Go forward',
-        category: 'Navigation',
+        title: COMMAND_TEXT.forward,
+        category: CATEGORY.navigation,
         binding: 'mod+]',
         run: () => history.forward(),
       },
       {
         id: 'onboarding.open',
-        title: 'Open the setup guide',
-        category: 'General',
+        title: COMMAND_TEXT.setupGuide,
+        category: CATEGORY.general,
         run: () => navigate('/onboarding'),
       },
       {
         id: 'apps.open',
-        title: 'Open app…',
-        category: 'Apps',
+        title: COMMAND_TEXT.openApp,
+        category: CATEGORY.apps,
         run: () => a().openAppPicker(),
       },
       {
         id: SHOW_APPS_COMMAND,
-        title: 'Show the chat’s apps',
-        category: 'Apps',
+        title: COMMAND_TEXT.chatApps,
+        category: CATEGORY.apps,
         run: () => a().openPanel('apps'),
       },
       {
         id: 'library.open',
-        title: 'Go to Library',
-        category: 'Navigation',
+        title: COMMAND_TEXT.library,
+        category: CATEGORY.navigation,
         run: () => navigate('/library'),
       },
       {
         id: 'files.show',
-        title: 'Show files',
-        category: 'Files',
+        title: COMMAND_TEXT.files,
+        category: CATEGORY.files,
         run: () => a().openPanel('files'),
       },
       {
         id: 'panel.toggle',
-        title: 'Toggle bottom panel',
-        category: 'View',
+        title: COMMAND_TEXT.togglePanel,
+        category: CATEGORY.view,
         binding: 'mod+j',
         run: () => a().togglePanel(),
       },
       {
         id: 'terminal.toggle',
-        title: 'Toggle terminal',
-        category: 'Terminal',
+        title: COMMAND_TEXT.toggleTerminal,
+        category: CATEGORY.terminal,
         binding: 'ctrl+`',
         run: () => a().toggleTerminal(),
       },
       {
         id: 'terminal.new',
-        title: 'New terminal',
-        category: 'Terminal',
+        title: COMMAND_TEXT.newTerminal,
+        category: CATEGORY.terminal,
         run: () => a().newTerminal(),
       },
       {
         id: 'pane.splitRight',
-        title: 'Split pane right',
-        category: 'Layout',
+        title: COMMAND_TEXT.splitRight,
+        category: CATEGORY.layout,
         run: () => a().split('row'),
       },
       {
         id: 'pane.splitDown',
-        title: 'Split pane down',
-        category: 'Layout',
+        title: COMMAND_TEXT.splitDown,
+        category: CATEGORY.layout,
         run: () => a().split('column'),
       },
       ...(['editor', 'preview', 'terminal'] as const).map((k) => ({
         id: `pane.add.${k}`,
-        title: `Add ${KIND_LABEL[k].toLowerCase()} pane`,
-        category: 'Layout',
+        title: SHELL_TEXT.pane.add({ kind: k }),
+        category: CATEGORY.layout,
         run: () => a().addPane(k),
       })),
       {
         id: 'pane.diff',
-        title: 'Show the diff pane',
-        category: 'Layout',
+        title: COMMAND_TEXT.diffPane,
+        category: CATEGORY.layout,
         binding: 'mod+shift+d',
         run: () => a().showPane('diff'),
       },
       {
         id: 'pane.browser',
-        title: 'Show the browser pane',
-        category: 'Layout',
+        title: COMMAND_TEXT.browserPane,
+        category: CATEGORY.layout,
         binding: 'mod+shift+b',
         run: () => a().showPane('browser'),
       },
       {
         id: 'pane.maximize',
-        title: 'Maximize or restore the active pane',
-        category: 'Layout',
+        title: COMMAND_TEXT.maximize,
+        category: CATEGORY.layout,
         run: () => a().maximize(),
       },
       {
         id: 'pane.close',
-        title: 'Close the active pane',
-        category: 'Layout',
+        title: COMMAND_TEXT.closePane,
+        category: CATEGORY.layout,
         run: () => a().closePane(),
       },
       {
         id: 'pane.moveEarlier',
-        title: 'Move the active pane earlier',
-        category: 'Layout',
+        title: COMMAND_TEXT.moveEarlier,
+        category: CATEGORY.layout,
         run: () => a().movePane(-1),
       },
       {
         id: 'pane.moveLater',
-        title: 'Move the active pane later',
-        category: 'Layout',
+        title: COMMAND_TEXT.moveLater,
+        category: CATEGORY.layout,
         run: () => a().movePane(1),
       },
       {
         id: 'layout.reset',
-        title: 'Reset layout',
-        category: 'Layout',
+        title: COMMAND_TEXT.resetLayout,
+        category: CATEGORY.layout,
         run: () => a().resetLayout(),
       },
     ];
@@ -863,12 +864,12 @@ export function Workspace({
   const panelKeys = registry.primaryBinding('panel.toggle');
   const workspaceFor = (m: Mode, main: ReactNode) => (
     <PaneWorkspace
-      label={`${MODE_INFO[m].label} workspace`}
+      label={MODE_TEXT[m].workspace}
       layout={layouts[m]}
       onChange={(fn) => updateLayout(m, fn)}
       visible={visibleMode === m}
       phone={layout === 'phone'}
-      info={(p) => paneInfo(p, { title: MODE_INFO[m].label, icon: MODE_INFO[m].icon })}
+      info={(p) => paneInfo(p, { title: MODE_TEXT[m].label, icon: MODE_INFO[m].icon })}
       renderPane={(pane, shown) => (
         <PaneContent
           pane={pane}
@@ -898,36 +899,12 @@ export function Workspace({
     />
   );
   const phoneMenu = layout === 'phone' && sidebarOpen;
-  const title =
-    route.name === 'settings'
-      ? 'Settings'
-      : route.name === 'onboarding'
-        ? 'Setup'
-        : route.name === 'projects'
-          ? 'Projects'
-          : route.name === 'library'
-            ? 'Library'
-            : route.name === 'spaces'
-              ? 'Spaces'
-              : route.name === 'sites'
-                ? 'Sites'
-                : route.name === 'apps'
-                  ? 'Apps'
-                  : route.name === 'computers'
-                    ? 'Computers'
-                    : route.name === 'devices'
-                      ? 'Devices'
-                      : route.name === 'network'
-                        ? 'Network'
-                        : route.name === 'approvals'
-                          ? 'Approvals'
-                          : route.name === 'team'
-                            ? 'Team'
-                            : route.name === 'marketplace'
-                              ? 'Marketplace'
-                              : route.name === 'authorize'
-                                ? 'Allow an app'
-                                : MODE_INFO[mode ?? lastMode].label;
+  const title = messageFor(SHELL_TEXT.page, route.name) ?? MODE_TEXT[mode ?? lastMode].label;
+  // The browser tab and the window list name the page that is open (WCAG 2.4.2).
+  const documentTitle = SHELL_TEXT.documentTitle({ page: title });
+  useEffect(() => {
+    document.title = documentTitle;
+  }, [documentTitle]);
 
   return (
     <div
@@ -937,11 +914,17 @@ export function Workspace({
       data-inspector={inspectorOpen ? 'open' : 'closed'}
     >
       <a className="skip-link" href="#main">
-        Skip to content
+        {SHELL_TEXT.skipToContent}
       </a>
       <header className="topbar">
         <IconButton
-          label={layout === 'phone' ? (sidebarOpen ? 'Close menu' : 'Open menu') : 'Toggle sidebar'}
+          label={
+            layout === 'phone'
+              ? sidebarOpen
+                ? SHELL_TEXT.closeMenu
+                : SHELL_TEXT.openMenu
+              : SHELL_TEXT.toggleSidebar
+          }
           icon={<Icon name={layout === 'phone' ? (sidebarOpen ? 'close' : 'menu') : 'sidebar'} />}
           variant="ghost"
           aria-expanded={sidebarOpen}
@@ -950,32 +933,38 @@ export function Workspace({
           onClick={toggleSidebar}
         />
         <span className="brand">Nova</span>
-        <span className="topbar-title">{title}</span>
+        <span className="topbar-title" dir="auto">
+          {title}
+        </span>
         <span className="topbar-spacer" />
         <Button
           variant="ghost"
           onClick={() => setPaletteOpen(true)}
           aria-keyshortcuts={paletteKeys ? ariaKeyShortcut(paletteKeys, mac) : undefined}
         >
-          Commands
+          {SHELL_TEXT.commands}
         </Button>
         <NotificationsBell />
         {mode !== null ? (
           <>
             <IconButton
-              label="Toggle bottom panel"
+              label={SHELL_TEXT.toggleBottomPanel}
               icon={<Icon name="panel" />}
               variant="ghost"
               aria-expanded={layouts[mode].bottom.open}
               aria-keyshortcuts={panelKeys ? ariaKeyShortcut(panelKeys, mac) : undefined}
               onClick={() => togglePanel(mode)}
             />
-            <Menu label="Layout" trigger={<Icon name="split-right" />} items={layoutItems(mode)} />
+            <Menu
+              label={SHELL_TEXT.layout}
+              trigger={<Icon name="split-right" />}
+              items={layoutItems(mode)}
+            />
           </>
         ) : null}
         {layout !== 'phone' && mode !== null ? (
           <IconButton
-            label="Toggle inspector"
+            label={SHELL_TEXT.toggleInspector}
             icon={<Icon name="inspector" />}
             variant="ghost"
             aria-expanded={inspectorOpen}
@@ -984,7 +973,7 @@ export function Workspace({
           />
         ) : null}
         <Menu
-          label={displayName ? `Account: ${displayName}` : 'Account'}
+          label={displayName ? SHELL_TEXT.accountOf({ name: displayName }) : SHELL_TEXT.account}
           trigger={
             <span className="account-initial">
               {(displayName ?? 'N').slice(0, 1).toUpperCase()}
@@ -993,10 +982,22 @@ export function Workspace({
           items={[
             // How this device reaches the Hub: directly, over the Mesh, or through the Relay.
             connectionMenuItem(hubPath, () => navigate('/network')),
-            { id: 'settings', label: 'Settings', onSelect: () => navigate('/settings/general') },
-            { id: 'approvals', label: 'Approvals', onSelect: () => navigate('/approvals') },
-            { id: 'setup', label: 'Setup guide', onSelect: () => navigate('/onboarding') },
-            { id: 'signout', label: 'Sign out', onSelect: onSignOut },
+            {
+              id: 'settings',
+              label: SHELL_TEXT.settings,
+              onSelect: () => navigate('/settings/general'),
+            },
+            {
+              id: 'approvals',
+              label: SHELL_TEXT.approvals,
+              onSelect: () => navigate('/approvals'),
+            },
+            {
+              id: 'setup',
+              label: SHELL_TEXT.setupGuide,
+              onSelect: () => navigate('/onboarding'),
+            },
+            { id: 'signout', label: SHELL_TEXT.signOut, onSelect: onSignOut },
           ]}
         />
       </header>
@@ -1047,7 +1048,7 @@ export function Workspace({
                 m === 'work' ? (
                   <WorkView id={route.name === 'mode' && route.mode === 'work' ? route.id : null} />
                 ) : m === 'code' ? (
-                  <MemberGate ownerOnly what="Code">
+                  <MemberGate ownerOnly what={SHELL_TEXT.owned.code}>
                     <CodeView
                       id={route.name === 'mode' && route.mode === 'code' ? route.id : null}
                     />
@@ -1069,7 +1070,7 @@ export function Workspace({
           ) : null}
           {route.name === 'projects' ? <ProjectsView projectId={route.projectId} /> : null}
           {route.name === 'library' ? (
-            <MemberGate ownerOnly what="Library">
+            <MemberGate ownerOnly what={SHELL_TEXT.owned.library}>
               <LibraryView />
             </MemberGate>
           ) : null}
@@ -1079,12 +1080,12 @@ export function Workspace({
           {route.name === 'sites' ? <SitesView siteId={route.siteId} /> : null}
           {route.name === 'apps' ? <AppsView entryId={route.entryId} /> : null}
           {route.name === 'devices' ? (
-            <MemberGate ownerOnly what="Devices">
+            <MemberGate ownerOnly what={SHELL_TEXT.owned.devices}>
               <DevicesView deviceId={route.deviceId} />
             </MemberGate>
           ) : null}
           {route.name === 'network' ? (
-            <MemberGate ownerOnly what="Network">
+            <MemberGate ownerOnly what={SHELL_TEXT.owned.network}>
               <NetworkSurface section={route.section} />
             </MemberGate>
           ) : null}
@@ -1104,23 +1105,28 @@ export function Workspace({
           {route.name === 'authorize' ? <AuthorizePage query={route.query} /> : null}
           <ExtensionStatusBar />
         </main>
-        <aside id="inspector" className="inspector" aria-label="Inspector" hidden={!inspectorOpen}>
+        <aside
+          id="inspector"
+          className="inspector"
+          aria-label={SHELL_TEXT.inspector}
+          hidden={!inspectorOpen}
+        >
           {layout === 'phone' ? (
             <Button
               className="inspector-close"
               onClick={() => setInspectorToggle({ fits: inspectorFits, open: false })}
             >
-              <Icon name="close" /> Close panel
+              <Icon name="close" /> {SHELL_TEXT.closePanel}
             </Button>
           ) : null}
           <Tabs
-            label="Inspector"
+            label={SHELL_TEXT.inspector}
             value={inspectorTab}
             onChange={setInspectorTab}
             items={[
               {
                 id: 'artifacts',
-                label: 'Artifacts',
+                label: SHELL_TEXT.tabs.artifacts,
                 panel: (
                   <ArtifactsPanel
                     key={chatThreadId ?? 'none'}
@@ -1132,7 +1138,7 @@ export function Workspace({
               },
               {
                 id: 'files',
-                label: 'Files',
+                label: SHELL_TEXT.tabs.files,
                 panel: (
                   <FileBrowser
                     key={`${target}:${target === 'chat' ? (chatThreadId ?? 'none') : ''}`}
@@ -1142,15 +1148,15 @@ export function Workspace({
                   />
                 ),
               },
-              { id: 'sources', label: 'Sources', panel: <InspectorEmpty what="Sources" /> },
+              { id: 'sources', label: SHELL_TEXT.tabs.sources, panel: <SourcesLater /> },
               {
                 id: 'activity',
-                label: 'Activity',
+                label: SHELL_TEXT.tabs.activity,
                 panel: <ActivityPanel key={chatThreadId ?? 'none'} threadId={chatThreadId} />,
               },
               {
                 id: 'side',
-                label: 'Side chat',
+                label: SHELL_TEXT.tabs.side,
                 panel: (
                   <SideChat
                     key={chatThreadId ?? 'none'}
@@ -1164,12 +1170,12 @@ export function Workspace({
               },
               {
                 id: 'branches',
-                label: 'Branches',
+                label: SHELL_TEXT.tabs.branches,
                 panel: <BranchesPanel threadId={chatThreadId} />,
               },
               {
                 id: 'apps',
-                label: 'Apps',
+                label: SHELL_TEXT.tabs.apps,
                 panel: <AppsSlot host={appsHost} onLeave={parkApps} shown={inspectorOpen} />,
               },
             ]}
@@ -1184,10 +1190,10 @@ export function Workspace({
       {temporaryChats.dialog}
       {appPicker !== 'closed' ? (
         <Picker
-          label="Open app"
-          placeholder="Search apps"
+          label={SHELL_TEXT.openApp}
+          placeholder={SHELL_TEXT.searchApps}
           options={appPicker}
-          empty="No apps yet. Plugins and MCP servers can add them."
+          empty={SHELL_TEXT.noApps}
           onPick={(id) => navigate(`/apps/${encodeURIComponent(id)}`)}
           onClose={() => setAppPicker('closed')}
         />
@@ -1243,6 +1249,6 @@ function moveApps(target: HTMLElement, host: HTMLElement): void {
   target.appendChild(host);
 }
 
-function InspectorEmpty({ what }: { what: string }) {
-  return <p className="muted">{what} for the open item appear here in a later milestone.</p>;
+function SourcesLater() {
+  return <p className="muted">{SHELL_TEXT.sourcesLater}</p>;
 }

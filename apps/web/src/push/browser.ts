@@ -3,6 +3,7 @@
 // pieces are behind small interfaces so tests use a fake PushManager. iPhone and iPad give Web
 // Push only to the app added to the Home Screen; a page served over plain HTTP gets none; and the
 // service worker (public/sw.js) must be running, which it is in the built app.
+import { defineMessages } from '@nova/i18n';
 import type { CreatePushSubscriptionRequest } from '@nova/shared';
 
 export interface PushSubscriptionLike {
@@ -107,7 +108,8 @@ export async function pushSupport(env: PushEnv): Promise<PushSupport> {
   return registration ? { ok: true, registration } : { ok: false, reason: 'no-worker' };
 }
 
-export const SUPPORT_TEXT: Record<Exclude<PushSupport, { ok: true }>['reason'], string> = {
+/** Why this page cannot get push notifications, by `PushSupport` reason. */
+export const SUPPORT_TEXT = defineMessages('push.support', {
   insecure:
     'This page is not on a secure connection, so the browser gives it no push notifications. Turn on HTTPS in Network → Trust, or use the Nova app.',
   unsupported: 'This browser cannot receive push notifications.',
@@ -115,7 +117,7 @@ export const SUPPORT_TEXT: Record<Exclude<PushSupport, { ok: true }>['reason'], 
     'On iPhone and iPad, push notifications work in the Nova app on the Home Screen. Tap Share, then Add to Home Screen, and open Nova from there.',
   'no-worker':
     'Nova’s background worker is not running on this page, so it cannot receive pushes. Reload the page and try again.',
-};
+}) satisfies Record<Exclude<PushSupport, { ok: true }>['reason'], string>;
 
 /** base64url (RFC 8292 `k`) → the bytes `subscribe` takes. */
 export function vapidKeyBytes(b64url: string): Uint8Array<ArrayBuffer> {

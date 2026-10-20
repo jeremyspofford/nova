@@ -2,6 +2,7 @@
 // The attach-window preview (FR-214, docs/04 §3.2): the image and the text as separate parts the
 // user can drop, redactions shown, and nothing sent until Send.
 const api = window.novaLocal;
+const t = window.novaText.t;
 const $ = (id) => document.getElementById(id);
 const draftId = new URLSearchParams(window.location.search).get('draft') || '';
 
@@ -10,24 +11,23 @@ function showError(message) {
   $('error').hidden = !message;
 }
 
-function plural(n, one, many) {
-  return `${n} ${n === 1 ? one : many}`;
+// The main process writes the sentences about the draft (`notes`) in the shell's language.
+function renderWords(d, notes) {
+  $('source').textContent = notes.source;
+  $('image-note').textContent = t(d.image ? 'imageAsIs' : 'noImage');
+  $('text-note').textContent = d.textNote || '';
+  $('redactions').textContent = notes.redactions;
 }
 
-function render(d) {
-  $('source').textContent = d.appName
-    ? `From ${d.appName}: ${d.windowTitle}`
-    : `From the window "${d.windowTitle}"`;
+function render(d, notes) {
+  renderWords(d, notes);
   const img = $('image');
   if (d.image) {
     img.src = d.image.dataUrl;
     img.hidden = false;
-    $('image-note').textContent =
-      'The image is sent as it is: check that it shows nothing private.';
   } else {
     $('keep-image').checked = false;
     $('keep-image').disabled = true;
-    $('image-note').textContent = 'This system gave no image of the window.';
   }
   const text = $('text');
   if (d.text) {
@@ -37,17 +37,6 @@ function render(d) {
     $('keep-text').checked = false;
     $('keep-text').disabled = true;
   }
-  $('text-note').textContent = d.textNote || '';
-  const notes = [];
-  if (d.redactions.length > 0) {
-    const n = d.redactions.reduce((s, r) => s + r.count, 0);
-    notes.push(`${plural(n, 'secret was', 'secrets were')} masked before attaching.`);
-  }
-  if (d.passwordFieldsSkipped > 0)
-    notes.push(
-      `${plural(d.passwordFieldsSkipped, 'password field was', 'password fields were')} left out.`,
-    );
-  $('redactions').textContent = notes.join(' ');
   const currentRadio = $('current-option').querySelector('input');
   currentRadio.disabled = !d.currentThreadId;
   if (d.currentThreadId) currentRadio.checked = true;
@@ -73,7 +62,7 @@ $('send').addEventListener('click', async () => {
       note: $('note').value,
       target: document.querySelector('input[name="target"]:checked').value,
     });
-    if (!res || res.ok !== true) showError((res && res.message) || 'Nothing was sent.');
+    if (!res || res.ok !== true) showError((res && res.message) || t('notSent'));
   } finally {
     update();
   }
@@ -88,12 +77,19 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') void api.invoke('window.capture.discard', { draftId });
 });
 
-void api.invoke('window.capture.draft', { draftId }).then((res) => {
+let shown = null;
+const load = () => api.invoke('window.capture.draft', { draftId });
+window.novaText.onChange(() => {
+  // The language changed: the main process writes the draft's sentences again.
+  if (shown) void load().then((res) => res && res.ok === true && renderWords(res.draft, res.notes));
+});
+void window.novaText.ready.then(load).then((res) => {
   if (!res || res.ok !== true) {
-    showError((res && res.message) || 'This capture is gone.');
+    showError((res && res.message) || t('gone'));
     $('send').disabled = true;
     return;
   }
-  render(res.draft);
+  shown = res.draft;
+  render(res.draft, res.notes);
   $('send').focus();
 });

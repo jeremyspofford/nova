@@ -1,10 +1,15 @@
 // A file of the session opened at a line (FR-074, FR-039): the workspace's editor, or its preview
 // for files the editor cannot show. Once the editor has the text, the line is selected and
 // scrolled into view.
+import { defineMessages } from '@nova/i18n';
 import { useEffect, useRef, useState } from 'react';
 import { EditorPane } from '../files/EditorPane.tsx';
 import { PreviewPane } from '../files/PreviewPane.tsx';
 import type { FileRef } from '../layout/model.ts';
+
+export const FILE_PANE_TEXT = defineMessages('code.filePane', {
+  empty: 'Find a symbol with Go to symbol above to open its file here.',
+});
 
 export interface FileTarget {
   path: string;
@@ -65,12 +70,7 @@ export function FilePane({
     return () => observer.disconnect();
   }, [kind, target]);
 
-  if (!target)
-    return (
-      <p className="muted pane-note">
-        Find a symbol with Go to symbol above to open its file here.
-      </p>
-    );
+  if (!target) return <p className="muted pane-note">{FILE_PANE_TEXT.empty}</p>;
   const file: FileRef = { root, path: target.path };
   return (
     <div ref={wrap} className="code-file-pane">

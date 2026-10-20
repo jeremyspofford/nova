@@ -2,7 +2,10 @@
 
 The Nova extension SDK (FR-117, `docs/14` §4): the typed `nova` API for extension authors, the
 `extension.json` types, and a test host for unit tests. Apache-2.0, with no dependencies, so an
-extension under any license can use it.
+extension under any license can use it. It is a workspace package (not published to a registry in
+M8). Inside the Hub's engine, `import … from '@nova/sdk'` resolves to a small built-in module with
+`API_VERSION`, `defineExtension` and `nova`; the types and the test host are for authoring and
+tests only. The author's guide is `docs/26` §9.
 
 ## What an extension is
 
@@ -22,7 +25,8 @@ my-extension/
 ```
 
 `nova init <dir>` (`@nova/cli`) starts one from [`examples/hello`](examples/hello), which adds a
-command, a panel and a tool.
+command, a panel and three tools, plus a status item, a keybinding, a menu item, a hook and an
+event listener.
 
 ## extension.json
 
@@ -55,8 +59,8 @@ command, a panel and a tool.
 
 | Key | Meaning |
 | --- | --- |
-| `network` | Hosts `nova.net.fetch` may reach (`host`, `*.host`, or `*` for any). Public addresses only. |
-| `fs` | Folders `nova.fs` may use: `${extensionData}` (its own data folder, read and write), `${extensionRoot}` (its own files, read only), or an absolute path (read only, or `{"path": "/x", "write": true}`). Nothing inside the Hub's own data. |
+| `network` | Hosts `nova.net.fetch` may reach (`host`, `*.host`, or `*` for any). Public addresses only, and always within the Hub's egress policy (the owner's `network.egressMode` and deny list, and managed policy): a request the policy refuses fails with `policy_denied` but does not turn the extension off. |
+| `fs` | Folders `nova.fs` may use: `${extensionData}` (its own data folder, always read and write), `${extensionRoot}` (its own files, read only), or an absolute path (read only, or `{"path": "/x", "write": true}`). A folder inside the Hub's own data, or one that contains it (such as `/`), is refused at install. |
 | `secrets` | Names `nova.secrets.get` may read. The owner stores the values (Settings, or `PUT /api/v1/extensions/:id/secrets/:name`). |
 | `commands` | Command ids the extension may register. |
 | `panels` | `ui://` resources served from a file in the extension, at entry point `global`, `thread` or `file` (with `extensions`). Their CSP domains must be within `network`. |
@@ -77,7 +81,7 @@ The owner sees all of this in plain words before installing, and the difference 
 | Panels | `nova.panels.register({ id, title, resource, entryPoint, extensions? })` |
 | Tools | `nova.tools.register({ name, title, description, inputSchema, outputSchema?, annotations?, handler })` |
 | Hooks | `nova.hooks.register({ id, event, matcher?, handler })` returning `{ block?, decision?, context?, continue? }` |
-| Themes | `nova.themes.register(theme)` (contracts/schemas/theme.json) |
+| Themes | `nova.themes.register(theme)` (contracts/schemas/theme.json, plain CSS values only; needs no declaration, and the owner chooses whether to use it) |
 | Keybindings | `nova.keybindings.register({ command, key, when? })` for its own commands |
 | Events | `nova.events.on(name, listener)` (observe only) |
 | Context menus | `nova.menus.register({ where, items: [{ title, command }] })` |
@@ -97,18 +101,26 @@ ended and restarted (up to 3 times in 10 minutes). Calls time out after 30 s (60
 ## Testing an extension
 
 ```ts
-import { createTestHost } from '@nova/sdk';
-import manifest from './.nova-plugin/extension.json' with { type: 'json' };
+import { readFileSync } from 'node:fs';
+import { createTestHost, type ExtensionManifest } from '@nova/sdk';
 import * as extension from './extension.js';
 
-const host = createTestHost(manifest, { secrets: { greeting: 'Hi' } });
+// A JSON import types `api` as number; read and cast the manifest instead.
+const manifest = JSON.parse(
+  readFileSync(new URL('./.nova-plugin/extension.json', import.meta.url), 'utf8'),
+) as ExtensionManifest;
+const host = createTestHost(manifest, { extensionId: 'com.example.hello', secrets: { greeting: 'Hi' } });
 await extension.activate(host.nova);
 await host.run('hello.greet', { name: 'Ada' });
 await host.callTool('greet', { name: 'Grace' });
 ```
 
-The test host applies the same declared-permission rules as the Hub (`host.denied` lists what it
-refused), but it does not isolate the code: that is the Hub's engine.
+The test host refuses undeclared commands, tools, hooks, panels, hosts, files, secrets and events
+(`host.denied` lists what it refused), but it is not the Hub: it throws `PermissionDeniedError` at
+once where the Hub rejects `ready` and turns the extension off; it does not isolate the code, apply
+the egress policy, public-address checks or limits, or validate menus, keybinding keys and status
+ids; it checks themes only for `schemaVersion` and requires a panel's `resource` and a hook's
+`event` to match the declaration when given. Load the extension with `nova dev` before publishing.
 
 ## Packaging and signing
 
@@ -117,7 +129,9 @@ your publisher key (`nova keys generate`). A Hub installs a bundle signed by a k
 trusts (`plugins.trustedPublishers`) as Verified; anything else installs only through an explicit
 sideload confirmation and stays labelled Unverified. A bundle whose signature does not match its
 files is refused. `nova dev <dir>` loads the folder into a running Hub and reloads it on every
-change (`NOVA_URL`, `NOVA_TOKEN`).
+change (`NOVA_URL`, `NOVA_TOKEN`). "Verified" is computed when shown, so removing a trusted key
+unverifies what it signed; an update signed by another key must be accepted and clears the
+extension's secrets and data.
 
 Bundle format (ADR-097 D2): a zip of the folder plus `META-INF/nova-signature.json`
 `{v: 1, publisher, digest, signature}`, where `digest` is SHA-256 over the sorted lines

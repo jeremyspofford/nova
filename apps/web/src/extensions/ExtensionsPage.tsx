@@ -22,12 +22,11 @@ import { SwitchField } from '../settings/controls.tsx';
 import { useSettings } from '../settings.tsx';
 import { MemberGate } from '../team/role.tsx';
 import { MARKET_PATH } from '../market/format.ts';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
 import {
-  ManagedNote,
   POLICY_TEXT,
   extensionsLimited,
   unverifiedForbidden,
-  useManagedSources,
   useRestrictions,
 } from '../market/policy.tsx';
 import { useExtensionsApi, type ExtensionsApi } from './api-m8.ts';
@@ -40,9 +39,11 @@ import {
   SIGNATURE_TEXT,
   STATUS_TEXT,
   extensionErrorMessage,
+  hookEventText,
   publisherText,
   readBundleFile,
   registeredText,
+  stoppedText,
 } from './format.ts';
 import { useRefreshContributions } from './store.ts';
 import './extensions.css';
@@ -76,11 +77,6 @@ function ExtensionsBody() {
   const [apps, setApps] = useState<UiEntryPointView[]>([]);
   const restrictions = useRestrictions();
   const sdk = settings.get('sdk.enabled');
-  const anyManaged =
-    sdk.locked ||
-    unverifiedForbidden(restrictions.layers) ||
-    extensionsLimited(restrictions.layers);
-  const sources = useManagedSources(anyManaged);
 
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
   useEffect(() => {
@@ -132,7 +128,8 @@ function ExtensionsBody() {
           label={EXT_TEXT.sdkSwitch}
           description={EXT_TEXT.sdkSwitchHint}
           checked={sdk.value}
-          disabled={sdk.locked}
+          locked={sdk.locked}
+          setting="sdk.enabled"
           onChange={(v) => {
             settings.set('sdk.enabled', v).then(
               () => refreshShell(),
@@ -143,7 +140,6 @@ function ExtensionsBody() {
             );
           }}
         />
-        {sdk.locked ? <ManagedNote view={sources} sourceKey="sdk.enabled" /> : null}
         {!sdk.value ? (
           <p className="ws-callout" role="note">
             <Icon name="alert" />
@@ -153,13 +149,13 @@ function ExtensionsBody() {
         {unverifiedForbidden(restrictions.layers) ? (
           <p className="ext-policy">
             <span>{POLICY_TEXT.unverifiedOff}</span>{' '}
-            <ManagedNote view={sources} sourceKey="restrict.unverifiedInstalls" />
+            <ManagedNote setting="restrict.unverifiedInstalls" />
           </p>
         ) : null}
         {extensionsLimited(restrictions.layers) ? (
           <p className="ext-policy">
             <span>{POLICY_TEXT.extensionsLimited}</span>{' '}
-            <ManagedNote view={sources} sourceKey="restrict.extensions" />
+            <ManagedNote setting="restrict.extensions" />
           </p>
         ) : null}
       </section>
@@ -204,7 +200,7 @@ function ExtensionsBody() {
         <summary>{EXT_TEXT.developer}</summary>
         <div className="stack">
           <p>{EXT_TEXT.developerBody}</p>
-          <pre className="ws-command" aria-label={EXT_TEXT.devCommands}>
+          <pre role="group" className="ws-command" aria-label={EXT_TEXT.devCommands}>
             <code>{DEV_COMMANDS}</code>
           </pre>
           <p className="muted">{EXT_TEXT.developerEnv}</p>
@@ -219,7 +215,11 @@ function ExtensionsBody() {
           onClose={() => setPreview(null)}
           onInstalled={(view, update) => {
             setPreview(null);
-            changed(update ? PREVIEW_TEXT.updated(view.name) : PREVIEW_TEXT.installed(view.name));
+            changed(
+              update
+                ? PREVIEW_TEXT.updated({ name: view.name })
+                : PREVIEW_TEXT.installed({ name: view.name }),
+            );
           }}
         />
       ) : null}
@@ -234,6 +234,29 @@ const DEV_COMMANDS = [
 ].join('\n');
 
 // ---- one extension --------------------------------------------------------------------------
+
+/**
+ * Why the Hub stopped an extension the owner left on: managed policy (with "Managed by your
+ * organization" naming the source of the part that refuses it), a policy it cannot read, or the
+ * SDK switch.
+ */
+function StoppedNote({ extension: e }: { extension: ExtensionView }) {
+  const text = stoppedText(e);
+  if (!text) return null;
+  const s = e.stopped;
+  const managed = s?.reason === 'managed' || s?.reason === 'managed_unreadable';
+  return (
+    <div className="ws-callout ext-stopped" role="note">
+      <Icon name={managed ? 'shield' : 'stop'} />
+      <div className="stack">
+        <p>{text}</p>
+        {managed ? (
+          <ManagedNote as="p" {...(s.policy ? { setting: `restrict.${s.policy}` } : {})} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function ExtensionCard({
   extension: e,
@@ -261,11 +284,13 @@ function ExtensionCard({
       (view) => {
         setBusy(false);
         onReplaced(view);
-        onChanged(on ? EXT_TEXT.turnedOn(e.name) : EXT_TEXT.turnedOff(e.name));
+        onChanged(on ? EXT_TEXT.turnedOn({ name: e.name }) : EXT_TEXT.turnedOff({ name: e.name }));
       },
       (err: unknown) => {
         setBusy(false);
-        toast.show(extensionErrorMessage(err, EXT_TEXT.changeFailed(e.name)), { tone: 'error' });
+        toast.show(extensionErrorMessage(err, EXT_TEXT.changeFailed({ name: e.name })), {
+          tone: 'error',
+        });
       },
     );
   };
@@ -284,7 +309,7 @@ function ExtensionCard({
           </span>
         </div>
         <SwitchField
-          label={EXT_TEXT.runSwitch(e.name)}
+          label={EXT_TEXT.runSwitch({ name: e.name })}
           checked={e.enabled}
           disabled={busy}
           onChange={toggle}
@@ -294,16 +319,18 @@ function ExtensionCard({
       {e.status === 'error' && e.error ? (
         <p role="alert" className="ws-warning">
           <Icon name="alert" />
-          <span>
-            {EXT_TEXT.error}: {e.error}
-          </span>
+          <span>{EXT_TEXT.error({ error: e.error })}</span>
         </p>
       ) : null}
+      {e.status === 'stopped' ? <StoppedNote extension={e} /> : null}
 
       <dl className="ws-dl ext-facts">
         <dt>{EXT_TEXT.publisher}</dt>
         <dd>
-          {publisherText(e.publisher)} · {SIGNATURE_TEXT[e.signature]}
+          {EXT_TEXT.publisherLine({
+            publisher: publisherText(e.publisher),
+            signature: SIGNATURE_TEXT[e.signature],
+          })}
         </dd>
         {e.publisher.fingerprint ? (
           <>
@@ -319,11 +346,11 @@ function ExtensionCard({
 
       <details className="ws-advanced ext-more">
         <summary>{EXT_TEXT.permissions}</summary>
-        <PermissionList lines={e.permissions} label={EXT_TEXT.permissionsOf(e.name)} />
+        <PermissionList lines={e.permissions} label={EXT_TEXT.permissionsOf({ name: e.name })} />
       </details>
 
       {e.hooks.length ? (
-        <section className="ext-sub" aria-label={EXT_TEXT.hooksOf(e.name)}>
+        <section className="ext-sub" aria-label={EXT_TEXT.hooksOf({ name: e.name })}>
           <h5 className="ws-subhead">{EXT_TEXT.hooks}</h5>
           <p className="muted">{EXT_TEXT.hooksHint}</p>
           <ul className="ws-list">
@@ -333,11 +360,14 @@ function ExtensionCard({
                 <li key={h.id} className="ws-list-row" aria-label={h.id}>
                   <span className="ws-row-meta">
                     <code className="ws-code-inline">{h.id}</code>
-                    <span>{h.event}</span>
+                    <span>{hookEventText(h.event)}</span>
                     <StateChip text={st.text} tone={st.tone} icon={st.icon} />
                   </span>
                   {h.status === 'needs_trust' || h.status === 'revoked' ? (
-                    <Button aria-label={EXT_TEXT.trustHook(h.id)} onClick={() => setTrusting(h)}>
+                    <Button
+                      aria-label={EXT_TEXT.trustHook({ id: h.id })}
+                      onClick={() => setTrusting(h)}
+                    >
                       {EXT_TEXT.trust}
                     </Button>
                   ) : null}
@@ -351,7 +381,7 @@ function ExtensionCard({
       {e.secrets.length ? <Secrets extension={e} ext={ext} onChanged={onChanged} /> : null}
 
       {apps.length ? (
-        <section className="ext-sub" aria-label={EXT_TEXT.appsOf(e.name)}>
+        <section className="ext-sub" aria-label={EXT_TEXT.appsOf({ name: e.name })}>
           <h5 className="ws-subhead">{EXT_TEXT.apps}</h5>
           <ul className="ws-plain-list">
             {apps.map((a) => (
@@ -361,7 +391,7 @@ function ExtensionCard({
                   <a
                     href={`/apps/${encodeURIComponent(a.id)}`}
                     className="link"
-                    aria-label={EXT_TEXT.openAppOf(a.title)}
+                    aria-label={EXT_TEXT.openAppOf({ title: a.title })}
                     onClick={(ev) => {
                       if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
                       ev.preventDefault();
@@ -383,7 +413,7 @@ function ExtensionCard({
         <Button
           variant="danger"
           onClick={() => setRemoving(true)}
-          aria-label={EXT_TEXT.uninstallOf(e.name)}
+          aria-label={EXT_TEXT.uninstallOf({ name: e.name })}
         >
           {EXT_TEXT.uninstall}
         </Button>
@@ -397,7 +427,7 @@ function ExtensionCard({
           onClose={() => setTrusting(null)}
           onTrusted={(id) => {
             setTrusting(null);
-            onChanged(EXT_TEXT.hookTrusted(id));
+            onChanged(EXT_TEXT.hookTrusted({ id }));
           }}
         />
       ) : null}
@@ -408,7 +438,7 @@ function ExtensionCard({
           onClose={() => setRemoving(false)}
           onDone={() => {
             setRemoving(false);
-            onChanged(EXT_TEXT.uninstalled(e.name));
+            onChanged(EXT_TEXT.uninstalled({ name: e.name }));
           }}
         />
       ) : null}
@@ -435,13 +465,13 @@ function UninstallDialog({
     setError(null);
     ext.uninstallExtension(e.id, { removeData }).then(onDone, (err: unknown) => {
       setBusy(false);
-      setError(extensionErrorMessage(err, EXT_TEXT.uninstallFailed(e.name)));
+      setError(extensionErrorMessage(err, EXT_TEXT.uninstallFailed({ name: e.name })));
     });
   };
   return (
     <Dialog
       open
-      title={EXT_TEXT.uninstallTitle(e.name)}
+      title={EXT_TEXT.uninstallTitle({ name: e.name })}
       description={EXT_TEXT.uninstallBody}
       onClose={onClose}
       footer={
@@ -487,12 +517,16 @@ function Secrets({
   const [editing, setEditing] = useState<string | null>(null);
   const [clearing, setClearing] = useState<string | null>(null);
   return (
-    <section className="ext-sub" aria-label={EXT_TEXT.secretsOf(e.name)}>
+    <section className="ext-sub" aria-label={EXT_TEXT.secretsOf({ name: e.name })}>
       <h5 className="ws-subhead">{EXT_TEXT.secrets}</h5>
       <p className="muted">{EXT_TEXT.secretsHint}</p>
       <ul className="ws-list">
         {e.secrets.map((s) => (
-          <li key={s.name} className="ws-list-row" aria-label={EXT_TEXT.secretRow(s.name)}>
+          <li
+            key={s.name}
+            className="ws-list-row"
+            aria-label={EXT_TEXT.secretRow({ name: s.name })}
+          >
             <span className="ws-row-meta">
               <code className="ws-code-inline">{s.name}</code>
               <span className="muted">{s.set ? EXT_TEXT.secretSet : EXT_TEXT.secretUnset}</span>
@@ -504,14 +538,16 @@ function Secrets({
                 onSave={async (value) => {
                   await ext.setExtensionSecret(e.id, s.name, value);
                   setEditing(null);
-                  onChanged(EXT_TEXT.secretSaved(s.name));
+                  onChanged(EXT_TEXT.secretSaved({ name: s.name }));
                 }}
               />
             ) : (
               <span className="row ws-row-actions">
                 <Button
                   aria-label={
-                    s.set ? EXT_TEXT.replaceSecretOf(s.name) : EXT_TEXT.setSecretOf(s.name)
+                    s.set
+                      ? EXT_TEXT.replaceSecretOf({ name: s.name })
+                      : EXT_TEXT.setSecretOf({ name: s.name })
                   }
                   onClick={() => setEditing(s.name)}
                 >
@@ -520,7 +556,7 @@ function Secrets({
                 {s.set ? (
                   <Button
                     variant="ghost"
-                    aria-label={EXT_TEXT.clearSecretOf(s.name)}
+                    aria-label={EXT_TEXT.clearSecretOf({ name: s.name })}
                     onClick={() => setClearing(s.name)}
                   >
                     {EXT_TEXT.clearSecret}
@@ -539,7 +575,7 @@ function Secrets({
           onClear={async () => {
             await ext.clearExtensionSecret(e.id, clearing);
             setClearing(null);
-            onChanged(EXT_TEXT.secretCleared(clearing));
+            onChanged(EXT_TEXT.secretCleared({ name: clearing }));
           }}
         />
       ) : null}
@@ -566,13 +602,13 @@ function SecretForm({
     setError(null);
     onSave(value).catch((err: unknown) => {
       setBusy(false);
-      setError(extensionErrorMessage(err, EXT_TEXT.storeFailed(name)));
+      setError(extensionErrorMessage(err, EXT_TEXT.storeFailed({ name })));
     });
   };
   return (
     <form className="ext-secret-form" onSubmit={submit}>
       <TextField
-        label={EXT_TEXT.secretValue(name)}
+        label={EXT_TEXT.secretValue({ name })}
         type="password"
         autoComplete="off"
         autoFocus
@@ -606,8 +642,8 @@ function ClearSecretDialog({
   return (
     <Dialog
       open
-      title={EXT_TEXT.clearTitle(name)}
-      description={EXT_TEXT.clearBody(extensionName)}
+      title={EXT_TEXT.clearTitle({ name })}
+      description={EXT_TEXT.clearBody({ extension: extensionName })}
       onClose={onClose}
       footer={
         <>
@@ -619,7 +655,7 @@ function ClearSecretDialog({
               setBusy(true);
               onClear().catch((err: unknown) => {
                 setBusy(false);
-                setError(extensionErrorMessage(err, EXT_TEXT.clearFailed(name)));
+                setError(extensionErrorMessage(err, EXT_TEXT.clearFailed({ name })));
               });
             }}
           >

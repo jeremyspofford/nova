@@ -13,6 +13,8 @@ import {
   findPane,
   leaves,
   movePane,
+  RESIZE_STEP,
+  resizePane,
   setActive,
   setBottom,
   setSizes,
@@ -24,6 +26,7 @@ import {
   type ModeLayout,
   type PaneLeaf,
 } from './model.ts';
+import { LAYOUT_TEXT, PANE_SIZE_TEXT } from './strings.ts';
 
 const DRAG_TYPE = 'application/x-nova-pane';
 
@@ -125,7 +128,7 @@ export function PaneWorkspace({
   const renderNode = (node: LayoutNode): ReactNode => {
     if (node.type === 'pane') return frame(node);
     const names = node.children.map((c) =>
-      c.type === 'pane' ? info(c).title : `${leaves(c).length} panes`,
+      c.type === 'pane' ? info(c).title : LAYOUT_TEXT.panesCount({ n: leaves(c).length }),
     );
     return (
       <PaneGroup
@@ -133,7 +136,12 @@ export function PaneWorkspace({
         direction={node.direction}
         sizes={node.sizes}
         onSizes={(sizes) => onChange((l) => setSizes(l, node.id, sizes))}
-        splitterLabel={(i) => `Resize ${names[i] ?? 'pane'} and ${names[i + 1] ?? 'pane'}`}
+        splitterLabel={(i) =>
+          LAYOUT_TEXT.resizeBetween({
+            first: names[i] ?? LAYOUT_TEXT.aPane,
+            second: names[i + 1] ?? LAYOUT_TEXT.aPane,
+          })
+        }
       >
         {node.children.map(renderNode)}
       </PaneGroup>
@@ -161,7 +169,7 @@ export function PaneWorkspace({
       </div>
       {bottom.open ? (
         <Splitter
-          label="Resize the bottom panel"
+          label={LAYOUT_TEXT.resizeBottom}
           orientation="horizontal"
           value={(1 - bottom.size) * 100}
           min={(1 - BOTTOM_MAX) * 100}
@@ -173,17 +181,38 @@ export function PaneWorkspace({
       <section
         id={panelId}
         className="bottom-panel"
-        aria-label="Bottom panel"
+        aria-label={LAYOUT_TEXT.bottomPanel}
         hidden={!bottom.open}
         style={bottom.open ? { flex: `${bottom.size} 1 0` } : undefined}
       >
         <div className="bottom-panel-head">
           <span className="bottom-panel-title">
-            <Icon name="terminal" /> Terminal
+            <Icon name="terminal" /> {LAYOUT_TEXT.terminal}
           </span>
           <span className="pane-head-spacer" />
+          <Menu
+            label={PANE_SIZE_TEXT.bottomMenu}
+            trigger={<Icon name="more" />}
+            items={[
+              // Resizing without dragging the splitter (WCAG 2.5.7).
+              {
+                id: 'taller',
+                label: PANE_SIZE_TEXT.taller,
+                disabled: bottom.size >= BOTTOM_MAX - 0.005,
+                onSelect: () =>
+                  onChange((l) => setBottom(l, { size: l.bottom.size + RESIZE_STEP })),
+              },
+              {
+                id: 'shorter',
+                label: PANE_SIZE_TEXT.shorter,
+                disabled: bottom.size <= BOTTOM_MIN + 0.005,
+                onSelect: () =>
+                  onChange((l) => setBottom(l, { size: l.bottom.size - RESIZE_STEP })),
+              },
+            ]}
+          />
           <IconButton
-            label="Close the bottom panel"
+            label={LAYOUT_TEXT.closeBottom}
             icon={<Icon name="close" />}
             variant="ghost"
             onClick={() => onChange((l) => setBottom(l, { open: false }))}
@@ -300,7 +329,9 @@ function PaneFrame({
   const chrome = !single && !phone;
   const parent = parentDirection(layout.root, pane.id);
   const [earlier, later] =
-    parent === 'column' ? ['Move up', 'Move down'] : ['Move left', 'Move right'];
+    parent === 'column'
+      ? [LAYOUT_TEXT.moveUp, LAYOUT_TEXT.moveDown]
+      : [LAYOUT_TEXT.moveLeft, LAYOUT_TEXT.moveRight];
   const siblings = siblingPlace(layout.root, pane.id);
   const more: MenuItem[] = [
     {
@@ -315,7 +346,20 @@ function PaneFrame({
       disabled: !siblings.later,
       onSelect: () => onChange((l) => movePane(l, pane.id, 1)),
     },
-    { id: 'reset', label: 'Reset layout', onSelect: () => onChange(resetKeepingBottom) },
+    // Resizing without dragging a splitter (WCAG 2.5.7).
+    {
+      id: 'larger',
+      label: PANE_SIZE_TEXT.larger,
+      disabled: maximized || !resizePane(layout, pane.id, RESIZE_STEP),
+      onSelect: () => onChange((l) => resizePane(l, pane.id, RESIZE_STEP) ?? l),
+    },
+    {
+      id: 'smaller',
+      label: PANE_SIZE_TEXT.smaller,
+      disabled: maximized || !resizePane(layout, pane.id, -RESIZE_STEP),
+      onSelect: () => onChange((l) => resizePane(l, pane.id, -RESIZE_STEP) ?? l),
+    },
+    { id: 'reset', label: LAYOUT_TEXT.resetLayout, onSelect: () => onChange(resetKeepingBottom) },
   ];
 
   return (
@@ -345,32 +389,36 @@ function PaneFrame({
           </h2>
           <span className="pane-head-spacer" />
           <IconButton
-            label={`Split ${info.title} right`}
+            label={LAYOUT_TEXT.splitRight({ pane: info.title })}
             icon={<Icon name="split-right" />}
             variant="ghost"
             onClick={() => onSplit(pane.id, 'row')}
           />
           <IconButton
-            label={`Split ${info.title} down`}
+            label={LAYOUT_TEXT.splitDown({ pane: info.title })}
             icon={<Icon name="split-down" />}
             variant="ghost"
             onClick={() => onSplit(pane.id, 'column')}
           />
           <IconButton
-            label={maximized ? `Restore ${info.title}` : `Maximize ${info.title}`}
+            label={
+              maximized
+                ? LAYOUT_TEXT.restore({ pane: info.title })
+                : LAYOUT_TEXT.maximize({ pane: info.title })
+            }
             icon={<Icon name={maximized ? 'restore' : 'maximize'} />}
             variant="ghost"
             aria-pressed={maximized}
             onClick={() => onChange((l) => toggleMaximize(l, pane.id))}
           />
           <Menu
-            label={`More actions for ${info.title}`}
+            label={LAYOUT_TEXT.moreActions({ pane: info.title })}
             trigger={<Icon name="more" />}
             items={more}
           />
           {pane.kind === 'main' ? null : (
             <IconButton
-              label={`Close ${info.title}`}
+              label={LAYOUT_TEXT.close({ pane: info.title })}
               icon={<Icon name="close" />}
               variant="ghost"
               onClick={() => onChange((l) => closePane(l, pane.id))}
@@ -433,7 +481,7 @@ function PaneSwitcher({
       <div
         ref={list}
         role="tablist"
-        aria-label="Panes"
+        aria-label={LAYOUT_TEXT.panes}
         className="pane-switcher-tabs"
         onKeyDown={(e) => {
           const next = rovingIndex(e.key, current, panes.length, 'horizontal');
@@ -461,7 +509,7 @@ function PaneSwitcher({
       </div>
       {activePane && activePane.kind !== 'main' ? (
         <IconButton
-          label={`Close ${info(activePane).title}`}
+          label={LAYOUT_TEXT.close({ pane: info(activePane).title })}
           icon={<Icon name="close" />}
           variant="ghost"
           onClick={() => onClose(activePane.id)}

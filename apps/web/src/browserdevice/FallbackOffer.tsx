@@ -13,7 +13,9 @@
 import { useEffect, useId, useState } from 'react';
 import type { ServerRequestView } from '@nova/shared';
 import { Button, Icon, StatusChip, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { ApiError } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useServices } from '../services.tsx';
 import { useHubEvents } from '../spaces/events.ts';
 import { useDebounced } from '../work/events.ts';
@@ -30,6 +32,32 @@ import {
 } from './format.ts';
 import './browserdevice.css';
 
+export const OFFER_TEXT = defineMessages('browserDevice.offer', {
+  hints: {
+    clean:
+      'Opens a new, empty browser profile on {device}: none of your sign-ins, and it reaches only {site} and its subdomains. It stops when the agent leaves {site}, and the profile is deleted.',
+    extension:
+      'Uses your own browser on {device} through the Nova extension, signed in as you. The agent acts only in a tab it opens or one you shared, on {site}, and stops when it leaves the site.',
+    decline:
+      'The agent’s own browser stays blocked on {site}. Nothing is remembered, so it may ask again.',
+  },
+  answered: {
+    clean: 'The agent continues {site} on {device} with a clean profile.',
+    extension: 'The agent continues {site} in your browser on {device}.',
+    decline: 'The agent does not continue {site} on {device}.',
+  },
+  answeredElsewhere: 'This was already answered on another device.',
+  expired: 'This offer expired before your answer arrived.',
+  sendFailed: 'Could not send the answer.',
+  title: 'Continue {site} on {device}?',
+  askedBecause: 'Asked because {cause}.',
+  choices: 'Choices',
+  waiting:
+    'Waiting until {when}. A choice to continue is remembered for {site} on {device} until you revoke it in {link}.',
+  settingsBrowser: 'Settings → Browser',
+});
+const S = OFFER_TEXT;
+
 /** Whether a request is the fallback's offer (and still waits for an answer). */
 export function isFallbackOffer(r: ServerRequestView): boolean {
   return r.status === 'pending' && parseFallbackOffer(r) !== null;
@@ -41,17 +69,18 @@ export function choiceHints(
 ): Record<FallbackChoiceId, string> {
   const { device, site } = o;
   return {
-    clean: `Opens a new, empty browser profile on ${device}: none of your sign-ins, and it reaches only ${site} and its subdomains. It stops when the agent leaves ${site}, and the profile is deleted.`,
-    extension: `Uses your own browser on ${device} through the Nova extension, signed in as you. The agent acts only in a tab it opens or one you shared, on ${site}, and stops when it leaves the site.`,
-    decline: `The agent’s own browser stays blocked on ${site}. Nothing is remembered, so it may ask again.`,
+    clean: S.hints.clean({ device, site }),
+    extension: S.hints.extension({ device, site }),
+    decline: S.hints.decline({ site }),
   };
 }
 
 /** What the toast says after an answer. */
 function answeredText(o: FallbackOffer, id: FallbackChoiceId): string {
-  if (id === 'clean') return `The agent continues ${o.site} on ${o.device} with a clean profile.`;
-  if (id === 'extension') return `The agent continues ${o.site} in your browser on ${o.device}.`;
-  return `The agent does not continue ${o.site} on ${o.device}.`;
+  const params = { site: o.site, device: o.device };
+  if (id === 'clean') return S.answered.clean(params);
+  if (id === 'extension') return S.answered.extension(params);
+  return S.answered.decline(params);
 }
 
 export function FallbackOfferCard({
@@ -84,12 +113,12 @@ export function FallbackOfferCard({
     } catch (err) {
       // The card leaves the list on a refetch, so these outcomes are told by a toast.
       if (err instanceof ApiError && err.status === 409) {
-        toast.show('This was already answered on another device.', { tone: 'info' });
+        toast.show(S.answeredElsewhere, { tone: 'info' });
         onAnswered();
       } else if (err instanceof ApiError && err.status === 410) {
-        toast.show('This offer expired before your answer arrived.', { tone: 'info' });
+        toast.show(S.expired, { tone: 'info' });
         onAnswered();
-      } else setError(browserDeviceError(err, 'Could not send the answer.'));
+      } else setError(browserDeviceError(err, S.sendFailed));
     } finally {
       setBusy(false);
     }
@@ -99,13 +128,17 @@ export function FallbackOfferCard({
     <article className="bdv-offer" aria-labelledby={`${id}-title`}>
       <div className="bdv-offer-head">
         <h4 id={`${id}-title`} className="bdv-offer-title">
-          Continue {site} on {device}?
+          {S.title({ site, device })}
         </h4>
         <StatusChip status="needs_input" />
       </div>
-      <p className="muted bdv-offer-meta">Asked because {CAUSE_TEXT[offer.cause]}.</p>
-      {offer.question ? <p className="bdv-offer-question">{offer.question}</p> : null}
-      <ul className="bdv-choices" aria-label="Choices">
+      <p className="muted bdv-offer-meta">{S.askedBecause({ cause: CAUSE_TEXT[offer.cause] })}</p>
+      {offer.question ? (
+        <p className="bdv-offer-question" dir="auto">
+          {offer.question}
+        </p>
+      ) : null}
+      <ul className="bdv-choices" aria-label={S.choices}>
         {offer.choices.map((c) => (
           <li key={c.id} className="bdv-choice">
             <Button
@@ -122,12 +155,17 @@ export function FallbackOfferCard({
         ))}
       </ul>
       <p className="muted bdv-offer-meta">
-        <Icon name="clock" /> Waiting until {stampOf(request.expiresAt)}. A choice to continue is
-        remembered for {site} on {device} until you revoke it in{' '}
-        <a href={SETTINGS_BROWSER_PATH} onClick={(e) => followLink(e, SETTINGS_BROWSER_PATH)}>
-          Settings → Browser
-        </a>
-        .
+        <Icon name="clock" />{' '}
+        {rich(S.waiting, {
+          when: stampOf(request.expiresAt),
+          site,
+          device,
+          link: (
+            <a href={SETTINGS_BROWSER_PATH} onClick={(e) => followLink(e, SETTINGS_BROWSER_PATH)}>
+              {S.settingsBrowser}
+            </a>
+          ),
+        })}
       </p>
       {error ? (
         <p role="alert" className="nv-field-error">

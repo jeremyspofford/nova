@@ -183,11 +183,16 @@ never exits silently (FR-225, ADR-080):
   status, DB size, and recent redacted logs.
 - "Create diagnostic bundle" produces a `.zip` with redaction applied and a preview before
   sharing (FR-119/121).
+- *As built in M8* (ADR-097): the Hub keeps its own crash reports locally (`<data>/crash/`, no
+  message text, redacted relative stack frames), previewable, sendable only to an endpoint the owner
+  configures, and deletable in Settings → Data (`docs/12` §9.5, `docs/16` §1.2). There is no Nova
+  crash service; the desktop shell's crash dumps are not part of this.
 
 ## 9. Uninstall & data removal
 
 - Uninstall removes the app; user data remains unless the user chooses to delete it.
-- An in-app "Delete all data" performs the FR-105 flow.
+- An in-app "Delete all data" performs the FR-105 flow (*as built in M8*: Settings → Data, typing
+  the Hub's name, `docs/12` §9.2).
 - A `--purge` uninstall option (documented) removes config, data, cache, and keychain entries.
 
 ## 10. Hub, novad, catalog & domain packaging (added)
@@ -198,6 +203,7 @@ never exits silently (FR-225, ADR-080):
 | **novad** | Signed per-OS/arch static binaries + module bundles | Served by the Hub at `/api/v1/agent/dist/` |
 | **Clients** | PWA (served by Hub) + signed desktop installers; mobile later | Same UI, thin shells |
 | **Relay / Catalog / Sync** | Container images | Default host `arialabs.ai`; fully self-hostable |
+| **`nova` command** (M8) | `@nova/cli` workspace package, bin `nova` (`packages/cli/src/main.ts`, run by Node's type stripping) | Linked by `npm install` in a checkout; not published or packaged separately in M8. AGPL-3.0-or-later; `@nova/sdk` (Apache-2.0) is a workspace package too (`docs/26` §9) |
 
 Domain defaults (all configurable): catalog `catalog.arialabs.ai`, relay `wss://relay.arialabs.ai`,
 sync `sync.arialabs.ai`. Standard TLS certificates for the public endpoints; the same services

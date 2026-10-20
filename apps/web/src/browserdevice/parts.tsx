@@ -4,7 +4,13 @@
 // confirm button stays off until the named risk is ticked (the elevated "all sites" grant).
 import { useId, useRef, useState, type ReactNode } from 'react';
 import { Button, Dialog, Icon, Spinner, type IconName } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { browserDeviceError, type Tone } from './format.ts';
+
+const S = defineMessages('browserDevice.parts', {
+  failed: 'That did not work.',
+  cancel: 'Cancel',
+});
 
 export function Chip({ tone, icon, text }: { tone: Tone; icon: IconName; text: string }) {
   return (
@@ -48,7 +54,7 @@ export function ConfirmAction({
     try {
       await onConfirm();
     } catch (err) {
-      setError(browserDeviceError(err, 'That did not work.'));
+      setError(browserDeviceError(err, S.failed));
       setBusy(false);
     }
   };
@@ -62,7 +68,7 @@ export function ConfirmAction({
       footer={
         <>
           <Button ref={cancelRef} onClick={onClose}>
-            Cancel
+            {S.cancel}
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}

@@ -29,6 +29,7 @@ import { matchingPattern } from '../computers/egress-policy.ts';
 import type { AuditRecord, AuditSink, ToolResult } from '../tools/types.ts';
 import type { EngineLimits } from './engine.ts';
 import {
+  SAFE_THEME_VALUE,
   EXTENSION_DATA_VAR,
   EXTENSION_ROOT_VAR,
   OBSERVABLE_EVENTS,
@@ -58,6 +59,10 @@ const LIMITS = {
   events: 50,
   invocations: 32,
   eventsInFlight: 20,
+  /** `nova.net.fetch` requests one extension may have in flight (M8 supply review #4). */
+  fetchesInFlight: 8,
+  /** Response bytes one extension may hold buffered across its requests in flight. */
+  fetchBudgetBytes: 16 * 1024 * 1024,
   schemaChars: 64 * 1024,
   responseBytes: 5 * 1024 * 1024,
   fileBytes: 5 * 1024 * 1024,
@@ -66,6 +71,14 @@ const LIMITS = {
   resultChars: 100_000,
   argsChars: 1_000_000,
 };
+
+/** One request's share of an extension's response budget (`LIMITS.fetchBudgetBytes`). */
+interface FetchBudget {
+  /** Count `bytes` more; false when the budget cannot hold them. */
+  take(bytes: number): boolean;
+  /** Give back everything taken (the response was dropped or delivered). */
+  release(): void;
+}
 
 /** What the service tells the host about an extension it should run. */
 export interface ExtensionSpec {
@@ -156,6 +169,9 @@ interface Running {
   pending: Map<number, Pending>;
   nextId: number;
   eventsInFlight: number;
+  /** `nova.net.fetch` requests in flight, and the response bytes they hold. */
+  fetches: number;
+  fetchBytes: number;
   activated: (r: { ok: boolean; error: string | null }) => void;
   stopping: boolean;
 }
@@ -344,6 +360,8 @@ export class ExtensionHost {
       pending: new Map(),
       nextId: 1,
       eventsInFlight: 0,
+      fetches: 0,
+      fetchBytes: 0,
       activated: (r) => settle(r),
       stopping: false,
     };
@@ -827,6 +845,14 @@ export class ExtensionHost {
           return this.#bad(
             `the theme is not valid: ${v.ok ? 'its id changed' : (v.errors[0]?.message ?? 'invalid')}`,
           );
+        // The marketplace's rule for theme values: plain CSS values only, nothing that could
+        // break out of a custom property (url(), expressions, `;`, `{`).
+        for (const [k, value] of Object.entries({
+          ...(isRecord(a.theme.tokens) ? a.theme.tokens : {}),
+          ...(isRecord(a.theme.fonts) ? a.theme.fonts : {}),
+        }))
+          if (typeof value !== 'string' || !SAFE_THEME_VALUE.test(value))
+            return this.#bad(`the theme value of ${k} is not a plain CSS value`);
         reg.themes.set(key, a.theme);
         return ok();
       }
@@ -947,6 +973,47 @@ export class ExtensionHost {
       typeof a.body === 'string' && method !== 'GET' && method !== 'HEAD' ? a.body : undefined;
     if (body !== undefined && body.length > LIMITS.responseBytes)
       return this.#bad('the request body is too large');
+    // Bounded: a few requests at a time and a byte budget, refused rather than queued.
+    if (run.fetches >= LIMITS.fetchesInFlight)
+      return {
+        ok: false as const,
+        error: {
+          code: 'too_many_requests',
+          message: `an extension may have at most ${LIMITS.fetchesInFlight} network requests in flight; wait for one to finish`,
+        },
+      };
+    run.fetches++;
+    let held = 0;
+    // This request's share of the budget; a dropped response gives its share back at once.
+    const budget: FetchBudget = {
+      take: (n) => {
+        if (run.fetchBytes + n > LIMITS.fetchBudgetBytes) return false;
+        run.fetchBytes += n;
+        held += n;
+        return true;
+      },
+      release: () => {
+        run.fetchBytes -= held;
+        held = 0;
+      },
+    };
+    try {
+      return await this.#fetchBounded(run, url, host, method, headers, body, budget);
+    } finally {
+      run.fetches--;
+      budget.release();
+    }
+  }
+
+  async #fetchBounded(
+    run: Running,
+    url: URL,
+    host: string,
+    method: string,
+    headers: Headers,
+    body: string | undefined,
+    budget: FetchBudget,
+  ) {
     const timeout = AbortSignal.timeout(this.#o.fetchTimeoutMs ?? 30_000);
     let res: Response;
     try {
@@ -974,6 +1041,17 @@ export class ExtensionHost {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (!budget.take(value.length)) {
+          budget.release();
+          void reader.cancel().catch(() => undefined);
+          return {
+            ok: false as const,
+            error: {
+              code: 'fetch_budget',
+              message: `${run.spec.extensionId} is receiving more than ${Math.round(LIMITS.fetchBudgetBytes / 1048576)} MB of responses at once; this response was dropped`,
+            },
+          };
+        }
         chunks.push(value);
         size += value.length;
         if (size >= LIMITS.responseBytes) {
@@ -1144,7 +1222,7 @@ export class ExtensionHost {
     const { accountId, extensionId } = run.spec;
     if (!(run.spec.manifest.permissions.secrets ?? []).includes(name))
       return this.#denied(run, 'the secret', name, 'secret');
-    const value = await this.#o.secrets.get(extensionSecretRef(extensionId, name));
+    const value = await this.#o.secrets.get(extensionSecretRef(accountId, extensionId, name));
     await this.#o.audit
       ?.append({
         accountId,
@@ -1161,6 +1239,12 @@ export class ExtensionHost {
 }
 
 /** Where an extension's declared secret lives in the vault. */
-export function extensionSecretRef(extensionId: string, name: string): string {
-  return `secret://extension/${extensionId}/${name}`;
+export function extensionSecretRef(accountId: string, extensionId: string, name: string): string {
+  // By account: two accounts with the same extension never share a secret.
+  return `secret://extension/${accountId}/${extensionId}/${name}`;
+}
+
+/** The vault prefix of an extension's secrets in an account. */
+export function extensionSecretPrefix(accountId: string, extensionId: string): string {
+  return `secret://extension/${accountId}/${extensionId}/`;
 }

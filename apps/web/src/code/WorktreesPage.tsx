@@ -5,6 +5,7 @@
 // uncommitted changes needs Remove anyway, after a warning). A repository holds at most 15: at the
 // cap, New worktree offers to remove the oldest unused clean one, and only does when you accept.
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { CodeSessionView, WorktreeView } from '@nova/shared';
 import {
   Button,
@@ -18,7 +19,7 @@ import {
 } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useAnnounce, useServices } from '../services.tsx';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { useCodeM6Api } from './api-m6.ts';
 import { AppLink, CodeNav } from './CodeNav.tsx';
 import { useCodeEvents, useCoalesced } from './events.ts';
@@ -26,6 +27,74 @@ import { sessionPath, sessionTitle } from './labels.ts';
 import { errorDetails, errorReason, leaseText } from './m6-format.ts';
 import { Badge, ConfirmDialog, ErrorBanner } from './parts.tsx';
 import '../workspace.css';
+
+export const WORKTREES_TEXT = defineMessages('code.worktrees', {
+  loadFailed: 'Could not load the worktrees.',
+  quotedSession: '“{title}”',
+  aSession: 'a session',
+  renewed: 'Lease renewed: {branch}.',
+  released: 'Lease released: {branch}.',
+  inUse: 'A Code session works in {branch}. Archive the session first.',
+  renewFailed: 'Could not renew the lease of {branch}: {reason}',
+  releaseFailed: 'Could not release the lease of {branch}: {reason}',
+  removed: 'Removed the worktree of {branch}. The branch stays.',
+  removeInUse: 'A Code session works in this worktree. Archive the session first.',
+  removeLeased: 'This worktree is leased. Release it first.',
+  removeDirty: 'This worktree has uncommitted changes.',
+  removeFailed: 'Could not remove the worktree.',
+  title: 'Worktrees',
+  new: 'New worktree',
+  intro:
+    'Each worktree is a separate checkout on its own nova/ branch, so parallel sessions do not touch each other’s files. A repository holds at most {max}.',
+  show: 'Show',
+  onDisk: 'Worktrees on disk',
+  all: 'All, including removed',
+  loading: 'Loading the worktrees',
+  emptyTitle: 'No worktrees',
+  emptyBody:
+    'Start a session with “Work in a new Git worktree”, or create one here for a session to use later.',
+  count: '{n} of {max} worktrees',
+  atCap:
+    'This repository is at the cap of {max} worktrees. Remove one before another session can get its own.',
+  listOf: 'Worktrees of {repo}',
+  stateRemoved: 'Removed',
+  dirty: 'Uncommitted changes',
+  clean: 'Clean',
+  unknown: 'State unknown',
+  from: 'From {branch}',
+  openSession: 'Open the session',
+  included: '{n, plural, one {# ignored file copied in} other {# ignored files copied in}}',
+  created: 'Created {when}',
+  renewLease: 'Renew lease',
+  renewHour: 'Renew 1 h',
+  release: 'Release',
+  releaseFirst: 'Release the lease first.',
+  remove: 'Remove…',
+  removeTitle: 'Remove the worktree of {branch}?',
+  removeDirtyBody:
+    'It has uncommitted changes. Removing it deletes them from disk; they cannot be recovered. The branch and its commits stay.',
+  removeBody: 'The folder is deleted from disk. The branch and its commits stay.',
+  removeAndDelete: 'Remove and delete changes',
+  removeConfirm: 'Remove',
+  createdToast: 'Created {branch}.',
+  cap: 'This repository already has {max} worktrees.',
+  createFailed: 'Could not create the worktree.',
+  dialogTitle: 'New worktree',
+  dialogBody:
+    'A checkout of the repository’s current commit on a new nova/ branch. A session can work in it later.',
+  repo: 'Repository folder on the Hub',
+  repoExample: '/home/me/projects/app',
+  branch: 'Branch name (optional)',
+  branchExample: 'fix-login',
+  branchHint: 'Nova names the branch nova/<name>, with a short suffix if it is taken.',
+  canRemove:
+    'The oldest one that no session uses and that has no uncommitted changes can be removed to make room.',
+  cannotRemove:
+    'Every one of them is leased or has uncommitted changes, so none can be removed for you. Remove one yourself first.',
+  removeOldest: 'Remove the oldest and create',
+  cancel: 'Cancel',
+  create: 'Create worktree',
+});
 
 /** The registry's cap per repository (docs/10 §9). */
 export const MAX_WORKTREES = 15;
@@ -54,7 +123,7 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
           setItems(list);
           setError(null);
         },
-        (err: unknown) => setError(errorMessage(err, 'Could not load the worktrees.')),
+        (err: unknown) => setError(errorMessage(err, WORKTREES_TEXT.loadFailed)),
       ),
     [filter, m6],
   );
@@ -80,7 +149,7 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
 
   const sessionName = (id: string) => {
     const s = sessions.find((x) => x.id === id);
-    return s ? `“${sessionTitle(s)}”` : 'a session';
+    return s ? WORKTREES_TEXT.quotedSession({ title: sessionTitle(s) }) : WORKTREES_TEXT.aSession;
   };
   const groups = useMemo(() => {
     const byRepo = new Map<string, WorktreeView[]>();
@@ -88,18 +157,29 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
     return [...byRepo.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [items]);
 
-  const act = async (w: WorktreeView, what: string, fn: () => Promise<WorktreeView>) => {
+  const act = async (
+    w: WorktreeView,
+    what: 'renew' | 'release',
+    fn: () => Promise<WorktreeView>,
+  ) => {
     setBusy((s) => new Set([...s, w.id]));
     try {
       const next = await fn();
       setItems((list) => list?.map((x) => (x.id === next.id ? next : x)) ?? null);
-      announce(`${what}: ${w.branch}.`);
+      announce(
+        what === 'renew'
+          ? WORKTREES_TEXT.renewed({ branch: w.branch })
+          : WORKTREES_TEXT.released({ branch: w.branch }),
+      );
     } catch (err) {
       const reason = errorReason(err);
+      const p = { branch: w.branch, reason: errorMessage(err) };
       toast.show(
         reason === 'in_use'
-          ? `A Code session works in ${w.branch}. Archive the session first.`
-          : `Could not ${what.toLowerCase()} ${w.branch}: ${errorMessage(err)}`,
+          ? WORKTREES_TEXT.inUse({ branch: w.branch })
+          : what === 'renew'
+            ? WORKTREES_TEXT.renewFailed(p)
+            : WORKTREES_TEXT.releaseFailed(p),
         { tone: 'error' },
       );
     } finally {
@@ -124,17 +204,17 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
           : (list?.filter((x) => x.id !== w.id) ?? null),
       );
       setRemoving(null);
-      toast.show(`Removed the worktree of ${w.branch}. The branch stays.`, { tone: 'success' });
+      toast.show(WORKTREES_TEXT.removed({ branch: w.branch }), { tone: 'success' });
     } catch (err) {
       const reason = errorReason(err);
       setRemoveError(
         reason === 'in_use'
-          ? 'A Code session works in this worktree. Archive the session first.'
+          ? WORKTREES_TEXT.removeInUse
           : reason === 'leased'
-            ? 'This worktree is leased. Release it first.'
+            ? WORKTREES_TEXT.removeLeased
             : reason === 'dirty'
-              ? 'This worktree has uncommitted changes.'
-              : errorMessage(err, 'Could not remove the worktree.'),
+              ? WORKTREES_TEXT.removeDirty
+              : errorMessage(err, WORKTREES_TEXT.removeFailed),
       );
     } finally {
       setRemoveBusy(false);
@@ -144,34 +224,31 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
   return (
     <div className="ws-page code-m6-page">
       <header className="ws-page-header">
-        <h1>Worktrees</h1>
+        <h1>{WORKTREES_TEXT.title}</h1>
         <Button variant="primary" onClick={() => setCreating(true)}>
-          <Icon name="plus" /> New worktree
+          <Icon name="plus" /> {WORKTREES_TEXT.new}
         </Button>
       </header>
       <CodeNav current="worktrees" />
-      <p className="muted">
-        Each worktree is a separate checkout on its own nova/ branch, so parallel sessions do not
-        touch each other’s files. A repository holds at most {MAX_WORKTREES}.
-      </p>
+      <p className="muted">{WORKTREES_TEXT.intro({ max: MAX_WORKTREES })}</p>
       <SelectField
-        label="Show"
+        label={WORKTREES_TEXT.show}
         className="code-filter"
         value={filter}
         onChange={(v) => setFilter(v as Filter)}
         options={[
-          { value: 'active', label: 'Worktrees on disk' },
-          { value: 'all', label: 'All, including removed' },
+          { value: 'active', label: WORKTREES_TEXT.onDisk },
+          { value: 'all', label: WORKTREES_TEXT.all },
         ]}
       />
       {error ? <ErrorBanner message={error} onRetry={reload} /> : null}
-      {items === null && !error ? <Spinner label="Loading the worktrees" /> : null}
+      {items === null && !error ? <Spinner label={WORKTREES_TEXT.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
-          title="No worktrees"
-          description="Start a session with “Work in a new Git worktree”, or create one here for a session to use later."
+          title={WORKTREES_TEXT.emptyTitle}
+          description={WORKTREES_TEXT.emptyBody}
           icon="branch"
-          action={<Button onClick={() => setCreating(true)}>New worktree</Button>}
+          action={<Button onClick={() => setCreating(true)}>{WORKTREES_TEXT.new}</Button>}
         />
       ) : null}
       {groups.map(([repo, list]) => {
@@ -179,18 +256,19 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
         return (
           <section key={repo} className="code-wt-group" aria-label={repo}>
             <div className="code-subhead">
-              <h2 className="code-path">{repo}</h2>
+              <h2 className="code-path" dir="ltr">
+                {repo}
+              </h2>
               <span className="muted">
-                {onDisk} of {MAX_WORKTREES} worktrees
+                {WORKTREES_TEXT.count({ n: onDisk, max: MAX_WORKTREES })}
               </span>
             </div>
             {onDisk >= MAX_WORKTREES ? (
               <p className="ws-warning" role="note">
-                <Icon name="alert" /> This repository is at the cap of {MAX_WORKTREES} worktrees.
-                Remove one before another session can get its own.
+                <Icon name="alert" /> {WORKTREES_TEXT.atCap({ max: MAX_WORKTREES })}
               </p>
             ) : null}
-            <ul className="ws-list" aria-label={`Worktrees of ${repo}`}>
+            <ul className="ws-list" aria-label={WORKTREES_TEXT.listOf({ repo })}>
               {list.map((w) => {
                 const working = busy.has(w.id);
                 const expired =
@@ -204,38 +282,42 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
                         </span>
                         {w.status === 'removed' ? (
                           <Badge tone="muted" icon="trash">
-                            Removed
+                            {WORKTREES_TEXT.stateRemoved}
                           </Badge>
                         ) : w.dirty ? (
                           <Badge tone="warn" icon="edit">
-                            Uncommitted changes
+                            {WORKTREES_TEXT.dirty}
                           </Badge>
                         ) : w.dirty === false ? (
                           <Badge tone="ok" icon="check">
-                            Clean
+                            {WORKTREES_TEXT.clean}
                           </Badge>
                         ) : (
                           <Badge tone="muted" icon="alert">
-                            State unknown
+                            {WORKTREES_TEXT.unknown}
                           </Badge>
                         )}
                       </div>
-                      <span className="code-path">{w.path}</span>
+                      <span className="code-path" dir="ltr">
+                        {w.path}
+                      </span>
                       <span className="muted code-row-meta">
-                        <span>From {w.sourceBranch}</span>
+                        <span>{WORKTREES_TEXT.from({ branch: w.sourceBranch })}</span>
                         <span>
                           {leaseText(w, sessionName)}
                           {w.leasedBy && w.status !== 'removed' ? (
                             <>
                               {' '}
-                              <AppLink to={sessionPath(w.leasedBy)}>Open the session</AppLink>
+                              <AppLink to={sessionPath(w.leasedBy)}>
+                                {WORKTREES_TEXT.openSession}
+                              </AppLink>
                             </>
                           ) : null}
                         </span>
                         {w.included ? (
-                          <span>{plural(w.included, 'ignored file')} copied in</span>
+                          <span>{WORKTREES_TEXT.included({ n: w.included })}</span>
                         ) : null}
-                        <span>Created {formatWhen(w.createdAt)}</span>
+                        <span>{WORKTREES_TEXT.created({ when: formatWhen(w.createdAt) })}</span>
                       </span>
                     </div>
                     {w.status === 'removed' ? null : (
@@ -243,33 +325,30 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
                         {w.leasedBy && w.leaseExpiresAt ? (
                           <Button
                             disabled={working}
-                            onClick={() =>
-                              void act(w, 'Lease renewed', () => m6.renewWorktree(w.id, 60))
-                            }
+                            onClick={() => void act(w, 'renew', () => m6.renewWorktree(w.id, 60))}
                           >
-                            <Icon name="clock" /> {expired ? 'Renew lease' : 'Renew 1 h'}
+                            <Icon name="clock" />{' '}
+                            {expired ? WORKTREES_TEXT.renewLease : WORKTREES_TEXT.renewHour}
                           </Button>
                         ) : null}
                         {w.leasedBy ? (
                           <Button
                             disabled={working}
-                            onClick={() =>
-                              void act(w, 'Lease released', () => m6.releaseWorktree(w.id))
-                            }
+                            onClick={() => void act(w, 'release', () => m6.releaseWorktree(w.id))}
                           >
-                            Release
+                            {WORKTREES_TEXT.release}
                           </Button>
                         ) : null}
                         <Button
                           variant="danger"
                           disabled={working || !!w.leasedBy}
-                          title={w.leasedBy ? 'Release the lease first.' : undefined}
+                          title={w.leasedBy ? WORKTREES_TEXT.releaseFirst : undefined}
                           onClick={() => {
                             setRemoveError(null);
                             setRemoving(w);
                           }}
                         >
-                          <Icon name="trash" /> Remove…
+                          <Icon name="trash" /> {WORKTREES_TEXT.remove}
                         </Button>
                       </div>
                     )}
@@ -282,13 +361,11 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
       })}
       <ConfirmDialog
         open={removing !== null}
-        title={`Remove the worktree of ${removing?.branch ?? ''}?`}
-        description={
-          removing?.dirty
-            ? 'It has uncommitted changes. Removing it deletes them from disk; they cannot be recovered. The branch and its commits stay.'
-            : 'The folder is deleted from disk. The branch and its commits stay.'
+        title={WORKTREES_TEXT.removeTitle({ branch: removing?.branch ?? '' })}
+        description={removing?.dirty ? WORKTREES_TEXT.removeDirtyBody : WORKTREES_TEXT.removeBody}
+        confirmLabel={
+          removing?.dirty ? WORKTREES_TEXT.removeAndDelete : WORKTREES_TEXT.removeConfirm
         }
-        confirmLabel={removing?.dirty ? 'Remove and delete changes' : 'Remove'}
         danger
         busy={removeBusy}
         error={removeError}
@@ -301,7 +378,7 @@ export function WorktreesPage({ visible = true }: { visible?: boolean }) {
         onCreated={(w) => {
           setCreating(false);
           setItems((list) => [...(list ?? []), w]);
-          toast.show(`Created ${w.branch}.`, { tone: 'success' });
+          toast.show(WORKTREES_TEXT.createdToast({ branch: w.branch }), { tone: 'success' });
         }}
       />
     </div>
@@ -356,10 +433,10 @@ function NewWorktreeForm({
       if (errorReason(err) === 'worktree_cap') {
         const removable = errorDetails(err).removable;
         setCap({
-          message: `This repository already has ${MAX_WORKTREES} worktrees.`,
+          message: WORKTREES_TEXT.cap({ max: MAX_WORKTREES }),
           removable: Array.isArray(removable) ? removable.length : 0,
         });
-      } else setError(errorMessage(err, 'Could not create the worktree.'));
+      } else setError(errorMessage(err, WORKTREES_TEXT.createFailed));
       setBusy(false);
     }
   };
@@ -367,8 +444,8 @@ function NewWorktreeForm({
   return (
     <Dialog
       open
-      title="New worktree"
-      description="A checkout of the repository’s current commit on a new nova/ branch. A session can work in it later."
+      title={WORKTREES_TEXT.dialogTitle}
+      description={WORKTREES_TEXT.dialogBody}
       onClose={onClose}
     >
       <form
@@ -379,38 +456,38 @@ function NewWorktreeForm({
         }}
       >
         <TextField
-          label="Repository folder on the Hub"
+          label={WORKTREES_TEXT.repo}
           value={repo}
           required
           autoComplete="off"
           spellCheck={false}
-          placeholder="/home/me/projects/app"
+          dir="ltr"
+          placeholder={WORKTREES_TEXT.repoExample}
           onChange={(e) => {
             setRepo(e.target.value);
             setCap(null);
           }}
         />
         <TextField
-          label="Branch name (optional)"
+          label={WORKTREES_TEXT.branch}
           value={branch}
           maxLength={200}
           autoComplete="off"
           spellCheck={false}
-          placeholder="fix-login"
-          hint="Nova names the branch nova/<name>, with a short suffix if it is taken."
+          dir="ltr"
+          placeholder={WORKTREES_TEXT.branchExample}
+          hint={WORKTREES_TEXT.branchHint}
           onChange={(e) => setBranch(e.target.value)}
         />
         {cap ? (
           <div className="code-callout" role="alert">
             <p>
               <Icon name="alert" /> {cap.message}{' '}
-              {cap.removable
-                ? 'The oldest one that no session uses and that has no uncommitted changes can be removed to make room.'
-                : 'Every one of them is leased or has uncommitted changes, so none can be removed for you. Remove one yourself first.'}
+              {cap.removable ? WORKTREES_TEXT.canRemove : WORKTREES_TEXT.cannotRemove}
             </p>
             {cap.removable ? (
               <Button variant="danger" disabled={busy} onClick={() => void submit(true)}>
-                Remove the oldest and create
+                {WORKTREES_TEXT.removeOldest}
               </Button>
             ) : null}
           </div>
@@ -421,9 +498,9 @@ function NewWorktreeForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{WORKTREES_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !repo.trim()}>
-            {busy ? <Spinner /> : null} Create worktree
+            {busy ? <Spinner /> : null} {WORKTREES_TEXT.create}
           </Button>
         </div>
       </form>

@@ -20,6 +20,53 @@
   text) are excluded unless the user explicitly enables them per signal. Export failures are
   dropped with a counter and never block the Hub.
 
+### 1.1 OTLP export as built (M8)
+
+*ADR-097 D6 (amends the bullet above: HTTP with JSON only, one content switch);
+`packages/telemetry/src/otlp.ts`, `apps/hub/src/otlp.ts`; settings in `docs/14` §1.1 (M8 table);
+routes in `contracts/hub-api.md`, "Telemetry export"; screen in `docs/04` §2.15.*
+
+- **Off by default** (`telemetry.otlp.enabled`). The owner names the collector's base URL
+  (`telemetry.otlp.endpoint`: https, or http only to this machine; no credentials, query or
+  fragment); the Hub POSTs OTLP/HTTP with **JSON** encoding (no protobuf or gRPC dependency) to
+  `<endpoint>/v1/traces`, `/v1/metrics` and `/v1/logs`. Header values (an API key for the
+  collector) go to the vault (`secret://telemetry/otlp/header/<name>`, at most 20) and are never
+  returned. Each signal can be turned off (`telemetry.otlp.signals`). **Send a test** sends one log
+  record to the saved endpoint whether or not export is on. Managed policy can keep it off
+  (`restrict.telemetryExport: false`).
+- **What is sent.** Resource `service.name = nova-hub` and `service.version`. Traces: one server span
+  per HTTP request, named `<METHOD> <route pattern>` with the method, route pattern, status code and
+  scheme, never the URL (so no token in a path leaves). Metrics, every 60 s, cumulative:
+  `http.server.request.duration` (by method, route and status), `nova.events` (every bus event, by
+  name), `process.memory.usage` and `process.uptime`; at most 1,000 attribute sets per instrument.
+  Logs: every Hub log record (severity, message, module and fields) except the exporter's own.
+  Provider and tool spans are not produced yet.
+- **Redaction and content.** The redactor runs on every name, body, attribute and nested value at
+  export; strings are cut at 32,768 characters and nesting at depth 4. **Content** is removed unless
+  `telemetry.otlp.includeContent` is on (one switch for every signal; the page asks first): keys
+  under `content.` or `nova.content.`, the GenAI prompt, completion, message and tool argument and
+  result attributes, and keys whose last part is a content word (`prompt`, `completion`, `content`,
+  `text`, `body`, `args`, `arguments`, `result`, `input`, `output`, `query`, `messages`,
+  `transcript`, `snippet`, `preview`, `message`, …). An error is exported with its name only, since
+  its message may quote content; an extension's own log text travels as `content.text`. A log
+  record's message and plain string fields are exported redacted either way, so code must keep
+  content out of them.
+- **Delivery.** A queue of 2,048 items per signal (the oldest dropped and counted), batches of 512
+  every 5 s, 10 s per request, redirects refused. Network errors, timeouts, 429, 502, 503 and 504 are
+  retried with backoff from 1 s to 5 minutes with jitter, honouring `Retry-After`; other errors drop
+  the batch. Export never blocks or fails the Hub; the status (`GET /api/v1/telemetry/otlp`) shows
+  queued, sent and dropped counts and the last error. Shutdown flushes for at most 5 s in all.
+
+### 1.2 Crash reports as built (M8, FR-121)
+
+*ADR-097 D5, D8; `packages/core/src/datactl/crash.ts`; `docs/12` §9.5.* The Hub writes a local report
+for every uncaught exception and fatal rejection to `<data>/crash/`, with no message text: the
+error's name and code when they look like identifiers, at most 40 stack frames made relative and
+redacted, and versions, platform, uptime and memory. The owner previews, sends or deletes reports in
+Settings → Data. Nothing is sent unless `privacy.crashReports` is on and
+`privacy.crashReportEndpoint` names the owner's own https endpoint; what is sent is exactly the
+preview. There is no Nova crash service. Desktop-shell crash dumps are not part of this.
+
 ## 2. Metrics (opt-in)
 
 If telemetry is enabled (`docs/12` §9): counters and histograms only (no content) for:
@@ -271,6 +318,13 @@ tracked over time.
 - Keyboard-only journey test (no mouse) for core flows.
 - Screen-reader smoke test (VoiceOver on macOS, Narrator on Windows) in the release checklist.
 - Contrast checks across all built-in themes.
+- *As built in M8* (ADR-097): `e2e/a11y-sweep.spec.ts` runs axe with every WCAG 2.0-2.2 A and AA rule
+  and fails on any impact (not only serious and critical), with no exclusions, over every surface,
+  Settings section and main dialog, in a member's view, on a phone, in forced dark and in both
+  high-contrast themes, plus browser checks axe cannot make (keyboard walk and focus return, focus
+  ring size and contrast, target size, drag alternatives, reduced motion, reflow at 320 px, text
+  spacing, paste and autofill, live regions, placeholder and field-edge contrast, managed lock notes
+  named and linked). The conformance table is `docs/04` §4.4.
 
 ## 8. Test data & fixtures
 

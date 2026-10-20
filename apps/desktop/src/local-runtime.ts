@@ -11,6 +11,7 @@ import type {
   ShellLocalRuntimeModelsView,
   ShellLocalRuntimeReason,
 } from '@nova/shared';
+import { LOCAL_TEXT } from './text.ts';
 
 export type RuntimeEndpoint =
   { kind: 'socket'; path: string } | { kind: 'loopback'; url: string; tokenFile: string };
@@ -84,15 +85,15 @@ export class LocalRuntimeError extends Error {
 export function reasonMessage(reason: ShellLocalRuntimeReason, detail?: string): string {
   switch (reason) {
     case 'no_novad':
-      return 'Local models need the Nova device agent (novad) on this computer. Add this computer on the Hub as a device with Local models, then try again.';
+      return LOCAL_TEXT.noNovad;
     case 'no_access':
-      return 'The Nova device agent on this computer runs as another user, so this app cannot reach its local models. Install it with --user and your user name, then try again.';
+      return LOCAL_TEXT.noAccess({ flag: '--user' });
     case 'scope_missing':
-      return 'The Hub has not granted this computer Local models. On the Hub, open Devices, choose this computer and turn on Local models.';
+      return LOCAL_TEXT.scopeMissing;
     case 'no_model_server':
-      return 'No local model server answers on this computer. Start one (by default at http://127.0.0.1:11434/v1), then try again.';
+      return LOCAL_TEXT.noModelServer({ url: 'http://127.0.0.1:11434/v1' });
     case 'failed':
-      return `The local models did not answer${detail ? `: ${detail}` : '.'}`;
+      return detail ? LOCAL_TEXT.failedDetail({ detail }) : LOCAL_TEXT.failed;
   }
 }
 

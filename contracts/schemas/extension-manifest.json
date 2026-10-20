@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arialabs.ai/schemas/extension-manifest.json",
+  "title": "ExtensionManifest",
+  "description": "An extension's .nova-plugin/extension.json, the SDK part of a plugin folder (FR-117, docs/14 §4, ADR-097 D2-D3). It names the SDK API version, the entry module and everything the extension may do; the runtime refuses and audits anything else (extension.access.denied). The rest of the folder is an ordinary plugin (plugin-manifest.json); the extension's id is the plugin id and its tools are ext:<id>/<name>. Mirrors extensionManifestSchema in packages/core/src/sdk/manifest.ts.",
+  "type": "object",
+  "required": ["api", "entry", "permissions"],
+  "additionalProperties": false,
+  "properties": {
+    "api": { "const": 1, "description": "The SDK API version (nova.api)." },
+    "entry": {
+      "description": "The entry ES module, relative to the extension folder; it may import only its own files and the built-in @nova/sdk.",
+      "allOf": [{ "$ref": "#/$defs/relativeFile" }, { "pattern": "\\.m?js$" }]
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "description": "Hosts nova.net.fetch may reach: a host name, *.host or *. Panel CSP domains must fall within them.",
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "maxLength": 253,
+            "pattern": "^(\\*|(\\*\\.)?([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)$"
+          }
+        },
+        "fs": {
+          "description": "Folders nova.fs may reach: ${extensionData} (the extension's own data folder, writable), ${extensionRoot} (its installed files, read-only) or an absolute path, read-only unless write is true. A folder inside the Hub's own data is refused at install (fs_scope_refused).",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1, "maxLength": 1000 },
+              {
+                "type": "object",
+                "required": ["path"],
+                "additionalProperties": false,
+                "properties": {
+                  "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+                  "write": { "type": "boolean" }
+                }
+              }
+            ]
+          }
+        },
+        "secrets": {
+          "description": "Names of secrets the owner stores for the extension (PUT /api/v1/extensions/:id/secrets/:name); nova.secrets.get reads only these.",
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/secretName" }
+        },
+        "commands": {
+          "description": "Command ids the extension may register (nova.commands.register).",
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/ident" }
+        },
+        "panels": {
+          "description": "MCP Apps panels (ADR-066): a ui:// resource served from an HTML file in the extension, at a global, thread or file entry point.",
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/panel" }
+        },
+        "tools": {
+          "description": "Tools by their own name (the canonical name is ext:<id>/<name>), each with its action class and an optional approval default.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["action"],
+            "additionalProperties": false,
+            "properties": {
+              "action": { "$ref": "#/$defs/actionClass" },
+              "default": { "$ref": "#/$defs/approvalDefault" }
+            }
+          }
+        },
+        "actionDefaults": {
+          "description": "Approval defaults per action class for the extension's tools.",
+          "type": "object",
+          "propertyNames": { "enum": ["read", "write", "send", "delete", "execute"] },
+          "additionalProperties": { "$ref": "#/$defs/approvalDefault" }
+        },
+        "hooks": {
+          "description": "SDK hooks (docs/08 §4.1). Each is stored as a hook with an mcp_tool handler on ext:<id>/hooks/<hookId>, installed untrusted, and trusted by a hash over its definition and the bundle digest. Hook ids are shared with the plugin's own hooks.",
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/hook" }
+        },
+        "events": {
+          "description": "Events the extension may observe (observe only): names or name.* patterns of the observable events, and the aliases thread.message, run.end and tool.call.",
+          "type": "array",
+          "maxItems": 50,
+          "items": { "type": "string", "minLength": 1, "maxLength": 100 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "relativeFile": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._/-]{1,300}$"
+    },
+    "ident": { "type": "string", "pattern": "^[a-z0-9][a-zA-Z0-9._-]{0,99}$" },
+    "secretName": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+    "actionClass": { "enum": ["read", "write", "send", "delete", "execute"] },
+    "approvalDefault": { "enum": ["allow", "ask", "deny"] },
+    "domainList": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+    },
+    "panel": {
+      "type": "object",
+      "required": ["id", "title", "resource", "entryPoint", "file"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/ident" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "resource": {
+          "type": "string",
+          "maxLength": 500,
+          "pattern": "^ui://[a-z0-9][a-z0-9.-]{0,99}(/[A-Za-z0-9._~-]+)*/?$"
+        },
+        "entryPoint": { "enum": ["global", "thread", "file"] },
+        "extensions": {
+          "description": "File extensions a file panel opens (required for entryPoint file, not allowed otherwise).",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": { "type": "string", "pattern": "^\\.[A-Za-z0-9]+$" }
+        },
+        "file": {
+          "description": "The HTML file (at most 5 MB) the resource serves.",
+          "allOf": [{ "$ref": "#/$defs/relativeFile" }, { "pattern": "\\.[hH][tT][mM][lL]?$" }]
+        },
+        "connectDomains": { "$ref": "#/$defs/domainList" },
+        "resourceDomains": { "$ref": "#/$defs/domainList" },
+        "frameDomains": { "$ref": "#/$defs/domainList" }
+      },
+      "if": { "properties": { "entryPoint": { "const": "file" } } },
+      "then": { "required": ["extensions"] },
+      "else": { "not": { "required": ["extensions"] } }
+    },
+    "hook": {
+      "type": "object",
+      "required": ["id", "event"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+        "event": {
+          "enum": [
+            "session.start",
+            "session.end",
+            "prompt.submit",
+            "tool.pre",
+            "permission.request",
+            "tool.post",
+            "compact.pre",
+            "compact.post",
+            "subagent.start",
+            "subagent.stop",
+            "stop",
+            "interrupt"
+          ]
+        },
+        "matcher": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 200 },
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 20,
+              "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+            }
+          ]
+        },
+        "failClosed": { "type": "boolean" },
+        "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000 },
+        "statusMessage": { "type": "string", "maxLength": 120 }
+      }
+    }
+  }
+}

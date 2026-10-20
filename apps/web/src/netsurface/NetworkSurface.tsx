@@ -2,17 +2,19 @@
 // reached. /network and /network/:section; a setup run is /network/setup?run=<id>. On desktop the
 // sections are tabs; on phones /network lists them and each one is a full page with a way back
 // (docs/04 §4.3). The sandbox egress rules stay in Settings → Network, linked both ways.
+import { defineMessages } from '@nova/i18n';
 import { Icon, Tabs } from '@nova/ui';
 import { useLayout } from '../hooks.ts';
 import { navigate } from '../router.ts';
+import { embed } from '../settings/embed.tsx';
 import { followLink } from '../work/nav.tsx';
 import {
   EGRESS_SETTINGS_PATH,
   NETWORK_PATH,
   NETWORK_SECTIONS,
-  SECTION_INFO,
   networkPath,
   sectionFrom,
+  sectionInfo,
   type NetworkSection,
 } from './format.ts';
 import { OverviewSection } from './Overview.tsx';
@@ -22,6 +24,16 @@ import { TrustSection } from './Trust.tsx';
 import { WakeSection } from './Wake.tsx';
 import '../workspace.css';
 import './netsurface.css';
+
+const S = defineMessages('netsurface.surface', {
+  title: 'Network',
+  introShort: 'How your devices reach this Hub.',
+  intro: 'How your devices reach this Hub: transports, certificates, the Relay and Wake helpers.',
+  sections: 'Network sections',
+  breadcrumb: 'Breadcrumb',
+  egress: 'Where sandboxes and agent computers may connect is set in {link}.',
+  egressLink: 'Settings → Network',
+});
 
 function panel(section: NetworkSection) {
   switch (section) {
@@ -41,11 +53,13 @@ function panel(section: NetworkSection) {
 function EgressLink() {
   return (
     <p className="muted ws-flush">
-      Where sandboxes and agent computers may connect is set in{' '}
-      <a href={EGRESS_SETTINGS_PATH} onClick={(e) => followLink(e, EGRESS_SETTINGS_PATH)}>
-        Settings → Network
-      </a>
-      .
+      {embed(S.egress, {
+        link: (
+          <a href={EGRESS_SETTINGS_PATH} onClick={(e) => followLink(e, EGRESS_SETTINGS_PATH)}>
+            {S.egressLink}
+          </a>
+        ),
+      })}
     </p>
   );
 }
@@ -59,17 +73,17 @@ export function NetworkSurface({ section }: { section: string | null }) {
       return (
         <div className="ws-page net-page">
           <header className="ws-page-header">
-            <h1>Network</h1>
+            <h1>{S.title}</h1>
           </header>
-          <p className="muted ws-flush">How your devices reach this Hub.</p>
-          <nav aria-label="Network sections">
+          <p className="muted ws-flush">{S.introShort}</p>
+          <nav aria-label={S.sections}>
             <ul className="net-menu">
               {NETWORK_SECTIONS.map((s) => (
                 <li key={s}>
                   <a href={networkPath(s)} onClick={(e) => followLink(e, networkPath(s))}>
                     <span className="net-menu-text">
-                      <span className="net-strong">{SECTION_INFO[s].label}</span>
-                      <span className="muted net-small">{SECTION_INFO[s].description}</span>
+                      <span className="net-strong">{sectionInfo(s).label}</span>
+                      <span className="muted net-small">{sectionInfo(s).description}</span>
                     </span>
                     <Icon name="forward" />
                   </a>
@@ -83,13 +97,13 @@ export function NetworkSurface({ section }: { section: string | null }) {
     }
     return (
       <div className="ws-page net-page">
-        <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+        <nav aria-label={S.breadcrumb} className="ws-breadcrumb">
           <a href={NETWORK_PATH} onClick={(e) => followLink(e, NETWORK_PATH)}>
-            <Icon name="back" /> Network
+            <Icon name="back" /> {S.title}
           </a>
         </nav>
         <header className="ws-page-header">
-          <h1>{SECTION_INFO[current].label}</h1>
+          <h1>{sectionInfo(current).label}</h1>
         </header>
         {panel(current)}
       </div>
@@ -100,20 +114,18 @@ export function NetworkSurface({ section }: { section: string | null }) {
   return (
     <div className="ws-page net-page">
       <header className="ws-page-header">
-        <h1>Network</h1>
+        <h1>{S.title}</h1>
       </header>
-      <p className="muted ws-flush">
-        How your devices reach this Hub: transports, certificates, the Relay and Wake helpers.
-      </p>
+      <p className="muted ws-flush">{S.intro}</p>
       <EgressLink />
       <Tabs
-        label="Network sections"
+        label={S.sections}
         className="net-tabs"
         value={value}
         onChange={(id) => navigate(networkPath(sectionFrom(id)), { replace: true })}
         items={NETWORK_SECTIONS.map((s) => ({
           id: s,
-          label: SECTION_INFO[s].label,
+          label: sectionInfo(s).label,
           panel: s === value ? panel(s) : null,
         }))}
       />

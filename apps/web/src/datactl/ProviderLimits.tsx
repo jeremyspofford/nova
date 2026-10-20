@@ -11,6 +11,7 @@ import { StateChip } from '../settings/badges.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useDatactlApi } from './api-m8.ts';
 import {
+  LIMIT_TEXT,
   SPEND_STRINGS as S,
   capPath,
   capSpentText,
@@ -25,25 +26,15 @@ import {
 import { ErrorBox, useFetched } from './parts.tsx';
 import './datactl.css';
 
-const LIMIT_TEXT = {
-  plan: (plan: string) => `Plan: ${plan}.`,
-  used: (used: number, limit: number) => `${count(used)} of ${count(limit)} used.`,
-  limit: (limit: number) => `Limit: ${count(limit)}.`,
-  resets: (when: string) => `Resets ${when}.`,
-  reportedAt: (text: string, when: string) => `${text} (${when})`,
-  spent: (usd: string) => `${usd} this month.`,
-  none: 'No plan or limits reported.',
-};
-
 function Entitlements({ e }: { e: NonNullable<ProviderLimitView['entitlements']> }) {
   const parts = [
-    e.plan ? LIMIT_TEXT.plan(e.plan) : null,
+    e.plan ? LIMIT_TEXT.plan({ plan: e.plan }) : null,
     e.limit !== null && e.used !== null
-      ? LIMIT_TEXT.used(e.used, e.limit)
+      ? LIMIT_TEXT.used({ used: count(e.used), limit: count(e.limit) })
       : e.limit !== null
-        ? LIMIT_TEXT.limit(e.limit)
+        ? LIMIT_TEXT.limit({ limit: count(e.limit) })
         : null,
-    e.resetAt ? LIMIT_TEXT.resets(formatUtcDate(e.resetAt)) : null,
+    e.resetAt ? LIMIT_TEXT.resets({ date: formatUtcDate(e.resetAt) }) : null,
   ].filter((x): x is string => x !== null);
   return <>{parts.length ? parts.join(' ') : LIMIT_TEXT.none}</>;
 }
@@ -65,7 +56,7 @@ export function ProviderLimitsSection() {
           onRetry={limits.reload}
         />
       ) : null}
-      {limits.loading ? <Spinner label="Loading provider limits" /> : null}
+      {limits.loading ? <Spinner label={S.limitsLoading} /> : null}
       {items.length ? (
         <ul className="dc-limits">
           {items.map((l) => {
@@ -73,7 +64,7 @@ export function ProviderLimitsSection() {
             return (
               <li key={l.providerAccountId} className="dc-limit">
                 <div className="dc-cap-head">
-                  <strong>{l.label}</strong>
+                  <strong dir="auto">{l.label}</strong>
                   <span className="muted">{providerName(l.provider)}</span>
                   {state ? (
                     <StateChip text={state.text} tone={state.tone} icon={state.icon} />
@@ -84,7 +75,7 @@ export function ProviderLimitsSection() {
                 ) : (
                   <dl className="ws-dl">
                     <dt>{S.thisMonth}</dt>
-                    <dd>{LIMIT_TEXT.spent(formatUsd(l.spentThisMonthUsd))}</dd>
+                    <dd>{LIMIT_TEXT.spent({ amount: formatUsd(l.spentThisMonthUsd) })}</dd>
                     <dt>{S.plan}</dt>
                     <dd>
                       {l.entitlements ? <Entitlements e={l.entitlements} /> : LIMIT_TEXT.none}
@@ -92,10 +83,10 @@ export function ProviderLimitsSection() {
                     <dt>{S.reported}</dt>
                     <dd>
                       {l.lastReported
-                        ? LIMIT_TEXT.reportedAt(
-                            reportedText(l.lastReported),
-                            formatWhen(l.lastReported.at),
-                          )
+                        ? LIMIT_TEXT.reportedAt({
+                            text: reportedText(l.lastReported),
+                            when: formatWhen(l.lastReported.at),
+                          })
                         : S.noneReported}
                     </dd>
                     <dt>{S.title}</dt>

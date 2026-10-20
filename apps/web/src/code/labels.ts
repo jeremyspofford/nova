@@ -1,16 +1,26 @@
 // Text for Code sessions shared by the list and the session view (FR-061, FR-215).
+import { defineMessages } from '@nova/i18n';
 import type { CodeSessionView, DerivedStatus, EnvironmentView } from '@nova/shared';
 import { baseName } from '../files/types.ts';
 
+export const LABEL_TEXT = defineMessages('code.labels', {
+  untitled: 'Code session',
+  notRepo: 'Not a Git repository',
+  detached: 'Detached HEAD',
+  dirty: '{branch}, uncommitted changes',
+  /** An environment that is not ready: "Build box (Degraded)". */
+  envWithStatus: '{name} ({status})',
+});
+
 export function sessionTitle(s: Pick<CodeSessionView, 'title' | 'folder'>): string {
-  return s.title || baseName(s.folder.path) || 'Code session';
+  return s.title || baseName(s.folder.path) || LABEL_TEXT.untitled;
 }
 
 /** "main", "main, uncommitted changes", or why there is no branch. */
 export function branchText(repo: CodeSessionView['repo']): string {
-  if (!repo) return 'Not a Git repository';
-  const branch = repo.branch ?? 'Detached HEAD';
-  return repo.dirty ? `${branch}, uncommitted changes` : branch;
+  if (!repo) return LABEL_TEXT.notRepo;
+  const branch = repo.branch ?? LABEL_TEXT.detached;
+  return repo.dirty ? LABEL_TEXT.dirty({ branch }) : branch;
 }
 
 /** docs/04 §1.1: Needs input first, then Blocked, Running, Ready; newest first within each. */
@@ -23,15 +33,17 @@ export function sortSessions(list: readonly CodeSessionView[]): CodeSessionView[
   );
 }
 
-export const ENV_STATUS_TEXT: Record<EnvironmentView['status'], string> = {
+export const ENV_STATUS_TEXT = defineMessages('code.envStatus', {
   ok: 'Ready',
   degraded: 'Degraded',
   down: 'Unavailable',
   unknown: 'Not checked',
-};
+}) satisfies Record<EnvironmentView['status'], string>;
 
 export function environmentLabel(env: EnvironmentView): string {
-  return env.status === 'ok' ? env.label : `${env.label} (${ENV_STATUS_TEXT[env.status]})`;
+  return env.status === 'ok'
+    ? env.label
+    : LABEL_TEXT.envWithStatus({ name: env.label, status: ENV_STATUS_TEXT[env.status] });
 }
 
 export function sessionPath(id: string | null): string {

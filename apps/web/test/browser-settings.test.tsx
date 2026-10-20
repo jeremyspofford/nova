@@ -331,7 +331,7 @@ describe('behavior', () => {
     const days = screen.getByLabelText('Keep action screenshots for (days)');
     await userEvent.clear(days);
     await userEvent.type(days, '0');
-    expect(await screen.findByText('From 1 to 3650 days')).toBeTruthy();
+    expect(await screen.findByText('From 1 to 3,650 days')).toBeTruthy();
     await userEvent.clear(days);
     await userEvent.type(days, '7');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));

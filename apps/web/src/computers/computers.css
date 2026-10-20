@@ -85,7 +85,8 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--u-space-1) var(--u-space-2);
-  padding: var(--u-space-1) var(--u-space-1) var(--u-space-1) var(--u-space-3);
+  padding-block: var(--u-space-1);
+  padding-inline: var(--u-space-3) var(--u-space-1);
   border: 1px solid var(--u-border);
   border-radius: var(--u-radius-sm);
   background: var(--u-surface);
@@ -124,15 +125,15 @@
   gap: var(--u-space-1);
   padding: var(--u-space-2) var(--u-space-3);
   border: 1px solid var(--u-border);
-  border-left-width: 4px;
+  border-inline-start-width: 4px;
   border-radius: var(--u-radius-sm);
   background: var(--u-surface);
 }
 .network-decision[data-decision='deny'] {
-  border-left-color: var(--u-danger);
+  border-inline-start-color: var(--u-danger);
 }
 .network-decision[data-decision='allow'] {
-  border-left-color: var(--u-success);
+  border-inline-start-color: var(--u-success);
 }
 .network-decision-head {
   display: flex;
@@ -159,7 +160,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--u-space-2);
-  margin: var(--u-space-1) 0 var(--u-space-2) var(--u-space-6);
+  margin-block: var(--u-space-1) var(--u-space-2);
+  margin-inline: var(--u-space-6) 0;
 }
 .shot {
   display: grid;
@@ -219,7 +221,7 @@
 
 /* ---- phones (docs/04 §4.3) ------------------------------------------------------------------ */
 .app[data-layout='phone'] .shots {
-  margin-left: 0;
+  margin-inline-start: 0;
 }
 .app[data-layout='phone'] .network-actions,
 .app[data-layout='phone'] .computers-actions {

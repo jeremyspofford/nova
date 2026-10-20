@@ -5,10 +5,11 @@
 // never parsed as Markdown or HTML. A pending approval for the call sits inside the card.
 import { useId, useState, type ReactNode } from 'react';
 import type { ToolCallStatus, ToolSource } from '@nova/shared';
+import { defineMessages, fmt, messageFor } from '@nova/i18n';
 import { Icon, Spinner, type IconName } from '@nova/ui';
 import { isTerminal, type DisplayCall } from './thread-state.ts';
 
-export const TOOL_STATUS_TEXT: Record<ToolCallStatus, string> = {
+export const TOOL_STATUS_TEXT = defineMessages('chat.toolStatus', {
   pending: 'Pending',
   awaiting_approval: 'Waiting for approval',
   running: 'Running',
@@ -17,7 +18,30 @@ export const TOOL_STATUS_TEXT: Record<ToolCallStatus, string> = {
   denied: 'Denied',
   timeout: 'Timed out',
   cancelled: 'Cancelled',
-};
+}) satisfies Record<ToolCallStatus, string>;
+
+export const TOOL_TEXT = defineMessages('chat.tool', {
+  source: {
+    builtin: 'Built-in',
+    mcp: 'MCP server',
+    plugin: 'Plugin',
+    computer: 'Computer',
+    browser: 'Browser',
+    page: 'Web page',
+    device: 'Device',
+  },
+  mcpServer: 'MCP server {server}',
+  /** The card's name when the tool has no title or name. */
+  toolCall: 'Tool call',
+  toolName: 'tool',
+  card: 'Tool call: {title}',
+  arguments: 'Arguments',
+  outputSoFar: 'Output so far',
+  error: 'Error',
+  result: 'Result',
+  resultNote: '(output from the tool, shown as plain text)',
+  noDetails: 'No details yet.',
+});
 
 const STATUS_ICON: Record<ToolCallStatus, IconName | null> = {
   pending: 'clock',
@@ -30,32 +54,18 @@ const STATUS_ICON: Record<ToolCallStatus, IconName | null> = {
   cancelled: 'stop',
 };
 
-const SOURCE_TEXT: Record<ToolSource, string> = {
-  builtin: 'Built-in',
-  mcp: 'MCP server',
-  plugin: 'Plugin',
-  computer: 'Computer',
-  browser: 'Browser',
-  page: 'Web page',
-  device: 'Device',
-};
-
 /** Where a tool comes from; MCP tools name their server (`mcp:<server>.<tool>`, docs/08 §8). */
 export function toolSourceLabel(tool: string, source: ToolSource): string {
   if (source === 'mcp') {
     const server = /^mcp:([^./]+)[./]/.exec(tool)?.[1];
-    return server ? `MCP server ${server}` : SOURCE_TEXT.mcp;
+    return server ? TOOL_TEXT.mcpServer({ server }) : TOOL_TEXT.source.mcp;
   }
-  return SOURCE_TEXT[source] ?? source;
+  return messageFor(TOOL_TEXT.source, source) ?? source;
 }
 
 export function formatDuration(ms: number | null): string | null {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return null;
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
-  const min = Math.floor(ms / 60_000);
-  const sec = Math.round((ms % 60_000) / 1000);
-  return sec ? `${min} min ${sec} s` : `${min} min`;
+  return fmt.duration(ms);
 }
 
 export interface ToolCardProps {
@@ -70,8 +80,8 @@ export function ToolCard({ call, status, approval }: ToolCardProps) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const shown = status ?? call.status;
-  const name = call.tool || 'tool';
-  const title = call.title?.trim() || call.tool || 'Tool call';
+  const name = call.tool || TOOL_TEXT.toolName;
+  const title = call.title?.trim() || call.tool || TOOL_TEXT.toolCall;
   const duration = formatDuration(call.durationMs);
   const failed = shown === 'error' || shown === 'denied' || shown === 'timeout';
   const problem = call.error ?? (failed ? call.resultPreview : null);
@@ -80,7 +90,7 @@ export function ToolCard({ call, status, approval }: ToolCardProps) {
     <div
       className="tool-card"
       role="group"
-      aria-label={`Tool call: ${title}`}
+      aria-label={TOOL_TEXT.card({ title })}
       data-status={shown}
       data-call-id={call.callId}
     >
@@ -102,26 +112,36 @@ export function ToolCard({ call, status, approval }: ToolCardProps) {
         </span>
         {duration ? <span className="tool-card-duration">{duration}</span> : null}
       </button>
-      {problem && !open ? <p className="tool-card-problem">{problem}</p> : null}
+      {problem && !open ? (
+        <p className="tool-card-problem" dir="auto">
+          {problem}
+        </p>
+      ) : null}
       {approval}
       {open ? (
         <div id={`${id}-body`} className="tool-card-body">
           {call.argsPreview ? (
             <>
-              <p className="tool-card-label">Arguments</p>
-              <pre className="tool-card-pre" tabIndex={0} aria-label="Arguments">
+              <p className="tool-card-label">{TOOL_TEXT.arguments}</p>
+              <pre
+                role="group"
+                className="tool-card-pre"
+                tabIndex={0}
+                aria-label={TOOL_TEXT.arguments}
+              >
                 {call.argsPreview}
               </pre>
             </>
           ) : null}
           {call.progress && !isTerminal(shown) ? (
             <>
-              <p className="tool-card-label">Output so far</p>
+              <p className="tool-card-label">{TOOL_TEXT.outputSoFar}</p>
               <pre
+                role="group"
                 className="tool-card-pre"
                 data-untrusted="true"
                 tabIndex={0}
-                aria-label="Output so far"
+                aria-label={TOOL_TEXT.outputSoFar}
               >
                 {call.progress}
               </pre>
@@ -129,23 +149,35 @@ export function ToolCard({ call, status, approval }: ToolCardProps) {
           ) : null}
           {problem ? (
             <>
-              <p className="tool-card-label">Error</p>
-              <pre className="tool-card-pre" data-untrusted="true" tabIndex={0} aria-label="Error">
+              <p className="tool-card-label">{TOOL_TEXT.error}</p>
+              <pre
+                role="group"
+                className="tool-card-pre"
+                data-untrusted="true"
+                tabIndex={0}
+                aria-label={TOOL_TEXT.error}
+              >
                 {problem}
               </pre>
             </>
           ) : call.resultPreview ? (
             <>
               <p className="tool-card-label">
-                Result <span className="muted">(output from the tool, shown as plain text)</span>
+                {TOOL_TEXT.result} <span className="muted">{TOOL_TEXT.resultNote}</span>
               </p>
-              <pre className="tool-card-pre" data-untrusted="true" tabIndex={0} aria-label="Result">
+              <pre
+                role="group"
+                className="tool-card-pre"
+                data-untrusted="true"
+                tabIndex={0}
+                aria-label={TOOL_TEXT.result}
+              >
                 {call.resultPreview}
               </pre>
             </>
           ) : null}
           {!call.argsPreview && !call.progress && !problem && !call.resultPreview ? (
-            <p className="muted">No details yet.</p>
+            <p className="muted">{TOOL_TEXT.noDetails}</p>
           ) : null}
         </div>
       ) : null}

@@ -27,7 +27,7 @@
   background: var(--u-surface);
 }
 .fw-card[data-current] {
-  border-left: 4px solid var(--u-accent);
+  border-inline-start: 4px solid var(--u-accent);
 }
 .fw-card-head {
   display: flex;

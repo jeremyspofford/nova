@@ -1,8 +1,13 @@
 // Shared bits for settings pages and the workspace surfaces (docs/14 §1.2).
 import { useEffect, useRef } from 'react';
-import { MANAGED_TEXT } from '@nova/ui';
+import { defineMessages, fmt } from '@nova/i18n';
 
-export const MANAGED = MANAGED_TEXT;
+/**
+ * "Managed by your organization": a live re-export of packages/ui's binding (never a copy), so it
+ * follows the locale; kept for the areas that import it. New code reads `UI_TEXT.managed` from
+ * @nova/ui at render, as the settings pages do.
+ */
+export { MANAGED_TEXT as MANAGED } from '@nova/ui';
 
 /** Run `fn` every `ms` while `active`; the latest `fn` is always the one called. */
 export function useInterval(fn: () => void, ms: number, active = true): void {
@@ -17,20 +22,24 @@ export function useInterval(fn: () => void, ms: number, active = true): void {
   }, [ms, active]);
 }
 
-/** A short, human time: "just now", "5 min ago", "3 h ago", then a date. */
+const WHEN_TEXT = defineMessages('settings.when', {
+  never: 'never',
+  unknown: 'unknown',
+  justNow: 'just now',
+  minutesAgo: '{n, plural, other {# min ago}}',
+  hoursAgo: '{n, plural, other {# h ago}}',
+});
+
+/** A short, human time in the active locale: "just now", "5 min ago", "3 h ago", then a date. */
 export function formatWhen(iso: string | null, now = Date.now()): string {
-  if (!iso) return 'never';
+  if (!iso) return WHEN_TEXT.never;
   const t = Date.parse(iso);
-  if (Number.isNaN(t)) return 'unknown';
+  if (Number.isNaN(t)) return WHEN_TEXT.unknown;
   const s = Math.round((now - t) / 1000);
-  if (s < 45 && s > -45) return 'just now';
-  if (s > 0 && s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s > 0 && s < 86_400) return `${Math.round(s / 3600)} h ago`;
-  return new Date(t).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
+  if (s < 45 && s > -45) return WHEN_TEXT.justNow;
+  if (s > 0 && s < 3600) return WHEN_TEXT.minutesAgo({ n: Math.round(s / 60) });
+  if (s > 0 && s < 86_400) return WHEN_TEXT.hoursAgo({ n: Math.round(s / 3600) });
+  return fmt.date(t, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 /** `list` with the item at `i` moved by `delta` places (clamped); a new array. */
@@ -43,7 +52,10 @@ export function moveItem<T>(list: readonly T[], i: number, delta: number): T[] {
   return next;
 }
 
-/** "1 chat", "2 chats". */
+/**
+ * "1 chat", "2 chats". English only: converted areas use an ICU plural message instead
+ * (`'{n, plural, one {# chat} other {# chats}}'`, FR-016).
+ */
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }

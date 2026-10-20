@@ -31,6 +31,12 @@ import { ApiError, type Api } from '../src/api.ts';
 export interface M4State {
   plugins: PluginView[];
   pluginPreview: PluginPreview | null;
+  /**
+   * M8: the plugin would replace an extension signed by a publisher (the Hub's sentence): the
+   * preview says it first, and the install needs `acceptPublisherChange: true` (400 `validation`
+   * `{field: acceptPublisherChange, reason: publisher_change_confirmation_required}` otherwise).
+   */
+  pluginTakeover?: string | null;
   catalogs: CatalogView[];
   catalog: CatalogEntryView[];
   skills: SkillDetail[];
@@ -173,12 +179,24 @@ export function m4Impl(
     previewPlugin: async () => {
       maybeFail('previewPlugin');
       if (!st.pluginPreview) throw notFound();
-      return st.pluginPreview;
+      return st.pluginTakeover
+        ? { ...st.pluginPreview, warnings: [st.pluginTakeover, ...st.pluginPreview.warnings] }
+        : st.pluginPreview;
     },
     installPlugin: async (body) => {
       maybeFail('installPlugin');
       const p = st.pluginPreview;
       if (!p || p.previewId !== body.previewId) throw notFound();
+      if (st.pluginTakeover && body.acceptPublisherChange !== true)
+        throw new ApiError(400, {
+          code: 'validation',
+          message: st.pluginTakeover,
+          retryable: false,
+          details: {
+            field: 'acceptPublisherChange',
+            reason: 'publisher_change_confirmation_required',
+          },
+        });
       const m = p.manifest as {
         id?: string;
         name?: string;

@@ -11,8 +11,8 @@ import {
   themeContrast,
   themeData,
   themeIdFor,
+  themeBase,
   themeLink,
-  themeSettings,
 } from '../src/settings/theme-file.ts';
 import { DONE_ONBOARDING, createHub } from './fakes.ts';
 import { renderApp, resetDom } from './render.tsx';
@@ -61,10 +61,12 @@ describe('theme files (FR-011, contracts/schemas/theme.json)', () => {
           '--u-accent': '#b34700',
           '--u-text': '#201810',
           '--u-info': '#abcdef',
+          // FR-011: a theme may also set the radii (a plain CSS value).
+          '--u-radius-sm': '4px',
         },
         fonts: { '--u-font-ui': 'Inter, sans-serif' },
       },
-      ignored: ['--u-radius-sm', '--u-danger', '--u-font-code', '--u-font-extra'],
+      ignored: ['--u-danger', '--u-font-code', '--u-font-extra'],
     });
     const unknownBase = checkTheme({ ...SUNRISE, extends: 'solarized' });
     expect(unknownBase.ok && unknownBase.ignored).toEqual(['extends']);
@@ -142,9 +144,17 @@ describe('theme files (FR-011, contracts/schemas/theme.json)', () => {
     expect(readTheme('{ broken')).toEqual({ ok: false, errors: ['That is not valid JSON.'] });
   });
 
-  it('exports the current look, maps a theme to settings and checks contrast', () => {
+  it('exports the current look, finds a theme’s base and checks contrast', () => {
     const t = exportTheme(
-      { ...dark, tokens: { ...dark.tokens, '--u-accent': '#ff8800', '--u-radius-sm': '6px' } },
+      {
+        ...dark,
+        tokens: {
+          ...dark.tokens,
+          '--u-accent': '#ff8800',
+          '--u-radius-sm': '6px',
+          '--u-space-4': '40px',
+        },
+      },
       { '--u-font-ui': 'Inter', '--u-font-code': null },
       '  Night Shift! ',
       'nova.dark',
@@ -156,25 +166,13 @@ describe('theme files (FR-011, contracts/schemas/theme.json)', () => {
       extends: 'nova.dark',
       fonts: { '--u-font-ui': 'Inter' },
     });
-    expect(Object.keys(t.tokens)).not.toContain('--u-radius-sm');
+    // Theme tokens only: the radii go with the colors, spacing stays the app's.
+    expect(t.tokens['--u-radius-sm']).toBe('6px');
+    expect(Object.keys(t.tokens)).not.toContain('--u-space-4');
     expect(checkTheme(t).ok).toBe(true);
     expect(themeIdFor('!!!')).toBe('user.theme');
-    expect(themeSettings(t, true)).toEqual({
-      base: 'dark',
-      accent: '#ff8800',
-      background: null,
-      foreground: null,
-      uiFont: 'Inter',
-      codeFont: null,
-    });
-    expect(themeSettings(SUNRISE, false)).toEqual({
-      base: 'light',
-      accent: '#b34700',
-      background: '#fff8f0',
-      foreground: '#201810',
-      uiFont: 'Inter, sans-serif',
-      codeFont: null,
-    });
+    expect(themeBase(t)).toBe('dark');
+    expect(themeBase(SUNRISE)).toBe('light');
     expect(themeContrast(SUNRISE, false)).toEqual([]);
     const murky = { ...SUNRISE, tokens: { '--u-bg': '#777777', '--u-text': '#888888' } };
     expect(themeContrast(murky, false).map((w) => w.pair)).toContain('Text on background');
@@ -252,13 +250,16 @@ describe('Settings → Appearance: theme import and export (FR-011)', () => {
     expect(hub.state.settings['appearance.customThemes']).toEqual([
       expect.objectContaining({ id: 'user.ember', name: 'Ember' }),
     ]);
+    // FR-011: the saved theme is used token for token; the accent override it carries is cleared.
+    expect(hub.state.settings['appearance.customTheme']).toBe('user.ember');
     expect(hub.state.settings['appearance.theme']).toBe('dark');
-    expect(hub.state.settings['appearance.accent']).toBe('#ff8800');
+    expect(hub.state.settings['appearance.accent']).toBeNull();
     const mine = within(region).getByRole('list', { name: 'Your themes' });
     const row = within(mine).getByRole('listitem', { name: 'Ember' });
     await userEvent.click(within(row).getByRole('button', { name: 'Remove Ember' }));
-    expect(await screen.findByText('Ember removed.')).toBeTruthy();
+    expect(await screen.findByText('Ember removed. Its base theme is used now.')).toBeTruthy();
     expect(hub.state.settings['appearance.customThemes']).toEqual([]);
+    expect(hub.state.settings['appearance.customTheme']).toBeNull();
   });
 
   it('rejects an invalid theme, warns about low contrast, and imports from a file', async () => {
@@ -306,16 +307,15 @@ describe('Settings → Appearance: theme import and export (FR-011)', () => {
     await userEvent.click(within(mine).getByRole('button', { name: 'Use Sunrise' }));
     expect(await screen.findByText('Using Sunrise.')).toBeTruthy();
     expect(hub.state.settings).toMatchObject({
+      'appearance.customTheme': 'com.example.sunrise',
       'appearance.theme': 'light',
-      'appearance.background': '#fff8f0',
-      'appearance.foreground': '#201810',
-      'appearance.accent': '#b34700',
-      'appearance.uiFont': 'Inter, sans-serif',
-      'appearance.codeFont': null,
     });
-    await waitFor(() =>
-      expect(document.documentElement.style.getPropertyValue('--u-bg')).toBe('#fff8f0'),
-    );
+    // No overrides: the color fields start from Sunrise's own colors (custom-theme.test.tsx
+    // checks the document root, applied by the shell's useApplyAppearance).
+    expect(hub.state.settings['appearance.background']).toBeUndefined();
+    expect(
+      screen.getByRole<HTMLInputElement>('textbox', { name: 'Background hex value' }).value,
+    ).toBe('#fff8f0');
   });
 
   it('opens a theme link at Appearance with the import filled in', async () => {

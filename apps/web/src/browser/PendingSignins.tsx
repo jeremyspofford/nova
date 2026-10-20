@@ -8,7 +8,8 @@ import { errorMessage } from '../api.ts';
 import { useDebounced } from '../work/events.ts';
 import { useBrowserApi } from './api.ts';
 import { SIGNIN_EVENTS, eventComputerId, useHubEvents } from './events.ts';
-import { SigninForm, type SigninOutcome } from './SigninForm.tsx';
+import { BROWSER_TEXT } from './format.ts';
+import { SIGNIN_TEXT, SigninForm, type SigninOutcome } from './SigninForm.tsx';
 
 interface Answered {
   host: string;
@@ -41,7 +42,7 @@ export function PendingSignins({
         setItems(list.filter((s) => !computerId || s.computerId === computerId));
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load sign-in requests.')),
+      (err: unknown) => alive && setError(errorMessage(err, SIGNIN_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -74,17 +75,17 @@ export function PendingSignins({
     return (
       <div className="ws-error" role="alert">
         <p>{error}</p>
-        <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+        <Button onClick={() => setAttempt((n) => n + 1)}>{BROWSER_TEXT.retry}</Button>
       </div>
     );
-  if (items === null) return <Spinner label="Loading sign-in requests" />;
+  if (items === null) return <Spinner label={SIGNIN_TEXT.loading} />;
   if (!waiting.length && !results.length) return empty ? <p className="muted">{empty}</p> : null;
   return (
     <div className="brw-signins">
       {results.map(([id, r]) => (
         <div key={id} className="brw-signin-result" data-outcome={r.outcome}>
           <p role="status">
-            <strong>Sign in to {r.host}:</strong> {r.message}
+            <strong>{SIGNIN_TEXT.resultTitle({ site: r.host })}</strong> {r.message}
           </p>
           <Button
             variant="ghost"
@@ -96,7 +97,7 @@ export function PendingSignins({
               })
             }
           >
-            Dismiss
+            {SIGNIN_TEXT.dismiss}
           </Button>
         </div>
       ))}

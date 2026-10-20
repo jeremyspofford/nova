@@ -220,6 +220,33 @@ describe('access for every sandbox (FR-102, FR-193)', () => {
     expect(within(access).queryByText('api.*.test')).toBeNull();
   });
 
+  it("shows the hosts in force when a managed ceiling decides them, never 'cannot reach any host'", async () => {
+    // The owner lists none: the policy's own hosts are in force (ADR-097).
+    const r = await openNetwork({}, { egressInForce: ['api.example.com'] });
+    let access = region('Access for every sandbox');
+    expect(
+      await within(access).findByText('Sandboxes may reach now: api.example.com.'),
+    ).toBeTruthy();
+    expect(within(access).getByText('None of your own.')).toBeTruthy();
+    expect(within(access).queryByText('None yet: sandboxes cannot reach any host.')).toBeNull();
+    expect(within(access).getByRole('note', { name: 'Hosts in force' })).toBeTruthy();
+    r.unmount();
+    // The owner's hosts are all outside the ceiling: none is in force.
+    const s = await openNetwork(
+      {},
+      { settings: { 'network.egressAllow': ['files.example.org'] }, egressInForce: [] },
+    );
+    access = region('Access for every sandbox');
+    expect(await within(access).findByText('Sandboxes may reach no host now.')).toBeTruthy();
+    expect(within(access).getByText('files.example.org')).toBeTruthy();
+    s.unmount();
+    // Without a ceiling the list in force is the owner's: no note.
+    await openNetwork({}, { settings: { 'network.egressAllow': ['ok.test'] } });
+    access = region('Access for every sandbox');
+    expect(await within(access).findByText('ok.test')).toBeTruthy();
+    expect(within(access).queryByRole('note', { name: 'Hosts in force' })).toBeNull();
+  });
+
   it('locks what managed policy sets', async () => {
     await openNetwork(
       {},

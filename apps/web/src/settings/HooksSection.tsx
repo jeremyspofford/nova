@@ -3,6 +3,7 @@
 // here; if the hook changed after the list loaded, the Hub refuses the old hash (409) and the new
 // definition is shown for review. Managed hooks are trusted by policy.
 import { useEffect, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { HookView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, Switch, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
@@ -20,6 +21,54 @@ import {
   hookSourceText,
   shortHash,
 } from './plugin-text.ts';
+import { embed } from './embed.tsx';
+
+export const HOOKS_TEXT = defineMessages('settings.hooks', {
+  loadFailed: 'Could not load hooks.',
+  changeFailed: 'Could not change {id}: {error}',
+  untrusted: 'Trust for {id} revoked. It stopped at once.',
+  untrustFailed: 'Could not revoke trust for {id}: {error}',
+  title: 'Hooks',
+  intro:
+    'Hooks run a command or an MCP tool at moments such as before a tool call. A hook never ' +
+    'runs until you trust it by its hash, and a changed hook needs your trust again.',
+  retry: 'Retry',
+  loading: 'Loading hooks',
+  none: 'No hooks',
+  noneHint: 'Hooks come from your hooks file, project folders and plugins.',
+  matches: '· matches {matcher}',
+  runs: 'Runs {handler}',
+  timeout: 'timeout {time}',
+  hash: 'Hash {hash}',
+  changedSinceTrust: 'Changed since you trusted it',
+  lastRun: 'Last run {when}: {effect}',
+  notRun: 'Not run yet',
+  turnOn: 'Turn on {id}',
+  trustedByOrg: 'Trusted by your organization',
+  untrustName: 'Untrust {id}',
+  untrust: 'Untrust',
+  trustName: 'Trust {id}',
+  trustEllipsis: 'Trust…',
+  trusted: '{id} is trusted. It runs from now on.',
+  trustFailed: 'Could not trust the hook.',
+  gone: 'This hook no longer exists.',
+  reloadFailed: 'The hook changed and could not be reloaded.',
+  trustTitle: 'Trust this hook?',
+  trustSubtitle: '{id} · {status}',
+  keepDisabled: 'Keep disabled',
+  trust: 'Trust',
+  changed:
+    'This hook changed since it was shown. Check what it runs and its new hash, then trust it ' +
+    'only if you still want it.',
+  from: 'From',
+  event: 'Event',
+  runsLabel: 'Runs',
+  sandboxed: '{handler} (sandboxed, timeout {time})',
+  hashLabel: 'Hash',
+  can: 'Can',
+  cannot: 'Cannot',
+});
+const S = HOOKS_TEXT;
 
 export function HooksSection({
   version,
@@ -44,7 +93,7 @@ export function HooksSection({
         setHooks(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load hooks.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -58,7 +107,7 @@ export function HooksSection({
     try {
       replace(await api.updateHook(h.id, { enabled: on }));
     } catch (err) {
-      toast.show(`Could not change ${h.id}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.changeFailed({ id: h.id, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -66,35 +115,28 @@ export function HooksSection({
     try {
       replace(await api.untrustHook(h.id));
       onTrustChanged?.();
-      toast.show(`Trust for ${h.id} revoked. It stopped at once.`, { tone: 'success' });
+      toast.show(S.untrusted({ id: h.id }), { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not revoke trust for ${h.id}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.untrustFailed({ id: h.id, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
   return (
     <section className="settings-section" aria-labelledby="plugins-hooks">
-      <h3 id="plugins-hooks">Hooks</h3>
-      <p className="muted">
-        Hooks run a command or an MCP tool at moments such as before a tool call. A hook never runs
-        until you trust it by its hash, and a changed hook needs your trust again.
-      </p>
+      <h3 id="plugins-hooks">{S.title}</h3>
+      <p className="muted">{S.intro}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setReload((r) => r + 1)}>Retry</Button>
+          <Button onClick={() => setReload((r) => r + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {hooks === null && !error ? <Spinner label="Loading hooks" /> : null}
+      {hooks === null && !error ? <Spinner label={S.loading} /> : null}
       {hooks?.length === 0 ? (
-        <EmptyState
-          level={3}
-          title="No hooks"
-          description="Hooks come from your hooks file, project folders and plugins."
-        />
+        <EmptyState level={3} title={S.none} description={S.noneHint} />
       ) : null}
       {hooks?.length ? (
-        <ul className="ws-list" aria-label="Hooks">
+        <ul className="ws-list" aria-label={S.title}>
           {hooks.map((h) => {
             const s = HOOK_STATUS[h.status];
             const managed = h.source === 'managed';
@@ -109,46 +151,65 @@ export function HooksSection({
                   <span className="ws-row-meta">
                     {HOOK_EVENT_TEXT[h.event]}
                     {h.matcher ? (
-                      <>
-                        · matches <code className="ws-code-inline">{h.matcher}</code>
-                      </>
+                      <span>
+                        {embed(S.matches, {
+                          matcher: (
+                            <code className="ws-code-inline" dir="ltr">
+                              {h.matcher}
+                            </code>
+                          ),
+                        })}
+                      </span>
                     ) : null}
                   </span>
                   <span className="ws-row-meta">
-                    Runs <code className="ws-code-inline">{hookHandlerText(h)}</code>
-                    <span className="muted">timeout {formatSeconds(h.timeoutMs / 1000)}</span>
+                    <span>
+                      {embed(S.runs, {
+                        handler: (
+                          <code className="ws-code-inline" dir="ltr">
+                            {hookHandlerText(h)}
+                          </code>
+                        ),
+                      })}
+                    </span>
+                    <span className="muted">
+                      {S.timeout({ time: formatSeconds(h.timeoutMs / 1000) })}
+                    </span>
                   </span>
                   <span className="muted ws-row-meta">
-                    <span title={h.contentHash}>Hash {shortHash(h.contentHash)}</span>
-                    {h.changedSinceTrust ? <span>Changed since you trusted it</span> : null}
+                    <span title={h.contentHash}>{S.hash({ hash: shortHash(h.contentHash) })}</span>
+                    {h.changedSinceTrust ? <span>{S.changedSinceTrust}</span> : null}
                     <span>
                       {h.lastRun
-                        ? `Last run ${formatWhen(h.lastRun.at)}: ${HOOK_EFFECT_TEXT[h.lastRun.effect]}`
-                        : 'Not run yet'}
+                        ? S.lastRun({
+                            when: formatWhen(h.lastRun.at),
+                            effect: HOOK_EFFECT_TEXT[h.lastRun.effect],
+                          })
+                        : S.notRun}
                     </span>
                   </span>
                 </div>
                 <div className="row ws-row-actions">
                   {h.source === 'user' ? (
                     <Switch
-                      label={`Turn on ${h.id}`}
+                      label={S.turnOn({ id: h.id })}
                       checked={h.enabled}
                       onChange={(v) => void toggle(h, v)}
                     />
                   ) : null}
                   {managed ? (
-                    <span className="muted">Trusted by your organization</span>
+                    <span className="muted">{S.trustedByOrg}</span>
                   ) : h.status === 'trusted' ? (
                     <Button
                       variant="ghost"
-                      aria-label={`Untrust ${h.id}`}
+                      aria-label={S.untrustName({ id: h.id })}
                       onClick={() => void untrust(h)}
                     >
-                      Untrust
+                      {S.untrust}
                     </Button>
                   ) : (
-                    <Button aria-label={`Trust ${h.id}`} onClick={() => setTrusting(h)}>
-                      Trust…
+                    <Button aria-label={S.trustName({ id: h.id })} onClick={() => setTrusting(h)}>
+                      {S.trustEllipsis}
                     </Button>
                   )}
                 </div>
@@ -165,7 +226,7 @@ export function HooksSection({
             setTrusting(null);
             replace(h);
             onTrustChanged?.();
-            toast.show(`${h.id} is trusted. It runs from now on.`, { tone: 'success' });
+            toast.show(S.trusted({ id: h.id }), { tone: 'success' });
           }}
           onChanged={(list) => setHooks(list)}
         />
@@ -200,7 +261,7 @@ function TrustDialog({
     } catch (err) {
       setBusy(false);
       if (!(err instanceof ApiError && err.status === 409)) {
-        setError(errorMessage(err, 'Could not trust the hook.'));
+        setError(errorMessage(err, S.trustFailed));
         return;
       }
       // The definition changed since it was shown: show the new one; never trust it blindly.
@@ -209,13 +270,13 @@ function TrustDialog({
         onChanged(items);
         const next = items.find((h) => h.id === hook.id);
         if (!next) {
-          setError('This hook no longer exists.');
+          setError(S.gone);
           return;
         }
         setHook(next);
         setChanged(true);
       } catch (e) {
-        setError(errorMessage(e, 'The hook changed and could not be reloaded.'));
+        setError(errorMessage(e, S.reloadFailed));
       }
     }
   };
@@ -223,15 +284,15 @@ function TrustDialog({
   return (
     <Dialog
       open
-      title="Trust this hook?"
-      description={`${hook.id} · ${HOOK_STATUS[hook.status].text}`}
+      title={S.trustTitle}
+      description={S.trustSubtitle({ id: hook.id, status: HOOK_STATUS[hook.status].text })}
       onClose={onClose}
       className="ws-wide-dialog"
       footer={
         <>
-          <Button onClick={onClose}>Keep disabled</Button>
+          <Button onClick={onClose}>{S.keepDisabled}</Button>
           <Button variant="primary" disabled={busy} onClick={() => void trust()}>
-            {busy ? <Spinner /> : null} Trust
+            {busy ? <Spinner /> : null} {S.trust}
           </Button>
         </>
       }
@@ -240,39 +301,51 @@ function TrustDialog({
         {changed ? (
           <p role="alert" className="ws-warning">
             <Icon name="alert" />
-            <span>
-              This hook changed since it was shown. Check what it runs and its new hash, then trust
-              it only if you still want it.
-            </span>
+            <span>{S.changed}</span>
           </p>
         ) : null}
         <dl className="ws-dl">
-          <dt>From</dt>
+          <dt>{S.from}</dt>
           <dd>{hookSourceText(hook)}</dd>
-          <dt>Event</dt>
+          <dt>{S.event}</dt>
           <dd>
-            {HOOK_EVENT_TEXT[hook.event]} <code className="ws-code-inline">{hook.event}</code>
+            {HOOK_EVENT_TEXT[hook.event]}{' '}
+            <code className="ws-code-inline" dir="ltr">
+              {hook.event}
+            </code>
             {hook.matcher ? (
               <>
                 {' '}
-                · matches <code className="ws-code-inline">{hook.matcher}</code>
+                {embed(S.matches, {
+                  matcher: (
+                    <code className="ws-code-inline" dir="ltr">
+                      {hook.matcher}
+                    </code>
+                  ),
+                })}
               </>
             ) : null}
           </dd>
-          <dt>Runs</dt>
+          <dt>{S.runsLabel}</dt>
           <dd>
-            <code className="ws-code-inline">{hookHandlerText(hook)}</code> (sandboxed, timeout{' '}
-            {formatSeconds(hook.timeoutMs / 1000)})
+            {embed(S.sandboxed, {
+              handler: (
+                <code className="ws-code-inline" dir="ltr">
+                  {hookHandlerText(hook)}
+                </code>
+              ),
+              time: formatSeconds(hook.timeoutMs / 1000),
+            })}
           </dd>
-          <dt>Hash</dt>
+          <dt>{S.hashLabel}</dt>
           <dd>
             <code className="ws-code-inline" data-testid="trust-hash">
               {hook.contentHash}
             </code>
           </dd>
-          <dt>Can</dt>
+          <dt>{S.can}</dt>
           <dd>{HOOK_CAN_TEXT[hook.event]}</dd>
-          <dt>Cannot</dt>
+          <dt>{S.cannot}</dt>
           <dd>{HOOK_CANNOT_TEXT}</dd>
         </dl>
         {error ? (

@@ -243,6 +243,35 @@ it('puts a pet back when its update fails', async () => {
   expect(env.pets.pets()[0]!.version).toBe('1.0.0');
 });
 
+it('stops using a theme it removes, so a reinstall does not quietly come back into use', async () => {
+  const root = join(dir, 'c');
+  const t = themeFile(join(root, 'dusk.json'));
+  catalog([
+    {
+      kind: 'theme',
+      id: 'com.test.dusk',
+      name: 'Dusk',
+      version: '1.0.0',
+      path: 'dusk.json',
+      sha256: sha256Hex(readFileSync(t)),
+    },
+  ]);
+  const install = async () =>
+    env.market.install(ACCOUNT, { previewId: (await preview('theme', 'com.test.dusk')).previewId });
+  await install();
+  // Another saved theme in use is left alone.
+  env.themeInUse.id = 'com.test.other';
+  await env.market.remove(ACCOUNT, 'theme', 'com.test.dusk');
+  expect(env.themeInUse.id).toBe('com.test.other');
+  await install();
+  env.themeInUse.id = 'com.test.dusk';
+  await env.market.remove(ACCOUNT, 'theme', 'com.test.dusk');
+  expect(env.themeInUse.id).toBeNull();
+  await install();
+  expect(env.themeInUse.id).toBeNull();
+  expect(env.themes.map((x) => x.id)).toEqual(['com.test.dusk']);
+});
+
 it('keeps at most 50 saved themes', async () => {
   for (let i = 0; i < 50; i++) env.themes.push({ id: `com.test.t${i}` });
   const root = join(dir, 'c');

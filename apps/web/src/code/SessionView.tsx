@@ -22,9 +22,11 @@ import type {
   PermissionMode,
   ReviewFindingView,
 } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, Spinner, StatusChip, rovingIndex, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { ChatView } from '../chat/ChatView.tsx';
+import { rich } from '../chat/rich.tsx';
 import { CloudFiles } from '../cloud/CloudFiles.tsx';
 import { matchesBinding } from '../keys.ts';
 import { navigate } from '../router.ts';
@@ -69,6 +71,72 @@ import { SessionsPane, SideQuestionDialog } from './SessionsPane.tsx';
 import { SymbolSearch } from './SymbolSearch.tsx';
 import { TerminalPane } from './TerminalPane.tsx';
 import { OpenInWindowButton } from '../shellbridge/OpenInWindow.tsx';
+
+export const SESSION_TEXT = defineMessages('code.session', {
+  missing: 'This Code session does not exist.',
+  loadFailed: 'Could not load the session.',
+  changesFailed: 'Could not load the changes.',
+  reviewFailed: 'Could not load the review.',
+  prStatus: 'Pull request: {status}.',
+  modeChanged: 'Permission mode: {mode}.',
+  modeFailed: 'Could not change the permission mode: {reason}',
+  reviewFinished: 'Review finished.',
+  reviewStartFailed: 'Could not start the review.',
+  /** Sent to the agent when the user applies a review finding's fix. */
+  applyFix: 'Apply the fix the code review suggested for “{title}”:',
+  fileLine: '{path}, line {line}',
+  fixSent: 'Fix sent to the agent.',
+  fixFailed: 'Could not send the fix: {reason}',
+  openedSymbol: 'Opened {path} at line {line}.',
+  retry: 'Retry',
+  allSessions: 'All sessions',
+  loading: 'Loading the session',
+  loadingDots: 'Loading…',
+  remote:
+    'This session runs on {environment} ({kind}). Go to symbol, push, pull requests, dev servers, Best of N and merging other sessions work only for folders on the Hub; the agent, the terminal, the diff, review, commits and branches work there.',
+  anotherMachine: 'another machine',
+  noRepo: 'This folder is not a Git repository.',
+  gitRemote: 'Not available for a session on another machine.',
+  label: 'Code session: {title}',
+  sessions: 'Sessions',
+  workerOf: 'Worker of {parent}',
+  workerRoleOf: 'Worker ({role}) of {parent}',
+  parent: 'its parent session',
+  prNumber: 'Pull request #{number}',
+  showChecks: '{status}: show the checks',
+  pr: 'Pull request',
+  prChecks:
+    '{status, select, none {Pull request (checks: none)} queued {Pull request (checks: queued)} running {Pull request (checks: running)} passed {Pull request (checks: passed)} failed {Pull request (checks: failed)} other {Pull request (checks: {status})}}',
+  review: 'Review',
+  commit: 'Commit…',
+  branch: 'Branch…',
+  push: 'Push…',
+  prOpen: 'Pull request…',
+  setupRunning: 'Setting up the environment: the setup script is running.',
+  setupFailed: 'The environment’s setup script failed.',
+  setupFailedBecause: 'The environment’s setup script failed: {detail}',
+  panes: 'Session panes',
+  tab: {
+    diff: 'Diff',
+    diffCount: 'Diff ({n})',
+    review: 'Review',
+    terminal: 'Terminal',
+    file: 'File',
+    pr: 'Pull request',
+    checks: 'Checks',
+    servers: 'Dev servers',
+    serversCount: 'Dev servers ({n})',
+    sessions: 'Sessions',
+  },
+  processesOn: 'Processes on {environment}',
+  prRemote: 'Pushing and pull requests work only for sessions whose folder is on the Hub.',
+  serversRemote: 'Dev servers run only for sessions whose folder is on the Hub.',
+  committed: 'Committed to {branch}.',
+  switched: 'Switched to the new branch {branch}.',
+  nowOn: 'Now on {branch}.',
+  pushed: 'Pushed {branch} to {remote}.',
+  prOpened: 'Opened pull request #{number}.',
+});
 
 type PaneTab =
   'diff' | 'review' | 'terminal' | 'file' | 'pr' | 'checks' | 'servers' | 'sessions' | M7Tab;
@@ -117,8 +185,8 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
         (err: unknown) =>
           setLoadError(
             err instanceof ApiError && err.status === 404
-              ? 'This Code session does not exist.'
-              : errorMessage(err, 'Could not load the session.'),
+              ? SESSION_TEXT.missing
+              : errorMessage(err, SESSION_TEXT.loadFailed),
           ),
       ),
     [api, id],
@@ -131,7 +199,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
           setComments(m.items);
           setChangesError(null);
         },
-        (err: unknown) => setChangesError(errorMessage(err, 'Could not load the changes.')),
+        (err: unknown) => setChangesError(errorMessage(err, SESSION_TEXT.changesFailed)),
       ),
     [api, id],
   );
@@ -140,7 +208,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
       api
         .getReview(id, reviewId)
         .then(setReview, (err: unknown) =>
-          setReviewError(errorMessage(err, 'Could not load the review.')),
+          setReviewError(errorMessage(err, SESSION_TEXT.reviewFailed)),
         ),
     [api, id],
   );
@@ -186,7 +254,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
     if (env.name.startsWith('code.devserver.')) setServerVersion((v) => v + 1);
     if (env.name === 'code.pr.ci.changed') {
       const status = asCiStatus(env.payload.status);
-      if (status) announce(`Pull request: ${CI_TEXT[status]}.`);
+      if (status) announce(SESSION_TEXT.prStatus({ status: CI_TEXT[status] }));
     }
     switch (env.name) {
       case 'code.changes.updated':
@@ -265,11 +333,11 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
     api.updateCodeSession(id, { permissionMode: mode }).then(
       (s) => {
         setSession(s);
-        announce(`Permission mode: ${MODE_LABEL[s.permissionMode]}.`);
+        announce(SESSION_TEXT.modeChanged({ mode: MODE_LABEL[s.permissionMode] }));
       },
       (err: unknown) => {
         setSession(before);
-        toast.show(`Could not change the permission mode: ${errorMessage(err)}`, {
+        toast.show(SESSION_TEXT.modeFailed({ reason: errorMessage(err) }), {
           tone: 'error',
         });
       },
@@ -283,9 +351,9 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
     try {
       const r = await api.startReview(id);
       setReview(r);
-      if (r.status === 'done') announce('Review finished.');
+      if (r.status === 'done') announce(SESSION_TEXT.reviewFinished);
     } catch (err) {
-      setReviewError(errorMessage(err, 'Could not start the review.'));
+      setReviewError(errorMessage(err, SESSION_TEXT.reviewStartFailed));
     } finally {
       setReviewStarting(false);
     }
@@ -299,7 +367,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
    */
   const applyFix = async (f: ReviewFindingView): Promise<boolean> => {
     if (!session || !f.fix) return false;
-    const body = `Apply the fix the code review suggested for “${f.title}”:\n\n${fenced(f.fix)}`;
+    const body = `${SESSION_TEXT.applyFix({ title: f.title })}\n\n${fenced(f.fix)}`;
     const change = (changes ?? []).find((c) => c.path === f.path);
     try {
       if (change && f.line !== null) {
@@ -309,13 +377,14 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
         });
         setComments((list) => mergeById(list, items));
       } else {
-        const where = f.line !== null ? `${f.path}, line ${f.line}` : f.path;
+        const where =
+          f.line !== null ? SESSION_TEXT.fileLine({ path: f.path, line: String(f.line) }) : f.path;
         await api.sendMessage(session.threadId, { text: `${where}: ${body}` });
       }
-      announce('Fix sent to the agent.');
+      announce(SESSION_TEXT.fixSent);
       return true;
     } catch (err) {
-      toast.show(`Could not send the fix: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(SESSION_TEXT.fixFailed({ reason: errorMessage(err) }), { tone: 'error' });
       return false;
     }
   };
@@ -323,7 +392,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
   const openSymbol = (s: CodeSymbolView) => {
     setFileTarget((t) => ({ path: s.path, line: s.line, n: (t?.n ?? 0) + 1 }));
     setTab('file');
-    announce(`Opened ${s.path} at line ${s.line}.`);
+    announce(SESSION_TEXT.openedSymbol({ path: s.path, line: String(s.line) }));
   };
 
   // ---- render ------------------------------------------------------------------------------------
@@ -332,13 +401,13 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
       <div className="ws-page">
         <div className="ws-error" role="alert">
           <p>{loadError}</p>
-          <Button onClick={reloadSession}>Retry</Button>
-          <Button onClick={() => navigate(sessionPath(null))}>All sessions</Button>
+          <Button onClick={reloadSession}>{SESSION_TEXT.retry}</Button>
+          <Button onClick={() => navigate(sessionPath(null))}>{SESSION_TEXT.allSessions}</Button>
         </div>
       </div>
     ) : (
       <p className="muted pane-note">
-        <Spinner label="Loading the session" /> Loading…
+        <Spinner label={SESSION_TEXT.loading} /> {SESSION_TEXT.loadingDots}
       </p>
     );
 
@@ -351,17 +420,19 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
   const envName = extras?.environment?.label ?? environment?.label ?? null;
   const remote = isRemoteKind(envKind);
   const remoteText = remote
-    ? `This session runs on ${envName ?? 'another machine'} (${KIND_LABEL[envKind ?? 'device']}). Go to symbol, push, pull requests, dev servers, Best of N and merging other sessions work only for folders on the Hub; the agent, the terminal, the diff, review, commits and branches work there.`
+    ? SESSION_TEXT.remote({
+        environment: envName ?? SESSION_TEXT.anotherMachine,
+        kind: KIND_LABEL[envKind ?? 'device'],
+      })
     : null;
-  const noRepo = !session.repo ? 'This folder is not a Git repository.' : null;
+  const noRepo = !session.repo ? SESSION_TEXT.noRepo : null;
   // Push and pull requests still need the folder on the Hub (M7 captures the rest remotely).
-  const gitUnavailable =
-    noRepo ?? (remote ? 'Not available for a session on another machine.' : null);
+  const gitUnavailable = noRepo ?? (remote ? SESSION_TEXT.gitRemote : null);
   const liveServers = (extras?.devServers ?? []).filter(isLive).length;
   const setup = extras?.setup ?? null;
 
   return (
-    <section className="code-session" aria-label={`Code session: ${title}`}>
+    <section className="code-session" aria-label={SESSION_TEXT.label({ title })}>
       <header className="code-header">
         <a
           href={sessionPath(null)}
@@ -372,14 +443,16 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
             navigate(sessionPath(null));
           }}
         >
-          <Icon name="back" /> Sessions
+          <Icon name="back" /> {SESSION_TEXT.sessions}
         </a>
-        <h1 className="code-title">{title}</h1>
+        <h1 className="code-title" dir="auto">
+          {title}
+        </h1>
         <OpenInWindowButton path={`/code/${encodeURIComponent(id)}`} what={title} compact />
         <StatusChip status={session.derived.status} reason={session.derived.reason ?? undefined} />
         <span className="code-header-meta muted">
           <span className="code-path" title={session.folder.path}>
-            <Icon name="folder" /> {session.folder.path}
+            <Icon name="folder" /> <span dir="ltr">{session.folder.path}</span>
           </span>
           <span data-dirty={session.repo?.dirty || undefined}>
             <Icon name="branch" /> {branchText(session.repo)}
@@ -391,24 +464,28 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
           ) : null}
           {extras?.parentSessionId ? (
             <span>
-              {extras.role ? `Worker (${extras.role}) of ` : 'Worker of '}
-              <AppLink to={sessionPath(extras.parentSessionId)}>its parent session</AppLink>
+              {rich(extras.role ? SESSION_TEXT.workerRoleOf : SESSION_TEXT.workerOf, {
+                role: extras.role ?? '',
+                parent: (
+                  <AppLink to={sessionPath(extras.parentSessionId)}>{SESSION_TEXT.parent}</AppLink>
+                ),
+              })}
             </span>
           ) : null}
           {pr ? (
             <span className="code-pr-chip">
               {prLink ? (
                 <a href={prLink} target="_blank" rel="noopener noreferrer">
-                  <Icon name="external" /> Pull request #{pr.number}
+                  <Icon name="external" /> {SESSION_TEXT.prNumber({ number: String(pr.number) })}
                 </a>
               ) : (
-                <span>Pull request #{pr.number}</span>
+                <span>{SESSION_TEXT.prNumber({ number: String(pr.number) })}</span>
               )}{' '}
               <button
                 type="button"
                 className="code-chip-button"
                 onClick={() => setTab('pr')}
-                aria-label={`${CI_TEXT[pr.ci.status]}: show the checks`}
+                aria-label={SESSION_TEXT.showChecks({ status: CI_TEXT[pr.ci.status] })}
               >
                 <Badge tone={CI_TONE[pr.ci.status]} icon={CI_ICON[pr.ci.status]}>
                   {CI_TEXT[pr.ci.status]}
@@ -417,15 +494,17 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
             </span>
           ) : prUrl ? (
             <a href={prUrl} target="_blank" rel="noreferrer noopener">
-              <Icon name="external" /> Pull request
-              {session.ciStatus ? ` (checks: ${session.ciStatus})` : ''}
+              <Icon name="external" />{' '}
+              {session.ciStatus
+                ? SESSION_TEXT.prChecks({ status: session.ciStatus })
+                : SESSION_TEXT.pr}
             </a>
           ) : null}
         </span>
         <span className="code-header-actions">
           {remote ? null : <SymbolSearch sessionId={id} onPick={openSymbol} />}
           <Button onClick={() => void runReview()} disabled={reviewStarting}>
-            <Icon name="eye" /> Review
+            <Icon name="eye" /> {SESSION_TEXT.review}
           </Button>
           <Button
             variant="primary"
@@ -433,28 +512,29 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
             title={noRepo ?? undefined}
             onClick={() => setCommitting(true)}
           >
-            <Icon name="save" /> Commit…
+            <Icon name="save" /> {SESSION_TEXT.commit}
           </Button>
           <Button
             disabled={!!noRepo}
             title={noRepo ?? undefined}
             onClick={() => setGitDialog('branch')}
           >
-            <Icon name="branch" /> Branch…
+            <Icon name="branch" /> {SESSION_TEXT.branch}
           </Button>
           <Button
             disabled={!!gitUnavailable}
             title={gitUnavailable ?? undefined}
             onClick={() => setGitDialog('push')}
           >
-            <Icon name="forward" /> Push…
+            <Icon name="forward" /> {SESSION_TEXT.push}
           </Button>
           <Button
             disabled={!!gitUnavailable}
             title={gitUnavailable ?? undefined}
             onClick={() => (pr && pr.state === 'open' ? setTab('pr') : setGitDialog('pr'))}
           >
-            <Icon name="compare" /> {pr && pr.state === 'open' ? 'Pull request' : 'Pull request…'}
+            <Icon name="compare" />{' '}
+            {pr && pr.state === 'open' ? SESSION_TEXT.pr : SESSION_TEXT.prOpen}
           </Button>
           {m7.actions}
         </span>
@@ -466,12 +546,14 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
       ) : null}
       {setup?.status === 'running' ? (
         <p className="code-remote-note" role="status">
-          <Spinner /> Setting up the environment: the setup script is running.
+          <Spinner /> {SESSION_TEXT.setupRunning}
         </p>
       ) : setup?.status === 'failed' ? (
         <p className="code-remote-note" data-tone="danger" role="alert">
-          <Icon name="alert" /> The environment’s setup script failed
-          {setup.detail ? `: ${setup.detail}` : '.'}
+          <Icon name="alert" />{' '}
+          {setup.detail
+            ? SESSION_TEXT.setupFailedBecause({ detail: setup.detail })
+            : SESSION_TEXT.setupFailed}
         </p>
       ) : null}
       {extras ? (
@@ -502,13 +584,15 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
         </div>
         <div className="code-panes">
           <PaneTabs
-            label="Session panes"
+            label={SESSION_TEXT.panes}
             value={tab}
             onChange={setTab}
             items={[
               {
                 id: 'diff',
-                label: totals.files ? `Diff (${totals.files})` : 'Diff',
+                label: totals.files
+                  ? SESSION_TEXT.tab.diffCount({ n: totals.files })
+                  : SESSION_TEXT.tab.diff,
                 panel: (
                   <DiffPane
                     sessionId={id}
@@ -524,7 +608,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               },
               {
                 id: 'review',
-                label: 'Review',
+                label: SESSION_TEXT.tab.review,
                 panel: (
                   <ReviewPane
                     review={review}
@@ -537,7 +621,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               },
               {
                 id: 'terminal',
-                label: 'Terminal',
+                label: SESSION_TEXT.tab.terminal,
                 panel: (
                   <>
                     <TerminalPane session={session} visible={visible && tab === 'terminal'} />
@@ -545,7 +629,9 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
                       <ProcessesPanel
                         environmentId={extras.environment.id}
                         sessionId={id}
-                        title={`Processes on ${extras.environment.label}`}
+                        title={SESSION_TEXT.processesOn({
+                          environment: extras.environment.label,
+                        })}
                         visible={visible && tab === 'terminal'}
                       />
                     ) : null}
@@ -554,7 +640,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               },
               {
                 id: 'file',
-                label: 'File',
+                label: SESSION_TEXT.tab.file,
                 // A cloud session's files are on the runner (the Hub's file tools are hidden there).
                 panel:
                   envKind === 'cloud' && extras?.environment ? (
@@ -574,18 +660,12 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               },
               {
                 id: 'pr',
-                label: 'Pull request',
+                label: SESSION_TEXT.tab.pr,
                 panel: (
                   <PullRequestPane
                     sessionId={id}
                     pr={pr}
-                    unavailable={
-                      noRepo
-                        ? noRepo
-                        : remote
-                          ? 'Pushing and pull requests work only for sessions whose folder is on the Hub.'
-                          : null
-                    }
+                    unavailable={noRepo ? noRepo : remote ? SESSION_TEXT.prRemote : null}
                     onOpen={() => setGitDialog('pr')}
                     onPush={() => setGitDialog('push')}
                     onRefreshed={(next) => setExtras((x) => (x ? { ...x, pullRequest: next } : x))}
@@ -594,7 +674,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               },
               {
                 id: 'checks',
-                label: 'Checks',
+                label: SESSION_TEXT.tab.checks,
                 panel: (
                   <ChecksPane
                     sessionId={id}
@@ -605,24 +685,22 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               },
               {
                 id: 'servers',
-                label: liveServers ? `Dev servers (${liveServers})` : 'Dev servers',
+                label: liveServers
+                  ? SESSION_TEXT.tab.serversCount({ n: liveServers })
+                  : SESSION_TEXT.tab.servers,
                 panel: (
                   <DevServersPane
                     sessionId={id}
                     visible={visible && tab === 'servers'}
                     version={serverVersion}
                     onChanged={reloadExtras}
-                    unavailable={
-                      remote
-                        ? 'Dev servers run only for sessions whose folder is on the Hub.'
-                        : null
-                    }
+                    unavailable={remote ? SESSION_TEXT.serversRemote : null}
                   />
                 ),
               },
               {
                 id: 'sessions',
-                label: 'Sessions',
+                label: SESSION_TEXT.tab.sessions,
                 panel: (
                   <SessionsPane
                     session={session}
@@ -643,7 +721,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
         pending={totals.pendingHunks}
         onClose={() => setCommitting(false)}
         onCommitted={(r) => {
-          announce(`Committed to ${r.branch}.`);
+          announce(SESSION_TEXT.committed({ branch: r.branch }));
           reloadSession();
           reloadChanges();
         }}
@@ -654,8 +732,8 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
         onClose={() => setGitDialog(null)}
         onCreated={(r) => {
           setGitDialog(null);
-          announce(`Switched to the new branch ${r.branch}.`);
-          toast.show(`Now on ${r.branch}.`, { tone: 'success' });
+          announce(SESSION_TEXT.switched({ branch: r.branch }));
+          toast.show(SESSION_TEXT.nowOn({ branch: r.branch }), { tone: 'success' });
           reloadSession();
         }}
       />
@@ -664,7 +742,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
         session={session}
         onClose={() => setGitDialog(null)}
         onPushed={(r) => {
-          announce(`Pushed ${r.branch} to ${r.remote}.`);
+          announce(SESSION_TEXT.pushed({ branch: r.branch, remote: r.remote }));
           reloadExtras();
         }}
       />
@@ -677,7 +755,7 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
           setGitDialog(null);
           setExtras((x) => (x ? { ...x, pullRequest: next } : x));
           setTab('pr');
-          announce(`Opened pull request #${next.number}.`);
+          announce(SESSION_TEXT.prOpened({ number: String(next.number) }));
           reloadSession();
         }}
       />

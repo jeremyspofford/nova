@@ -6,6 +6,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 const CHANNELS = new Set([
+  'shell.text',
   'shell.connect.state',
   'shell.connect',
   'quick.state',
@@ -18,7 +19,7 @@ const CHANNELS = new Set([
   'window.capture.attach',
   'window.capture.discard',
 ]);
-const EVENTS = new Set(['quick.status']);
+const EVENTS = new Set(['quick.status', 'shell.text']);
 
 contextBridge.exposeInMainWorld('novaLocal', {
   invoke: (channel, payload) =>

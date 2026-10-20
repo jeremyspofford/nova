@@ -6,6 +6,7 @@ import type { ManagedRestrict, ToolDescriptor } from '@nova/shared';
 import {
   ManagedRestrictions,
   NO_RESTRICTIONS,
+  effectiveEgressAllow,
   extensionOfTool,
   globMatch,
   managedDenied,
@@ -164,6 +165,39 @@ describe('plugins, extensions and MCP servers', () => {
     ).toBeNull();
     expect(r.mcpServer({ name: 'corp-a', source: 'plugin', transport: 'http' })).toBeNull();
     expect(of({}).mcpServer({ name: 'x', source: 'user', transport: 'stdio' })).toBeNull();
+  });
+});
+
+describe('the egress ceiling', () => {
+  it('works out the hosts in force from the owner list, and refuses hosts outside it', () => {
+    expect(effectiveEgressAllow([], ['a.example'])).toEqual(['a.example']);
+    expect(effectiveEgressAllow([['api.example.com']], [])).toEqual(['api.example.com']);
+    expect(effectiveEgressAllow([['*.example.com']], ['a.example', 'api.example.com'])).toEqual([
+      'api.example.com',
+    ]);
+    expect(effectiveEgressAllow([['api.example.com']], ['a.example'])).toEqual([]);
+    // Two sources: the first one's hosts that the second covers.
+    expect(effectiveEgressAllow([['api.example.com', 'b.example'], ['*.example.com']], [])).toEqual(
+      ['api.example.com'],
+    );
+    const r = of({ egress: { allow: ['*.corp.example'] } });
+    expect(r.egressCeilings()).toEqual([['*.corp.example']]);
+    expect(r.egressCovered('api.corp.example')).toBe(true);
+    expect(r.egressCovered('evil.example')).toBe(false);
+    expect(r.egressAllow([])).toEqual(['*.corp.example']);
+    // A worked-out list the policy sent wins over working it out again.
+    expect(
+      new ManagedRestrictions({
+        layers: [],
+        failClosed: null,
+        egressAllow: ['x.example'],
+      }).egressAllow(['y.example']),
+    ).toEqual(['x.example']);
+    const fetch = tool('web.fetch', { annotations: { requiresNetwork: true } });
+    expect(r.tool(fetch, 'evil.example')).toMatch(/not among the hosts/);
+    expect(r.tool(fetch, 'API.corp.example')).toBeNull();
+    expect(r.tool(tool('fs.read'), 'evil.example')).toBeNull();
+    expect(of({}).tool(fetch, 'evil.example')).toBeNull();
   });
 });
 

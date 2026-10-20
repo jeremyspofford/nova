@@ -9,6 +9,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../src/api.ts';
+import { itemLabel, noteText, problemText } from '../src/offline/format.ts';
 import { QueuePanel } from '../src/offline/QueuePanel.tsx';
 import { backoffMs } from '../src/offline/queue.ts';
 import type { Sealed } from '../src/replica/vault.ts';
@@ -64,7 +65,7 @@ describe('writes made offline', () => {
     expect((await api.getSpacePage('s1', 'pg1')).content).toBe('Boots, hat');
     expect(hub.value('thread', 't1', 'title')).toBe('Trip planning');
     const items = runtime.queue.items();
-    expect(items.map((i) => [i.kind, i.status, i.label])).toEqual([
+    expect(items.map((i) => [i.kind, i.status, itemLabel(i)])).toEqual([
       ['chat_edit', 'queued', 'Rename “Trip planning” to “Lisbon”'],
       ['message', 'queued', 'Message in “Lisbon”'],
       ['page', 'queued', 'Edit the page “Packing”'],
@@ -103,7 +104,7 @@ describe('writes made offline', () => {
     expect(env.kv.raw.get('queue')!.size).toBe(0);
     // Once on the Hub, the message is answered there.
     expect(hub.answered).toEqual([sent.userMessageId]);
-    expect(runtime.queue.items()[1]!.note).toBe('Sent. The Hub is answering it now.');
+    expect(noteText(runtime.queue.items()[1]!.note)).toBe('Sent. The Hub is answering it now.');
     const ask = hub.requests.find((r) => r.path.endsWith(`/messages/${sent.userMessageId}/answer`));
     expect(ask).toMatchObject({ method: 'POST', key: `${items[1]!.idempotencyKey}-answer` });
     env.stop();
@@ -114,7 +115,7 @@ describe('writes made offline', () => {
     const space = await env.api.updateSpace('s1', { name: 'Road notes' });
     expect(space.name).toBe('Road notes');
     expect((await env.api.listSpaces()).items.map((s) => s.name)).toEqual(['Road notes']);
-    expect(env.runtime.queue.items()[0]!.label).toBe(
+    expect(itemLabel(env.runtime.queue.items()[0]!)).toBe(
       'Rename the space “Field notes” to “Road notes”',
     );
     await reconnect(env);
@@ -232,11 +233,8 @@ describe('sending what waits', () => {
     env.hub.down = true;
     await reconnect(env);
     const [page, chat] = env.runtime.queue.items();
-    expect(page).toMatchObject({
-      status: 'failed',
-      errorCode: 'deleted',
-      error: 'It was deleted on the Hub.',
-    });
+    expect(page).toMatchObject({ status: 'failed', errorCode: 'deleted', problem: 'rejected' });
+    expect(problemText(page!)).toBe('It was deleted on the Hub.');
     expect(chat!.status).toBe('done');
     expect(await env.runtime.queue.discard(page!.id)).toBe(true);
     expect(env.runtime.queue.items().map((i) => i.kind)).toEqual(['chat_edit']);
@@ -267,7 +265,9 @@ describe('sending what waits', () => {
     await reconnect(env);
     const [item] = env.runtime.queue.items();
     expect(item).toMatchObject({ status: 'done' });
-    expect(item!.note).toMatch(/newer change made elsewhere won.*Settings → Sync → History/);
+    expect(noteText(item!.note)).toMatch(
+      /newer change made elsewhere won.*Settings → Sync → History/,
+    );
     expect(env.hub.value('thread', 't1', 'title')).toBe('Porto');
     expect(env.hub.merge).toMatchObject([
       { reason: 'stale', field: 'title', lost: { value: 'Lisbon' }, winner: { value: 'Porto' } },
@@ -283,7 +283,7 @@ describe('sending what waits', () => {
     const again = offlineSetup(env.hub, env.kv);
     await again.api.session();
     await again.runtime.queue.load();
-    expect(again.runtime.queue.items().map((i) => i.label)).toEqual([
+    expect(again.runtime.queue.items().map((i) => itemLabel(i))).toEqual([
       'Rename “Trip planning” to “Lisbon”',
     ]);
     env.hub.down = false;
@@ -304,7 +304,8 @@ describe('answers for messages written offline', () => {
     expect(env.hub.answered).toEqual([last.userMessageId]);
     const [a, b] = env.runtime.queue.items();
     expect(a).toMatchObject({ status: 'done', note: null, entityId: first.userMessageId });
-    expect(b).toMatchObject({ status: 'done', note: 'Sent. The Hub is answering it now.' });
+    expect(b).toMatchObject({ status: 'done', note: 'requested' });
+    expect(noteText(b!.note)).toBe('Sent. The Hub is answering it now.');
     env.stop();
   });
 
@@ -319,7 +320,7 @@ describe('answers for messages written offline', () => {
       setup(env.hub);
       await reconnect(env);
       expect(env.runtime.queue.items()[0]).toMatchObject({ status: 'done' });
-      expect(env.runtime.queue.items()[0]!.note).toMatch(note);
+      expect(noteText(env.runtime.queue.items()[0]!.note)).toMatch(note);
       expect(env.hub.answered).toEqual([]);
       env.stop();
     }
@@ -343,10 +344,7 @@ describe('answers for messages written offline', () => {
     await settle(() => env.runtime.getState().hub === 'offline');
     expect(env.runtime.queue.items()[0]!.status).toBe('queued');
     await reconnect(env);
-    expect(env.runtime.queue.items()[0]).toMatchObject({
-      status: 'done',
-      note: 'Sent. The Hub is answering it now.',
-    });
+    expect(env.runtime.queue.items()[0]).toMatchObject({ status: 'done', note: 'requested' });
     const asks = env.hub.requests.filter((r) => r.path.endsWith('/answer'));
     expect(asks).toHaveLength(2);
     expect(asks[0]!.key).toBe(asks[1]!.key);

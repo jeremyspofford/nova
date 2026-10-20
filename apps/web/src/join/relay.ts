@@ -27,6 +27,7 @@ import {
 import { joinClient } from './client.ts';
 import { exportPublicKey, generateDeviceKey, signStatus } from './crypto.ts';
 import { pollStatus, sleep, type PollDeps } from './poll.ts';
+import { JOIN_ERROR_TEXT as E } from './strings.ts';
 
 export interface RelayJoinDeps {
   pair: (input: PairWithRelayInput) => Promise<PairWithRelayResult>;
@@ -134,9 +135,7 @@ export interface RelayWaitOptions {
 /** The Relay dropped the route without the Hub's decision (a Relay older than M7). */
 export class RouteDroppedError extends Error {
   constructor() {
-    super(
-      'The Relay ended this request before the Hub said why: the owner denied it, or it expired. Ask for a new code on the Hub and try again.',
-    );
+    super(E.routeDropped);
     this.name = 'RouteDroppedError';
   }
 }
@@ -144,7 +143,7 @@ export class RouteDroppedError extends Error {
 /** The Hub refused to grant a session (an approval without one). */
 export class NoSessionError extends Error {
   constructor() {
-    super('The Hub approved this device but did not give it a session.');
+    super(E.noSession);
     this.name = 'NoSessionError';
   }
 }
@@ -243,47 +242,24 @@ export function relayJoinError(err: unknown): {
   if (err instanceof RelayError) {
     switch (err.code) {
       case 'invalid_code':
-        return {
-          message: 'That code is not right. Check it on the Hub.',
-          wrongHub: false,
-          gone: false,
-        };
+        return { message: E.wrongCode, wrongHub: false, gone: false };
       case 'expired':
-        return {
-          message: 'This code has expired or was already used. Ask for a new code on the Hub.',
-          wrongHub: false,
-          gone: true,
-        };
+        return { message: E.expired, wrongHub: false, gone: true };
       case 'rate_limited':
-        return {
-          message: 'Too many tries from this network. Wait a minute and try again.',
-          wrongHub: false,
-          gone: false,
-        };
+        return { message: E.rateLimited, wrongHub: false, gone: false };
       case 'relay_full':
-        return {
-          message:
-            'The Relay takes no more devices right now. Try again later, or ask the owner to use another Relay.',
-          wrongHub: false,
-          gone: false,
-        };
+        return { message: E.relayFull, wrongHub: false, gone: false };
       default:
-        return {
-          message: `The Relay refused this device: ${err.message}.`,
-          wrongHub: false,
-          gone: false,
-        };
+        // The Relay's own words for the refusal (English, from @nova/relay).
+        return { message: E.relayRefused({ reason: err.message }), wrongHub: false, gone: false };
     }
   }
-  if (err instanceof NoSessionError || err instanceof RouteDroppedError)
-    return { message: err.message, wrongHub: false, gone: false };
+  if (err instanceof NoSessionError) return { message: E.noSession, wrongHub: false, gone: false };
+  if (err instanceof RouteDroppedError)
+    return { message: E.routeDropped, wrongHub: false, gone: false };
   if (err instanceof Error && /offer|pinned fingerprint|signature/i.test(err.message))
     return { message: err.message, wrongHub: true, gone: false };
   if (err instanceof TypeError)
-    return {
-      message: 'Cannot reach the Relay. Check your connection and try again.',
-      wrongHub: false,
-      gone: false,
-    };
-  return { message: errorMessage(err, 'Something went wrong.'), wrongHub: false, gone: false };
+    return { message: E.relayUnreachable, wrongHub: false, gone: false };
+  return { message: errorMessage(err, E.generic), wrongHub: false, gone: false };
 }

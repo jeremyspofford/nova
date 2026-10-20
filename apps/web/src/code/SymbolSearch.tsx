@@ -3,10 +3,23 @@
 // closes the list (and clears the box when the list is already closed).
 import { useEffect, useId, useState, type KeyboardEvent } from 'react';
 import type { CodeSymbolView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { VisuallyHidden } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
-import { plural } from '../settings/common.ts';
+
+export const SYMBOL_TEXT = defineMessages('code.symbols', {
+  searchFailed: 'Could not search symbols.',
+  searching: 'Searching…',
+  found: '{n, plural, one {# symbol found.} other {# symbols found.}}',
+  none: 'No symbols match.',
+  symbols: 'Symbols',
+  goTo: 'Go to symbol',
+  list: 'Symbols found',
+  /** A symbol's kind and place: "function in Parser · src/parse.ts:12". */
+  where: '{kind} · {location}',
+  whereIn: '{kind} in {container} · {location}',
+});
 
 /** Wait this long after the last key before asking the Hub. */
 export const SYMBOL_DEBOUNCE_MS = 200;
@@ -43,7 +56,7 @@ export function SymbolSearch({
           setResults({
             query: q,
             items: [],
-            error: errorMessage(err, 'Could not search symbols.'),
+            error: errorMessage(err, SYMBOL_TEXT.searchFailed),
           }),
       );
     }, SYMBOL_DEBOUNCE_MS);
@@ -86,17 +99,17 @@ export function SymbolSearch({
   const status = !q
     ? ''
     : !current
-      ? 'Searching…'
+      ? SYMBOL_TEXT.searching
       : current.error
         ? current.error
         : current.items.length
-          ? `${plural(current.items.length, 'symbol')} found.`
-          : 'No symbols match.';
+          ? SYMBOL_TEXT.found({ n: current.items.length })
+          : SYMBOL_TEXT.none;
 
   return (
-    <div className="code-symbols" role="search" aria-label="Symbols">
+    <div className="code-symbols" role="search" aria-label={SYMBOL_TEXT.symbols}>
       <label htmlFor={`${id}-input`} className="nv-vh">
-        Go to symbol
+        {SYMBOL_TEXT.goTo}
       </label>
       <input
         id={`${id}-input`}
@@ -107,7 +120,7 @@ export function SymbolSearch({
         aria-expanded={expanded}
         aria-controls={`${id}-list`}
         aria-activedescendant={expanded && items.length ? `${id}-opt-${index}` : undefined}
-        placeholder="Go to symbol"
+        placeholder={SYMBOL_TEXT.goTo}
         autoComplete="off"
         spellCheck={false}
         value={query}
@@ -120,7 +133,7 @@ export function SymbolSearch({
         onBlur={() => setOpen(false)}
         onKeyDown={onKey}
       />
-      <ul id={`${id}-list`} role="listbox" aria-label="Symbols found" hidden={!expanded}>
+      <ul id={`${id}-list`} role="listbox" aria-label={SYMBOL_TEXT.list} hidden={!expanded}>
         {items.map((s, i) => (
           <li
             key={`${s.path}:${s.line}:${s.name}`}
@@ -134,8 +147,13 @@ export function SymbolSearch({
           >
             <span className="code-symbol-name">{s.name}</span>{' '}
             <span className="muted">
-              {s.kind}
-              {s.container ? ` in ${s.container}` : ''} · {s.path}:{s.line}
+              {s.container
+                ? SYMBOL_TEXT.whereIn({
+                    kind: s.kind,
+                    container: s.container,
+                    location: `${s.path}:${s.line}`,
+                  })
+                : SYMBOL_TEXT.where({ kind: s.kind, location: `${s.path}:${s.line}` })}
             </span>
           </li>
         ))}

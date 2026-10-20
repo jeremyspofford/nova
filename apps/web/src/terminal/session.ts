@@ -4,8 +4,49 @@
 // addon, loaded only when a terminal opens. A session owns its screen's element, so the bottom
 // panel and a terminal pane can each show it without restarting the shell; the view that showed
 // it last owns it. Terminal output is untrusted data (FR-189): it is only ever drawn as text.
+import { defineMessages } from '@nova/i18n';
 import type { TerminalView } from '@nova/shared';
 import { ApiError, errorMessage, type Api } from '../api.ts';
+
+export const TERMINAL_TEXT = defineMessages('terminal', {
+  terminals: 'Terminals',
+  terminal: 'Terminal',
+  numbered: 'Terminal {n}',
+  startFailed: 'The terminal could not start.',
+  /** Written into the terminal when its process ends. */
+  processExited:
+    '{code, select, none {[Process exited]} other {[Process exited with code {code}]}}',
+  sandboxUnavailable:
+    'Terminals run inside the Hub’s sandbox, and this Hub has none. Set up a sandbox on the Hub to use the terminal.',
+  exitedAnnounce:
+    '{code, select, none {Terminal exited.} other {Terminal exited with code {code}.}}',
+  started: 'Terminal started.',
+  createFailed: 'Could not start a terminal: {reason}',
+  closed: '{name} closed.',
+  closeFailed: 'Could not close {name}: {reason}',
+  open: 'Open terminals',
+  exitedName: '{name} (exited)',
+  exited: '(exited)',
+  close: 'Close {name}',
+  new: 'New terminal',
+  loading: 'Loading terminals',
+  loadingDots: 'Loading…',
+  none: 'No terminal is open.',
+  start: 'Start a terminal',
+  elsewhere: '{name} is shown in another place.',
+  showHere: 'Show it here',
+  connecting: 'Connecting',
+  connectingDots: 'Connecting…',
+  disconnected: 'Disconnected from the terminal.',
+  reconnect: 'Reconnect',
+  shellExited:
+    '{code, select, none {The shell exited.} other {The shell exited with code {code}.}}',
+});
+
+/** An exit code as a select value for the messages above. */
+export function exitCodeArg(code: number | null | undefined): string {
+  return code === null || code === undefined ? 'none' : String(code);
+}
 
 /** The subset of an xterm.js terminal that sessions use, so tests can draw into a fake. */
 export interface TerminalScreen {
@@ -169,7 +210,7 @@ export class TerminalSession {
     } catch (err) {
       this.#set({
         state: 'disconnected',
-        error: errorMessage(err, 'The terminal could not start.'),
+        error: errorMessage(err, TERMINAL_TEXT.startFailed),
       });
     }
   }
@@ -211,7 +252,7 @@ export class TerminalSession {
     if (f.type === 'output' && typeof f.data === 'string') this.#screen?.write(f.data);
     else if (f.type === 'exit') {
       const code = typeof f.code === 'number' ? f.code : null;
-      this.#screen?.write(`\r\n[Process exited${code === null ? '' : ` with code ${code}`}]\r\n`);
+      this.#screen?.write(`\r\n${TERMINAL_TEXT.processExited({ code: exitCodeArg(code) })}\r\n`);
       this.#set({ state: 'exited', exitCode: code });
       this.#deps.onExit(code);
       this.#socket?.close();
@@ -281,9 +322,6 @@ export interface TerminalHubDeps {
   screen: TerminalScreenFactory;
   keyFilter: (e: KeyboardEvent) => boolean;
 }
-
-export const SANDBOX_UNAVAILABLE =
-  'Terminals run inside the Hub’s sandbox, and this Hub has none. Set up a sandbox on the Hub to use the terminal.';
 
 /** Every terminal the UI knows about, with their sessions. One per signed-in workspace. */
 export class TerminalHub {
@@ -361,7 +399,7 @@ export class TerminalHub {
       return view.id;
     } catch (err) {
       if (err instanceof ApiError && err.body.code === 'sandbox_unavailable') {
-        this.#set({ unavailable: SANDBOX_UNAVAILABLE });
+        this.#set({ unavailable: TERMINAL_TEXT.sandboxUnavailable });
         return null;
       }
       throw err;

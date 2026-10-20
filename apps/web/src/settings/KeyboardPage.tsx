@@ -3,15 +3,55 @@
 // Remappings are saved to `keyboard.bindings` on the Hub, written with `mod` so they carry across
 // operating systems.
 import { useMemo, useState, useSyncExternalStore } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Button, Dialog, Icon, Kbd, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import type { Command } from '../commands.ts';
 import { bindingText, eventToBinding, formatBinding } from '../keys.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
-import { MANAGED } from './common.ts';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
 import { GlobalShortcutsSection } from '../shellbridge/GlobalShortcuts.tsx';
 import { ExtensionKeyOffers } from '../extensions/Offers.tsx';
+
+export const KEYBOARD_TEXT = defineMessages('settings.keyboard', {
+  saveFailed: 'Could not save the shortcut: {error}',
+  clash: '{keys} is also used by {commands}. Change one of them to resolve the conflict.',
+  title: 'Keyboard shortcuts',
+  browserTab:
+    'In a browser tab some shortcuts use Alt, because the browser keeps keys like {first} and {second} for itself. The installed app uses the standard keys.',
+  pressToFind: 'Press a shortcut to find it',
+  searchByName: 'Search shortcuts by name',
+  pressKeys: 'Press keys…',
+  searchPlaceholder: 'Search by name',
+  stopRecording: 'Stop recording',
+  recordKeys: 'Record keys',
+  resetAll: 'Reset all',
+  conflicts: 'Shortcut conflicts',
+  boundTo: '{keys} is bound to {commands}.',
+  table: 'Commands and their shortcuts',
+  command: 'Command',
+  shortcut: 'Shortcut',
+  actions: 'Actions',
+  category: '{category}:',
+  changed: '(changed)',
+  notBound: 'Not bound',
+  conflict: 'Conflict',
+  pressNew: 'Press the new shortcut for {command}, or Escape to cancel',
+  capturing: 'Press keys… (Esc cancels)',
+  changeFor: 'Change shortcut for {command}',
+  change: 'Change',
+  removeFor: 'Remove shortcut for {command}',
+  remove: 'Remove',
+  resetFor: 'Reset shortcut for {command}',
+  reset: 'Reset',
+  noCommandUses: 'No command uses {keys}.',
+  noMatches: 'No matching commands.',
+  resetTitle: 'Reset all shortcuts?',
+  resetBody: 'Every shortcut returns to its default. Your changes are removed.',
+  cancel: 'Cancel',
+});
+const S = KEYBOARD_TEXT;
 
 export function KeyboardPage() {
   const { registry } = useServices();
@@ -44,7 +84,7 @@ export function KeyboardPage() {
 
   const write = (next: Record<string, string>) => {
     settings.set('keyboard.bindings', next).catch((err: unknown) => {
-      toast.show(`Could not save the shortcut: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' });
     });
   };
 
@@ -53,7 +93,10 @@ export function KeyboardPage() {
     write({ ...bindings.value, [cmd.id]: binding });
     if (clash.length)
       toast.show(
-        `${bindingText(binding, mac)} is also used by ${clash.map((c) => c.title).join(', ')}. Change one of them to resolve the conflict.`,
+        S.clash({
+          keys: bindingText(binding, mac),
+          commands: fmt.list(clash.map((c) => c.title)),
+        }),
         { tone: 'error', duration: 8000 },
       );
   };
@@ -68,24 +111,22 @@ export function KeyboardPage() {
 
   return (
     <div className="settings-page">
-      <h2>Keyboard shortcuts</h2>
-      {locked ? <p className="nv-field-hint nv-field-lock">{MANAGED}</p> : null}
+      <h2>{S.title}</h2>
+      {locked ? <ManagedNote as="p" id="keyboard-lock" setting="keyboard.bindings" /> : null}
       {registry.platform.browserTab ? (
         <p className="muted">
-          In a browser tab some shortcuts use Alt, because the browser keeps keys like{' '}
-          {bindingText('mod+n', mac)} and {bindingText('mod+1', mac)} for itself. The installed app
-          uses the standard keys.
+          {S.browserTab({ first: bindingText('mod+n', mac), second: bindingText('mod+1', mac) })}
         </p>
       ) : null}
       <div className="keyboard-search">
         <label htmlFor="kb-search" className="nv-vh">
-          {recording ? 'Press a shortcut to find it' : 'Search shortcuts by name'}
+          {recording ? S.pressToFind : S.searchByName}
         </label>
         <input
           id="kb-search"
           className="nv-input"
           type="search"
-          placeholder={recording ? 'Press keys…' : 'Search by name'}
+          placeholder={recording ? S.pressKeys : S.searchPlaceholder}
           value={recording ? (keyFilter ? bindingText(keyFilter, mac) : '') : query}
           readOnly={recording}
           onChange={(e) => setQuery(e.target.value)}
@@ -106,37 +147,40 @@ export function KeyboardPage() {
             document.getElementById('kb-search')?.focus();
           }}
         >
-          {recording ? 'Stop recording' : 'Record keys'}
+          {recording ? S.stopRecording : S.recordKeys}
         </Button>
         <Button
           onClick={() => setConfirmReset(true)}
           disabled={locked || Object.keys(bindings.value).length === 0}
         >
-          Reset all
+          {S.resetAll}
         </Button>
       </div>
 
       {conflicts.length ? (
-        <div className="contrast-warning" role="status" aria-label="Shortcut conflicts">
+        <div className="contrast-warning" role="status" aria-label={S.conflicts}>
           <Icon name="alert" />
           <ul>
             {conflicts.map((c) => (
               <li key={c.binding}>
-                {bindingText(c.binding, mac)} is bound to {c.ids.map(nameOf).join(' and ')}.
+                {S.boundTo({
+                  keys: bindingText(c.binding, mac),
+                  commands: fmt.list(c.ids.map(nameOf)),
+                })}
               </li>
             ))}
           </ul>
         </div>
       ) : null}
 
-      <table className="keyboard-table">
-        <caption className="nv-vh">Commands and their shortcuts</caption>
+      <table className="keyboard-table" aria-describedby={locked ? 'keyboard-lock' : undefined}>
+        <caption className="nv-vh">{S.table}</caption>
         <thead>
           <tr>
-            <th scope="col">Command</th>
-            <th scope="col">Shortcut</th>
+            <th scope="col">{S.command}</th>
+            <th scope="col">{S.shortcut}</th>
             <th scope="col">
-              <span className="nv-vh">Actions</span>
+              <span className="nv-vh">{S.actions}</span>
             </th>
           </tr>
         </thead>
@@ -148,19 +192,19 @@ export function KeyboardPage() {
             return (
               <tr key={c.id} data-command={c.id} data-conflict={conflictIds.has(c.id) || undefined}>
                 <th scope="row">
-                  <span className="muted">{c.category}: </span>
+                  <span className="muted">{S.category({ category: c.category })} </span>
                   {c.title}
-                  {custom ? <span className="muted"> (changed)</span> : null}
+                  {custom ? <span className="muted"> {S.changed}</span> : null}
                 </th>
                 <td className="kb-shortcut">
                   {b[0] ? (
                     <Kbd keys={formatBinding(b[0], mac)} />
                   ) : (
-                    <span className="muted">Not bound</span>
+                    <span className="muted">{S.notBound}</span>
                   )}
                   {conflictIds.has(c.id) ? (
                     <span className="kb-conflict">
-                      <Icon name="alert" /> Conflict
+                      <Icon name="alert" /> {S.conflict}
                     </span>
                   ) : null}
                 </td>
@@ -172,7 +216,7 @@ export function KeyboardPage() {
                         className="nv-btn kb-capture"
                         data-variant="primary"
                         autoFocus
-                        aria-label={`Press the new shortcut for ${c.title}, or Escape to cancel`}
+                        aria-label={S.pressNew({ command: c.title })}
                         onBlur={() => setCapturing(null)}
                         onKeyDown={(e) => {
                           // Plain Tab leaves capture, so the keyboard is never trapped here.
@@ -192,16 +236,16 @@ export function KeyboardPage() {
                           assign(c, combo);
                         }}
                       >
-                        Press keys… (Esc cancels)
+                        {S.capturing}
                       </button>
                     ) : (
                       <Button
                         variant="ghost"
                         disabled={locked}
                         onClick={() => setCapturing(c.id)}
-                        aria-label={`Change shortcut for ${c.title}`}
+                        aria-label={S.changeFor({ command: c.title })}
                       >
-                        Change
+                        {S.change}
                       </Button>
                     )}
                     {b.length ? (
@@ -209,9 +253,9 @@ export function KeyboardPage() {
                         variant="ghost"
                         disabled={locked}
                         onClick={() => write({ ...bindings.value, [c.id]: '' })}
-                        aria-label={`Remove shortcut for ${c.title}`}
+                        aria-label={S.removeFor({ command: c.title })}
                       >
-                        Remove
+                        {S.remove}
                       </Button>
                     ) : null}
                     {custom ? (
@@ -219,9 +263,9 @@ export function KeyboardPage() {
                         variant="ghost"
                         disabled={locked}
                         onClick={() => resetOne(c.id)}
-                        aria-label={`Reset shortcut for ${c.title}`}
+                        aria-label={S.resetFor({ command: c.title })}
                       >
-                        Reset
+                        {S.reset}
                       </Button>
                     ) : null}
                   </div>
@@ -233,7 +277,7 @@ export function KeyboardPage() {
       </table>
       {shown.length === 0 ? (
         <p className="muted">
-          {keyFilter ? `No command uses ${bindingText(keyFilter, mac)}.` : 'No matching commands.'}
+          {keyFilter ? S.noCommandUses({ keys: bindingText(keyFilter, mac) }) : S.noMatches}
         </p>
       ) : null}
       {/* Shortcuts running extensions suggest, bound only when chosen (FR-117, M8). */}
@@ -243,12 +287,12 @@ export function KeyboardPage() {
 
       <Dialog
         open={confirmReset}
-        title="Reset all shortcuts?"
-        description="Every shortcut returns to its default. Your changes are removed."
+        title={S.resetTitle}
+        description={S.resetBody}
         onClose={() => setConfirmReset(false)}
         footer={
           <>
-            <Button onClick={() => setConfirmReset(false)}>Cancel</Button>
+            <Button onClick={() => setConfirmReset(false)}>{S.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -256,7 +300,7 @@ export function KeyboardPage() {
                 write({});
               }}
             >
-              Reset all
+              {S.resetAll}
             </Button>
           </>
         }

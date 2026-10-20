@@ -5,6 +5,7 @@
 import { useId, useState } from 'react';
 import type { DeviceServiceView, DeviceView } from '@nova/shared';
 import { Button, Spinner, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { useHubStream } from '../hub-events.ts';
 import { useDebounced } from '../work/events.ts';
 import { useDevicesApi } from './api.ts';
@@ -13,14 +14,83 @@ import { capabilityBlocked, errorReason, moduleLabel, type ChipTone } from './fo
 import { opsErrorMessage } from './ops.tsx';
 import { Chip, LoadError, Unavailable, useLoad } from './parts.tsx';
 
+/** Managed services' words (FR-016), also used by a compute node's services. */
+export const SERVICES_TEXT = defineMessages('devices.services', {
+  states: {
+    running: 'Running',
+    stopped: 'Stopped',
+    failed: 'Failed',
+    activating: 'Activating',
+    deactivating: 'Stopping',
+    reloading: 'Reloading',
+    unknown: 'State unknown',
+  },
+  /** A service's new state, after an action; `other` shows the device's own word. */
+  nowState:
+    '{name}: {state, select, running {running.} stopped {stopped.} failed {failed.} activating {activating.} deactivating {stopping.} reloading {reloading.} unknown {state unknown.} other {{raw}.}}',
+  systemdUnit: 'systemd unit {unit}',
+  systemd: 'systemd unit',
+  moduleOf: '{module} module',
+  module: 'Module',
+  actions: {
+    status: 'Status',
+    start: 'Start',
+    stop: 'Stop',
+    restart: 'Restart',
+  },
+  actionOn:
+    '{action, select, status {Status {name}} start {Start {name}} stop {Stop {name}} other {Restart {name}}}',
+  actionFailed:
+    '{action, select, start {Could not start {name}.} stop {Could not stop {name}.} restart {Could not restart {name}.} other {Could not get the status of {name}.}}',
+  title: 'Managed services',
+  intro: 'The services declared in novad’s configuration on this device.',
+  oldNovad:
+    'This device’s novad cannot list its services yet. Update novad on it; meanwhile you can still act on a service by its name below.',
+  loadFailed: 'Could not load the services.',
+  loading: 'Loading the services',
+  none: 'novad’s configuration declares no services.',
+});
+
+const S = SERVICES_TEXT;
+
 type ServiceAction = 'status' | 'start' | 'stop' | 'restart';
 
-const ACTION_LABEL: Record<ServiceAction, string> = {
-  status: 'Status',
-  start: 'Start',
-  stop: 'Stop',
-  restart: 'Restart',
-};
+type StateKey = keyof typeof S.states;
+
+/** The state's key in `S.states`, or null for a word Nova does not know. */
+function stateKey(state: string | null): StateKey | null {
+  switch (state) {
+    case 'running':
+    case 'active':
+      return 'running';
+    case 'stopped':
+    case 'inactive':
+    case 'dead':
+      return 'stopped';
+    case 'failed':
+    case 'crash_loop':
+      return 'failed';
+    case 'activating':
+    case 'deactivating':
+    case 'reloading':
+      return state;
+    case null:
+      return 'unknown';
+    default:
+      return null;
+  }
+}
+
+const STATE_LOOK: Record<StateKey, { tone: ChipTone; icon: 'check' | 'stop' | 'alert' | 'clock' }> =
+  {
+    running: { tone: 'ready', icon: 'check' },
+    stopped: { tone: 'neutral', icon: 'stop' },
+    failed: { tone: 'blocked', icon: 'alert' },
+    activating: { tone: 'neutral', icon: 'clock' },
+    deactivating: { tone: 'neutral', icon: 'clock' },
+    reloading: { tone: 'neutral', icon: 'clock' },
+    unknown: { tone: 'neutral', icon: 'clock' },
+  };
 
 /** A service state as a chip: running, stopped, failed, or what the device said. */
 export function serviceChip(state: string | null): {
@@ -28,32 +98,26 @@ export function serviceChip(state: string | null): {
   tone: ChipTone;
   icon: 'check' | 'stop' | 'alert' | 'clock';
 } {
-  switch (state) {
-    case 'running':
-    case 'active':
-      return { text: 'Running', tone: 'ready', icon: 'check' };
-    case 'stopped':
-    case 'inactive':
-    case 'dead':
-      return { text: 'Stopped', tone: 'neutral', icon: 'stop' };
-    case 'failed':
-    case 'crash_loop':
-      return { text: 'Failed', tone: 'blocked', icon: 'alert' };
-    case null:
-      return { text: 'State unknown', tone: 'neutral', icon: 'clock' };
-    default:
-      return {
-        text: state.charAt(0).toUpperCase() + state.slice(1).replace(/_/g, ' '),
-        tone: 'neutral',
-        icon: 'clock',
-      };
-  }
+  const key = stateKey(state);
+  if (key) return { text: S.states[key], ...STATE_LOOK[key] };
+  // A state Nova has no words for: the device's own word, tidied.
+  const raw = state ?? '';
+  return {
+    text: raw.charAt(0).toUpperCase() + raw.slice(1).replace(/_/g, ' '),
+    tone: 'neutral',
+    icon: 'clock',
+  };
 }
 
-/** "Module storage" or "systemd unit ollama.service". */
+/** "ollama.service: running." after an action. */
+export function serviceNowText(name: string, state: string | null): string {
+  return S.nowState({ name, state: stateKey(state) ?? 'other', raw: state ?? '' });
+}
+
+/** "Storage module" or "systemd unit ollama.service". */
 export function serviceKindText(s: DeviceServiceView): string {
-  if (s.kind === 'systemd') return s.unit ? `systemd unit ${s.unit}` : 'systemd unit';
-  return s.module ? `${moduleLabel(s.module)} module` : 'Module';
+  if (s.kind === 'systemd') return s.unit ? S.systemdUnit({ unit: s.unit }) : S.systemd;
+  return s.module ? S.moduleOf({ module: moduleLabel(s.module) }) : S.module;
 }
 
 export function ServiceList({ device }: { device: DeviceView }) {
@@ -84,9 +148,9 @@ export function ServiceList({ device }: { device: DeviceView }) {
       const { service } = await api.deviceServiceAction(device.id, s.name, action);
       const state = typeof service.state === 'string' ? service.state : null;
       list.setData((cur) => cur?.map((x) => (x.name === s.name ? { ...x, state } : x)) ?? cur);
-      toast.show(`${s.name}: ${serviceChip(state).text.toLowerCase()}.`, { tone: 'success' });
+      toast.show(serviceNowText(s.name, state), { tone: 'success' });
     } catch (err) {
-      setError(opsErrorMessage(err, `Could not ${action} ${s.name}.`));
+      setError(opsErrorMessage(err, S.actionFailed({ action, name: s.name })));
       reload();
     } finally {
       setBusy(null);
@@ -96,29 +160,18 @@ export function ServiceList({ device }: { device: DeviceView }) {
   const updateRequired = errorReason(list.error) === 'update_required';
   return (
     <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
-      <h2 id={`${base}-h`}>Managed services</h2>
-      <p className="muted ws-flush">
-        The services declared in novad’s configuration on this device.
-      </p>
+      <h2 id={`${base}-h`}>{S.title}</h2>
+      <p className="muted ws-flush">{S.intro}</p>
       {blocked ? <Unavailable>{blocked}</Unavailable> : null}
       {updateRequired ? (
-        <Unavailable>
-          This device’s novad cannot list its services yet. Update novad on it; meanwhile you can
-          still act on a service by its name below.
-        </Unavailable>
+        <Unavailable>{S.oldNovad}</Unavailable>
       ) : list.error ? (
-        <LoadError
-          error={list.error}
-          fallback="Could not load the services."
-          onRetry={list.reload}
-        />
+        <LoadError error={list.error} fallback={S.loadFailed} onRetry={list.reload} />
       ) : null}
-      {list.loading ? <Spinner label="Loading the services" /> : null}
-      {list.data?.length === 0 ? (
-        <p className="muted ws-flush">novad’s configuration declares no services.</p>
-      ) : null}
+      {list.loading ? <Spinner label={S.loading} /> : null}
+      {list.data?.length === 0 ? <p className="muted ws-flush">{S.none}</p> : null}
       {list.data?.length ? (
-        <ul className="ws-list" aria-label="Managed services">
+        <ul className="ws-list" aria-label={S.title}>
           {list.data.map((s) => {
             const chip = serviceChip(s.state);
             const off = Boolean(blocked) || busy !== null;
@@ -126,7 +179,7 @@ export function ServiceList({ device }: { device: DeviceView }) {
               <li key={s.name} className="ws-list-row devices-module" aria-label={s.name}>
                 <div className="devices-row-main">
                   <div className="devices-row-head">
-                    <strong>{s.name}</strong>
+                    <strong dir="ltr">{s.name}</strong>
                     <Chip tone={chip.tone} icon={chip.icon} text={chip.text} />
                   </div>
                   <span className="muted ws-row-meta">{serviceKindText(s)}</span>
@@ -136,10 +189,10 @@ export function ServiceList({ device }: { device: DeviceView }) {
                     <Button
                       key={a}
                       disabled={off}
-                      aria-label={`${ACTION_LABEL[a]} ${s.name}`}
+                      aria-label={S.actionOn({ action: a, name: s.name })}
                       onClick={() => void act(s, a)}
                     >
-                      {busy === `${s.name}:${a}` ? <Spinner /> : null} {ACTION_LABEL[a]}
+                      {busy === `${s.name}:${a}` ? <Spinner /> : null} {S.actions[a]}
                     </Button>
                   ))}
                 </div>

@@ -4,12 +4,35 @@
 // branch, and says so when the repository's hooks did not run.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { CodeSessionView, CommitResult } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, Icon, Spinner, TextField } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { rich } from '../chat/rich.tsx';
 import { useServices } from '../services.tsx';
-import { plural } from '../settings/common.ts';
 import { branchProblem, defaultBranch, onDefaultBranch, shortSha, suggestBranch } from './git.ts';
 import { sessionTitle } from './labels.ts';
+
+export const COMMIT_TEXT = defineMessages('code.commit', {
+  failed: 'Could not commit.',
+  committed: 'Committed',
+  title: 'Commit changes',
+  onDefault: 'You are on {branch}, the default branch. The commit goes on a new branch.',
+  theDefault: 'the default branch',
+  commitsTo: 'Commits to {branch}.',
+  theHead: 'the current HEAD',
+  noRepo: 'This folder is not a Git repository.',
+  done: 'Done',
+  result:
+    '{n, plural, one {Committed # file to {branch} as {commit}.} other {Committed # files to {branch} as {commit}.}}',
+  message: 'Commit message',
+  newBranch: 'New branch',
+  branchHint: 'Suggested from the message. Nova creates it and switches to it before committing.',
+  acceptPending: 'Accept the pending changes and include them',
+  pending:
+    '{n, plural, one {# hunk still waits for a decision. Rejected changes are always left out.} other {# hunks still wait for a decision. Rejected changes are always left out.}}',
+  cancel: 'Cancel',
+  commit: 'Commit',
+});
 
 /**
  * Whether the repository's hooks ran. Not in CommitResult yet: a Hub that commits outside a
@@ -83,7 +106,7 @@ function CommitForm({
       setDone(r);
       onCommitted(r);
     } catch (err) {
-      setError(errorMessage(err, 'Could not commit.'));
+      setError(errorMessage(err, COMMIT_TEXT.failed));
     } finally {
       setBusy(false);
     }
@@ -92,22 +115,22 @@ function CommitForm({
   return (
     <Dialog
       open
-      title={done ? 'Committed' : 'Commit changes'}
+      title={done ? COMMIT_TEXT.committed : COMMIT_TEXT.title}
       description={
         done
           ? undefined
           : repo
             ? onDefault
-              ? `You are on ${main ?? repo.branch ?? 'the default branch'}, the default branch. The commit goes on a new branch.`
-              : `Commits to ${repo.branch ?? 'the current HEAD'}.`
-            : 'This folder is not a Git repository.'
+              ? COMMIT_TEXT.onDefault({ branch: main ?? repo.branch ?? COMMIT_TEXT.theDefault })
+              : COMMIT_TEXT.commitsTo({ branch: repo.branch ?? COMMIT_TEXT.theHead })
+            : COMMIT_TEXT.noRepo
       }
       onClose={onClose}
       initialFocusRef={messageRef}
       footer={
         done ? (
           <Button ref={doneRef} variant="primary" onClick={onClose}>
-            Done
+            {COMMIT_TEXT.done}
           </Button>
         ) : undefined
       }
@@ -115,8 +138,11 @@ function CommitForm({
       {done ? (
         <>
           <p role="status">
-            <Icon name="check" /> Committed {plural(done.files, 'file')} to {done.branch} as{' '}
-            <code title={done.sha}>{shortSha(done.sha)}</code>.
+            <Icon name="check" />{' '}
+            {rich((p) => COMMIT_TEXT.result({ ...p, n: done.files }), {
+              branch: done.branch,
+              commit: <code title={done.sha}>{shortSha(done.sha)}</code>,
+            })}
           </p>
           {/* Only when the repository has hooks that did not run (FR-211): the Hub says why. */}
           {done.hooksRan === false && done.hooksNote ? (
@@ -135,7 +161,7 @@ function CommitForm({
         >
           <div className="nv-field">
             <label className="nv-field-label" htmlFor={`${id}-msg`}>
-              Commit message
+              {COMMIT_TEXT.message}
             </label>
             <textarea
               ref={messageRef}
@@ -150,12 +176,13 @@ function CommitForm({
           </div>
           {onDefault ? (
             <TextField
-              label="New branch"
+              label={COMMIT_TEXT.newBranch}
               value={branch}
               autoComplete="off"
               spellCheck={false}
+              dir="ltr"
               maxLength={200}
-              hint="Suggested from the message. Nova creates it and switches to it before committing."
+              hint={COMMIT_TEXT.branchHint}
               error={branchError ?? undefined}
               onChange={(e) => setBranchDraft(e.target.value)}
             />
@@ -169,11 +196,10 @@ function CommitForm({
                   aria-describedby={`${id}-pending`}
                   onChange={(e) => setAcceptPending(e.target.checked)}
                 />
-                Accept the pending changes and include them
+                {COMMIT_TEXT.acceptPending}
               </label>
               <span id={`${id}-pending`} className="nv-field-hint">
-                {plural(pending, 'hunk')} still {pending === 1 ? 'waits' : 'wait'} for a decision.
-                Rejected changes are always left out.
+                {COMMIT_TEXT.pending({ n: pending })}
               </span>
             </>
           ) : null}
@@ -183,9 +209,9 @@ function CommitForm({
             </p>
           ) : null}
           <div className="nv-dialog-footer">
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={onClose}>{COMMIT_TEXT.cancel}</Button>
             <Button type="submit" variant="primary" disabled={!canCommit}>
-              {busy ? <Spinner /> : null} Commit
+              {busy ? <Spinner /> : null} {COMMIT_TEXT.commit}
             </Button>
           </div>
         </form>

@@ -275,7 +275,7 @@ describe('follow-ups while a reply streams (FR-019)', () => {
       },
     );
     const summary = await screen.findByRole('article', { name: 'Context summary' });
-    expect(within(summary).getByText(/14 messages, 9000 → 1200 tokens/)).toBeTruthy();
+    expect(within(summary).getByText(/14 messages, 9,000 → 1,200 tokens/)).toBeTruthy();
     expect(within(summary).getByText('We planned the garden.')).toBeTruthy();
     expect(screen.getByRole('note').textContent).toContain('AGENTS.md was cut.');
   });

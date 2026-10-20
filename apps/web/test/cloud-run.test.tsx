@@ -58,7 +58,7 @@ describe('a cloud run (FR-116)', () => {
       },
       't-cs1',
     );
-    expect(await within(card()).findByText('Near the cap (83 %)')).toBeTruthy();
+    expect(await within(card()).findByText('Near the cap (83%)')).toBeTruthy();
     expect(within(card()).getByRole('status').textContent).toMatch(/Near its CPU time cap/);
     expect(within(card()).getByText('9 commands')).toBeTruthy();
     expect(api.getCloudRun).toHaveBeenCalledTimes(1);
@@ -179,7 +179,7 @@ describe('units', () => {
     expect(formatSeconds(125)).toBe('2 min 5 s');
     expect(formatSeconds(3900)).toBe('1 h 5 min');
     expect(formatBytes(512)).toBe('512 B');
-    expect(formatBytes(3 * 1024 ** 3)).toBe('3.0 GB');
+    expect(formatBytes(3 * 1024 ** 3)).toBe('3 GB');
     const lines = usageLines(
       cloudRun({ warnings: ['wall'], usage: { cpuSeconds: 10, wallSeconds: 20, commands: 1 } }),
     );

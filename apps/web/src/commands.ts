@@ -1,7 +1,10 @@
 // Command and shortcut registry (FR-003, FR-004, docs/14 §3). Commands are data: id, title,
 // category, default bindings, an optional when-clause and a run function. The palette, the global
 // key handler and Settings → Keyboard all read from this one registry. User remappings come from
-// the `keyboard.bindings` setting: command id → binding, where "" unbinds.
+// the `keyboard.bindings` setting: command id → binding, where "" unbinds. Titles and categories
+// are read from messages when a command registers; the shell re-registers its commands when the
+// language changes (it remounts), and lists sort in the active locale.
+import { defineMessages, getLocale } from '@nova/i18n';
 import {
   browserAlternate,
   detectPlatform,
@@ -13,6 +16,22 @@ import {
   type Platform,
   type WhenContext,
 } from './keys.ts';
+
+/** The shared command categories; areas pick from these rather than naming their own. */
+export const CATEGORY = defineMessages('commands.category', {
+  apps: 'Apps',
+  chat: 'Chat',
+  files: 'Files',
+  general: 'General',
+  layout: 'Layout',
+  modes: 'Modes',
+  navigation: 'Navigation',
+  projects: 'Projects',
+  settings: 'Settings',
+  terminal: 'Terminal',
+  view: 'View',
+  work: 'Work',
+});
 
 export interface Command {
   id: string;
@@ -59,8 +78,10 @@ export class CommandRegistry {
   }
 
   list(): Command[] {
+    const locale = getLocale();
     this.#snapshot ??= [...this.#commands.values()].sort(
-      (a, b) => a.category.localeCompare(b.category) || a.title.localeCompare(b.title),
+      (a, b) =>
+        a.category.localeCompare(b.category, locale) || a.title.localeCompare(b.title, locale),
     );
     return this.#snapshot;
   }

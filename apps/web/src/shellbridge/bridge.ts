@@ -6,6 +6,7 @@
 // capture is never reachable from the page (contracts/ipc-channels.md rule 6): it starts only from
 // the shell's own shortcut, tray or overlay.
 import { useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import {
   SHELL_SHORTCUT_ACTIONS,
   type NovaShellBridge,
@@ -90,7 +91,8 @@ export const DEFAULT_GLOBAL_SHORTCUTS: Record<ShellShortcutAction, string> = {
   attachWindow: 'Control+Alt+A',
 };
 
-export const GLOBAL_SHORTCUT_TEXT: Record<ShellShortcutAction, { title: string; hint: string }> = {
+/** What each global shortcut does, keyed by its action (read at render). */
+export const GLOBAL_SHORTCUT_TEXT = defineMessages('shellbridge.shortcuts', {
   quickChat: {
     title: 'Open quick chat or focus Nova',
     hint: 'Opens the quick overlay to ask Nova, start a task or see what needs you; pressed again, it brings Nova to the front.',
@@ -99,7 +101,17 @@ export const GLOBAL_SHORTCUT_TEXT: Record<ShellShortcutAction, { title: string; 
     title: 'Attach the frontmost window',
     hint: 'Captures the window in front (a screenshot and its text) for a chat. You see it, and can remove parts, before anything is sent.',
   },
-};
+}) satisfies Record<ShellShortcutAction, { title: string; hint: string }>;
+
+/** Why a key cannot be a global shortcut. */
+export const SHORTCUT_PROBLEM_TEXT = defineMessages('shellbridge.problems', {
+  /** `{example}` is a key combination as printed, like "Ctrl+Alt+N". */
+  needsModifier: 'Use one or more modifiers and one key, like {example}.',
+  onlyShift: 'A global shortcut needs Ctrl, Alt, Super or Command, not only Shift.',
+  conflict: 'Another app already uses this key, so it does nothing in Nova. Choose another key.',
+  duplicate: 'Both global shortcuts use this key. Change one of them.',
+  invalid: 'This is not a key combination the app can use.',
+});
 
 /** The order the shortcuts are listed in. */
 export const GLOBAL_SHORTCUT_ACTIONS: readonly ShellShortcutAction[] = SHELL_SHORTCUT_ACTIONS;
@@ -208,22 +220,23 @@ export function acceleratorProblem(accelerator: string): string | null {
   const parts = accelerator.split('+');
   const mods = parts.slice(0, -1);
   if (!parts.at(-1) || mods.length === 0)
-    return 'Use one or more modifiers and one key, like Ctrl+Alt+N.';
-  if (!mods.some((m) => m !== 'Shift'))
-    return 'A global shortcut needs Ctrl, Alt, Super or Command, not only Shift.';
+    return SHORTCUT_PROBLEM_TEXT.needsModifier({ example: 'Ctrl+Alt+N' });
+  if (!mods.some((m) => m !== 'Shift')) return SHORTCUT_PROBLEM_TEXT.onlyShift;
   return null;
 }
 
 /** What a shortcut's state means, in a sentence for its row. */
 export function shortcutProblemText(v: ShellShortcutView): string | null {
-  if (v.problem === 'conflict')
-    return 'Another app already uses this key, so it does nothing in Nova. Choose another key.';
-  if (v.problem === 'duplicate') return 'Both global shortcuts use this key. Change one of them.';
-  if (v.problem === 'invalid') return 'This is not a key combination the app can use.';
+  if (v.problem === 'conflict') return SHORTCUT_PROBLEM_TEXT.conflict;
+  if (v.problem === 'duplicate') return SHORTCUT_PROBLEM_TEXT.duplicate;
+  if (v.problem === 'invalid') return SHORTCUT_PROBLEM_TEXT.invalid;
   return null;
 }
 
-/** The rejection message of a bridge call, in a sentence. */
+/**
+ * The rejection message of a bridge call, in a sentence. The desktop app writes it in English
+ * (like Hub error messages, D9); `fallback` is a message.
+ */
 export function shellErrorMessage(err: unknown, fallback: string): string {
   const raw = err instanceof Error ? err.message.trim() : '';
   if (!raw) return fallback;

@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { HLC_PATTERN } from '@nova/shared';
 import { HybridClock, compareHlc, formatHlc, hlcMs, parseHlc } from '../src/replica/hlc.ts';
-import { SyncEngine } from '../src/replica/engine.ts';
+import { SyncEngine, replicaReason } from '../src/replica/engine.ts';
 import { Replica } from '../src/replica/replica.ts';
 import { SealedStore, Vault, indexedDbBackend, type Sealed } from '../src/replica/vault.ts';
 import { FakeEventSource, fakeEventSource } from './fakes.ts';
@@ -171,7 +171,7 @@ describe('ending the copy', () => {
       FakeEventSource.for('/api/v1/events/stream').emit(name, payload);
     env.hub.revoke(THIS_DEVICE, 'revoked');
     await settle(() => env.runtime.engine.state().phase === 'removed');
-    expect(env.runtime.engine.state().reason).toMatch(/revoked this device/);
+    expect(replicaReason(env.runtime.engine.state())).toMatch(/revoked this device/);
     expect(env.runtime.engine.replica).toBeNull();
     expect(env.kv.raw.get('keys')!.has('replica')).toBe(false);
     expect(env.kv.raw.get('replica')!.size).toBe(0);
@@ -233,7 +233,7 @@ describe('ending the copy', () => {
     });
     await bare.start(session(hub), true);
     expect(bare.state()).toMatchObject({ phase: 'unsupported' });
-    expect(bare.state().reason).toMatch(/IndexedDB and WebCrypto/);
+    expect(replicaReason(bare.state())).toMatch(/IndexedDB and WebCrypto/);
   });
 });
 

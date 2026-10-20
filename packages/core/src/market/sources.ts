@@ -5,7 +5,7 @@
 // its signature file, so the signature is checked over what was read, and fetches artifacts:
 // folders and files inside the catalog, files next to a remote index, and folders of other Git
 // repositories pinned to a commit.
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
 import { NovaError, type MarketCatalogKind } from '@nova/shared';
 import { catalogKind, type CatalogConfig, type PluginCatalogs } from '../plugins/catalog.ts';
@@ -64,6 +64,16 @@ function folderOf(location: string): string {
   if (!existsSync(dir) || !statSync(dir).isDirectory())
     throw new NovaError('not_found', `catalog folder not found: ${location}`);
   return dir;
+}
+
+/** Whether a name exists in a folder at all (a link counts, wherever it points). */
+function present(dir: string, name: string): boolean {
+  try {
+    lstatSync(join(dir, name));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function readCapped(file: string, max: number, what: string): Uint8Array {
@@ -126,13 +136,14 @@ export class MarketSources {
     dir: string,
     commit: string | null,
   ): CatalogRead {
+    // The index and its signature are read only from inside the catalog's folder: a link that
+    // leaves it (a Git checkout can hold one) is refused, never followed.
     for (const name of INDEX_NAMES) {
-      const file = join(dir, name);
-      if (!existsSync(file)) continue;
-      const indexBytes = readCapped(file, INDEX_MAX_BYTES, name);
-      const sigFile = file + CATALOG_SIGNATURE_SUFFIX;
-      const signature = existsSync(sigFile)
-        ? readCapped(sigFile, SIGNATURE_MAX_BYTES, name + CATALOG_SIGNATURE_SUFFIX)
+      if (!present(dir, name)) continue;
+      const indexBytes = readCapped(realInside(dir, name, name), INDEX_MAX_BYTES, name);
+      const sigName = name + CATALOG_SIGNATURE_SUFFIX;
+      const signature = present(dir, sigName)
+        ? readCapped(realInside(dir, sigName, sigName), SIGNATURE_MAX_BYTES, sigName)
         : null;
       return {
         config: c,

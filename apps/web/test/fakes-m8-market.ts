@@ -17,6 +17,15 @@
 //   diff not accepted by its hash 400 `{reason: permission_diff_not_accepted}`; then 201. A theme
 //   lands in `appearance.customThemes`, a pet among the installed pets;
 // - remove: 404 when not installed; a theme leaves `appearance.customThemes`; ratings stay here.
+// - publishers (signing.ts `publisherView`): named only with the owner's name for a key they trust
+//   (`plugins.trustedPublishers`); a key a catalog pins is trusted without a name; any other key
+//   is shown by its fingerprint, not trusted. An item without its own key shows its catalog's
+//   signer. A `.novax` bundle (`bundle: true`) signed by a key the owner does not trust is
+//   Unverified (`bundle_untrusted`) with the Hub's warning; an extension update by another
+//   publisher carries `publisherChange` (said first in the warnings) and installs only with
+//   `acceptPublisherChange: true` (400 `{field, reason: publisher_change_confirmation_required}`).
+// Where managed policy comes from (`GET /api/v1/managed`) is the main fake's managed part:
+// `renderWithMarket`'s `policy` sets its view.
 //
 // Wiring into test/fakes.ts (done by the lead): `HubState` gets `m8market: M8MarketState`,
 // `createHub` defaults it to `m8MarketState()`, and `impl` spreads
@@ -38,6 +47,8 @@ import {
   type MarketPermissionLine,
   type MarketPetView,
   type MarketPreview,
+  type MarketPublisher,
+  type MarketPublisherSide,
   type MarketRatingView,
   type MarketUnverifiedReason,
 } from '@nova/shared';
@@ -48,6 +59,17 @@ import { AnnouncerProvider, ServicesProvider } from '../src/services.tsx';
 import { SettingsProvider } from '../src/settings.tsx';
 import { DONE_ONBOARDING, createHub, fakeEventSource, testRegistry } from './fakes.ts';
 import { MEMBER_ID, m7TeamState } from './fakes-m7-team.ts';
+import { fakeFingerprint } from './fakes-m8-extensions.ts';
+
+/** The key the sample catalog's index is signed with (pinned in code by the Hub). */
+export const SAMPLE_KEY = 'u4qLjk3s9PZx0f2l5m8n1o4p7q0r3s6t9u2v5w8x1y4';
+/** Example Labs' key: Word count's `.novax` is signed with it. */
+export const EXAMPLE_LABS_KEY = 'KWyGeoNcQVUoD7fIgkwppFWhQZbPo5ynx1JyVjt5-O0';
+
+/** A publisher as the Hub shows it (the fake recomputes `name` and `trusted` from the settings). */
+export function publisherOf(key: string, over: Partial<MarketPublisher> = {}): MarketPublisher {
+  return { name: null, key, fingerprint: fakeFingerprint(key), trusted: false, ...over };
+}
 
 // ---- items ----------------------------------------------------------------------------------------
 
@@ -64,6 +86,10 @@ export interface FakeItem {
   pet?: MarketPetView;
   /** For a theme: the theme file installing it saves. */
   theme?: Record<string, unknown>;
+  /** A signed `.novax` (an extension): its signer must be a key the owner trusts. */
+  bundle?: true;
+  /** An extension update signed by another publisher than the installed one (or by none). */
+  publisherChange?: { from: MarketPublisherSide; to: MarketPublisherSide };
 }
 
 const line = (
@@ -86,7 +112,8 @@ export function item(
     version: '1.0.0',
     description: null,
     author: 'Example Labs',
-    publisher: { name: 'Example Labs', key: 'KWyGeoNcQVUoD7fIgkwppFWhQZbPo5ynx1JyVjt5-O0' },
+    // No key of its own in the index: its catalog's signer (the sample catalog pins it).
+    publisher: publisherOf(SAMPLE_KEY, { trusted: true }),
     categories: [],
     verified: true,
     permissions: [],
@@ -150,7 +177,6 @@ export function sampleItems(): FakeItem[] {
         id: 'com.example.sample',
         name: 'Sample plugin',
         author: 'Nova examples',
-        publisher: null,
         description: 'A skill, a slash command, a hook, an MCP server and an MCP App panel.',
         permissions: [
           line('net:api.example.com', 'network', 'Reach api.example.com on the network'),
@@ -191,7 +217,10 @@ export function sampleItems(): FakeItem[] {
         description:
           'Counts the words, sentences and reading time of a text: a tool and a command.',
         categories: ['Writing', 'Extensions'],
+        // Its index entry names Example Labs' key: the catalog's name for it is not shown.
+        publisher: publisherOf(EXAMPLE_LABS_KEY),
       }),
+      bundle: true,
       details: { hooks: [], mcpServers: [], skills: [], roles: [], uiEntryPoints: [] },
     },
     {
@@ -224,7 +253,7 @@ export const SAMPLE_CATALOG: MarketCatalogView = {
   location: '/opt/nova/examples/catalog',
   kind: 'builtin',
   signature: 'verified',
-  publisher: { name: null, key: 'u4qLjk3s9PZx0f2l5m8n1o4p7q0r3s6t9u2v5w8x1y4' },
+  publisher: publisherOf(SAMPLE_KEY, { trusted: true }),
   commit: null,
   items: 5,
   error: null,
@@ -244,11 +273,17 @@ export interface M8MarketState {
   installedLines: Record<string, MarketPermissionLine[]>;
   ratings: MarketRatingView[];
   pets: MarketPetView[];
-  previews: Map<string, { it: FakeItem; diff: MarketPermissionDiff | null; verified: boolean }>;
+  previews: Map<
+    string,
+    {
+      it: FakeItem;
+      diff: MarketPermissionDiff | null;
+      verified: boolean;
+      change: FakeItem['publisherChange'] | null;
+    }
+  >;
   /** Kinds the Hub has an installer for (MCP only once the MCP area hands one over). */
   installers: MarketItemKind[];
-  /** What `GET /api/v1/managed` answers. */
-  managed: ManagedPolicyView;
   member: boolean;
   seq: number;
 }
@@ -263,15 +298,6 @@ export function m8MarketState(init: Partial<M8MarketState> = {}): M8MarketState 
     pets: [],
     previews: new Map(),
     installers: ['plugin', 'skill', 'theme', 'pet', 'mcp'],
-    managed: {
-      active: false,
-      failClosed: null,
-      sources: [],
-      settings: [],
-      restrict: [],
-      ignored: [],
-      checkedAt: '2026-10-19T09:00:00.000Z',
-    },
     member: false,
     seq: 0,
     ...init,
@@ -304,6 +330,25 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
         reason: 'owner_only',
       });
   };
+  const trustedKeys = () =>
+    (h.setting('plugins.trustedPublishers') as { name: string; key: string }[] | undefined) ?? [];
+  /** signing.ts `publisherView`: the owner's name for a key they trust; a pinned key is trusted. */
+  const signer = (key: string, pinned = false): MarketPublisher => {
+    const named = trustedKeys().find((t) => t.key === key);
+    return publisherOf(key, { name: named?.name ?? null, trusted: !!named || pinned });
+  };
+  /** The key a catalog pins (the sample catalog's own, or a `plugins.catalogs` entry's). */
+  const pinnedKey = (catalogId: string) =>
+    catalogId === SAMPLE_CATALOG.id
+      ? SAMPLE_KEY
+      : (userCatalogs().find((c) => c.id === catalogId)?.publisherKey ?? null);
+  /** Who signed an item, as the Hub shows it now. */
+  const itemPublisher = (it: FakeItem): MarketPublisher | null => {
+    const key = it.detail.publisher?.key;
+    if (!key) return null;
+    // A bundle's signer is checked against the trusted publishers only (never the pin).
+    return signer(key, !it.bundle && key === pinnedKey(it.detail.catalogId));
+  };
   const userCatalogs = () =>
     (h.setting('plugins.catalogs') as {
       id: string;
@@ -329,7 +374,7 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
         location: c.location,
         kind,
         signature: s.signature,
-        publisher: c.publisherKey ? { name: null, key: c.publisherKey } : null,
+        publisher: c.publisherKey ? signer(c.publisherKey, true) : null,
         commit: s.commit ?? c.commit ?? null,
         items:
           s.signature === 'invalid'
@@ -375,6 +420,7 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
       st.ratings.find((r) => r.kind === it.detail.kind && r.itemId === it.detail.id) ?? null;
     return {
       ...it.detail,
+      publisher: itemPublisher(it),
       installedVersion: inst?.version ?? null,
       updateAvailable: !!inst && compare(it.detail.version, inst.version) > 0,
       rating,
@@ -448,8 +494,16 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
           reason: 'bundle_invalid',
           bundle: 'digest_mismatch',
         });
-      const reasons = it.reasons ?? (it.detail.verified ? [] : ['catalog_unsigned']);
+      const publisher = itemPublisher(it);
+      const untrustedBundle = !!it.bundle && !!publisher && !publisher.trusted;
+      const reasons: MarketUnverifiedReason[] = it.reasons ?? [
+        ...(it.detail.verified ? [] : (['catalog_unsigned'] as const)),
+        ...(untrustedBundle ? (['bundle_untrusted'] as const) : []),
+      ];
       const verified = reasons.length === 0;
+      const change = installedOf(it.detail.kind, it.detail.id)
+        ? (it.publisherChange ?? null)
+        : null;
       const lines = it.own ?? it.detail.permissions;
       const inst = installedOf(it.detail.kind, it.detail.id);
       let diff: MarketPermissionDiff | null = null;
@@ -474,7 +528,7 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
       }
       const block = blocked(it.detail.kind, verified);
       const previewId = `mp-${++st.seq}`;
-      st.previews.set(previewId, { it, diff, verified });
+      st.previews.set(previewId, { it, diff, verified, change });
       const p: MarketPreview = {
         previewId,
         catalogId: it.detail.catalogId,
@@ -485,19 +539,47 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
         verification: {
           status: verified ? 'verified' : 'unverified',
           reasons,
-          publisher: it.detail.publisher,
+          publisher,
+          // Who vouches (the Hub's `vouchedBy`): the catalog by its pinned key or a trusted
+          // publisher, and a bundle's own trusted signer.
+          vouchedBy: verified
+            ? {
+                catalog: {
+                  id: it.detail.catalogId,
+                  name: catalogUsable(it.detail.catalogId).name,
+                  signedWith: pinnedKey(it.detail.catalogId) ? 'pinned_key' : 'trusted_publisher',
+                  publisher: catalogUsable(it.detail.catalogId).publisher,
+                },
+                bundle: it.bundle ? publisher : null,
+              }
+            : null,
         },
         permissions: lines,
         diff,
+        publisherChange: change,
         replaces: inst ? { version: inst.version } : null,
         requires: {
           sideloadConfirmation: !verified,
           permissionAcceptance: !!diff && (diff.added.length > 0 || diff.changed.length > 0),
+          publisherChangeAcceptance: change !== null,
         },
         allowed: block.by === null,
         blockedBy: block.by,
         details: it.details ?? {},
         warnings: [
+          // A change of publisher is said first (the extension installer's warning).
+          ...(change
+            ? [
+                change.to.key
+                  ? `Another publisher: the installed version is signed by ${change.from.name ?? change.from.fingerprint}, this one by ${change.to.name ?? change.to.fingerprint}. Installing it clears the extension's secrets and data.`
+                  : `Not signed by the publisher of the installed version (${change.from.name ?? change.from.fingerprint}). Installing it clears the extension's secrets and data.`,
+              ]
+            : []),
+          ...(untrustedBundle
+            ? [
+                `Signed by a publisher you have not trusted (key ${publisher.fingerprint}); the name the catalog gives it is not checked.`,
+              ]
+            : []),
           ...(it.warnings ?? []),
           ...(block.by === 'managed' && block.why ? [block.why] : []),
         ],
@@ -509,7 +591,7 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
       owner();
       const p = st.previews.get(body.previewId);
       if (!p) throw err(410, 'request_expired', 'the preview expired; preview the item again');
-      const { it, diff, verified } = p;
+      const { it, diff, verified, change } = p;
       const block = blocked(it.detail.kind, verified);
       if (block.by)
         throw err(403, 'policy_denied', block.why ?? 'refused by policy', { reason: block.by });
@@ -521,6 +603,18 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
           {
             field: 'confirmSideload',
             reason: 'sideload_confirmation_required',
+          },
+        );
+      if (change && body.acceptPublisherChange !== true)
+        throw err(
+          400,
+          'validation',
+          'this update comes from another publisher than the installed version; accept the change to install it (its secrets and data are cleared)',
+          {
+            field: 'acceptPublisherChange',
+            reason: 'publisher_change_confirmation_required',
+            from: change.from.key,
+            to: change.to.key,
           },
         );
       if (
@@ -544,7 +638,7 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
         catalogId: it.detail.catalogId,
         origin: `${it.detail.catalogId}/${it.detail.id}@${it.detail.version}`,
         verified,
-        publisherKey: it.detail.publisher?.key ?? null,
+        publisherKey: itemPublisher(it)?.key ?? null,
         sha256: null,
         commit: null,
         permissions: it.own ?? it.detail.permissions,
@@ -607,10 +701,6 @@ export function m8MarketImpl(st: M8MarketState, h: M8MarketHelpers) {
     },
     marketPetFrameUrl: (petId, frame) =>
       `/api/v1/market/pets/${encodeURIComponent(petId)}/files/${frame.split('/').map(encodeURIComponent).join('/')}`,
-    marketPolicySources: async () => {
-      owner();
-      return st.managed;
-    },
   };
   return api;
 }
@@ -659,7 +749,10 @@ export async function renderWithMarket(
   ui: ReactNode,
   opts: {
     settings?: Record<string, unknown>;
+    /** The managed settings layer (what is locked). */
     managed?: Record<string, unknown>;
+    /** What `GET /api/v1/managed` answers: where the policy comes from. */
+    policy?: ManagedPolicyView;
     member?: boolean;
     market?: Partial<M8MarketState>;
   } = {},
@@ -667,6 +760,7 @@ export async function renderWithMarket(
   const hub = createHub(opts.member ? { m7team: m7TeamState({ me: MEMBER_ID }) } : {});
   hub.state.settings = { 'onboarding.state': DONE_ONBOARDING, ...opts.settings };
   hub.state.managed = { ...opts.managed };
+  if (opts.policy) hub.state.m8managed.view = opts.policy;
   const market = withMarket(hub, { member: opts.member ?? false, ...opts.market });
   const api = hub.api as unknown as Api;
   const { settings } = await hub.api.settings();

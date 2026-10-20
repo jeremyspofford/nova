@@ -1,4 +1,5 @@
 // Settings (docs/14 §1.2): a section nav and one page per section, addressed as /settings/:section.
+import { defineMessages } from '@nova/i18n';
 import { navigate, SETTINGS_SECTIONS, type SettingsSection } from '../router.ts';
 import { AccountsPage } from './AccountsPage.tsx';
 import { AppearancePage } from './AppearancePage.tsx';
@@ -36,7 +37,13 @@ import { DataPage } from '../datactl/DataPage.tsx';
 import { AppsSettings } from '../appauth/AppsSettings.tsx';
 import { OtlpSettings } from '../appauth/OtlpSettings.tsx';
 
-export const SECTION_LABELS: Record<SettingsSection, string> = {
+export const SETTINGS_TEXT = defineMessages('settings', {
+  title: 'Settings',
+  navLabel: 'Settings sections',
+});
+
+/** Section names: the nav, page headings, and the "Open … settings" commands. */
+export const SECTION_LABELS = defineMessages('settings.sections', {
   general: 'General',
   account: 'Account',
   members: 'Members',
@@ -69,7 +76,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   experimental: 'Experimental',
   telemetry: 'Telemetry export',
   diagnostics: 'Diagnostics',
-};
+});
 
 export function SettingsView({
   section,
@@ -84,8 +91,8 @@ export function SettingsView({
   const { role } = useTeamRole();
   return (
     <div className="settings">
-      <h1 className="settings-title">Settings</h1>
-      <nav className="settings-nav" aria-label="Settings sections">
+      <h1 className="settings-title">{SETTINGS_TEXT.title}</h1>
+      <nav className="settings-nav" aria-label={SETTINGS_TEXT.navLabel}>
         <ul>
           {visibleSettingsSections(SETTINGS_SECTIONS, role).map((s) => (
             <li key={s}>

@@ -265,7 +265,7 @@ describe('Settings → Diagnostics: audit log (FR-104 partial)', () => {
       JSON.stringify({ reason: 'protected_path', path: '[REDACTED]' }, null, 2),
     );
     expect(
-      within(row('device: device.big')).getByText(/too long to show here \(9001 characters\)/),
+      within(row('device: device.big')).getByText(/too long to show here \(9,001 characters\)/),
     ).toBeTruthy();
     const plain = row('auth: session.created');
     expect(plain.querySelector('.ws-audit-change, details')).toBeNull();

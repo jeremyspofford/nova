@@ -29,7 +29,9 @@ describe('removed members (ADR-097)', () => {
     const s = within(await section());
     const row = await s.findByRole('listitem', { name: 'Robin' });
     expect(within(row).getByText('Deleted in 23 days')).toBeTruthy();
-    const link = within(row).getByRole('link', { name: REMOVED_TEXT.exportLabel('Robin') });
+    const link = within(row).getByRole('link', {
+      name: REMOVED_TEXT.exportLabel({ name: 'Robin' }),
+    });
     expect(link.getAttribute('href')).toBe('/api/v1/team/removed/acc-robin/export');
     expect(link.hasAttribute('download')).toBe(true);
     expect(s.getByText(REMOVED_TEXT.intro)).toBeTruthy();
@@ -40,8 +42,10 @@ describe('removed members (ADR-097)', () => {
       appauth: { removed: [removedMember()] },
     });
     const s = within(await section());
-    await userEvent.click(await s.findByRole('button', { name: REMOVED_TEXT.purgeLabel('Robin') }));
-    const dialog = screen.getByRole('dialog', { name: REMOVED_TEXT.purgeTitle('Robin') });
+    await userEvent.click(
+      await s.findByRole('button', { name: REMOVED_TEXT.purgeLabel({ name: 'Robin' }) }),
+    );
+    const dialog = screen.getByRole('dialog', { name: REMOVED_TEXT.purgeTitle({ name: 'Robin' }) });
     expect(dialog.textContent).toContain(REMOVED_TEXT.purgeWhat);
     expect(dialog.textContent).toContain(REMOVED_TEXT.purgeExportFirst);
     const confirm = within(dialog).getByRole<HTMLButtonElement>('button', {
@@ -50,17 +54,17 @@ describe('removed members (ADR-097)', () => {
     expect(confirm.disabled).toBe(true);
     expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }));
     await userEvent.click(
-      within(dialog).getByRole('checkbox', { name: REMOVED_TEXT.purgeConfirm('Robin') }),
+      within(dialog).getByRole('checkbox', { name: REMOVED_TEXT.purgeConfirm({ name: 'Robin' }) }),
     );
     expect(confirm.disabled).toBe(false);
     await userEvent.click(confirm);
     await waitFor(() => expect(api.purgeRemovedMember).toHaveBeenCalledWith('acc-robin'));
-    expect(await screen.findByText(REMOVED_TEXT.purged('Robin'))).toBeTruthy();
+    expect(await screen.findByText(REMOVED_TEXT.purged({ name: 'Robin' }))).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
     const row = s.getByRole('listitem', { name: REMOVED_TEXT.purgedName });
     expect(within(row).getByText(/^Deleted /)).toBeTruthy();
     expect(within(row).getByText(REMOVED_TEXT.byRequest)).toBeTruthy();
-    expect(within(row).getByText(REMOVED_TEXT.counts(260, 3))).toBeTruthy();
+    expect(within(row).getByText(REMOVED_TEXT.counts({ rows: 260, files: 3 }))).toBeTruthy();
     expect(within(row).queryByRole('link')).toBeNull();
     expect(within(row).queryByRole('button')).toBeNull();
     expect(state.removed[0]?.status).toBe('purged');
@@ -69,7 +73,9 @@ describe('removed members (ADR-097)', () => {
   it('cancels without deleting anything', async () => {
     const { api } = await renderW11(<MembersPage />, { appauth: { removed: [removedMember()] } });
     const s = within(await section());
-    await userEvent.click(await s.findByRole('button', { name: REMOVED_TEXT.purgeLabel('Robin') }));
+    await userEvent.click(
+      await s.findByRole('button', { name: REMOVED_TEXT.purgeLabel({ name: 'Robin' }) }),
+    );
     await userEvent.click(
       within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }),
     );
@@ -82,11 +88,13 @@ describe('removed members (ADR-097)', () => {
       appauth: { removed: [removedMember()], purgeOutcome: 'failed' },
     });
     let s = within(await section());
-    await userEvent.click(await s.findByRole('button', { name: REMOVED_TEXT.purgeLabel('Robin') }));
+    await userEvent.click(
+      await s.findByRole('button', { name: REMOVED_TEXT.purgeLabel({ name: 'Robin' }) }),
+    );
     let dialog = within(screen.getByRole('dialog'));
     await userEvent.click(dialog.getByRole('checkbox'));
     await userEvent.click(dialog.getByRole('button', { name: REMOVED_TEXT.purgeButton }));
-    expect(await screen.findByText(REMOVED_TEXT.purgeFailed('Robin'))).toBeTruthy();
+    expect(await screen.findByText(REMOVED_TEXT.purgeFailed({ name: 'Robin' }))).toBeTruthy();
     const row = s.getByRole('listitem', { name: 'Robin' });
     expect(within(row).getByText(REMOVED_TEXT.status.failed)).toBeTruthy();
     expect(within(row).getByText(/Why: the database was busy/)).toBeTruthy();
@@ -103,7 +111,9 @@ describe('removed members (ADR-097)', () => {
       },
     });
     s = within(await section());
-    await userEvent.click(await s.findByRole('button', { name: REMOVED_TEXT.purgeLabel('Robin') }));
+    await userEvent.click(
+      await s.findByRole('button', { name: REMOVED_TEXT.purgeLabel({ name: 'Robin' }) }),
+    );
     dialog = within(screen.getByRole('dialog'));
     await userEvent.click(dialog.getByRole('checkbox'));
     await userEvent.click(dialog.getByRole('button', { name: REMOVED_TEXT.purgeButton }));
@@ -136,7 +146,7 @@ describe('removed members (ADR-097)', () => {
     const lee = s.getByRole('listitem', { name: REMOVED_TEXT.purgedName });
     expect(within(lee).getByText(REMOVED_TEXT.afterGrace)).toBeTruthy();
     expect(within(lee).getByText(REMOVED_TEXT.cleanupPending)).toBeTruthy();
-    expect(within(lee).getByText(REMOVED_TEXT.counts(1, 1))).toBeTruthy();
+    expect(within(lee).getByText(REMOVED_TEXT.counts({ rows: 1, files: 1 }))).toBeTruthy();
   });
 
   it('follows removals and purges live, and retries a failed load', async () => {
@@ -177,7 +187,7 @@ describe('how long their data is kept', () => {
     await userEvent.type(field, '0');
     await userEvent.click(form.getByRole('button', { name: REMOVED_TEXT.save }));
     await waitFor(() => expect(hub.state.settings['team.removedMemberPurgeDays']).toBe(0));
-    expect(await screen.findByText(REMOVED_TEXT.keepSaved(0))).toBeTruthy();
+    expect(await screen.findByText(REMOVED_TEXT.keepSaved({ days: 0 }))).toBeTruthy();
   });
 
   it('is disabled and says so when managed policy sets it', async () => {
@@ -192,8 +202,10 @@ describe('how long their data is kept', () => {
     await renderW11(<MembersPage />, { settings: { 'team.removedMemberPurgeDays': 14 } });
     await userEvent.click(await screen.findByRole('button', { name: 'Remove Alex' }));
     const dialog = screen.getByRole('dialog', { name: 'Remove Alex from this Hub?' });
-    expect(dialog.textContent).toContain(REMOVED_TEXT.removeWhat(14));
-    expect(REMOVED_TEXT.removeWhat(0)).toContain('until you delete it under Removed members');
+    expect(dialog.textContent).toContain(REMOVED_TEXT.removeWhat({ days: 14 }));
+    expect(REMOVED_TEXT.removeWhat({ days: 0 })).toContain(
+      'until you delete it under Removed members',
+    );
   });
 
   it('is the owner’s: a member sees no removed members', async () => {

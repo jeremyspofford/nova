@@ -223,6 +223,68 @@ export class DataControls {
     })();
   }
 
+  /**
+   * One account's data as a `.novaexport` (account.ts): for the owner to keep a removed member's
+   * data before the purge. Never sealed, so no secret travels (their references are listed to
+   * re-enter); audited as `data.export` with the scope.
+   */
+  exportAccount(
+    ownerAccountId: string,
+    accountId: string,
+  ): Promise<{ fileName: string; contentType: string; body: AsyncGenerator<Buffer> }> {
+    try {
+      this.assertOwner(ownerAccountId);
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
+    const exists = this.#o.db.raw.prepare('SELECT 1 AS x FROM account WHERE id = ?').get(accountId);
+    if (!exists) return Promise.reject(new NovaError('not_found', 'no such account'));
+    const scope = { accountId };
+    let done = false;
+    const inner = exportArchive({
+      db: this.#o.db,
+      secrets: this.#o.secrets,
+      dataDir: this.#o.dataDir,
+      hubVersion: this.#o.hubVersion,
+      account: accountId,
+      ...(this.#o.now ? { now: this.#o.now } : {}),
+      onComplete: (manifest: ExportManifest, bytes: number) => {
+        done = true;
+        void this.#audit(ownerAccountId, 'data.export', 'ok', {
+          scope,
+          encrypted: false,
+          bytes,
+          tables: manifest.tables.length,
+          rows: manifest.tables.reduce((n, t) => n + t.rows, 0),
+          files: manifest.blobs.length,
+          toReEnter: manifest.toReEnter.length,
+        });
+        void this.#emit(ownerAccountId, 'data.exported', {
+          scope,
+          encrypted: false,
+          bytes,
+          tables: manifest.tables.length,
+          files: manifest.blobs.length,
+        });
+      },
+    });
+    const failed = () =>
+      this.#audit(ownerAccountId, 'data.export', 'failed', { scope, encrypted: false });
+    const body = (async function* () {
+      try {
+        yield* inner;
+      } finally {
+        if (!done) await failed();
+      }
+    })();
+    const day = (this.#o.now ?? (() => new Date()))().toISOString().slice(0, 10);
+    return Promise.resolve({
+      fileName: `nova-account-${accountId}-${day}.novaexport`,
+      contentType: 'application/zip',
+      body,
+    });
+  }
+
   // ---- delete-all ---------------------------------------------------------------------------
 
   async deleteAll(

@@ -4,9 +4,10 @@
 // names and summaries come from the host and are shown as text only.
 import { useState } from 'react';
 import type { PullRequestView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { useSettings } from '../settings.tsx';
 import { useCodeM6Api } from './api-m6.ts';
 import {
@@ -20,6 +21,29 @@ import {
   safeHttpUrl,
 } from './m6-format.ts';
 import { Badge } from './parts.tsx';
+
+export const PR_TEXT = defineMessages('code.pr', {
+  title: 'Pull request',
+  emptyTitle: 'No pull request yet',
+  emptyBody:
+    'Push the session’s branch and open a pull request on a connected Git host. Its CI checks show here.',
+  open: 'Open a pull request…',
+  push: 'Push…',
+  readFailed: 'Could not read the pull request: {reason}',
+  heading: '#{number} {title}',
+  into: '{head} into {base}',
+  opened: 'Opened {when}',
+  failed: '{failed, plural, one {# check of {total} failed.} other {# checks of {total} failed.}}',
+  checks: '{n, plural, one {# check.} other {# checks.}}',
+  reading: 'Reading the pull request',
+  refresh: 'Refresh',
+  checksRead: 'Checks read {when}.',
+  notRead: 'Checks not read yet.',
+  feedbackOn: 'Failed checks go back to the agent to fix.',
+  feedbackOff: 'Failed checks are not sent to the agent (Settings → Code).',
+  ciChecks: 'CI checks',
+  details: 'Details',
+});
 
 export function PullRequestPane({
   sessionId,
@@ -44,22 +68,19 @@ export function PullRequestPane({
 
   if (!pr)
     return (
-      <section className="code-pr" aria-label="Pull request">
+      <section className="code-pr" aria-label={PR_TEXT.title}>
         <EmptyState
           level={3}
-          title="No pull request yet"
-          description={
-            unavailable ??
-            'Push the session’s branch and open a pull request on a connected Git host. Its CI checks show here.'
-          }
+          title={PR_TEXT.emptyTitle}
+          description={unavailable ?? PR_TEXT.emptyBody}
           icon="branch"
           action={
             unavailable ? undefined : (
               <span className="code-actions">
                 <Button variant="primary" onClick={onOpen}>
-                  Open a pull request…
+                  {PR_TEXT.open}
                 </Button>
-                <Button onClick={onPush}>Push…</Button>
+                <Button onClick={onPush}>{PR_TEXT.push}</Button>
               </span>
             )
           }
@@ -73,7 +94,7 @@ export function PullRequestPane({
     try {
       onRefreshed(await m6.refreshPullRequest(sessionId));
     } catch (err) {
-      toast.show(`Could not read the pull request: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(PR_TEXT.readFailed({ reason: errorMessage(err) }), { tone: 'error' });
     } finally {
       setRefreshing(false);
     }
@@ -81,17 +102,16 @@ export function PullRequestPane({
   const failed = pr.ci.checks.filter((c) => checkTone(c) === 'danger').length;
 
   return (
-    <section className="code-pr" aria-label="Pull request">
+    <section className="code-pr" aria-label={PR_TEXT.title}>
       <div className="code-pr-head">
-        <h3>
+        <h3 dir="auto">
           {url ? (
             <a href={url} target="_blank" rel="noopener noreferrer">
-              #{pr.number} {pr.title} <Icon name="external" />
+              {PR_TEXT.heading({ number: String(pr.number), title: pr.title })}{' '}
+              <Icon name="external" />
             </a>
           ) : (
-            <>
-              #{pr.number} {pr.title}
-            </>
+            PR_TEXT.heading({ number: String(pr.number), title: pr.title })
           )}
         </h3>
         <Badge
@@ -102,11 +122,11 @@ export function PullRequestPane({
         </Badge>
       </div>
       <span className="muted code-row-meta">
-        <span className="code-path">{pr.repo}</span>
-        <span>
-          {pr.headBranch} into {pr.baseBranch}
+        <span className="code-path" dir="ltr">
+          {pr.repo}
         </span>
-        <span>Opened {formatWhen(pr.createdAt)}</span>
+        <span>{PR_TEXT.into({ head: pr.headBranch, base: pr.baseBranch })}</span>
+        <span>{PR_TEXT.opened({ when: formatWhen(pr.createdAt) })}</span>
       </span>
       <div className="code-subhead">
         <p aria-live="polite" className="code-ci-line">
@@ -115,23 +135,21 @@ export function PullRequestPane({
           </Badge>{' '}
           {pr.ci.checks.length
             ? failed
-              ? `${plural(failed, 'check')} of ${pr.ci.checks.length} failed.`
-              : `${plural(pr.ci.checks.length, 'check')}.`
+              ? PR_TEXT.failed({ failed, total: pr.ci.checks.length })
+              : PR_TEXT.checks({ n: pr.ci.checks.length })
             : null}
         </p>
         <Button disabled={refreshing} onClick={() => void refresh()}>
-          {refreshing ? <Spinner label="Reading the pull request" /> : <Icon name="refresh" />}{' '}
-          Refresh
+          {refreshing ? <Spinner label={PR_TEXT.reading} /> : <Icon name="refresh" />}{' '}
+          {PR_TEXT.refresh}
         </Button>
       </div>
       <p className="muted ws-flush">
-        {pr.polledAt ? `Checks read ${formatWhen(pr.polledAt)}.` : 'Checks not read yet.'}{' '}
-        {feedback
-          ? 'Failed checks go back to the agent to fix.'
-          : 'Failed checks are not sent to the agent (Settings → Code).'}
+        {pr.polledAt ? PR_TEXT.checksRead({ when: formatWhen(pr.polledAt) }) : PR_TEXT.notRead}{' '}
+        {feedback ? PR_TEXT.feedbackOn : PR_TEXT.feedbackOff}
       </p>
       {pr.ci.checks.length ? (
-        <ul className="code-checks" aria-label="CI checks">
+        <ul className="code-checks" aria-label={PR_TEXT.ciChecks}>
           {pr.ci.checks.map((c, i) => {
             const link = safeHttpUrl(c.url);
             return (
@@ -142,10 +160,14 @@ export function PullRequestPane({
                 </Badge>
                 {link ? (
                   <a href={link} target="_blank" rel="noopener noreferrer">
-                    Details <Icon name="external" />
+                    {PR_TEXT.details} <Icon name="external" />
                   </a>
                 ) : null}
-                {c.summary ? <p className="code-check-summary">{c.summary}</p> : null}
+                {c.summary ? (
+                  <p className="code-check-summary" dir="auto">
+                    {c.summary}
+                  </p>
+                ) : null}
               </li>
             );
           })}

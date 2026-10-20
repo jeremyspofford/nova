@@ -3,11 +3,21 @@
 // navigation has already happened, so "Go back" returns to it). Closing the tab deletes it on a
 // best-effort basis; the Hub's `chat.temporaryTtlHours` sweeper removes anything left over.
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useThreads } from '../stores.tsx';
+
+export const TEMPORARY_TEXT = defineMessages('chat.temporary', {
+  deleteFailed: 'Could not delete the temporary chat: {reason} It is removed automatically later.',
+  confirmTitle: 'Delete the temporary chat?',
+  confirmBody:
+    'A reply was still streaming when you left it. Deleting stops the reply and removes the chat.',
+  goBack: 'Go back to it',
+  delete: 'Delete chat',
+});
 
 export interface TemporaryReport {
   threadId: string | null;
@@ -35,10 +45,9 @@ export function useTemporaryChats(currentId: string | null) {
       void stopped
         .then(() => threads.remove(id))
         .catch((err: unknown) =>
-          toast.show(
-            `Could not delete the temporary chat: ${errorMessage(err)} It is removed automatically later.`,
-            { tone: 'error' },
-          ),
+          toast.show(TEMPORARY_TEXT.deleteFailed({ reason: errorMessage(err) }), {
+            tone: 'error',
+          }),
         );
     },
     [api, threads, toast],
@@ -84,12 +93,12 @@ export function useTemporaryChats(currentId: string | null) {
   const dialog = (
     <Dialog
       open={confirm !== null}
-      title="Delete the temporary chat?"
-      description="A reply was still streaming when you left it. Deleting stops the reply and removes the chat."
+      title={TEMPORARY_TEXT.confirmTitle}
+      description={TEMPORARY_TEXT.confirmBody}
       onClose={goBack}
       footer={
         <>
-          <Button onClick={goBack}>Go back to it</Button>
+          <Button onClick={goBack}>{TEMPORARY_TEXT.goBack}</Button>
           <Button
             variant="danger"
             onClick={() => {
@@ -98,7 +107,7 @@ export function useTemporaryChats(currentId: string | null) {
               if (id) discard(id, true);
             }}
           >
-            Delete chat
+            {TEMPORARY_TEXT.delete}
           </Button>
         </>
       }

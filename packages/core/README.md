@@ -380,3 +380,63 @@ M7.5 (decisions in `docs/20` ADR-096):
   made by the signed-in user (`hub_only`); channels never offer or accept an answer to one
   (`HUB_ONLY_TEXT`); `ApprovalView` gains `answerIn` and `scope`; `user_input` requests take an
   optional `context` (`requests/validate.ts`).
+
+M8 (decisions in `docs/20` ADR-097):
+
+- Extension SDK (`src/sdk/`, FR-117) — `ExtensionService` (preview, install, `nova dev`, update with
+  the publisher-change check, kept signed bundles and rollback through `snapshot()`, uninstall,
+  secrets, managed refusal and `reapplyPolicy`, the digest check before a worker starts, the tool
+  source, the plugin permission source, the hook client and hook gate for SDK hooks, panels for MCP
+  Apps), `ExtensionHost` (`host.ts`: one worker per account and extension, the `nova` API with
+  every declared-permission check, fetch within the egress ceiling and its in-flight caps, files on
+  real paths, secrets at `secret://extension/<account>/<id>/<name>`), the QuickJS engine
+  (`engine.ts`, `worker.ts`: memory, CPU slices across promise jobs, timers, faults), `bundle.ts`
+  (`.novax` read and pack, the D2 digest, `verifyBundle`, `secretFileProblems`), `keys.ts` (Ed25519
+  publisher keys, `signDigest`/`verifyDigest` with the `nova-extension-v1` and `nova-catalog-v1`
+  domains), `manifest.ts` (`extension.json`, observable events, `ext:` tool and hook names, the
+  hook hash over the bundle), `describe.ts` (permission lines with details and the update diff) and
+  `validate.ts` (`nova validate`).
+- Marketplace (`src/market/`, FR-049) — `Marketplace` (catalogs, search, preview with the verdict
+  and the permission diff, install one at a time with rollback, remove, ratings, pets), catalog
+  sources (`sources.ts`: built-in, folder, Git at a pinned commit, https), the index format
+  (`catalog-index.ts`), catalog signatures and folder digests (`signing.ts`), the installers per
+  kind (`installers.ts`: plugins and extensions with provenance, skills, themes, pets) and
+  permission lines (`permissions.ts`). `documents/zip.ts` is the bounded zip reader every archive
+  goes through.
+- Managed policy (`src/managed/`, FR-106) — `ManagedPolicy` (`policy.ts`: the local, remote and test
+  sources, last good copies, fail closed, the compiled settings layer, `managed.policy.changed`),
+  the file and remote checks (`source.ts`: ownership, `NOVA_MANAGED_SETTINGS_FILE` gating, the
+  signed envelope), tighten-only rules per setting (`rules.ts`) and `managedRestrictions` (the typed
+  getters every area reads from the `managed.restrict` setting, `managedDenied`).
+- Data controls (`src/datactl/`, FR-105, FR-121) — `DataControls` (export, ticket downloads,
+  delete-all, upload, check and import, retention, crash reports), the ZIP64 writer and reader
+  (`zip.ts`), sealing (`seal.ts`: scrypt and chunked AES-256-GCM), the table codec (`codec.ts`),
+  data-folder roots (`files.ts`), `exporter.ts`, `importer.ts` with `vet.ts` (secret references,
+  paths, what comes back off), `wipe.ts`, retention (`retention.ts`) with the audit anchor
+  (`anchor.ts`, `verifyAuditChain`), crash reports (`crash.ts`, `installCrashReporting`) and the
+  `nova data` commands (`cli.ts`). Spend caps are `SpendCaps` and `withSpendCaps` in
+  `src/profile/spend.ts` (FR-116, FR-115: caps, reservations, alerts, clear usage, provider limits).
+- Third-party apps (`src/appauth/`, FR-222) — `AppAuthService` (registration, consent, codes, token
+  chains with rotation and reuse detection, revocation, the call audit), redirect rules
+  (`redirect.ts`), PKCE (`pkce.ts`) and the scopes and `APP_ROUTE_SCOPES` (`scopes.ts`).
+- Channels M8 (`src/channels/`, FR-110) — `ChannelOAuth` (`oauth.ts`: email OAuth sign-in, refresh
+  and revocation, tokens in the vault) and `files.ts` (Telegram files in and out, the text-file
+  check, `channel.send` files).
+- Team M8 (`src/team/`) — the route classification (`routes.ts`: `ROUTE_GROUPS`,
+  `WEB_SHELL_ROUTES`, `routeClass`; the member guard in `access.ts` reads it), `MemberPurgeService`
+  (`member-purge.ts`: the grace sweep, purge with redaction, the `cleaning` state).
+- Spaces and sites M8 (`src/spaces/`, FR-036, FR-037) — page order in one write (`reorderPages`),
+  what a deletion takes (`deletionImpact`), deleted pages and `undeletePage`, a site's source preview
+  (`previewSource`), the publish plan (`plan`), and hosting targets (`hosting.ts`: the `HostingTarget` interface with `HubFolderTarget` and the remote
+  kind, `SiteTargetService`, the egress check every request passes, the credential in the vault; `webdav.ts`: the WebDAV
+  client with a temporary collection swapped in by one MOVE, the `.nova-site` marker, no redirects,
+  30 s per request; `targetError` problems).
+- Saved themes in full — the theme tokens a saved theme may set and the plain-value rule are in
+  `@nova/shared` (`THEME_ID`, `SAFE_THEME_VALUE`); the marketplace clears `appearance.customTheme`
+  when it removes the theme in use.
+- Account export (`src/datactl/account.ts`) — one account's archive for a removed member, built on a
+  private copy of the database by walking the schema; `DataControls.exportAccount`.
+- Elsewhere — `PluginService.install` takes provenance; plugin hook hashes cover the plugin's files
+  (`plugins/hook-hash.ts`); `acp/env.ts` (the allowlist of environment names for ACP terminals);
+  `script.run` records origin `script`; image generation honours spend caps and managed providers;
+  `devices/service.ts` `mcpRequest` (device MCP resources and prompts).

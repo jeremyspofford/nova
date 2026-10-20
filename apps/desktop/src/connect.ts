@@ -6,6 +6,7 @@ import { shellIdentityStatementSchema, type HubIdentityStatement } from '@nova/s
 import { hubOriginOf, joinTarget, routeDeepLink } from './deeplinks.ts';
 import { checkStatement, pinnedTrust, verifyHubIdentity, type PinnedTrust } from './pinning.ts';
 import { isLoopbackHost, probeIdentity, type IdentityProbe } from './probe.ts';
+import { CONNECT_TEXT } from './text.ts';
 
 const FINGERPRINT = /^[A-Za-z0-9_-]{43}$/;
 
@@ -75,32 +76,34 @@ export function refusalMessage(
   origin: string | null,
   detail?: string,
 ): string {
-  const at = origin ?? 'the Hub';
+  const at = origin ?? CONNECT_TEXT.theHub;
   switch (reason) {
     case 'invalid_input':
-      return detail ?? 'Paste the Add Device link, or enter the Hub address and its fingerprint.';
+      return detail ?? CONNECT_TEXT.invalidInput;
     case 'insecure_transport':
-      return `${at} serves plain HTTP, which the app uses only for a Hub on this computer. Turn on HTTPS on the Hub (Network, Trust), then add this computer again.`;
+      return CONNECT_TEXT.insecure({ at });
     case 'unreachable':
-      return `Cannot reach ${at}${detail ? ` (${detail})` : ''}. Check the address and that the Hub is running.`;
+      return detail
+        ? CONNECT_TEXT.unreachableDetail({ at, detail })
+        : CONNECT_TEXT.unreachable({ at });
     case 'identity_unavailable':
-      return `${at} cannot prove its identity right now (its identity key is not available). Check Network, Trust on the Hub. Nothing was sent to it.`;
+      return CONNECT_TEXT.identityUnavailable({ at });
     case 'bad_response':
-      return `${at} did not answer with a Hub identity statement. Nothing was sent to it.`;
+      return CONNECT_TEXT.badResponse({ at });
     case 'untrusted_certificate':
-      return `The certificate of ${at} is not trusted by this computer, and the Hub does not ask apps to pin it. Nothing was sent to it.`;
+      return CONNECT_TEXT.untrustedCertificate({ at });
     case 'pin_mismatch':
-      return `This is not the Hub you added: its identity does not match the fingerprint. Nothing was sent to it.`;
+      return CONNECT_TEXT.pinMismatch;
     case 'bad_signature':
     case 'nonce_mismatch':
-      return `The identity statement of ${at} did not verify, so the connection may have been tampered with. Nothing was sent to it.`;
+      return CONNECT_TEXT.badSignature({ at });
     case 'no_certificate':
     case 'not_listed':
     case 'not_server_certificate':
     case 'host_mismatch':
-      return `The certificate ${at} presented is not one its identity vouches for, so the connection may have been intercepted. Nothing was sent to it.`;
+      return CONNECT_TEXT.notVouched({ at });
     case 'expired':
-      return `The certificate of ${at} has expired. Renew it on the Hub (Network, Trust). Nothing was sent to it.`;
+      return CONNECT_TEXT.expired({ at });
   }
 }
 
@@ -137,15 +140,10 @@ export function parseConnectInput(input: {
       }
     }
     if (!target || target.kind !== 'add-device')
-      return fail('invalid_input', null, 'That is not an Add Device link.');
-    if (!target.hubUrl) return fail('invalid_input', null, 'The link does not name a Hub.');
+      return fail('invalid_input', null, CONNECT_TEXT.notALink);
+    if (!target.hubUrl) return fail('invalid_input', null, CONNECT_TEXT.noHub);
     // Without a fingerprint there is nothing to verify the Hub against, so nothing is sent.
-    if (!target.pin)
-      return fail(
-        'invalid_input',
-        target.hubUrl,
-        'The link carries no Hub fingerprint, so the app cannot check the Hub. Enter the fingerprint the Hub shows under Network, Trust.',
-      );
+    if (!target.pin) return fail('invalid_input', target.hubUrl, CONNECT_TEXT.noPin);
     return {
       origins: [target.hubUrl, ...target.endpoints.filter((e) => e !== target.hubUrl)],
       pin: target.pin,
@@ -154,14 +152,13 @@ export function parseConnectInput(input: {
   }
   const origin = normalizeHubUrl(input.url ?? '');
   if (!origin)
-    return fail('invalid_input', null, 'Enter the Hub address, like https://hub.local:7443.');
-  const pin = normalizePin(input.pin ?? '');
-  if (!pin)
     return fail(
       'invalid_input',
-      origin,
-      'Enter the Hub fingerprint: 43 letters, digits, - and _, shown on the Hub under Network, Trust.',
+      null,
+      CONNECT_TEXT.enterAddress({ example: 'https://hub.local:7443' }),
     );
+  const pin = normalizePin(input.pin ?? '');
+  if (!pin) return fail('invalid_input', origin, CONNECT_TEXT.enterPin);
   return { origins: [origin], pin, joinPath: null };
 }
 
@@ -254,5 +251,5 @@ export function replacementOf(
 }
 
 export function replacementMessage(r: Replacement): string {
-  return `This replaces ${r.current} with another Hub, ${r.next} (fingerprint ${r.fingerprint}). Nova closes the current Hub's windows and deletes its data on this computer.`;
+  return CONNECT_TEXT.replacement({ current: r.current, next: r.next, fingerprint: r.fingerprint });
 }

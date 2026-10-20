@@ -10,6 +10,7 @@ import type {
   EnvironmentView,
   SessionHandoffView,
 } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon } from '@nova/ui';
 import { ThreadCloudRun } from '../cloud/ThreadCloudRun.tsx';
 import { DelegationsPane } from '../flagged/DelegationsPane.tsx';
@@ -22,6 +23,20 @@ import { isRemoteKind } from './m6-format.ts';
 import { MergePane } from './MergePane.tsx';
 import '../cloud/cloud.css';
 import './code-m7.css';
+
+export const SESSION_M7_TEXT = defineMessages('code.sessionM7', {
+  bestOfNRemote: 'Best of N needs the session’s folder on the Hub, where its worktrees are.',
+  noRepo: 'This folder is not a Git repository.',
+  handOff: 'Hand off…',
+  bestOfN: 'Best of N…',
+  tab: {
+    attempts: 'Attempts',
+    merges: 'Merges',
+    moves: 'Moves',
+    agents: 'Agents',
+    scripts: 'Scripts',
+  },
+});
 
 export type M7Tab = 'attempts' | 'merges' | 'moves' | 'agents' | 'scripts';
 
@@ -42,8 +57,8 @@ function isM7Tab(tab: string): tab is M7Tab {
 
 /** Why Best of N cannot start for this session, or null. */
 export function attemptsUnavailable(session: CodeSessionView, remote: boolean): string | null {
-  if (remote) return 'Best of N needs the session’s folder on the Hub, where its worktrees are.';
-  if (!session.repo) return 'This folder is not a Git repository.';
+  if (remote) return SESSION_M7_TEXT.bestOfNRemote;
+  if (!session.repo) return SESSION_M7_TEXT.noRepo;
   return null;
 }
 
@@ -82,7 +97,7 @@ export function useSessionM7({
   const actions = (
     <>
       <Button onClick={() => setHandingOff(true)}>
-        <Icon name="forward" /> Hand off…
+        <Icon name="forward" /> {SESSION_M7_TEXT.handOff}
       </Button>
       <Button
         disabled={!!noAttempts}
@@ -92,7 +107,7 @@ export function useSessionM7({
           setStartRequest((n) => n + 1);
         }}
       >
-        <Icon name="split-right" /> Best of N…
+        <Icon name="split-right" /> {SESSION_M7_TEXT.bestOfN}
       </Button>
     </>
   );
@@ -109,7 +124,7 @@ export function useSessionM7({
   const panes: SessionM7['panes'] = [
     {
       id: 'attempts',
-      label: 'Attempts',
+      label: SESSION_M7_TEXT.tab.attempts,
       panel: (
         <AttemptsPane
           session={session}
@@ -124,12 +139,12 @@ export function useSessionM7({
     },
     {
       id: 'merges',
-      label: 'Merges',
+      label: SESSION_M7_TEXT.tab.merges,
       panel: <MergePane session={session} remote={remote} onChanged={onMoved} />,
     },
     {
       id: 'moves',
-      label: 'Moves',
+      label: SESSION_M7_TEXT.tab.moves,
       panel: (
         <HandoffHistory
           sessionId={session.id}
@@ -142,13 +157,13 @@ export function useSessionM7({
   if (agentsOn)
     panes.push({
       id: 'agents',
-      label: 'Agents',
+      label: SESSION_M7_TEXT.tab.agents,
       panel: <DelegationsPane sessionId={session.id} threadId={session.threadId} />,
     });
   if (scriptsOn)
     panes.push({
       id: 'scripts',
-      label: 'Scripts',
+      label: SESSION_M7_TEXT.tab.scripts,
       panel: <ScriptRuns threadId={session.threadId} />,
     });
 

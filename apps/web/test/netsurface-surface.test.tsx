@@ -221,7 +221,8 @@ describe('words and helpers', () => {
       'authKey: Stored in the vault; tags: tag:a, tag:b; acl: Yes; port: 1',
     );
     expect(optionText(null)).toBe('None');
-    expect(transportsText(['lan', 'mesh', 'relay'])).toBe('LAN, Mesh and Relay');
+    // Joined the locale's way (Intl.ListFormat): English uses the serial comma.
+    expect(transportsText(['lan', 'mesh', 'relay'])).toBe('LAN, Mesh, and Relay');
     expect(transportsText([])).toBeNull();
     expect(uptimeText({ checks: 0, ok: 0 })).toBeNull();
   });

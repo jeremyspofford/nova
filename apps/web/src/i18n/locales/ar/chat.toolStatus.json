@@ -1,0 +1,10 @@
+{
+  "awaiting_approval": "بانتظار الموافقة",
+  "cancelled": "أُلغي",
+  "denied": "مرفوض",
+  "error": "فشل",
+  "ok": "تم",
+  "pending": "قيد الانتظار",
+  "running": "قيد التشغيل",
+  "timeout": "انتهت المهلة"
+}

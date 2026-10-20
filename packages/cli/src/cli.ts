@@ -56,8 +56,10 @@ export const USAGE = `nova: Nova from a terminal
   nova keys generate [--key <file>] [--force]
   nova keys show [--key <file>]
       An Ed25519 publisher key, kept 0600 in your config folder (never in a repository).
-  nova dev <folder> [--once] [--trust-hooks]
+  nova dev <folder> [--once] [--trust-hooks] [--accept-publisher-change]
       Load the extension into a running Hub and reload it on every change (NOVA_URL, NOVA_TOKEN).
+      Replacing an installed extension signed by a publisher needs --accept-publisher-change
+      (its secrets and data are cleared).
   nova mcp stdio [--url <url>] [--token-file <file>]
       Nova's MCP server for MCP clients that only speak stdio (NOVA_MCP_URL, NOVA_MCP_TOKEN).
   nova data export|import ...
@@ -147,7 +149,42 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
 
 const TEMPLATE = fileURLToPath(new URL('../../sdk/examples/hello/', import.meta.url));
 const TEMPLATE_ID = 'com.example.hello';
+const TEMPLATE_NAME = 'Hello extension';
 const ID = /^[a-z0-9]+(\.[a-z0-9-]+)+$/;
+/** Template files that are text, and how the extension's name is written inside each. */
+const TEXT_FILES: [RegExp, (name: string) => string][] = [
+  [/\.json$/i, (n) => JSON.stringify(n).slice(1, -1)],
+  [
+    /\.(m?js|cjs|ts)$/i,
+    (n) =>
+      JSON.stringify(n)
+        .slice(1, -1)
+        .replace(/'/g, "\\'")
+        .replace(/`/g, '\\`')
+        .replace(/\$\{/g, '\\${'),
+  ],
+  [
+    /\.(html?|svg|css)$/i,
+    (n) =>
+      n.replace(
+        /[&<>"']/g,
+        (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
+      ),
+  ],
+  [/\.(md|txt)$/i, (n) => n],
+];
+
+/** Every reference to the template's id and name in the copied files, rewritten for this one. */
+function rewriteTemplate(dir: string, id: string, name: string): void {
+  for (const rel of readdirSync(dir, { recursive: true, encoding: 'utf8' })) {
+    const file = join(dir, rel);
+    const kind = TEXT_FILES.find(([re]) => re.test(rel));
+    if (!kind || !statSync(file).isFile()) continue;
+    const before = readFileSync(file, 'utf8');
+    const after = before.split(TEMPLATE_ID).join(id).split(TEMPLATE_NAME).join(kind[1](name));
+    if (after !== before) writeFileSync(file, after);
+  }
+}
 
 function initCommand(argv: string[], io: CliIo): number {
   const [dirArg] = positional(argv, ['id', 'name']);
@@ -158,10 +195,7 @@ function initCommand(argv: string[], io: CliIo): number {
   if (!ID.test(id)) throw new UsageError(`${id} is not a reverse-DNS id like com.example.tool`);
   const name = option(argv, 'name') ?? dirArg.split(/[\\/]/).pop()!;
   cpSync(TEMPLATE, dir, { recursive: true });
-  for (const rel of ['.nova-plugin/plugin.json', '.nova-plugin/extension.json', 'extension.js']) {
-    const file = join(dir, ...rel.split('/'));
-    writeFileSync(file, readFileSync(file, 'utf8').split(TEMPLATE_ID).join(id));
-  }
+  rewriteTemplate(dir, id, name.slice(0, 100));
   const pluginFile = join(dir, '.nova-plugin', 'plugin.json');
   const manifest = JSON.parse(readFileSync(pluginFile, 'utf8')) as Record<string, unknown>;
   manifest.name = name.slice(0, 100);
@@ -294,13 +328,15 @@ const IGNORED = new Set(['.git', 'node_modules']);
 
 async function devCommand(argv: string[], io: CliIo): Promise<number> {
   const [target] = positional(argv, []);
-  if (!target) throw new UsageError('nova dev <folder> [--once] [--trust-hooks]');
+  if (!target)
+    throw new UsageError('nova dev <folder> [--once] [--trust-hooks] [--accept-publisher-change]');
   const root = resolve(io.cwd, target);
   if (!existsSync(root) || !statSync(root).isDirectory())
     throw new Error(`${root} is not an extension folder`);
   const hub = hubFromEnv(io.env);
   const doFetch = io.fetch ?? fetch;
   const trustHooks = flag(argv, 'trust-hooks');
+  const acceptPublisherChange = flag(argv, 'accept-publisher-change');
 
   const load = async (): Promise<boolean> => {
     const v = await validateExtension(root);
@@ -319,6 +355,7 @@ async function devCommand(argv: string[], io: CliIo): Promise<number> {
           bundle: Buffer.from(packed.bytes).toString('base64'),
           confirmSideload: true,
           trustHooks,
+          ...(acceptPublisherChange ? { acceptPublisherChange: true } : {}),
         }),
       });
     } catch (err) {

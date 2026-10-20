@@ -5,6 +5,7 @@
 // Elsewhere it says why it is not offered: no desktop app, no offline copy, or this chat is not in
 // it. Answers are model output: shown as plain text, never as HTML.
 import { useEffect, useId, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type {
   NovaShellBridge,
   ShellLocalChatMessage,
@@ -15,10 +16,42 @@ import { LOCAL_RUNTIME_SCOPE } from '../replica/api.ts';
 import { currentFields, threadTranscript, threadView } from '../replica/views.ts';
 import { useAnnounce } from '../services.tsx';
 import { useOffline } from './context.tsx';
-import { QUEUE_STATUS } from './format.ts';
+import { problemText, queueStatus } from './format.ts';
 import { Chip, CopyText } from './parts.tsx';
 import { answerParent, type QueueItem } from './queue.ts';
 import './offline.css';
+
+export const LOCAL_TEXT = defineMessages('offline.local', {
+  title: 'Answer on this computer',
+  noDesktop:
+    'While the Hub is unreachable, a model on this computer can answer only in the Nova desktop app.',
+  noCopy:
+    "This computer's model cannot answer here: this device keeps no offline copy of your chats to give it.",
+  notInCopy:
+    "This chat is not in this device's offline copy, so this computer's model cannot answer it.",
+  notGranted:
+    "This computer's model can answer only on a device the Hub gave Local models. Change that on this device's page in Devices.",
+  appSilent: 'The desktop app did not answer.',
+  answering: "This computer's model is answering.",
+  ready: 'Answer ready. It is kept on this device and goes to the Hub when it is back.',
+  modelSilent: "This computer's model did not answer.",
+  noAnswer: 'No answer: {message}',
+  looking: 'Looking for models on this computer',
+  serverSilent: "This computer's model server did not answer.",
+  checkAgain: 'Check again',
+  noModels: 'No models were found on this computer.',
+  model: 'Model on this computer',
+  answer: "Answer with this computer's model",
+  allAnswered:
+    'Every message waiting for the Hub has an answer from this computer. Send another to ask more.',
+  sendFirst:
+    "Send a message first. It waits for the Hub, and this computer's model can answer it now.",
+  modelAnswering: '{model} is answering…',
+  answers: 'Answers from this computer',
+  byModel:
+    "{named, select, yes {This computer's model ({model})} other {This computer's model (local)}}",
+  inAnswerTo: 'In answer to “{text}”',
+});
 
 /** The desktop shell's bridge, when the app runs inside it. */
 export function shellBridge(): NovaShellBridge | null {
@@ -58,30 +91,18 @@ export function LocalFallback({ threadId }: { threadId: string | null }) {
   if (!runtime || state.hub !== 'offline' || !threadId) return null;
   const shell = shellBridge();
   const note = (text: string) => (
-    <aside className="of-local" aria-label="Answer on this computer">
+    <aside className="of-local" aria-label={LOCAL_TEXT.title}>
       <p className="muted of-local-note">
         <Icon name="server" /> {text}
       </p>
     </aside>
   );
-  if (!shell)
-    return note(
-      'While the Hub is unreachable, a model on this computer can answer only in the Nova desktop app.',
-    );
+  if (!shell) return note(LOCAL_TEXT.noDesktop);
   const src = runtime.viewSource();
-  if (!src)
-    return note(
-      "This computer's model cannot answer here: this device keeps no offline copy of your chats to give it.",
-    );
-  if (!threadView(src, threadId))
-    return note(
-      "This chat is not in this device's offline copy, so this computer's model cannot answer it.",
-    );
+  if (!src) return note(LOCAL_TEXT.noCopy);
+  if (!threadView(src, threadId)) return note(LOCAL_TEXT.notInCopy);
   // The Hub takes answers from this computer only from a device it gave Local models (FR-128).
-  if (!(state.scopes ?? []).includes(LOCAL_RUNTIME_SCOPE))
-    return note(
-      "This computer's model can answer only on a device the Hub gave Local models. Change that on this device's page in Devices.",
-    );
+  if (!(state.scopes ?? []).includes(LOCAL_RUNTIME_SCOPE)) return note(LOCAL_TEXT.notGranted);
   return <LocalAnswer threadId={threadId} shell={shell} />;
 }
 
@@ -108,8 +129,7 @@ function LocalAnswer({ threadId, shell }: { threadId: string; shell: NovaShellBr
         alive.current &&
         setModels({
           state: 'error',
-          message:
-            err instanceof Error && err.message ? err.message : 'The desktop app did not answer.',
+          message: err instanceof Error && err.message ? err.message : LOCAL_TEXT.appSilent,
         }),
     );
     return () => {
@@ -150,18 +170,17 @@ function LocalAnswer({ threadId, shell }: { threadId: string; shell: NovaShellBr
     }
     setError(null);
     setDraft('');
-    announce("This computer's model is answering.");
+    announce(LOCAL_TEXT.answering);
     try {
       const res = await shell.localRuntime.chat({ model, messages: trim(messages) }, (delta) => {
         if (alive.current) setDraft((d) => (d ?? '') + delta);
       });
       await runtime.addAnswer({ threadId, parentId: question.entityId, text: res.text, model });
-      announce('Answer ready. It is kept on this device and goes to the Hub when it is back.');
+      announce(LOCAL_TEXT.ready);
     } catch (err) {
-      const message =
-        err instanceof Error && err.message ? err.message : "This computer's model did not answer.";
+      const message = err instanceof Error && err.message ? err.message : LOCAL_TEXT.modelSilent;
       setError(message);
-      announce(`No answer: ${message}`);
+      announce(LOCAL_TEXT.noAnswer({ message }));
     } finally {
       if (alive.current) setDraft(null);
     }
@@ -174,26 +193,22 @@ function LocalAnswer({ threadId, shell }: { threadId: string; shell: NovaShellBr
   return (
     <section className="of-local" aria-labelledby={headingId}>
       <h2 id={headingId} className="of-local-title">
-        <Icon name="server" /> Answer on this computer
+        <Icon name="server" /> {LOCAL_TEXT.title}
       </h2>
-      {models.state === 'loading' ? <Spinner label="Looking for models on this computer" /> : null}
+      {models.state === 'loading' ? <Spinner label={LOCAL_TEXT.looking} /> : null}
       {models.state === 'error' || (view && !view.ok) ? (
         <div role="alert" className="ws-error">
           <p>
-            {models.state === 'error'
-              ? models.message
-              : (view?.message ?? "This computer's model server did not answer.")}
+            {models.state === 'error' ? models.message : (view?.message ?? LOCAL_TEXT.serverSilent)}
           </p>
-          <Button onClick={() => setAttempt((a) => a + 1)}>Check again</Button>
+          <Button onClick={() => setAttempt((a) => a + 1)}>{LOCAL_TEXT.checkAgain}</Button>
         </div>
       ) : null}
-      {view?.ok && !view.models.length ? (
-        <p className="muted">No models were found on this computer.</p>
-      ) : null}
+      {view?.ok && !view.models.length ? <p className="muted">{LOCAL_TEXT.noModels}</p> : null}
       {view?.ok && view.models.length ? (
         <div className="row of-local-controls">
           <SelectField
-            label="Model on this computer"
+            label={LOCAL_TEXT.model}
             value={model}
             onChange={setModel}
             options={view.models.map((m) => ({ value: m, label: m }))}
@@ -204,23 +219,21 @@ function LocalAnswer({ threadId, shell }: { threadId: string; shell: NovaShellBr
             disabled={busy || !question || !model}
             onClick={() => void ask()}
           >
-            {busy ? <Spinner /> : null} Answer with this computer&apos;s model
+            {busy ? <Spinner /> : null} {LOCAL_TEXT.answer}
           </Button>
         </div>
       ) : null}
       {view?.ok && view.models.length && !question && !busy ? (
-        <p className="muted">
-          {questions.length
-            ? 'Every message waiting for the Hub has an answer from this computer. Send another to ask more.'
-            : "Send a message first. It waits for the Hub, and this computer's model can answer it now."}
-        </p>
+        <p className="muted">{questions.length ? LOCAL_TEXT.allAnswered : LOCAL_TEXT.sendFirst}</p>
       ) : null}
       {busy ? (
         <div className="of-answer" aria-busy="true">
           <p className="of-answer-head muted">
-            <Spinner /> {model} is answering…
+            <Spinner /> {LOCAL_TEXT.modelAnswering({ model })}
           </p>
-          <p className="of-text">{draft}</p>
+          <p className="of-text" dir="auto">
+            {draft}
+          </p>
         </div>
       ) : null}
       {error ? (
@@ -229,19 +242,27 @@ function LocalAnswer({ threadId, shell }: { threadId: string; shell: NovaShellBr
         </p>
       ) : null}
       {answers.length ? (
-        <ul className="ws-list" aria-label="Answers from this computer">
+        <ul className="ws-list" aria-label={LOCAL_TEXT.answers}>
           {answers.map((a) => (
             <li key={a.id} className="of-answer">
               <div className="of-answer-head">
-                <span className="muted">This computer&apos;s model ({a.model ?? 'local'})</span>
-                <Chip spec={QUEUE_STATUS[a.status]} />
-                {a.text ? <CopyText text={a.text} what="answer" /> : null}
+                <span className="muted">
+                  {LOCAL_TEXT.byModel({ named: a.model ? 'yes' : 'no', model: a.model ?? '' })}
+                </span>
+                <Chip spec={queueStatus(a.status)} />
+                {a.text ? <CopyText text={a.text} kind="answer" /> : null}
               </div>
               {askedBy(a) ? (
-                <p className="of-reason muted">In answer to “{clip(askedBy(a)!)}”</p>
+                <p className="of-reason muted">
+                  {LOCAL_TEXT.inAnswerTo({ text: clip(askedBy(a)!) })}
+                </p>
               ) : null}
-              {a.error && a.status !== 'done' ? <p className="of-reason">{a.error}</p> : null}
-              <p className="of-text">{a.text}</p>
+              {a.status !== 'done' && problemText(a) ? (
+                <p className="of-reason">{problemText(a)}</p>
+              ) : null}
+              <p className="of-text" dir="auto">
+                {a.text}
+              </p>
             </li>
           ))}
         </ul>

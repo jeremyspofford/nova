@@ -8,6 +8,7 @@
 // token and secret made here and shown once after it is created. The last step shows the inbound address to
 // paste into the other service. The body is checked with the Hub's own schema before it is sent.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import {
   createChannelBindingM7Schema,
   type AgentView,
@@ -18,20 +19,22 @@ import {
 } from '@nova/shared';
 import { Button, Dialog, Icon, RadioGroup, SelectField, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { SwitchField } from '../settings/controls.tsx';
 import { useChannelsApi } from './api.ts';
 import {
   APPROVAL_HINT,
   BINDING_STATUS,
+  CHANNEL_TEXT,
   CHOICE_HINT,
   CONFIG_TEXT,
-  CONFIRM_REQUIRED_TEXT,
-  CONFIG_CHOICES,
+  CREDENTIAL_TEXT,
   INBOUND_HINT,
   KIND_HINT,
   KIND_TEXT,
   REF_TEXT,
   absoluteUrl,
+  configChoices,
   errorField,
   isConfirmRequired,
   issueErrors,
@@ -51,8 +54,124 @@ import {
   SigningHelp,
 } from './parts.tsx';
 
-const CONFIRM_REQUIRED_SHARED =
-  'That mailbox trusts the From address. Confirm it above, or choose another mailbox.';
+/** The Add channel dialog's words (FR-016). Names, addresses and the Hub's errors are data. */
+export const ADD_CHANNEL_TEXT = defineMessages('channels.add', {
+  title: 'Add a channel',
+  description:
+    "Message an agent from another app. Each channel keeps its own thread; the agent's memory is shared across them.",
+  form: 'New channel',
+  cancel: 'Cancel',
+  adding: 'Adding…',
+  add: 'Add channel',
+  added: '{name} added.',
+  addFailed: 'Could not add the channel.',
+  confirmShared:
+    'That mailbox trusts the From address. Confirm it above, or choose another mailbox.',
+  kind: 'Kind',
+  unavailable: 'Not available on this Hub.',
+  agent: 'Agent',
+  noAgent: 'No agent (Nova)',
+  agentsUnlisted: 'Agents could not be listed; the channel can be added without one.',
+  agentHint: 'Who answers in this channel.',
+  name: 'Name (optional)',
+  conversationOf: '{kind} conversation',
+  audience: 'Who can read it',
+  private: {
+    label: 'Private',
+    description: 'Only you, like your own direct message with the bot.',
+  },
+  shared: {
+    label: 'Shared',
+    description: 'Other people read it. Replies that use your private details are checked first.',
+  },
+  mainThread: "Use the agent's main thread",
+  mainThreadHint:
+    'Your private channels and the in-app channel share one thread instead of each keeping its own.',
+  unknown: 'Answer people Nova does not know',
+  unknownHint: 'Off: only people listed under People get answers here.',
+  replyUrl: 'Reply URL (optional)',
+  replyUrlHint:
+    'Where replies are posted, signed with the secret. Without it, the agent cannot answer here.',
+  webhookOnce:
+    'A token and a signing secret are made for this channel when you add it and shown once.',
+  finish: {
+    title: 'Finish setting up {name}',
+    description: 'The channel is added. Connect the other side so messages can reach Nova.',
+    done: 'Done',
+    status: 'Status: {status}',
+    inbound: 'Inbound address',
+    connectChecks:
+      '{kind, select, telegram {Connecting checks the bot token and says what went wrong, if anything. Add the people the agent should answer under People.} other {Connecting checks the mailbox and says what went wrong, if anything. Add the people the agent should answer under People.}}',
+    pageAddress:
+      "The address uses this page's address. If Slack, Teams or your service reach the Hub at another address, set the public address on the Channels page.",
+  },
+  app: {
+    slack: 'Slack app',
+    teams: 'Azure bot',
+    credentials: 'Credentials',
+    own: 'Enter this app’s credentials',
+    same: 'Same app as {name}',
+    kept: "Kept in the Hub's secret store and never shown again.",
+    uses: "This channel uses that app's stored credentials.",
+    botToken: 'Bot token',
+    signingSecret: 'Signing secret',
+    botUserId: 'Bot user ID (optional)',
+    teamId: 'Workspace ID (optional)',
+    appId: 'App ID',
+    appPassword: 'App password',
+  },
+  telegram: {
+    legend: 'Telegram bot',
+    bot: 'Bot',
+    own: 'Enter this bot’s token',
+    same: 'Same bot as {name}',
+    token: 'Bot token',
+    tokenHint: 'From @BotFather. Kept in the Hub’s secret store and never shown again.',
+    mode: 'How messages arrive',
+    needsHttps: 'Needs an https public address, set on the Channels page.',
+    uses: 'This channel uses that bot’s stored token and settings.',
+  },
+  mail: {
+    legend: 'Mailbox',
+    mailbox: 'Mailbox',
+    own: 'Enter a mailbox',
+    same: 'Same mailbox as {name}',
+    intro:
+      'The agent reads new mail from this person in the mailbox and answers from it. Mail already there is never read.',
+    address: 'Mailbox address',
+    username: 'Login name (optional)',
+    password: 'Password',
+    passwordHint:
+      'An app password if your provider has them. Kept in the Hub’s secret store and never shown again.',
+    imapHost: 'IMAP server',
+    imapPort: 'IMAP port (optional)',
+    imapSecurity: 'IMAP security',
+    smtpHost: 'SMTP server',
+    smtpPort: 'SMTP port (optional)',
+    smtpSecurity: 'SMTP security',
+    plain: 'Without TLS only works for a server on this machine. Choose TLS or STARTTLS.',
+    more: 'More mailbox settings',
+    folder: 'Folder (optional)',
+    mode: 'Checking for mail',
+    senderCheck: 'Who counts as a known sender',
+    authservId: 'Authentication-Results name (optional)',
+    uses: 'This channel uses that mailbox’s stored password and settings.',
+  },
+});
+
+/** Examples shown in empty fields: protocol values and addresses, not translated. */
+const EXAMPLE = {
+  url: 'https://',
+  slackToken: 'xoxb-…',
+  telegramToken: '123456789:AA…',
+  mailbox: 'agent@example.com',
+  imapHost: 'imap.example.com',
+  imapPort: '993',
+  smtpHost: 'smtp.example.com',
+  smtpPort: '465',
+  folder: 'INBOX',
+  authservId: 'mx.google.com',
+} as const;
 
 interface Form {
   kind: ChannelKindM7 | null;
@@ -179,12 +298,9 @@ function mailboxConfig(f: Form): Record<string, string> {
 export function mailOAuthErrors(f: Form): Record<string, string> {
   if (f.kind !== 'email' || f.shareWith || f.auth !== 'oauth') return {};
   const out: Record<string, string> = {};
-  if (!f.oauthAuthUrl.trim())
-    out.oauthAuthUrl = MAIL_OAUTH_TEXT.required(MAIL_OAUTH_TEXT.authUrlName);
-  if (!f.oauthTokenUrl.trim())
-    out.oauthTokenUrl = MAIL_OAUTH_TEXT.required(MAIL_OAUTH_TEXT.tokenUrlName);
-  if (!f.oauthClientId.trim())
-    out.oauthClientId = MAIL_OAUTH_TEXT.required(MAIL_OAUTH_TEXT.clientIdName);
+  if (!f.oauthAuthUrl.trim()) out.oauthAuthUrl = MAIL_OAUTH_TEXT.needAuthUrl;
+  if (!f.oauthTokenUrl.trim()) out.oauthTokenUrl = MAIL_OAUTH_TEXT.needTokenUrl;
+  if (!f.oauthClientId.trim()) out.oauthClientId = MAIL_OAUTH_TEXT.needClientId;
   return out;
 }
 
@@ -356,7 +472,7 @@ function AddChannel({
   const submit = async () => {
     if (!kind || busy) return;
     if (sharedNone && !form.confirmNone) {
-      setErrors({ confirmSenderCheckNone: CONFIRM_REQUIRED_SHARED });
+      setErrors({ confirmSenderCheckNone: ADD_CHANNEL_TEXT.confirmShared });
       return;
     }
     const missing = mailOAuthErrors(form);
@@ -378,7 +494,7 @@ function AddChannel({
       const b = await api.createChannel(parsed.data);
       onCreated(b);
       if (kind === 'inapp') {
-        toast.show(`${b.label} added.`, { tone: 'success' });
+        toast.show(ADD_CHANNEL_TEXT.added({ name: b.label }), { tone: 'success' });
         onClose();
         return;
       }
@@ -386,8 +502,8 @@ function AddChannel({
     } catch (err) {
       const field = errorField(err);
       const message = isConfirmRequired(err)
-        ? CONFIRM_REQUIRED_TEXT
-        : errorMessage(err, 'Could not add the channel.');
+        ? CHANNEL_TEXT.confirmRequired
+        : errorMessage(err, ADD_CHANNEL_TEXT.addFailed);
       if (field) setErrors(formErrors({ [field]: message }));
       else setFailure(message);
     } finally {
@@ -395,28 +511,30 @@ function AddChannel({
     }
   };
 
+  const S = ADD_CHANNEL_TEXT;
   if (created) {
     const b = created.binding;
+    const F = S.finish;
     return (
       <Dialog
         open
         className="ch-dialog"
-        title={`Finish setting up ${b.label}`}
-        description="The channel is added. Connect the other side so messages can reach Nova."
+        title={F.title({ name: b.label })}
+        description={F.description}
         onClose={onClose}
         footer={
           <Button variant="primary" onClick={onClose}>
-            Done
+            {F.done}
           </Button>
         }
       >
         <div className="stack">
           <p className="ws-flush">
-            Status: <Chip spec={BINDING_STATUS[b.status]} />
+            {rich(F.status, { status: <Chip spec={BINDING_STATUS[b.status]} /> })}
           </p>
           {b.inboundPath ? (
             <CopyValue
-              label="Inbound address"
+              label={F.inbound}
               value={absoluteUrl(b.inboundPath, publicUrl)}
               hint={INBOUND_HINT[b.kind]}
             />
@@ -427,10 +545,7 @@ function AddChannel({
             </p>
           ) : null}
           {b.kind === 'telegram' || b.kind === 'email' ? (
-            <p className="muted ws-flush">
-              Connecting checks the {b.kind === 'telegram' ? 'bot token' : 'mailbox'} and says what
-              went wrong, if anything. Add the people the agent should answer under People.
-            </p>
+            <p className="muted ws-flush">{F.connectChecks({ kind: b.kind })}</p>
           ) : null}
           {b.kind === 'email' && b.oauth ? (
             <MailOAuthPanel
@@ -445,26 +560,21 @@ function AddChannel({
             <>
               <SecretsOnce
                 items={[
-                  { label: 'Bearer token', value: created.secrets.token },
-                  { label: 'Signing secret', value: created.secrets.secret },
+                  { label: CREDENTIAL_TEXT.token, value: created.secrets.token },
+                  { label: CREDENTIAL_TEXT.secret, value: created.secrets.secret },
                 ]}
               />
               <SigningHelp />
             </>
           ) : null}
-          {publicUrl ? null : (
-            <p className="muted ws-flush">
-              The address uses this page&apos;s address. If Slack, Teams or your service reach the
-              Hub at another address, set the public address on the Channels page.
-            </p>
-          )}
+          {publicUrl ? null : <p className="muted ws-flush">{F.pageAddress}</p>}
         </div>
       </Dialog>
     );
   }
 
   const agentOptions = [
-    { value: '', label: 'No agent (Nova)' },
+    { value: '', label: S.noAgent },
     ...(agents ?? []).map((a) => ({ value: a.id, label: a.name })),
   ];
   const ref = kind ? REF_TEXT[kind] : null;
@@ -473,21 +583,21 @@ function AddChannel({
     <Dialog
       open
       className="ch-dialog"
-      title="Add a channel"
-      description="Message an agent from another app. Each channel keeps its own thread; the agent's memory is shared across them."
+      title={S.title}
+      description={S.description}
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.cancel}</Button>
           <Button variant="primary" disabled={!kind || busy} onClick={() => void submit()}>
-            {busy ? 'Adding…' : 'Add channel'}
+            {busy ? S.adding : S.add}
           </Button>
         </>
       }
     >
       <form
         className="stack"
-        aria-label="New channel"
+        aria-label={S.form}
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
@@ -495,7 +605,7 @@ function AddChannel({
         }}
       >
         <fieldset className="nv-radios ch-kinds">
-          <legend className="nv-field-label">Kind</legend>
+          <legend className="nv-field-label">{S.kind}</legend>
           {adapters.map((a) => (
             <label key={a.kind} className="nv-radio" data-disabled={!a.available || undefined}>
               <input
@@ -519,11 +629,7 @@ function AddChannel({
               <span className="nv-radio-text">
                 <span id={`${id}-kind-${a.kind}-label`}>{KIND_TEXT[a.kind]}</span>
                 <span id={`${id}-kind-${a.kind}`} className="nv-field-hint">
-                  {a.available
-                    ? KIND_HINT[a.kind]
-                    : a.detail
-                      ? sentence(a.detail)
-                      : 'Not available on this Hub.'}
+                  {a.available ? KIND_HINT[a.kind] : a.detail ? sentence(a.detail) : S.unavailable}
                 </span>
               </span>
             </label>
@@ -533,22 +639,20 @@ function AddChannel({
         {kind ? (
           <>
             <SelectField
-              label="Agent"
+              label={S.agent}
               value={form.agentId}
               options={agentOptions}
-              hint={
-                agents === null
-                  ? 'Agents could not be listed; the channel can be added without one.'
-                  : 'Who answers in this channel.'
-              }
+              hint={agents === null ? S.agentsUnlisted : S.agentHint}
               error={errors.agentId}
               onChange={(v) => set({ agentId: v })}
             />
             <TextField
-              label="Name (optional)"
+              label={S.name}
               value={form.label}
               maxLength={200}
-              placeholder={kind === 'inapp' ? 'In-app' : `${KIND_TEXT[kind]} conversation`}
+              placeholder={
+                kind === 'inapp' ? KIND_TEXT.inapp : S.conversationOf({ kind: KIND_TEXT[kind] })
+              }
               error={errors.label}
               onChange={(e) => set({ label: e.target.value })}
             />
@@ -565,36 +669,28 @@ function AddChannel({
             ) : null}
             {kind !== 'inapp' ? (
               <RadioGroup
-                legend="Who can read it"
+                legend={S.audience}
                 name={`${id}-audience`}
                 value={form.audience}
                 onChange={(v) => set({ audience: v as ChannelAudience })}
-                options={[
-                  {
-                    value: 'private',
-                    label: 'Private',
-                    description: 'Only you, like your own direct message with the bot.',
-                  },
-                  {
-                    value: 'shared',
-                    label: 'Shared',
-                    description:
-                      'Other people read it. Replies that use your private details are checked first.',
-                  },
-                ]}
+                options={(['private', 'shared'] as const).map((v) => ({
+                  value: v,
+                  label: S[v].label,
+                  description: S[v].description,
+                }))}
               />
             ) : null}
             {kind === 'inapp' || form.audience === 'private' ? (
               <SwitchField
-                label="Use the agent's main thread"
-                description="Your private channels and the in-app channel share one thread instead of each keeping its own."
+                label={S.mainThread}
+                description={S.mainThreadHint}
                 checked={form.sharePrimaryThread}
                 onChange={(v) => set({ sharePrimaryThread: v })}
               />
             ) : (
               <SwitchField
-                label="Answer people Nova does not know"
-                description="Off: only people listed under People get answers here."
+                label={S.unknown}
+                description={S.unknownHint}
                 checked={form.allowUnknown}
                 onChange={(v) => set({ allowUnknown: v })}
               />
@@ -629,19 +725,18 @@ function AddChannel({
             {kind === 'webhook' ? (
               <>
                 <TextField
-                  label="Reply URL (optional)"
+                  label={S.replyUrl}
                   type="url"
                   value={form.callbackUrl}
                   spellCheck={false}
                   autoComplete="off"
-                  placeholder="https://"
-                  hint="Where replies are posted, signed with the secret. Without it, the agent cannot answer here."
+                  placeholder={EXAMPLE.url}
+                  hint={S.replyUrlHint}
                   error={errors.callbackUrl}
                   onChange={(e) => set({ callbackUrl: e.target.value })}
                 />
                 <p className="muted ws-flush">
-                  <Icon name="shield" /> A token and a signing secret are made for this channel when
-                  you add it and shown once.
+                  <Icon name="shield" /> {S.webhookOnce}
                 </p>
               </>
             ) : null}
@@ -671,43 +766,40 @@ function CredentialsFields({
   set: (patch: Partial<Form>) => void;
 }) {
   const own = form.shareWith === '';
+  const A = ADD_CHANNEL_TEXT.app;
   return (
     <fieldset className="ws-fieldset">
-      <legend>{kind === 'slack' ? 'Slack app' : 'Azure bot'}</legend>
+      <legend>{A[kind]}</legend>
       {apps.length ? (
         <SelectField
-          label="Credentials"
+          label={A.credentials}
           value={form.shareWith}
           onChange={(v) => set({ shareWith: v })}
           error={errors.shareCredentialsWith}
           options={[
-            { value: '', label: 'Enter this app’s credentials' },
-            ...apps.map((b) => ({ value: b.id, label: `Same app as ${b.label}` })),
+            { value: '', label: A.own },
+            ...apps.map((b) => ({ value: b.id, label: A.same({ name: b.label }) })),
           ]}
         />
       ) : null}
       {own ? (
-        <p className="nv-field-hint ws-flush">
-          Kept in the Hub&apos;s secret store and never shown again.
-        </p>
+        <p className="nv-field-hint ws-flush">{A.kept}</p>
       ) : (
-        <p className="nv-field-hint ws-flush">
-          This channel uses that app&apos;s stored credentials.
-        </p>
+        <p className="nv-field-hint ws-flush">{A.uses}</p>
       )}
       {own && kind === 'slack' ? (
         <>
           <TextField
-            label="Bot token"
+            label={A.botToken}
             type="password"
             autoComplete="new-password"
-            placeholder="xoxb-…"
+            placeholder={EXAMPLE.slackToken}
             value={form.botToken}
             error={errors.botToken ?? errors.credentials}
             onChange={(e) => set({ botToken: e.target.value })}
           />
           <TextField
-            label="Signing secret"
+            label={A.signingSecret}
             type="password"
             autoComplete="new-password"
             value={form.signingSecret}
@@ -715,16 +807,16 @@ function CredentialsFields({
             onChange={(e) => set({ signingSecret: e.target.value })}
           />
           <TextField
-            label="Bot user ID (optional)"
+            label={A.botUserId}
             value={form.botUserId}
             spellCheck={false}
             autoComplete="off"
-            hint="Lets Nova tell when the bot is mentioned."
+            hint={CONFIG_TEXT.botUserId?.hint}
             error={errors.botUserId}
             onChange={(e) => set({ botUserId: e.target.value })}
           />
           <TextField
-            label="Workspace ID (optional)"
+            label={A.teamId}
             value={form.teamId}
             spellCheck={false}
             autoComplete="off"
@@ -736,16 +828,16 @@ function CredentialsFields({
       {own && kind === 'teams' ? (
         <>
           <TextField
-            label="App ID"
+            label={A.appId}
             value={form.appId}
             spellCheck={false}
             autoComplete="off"
-            hint="The Microsoft app ID of your Azure bot."
+            hint={CONFIG_TEXT.appId?.hint}
             error={errors.appId ?? errors.config}
             onChange={(e) => set({ appId: e.target.value })}
           />
           <TextField
-            label="App password"
+            label={A.appPassword}
             type="password"
             autoComplete="new-password"
             value={form.appPassword}
@@ -775,36 +867,37 @@ function TelegramFields({
   const id = useId();
   const own = form.shareWith === '';
   const httpsAddress = publicUrl?.startsWith('https://') ?? false;
-  const modes = CONFIG_CHOICES.telegram?.mode ?? [];
+  const modes = configChoices().telegram?.mode ?? [];
+  const T = ADD_CHANNEL_TEXT.telegram;
   return (
     <fieldset className="ws-fieldset">
-      <legend>Telegram bot</legend>
+      <legend>{T.legend}</legend>
       {apps.length ? (
         <SelectField
-          label="Bot"
+          label={T.bot}
           value={form.shareWith}
           onChange={(v) => set({ shareWith: v })}
           error={errors.shareCredentialsWith}
           options={[
-            { value: '', label: 'Enter this bot’s token' },
-            ...apps.map((b) => ({ value: b.id, label: `Same bot as ${b.label}` })),
+            { value: '', label: T.own },
+            ...apps.map((b) => ({ value: b.id, label: T.same({ name: b.label }) })),
           ]}
         />
       ) : null}
       {own ? (
         <>
           <TextField
-            label="Bot token"
+            label={T.token}
             type="password"
             autoComplete="new-password"
-            placeholder="123456789:AA…"
+            placeholder={EXAMPLE.telegramToken}
             value={form.botToken}
-            hint="From @BotFather. Kept in the Hub’s secret store and never shown again."
+            hint={T.tokenHint}
             error={errors.botToken ?? errors.credentials}
             onChange={(e) => set({ botToken: e.target.value })}
           />
           <fieldset className="nv-radios">
-            <legend className="nv-field-label">How messages arrive</legend>
+            <legend className="nv-field-label">{T.mode}</legend>
             {modes.map((m) => {
               const disabled = m.value === 'webhook' && !httpsAddress;
               return (
@@ -823,7 +916,7 @@ function TelegramFields({
                     <span className="nv-field-hint">{m.hint}</span>
                     {disabled ? (
                       <span id={`${id}-mode-why`} className="nv-field-hint">
-                        Needs an https public address, set on the Channels page.
+                        {T.needsHttps}
                       </span>
                     ) : null}
                   </span>
@@ -833,9 +926,7 @@ function TelegramFields({
           </fieldset>
         </>
       ) : (
-        <p className="nv-field-hint ws-flush">
-          This channel uses that bot’s stored token and settings.
-        </p>
+        <p className="nv-field-hint ws-flush">{T.uses}</p>
       )}
     </fieldset>
   );
@@ -867,11 +958,10 @@ function MailboxFields({
       {errors.confirmSenderCheckNone}
     </p>
   ) : null;
-  const choices = CONFIG_CHOICES.email ?? {};
+  const choices = configChoices().email ?? {};
+  const M = ADD_CHANNEL_TEXT.mail;
   const plain = (host: string, sec: string) =>
-    sec === 'none' && host.trim() !== '' && !plainMailAllowed(host)
-      ? 'Without TLS only works for a server on this machine. Choose TLS or STARTTLS.'
-      : undefined;
+    sec === 'none' && host.trim() !== '' && !plainMailAllowed(host) ? M.plain : undefined;
   const select = (key: 'imapSecurity' | 'smtpSecurity' | 'mode' | 'senderCheck', label: string) => (
     <SelectField
       label={label}
@@ -892,10 +982,10 @@ function MailboxFields({
   );
   return (
     <fieldset className="ws-fieldset">
-      <legend>Mailbox</legend>
+      <legend>{M.legend}</legend>
       {apps.length ? (
         <SelectField
-          label="Mailbox"
+          label={M.mailbox}
           value={form.shareWith}
           onChange={(v) => {
             setAsking(false);
@@ -903,33 +993,30 @@ function MailboxFields({
           }}
           error={errors.shareCredentialsWith}
           options={[
-            { value: '', label: 'Enter a mailbox' },
-            ...apps.map((b) => ({ value: b.id, label: `Same mailbox as ${b.label}` })),
+            { value: '', label: M.own },
+            ...apps.map((b) => ({ value: b.id, label: M.same({ name: b.label }) })),
           ]}
         />
       ) : null}
       {own ? (
         <div className="stack">
-          <p className="nv-field-hint ws-flush">
-            The agent reads new mail from this person in the mailbox and answers from it. Mail
-            already there is never read.
-          </p>
+          <p className="nv-field-hint ws-flush">{M.intro}</p>
           <TextField
-            label="Mailbox address"
+            label={M.address}
             type="email"
             autoComplete="off"
             spellCheck={false}
             value={form.address}
-            placeholder="agent@example.com"
+            placeholder={EXAMPLE.mailbox}
             error={errors.address}
             onChange={(e) => set({ address: e.target.value })}
           />
           <TextField
-            label="Login name (optional)"
+            label={M.username}
             autoComplete="off"
             spellCheck={false}
             value={form.username}
-            hint="Leave empty to sign in with the mailbox address."
+            hint={CONFIG_TEXT.username?.hint}
             error={errors.username}
             onChange={(e) => set({ username: e.target.value })}
           />
@@ -955,52 +1042,52 @@ function MailboxFields({
             <MailOAuthFields form={form} errors={errors} set={set} />
           ) : (
             <TextField
-              label="Password"
+              label={M.password}
               type="password"
               autoComplete="new-password"
               value={form.password}
-              hint="An app password if your provider has them. Kept in the Hub’s secret store and never shown again."
+              hint={M.passwordHint}
               error={errors.password ?? errors.credentials}
               onChange={(e) => set({ password: e.target.value })}
             />
           )}
           <div className="ch-mail-grid">
             <TextField
-              label="IMAP server"
+              label={M.imapHost}
               spellCheck={false}
               autoComplete="off"
               value={form.imapHost}
-              placeholder="imap.example.com"
+              placeholder={EXAMPLE.imapHost}
               error={errors.imapHost}
               onChange={(e) => set({ imapHost: e.target.value })}
             />
             <TextField
-              label="IMAP port (optional)"
+              label={M.imapPort}
               inputMode="numeric"
               value={form.imapPort}
-              placeholder="993"
+              placeholder={EXAMPLE.imapPort}
               error={errors.imapPort}
               onChange={(e) => set({ imapPort: e.target.value })}
             />
-            {select('imapSecurity', 'IMAP security')}
+            {select('imapSecurity', M.imapSecurity)}
             <TextField
-              label="SMTP server"
+              label={M.smtpHost}
               spellCheck={false}
               autoComplete="off"
               value={form.smtpHost}
-              placeholder="smtp.example.com"
+              placeholder={EXAMPLE.smtpHost}
               error={errors.smtpHost}
               onChange={(e) => set({ smtpHost: e.target.value })}
             />
             <TextField
-              label="SMTP port (optional)"
+              label={M.smtpPort}
               inputMode="numeric"
               value={form.smtpPort}
-              placeholder="465"
+              placeholder={EXAMPLE.smtpPort}
               error={errors.smtpPort}
               onChange={(e) => set({ smtpPort: e.target.value })}
             />
-            {select('smtpSecurity', 'SMTP security')}
+            {select('smtpSecurity', M.smtpSecurity)}
           </div>
           {hint ? <p className="nv-field-hint ws-flush">{hint}</p> : null}
           {(plain(form.imapHost, form.imapSecurity) ?? plain(form.smtpHost, form.smtpSecurity)) ? (
@@ -1009,18 +1096,18 @@ function MailboxFields({
             </p>
           ) : null}
           <details className="ws-advanced">
-            <summary>More mailbox settings</summary>
+            <summary>{M.more}</summary>
             <div className="stack">
               <TextField
-                label="Folder (optional)"
+                label={M.folder}
                 spellCheck={false}
                 value={form.folder}
-                placeholder="INBOX"
+                placeholder={EXAMPLE.folder}
                 error={errors.folder}
                 onChange={(e) => set({ folder: e.target.value })}
               />
-              {select('mode', 'Checking for mail')}
-              {select('senderCheck', 'Who counts as a known sender')}
+              {select('mode', M.mode)}
+              {select('senderCheck', M.senderCheck)}
               {asking ? (
                 <SenderCheckOffConfirm
                   onCancel={() => setAsking(false)}
@@ -1032,11 +1119,11 @@ function MailboxFields({
               ) : null}
               {form.senderCheck === 'none' ? <SenderCheckOffNotice /> : null}
               <TextField
-                label="Authentication-Results name (optional)"
+                label={M.authservId}
                 spellCheck={false}
                 autoComplete="off"
                 value={form.authservId}
-                placeholder="mx.google.com"
+                placeholder={EXAMPLE.authservId}
                 hint={CONFIG_TEXT.authservId?.hint}
                 error={errors.authservId}
                 onChange={(e) => set({ authservId: e.target.value })}
@@ -1052,9 +1139,7 @@ function MailboxFields({
         </div>
       ) : (
         <div className="stack">
-          <p className="nv-field-hint ws-flush">
-            This channel uses that mailbox’s stored password and settings.
-          </p>
+          <p className="nv-field-hint ws-flush">{M.uses}</p>
           {sharedNone && !form.confirmNone ? (
             <SenderCheckOffConfirm
               onCancel={() => set({ shareWith: '', confirmNone: false })}
@@ -1096,8 +1181,8 @@ function MailOAuthFields({
   );
   return (
     <div className="stack">
-      {field('oauthAuthUrl', { type: 'url', placeholder: 'https://' })}
-      {field('oauthTokenUrl', { type: 'url', placeholder: 'https://' })}
+      {field('oauthAuthUrl', { type: 'url', placeholder: EXAMPLE.url })}
+      {field('oauthTokenUrl', { type: 'url', placeholder: EXAMPLE.url })}
       {field('oauthClientId')}
       {field('oauthScopes')}
       <TextField
@@ -1109,7 +1194,7 @@ function MailOAuthFields({
         error={errors.oauthClientSecret}
         onChange={(e) => set({ oauthClientSecret: e.target.value })}
       />
-      {field('oauthRevokeUrl', { type: 'url', placeholder: 'https://' })}
+      {field('oauthRevokeUrl', { type: 'url', placeholder: EXAMPLE.url })}
       <CopyValue
         label={MAIL_OAUTH_TEXT.redirectLabel}
         value={mailOAuthRedirectUri()}

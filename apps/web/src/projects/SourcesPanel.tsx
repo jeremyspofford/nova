@@ -3,21 +3,63 @@
 // waiting or indexing, the list refreshes every 2 s.
 import { useEffect, useRef, useState } from 'react';
 import type { SourceStatus, SourceView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, Icon, Spinner, TextField, useToast, type IconName } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { acceptedMime, formatBytes, readAsBase64 } from '../chat/attachments.ts';
 import { useServices } from '../services.tsx';
-import { plural, useInterval } from '../settings/common.ts';
+import { useInterval } from '../settings/common.ts';
 
 /** docs/03 FR-040 and the M2 API: at most 20 MB per source. */
 export const SOURCE_MAX_BYTES = 20 * 1024 * 1024;
 export const SOURCE_POLL_MS = 2000;
 
-const STATUS: Record<SourceStatus, { text: string; icon: IconName | null; tone: string }> = {
-  pending: { text: 'Waiting to index', icon: null, tone: 'running' },
-  indexing: { text: 'Indexing', icon: null, tone: 'running' },
-  ready: { text: 'Ready', icon: 'check', tone: 'ready' },
-  error: { text: 'Could not index', icon: 'alert', tone: 'blocked' },
+export const SOURCES_TEXT = defineMessages('projects.sources', {
+  status: {
+    pending: 'Waiting to index',
+    indexing: 'Indexing',
+    ready: 'Ready',
+    error: 'Could not index',
+  },
+  loadFailed: 'Could not load sources.',
+  tooLarge: '{name} is {size}; a source can be at most {limit}.',
+  addFailed: 'Could not add {name}: {reason}',
+  added:
+    '{n, plural, one {# source added. Indexing has started.} other {# sources added. Indexing has started.}}',
+  reindexFailed: 'Could not re-index {name}: {reason}',
+  removed: '{name} removed.',
+  removeFailed: 'Could not remove {name}: {reason}',
+  title: 'Sources',
+  intro:
+    'Files and notes that chats in this project can search and cite. Text, Markdown, CSV, JSON and code files can be indexed now; other types are kept but not searched yet. Up to {limit} each.',
+  dropHere: 'Drop files here, or',
+  upload: 'Upload files',
+  paste: 'Paste text',
+  uploadLabel: 'Upload source files',
+  uploading: '{n, plural, one {Uploading # file} other {Uploading # files}}',
+  textAdded: '{name} added. Indexing has started.',
+  retry: 'Retry',
+  loading: 'Loading sources',
+  none: 'No sources yet.',
+  chunks: '{size} · {n, plural, one {# chunk} other {# chunks}}',
+  reindex: 'Re-index',
+  remove: 'Remove',
+  removeTitle: 'Remove this source?',
+  removeBody: '{name} is removed from the project. Chats stop using it right away.',
+  cancel: 'Cancel',
+  textFailed: 'Could not add the text.',
+  pasteForm: 'Paste text as a source',
+  name: 'Source name',
+  namePlaceholder: 'Meeting notes',
+  text: 'Text',
+  add: 'Add source',
+});
+
+const STATUS: Record<SourceStatus, { icon: IconName | null; tone: string }> = {
+  pending: { icon: null, tone: 'running' },
+  indexing: { icon: null, tone: 'running' },
+  ready: { icon: 'check', tone: 'ready' },
+  error: { icon: 'alert', tone: 'blocked' },
 };
 
 function SourceStatusChip({ source }: { source: SourceView }) {
@@ -25,7 +67,7 @@ function SourceStatusChip({ source }: { source: SourceView }) {
   return (
     <span className="nv-chip" data-status={s.tone}>
       {s.icon ? <Icon name={s.icon} /> : <Spinner />}
-      <span>{s.text}</span>
+      <span>{SOURCES_TEXT.status[source.status]}</span>
     </span>
   );
 }
@@ -58,7 +100,7 @@ export function SourcesPanel({
         setSources(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load sources.')),
+      (err: unknown) => alive && setError(errorMessage(err, SOURCES_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -77,9 +119,12 @@ export function SourcesPanel({
   const addFiles = async (files: readonly File[]) => {
     const tooBig = files.filter((f) => f.size > SOURCE_MAX_BYTES);
     setRejected(
-      tooBig.map(
-        (f) =>
-          `${f.name} is ${formatBytes(f.size)}; a source can be at most ${formatBytes(SOURCE_MAX_BYTES)}.`,
+      tooBig.map((f) =>
+        SOURCES_TEXT.tooLarge({
+          name: f.name,
+          size: formatBytes(f.size),
+          limit: formatBytes(SOURCE_MAX_BYTES),
+        }),
       ),
     );
     const ok = files.filter((f) => f.size <= SOURCE_MAX_BYTES);
@@ -93,13 +138,15 @@ export function SourcesPanel({
         upsert(await api.addSource(projectId, { kind: 'file', name: file.name, mime, data }));
         added++;
       } catch (err) {
-        toast.show(`Could not add ${file.name}: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(SOURCES_TEXT.addFailed({ name: file.name, reason: errorMessage(err) }), {
+          tone: 'error',
+        });
       } finally {
         setUploading((n) => n - 1);
       }
     }
     if (added) {
-      toast.show(`${plural(added, 'source')} added. Indexing has started.`, { tone: 'success' });
+      toast.show(SOURCES_TEXT.added({ n: added }), { tone: 'success' });
       onChanged?.();
     }
   };
@@ -108,7 +155,9 @@ export function SourcesPanel({
     try {
       upsert(await api.reindexSource(s.id));
     } catch (err) {
-      toast.show(`Could not re-index ${s.name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(SOURCES_TEXT.reindexFailed({ name: s.name, reason: errorMessage(err) }), {
+        tone: 'error',
+      });
     }
   };
 
@@ -117,10 +166,12 @@ export function SourcesPanel({
     try {
       await api.deleteSource(s.id);
       setSources((list) => list?.filter((x) => x.id !== s.id) ?? null);
-      toast.show(`${s.name} removed.`, { tone: 'success' });
+      toast.show(SOURCES_TEXT.removed({ name: s.name }), { tone: 'success' });
       onChanged?.();
     } catch (err) {
-      toast.show(`Could not remove ${s.name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(SOURCES_TEXT.removeFailed({ name: s.name, reason: errorMessage(err) }), {
+        tone: 'error',
+      });
     }
   };
 
@@ -145,33 +196,29 @@ export function SourcesPanel({
         if (files.length) void addFiles(files);
       }}
     >
-      <h2 id="project-sources">Sources</h2>
-      <p className="muted">
-        Files and notes that chats in this project can search and cite. Text, Markdown, CSV, JSON
-        and code files can be indexed now; other types are kept but not searched yet. Up to{' '}
-        {formatBytes(SOURCE_MAX_BYTES)} each.
-      </p>
+      <h2 id="project-sources">{SOURCES_TEXT.title}</h2>
+      <p className="muted">{SOURCES_TEXT.intro({ limit: formatBytes(SOURCE_MAX_BYTES) })}</p>
       <div className="ws-dropzone">
-        <span className="muted">Drop files here, or</span>
+        <span className="muted">{SOURCES_TEXT.dropHere}</span>
         <Button onClick={() => fileInput.current?.click()}>
-          <Icon name="attach" /> Upload files
+          <Icon name="attach" /> {SOURCES_TEXT.upload}
         </Button>
         <Button onClick={() => setPasting(true)} disabled={pasting}>
-          <Icon name="file" /> Paste text
+          <Icon name="file" /> {SOURCES_TEXT.paste}
         </Button>
         <input
           ref={fileInput}
           type="file"
           multiple
           hidden
-          aria-label="Upload source files"
+          aria-label={SOURCES_TEXT.uploadLabel}
           onChange={(e) => {
             const files = [...(e.target.files ?? [])];
             e.target.value = '';
             if (files.length) void addFiles(files);
           }}
         />
-        {uploading > 0 ? <Spinner label={`Uploading ${plural(uploading, 'file')}`} /> : null}
+        {uploading > 0 ? <Spinner label={SOURCES_TEXT.uploading({ n: uploading })} /> : null}
       </div>
       {rejected.length ? (
         <ul className="ws-rejections" role="alert">
@@ -187,7 +234,7 @@ export function SourcesPanel({
             setPasting(false);
             if (s) {
               upsert(s);
-              toast.show(`${s.name} added. Indexing has started.`, { tone: 'success' });
+              toast.show(SOURCES_TEXT.textAdded({ name: s.name }), { tone: 'success' });
               onChanged?.();
             }
           }}
@@ -196,20 +243,23 @@ export function SourcesPanel({
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{SOURCES_TEXT.retry}</Button>
         </div>
       ) : null}
-      {sources === null && !error ? <Spinner label="Loading sources" /> : null}
-      {sources?.length === 0 ? <p className="muted">No sources yet.</p> : null}
+      {sources === null && !error ? <Spinner label={SOURCES_TEXT.loading} /> : null}
+      {sources?.length === 0 ? <p className="muted">{SOURCES_TEXT.none}</p> : null}
       {sources?.length ? (
-        <ul className="ws-list" aria-label="Sources">
+        <ul className="ws-list" aria-label={SOURCES_TEXT.title}>
           {sources.map((s) => (
             <li key={s.id} className="ws-list-row ws-source" aria-label={s.name}>
               <div className="ws-source-main">
-                <strong className="ws-source-name">{s.name}</strong>
+                <strong className="ws-source-name" dir="auto">
+                  {s.name}
+                </strong>
                 <span className="muted ws-row-meta">
-                  {formatBytes(s.size)}
-                  {s.status === 'ready' ? ` · ${plural(s.chunkCount, 'chunk')}` : ''}
+                  {s.status === 'ready'
+                    ? SOURCES_TEXT.chunks({ size: formatBytes(s.size), n: s.chunkCount })
+                    : formatBytes(s.size)}
                 </span>
                 <SourceStatusChip source={s} />
                 {s.status === 'error' && s.error ? (
@@ -222,10 +272,10 @@ export function SourcesPanel({
                   onClick={() => void reindex(s)}
                   disabled={s.status === 'pending' || s.status === 'indexing'}
                 >
-                  Re-index
+                  {SOURCES_TEXT.reindex}
                 </Button>
                 <Button variant="ghost" onClick={() => setRemoving(s)}>
-                  Remove
+                  {SOURCES_TEXT.remove}
                 </Button>
               </div>
             </li>
@@ -234,23 +284,19 @@ export function SourcesPanel({
       ) : null}
       <Dialog
         open={removing !== null}
-        title="Remove this source?"
-        description={
-          removing
-            ? `${removing.name} is removed from the project. Chats stop using it right away.`
-            : undefined
-        }
+        title={SOURCES_TEXT.removeTitle}
+        description={removing ? SOURCES_TEXT.removeBody({ name: removing.name }) : undefined}
         onClose={() => setRemoving(null)}
         footer={
           <>
-            <Button onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button onClick={() => setRemoving(null)}>{SOURCES_TEXT.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => {
                 if (removing) void remove(removing);
               }}
             >
-              Remove
+              {SOURCES_TEXT.remove}
             </Button>
           </>
         }
@@ -280,7 +326,7 @@ function PasteSource({
     try {
       onDone(await api.addSource(projectId, { kind: 'text', name: name.trim(), text }));
     } catch (err) {
-      setError(errorMessage(err, 'Could not add the text.'));
+      setError(errorMessage(err, SOURCES_TEXT.textFailed));
       setBusy(false);
     }
   };
@@ -288,7 +334,7 @@ function PasteSource({
   return (
     <form
       className="panel-inset"
-      aria-label="Paste text as a source"
+      aria-label={SOURCES_TEXT.pasteForm}
       onSubmit={(e) => {
         e.preventDefault();
         void submit();
@@ -301,16 +347,16 @@ function PasteSource({
       }}
     >
       <TextField
-        label="Source name"
+        label={SOURCES_TEXT.name}
         value={name}
         maxLength={255}
         autoFocus
-        placeholder="Meeting notes"
+        placeholder={SOURCES_TEXT.namePlaceholder}
         onChange={(e) => setName(e.target.value)}
       />
       <div className="nv-field">
         <label className="nv-field-label" htmlFor={`paste-${projectId}`}>
-          Text
+          {SOURCES_TEXT.text}
         </label>
         <textarea
           id={`paste-${projectId}`}
@@ -328,9 +374,9 @@ function PasteSource({
       ) : null}
       <div className="row">
         <Button type="submit" variant="primary" disabled={!ready || busy}>
-          {busy ? <Spinner /> : null} Add source
+          {busy ? <Spinner /> : null} {SOURCES_TEXT.add}
         </Button>
-        <Button onClick={() => onDone(null)}>Cancel</Button>
+        <Button onClick={() => onDone(null)}>{SOURCES_TEXT.cancel}</Button>
       </div>
     </form>
   );

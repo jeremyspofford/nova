@@ -256,7 +256,11 @@ mailbox connector exists, and Telegram, voice and SMS are not built. *M7 adds Te
   copy cannot ask first, so a shared binding gets one only when `channels.privateToShared` is
   `allow`; otherwise the copy is recorded failed with the reason "withheld: …".
 - **Tools.** `channel.list` and `channel.send` (effect `external_communication`; the gate resource
-  is `<kind>:<externalRef>`, so a rule can name the channel).
+  is `<kind>:<externalRef>`, so a rule can name the channel). *Since M8* `channel.send` takes `files` (at most 10
+  artifact or attachment ids of the agent's own chat); only Telegram carries files
+  (`capability_missing` elsewhere). In a shared binding the text and then the files pass the
+  private-to-shared check before anything is sent; files that fail after the text went are reported
+  (`server_error`, retryable).
 - **Watching.** Watching a Slack conversation is a `connector_event` trigger (`docs/09` §7); a
   binding alone never starts work it was not addressed in.
 
@@ -303,7 +307,47 @@ mailbox connector exists, and Telegram, voice and SMS are not built. *M7 adds Te
 - **Shared threads** (FR-217) are built: §7.
 - **Not built**: voice calls (FR-218), SMS, Telegram files, email OAuth, and the channel relay
   through the Relay (`/v1/relay/messages`): channels reach the Hub directly (webhooks need a public
-  address) or by polling.
+  address) or by polling. *M8 builds Telegram files and email OAuth (below).*
+
+*As built in M8 (ADR-097; `packages/core/src/channels/{files,oauth}.ts`, the Telegram and email
+adapters, `apps/hub/src/channels.ts`; routes in `contracts/hub-api.md`, "Channels").*
+
+- **Telegram files in.** Photos (the largest size within the cap), documents, voice notes and video
+  notes are downloaded only after the message passed every check and will start a turn (a message of
+  files alone counts), at most 10 a message. The 20 MiB cap is checked against the size the message
+  states, the size `getFile` reports, `Content-Length` and while reading, so nothing larger is held;
+  file paths from Telegram are checked, redirects refused, and the bot token never appears in an
+  error. Photos and documents pass the upload checks (`prepareAttachments`; Nova has no virus
+  scanner) and become thread attachments. Voice notes (Ogg) and video notes (MP4) are checked and
+  kept as attachments but are not model input: the turn gets a line saying so, since the Hub cannot
+  transcribe them. Videos, audio, stickers and animations are named in the turn as not read; refused
+  files are listed with the reason. In webhook mode downloads happen before the Hub answers Telegram,
+  and the duplicate check covers Telegram's retries. Albums are not merged into one turn.
+- **Telegram files out.** The artifacts a channel turn created or changed (the newest version of
+  each, at most 10; "N more files are in Nova." for the rest) go out after the reply, and only if the
+  reply did. JPEG, PNG or WebP up to 10 MB go as photos, anything else (or a photo Telegram refuses)
+  as a document (50 MB). Text files are redacted before sending. Each file counts against the
+  outbound rate cap and gets its own log entry. In a shared conversation the files pass the
+  private-to-shared check: text files are read, and files the check cannot read (images, PDFs) count
+  as private, so `channels.privateToShared` decides ("I can't share those files here."). Email and
+  Slack send no files.
+- **Email OAuth (XOAUTH2).** A mailbox chooses `auth: password` (as before) or `oauth`. For OAuth the
+  owner sets the provider's authorization URL, token URL, optional revocation URL, client id and
+  scopes; the client secret is optional, write-only and kept in the vault. There is no discovery:
+  these are fixed settings. **Authorize** opens the provider in the browser with PKCE (S256) and a
+  single-use state (10 minutes); the provider redirects to `<Hub>/api/v1/channels/oauth/callback`
+  (register that address with the provider), which exchanges the code only when `iss` is absent or
+  names the configured authorization server, never the Hub. Tokens and the state live in the vault.
+  Tokens are refreshed within 60 s of expiry, one refresh at a time per mailbox; a login the server
+  refuses gets one forced refresh and one retry. A refused refresh token sets the mailbox to
+  `expired` ("Authorize again"). Signing out, removing the mailbox's last binding, or removing the
+  member who owns it revokes the tokens at the provider. Password mailboxes work as before. Audit:
+  `channel.oauth.start`, `.connect`, `.failed`, `.expired`, `.revoke`.
+- **Message log files.** Each entry that carried a file has `file` (and `files` when it carried
+  several): name, size, type, direction, status (`received`, `sent`, `withheld`, `failed`), the
+  attachment or artifact and the reason; only names, sizes and types are stored
+  (`channel_message_file`), never content. Email attachments are recorded the same way. Files of a
+  message that starts no turn are never downloaded, so their entry has no file.
 
 ## 5. Remote control, mobile dispatch & notifications (FR-111, FR-137)
 
@@ -432,7 +476,8 @@ message's id. Push through the Relay is not built (*M7: built, see above*).
 
 *As built in M7 (ADR-095; `packages/core/src/team`, `apps/hub/src/team.ts`, `apps/web/src/team`,
 `apps/web/src/joinmember`; routes in `contracts/hub-api.md`, "Team").* Several people can use one
-Hub (decision 5, FR-217, FR-091, FR-113). Entitlements are not built.
+Hub (decision 5, FR-217, FR-091, FR-113). Entitlements are not built (*M8: providers' reported
+plans and limits are shown in Settings → Accounts, `docs/14` §6*).
 
 - **People.** The owner is the account that set the Hub up (the recorded owner row). The owner
   invites members with a one-use link (a 256-bit token in the link's fragment, only its hash
@@ -459,7 +504,10 @@ Hub (decision 5, FR-217, FR-091, FR-113). Entitlements are not built.
   (web search, artifact, document, visualization and image creation, `tool.search`,
   `context.remaining`, `context.fresh`). Any participant may stop a running turn but not cancel
   another's queued message; editing and regenerating are refused. The shared view (`/team/shared/<id>`)
-  shows who wrote each message and who asked for each reply; the ordinary chat view does not yet.
+  shows who wrote each message and who asked for each reply. *Since M8* the ordinary chat view
+  does too: a user message of a shared thread carries `author` `{accountId, displayName}` (nothing
+  else, never on a private thread), and another person's message shows their name ("Someone" without
+  one).
 - **Team agents** (FR-091). The owner provisions an agent that lives in its own identity account,
   which never signs in; provider and egress credentials are bound to that identity (`secret://`
   references only). Any person may give it a task; each task runs in a shared thread of its own,
@@ -477,6 +525,34 @@ Hub (decision 5, FR-217, FR-091, FR-113). Entitlements are not built.
 - **Public profile cards** (FR-113): a read-only card (display name, optional avatar) at
   `/profile/<handle>`, only while the owner's `team.publicProfiles` is on (off by default) and the
   person opted in.
+
+*As built in M8 (ADR-097; `packages/core/src/team/member-purge.ts`, `routes.ts`; routes in
+`contracts/hub-api.md`, "Team" (M8)).*
+
+- **A removed member's data** is kept for `team.removedMemberPurgeDays` (30; 0 keeps it until the
+  owner purges), so the owner can export it first, then purged by an hourly sweep, or at once from
+  Settings → Members ("Delete now", with a confirmation). The purge deletes every row with the
+  member's `account_id` and the rows hanging off them, their blobs no one else uses, the vault entries
+  named by those rows' ids and their folders. It keeps the account row with its name, username,
+  avatar and email cleared, the member row, the audit chain and their usage rows (detached from
+  their chats). Their messages in someone else's shared chat keep their place but their text becomes
+  "[Removed: written by a member whose data was purged]" and their files go; the assistant's answers
+  stay, since they belong to the chat's owner (they may quote the member). The rows go in one
+  transaction that also records what is left to clean (`cleaning`), so files and vault entries an
+  interrupted purge left are removed by the next sweep; a failed purge is retried a day later.
+  Audited `team.member.purge`; `team.member.purged`. **Export their data** downloads the member's own
+  data before the purge: a `.novaexport` with `accountScope: {accountId}`, never sealed and without
+  secrets (only the references their rows hold, listed to re-enter), holding every row that names
+  the account and the rows hanging off it, the account row and their files and folders, and nothing
+  of anyone else (their words in someone else's shared chat stay out). It is built on a private copy
+  of the database, and an import refuses it (`account_scope`): it is for keeping, not restoring.
+- **At removal** (not at purge) the member's channel pollers stop and their email mailboxes' OAuth
+  tokens are revoked at the provider (`docs/12` §1.1).
+- **Member mode.** `GET /api/v1/team/me/access` lists the routes a member is refused (every owner
+  route, from the route classification) and their limits; the web app uses it to show Tools & MCP,
+  Notifications and Channels to members with the owner's parts hidden (`docs/04` §1).
+- **Agents' skills** follow their plugin connections: an agent's skill catalog lists only skills of
+  plugins connected to it, and `skill.load` refuses the rest.
 
 ## 8. Data residency & compliance hooks
 

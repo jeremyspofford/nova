@@ -18,12 +18,14 @@ import {
   type OobStatusView,
 } from '@nova/shared';
 import { Button, Icon, SelectField, Spinner, useToast } from '@nova/ui';
+import { defineMessages, fmt } from '@nova/i18n';
 import { useAnnounce } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { followLink } from '../work/nav.tsx';
+import { rich } from '../i18n/rich.tsx';
 import { Chip, ConfirmDialog, LoadError, Unavailable } from '../devices/parts.tsx';
-import { devicePath } from '../devices/format.ts';
+import { devicePath, listText } from '../devices/format.ts';
 import type { OobApi, OobActionBody } from './api-m75.ts';
 import { EndpointDialog, RepinDialog } from './EndpointForm.tsx';
 import {
@@ -32,8 +34,10 @@ import {
   BIOS_REFUSAL_TEXT,
   BOOT_TARGET_LABEL,
   HEALTH_TEXT,
+  OOB_TEXT,
   POWER_ACTIONS,
   POWER_EFFECT,
+  POWER_KEY,
   POWER_TEXT,
   SENSOR_KIND_LABEL,
   STATUS_CHIP,
@@ -63,6 +67,201 @@ import {
   plainly,
   useOobActions,
 } from './parts.tsx';
+
+export const ENDPOINT_TEXT = defineMessages('oob.endpoint', {
+  /** Announced after a read: the action's name, then what came of it. */
+  readDone: '{action}: {result}',
+  waitsApproval: '{action} waits for your approval.',
+  approveBelow: 'Approve it below to run it.',
+  editOff: 'Turn out-of-band management on to edit',
+  edit: 'Edit',
+  remove: 'Remove',
+  facts: {
+    address: 'Address',
+    system: 'System',
+    device: 'Device',
+    credentials: 'Credentials',
+    certificate: 'Certificate',
+    lastCheck: 'Last check',
+  },
+  onlySystem: 'Its only system',
+  openDevice: 'Open the device',
+  noDevice: 'Not linked to a device',
+  credentialsStored: 'Stored in the Hub’s vault (never shown)',
+  credentialsMissing: 'Missing: enter them again',
+  /** `error`: the Hub's own words for the last failed check. */
+  lastError: 'Last error: {error}',
+  confirm: {
+    question: 'Is this your BMC’s certificate?',
+    read: 'The Hub read it without sending any credentials. Compare its fingerprint with the one on the BMC’s own web page or console, not one sent over this network:',
+    after:
+      'Only after you confirm it does the Hub send the BMC its user name and password, and only to a BMC presenting this certificate.',
+    yes: 'Yes, it is my BMC’s…',
+    enter: 'Enter the fingerprint instead…',
+  },
+  /** `pin`: the fingerprint, shown as code. */
+  sha256: 'SHA-256 {pin}',
+  mismatch: {
+    /** The bold start of `said`, which continues the same sentence. */
+    headline: 'This BMC presented a different certificate',
+    /** `headline` is the bold start of this sentence; `when` is when the BMC presented it. */
+    said: '{headline} than the one pinned ({when}). Nova sent it nothing, not even the credentials, and refuses it until you decide.',
+    /** `pin`: the fingerprint, shown as code. */
+    pinned: 'Pinned: {pin}',
+    advice:
+      'If you replaced the BMC’s certificate on purpose, read the new fingerprint on the BMC’s own page or console and pin it. Otherwise something else may be answering at this address: leave the pin as it is.',
+    repin: 'Pin the new certificate…',
+    unpin: 'Clear the pin…',
+  },
+  connection: 'Connection',
+  checkRedfish:
+    'Reads the BMC’s Redfish service. The first check reads its certificate, without credentials, for you to confirm.',
+  checkIpmi: 'Reads the chassis status over IPMI.',
+  waiting: 'Waiting for you',
+  power: 'Power',
+  /** `state` is shown bold; `when` is when it was read, in parentheses. */
+  powerNow: 'Power: {state} {when}',
+  powerUnread: 'Power state not read yet.',
+  readPower: 'Read the power state',
+  sensors: 'Sensors',
+  notRead: 'Not read yet.',
+  log: 'Action log',
+  logFailed: 'Could not load the actions.',
+  logLoading: 'Loading the actions',
+  logEmpty: 'Nothing asked of this BMC yet.',
+  saved: '{name} saved.',
+  repinned: 'The new certificate is pinned.',
+  powerAsk: {
+    title: {
+      on: 'Power on {name}?',
+      off: 'Power off {name}?',
+      cycle: 'Power cycle {name}?',
+      reset: 'Reset {name}?',
+    },
+    confirm: {
+      on: 'Ask to power on',
+      off: 'Ask to power off',
+      cycle: 'Ask to power cycle',
+      reset: 'Ask to reset',
+    },
+  },
+  ask: 'Ask',
+  boot: {
+    title: 'Set the next boot of {name}?',
+    /** `boot`: "Hard disk once (UEFI)". */
+    effect: 'It starts from {boot} at its next start, then boots as before. Nothing restarts now.',
+    ipmi: 'Many BMCs drop an IPMI boot override if the machine does not restart within 60 seconds.',
+    confirm: 'Ask to set the next boot',
+    help: 'Start the machine once from another device, for example to reinstall it over the network. After that start it boots as before.',
+    from: 'Boot from',
+    /** A boot target IPMI cannot set: `target` is its name. */
+    notIpmi: '{target} (not over IPMI)',
+    mode: 'Boot mode',
+    modeAsIs: 'As the BMC has it',
+    uefi: 'UEFI',
+    legacy: 'Legacy',
+    set: 'Set the next boot…',
+    /** In the waiting list: `boot` is "Hard disk once (UEFI)". */
+    what: 'Next boot: {boot}',
+  },
+  apply: {
+    title: 'Apply the BIOS change to {name}?',
+    description:
+      'The BMC stores these values as pending settings; they take effect at the next restart. Nothing restarts now.',
+    descriptionDevice:
+      'The BMC stores these values as pending settings; they take effect at the next restart of {device}. Nothing restarts now.',
+    confirm: 'Apply at the next restart',
+    applied: 'Applied.',
+    open: 'Apply at the next restart…',
+    approved: 'Approved. Apply it before it runs out.',
+  },
+  confirmPin: {
+    title: 'Is this the certificate of {name}?',
+    description:
+      'Confirm only if this fingerprint is the one the BMC itself shows. From now on the Hub sends it the credentials, and refuses any other certificate at this address.',
+    confirm: 'Confirm the fingerprint',
+    done: 'Certificate confirmed. The Hub may now send the BMC its credentials.',
+  },
+  removeAsk: {
+    title: 'Remove {name}?',
+    description:
+      'The Hub forgets this BMC and deletes its credentials from the vault. Approvals still waiting for it are withdrawn. The machine itself is not touched.',
+    done: '{name} removed.',
+  },
+  unpin: {
+    title: 'Clear the pinned certificate of {name}?',
+    description:
+      'The next check reads whatever certificate the BMC presents then, for you to confirm again; until then the Hub sends it no credentials. Do this only if you know its certificate changed.',
+    confirm: 'Clear the pin',
+    done: 'The pin is cleared. The next connection pins the certificate again.',
+  },
+  manages: 'This BMC manages {device}.',
+  runsAfter: 'It runs only after you approve it on the card that appears next, within 10 minutes.',
+  asked: 'Asked {when}',
+  until: 'Until {time}',
+  diff: {
+    caption: 'BIOS change ({vendor}): pending until the next restart',
+    setting: 'Setting',
+    now: 'Now',
+    after: 'After the restart',
+    weakens: 'Weakens security',
+    /** `items`: the settings left out, each "Secure Boot (why)", comma-joined. */
+    leftOut: 'Left out: {items}.',
+    /** One setting left out of a plan, and why. */
+    leftOutItem: '{setting} ({reason})',
+  },
+  sensorTable: {
+    caption: 'Read {when}',
+    sensor: 'Sensor',
+    kind: 'Kind',
+    reading: 'Reading',
+    health: 'Health',
+    noReading: 'No reading',
+    none: 'The BMC reported no sensors.',
+  },
+  bios: {
+    title: 'BIOS settings',
+    ipmi: 'BIOS settings are not available over IPMI. Add the BMC’s Redfish address to change them.',
+    planned: 'The BIOS plan waits for your approval. Its diff is on the card.',
+    planFailed: 'Could not make the plan.',
+    help: 'Only the allowlisted settings: Wake-on-LAN, power on after power loss, boot order, virtualization, Secure Boot, the TPM and the fan profile. A change is a dry run first: you approve its diff, then it is stored as pending settings for the next restart.',
+    /** `link`: a link to Settings → Devices (`settingsDevices`). */
+    changesOff:
+      'BIOS and firmware changes are off, as they are by default: reading works, plans are refused. Turn on “Allow BIOS/firmware changes” in {link} to change them, here and on devices running novad.',
+    settingsDevices: 'Settings → Devices',
+    /** `reason`: the Hub's words, or `unknownHardware`. */
+    unsupported: 'BIOS settings are not supported on this hardware: {reason}.',
+    unsupportedVendor: 'BIOS settings are not supported on this hardware ({vendor}): {reason}.',
+    form: 'Plan a BIOS change',
+    caption: 'BIOS settings, read {when}',
+    captionVendor: '{vendor} settings, read {when}',
+    setting: 'Setting',
+    now: 'Now',
+    pending: 'Pending',
+    changeTo: 'Change to',
+    none: 'none',
+    changeSetting: 'Change {setting} to',
+    keep: 'Keep',
+    /** A value that would weaken security: `value` is the BMC's own value name. */
+    weakensValue: '{value} (weakens security)',
+    readOnly: 'Read-only',
+    /** `settings`: the settings' names, joined ("Secure Boot and TPM"). */
+    weakens:
+      '{settings} would weaken the machine’s security. Such a change is refused unless you include it here and “Allow changes that weaken security” is on (it is).',
+    weakensOff:
+      '{settings} would weaken the machine’s security. Such a change is refused unless you include it here and “Allow changes that weaken security” is on (it is off).',
+    include: 'Include the change that weakens security',
+    plan: 'Plan the change',
+    nothingYet: 'Nothing changes until you approve the plan and apply it.',
+  },
+  how: {
+    read: 'A read: no approval needed',
+    plan: 'From an approved plan',
+    approval: 'With your approval',
+  },
+});
+
+const S = ENDPOINT_TEXT;
 
 const FIRMWARE_SETTINGS_PATH = '/settings/devices';
 
@@ -132,10 +331,15 @@ export function EndpointView({
     try {
       const { action: a } = await api.oobAction(ep.id, action, {});
       remember(a);
-      announce(`${ACTION_LABEL[action]}: ${actionSummary(a) ?? STATUS_CHIP[a.status].text}`);
+      announce(
+        S.readDone({
+          action: ACTION_LABEL[action],
+          result: actionSummary(a) ?? STATUS_CHIP[a.status].text,
+        }),
+      );
       if (action === 'check') onEndpoint(await api.getOobEndpoint(ep.id));
     } catch (err) {
-      setErrors((e) => ({ ...e, [action]: oobErrorMessage(err, 'That did not work.') }));
+      setErrors((e) => ({ ...e, [action]: oobErrorMessage(err, OOB_TEXT.failed) }));
       actions.reload();
       if (action === 'check') await api.getOobEndpoint(ep.id).then(onEndpoint, () => undefined);
     } finally {
@@ -149,8 +353,8 @@ export function EndpointView({
     remember(a);
     setPending(null);
     if (a.status === 'awaiting_approval') {
-      announce(`${ACTION_LABEL[action]} waits for your approval.`);
-      toast.show('Approve it below to run it.', { tone: 'success' });
+      announce(S.waitsApproval({ action: ACTION_LABEL[action] }));
+      toast.show(S.approveBelow, { tone: 'success' });
     }
     return a;
   };
@@ -170,7 +374,7 @@ export function EndpointView({
     <div className="stack oob-endpoint">
       <header className="ws-page-header">
         <div className="devices-title">
-          <H>{ep.name}</H>
+          <H dir="auto">{ep.name}</H>
           <KindChip kind={ep.kind} />
         </div>
         <div className="row">
@@ -178,94 +382,95 @@ export function EndpointView({
             <Button
               onClick={() => setEditing(true)}
               disabled={status !== null && !status.enabled}
-              title={
-                status && !status.enabled ? 'Turn out-of-band management on to edit' : undefined
-              }
+              title={status && !status.enabled ? S.editOff : undefined}
             >
-              <Icon name="edit" /> Edit
+              <Icon name="edit" /> {S.edit}
             </Button>
           ) : null}
           <Button variant="danger" onClick={() => setPending({ kind: 'delete' })}>
-            <Icon name="trash" /> Remove
+            <Icon name="trash" /> {S.remove}
           </Button>
         </div>
       </header>
       <dl className="devices-facts">
         <div>
-          <dt>Address</dt>
+          <dt>{S.facts.address}</dt>
           <dd>
-            <code className="ws-code-inline">{addressText(ep)}</code>
+            <code className="ws-code-inline" dir="ltr">
+              {addressText(ep)}
+            </code>
           </dd>
         </div>
         {ep.kind === 'redfish' ? (
           <div>
-            <dt>System</dt>
-            <dd>{ep.systemId ?? 'Its only system'}</dd>
+            <dt>{S.facts.system}</dt>
+            <dd>{ep.systemId ? <span dir="ltr">{ep.systemId}</span> : S.onlySystem}</dd>
           </div>
         ) : null}
         <div>
-          <dt>Device</dt>
+          <dt>{S.facts.device}</dt>
           <dd>
             {deviceHref ? (
-              <a href={deviceHref} onClick={(e) => followLink(e, deviceHref)}>
-                {deviceName ?? 'Open the device'}
+              <a href={deviceHref} dir="auto" onClick={(e) => followLink(e, deviceHref)}>
+                {deviceName ?? S.openDevice}
               </a>
             ) : (
-              <span className="muted">Not linked to a device</span>
+              <span className="muted">{S.noDevice}</span>
             )}
           </dd>
         </div>
         <div>
-          <dt>Credentials</dt>
+          <dt>{S.facts.credentials}</dt>
           <dd>
             {ep.hasCredentials ? (
-              'Stored in the Hub’s vault (never shown)'
+              S.credentialsStored
             ) : (
-              <Chip tone="needs_input" icon="alert" text="Missing: enter them again" />
+              <Chip tone="needs_input" icon="alert" text={S.credentialsMissing} />
             )}
           </dd>
         </div>
         <div>
-          <dt>Certificate</dt>
+          <dt>{S.facts.certificate}</dt>
           <dd>
             <PinText ep={ep} />
           </dd>
         </div>
         <div>
-          <dt>Last check</dt>
+          <dt>{S.facts.lastCheck}</dt>
           <dd>
             <LastCheck ep={ep} />
           </dd>
         </div>
       </dl>
       {ep.lastError && ep.lastCheckOk === false && !mismatch ? (
-        <p className="muted ws-flush">Last error: {ep.lastError}</p>
+        <p className="muted ws-flush">{S.lastError({ error: ep.lastError })}</p>
       ) : null}
       {blocked && !awaitingConfirm ? <Unavailable>{blocked}</Unavailable> : null}
 
       {awaitingConfirm && ep.tlsPin ? (
         <div className="devices-note oob-confirm" role="status">
           <p className="ws-flush">
-            <Icon name="shield" /> <strong>Is this your BMC’s certificate?</strong> The Hub read it
-            without sending any credentials. Compare its fingerprint with the one on the BMC’s own
-            web page or console, not one sent over this network:
+            <Icon name="shield" /> <strong>{S.confirm.question}</strong> {S.confirm.read}
           </p>
           <p className="ws-flush">
-            SHA-256 <code className="ws-code-inline oob-pin">{pinPairs(ep.tlsPin)}</code>
+            {rich(S.sha256, {
+              pin: (
+                <code className="ws-code-inline oob-pin" dir="ltr">
+                  {pinPairs(ep.tlsPin)}
+                </code>
+              ),
+            })}
           </p>
-          <p className="ws-flush">
-            Only after you confirm it does the Hub send the BMC its user name and password, and only
-            to a BMC presenting this certificate.
-          </p>
+          <p className="ws-flush">{S.confirm.after}</p>
           <div className="row">
             <Button
               variant="primary"
               disabled={Boolean(checkOff)}
               onClick={() => setPending({ kind: 'confirmPin', pin: ep.tlsPin! })}
             >
-              Yes, it is my BMC’s…
+              {S.confirm.yes}
             </Button>
-            <Button onClick={() => setRepinning(true)}>Enter the fingerprint instead…</Button>
+            <Button onClick={() => setRepinning(true)}>{S.confirm.enter}</Button>
           </div>
         </div>
       ) : null}
@@ -273,48 +478,48 @@ export function EndpointView({
       {mismatch && ep.tlsPin ? (
         <div className="devices-note oob-mismatch" data-tone="bad" role="alert">
           <p className="ws-flush">
-            <Icon name="alert" /> <strong>This BMC presented a different certificate</strong> than
-            the one pinned ({formatWhen(mismatch.createdAt)}). Nova sent it nothing, not even the
-            credentials, and refuses it until you decide.
+            <Icon name="alert" />{' '}
+            {rich(S.mismatch.said, {
+              headline: <strong>{S.mismatch.headline}</strong>,
+              when: formatWhen(mismatch.createdAt),
+            })}
           </p>
           <p className="ws-flush">
-            Pinned: <code className="ws-code-inline oob-pin">{pinPairs(ep.tlsPin)}</code>
+            {rich(S.mismatch.pinned, {
+              pin: (
+                <code className="ws-code-inline oob-pin" dir="ltr">
+                  {pinPairs(ep.tlsPin)}
+                </code>
+              ),
+            })}
           </p>
-          <p className="ws-flush">
-            If you replaced the BMC’s certificate on purpose, read the new fingerprint on the BMC’s
-            own page or console and pin it. Otherwise something else may be answering at this
-            address: leave the pin as it is.
-          </p>
+          <p className="ws-flush">{S.mismatch.advice}</p>
           <div className="row">
             <Button variant="primary" onClick={() => setRepinning(true)}>
-              Pin the new certificate…
+              {S.mismatch.repin}
             </Button>
-            <Button onClick={() => setPending({ kind: 'unpin' })}>Clear the pin…</Button>
+            <Button onClick={() => setPending({ kind: 'unpin' })}>{S.mismatch.unpin}</Button>
           </div>
         </div>
       ) : null}
 
       <Section
         id={`${base}-check`}
-        title="Connection"
+        title={S.connection}
         actions={
           <Button disabled={Boolean(checkOff) || busy !== null} onClick={() => void read('check')}>
-            {busy === 'check' ? <Spinner /> : null} Check the connection
+            {busy === 'check' ? <Spinner /> : null} {ACTION_LABEL.check}
           </Button>
         }
       >
-        <p className="muted ws-flush">
-          {ep.kind === 'redfish'
-            ? 'Reads the BMC’s Redfish service. The first check reads its certificate, without credentials, for you to confirm.'
-            : 'Reads the chassis status over IPMI.'}
-        </p>
+        <p className="muted ws-flush">{ep.kind === 'redfish' ? S.checkRedfish : S.checkIpmi}</p>
 
         <ActionError text={errors.check} />
       </Section>
 
       {open.length ? (
-        <Section id={`${base}-open`} title="Waiting for you">
-          <ul className="ws-list oob-open" aria-label="Waiting for you">
+        <Section id={`${base}-open`} title={S.waiting}>
+          <ul className="ws-list oob-open" aria-label={S.waiting}>
             {open.map((a) => (
               <li key={a.id} className="oob-open-item">
                 <OpenAction
@@ -331,15 +536,17 @@ export function EndpointView({
         </Section>
       ) : null}
 
-      <Section id={`${base}-power`} title="Power">
+      <Section id={`${base}-power`} title={S.power}>
         <p className="ws-flush" aria-live="polite">
           {power ? (
-            <>
-              Power: <strong>{POWER_TEXT[powerOf(power)!]}</strong>{' '}
-              <span className="muted">({formatWhen(power.finishedAt ?? power.createdAt)})</span>
-            </>
+            rich(S.powerNow, {
+              state: <strong>{POWER_TEXT[powerOf(power)!]}</strong>,
+              when: (
+                <span className="muted">({formatWhen(power.finishedAt ?? power.createdAt)})</span>
+              ),
+            })
           ) : (
-            <span className="muted">Power state not read yet.</span>
+            <span className="muted">{S.powerUnread}</span>
           )}
         </p>
         <div className="row">
@@ -347,7 +554,7 @@ export function EndpointView({
             disabled={Boolean(blocked) || busy !== null}
             onClick={() => void read('power.status')}
           >
-            {busy === 'power.status' ? <Spinner /> : null} Read the power state
+            {busy === 'power.status' ? <Spinner /> : null} {S.readPower}
           </Button>
           {POWER_ACTIONS.map((a) => (
             <Button
@@ -367,19 +574,15 @@ export function EndpointView({
 
       <Section
         id={`${base}-sensors`}
-        title="Sensors"
+        title={S.sensors}
         actions={
           <Button disabled={Boolean(blocked) || busy !== null} onClick={() => void read('sensors')}>
-            {busy === 'sensors' ? <Spinner /> : null} Read the sensors
+            {busy === 'sensors' ? <Spinner /> : null} {ACTION_LABEL.sensors}
           </Button>
         }
       >
         <ActionError text={errors.sensors} />
-        {sensors ? (
-          <SensorTable action={sensors} />
-        ) : (
-          <p className="muted ws-flush">Not read yet.</p>
-        )}
+        {sensors ? <SensorTable action={sensors} /> : <p className="muted ws-flush">{S.notRead}</p>}
       </Section>
 
       <BiosSection
@@ -393,18 +596,12 @@ export function EndpointView({
         onPlanned={remember}
       />
 
-      <Section id={`${base}-log`} title="Action log">
+      <Section id={`${base}-log`} title={S.log}>
         {actions.error ? (
-          <LoadError
-            error={actions.error}
-            fallback="Could not load the actions."
-            onRetry={actions.reload}
-          />
+          <LoadError error={actions.error} fallback={S.logFailed} onRetry={actions.reload} />
         ) : null}
-        {actions.loading ? <Spinner label="Loading the actions" /> : null}
-        {actions.data?.length === 0 ? (
-          <p className="muted ws-flush">Nothing asked of this BMC yet.</p>
-        ) : null}
+        {actions.loading ? <Spinner label={S.logLoading} /> : null}
+        {actions.data?.length === 0 ? <p className="muted ws-flush">{S.logEmpty}</p> : null}
         {items.length ? <ActionLog items={items} /> : null}
       </Section>
 
@@ -416,7 +613,7 @@ export function EndpointView({
           onSaved={(next) => {
             setEditing(false);
             onEndpoint(next);
-            toast.show(`${next.name} saved.`, { tone: 'success' });
+            toast.show(S.saved({ name: next.name }), { tone: 'success' });
           }}
         />
       ) : null}
@@ -428,20 +625,24 @@ export function EndpointView({
           onSaved={(next) => {
             setRepinning(false);
             onEndpoint(next);
-            toast.show('The new certificate is pinned.', { tone: 'success' });
+            toast.show(S.repinned, { tone: 'success' });
           }}
         />
       ) : null}
       <ConfirmDialog
         open={pending?.kind === 'power'}
-        title={pending?.kind === 'power' ? `${ACTION_LABEL[pending.action]} ${ep.name}?` : ''}
+        title={
+          pending?.kind === 'power'
+            ? S.powerAsk.title[POWER_KEY[pending.action]]({ name: ep.name })
+            : ''
+        }
         description={
           pending?.kind === 'power' ? (
             <ChangeText deviceName={deviceName} effect={POWER_EFFECT[pending.action]} />
           ) : undefined
         }
         confirmLabel={
-          pending?.kind === 'power' ? `Ask to ${ACTION_LABEL[pending.action].toLowerCase()}` : 'Ask'
+          pending?.kind === 'power' ? S.powerAsk.confirm[POWER_KEY[pending.action]] : S.ask
         }
         danger={pending?.kind === 'power' && pending.action !== 'power.on'}
         onClose={() => setPending(null)}
@@ -451,20 +652,21 @@ export function EndpointView({
       />
       <ConfirmDialog
         open={pending?.kind === 'boot'}
-        title={`Set the next boot of ${ep.name}?`}
+        title={S.boot.title({ name: ep.name })}
         description={
           pending?.kind === 'boot' ? (
             <ChangeText
               deviceName={deviceName}
-              effect={`It starts from ${bootText(pending.body)} at its next start, then boots as before. Nothing restarts now.${
-                ep.kind === 'ipmi'
-                  ? ' Many BMCs drop an IPMI boot override if the machine does not restart within 60 seconds.'
-                  : ''
-              }`}
+              effect={[
+                S.boot.effect({ boot: bootText(pending.body) }),
+                ep.kind === 'ipmi' ? S.boot.ipmi : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
             />
           ) : undefined
         }
-        confirmLabel="Ask to set the next boot"
+        confirmLabel={S.boot.confirm}
         onClose={() => setPending(null)}
         onConfirm={async () => {
           if (pending?.kind === 'boot') await ask('boot.next', pending.body);
@@ -472,18 +674,18 @@ export function EndpointView({
       />
       <ConfirmDialog
         open={pending?.kind === 'apply'}
-        title={`Apply the BIOS change to ${ep.name}?`}
-        description={`The BMC stores these values as pending settings; they take effect at the next restart${
-          deviceName ? ` of ${deviceName}` : ''
-        }. Nothing restarts now.`}
-        confirmLabel="Apply at the next restart"
+        title={S.apply.title({ name: ep.name })}
+        description={
+          deviceName ? S.apply.descriptionDevice({ device: deviceName }) : S.apply.description
+        }
+        confirmLabel={S.apply.confirm}
         danger
         onClose={() => setPending(null)}
         onConfirm={async () => {
           if (pending?.kind !== 'apply') return;
           try {
             const a = await ask('bios.apply', { planId: pending.plan.planId });
-            toast.show(actionSummary(a) ?? 'Applied.', { tone: 'success' });
+            toast.show(actionSummary(a) ?? S.apply.applied, { tone: 'success' });
           } finally {
             // A failed apply may end the plan (`apply_outcome_unknown`): show it as it is now.
             actions.reload();
@@ -494,54 +696,56 @@ export function EndpointView({
       </ConfirmDialog>
       <ConfirmDialog
         open={pending?.kind === 'confirmPin'}
-        title={`Is this the certificate of ${ep.name}?`}
-        description="Confirm only if this fingerprint is the one the BMC itself shows. From now on the Hub sends it the credentials, and refuses any other certificate at this address."
-        confirmLabel="Confirm the fingerprint"
+        title={S.confirmPin.title({ name: ep.name })}
+        description={S.confirmPin.description}
+        confirmLabel={S.confirmPin.confirm}
         onClose={() => setPending(null)}
         onConfirm={async () => {
           if (pending?.kind !== 'confirmPin') return;
           const next = await plainly(() => api.confirmOobPin(ep.id, pending.pin));
           setPending(null);
           onEndpoint(next);
-          toast.show('Certificate confirmed. The Hub may now send the BMC its credentials.', {
-            tone: 'success',
-          });
+          toast.show(S.confirmPin.done, { tone: 'success' });
         }}
       >
         {pending?.kind === 'confirmPin' ? (
           <p className="ws-flush">
-            SHA-256 <code className="ws-code-inline oob-pin">{pinPairs(pending.pin)}</code>
+            {rich(S.sha256, {
+              pin: (
+                <code className="ws-code-inline oob-pin" dir="ltr">
+                  {pinPairs(pending.pin)}
+                </code>
+              ),
+            })}
           </p>
         ) : null}
       </ConfirmDialog>
       <ConfirmDialog
         open={pending?.kind === 'delete'}
-        title={`Remove ${ep.name}?`}
-        description="The Hub forgets this BMC and deletes its credentials from the vault. Approvals still waiting for it are withdrawn. The machine itself is not touched."
-        confirmLabel="Remove"
+        title={S.removeAsk.title({ name: ep.name })}
+        description={S.removeAsk.description}
+        confirmLabel={S.remove}
         danger
         onClose={() => setPending(null)}
         onConfirm={async () => {
           await plainly(() => api.deleteOobEndpoint(ep.id));
           setPending(null);
-          toast.show(`${ep.name} removed.`, { tone: 'success' });
+          toast.show(S.removeAsk.done({ name: ep.name }), { tone: 'success' });
           onDeleted();
         }}
       />
       <ConfirmDialog
         open={pending?.kind === 'unpin'}
-        title={`Clear the pinned certificate of ${ep.name}?`}
-        description="The next check reads whatever certificate the BMC presents then, for you to confirm again; until then the Hub sends it no credentials. Do this only if you know its certificate changed."
-        confirmLabel="Clear the pin"
+        title={S.unpin.title({ name: ep.name })}
+        description={S.unpin.description}
+        confirmLabel={S.unpin.confirm}
         danger
         onClose={() => setPending(null)}
         onConfirm={async () => {
           const next = await plainly(() => api.updateOobEndpoint(ep.id, { tlsPin: null }));
           setPending(null);
           onEndpoint(next);
-          toast.show('The pin is cleared. The next connection pins the certificate again.', {
-            tone: 'success',
-          });
+          toast.show(S.unpin.done, { tone: 'success' });
         }}
       />
     </div>
@@ -560,8 +764,9 @@ function ActionError({ text }: { text: string | undefined }) {
 function ChangeText({ deviceName, effect }: { deviceName: string | null; effect: string }) {
   return (
     <>
-      {effect} {deviceName ? `This BMC manages ${deviceName}. ` : ''}It runs only after you approve
-      it on the card that appears next, within 10 minutes.
+      {[effect, deviceName ? S.manages({ device: deviceName }) : '', S.runsAfter]
+        .filter(Boolean)
+        .join(' ')}
     </>
   );
 }
@@ -584,9 +789,7 @@ function OpenAction({
 }) {
   const plan = planOf(a);
   const what =
-    a.action === 'boot.next'
-      ? `${ACTION_LABEL[a.action]}: ${bootText(a.params)}`
-      : ACTION_LABEL[a.action];
+    a.action === 'boot.next' ? S.boot.what({ boot: bootText(a.params) }) : ACTION_LABEL[a.action];
   return (
     <div className="stack">
       <div className="devices-row-head">
@@ -594,12 +797,14 @@ function OpenAction({
         <OobStatusChip status={a.status} />
       </div>
       <span className="muted ws-row-meta">
-        <span>
+        <span dir="auto">
           {endpointName}
           {deviceName ? ` (${deviceName})` : ''}
         </span>
-        <span>Asked {formatWhen(a.createdAt)}</span>
-        {a.expiresAt ? <span>Until {new Date(a.expiresAt).toLocaleTimeString()}</span> : null}
+        <span>{S.asked({ when: formatWhen(a.createdAt) })}</span>
+        {a.expiresAt ? (
+          <span>{S.until({ time: fmt.time(a.expiresAt, { timeStyle: 'medium' }) })}</span>
+        ) : null}
       </span>
       {plan ? <DiffTable plan={plan} /> : null}
       {a.status === 'awaiting_approval' && a.approvalId ? (
@@ -608,9 +813,9 @@ function OpenAction({
       {a.status === 'approved' && plan ? (
         <div className="row">
           <Button variant="primary" disabled={Boolean(blocked)} onClick={() => onApply(plan)}>
-            Apply at the next restart…
+            {S.apply.open}
           </Button>
-          <span className="muted">Approved. Apply it before it runs out.</span>
+          <span className="muted">{S.apply.approved}</span>
         </div>
       ) : null}
     </div>
@@ -627,25 +832,25 @@ export function DiffTable({ plan }: { plan: OobBiosPlanView }) {
   return (
     <div className="stack">
       <table className="ws-table oob-diff">
-        <caption>BIOS change ({plan.vendor}): pending until the next restart</caption>
+        <caption>{S.diff.caption({ vendor: plan.vendor })}</caption>
         <thead>
           <tr>
-            <th scope="col">Setting</th>
-            <th scope="col">Now</th>
-            <th scope="col">After the restart</th>
+            <th scope="col">{S.diff.setting}</th>
+            <th scope="col">{S.diff.now}</th>
+            <th scope="col">{S.diff.after}</th>
           </tr>
         </thead>
         <tbody>
           {plan.diff.map((d) => (
             <tr key={d.key} data-degrading={d.securityDegrading || undefined}>
               <th scope="row">{BIOS_KEY_LABEL[d.key]}</th>
-              <td>{valueText(d.from)}</td>
+              <td dir="auto">{valueText(d.from)}</td>
               <td>
-                {d.to}
+                <span dir="auto">{d.to}</span>
                 {d.securityDegrading ? (
                   <span className="oob-degrading">
                     {' '}
-                    <Icon name="alert" /> Weakens security
+                    <Icon name="alert" /> {S.diff.weakens}
                   </span>
                 ) : null}
               </td>
@@ -655,11 +860,16 @@ export function DiffTable({ plan }: { plan: OobBiosPlanView }) {
       </table>
       {plan.refused.length ? (
         <p className="muted ws-flush">
-          Left out:{' '}
-          {plan.refused
-            .map((r) => `${BIOS_KEY_LABEL[r.key]} (${BIOS_REFUSAL_TEXT[r.reason]})`)
-            .join(', ')}
-          .
+          {S.diff.leftOut({
+            items: listText(
+              plan.refused.map((r) =>
+                S.diff.leftOutItem({
+                  setting: BIOS_KEY_LABEL[r.key],
+                  reason: BIOS_REFUSAL_TEXT[r.reason],
+                }),
+              ),
+            ),
+          })}
         </p>
       ) : null}
     </div>
@@ -680,14 +890,11 @@ function BootSection({
   const [mode, setMode] = useState<'' | 'uefi' | 'legacy'>('');
   const usbOff = ep.kind === 'ipmi';
   return (
-    <Section id={`${base}-boot`} title="Next boot">
-      <p className="muted ws-flush">
-        Start the machine once from another device, for example to reinstall it over the network.
-        After that start it boots as before.
-      </p>
+    <Section id={`${base}-boot`} title={ACTION_LABEL['boot.next']}>
+      <p className="muted ws-flush">{S.boot.help}</p>
       <div className="devices-fields">
         <SelectField
-          label="Boot from"
+          label={S.boot.from}
           value={target}
           disabled={Boolean(blocked)}
           onChange={(v) => setTarget(v as OobBootTarget)}
@@ -695,20 +902,20 @@ function BootSection({
             value: t,
             label:
               t === 'usb' && usbOff
-                ? `${BOOT_TARGET_LABEL[t]} (not over IPMI)`
+                ? S.boot.notIpmi({ target: BOOT_TARGET_LABEL[t] })
                 : BOOT_TARGET_LABEL[t],
             disabled: t === 'usb' && usbOff,
           }))}
         />
         <SelectField
-          label="Boot mode"
+          label={S.boot.mode}
           value={mode}
           disabled={Boolean(blocked)}
           onChange={(v) => setMode(v as '' | 'uefi' | 'legacy')}
           options={[
-            { value: '', label: 'As the BMC has it' },
-            { value: 'uefi', label: 'UEFI' },
-            { value: 'legacy', label: 'Legacy' },
+            { value: '', label: S.boot.modeAsIs },
+            { value: 'uefi', label: S.boot.uefi },
+            { value: 'legacy', label: S.boot.legacy },
           ]}
         />
       </div>
@@ -717,35 +924,44 @@ function BootSection({
           disabled={Boolean(blocked)}
           onClick={() => onAsk({ target, ...(mode ? { mode } : {}) })}
         >
-          Set the next boot…
+          {S.boot.set}
         </Button>
       </div>
     </Section>
   );
 }
 
+/** A sensor reading and its unit (the BMC's own unit name, e.g. "RPM"). */
+function readingText(s: { reading: number | null; unit: string | null }): string {
+  if (s.reading === null) return S.sensorTable.noReading;
+  const value = fmt.number(s.reading, { useGrouping: false, maximumFractionDigits: 3 });
+  return s.unit ? `${value} ${s.unit}` : value;
+}
+
 function SensorTable({ action }: { action: OobActionView }) {
   const list = sensorsOf(action);
-  if (!list.length) return <p className="muted ws-flush">The BMC reported no sensors.</p>;
+  if (!list.length) return <p className="muted ws-flush">{S.sensorTable.none}</p>;
   return (
     <table className="ws-table oob-sensors">
-      <caption>Read {formatWhen(action.finishedAt ?? action.createdAt)}</caption>
+      <caption>
+        {S.sensorTable.caption({ when: formatWhen(action.finishedAt ?? action.createdAt) })}
+      </caption>
       <thead>
         <tr>
-          <th scope="col">Sensor</th>
-          <th scope="col">Kind</th>
-          <th scope="col">Reading</th>
-          <th scope="col">Health</th>
+          <th scope="col">{S.sensorTable.sensor}</th>
+          <th scope="col">{S.sensorTable.kind}</th>
+          <th scope="col">{S.sensorTable.reading}</th>
+          <th scope="col">{S.sensorTable.health}</th>
         </tr>
       </thead>
       <tbody>
         {list.map((s, i) => (
           <tr key={`${s.name}-${i}`} data-health={s.health}>
-            <th scope="row">{s.name}</th>
+            <th scope="row" dir="auto">
+              {s.name}
+            </th>
             <td>{SENSOR_KIND_LABEL[s.kind]}</td>
-            <td>
-              {s.reading === null ? 'No reading' : `${s.reading}${s.unit ? ` ${s.unit}` : ''}`}
-            </td>
+            <td>{readingText(s)}</td>
             <td>
               {s.health === 'warning' || s.health === 'critical' ? <Icon name="alert" /> : null}{' '}
               {HEALTH_TEXT[s.health]}
@@ -789,10 +1005,8 @@ function BiosSection({
 
   if (ep.kind !== 'redfish')
     return (
-      <Section id={`${base}-bios`} title="BIOS settings">
-        <Unavailable>
-          BIOS settings are not available over IPMI. Add the BMC’s Redfish address to change them.
-        </Unavailable>
+      <Section id={`${base}-bios`} title={S.bios.title}>
+        <Unavailable>{S.bios.ipmi}</Unavailable>
       </Section>
     );
 
@@ -814,52 +1028,58 @@ function BiosSection({
       onPlanned(action);
       setChoices({});
       setDegrading(false);
-      announce('The BIOS plan waits for your approval. Its diff is on the card.');
+      announce(S.bios.planned);
     } catch (err) {
-      setPlanError(oobErrorMessage(err, 'Could not make the plan.'));
+      setPlanError(oobErrorMessage(err, S.bios.planFailed));
     } finally {
       setPlanning(false);
     }
   };
 
+  const weakens = fmt.list(weakening.map((s) => BIOS_KEY_LABEL[s.key]));
   return (
     <Section
       id={`${base}-bios`}
-      title="BIOS settings"
+      title={S.bios.title}
       actions={
         <Button disabled={Boolean(blocked) || busy} onClick={onRead}>
-          {busy ? <Spinner /> : null} Read the BIOS settings
+          {busy ? <Spinner /> : null} {ACTION_LABEL['bios.read']}
         </Button>
       }
     >
-      <p className="muted ws-flush">
-        Only the allowlisted settings: Wake-on-LAN, power on after power loss, boot order,
-        virtualization, Secure Boot, the TPM and the fan profile. A change is a dry run first: you
-        approve its diff, then it is stored as pending settings for the next restart.
-      </p>
+      <p className="muted ws-flush">{S.bios.help}</p>
       {!allowChanges ? (
         <div className="devices-note" role="status">
           <p className="ws-flush">
-            <Icon name="shield" /> BIOS and firmware changes are off, as they are by default:
-            reading works, plans are refused. Turn on “Allow BIOS/firmware changes” in{' '}
-            <a href={FIRMWARE_SETTINGS_PATH} onClick={(e) => followLink(e, FIRMWARE_SETTINGS_PATH)}>
-              Settings → Devices
-            </a>{' '}
-            to change them, here and on devices running novad.
+            <Icon name="shield" />{' '}
+            {rich(S.bios.changesOff, {
+              link: (
+                <a
+                  href={FIRMWARE_SETTINGS_PATH}
+                  onClick={(e) => followLink(e, FIRMWARE_SETTINGS_PATH)}
+                >
+                  {S.bios.settingsDevices}
+                </a>
+              ),
+            })}
           </p>
         </div>
       ) : null}
       <ActionError text={error} />
       {view && !view.supported ? (
         <Unavailable>
-          BIOS settings are not supported on this hardware{view.vendor ? ` (${view.vendor})` : ''}:{' '}
-          {view.reason ?? 'unknown hardware'}.
+          {view.vendor
+            ? S.bios.unsupportedVendor({
+                vendor: view.vendor,
+                reason: view.reason ?? OOB_TEXT.unknownHardware,
+              })
+            : S.bios.unsupported({ reason: view.reason ?? OOB_TEXT.unknownHardware })}
         </Unavailable>
       ) : null}
       {view?.supported ? (
         <form
           className="stack"
-          aria-label="Plan a BIOS change"
+          aria-label={S.bios.form}
           onSubmit={(e) => {
             e.preventDefault();
             void plan();
@@ -867,14 +1087,19 @@ function BiosSection({
         >
           <table className="ws-table oob-bios">
             <caption>
-              {view.vendor ?? 'BIOS'} settings, read {formatWhen(read?.finishedAt ?? null)}
+              {view.vendor
+                ? S.bios.captionVendor({
+                    vendor: view.vendor,
+                    when: formatWhen(read?.finishedAt ?? null),
+                  })
+                : S.bios.caption({ when: formatWhen(read?.finishedAt ?? null) })}
             </caption>
             <thead>
               <tr>
-                <th scope="col">Setting</th>
-                <th scope="col">Now</th>
-                <th scope="col">Pending</th>
-                <th scope="col">Change to</th>
+                <th scope="col">{S.bios.setting}</th>
+                <th scope="col">{S.bios.now}</th>
+                <th scope="col">{S.bios.pending}</th>
+                <th scope="col">{S.bios.changeTo}</th>
               </tr>
             </thead>
             <tbody>
@@ -883,28 +1108,30 @@ function BiosSection({
                 return (
                   <tr key={s.key}>
                     <th scope="row">{BIOS_KEY_LABEL[s.key]}</th>
-                    <td>{valueText(s.value)}</td>
-                    <td>{s.pending ? s.pending : <span className="muted">none</span>}</td>
+                    <td dir="auto">{valueText(s.value)}</td>
+                    <td dir="auto">
+                      {s.pending ? s.pending : <span className="muted">{S.bios.none}</span>}
+                    </td>
                     <td>
                       {s.allowed.length ? (
                         <SelectField
-                          label={`Change ${BIOS_KEY_LABEL[s.key]} to`}
+                          label={S.bios.changeSetting({ setting: BIOS_KEY_LABEL[s.key] })}
                           hideLabel
                           value={chosen}
                           disabled={!allowChanges || Boolean(blocked)}
                           onChange={(v) => setChoices((c) => ({ ...c, [s.key]: v }))}
                           options={[
-                            { value: '', label: 'Keep' },
+                            { value: '', label: S.bios.keep },
                             ...s.allowed.map((v) => ({
                               value: v,
                               label: s.securityDegrading.includes(v)
-                                ? `${v} (weakens security)`
+                                ? S.bios.weakensValue({ value: v })
                                 : v,
                             })),
                           ]}
                         />
                       ) : (
-                        <span className="muted">Read-only</span>
+                        <span className="muted">{S.bios.readOnly}</span>
                       )}
                     </td>
                   </tr>
@@ -915,10 +1142,10 @@ function BiosSection({
           {weakening.length ? (
             <div className="devices-note" data-tone="bad">
               <p className="ws-flush">
-                <Icon name="alert" /> {weakening.map((s) => BIOS_KEY_LABEL[s.key]).join(' and ')}{' '}
-                would weaken the machine’s security. Such a change is refused unless you include it
-                here and “Allow changes that weaken security” is on
-                {allowDegrading ? ' (it is)' : ' (it is off)'}.
+                <Icon name="alert" />{' '}
+                {allowDegrading
+                  ? S.bios.weakens({ settings: weakens })
+                  : S.bios.weakensOff({ settings: weakens })}
               </p>
               <label className="nv-radio">
                 <input
@@ -927,7 +1154,7 @@ function BiosSection({
                   onChange={(e) => setDegrading(e.target.checked)}
                 />
                 <span className="nv-radio-text">
-                  <span>Include the change that weakens security</span>
+                  <span>{S.bios.include}</span>
                 </span>
               </label>
             </div>
@@ -943,13 +1170,13 @@ function BiosSection({
               variant="primary"
               disabled={!allowChanges || Boolean(blocked) || planning || changes.length === 0}
             >
-              {planning ? <Spinner /> : null} Plan the change
+              {planning ? <Spinner /> : null} {S.bios.plan}
             </Button>
-            <span className="muted">Nothing changes until you approve the plan and apply it.</span>
+            <span className="muted">{S.bios.nothingYet}</span>
           </div>
         </form>
       ) : null}
-      {!view && !error ? <p className="muted ws-flush">Not read yet.</p> : null}
+      {!view && !error ? <p className="muted ws-flush">{S.notRead}</p> : null}
     </Section>
   );
 }
@@ -957,14 +1184,14 @@ function BiosSection({
 const READS: readonly OobAction[] = ['check', 'power.status', 'sensors', 'bios.read'];
 
 function howAsked(a: OobActionView): string {
-  if (READS.includes(a.action)) return 'A read: no approval needed';
-  if (a.action === 'bios.apply') return 'From an approved plan';
-  return 'With your approval';
+  if (READS.includes(a.action)) return S.how.read;
+  if (a.action === 'bios.apply') return S.how.plan;
+  return S.how.approval;
 }
 
 function ActionLog({ items }: { items: OobActionView[] }) {
   return (
-    <ul className="ws-list" aria-label="Action log">
+    <ul className="ws-list" aria-label={S.log}>
       {items.map((a) => {
         const summary = actionSummary(a);
         return (

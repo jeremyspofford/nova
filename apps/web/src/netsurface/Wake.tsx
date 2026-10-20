@@ -3,6 +3,7 @@
 // others, which ones the Hub uses and in what order (`network.wakeHelpers`, saved through the
 // network panel so it can be rolled back), and the recent wakes with the device that sent each.
 import { useId, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { WakeHelperView } from '@nova/shared';
 import { Button, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { focusMoved, formatWhen, moveItem } from '../settings/common.ts';
@@ -11,8 +12,59 @@ import { useAnnounce } from '../services.tsx';
 import { useDebounced } from '../work/events.ts';
 import { useNetworkSurfaceApi, type NetworkPanel, type WakeLogEntry } from './api.ts';
 import { WAKE_EVENTS, useNetworkEvents, wakeFromEvent } from './events.ts';
-import { ADD_DEVICE_PATH, netErrorMessage, wakeStatusChip } from './format.ts';
+import { ADD_DEVICE_PATH, netErrorMessage, valuesText, wakeStatusChip } from './format.ts';
 import { Chip, LoadError, useLoad } from './parts.tsx';
+
+const S = defineMessages('netsurface.wake', {
+  loadFailed: 'Could not load the Wake helpers.',
+  loading: 'Loading the Wake helpers',
+  refreshFailed: 'Could not refresh the Wake helpers.',
+  intro:
+    'A Wake-on-LAN signal only reaches computers on the same network. A Wake helper is an always-on device on that network (a NAS, a small PC) that sends it for the Hub. ' +
+    'Wakes are limited per hour and recorded in the audit log.',
+  saved: 'Wake helpers saved. You can roll this back from the Overview.',
+  savedShort: 'Wake helpers saved.',
+  saveFailed: 'Could not save the Wake helpers.',
+  title: 'Wake helpers',
+  empty: 'No Wake helpers yet',
+  emptyHelp:
+    'Add an always-on device on the same network as the computers you want to wake, and give it the Wake helper role. Until then the Hub sends the signal itself when it is on that network.',
+  addDevice: 'Add a device',
+  order: 'The Hub tries these in order, using the first one on the sleeping computer’s network.',
+  noneChosen:
+    'None chosen: the Hub uses any online Wake helper on the sleeping computer’s network, then sends the signal itself when it is on that network.',
+  inUse: 'Wake helpers in use',
+  gone: 'A device that is no longer a Wake helper',
+  moveUp: 'Move {name} up',
+  moveDown: 'Move {name} down',
+  up: 'Up',
+  down: 'Down',
+  stopUsing: 'Stop using {name}',
+  remove: 'Remove',
+  others: 'Other Wake helpers',
+  withRole: 'Devices with the Wake helper role',
+  available: 'Available Wake helpers',
+  chooseName: 'Use {name}',
+  choose: 'Use',
+  save: 'Save',
+  reset: 'Reset',
+  online: 'Online',
+  offline: 'Offline',
+  notAvailable: 'Not available',
+  networks: 'networks {list}',
+  networksUnknown: 'networks not reported yet',
+  lastSeen: 'last seen {when}',
+  notSeen: 'not seen yet',
+  fixGone: 'Remove it, or give the device the Wake helper role again.',
+  aDevice: 'A device',
+  limited: 'not sent: the hourly limit was reached',
+  noSender: 'nothing on its network could send it',
+  byHub: 'sent by the Hub',
+  through: 'sent through {name}',
+  recent: 'Recent wakes',
+  row: '{name}, {when}',
+  none: 'No wakes yet. Wake a computer from its page in Devices.',
+});
 
 interface WakeData {
   panel: NetworkPanel;
@@ -66,29 +118,17 @@ export function WakeSection() {
   const d = data.data;
   if (!d)
     return data.error ? (
-      <LoadError
-        error={data.error}
-        fallback="Could not load the Wake helpers."
-        onRetry={data.reload}
-      />
+      <LoadError error={data.error} fallback={S.loadFailed} onRetry={data.reload} />
     ) : (
-      <Spinner label="Loading the Wake helpers" />
+      <Spinner label={S.loading} />
     );
   const fromHub = d.panel.wakeHelpers.recent;
   return (
     <div className="stack net-section">
       {data.error ? (
-        <LoadError
-          error={data.error}
-          fallback="Could not refresh the Wake helpers."
-          onRetry={data.reload}
-        />
+        <LoadError error={data.error} fallback={S.refreshFailed} onRetry={data.reload} />
       ) : null}
-      <p className="muted ws-flush net-first">
-        A Wake-on-LAN signal only reaches computers on the same network. A Wake helper is an
-        always-on device on that network (a NAS, a small PC) that sends it for the Hub. Wakes are
-        limited per hour and recorded in the audit log.
-      </p>
+      <p className="muted ws-flush net-first">{S.intro}</p>
       <Helpers
         key={d.panel.wakeHelpers.configured.join(',')}
         panel={d.panel}
@@ -119,12 +159,10 @@ function Helpers({ panel, onSaved }: { panel: NetworkPanel; onSaved: (p: Network
     try {
       const next = await api.updateNetworkPanel({ wakeHelpers: chosen });
       onSaved(next);
-      toast.show('Wake helpers saved. You can roll this back from the Overview.', {
-        tone: 'success',
-      });
-      announce('Wake helpers saved.');
+      toast.show(S.saved, { tone: 'success' });
+      announce(S.savedShort);
     } catch (err) {
-      setFailure(netErrorMessage(err, 'Could not save the Wake helpers.'));
+      setFailure(netErrorMessage(err, S.saveFailed));
     } finally {
       setBusy(false);
     }
@@ -138,13 +176,13 @@ function Helpers({ panel, onSaved }: { panel: NetworkPanel; onSaved: (p: Network
   if (available.length === 0 && configured.length === 0) {
     return (
       <section className="ws-section" aria-labelledby={headingId}>
-        <h2 id={headingId}>Wake helpers</h2>
+        <h2 id={headingId}>{S.title}</h2>
         <EmptyState
-          title="No Wake helpers yet"
+          title={S.empty}
           level={3}
           icon="server"
-          description="Add an always-on device on the same network as the computers you want to wake, and give it the Wake helper role. Until then the Hub sends the signal itself when it is on that network."
-          action={<Button onClick={() => navigate(ADD_DEVICE_PATH)}>Add a device</Button>}
+          description={S.emptyHelp}
+          action={<Button onClick={() => navigate(ADD_DEVICE_PATH)}>{S.addDevice}</Button>}
         />
       </section>
     );
@@ -152,17 +190,13 @@ function Helpers({ panel, onSaved }: { panel: NetworkPanel; onSaved: (p: Network
 
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>Wake helpers</h2>
-      <p className="muted">
-        {chosen.length
-          ? 'The Hub tries these in order, using the first one on the sleeping computer’s network.'
-          : 'None chosen: the Hub uses any online Wake helper on the sleeping computer’s network, then sends the signal itself when it is on that network.'}
-      </p>
+      <h2 id={headingId}>{S.title}</h2>
+      <p className="muted">{chosen.length ? S.order : S.noneChosen}</p>
       {chosen.length ? (
-        <ul className="ws-list" aria-label="Wake helpers in use" ref={listRef}>
+        <ul className="ws-list" aria-label={S.inUse} ref={listRef}>
           {chosen.map((id, i) => {
             const h = byId.get(id);
-            const name = h?.name ?? 'A device that is no longer a Wake helper';
+            const name = h?.name ?? S.gone;
             return (
               <li key={id} className="ws-list-row" data-move-key={id} aria-label={name}>
                 <HelperInfo h={h} name={name} />
@@ -170,26 +204,26 @@ function Helpers({ panel, onSaved }: { panel: NetworkPanel; onSaved: (p: Network
                   <Button
                     variant="ghost"
                     data-move="up"
-                    aria-label={`Move ${name} up`}
+                    aria-label={S.moveUp({ name })}
                     disabled={i === 0}
                     onClick={() => move(id, i, -1)}
                   >
-                    Up
+                    {S.up}
                   </Button>
                   <Button
                     variant="ghost"
                     data-move="down"
-                    aria-label={`Move ${name} down`}
+                    aria-label={S.moveDown({ name })}
                     disabled={i === chosen.length - 1}
                     onClick={() => move(id, i, 1)}
                   >
-                    Down
+                    {S.down}
                   </Button>
                   <Button
-                    aria-label={`Stop using ${name}`}
+                    aria-label={S.stopUsing({ name })}
                     onClick={() => setChosen((c) => c.filter((x) => x !== id))}
                   >
-                    Remove
+                    {S.remove}
                   </Button>
                 </div>
               </li>
@@ -199,18 +233,16 @@ function Helpers({ panel, onSaved }: { panel: NetworkPanel; onSaved: (p: Network
       ) : null}
       {others.length ? (
         <>
-          <h3 className="ws-subhead">
-            {chosen.length ? 'Other Wake helpers' : 'Devices with the Wake helper role'}
-          </h3>
-          <ul className="ws-list" aria-label="Available Wake helpers">
+          <h3 className="ws-subhead">{chosen.length ? S.others : S.withRole}</h3>
+          <ul className="ws-list" aria-label={S.available}>
             {others.map((h) => (
               <li key={h.deviceId} className="ws-list-row" aria-label={h.name}>
                 <HelperInfo h={h} name={h.name} />
                 <Button
-                  aria-label={`Use ${h.name}`}
+                  aria-label={S.chooseName({ name: h.name })}
                   onClick={() => setChosen((c) => [...c, h.deviceId])}
                 >
-                  Use
+                  {S.choose}
                 </Button>
               </li>
             ))}
@@ -224,9 +256,9 @@ function Helpers({ panel, onSaved }: { panel: NetworkPanel; onSaved: (p: Network
       ) : null}
       <div className="row">
         <Button variant="primary" disabled={!dirty || busy} onClick={() => void save()}>
-          {busy ? <Spinner /> : null} Save
+          {busy ? <Spinner /> : null} {S.save}
         </Button>
-        {dirty ? <Button onClick={() => setChosen(configured)}>Reset</Button> : null}
+        {dirty ? <Button onClick={() => setChosen(configured)}>{S.reset}</Button> : null}
       </div>
     </section>
   );
@@ -239,32 +271,30 @@ function HelperInfo({ h, name }: { h: WakeHelperView | undefined; name: string }
         <span className="net-strong">{name}</span>
         {h ? (
           h.status === 'active' ? (
-            <Chip spec={{ text: 'Online', tone: 'ready', icon: 'check' }} />
+            <Chip spec={{ text: S.online, tone: 'ready', icon: 'check' }} />
           ) : (
             <Chip
               spec={{
-                text: h.status === 'unreachable' ? 'Offline' : h.status,
+                text: h.status === 'unreachable' ? S.offline : h.status,
                 tone: 'needs_input',
                 icon: 'alert',
               }}
             />
           )
         ) : (
-          <Chip spec={{ text: 'Not available', tone: 'blocked', icon: 'stop' }} />
+          <Chip spec={{ text: S.notAvailable, tone: 'blocked', icon: 'stop' }} />
         )}
       </div>
       {h ? (
         <span className="muted ws-row-meta">
           <span>
-            {h.subnets.length ? `networks ${h.subnets.join(', ')}` : 'networks not reported yet'}
+            {h.subnets.length ? S.networks({ list: valuesText(h.subnets) }) : S.networksUnknown}
           </span>
-          {h.addresses.length ? <span>{h.addresses.join(', ')}</span> : null}
-          <span>{h.lastSeenAt ? `last seen ${formatWhen(h.lastSeenAt)}` : 'not seen yet'}</span>
+          {h.addresses.length ? <span>{valuesText(h.addresses)}</span> : null}
+          <span>{h.lastSeenAt ? S.lastSeen({ when: formatWhen(h.lastSeenAt) }) : S.notSeen}</span>
         </span>
       ) : (
-        <span className="muted net-small">
-          Remove it, or give the device the Wake helper role again.
-        </span>
+        <span className="muted net-small">{S.fixGone}</span>
       )}
     </div>
   );
@@ -272,25 +302,28 @@ function HelperInfo({ h, name }: { h: WakeHelperView | undefined; name: string }
 
 function RecentWakes({ wakes, names }: { wakes: WakeLogEntry[]; names: Map<string, string> }) {
   const headingId = useId();
-  const name = (id: string, given?: string | null) => given ?? names.get(id) ?? 'A device';
+  const name = (id: string, given?: string | null) => given ?? names.get(id) ?? S.aDevice;
   const via = (w: WakeLogEntry) =>
     w.status === 'rate_limited'
-      ? 'not sent: the hourly limit was reached'
+      ? S.limited
       : !w.via
-        ? 'nothing on its network could send it'
+        ? S.noSender
         : w.via === 'hub'
-          ? 'sent by the Hub'
-          : `sent through ${name(w.via, w.viaName)}`;
+          ? S.byHub
+          : S.through({ name: name(w.via, w.viaName) });
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>Recent wakes</h2>
+      <h2 id={headingId}>{S.recent}</h2>
       {wakes.length ? (
-        <ul className="ws-list" aria-label="Recent wakes" aria-live="polite">
+        <ul className="ws-list" aria-label={S.recent} aria-live="polite">
           {wakes.map((w) => (
             <li
               key={w.id}
               className="ws-list-row"
-              aria-label={`${name(w.deviceId, w.deviceName)}, ${formatWhen(w.createdAt)}`}
+              aria-label={S.row({
+                name: name(w.deviceId, w.deviceName),
+                when: formatWhen(w.createdAt),
+              })}
             >
               <div className="net-row-main">
                 <div className="net-row-head">
@@ -309,7 +342,7 @@ function RecentWakes({ wakes, names }: { wakes: WakeLogEntry[]; names: Map<strin
         </ul>
       ) : (
         <p className="muted ws-flush" aria-live="polite">
-          <Icon name="clock" /> No wakes yet. Wake a computer from its page in Devices.
+          <Icon name="clock" /> {S.none}
         </p>
       )}
     </section>

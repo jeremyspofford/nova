@@ -12,6 +12,7 @@ import type {
   SessionHandoffView,
   WorktreeView,
 } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, Icon, RadioGroup, SelectField, Spinner, TextField } from '@nova/ui';
 import { useHubStream } from '../hub-events.ts';
 import { useAnnounce } from '../services.tsx';
@@ -19,9 +20,78 @@ import { useSettings } from '../settings.tsx';
 import { useInterval } from '../settings/common.ts';
 import { useCodeM6Api } from './api-m6.ts';
 import { useCodeM7Api, type HandoffBody } from './api-m7.ts';
+import { NEW_SESSION_TEXT } from './NewSessionDialog.tsx';
 import { Badge } from './parts.tsx';
-import { HEALTH_TEXT, KIND_LABEL, inRepo, isBindable } from './m6-format.ts';
+import { KIND_LABEL, inRepo, isBindable } from './m6-format.ts';
 import { HANDOFF_STATUS, codeM7ErrorMessage, handoffReasonText, shortHash } from './m7-format.ts';
+
+export const HANDOFF_TEXT = defineMessages('code.handoff', {
+  envsFailed: 'Could not load the environments.',
+  moved: 'Moved to {target}.',
+  refused: 'The move was refused.',
+  notCompleted: 'The move was not completed.',
+  where: {
+    environment: 'Another environment',
+    environmentHint: 'This Hub, an SSH host, a device or the cloud, in a folder there.',
+    new: 'A new worktree',
+    newHint: 'On its own nova/… branch next to your checkout.',
+    main: 'The main checkout',
+    mainHint: 'Back to the repository’s own folder.',
+    existing: 'An existing worktree',
+    existingHint: 'A worktree of this repository that no session holds.',
+  },
+  chooseEnv: 'Choose an environment.',
+  envUnavailable: '{name} is unavailable.',
+  envUnavailableBecause: '{name} is unavailable: {detail}.',
+  enterFolder: 'Enter the repository’s folder there.',
+  fullPath: 'Enter a full path that starts with /.',
+  chooseWorktree: 'Choose a worktree.',
+  moving: 'Moving the session to {target}.',
+  startFailed: 'Could not start the move.',
+  title: 'Hand off this session',
+  body: 'Its branch, commits and uncommitted changes travel with it. It continues there only once the target has exactly the same state.',
+  loading: 'Loading the environments',
+  loadingDots: 'Loading environments…',
+  noRepo:
+    'This folder is not a Git repository, so its state cannot travel. The Hub will refuse the move.',
+  moveTo: 'Move to',
+  environment: 'Environment',
+  chooseEnvOption: 'Choose an environment',
+  thisHub: 'This Hub',
+  envOption:
+    '{status, select, ok {{name} ({kind})} degraded {{name} ({kind}), degraded} down {{name} ({kind}), unavailable} other {{name} ({kind}), not checked}}',
+  folderOn: 'Repository folder on {name}',
+  folderThere: 'Repository folder there',
+  cloudHint: 'Cloud environments keep their repositories under /workspace.',
+  cloneHint: 'A clone of the same repository, with no uncommitted changes.',
+  worktree: 'Worktree',
+  chooseWorktreeOption: 'Choose a worktree',
+  dirtyBranch: '{branch} (uncommitted changes)',
+  worktreeHint: 'A worktree with uncommitted changes cannot take the session.',
+  sourceLegend: 'After the move, the changes here',
+  keep: 'Keep them here too',
+  keepHint: 'This folder stays as it is.',
+  clean: 'Clean them up here',
+  cleanHint: 'Only after the target confirmed it has them.',
+  interrupt: 'Interrupt the running turn',
+  interruptHint: 'Otherwise the move waits for the turn to end. The next turn waits for the move.',
+  cancel: 'Cancel',
+  move: 'Move session',
+  doneTitle: 'Session moved',
+  failedTitle: 'The session did not move',
+  movingTitle: 'Moving the session',
+  another: 'Choose another target',
+  close: 'Close',
+  closeKeep: 'Close and keep moving',
+  waiting: 'Waiting for the running turn to end.',
+  sending: 'Sending the Git state and checking it there.',
+  continues: 'It continues in {folder}.',
+  git: 'Commit {commit}, {files, plural, one {# changed file} other {# changed files}}{local, plural, =0 {} one {, # local commit} other {, # local commits}}. State {state}.',
+  gitBranch:
+    'Branch {branch}, commit {commit}, {files, plural, one {# changed file} other {# changed files}}{local, plural, =0 {} one {, # local commit} other {, # local commits}}. State {state}.',
+  cleaned: 'The changes were cleaned up in the old folder.',
+  stayed: 'The session stayed where it was.',
+});
 
 type Where = 'environment' | 'new' | 'main' | 'existing';
 
@@ -30,9 +100,9 @@ export const HANDOFF_POLL_MS = 2000;
 
 /** Where a folder path in an environment of this kind usually is. */
 export function folderPlaceholder(kind: SavedEnvironmentView['kind']): string {
-  if (kind === 'cloud') return '/workspace/app';
-  if (kind === 'local' || kind === 'container') return '/home/me/projects/app';
-  return '/home/me/src/app';
+  if (kind === 'cloud') return NEW_SESSION_TEXT.cloudPath;
+  if (kind === 'local' || kind === 'container') return NEW_SESSION_TEXT.hubPath;
+  return NEW_SESSION_TEXT.remotePath;
 }
 
 export function HandoffDialog({
@@ -92,7 +162,7 @@ function HandoffForm({
       (err: unknown) => {
         if (!alive) return;
         setEnvs([]);
-        setLoadError(codeM7ErrorMessage(err, 'Could not load the environments.'));
+        setLoadError(codeM7ErrorMessage(err, HANDOFF_TEXT.envsFailed));
       },
     );
     if (hubLocal)
@@ -112,11 +182,11 @@ function HandoffForm({
     if (ended.current) return;
     if (v.status === 'completed') {
       ended.current = true;
-      announce(`Moved to ${v.toLabel}.`);
+      announce(HANDOFF_TEXT.moved({ target: v.toLabel }));
       onFinished(v);
     } else if (v.status === 'refused' || v.status === 'failed') {
       ended.current = true;
-      announce(`The move was ${v.status === 'refused' ? 'refused' : 'not completed'}.`);
+      announce(v.status === 'refused' ? HANDOFF_TEXT.refused : HANDOFF_TEXT.notCompleted);
       onFinished(v);
     }
   };
@@ -141,40 +211,41 @@ function HandoffForm({
   const options: { value: Where; label: string; description: string }[] = [
     {
       value: 'environment',
-      label: 'Another environment',
-      description: 'This Hub, an SSH host, a device or the cloud, in a folder there.',
+      label: HANDOFF_TEXT.where.environment,
+      description: HANDOFF_TEXT.where.environmentHint,
     },
   ];
   if (hubLocal && repo) {
     options.push({
       value: 'new',
-      label: 'A new worktree',
-      description: 'On its own nova/… branch next to your checkout.',
+      label: HANDOFF_TEXT.where.new,
+      description: HANDOFF_TEXT.where.newHint,
     });
     if (session.worktreeId)
       options.push({
         value: 'main',
-        label: 'The main checkout',
-        description: 'Back to the repository’s own folder.',
+        label: HANDOFF_TEXT.where.main,
+        description: HANDOFF_TEXT.where.mainHint,
       });
     if (bindable.length)
       options.push({
         value: 'existing',
-        label: 'An existing worktree',
-        description: 'A worktree of this repository that no session holds.',
+        label: HANDOFF_TEXT.where.existing,
+        description: HANDOFF_TEXT.where.existingHint,
       });
   }
 
   const problems: Record<string, string> = {};
   if (where === 'environment') {
-    if (!env) problems.env = 'Choose an environment.';
+    if (!env) problems.env = HANDOFF_TEXT.chooseEnv;
     else if (env.status === 'down')
-      problems.env = `${env.label} is unavailable${env.detail ? `: ${env.detail}` : ''}.`;
-    if (!folder.trim()) problems.folder = 'Enter the repository’s folder there.';
-    else if (!folder.trim().startsWith('/'))
-      problems.folder = 'Enter a full path that starts with /.';
+      problems.env = env.detail
+        ? HANDOFF_TEXT.envUnavailableBecause({ name: env.label, detail: env.detail })
+        : HANDOFF_TEXT.envUnavailable({ name: env.label });
+    if (!folder.trim()) problems.folder = HANDOFF_TEXT.enterFolder;
+    else if (!folder.trim().startsWith('/')) problems.folder = HANDOFF_TEXT.fullPath;
   }
-  if (where === 'existing' && !worktreeId) problems.worktree = 'Choose a worktree.';
+  if (where === 'existing' && !worktreeId) problems.worktree = HANDOFF_TEXT.chooseWorktree;
   const shown = tried ? problems : {};
 
   const submit = async () => {
@@ -194,10 +265,10 @@ function HandoffForm({
         source,
         ...(interrupt ? { interrupt: true } : {}),
       });
-      announce(`Moving the session to ${v.toLabel}.`);
+      announce(HANDOFF_TEXT.moving({ target: v.toLabel }));
       settle(v);
     } catch (err) {
-      setError(codeM7ErrorMessage(err, 'Could not start the move.'));
+      setError(codeM7ErrorMessage(err, HANDOFF_TEXT.startFailed));
     } finally {
       setBusy(false);
     }
@@ -219,14 +290,14 @@ function HandoffForm({
   return (
     <Dialog
       open
-      title="Hand off this session"
-      description="Its branch, commits and uncommitted changes travel with it. It continues there only once the target has exactly the same state."
+      title={HANDOFF_TEXT.title}
+      description={HANDOFF_TEXT.body}
       onClose={onClose}
       className="ws-wide-dialog"
     >
       {envs === null ? (
         <p className="muted">
-          <Spinner label="Loading the environments" /> Loading environments…
+          <Spinner label={HANDOFF_TEXT.loading} /> {HANDOFF_TEXT.loadingDots}
         </p>
       ) : (
         <form
@@ -246,15 +317,12 @@ function HandoffForm({
           {!repo ? (
             <p className="ws-callout" role="note">
               <Icon name="alert" />
-              <span>
-                This folder is not a Git repository, so its state cannot travel. The Hub will refuse
-                the move.
-              </span>
+              <span>{HANDOFF_TEXT.noRepo}</span>
             </p>
           ) : null}
           {options.length > 1 ? (
             <RadioGroup
-              legend="Move to"
+              legend={HANDOFF_TEXT.moveTo}
               name={`${id}-where`}
               value={where}
               onChange={(v) => setWhere(v as Where)}
@@ -264,14 +332,18 @@ function HandoffForm({
           {where === 'environment' ? (
             <>
               <SelectField
-                label="Environment"
+                label={HANDOFF_TEXT.environment}
                 value={envId}
                 onChange={setEnvId}
                 options={[
-                  { value: '', label: 'Choose an environment' },
+                  { value: '', label: HANDOFF_TEXT.chooseEnvOption },
                   ...envs.map((e) => ({
                     value: e.id,
-                    label: `${e.label} (${e.builtIn ? 'This Hub' : KIND_LABEL[e.kind]})${e.status === 'ok' ? '' : `, ${HEALTH_TEXT[e.status].toLowerCase()}`}`,
+                    label: HANDOFF_TEXT.envOption({
+                      name: e.label,
+                      kind: e.builtIn ? HANDOFF_TEXT.thisHub : KIND_LABEL[e.kind],
+                      status: e.status,
+                    }),
                     disabled: e.status === 'down',
                     ...(e.detail ? { title: e.detail } : {}),
                   })),
@@ -279,16 +351,13 @@ function HandoffForm({
                 error={shown.env}
               />
               <TextField
-                label={env ? `Repository folder on ${env.label}` : 'Repository folder there'}
+                label={env ? HANDOFF_TEXT.folderOn({ name: env.label }) : HANDOFF_TEXT.folderThere}
                 value={folder}
                 autoComplete="off"
                 spellCheck={false}
+                dir="ltr"
                 placeholder={folderPlaceholder(env?.kind ?? 'local')}
-                hint={
-                  env?.kind === 'cloud'
-                    ? 'Cloud environments keep their repositories under /workspace.'
-                    : 'A clone of the same repository, with no uncommitted changes.'
-                }
+                hint={env?.kind === 'cloud' ? HANDOFF_TEXT.cloudHint : HANDOFF_TEXT.cloneHint}
                 error={shown.folder}
                 onChange={(e) => setFolder(e.target.value)}
               />
@@ -296,36 +365,36 @@ function HandoffForm({
           ) : null}
           {where === 'existing' ? (
             <SelectField
-              label="Worktree"
+              label={HANDOFF_TEXT.worktree}
               value={worktreeId}
               onChange={setWorktreeId}
               options={[
-                { value: '', label: 'Choose a worktree' },
+                { value: '', label: HANDOFF_TEXT.chooseWorktreeOption },
                 ...bindable.map((w) => ({
                   value: w.id,
-                  label: `${w.branch}${w.dirty ? ' (uncommitted changes)' : ''}`,
+                  label: w.dirty ? HANDOFF_TEXT.dirtyBranch({ branch: w.branch }) : w.branch,
                   disabled: w.dirty === true,
                 })),
               ]}
-              hint="A worktree with uncommitted changes cannot take the session."
+              hint={HANDOFF_TEXT.worktreeHint}
               error={shown.worktree}
             />
           ) : null}
           <RadioGroup
-            legend="After the move, the changes here"
+            legend={HANDOFF_TEXT.sourceLegend}
             name={`${id}-source`}
             value={source}
             onChange={(v) => setSource(v as 'keep' | 'clean')}
             options={[
               {
                 value: 'keep',
-                label: 'Keep them here too',
-                description: 'This folder stays as it is.',
+                label: HANDOFF_TEXT.keep,
+                description: HANDOFF_TEXT.keepHint,
               },
               {
                 value: 'clean',
-                label: 'Clean them up here',
-                description: 'Only after the target confirmed it has them.',
+                label: HANDOFF_TEXT.clean,
+                description: HANDOFF_TEXT.cleanHint,
               },
             ]}
           />
@@ -337,12 +406,12 @@ function HandoffForm({
                 aria-describedby={`${id}-int`}
                 onChange={(e) => setInterrupt(e.target.checked)}
               />
-              Interrupt the running turn
+              {HANDOFF_TEXT.interrupt}
             </label>
           ) : null}
           {running ? (
             <span id={`${id}-int`} className="nv-field-hint">
-              Otherwise the move waits for the turn to end. The next turn waits for the move.
+              {HANDOFF_TEXT.interruptHint}
             </span>
           ) : null}
           {error ? (
@@ -351,9 +420,9 @@ function HandoffForm({
             </p>
           ) : null}
           <div className="nv-dialog-footer">
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={onClose}>{HANDOFF_TEXT.cancel}</Button>
             <Button type="submit" variant="primary" disabled={busy}>
-              {busy ? <Spinner /> : <Icon name="forward" />} Move session
+              {busy ? <Spinner /> : <Icon name="forward" />} {HANDOFF_TEXT.move}
             </Button>
           </div>
         </form>
@@ -378,14 +447,16 @@ function HandoffProgress({
   return (
     <Dialog
       open
-      title={done ? 'Session moved' : over ? 'The session did not move' : 'Moving the session'}
+      title={
+        done ? HANDOFF_TEXT.doneTitle : over ? HANDOFF_TEXT.failedTitle : HANDOFF_TEXT.movingTitle
+      }
       onClose={onClose}
       className="ws-wide-dialog"
       footer={
         <>
-          {over && !done ? <Button onClick={onRetry}>Choose another target</Button> : null}
+          {over && !done ? <Button onClick={onRetry}>{HANDOFF_TEXT.another}</Button> : null}
           <Button variant={over ? 'primary' : 'default'} onClick={onClose}>
-            {over ? 'Close' : 'Close and keep moving'}
+            {over ? HANDOFF_TEXT.close : HANDOFF_TEXT.closeKeep}
           </Button>
         </>
       }
@@ -399,11 +470,11 @@ function HandoffProgress({
             {s.text}
           </Badge>{' '}
           {move.status === 'pending'
-            ? 'Waiting for the running turn to end.'
+            ? HANDOFF_TEXT.waiting
             : move.status === 'running'
-              ? 'Sending the Git state and checking it there.'
+              ? HANDOFF_TEXT.sending
               : done
-                ? `It continues in ${move.folder ?? move.toLabel}.`
+                ? HANDOFF_TEXT.continues({ folder: move.folder ?? move.toLabel })
                 : null}
         </p>
         {why ? (
@@ -412,20 +483,30 @@ function HandoffProgress({
             <span>{why}</span>
           </p>
         ) : null}
-        {move.detail && !done ? <p className="muted cl-small">{move.detail}</p> : null}
+        {move.detail && !done ? (
+          <p className="muted cl-small" dir="auto">
+            {move.detail}
+          </p>
+        ) : null}
         {move.git ? (
           <p className="muted cl-small">
-            {move.git.branch ? `Branch ${move.git.branch}, ` : ''}commit{' '}
-            {shortHash(move.git.head, 7)},{' '}
-            {move.git.files === 1 ? '1 changed file' : `${move.git.files} changed files`}
-            {move.git.bundleCommits ? `, ${move.git.bundleCommits} local commits` : ''}. State{' '}
-            {shortHash(move.git.stateHash)}.
+            {(() => {
+              const g = {
+                commit: shortHash(move.git.head, 7),
+                files: move.git.files,
+                local: move.git.bundleCommits ?? 0,
+                state: shortHash(move.git.stateHash),
+              };
+              return move.git.branch
+                ? HANDOFF_TEXT.gitBranch({ ...g, branch: move.git.branch })
+                : HANDOFF_TEXT.git(g);
+            })()}
           </p>
         ) : null}
         {done && move.source === 'clean' ? (
-          <p className="muted cl-small">The changes were cleaned up in the old folder.</p>
+          <p className="muted cl-small">{HANDOFF_TEXT.cleaned}</p>
         ) : null}
-        {over && !done ? <p className="muted cl-small">The session stayed where it was.</p> : null}
+        {over && !done ? <p className="muted cl-small">{HANDOFF_TEXT.stayed}</p> : null}
       </div>
     </Dialog>
   );

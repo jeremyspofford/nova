@@ -198,7 +198,41 @@ credential; it ends its own open fallback sessions at start and closes unknown d
 (`/agent/v1/bridge/events` is a `novad` route; a renewed certificate the device presents retires the
 old one).
 
-More options: `NOVA_SECRETS=keychain|vault`, `NOVA_TLS_CERT` / `NOVA_TLS_KEY` (HTTPS),
+M8 (decisions in ADR-097) adds seven areas and changes the start. `app.ts` now sets up `managed`
+first (every other area reads its settings layer), then ops → policy → mcp → plugins → hooks →
+sdk → … as before, and `market`, `datactl`, `appAuth` and `otlp` after sync; `quiesceHub` stops new
+turns, schedulers and node checks and closes the other areas before delete-all or an import, and
+`main.ts` restarts the Hub in-process afterwards and installs crash reporting. The model router is
+wrapped in `withSpendCaps`. Every route is classified once in `packages/core/src/team/routes.ts`
+(`test/routes.test.ts` fails on an unclassified route), and the request log writes the route
+pattern, never the path. Routes are in `contracts/hub-api.md` §1.
+
+| File | Area | Routes |
+| --- | --- | --- |
+| `managed.ts` | Managed policy (FR-106): the protected file, the signed remote policy and its refresh, the test layer (`NOVA_MANAGED_SETTINGS_FILE` only with `NODE_ENV=test` or `--allow-test-policy`), the managed settings layer, the settings guard for `managed.*` and policy-refused values, one `managed.denied` audit per refusal; the `managed` probe | `GET /managed` (member), `POST /managed/reload` (owner) |
+| `sdk.ts` | Extensions (FR-117): install, `nova dev`, contributions, commands and status items, secrets; the `ext:` tool source, plugin permissions with extensions, the hook client and gate for SDK hooks, panels for MCP Apps; reacts to `sdk.enabled`, `managed.policy.changed` and trusted publishers; the `extensions` probe | `GET`/`POST /extensions`, `POST /extensions/preview`, `POST /extensions/dev`, `GET /extensions/contributions`, `GET`/`PATCH`/`DELETE /extensions/:id`, `POST /extensions/:id/commands/:command/run`, `POST /extensions/:id/status/:item/click`, `PUT`/`DELETE /extensions/:id/secrets/:name` |
+| `market.ts`, `mcp-market.ts` | The marketplace (FR-049): the built-in sample catalog `examples/catalog` with its pinned key, the owner's catalogs, installers for every kind (the MCP one from `mcp-market.ts`: registry entries and `.mcpb` bundles), ratings, pets | under `/market`: `GET catalogs`, `GET items`, `GET items/:catalogId/:kind/:id[/screenshots/:n]`, `POST preview`, `POST install`, `GET installed`, `DELETE installed/:kind/:id`, `GET`/`PUT ratings`, `DELETE ratings/:kind/:id`, `GET pets`, `GET pets/:id/files/*` |
+| `datactl.ts` | Data controls (FR-105, FR-116, FR-115, FR-121): export (streamed, ticket downloads), delete-all, import, retention sweeps (hourly check, daily sweep), crash reports, spend caps and provider limits; the `dataControls` probe | under `/data`: `GET`, `POST export`, `POST export/ticket`, `GET export/download`, `POST delete-all`, `POST import/upload`, `DELETE import/uploads/:id`, `POST import/check`, `POST import`, `GET retention`, `POST retention/sweep`, `GET`/`DELETE crash-reports`, `GET crash-reports/:id/preview`, `POST crash-reports/:id/send`, `DELETE crash-reports/:id`; under `/usage`: `GET caps`, `PUT`/`DELETE caps/:provider`, `GET limits`, `POST clear` |
+| `appauth.ts` | Third-party apps (FR-222): registration, consent, the token and revocation endpoints, the app-token gate (`APP_ROUTE_SCOPES` only, Bearer only), the hourly call audit; `nva_` tokens authenticate through `auth.ts` once the gate is installed | the public `POST /apps/register`, `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server`; owner `GET`/`POST /apps/authorize`, `GET /apps`, `DELETE /apps/:id`, `GET /apps/pending`, `DELETE /apps/pending/:clientId` |
+| `otlp.ts` | OTLP export (FR-223): request spans and metrics, the log sink, header values in the vault, reconfiguration on settings and policy changes; the `otlp` probe | `GET`/`PUT /telemetry/otlp`, `POST /telemetry/otlp/test` |
+
+Extended areas: `channels.ts` (email OAuth: `POST /channels/:id/oauth/start`,
+`DELETE /channels/:id/oauth`, the public `GET /channels/oauth/callback`; Telegram files; files in the
+message log; on `team.member.removed` it stops the member's pollers and revokes their mailboxes'
+tokens); `team.ts` (`GET /team/removed`, `POST /team/removed/:id/purge`,
+`GET /team/removed/:id/export` (the data controls' `memberExporter`, wired in `app.ts`), `GET /team/me/access`, the hourly purge
+sweep; the member guard reads the route classification); `mcp.ts` (managed checks on add, change,
+enable and policy change, `bundle_launch`, the marketplace's MCP installer, the OAuth callback's
+`iss` guard); `mcp-apps.ts` (`UiEntryPointView.domains`, extension panels); `spaces.ts` (`PUT /spaces/:id/order`,
+`GET /spaces/:id/pages/:pageId/deletion`, `GET /spaces/:id/deleted-pages`,
+`POST /spaces/:id/pages/:pageId/undelete`, `POST /sites/:id/source-preview`,
+`POST /sites/:id/publish-plan`, and the owner's hosting targets: `GET`/`POST /sites/targets`,
+`GET`/`PATCH`/`DELETE /sites/targets/:targetId`, `POST /sites/targets/:targetId/check`); `plugins.ts` and
+`hooks.ts` (managed hooks re-read on `managed.policy.changed`); `tools.ts` (managed folder rules in
+the tool scope, spend caps for image generation).
+
+More options: `--allow-test-policy` (M8: honour `NOVA_MANAGED_SETTINGS_FILE` as a test layer),
+`NOVA_SECRETS=keychain|vault`, `NOVA_TLS_CERT` / `NOVA_TLS_KEY` (HTTPS),
 `NOVA_SANDBOX=auto|docker|podman|bwrap|microvm|off` (M6 adds bubblewrap and the micro-VM stub;
 `auto` tries a container engine, then bubblewrap), `NOVA_SANDBOX_IMAGE` (terminals and command hooks
 run in this image; the sample plugin's hook needs Node in it), `NOVA_DETECT_URLS`,

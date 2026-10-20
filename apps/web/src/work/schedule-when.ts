@@ -2,29 +2,61 @@
 // weekdays, weekly on a day, every N minutes or hours, once) map to cron, an interval or a
 // one-shot time; anything else is typed as cron or an RRULE in the advanced field. Rules are
 // evaluated by the Hub in the schedule's timezone; this file only builds and describes them.
+import { defineMessages, fmt, subscribe } from '@nova/i18n';
 import type { ScheduleWhen } from '@nova/shared';
 
 export const REPEATS = ['daily', 'weekdays', 'weekly', 'interval', 'once', 'advanced'] as const;
 export type Repeat = (typeof REPEATS)[number];
 
-export const REPEAT_TEXT: Record<Repeat, string> = {
+export const REPEAT_TEXT = defineMessages('work.repeat', {
   daily: 'Every day',
   weekdays: 'Weekdays (Monday to Friday)',
   weekly: 'Every week',
   interval: 'Every few minutes or hours',
   once: 'Once',
   advanced: 'Advanced (cron or RRULE)',
-};
+}) satisfies Record<Repeat, string>;
 
-export const WEEKDAYS = [
-  'Sunday',
-  'Monday',
-  'Tuesday',
-  'Wednesday',
-  'Thursday',
-  'Friday',
-  'Saturday',
-] as const;
+/** A schedule's rule in words, and what to fix in the picker. */
+export const WHEN_TEXT = defineMessages('work.when', {
+  /** {time} is a 24-hour time, such as "09:00". */
+  daily: 'Every day at {time}',
+  weekdays: 'Weekdays at {time}',
+  /** {day} is the day of the week, 0 for Sunday to 6 for Saturday. */
+  weekly:
+    '{day, select, 0 {Every Sunday at {time}} 1 {Every Monday at {time}} 2 {Every Tuesday at {time}} 3 {Every Wednesday at {time}} 4 {Every Thursday at {time}} 5 {Every Friday at {time}} 6 {Every Saturday at {time}} other {Every week at {time}}}',
+  interval:
+    '{unit, select, hours {{n, plural, one {Every hour} other {Every # hours}}} other {{n, plural, one {Every minute} other {Every # minutes}}}}',
+  /** {expr} is a cron expression, shown as typed. */
+  cron: 'Cron: {expr}',
+  /** {rule} is an RRULE, shown as typed. */
+  rule: 'Rule: {rule}',
+  /** {at} is the time as stored, when it cannot be read as a date. */
+  onceAt: 'Once at {at}',
+  /** {date} is a date and time, such as "Oct 20, 2026, 9:00 AM". */
+  onceOn: 'Once on {date}',
+  enterTime: 'Enter a time, for example 09:00.',
+  enterInterval: 'Enter a whole number: at least 1 minute and at most 366 days.',
+  chooseDate: 'Choose a date and time.',
+  enterRule: 'Enter a cron expression with five fields, or an RRULE that starts with FREQ=.',
+});
+
+/** The days of the week in the active locale, Sunday first (index 0, as cron counts them). */
+export function weekdayNames(): string[] {
+  // 1970-01-04 was a Sunday.
+  return Array.from({ length: 7 }, (_, i) =>
+    fmt.date(Date.UTC(1970, 0, 4 + i), { weekday: 'long', timeZone: 'UTC' }),
+  );
+}
+
+/**
+ * The days of the week in the active locale, Sunday first. A live binding, updated when the
+ * locale changes: read it at render time; `weekdayNames()` gives the same list.
+ */
+export let WEEKDAYS: readonly string[] = weekdayNames();
+subscribe(() => {
+  WEEKDAYS = weekdayNames();
+});
 
 export interface WhenDraft {
   repeat: Repeat;
@@ -94,7 +126,7 @@ export function whenFromDraft(d: WhenDraft): { when: ScheduleWhen } | { error: s
     case 'weekdays':
     case 'weekly': {
       const t = TIME.exec(d.time);
-      if (!t) return { error: 'Enter a time, for example 09:00.' };
+      if (!t) return { error: WHEN_TEXT.enterTime };
       const dow = d.repeat === 'daily' ? '*' : d.repeat === 'weekdays' ? '1-5' : String(d.day);
       return { when: { cron: `${Number(t[2])} ${Number(t[1])} * * ${dow}` } };
     }
@@ -102,22 +134,19 @@ export function whenFromDraft(d: WhenDraft): { when: ScheduleWhen } | { error: s
       const n = Number(d.every);
       const seconds = n * (d.unit === 'hours' ? 3600 : 60);
       if (!/^\d+$/.test(d.every.trim()) || n < 1 || seconds > MAX_INTERVAL)
-        return { error: 'Enter a whole number: at least 1 minute and at most 366 days.' };
+        return { error: WHEN_TEXT.enterInterval };
       return { when: { intervalSeconds: seconds } };
     }
     case 'once': {
       const at = new Date(d.at);
-      if (!d.at || Number.isNaN(at.getTime())) return { error: 'Choose a date and time.' };
+      if (!d.at || Number.isNaN(at.getTime())) return { error: WHEN_TEXT.chooseDate };
       return { when: { at: at.toISOString() } };
     }
     case 'advanced': {
       const expr = d.expr.trim();
       if (/^(RRULE:)?FREQ=/i.test(expr)) return { when: { rrule: expr } };
       const fields = expr.split(/\s+/).filter(Boolean).length;
-      if (fields < 5 || fields > 6)
-        return {
-          error: 'Enter a cron expression with five fields, or an RRULE that starts with FREQ=.',
-        };
+      if (fields < 5 || fields > 6) return { error: WHEN_TEXT.enterRule };
       return { when: { cron: expr } };
     }
   }
@@ -125,29 +154,27 @@ export function whenFromDraft(d: WhenDraft): { when: ScheduleWhen } | { error: s
 
 /** A rule in words: "Every day at 09:00", "Every Monday at 08:30", "Every 2 hours". */
 export function whenText(when: ScheduleWhen): string {
+  const S = WHEN_TEXT;
   if ('cron' in when || 'intervalSeconds' in when) {
     const d = draftFromWhen(when, new Date(0));
     switch (d.repeat) {
       case 'daily':
-        return `Every day at ${d.time}`;
+        return S.daily({ time: d.time });
       case 'weekdays':
-        return `Weekdays at ${d.time}`;
+        return S.weekdays({ time: d.time });
       case 'weekly':
-        return `Every ${WEEKDAYS[d.day] ?? 'week'} at ${d.time}`;
-      case 'interval': {
-        const n = Number(d.every);
-        const unit = d.unit === 'hours' ? 'hour' : 'minute';
-        return n === 1 ? `Every ${unit}` : `Every ${n} ${unit}s`;
-      }
+        return S.weekly({ day: String(d.day), time: d.time });
+      case 'interval':
+        return S.interval({ unit: d.unit, n: Number(d.every) });
       default:
-        return `Cron: ${'cron' in when ? when.cron : ''}`;
+        return S.cron({ expr: 'cron' in when ? when.cron : '' });
     }
   }
-  if ('rrule' in when) return `Rule: ${when.rrule}`;
+  if ('rrule' in when) return S.rule({ rule: when.rrule });
   const at = new Date(when.at);
   return Number.isNaN(at.getTime())
-    ? `Once at ${when.at}`
-    : `Once on ${at.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+    ? S.onceAt({ at: when.at })
+    : S.onceOn({ date: fmt.dateTime(at, { dateStyle: 'medium', timeStyle: 'short' }) });
 }
 
 /** The browser's IANA timezone, the default for a new schedule. */

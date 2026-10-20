@@ -3,26 +3,35 @@
 // until then `useSpacesApi` reads them from the same services object.
 import type { z } from 'zod';
 import type {
+  DeletedPageView,
   PageCommentView,
+  PageDeletionView,
   PageProposalView,
   PageSummaryView,
   PageVersionView,
   PageView,
   SiteDataSourceView,
+  SiteHostingTargetView,
+  SitePublishPlanView,
   SitePublishResult,
   SitePublishView,
+  SiteSourcePreviewView,
   SiteVersionView,
   SiteView,
   SpaceView,
   acceptProposalSchema,
   buildSiteSchema,
   createCommentSchema,
+  createHostingTargetSchema,
   createPageSchema,
   createSiteSchema,
   createSpaceSchema,
+  publishPlanSchema,
   publishSiteSchema,
   restorePageSchema,
   savePageSchema,
+  siteSourcePreviewSchema,
+  updateHostingTargetSchema,
   updatePageSchema,
   updateSiteSchema,
   updateSpaceSchema,
@@ -127,6 +136,38 @@ export function spacesApi(call: HubCall) {
     sitePreviewUrl: (id: string, version: number) => `${site(id)}/versions/${version}/preview`,
     /** A version as a zip download. */
     siteZipUrl: (id: string, version: number) => `${site(id)}/versions/${version}/zip`,
+
+    // ---- M8: page order and deleted pages (FR-036) ---------------------------------------------
+    /** The whole order in one write; 409 `order_stale` when the pages changed meanwhile. */
+    reorderSpacePages: (spaceId: string, pageIds: string[]) =>
+      call<{ items: PageSummaryView[] }>('PUT', `${space(spaceId)}/order`, { pageIds }),
+    /** What deleting a page takes with it, for the confirmation. */
+    getPageDeletion: (spaceId: string, pageId: string) =>
+      call<PageDeletionView>('GET', `${page(spaceId, pageId)}/deletion`),
+    listDeletedPages: (spaceId: string) =>
+      call<{ items: DeletedPageView[] }>('GET', `${space(spaceId)}/deleted-pages`),
+    /** Bring a deleted page back with its history and comments. */
+    undeleteSpacePage: (spaceId: string, pageId: string) =>
+      call<PageView>('POST', `${page(spaceId, pageId)}/undelete`, {}),
+
+    // ---- M8: a site's source, publish plans and hosting targets (FR-037) -----------------------
+    /** What a build from another source would make, against the latest version. */
+    previewSiteSource: (id: string, body: z.input<typeof siteSourcePreviewSchema>) =>
+      call<SiteSourcePreviewView>('POST', `${site(id)}/source-preview`, body),
+    /** What publishing a version to a target would do (owner). */
+    planSitePublish: (id: string, body: z.input<typeof publishPlanSchema>) =>
+      call<SitePublishPlanView>('POST', `${site(id)}/publish-plan`, body),
+    listSiteTargets: () => call<{ items: SiteHostingTargetView[] }>('GET', `${V1}/sites/targets`),
+    createSiteTarget: (body: z.input<typeof createHostingTargetSchema>) =>
+      call<SiteHostingTargetView>('POST', `${V1}/sites/targets`, body),
+    updateSiteTarget: (id: string, body: z.input<typeof updateHostingTargetSchema>) =>
+      call<SiteHostingTargetView>('PATCH', `${V1}/sites/targets/${enc(id)}`, body),
+    /** 409 `target_in_use` while a site is published there. */
+    deleteSiteTarget: (id: string) =>
+      call<{ ok: true }>('DELETE', `${V1}/sites/targets/${enc(id)}`),
+    /** Try the connection; the outcome is kept on the target (`lastCheck`). */
+    checkSiteTarget: (id: string) =>
+      call<SiteHostingTargetView>('POST', `${V1}/sites/targets/${enc(id)}/check`, {}),
   };
 }
 

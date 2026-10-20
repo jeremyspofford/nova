@@ -60,7 +60,19 @@ extension bridge's events come from `novad` like its heartbeats:
 | `POST /agent/v1/bridge/events` | The device credential (`nvc_…`) as a bearer token, and the device certificate under mutual TLS, as for heartbeats (§3); the credential must name a managed `novad` device, else 401 `auth_missing` |
 
 The request log writes the route pattern for `/boot/` paths, never the token, and the redactor's
-Nova-token rule covers `nvb_`.
+Nova-token rule covers `nvb_`. Since M8 the request log writes the matched route pattern for every
+request (`unmatched` otherwise), never the path, so no token in a path is logged or exported.
+
+M8 adds (ADR-097; same list). Third-party apps sign in with OAuth 2.0 (app tokens below); the email
+OAuth callback is a redirect target like the MCP one:
+
+| Route | How it authenticates |
+| --- | --- |
+| `POST /api/v1/apps/register` | None (an app registers itself), or the owner's session. Without the owner's session: refused while `apps.openRegistration` is off (403 `policy_denied` `{reason: registration_closed}`), 10 an hour per client address (429 `rate_limited` `{reason: address_rate_limited}`), at most 100 apps waiting for approval Hub-wide (429 `{reason: too_many_pending_apps}`), each lapsing after 1 hour unapproved. Registering grants nothing: the owner approves every app |
+| `POST /api/v1/oauth/token` | A one-use authorization code with its PKCE verifier, redirect URI and `client_id`, or a refresh token with its `client_id`. 60 a minute per address (`slow_down`) |
+| `POST /api/v1/oauth/revoke` | The token itself plus its `client_id`. 60 a minute per address |
+| `GET /.well-known/oauth-authorization-server` | None: the Hub's OAuth metadata (RFC 8414), no account data |
+| `GET /api/v1/channels/oauth/callback` | The single-use 10-minute state of an email mailbox's OAuth sign-in (`POST /api/v1/channels/:id/oauth/start`); it only ever redirects to `/settings/channels?oauth=ok\|error` |
 
 Telegram webhooks arrive on the existing `POST /api/v1/channels/:id/inbound` (the secret-token
 header the Hub generated), and so do Slack button presses (form-encoded, the same signing-secret
@@ -70,11 +82,28 @@ The Relay adds no public Hub route: requests a client tunnels through it are dis
 Hub's own routes and authenticate like direct ones (`/api/v1/relay` below); since M7 the tunnel
 also passes `Idempotency-Key`.
 
+**Route classification (M8, D7 of ADR-097; closes R-032).** Every route the Hub registers is
+listed exactly once, by method and pattern, in `packages/core/src/team/routes.ts` with one class:
+`public` (authenticates another way or not at all: the tables above), `owner`, `member` (any
+signed-in account, which sees only its own data), `device` (`/agent/v1` with the device
+credential), `node` (`/node/v1`) or `app` (`/mcp` with a client token). The web shell's static files
+are an explicit list (`WEB_SHELL_ROUTES`: `/`, `/index.html`, `/sw.js`, `/manifest.webmanifest`,
+`/icon.svg`, `/icon-maskable.svg` and plain files under `GET /assets/*`). The member guard reads
+this list: for an account that is not the owner, an `owner` route and any route nobody classified
+are refused with 403 `policy_denied` `{reason: owner_only}` (fail closed, anywhere, not only under
+`/api`). `apps/hub/test/routes.test.ts` runs over the fully wired Hub and fails on an unclassified
+route, a listed route that no longer exists, a web-shell entry not served, an app-scoped route
+(below) that is not a member route, and an owner route a member can reach; it also checks every
+owner and member route answers 401 without a session. The owner routes, as before, are what
+administers the Hub or reaches its machine; `GET /api/v1/team/me/access` (Team, M8) tells a member
+which routes they are refused. Each M8 route below names its class.
+
 **Members (M7, decision 5 of ADR-095).** A Hub may have several people: the owner and members
 (each their own account) and team agents' identity accounts (which never sign in). Every
 account-scoped route shows a caller only its own account's data. Routes that administer the Hub
 or reach its machine are the owner's: any other account gets 403 `policy_denied`
-`{reason: owner_only}`. The list is `OWNER_ONLY_ROUTES` in `packages/core/src/team/access.ts`:
+`{reason: owner_only}`. The M7 list was `OWNER_ONLY_ROUTES` in `packages/core/src/team/access.ts`
+(since M8 derived from the classification above); it covered:
 `/api/v1/settings` (all methods; members keep their own appearance, keyboard and onboarding
 preferences at `/api/v1/team/me/settings`), `PUT /presets`, `/providers/detect`, `GET/PATCH /trust`,
 `/trust/renew`, everything under `/network`, `/relay`, `/devices`, `/nodes` and (M7.5) `/oob`,
@@ -89,6 +118,29 @@ The M7.5 firmware, boot, device operation and extension bridge routes fall under
 out-of-band management under `/oob`; the firmware, out-of-band and bridge services also refuse a
 member themselves (`owner_only`). The local browser fallback's consents and sessions
 (`/browser/fallback`) are account-scoped.
+
+**App tokens (M8, FR-222, D6 of ADR-097).** A third-party app's access token is `nva_` followed
+by 43 base64url characters, sent only as `Authorization: Bearer nva_…` (in a cookie it is 401
+`token_required`). It is read-only and reaches exactly the `GET` routes of `APP_ROUTE_SCOPES`
+(`packages/core/src/appauth/scopes.ts`; `HEAD` counts as `GET`), each a member route:
+
+| Scope | Routes |
+| --- | --- |
+| `account:read` | `/api/v1/account`, `/api/v1/account/avatar` |
+| `projects:read` | `/api/v1/projects`, `/api/v1/projects/:id` |
+| `threads:read` | `/api/v1/threads`, `/api/v1/threads/:id`, `/api/v1/threads/:id/tree`, `/api/v1/search`, `/api/v1/attachments/:id`, `/api/v1/artifacts`, `/api/v1/artifacts/:id`, `/api/v1/artifacts/:id/preview`, `/api/v1/artifacts/:id/content` |
+| `runs:read` | `/api/v1/runs`, `/api/v1/runs/:id`, `/api/v1/runs/:id/activity`, `/api/v1/runs/:id/goal`, `/api/v1/runs/:id/subagents`, `/api/v1/goals`, `/api/v1/goals/:id` |
+| `memory:read` | `/api/v1/memory/items` |
+| `notifications:read` | `/api/v1/notifications` |
+| `usage:read` | `/api/v1/usage` |
+
+A listed route without its scope is 403 `policy_denied` `{reason: insufficient_scope, scope}` with
+`WWW-Authenticate: Bearer realm="nova", error="insufficient_scope", scope="…"`; every other route
+(owner routes, writes, `/mcp`, device and node routes, streams, the WebSocket) is 403
+`{reason: not_app_scoped}`. Each refusal is audited as `app.call`; allowed calls are counted and
+audited once an hour per app (`app.calls`). A token works only while app authorization is allowed:
+managed `restrict.apps: false` (403 `{reason: managed}`) or `apps.enabled` off (`apps_disabled`)
+stops every token at once.
 
 ### Idempotent writes (M7, FR-112, decision 2 of ADR-095)
 
@@ -202,7 +254,7 @@ public (table above). Owner routes need a session.
 | `POST` | `/api/v1/projects/:id/folders/:fid/reindex` | Index the folder again; returns it |
 | `DELETE` | `/api/v1/projects/:id/folders/:fid` | Unbind; its sources leave retrieval at once and the files on disk are untouched |
 | `GET/POST` | `/api/v1/threads` | List (`mode`, `archived`, `q`, `projectId`, `cursor`, `limit`; pinned first, then most recent; side chats excluded) / create conversations (`temporary`, `memoryOptOut`, `projectId`). Shapes: `packages/shared/src/api.ts`. Since M5 each listed `ThreadView` carries `derived` `{status: needs_input\|blocked\|running\|ready, reason}` (FR-215), counting its child threads |
-| `GET/PATCH/DELETE` | `/api/v1/threads/:id` | Thread with its active path, version info, citations and follow-up queue (its `thread.derived` filled as in the list; since M5 a user message Nova started has `provenance` `run\|schedule\|goal\|subagent\|system` (M7: `sync` for a user message a replica wrote offline, `offline` for an answer a device's local model wrote), a compaction is a `summary` message with a `compaction` part, and a reply may carry a `notice` part) / rename, pin, archive, model, reasoning level, memory opt-out, project / soft delete; a temporary thread is purged (FR-027) |
+| `GET/PATCH/DELETE` | `/api/v1/threads/:id` | Thread with its active path, version info, citations and follow-up queue (its `thread.derived` filled as in the list; since M5 a user message Nova started has `provenance` `run\|schedule\|goal\|subagent\|system` (M7: `sync` for a user message a replica wrote offline, `offline` for an answer a device's local model wrote), a compaction is a `summary` message with a `compaction` part, and a reply may carry a `notice` part; M8: a user message of a shared thread carries `author: {accountId, displayName}` (nothing else; absent on private threads and on Nova's messages, FR-217)) / rename, pin, archive, model, reasoning level, memory opt-out, project / soft delete; a temporary thread is purged (FR-027) |
 | `POST` | `/api/v1/threads/:id/messages` | Send a message: 202 `{disposition, turnId, userMessageId, assistantMessageId, queuePosition?}`; output arrives as events (§5). Body up to 30 MB with attachments, else 413. While a turn runs, `inputMode` (or the `general.followUp` setting) decides (FR-019): `steered` joins the running turn and is applied at the start of its next model step; `queued` is persisted and runs as the next turn, surviving a restart; its id becomes the `userMessageId` of the message it creates |
 | `GET` | `/api/v1/threads/:id/queue` | Queued follow-ups, oldest first |
 | `DELETE` | `/api/v1/threads/:id/queue/:queuedId` | Cancel a queued follow-up |
@@ -397,8 +449,8 @@ The "reference past chats" toggle (FR-205) is the setting `memory.referencePastC
 | `GET/DELETE` | `/api/v1/mcp/subscriptions/:id` | One `McpSubscriptionView` / unsubscribe (`nova/events/unsubscribe`, best effort): the row stays as `removed`, its trigger is turned off and its secret deleted; the webhook then answers 410. Returns the view. Audited as `mcp.subscription.remove`; `mcp.subscription.changed` `{status: removed}`. Deleting an MCP server unsubscribes its subscriptions first, while it is still connected |
 | `GET` | `/api/v1/mcp/event-sources` | Connected servers that advertise events (experimental capability `nova/events` `{events: [{name, description?}]}`): `{items: [{serverId, name, events}]}` |
 | `POST` | `/api/v1/mcp/events/:subscriptionId` | **Public: webhook receiver** for MCP events. No session: `x-nova-event-id` (≤ 200), `x-nova-event-timestamp` (Unix seconds or ISO-8601, within 5 minutes) and `x-nova-event-signature: sha256=<hex>`, HMAC-SHA256 with the subscription's secret over `<id>.<timestamp>.<raw body>`, constant-time. An unknown or removed subscription is 410; a body over 256 KiB is 413; a missing header, a stale timestamp or a wrong signature is 401 `token_required`; a body that is not JSON is 400 `validation`. Each refusal is audited as `mcp.event.rejected` and noted in the subscription's `lastError`; nothing is stored. A delivery id seen before (kept 7 days) is 200 `{ok: true, duplicate: true}` and starts nothing. Otherwise 200 `{ok: true, duplicate: false, outcome: started\|duplicate\|skipped\|failed, runId}`: the trigger fires with the payload as untrusted data. Error bodies here are `{error: {code, message, retryable: false}}` without `requestId`. `mcp.event.received` (also for a repeat, with `duplicate: true`) |
-| `GET/POST` | `/api/v1/plugins` | Installed plugins as `PluginView` (status `ok\|needs_trust\|disabled\|error`, verified, confirmed permissions, component counts) (FR-045) / install `{previewId, confirmSideload, enable?, trustHooks?: [{id, contentHash}]}` (201). No plugin is verified until signing lands (FR-049), so `confirmSideload: true` is required (`validation` `{field: confirmSideload, reason: sideload_confirmation_required}`). An expired preview is 410 `request_expired`; a folder that changed or went away after the preview is `conflict`. Installs run one at a time; an update swaps the version folder atomically and rolls back on failure. The plugin's MCP servers become servers with source `plugin`, named by manifest key (`-2`, `-3` on a clash); literal env and header values go to the vault, references must be `secret://plugin/<pluginId>/…`, `deviceId` is refused and `auth` is ignored with a warning. Node servers get `NODE_PATH` set to Nova's own `node_modules`. `plugin.installed` / `plugin.updated` |
-| `POST` | `/api/v1/plugins/preview` | What installing would do `{source}`: `{kind: path, path}` (a folder on the Hub), `{kind: catalog, catalogId, pluginId, version?}` or `{kind: git, url, ref?}`. Returns `PluginPreview` (manifest, permissions, hooks with their hashes, MCP servers, skills, warnings, `replaces` on update); held in memory for 30 min with a digest of the whole folder. Nothing is installed |
+| `GET/POST` | `/api/v1/plugins` | Installed plugins as `PluginView` (status `ok\|needs_trust\|disabled\|error`, verified, confirmed permissions, component counts) (FR-045) / install `{previewId, confirmSideload, enable?, trustHooks?: [{id, contentHash}]}` (201). No plugin is verified until signing lands (FR-049), so `confirmSideload: true` is required (`validation` `{field: confirmSideload, reason: sideload_confirmation_required}`). An expired preview is 410 `request_expired`; a folder that changed or went away after the preview is `conflict`. Installs run one at a time; an update swaps the version folder atomically and rolls back on failure. The plugin's MCP servers become servers with source `plugin`, named by manifest key (`-2`, `-3` on a clash); literal env and header values go to the vault, references must be `secret://plugin/<pluginId>/…`, `deviceId` is refused and `auth` is ignored with a warning. Node servers get `NODE_PATH` set to Nova's own `node_modules`. `plugin.installed` / `plugin.updated`. M8: `acceptPublisherChange?` on install: installing over an extension signed by another publisher (or a signed one by an unsigned plugin) is 400 `{field: acceptPublisherChange, reason: publisher_change_confirmation_required}` without it (the preview warns first); accepting clears the extension's secrets and data (audited `extension.publisher.change`, `via: plugins`) |
+| `POST` | `/api/v1/plugins/preview` | What installing would do `{source}`: `{kind: path, path}` (a folder on the Hub), `{kind: catalog, catalogId, pluginId, version?}` or `{kind: git, url, ref?}`. Returns `PluginPreview` (manifest, permissions, hooks with their hashes, MCP servers, skills, warnings, `replaces` on update); held in memory for 30 min with a digest of the whole folder. Nothing is installed. M8: `publisherChange: {from, to}\|null`, each side `{key (null: not signed), name (only for a trusted key), fingerprint, trusted}`: set when installing would replace an extension signed by another publisher (or a signed one by an unsigned plugin), so the dialog asks for `acceptPublisherChange` before the first Install |
 | `PATCH/DELETE` | `/api/v1/plugins/:id` | Enable or disable `{enabled}` (its servers, skills and hooks follow; `plugin.updated`) / uninstall: its servers and their secrets, roles, skill state and files go (`plugin.removed`) |
 | `GET` | `/api/v1/plugins/catalogs` | Catalog sources as `CatalogView` (`local\|url\|git`): the built-in sample catalog `nova-sample` plus the `plugins.catalogs` setting |
 | `GET` | `/api/v1/plugins/catalog?q=` | Search every catalog: `CatalogEntryView` with the installed version. Folder catalogs read `catalog.json` or `nova-catalog.json`; URL catalogs need https, an index ≤ 1 MB and same-host zip archives ≤ 50 MB (optional SHA-256 check); Git catalogs take https, ssh or git URLs, cloned shallow with Git hooks off, and answer `capability_missing` when Git is not installed |
@@ -416,9 +468,7 @@ The "reference past chats" toggle (FR-205) is the setting `memory.referencePastC
 | `PUT` | `/api/v1/ui/context` | An open app's model-visible context `{threadId, entryId, instanceId, text}` (`text` ≤ 16,000 characters; `null` clears it); returns `{ok: true}`. Kept in Hub memory only (8 apps per thread, 500 threads) and added to the thread's next turn as untrusted content; parts an app marks private (`_meta["nova/private"]`) never leave the browser |
 | `GET/POST` | `/api/v1/app-authorizations` | Per-client tokens: MCP clients of Nova's MCP server (FR-192) and third-party apps (FR-222). Create returns the token once. List: `AppAuthorizationView` (revoked ones stay in the database for the audit trail and are not listed). Create `{kind: mcp_client, clientName, scopes: {tools: [..]\|"*", projects: [..]\|"*", threads: none\|read\|read_write, mode: read_only\|run_allowed}, expiresInDays?}` (1–365, default 90; `null` never expires) returns 201 `{authorization, token, endpoint}`: the token starts `nvm_` and is stored only as its SHA-256 hash. An unknown project is `validation` `{field: scopes.projects}`. The first client turns `mcpServer.enabled` on. Audited as `app_authorization.create`; `app.authorization.changed`. M4 ships `kind: mcp_client` only and `AppAuthorizationView` without `status`; the full shape is a follow-up |
 | `DELETE` | `/api/v1/app-authorizations/:id` | Revoke; open sessions close at once (calls in progress are cancelled but still answered); audited as `app_authorization.revoke` |
-| `POST` | `/api/v1/app-authorizations/requests` | A third-party app requests scopes; returns a user code and verification URL (FR-222). Not in M4 |
-| `POST` | `/api/v1/app-authorizations/requests/:id/{approve,deny}` | The user decides in a Nova client. Not in M4 |
-| `POST` | `/api/v1/app-authorizations/token` | The app exchanges an approved request for its token. Not in M4 |
+| — | (M4 sketch, replaced) | The device-code rows `POST /app-authorizations/requests`, `…/requests/:id/{approve,deny}` and `…/token` are not built: third-party apps sign in with OAuth 2.0 code + PKCE since M8 ("Third-party apps" below; ADR-097 D6). An approved app is listed and revoked here as an `AppAuthorizationView` of kind `app` |
 | `POST/GET/DELETE` | `/mcp` | **Nova's MCP server** for external MCP clients (streamable HTTP: `POST` carries JSON-RPC messages, `GET` opens the server stream, `DELETE` ends the session). Off until the user adds a client; `Authorization: Bearer` with that client's token from `/api/v1/app-authorizations`, which scopes its tools, projects, thread scope, read-only or run-allowed, and expiry. Missing, wrong, expired or revoked token → 401 `token_required`; non-allowlisted `Origin`/`Host` → 403 `origin_rejected`. Every call is audited with the client id and passes the policy engine; the `nova mcp stdio` launcher proxies to this endpoint with a token from an environment variable or file (FR-044, FR-192, ADR-075, `docs/08` §2.2). M4: while `mcpServer.enabled` is off every method answers 404 `not_found`, and turning it off closes open sessions; a 401 carries `WWW-Authenticate: Bearer realm="nova"`. Tools offered: `projects.list` (when the client has projects), `threads.list` and `threads.read` (when `threads` is not `none`; temporary chats never, and a client limited to some projects sees only their chats), plus the Hub tools its `tools` scope allows, with invalid name characters replaced (`mcp:x.y` → `mcp_x.y`). `read_only` clients get only tools whose action is a read; `tool.search` is never offered; `threads: read_write` grants read only. Calls pass the gate with origin `mcp_client`, never as the user's instruction (FR-189), and are audited as `client.call`. Resources, prompts and the `nova mcp stdio` launcher are not in M4. M7 (FR-044): it also answers `resources/list`, `resources/templates/list` and `resources/read` (chat transcripts in the client's thread scope and read-only files of its account's projects, opened with `O_NOFOLLOW`) and `prompts/list` and `prompts/get` (active skills, only for a client whose tools include `skill.load`); list calls pass the gate as `threads.list`, `projects.list` and `skills.list`, and anything out of scope or denied reads as missing; every read is audited as `client.call`. `script.run` is never served. The stdio launcher is `packages/mcp/src/launcher-main.ts` (`mcp stdio`, token from `NOVA_MCP_TOKEN` or a file) |
 
 ### Agents (M6)
@@ -650,8 +700,31 @@ text is refused (413, reported as `validation`) before it is read.
 | `GET` | `/api/v1/sites/:id/versions/:version/preview` | The version as one HTML document (a space site's pages are sections switched by in-page links, because a sandboxed frame cannot load other URLs with the session). `Content-Security-Policy: sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'`, or, only for a version built from an HTML artifact that contains a script, `sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; frame-ancestors 'self'` (never same-origin); plus `X-Frame-Options: SAMEORIGIN`, `nosniff`, `Cross-Origin-Resource-Policy: same-origin` and `Cache-Control: private, no-cache`. Nothing loads from elsewhere |
 | `GET` | `/api/v1/sites/:id/versions/:version/zip` | The files as `application/zip`, `Content-Disposition: attachment; filename="<name>-v<version>.zip"`, `nosniff`; the Hub's default CSP and `X-Frame-Options: DENY` stay |
 | `GET` | `/api/v1/sites/:id/publishes` | Publish history, newest first: `{items: SitePublishView[]}` `{id, siteId, version, target: {kind: folder, folder}\|{kind: zip}, current, revertedAt, createdAt}` |
-| `POST` | `/api/v1/sites/:id/publish` | `{version, target, confirm: true}`: the strict body without `confirm: true` is `validation`, so publishing is always explicit; an earlier version is a rollback. A folder target (`^[a-z0-9][a-z0-9-]{0,62}$`) is written under `sites.publishRoot` (default `<data>/sites`) with a `.nova-site` marker holding the site id and swapped in atomically; an existing folder without this site's marker (or a link or a file) is `conflict` `{reason: folder_in_use}`. Moving to another target removes the previous marked folder. Returns `SitePublishResult` `{site, publish, downloadUrl, folderPath}`. Audited as `site.published`; `site.published`. Remote hosting targets are not in M6 |
+| `POST` | `/api/v1/sites/:id/publish` | `{version, target, confirm: true}`: the strict body without `confirm: true` is `validation`, so publishing is always explicit; an earlier version is a rollback. A folder target (`^[a-z0-9][a-z0-9-]{0,62}$`) is written under `sites.publishRoot` (default `<data>/sites`) with a `.nova-site` marker holding the site id and swapped in atomically; an existing folder without this site's marker (or a link or a file) is `conflict` `{reason: folder_in_use}`. Moving to another target removes the previous marked folder. Returns `SitePublishResult` `{site, publish, downloadUrl, folderPath}`. Audited as `site.published`; `site.published`. M8: `target` may also be `{kind: remote, targetId, folder}` (a hosting target below; owner only): the files are uploaded into a temporary collection and swapped in with one MOVE before the publish is recorded, so a failure changes nothing; Nova replaces or removes only a folder carrying this site's `.nova-site` marker and never follows redirects. Moving away from a live remote copy that cannot be removed goes ahead and reports it in `leftBehind` `{target, location, reason}`. Views gain `remote` and `publishedRemote` (`{targetId, name (null once removed), location, publicUrl}`). The audit detail adds `targetId`, `folder` and `leftBehind` |
 | `POST` | `/api/v1/sites/:id/unpublish` | `{confirm: true}`: the live publish is marked reverted and the previous one not yet undone is live again (its folder written back), or nothing is published. Returns `SitePublishResult`; nothing published is `conflict` `{reason: not_published}`. Audited as `site.unpublished`; `site.unpublished` |
+| `PUT` | `/api/v1/spaces/:id/order` | M8 (member): the whole order in one write `{pageIds}` (every live page of the space, each once, ≤ 10,000) → `{items: PageSummaryView[]}`. A list that misses, repeats or adds a page is 409 `conflict` `{reason: order_stale}` (the Hub's order stands). Page times do not change (order is not a version). `space.pages.reordered` |
+| `GET` | `/api/v1/spaces/:id/pages/:pageId/deletion` | M8 (member): what deleting the page takes with it, for the confirmation: `PageDeletionView` `{pageId, spaceId, title, versions, comments, replies, openProposals (they end rejected and stay rejected), sites: [{id, name, publishedVersion}] (their next build leaves the page out)}`. Pages have no child pages |
+| `GET` | `/api/v1/spaces/:id/deleted-pages` | M8 (member): `{items: DeletedPageView[]}` `{id, spaceId, title, slug, version, comments, deletedAt}`: deleted pages the space keeps (until the space is deleted; no retention sweep) |
+| `POST` | `/api/v1/spaces/:id/pages/:pageId/undelete` | M8 (member): restore a deleted page where it was, with its history and comments → `PageView`. Audited as `space.page.undeleted`; `space.page.undeleted` |
+| `POST` | `/api/v1/sites/:id/source-preview` | M8 (member): `{source?, data?}` → `SiteSourcePreviewView` `{siteId, current, next: {source, sourceLabel, data}, comparedWith (the latest version, or null), files: [{path, size, change: added\|changed\|removed\|same}], size, scripts}`: what a build from another source would make, compared with the latest version; nothing is stored (the change itself is `PATCH {source}`) |
+| `POST` | `/api/v1/sites/:id/publish-plan` | M8 (owner): `{version, target}` → `SitePublishPlanView` `{siteId, version, target, remote, location, files, size, live, takesDown, reversible (false for a zip), egress: {host, allowed, message}\|null}`: what a publish would do, before the user confirms |
+| `GET/POST` | `/api/v1/sites/targets` | M8 (owner): hosting targets `{items: SiteHostingTargetView[]}` `{id, name, kind: webdav, url (the collection, ending in /), publicUrl, auth: none\|basic\|bearer, username, hasCredential, sites: [{siteId, name, folder, version}] (live there), lastCheck: {ok, at, reason, message}\|null, createdAt, updatedAt}` / create `{name (1–100), kind: webdav, url, publicUrl?, credential: {kind: none} \| {kind: basic, username, password} \| {kind: bearer, token}}` → 201, `no-store`. The credential goes to the vault (`secret://sites/target/<id>/credential`) and is never returned. A URL must be https (http only to this machine), without credentials: 400 `validation` `{reason: https_required\|credentials_in_url\|url_invalid, field}`. Audited `site.target.created`; `site.target.changed` |
+| `GET/PATCH/DELETE` | `/api/v1/sites/targets/:targetId` | M8 (owner): one target / change `{name?, url?, publicUrl?, credential?}` (a sent credential replaces the stored one; the URL cannot change while a site is live there: 409 `{reason: target_in_use}`) / remove: a soft delete (publish history keeps it, without a name) and its credential leaves the vault; 409 `target_in_use` while a site is live there. A removed or unknown target is 404 `{reason: target_missing}`. Audited `site.target.updated`/`.deleted`; `site.target.changed` |
+| `POST` | `/api/v1/sites/targets/:targetId/check` | M8 (owner): a PROPFIND on the collection through the egress policy → the view with `lastCheck`; `site.target.changed` `{change: checked}` |
+
+Hosting targets (M8, ADR-097): WebDAV over https (plain http only to this machine), 30 s per
+request, no redirects. Every request passes the egress check: the `network.egressMode` and deny
+list (with their managed values) narrowed by managed policy's own layers, whose allow lists apply;
+the owner's own allow list is not required (a target the owner set up counts as its own entry);
+`limited` refuses publishing and an unreadable policy refuses everything: 403 `policy_denied`
+`{reason: egress_denied, host}`, audited `site.egress.denied` (kind `network`). While
+`sites.remoteTargets` is off (managed policy can only turn it off), adding, checking, planning and
+publishing to targets are 403 `{reason: remote_targets_off}`; taking a site down from a target still
+works. A target that fails is 409 `conflict` with `details.reason` `target_unreachable` or
+`target_timeout` (both `retryable`), `target_auth_failed`, `target_not_found`, `target_refused` or
+`target_redirected`. If unpublishing must put an earlier version back on a target that refuses, was
+removed or is turned off, the unpublish fails as a whole. Members get the owner-only notice for
+targets, plans and remote publishing.
 
 Visualizations (FR-076) have no route: `visualize.create` saves a `chart` artifact
 (`application/json`) holding `{type: "nova.visualization", version: 1, kind: chart|diagram|notebook,
@@ -1191,6 +1264,177 @@ earlier connection), `.tab.shared`, `.tab.unshared`, `.tab.closed`, `.tab.opened
 `.grant.revoked`, `.refused`, `.history.search` (resource `device:<id>`) and `.events.refused`.
 Events: `browser.fallback.changed`, `browser.bridge.changed`, `browser.bridge.grant.changed`.
 
+### Extensions (M8, `docs/14` §4, `docs/26` §3, ADR-097 D1-D3)
+
+All owner (class `owner`; a member gets 403 `owner_only`). Bodies are 1 MiB at most, except
+`preview` and `dev` (48 MiB: a bundle travels as base64, at most 32 MiB decoded). Views are in
+`packages/shared/src/m8/sdk.ts`. Refusals on every path that reads a bundle (preview, dev, a
+rollback): 400 `validation` for a bundle over 32 MiB, a path not found on the Hub, a bundle holding
+`.git`, an archive the zip reader refuses (not a zip, an unsafe or duplicate name, too many
+entries, an entry or the total too large, overlapping or inconsistent entries, ZIP64), a manifest
+that fails [`extension-manifest.json`](schemas/extension-manifest.json) or its load checks
+(`details.issues`), `{reason: not_an_extension}`, `{reason: fs_scope_refused}` (a filesystem scope
+inside or containing the Hub's data folder), `{reason: unsafe_path}`, and
+`{reason: signature_invalid, why: signature_damaged|digest_mismatch|signature_invalid}` (a bundle
+whose signature does not match its files; audited `extension.refused`, never installable).
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/extensions` | `{items: ExtensionView[]}` `{id, name, version, description, api, signature: verified\|unverified\|dev, verified, publisher: {key, name, fingerprint, trusted}, digest, enabled, status: running\|starting\|stopped\|disabled\|error, error, permissions: ExtensionPermissionLine[], hooks, registered: {commands, panels, tools, hooks, themes, keybindings, menus, statusItems, events}, secrets: [{name, set}], installedAt, updatedAt}`. A policy-refused extension shows `stopped` with the reason in `error`; one whose installed files no longer match their digest does not start and shows `error` (audited `extension.tampered`). `stopped: {reason: managed\|managed_unreadable\|sdk_off, policy: extensions\|plugins\|unverifiedInstalls\|null}\|null` says why the Hub stopped an extension the owner left on: `managed` names the part of the policy's `restrict` that refuses it, `managed_unreadable` that a trusted source could not be read (fail closed), `sdk_off` that `sdk.enabled` is off; `error` keeps the Hub's sentence. The policy's source is not in the view (the setting the SDK reads does not record it); clients take it from `GET /api/v1/managed` |
+| `POST` | `/api/v1/extensions/preview` | `{source: {kind: upload, bundle (base64), fileName?} \| {kind: path, path}}` (a `.novax` or an extension folder on the Hub) → `ExtensionPreviewView` `{previewId, id, name, version, description, api, signature, verified, publisher, digest, sideloadReason, permissions, diff: {added, removed, changed: [{key, text, before, after}]}\|null, publisherChange: {from, to}\|null, hooks, pluginHooks, warnings, replaces}`. Nothing is installed; the preview lives 30 minutes (at most 20 kept). `permissions` are plain-words lines with a stable `key`, a `sensitive` mark and a `detail` (what can change under the key); a different detail is a changed permission |
+| `POST` | `/api/v1/extensions` | Install `{previewId, confirmSideload?, enable? (default true), trustHooks?: [{id, contentHash}] (≤ 100), acceptPublisherChange?}` → 201 `ExtensionView`. Refusals: 410 `request_expired` (preview missing, expired or another account's); 403 `policy_denied` `{reason: managed}` (managed policy refuses the extension or its plugin id, or forbids unverified installs; audited `extension.refused`); 400 `validation` `{field: confirmSideload, reason: sideload_confirmation_required}` for an Unverified bundle; 400 `{field: acceptPublisherChange, reason: publisher_change_confirmation_required}` when `publisherChange` is set (accepting clears the extension's secrets and data, audited `extension.publisher.change`). A failure after the plugin committed puts the previous version back (its kept signed bundle, verified again) or removes a first install. Audited as `extension.install` or `extension.update` with the verdict, publisher, digest, source, origin and trusted hooks; `extension.changed` |
+| `POST` | `/api/v1/extensions/dev` | `nova dev`: `{bundle, confirmSideload: true, trustHooks? (default false: true trusts every hook at this load's hashes), acceptPublisherChange?}` → `ExtensionView`; preview and install in one step, signature `dev` (always Unverified). A body without `confirmSideload: true` is 400 `{field: confirmSideload, reason: sideload_confirmation_required}`, any other shape 400 with `details.issues`; then the install refusals apply. Audited as `extension.dev.reload` |
+| `GET` | `/api/v1/extensions/contributions` | What running extensions add to the client: `ExtensionContributionsView` `{commands: [{extensionId, id, title}], panels: [{extensionId, id, title, resource, entryPoint, extensions}], themes: [{extensionId, theme}], keybindings: [{extensionId, command: "ext:<id>/<command>", key, when}], menus: [{extensionId, where: thread\|message\|file\|composer\|sidebar, items: [{id, title, command}]}], statusItems: [{extensionId, id, text, command, clickable}]}` (`clickable`: the item has a command or a click handler). Themes and keybindings are offers: nothing is applied until the user picks one |
+| `GET/PATCH/DELETE` | `/api/v1/extensions/:id` | One `ExtensionView` (404 "extension not found") / `{enabled}` (strict) → `ExtensionView`; turning on an extension managed policy refuses is 403 `policy_denied` `{extensionId, reason: managed}`; audited `extension.enable`/`.disable` / uninstall `?removeData=true\|false` → `{ok: true}`: the worker stops, the plugin, its hook rows, every secret and the kept bundle go; the data folder only with `removeData=true`. Audited `extension.uninstall`; `extension.changed` |
+| `POST` | `/api/v1/extensions/:id/commands/:command/run` | `{args?}` (JSON, at most 64 KiB) → 200 `{ok, result, error: {code, message}\|null}`; a handler failure is still 200 with `ok: false` (`extension_unavailable`, `extension_busy`, `invalid_arguments`, `timeout`, `cancelled`, `extension_stopped`, `not_registered`, `too_large`, `not_json`, or the handler's own code). 404 when the extension or a running, registered command is missing. Audited `extension.command.run` |
+| `POST` | `/api/v1/extensions/:id/status/:item/click` | Click a status item: an item with a command runs it (as above, audited); one with a click handler calls it; a plain item answers `{ok: true, result: null, error: null}`. 404 "status item not found" |
+| `PUT/DELETE` | `/api/v1/extensions/:id/secrets/:name` | Store `{value (1–10,000)}` (strict) in the vault at `secret://extension/<account>/<id>/<name>` (400 when the extension does not declare the name) / delete it → `{ok: true}`. Values are never returned (`ExtensionView.secrets` says only whether one is set). Audited `extension.secret.set`/`.delete` (kind `secret`); each read by the extension is audited `extension.secret.read` |
+
+Extension tools are registered as `ext:<extensionId>/<name>` (source `plugin`; `tool-descriptor.json`)
+and invoked like any tool; `POST /api/v1/tools/:name/invoke` takes the name URL-encoded. An
+extension's panels are entry points of `GET /api/v1/ui/entry-points` served from the bundle, with
+`domains` (`UiEntryPointView.domains`, the CSP domains the App frame header names). `POST
+/api/v1/plugins` adopts a plugin folder that holds `extension.json` as an Unverified extension.
+
+### Marketplace (M8, `docs/14` §5, `docs/08` §7, ADR-097 D2)
+
+All owner. Views are in `packages/shared/src/m8/market.ts`; `kind` is `plugin`, `skill`, `theme`,
+`pet` or `mcp`. A publisher is `MarketPublisher` `{name (only for a trusted or pinned key; a name a
+catalog claims is never shown), key, fingerprint, trusted}`. Item routes refuse a catalog that is
+not usable: 404 `not_found` (unknown catalog), 400 `validation` (it could not be read), 400
+`validation` `{reason: catalog_signature_invalid, catalogId}` (its index signature is invalid,
+including a missing signature under a pinned key; audited `market.refuse`).
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/market/catalogs` | `{items: MarketCatalogView[]}` `{id, name, location, kind: builtin\|local\|git\|url, signature: verified\|untrusted\|unsigned\|invalid, publisher, commit, items, error}`: the built-in `nova-sample` and `plugins.catalogs`; a catalog that fails says so in `error` (an invalid one lists 0 items) |
+| `GET` | `/api/v1/market/items?q=&kind=&catalogId=` | `{items: MarketItemView[]}` `{catalogId, kind, id, name, version, description, author (null when the entry names none; never the publisher's claimed name), publisher, categories, verified, permissions, screenshots (count), homepage, installedVersion, updateAvailable, rating}`: the newest version of each item, matched on id, name, description, author and categories (`q` ≤ 200); unreadable or invalid catalogs are skipped |
+| `GET` | `/api/v1/market/items/:catalogId/:kind/:id` | `MarketItemDetail`: the item plus `versions` (newest first), `changelog`, `components {hooks, roles, browserExtensions, uiEntryPoints}`, `sha256` (the expected checksum: a folder's digest) and `commit`; 404 when the catalog does not list it |
+| `GET` | `/api/v1/market/items/:catalogId/:kind/:id/screenshots/:n` | Screenshot `n` (0–7): PNG, JPEG or WebP, at most 2 MiB, with `nosniff` and `Content-Security-Policy: default-src 'none'` |
+| `POST` | `/api/v1/market/preview` | `{catalogId, kind, id, version?}` → `MarketPreview` `{previewId, catalogId, kind, id, name, version, verification: {status, reasons, publisher, vouchedBy}, permissions, diff: {from, to, added, removed, changed, hash}\|null, publisherChange: {from, to}\|null, replaces, requires: {sideloadConfirmation, permissionAcceptance, publisherChangeAcceptance}, allowed, blockedBy: managed\|sideload_disabled\|kind_not_allowed\|null, details, warnings, expiresAt}`. Fetches and checks the artifact; nothing is installed (30 minutes, at most 50 per account). `reasons` for Unverified: `catalog_unsigned`, `catalog_untrusted`, `no_checksum`, `checksum_mismatch`, `bundle_unsigned`, `bundle_untrusted`. `vouchedBy` (null when Unverified) says what vouches for a Verified item: `{catalog: {id, name, signedWith: pinned_key\|trusted_publisher, publisher}, bundle}` (`publisher` named only when trusted; `bundle` the trusted publisher that signed a `.novax`, else null). A policy block does not refuse the preview (`allowed: false`). Refusals: 400 `capability_missing` `{reason: installer_missing, kind}`; 404 (no such version); 400 `validation` `{reason: bundle_invalid, bundle: signature_damaged\|digest_mismatch\|signature_invalid}` (audited); 400 for an artifact that cannot be fetched, staged or inspected or whose id or version differs from the entry (`capability_missing` when Git is missing) |
+| `POST` | `/api/v1/market/install` | `{previewId, confirmSideload?, acceptPermissions? (the diff's hash), acceptPublisherChange?, enable? (default true), trustHooks?: [{id, contentHash}] (≤ 50), userConfig? (an MCP bundle's settings)}` → 201 `MarketInstallView` `{kind, itemId, name, version, catalogId, origin, verified, publisherKey, sha256, commit, permissions, installedAt, updatedAt}`. One install at a time. Refusals in order: 410 `request_expired`; 400 `capability_missing`; 403 `policy_denied` `{reason: kind_not_allowed\|managed\|sideload_disabled}` (audited `market.refuse`); 400 `{field: confirmSideload, reason: sideload_confirmation_required, reasons}`; 400 `{field: acceptPermissions, reason: permission_diff_not_accepted, diffHash}` (an update that adds or changes a permission); 400 `{field: acceptPublisherChange, reason: publisher_change_confirmation_required, from, to}` (an extension update by another publisher; accepting clears its secrets and data); 409 `conflict` (what is installed changed since the preview); then the installer's own refusals (managed 403, at most 50 saved themes, an MCP server name taken: 409 `{reason: name_taken}`). A failed install puts back what it replaced (audited `market.install.failed` with `rolledBack`). Audited `market.install` or `market.update`; `market.installed` or `market.updated` |
+| `GET` | `/api/v1/market/installed` | `{items: MarketInstallView[]}` |
+| `DELETE` | `/api/v1/market/installed/:kind/:id` | Remove through the kind's installer → `{ok: true}`; 404 when nothing is installed. Audited `market.remove`; `market.removed` |
+| `GET/PUT` | `/api/v1/market/ratings` | `{items: MarketRatingView[]}` / `{kind, itemId, stars (1–5), review? (≤ 2,000)}` → `MarketRatingView` `{kind, itemId, stars, review, updatedAt, shared: false}`. Ratings stay on the Hub |
+| `DELETE` | `/api/v1/market/ratings/:kind/:id` | → `{ok: true}` |
+| `GET` | `/api/v1/market/pets` | Installed pets: `{items: [{id, name, version, states: {<state>: {frames, fps, loop}}}]}` |
+| `GET` | `/api/v1/market/pets/:id/files/*` | One frame an installed pet's `pet.json` lists (PNG, APNG or WebP, a regular file in the pet's folder), `nosniff`, `Cache-Control: private, max-age=3600`; 404 "not a pet frame" otherwise |
+
+### Managed policy (M8, `docs/12` §10, `docs/14` §1.3, ADR-097 D4)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/managed` | Member. `ManagedPolicyView` `{active, failClosed (why every agent tool is denied, or null), sources: [{channel: local\|remote\|test, location, status: absent\|active\|ignored\|invalid\|refused\|unreachable, problem, inForce, cached, serial, loadedAt, checkedAt, testOverride?}], settings: [{key, value, channel: local\|remote\|test\|both, derivedFrom}], restrict: [{channel, restrict}], ignored: [{channel, key, reason: unknown_key\|invalid_value\|loosens\|unordered\|manual_mode, message}], egress: {ceilings, own, effective, note}\|null, checkedAt}`. `egress` (when a policy has an egress allow list): each source's list, the owner's own `network.egressAllow`, the hosts in force and a note when the owner's hosts fall outside the policy (`docs/14` §1.3) |
+| `POST` | `/api/v1/managed/reload` | Owner (403 `owner_only` otherwise). `{}` (strict): read the local file and fetch the remote policy again → `ManagedPolicyView`. Audited `managed.policy.reload` |
+
+`GET /api/v1/settings` reports each key's `source` (`default`, `global`, `project`, `managed`) and
+`locked`; which policy source set a key comes from `settings[].channel` above. `PATCH
+/api/v1/settings` refuses a locked key, any `managed.*` key and a policy-refused value of
+`code.permissionMode`, `code.folderModes`, `runs.autonomy`, `agents.autonomy` or
+`tools.approvalPolicy` with 403 `policy_denied` `{reason: managed, key}`. Under a policy egress allow list it also refuses an owner `network.egressAllow` holding hosts outside that ceiling (the owner's list itself stays unlocked); `GET /api/v1/egress` returns the hosts in force. Every HTTP refusal with
+`details.reason: managed`, on any route, is audited once as `managed.denied`; tool calls the policy
+denies are audited by the gate with source `managed`. Changing the command, arguments or transport
+of an MCP server installed from a bundle is always 400 `validation` `{reason: bundle_launch}`.
+
+### Data controls (M8, `docs/12` §9, ADR-097 D5)
+
+All owner (403 `owner_only` otherwise, from the guard and the handlers). Delete-all and import run
+one at a time (409 `conflict` `{reason: busy}`) and restart the Hub in-process after answering
+(`restartRequired: true`). Views are in `packages/shared/src/m8/datactl.ts`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/data` | `DataOverviewView` `{hubName (what delete-all asks for), hubVersion, schemaVersion, tables, rows, files: {count, bytes}, secrets: {count}, empty, blockingTables}` |
+| `POST` | `/api/v1/data/export` | `{passphrase? (12–1,024), confirm?}` (strict) → 200, streamed: `application/zip` (or `application/octet-stream` when sealed), `Content-Disposition: attachment; filename="nova-<date>.novaexport"`, `no-store` ([`export-manifest.json`](schemas/export-manifest.json)). A sealed export needs `confirm` equal to the Hub's name (trimmed, ignoring case; 400 `{reason: confirmation_mismatch, field: confirm}`) and is refused from a paired device's session (403 `policy_denied` `{reason: hub_only}`). Audited `data.export`; `data.exported` |
+| `POST` | `/api/v1/data/export/ticket` | The same body, checked at once → `{ticket, expiresAt}`: one use, 2 minutes, for a browser download |
+| `GET` | `/api/v1/data/export/download?ticket=` | The export the ticket names (404 `{reason: ticket_expired}` when it is missing, used, expired or another account's; `hub_only` applies again) |
+| `POST` | `/api/v1/data/delete-all` | `{confirm: <the Hub's name>}` (strict) → `DataDeleteResultView` `{deletedAt, tables, rows, files, secrets, keptPaths, restartRequired}`; 400 `confirmation_mismatch`. Audited `data.delete_all` (the first entry of the new log); `data.deleted` |
+| `POST` | `/api/v1/data/import/upload` | The archive as the raw body (`application/octet-stream` or `application/zip`; at most 512 GiB) → 201 `{uploadId, bytes, encrypted, expiresAt}` (1 hour). 400 `{reason: content_type\|too_large\|empty}` |
+| `DELETE` | `/api/v1/data/import/uploads/:id` | → `{ok: true}`; 404 |
+| `POST` | `/api/v1/data/import/check` | `{uploadId, passphrase?}` → `DataImportCheckView` `{format, hubVersion, schemaVersion, migratesFrom, createdAt, encrypted, tables, rows, files, secrets: {included, count}, toReEnter, omitted, hubEmpty, blockingTables}`; stages and vets the whole archive and writes nothing |
+| `POST` | `/api/v1/data/import` | `{uploadId, passphrase?, confirm: true}` (strict) → `DataImportResultView` `{importedAt, tables, rows, files, secrets, verified: true, toReEnter, keptTables, restoredOff: {mcpServers, plugins, agentAdapters, hooks, sessions}, restartRequired}`. 409 `{reason: hub_not_empty, tables}`. Stage and apply refusals, all 400 `validation`: `passphrase_required`, `wrong_passphrase`, `archive_damaged`, `unsupported_format`, `newer_schema` `{schemaVersion, current}`, `checksum_mismatch` `{table\|file}`, `too_large`, `disk_full` `{neededBytes, freeBytes}`, `archive_inconsistent` `{tables}`, `unknown_table`, `unsafe_path` `{table, column\|plugin}`, `foreign_secret` `{table?}`, `verify_failed` `{table}`. An account-scoped archive (a removed member's export) is refused with `account_scope`: it is kept, not imported. Audited `data.import` (`ok`, `refused` or `failed`); `data.imported` |
+| `GET` | `/api/v1/data/retention` | `RetentionView` `{items: [{item: threads\|runs\|audit\|artifacts\|traces, setting, days, floorDays, cutoff, due}], lastSweep, nextSweepAt}` |
+| `POST` | `/api/v1/data/retention/sweep` | Sweep now → `RetentionSweepView` `{id, trigger: schedule\|manual, startedAt, finishedAt, removed, skipped, error}` (a sweep already running is shared). Audited `data.retention.sweep`; `data.retention.swept` |
+| `GET/DELETE` | `/api/v1/data/crash-reports` | `{items: CrashReportView[], enabled, endpoint}` (newest first) / delete every report → `{deleted}` |
+| `GET` | `/api/v1/data/crash-reports/:id/preview` | `{body (the exact JSON that would be sent), endpoint, wouldSend, reason: off\|no_endpoint\|null}` |
+| `POST` | `/api/v1/data/crash-reports/:id/send` | Send exactly the preview → `CrashReportView`. 403 `{reason: crash_reports_off\|no_endpoint}`, 500 `{reason: send_failed}`, 404. Audited `crash.report.send` |
+| `DELETE` | `/api/v1/data/crash-reports/:id` | → `{ok: true}` |
+
+### Usage: spend caps and provider limits (M8, FR-116, FR-115, `docs/14` §6)
+
+Member routes: each account manages its own caps.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/usage/caps` | `{items: SpendCapView[]}` `{provider, limitUsd, period: day\|month, warnAt, hardStop, periodStart, resetsAt, spentUsd, fraction, state: ok\|warning\|reached, updatedAt}` |
+| `PUT/DELETE` | `/api/v1/usage/caps/:provider` | Set `{limitUsd (> 0, ≤ 1,000,000), period? (default month, UTC), warnAt? (0.05–0.99, default 0.8), hardStop? (default true)}` (strict) → `SpendCapView`; audited `spend.cap.set` / remove → `{ok: true}` (404 when none); audited `spend.cap.remove` |
+| `GET` | `/api/v1/usage/limits` | `{items: ProviderLimitView[]}`: per provider account its kind, whether it is the active one and local, `entitlements {plan, limit, used, resetAt}` (what the provider reported), the last limit error it reported, this month's spend and its cap |
+| `POST` | `/api/v1/usage/clear` | `{confirm: true}` → `{removed}`: deletes usage events (not those of active runs and goals); each cap keeps the period's spend. Audited `usage.clear` |
+
+A model call a hard-stopped cap blocks ends its reply with the error part `over_budget` (402)
+`{reason: spend_cap, provider}` and the action "Raise the cap in Settings → Profile & usage"
+(`PartView` error `details`); a capped target is dropped first, so a fallback on another provider
+still runs.
+
+### Third-party apps (M8, FR-222, `docs/12` §15.1, ADR-097 D6)
+
+The public routes are in the table at the top of §1; their errors follow OAuth (RFC 6749
+`{error, error_description}`), not §6. The owner routes need the owner's session (403 `owner_only`;
+an app token is 403 `not_app_scoped`). Views are in `packages/shared/src/m8/appauth.ts`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/.well-known/oauth-authorization-server` | Public. `{issuer, authorization_endpoint: <issuer>/authorize, token_endpoint, registration_endpoint, revocation_endpoint, scopes_supported (7), response_types_supported: [code], grant_types_supported: [authorization_code, refresh_token], code_challenge_methods_supported: [S256], token_endpoint_auth_methods_supported: [none], revocation_endpoint_auth_methods_supported: [none], authorization_response_iss_parameter_supported: true}`. The issuer is the address the request came in on |
+| `POST` | `/api/v1/apps/register` | Public (or the owner's session). `{name (1–100), redirectUris (1–10), scopes (1–7)}` or the RFC 7591 form `{client_name, redirect_uris, scope, token_endpoint_auth_method?: none, grant_types?, response_types?: [code]}` (strict) → 201 `{client_id, client_name, redirect_uris, scope, token_endpoint_auth_method: none, grant_types, response_types, client_id_issued_at}`, `no-store`. A redirect URI is `http://127.0.0.1` or `http://[::1]` on any port, or a private-use reverse-domain scheme (`com.example.app:/cb`); refused (400 `validation` `{field: redirectUris, reason}`): `invalid_uri`, `fragment`, `credentials`, `non_loopback_http` (`localhost` included), `web_redirect` (https), `scheme_not_reverse_domain`, `hub_path` (a loopback path under `/api`, `/node`, `/agent`, `/boot`, `/mcp` or `/.well-known`), `hub_address` (one of the Hub's ports). 403 `policy_denied` `{reason: managed\|apps_disabled\|registration_closed}`; 429 as in the table at the top. Audited `app.client.register` |
+| `GET` | `/api/v1/apps/authorize?<the app's request>` | Owner: what the consent page shows for `client_id, redirect_uri, response_type=code, scope?, state? (≤ 500), code_challenge, code_challenge_method=S256` → `AppConsentView` `{client: {id, name, redirectUri, redirectKind: loopback\|private_scheme, registeredAt}, scopes: [{scope, label, description, granted}], authorized}`. Refused without a redirect (the browser is never sent to an unverified address): 400 `{reason: invalid_request}` (repeated `client_id` or `redirect_uri`), 404 `{reason: unknown_client}` (also a lapsed registration), 400 `redirect_uri_required`, `redirect_uri_reserved` (a Hub path or port), `redirect_uri_mismatch` (a loopback URI matches on any port when host, path and query match). Refused with `details.redirectTo` (the app's redirect with `error`, `state` and `iss`): 403 `{reason: managed\|apps_disabled}` (`error=access_denied`), 400 `invalid_request`, `unsupported_response_type`, `invalid_scope` |
+| `POST` | `/api/v1/apps/authorize` | Owner: `{query (≤ 4,000), decision: approve\|deny, scopes? (default: all requested)}` (strict) → `{redirectTo}`, `no-store`: approve adds `code`, `state` and `iss` (the code lasts 5 minutes); deny adds `error=access_denied`. 400 `{field: scopes, reason: not_requested}`. A second approval adds scopes to the app's grant. Audited `app_authorization.create`/`.update` or `app.authorize.deny`; `app.authorization.changed` on a first approval |
+| `POST` | `/api/v1/oauth/token` | Public, form-encoded (16 KiB) or JSON. `grant_type=authorization_code` with `code, redirect_uri, client_id, code_verifier` (43–128 unreserved characters, S256), or `grant_type=refresh_token` with `refresh_token, client_id, scope?` (narrowing only) → `{access_token: "nva_…", token_type: Bearer, expires_in: 3600, refresh_token: "nva_…" (30 days, rotated on every use), scope}`, `no-store`. Errors: `invalid_request`, `unsupported_grant_type`, `unauthorized_client` (apps off), `invalid_client` (401), `invalid_grant` (a code unknown, used, expired, for another redirect URI or verifier; a refresh token unknown, revoked, used or expired; the authorization revoked or left with no scope), `invalid_scope`, `slow_down` (429). A code is burned by any failed attempt; presenting a used code revokes what it issued (`app.token.reuse`), a used refresh token its whole chain. Audited `app.token.issue`/`.refresh` |
+| `POST` | `/api/v1/oauth/revoke` | Public: `{token, token_type_hint?, client_id}` → 200 `{}` (also for an unknown token); a refresh token revokes its chain, an access token itself. `unauthorized_client` for another app's token. Audited `app.token.revoke` |
+| `GET` | `/api/v1/apps` | Owner: `{items: AppGrantView[]}` `{id, clientId, name, redirectUris, scopes, sessions (live token chains), createdAt, lastUsedAt}` |
+| `DELETE` | `/api/v1/apps/:id` | Owner: revoke the app's grant and every token → `{ok: true}`; 404. Audited `app_authorization.revoke`; `app.authorization.changed`. (`DELETE /api/v1/app-authorizations/:id` does the same) |
+| `GET` | `/api/v1/apps/pending` | Owner: `{items: AppPendingView[]}` `{clientId, name, redirectHosts, scopes, registeredAt, expiresAt}`, newest first: every registered app nobody authorizes now (`expiresAt` null for an owner registration or a revoked app) |
+| `DELETE` | `/api/v1/apps/pending/:clientId` | Owner: forget the app with its leftover codes and tokens → `{ok: true}`; 409 `{reason: authorized}` (revoke it first), 404. Audited `app.client.delete` |
+
+### Telemetry export (M8, FR-223, `docs/16` §1.1)
+
+Owner.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/telemetry/otlp` | `OtlpStatusView` `{enabled, endpoint, headers: [{name, set}], signals: {traces, metrics, logs}, includeContent, managedOff, active, queued, dropped, sent (per signal), failures, lastError, lastSuccessAt, nextAttemptAt}`; header values are never returned |
+| `PUT` | `/api/v1/telemetry/otlp` | `{enabled?, endpoint?, headers?: {<name>: value (1–4,000) \| null}, signals?, includeContent?}` (strict, at least one key) → `OtlpStatusView`. A header value goes to the vault (`secret://telemetry/otlp/header/<name>`, names `^[A-Za-z0-9][A-Za-z0-9-]{0,63}$`, at most 20; `null` removes one; audited `telemetry.otlp.headers`, kind `secret`); the other fields are written as settings (audited as `setting.changed`). 403 `policy_denied` `{reason: managed}` for `enabled: true` under `restrict.telemetryExport: false` or a locked key |
+| `POST` | `/api/v1/telemetry/otlp/test` | Send one log record to the saved endpoint now, whether or not export is on → `{ok, status, error}`; 403 `managed`, 400 `{field: endpoint, reason: no_endpoint}` |
+
+### Channels (M8, FR-110, `docs/13` §4)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/v1/channels/:id/oauth/start` | Member (own binding). `{}` → `{authorizeUrl, redirectUri, expiresAt}`, `no-store`: PKCE (S256) and a single-use state (10 minutes, at most 100 waiting) for an email mailbox with `config.auth: oauth`; `redirectUri` is `<the Hub as the browser reached it>/api/v1/channels/oauth/callback`, to register with the provider. 404; 400 `{field: config.auth}` (not an OAuth mailbox), 400 `{field: config}` (the provider is not configured). Audited `channel.oauth.start` |
+| `DELETE` | `/api/v1/channels/:id/oauth` | Member: sign out: revoke the tokens at `oauthRevokeUrl` when set (best effort), forget them → the binding view (`oauth.status: needs_auth`). Audited `channel.oauth.revoke`; `channel.binding.changed` |
+| `GET` | `/api/v1/channels/oauth/callback?state=&code=&error=&iss=` | Public: a malformed query is 400; otherwise always 302 to `/settings/channels?oauth=ok\|error`, `no-store`, `Referrer-Policy: no-referrer`. The code is exchanged only when `iss` is absent or has the origin of the mailbox's `oauthAuthUrl` and is not the Hub (`issuer_mismatch` otherwise). Audited `channel.oauth.connect` or `.failed` |
+
+An email binding's `config` gains `auth: password|oauth` (default `password`) and, for OAuth,
+`oauthAuthUrl`, `oauthTokenUrl`, `oauthRevokeUrl?` (https, or http to this machine), `oauthClientId`
+and `oauthScopes` (space-separated); the client secret is the optional top-level
+`oauthClientSecret` on create (`credentials.oauthClientSecret` on change), kept in the vault. The
+binding view gains `oauth: {status: needs_auth|connected|expired|error, scopes, expiresAt,
+authorizedAt, lastError}` (no tokens); an OAuth mailbox counts as configured only while
+`connected`. `GET /api/v1/channels/:id/messages` entries gain `file?` (the entry's first file) and
+`files?` (only when it carried several): `ChannelMessageFileView` `{name, size, contentType,
+direction: in|out, status: received|sent|withheld|failed, attachmentId?, artifactId?, reason?}`.
+`channel.send` takes `files?` (at most 10 artifact or attachment ids of the agent's own chat;
+Telegram only, `capability_missing` elsewhere).
+
+### Team (M8, FR-217, `docs/13` §7)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/team/removed` | Owner: `{items: RemovedMemberView[]}` `{accountId, displayName (null once purged), removedAt, removedBy, status: kept\|scheduled\|purged\|failed, purgeAfter, purgedAt, cause: grace\|request\|null, error, counts: {rows, blobs, secrets, folders}\|null, exportable, cleanupPending}` |
+| `POST` | `/api/v1/team/removed/:id/purge` | Owner: `{confirm: true}` (strict): purge now → the view (a failed purge answers 200 with `status: failed`). 404; 409 `{reason: already_purged}`. Audited `team.member.purge`; `team.member.purged` |
+| `GET` | `/api/v1/team/removed/:id/export` | Owner: the removed member's data as a streamed download, `nova-account-<id>-<date>.novaexport`: the `.novaexport` format with `accountScope: {accountId}` ([`export-manifest.json`](schemas/export-manifest.json)), never sealed and without vault secrets (only the references the account's rows hold, listed to re-enter). It holds every row naming the account and the rows hanging off them, the account row, its files and folders; not other accounts' rows, Hub-wide tables, the member's words in another account's shared chat, tasks given to team agents or secrets. Built on a private copy of the database, so the Hub is never touched. 404; 409 `already_purged`; 400 `capability_missing` `{reason: export_unavailable}` only when no exporter is wired. Audited `team.member.export` and `data.export` `{scope: {accountId}}`; `data.exported` |
+| `GET` | `/api/v1/team/me/access` | Member: `TeamAccessView` `{role, refused: [{method, route, why}], limits: {stdioMcpServers, privateAddresses, narrowingOnlyAllowLists, hubSettings}}`: the routes this account is refused (none for the owner) and its limits, for member mode in the web app |
+
+
 ## 2. Hub ↔ Compute Node
 
 Internal, authenticated (mTLS over Mesh or LAN). The Hub authorizes every job; nodes never
@@ -1465,6 +1709,7 @@ with a certificate since M7.5):
 | `POST` | `/agent/v1/proc/{spawn,read,write,list}` | Long-lived processes kept by `novad` for Code environments (FR-062, FR-078): spawn `{grantee, cmd, cwd, env?, tag?}` → `{id}` (32 per grantee); read `{grantee, id, offset?, waitMs? (≤ 30,000)}` → `{data, offset, dropped, running, exitCode}` (the newest 1 MiB is kept); write `{text?, closeStdin?, signal?}`; list |
 | `POST` | `/agent/v1/mcp/list` | `{grantee}` → the device's local stdio MCP servers the grantee holds an `mcp` grant for, with their tools |
 | `POST` | `/agent/v1/mcp/call` | `{grantee, server, tool, arguments?}` → `{content, isError, untrusted: true}`; the server starts for the call, under bubblewrap unless its owner turned that off |
+| `POST` | `/agent/v1/mcp/request` | M8 (ADR-097): `{grantee, server, method, params?}` for one of five read-only MCP methods of a local server the grantee holds an `mcp` grant for: `resources/list`, `resources/templates/list`, `resources/read`, `prompts/list`, `prompts/get` (anything else is refused) → the server's result, untrusted; 60 s on the device, 90 s on the Hub. The Hub audits `resources/read` and `prompts/get` as `device.mcp.request` (kind `device`). A `novad` without the route offers tools only |
 | `POST` | `/agent/v1/firmware/read` | (FR-146; M7.5) `{}` → `{supported: true, platform: {vendor, product, biosVendor, biosVersion, biosDate, uefi}, method: firmware-attributes\|efibootmgr\|fake, adminPasswordSet, settings: [{key, vendorKey, value, type: enum\|order\|string\|int, allowed, readOnly, securityDegrading}], updates: [{device, version, summary}]}`, or `{supported: false, reason, platform, …}` (`reason`: `os_not_supported`, `driver_missing`, `vendor_not_supported`, `tool_missing`, `disabled_by_owner`). Whatever the policy, but only while `firmware` is in `policy.allowedModules` (else 403 `policy_denied` `{reason: module_not_allowed}`, for every firmware route). The platform comes from `/sys/class/dmi/id`; the backends are the kernel firmware-attributes class (dell-wmi-sysman, think-lmi, hp-bioscfg), `efibootmgr` (the boot order only) and a fake the owner's `config.json` alone selects; `updates` is `fwupdmgr get-updates --json` (10 s; `[]` without fwupd), read only. Only the canonical keys exist |
 | `POST` | `/agent/v1/firmware/plan` | `{changes: [{key, value}] (1–16, each key once)}` → `{planId, snapshot: {id, takenAt, values, sha256}, diff: [{key, vendorKey, from, to, securityDegrading}], refused: [{key, reason: unknown_key\|read_only\|not_allowed_value\|unsupported}], requiresReboot}`. A dry run, allowed whatever the policy; the snapshot of every allowlisted value is kept under the data folder (`firmware/snapshots/<id>.json`, 0600, the last 20). A `bootOrder` value may only reorder the entries: dropping or adding one is `not_allowed_value` |
 | `POST` | `/agent/v1/firmware/apply` | (privileged, kind `firmware.apply`) `{planId, snapshotId, changes, reboot?, watchdogSeconds? (120–3,600; default 600; the Hub sends `devices.firmware.watchdogSeconds` with every apply that restarts), allowSecurityDegrading?, adminPassword?, authorization}` → `{applied: [{key, from, to}], pendingReboot, watchdog: {deadline}\|null}`. Checked in this order: `adminPassword` over plain HTTP (`tls_required`), the module, a supported backend (409 `conflict` `{reason: unsupported_hardware, detail}`), the Hub's `policy.firmwareChanges` (403 `firmware_disabled`, even with a valid authorization), the authorization. It writes only while the machine still holds the snapshot's values (409 `conflict` `{reason: base_mismatch, keys}`, nothing written); refuses a security-degrading value without `allowSecurityDegrading: true` (403 `policy_denied` `{reason: security_degrading, keys}`) and, on a BIOS with an admin password, a body without `adminPassword` (403 `{reason: admin_password_required}`; the password is used for the writes and cleared after, never stored or logged). A write that fails midway restores what was written and answers 500 `server_error` `{reason: apply_failed, restored, key}`. With `reboot: true` the watchdog marker (`firmware/pending.json`) is written before any setting, and the restart goes through the power module, which needs the device's `power.allowActions` (409 `{reason: reboot_unavailable}`, checked before anything is written); one guarded restart may be pending (409 `{reason: watchdog_pending}`) and the watchdog reverts a snapshot once only (409 `{reason: watchdog_already_used}`). Other refusals: 404 `not_found` `{reason: snapshot_missing}`, 409 `{reason: plan_mismatch}`, 400 `validation` `{reason: unknown_key\|read_only\|not_allowed_value\|unsupported, key}` |

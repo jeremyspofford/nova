@@ -4,21 +4,31 @@
 // screens), its versions and homepage, and the owner's own rating, which stays on the Hub. Install,
 // Update and Remove start from here too.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { MarketItemDetail, MarketItemView } from '@nova/shared';
 import { Button, Dialog, Icon, RadioGroup, Spinner, useToast } from '@nova/ui';
 import { VerifiedBadge } from '../settings/badges.tsx';
 import { HOOK_EVENT_TEXT } from '../settings/plugin-text.ts';
 import type { MarketApi } from './api-m8.ts';
-import { KIND_TEXT, MARKET_TEXT, marketErrorMessage, shortKey } from './format.ts';
+import {
+  KIND_TEXT,
+  MARKET_TEXT,
+  PUBLISHER_TEXT,
+  entryPointText,
+  marketErrorMessage,
+  marketPublisherText,
+} from './format.ts';
 import { MarketPermissions } from './InstallDialog.tsx';
 
 const eventText = (event: string) =>
   (HOOK_EVENT_TEXT as Record<string, string | undefined>)[event] ?? event;
 
-const STAR_OPTIONS = [1, 2, 3, 4, 5].map((n) => ({
-  value: String(n),
-  label: MARKET_TEXT.stars(n),
-}));
+/** The rating's choices, read at render so they follow the active locale. */
+const starOptions = () =>
+  [1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: MARKET_TEXT.stars({ n }) }));
+
+/** Names, versions and roles as the catalog lists them, joined the active locale's way. */
+const joined = (items: readonly string[]) => fmt.list(items, { type: 'unit', style: 'short' });
 
 export function ItemDetails({
   market,
@@ -66,13 +76,17 @@ export function ItemDetails({
         <>
           <Button onClick={onClose}>{MARKET_TEXT.close}</Button>
           {installed ? (
-            <Button variant="ghost" onClick={onRemove} aria-label={MARKET_TEXT.removeOf(item.name)}>
+            <Button
+              variant="ghost"
+              onClick={onRemove}
+              aria-label={MARKET_TEXT.removeOf({ name: item.name })}
+            >
               {MARKET_TEXT.remove}
             </Button>
           ) : null}
           {!installed || view.updateAvailable ? (
             <Button variant="primary" disabled={off} onClick={onInstall}>
-              {installed ? MARKET_TEXT.updateTo(view.version) : MARKET_TEXT.install}
+              {installed ? MARKET_TEXT.updateTo({ version: view.version }) : MARKET_TEXT.install}
             </Button>
           ) : null}
         </>
@@ -88,22 +102,19 @@ export function ItemDetails({
           {view.author ? (
             <>
               <dt>{DETAIL_TEXT.author}</dt>
-              <dd>{view.author}</dd>
+              <dd dir="auto">{view.author}</dd>
             </>
           ) : null}
           {view.publisher ? (
             <>
-              <dt>{DETAIL_TEXT.publisher}</dt>
-              <dd>
-                {view.publisher.name ?? DETAIL_TEXT.unnamed}{' '}
-                <code className="ws-code-inline">{shortKey(view.publisher.key)}</code>
-              </dd>
+              <dt>{PUBLISHER_TEXT.label}</dt>
+              <dd>{marketPublisherText(view.publisher)}</dd>
             </>
           ) : null}
           <dt>{MARKET_TEXT.catalog}</dt>
-          <dd>{catalogName}</dd>
+          <dd dir="auto">{catalogName}</dd>
           <dt>{MARKET_TEXT.versions}</dt>
-          <dd>{detail ? detail.versions.join(', ') : view.version}</dd>
+          <dd>{detail ? joined(detail.versions) : view.version}</dd>
           {view.installedVersion ? (
             <>
               <dt>{DETAIL_TEXT.installed}</dt>
@@ -122,7 +133,7 @@ export function ItemDetails({
             <>
               <dt>{MARKET_TEXT.homepage}</dt>
               <dd>
-                <a href={view.homepage} target="_blank" rel="noopener noreferrer">
+                <a href={view.homepage} target="_blank" rel="noopener noreferrer" dir="ltr">
                   {view.homepage} <Icon name="external" />
                 </a>
               </dd>
@@ -156,7 +167,7 @@ export function ItemDetails({
                     <img
                       key={n}
                       src={market.marketScreenshotUrl(detail.catalogId, detail.kind, detail.id, n)}
-                      alt={MARKET_TEXT.screenshot(n + 1, detail.name)}
+                      alt={MARKET_TEXT.screenshot({ n: n + 1, name: detail.name })}
                       loading="lazy"
                     />
                   ))}
@@ -171,7 +182,7 @@ export function ItemDetails({
               {detail.changelog.length ? (
                 <ul className="ws-plain-list">
                   {detail.changelog.map((c) => (
-                    <li key={c.version}>
+                    <li key={c.version} dir="auto">
                       <strong>{c.version}</strong>
                       {c.date ? <span className="muted"> ({c.date})</span> : null}: {c.notes}
                     </li>
@@ -189,14 +200,12 @@ export function ItemDetails({
   );
 }
 
-const DETAIL_TEXT = {
+const DETAIL_TEXT = defineMessages('market.itemDetails', {
   author: 'Author',
-  publisher: 'Signed by',
-  unnamed: 'A publisher',
   installed: 'Installed',
   commit: 'Commit',
   catalogSays: 'As the catalog lists it. The install screen shows what the item itself declares.',
-} as const;
+});
 
 function Components({ detail }: { detail: MarketItemDetail }) {
   const c = detail.components;
@@ -225,22 +234,20 @@ function Components({ detail }: { detail: MarketItemDetail }) {
         {c.roles.length ? (
           <>
             <dt>{MARKET_TEXT.roles}</dt>
-            <dd>{c.roles.join(', ')}</dd>
+            <dd>{joined(c.roles)}</dd>
           </>
         ) : null}
         {c.browserExtensions.length ? (
           <>
             <dt>{MARKET_TEXT.browserExtensions}</dt>
-            <dd>{c.browserExtensions.join(', ')}</dd>
+            <dd>{joined(c.browserExtensions)}</dd>
           </>
         ) : null}
         {c.uiEntryPoints.length ? (
           <>
             <dt>{MARKET_TEXT.entryPoints}</dt>
             <dd>
-              {c.uiEntryPoints
-                .map((e) => `${e.title ?? detail.name} (${ENTRY_KIND_TEXT[e.kind] ?? e.kind})`)
-                .join(', ')}
+              {joined(c.uiEntryPoints.map((e) => entryPointText(e.title ?? detail.name, e.kind)))}
             </dd>
           </>
         ) : null}
@@ -248,12 +255,6 @@ function Components({ detail }: { detail: MarketItemDetail }) {
     </section>
   );
 }
-
-const ENTRY_KIND_TEXT: Record<string, string> = {
-  global: 'in Apps',
-  thread: 'beside a chat',
-  file: 'for files',
-};
 
 /** The owner's own rating of the item; it stays on the Hub. */
 function Rating({
@@ -322,7 +323,7 @@ function Rating({
         legend={MARKET_TEXT.rating}
         name={`stars-${detail.kind}-${detail.id}`}
         value={stars}
-        options={STAR_OPTIONS}
+        options={starOptions()}
         onChange={setStars}
         className="market-stars-input"
       />

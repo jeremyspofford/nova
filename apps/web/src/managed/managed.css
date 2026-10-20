@@ -16,7 +16,7 @@ p.mg-note {
   margin-bottom: var(--u-space-4);
 }
 .mg-banner[data-tone='danger'] {
-  border-left-color: var(--u-danger);
+  border-inline-start-color: var(--u-danger);
 }
 .mg-banner[data-tone='danger'] > svg,
 .mg-banner[data-tone='danger'] > .nv-icon {
@@ -25,7 +25,7 @@ p.mg-note {
 .mg-banner-sources,
 .mg-lines {
   margin: 0;
-  padding-left: var(--u-space-6);
+  padding-inline-start: var(--u-space-6);
 }
 .mg-lines li + li {
   margin-top: var(--u-space-1);

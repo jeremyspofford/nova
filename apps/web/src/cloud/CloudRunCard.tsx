@@ -4,6 +4,7 @@
 // (the Hub refuses caps on an ended run). Cancel asks first. A file of the run's folder can be kept
 // in its thread as an artifact. Used on the run page, a Code session and a Work run.
 import { useCallback, useId, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { CloudRunView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, TextField, useToast } from '@nova/ui';
 import { useAnnounce } from '../services.tsx';
@@ -17,16 +18,60 @@ import {
   usageFromEvent,
 } from './events.ts';
 import {
+  CAP_TEXT,
+  CLOUD_TEXT,
   RUN_KIND,
-  RUN_STATUS,
+  capResource,
   cloudErrorMessage,
   formatSeconds,
   isLiveRun,
-  resourceText,
   runReasonText,
+  runStatusSpec,
   usageLines,
 } from './format.ts';
 import { ConfirmAction, StateBadge, UsageMeter, useLoad, type Loaded } from './parts.tsx';
+
+/** A cloud run's card and its dialogs. */
+export const RUN_CARD_TEXT = defineMessages('cloud.run', {
+  title: 'Cloud run',
+  /** {environment} is the environment's name. */
+  titleOn: 'Cloud run on {environment}',
+  capped:
+    '{resource, select, cpu {Stopped at its CPU time cap.} wall {Stopped at its running time cap.} disk {Stopped at its disk cap.} other {Stopped at a cap.}} Its work is kept; nothing more runs until you raise the caps.',
+  /** {which} is cpu, wall or both. */
+  near: '{which, select, cpu {Near its CPU time cap.} wall {Near its running time cap.} other {Near its CPU time and running time caps.}} It stops there; raise the caps to give it more.',
+  announceNear:
+    '{resource, select, cpu {The cloud run is near its CPU time cap.} wall {The cloud run is near its running time cap.} disk {The cloud run is near its disk cap.} other {The cloud run is near a cap.}}',
+  announceCapped:
+    '{resource, select, cpu {The cloud run stopped at its CPU time cap.} wall {The cloud run stopped at its running time cap.} disk {The cloud run stopped at its disk cap.} other {The cloud run stopped at a cap.}}',
+  commands: '{n, plural, one {# command} other {# commands}}',
+  raise: 'Raise caps…',
+  keep: 'Keep a file…',
+  cancel: 'Cancel run…',
+  raised: 'Caps raised.',
+  raisedContinue: 'Caps raised. The cloud run can continue.',
+  /** {title} is the file's or artifact's name. */
+  kept: 'Kept {title} in the thread’s artifacts.',
+  cancelTitle: 'Cancel this cloud run?',
+  cancelBody:
+    'Commands still running on the runner are stopped. The environment and its files stay; a new run starts with the next command.',
+  cancelConfirm: 'Cancel run',
+  cancelFailed: 'Could not cancel the run.',
+  cancelled: 'Cloud run cancelled.',
+  raiseTitle: 'Raise the caps of this run',
+  /** {cpu} and {wall} are durations, such as "10 min". */
+  raiseBody:
+    'It has used {cpu} of CPU time and {wall} of running time. It stops again at the new caps.',
+  raiseFailed: 'Could not change the caps.',
+  raiseSubmit: 'Raise caps',
+  keepTitle: 'Keep a file from the runner',
+  keepBody: 'A copy goes into the thread’s artifacts, where you can open or download it.',
+  file: 'File on the runner',
+  pathRequired: 'Enter the file’s full path on the runner.',
+  pathOutside: 'Files on the runner are under /workspace.',
+  keepFailed: 'Could not keep that file.',
+  keepSubmit: 'Keep file',
+});
 
 /** One run by id, kept current from the run events. */
 export function useCloudRun(id: string): Loaded<CloudRunView> {
@@ -76,13 +121,11 @@ function useLiveRun<T extends CloudRunView | null>(
           setData((prev) => (prev ? { ...prev, usage: u.usage, caps: u.caps ?? prev.caps } : prev));
         return;
       }
-      const resource = resourceText(
+      const resource = capResource(
         typeof env.payload.resource === 'string' ? env.payload.resource : null,
       );
-      if (env.name === 'cloud.run.cap_warning')
-        announce(`The cloud run is near its ${resource} cap.`);
-      if (env.name === 'cloud.run.capped')
-        announce(`The cloud run stopped at its ${resource} cap.`);
+      if (env.name === 'cloud.run.cap_warning') announce(RUN_CARD_TEXT.announceNear({ resource }));
+      if (env.name === 'cloud.run.capped') announce(RUN_CARD_TEXT.announceCapped({ resource }));
       reload();
     },
     reload,
@@ -114,6 +157,8 @@ export function CloudRunCard({
   const reason = runReasonText(run);
   const warned = lines.filter((l) => l.warn);
   const H = headingLevel === 2 ? 'h2' : 'h3';
+  const S = RUN_CARD_TEXT;
+  const nearWhich = warned.length === 1 && warned[0] ? warned[0].resource : ('both' as const);
 
   return (
     <section
@@ -123,26 +168,20 @@ export function CloudRunCard({
     >
       <div className="cl-run-head">
         <H id={headingId} className="cl-run-title">
-          Cloud run{environmentLabel ? ` on ${environmentLabel}` : ''}
+          {environmentLabel ? S.titleOn({ environment: environmentLabel }) : S.title}
         </H>
-        <StateBadge spec={RUN_STATUS[run.status]} />
+        <StateBadge spec={runStatusSpec(run.status)} />
         <span className="muted cl-small">{RUN_KIND[run.kind]}</span>
       </div>
       {run.status === 'capped' ? (
         <p className="cl-notice" data-tone="danger" role="alert">
           <Icon name="stop" />
-          <span>
-            Stopped at its {resourceText(run.reason)} cap. Its work is kept; nothing more runs until
-            you raise the caps.
-          </span>
+          <span>{S.capped({ resource: capResource(run.reason) })}</span>
         </p>
       ) : warned.length && live ? (
         <p className="cl-notice" data-tone="warn" role="status">
           <Icon name="alert" />
-          <span>
-            Near its {warned.map((l) => resourceText(l.resource)).join(' and ')} cap. It stops
-            there; raise the caps to give it more.
-          </span>
+          <span>{S.near({ which: nearWhich })}</span>
         </p>
       ) : reason ? (
         <p className="muted cl-small">{reason}</p>
@@ -151,9 +190,7 @@ export function CloudRunCard({
         {lines.map((l) => (
           <UsageMeter key={l.resource} line={l} />
         ))}
-        <span className="muted cl-small">
-          {run.usage.commands === 1 ? '1 command' : `${run.usage.commands} commands`}
-        </span>
+        <span className="muted cl-small">{S.commands({ n: run.usage.commands })}</span>
       </div>
       <div className="cl-actions">
         {live ? (
@@ -161,17 +198,17 @@ export function CloudRunCard({
             variant={run.status === 'capped' ? 'primary' : 'default'}
             onClick={() => setRaising(true)}
           >
-            <Icon name="plus" /> Raise caps…
+            <Icon name="plus" /> {S.raise}
           </Button>
         ) : null}
         {run.threadId ? (
           <Button onClick={() => setKeeping(true)}>
-            <Icon name="artifact" /> Keep a file…
+            <Icon name="artifact" /> {S.keep}
           </Button>
         ) : null}
         {live ? (
           <Button variant="danger" onClick={() => setCancelling(true)}>
-            <Icon name="stop" /> Cancel run…
+            <Icon name="stop" /> {S.cancel}
           </Button>
         ) : null}
       </div>
@@ -182,9 +219,7 @@ export function CloudRunCard({
         onSaved={(next) => {
           setRaising(false);
           onChange(next);
-          announce(
-            next.status === 'active' ? 'Caps raised. The cloud run can continue.' : 'Caps raised.',
-          );
+          announce(next.status === 'active' ? S.raisedContinue : S.raised);
         }}
       />
       <KeepFileDialog
@@ -193,29 +228,29 @@ export function CloudRunCard({
         onClose={() => setKeeping(false)}
         onKept={(title) => {
           setKeeping(false);
-          toast.show(`Kept ${title} in the thread’s artifacts.`, { tone: 'success' });
+          toast.show(S.kept({ title }), { tone: 'success' });
         }}
       />
       <ConfirmAction
         open={cancelling}
-        title="Cancel this cloud run?"
-        description="Commands still running on the runner are stopped. The environment and its files stay; a new run starts with the next command."
-        confirmLabel="Cancel run"
+        title={S.cancelTitle}
+        description={S.cancelBody}
+        confirmLabel={S.cancelConfirm}
         danger
-        errorText={(err) => cloudErrorMessage(err, 'Could not cancel the run.')}
+        errorText={(err) => cloudErrorMessage(err, S.cancelFailed)}
         onClose={() => setCancelling(false)}
         onConfirm={async () => {
           const next = await api.cancelCloudRun(run.id);
           setCancelling(false);
           onChange(next);
-          announce('Cloud run cancelled.');
+          announce(S.cancelled);
         }}
       />
     </section>
   );
 }
 
-/** Minutes typed into a cap field, or the problem with them. */
+/** Minutes typed into a cap field, or the problem with them; `what` names the resource. */
 export function parseCapMinutes(
   text: string,
   usedSeconds: number,
@@ -224,12 +259,10 @@ export function parseCapMinutes(
   const t = text.trim();
   const m = Number(t);
   if (!/^\d+$/.test(t) || m < 1 || m > 7 * 24 * 60)
-    return { error: `Set the ${what} cap in whole minutes, from 1 to 10,080.` };
+    return { error: CAP_TEXT.wholeMinutes({ what, min: 1, max: 7 * 24 * 60 }) };
   const seconds = m * 60;
   if (seconds <= usedSeconds)
-    return {
-      error: `The run has used ${formatSeconds(usedSeconds)} of ${what}; set a cap above that.`,
-    };
+    return { error: CAP_TEXT.aboveUsed({ used: formatSeconds(usedSeconds), what }) };
   return { seconds };
 }
 
@@ -265,8 +298,9 @@ function RaiseCapsForm({
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cpuR = parseCapMinutes(cpu, run.usage.cpuSeconds, 'CPU time');
-  const wallR = parseCapMinutes(wall, run.usage.wallSeconds, 'running time');
+  const cpuR = parseCapMinutes(cpu, run.usage.cpuSeconds, CAP_TEXT.resource.cpu);
+  const wallR = parseCapMinutes(wall, run.usage.wallSeconds, CAP_TEXT.resource.wall);
+  const S = RUN_CARD_TEXT;
 
   const submit = async () => {
     setTried(true);
@@ -281,7 +315,7 @@ function RaiseCapsForm({
         }),
       );
     } catch (err) {
-      setError(cloudErrorMessage(err, 'Could not change the caps.'));
+      setError(cloudErrorMessage(err, S.raiseFailed));
       setBusy(false);
     }
   };
@@ -289,8 +323,11 @@ function RaiseCapsForm({
   return (
     <Dialog
       open
-      title="Raise the caps of this run"
-      description={`It has used ${formatSeconds(run.usage.cpuSeconds)} of CPU time and ${formatSeconds(run.usage.wallSeconds)} of running time. It stops again at the new caps.`}
+      title={S.raiseTitle}
+      description={S.raiseBody({
+        cpu: formatSeconds(run.usage.cpuSeconds),
+        wall: formatSeconds(run.usage.wallSeconds),
+      })}
       onClose={onClose}
       initialFocusRef={first}
     >
@@ -306,7 +343,7 @@ function RaiseCapsForm({
         <div className="cl-field-row">
           <TextField
             ref={first}
-            label="CPU time cap (minutes)"
+            label={CLOUD_TEXT.cpuCapMinutes}
             type="number"
             inputMode="numeric"
             className="ws-number"
@@ -316,7 +353,7 @@ function RaiseCapsForm({
             onChange={(e) => setCpu(e.target.value)}
           />
           <TextField
-            label="Running time cap (minutes)"
+            label={CLOUD_TEXT.wallCapMinutes}
             type="number"
             inputMode="numeric"
             className="ws-number"
@@ -332,9 +369,9 @@ function RaiseCapsForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{CLOUD_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Raise caps
+            {busy ? <Spinner /> : null} {S.raiseSubmit}
           </Button>
         </div>
       </form>
@@ -373,12 +410,9 @@ function KeepFileForm({
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const S = RUN_CARD_TEXT;
   const p = path.trim();
-  const pathError = !p
-    ? 'Enter the file’s full path on the runner.'
-    : !p.startsWith('/workspace')
-      ? 'Files on the runner are under /workspace.'
-      : null;
+  const pathError = !p ? S.pathRequired : !p.startsWith('/workspace') ? S.pathOutside : null;
 
   const submit = useCallback(async () => {
     setTried(true);
@@ -392,16 +426,16 @@ function KeepFileForm({
       });
       onKept(a.title ?? p.split('/').pop() ?? p);
     } catch (err) {
-      setError(cloudErrorMessage(err, 'Could not keep that file.'));
+      setError(cloudErrorMessage(err, S.keepFailed));
       setBusy(false);
     }
-  }, [api, busy, onKept, p, pathError, run.id, title]);
+  }, [api, busy, onKept, p, pathError, run.id, title, S.keepFailed]);
 
   return (
     <Dialog
       open
-      title="Keep a file from the runner"
-      description="A copy goes into the thread’s artifacts, where you can open or download it."
+      title={S.keepTitle}
+      description={S.keepBody}
       onClose={onClose}
       initialFocusRef={first}
     >
@@ -415,16 +449,18 @@ function KeepFileForm({
       >
         <TextField
           ref={first}
-          label="File on the runner"
+          label={S.file}
           value={path}
           autoComplete="off"
           spellCheck={false}
+          dir="ltr"
+          // eslint-disable-next-line nova-i18n/no-literal-ui-text -- an example path, not text
           placeholder="/workspace/app/report.html"
           error={tried && pathError ? pathError : undefined}
           onChange={(e) => setPath(e.target.value)}
         />
         <TextField
-          label="Title (optional)"
+          label={CLOUD_TEXT.titleOptional}
           value={title}
           maxLength={200}
           autoComplete="off"
@@ -436,9 +472,9 @@ function KeepFileForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{CLOUD_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Keep file
+            {busy ? <Spinner /> : null} {S.keepSubmit}
           </Button>
         </div>
       </form>

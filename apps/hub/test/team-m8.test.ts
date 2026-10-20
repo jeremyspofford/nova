@@ -68,8 +68,8 @@ describe("a removed member's data", () => {
         displayName: 'Bea',
         status: 'scheduled',
         purgeAfter: '2026-10-31T00:00:00.000Z',
-        // Nothing to export with until the data controls hand the area their export.
-        exportable: false,
+        // The data controls hand the area their account-scoped export (app.ts).
+        exportable: true,
       }),
     ]);
     for (const [method, url, body] of [
@@ -84,12 +84,8 @@ describe("a removed member's data", () => {
     // Her own session ended with the removal.
     expect((await call(bea.headers, 'GET', '/api/v1/threads')).status).toBe(401);
 
-    // Export: refused until wired, then streamed and audited.
-    const missing = await call(owner, 'GET', `/api/v1/team/removed/${bea.accountId}/export`);
-    expect(missing.json.error).toMatchObject({
-      code: 'capability_missing',
-      details: { reason: 'export_unavailable' },
-    });
+    // Export: streamed with a safe file name and audited (a stand-in exporter here; the real
+    // account-scoped archive is tested in datactl.test.ts).
     const asked: string[] = [];
     h.area.useExporter((accountId) => {
       asked.push(accountId);

@@ -9,6 +9,7 @@
 // On edit, `env` is sent only when the set changed, and then it is the complete set of names: an
 // empty value keeps the saved secret, a value replaces it, and a name left out is deleted.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { McpServerRequest, McpServerView, McpTransport } from '@nova/shared';
 import { Button, Icon, RadioGroup, SelectField, Spinner, TextField } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -19,6 +20,62 @@ const NAME_RE = /^[a-z0-9-]{1,40}$/;
 const ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const HEADER_RE = /^[A-Za-z][A-Za-z0-9-]*$/;
 const MASK = '••••••••';
+// Examples of what goes in a field: protocol names and numbers, the same in every language.
+const ENV_EXAMPLE = 'API_KEY';
+const HEADER_EXAMPLE = 'Authorization';
+const URL_EXAMPLE = 'https://';
+
+export const MCP_FORM_TEXT = defineMessages('settings.mcpForm', {
+  secondsRange: 'Enter a whole number of seconds from 1 to {max}.',
+  nameRule: 'Use 1 to 40 lowercase letters, digits or hyphens.',
+  needCommand: 'Enter the command that starts the server.',
+  needUrl: 'Enter an http:// or https:// address.',
+  envRule: 'Use letters, digits and underscores, not starting with a digit.',
+  headerRule: 'Use letters, digits and hyphens, starting with a letter.',
+  twice: '{name} is listed twice.',
+  needValue: 'Enter a value for {name}.',
+  saveFailed: 'Could not save the server.',
+  editName: 'Edit {name}',
+  add: 'Add an MCP server',
+  name: 'Name',
+  nameHint: 'Lowercase letters, digits and hyphens. Tools from this server are named after it.',
+  connection: 'Connection',
+  stdio: 'Run a command on the Hub',
+  stdioHint: 'Nova starts the server as a program and talks to it directly.',
+  http: 'Streamable HTTP',
+  httpHint: 'A server reachable at a web address.',
+  sse: 'Server-sent events',
+  sseHint: 'For older servers that use SSE.',
+  command: 'Command',
+  commandHint: 'The program to start, for example npx or a full path. It runs without a shell.',
+  args: 'Arguments',
+  argsHint: 'One per line.',
+  url: 'Server URL',
+  envVars: 'Environment variables',
+  headers: 'Headers',
+  secretsHint: "Values are kept in the Hub's secret store and are never shown again.",
+  rowName: '{kind, select, env {Variable {n}} other {Header {n}}}',
+  rowValue: 'Value {n}',
+  savedHint: 'Saved. Type a new value to replace it.',
+  removeName: 'Remove {name}',
+  removeRow: '{kind, select, env {Remove variable {n}} other {Remove header {n}}}',
+  remove: 'Remove',
+  addVariable: 'Add variable',
+  addHeader: 'Add header',
+  advanced: 'Advanced',
+  defaultApproval: "Default for this server's tools",
+  defaultApprovalHint: 'Built-in safety still applies; a per-tool default overrides this.',
+  approvalDefault: 'Default (ask)',
+  ask: 'Ask',
+  allow: 'Allow',
+  deny: 'Deny',
+  toolTimeout: 'Tool timeout (seconds)',
+  startupTimeout: 'Startup timeout (seconds)',
+  saveChanges: 'Save changes',
+  addServer: 'Add server',
+  cancel: 'Cancel',
+});
+const S = MCP_FORM_TEXT;
 
 export const headerToEnv = (name: string): string => name.replaceAll('-', '_');
 export const envToHeader = (key: string): string => key.replaceAll('_', '-');
@@ -76,8 +133,7 @@ export function formFromServer(s: McpServerView | null): McpFormState {
 function seconds(text: string, max: number): { ms?: number; error?: string } {
   if (!text.trim()) return {};
   const n = Number(text);
-  if (!/^\d+$/.test(text.trim()) || n < 1 || n > max)
-    return { error: `Enter a whole number of seconds from 1 to ${max}.` };
+  if (!/^\d+$/.test(text.trim()) || n < 1 || n > max) return { error: S.secondsRange({ max }) };
   return { ms: n * 1000 };
 }
 
@@ -100,9 +156,9 @@ export function mcpRequestFromForm(
 ): { body: Partial<McpServerRequest> } | { errors: McpFormErrors } {
   const errors: McpFormErrors = {};
   const stdio = f.transport === 'stdio';
-  if (!NAME_RE.test(f.name)) errors.name = 'Use 1 to 40 lowercase letters, digits or hyphens.';
-  if (stdio && !f.command.trim()) errors.command = 'Enter the command that starts the server.';
-  if (!stdio && !isHttpUrl(f.url.trim())) errors.url = 'Enter an http:// or https:// address.';
+  if (!NAME_RE.test(f.name)) errors.name = S.nameRule;
+  if (stdio && !f.command.trim()) errors.command = S.needCommand;
+  if (!stdio && !isHttpUrl(f.url.trim())) errors.url = S.needUrl;
   const tool = seconds(f.toolTimeout, 600);
   const startup = seconds(f.startupTimeout, 120);
   if (tool.error) errors.toolTimeout = tool.error;
@@ -116,14 +172,9 @@ export function mcpRequestFromForm(
     if (!name && !r.value) continue; // an untouched blank row
     const key = stdio ? name : headerToEnv(name);
     const valid = stdio ? ENV_RE.test(name) : HEADER_RE.test(name);
-    if (!valid)
-      rowErrors[r.id] = {
-        name: stdio
-          ? 'Use letters, digits and underscores, not starting with a digit.'
-          : 'Use letters, digits and hyphens, starting with a letter.',
-      };
-    else if (seen.has(key)) rowErrors[r.id] = { name: `${name} is listed twice.` };
-    else if (!r.saved && !r.value) rowErrors[r.id] = { value: `Enter a value for ${name}.` };
+    if (!valid) rowErrors[r.id] = { name: stdio ? S.envRule : S.headerRule };
+    else if (seen.has(key)) rowErrors[r.id] = { name: S.twice({ name }) };
+    else if (!r.saved && !r.value) rowErrors[r.id] = { value: S.needValue({ name }) };
     seen.add(key);
     env[key] = r.value;
   }
@@ -224,17 +275,17 @@ export function McpServerForm({
       setForm(formFromServer(saved));
       onSaved(saved);
     } catch (err) {
-      setFailure(errorMessage(err, 'Could not save the server.'));
+      setFailure(errorMessage(err, S.saveFailed));
     } finally {
       setBusy(false);
     }
   };
 
-  const kind = stdio ? 'Variable' : 'Header';
+  const kind = stdio ? 'env' : 'header';
   return (
     <form
       className="stack"
-      aria-label={server ? `Edit ${server.name}` : 'Add an MCP server'}
+      aria-label={server ? S.editName({ name: server.name }) : S.add}
       noValidate
       onSubmit={(e) => {
         e.preventDefault();
@@ -242,17 +293,17 @@ export function McpServerForm({
       }}
     >
       <TextField
-        label="Name"
+        label={S.name}
         value={form.name}
         maxLength={40}
         autoComplete="off"
         spellCheck={false}
-        hint="Lowercase letters, digits and hyphens. Tools from this server are named after it."
+        hint={S.nameHint}
         error={errors.name}
         onChange={(e) => set({ name: e.target.value })}
       />
       <RadioGroup
-        legend="Connection"
+        legend={S.connection}
         name={`${id}-transport`}
         value={form.transport}
         onChange={(v) => set({ transport: v as McpTransport })}
@@ -262,37 +313,37 @@ export function McpServerForm({
             ? [
                 {
                   value: 'stdio',
-                  label: 'Run a command on the Hub',
-                  description: 'Nova starts the server as a program and talks to it directly.',
+                  label: S.stdio,
+                  description: S.stdioHint,
                 },
               ]
             : []),
           {
             value: 'http',
-            label: 'Streamable HTTP',
-            description: 'A server reachable at a web address.',
+            label: S.http,
+            description: S.httpHint,
           },
           {
             value: 'sse',
-            label: 'Server-sent events',
-            description: 'For older servers that use SSE.',
+            label: S.sse,
+            description: S.sseHint,
           },
         ]}
       />
       {stdio ? (
         <>
           <TextField
-            label="Command"
+            label={S.command}
             value={form.command}
             spellCheck={false}
             autoComplete="off"
-            hint="The program to start, for example npx or a full path. It runs without a shell."
+            hint={S.commandHint}
             error={errors.command}
             onChange={(e) => set({ command: e.target.value })}
           />
           <div className="nv-field">
             <label className="nv-field-label" htmlFor={`${id}-args`}>
-              Arguments
+              {S.args}
             </label>
             <textarea
               id={`${id}-args`}
@@ -304,84 +355,86 @@ export function McpServerForm({
               onChange={(e) => set({ args: e.target.value })}
             />
             <span id={`${id}-args-hint`} className="nv-field-hint">
-              One per line.
+              {S.argsHint}
             </span>
           </div>
         </>
       ) : (
         <TextField
-          label="Server URL"
+          label={S.url}
           type="url"
           value={form.url}
           spellCheck={false}
           autoComplete="off"
-          placeholder="https://"
+          placeholder={URL_EXAMPLE}
           error={errors.url}
           onChange={(e) => set({ url: e.target.value })}
         />
       )}
       <fieldset className="ws-fieldset">
-        <legend>{stdio ? 'Environment variables' : 'Headers'}</legend>
-        <p className="nv-field-hint ws-flush">
-          Values are kept in the Hub&apos;s secret store and are never shown again.
-        </p>
+        <legend>{stdio ? S.envVars : S.headers}</legend>
+        <p className="nv-field-hint ws-flush">{S.secretsHint}</p>
         {form.rows.map((r, i) => {
           const re = errors.rows?.[r.id];
           return (
             <div key={r.id} className="ws-target ws-secret-row">
               <TextField
-                label={`${kind} ${i + 1}`}
+                label={S.rowName({ kind, n: i + 1 })}
                 value={r.name}
                 readOnly={r.saved}
                 spellCheck={false}
                 autoComplete="off"
-                placeholder={stdio ? 'API_KEY' : 'Authorization'}
+                placeholder={stdio ? ENV_EXAMPLE : HEADER_EXAMPLE}
                 error={re?.name}
                 onChange={(e) => setRow(r.id, { name: e.target.value })}
               />
               <TextField
-                label={`Value ${i + 1}`}
+                label={S.rowValue({ n: i + 1 })}
                 type="password"
                 autoComplete="new-password"
                 value={r.value}
                 placeholder={r.saved ? MASK : ''}
-                hint={r.saved ? 'Saved. Type a new value to replace it.' : undefined}
+                hint={r.saved ? S.savedHint : undefined}
                 error={re?.value}
                 onChange={(e) => setRow(r.id, { value: e.target.value })}
               />
               <Button
                 variant="ghost"
-                aria-label={`Remove ${r.name.trim() || `${kind.toLowerCase()} ${i + 1}`}`}
+                aria-label={
+                  r.name.trim()
+                    ? S.removeName({ name: r.name.trim() })
+                    : S.removeRow({ kind, n: i + 1 })
+                }
                 onClick={() => set({ rows: form.rows.filter((x) => x.id !== r.id) })}
               >
-                Remove
+                {S.remove}
               </Button>
             </div>
           );
         })}
         <div className="row">
           <Button onClick={() => set({ rows: [...form.rows, newRow()] })}>
-            <Icon name="plus" /> {stdio ? 'Add variable' : 'Add header'}
+            <Icon name="plus" /> {stdio ? S.addVariable : S.addHeader}
           </Button>
         </div>
       </fieldset>
       <details className="ws-advanced">
-        <summary>Advanced</summary>
+        <summary>{S.advanced}</summary>
         <div className="stack">
           <SelectField
-            label="Default for this server's tools"
+            label={S.defaultApproval}
             value={form.defaultApproval}
             onChange={(v) => set({ defaultApproval: v as McpFormState['defaultApproval'] })}
-            hint="Built-in safety still applies; a per-tool default overrides this."
+            hint={S.defaultApprovalHint}
             options={[
-              { value: '', label: 'Default (ask)' },
-              { value: 'ask', label: 'Ask' },
-              { value: 'allow', label: 'Allow' },
-              { value: 'deny', label: 'Deny' },
+              { value: '', label: S.approvalDefault },
+              { value: 'ask', label: S.ask },
+              { value: 'allow', label: S.allow },
+              { value: 'deny', label: S.deny },
             ]}
           />
           <TextField
-            label="Tool timeout (seconds)"
+            label={S.toolTimeout}
             className="ws-number"
             inputMode="numeric"
             value={form.toolTimeout}
@@ -390,7 +443,7 @@ export function McpServerForm({
             onChange={(e) => set({ toolTimeout: e.target.value })}
           />
           <TextField
-            label="Startup timeout (seconds)"
+            label={S.startupTimeout}
             className="ws-number"
             inputMode="numeric"
             value={form.startupTimeout}
@@ -407,9 +460,9 @@ export function McpServerForm({
       ) : null}
       <div className="row">
         <Button type="submit" variant="primary" disabled={busy}>
-          {busy ? <Spinner /> : null} {submitLabel ?? (server ? 'Save changes' : 'Add server')}
+          {busy ? <Spinner /> : null} {submitLabel ?? (server ? S.saveChanges : S.addServer)}
         </Button>
-        {onCancel ? <Button onClick={onCancel}>Cancel</Button> : null}
+        {onCancel ? <Button onClick={onCancel}>{S.cancel}</Button> : null}
       </div>
     </form>
   );

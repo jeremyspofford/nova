@@ -551,7 +551,10 @@ describe('deleting and ordering pages (FR-036)', () => {
     await screen.findByRole('heading', { name: 'Welcome', level: 1 });
     await userEvent.click(screen.getByRole('button', { name: 'Delete page' }));
     let dialog = screen.getByRole('dialog', { name: 'Delete “Welcome”?' });
-    expect(dialog.textContent).toContain('Its history and comments go with it');
+    // M8: the dialog says what goes with the page, and that it can come back.
+    await waitFor(() => expect(dialog.textContent).toContain('its saved version'));
+    expect(dialog.textContent).toContain('1 open proposal from an agent');
+    expect(dialog.textContent).toContain('You can restore it, with its history and comments');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(api.deleteSpacePage).not.toHaveBeenCalled();
 
@@ -562,6 +565,7 @@ describe('deleting and ordering pages (FR-036)', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/spaces/sp1'));
     expect(await screen.findByText('Deleted “Welcome”.')).toBeTruthy();
     expect(state.pages).toEqual([]);
+    expect(state.trash.map((t) => t.page.id)).toEqual(['pg1']);
     expect(state.proposals.map((x) => [x.id, x.status])).toEqual([
       ['pr-open', 'rejected'],
       ['pr-done', 'accepted'],
@@ -595,7 +599,7 @@ describe('deleting and ordering pages (FR-036)', () => {
       .getAllByRole('link')
       .map((a) => a.textContent);
 
-  it('moves a page down and up by swapping positions, keeping focus and announcing it', async () => {
+  it('moves a page down and up in one write each, keeping focus and announcing it', async () => {
     const { api, state } = await renderWithSpaces(<SpacesView spaceId="sp1" pageId={null} />, {
       spaces: {
         spaces: [SPACE()],
@@ -616,8 +620,7 @@ describe('deleting and ordering pages (FR-036)', () => {
     ).toBe(true);
 
     await userEvent.click(screen.getByRole('button', { name: 'Move Second down' }));
-    expect(api.updateSpacePage).toHaveBeenCalledWith('sp1', 'pg2', { position: 2 });
-    expect(api.updateSpacePage).toHaveBeenCalledWith('sp1', 'pg3', { position: 1 });
+    expect(api.reorderSpacePages).toHaveBeenCalledWith('sp1', ['pg1', 'pg3', 'pg2']);
     expect(ordered()).toEqual(['First', 'Third', 'Second']);
     await waitFor(() =>
       expect(screen.getByTestId('announcer').textContent).toContain(
@@ -637,10 +640,11 @@ describe('deleting and ordering pages (FR-036)', () => {
     // Keyboard: Enter on the focused Up moves it back.
     await userEvent.keyboard('{Enter}');
     await waitFor(() => expect(ordered()).toEqual(['First', 'Second', 'Third']));
-    await waitFor(() => expect(api.updateSpacePage).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(api.reorderSpacePages).toHaveBeenCalledTimes(2));
+    expect(api.updateSpacePage).not.toHaveBeenCalled();
   });
 
-  it('renumbers pages that share a position, in the new order', async () => {
+  it('sends the whole new order when pages share a position', async () => {
     const { api } = await renderWithSpaces(<SpacesView spaceId="sp1" pageId={null} />, {
       spaces: {
         spaces: [SPACE()],
@@ -654,8 +658,8 @@ describe('deleting and ordering pages (FR-036)', () => {
     // Equal positions fall back to creation time.
     expect(ordered()).toEqual(['Older', 'Newer']);
     await userEvent.click(screen.getByRole('button', { name: 'Move Newer up' }));
-    await waitFor(() => expect(api.updateSpacePage).toHaveBeenCalledTimes(1));
-    expect(api.updateSpacePage).toHaveBeenCalledWith('sp1', 'pg1', { position: 1 });
+    await waitFor(() => expect(api.reorderSpacePages).toHaveBeenCalledTimes(1));
+    expect(api.reorderSpacePages).toHaveBeenCalledWith('sp1', ['pg2', 'pg1']);
     await waitFor(() => expect(api.listSpacePages).toHaveBeenCalledTimes(2));
     expect(ordered()).toEqual(['Newer', 'Older']);
   });
@@ -671,14 +675,14 @@ describe('deleting and ordering pages (FR-036)', () => {
       },
     });
     await screen.findByRole('list', { name: 'Pages' });
-    spaces.failNext.updateSpacePage = new ApiError(500, {
+    spaces.failNext.reorderSpacePages = new ApiError(500, {
       code: 'internal',
       message: 'Disk full.',
       retryable: true,
     });
     await userEvent.click(screen.getByRole('button', { name: 'Move Second up' }));
     expect(await screen.findByText('Could not move it: Disk full.')).toBeTruthy();
-    // Only the other page's update went through, so both share a position: creation order.
+    // Nothing moved on the Hub, so its order comes back.
     await waitFor(() => expect(spaces.api.listSpacePages).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(ordered()).toEqual(['First', 'Second']));
   });

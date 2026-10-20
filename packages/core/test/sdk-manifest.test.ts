@@ -183,7 +183,7 @@ describe('nova validate', () => {
       id: 'com.example.hello',
       version: '1.0.0',
       signature: null,
-      summary: { commands: 1, panels: 1, tools: 2, hooks: 1, events: 1, skills: 0, mcpServers: 0 },
+      summary: { commands: 1, panels: 1, tools: 3, hooks: 1, events: 1, skills: 0, mcpServers: 0 },
     });
     expect(v.warnings.join('\n')).toMatch(/secrets/);
   });

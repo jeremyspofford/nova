@@ -3,7 +3,15 @@
 // clicks. /code/environments and /code/worktrees use the id slot of the Code route, as
 // /work/scheduled does for Work.
 import type { MouseEvent, ReactNode } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { navigate } from '../router.ts';
+
+export const NAV_TEXT = defineMessages('code.nav', {
+  sections: 'Code sections',
+  sessions: 'Sessions',
+  environments: 'Environments',
+  worktrees: 'Worktrees',
+});
 
 export const ENVIRONMENTS_PATH = '/code/environments';
 export const WORKTREES_PATH = '/code/worktrees';
@@ -22,10 +30,10 @@ export function CodeNav({ current }: { current: 'sessions' | 'environments' | 'w
     </a>
   );
   return (
-    <nav className="code-tabs" aria-label="Code sections">
-      {link('/code', 'Sessions', current === 'sessions')}
-      {link(ENVIRONMENTS_PATH, 'Environments', current === 'environments')}
-      {link(WORKTREES_PATH, 'Worktrees', current === 'worktrees')}
+    <nav className="code-tabs" aria-label={NAV_TEXT.sections}>
+      {link('/code', NAV_TEXT.sessions, current === 'sessions')}
+      {link(ENVIRONMENTS_PATH, NAV_TEXT.environments, current === 'environments')}
+      {link(WORKTREES_PATH, NAV_TEXT.worktrees, current === 'worktrees')}
     </nav>
   );
 }

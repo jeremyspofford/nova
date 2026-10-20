@@ -4,6 +4,7 @@
 // blocked only because it is not allowed can be allowed from here (docs/11 §10, one click,
 // audited), for every sandbox or only for the agent, run or session that asked.
 import { useEffect, useId, useState } from 'react';
+import { fmt, messageFor } from '@nova/i18n';
 import { checkHostPattern, type EgressScopeView, type NetworkDecisionView } from '@nova/shared';
 import {
   Button,
@@ -18,33 +19,29 @@ import {
 import { errorMessage } from '../api.ts';
 import { useComputersApi } from '../computers/api.ts';
 import { isNetworkAudit, useHubEvents } from '../computers/events.ts';
-import {
-  MODE_TEXT,
-  causeText,
-  formatBytes,
-  formatDateTime,
-  normalizeHost,
-} from '../computers/format.ts';
+import { MODE_TEXT, causeText, normalizeHost } from '../computers/format.ts';
 import { useSettings } from '../settings.tsx';
 import { useDebounced } from '../work/events.ts';
 import { isRuleScope } from './scopes.ts';
+import { EGRESS_TEXT, LOG_TEXT as S } from './strings.ts';
 
 export const PAGE_SIZE = 50;
 
-const ADDRESS_TEXT: Record<string, string> = {
-  private: 'Private address',
-  loopback: 'Loopback address',
-  link_local: 'Link-local address',
-  cgnat: 'Carrier-grade NAT address',
-  unique_local: 'Unique-local address',
-  multicast: 'Multicast address',
-  unspecified: 'Unspecified address',
-  reserved: 'Reserved address',
-};
-
 function hostPort(d: NetworkDecisionView): string {
-  if (!d.host) return 'unknown host';
+  if (!d.host) return S.unknownHost;
   return d.port && d.port !== 80 && d.port !== 443 ? `${d.host}:${d.port}` : d.host;
+}
+
+/** When the proxy decided, in the active locale (the Hub's text when it is not a date). */
+function decidedAt(iso: string): string {
+  if (Number.isNaN(Date.parse(iso))) return iso;
+  return fmt.dateTime(iso, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export function DecisionLog({
@@ -89,7 +86,7 @@ export function DecisionLog({
           setNext(nextCursor);
           setError(null);
         },
-        (err: unknown) => alive && setError(errorMessage(err, 'Could not load the decision log.')),
+        (err: unknown) => alive && setError(errorMessage(err, S.loadError)),
       )
       .finally(() => alive && setLoadedKey(key));
     return () => {
@@ -113,7 +110,7 @@ export function DecisionLog({
           setNext(nextCursor);
           setError(null);
         },
-        (err: unknown) => setError(errorMessage(err, 'Could not load older decisions.')),
+        (err: unknown) => setError(errorMessage(err, S.olderError)),
       )
       .finally(() => setLoadingMore(false));
   };
@@ -129,42 +126,39 @@ export function DecisionLog({
 
   return (
     <section className="settings-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>Decision log</h3>
-      <p className="muted">
-        Every request a sandbox made through the proxy, allowed or blocked, newest first. Bodies and
-        full addresses are not kept.
-      </p>
+      <h3 id={headingId}>{S.heading}</h3>
+      <p className="muted">{S.intro}</p>
       <form
         className="ws-toolbar network-filters"
         role="search"
-        aria-label="Filter the decision log"
+        aria-label={S.filter}
         onSubmit={(e) => {
           e.preventDefault();
           setHost(normalizeHost(hostDraft));
         }}
       >
         <TextField
-          label="Host"
+          label={S.host}
           value={hostDraft}
           spellCheck={false}
           autoCapitalize="off"
           autoComplete="off"
-          placeholder="api.example.com"
+          placeholder={S.hostPlaceholder}
           onChange={(e) => setHostDraft(e.target.value)}
         />
         <SelectField
-          label="Decision"
+          label={S.decision}
           value={decision}
           onChange={(v) => {
             setDecision(v === 'allow' || v === 'deny' ? v : '');
           }}
           options={[
-            { value: '', label: 'All' },
-            { value: 'allow', label: 'Allowed' },
-            { value: 'deny', label: 'Blocked' },
+            { value: '', label: S.all },
+            { value: 'allow', label: S.allowed },
+            { value: 'deny', label: S.blocked },
           ]}
         />
-        <Button type="submit">Filter</Button>
+        <Button type="submit">{S.filterButton}</Button>
         {filtered ? (
           <Button
             variant="ghost"
@@ -174,29 +168,23 @@ export function DecisionLog({
               setDecision('');
             }}
           >
-            Clear filters
+            {S.clearFilters}
           </Button>
         ) : null}
         <Button variant="ghost" onClick={() => setAttempt((n) => n + 1)}>
-          <Icon name="refresh" /> Refresh
+          <Icon name="refresh" /> {S.refresh}
         </Button>
       </form>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{EGRESS_TEXT.retry}</Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading the decision log" /> : null}
-      {items?.length === 0 ? (
-        <p className="ws-flush">
-          {filtered
-            ? 'No decisions match these filters.'
-            : 'No requests yet. Requests appear here when agents or commands use the network.'}
-        </p>
-      ) : null}
+      {items === null && !error ? <Spinner label={S.loading} /> : null}
+      {items?.length === 0 ? <p className="ws-flush">{filtered ? S.noMatch : S.empty}</p> : null}
       {items?.length ? (
-        <ol className="network-log" aria-label="Network decisions">
+        <ol className="network-log" aria-label={S.list}>
           {items.map((d) => {
             const allowed = d.decision === 'allow';
             const why = causeText(d);
@@ -206,34 +194,39 @@ export function DecisionLog({
               <li key={d.id} className="network-decision" data-decision={d.decision}>
                 <div className="network-decision-head">
                   <span className="ws-badge" data-tone={allowed ? 'ok' : 'danger'}>
-                    <Icon name={allowed ? 'check' : 'stop'} /> {allowed ? 'Allowed' : 'Blocked'}
+                    <Icon name={allowed ? 'check' : 'stop'} /> {allowed ? S.allowed : S.blocked}
                   </span>
-                  <code className="network-request">
+                  <code className="network-request" dir="ltr">
                     {d.method ? `${d.method} ` : ''}
                     {hostPort(d)}
                   </code>
                   <time className="muted network-time" dateTime={d.createdAt}>
-                    {formatDateTime(d.createdAt)}
+                    {decidedAt(d.createdAt)}
                   </time>
                 </div>
                 {why ? <p className="network-cause">{why}</p> : null}
                 <span className="muted ws-row-meta">
                   {d.scope ? <span>{label(d.scope.kind, d.scope.id)}</span> : null}
                   {d.mode ? <span>{MODE_TEXT[d.mode].label}</span> : null}
-                  {d.status !== null ? <span>HTTP {d.status}</span> : null}
-                  {d.inspected ? <span>HTTPS inspected</span> : null}
+                  {d.status !== null ? <span>{S.http({ status: String(d.status) })}</span> : null}
+                  {d.inspected ? <span>{S.inspected}</span> : null}
                   {d.addressClass && d.addressClass !== 'public' ? (
-                    <span>{ADDRESS_TEXT[d.addressClass] ?? 'Non-public address'}</span>
+                    <span>{messageFor(S.address, d.addressClass) ?? S.addressOther}</span>
                   ) : null}
                   {d.bytesIn || d.bytesOut ? (
                     <span>
-                      {formatBytes(d.bytesIn)} in, {formatBytes(d.bytesOut)} out
+                      {S.traffic({
+                        received: fmt.bytes(d.bytesIn ?? 0),
+                        sent: fmt.bytes(d.bytesOut ?? 0),
+                      })}
                     </span>
                   ) : null}
                 </span>
                 {canAllow ? (
                   <div>
-                    <Button onClick={() => setAllowing(d)}>Allow {d.host}</Button>
+                    <Button onClick={() => setAllowing(d)}>
+                      {S.allowHost({ host: d.host ?? '' })}
+                    </Button>
                   </div>
                 ) : null}
               </li>
@@ -244,7 +237,7 @@ export function DecisionLog({
       {more ? (
         <div>
           <Button disabled={loading || loadingMore} onClick={showMore}>
-            {loadingMore ? <Spinner /> : null} Show more
+            {loadingMore ? <Spinner /> : null} {S.showMore}
           </Button>
         </div>
       ) : null}
@@ -306,25 +299,22 @@ function AllowHostDialog({
           hooks: cur?.hooks ?? [],
           allowLocalBinding: cur?.allowLocalBinding ?? false,
         });
-        toast.show(`Allowed ${h} for ${label(own.kind, own.id)}.`, { tone: 'success' });
+        toast.show(S.allowedFor({ host: h, scope: label(own.kind, own.id) }), {
+          tone: 'success',
+        });
       } else {
         await settings.set('network.egressAllow', [...new Set([...global.value, h])]);
-        toast.show(`Allowed ${h} for every sandbox.`, { tone: 'success' });
+        toast.show(S.allowedEvery({ host: h }), { tone: 'success' });
       }
       onDone();
     } catch (err) {
-      setError(errorMessage(err, 'Could not allow the host.'));
+      setError(errorMessage(err, S.allowError));
       setBusy(false);
     }
   };
 
   return (
-    <Dialog
-      open
-      title={`Allow ${h}?`}
-      description="Commands can then reach this host through the proxy. A blocked host stays blocked, and read-only access still allows only GET, HEAD and OPTIONS."
-      onClose={onClose}
-    >
+    <Dialog open title={S.allowTitle({ host: h })} description={S.allowBody} onClose={onClose}>
       <form
         className="stack"
         onSubmit={(e) => {
@@ -334,21 +324,21 @@ function AllowHostDialog({
       >
         {own ? (
           <RadioGroup
-            legend="Allow it for"
+            legend={S.allowFor}
             name={`${id}-where`}
             value={where}
             options={[
-              { value: 'scope', label: `Only ${label(own.kind, own.id)}` },
-              { value: 'global', label: 'Every sandbox' },
+              { value: 'scope', label: S.onlyScope({ scope: label(own.kind, own.id) }) },
+              { value: 'global', label: EGRESS_TEXT.everySandbox },
             ]}
             onChange={(v) => setWhere(v === 'global' ? 'global' : 'scope')}
           />
         ) : (
-          <p className="ws-flush">It is added to the allowed hosts for every sandbox.</p>
+          <p className="ws-flush">{S.addedEvery}</p>
         )}
         {where === 'global' && global.locked ? (
           <p className="nv-field-error" role="alert">
-            The allowed hosts are managed by your organization.
+            {S.managed}
           </p>
         ) : null}
         {error ? (
@@ -357,13 +347,13 @@ function AllowHostDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{EGRESS_TEXT.cancel}</Button>
           <Button
             type="submit"
             variant="primary"
             disabled={busy || (where === 'global' && global.locked)}
           >
-            {busy ? <Spinner /> : null} Allow host
+            {busy ? <Spinner /> : null} {S.allowButton}
           </Button>
         </div>
       </form>

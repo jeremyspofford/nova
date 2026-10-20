@@ -13,10 +13,12 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { DeviceDecommissionView, DeviceSummaryView, DeviceView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, Tabs, TextField, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { ApiError } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { BrowserBridgeSection } from '../browserdevice/BridgeSection.tsx';
 import { pageNav, thisDeviceId } from '../join/store.ts';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { navigate, useLocation } from '../router.ts';
 import { useDebounced } from '../work/events.ts';
 import { followLink } from '../work/nav.tsx';
@@ -84,18 +86,83 @@ function pageTabPath(id: string, tab: PageTab): string {
   return isM75Tab(tab) ? `${devicePath(id)}?tab=${tab}` : devicePath(id, tab);
 }
 
-const TAB_LABEL: Record<PageTab, string> = {
-  firmware: 'Firmware',
-  boot: 'Boot',
-  capabilities: 'Capabilities',
-  modules: 'Modules',
-  power: 'Power',
-  updates: 'Updates',
-  policy: 'Policy',
-  files: 'Files',
-  agents: 'Agents',
-  mcp: 'MCP',
-};
+export const PAGE_TEXT = defineMessages('devices.page', {
+  tabs: {
+    firmware: 'Firmware',
+    boot: 'Boot',
+    capabilities: 'Capabilities',
+    modules: 'Modules',
+    power: 'Power',
+    updates: 'Updates',
+    policy: 'Policy',
+    files: 'Files',
+    agents: 'Agents',
+    mcp: 'MCP',
+  },
+  sections: 'Device sections',
+  revoke: {
+    sessions: 'Its sessions end at once and its key is blocked.',
+    credential: 'Its credential stops working at once and its key is blocked.',
+    novad:
+      'Agents using it as their computer are disconnected, and every folder it shared is closed.',
+    again: 'To use it again, add it with a new code.',
+    self: 'This is the device you are using: you will be signed out here.',
+    title: 'Revoke {name}?',
+    confirm: 'Revoke',
+    done: '{name} revoked.',
+  },
+  notOnHub: 'This device is not on this Hub.',
+  back: 'Back to devices',
+  loadFailed: 'Could not load the device.',
+  loading: 'Loading the device',
+  refreshFailed: 'Could not refresh the device.',
+  wakeFailed: 'Could not wake {name}.',
+  thisDevice: 'This device',
+  wake: 'Wake',
+  rename: 'Rename',
+  facts: {
+    role: 'Role',
+    runs: 'Runs',
+    platform: 'Platform',
+    lastHeartbeat: 'Last heartbeat',
+    lastSeen: 'Last seen',
+    address: 'Address',
+    sessions: 'Sessions',
+    added: 'Added',
+    key: 'Key',
+  },
+  novad: 'novad',
+  novadVersion: 'novad {version}',
+  unknown: 'Unknown',
+  liveSessions: '{n, plural, one {# live session} other {# live sessions}}',
+  signedOut: 'Signed out',
+  revoked:
+    'This device was revoked: it can no longer reach this Hub. To use it again, add it with a new code.',
+  configPending: 'Your latest changes reach the device when it next checks in.',
+  scopesFailed: "Could not load the device's scopes.",
+  modelsIn: 'Its models and load are in {link}.',
+  settingsDevices: 'Settings → Devices',
+  breadcrumb: 'Breadcrumb',
+  devices: 'Devices',
+  scopes: {
+    title: 'Scopes',
+    edit: 'Edit scopes',
+    none: 'No extra scopes: it uses Nova as its role allows, and nothing else.',
+    saved: 'Scopes of {name} saved.',
+    dialogTitle: 'Scopes of {name}',
+    dialogHelp:
+      'What this device may do besides its role. Folders, the browser and the screen still ask before each use.',
+    noChoices: 'This device’s role has no scopes to choose.',
+    saveFailed: 'Could not save the scopes.',
+  },
+  cancel: 'Cancel',
+  save: 'Save',
+  renameTitle: 'Rename device',
+  name: 'Name',
+  renameFailed: 'Could not rename the device.',
+});
+const S = PAGE_TEXT;
+const TAB_LABEL: Readonly<Record<PageTab, string>> = S.tabs;
 
 /** What a device panel gets: the device as last loaded, and a way to replace it. */
 export interface PanelProps {
@@ -109,17 +176,11 @@ export interface PanelProps {
 
 /** What revoking does, in words (docs/22 §4.5). */
 export function revokeText(opts: { novad: boolean; session: boolean; self: boolean }): string {
-  const parts = [
-    opts.session
-      ? 'Its sessions end at once and its key is blocked.'
-      : 'Its credential stops working at once and its key is blocked.',
-  ];
-  if (opts.novad)
-    parts.push(
-      'Agents using it as their computer are disconnected, and every folder it shared is closed.',
-    );
-  parts.push('To use it again, add it with a new code.');
-  if (opts.self) parts.push('This is the device you are using: you will be signed out here.');
+  // Whole sentences, each its own message, shown one after the other.
+  const parts = [opts.session ? S.revoke.sessions : S.revoke.credential];
+  if (opts.novad) parts.push(S.revoke.novad);
+  parts.push(S.revoke.again);
+  if (opts.self) parts.push(S.revoke.self);
   return parts.join(' ');
 }
 
@@ -168,20 +229,20 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
         <Breadcrumb />
         {gone ? (
           <div role="alert" className="ws-error">
-            <p>This device is not on this Hub.</p>
-            <Button onClick={() => navigate(DEVICES_PATH)}>Back to devices</Button>
+            <p>{S.notOnHub}</p>
+            <Button onClick={() => navigate(DEVICES_PATH)}>{S.back}</Button>
           </div>
         ) : dev.error || (all.error && !loading) ? (
           <LoadError
             error={dev.error ?? all.error}
-            fallback="Could not load the device."
+            fallback={S.loadFailed}
             onRetry={() => {
               dev.reload();
               all.reload();
             }}
           />
         ) : (
-          <Spinner label="Loading the device" />
+          <Spinner label={S.loading} />
         )}
       </div>
     );
@@ -202,7 +263,7 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
       const w = await api.wakeDevice(d.id);
       toast.show(wakeSentText(d.name, w, nameOf), { tone: 'success' });
     } catch (err) {
-      toast.show(deviceErrorMessage(err, `Could not wake ${d.name}.`), { tone: 'error' });
+      toast.show(deviceErrorMessage(err, S.wakeFailed({ name: d.name })), { tone: 'error' });
     } finally {
       setWaking(false);
     }
@@ -230,75 +291,85 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
       <Breadcrumb />
       <header className="ws-page-header">
         <div className="devices-title">
-          <h1>{name}</h1>
+          <h1 dir="auto">{name}</h1>
           <DeviceStatusChip status={status} />
           {d?.updateRequired && !revoked ? <UpdateRequiredChip /> : null}
-          {self && !revoked ? <span className="ws-badge">This device</span> : null}
+          {self && !revoked ? <span className="ws-badge">{S.thisDevice}</span> : null}
         </div>
         {!revoked ? (
           <div className="row">
             {d?.wake.wakeable && d.status !== 'active' ? (
               <Button onClick={() => void wake()} disabled={waking}>
-                {waking ? <Spinner /> : null} Wake
+                {waking ? <Spinner /> : null} {S.wake}
               </Button>
             ) : null}
             {d ? (
               <Button onClick={() => setRenaming(true)}>
-                <Icon name="edit" /> Rename
+                <Icon name="edit" /> {S.rename}
               </Button>
             ) : null}
             {d ? <DecommissionButton device={d} onRequested={setDecommission} /> : null}
             <Button variant="danger" onClick={() => setRevoking(true)}>
-              Revoke
+              {S.revoke.confirm}
             </Button>
           </div>
         ) : null}
       </header>
       {dev.error ? (
-        <LoadError
-          error={dev.error}
-          fallback="Could not refresh the device."
-          onRetry={dev.reload}
-        />
+        <LoadError error={dev.error} fallback={S.refreshFailed} onRetry={dev.reload} />
       ) : null}
       <dl className="devices-facts">
         <div>
-          <dt>Role</dt>
+          <dt>{S.facts.role}</dt>
           <dd>{rolesText(roles)}</dd>
         </div>
         <div>
-          <dt>Runs</dt>
-          <dd>{s ? runsText(s, d) : d?.novadVersion ? `novad ${d.novadVersion}` : 'novad'}</dd>
+          <dt>{S.facts.runs}</dt>
+          <dd>
+            {s
+              ? runsText(s, d)
+              : d?.novadVersion
+                ? S.novadVersion({ version: d.novadVersion })
+                : S.novad}
+          </dd>
         </div>
         <div>
-          <dt>Platform</dt>
-          <dd>{d?.platform ?? s?.platform ?? 'Unknown'}</dd>
+          <dt>{S.facts.platform}</dt>
+          <dd>{d?.platform ?? s?.platform ?? S.unknown}</dd>
         </div>
         <div>
-          <dt>{d ? 'Last heartbeat' : 'Last seen'}</dt>
+          <dt>{d ? S.facts.lastHeartbeat : S.facts.lastSeen}</dt>
           <dd>{formatWhen(d?.lastSeenAt ?? s?.lastSeenAt ?? null)}</dd>
         </div>
         {d ? (
           <div>
-            <dt>Address</dt>
-            <dd>{d.endpoint ? <code className="ws-code-inline">{d.endpoint}</code> : 'Unknown'}</dd>
+            <dt>{S.facts.address}</dt>
+            <dd>
+              {d.endpoint ? (
+                <code className="ws-code-inline" dir="ltr">
+                  {d.endpoint}
+                </code>
+              ) : (
+                S.unknown
+              )}
+            </dd>
           </div>
         ) : null}
         {d || s?.kind === 'compute' ? <DeviceTlsFact deviceId={deviceId} /> : null}
         {d ? <ManagementFact deviceId={deviceId} /> : null}
         {session && s ? (
           <div>
-            <dt>Sessions</dt>
-            <dd>{s.sessions ? plural(s.sessions, 'live session') : 'Signed out'}</dd>
+            <dt>{S.facts.sessions}</dt>
+            <dd>{s.sessions ? S.liveSessions({ n: s.sessions }) : S.signedOut}</dd>
           </div>
         ) : null}
         <div>
-          <dt>Added</dt>
+          <dt>{S.facts.added}</dt>
           <dd>{formatWhen(d?.createdAt ?? s?.createdAt ?? null)}</dd>
         </div>
         {s ? (
           <div>
-            <dt>Key</dt>
+            <dt>{S.facts.key}</dt>
             <dd>
               <code className="ws-code-inline" title={s.fingerprint}>
                 {s.fingerprint.slice(0, 16)}…
@@ -309,12 +380,11 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
       </dl>
       {revoked ? (
         <p className="devices-note" role="status">
-          <Icon name="stop" /> This device was revoked: it can no longer reach this Hub. To use it
-          again, add it with a new code.
+          <Icon name="stop" /> {S.revoked}
         </p>
       ) : d?.configPending ? (
         <p className="devices-note" role="status">
-          <Icon name="clock" /> Your latest changes reach the device when it next checks in.
+          <Icon name="clock" /> {S.configPending}
         </p>
       ) : null}
       {d ? (
@@ -330,19 +400,17 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
       {s ? (
         <ScopesSection device={s} revoked={revoked} onEdit={() => setEditing(true)} />
       ) : all.error ? (
-        <LoadError
-          error={all.error}
-          fallback="Could not load the device's scopes."
-          onRetry={all.reload}
-        />
+        <LoadError error={all.error} fallback={S.scopesFailed} onRetry={all.reload} />
       ) : null}
       {!d && s?.kind === 'compute' && !s.addedAs ? (
         <p className="muted ws-flush">
-          Its models and load are in{' '}
-          <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
-            Settings → Devices
-          </a>
-          .
+          {rich(S.modelsIn, {
+            link: (
+              <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
+                {S.settingsDevices}
+              </a>
+            ),
+          })}
         </p>
       ) : null}
       {/* M7.5 (FR-126, FR-150): a compute node's policy, GPU memory and services. */}
@@ -351,7 +419,7 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
       {d && !revoked ? <BrowserBridgeSection device={d} /> : null}
       {d && panels ? (
         <Tabs
-          label="Device sections"
+          label={S.sections}
           className="devices-tabs"
           value={oob.active ? OOB_TAB : tab}
           onChange={(id) =>
@@ -375,15 +443,15 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
           onSaved={(next) => {
             all.setData((cur) => cur?.map((x) => (x.id === next.id ? next : x)) ?? null);
             setEditing(false);
-            toast.show(`Scopes of ${next.name} saved.`, { tone: 'success' });
+            toast.show(S.scopes.saved({ name: next.name }), { tone: 'success' });
           }}
         />
       ) : null}
       <ConfirmDialog
         open={revoking}
-        title={`Revoke ${name}?`}
+        title={S.revoke.title({ name })}
         description={revokeText({ novad: d !== null, session, self })}
-        confirmLabel="Revoke"
+        confirmLabel={S.revoke.confirm}
         danger
         onClose={() => setRevoking(false)}
         onConfirm={async () => {
@@ -399,7 +467,7 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
               cur?.map((x) => (x.id === deviceId ? { ...x, status: 'revoked' as const } : x)) ??
               null,
           );
-          toast.show(`${name} revoked.`, { tone: 'success' });
+          toast.show(S.revoke.done({ name }), { tone: 'success' });
         }}
       />
     </div>
@@ -408,9 +476,9 @@ export function DevicePage({ deviceId }: { deviceId: string }) {
 
 function Breadcrumb() {
   return (
-    <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+    <nav aria-label={S.breadcrumb} className="ws-breadcrumb">
       <a href={DEVICES_PATH} onClick={(e) => followLink(e, DEVICES_PATH)}>
-        <Icon name="back" /> Devices
+        <Icon name="back" /> {S.devices}
       </a>
     </nav>
   );
@@ -429,11 +497,11 @@ function ScopesSection({
   return (
     <section className="ws-section devices-flat" aria-labelledby="device-scopes-h">
       <div className="ws-section-header">
-        <h2 id="device-scopes-h">Scopes</h2>
-        {!revoked ? <Button onClick={onEdit}>Edit scopes</Button> : null}
+        <h2 id="device-scopes-h">{S.scopes.title}</h2>
+        {!revoked ? <Button onClick={onEdit}>{S.scopes.edit}</Button> : null}
       </div>
       {device.scopes.length ? (
-        <ul className="devices-scopes" aria-label="Scopes">
+        <ul className="devices-scopes" aria-label={S.scopes.title}>
           {device.scopes.map((sc) => (
             <li key={sc}>
               <strong>{scopeLabel(sc)}</strong>
@@ -442,9 +510,7 @@ function ScopesSection({
           ))}
         </ul>
       ) : (
-        <p className="muted ws-flush">
-          No extra scopes: it uses Nova as its role allows, and nothing else.
-        </p>
+        <p className="muted ws-flush">{S.scopes.none}</p>
       )}
     </section>
   );
@@ -476,28 +542,28 @@ function ScopesDialog({
         ),
       );
     } catch (err) {
-      setError(deviceErrorMessage(err, 'Could not save the scopes.'));
+      setError(deviceErrorMessage(err, S.scopes.saveFailed));
       setBusy(false);
     }
   };
   return (
     <Dialog
       open
-      title={`Scopes of ${device.name}`}
-      description="What this device may do besides its role. Folders, the browser and the screen still ask before each use."
+      title={S.scopes.dialogTitle({ name: device.name })}
+      description={S.scopes.dialogHelp}
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.cancel}</Button>
           <Button variant="primary" disabled={busy} onClick={() => void save()}>
-            {busy ? <Spinner /> : null} Save
+            {busy ? <Spinner /> : null} {S.save}
           </Button>
         </>
       }
     >
       {choices.length ? (
         <fieldset className="ws-fieldset devices-roles">
-          <legend>Scopes</legend>
+          <legend>{S.scopes.title}</legend>
           {choices.map((sc) => (
             <label key={sc} className="nv-radio">
               <input
@@ -523,7 +589,7 @@ function ScopesDialog({
           ))}
         </fieldset>
       ) : (
-        <p className="muted">This device’s role has no scopes to choose.</p>
+        <p className="muted">{S.scopes.noChoices}</p>
       )}
       {error ? (
         <p role="alert" className="nv-field-error">
@@ -558,12 +624,12 @@ function RenameDialog({
       onSaved(await api.updateNovadDevice(device.id, { name: next }));
       onClose();
     } catch (err) {
-      setError(deviceErrorMessage(err, 'Could not rename the device.'));
+      setError(deviceErrorMessage(err, S.renameFailed));
       setBusy(false);
     }
   };
   return (
-    <Dialog open title="Rename device" onClose={onClose} initialFocusRef={ref}>
+    <Dialog open title={S.renameTitle} onClose={onClose} initialFocusRef={ref}>
       <form
         className="stack"
         onSubmit={(e) => {
@@ -573,16 +639,16 @@ function RenameDialog({
       >
         <TextField
           ref={ref}
-          label="Name"
+          label={S.name}
           value={name}
           maxLength={100}
           onChange={(e) => setName(e.target.value)}
           error={error ?? undefined}
         />
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.cancel}</Button>
           <Button type="submit" variant="primary" disabled={!name.trim() || busy}>
-            Save
+            {S.save}
           </Button>
         </div>
       </form>

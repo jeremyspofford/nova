@@ -3,6 +3,10 @@
 // current page, accepting a proposal made on an older version answers 409 `stale_proposal` unless
 // forced, deleting a published site answers 409 `published`, and publishing into a folder Nova
 // did not fill answers 409 `folder_in_use`. Views handed out are copies and never mutated.
+// M8: a page order that misses a page answers 409 `order_stale`; deleted pages wait in `trash`
+// and come back; source previews compare `sourceFiles` with the latest version; hosting targets
+// answer like the Hub (`https_required`, `target_in_use`, `remote_targets_off`, `egress_denied`
+// for a host in `egressDenied`, and the reason in `targetFailures` for a target that fails).
 //
 // Wiring into test/fakes.ts (done by the lead): `HubState` gets `m6spaces: M6SpacesState`,
 // `createHub` defaults it to `m6SpacesState()`, and `impl` spreads
@@ -17,24 +21,34 @@ import {
   acceptProposalSchema,
   buildSiteSchema,
   createCommentSchema,
+  createHostingTargetSchema,
   createPageSchema,
   createSiteSchema,
   createSpaceSchema,
+  publishPlanSchema,
   publishSiteSchema,
+  reorderPagesSchema,
   restorePageSchema,
   savePageSchema,
+  siteSourcePreviewSchema,
+  updateHostingTargetSchema,
   updatePageSchema,
   updateSiteSchema,
   updateSpaceSchema,
   type CommentAnchor,
+  type HostingProblem,
   type PageCommentView,
   type PageProposalView,
   type PageSummaryView,
   type PageVersionView,
   type PageView,
   type SiteDataSourceView,
+  type SiteFileChange,
+  type SiteHostingTargetView,
   type SitePublishResult,
   type SitePublishView,
+  type SiteRemoteRef,
+  type SiteTarget,
   type SiteVersionView,
   type SiteView,
   type SpaceView,
@@ -45,6 +59,7 @@ import { AnnouncerProvider, ServicesProvider } from '../src/services.tsx';
 import { SettingsProvider } from '../src/settings.tsx';
 import type { SpacesApi } from '../src/spaces/api.ts';
 import { DONE_ONBOARDING, createHub, fakeEventSource, testRegistry } from './fakes.ts';
+import { MEMBER_ID, m7TeamState } from './fakes-m7-team.ts';
 
 const T0 = '2026-10-01T12:00:00.000Z';
 let n = 0;
@@ -193,6 +208,24 @@ export function dataSourceView(over: Partial<SiteDataSourceView> = {}): SiteData
   };
 }
 
+export function targetView(over: Partial<SiteHostingTargetView> = {}): SiteHostingTargetView {
+  return {
+    id: `tgt${++n}`,
+    name: 'Home NAS',
+    kind: 'webdav',
+    url: 'https://dav.example.com/sites/',
+    publicUrl: null,
+    auth: 'none',
+    username: null,
+    hasCredential: false,
+    sites: [],
+    lastCheck: null,
+    createdAt: T0,
+    updatedAt: T0,
+    ...over,
+  };
+}
+
 /** A stored page version, with its content. */
 export type StoredVersion = PageVersionView & { content: string };
 
@@ -210,6 +243,18 @@ export interface M6SpacesState {
   artifacts: { id: string; title: string; html: boolean }[];
   /** Folders under the publish root that hold files Nova did not put there. */
   foreignFolders: string[];
+  /** M8: deleted pages the spaces keep (no longer in `pages`), oldest deletion first. */
+  trash: { page: PageView; deletedAt: string }[];
+  /** M8: the owner's hosting targets (`sites` is filled from the live publishes). */
+  targets: SiteHostingTargetView[];
+  /** M8: hosts the egress policy refuses. */
+  egressDenied: string[];
+  /** M8: `sites.remoteTargets` is off. */
+  remoteTargetsOff: boolean;
+  /** M8: targets whose check and uploads fail, with the reason. */
+  targetFailures: Record<string, HostingProblem>;
+  /** M8: the files a build from a source makes, by space or artifact id (source previews). */
+  sourceFiles: Record<string, { path: string; size: number }[]>;
 }
 
 /** State with a version row for every page's current version that the init did not give. */
@@ -226,6 +271,12 @@ export function m6SpacesState(init: Partial<M6SpacesState> = {}): M6SpacesState 
     dataSources: [],
     artifacts: [],
     foreignFolders: [],
+    trash: [],
+    targets: [],
+    egressDenied: [],
+    remoteTargetsOff: false,
+    targetFailures: {},
+    sourceFiles: {},
     ...init,
   };
   for (const p of st.pages)
@@ -388,6 +439,7 @@ export function m6SpacesImpl(
     return patchSite(sid, {
       publishedVersion: pub?.version ?? null,
       publishedTarget: pub?.target ?? null,
+      publishedRemote: pub ? remoteRef(pub.target) : null,
       publishedAt: pub?.createdAt ?? null,
     });
   };
@@ -396,7 +448,89 @@ export function m6SpacesImpl(
     publish: pub ? { ...pub, current: true } : null,
     downloadUrl: pub?.target.kind === 'zip' ? zipUrl(s.id, pub.version) : null,
     folderPath: pub?.target.kind === 'folder' ? `/data/sites/${pub.target.folder}` : null,
+    leftBehind: null,
   });
+
+  // ---- M8 helpers ----
+  const renumber = (sid: string, order: PageView[]) => {
+    const pos = new Map(order.map((p, i) => [p.id, i]));
+    st.pages = st.pages.map((p) =>
+      p.spaceId === sid && pos.has(p.id) ? { ...p, position: pos.get(p.id) ?? p.position } : p,
+    );
+  };
+  const livePages = (sid: string) =>
+    st.pages.filter((p) => p.spaceId === sid).sort((a, b) => a.position - b.position);
+  const targetRow = (tid: string) => {
+    const t = st.targets.find((x) => x.id === tid);
+    if (!t)
+      throw err(404, 'not_found', 'That hosting target was removed.', { reason: 'target_missing' });
+    return t;
+  };
+  const remoteRef = (t: SiteTarget): SiteRemoteRef | null => {
+    if (t.kind !== 'remote') return null;
+    const row = st.targets.find((x) => x.id === t.targetId);
+    return {
+      targetId: t.targetId,
+      name: row?.name ?? null,
+      location: row ? `${row.url}${t.folder}/` : null,
+      publicUrl: row?.publicUrl ? `${row.publicUrl}${t.folder}/` : null,
+    };
+  };
+  const targetOut = (t: SiteHostingTargetView): SiteHostingTargetView => ({
+    ...t,
+    sites: st.sites.flatMap((s) =>
+      s.publishedTarget?.kind === 'remote' &&
+      s.publishedTarget.targetId === t.id &&
+      s.publishedVersion !== null
+        ? [
+            {
+              siteId: s.id,
+              name: s.name,
+              folder: s.publishedTarget.folder,
+              version: s.publishedVersion,
+            },
+          ]
+        : [],
+    ),
+  });
+  const hostOf = (url: string) => new URL(url).hostname;
+  const checkUrl = (raw: string, field: 'url' | 'publicUrl') => {
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      throw err(400, 'validation', 'not a URL', { reason: 'url_invalid', field });
+    }
+    if (u.username || u.password)
+      throw err(400, 'validation', 'credentials in the URL', {
+        reason: 'credentials_in_url',
+        field,
+      });
+    if (
+      field === 'url' &&
+      u.protocol === 'http:' &&
+      !['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)
+    )
+      throw err(400, 'validation', 'use https', { reason: 'https_required', field });
+    return u.toString().endsWith('/') ? u.toString() : `${u.toString()}/`;
+  };
+  /** Why a write to the target is refused, as the Hub answers it. */
+  const remoteRefusal = (tid: string) => {
+    if (st.remoteTargetsOff)
+      return err(403, 'policy_denied', 'Publishing to hosting targets is turned off.', {
+        reason: 'remote_targets_off',
+      });
+    const t = targetRow(tid);
+    const host = hostOf(t.url);
+    if (st.egressDenied.includes(host))
+      return err(403, 'policy_denied', `Nova may not reach ${host}`, {
+        reason: 'egress_denied',
+        host,
+      });
+    const fail = st.targetFailures[tid];
+    if (fail) return err(409, 'conflict', `The hosting target failed: ${fail}`, { reason: fail });
+    return null;
+  };
 
   return {
     // ---- spaces and pages ----
@@ -504,10 +638,10 @@ export function m6SpacesImpl(
     },
     deleteSpacePage: async (sid, pid) => {
       maybeFail('deleteSpacePage');
-      page(sid, pid);
+      const gone = page(sid, pid);
       st.pages = st.pages.filter((p) => p.id !== pid);
-      st.versions = st.versions.filter((v) => v.pageId !== pid);
-      st.comments = st.comments.filter((c) => c.pageId !== pid);
+      // M8: the page waits in the trash with its versions and comments.
+      st.trash = [...st.trash, { page: gone, deletedAt: ts() }];
       // Open proposals for the page end as rejected; decided ones stay as they were.
       st.proposals = st.proposals.map((x) =>
         x.pageId === pid && x.status === 'open'
@@ -762,6 +896,10 @@ export function m6SpacesImpl(
       if (!st.siteVersions.some((v) => v.siteId === sid && v.version === b.version))
         throw notFound();
       const target = b.target;
+      if (target.kind === 'remote') {
+        const refusal = remoteRefusal(target.targetId);
+        if (refusal) throw refusal;
+      }
       if (target.kind === 'folder') {
         if (st.foreignFolders.includes(target.folder))
           throw err(409, 'conflict', 'That folder holds files Nova did not put there.', {
@@ -785,6 +923,7 @@ export function m6SpacesImpl(
         siteId: sid,
         version: b.version,
         target,
+        remote: remoteRef(target),
         createdAt: ts(),
       });
       st.publishes = [...st.publishes, pub];
@@ -807,6 +946,226 @@ export function m6SpacesImpl(
     },
     sitePreviewUrl: (sid, v) => `/api/v1/sites/${encodeURIComponent(sid)}/versions/${v}/preview`,
     siteZipUrl: zipUrl,
+
+    // ---- M8: page order and deleted pages ----
+    reorderSpacePages: async (sid, pageIds) => {
+      maybeFail('reorderSpacePages');
+      space(sid);
+      const b = parse(reorderPagesSchema, { pageIds });
+      const live = livePages(sid);
+      const known = new Set(live.map((p) => p.id));
+      if (b.pageIds.length !== live.length || b.pageIds.some((x) => !known.has(x)))
+        throw err(409, 'conflict', 'The pages of this space changed.', { reason: 'order_stale' });
+      renumber(
+        sid,
+        b.pageIds.map((x) => live.find((p) => p.id === x)!),
+      );
+      return { items: livePages(sid).map(summary) };
+    },
+    getPageDeletion: async (sid, pid) => {
+      maybeFail('getPageDeletion');
+      const p = page(sid, pid);
+      const mine = st.comments.filter((c) => c.pageId === pid);
+      return {
+        pageId: pid,
+        spaceId: sid,
+        title: p.title,
+        versions: st.versions.filter((v) => v.pageId === pid).length,
+        comments: mine.filter((c) => !c.parentId).length,
+        replies: mine.filter((c) => c.parentId).length,
+        openProposals: st.proposals.filter((x) => x.pageId === pid && x.status === 'open').length,
+        sites: st.sites
+          .filter((x) => x.source.kind === 'space' && x.source.spaceId === sid)
+          .map((x) => ({ id: x.id, name: x.name, publishedVersion: x.publishedVersion })),
+      };
+    },
+    listDeletedPages: async (sid) => {
+      maybeFail('listDeletedPages');
+      space(sid);
+      return {
+        items: st.trash
+          .filter((t) => t.page.spaceId === sid)
+          .reverse()
+          .map(({ page: p, deletedAt }) => ({
+            id: p.id,
+            spaceId: sid,
+            title: p.title,
+            slug: p.slug,
+            version: p.version,
+            comments: st.comments.filter((c) => c.pageId === p.id).length,
+            deletedAt,
+          })),
+      };
+    },
+    undeleteSpacePage: async (sid, pid) => {
+      maybeFail('undeleteSpacePage');
+      space(sid);
+      const entry = st.trash.find((t) => t.page.id === pid && t.page.spaceId === sid);
+      if (!entry) throw notFound();
+      st.trash = st.trash.filter((t) => t !== entry);
+      const live = livePages(sid);
+      const slug = live.some((p) => p.slug === entry.page.slug)
+        ? `${entry.page.slug}-2`
+        : entry.page.slug;
+      const back = { ...entry.page, slug, updatedAt: ts() };
+      const at = live.filter((p) => p.position < entry.page.position).length;
+      st.pages = [...st.pages, back];
+      renumber(sid, [...live.slice(0, at), back, ...live.slice(at)]);
+      return pageOut(page(sid, pid));
+    },
+
+    // ---- M8: a site's source, publish plans and hosting targets ----
+    previewSiteSource: async (id, body) => {
+      maybeFail('previewSiteSource');
+      const b = parse(siteSourcePreviewSchema, body);
+      const s = site(id);
+      const next = b.source ?? s.source;
+      if (next.kind === 'space') space(next.spaceId);
+      else if (!st.artifacts.some((a) => a.id === next.artifactId))
+        throw err(404, 'not_found', 'The artifact is gone.', { reason: 'source_missing' });
+      const ref = next.kind === 'space' ? next.spaceId : next.artifactId;
+      const files = st.sourceFiles[ref] ?? [{ path: 'index.html', size: 1000 }];
+      const latest = st.siteVersions.find((v) => v.siteId === id && v.version === s.latestVersion);
+      const old = latest?.files ?? null;
+      const out: { path: string; size: number; change: SiteFileChange }[] = files.map((f) => {
+        const before = old?.find((o) => o.path === f.path);
+        return { ...f, change: !before ? 'added' : before.size === f.size ? 'same' : 'changed' };
+      });
+      for (const o of old ?? [])
+        if (!files.some((f) => f.path === o.path)) out.push({ ...o, change: 'removed' });
+      return {
+        siteId: id,
+        current: { source: s.source, sourceLabel: s.sourceLabel, data: s.data },
+        next: { source: next, sourceLabel: sourceLabel(next), data: b.data ?? s.data },
+        comparedWith: latest?.version ?? null,
+        files: out,
+        size: files.reduce((n0, f) => n0 + f.size, 0),
+        scripts: false,
+      };
+    },
+    planSitePublish: async (id, body) => {
+      maybeFail('planSitePublish');
+      const b = parse(publishPlanSchema, body);
+      const s = site(id);
+      const v = st.siteVersions.find((x) => x.siteId === id && x.version === b.version);
+      if (!v) throw notFound();
+      const t = b.target;
+      let egress = null;
+      if (t.kind === 'remote') {
+        if (st.remoteTargetsOff)
+          throw err(403, 'policy_denied', 'Publishing to hosting targets is turned off.', {
+            reason: 'remote_targets_off',
+          });
+        const host = hostOf(targetRow(t.targetId).url);
+        egress = {
+          host,
+          allowed: !st.egressDenied.includes(host),
+          message: st.egressDenied.includes(host) ? `${host} is on the egress deny list` : null,
+        };
+      }
+      const live = s.publishedTarget && s.publishedVersion !== null ? s.publishedTarget : null;
+      const same = live !== null && JSON.stringify(live) === JSON.stringify(t);
+      return {
+        siteId: id,
+        version: b.version,
+        target: t,
+        remote: remoteRef(t),
+        location:
+          t.kind === 'folder'
+            ? `/data/sites/${t.folder}`
+            : t.kind === 'remote'
+              ? (remoteRef(t)?.location ?? null)
+              : null,
+        files: v.files,
+        size: v.files.reduce((n0, f) => n0 + f.size, 0),
+        live:
+          live && s.publishedVersion !== null
+            ? { version: s.publishedVersion, target: live, remote: remoteRef(live) }
+            : null,
+        takesDown:
+          live && live.kind !== 'zip' && !same ? { target: live, remote: remoteRef(live) } : null,
+        reversible: t.kind !== 'zip',
+        egress,
+      };
+    },
+    listSiteTargets: async () => {
+      maybeFail('listSiteTargets');
+      return { items: st.targets.map(targetOut) };
+    },
+    createSiteTarget: async (body) => {
+      maybeFail('createSiteTarget');
+      if (st.remoteTargetsOff)
+        throw err(403, 'policy_denied', 'Publishing to hosting targets is turned off.', {
+          reason: 'remote_targets_off',
+        });
+      const b = parse(createHostingTargetSchema, body);
+      const t = targetView({
+        id: id('tgt'),
+        name: b.name,
+        url: checkUrl(b.url, 'url'),
+        publicUrl: b.publicUrl ? checkUrl(b.publicUrl, 'publicUrl') : null,
+        auth: b.credential.kind,
+        username: b.credential.kind === 'basic' ? b.credential.username : null,
+        hasCredential: b.credential.kind !== 'none',
+        createdAt: ts(),
+        updatedAt: ts(),
+      });
+      st.targets = [...st.targets, t];
+      return targetOut(t);
+    },
+    updateSiteTarget: async (tid, body) => {
+      maybeFail('updateSiteTarget');
+      const b = parse(updateHostingTargetSchema, body);
+      const t = targetRow(tid);
+      const url = b.url !== undefined ? checkUrl(b.url, 'url') : t.url;
+      if (url !== t.url && targetOut(t).sites.length)
+        throw err(409, 'conflict', 'Sites are published there.', { reason: 'target_in_use' });
+      const next: SiteHostingTargetView = {
+        ...t,
+        ...(b.name !== undefined ? { name: b.name } : {}),
+        url,
+        publicUrl:
+          b.publicUrl === undefined
+            ? t.publicUrl
+            : b.publicUrl
+              ? checkUrl(b.publicUrl, 'publicUrl')
+              : null,
+        ...(b.credential
+          ? {
+              auth: b.credential.kind,
+              username: b.credential.kind === 'basic' ? b.credential.username : null,
+              hasCredential: b.credential.kind !== 'none',
+            }
+          : {}),
+        updatedAt: ts(),
+      };
+      st.targets = st.targets.map((x) => (x.id === tid ? next : x));
+      return targetOut(next);
+    },
+    deleteSiteTarget: async (tid) => {
+      maybeFail('deleteSiteTarget');
+      const t = targetRow(tid);
+      if (targetOut(t).sites.length)
+        throw err(409, 'conflict', 'Sites are published there.', { reason: 'target_in_use' });
+      st.targets = st.targets.filter((x) => x.id !== tid);
+      return { ok: true as const };
+    },
+    checkSiteTarget: async (tid) => {
+      maybeFail('checkSiteTarget');
+      const t = targetRow(tid);
+      if (st.remoteTargetsOff)
+        throw err(403, 'policy_denied', 'Publishing to hosting targets is turned off.', {
+          reason: 'remote_targets_off',
+        });
+      const refusal = remoteRefusal(tid);
+      const reason = (refusal?.body.details?.reason as HostingProblem | undefined) ?? null;
+      const next: SiteHostingTargetView = {
+        ...t,
+        lastCheck: { ok: !refusal, at: ts(), reason, message: refusal?.message ?? null },
+      };
+      st.targets = st.targets.map((x) => (x.id === tid ? next : x));
+      return targetOut(next);
+    },
   };
 }
 
@@ -851,9 +1210,11 @@ export async function renderWithSpaces(
     settings?: Record<string, unknown>;
     /** Values set by managed policy (locked). */
     managed?: Record<string, unknown>;
+    /** M8: render as Alex, a member of the owner's Hub. */
+    member?: boolean;
   } = {},
 ) {
-  const hub = createHub();
+  const hub = createHub(opts.member ? { m7team: m7TeamState({ me: MEMBER_ID }) } : {});
   hub.state.settings = { 'onboarding.state': DONE_ONBOARDING, ...opts.settings };
   hub.state.managed = { ...opts.managed };
   const spaces = createSpacesHub(opts.spaces);

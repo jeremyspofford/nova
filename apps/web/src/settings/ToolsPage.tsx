@@ -6,6 +6,7 @@
 // (FR-047). M8: a member sees their own servers and tool defaults; commands on the Hub, bundles and
 // web search are the owner's and are hidden or explained (src/team/access.tsx).
 import { useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { McpLogLine, McpServerView, ToolDescriptor, ToolView } from '@nova/shared';
 import {
   Button,
@@ -24,7 +25,8 @@ import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { VerifiedBadge } from './badges.tsx';
 import { BundleInstallButton } from './BundleInstall.tsx';
-import { MANAGED, formatWhen, plural, useInterval } from './common.ts';
+import { formatWhen, useInterval } from './common.ts';
+import { embed } from './embed.tsx';
 import { McpAuthControls, useOAuthReturn } from './McpAuth.tsx';
 import { McpServerForm, envToHeader } from './McpServerForm.tsx';
 import { EFFECT_TEXT, EFFECT_TONE, MCP_STATUS, SOURCE_TEXT, TIER_TEXT } from './policy-text.ts';
@@ -33,10 +35,108 @@ import { MEMBER_MODE_TEXT } from '../team/format.ts';
 import '../workspace.css';
 
 export const MCP_POLL_MS = 5000;
+/** An example SearXNG address: a URL, the same in every language. */
+const SEARXNG_EXAMPLE = 'http://localhost:8080';
 
-/** What marking an MCP tool "Reads only" means (FR-082, FR-189: the owner's declaration). */
-export const READS_ONLY_HELP =
-  "Nova treats this tool as reading only: agents' research may use it, and it is allowed without asking. Only mark tools that never change anything.";
+export const TOOLS_TEXT = defineMessages('settings.tools', {
+  /** What marking an MCP tool "Reads only" means (FR-082, FR-189: the owner's declaration). */
+  readsOnlyHelp:
+    "Nova treats this tool as reading only: agents' research may use it, and it is allowed " +
+    'without asking. Only mark tools that never change anything.',
+  loadServersFailed: 'Could not load MCP servers.',
+  title: 'Tools & MCP',
+  removed: '{name} removed.',
+  removeFailed: 'Could not remove {name}: {error}',
+  servers: 'MCP servers',
+  serversHint:
+    'Servers that give Nova more tools. Each one runs on its own; one failing never stops the ' +
+    'others.',
+  addServer: 'Add server',
+  bundleInstalled: '{name} installed. It connects in the background.',
+  hooksIn: 'Hooks and plugins are in {link}.',
+  pluginsLink: 'Plugins & skills',
+  retry: 'Retry',
+  loadingServers: 'Loading MCP servers',
+  noServers: 'No MCP servers yet',
+  noServersHint: 'Add a server to give Nova tools such as issue trackers, calendars or databases.',
+  addTitle: 'Add an MCP server',
+  addBody: 'It connects in the background once added.',
+  added: '{name} added. It connects in the background.',
+  editName: 'Edit {name}',
+  editServer: 'Edit server',
+  saved: '{name} saved.',
+  removeTitle: 'Remove {name}?',
+  removeThis: 'Remove this server?',
+  removeBody: 'Its tools stop working at once and its saved secrets are deleted.',
+  cancel: 'Cancel',
+  remove: 'Remove',
+  command: 'Command',
+  bundle: 'bundle {name} {version}',
+  fromPlugin: 'From the plugin {id}; change or remove it in {link}.',
+  plugins: 'Plugins',
+  environment: 'Environment:',
+  headers: 'Headers:',
+  valueHidden: 'value hidden',
+  counts:
+    '{tools, plural, one {# tool} other {# tools}} · {resources, plural, one {# resource} other {# resources}} · {prompts, plural, one {# prompt} other {# prompts}}',
+  connectedAt: 'connected {when}',
+  restarts:
+    '{n, plural, one {restarted # time in the last 10 minutes} other {restarted # times in the last 10 minutes}}',
+  lastError: 'Last error: {error}',
+  enable: 'Enable {name}',
+  turnedOn: '{name} turned on.',
+  turnedOff: '{name} turned off.',
+  changeFailed: 'Could not change {name}: {error}',
+  restarting: 'Restarting {name}.',
+  restartFailed: 'Could not restart {name}: {error}',
+  restart: 'Restart',
+  logs: 'Logs',
+  tools: 'Tools',
+  edit: 'Edit',
+  logsFailed: 'Could not load the logs.',
+  logsFor: 'Logs for {name}',
+  refresh: 'Refresh',
+  loadingLogs: 'Loading logs',
+  noLogs: 'No log lines yet.',
+  toolsFailed: 'Could not load the tools.',
+  toolsFrom: 'Tools from {name}',
+  loadingTools: 'Loading tools',
+  noTools: 'No tools listed. A server lists its tools once it is connected.',
+  notAllowListed: "Not in this server's allow list.",
+  readsOnly: 'Reads only',
+  toggle: 'Use {name}',
+  badge: {
+    readOnly: 'Read-only',
+    destructive: 'Can delete or overwrite',
+    network: 'Uses the network',
+    deferred: 'Loaded on demand',
+  },
+  mcpGroup: 'MCP: {server}',
+  unknownServer: 'unknown server',
+  defaultFailed: 'Could not change the default for {name}: {error}',
+  toolsHint:
+    'Choose whether each tool asks first. The decision shown is what Nova would do for a plain ' +
+    'call in a chat now. Built-in safety still applies to every tool.',
+  filter: 'Filter tools',
+  noMatch: 'No tools match “{filter}”.',
+  defaultFor: 'Default for {name}',
+  default: 'Default',
+  ask: 'Ask',
+  allow: 'Allow',
+  deny: 'Deny',
+  searchSaved: 'Web search address saved.',
+  searchOff: 'Web search turned off.',
+  saveFailed: 'Could not save: {error}',
+  webSearch: 'Web search',
+  searxng: 'SearXNG address',
+  searxngHint:
+    'The web search tool sends queries to this SearXNG instance. Leave it empty to turn web ' +
+    'search off. Saved when you leave the field.',
+  needUrl: 'Enter an http:// or https:// address.',
+  isOn: 'Web search is on.',
+  isOff: 'Web search is off.',
+});
+const S = TOOLS_TEXT;
 
 export function ToolsPage() {
   const { api } = useServices();
@@ -56,7 +156,7 @@ export function ToolsPage() {
         setServers(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load MCP servers.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadServersFailed)),
     );
     return () => {
       alive = false;
@@ -80,7 +180,7 @@ export function ToolsPage() {
 
   return (
     <div className="settings-page">
-      <h2>Tools &amp; MCP</h2>
+      <h2>{S.title}</h2>
       <MemberNote access={access}>{MEMBER_MODE_TEXT.tools}</MemberNote>
       <McpServersSection
         access={access}
@@ -140,30 +240,25 @@ function McpServersSection({
     try {
       await api.deleteMcpServer(s.id);
       onRemoved(s.id);
-      toast.show(`${s.name} removed.`, { tone: 'success' });
+      toast.show(S.removed({ name: s.name }), { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not remove ${s.name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.removeFailed({ name: s.name, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
   return (
     <section className="settings-section" aria-labelledby="tools-mcp">
-      <h3 id="tools-mcp">MCP servers</h3>
-      <p className="muted">
-        Servers that give Nova more tools. Each one runs on its own; one failing never stops the
-        others.
-      </p>
+      <h3 id="tools-mcp">{S.servers}</h3>
+      <p className="muted">{S.serversHint}</p>
       <div className="row">
         <Button variant="primary" onClick={() => setAdding(true)}>
-          <Icon name="plus" /> Add server
+          <Icon name="plus" /> {S.addServer}
         </Button>
         {access.may('POST', '/api/v1/mcp/bundles/install') ? (
           <BundleInstallButton
             onInstalled={(s) => {
               onSaved(s);
-              toast.show(`${s.name} installed. It connects in the background.`, {
-                tone: 'success',
-              });
+              toast.show(S.bundleInstalled({ name: s.name }), { tone: 'success' });
             }}
           />
         ) : null}
@@ -172,34 +267,32 @@ function McpServersSection({
         <p className="muted ws-flush">{MEMBER_MODE_TEXT.toolsAddresses}</p>
       )}
       <p className="muted">
-        Hooks and plugins are in{' '}
-        <a
-          href="/settings/plugins"
-          onClick={(e) => {
-            e.preventDefault();
-            navigate('/settings/plugins');
-          }}
-        >
-          Plugins &amp; skills
-        </a>
-        .
+        {embed(S.hooksIn, {
+          link: (
+            <a
+              href="/settings/plugins"
+              onClick={(e) => {
+                e.preventDefault();
+                navigate('/settings/plugins');
+              }}
+            >
+              {S.pluginsLink}
+            </a>
+          ),
+        })}
       </p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={onRetry}>Retry</Button>
+          <Button onClick={onRetry}>{S.retry}</Button>
         </div>
       ) : null}
-      {servers === null && !error ? <Spinner label="Loading MCP servers" /> : null}
+      {servers === null && !error ? <Spinner label={S.loadingServers} /> : null}
       {servers?.length === 0 ? (
-        <EmptyState
-          level={3}
-          title="No MCP servers yet"
-          description="Add a server to give Nova tools such as issue trackers, calendars or databases."
-        />
+        <EmptyState level={3} title={S.noServers} description={S.noServersHint} />
       ) : null}
       {servers?.length ? (
-        <ul className="ws-list" aria-label="MCP servers">
+        <ul className="ws-list" aria-label={S.servers}>
           {servers.map((s) => (
             <ServerRow
               key={s.id}
@@ -213,8 +306,8 @@ function McpServersSection({
       ) : null}
       <Dialog
         open={adding}
-        title="Add an MCP server"
-        description="It connects in the background once added."
+        title={S.addTitle}
+        description={S.addBody}
         onClose={() => setAdding(false)}
       >
         <McpServerForm
@@ -224,13 +317,13 @@ function McpServersSection({
           onSaved={(s) => {
             setAdding(false);
             onSaved(s);
-            toast.show(`${s.name} added. It connects in the background.`, { tone: 'success' });
+            toast.show(S.added({ name: s.name }), { tone: 'success' });
           }}
         />
       </Dialog>
       <Dialog
         open={editing !== null}
-        title={editing ? `Edit ${editing.name}` : 'Edit server'}
+        title={editing ? S.editName({ name: editing.name }) : S.editServer}
         onClose={() => setEditing(null)}
       >
         {editing ? (
@@ -242,21 +335,21 @@ function McpServersSection({
             onSaved={(s) => {
               setEditing(null);
               onSaved(s);
-              toast.show(`${s.name} saved.`, { tone: 'success' });
+              toast.show(S.saved({ name: s.name }), { tone: 'success' });
             }}
           />
         ) : null}
       </Dialog>
       <Dialog
         open={removing !== null}
-        title={removing ? `Remove ${removing.name}?` : 'Remove this server?'}
-        description="Its tools stop working at once and its saved secrets are deleted."
+        title={removing ? S.removeTitle({ name: removing.name }) : S.removeThis}
+        description={S.removeBody}
         onClose={() => setRemoving(null)}
         footer={
           <>
-            <Button onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button onClick={() => setRemoving(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => removing && void remove(removing)}>
-              Remove
+              {S.remove}
             </Button>
           </>
         }
@@ -282,13 +375,17 @@ function ServerRow({
   const [showTools, setShowTools] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const act = async (fn: () => Promise<McpServerView>, done: string, failed: string) => {
+  const act = async (
+    fn: () => Promise<McpServerView>,
+    done: string,
+    failed: (error: string) => string,
+  ) => {
     setBusy(true);
     try {
       onSaved(await fn());
       toast.show(done, { tone: 'success' });
     } catch (err) {
-      toast.show(`${failed}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(failed(errorMessage(err)), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -307,69 +404,84 @@ function ServerRow({
           <strong>{s.name}</strong>
           <McpStatusChip server={s} />
           <span className="ws-badge">
-            {s.transport === 'stdio' ? 'Command' : s.transport.toUpperCase()}
+            {s.transport === 'stdio' ? S.command : s.transport.toUpperCase()}
           </span>
           {s.bundle ? (
             <>
               <VerifiedBadge verified={s.bundle.signature === 'verified'} />
               <span className="muted">
-                bundle {s.bundle.name} {s.bundle.version}
+                {S.bundle({ name: s.bundle.name, version: s.bundle.version })}
               </span>
             </>
           ) : null}
         </span>
         {s.pluginId ? (
           <span className="muted ws-row-meta">
-            From the plugin {s.pluginId}; change or remove it in{' '}
-            <a
-              href="/settings/plugins"
-              onClick={(e) => {
-                e.preventDefault();
-                navigate('/settings/plugins');
-              }}
-            >
-              Plugins
-            </a>
-            .
+            <span>
+              {embed(S.fromPlugin, {
+                id: s.pluginId,
+                link: (
+                  <a
+                    href="/settings/plugins"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      navigate('/settings/plugins');
+                    }}
+                  >
+                    {S.plugins}
+                  </a>
+                ),
+              })}
+            </span>
           </span>
         ) : null}
-        {target ? <code className="ws-code-inline">{target}</code> : null}
+        {target ? (
+          <code className="ws-code-inline" dir="ltr">
+            {target}
+          </code>
+        ) : null}
         {secretNames.length ? (
           <span className="muted ws-row-meta">
-            {s.transport === 'stdio' ? 'Environment:' : 'Headers:'}
+            {s.transport === 'stdio' ? S.environment : S.headers}
             {secretNames.map((k) => (
-              <code key={k} className="ws-code-inline">
-                {k} <span aria-label="value hidden">••••••</span>
+              <code key={k} className="ws-code-inline" dir="ltr">
+                {k}{' '}
+                <span role="img" aria-label={S.valueHidden}>
+                  ••••••
+                </span>
               </code>
             ))}
           </span>
         ) : null}
         <span className="muted ws-row-meta">
-          {plural(s.counts.tools, 'tool')} · {plural(s.counts.resources, 'resource')} ·{' '}
-          {plural(s.counts.prompts, 'prompt')}
+          {S.counts({
+            tools: s.counts.tools,
+            resources: s.counts.resources,
+            prompts: s.counts.prompts,
+          })}
           {s.serverInfo ? ` · ${s.serverInfo.name} ${s.serverInfo.version}` : ''}
           {s.status === 'connected' && s.connectedAt
-            ? ` · connected ${formatWhen(s.connectedAt)}`
+            ? ` · ${S.connectedAt({ when: formatWhen(s.connectedAt) })}`
             : ''}
-          {s.restarts ? ` · restarted ${plural(s.restarts, 'time')} in the last 10 minutes` : ''}
+          {s.restarts ? ` · ${S.restarts({ n: s.restarts })}` : ''}
         </span>
         <McpAuthControls server={s} onSaved={onSaved} />
         {s.lastError ? (
           <p className="ws-warning ws-mcp-error">
-            <Icon name="alert" /> <span>Last error: {s.lastError}</span>
+            <Icon name="alert" /> <span>{S.lastError({ error: s.lastError })}</span>
           </p>
         ) : null}
       </div>
       <div className="row ws-row-actions">
         <Switch
-          label={`Enable ${s.name}`}
+          label={S.enable({ name: s.name })}
           checked={s.enabled}
           disabled={busy || !!s.pluginId}
           onChange={(v) =>
             void act(
               () => api.updateMcpServer(s.id, { enabled: v }),
-              v ? `${s.name} turned on.` : `${s.name} turned off.`,
-              `Could not change ${s.name}`,
+              v ? S.turnedOn({ name: s.name }) : S.turnedOff({ name: s.name }),
+              (error) => S.changeFailed({ name: s.name, error }),
             )
           }
         />
@@ -379,12 +491,12 @@ function ServerRow({
           onClick={() =>
             void act(
               () => api.restartMcpServer(s.id),
-              `Restarting ${s.name}.`,
-              `Could not restart ${s.name}`,
+              S.restarting({ name: s.name }),
+              (error) => S.restartFailed({ name: s.name, error }),
             )
           }
         >
-          Restart
+          {S.restart}
         </Button>
         <Button
           variant="ghost"
@@ -392,7 +504,7 @@ function ServerRow({
           aria-controls={showLogs ? logsId : undefined}
           onClick={() => setShowLogs((v) => !v)}
         >
-          Logs
+          {S.logs}
         </Button>
         <Button
           variant="ghost"
@@ -400,15 +512,15 @@ function ServerRow({
           aria-controls={showTools ? toolsId : undefined}
           onClick={() => setShowTools((v) => !v)}
         >
-          Tools
+          {S.tools}
         </Button>
         {s.pluginId ? null : (
           <>
             <Button variant="ghost" onClick={onEdit}>
-              Edit
+              {S.edit}
             </Button>
             <Button variant="ghost" onClick={onRemove}>
-              Remove
+              {S.remove}
             </Button>
           </>
         )}
@@ -433,7 +545,7 @@ function ServerLogs({ id, server }: { id: string; server: McpServerView }) {
         setLines(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the logs.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.logsFailed)),
     );
     return () => {
       alive = false;
@@ -441,10 +553,10 @@ function ServerLogs({ id, server }: { id: string; server: McpServerView }) {
   }, [api, server.id, version]);
 
   return (
-    <section id={id} className="ws-subpanel" aria-label={`Logs for ${server.name}`}>
+    <section id={id} className="ws-subpanel" aria-label={S.logsFor({ name: server.name })}>
       <div className="row">
         <Button variant="ghost" onClick={() => setVersion((v) => v + 1)}>
-          <Icon name="refresh" /> Refresh
+          <Icon name="refresh" /> {S.refresh}
         </Button>
       </div>
       {error ? (
@@ -452,10 +564,10 @@ function ServerLogs({ id, server }: { id: string; server: McpServerView }) {
           {error}
         </p>
       ) : null}
-      {lines === null && !error ? <Spinner label="Loading logs" /> : null}
-      {lines?.length === 0 ? <p className="muted">No log lines yet.</p> : null}
+      {lines === null && !error ? <Spinner label={S.loadingLogs} /> : null}
+      {lines?.length === 0 ? <p className="muted">{S.noLogs}</p> : null}
       {lines?.length ? (
-        <pre className="ws-log" tabIndex={0}>
+        <pre className="ws-log" tabIndex={0} dir="ltr">
           {lines.map((l) => `${l.ts}  ${l.stream.padEnd(8)}  ${l.text}`).join('\n')}
         </pre>
       ) : null}
@@ -482,7 +594,7 @@ function ServerTools({
     let alive = true;
     api.mcpServerTools(server.id).then(
       ({ items }) => alive && setTools(items),
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the tools.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.toolsFailed)),
     );
     return () => {
       alive = false;
@@ -498,7 +610,7 @@ function ServerTools({
     try {
       onSaved(await api.updateMcpServer(server.id, { disabledTools: on ? rest : [...rest, name] }));
     } catch (err) {
-      toast.show(`Could not change ${name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.changeFailed({ name, error: errorMessage(err) }), { tone: 'error' });
     }
   };
   // The owner's "Reads only" list (FR-082). The Hub matches an entry by the server's name, the
@@ -511,24 +623,22 @@ function ServerTools({
     try {
       onSaved(await api.updateMcpServer(server.id, { readOnlyTools: on ? [...rest, name] : rest }));
     } catch (err) {
-      toast.show(`Could not change ${name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.changeFailed({ name, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
   return (
-    <section id={id} className="ws-subpanel" aria-label={`Tools from ${server.name}`}>
+    <section id={id} className="ws-subpanel" aria-label={S.toolsFrom({ name: server.name })}>
       {error ? (
         <p role="alert" className="nv-field-error">
           {error}
         </p>
       ) : null}
-      {tools === null && !error ? <Spinner label="Loading tools" /> : null}
-      {tools?.length === 0 ? (
-        <p className="muted">No tools listed. A server lists its tools once it is connected.</p>
-      ) : null}
+      {tools === null && !error ? <Spinner label={S.loadingTools} /> : null}
+      {tools?.length === 0 ? <p className="muted">{S.noTools}</p> : null}
       {tools?.length ? (
         <p id={helpId} className="muted">
-          {READS_ONLY_HELP}
+          {S.readsOnlyHelp}
         </p>
       ) : null}
       {tools?.length ? (
@@ -539,11 +649,17 @@ function ServerTools({
             return (
               <li key={t.name} className="ws-list-row" aria-label={t.name}>
                 <div className="ws-source-main">
-                  <code className="ws-code-inline">{t.name}</code>
-                  {t.description ? <span className="muted">{t.description}</span> : null}
+                  <code className="ws-code-inline" dir="ltr">
+                    {t.name}
+                  </code>
+                  {t.description ? (
+                    <span className="muted" dir="auto">
+                      {t.description}
+                    </span>
+                  ) : null}
                   <ToolBadges tool={t} />
                   {!allowListed ? (
-                    <span className="muted ws-row-meta">Not in this server&apos;s allow list.</span>
+                    <span className="muted ws-row-meta">{S.notAllowListed}</span>
                   ) : null}
                 </div>
                 <div className="row ws-row-actions">
@@ -555,10 +671,10 @@ function ServerTools({
                       aria-describedby={helpId}
                       onChange={(e) => void markReadsOnly(t, e.target.checked)}
                     />
-                    <span>Reads only</span>
+                    <span>{S.readsOnly}</span>
                   </label>
                   <Switch
-                    label={`Use ${t.name}`}
+                    label={S.toggle({ name: t.name })}
                     checked={allowListed && !server.disabledTools.includes(name)}
                     disabled={!allowListed || !!server.pluginId}
                     onChange={(v) => void toggle(name, v)}
@@ -576,10 +692,10 @@ function ServerTools({
 function ToolBadges({ tool }: { tool: ToolDescriptor }) {
   const a = tool.annotations ?? {};
   const badges = [
-    a.readOnly ? 'Read-only' : null,
-    a.destructive ? 'Can delete or overwrite' : null,
-    a.requiresNetwork ? 'Uses the network' : null,
-    tool.deferred ? 'Loaded on demand' : null,
+    a.readOnly ? S.badge.readOnly : null,
+    a.destructive ? S.badge.destructive : null,
+    a.requiresNetwork ? S.badge.network : null,
+    tool.deferred ? S.badge.deferred : null,
   ].filter((b): b is string => b !== null);
   if (!badges.length) return null;
   return (
@@ -608,7 +724,7 @@ export function groupTools(
     const key = t.source === 'mcp' ? `mcp:${t.serverId ?? ''}` : t.source;
     const label =
       t.source === 'mcp'
-        ? `MCP: ${names.get(t.serverId ?? '') ?? t.serverId ?? 'unknown server'}`
+        ? S.mcpGroup({ server: names.get(t.serverId ?? '') ?? t.serverId ?? S.unknownServer })
         : SOURCE_TEXT[t.source];
     const g = groups.get(key) ?? { key, label, rank: order.indexOf(t.source), tools: [] };
     g.tools.push(t);
@@ -639,7 +755,7 @@ function ToolsSection({ servers, version }: { servers: McpServerView[]; version:
         setTools(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the tools.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.toolsFailed)),
     );
     return () => {
       alive = false;
@@ -658,9 +774,7 @@ function ToolsSection({ servers, version }: { servers: McpServerView[]; version:
       setReload((r) => r + 1);
     } catch (err) {
       patch(t.userDefault);
-      toast.show(`Could not change the default for ${t.name}: ${errorMessage(err)}`, {
-        tone: 'error',
-      });
+      toast.show(S.defaultFailed({ name: t.name, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -672,13 +786,10 @@ function ToolsSection({ servers, version }: { servers: McpServerView[]; version:
 
   return (
     <section className="settings-section" aria-labelledby="tools-all">
-      <h3 id="tools-all">Tools</h3>
-      <p className="muted">
-        Choose whether each tool asks first. The decision shown is what Nova would do for a plain
-        call in a chat now. Built-in safety still applies to every tool.
-      </p>
+      <h3 id="tools-all">{S.tools}</h3>
+      <p className="muted">{S.toolsHint}</p>
       <TextField
-        label="Filter tools"
+        label={S.filter}
         type="search"
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
@@ -686,12 +797,12 @@ function ToolsSection({ servers, version }: { servers: McpServerView[]; version:
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setReload((r) => r + 1)}>Retry</Button>
+          <Button onClick={() => setReload((r) => r + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {tools === null && !error ? <Spinner label="Loading tools" /> : null}
+      {tools === null && !error ? <Spinner label={S.loadingTools} /> : null}
       {tools?.length && !shown.length ? (
-        <p className="muted">No tools match “{filter.trim()}”.</p>
+        <p className="muted">{S.noMatch({ filter: filter.trim() })}</p>
       ) : null}
       {groups.map((g) => (
         <section key={g.key} className="ws-memory-group" aria-labelledby={`tools-g-${g.key}`}>
@@ -723,9 +834,17 @@ function ToolRow({ tool: t, onDefault }: { tool: ToolView; onDefault: (v: ToolDe
       <div className="ws-source-main">
         <span className="ws-row-meta">
           <strong>{t.title || t.name}</strong>
-          {t.title && t.title !== t.name ? <code className="ws-code-inline">{t.name}</code> : null}
+          {t.title && t.title !== t.name ? (
+            <code className="ws-code-inline" dir="ltr">
+              {t.name}
+            </code>
+          ) : null}
         </span>
-        {t.description ? <span className="muted">{t.description}</span> : null}
+        {t.description ? (
+          <span className="muted" dir="auto">
+            {t.description}
+          </span>
+        ) : null}
         <span className="ws-row-meta">
           <EffectChip effect={t.effective.effect} />
           <span className="muted">{t.effective.reason}</span>
@@ -735,15 +854,15 @@ function ToolRow({ tool: t, onDefault }: { tool: ToolView; onDefault: (v: ToolDe
         ) : null}
       </div>
       <SelectField
-        label={`Default for ${t.name}`}
+        label={S.defaultFor({ name: t.name })}
         hideLabel
         value={t.userDefault ?? ''}
         onChange={(v) => onDefault(v ? (v as 'allow' | 'ask' | 'deny') : null)}
         options={[
-          { value: '', label: 'Default' },
-          { value: 'ask', label: 'Ask' },
-          { value: 'allow', label: 'Allow' },
-          { value: 'deny', label: 'Deny' },
+          { value: '', label: S.default },
+          { value: 'ask', label: S.ask },
+          { value: 'allow', label: S.allow },
+          { value: 'deny', label: S.deny },
         ]}
       />
     </li>
@@ -775,26 +894,24 @@ function WebSearchSection() {
     if (invalid || trimmed === saved) return;
     setDraft(null);
     settings.set('search.searxngUrl', trimmed || null).then(
-      () =>
-        toast.show(trimmed ? 'Web search address saved.' : 'Web search turned off.', {
-          tone: 'success',
-        }),
-      (err: unknown) => toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' }),
+      () => toast.show(trimmed ? S.searchSaved : S.searchOff, { tone: 'success' }),
+      (err: unknown) => toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' }),
     );
   };
 
   return (
     <section className="settings-section" aria-labelledby="tools-search">
-      <h3 id="tools-search">Web search</h3>
+      <h3 id="tools-search">{S.webSearch}</h3>
       <TextField
-        label="SearXNG address"
+        label={S.searxng}
         type="url"
         value={text}
-        placeholder="http://localhost:8080"
-        disabled={url.locked}
+        placeholder={SEARXNG_EXAMPLE}
+        locked={url.locked}
+        setting="search.searxngUrl"
         spellCheck={false}
-        hint={`${url.locked ? `${MANAGED}. ` : ''}The web search tool sends queries to this SearXNG instance. Leave it empty to turn web search off. Saved when you leave the field.`}
-        error={invalid ? 'Enter an http:// or https:// address.' : undefined}
+        hint={S.searxngHint}
+        error={invalid ? S.needUrl : undefined}
         onChange={(e) => setDraft({ base: saved, text: e.target.value })}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -804,11 +921,7 @@ function WebSearchSection() {
           }
         }}
       />
-      {saved ? (
-        <p className="muted">Web search is on.</p>
-      ) : (
-        <p className="muted">Web search is off.</p>
-      )}
+      {saved ? <p className="muted">{S.isOn}</p> : <p className="muted">{S.isOff}</p>}
     </section>
   );
 }

@@ -5,18 +5,12 @@
 // Background work, Threads, Channels, Computer and Profile. `?tab=<id>` opens a section. Every
 // part follows the agent's events on the shared stream.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import {
-  AGENT_DELETE_NOTICE,
-  type AgentThreadView,
-  type AgentView,
-  type ChannelBindingView,
-  type EventEnvelope,
-} from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
+import type { AgentThreadView, AgentView, ChannelBindingView, EventEnvelope } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner, StatusChip, Tabs, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { navigate, useLocation } from '../router.ts';
 import { useAnnounce } from '../services.tsx';
-import { formatWhen } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
 import { budgetLine, formatCost, formatSpan, formatTokens } from '../work/format.ts';
 import { followLink } from '../work/nav.tsx';
@@ -25,7 +19,7 @@ import { AgentAvatar } from './AgentAvatar.tsx';
 import { AgentConversation } from './AgentConversation.tsx';
 import { AgentGoal } from './AgentGoal.tsx';
 import { AgentBackground, AgentChannels, AgentComputer, AgentThreads } from './AgentLinks.tsx';
-import { AgentStateBadge } from './AgentList.tsx';
+import { AgentStateBadge, lastActiveText } from './AgentList.tsx';
 import { AgentMemory } from './AgentMemory.tsx';
 import { AgentProfile } from './AgentProfile.tsx';
 import { AgentResponsibilities } from './AgentResponsibilities.tsx';
@@ -34,13 +28,82 @@ import { AgentSchedules } from './AgentSchedules.tsx';
 import { AgentSuggestions } from './AgentSuggestions.tsx';
 import { useAgentsApi } from './api.ts';
 import { eventAgentId, eventThreadRef, useAgentEvents } from './events.ts';
-import { AGENT_AUTONOMY_TEXT, AGENTS_PATH, agentPath } from './format.ts';
+import { AGENT_AUTONOMY_TEXT, AGENTS_PATH, AGENTS_TEXT, agentPath } from './format.ts';
+import { rich } from '../i18n/rich.tsx';
 import '../workspace.css';
 import '../work/work.css';
 import './agents.css';
 import { AgentPluginsSection } from '../team/AgentPlugins.tsx';
 import { ScopedSiteLevels } from '../browser/SiteLevels.tsx';
 import { OpenInWindowButton } from '../shellbridge/OpenInWindow.tsx';
+
+export const PAGE_TEXT = defineMessages('agents.page', {
+  missing: 'This agent was deleted or does not exist.',
+  loadFailed: 'Could not load this agent.',
+  threadsFailed: 'Could not load the threads.',
+  channelsFailed: 'Could not load the channels.',
+  deleted: 'This agent was deleted.',
+  /** Said out loud when the agent's state changes. */
+  announce:
+    '{name} is {state, select, paused {paused} stopped {stopped} needs_input {needs input} blocked {blocked} running {working} other {ready}}.',
+  resumed: '{name} resumed.',
+  resumeFailed: 'Could not resume: {reason}',
+  paused: '{name} paused, with its runs, schedules and wakes.',
+  pauseFailed: 'Could not pause: {reason}',
+  stopped: 'Stopped. Partial results are kept.',
+  stopFailed: 'Could not stop: {reason}',
+  researchStarted: 'Research started. Findings arrive as suggestions.',
+  researchNotStarted: 'Research did not start: {reason}.',
+  researchLater: 'Research did not start: try again later.',
+  researchFailed: 'Could not start research: {reason}',
+  deletedNamed: '{name} was deleted.',
+  deleteFailed: 'Could not delete it: {reason}',
+  loading: 'Loading the agent',
+  tabs: {
+    activity: 'Activity',
+    responsibilities: 'Responsibilities',
+    goal: 'Goal',
+    rules: 'Rules',
+    memory: 'Memory',
+    suggestions: 'Suggestions',
+    suggestionsOpen: 'Suggestions ({n})',
+    schedules: 'Schedules',
+    background: 'Background',
+    threads: 'Threads',
+    channels: 'Channels',
+    computer: 'Computer',
+    plugins: 'Plugins',
+    profile: 'Profile',
+  },
+  region: 'Agent: {name}',
+  autonomy: 'Autonomy: {level}',
+  proactiveOn: 'Proactive research on',
+  proactiveOff: 'Proactive research off',
+  memoryOn: 'Memory on',
+  memoryOff: 'Memory off',
+  usedSoFar: 'Used so far: {time} · {tokens} tokens · {cost}',
+  eachPiece: 'Each piece of work: {budget}',
+  safetyPaused:
+    'Safety monitoring paused this agent. Review its activity, then resume it when you are ready.',
+  safetyPausedDetail:
+    'Safety monitoring paused this agent: {detail}. Review its activity, then resume it when you are ready.',
+  stoppedNote:
+    'Stopped: its current work was cancelled and partial results kept. It answers new ' +
+    'messages; Resume lets its schedules and goal go on.',
+  controls: 'Agent controls',
+  resume: 'Resume',
+  pause: 'Pause',
+  stop: 'Stop',
+  research: 'Research now',
+  sections: 'Agent sections',
+  deleteTitle: 'Delete {name}?',
+  /** The Hub's notice before deleting an agent (AGENT_DELETE_NOTICE in @nova/shared). */
+  deleteNotice:
+    'Deleting this agent is permanent. It removes its threads, notes, rules, schedules, wakes, ' +
+    'channel bindings and grants. Actions it already took are not undone.',
+  keep: 'Keep the agent',
+  deletePermanently: 'Delete permanently',
+});
 
 export const AGENT_TABS = [
   'activity',
@@ -82,18 +145,16 @@ export function partsFor(name: string): Part[] {
 function loadError(err: unknown): { message: string; missing: boolean } {
   const missing = err instanceof ApiError && err.status === 404;
   return {
-    message: missing
-      ? 'This agent was deleted or does not exist.'
-      : errorMessage(err, 'Could not load this agent.'),
+    message: missing ? PAGE_TEXT.missing : errorMessage(err, PAGE_TEXT.loadFailed),
     missing,
   };
 }
 
 function Breadcrumb() {
   return (
-    <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+    <nav aria-label={AGENTS_TEXT.breadcrumb} className="ws-breadcrumb">
       <a href={AGENTS_PATH} onClick={(e) => followLink(e, AGENTS_PATH)}>
-        <Icon name="back" /> Agents
+        <Icon name="back" /> {AGENTS_TEXT.agents}
       </a>
     </nav>
   );
@@ -160,7 +221,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
         setThreads(items);
         setThreadsError(null);
       },
-      (err: unknown) => alive && setThreadsError(errorMessage(err, 'Could not load the threads.')),
+      (err: unknown) => alive && setThreadsError(errorMessage(err, PAGE_TEXT.threadsFailed)),
     );
     return () => {
       alive = false;
@@ -175,8 +236,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
         setChannels(items);
         setChannelsError(null);
       },
-      (err: unknown) =>
-        alive && setChannelsError(errorMessage(err, 'Could not load the channels.')),
+      (err: unknown) => alive && setChannelsError(errorMessage(err, PAGE_TEXT.channelsFailed)),
     );
     return () => {
       alive = false;
@@ -216,7 +276,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
       }
       const about = eventAgentId(env);
       if (env.name === 'agent.deleted' && about === agentId) {
-        setError({ message: 'This agent was deleted.', missing: true });
+        setError({ message: PAGE_TEXT.deleted, missing: true });
         return;
       }
       // Schedule and run events do not name the agent; they refetch only what may list them.
@@ -243,48 +303,42 @@ export function AgentPage({ agentId }: { agentId: string }) {
     if (!agent) return;
     const line = `${agent.status}:${agent.derived.status}`;
     if (lastState.current !== null && lastState.current !== line) {
-      const what =
-        agent.status === 'paused'
-          ? 'paused'
-          : agent.status === 'stopped'
-            ? 'stopped'
-            : agent.derived.status === 'needs_input'
-              ? 'needs input'
-              : agent.derived.status === 'blocked'
-                ? 'blocked'
-                : agent.derived.status === 'running'
-                  ? 'working'
-                  : 'ready';
-      announce(`${agent.name} is ${what}.`);
+      const state = agent.status === 'active' ? agent.derived.status : agent.status;
+      announce(PAGE_TEXT.announce({ name: agent.name, state }));
     }
     lastState.current = line;
   }, [agent, announce]);
 
   // ---- controls ----------------------------------------------------------------------------------
-  const control = (call: (id: string) => Promise<AgentView>, done: string, what: string): void => {
+  const control = (
+    call: (id: string) => Promise<AgentView>,
+    done: string,
+    failed: (p: { reason: string }) => string,
+  ): void => {
     call(agentId).then(
       (a) => {
         setAgent(a);
         bumpNow(['activity', 'schedules', 'background']);
         toast.show(done, { tone: 'success' });
       },
-      (err: unknown) => toast.show(`${what}: ${errorMessage(err)}`, { tone: 'error' }),
+      (err: unknown) => toast.show(failed({ reason: errorMessage(err) }), { tone: 'error' }),
     );
   };
   const research = () => {
     api.researchAgent(agentId).then(
       (r) => {
         if (r.started) {
-          toast.show('Research started. Findings arrive as suggestions.', { tone: 'success' });
+          toast.show(PAGE_TEXT.researchStarted, { tone: 'success' });
           bumpNow(['activity', 'threads']);
         } else {
-          toast.show(`Research did not start: ${r.reason ?? 'try again later'}.`, {
-            tone: 'info',
-          });
+          toast.show(
+            r.reason ? PAGE_TEXT.researchNotStarted({ reason: r.reason }) : PAGE_TEXT.researchLater,
+            { tone: 'info' },
+          );
         }
       },
       (err: unknown) =>
-        toast.show(`Could not start research: ${errorMessage(err)}`, { tone: 'error' }),
+        toast.show(PAGE_TEXT.researchFailed({ reason: errorMessage(err) }), { tone: 'error' }),
     );
   };
   const remove = () => {
@@ -292,12 +346,14 @@ export function AgentPage({ agentId }: { agentId: string }) {
     api.deleteAgent(agentId).then(
       () => {
         setConfirmDelete(false);
-        toast.show(`${agent?.name ?? 'The agent'} was deleted.`, { tone: 'success' });
+        toast.show(agent ? PAGE_TEXT.deletedNamed({ name: agent.name }) : PAGE_TEXT.deleted, {
+          tone: 'success',
+        });
         navigate(AGENTS_PATH);
       },
       (err: unknown) => {
         setDeleting(false);
-        toast.show(`Could not delete it: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(PAGE_TEXT.deleteFailed({ reason: errorMessage(err) }), { tone: 'error' });
       },
     );
   };
@@ -309,7 +365,9 @@ export function AgentPage({ agentId }: { agentId: string }) {
         <Breadcrumb />
         <div role="alert" className="ws-error">
           <p>{error.message}</p>
-          {error.missing ? null : <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>}
+          {error.missing ? null : (
+            <Button onClick={() => setAttempt((n) => n + 1)}>{AGENTS_TEXT.retry}</Button>
+          )}
         </div>
       </div>
     );
@@ -317,9 +375,10 @@ export function AgentPage({ agentId }: { agentId: string }) {
     return (
       <div className="ws-page agents-page">
         <Breadcrumb />
-        <Spinner label="Loading the agent" />
+        <Spinner label={PAGE_TEXT.loading} />
       </div>
     );
+  const T = PAGE_TEXT.tabs;
 
   const paused = agent.status === 'paused';
   const showThread = (t: AgentThreadView) => {
@@ -334,12 +393,12 @@ export function AgentPage({ agentId }: { agentId: string }) {
   const tabs: { id: AgentTab; label: string; panel: ReactNode }[] = [
     {
       id: 'activity',
-      label: 'Activity',
+      label: T.activity,
       panel: <AgentActivity agentId={agentId} version={versions.activity} />,
     },
     {
       id: 'responsibilities',
-      label: 'Responsibilities',
+      label: T.responsibilities,
       panel: (
         <AgentResponsibilities
           agentId={agentId}
@@ -351,7 +410,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
     },
     {
       id: 'goal',
-      label: 'Goal',
+      label: T.goal,
       panel: (
         <AgentGoal
           agentId={agentId}
@@ -362,17 +421,19 @@ export function AgentPage({ agentId }: { agentId: string }) {
     },
     {
       id: 'rules',
-      label: 'Rules',
+      label: T.rules,
       panel: <AgentRules agentId={agentId} version={versions.rules} />,
     },
     {
       id: 'memory',
-      label: 'Memory',
+      label: T.memory,
       panel: <AgentMemory agent={agent} version={versions.memory} onAgent={setAgent} />,
     },
     {
       id: 'suggestions',
-      label: agent.openSuggestions ? `Suggestions (${agent.openSuggestions})` : 'Suggestions',
+      label: agent.openSuggestions
+        ? T.suggestionsOpen({ n: agent.openSuggestions })
+        : T.suggestions,
       panel: (
         <AgentSuggestions
           agentId={agentId}
@@ -383,17 +444,17 @@ export function AgentPage({ agentId }: { agentId: string }) {
     },
     {
       id: 'schedules',
-      label: 'Schedules',
+      label: T.schedules,
       panel: <AgentSchedules agent={agent} version={versions.schedules} />,
     },
     {
       id: 'background',
-      label: 'Background',
+      label: T.background,
       panel: <AgentBackground agentId={agentId} version={versions.background} />,
     },
     {
       id: 'threads',
-      label: 'Threads',
+      label: T.threads,
       panel: (
         <AgentThreads
           agent={agent}
@@ -408,7 +469,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
     },
     {
       id: 'channels',
-      label: 'Channels',
+      label: T.channels,
       panel: (
         <AgentChannels
           channels={channels}
@@ -421,7 +482,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
     },
     {
       id: 'computer',
-      label: 'Computer',
+      label: T.computer,
       panel: (
         <>
           <AgentComputer agent={agent} />
@@ -436,16 +497,16 @@ export function AgentPage({ agentId }: { agentId: string }) {
       ),
     },
     // The plugins connected to this agent: only their tools are usable (FR-045, M7).
-    { id: 'plugins', label: 'Plugins', panel: <AgentPluginsSection agentId={agentId} /> },
+    { id: 'plugins', label: T.plugins, panel: <AgentPluginsSection agentId={agentId} /> },
     {
       id: 'profile',
-      label: 'Profile',
+      label: T.profile,
       panel: <AgentProfile key={agent.updatedAt} agent={agent} onAgent={setAgent} />,
     },
   ];
 
   return (
-    <div className="agent-page" aria-label={`Agent: ${agent.name}`} role="region">
+    <div className="agent-page" aria-label={PAGE_TEXT.region({ name: agent.name })} role="region">
       <header className="agent-header">
         <Breadcrumb />
         <div className="agent-title-row">
@@ -461,19 +522,24 @@ export function AgentPage({ agentId }: { agentId: string }) {
               <AgentStateBadge agent={agent} />
             </div>
             <p className="muted ws-row-meta">
-              <span>Autonomy: {AGENT_AUTONOMY_TEXT[agent.autonomy].label}</span>
-              <span>Proactive research {agent.proactive.enabled ? 'on' : 'off'}</span>
-              <span>Memory {agent.memoryEnabled ? 'on' : 'off'}</span>
               <span>
-                {agent.lastActiveAt ? `Active ${formatWhen(agent.lastActiveAt)}` : 'Not active yet'}
+                {PAGE_TEXT.autonomy({ level: AGENT_AUTONOMY_TEXT[agent.autonomy].label })}
               </span>
+              <span>
+                {agent.proactive.enabled ? PAGE_TEXT.proactiveOn : PAGE_TEXT.proactiveOff}
+              </span>
+              <span>{agent.memoryEnabled ? PAGE_TEXT.memoryOn : PAGE_TEXT.memoryOff}</span>
+              <span>{lastActiveText(agent)}</span>
             </p>
             <p className="muted ws-row-meta">
               <span>
-                Used so far: {formatSpan(agent.usage.timeSeconds)} ·{' '}
-                {formatTokens(agent.usage.tokens)} tokens · {formatCost(agent.usage.costUsd)}
+                {PAGE_TEXT.usedSoFar({
+                  time: formatSpan(agent.usage.timeSeconds),
+                  tokens: formatTokens(agent.usage.tokens),
+                  cost: formatCost(agent.usage.costUsd),
+                })}
               </span>
-              <span>Each piece of work: {budgetLine(agent.budgets)}</span>
+              <span>{PAGE_TEXT.eachPiece({ budget: budgetLine(agent.budgets) })}</span>
             </p>
           </div>
         </div>
@@ -481,66 +547,69 @@ export function AgentPage({ agentId }: { agentId: string }) {
           <p className="ws-callout" role="note">
             <Icon name="shield" />
             <span>
-              Safety monitoring paused this agent
-              {agent.statusDetail ? (
-                <>
-                  : <span data-untrusted="true">{agent.statusDetail}</span>
-                </>
-              ) : null}
-              . Review its activity, then resume it when you are ready.
+              {agent.statusDetail
+                ? rich(PAGE_TEXT.safetyPausedDetail, {
+                    detail: <span data-untrusted="true">{agent.statusDetail}</span>,
+                  })
+                : PAGE_TEXT.safetyPaused}
             </span>
           </p>
         ) : agent.status === 'stopped' ? (
-          <p className="muted ws-flush">
-            Stopped: its current work was cancelled and partial results kept. It answers new
-            messages; Resume lets its schedules and goal go on.
-          </p>
+          <p className="muted ws-flush">{PAGE_TEXT.stoppedNote}</p>
         ) : null}
-        <div className="ws-toolbar" role="group" aria-label="Agent controls">
+        <div className="ws-toolbar" role="group" aria-label={PAGE_TEXT.controls}>
           {paused ? (
             <Button
-              onClick={() => control(api.resumeAgent, `${agent.name} resumed.`, 'Could not resume')}
+              onClick={() =>
+                control(
+                  api.resumeAgent,
+                  PAGE_TEXT.resumed({ name: agent.name }),
+                  PAGE_TEXT.resumeFailed,
+                )
+              }
             >
-              <Icon name="forward" /> Resume
+              <Icon name="forward" /> {PAGE_TEXT.resume}
             </Button>
           ) : (
             <Button
               onClick={() =>
                 control(
                   api.pauseAgent,
-                  `${agent.name} paused, with its runs, schedules and wakes.`,
-                  'Could not pause',
+                  PAGE_TEXT.paused({ name: agent.name }),
+                  PAGE_TEXT.pauseFailed,
                 )
               }
             >
-              <Icon name="clock" /> Pause
+              <Icon name="clock" /> {PAGE_TEXT.pause}
             </Button>
           )}
           {agent.status === 'stopped' ? (
             <Button
-              onClick={() => control(api.resumeAgent, `${agent.name} resumed.`, 'Could not resume')}
+              onClick={() =>
+                control(
+                  api.resumeAgent,
+                  PAGE_TEXT.resumed({ name: agent.name }),
+                  PAGE_TEXT.resumeFailed,
+                )
+              }
             >
-              <Icon name="forward" /> Resume
+              <Icon name="forward" /> {PAGE_TEXT.resume}
             </Button>
           ) : null}
           {agent.status === 'active' ? (
-            <Button
-              onClick={() =>
-                control(api.stopAgent, 'Stopped. Partial results are kept.', 'Could not stop')
-              }
-            >
-              <Icon name="stop" /> Stop
+            <Button onClick={() => control(api.stopAgent, PAGE_TEXT.stopped, PAGE_TEXT.stopFailed)}>
+              <Icon name="stop" /> {PAGE_TEXT.stop}
             </Button>
           ) : null}
           <Button
             onClick={research}
             disabled={paused}
-            title={paused ? 'Resume the agent first' : undefined}
+            title={paused ? AGENTS_TEXT.resumeFirst : undefined}
           >
-            <Icon name="search" /> Research now
+            <Icon name="search" /> {PAGE_TEXT.research}
           </Button>
           <Button variant="danger" onClick={() => setConfirmDelete(true)}>
-            <Icon name="trash" /> Delete
+            <Icon name="trash" /> {AGENTS_TEXT.delete}
           </Button>
         </div>
       </header>
@@ -555,7 +624,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
         </div>
         <div className="agent-sections">
           <Tabs
-            label="Agent sections"
+            label={PAGE_TEXT.sections}
             className="agent-tabs"
             value={tab}
             onChange={setTab}
@@ -565,16 +634,16 @@ export function AgentPage({ agentId }: { agentId: string }) {
       </div>
       <Dialog
         open={confirmDelete}
-        title={`Delete ${agent.name}?`}
-        description={AGENT_DELETE_NOTICE}
+        title={PAGE_TEXT.deleteTitle({ name: agent.name })}
+        description={PAGE_TEXT.deleteNotice}
         onClose={() => setConfirmDelete(false)}
         footer={
           <>
             <Button onClick={() => setConfirmDelete(false)} disabled={deleting}>
-              Keep the agent
+              {PAGE_TEXT.keep}
             </Button>
             <Button variant="danger" onClick={remove} disabled={deleting}>
-              {deleting ? <Spinner /> : null} Delete permanently
+              {deleting ? <Spinner /> : null} {PAGE_TEXT.deletePermanently}
             </Button>
           </>
         }

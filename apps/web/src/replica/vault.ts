@@ -4,6 +4,16 @@
 // non-extractable and kept in IndexedDB too, so its bytes never reach script or disk in the
 // clear. Each record's name is bound into its seal, so sealed records cannot be swapped. When a
 // key is gone its records cannot be opened and are wiped; wiping a key wipes what it sealed.
+import { defineMessages } from '@nova/i18n';
+
+/** Storage failures, read when thrown: a failed write reaches the user as the request's error. */
+const VAULT_TEXT = defineMessages('replica.vault', {
+  requestFailed: 'This browser could not read or write its offline storage.',
+  transactionFailed: 'This browser could not save to its offline storage.',
+  notOpened: 'This browser could not open its offline storage.',
+  blocked:
+    'An older version of Nova still has this browser’s offline storage open. Close it and try again.',
+});
 
 export const KV_STORES = ['keys', 'replica', 'meta', 'cache', 'queue'] as const;
 export type KvStoreName = (typeof KV_STORES)[number];
@@ -27,15 +37,15 @@ const DB_NAME = 'nova-offline';
 function done<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error('IndexedDB request failed'));
+    req.onerror = () => reject(req.error ?? new Error(VAULT_TEXT.requestFailed));
   });
 }
 
 function finished(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
-    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
+    tx.onerror = () => reject(tx.error ?? new Error(VAULT_TEXT.transactionFailed));
+    tx.onabort = () => reject(tx.error ?? new Error(VAULT_TEXT.transactionFailed));
   });
 }
 
@@ -51,8 +61,8 @@ export function indexedDbBackend(name = DB_NAME): KvBackend | null {
           if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s);
       };
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error('IndexedDB did not open'));
-      req.onblocked = () => reject(new Error('IndexedDB is in use by an older version of Nova'));
+      req.onerror = () => reject(req.error ?? new Error(VAULT_TEXT.notOpened));
+      req.onblocked = () => reject(new Error(VAULT_TEXT.blocked));
     }).catch((err: unknown) => {
       opening = null;
       throw err;

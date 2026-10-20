@@ -271,6 +271,8 @@ export interface MarketEnv {
   plugins: PluginService;
   skills: SkillIndex;
   themes: Record<string, unknown>[];
+  /** `appearance.customTheme`: the saved theme in use. */
+  themeInUse: { id: string | null };
   pets: PetMarketInstaller;
   mcp: ReturnType<typeof fakeMcpInstaller>;
   events: MemoryEventSink;
@@ -361,6 +363,8 @@ export function marketEnv(
   });
   const backupsDir = join(dir, 'data', 'cache', 'market', 'backups');
   const themes: Record<string, unknown>[] = [];
+  /** `appearance.customTheme`. */
+  const themeInUse: { id: string | null } = { id: null };
   const pets = new PetMarketInstaller({ dir: join(dir, 'data', 'market', 'pets'), backupsDir });
   const mcp = fakeMcpInstaller();
   const trusted: TrustedPublisherKey[] = [];
@@ -396,6 +400,11 @@ export function marketEnv(
       backupsDir,
     }),
     theme: new ThemeMarketInstaller({
+      inUse: () => Promise.resolve(themeInUse.id),
+      clearInUse: () => {
+        themeInUse.id = null;
+        return Promise.resolve();
+      },
       read: () => Promise.resolve(themes.map((t) => ({ ...t }))),
       write: (_a, next) => {
         if (opts.failThemeWrite?.()) return Promise.reject(new Error('the settings write failed'));
@@ -431,6 +440,7 @@ export function marketEnv(
     plugins,
     skills,
     themes,
+    themeInUse,
     pets,
     mcp,
     events,

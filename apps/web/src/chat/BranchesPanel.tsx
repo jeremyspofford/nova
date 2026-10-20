@@ -3,10 +3,26 @@
 // compare at /chat/<id>?compare=<id2>.
 import { useEffect, useState } from 'react';
 import type { ThreadTree } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, Spinner, Tree, type TreeNode } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
+
+export const BRANCHES_TEXT = defineMessages('chat.branches', {
+  title: 'Branches',
+  loadFailed: 'Could not load branches.',
+  openChat: 'Open a chat to see its branches.',
+  retry: 'Retry',
+  loading: 'Loading branches',
+  loadingDots: 'Loading branches…',
+  sideChat: 'Side chat: {title}',
+  untitled: 'Untitled chat',
+  messages: '{n, plural, one {# message} other {# messages}}',
+  hint: 'Enter opens a chat. Space selects two to compare.',
+  none: 'No branches yet. Use “Branch from here” on a message to start one.',
+  compare: 'Compare selected',
+});
 
 export function comparePath(a: string, b: string): string {
   return `${chatPath(a)}?compare=${encodeURIComponent(b)}`;
@@ -29,8 +45,7 @@ export function BranchesPanel({ threadId }: { threadId: string | null }) {
         setError(null);
       },
       (err: unknown) => {
-        if (alive)
-          setError({ of: threadId, message: errorMessage(err, 'Could not load branches.') });
+        if (alive) setError({ of: threadId, message: errorMessage(err, BRANCHES_TEXT.loadFailed) });
       },
     );
     return () => {
@@ -38,45 +53,46 @@ export function BranchesPanel({ threadId }: { threadId: string | null }) {
     };
   }, [api, threadId, attempt]);
 
-  if (!threadId) return <p className="muted">Open a chat to see its branches.</p>;
+  if (!threadId) return <p className="muted">{BRANCHES_TEXT.openChat}</p>;
 
   const failed = error?.of === threadId ? error.message : null;
   if (failed)
     return (
       <div className="branches" role="alert">
         <p>{failed}</p>
-        <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+        <Button onClick={() => setAttempt((n) => n + 1)}>{BRANCHES_TEXT.retry}</Button>
       </div>
     );
   const data = tree?.of === threadId ? tree.data : null;
   if (!data)
     return (
       <p className="muted">
-        <Spinner label="Loading branches" /> Loading branches…
+        <Spinner label={BRANCHES_TEXT.loading} /> {BRANCHES_TEXT.loadingDots}
       </p>
     );
 
   const ids = new Set(data.nodes.map((n) => n.threadId));
   const picked = selected.filter((id) => ids.has(id));
-  const nodes: TreeNode[] = data.nodes.map((n) => ({
-    id: n.threadId,
-    parentId: n.parentThreadId,
-    label: `${n.side ? 'Side chat: ' : ''}${n.title?.trim() || 'Untitled chat'}`,
-    detail: `${n.messageCount} ${n.messageCount === 1 ? 'message' : 'messages'}`,
-  }));
+  const nodes: TreeNode[] = data.nodes.map((n) => {
+    const title = n.title?.trim() || BRANCHES_TEXT.untitled;
+    return {
+      id: n.threadId,
+      parentId: n.parentThreadId,
+      label: n.side ? BRANCHES_TEXT.sideChat({ title }) : title,
+      detail: BRANCHES_TEXT.messages({ n: n.messageCount }),
+    };
+  });
   const [a, b] = picked;
 
   return (
     <div className="branches">
       {data.nodes.length > 1 ? (
-        <p className="muted branches-hint">Enter opens a chat. Space selects two to compare.</p>
+        <p className="muted branches-hint">{BRANCHES_TEXT.hint}</p>
       ) : (
-        <p className="muted branches-hint">
-          No branches yet. Use “Branch from here” on a message to start one.
-        </p>
+        <p className="muted branches-hint">{BRANCHES_TEXT.none}</p>
       )}
       <Tree
-        label="Branches"
+        label={BRANCHES_TEXT.title}
         nodes={nodes}
         currentId={threadId}
         selected={picked}
@@ -93,7 +109,7 @@ export function BranchesPanel({ threadId }: { threadId: string | null }) {
           if (a && b) navigate(comparePath(a, b));
         }}
       >
-        <Icon name="compare" /> Compare selected
+        <Icon name="compare" /> {BRANCHES_TEXT.compare}
       </Button>
     </div>
   );

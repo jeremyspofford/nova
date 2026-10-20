@@ -3,12 +3,30 @@
 // click opens a text file in the editor and anything else in the preview.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FileEntryView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon, IconButton, SelectField, Spinner, Tree, type TreeNode } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { formatBytes } from '../chat/attachments.ts';
 import type { FileRef } from '../layout/model.ts';
 import { useServices } from '../services.tsx';
 import { opensIn } from './types.ts';
+
+export const FILES_TEXT = defineMessages('files', {
+  title: 'Files',
+  rootsFailed: 'Could not load the folders.',
+  folderFailed: 'Could not load.',
+  couldNotLoad: 'Could not load',
+  loadingDots: 'Loading…',
+  retry: 'Retry',
+  loadingFolders: 'Loading folders',
+  noFolders: 'No folders are available here.',
+  folder: 'Folder',
+  readOnly: 'Read-only',
+  refresh: 'Refresh files',
+  loadingFiles: 'Loading files',
+  empty: 'This folder is empty.',
+  filesIn: 'Files in {folder}',
+});
 
 export interface FileRoot {
   path: string;
@@ -50,7 +68,7 @@ export function FileBrowser({ threadId, projectId, onOpen }: FileBrowserProps) {
           setRootsError(null);
         },
         (err: unknown) => {
-          if (alive) setRootsError(errorMessage(err, 'Could not load the folders.'));
+          if (alive) setRootsError(errorMessage(err, FILES_TEXT.rootsFailed));
         },
       );
     return () => {
@@ -71,7 +89,10 @@ export function FileBrowser({ threadId, projectId, onOpen }: FileBrowserProps) {
         (err: unknown) =>
           setFolders((f) => ({
             ...f,
-            [dir]: { items: f[dir]?.items ?? null, error: errorMessage(err, 'Could not load.') },
+            [dir]: {
+              items: f[dir]?.items ?? null,
+              error: errorMessage(err, FILES_TEXT.folderFailed),
+            },
           })),
       );
     },
@@ -106,15 +127,15 @@ export function FileBrowser({ threadId, projectId, onOpen }: FileBrowserProps) {
           expandable: e.kind === 'dir',
           label: (
             <>
-              <Icon name={e.kind === 'dir' ? 'folder' : 'file'} /> {e.name}
+              <Icon name={e.kind === 'dir' ? 'folder' : 'file'} /> <span dir="auto">{e.name}</span>
             </>
           ),
           detail:
             e.kind === 'dir'
               ? folder?.error
-                ? 'Could not load'
+                ? FILES_TEXT.couldNotLoad
                 : expanded.has(e.path) && !folder?.items
-                  ? 'Loading…'
+                  ? FILES_TEXT.loadingDots
                   : undefined
               : e.size !== null
                 ? formatBytes(e.size)
@@ -148,38 +169,40 @@ export function FileBrowser({ threadId, projectId, onOpen }: FileBrowserProps) {
     return (
       <div className="files-error" role="alert">
         <p>{rootsError}</p>
-        <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+        <Button onClick={() => setAttempt((n) => n + 1)}>{FILES_TEXT.retry}</Button>
       </div>
     );
   if (!roots)
     return (
       <p className="muted">
-        <Spinner label="Loading folders" /> Loading…
+        <Spinner label={FILES_TEXT.loadingFolders} /> {FILES_TEXT.loadingDots}
       </p>
     );
-  if (!root) return <p className="muted">No folders are available here.</p>;
+  if (!root) return <p className="muted">{FILES_TEXT.noFolders}</p>;
   const top = folders[''];
 
   return (
-    <section className="file-browser" aria-label="Files">
+    <section className="file-browser" aria-label={FILES_TEXT.title}>
       <div className="file-browser-bar">
         {roots.length > 1 ? (
           <SelectField
             className="file-root"
-            label="Folder"
+            label={FILES_TEXT.folder}
             hideLabel
             value={root.path}
             onChange={setPicked}
             options={roots.map((r) => ({ value: r.path, label: r.label, title: r.path }))}
           />
         ) : (
-          <span className="file-root-label" title={root.path}>
+          <span className="file-root-label" title={root.path} dir="auto">
             <Icon name="folder" /> {root.label}
           </span>
         )}
-        {root.access === 'read' ? <span className="muted file-access">Read-only</span> : null}
+        {root.access === 'read' ? (
+          <span className="muted file-access">{FILES_TEXT.readOnly}</span>
+        ) : null}
         <IconButton
-          label="Refresh files"
+          label={FILES_TEXT.refresh}
           icon={<Icon name="refresh" />}
           variant="ghost"
           onClick={() => {
@@ -191,17 +214,17 @@ export function FileBrowser({ threadId, projectId, onOpen }: FileBrowserProps) {
       {top?.error ? (
         <div className="files-error" role="alert">
           <p>{top.error}</p>
-          <Button onClick={() => load('')}>Retry</Button>
+          <Button onClick={() => load('')}>{FILES_TEXT.retry}</Button>
         </div>
       ) : !top?.items ? (
         <p className="muted">
-          <Spinner label="Loading files" /> Loading…
+          <Spinner label={FILES_TEXT.loadingFiles} /> {FILES_TEXT.loadingDots}
         </p>
       ) : top.items.length === 0 ? (
-        <p className="muted">This folder is empty.</p>
+        <p className="muted">{FILES_TEXT.empty}</p>
       ) : (
         <Tree
-          label={`Files in ${root.label}`}
+          label={FILES_TEXT.filesIn({ folder: root.label })}
           nodes={nodes}
           onActivate={activate}
           expanded={expanded}

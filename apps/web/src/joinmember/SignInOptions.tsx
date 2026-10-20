@@ -8,6 +8,7 @@ import { Button, Icon, Spinner } from '@nova/ui';
 import { oidcErrorText, oidcReturn, teamErrorMessage } from '../team/format.ts';
 import { browser, isSafeExternalUrl } from '../team/leave.ts';
 import { memberClient, type MemberClient } from './client.ts';
+import { JOIN_MEMBER_TEXT, SIGN_IN_TEXT as S } from './strings.ts';
 import './joinmember.css';
 
 export function SignInOptions({
@@ -46,8 +47,7 @@ export function SignInOptions({
     setFailure(null);
     try {
       const out = await client.oidcStart({ providerId, flow: 'sign_in' });
-      if (!isSafeExternalUrl(out.url))
-        throw new Error('The Hub sent an address this page will not open.');
+      if (!isSafeExternalUrl(out.url)) throw new Error(JOIN_MEMBER_TEXT.unsafeAddress);
       browser.leaveTo(out.url);
     } catch (err) {
       setFailure(err);
@@ -58,22 +58,21 @@ export function SignInOptions({
   if (!refused && !providers?.length) return null;
   return (
     <section className="panel joinm-signin" aria-labelledby={headingId}>
-      <h2 id={headingId}>Sign in</h2>
+      <h2 id={headingId}>{S.title}</h2>
       {refused ? (
         <p className="joinm-notice" role="alert">
           <Icon name="alert" /> {oidcErrorText(refused)}
         </p>
       ) : null}
-      {providers === null ? <Spinner label="Loading sign-in options" /> : null}
+      {providers === null ? <Spinner label={S.loading} /> : null}
       {providers && providers.length > 0 ? (
         <>
-          <p className="muted joinm-flush">
-            Sign in with the account you linked in Settings → Account.
-          </p>
+          <p className="muted joinm-flush">{S.linked}</p>
           <div className="stack">
             {providers.map((p) => (
               <Button key={p.id} onClick={() => void start(p.id)} disabled={busy !== null}>
-                {busy === p.id ? <Spinner /> : <Icon name="external" />} Continue with {p.label}
+                {busy === p.id ? <Spinner /> : <Icon name="external" />}{' '}
+                {JOIN_MEMBER_TEXT.continueWith({ provider: p.label })}
               </Button>
             ))}
           </div>
@@ -81,12 +80,10 @@ export function SignInOptions({
       ) : null}
       {failure ? (
         <p role="alert" className="nv-field-error">
-          {teamErrorMessage(failure, 'Could not start signing in.')}
+          {teamErrorMessage(failure, S.startError)}
         </p>
       ) : null}
-      <p className="muted joinm-flush">
-        New here? Open the invitation link the owner of the Hub sent you.
-      </p>
+      <p className="muted joinm-flush">{S.newHere}</p>
     </section>
   );
 }

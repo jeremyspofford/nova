@@ -51,3 +51,4 @@ export * from './schema/datactl.ts';
 export * from './schema/appauth.ts';
 export * from './schema/channels_m8.ts';
 export * from './schema/team_m8.ts';
+export * from './schema/sites_m8.ts';

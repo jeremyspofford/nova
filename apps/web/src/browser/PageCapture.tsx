@@ -4,6 +4,7 @@
 // and secret-looking values; request bodies are never kept. Everything here is page content:
 // shown as text (never HTML, never a link), and never treated as an instruction.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type {
   BrowserCaptureView,
   BrowserConsoleEntryView,
@@ -17,12 +18,55 @@ import { useBrowserM7Api } from './api-m7.ts';
 import { eventComputerId, useHubEvents } from './events.ts';
 import {
   BODY_OMITTED_TEXT,
-  CONSOLE_LEVEL_CHIP,
+  BROWSER_TEXT,
+  consoleLevelChip,
   durationText,
   requestFailed,
   requestOutcome,
   sizeText,
 } from './format.ts';
+
+/** What the page logged. Messages, addresses, headers and bodies are page content (data). */
+export const CAPTURE_TEXT = defineMessages('browser.capture', {
+  heading: 'What the page logged',
+  intro:
+    'The page’s console and the requests it made, as the agent reads them. This is page content: it is shown as text and never followed. Cookies, sign-in headers and values that look secret are masked, and request bodies are never kept.',
+  tabs: 'Page capture',
+  console: 'Console',
+  network: 'Network',
+  closed:
+    'The browser is not open, so there is nothing to show. It is kept only while the browser runs.',
+  /** {limit} is how many entries the browser keeps. */
+  droppedMessages:
+    '{n, plural, one {# older message was dropped: the browser keeps the latest {limit}.} other {# older messages were dropped: the browser keeps the latest {limit}.}}',
+  droppedRequests:
+    '{n, plural, one {# older request was dropped: the browser keeps the latest {limit}.} other {# older requests were dropped: the browser keeps the latest {limit}.}}',
+  consoleFailed: 'Could not load the console.',
+  consoleLoading: 'Loading the console',
+  show: 'Show',
+  every: 'Every message',
+  problems: 'Errors and warnings',
+  errors: 'Errors only',
+  consoleEmpty: 'The page has not written anything to its console.',
+  noMessageMatches: 'No message matches.',
+  consoleList: 'Console messages, newest first',
+  uncaught: 'Uncaught error',
+  requestsFailed: 'Could not load the requests.',
+  requestsLoading: 'Loading the requests',
+  contains: 'Address contains',
+  failedOnly: 'Only failed or blocked',
+  requestsEmpty: 'The page has not made any requests yet.',
+  noRequestMatches: 'No request matches.',
+  requestsList: 'Requests, newest first',
+  none: 'None',
+  pageLoad: 'Page load',
+  failure: 'Failure',
+  blocked: 'Blocked',
+  blockedWhy: 'The site is not on the allow list, so the browser did not send it.',
+  requestHeaders: 'Request headers',
+  responseHeaders: 'Response headers',
+  responseBody: 'Response body',
+});
 
 /** The Hub keeps at most this many entries of each kind per browser. */
 export const CAPTURE_LIMIT = 300;
@@ -79,32 +123,29 @@ export function PageCapture({ computerId }: { computerId: string }) {
   const headingId = useId();
   const [tab, setTab] = useState<Tab>('console');
   const [version, setVersion] = useState(0);
+  const S = CAPTURE_TEXT;
   return (
     <section className="ws-section brw-capture" aria-labelledby={headingId}>
       <div className="ws-section-header">
-        <h3 id={headingId}>What the page logged</h3>
+        <h3 id={headingId}>{S.heading}</h3>
         <Button variant="ghost" onClick={() => setVersion((n) => n + 1)}>
-          <Icon name="refresh" /> Refresh
+          <Icon name="refresh" /> {BROWSER_TEXT.refresh}
         </Button>
       </div>
-      <p className="muted ws-flush">
-        The page’s console and the requests it made, as the agent reads them. This is page content:
-        it is shown as text and never followed. Cookies, sign-in headers and values that look secret
-        are masked, and request bodies are never kept.
-      </p>
+      <p className="muted ws-flush">{S.intro}</p>
       <Tabs
-        label="Page capture"
+        label={S.tabs}
         value={tab}
         onChange={(id) => setTab(id === 'network' ? 'network' : 'console')}
         items={[
           {
             id: 'console',
-            label: 'Console',
+            label: S.console,
             panel: <ConsoleLog computerId={computerId} version={version} />,
           },
           {
             id: 'network',
-            label: 'Network',
+            label: S.network,
             panel: <NetworkLog computerId={computerId} version={version} />,
           },
         ]}
@@ -114,28 +155,25 @@ export function PageCapture({ computerId }: { computerId: string }) {
 }
 
 function Closed() {
-  return (
-    <p className="muted ws-flush">
-      The browser is not open, so there is nothing to show. It is kept only while the browser runs.
-    </p>
-  );
+  return <p className="muted ws-flush">{CAPTURE_TEXT.closed}</p>;
 }
 
 function Failed({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="ws-error" role="alert">
       <p>{message}</p>
-      <Button onClick={onRetry}>Retry</Button>
+      <Button onClick={onRetry}>{BROWSER_TEXT.retry}</Button>
     </div>
   );
 }
 
-function Dropped({ n, what }: { n: number; what: string }) {
+function Dropped({ n, kind }: { n: number; kind: 'messages' | 'requests' }) {
   if (n <= 0) return null;
+  const S = CAPTURE_TEXT;
+  const p = { n, limit: CAPTURE_LIMIT };
   return (
     <p className="muted ws-flush">
-      {n} older {what} {n === 1 ? 'was' : 'were'} dropped: the browser keeps the latest{' '}
-      {CAPTURE_LIMIT}.
+      {kind === 'messages' ? S.droppedMessages(p) : S.droppedRequests(p)}
     </p>
   );
 }
@@ -153,9 +191,10 @@ function ConsoleLog({ computerId, version }: { computerId: string; version: numb
     computerId,
     () => api.browserConsole(computerId, CAPTURE_LIMIT),
     version,
-    'Could not load the console.',
+    CAPTURE_TEXT.consoleFailed,
   );
-  if (data.state === 'loading') return <Spinner label="Loading the console" />;
+  const S = CAPTURE_TEXT;
+  if (data.state === 'loading') return <Spinner label={S.consoleLoading} />;
   if (data.state === 'closed') return <Closed />;
   if (data.state === 'error') return <Failed message={data.message} onRetry={retry} />;
   const all = data.view.items;
@@ -164,25 +203,25 @@ function ConsoleLog({ computerId, version }: { computerId: string; version: numb
     <div className="stack brw-capture-body">
       <div className="ws-toolbar">
         <SelectField
-          label="Show"
+          label={S.show}
           value={filter}
           onChange={(v) => setFilter(v === 'problems' || v === 'errors' ? v : 'all')}
           options={[
-            { value: 'all', label: 'Every message' },
-            { value: 'problems', label: 'Errors and warnings' },
-            { value: 'errors', label: 'Errors only' },
+            { value: 'all', label: S.every },
+            { value: 'problems', label: S.problems },
+            { value: 'errors', label: S.errors },
           ]}
         />
       </div>
-      <Dropped n={data.view.dropped} what="messages" />
+      <Dropped n={data.view.dropped} kind="messages" />
       {all.length === 0 ? (
-        <p className="muted ws-flush">The page has not written anything to its console.</p>
+        <p className="muted ws-flush">{S.consoleEmpty}</p>
       ) : shown.length === 0 ? (
-        <p className="muted ws-flush">No message matches.</p>
+        <p className="muted ws-flush">{S.noMessageMatches}</p>
       ) : (
-        <ol className="ws-list brw-log" aria-label="Console messages, newest first">
+        <ol className="ws-list brw-log" aria-label={S.consoleList}>
           {shown.map((e) => {
-            const chip = CONSOLE_LEVEL_CHIP[e.level];
+            const chip = consoleLevelChip(e.level);
             return (
               <li key={e.seq} className="ws-list-row brw-log-row" data-level={e.level}>
                 <div className="brw-log-head">
@@ -190,16 +229,14 @@ function ConsoleLog({ computerId, version }: { computerId: string; version: numb
                     <Icon name={chip.icon} />
                     <span>{chip.text}</span>
                   </span>
-                  {e.source === 'pageerror' ? (
-                    <span className="ws-badge">Uncaught error</span>
-                  ) : null}
+                  {e.source === 'pageerror' ? <span className="ws-badge">{S.uncaught}</span> : null}
                   <time className="muted" dateTime={e.at}>
                     {timeOf(e.at)}
                   </time>
                 </div>
                 <pre className="brw-log-text">{e.text}</pre>
                 {e.url ? (
-                  <span className="muted brw-url">
+                  <span className="muted brw-url" dir="ltr">
                     {e.url}
                     {e.line !== null ? `:${e.line}` : ''}
                   </span>
@@ -222,9 +259,10 @@ function NetworkLog({ computerId, version }: { computerId: string; version: numb
     computerId,
     () => api.browserNetwork(computerId, CAPTURE_LIMIT),
     version,
-    'Could not load the requests.',
+    CAPTURE_TEXT.requestsFailed,
   );
-  if (data.state === 'loading') return <Spinner label="Loading the requests" />;
+  const S = CAPTURE_TEXT;
+  if (data.state === 'loading') return <Spinner label={S.requestsLoading} />;
   if (data.state === 'closed') return <Closed />;
   if (data.state === 'error') return <Failed message={data.message} onRetry={retry} />;
   const all = data.view.items;
@@ -245,7 +283,7 @@ function NetworkLog({ computerId, version }: { computerId: string; version: numb
     <div className="stack brw-capture-body">
       <div className="ws-toolbar brw-net-filters">
         <TextField
-          label="Address contains"
+          label={S.contains}
           type="search"
           value={contains}
           spellCheck={false}
@@ -258,16 +296,16 @@ function NetworkLog({ computerId, version }: { computerId: string; version: numb
             checked={failedOnly}
             onChange={(e) => setFailedOnly(e.target.checked)}
           />
-          <span>Only failed or blocked</span>
+          <span>{S.failedOnly}</span>
         </label>
       </div>
-      <Dropped n={data.view.dropped} what="requests" />
+      <Dropped n={data.view.dropped} kind="requests" />
       {all.length === 0 ? (
-        <p className="muted ws-flush">The page has not made any requests yet.</p>
+        <p className="muted ws-flush">{S.requestsEmpty}</p>
       ) : shown.length === 0 ? (
-        <p className="muted ws-flush">No request matches.</p>
+        <p className="muted ws-flush">{S.noRequestMatches}</p>
       ) : (
-        <ol className="ws-list brw-log" aria-label="Requests, newest first">
+        <ol className="ws-list brw-log" aria-label={S.requestsList}>
           {shown.map((r) => (
             <NetworkRow
               key={r.seq}
@@ -298,7 +336,7 @@ function Headers({ title, headers }: { title: string; headers: Record<string, st
             ))}
           </dl>
         ) : (
-          'None'
+          CAPTURE_TEXT.none
         )}
       </dd>
     </>
@@ -317,6 +355,7 @@ function NetworkRow({
   const outcome = requestOutcome(r);
   const size = sizeText(r.size);
   const took = durationText(r.durationMs);
+  const S = CAPTURE_TEXT;
   return (
     <li className="ws-list-row brw-log-row" data-failed={requestFailed(r) || undefined}>
       <button type="button" className="brw-net-summary" aria-expanded={expanded} onClick={onToggle}>
@@ -326,12 +365,14 @@ function NetworkRow({
             <Icon name={outcome.icon} />
             <span>{outcome.text}</span>
           </span>
-          {r.navigation ? <span className="ws-badge">Page load</span> : null}
+          {r.navigation ? <span className="ws-badge">{S.pageLoad}</span> : null}
           <time className="muted" dateTime={r.at}>
             {timeOf(r.at)}
           </time>
         </span>
-        <span className="brw-url">{r.url}</span>
+        <span className="brw-url" dir="ltr">
+          {r.url}
+        </span>
         <span className="muted ws-row-meta">
           <span>{r.resourceType}</span>
           {r.mimeType ? <span>{r.mimeType}</span> : null}
@@ -343,19 +384,19 @@ function NetworkRow({
         <dl className="ws-dl brw-net-detail">
           {r.failure ? (
             <>
-              <dt>Failure</dt>
+              <dt>{S.failure}</dt>
               <dd>{r.failure}</dd>
             </>
           ) : null}
           {r.blocked ? (
             <>
-              <dt>Blocked</dt>
-              <dd>The site is not on the allow list, so the browser did not send it.</dd>
+              <dt>{S.blocked}</dt>
+              <dd>{S.blockedWhy}</dd>
             </>
           ) : null}
-          <Headers title="Request headers" headers={r.requestHeaders} />
-          <Headers title="Response headers" headers={r.responseHeaders} />
-          <dt>Response body</dt>
+          <Headers title={S.requestHeaders} headers={r.requestHeaders} />
+          <Headers title={S.responseHeaders} headers={r.responseHeaders} />
+          <dt>{S.responseBody}</dt>
           <dd>
             {r.body !== null ? (
               <pre className="brw-log-text">{r.body}</pre>

@@ -54,6 +54,12 @@ export const EVENT_ALIASES: Readonly<Record<string, string>> = {
   'tool.call': 'tool.call.completed',
 };
 
+/**
+ * A theme token or font value an extension may set: plain CSS values only. The one rule, shared
+ * with the Appearance settings and the marketplace's theme items, lives in @nova/shared.
+ */
+export { SAFE_THEME_VALUE } from '@nova/shared';
+
 /** Where an extension's own files live, as fs scope variables. */
 export const EXTENSION_DATA_VAR = '${extensionData}';
 export const EXTENSION_ROOT_VAR = '${extensionRoot}';

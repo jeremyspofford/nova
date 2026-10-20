@@ -127,6 +127,24 @@ kernel's documented `sysfs` interface; the programs Nova calls (`ipmitool`, `efi
 `bootctl`, `grub-reboot`, `fwupdmgr`, Chromium) are run as separate processes on the user's
 machine and are neither bundled nor linked.
 
+### 3.4 M8: SDK licensing, no new third-party code (ADR-097)
+
+M8 adds no third-party package. Extension code runs in `quickjs-emscripten`, already a dependency of
+`script.run` (§3.2). Two new workspace packages carry their own licenses:
+
+| Package | License | Why |
+| --- | --- | --- |
+| `packages/sdk` (`@nova/sdk`) and its sample extension (`examples/hello`) | Apache-2.0 | Types and a test host only, with no dependencies, so an extension under any license can build against it without taking on the AGPL |
+| `packages/cli` (`@nova/cli`, the `nova` command) | AGPL-3.0-or-later | It imports `@nova/core` |
+
+The sample catalog's third-party items (`Release notes`, the `Aurora` theme, the `word-count`
+extension of a made-up "Example Labs" publisher) are our own code and text, signed with test keys
+whose private halves are fixtures marked fake. Extensions, plugins and themes a user installs from a
+catalog carry their publishers' licenses; Nova neither bundles nor redistributes them. OAuth 2.0
+authorization with PKCE, dynamic registration, server metadata and the `iss` parameter (RFC 6749,
+7636, 7591, 8414, 8252, 9207), the SASL XOAUTH2 mechanism for email and OTLP/HTTP with JSON are
+written from their public specifications.
+
 ## 4. Privacy & data protection
 
 - **No training on user data**, ever. The product states this plainly.

@@ -3,8 +3,9 @@
 ## 1. Settings model
 
 Settings are stored in the `setting` table (scoped global/project/workspace) and resolved with
-precedence: **built-in default → user global → user project → managed policy**. Environment
-variables may override only in developer mode.
+precedence: **built-in default → user global → user project → managed policy**, managed policy
+winning and locking the key (§1.3 as built in M8). Environment variables configure the process and
+never override a setting.
 
 **Security-relevant keys are not project-settable.** A project-scoped value, whether set in the
 app or read from a project's `.nova/` folder, cannot change these keys: sandbox and permission
@@ -20,12 +21,12 @@ ignored, and Diagnostics shows a warning naming the key and the project.
 
 | Section | Keys |
 | --- | --- |
-| **General** | language, enter-to-send (`enter`\|`mod+enter`), prevent-sleep, follow-up behavior (`general.followUp`: `steer`\|`queue`, default `queue`, FR-019), temporary-chat retention (`chat.temporaryTtlHours`, default 24, FR-027), suggested follow-ups ("Suggest follow-ups", `chat.suggestions`, default on, FR-028), restore-session, check-updates |
-| **Profile & usage** | display name, username, avatar (PNG, JPEG or WebP up to 2 MB, metadata stripped; FR-113), usage insights (§6, FR-114) |
-| **Accounts** | provider accounts, active account per provider kind ("Active <kind> account" when a kind has more than one, FR-115), default model, spend caps; display name moved to Profile & usage in M4 |
+| **General** | language (in Appearance → Language since M8, §2.4), enter-to-send (`enter`\|`mod+enter`), prevent-sleep, follow-up behavior (`general.followUp`: `steer`\|`queue`, default `queue`, FR-019), temporary-chat retention (`chat.temporaryTtlHours`, default 24, FR-027), suggested follow-ups ("Suggest follow-ups", `chat.suggestions`, default on, FR-028), restore-session, check-updates |
+| **Profile & usage** | display name, username, avatar (PNG, JPEG or WebP up to 2 MB, metadata stripped; FR-113), usage insights (§6, FR-114); spend caps and "Clear usage data" (M8, §6, FR-116) |
+| **Accounts** | provider accounts, active account per provider kind ("Active <kind> account" when a kind has more than one, FR-115), default model, each provider's plan, last reported limit, this month's spend and its cap (M8; caps are edited on Profile & usage); display name moved to Profile & usage in M4 |
 | **Models** | presets from Faster to Smarter (`models.presets`; empty = generated built-ins, FR-221), local model server detection, routing order (`routing.order`, FR-127), allow cloud models (`routing.allowCloud`, security-relevant) |
 | **Devices** | compute nodes: add (one-use enrollment token), status, models, load, revoke (FR-126); **Firmware and boot** (M7.5: the firmware, low-level boot and network boot switches, below) |
-| **Appearance** | theme, accent, background, foreground, uiFont, codeFont, fontSize, density, sidebarWidth, reducedMotion, highContrast; theme export and import with saved themes (`appearance.customThemes`, at most 50, §2.2, FR-011) |
+| **Appearance** | theme, accent, background, foreground, uiFont, codeFont, fontSize, density, sidebarWidth, reducedMotion, highContrast; theme export and import with saved themes (`appearance.customThemes`, at most 50) and the saved theme in use (`appearance.customTheme`, §2.2, FR-011); the interface language (`appearance.locale`, §2.4, FR-016) |
 | **Pets** | enabled, petId, position, size, reactions, mute |
 | **Keyboard** | bindings map, reset, search |
 | **Notifications** | per-category (completion, approval, error, scheduled), OS permission, quiet hours |
@@ -36,17 +37,21 @@ ignored, and Diagnostics shows a warning naming the key and the project.
 | **Memory** | use saved memories (`memory.enabled`), the item list (correct, pin, dismiss, delete, add, import; FR-032), retention, extraction on/off, embedding provider, review frequency, reference past chats (on/off; off purges derived data within 30 days, FR-205), default project memory scope (`shared` \| `project_only`), background consolidation (on/off, idle delay, summary budget 2,500 tokens, FR-204) |
 | **Tools & MCP** | server list and per-server settings (`startupTimeoutMs`, `toolTimeoutMs`, `enabledTools`/`disabledTools`, `required`, `defaultApproval`, `deferred`, `oauth`; `contracts/schemas/mcp-config.json`, `docs/08` §2.1), OAuth sign-in, reconnect and sign-out for remote servers (FR-047), **Install a bundle** (FR-199), per-tool and per-action defaults, approval rules ("Always allow" list, revocable, FR-100), deferred-tool budget (default 40 tools or 8,000 schema tokens, FR-196), a link to Plugins & skills for hooks |
 | **Plugins & skills** | installed plugins (status, Verified/Unverified, permissions, on/off, update, uninstall; FR-045), catalog search and catalog sources (`plugins.catalogs`: a folder on the Hub, an https URL or a Git URL; security-relevant), install from a folder or Git with the sideload confirmation (FR-049), skills (source, shadowed by, on/off, view, create and delete user and project skills; FR-046), **Hooks**: the hook trust list (id, source, event, matcher, command, hash, status, "Changed since you trusted it", last run; trust, untrust, on/off for user hooks; FR-197) |
+| **Extensions** (M8) | the "Run extensions" switch (`sdk.enabled`), installed extensions (status, publisher, Verified/Unverified, permissions, hooks and their trust, secrets, app screens, on/off, uninstall with or without data), install from a `.novax` or a path on the Hub (§4, FR-117) |
 | **Apps & clients** | Nova's MCP server on or off (`mcpServer.enabled`, default off, security-relevant), its clients (tools, projects, chat access, read-only or run-allowed, expiry of 7, 30, 90 (default) or 365 days or never; per-client tokens shown once; revoke; FR-044, FR-192) |
+| **Authorized apps** (M8) | "Let apps ask for access" (`apps.enabled`), the sign-in metadata address, apps you allowed (scopes, return addresses, devices, last used, revoke), registered apps nobody authorizes (remove) (FR-222) |
+| **Managed policy** (M8) | how a setting is decided, the policy sources and their status, restrictions, settings the policy sets, keys not applied; "Check for changes" (owner) (FR-106, `docs/12` §10) |
 | **Import** | the import wizard and the import records (FR-200, `docs/04` §2.11) |
 | **Workspace** (no page) | `workspace.layout`: the pane layout per mode, written by the workspace and restored on start (FR-005, `docs/04` §4.3) |
 | **Network** | egress allowlist, proxy mode (`allowlist` \| `limited`, FR-193), SOCKS5 for non-HTTP clients, private-IP access, dev-server ports |
-| **Data** | retention overrides, export, delete, storage usage, backup folder, import ledger (FR-200) |
+| **Data** | retention overrides, export, delete, storage usage, backup folder, import ledger (FR-200). *As built in M8*: what the Hub holds, export (optional passphrase), import into an empty Hub, retention per item and "Sweep now", crash reports, delete all data (FR-105, FR-121, `docs/12` §9); storage usage and a backup folder are not built |
 | **Sync** | enable, devices, passphrase, history/merge log, E2EE status (as built in M7: this device's copy, changes waiting to send, devices with a copy, History with Restore; no passphrase, `docs/13` §2) |
 | **Account** (M7) | linked OIDC identities (link and unlink), the public profile card and its preview (`docs/13` §7) |
 | **Members** (M7) | people and roles; for the owner, invitations (one-use link shown once, chosen expiry, withdraw), removing a member, OIDC providers (`docs/13` §7) |
 | **Cloud runner** (M7) | the runner's URL, a write-only token, test, on/off, forget, caps, unrestricted network; cloud environments, their runs and snapshots (`docs/13` §3) |
 | **Experimental** (M7) | `script.run` and its limits, external agent adapters (FR-202, FR-203) |
-| **Advanced** | feature flags with their stage (ADR-082: `experimental` off and hidden outside developer mode, `beta` off and listed, `stable` on, `deprecated` still honoured with a warning, `removed` rejected at load), log level, developer mode, diagnostics, telemetry export over OTLP (endpoint, signals, include content; off by default, FR-223), reset |
+| **Telemetry export** (M8) | OTLP export: on/off (off by default), collector address, write-only headers, signals, include content, test, status (FR-223, `docs/16` §1.1) |
+| **Advanced** | feature flags with their stage (ADR-082: `experimental` off and hidden outside developer mode, `beta` off and listed, `stable` on, `deprecated` still honoured with a warning, `removed` rejected at load), log level, developer mode, diagnostics, reset; telemetry export over OTLP moved to its own section in M8 |
 
 *As shipped in M5* (ADR-092): the Work keys live in Settings → General → **Work runs**, and the
 Code keys in a new Settings → **Code** section (`/settings/code`). Security-relevant keys resolve
@@ -236,6 +241,47 @@ the confirmation). The security audit records each change once, as kind `setting
 `setting.changed`, resource the key, with the same values (`docs/06` §2); no route writes an audit
 entry of its own for the change.
 
+*Added in M8* (ADR-097). The keys are in `packages/shared/src/settings.ts` (the `// ---- M8`
+blocks); every one but the `appearance.*` keys is security-relevant, so a project cannot set it and
+managed policy can only tighten it (§1.3). Where each one is shown: Settings → Extensions (`sdk.enabled`, "Run extensions"),
+Marketplace → Catalogs (`plugins.trustedPublishers` under "Trusted publishers", `market.*` under
+"Install rules", `plugins.catalogs` with its two new fields), Settings → Authorized apps
+(`apps.enabled`, "Let apps ask for access"; `apps.openRegistration` has no control yet), Settings
+→ Telemetry export (the `telemetry.otlp.*` keys, written through `PUT /api/v1/telemetry/otlp`),
+Settings → Data (the `retention.*` keys under "How long data is kept" and the `privacy.crash*`
+keys under "Crash reports"), Settings → Members ("Keep a removed member's data for",
+`team.removedMemberPurgeDays`), Sites → Publishing targets (`sites.remoteTargets`, "Allow publishing to hosting targets") and Settings →
+Appearance (`appearance.locale` under "Language", `appearance.customTheme` under Themes).
+`managed.restrict` has no page: Settings → Managed policy shows what it holds.
+
+| Key | Default | Security | Notes |
+| --- | --- | --- | --- |
+| `sdk.enabled` | `true` | yes | Run installed SDK extensions, each in a worker of its own with only the permissions it declared (FR-117). Off stops every extension's worker and turns its hook rows off; its commands, panels, tools and hooks go away until it is turned back on |
+| `plugins.trustedPublishers` | `[]` | yes | Publishers whose signed extensions, plugins and catalogs count as Verified: `{name (1–100), key}` with the raw Ed25519 public key in base64url (43 characters), at most 50 (FR-049, FR-117). "Verified" is computed live, so removing a key unverifies what it signed. When managed policy forbids unverified installs, this list is exactly what the policy pins (§1.3) |
+| `market.allowSideload` | `true` | yes | Allow installing Unverified marketplace items after the explicit sideload confirmation; off, only Verified items install (`sideload_disabled`). Turned off and locked when managed policy forbids unverified installs (FR-049) |
+| `market.allowedKinds` | all five | yes | The kinds that may be installed: `plugin`, `skill`, `theme`, `pet`, `mcp` (`kind_not_allowed`) |
+| `plugins.catalogs` (M8 fields) | — | yes | Each catalog may now pin `publisherKey` (the key its index must be signed with; a catalog that pins a key and has no signature is refused) and, for a Git catalog, `commit` (a full 40-character SHA its index is read at) (`docs/08` §7) |
+| `managed.restrict` | `{layers: [], failClosed: null}` | yes | Set only by managed policy, never by a user (the settings route refuses every `managed.*` key): one `restrict` block per source in force and, when a trusted source could not be read, why every agent tool is denied (FR-106, `docs/12` §10). Always present in the managed layer, so always locked |
+| `apps.enabled` | `true` | yes | Let third-party apps ask for access to the Hub (FR-222). Off, registration, consent and token requests are refused (`apps_disabled`) and every app token stops working at once |
+| `apps.openRegistration` | `true` | yes | Let apps register themselves without a session (10 an hour per address, at most 100 waiting, each lapsing after 1 hour). Off, only the owner can register an app, with their session (`registration_closed`); approving each app is needed either way |
+| `telemetry.otlp.enabled` | `false` | yes | Export traces, metrics and logs over OTLP/HTTP with JSON to the collector below (FR-223, `docs/16` §1). Redaction always applies |
+| `telemetry.otlp.endpoint` | `''` | yes | The collector's base URL: https, or http only to this machine; `/v1/traces`, `/v1/metrics` and `/v1/logs` are appended |
+| `telemetry.otlp.headers` | `{}` | yes | Header names → vault references `secret://telemetry/otlp/header/<name>`; `PUT /api/v1/telemetry/otlp` stores the values, which are never returned |
+| `telemetry.otlp.signals` | `{traces: true, metrics: true, logs: true}` | yes | Which signals are sent |
+| `telemetry.otlp.includeContent` | `false` | yes | Also export content attributes (prompts, completions, tool arguments and results, error and log messages); off, they are removed before export. The page asks before turning it on |
+| `privacy.crashReports` | `false` | yes | Send crash reports to the endpoint below (FR-121, `docs/16` §1.2). A crash always writes a local report you can preview, send or delete; nothing leaves the machine while this is off |
+| `privacy.crashReportEndpoint` | `''` | yes | Where crash reports go: https, or http only to this machine; no credentials, query or fragment. Empty: nowhere |
+| `retention.threadsDays` | `null` | yes | Delete chats untouched for this many days (pinned chats kept); a deleted chat can be recovered for 30 days, then it is purged. 1 to 36,500; null keeps every chat (FR-105) |
+| `retention.runsDays` | `null` | yes | Purge Work runs that ended this many days ago, with their thread, plan and steps (runs in pinned threads kept) |
+| `retention.auditDays` | `null` | yes | Prune audit entries older than this many days, never fewer than 365; the chain stays verifiable from the audit anchor (`docs/12` §9.4) |
+| `retention.artifactsDays` | `null` | yes | Delete artifacts not changed for this many days, with their versions and files (artifacts in pinned chats kept) |
+| `retention.tracesDays` | `null` | yes | Prune activity history older than this: the stored event log, agent browser traces, network checks and notification deliveries |
+| `team.removedMemberPurgeDays` | `30` | yes | Days a removed member's data is kept before it is purged, so the owner can export it first (0 to 3,650; 0 keeps it until the owner purges it) (`docs/13` §7) |
+| `appearance.pet` (M8 values) | `off` | no | Also `market:<id>`: a pet installed from the marketplace (its reverse-DNS id) (§2.3) |
+| `appearance.customTheme` | `null` | no | The saved theme in use: the id of a theme in `appearance.customThemes`, applied token for token over its base; choosing a base theme, accent or color by hand clears it, and an id no longer saved falls back to the base theme (§2.2, FR-011) |
+| `appearance.locale` | `system` | no | The interface language (FR-016): `system` (the first of the device's languages Nova has, else English), `en`, `ar` (partly translated; English where a translation is missing), and for testing `en-XA` and `ar-XB`. Each person's own (members set theirs through `/api/v1/team/me/settings`); the desktop app follows it while signed in (§2.4) |
+| `sites.remoteTargets` | `true` | yes | Let the owner publish sites to remote hosting targets (WebDAV) besides the Hub folder and a zip (FR-037); uploads pass the egress policy. Off, adding, checking, planning and publishing to targets are refused (`remote_targets_off`); taking a site down from one still works. Managed policy can only turn it off |
+
 ### 1.2 Settings UI
 
 - Grouped left nav; search across all settings; each control has a label, description, and
@@ -243,6 +289,53 @@ entry of its own for the change.
 - Changes apply immediately; a "Revert" affordance for the current session.
 - Export/import settings as JSON (secrets excluded).
 - A "Reset section" action; "Reset all" requires typed confirmation.
+
+### 1.3 Precedence with managed policy (M8)
+
+*As built in M8 (ADR-097 D4; `packages/shared/src/settings.ts` `resolveSetting`,
+`packages/core/src/managed`).* A key resolves from the first layer that holds a valid value:
+**managed policy** (locked) → **user project** (only keys that are not security-relevant) →
+**user global** → **built-in default**. Environment variables configure the process (ports, the
+data folder, the test-only policy file) and never override a setting. The managed layer is built
+from the policy sources in force (the remote policy, the OS-protected file and, in tests only, a
+layered test file; `docs/12` §10):
+
+- **Tighten only.** For a security-relevant key the managed value is the tighter of the policy's
+  and the user's own: allow-lists intersect, deny-lists merge, a disabling switch wins, a cap takes
+  the smaller value (`retention.*` days: null is the loosest), and a few keys are pinned to the
+  policy's value (`review.model`, `privacy.crashReportEndpoint` (`''` forbids sending anywhere),
+  `team.removedMemberPurgeDays` (neither direction is safer for every organization, so the
+  administrator fixes the number), and `plugins.trustedPublishers` when unverified installs are
+  forbidden). `apps.openRegistration` and `sites.remoteTargets` can only be turned off. A policy
+  value looser than the default is ignored and reported as `loosens`; a security key Nova knows no
+  tightening direction for (addresses, paths, tokens: `relay.url`, the OTLP endpoint and headers,
+  `sites.publishRoot`, …) is ignored and reported as `unordered`. **Every security setting is
+  decided**: `packages/core/test/managed-rules.test.ts` fails when a security setting has neither a
+  rule in `SECURITY_RULES` nor a place on its list of keys with no safe direction, so a new one
+  cannot slip through unlocked. Keys that are not security-relevant take the policy's value; when
+  two sources set one, the remote policy wins.
+- **The egress allow list is a ceiling** (not a locked value). A policy's egress allow list
+  (`restrict.egress.allow`, or `network.egressAllow` under `settings`, which joins its source's
+  restriction) bounds the hosts agents may reach: while the owner's own `network.egressAllow` is
+  unset or empty, the policy's hosts apply; otherwise only the owner's hosts that every policy list
+  covers (wildcards count, so `api.example.com` is within `*.example.com`). The owner's list stays
+  editable, but the settings route refuses hosts outside the ceiling. The result applies at the
+  gate (a network call outside it is refused as `managed`, not asked about), in the browser's site
+  decisions and in the egress proxy, where scope grants, profile hosts and external agents' own
+  hosts are kept within it too. `GET /api/v1/egress` returns the hosts in force, and
+  `GET /api/v1/managed` an `egress` section `{ceilings, own, effective, note}` whose note says when
+  none of the owner's hosts is allowed or which are outside the policy. Deny lists still add up.
+- **Implied settings.** Each `restrict` part also locks the settings it implies: `code.allowBypass`
+  off when Bypass is denied, the `tools.approvalPolicy` ceiling, `network.egressMode` and
+  `network.egressDeny` and `cloud.runner.unrestrictedNetwork` off for any egress restriction, `telemetry.otlp.enabled` off,
+  `routing.allowCloud` off, `code.ssh.enabled` off, `apps.enabled` and `mcpServer.enabled` off,
+  `market.allowSideload` off and `plugins.trustedPublishers` pinned when unverified installs are
+  forbidden, and the folder rules over `tools.roots`.
+- **Locked everywhere.** Every key the policy touches is locked: the settings route refuses a
+  write (`policy_denied` `{reason: managed}`) and every view shows "Managed by your organization"
+  with the source. `managed.*` keys are never user-writable, and policy-restricted values of
+  `code.permissionMode`, `code.folderModes`, `runs.autonomy`, `agents.autonomy` and
+  `tools.approvalPolicy` are refused too.
 
 ## 2. Theming (FR-010/011)
 
@@ -286,10 +379,43 @@ entry of its own for the change.
 - *As shipped in M4* (ADR-091): Settings → Appearance exports the current look as a theme file or
   a `nova://theme?data=` link, and imports a file or pasted text. An import is checked against
   the schema; low contrast gives a warning but does not block saving. Saved themes go to
-  `appearance.customThemes`. **Use** sets the saved theme's base theme plus its background,
-  text, accent and fonts where they differ from the base, and derives the other colors, so a
-  custom palette is not yet applied token for token; a setting that applies a saved theme
-  fully (`appearance.customTheme`) comes later.
+  `appearance.customThemes`. In M4 **Use** set the saved theme's base theme plus its
+  background, text, accent and fonts and derived the other colors; M8 replaced that with the
+  token-for-token setting below.
+- *As of M8* (ADR-097) themes also come from the Marketplace and from extensions. A theme item
+  installed from a catalog is checked against the theme schema, each token and font value must
+  be a plain CSS value (letters, digits, spaces and `#%.,'"()+-`, at most 200 characters), and it
+  is added to `appearance.customThemes` (still at most 50). Themes a running extension registers
+  (`nova.themes.register`) pass the same checks and are offered in Appearance → Themes under
+  "From your extensions" (**Save to your themes**, **Save and use**); nothing an extension offers
+  is applied until the user picks it, and no extension writes a setting.
+- *As of M8, a saved theme in full* (FR-011). `appearance.customTheme` holds the id of a theme in
+  `appearance.customThemes`, or `null` (the default). While it names a saved theme, that theme
+  replaces `appearance.theme`: every token it sets is applied over its base (the built-in it
+  `extends`, else its variant's; a `system` theme follows the device's light or dark), and
+  tokens it does not set come from that base. A theme may set the color roles (`docs/04` §4.1,
+  as hex colors, which Nova needs to check contrast), the radii (`--u-radius-sm` to
+  `--u-radius-xl`) and the two fonts; every value must also pass the marketplace's and the SDK's
+  plain-value rule (`SAFE_THEME_VALUE` in `@nova/shared`). Other tokens (spacing, type sizes,
+  motion, layering) are ignored, so a theme cannot undo the text size, reduced motion or the
+  layout. The accent, background and text overrides, and the user's own fonts, still go on top.
+  - **Use** (Appearance → Themes → Your themes, and **Save and use**) sets the base theme to the
+    theme's base, clears the accent, background and text overrides and the fonts the theme sets,
+    then sets `appearance.customTheme`; keys managed policy holds are left alone ("Using <theme>,
+    except settings your organization manages."). When the theme's body text is below 4.5:1
+    against its background, Use first asks "Use <theme>?" with the ratio; **Use anyway** goes on
+    and nothing is blocked (an import's preview already shows its contrast, so **Save and use**
+    there does not ask again).
+  - Appearance says which saved theme is in use, with **Stop using <theme>**, and marks it
+    "In use" in Your themes. Choosing a base theme, an accent, a background or a text color by
+    hand (including the Toggle theme command) stops using it.
+  - Removing the theme in use clears the setting and sets its base theme. An id no longer saved
+    (a theme removed in the Marketplace, or on another device) is ignored: the base theme is
+    used and Appearance says so.
+  - It is a plain setting: managed policy can lock it (Use is then disabled and shows "Managed
+    by your organization"), a project or a member can set their own, and export and import carry
+    it with the other settings. The shell applies the look (`useApplyAppearance`); first paint
+    still uses the cached base theme until settings load.
 - Themes are validated against the token schema; unknown tokens are ignored, missing tokens
   fall back to the active base theme.
 - **No hard-coded colors** in components; a lint rule enforces token usage.
@@ -300,6 +426,29 @@ entry of its own for the change.
   working, success, error, waiting.
 - Pets are optional, non-blocking, respect reduced-motion, and can be muted/positioned.
 - The app ships one original default pet; the marketplace can provide more (community).
+- *As of M8* (ADR-097) a pet item is a folder with `pet.json` (at most 64 KB) and its frames
+  (PNG, APNG or WebP, at most 1 MB each and 8 MB in all), installed to
+  `<dataDir>/market/pets/<id>` and listed by `GET /api/v1/market/pets`; the companion fetches only
+  the frames `pet.json` lists (`GET /api/v1/market/pets/:id/files/*`). Choosing it sets
+  `appearance.pet` to `market:<id>`; reduced motion and "Keep still" hold it on one frame, and
+  removing the pet in use turns the companion off.
+
+### 2.4 Language (FR-016, M8)
+
+*As built in M8 (ADR-097 D9; `packages/i18n`, `apps/web/src/i18n`).* Settings → Appearance →
+**Language** (`appearance.locale`): **System** (the first of the device's languages Nova has, else
+English), or a language by its own name: **English**, or **العربية (partly translated)**, which
+shows English where a translation is missing. Under **For testing**: `en-XA` (accented, about a
+third longer, bracketed, so text that was never extracted stands out) and `ar-XB` (right to left,
+every string mirrored). The change applies at once: the shell remounts in the new language and
+`<html lang dir>` follows. Arabic and `ar-XB` lay the app out right to left (`docs/04` §4.5).
+Dates, numbers, sizes, durations, relative times and lists are formatted in the active locale. Text
+the Hub writes (error, notification and status messages, permission lines, diagnostics) stays
+English in M8. The setting is each person's own (members keep theirs). The desktop app uses the
+same setting while signed in to the Hub (re-read on sign-in and on `settings.changed`); signed out,
+on `system`, without a Hub or when the Hub refuses (403), it uses the operating system's languages,
+the first one Nova supports. The look, including a saved theme, is cached in the browser and applied
+before settings load, so the first paint matches.
 
 ## 3. Keybindings (FR-004)
 
@@ -353,6 +502,69 @@ entry of its own for the change.
   declared network permissions.
 - `nova pack` produces a signed `.novax` bundle.
 
+### 4.4 As shipped in M8
+
+*ADR-097 D1-D3; `packages/core/src/sdk`, `apps/hub/src/sdk.ts`, `packages/sdk`, `packages/cli`;
+routes in `contracts/hub-api.md`, "Extensions"; the author's guide is `docs/26` §9.*
+
+- **What an extension is.** A plugin folder (`docs/08` §3.1) plus `.nova-plugin/extension.json`
+  ([`extension-manifest.json`](../contracts/schemas/extension-manifest.json)): `api: 1`, the entry
+  ES module and `permissions` (`network`, `fs`, `secrets`, `commands`, `panels` with their HTML file
+  and CSP domains, `tools` with their action class and default, `actionDefaults`, `hooks`,
+  `events`). Its id is the plugin id; its tools are `ext:<id>/<name>`. It ships as a signed `.novax`
+  (§5 of this page and `docs/26` §3).
+- **The API as built** (`nova` in the entry module; `@nova/sdk` has the types):
+  `nova.commands.register({id, title, run})`, `nova.panels.register({id, …})` (the panel must be
+  declared; its resource and entry point come from the manifest), `nova.tools.register({name,
+  title, description, inputSchema, outputSchema?, annotations?, handler})`,
+  `nova.hooks.register({id, handler})`, `nova.themes.register(theme)`,
+  `nova.keybindings.register({command, key, when?})` (the command must be declared),
+  `nova.menus.register({where: thread|message|file|composer|sidebar, items})`,
+  `nova.status.addItem({id, text, onClick?})` (returns `update(text)`), `nova.events.on(name, fn)`,
+  `nova.net.fetch(url, init)`, `nova.fs.read|write|list|remove(path)`, `nova.secrets.get(name)`
+  and `nova.log(...)`. Each registration returns `{ready, dispose}`; `ready` rejects when the Hub
+  refuses it. There is no storage API: an extension keeps files in `${extensionData}`. Limits: 10
+  themes, 50 keybindings, 20 menus of 20 items, 5 status items, 50 event listeners, 32 calls
+  waiting, 8 fetches in flight and 16 MiB being received at once (more is refused at once with
+  `too_many_requests` or `fetch_budget`, never queued), 5 MiB per response or file, 64 KiB of tool
+  schemas.
+- **Where it runs.** QuickJS in a worker thread per account and extension (64 MiB, 2 s of CPU per
+  call into the engine, at most 3 restarts in 10 minutes); no Node, files, network or host objects;
+  everything goes to the Hub over a message port and through the policy engine (`docs/12` §7.5).
+  Starting checks that the installed files still match the recorded digest; otherwise the
+  extension does not start, shows `error` and is audited `extension.tampered` until reinstalled.
+  A bundle holding `.git`, `.env` files or a PEM private key is refused.
+- **Permissions are enforced.** Undeclared access is denied, audited as `extension.access.denied`,
+  the extension is turned off and the owner notified. `nova.net.fetch` reaches only declared hosts,
+  public addresses, within the egress ceiling (the owner's `network.egressMode` and deny list and
+  managed policy's egress; refusals there are audited `extension.egress.denied` but do not turn the
+  extension off). A filesystem scope inside or containing the Hub's data folder is refused at
+  install. Secrets live in the vault at `secret://extension/<account>/<id>/<name>`; the owner sets
+  them in Settings → Extensions, and every read is audited.
+- **Tools and hooks.** Extension tools have source `plugin`, so plugin scopes, agent plugin
+  connections and approval defaults apply; a tool declared with an action other than `read` is never
+  read-only. SDK hooks are stored as hooks with an `mcp_tool` handler on `ext:<id>/hooks/<hookId>`
+  and trusted by a hash over their definition and the bundle digest (`docs/08` §4.1); they never
+  answer asks and fail closed while the extension is not running.
+- **Command results** show in a toast: a string as is, an object's `message` or `text` field, a
+  flat object as `key: value` on one line, anything longer behind **Show the result** (`docs/26`
+  §9.3). A stopped extension's card says why (managed policy with its source, an unreadable policy,
+  or the SDK switch off).
+- **Themes and keybindings** are offers (`GET /api/v1/extensions/contributions`): Appearance and
+  Keyboard show them, and nothing is applied until the user picks one (§2.2, `docs/04` §2.14).
+- **Signatures.** A `.novax` signed by a key in `plugins.trustedPublishers` is Verified; anything
+  else needs the sideload confirmation and stays Unverified; a bundle whose signature does not match
+  its files is refused. An update by another publisher must be accepted and clears the extension's
+  secrets and data. Each install keeps its signed bytes, so a failed update rolls back to a
+  re-verified copy.
+- **Switches.** `sdk.enabled` (default on) runs or stops every extension; each extension has its
+  own on/off; managed policy can deny extensions by id, forbid unverified ones or turn the SDK off
+  (a refused extension stays installed, shows `stopped` with the reason, and starts again when the
+  policy allows it).
+- **Not built**: an npm package (`@nova/sdk` is a workspace package), a separate template
+  repository (`nova init` copies the SDK's sample from a checkout), extension-to-extension calls,
+  and paid extensions.
+
 ## 5. Marketplace (FR-049)
 
 - Tabs: Plugins, Skills, Themes, Pets, MCP servers (registry entries and MCP bundles, FR-199).
@@ -371,6 +583,61 @@ entry of its own for the change.
   works offline.
 - No telemetry about installs leaves the device unless the user opts in.
 
+*As shipped in M8* (ADR-097; `packages/core/src/market`, `apps/hub/src/market.ts`,
+`apps/hub/src/mcp-market.ts`, `apps/web/src/market`; routes in `contracts/hub-api.md`,
+"Marketplace"). The Marketplace is a sidebar page (`docs/04` §2.14) and the owner's alone.
+
+- **Sources.** The built-in sample catalog (`nova-sample`, `examples/catalog`, read from disk with
+  its key pinned in code, so it works offline) and the owner's `plugins.catalogs`: a folder on the
+  Hub, a Git repository (read at the pinned `commit`, fetched with hooks off and checked to be that
+  commit; without a pin, a shallow clone of the ref) or an https location (the index and its
+  artifacts on the same host, at most 3 redirects on that host). Entries may also point to a
+  folder of another Git repository at a commit. The index format is
+  [`catalog-index.json`](../contracts/schemas/catalog-index.json); caps: index 1 MiB, signature
+  16 KiB, artifact 50 MiB, screenshot 2 MiB.
+- **Catalog signatures.** Every index may carry `<index>.sig`
+  ([`catalog-signature.json`](../contracts/schemas/catalog-signature.json)): Ed25519 over
+  `"nova-catalog-v1\n"` + the SHA-256 of the index bytes. A catalog that pins a key verifies only
+  with it, and a missing signature is then a downgrade; otherwise a key in
+  `plugins.trustedPublishers` verifies it. An **invalid** signature (damaged, not matching, the
+  wrong key, or missing under a pin) refuses the whole catalog: nothing is listed or installed,
+  not even as a sideload (`catalog_signature_invalid`, audited `market.refuse`). An unsigned or
+  untrusted catalog lists its items as Unverified.
+- **Verified or Unverified.** An item is Verified when its catalog is verified, its artifact
+  matches the listed checksum (`sha256` for a file, `digest` for a folder) and, for a `.novax`,
+  its bundle is signed by a key in `plugins.trustedPublishers` (the same rule as Settings →
+  Extensions, so both give one verdict). An extension shipped as a folder or zip is never
+  Verified (it runs code). A registry entry and an `.mcpb` are verified by the catalog and the
+  checksum. Anything else is Unverified, with its reasons (`catalog_unsigned`,
+  `catalog_untrusted`, `no_checksum`, `checksum_mismatch`, `bundle_unsigned`,
+  `bundle_untrusted`), and installs only through the sideload confirmation while
+  `market.allowSideload` is on and managed policy allows unverified installs. A tampered bundle
+  (`bundle_invalid`) is refused outright.
+- **Kinds.** Plugins (folders, zips and `.novax` bundles; extensions install through the
+  extension installer, §4), skills (as `skill:import:<id>`), themes (into
+  `appearance.customThemes`, §2.2), pets (§2.3) and MCP servers (a registry entry becomes a remote
+  server; an `.mcpb` installs through the bundle installer with the marketplace's verdict). The
+  kinds `market.allowedKinds` leaves out are refused (`kind_not_allowed`).
+- **Install, update, remove.** Preview first (held 30 minutes); install needs the preview id, the
+  sideload confirmation for an Unverified item and, on an update that adds or changes a
+  permission, the permission diff's hash echoed back (`acceptPermissions`); a diff that only
+  removes permissions needs no acceptance. A newer version is an update, and so is the same
+  version from the same catalog with a different checksum (a moved Git ref, a republished item).
+  Installs run one at a time; a failed install or update puts back what it replaced (for an
+  extension, its kept signed bundle, re-verified), audited `market.install.failed` with
+  `rolledBack`. An MCP update keeps the server's settings unless new ones are given. An extension
+  update signed by another publisher, or an unsigned one replacing a signed one, shows
+  `publisherChange` and needs `acceptPublisherChange: true` (else `publisher_change_confirmation_required`
+  before anything changes); accepting clears the extension's secrets and data. Removing the theme in
+  use clears `appearance.customTheme` first.
+- **Ratings** (1 to 5 stars and optional notes) stay on the Hub; nothing is sent anywhere
+  (`shared: false`).
+- **Names.** A publisher is named only for a trusted or pinned key (else its fingerprint, with a
+  warning that the catalog's name for it is not checked), and an item with no author of its own shows
+  none.
+- **Not built**: a hosted remote catalog service (only the client), paid extensions, install
+  counts, shared ratings; the sample catalog has no pet or MCP item.
+
 ## 6. Profile & usage (FR-113/114)
 
 - Profile: display name, username, avatar, optional public profile card (sharing is opt-in).
@@ -384,7 +651,27 @@ the avatar, then usage for the last 7, 30, 90 or 365 days: input, output and cac
 estimated cost and turns; day bars for tokens and cost (each with a table view); active days;
 the streak (consecutive UTC days with use, broken only after a whole day without use); the
 longest task, linking to its chat; and tables by model and by project. Days are UTC days. The
-public profile card, spend caps, entitlements and limits, and "clear usage data" come later.
+public profile card came in M7 (`docs/13` §7).
+
+*As shipped in M8* (ADR-097; `packages/core/src/profile/spend.ts`; routes in
+`contracts/hub-api.md`, "Usage"; screens in `docs/04` §2.16):
+
+- **Spend caps** (FR-116) are per account and provider kind (members set their own): an amount in US
+  dollars per UTC day or month, a warning share (5 to 99 %, default 80 %) and a hard stop (default
+  on; off, the cap only warns). Spend is the period's `usage_event` cost. Each model call holds a
+  reservation of its likely cost (the provider's recent average, at least 1 % of the cap) until its
+  stream ends, so concurrent calls overshoot a hard stop by at most one call. A capped target is
+  dropped from the route and a fallback on another provider still runs; when nothing is left the
+  reply stops with `over_budget` (`{reason: spend_cap, provider}`, "Raise the cap in Settings →
+  Profile & usage"). Each alert (`spend.cap.warning`, `spend.cap.reached`) fires once per period,
+  with a notification linking to the cap. Image generation honours caps and records its usage.
+  Compute nodes have no cap.
+- **Clear usage data** deletes usage events (except those of runs and goals still active) and
+  carries each cap's spend for the period over, so it never resets a cap.
+- **Entitlements and limits** (FR-115): Settings → Accounts shows, per provider account, what the
+  provider reported (plan, limit, used, reset time), the last limit error it reported, this month's
+  spend and its cap. Nova shows what providers report and never invents limits.
+- **Not built**: per-project caps, an account-wide cap across providers, and caps on compute nodes.
 
 ## 7. New settings sections (added)
 
@@ -396,4 +683,4 @@ public profile card, spend caps, entitlements and limits, and "clear usage data"
 | **Automations** | list, enable/disable, dry-run, logs, versions, default approval rules |
 | **Smart Home** | integrations (HA/MQTT/vendor), areas/rooms, scenes, allowed entity classes |
 | **Learning** | memory review, skill proposals, optimization proposals, tuning bounds, self-modification guardrail (on by default), kill switch |
-| **Catalog** | catalog URLs (public + tailnet + local + Git-hosted), trusted publishers, allowed types, sideloading (explicit confirmation; items labelled Unverified) |
+| **Catalog** | catalog URLs (public + tailnet + local + Git-hosted), trusted publishers, allowed types, sideloading (explicit confirmation; items labelled Unverified). *As shipped in M8*: the Marketplace's **Catalogs** tab (`docs/04` §2.14): catalogs with a pinned publisher key and commit (`plugins.catalogs`), trusted publishers (`plugins.trustedPublishers`), and the install rules (`market.allowSideload`, `market.allowedKinds`) |

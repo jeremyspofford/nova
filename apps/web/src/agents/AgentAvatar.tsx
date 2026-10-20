@@ -2,11 +2,25 @@
 // picked here (PNG, JPEG or WebP up to 2 MB, as the account's) and previewed from the file the
 // user chose before it is sent. The image only ever comes from the Hub's own route or that file.
 import { useRef, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { AgentView } from '@nova/shared';
 import { Button, useToast } from '@nova/ui';
-import { formatBytes, readAsBase64 } from '../chat/attachments.ts';
+import { readAsBase64 } from '../chat/attachments.ts';
 import { useAgentsApi } from './api.ts';
 import { initial } from './format.ts';
+
+export const AVATAR_TEXT = defineMessages('agents.avatar', {
+  wrongType: 'Choose a PNG, JPEG or WebP image.',
+  tooBig: 'That image is {size}; the limit is {limit}.',
+  unreadable: 'Could not read that image.',
+  preview: 'New avatar preview',
+  change: 'Change avatar',
+  upload: 'Upload avatar',
+  remove: 'Remove avatar',
+  keep: 'Keep the current avatar',
+  input: 'Avatar image',
+  hint: 'PNG, JPEG or WebP, up to {limit}.',
+});
 
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 export const AVATAR_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
@@ -65,18 +79,21 @@ export function AvatarPicker({
 
   const pick = async (f: File) => {
     if (!(AVATAR_TYPES as readonly string[]).includes(f.type)) {
-      toast.show('Choose a PNG, JPEG or WebP image.', { tone: 'error' });
+      toast.show(AVATAR_TEXT.wrongType, { tone: 'error' });
       return;
     }
     if (f.size > AVATAR_MAX_BYTES) {
-      toast.show(`That image is ${formatBytes(f.size)}; the limit is 2 MB.`, { tone: 'error' });
+      toast.show(
+        AVATAR_TEXT.tooBig({ size: fmt.bytes(f.size), limit: fmt.bytes(AVATAR_MAX_BYTES) }),
+        { tone: 'error' },
+      );
       return;
     }
     setReading(true);
     try {
       onChange({ mime: f.type as AvatarMime, data: await readAsBase64(f) });
     } catch {
-      toast.show('Could not read that image.', { tone: 'error' });
+      toast.show(AVATAR_TEXT.unreadable, { tone: 'error' });
     } finally {
       setReading(false);
     }
@@ -91,7 +108,7 @@ export function AvatarPicker({
           className="agent-avatar"
           data-size="lg"
           src={`data:${value.mime};base64,${value.data}`}
-          alt="New avatar preview"
+          alt={AVATAR_TEXT.preview}
         />
       ) : showsSaved && current ? (
         <AgentAvatar agent={current} size="lg" />
@@ -102,7 +119,7 @@ export function AvatarPicker({
       )}
       <div className="ws-toolbar">
         <Button onClick={() => file.current?.click()} disabled={disabled || reading}>
-          {has ? 'Change avatar' : 'Upload avatar'}
+          {has ? AVATAR_TEXT.change : AVATAR_TEXT.upload}
         </Button>
         {has ? (
           <Button
@@ -110,12 +127,12 @@ export function AvatarPicker({
             disabled={disabled || reading}
             onClick={() => onChange(current?.hasAvatar ? null : undefined)}
           >
-            Remove avatar
+            {AVATAR_TEXT.remove}
           </Button>
         ) : null}
         {value !== undefined && current?.hasAvatar ? (
           <Button variant="ghost" disabled={disabled} onClick={() => onChange(undefined)}>
-            Keep the current avatar
+            {AVATAR_TEXT.keep}
           </Button>
         ) : null}
       </div>
@@ -124,14 +141,16 @@ export function AvatarPicker({
         type="file"
         accept={AVATAR_TYPES.join(',')}
         hidden
-        aria-label="Avatar image"
+        aria-label={AVATAR_TEXT.input}
         onChange={(e) => {
           const f = e.target.files?.[0];
           e.target.value = '';
           if (f) void pick(f);
         }}
       />
-      <span className="nv-field-hint">PNG, JPEG or WebP, up to 2 MB.</span>
+      <span className="nv-field-hint">
+        {AVATAR_TEXT.hint({ limit: fmt.bytes(AVATAR_MAX_BYTES) })}
+      </span>
     </div>
   );
 }

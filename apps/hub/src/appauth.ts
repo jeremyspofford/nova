@@ -12,7 +12,8 @@
 //
 // App tokens (`nva_`) authenticate through AuthService once this area's route gate is installed:
 // the gate admits an app token only to the app-scoped routes (APP_ROUTE_SCOPES) its scopes name,
-// only as `Authorization: Bearer`, and audits every call (`app.call`). Everything else, owner
+// only as `Authorization: Bearer`, and audits the calls (one `app.calls` entry per app per hour,
+// each refusal on its own). Everything else, owner
 // administration included, is refused (403 `policy_denied`). Managed policy (`managed.restrict`,
 // D4 `restrict.apps`, checked first so the refusal says `{reason: managed}`) and `apps.enabled`
 // can turn all of it off; tokens stop at once.

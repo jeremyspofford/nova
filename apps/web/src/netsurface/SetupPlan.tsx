@@ -2,6 +2,7 @@
 // checked with the Hub's own schema before they are sent; auth, setup and API keys are write-only
 // fields (sent once, kept in the Hub's vault, never shown again). Planning changes nothing.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import {
   MESH_PROVIDERS,
   networkSetupOptionsSchema,
@@ -13,7 +14,112 @@ import { Button, RadioGroup, SelectField, Spinner, TextField, useToast } from '@
 import { SwitchField } from '../settings/controls.tsx';
 import { useAnnounce } from '../services.tsx';
 import { useNetworkSurfaceApi, type NetworkSetupOptionsBody } from './api.ts';
-import { PROVIDER_INFO, errorFields, netErrorMessage, providerLabel, reasonOf } from './format.ts';
+import {
+  errorFields,
+  netErrorMessage,
+  providerInfo,
+  providerLabel,
+  reasonOf,
+  valuesText,
+} from './format.ts';
+
+const S = defineMessages('netsurface.plan', {
+  cert: {
+    auto: 'Mesh certificates when the mesh has them, else the Hub local CA',
+    mesh: 'Mesh certificates',
+    localCa: 'The Hub local CA',
+    none: 'No certificate',
+  },
+  foundConnected: 'Found on this computer, connected.',
+  foundNotConnected: 'Found on this computer, not connected.',
+  wgAddressRequired: 'Enter the Hub’s address on the WireGuard network.',
+  planReady: '{n, plural, one {Plan ready: # step.} other {Plan ready: # steps.}}',
+  providerReady: '{provider} plan ready.',
+  planFailed: 'Could not make a plan.',
+  title: 'Set up a mesh',
+  mesh: 'Mesh',
+  providerOption: '{provider}: {tag}',
+  meshHint:
+    'On iPhone and iPad, a self-hosted mesh works only with NetBird; otherwise those reach the Hub through the Relay.',
+  options: '{provider} options',
+  headscale: {
+    url: 'Headscale server URL',
+    urlHint: 'Where your Headscale answers, for example {url}.',
+    authKey: 'Pre-auth key (optional, write-only)',
+    authKeyHint:
+      "Leave empty and Nova makes a one-use key on the server. A key you enter goes to the Hub's vault and is never shown again.",
+    user: 'Headscale user',
+    userHint: "The user the Hub's node belongs to. Default: {user}.",
+    acl: 'Write access rules for Nova',
+    aclHelp: "Let Nova devices reach the Hub's tag. Existing rules are kept.",
+  },
+  tailscale: {
+    authKey: 'Auth key (write-only)',
+    authKeyHint:
+      "Make one in your Tailscale admin console. It goes to the Hub's vault and is never shown again.",
+    controlUrl: 'Control server URL (optional)',
+    controlUrlHint: "Leave empty for Tailscale's own service.",
+  },
+  netbird: {
+    url: 'Management URL (optional)',
+    urlHint:
+      "Your own NetBird management service, for example {url}. Leave empty for NetBird's hosted service.",
+    setupKey: 'Setup key (write-only)',
+    setupKeyHint: "It goes to the Hub's vault and is never shown again.",
+  },
+  hostname: 'Name on the mesh',
+  defaultIs: 'Default: {value}.',
+  certs: 'Certificates',
+  more: 'More options',
+  tags: 'Tags',
+  tagsHint: 'Separated by commas, for example {tag} (the default).',
+  routes: 'Subnet routes',
+  routesHint: 'Networks the Hub shares with the mesh, separated by commas.',
+  routesHintLan:
+    "Networks the Hub shares with the mesh, separated by commas. This computer's LAN: {lan}.",
+  magicDns: 'Mesh names (MagicDNS)',
+  magicDnsHelp: 'Reach devices on the mesh by name.',
+  exitNode: 'Offer the Hub as an exit node',
+  exitNodeHelp: 'Other devices may send all their internet traffic through the Hub.',
+  installClient: 'Install the mesh client if it is missing',
+  replace: 'Replace an existing login',
+  replaceHelp:
+    'When the Hub is already signed in to another control server. The old login is not restored on rollback.',
+  firewall: "Open the Hub's port in the firewall",
+  firewallHelp: 'Adds allow rules in ufw when it is present. Nothing is denied or removed.',
+  relay: 'Relay to enroll with (optional)',
+  relayHint: 'A {scheme} address, as a fallback path.',
+  hsRemote: 'Remote Headscale address (optional)',
+  hsRemoteHint: 'host:port of a Headscale on another computer. Leave empty when it runs here.',
+  hsApiKey: 'Remote Headscale API key (write-only)',
+  hsApiKeyHint: "Needed with a remote address. It goes to the Hub's vault.",
+  changesNothing:
+    'Making a plan changes nothing. You apply each step yourself and can roll it back.',
+  makePlan: 'Make a plan',
+  wg: {
+    address: "The Hub's address on the WireGuard network",
+    addressHint: 'With its prefix, for example {example}.',
+    iface: 'Interface',
+    port: 'Listen port',
+    portHint: 'UDP, 1024 to 65535.',
+    dns: 'DNS servers (optional)',
+    dnsHint: 'Separated by commas.',
+    peers: 'Peers',
+    peersHelp:
+      "Each device that joins: its public key and the addresses it may use. Nova makes the Hub's own key and shows its public half after planning.",
+    noPeers: 'No peers yet.',
+    peer: 'Peer {n}',
+    name: 'Name',
+    publicKey: 'Public key',
+    allowedIps: 'Allowed addresses',
+    allowedIpsHint: 'For example {example}.',
+    endpoint: 'Endpoint (optional)',
+    endpointHint: 'host:port',
+    removePeer: 'Remove peer {n}',
+    remove: 'Remove',
+    addPeer: 'Add a peer',
+  },
+});
 
 interface Peer {
   key: number;
@@ -144,11 +250,12 @@ const REASON_FIELD: Record<string, string> = {
   mesh_certs_unavailable: 'certs',
 };
 
-const CERT_OPTIONS = [
-  { value: 'auto', label: 'Mesh certificates when the mesh has them, else the Hub local CA' },
-  { value: 'mesh', label: 'Mesh certificates' },
-  { value: 'local-ca', label: 'The Hub local CA' },
-  { value: 'none', label: 'No certificate' },
+/** The certificate choices, in the active locale. */
+const certOptions = () => [
+  { value: 'auto', label: S.cert.auto },
+  { value: 'mesh', label: S.cert.mesh },
+  { value: 'local-ca', label: S.cert.localCa },
+  { value: 'none', label: S.cert.none },
 ];
 
 export function SetupPlan({
@@ -176,14 +283,8 @@ export function SetupPlan({
   const found = (p: MeshProvider) => detection?.meshes.find((m) => m.provider === p) ?? null;
   const describe = (p: MeshProvider) => {
     const m = found(p);
-    const state = !m
-      ? ''
-      : !m.installed
-        ? ''
-        : m.loggedIn
-          ? ' Found on this computer, connected.'
-          : ' Found on this computer, not connected.';
-    return `${PROVIDER_INFO[p]?.help ?? ''}${state}`;
+    const state = !m?.installed ? '' : m.loggedIn ? S.foundConnected : S.foundNotConnected;
+    return [providerInfo(p)?.help ?? '', state].filter(Boolean).join(' ');
   };
 
   const plan = async () => {
@@ -191,7 +292,7 @@ export function SetupPlan({
     const options = optionsOf(provider, f);
     const local = checkOptions(options);
     if (provider === 'wireguard' && !f.wgAddress.trim())
-      local['wireguard.address'] = 'Enter the Hub’s address on the WireGuard network.';
+      local['wireguard.address'] = S.wgAddressRequired;
     setErrors(local);
     setFailure(null);
     if (Object.keys(local).length) return;
@@ -200,8 +301,8 @@ export function SetupPlan({
       const { run } = await api.planNetworkSetup(provider, options);
       // Secrets go to the Hub once; nothing keeps them here.
       set({ authKey: '', hsApiKey: '' });
-      toast.show(`Plan ready: ${run.steps.length} steps.`, { tone: 'success' });
-      announce(`${providerLabel(provider)} plan ready.`);
+      toast.show(S.planReady({ n: run.steps.length }), { tone: 'success' });
+      announce(S.providerReady({ provider: providerLabel(provider) }));
       onPlanned(run);
     } catch (e) {
       const fields: Record<string, string> = {};
@@ -210,7 +311,7 @@ export function SetupPlan({
       const field = reason ? REASON_FIELD[reason] : undefined;
       if (field) fields[field] = netErrorMessage(e);
       setErrors(fields);
-      setFailure(field ? null : netErrorMessage(e, 'Could not make a plan.'));
+      setFailure(field ? null : netErrorMessage(e, S.planFailed));
     } finally {
       setBusy(false);
     }
@@ -219,15 +320,15 @@ export function SetupPlan({
   const p = provider;
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>Set up a mesh</h2>
+      <h2 id={headingId}>{S.title}</h2>
       <RadioGroup
-        legend="Mesh"
+        legend={S.mesh}
         name="net-mesh-provider"
         value={provider ?? ''}
         className="net-providers"
         options={MESH_PROVIDERS.map((m) => ({
           value: m,
-          label: `${providerLabel(m)}: ${PROVIDER_INFO[m]?.tag ?? ''}`,
+          label: S.providerOption({ provider: providerLabel(m), tag: providerInfo(m)?.tag ?? '' }),
           description: describe(m),
         }))}
         onChange={(v) => {
@@ -236,13 +337,13 @@ export function SetupPlan({
           setErrors({});
           setFailure(null);
         }}
-        hint="On iPhone and iPad, a self-hosted mesh works only with NetBird; otherwise those reach the Hub through the Relay."
+        hint={S.meshHint}
       />
       {p ? (
         <form
           className="stack net-form"
           noValidate
-          aria-label={`${providerLabel(p)} options`}
+          aria-label={S.options({ provider: providerLabel(p) })}
           onSubmit={(e) => {
             e.preventDefault();
             void plan();
@@ -251,8 +352,8 @@ export function SetupPlan({
           {p === 'headscale' ? (
             <>
               <TextField
-                label="Headscale server URL"
-                hint="Where your Headscale answers, for example https://headscale.example.com."
+                label={S.headscale.url}
+                hint={S.headscale.urlHint({ url: 'https://headscale.example.com' })}
                 value={f.controlUrl}
                 inputMode="url"
                 autoComplete="off"
@@ -260,8 +361,8 @@ export function SetupPlan({
                 error={err('controlUrl')}
               />
               <TextField
-                label="Pre-auth key (optional, write-only)"
-                hint="Leave empty and Nova makes a one-use key on the server. A key you enter goes to the Hub's vault and is never shown again."
+                label={S.headscale.authKey}
+                hint={S.headscale.authKeyHint}
                 type="password"
                 autoComplete="off"
                 value={f.authKey}
@@ -269,16 +370,16 @@ export function SetupPlan({
                 error={err('authKey')}
               />
               <TextField
-                label="Headscale user"
-                hint="The user the Hub's node belongs to. Default: nova."
+                label={S.headscale.user}
+                hint={S.headscale.userHint({ user: 'nova' })}
                 value={f.hsUser}
                 autoComplete="off"
                 onChange={(e) => set({ hsUser: e.target.value })}
                 error={err('headscale.user')}
               />
               <SwitchField
-                label="Write access rules for Nova"
-                description="Let Nova devices reach the Hub's tag. Existing rules are kept."
+                label={S.headscale.acl}
+                description={S.headscale.aclHelp}
                 checked={f.hsAcl}
                 onChange={(v) => set({ hsAcl: v })}
               />
@@ -287,8 +388,8 @@ export function SetupPlan({
           {p === 'tailscale' ? (
             <>
               <TextField
-                label="Auth key (write-only)"
-                hint="Make one in your Tailscale admin console. It goes to the Hub's vault and is never shown again."
+                label={S.tailscale.authKey}
+                hint={S.tailscale.authKeyHint}
                 type="password"
                 autoComplete="off"
                 value={f.authKey}
@@ -296,8 +397,8 @@ export function SetupPlan({
                 error={err('authKey')}
               />
               <TextField
-                label="Control server URL (optional)"
-                hint="Leave empty for Tailscale's own service."
+                label={S.tailscale.controlUrl}
+                hint={S.tailscale.controlUrlHint}
                 value={f.controlUrl}
                 inputMode="url"
                 autoComplete="off"
@@ -309,8 +410,8 @@ export function SetupPlan({
           {p === 'netbird' ? (
             <>
               <TextField
-                label="Management URL (optional)"
-                hint="Your own NetBird management service, for example https://netbird.example.com. Leave empty for NetBird's hosted service."
+                label={S.netbird.url}
+                hint={S.netbird.urlHint({ url: 'https://netbird.example.com' })}
                 value={f.controlUrl}
                 inputMode="url"
                 autoComplete="off"
@@ -318,8 +419,8 @@ export function SetupPlan({
                 error={err('controlUrl')}
               />
               <TextField
-                label="Setup key (write-only)"
-                hint="It goes to the Hub's vault and is never shown again."
+                label={S.netbird.setupKey}
+                hint={S.netbird.setupKeyHint}
                 type="password"
                 autoComplete="off"
                 value={f.authKey}
@@ -331,8 +432,8 @@ export function SetupPlan({
           {p === 'wireguard' ? <WireguardFields f={f} set={set} err={err} /> : null}
           {p !== 'wireguard' ? (
             <TextField
-              label="Name on the mesh"
-              hint="Default: nova-hub."
+              label={S.hostname}
+              hint={S.defaultIs({ value: 'nova-hub' })}
               value={f.hostname}
               autoComplete="off"
               spellCheck={false}
@@ -341,19 +442,19 @@ export function SetupPlan({
             />
           ) : null}
           <SelectField
-            label="Certificates"
+            label={S.certs}
             value={f.certs}
-            options={CERT_OPTIONS}
+            options={certOptions()}
             onChange={(v) => set({ certs: v as Form['certs'] })}
             error={err('certs')}
           />
           <details className="ws-advanced">
-            <summary>More options</summary>
+            <summary>{S.more}</summary>
             <div className="stack">
               {p === 'headscale' || p === 'tailscale' ? (
                 <TextField
-                  label="Tags"
-                  hint="Separated by commas, for example tag:nova-hub (the default)."
+                  label={S.tags}
+                  hint={S.tagsHint({ tag: 'tag:nova-hub' })}
                   value={f.tags}
                   autoComplete="off"
                   spellCheck={false}
@@ -362,12 +463,12 @@ export function SetupPlan({
                 />
               ) : null}
               <TextField
-                label="Subnet routes"
-                hint={`Networks the Hub shares with the mesh, separated by commas.${
+                label={S.routes}
+                hint={
                   detection?.subnets.length
-                    ? ` This computer's LAN: ${detection.subnets.join(', ')}.`
-                    : ''
-                }`}
+                    ? S.routesHintLan({ lan: valuesText(detection.subnets) })
+                    : S.routesHint
+                }
                 value={f.advertiseRoutes}
                 autoComplete="off"
                 spellCheck={false}
@@ -377,39 +478,39 @@ export function SetupPlan({
               {p !== 'wireguard' ? (
                 <>
                   <SwitchField
-                    label="Mesh names (MagicDNS)"
-                    description="Reach devices on the mesh by name."
+                    label={S.magicDns}
+                    description={S.magicDnsHelp}
                     checked={f.magicDns}
                     onChange={(v) => set({ magicDns: v })}
                   />
                   <SwitchField
-                    label="Offer the Hub as an exit node"
-                    description="Other devices may send all their internet traffic through the Hub."
+                    label={S.exitNode}
+                    description={S.exitNodeHelp}
                     checked={f.exitNode}
                     onChange={(v) => set({ exitNode: v })}
                   />
                   <SwitchField
-                    label="Install the mesh client if it is missing"
+                    label={S.installClient}
                     checked={f.installClient}
                     onChange={(v) => set({ installClient: v })}
                   />
                   <SwitchField
-                    label="Replace an existing login"
-                    description="When the Hub is already signed in to another control server. The old login is not restored on rollback."
+                    label={S.replace}
+                    description={S.replaceHelp}
                     checked={f.replaceExisting}
                     onChange={(v) => set({ replaceExisting: v })}
                   />
                 </>
               ) : null}
               <SwitchField
-                label="Open the Hub's port in the firewall"
-                description="Adds allow rules in ufw when it is present. Nothing is denied or removed."
+                label={S.firewall}
+                description={S.firewallHelp}
                 checked={f.firewall}
                 onChange={(v) => set({ firewall: v })}
               />
               <TextField
-                label="Relay to enroll with (optional)"
-                hint="A wss:// address, as a fallback path."
+                label={S.relay}
+                hint={S.relayHint({ scheme: 'wss://' })}
                 value={f.relayUrl}
                 inputMode="url"
                 autoComplete="off"
@@ -419,16 +520,16 @@ export function SetupPlan({
               {p === 'headscale' ? (
                 <>
                   <TextField
-                    label="Remote Headscale address (optional)"
-                    hint="host:port of a Headscale on another computer. Leave empty when it runs here."
+                    label={S.hsRemote}
+                    hint={S.hsRemoteHint}
                     value={f.hsCliAddress}
                     autoComplete="off"
                     onChange={(e) => set({ hsCliAddress: e.target.value })}
                     error={err('headscale.cliAddress')}
                   />
                   <TextField
-                    label="Remote Headscale API key (write-only)"
-                    hint="Needed with a remote address. It goes to the Hub's vault."
+                    label={S.hsApiKey}
+                    hint={S.hsApiKeyHint}
                     type="password"
                     autoComplete="off"
                     value={f.hsApiKey}
@@ -444,12 +545,10 @@ export function SetupPlan({
               {failure}
             </p>
           ) : null}
-          <p className="muted ws-flush net-small">
-            Making a plan changes nothing. You apply each step yourself and can roll it back.
-          </p>
+          <p className="muted ws-flush net-small">{S.changesNothing}</p>
           <div className="row">
             <Button type="submit" variant="primary" disabled={busy}>
-              {busy ? <Spinner /> : null} Make a plan
+              {busy ? <Spinner /> : null} {S.makePlan}
             </Button>
           </div>
         </form>
@@ -472,8 +571,8 @@ function WireguardFields({
   return (
     <>
       <TextField
-        label="The Hub's address on the WireGuard network"
-        hint="With its prefix, for example 10.77.0.1/24."
+        label={S.wg.address}
+        hint={S.wg.addressHint({ example: '10.77.0.1/24' })}
         value={f.wgAddress}
         autoComplete="off"
         spellCheck={false}
@@ -482,16 +581,16 @@ function WireguardFields({
       />
       <div className="net-fields">
         <TextField
-          label="Interface"
-          hint="Default: wg-nova."
+          label={S.wg.iface}
+          hint={S.defaultIs({ value: 'wg-nova' })}
           value={f.wgInterface}
           autoComplete="off"
           onChange={(e) => set({ wgInterface: e.target.value })}
           error={err('wireguard.interface')}
         />
         <TextField
-          label="Listen port"
-          hint="UDP, 1024 to 65535."
+          label={S.wg.port}
+          hint={S.wg.portHint}
           className="ws-number"
           type="number"
           min={1024}
@@ -503,31 +602,28 @@ function WireguardFields({
         />
       </div>
       <TextField
-        label="DNS servers (optional)"
-        hint="Separated by commas."
+        label={S.wg.dns}
+        hint={S.wg.dnsHint}
         value={f.wgDns}
         autoComplete="off"
         onChange={(e) => set({ wgDns: e.target.value })}
         error={err('wireguard.dns')}
       />
       <fieldset className="net-fieldset">
-        <legend className="nv-field-label">Peers</legend>
-        <p className="nv-field-hint">
-          Each device that joins: its public key and the addresses it may use. Nova makes the
-          Hub&apos;s own key and shows its public half after planning.
-        </p>
-        {f.peers.length === 0 ? <p className="muted ws-flush">No peers yet.</p> : null}
+        <legend className="nv-field-label">{S.wg.peers}</legend>
+        <p className="nv-field-hint">{S.wg.peersHelp}</p>
+        {f.peers.length === 0 ? <p className="muted ws-flush">{S.wg.noPeers}</p> : null}
         {f.peers.map((p, i) => (
-          <div key={p.key} className="net-peer" role="group" aria-label={`Peer ${i + 1}`}>
+          <div key={p.key} className="net-peer" role="group" aria-label={S.wg.peer({ n: i + 1 })}>
             <TextField
-              label="Name"
+              label={S.wg.name}
               value={p.name}
               autoComplete="off"
               onChange={(e) => peer(i, { name: e.target.value })}
               error={err(`wireguard.peers.${i}.name`)}
             />
             <TextField
-              label="Public key"
+              label={S.wg.publicKey}
               value={p.publicKey}
               autoComplete="off"
               spellCheck={false}
@@ -535,16 +631,16 @@ function WireguardFields({
               error={err(`wireguard.peers.${i}.publicKey`)}
             />
             <TextField
-              label="Allowed addresses"
-              hint="For example 10.77.0.2/32."
+              label={S.wg.allowedIps}
+              hint={S.wg.allowedIpsHint({ example: '10.77.0.2/32' })}
               value={p.allowedIps}
               autoComplete="off"
               onChange={(e) => peer(i, { allowedIps: e.target.value })}
               error={err(`wireguard.peers.${i}.allowedIps`)}
             />
             <TextField
-              label="Endpoint (optional)"
-              hint="host:port"
+              label={S.wg.endpoint}
+              hint={S.wg.endpointHint}
               value={p.endpoint}
               autoComplete="off"
               onChange={(e) => peer(i, { endpoint: e.target.value })}
@@ -553,10 +649,10 @@ function WireguardFields({
             <div>
               <Button
                 variant="ghost"
-                aria-label={`Remove peer ${i + 1}`}
+                aria-label={S.wg.removePeer({ n: i + 1 })}
                 onClick={() => set({ peers: f.peers.filter((_, j) => j !== i) })}
               >
-                Remove
+                {S.wg.remove}
               </Button>
             </div>
           </div>
@@ -578,7 +674,7 @@ function WireguardFields({
               })
             }
           >
-            Add a peer
+            {S.wg.addPeer}
           </Button>
         </div>
       </fieldset>

@@ -12,7 +12,9 @@ import type {
   DeviceView,
 } from '@nova/shared';
 import { Button, Icon, Spinner, useToast } from '@nova/ui';
+import { defineMessages, messageFor } from '@nova/i18n';
 import { ApiError } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useHubStream } from '../hub-events.ts';
 import { formatWhen } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
@@ -23,39 +25,125 @@ import './ops.css';
 
 // ---- words ---------------------------------------------------------------------------------------
 
-export const TLS_FAILURE_TEXT: Record<DeviceTlsFailure, string> = {
-  no_ca: 'this Hub has no local CA to check the device with',
-  no_client_certificate: 'the Hub has no client certificate for the management channel',
-  untrusted_certificate: 'the device’s certificate was not issued by this Hub',
-  expired: 'the device’s certificate expired',
-  not_yet_valid: 'the device’s certificate is not valid yet',
-  wrong_device: 'the device’s certificate names another device',
-  key_mismatch: 'the device’s certificate carries another key than the one the Hub pinned',
-  revoked: 'the device’s certificate was revoked',
-  unknown_certificate: 'this Hub does not know the device’s certificate',
-  unsupported_purpose:
-    'the device still presents its old certificate; it installs the renewed one with its next heartbeat',
-  handshake_failed:
-    'the secure connection failed (the device may have refused the Hub’s certificate)',
-};
+export const OPS_TEXT = defineMessages('devices.ops', {
+  /** Why a call on the management channel was refused: a clause, shown after a colon. */
+  tlsFailures: {
+    no_ca: 'this Hub has no local CA to check the device with',
+    no_client_certificate: 'the Hub has no client certificate for the management channel',
+    untrusted_certificate: 'the device’s certificate was not issued by this Hub',
+    expired: 'the device’s certificate expired',
+    not_yet_valid: 'the device’s certificate is not valid yet',
+    wrong_device: 'the device’s certificate names another device',
+    key_mismatch: 'the device’s certificate carries another key than the one the Hub pinned',
+    revoked: 'the device’s certificate was revoked',
+    unknown_certificate: 'this Hub does not know the device’s certificate',
+    unsupported_purpose:
+      'the device still presents its old certificate; it installs the renewed one with its next heartbeat',
+    handshake_failed:
+      'the secure connection failed (the device may have refused the Hub’s certificate)',
+  },
+  errors: {
+    decommissionPending: 'A decommission of this device is already waiting for your approval.',
+    tlsFailed: 'The Hub could not reach the device securely: {reason}.',
+    secureFailed: 'the secure connection failed',
+    jobToken: 'The node refused the Hub’s job token. Add the node again.',
+    ownerOnly: 'Only the owner of this Hub can do that.',
+  },
+  management: 'Management',
+  chip: {
+    refused: 'Channel refused',
+    mutualTls: 'Mutual TLS',
+    plainHttp: 'Plain HTTP',
+    noAddress: 'No address yet',
+  },
+  channel: {
+    refused: 'Refused {when}: {reason}.',
+    mutual: 'The Hub and the device check each other’s certificates on every call.',
+    noClient:
+      'The Hub has no client certificate yet, so it cannot reach the device. Check the trust settings.',
+    plain:
+      'Calls are not encrypted. Add the device again with the Hub’s local CA to use mutual TLS.',
+    none: 'The device has not told the Hub where to reach it.',
+  },
+  renewal: {
+    offeredUntil:
+      'Certificate renewal offered; the device switches at its next check-in (its old certificate is accepted until {when}).',
+    offered: 'Certificate renewal offered; the device switches at its next check-in.',
+    renewedChannel: 'Certificate renewed for the encrypted management channel; valid until {when}.',
+    renewed: 'Certificate renewed; valid until {when}.',
+    legacy:
+      'This device has an older kind of certificate; the Hub offers a new one at its next check-in.',
+  },
+  platforms: {
+    linux: 'Linux',
+    darwin: 'macOS',
+    windows: 'Windows',
+  },
+  /** A platform, in a sentence: "Linux x86_64". */
+  platform: '{os} {arch}',
+  itsPlatform: 'its platform',
+  /** The version the device has, in a sentence. */
+  current: 'novad {version}',
+  unknownVersion: 'an unknown version',
+  available: {
+    newer: 'This Hub serves novad {version} for {platform}; the device has {current}.',
+    upToDate: 'The device has {current}, the build this Hub serves for {platform}.',
+    noBuilds: 'This Hub serves no novad builds.',
+    noBuildFor: 'This Hub serves no novad build for {platform}.',
+    unknownPlatform:
+      'The device has not said which platform it runs on, so no build can be matched.',
+    unknownVersion:
+      'This Hub serves novad {version} for {platform}, but the device’s version is unknown.',
+  },
+  availableBuild: 'Available build',
+  checkFailed: 'Could not check for a newer novad.',
+  checking: 'Checking for a newer novad',
+  sha: 'SHA-256 {hash}',
+  notInstalled:
+    'The Hub does not install it by itself: install it on the device as a signed update bundle below.',
+  sections: {
+    models: 'Models',
+    computePolicy: 'Compute',
+    scheduling: 'Scheduling',
+    limits: 'Limits',
+    power: 'Power',
+    locale: 'Locale',
+    data: 'Data',
+  },
+  sent: 'Sent. The device has not confirmed it yet.',
+  hasIt: 'The device has it now.',
+  pushFailed: 'Could not push the changes.',
+  onDevice: 'On the device',
+  pushNow: 'Push now',
+  pushHelp:
+    'The device takes your overrides and policy with its next heartbeat. Push now sends them at once.',
+  loadFailed: 'Could not load what the device has.',
+  loading: 'Loading what the device has',
+  waiting: 'Waiting for the device: change {revision}, it has {pushed}',
+  latest: 'The device has the latest (change {revision})',
+  inForce: 'In force on the device',
+  inForceHelp:
+    'From the device’s last signed capability document: its own settings with yours applied.',
+});
+const S = OPS_TEXT;
+
+export const TLS_FAILURE_TEXT: Readonly<Record<DeviceTlsFailure, string>> = S.tlsFailures;
 
 /** A device-operations refusal in plain words (the M6 words for the rest). */
-export function opsErrorMessage(err: unknown, fallback = 'Something went wrong.'): string {
+export function opsErrorMessage(err: unknown, fallback?: string): string {
   if (err instanceof ApiError) {
     const d = err.body.details ?? {};
     switch (d.reason) {
       case 'decommission_pending':
-        return 'A decommission of this device is already waiting for your approval.';
+        return S.errors.decommissionPending;
       case 'device_tls_failed': {
-        const tls = typeof d.tls === 'string' ? (d.tls as DeviceTlsFailure) : null;
-        return `The Hub could not reach the device securely: ${
-          tls && tls in TLS_FAILURE_TEXT ? TLS_FAILURE_TEXT[tls] : 'the secure connection failed'
-        }.`;
+        const tls = typeof d.tls === 'string' ? messageFor(S.tlsFailures, d.tls) : undefined;
+        return S.errors.tlsFailed({ reason: tls ?? S.errors.secureFailed });
       }
       case 'job_token_rejected':
-        return 'The node refused the Hub’s job token. Add the node again.';
+        return S.errors.jobToken;
       case 'owner_only':
-        return 'Only the owner of this Hub can do that.';
+        return S.errors.ownerOnly;
       default:
         break;
     }
@@ -83,7 +171,7 @@ export function ManagementFact({ deviceId }: { deviceId: string }) {
   if (!v) return null;
   return (
     <div>
-      <dt>Management</dt>
+      <dt>{S.management}</dt>
       <dd>
         <span className="devices-tls-fact">
           <ChannelChip view={v} />
@@ -99,25 +187,25 @@ export function ManagementFact({ deviceId }: { deviceId: string }) {
 
 export function ChannelChip({ view }: { view: DeviceManagementTlsView }) {
   if (view.lastCall && !view.lastCall.ok && view.lastCall.failure)
-    return <Chip tone="blocked" icon="stop" text="Channel refused" />;
-  if (view.channel === 'mutual_tls') return <Chip tone="ready" icon="shield" text="Mutual TLS" />;
+    return <Chip tone="blocked" icon="stop" text={S.chip.refused} />;
+  if (view.channel === 'mutual_tls')
+    return <Chip tone="ready" icon="shield" text={S.chip.mutualTls} />;
   if (view.channel === 'plain_http')
-    return <Chip tone="needs_input" icon="alert" text="Plain HTTP" />;
-  return <Chip tone="neutral" icon="clock" text="No address yet" />;
+    return <Chip tone="needs_input" icon="alert" text={S.chip.plainHttp} />;
+  return <Chip tone="neutral" icon="clock" text={S.chip.noAddress} />;
 }
 
 /** What the channel means, in a sentence. */
 export function channelText(v: DeviceManagementTlsView, hubClient: boolean): string {
   const failure = v.lastCall && !v.lastCall.ok ? v.lastCall.failure : null;
   if (failure)
-    return `Refused ${formatWhen(v.lastCall?.at ?? null)}: ${TLS_FAILURE_TEXT[failure]}.`;
-  if (v.channel === 'mutual_tls')
-    return hubClient
-      ? 'The Hub and the device check each other’s certificates on every call.'
-      : 'The Hub has no client certificate yet, so it cannot reach the device. Check the trust settings.';
-  if (v.channel === 'plain_http')
-    return 'Calls are not encrypted. Add the device again with the Hub’s local CA to use mutual TLS.';
-  return 'The device has not told the Hub where to reach it.';
+    return S.channel.refused({
+      when: formatWhen(v.lastCall?.at ?? null),
+      reason: TLS_FAILURE_TEXT[failure],
+    });
+  if (v.channel === 'mutual_tls') return hubClient ? S.channel.mutual : S.channel.noClient;
+  if (v.channel === 'plain_http') return S.channel.plain;
+  return S.channel.none;
 }
 
 /**
@@ -130,41 +218,40 @@ export function renewalText(v: DeviceManagementTlsView): string | null {
   if (!r) return null;
   if (r.state === 'offered')
     return v.legacyGraceEndsAt
-      ? `Certificate renewal offered; the device switches at its next check-in (its old certificate is accepted until ${formatWhen(v.legacyGraceEndsAt)}).`
-      : 'Certificate renewal offered; the device switches at its next check-in.';
+      ? S.renewal.offeredUntil({ when: formatWhen(v.legacyGraceEndsAt) })
+      : S.renewal.offered;
   if (r.state === 'presented')
-    return `Certificate renewed${r.reason === 'missing_server_auth' ? ' for the encrypted management channel' : ''}; valid until ${formatWhen(r.notAfter)}.`;
-  if (v.legacyCertificate)
-    return 'This device has an older kind of certificate; the Hub offers a new one at its next check-in.';
+    return r.reason === 'missing_server_auth'
+      ? S.renewal.renewedChannel({ when: formatWhen(r.notAfter) })
+      : S.renewal.renewed({ when: formatWhen(r.notAfter) });
+  if (v.legacyCertificate) return S.renewal.legacy;
   return null;
 }
 
 // ---- the novad build the Hub serves (FR-148) ------------------------------------------------------
 
-const PLATFORM_TEXT: Record<string, string> = {
-  linux: 'Linux',
-  darwin: 'macOS',
-  windows: 'Windows',
-};
-
 export function availableText(v: DeviceAvailableUpdateView): string {
   const platform = v.platform
-    ? `${PLATFORM_TEXT[v.platform.os] ?? v.platform.os} ${v.platform.arch}`
-    : 'its platform';
-  const current = v.current.novad ? `novad ${v.current.novad}` : 'an unknown version';
+    ? S.platform({
+        os: messageFor(S.platforms, v.platform.os) ?? v.platform.os,
+        arch: v.platform.arch,
+      })
+    : S.itsPlatform;
+  const current = v.current.novad ? S.current({ version: v.current.novad }) : S.unknownVersion;
+  const version = v.novad?.version ?? '';
   switch (v.reason) {
     case 'newer_available':
-      return `This Hub serves novad ${v.novad?.version ?? ''} for ${platform}; the device has ${current}.`;
+      return S.available.newer({ version, platform, current });
     case 'up_to_date':
-      return `The device has ${current}, the build this Hub serves for ${platform}.`;
+      return S.available.upToDate({ current, platform });
     case 'no_builds':
-      return 'This Hub serves no novad builds.';
+      return S.available.noBuilds;
     case 'no_build_for_platform':
-      return `This Hub serves no novad build for ${platform}.`;
+      return S.available.noBuildFor({ platform });
     case 'unknown_platform':
-      return 'The device has not said which platform it runs on, so no build can be matched.';
+      return S.available.unknownPlatform;
     case 'unknown_version':
-      return `This Hub serves novad ${v.novad?.version ?? ''} for ${platform}, but the device’s version is unknown.`;
+      return S.available.unknownVersion({ version, platform });
   }
 }
 
@@ -184,15 +271,11 @@ export function AvailableBuild({ device }: { device: DeviceView }) {
   const v = avail.data;
   return (
     <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
-      <h2 id={`${base}-h`}>Available build</h2>
+      <h2 id={`${base}-h`}>{S.availableBuild}</h2>
       {avail.error ? (
-        <LoadError
-          error={avail.error}
-          fallback="Could not check for a newer novad."
-          onRetry={avail.reload}
-        />
+        <LoadError error={avail.error} fallback={S.checkFailed} onRetry={avail.reload} />
       ) : null}
-      {avail.loading ? <Spinner label="Checking for a newer novad" /> : null}
+      {avail.loading ? <Spinner label={S.checking} /> : null}
       {v ? (
         <div className={v.newer ? 'devices-note' : undefined} role="status">
           <p className="ws-flush">
@@ -200,18 +283,17 @@ export function AvailableBuild({ device }: { device: DeviceView }) {
           </p>
           {v.novad ? (
             <p className="muted ws-flush">
-              {v.novad.file} · {formatBytes(v.novad.size)} · SHA-256{' '}
-              <code className="ws-code-inline" title={v.novad.sha256}>
-                {v.novad.sha256.slice(0, 16)}…
-              </code>
+              {v.novad.file} · {formatBytes(v.novad.size)} ·{' '}
+              {rich(S.sha, {
+                hash: (
+                  <code className="ws-code-inline" title={v.novad.sha256}>
+                    {v.novad.sha256.slice(0, 16)}…
+                  </code>
+                ),
+              })}
             </p>
           ) : null}
-          {v.newer ? (
-            <p className="muted ws-flush">
-              The Hub does not install it by itself: install it on the device as a signed update
-              bundle below.
-            </p>
-          ) : null}
+          {v.newer ? <p className="muted ws-flush">{S.notInstalled}</p> : null}
         </div>
       ) : null}
     </section>
@@ -220,15 +302,7 @@ export function AvailableBuild({ device }: { device: DeviceView }) {
 
 // ---- overrides and policy on the device (FR-142, FR-150) --------------------------------------------
 
-const SECTION_LABEL: Record<string, string> = {
-  models: 'Models',
-  computePolicy: 'Compute',
-  scheduling: 'Scheduling',
-  limits: 'Limits',
-  power: 'Power',
-  locale: 'Locale',
-  data: 'Data',
-};
+const SECTION_LABEL: Readonly<Record<string, string | undefined>> = S.sections;
 
 /** The Policy tab's "On the device" section, with Push now. */
 export function OverridesSection({ device }: { device: DeviceView }) {
@@ -254,14 +328,9 @@ export function OverridesSection({ device }: { device: DeviceView }) {
     try {
       const next = await api.pushDeviceOverrides(device.id);
       view.setData(() => next);
-      toast.show(
-        next.configPending
-          ? 'Sent. The device has not confirmed it yet.'
-          : 'The device has it now.',
-        { tone: 'success' },
-      );
+      toast.show(next.configPending ? S.sent : S.hasIt, { tone: 'success' });
     } catch (err) {
-      setError(opsErrorMessage(err, 'Could not push the changes.'));
+      setError(opsErrorMessage(err, S.pushFailed));
     } finally {
       setBusy(false);
     }
@@ -270,38 +339,27 @@ export function OverridesSection({ device }: { device: DeviceView }) {
   return (
     <section className="ws-section devices-flat" aria-labelledby={`${base}-h`}>
       <div className="ws-section-header">
-        <h2 id={`${base}-h`}>On the device</h2>
+        <h2 id={`${base}-h`}>{S.onDevice}</h2>
         <Button disabled={busy || Boolean(offline) || !v} onClick={() => void push()}>
-          {busy ? <Spinner /> : <Icon name="send" />} Push now
+          {busy ? <Spinner /> : <Icon name="send" />} {S.pushNow}
         </Button>
       </div>
-      <p className="muted ws-flush">
-        The device takes your overrides and policy with its next heartbeat. Push now sends them at
-        once.
-      </p>
+      <p className="muted ws-flush">{S.pushHelp}</p>
       {offline ? <Unavailable>{offline}</Unavailable> : null}
       {view.error ? (
-        <LoadError
-          error={view.error}
-          fallback="Could not load what the device has."
-          onRetry={view.reload}
-        />
+        <LoadError error={view.error} fallback={S.loadFailed} onRetry={view.reload} />
       ) : null}
-      {view.loading ? <Spinner label="Loading what the device has" /> : null}
+      {view.loading ? <Spinner label={S.loading} /> : null}
       {v ? (
         <p className="ws-flush" aria-live="polite">
           {v.configPending ? (
             <Chip
               tone="needs_input"
               icon="clock"
-              text={`Waiting for the device: change ${v.configRevision}, it has ${v.pushedRevision}`}
+              text={S.waiting({ revision: v.configRevision, pushed: v.pushedRevision })}
             />
           ) : (
-            <Chip
-              tone="ready"
-              icon="check"
-              text={`The device has the latest (change ${v.configRevision})`}
-            />
+            <Chip tone="ready" icon="check" text={S.latest({ revision: v.configRevision })} />
           )}
         </p>
       ) : null}
@@ -312,10 +370,8 @@ export function OverridesSection({ device }: { device: DeviceView }) {
       ) : null}
       {sections.length ? (
         <details className="ws-advanced">
-          <summary>In force on the device</summary>
-          <p className="muted">
-            From the device’s last signed capability document: its own settings with yours applied.
-          </p>
+          <summary>{S.inForce}</summary>
+          <p className="muted">{S.inForceHelp}</p>
           <dl className="devices-facts">
             {sections.map(([k, value]) => (
               <div key={k}>

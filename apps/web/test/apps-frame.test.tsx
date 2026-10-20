@@ -405,6 +405,13 @@ describe('display modes and size', () => {
     await userEvent.keyboard('{ArrowLeft}{ArrowUp}');
     expect(first.style.right).toBe('40px');
     expect(first.style.bottom).toBe('40px');
+    // A click (a single pointer, no drag) moves it to the next corner: bottom left, then top left
+    // (WCAG 2.5.7).
+    await userEvent.click(move);
+    expect(first.style.right).toBe('864px');
+    expect(first.style.bottom).toBe('16px');
+    await userEvent.click(move);
+    expect(first.style.bottom).toBe('688px');
     await userEvent.click(within(second).getByRole('button', { name: 'Picture in picture' }));
     expect(second.dataset.mode).toBe('pip');
     await waitFor(() => expect(first.dataset.mode).toBe('inline'));

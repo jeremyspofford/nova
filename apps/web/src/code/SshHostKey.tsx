@@ -5,7 +5,9 @@
 // environments are off on this Hub, the row says where to turn them on.
 import { useEffect, useId, useState } from 'react';
 import type { SavedEnvironmentView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Icon } from '@nova/ui';
+import { rich } from '../chat/rich.tsx';
 import { ConfirmAction } from '../cloud/parts.tsx';
 import { TextArea } from '../cloud/CloudEnvironmentDialog.tsx';
 import { useAnnounce } from '../services.tsx';
@@ -14,6 +16,44 @@ import { AppLink } from './CodeNav.tsx';
 import { codeM7ErrorMessage } from './m7-format.ts';
 
 export const CODE_SETTINGS_PATH = '/settings/code';
+
+/** The command that prints a host key's fingerprint (code, not translated). */
+const KEYGEN_COMMAND = 'ssh-keygen -lf';
+
+export const HOST_KEY_TEXT = defineMessages('code.sshKey', {
+  sshOff:
+    'SSH environments are off on this Hub, so Nova does not connect to {host}. Turn them on in {settings}.',
+  settingsLink: 'Settings → Code',
+  mismatchTitle: '{host} answered with a different host key.',
+  mismatchBody:
+    'Nova refused to connect and sent nothing. This happens when the machine was reinstalled or its keys were changed, and also when something is intercepting the connection. Check the key on the machine itself (for example with {command} on its host key file) before you replace the pinned key.',
+  pinned: 'Pinned host key:',
+  pinnedType: 'Pinned host key ({type}):',
+  hostKey: 'Host key:',
+  noFingerprint: 'its fingerprint cannot be shown here.',
+  notPinned: 'not pinned yet. Nova pins the key the host shows on the first connection.',
+  replace: 'Replace the pinned key…',
+  pin: 'Pin a key…',
+  forget: 'Forget the pinned key…',
+  replaceTitle: 'Replace the host key of {host}?',
+  pinTitle: 'Pin a host key for {host}',
+  pasteBody:
+    'Paste the host’s public key, as in its .pub file or known_hosts. Compare its fingerprint with the one the host shows.',
+  replaceKey: 'Replace key',
+  pinKey: 'Pin key',
+  saveFailed: 'Could not save the host key.',
+  notAKey: 'That is not a public key line such as “ssh-ed25519 AAAA…”.',
+  pinnedAnnounce: 'The host key of {host} is pinned.',
+  publicKey: 'Host public key',
+  keyExample: 'ssh-ed25519 AAAAC3Nza…',
+  fingerprint: 'Its fingerprint: {fingerprint}',
+  forgetTitle: 'Forget the host key of {host}?',
+  forgetBody:
+    'Nova then trusts whatever key the host shows on the next connection, and pins that. Do this only when you know why the key changed.',
+  forgetKey: 'Forget key',
+  forgetFailed: 'Could not forget the host key.',
+  forgotten: 'The host key of {host} is forgotten.',
+});
 
 /** `<type> <base64>` of a public key line (comments dropped), or null when it is not one. */
 export function parseHostKey(text: string): { type: string; blob: string } | null {
@@ -91,13 +131,15 @@ export function SshHostKey({
   const key = parseHostKey(pinned ?? '');
 
   return (
-    <div className="cm7-hostkey" aria-labelledby={id}>
+    <div role="group" className="cm7-hostkey" aria-labelledby={id}>
       {isSshOff(env) ? (
         <p className="ws-callout" role="note">
           <Icon name="alert" />
           <span>
-            SSH environments are off on this Hub, so Nova does not connect to {c.host}. Turn them on
-            in <AppLink to={CODE_SETTINGS_PATH}>Settings → Code</AppLink>.
+            {rich(HOST_KEY_TEXT.sshOff, {
+              host: c.host,
+              settings: <AppLink to={CODE_SETTINGS_PATH}>{HOST_KEY_TEXT.settingsLink}</AppLink>,
+            })}
           </span>
         </p>
       ) : null}
@@ -105,27 +147,27 @@ export function SshHostKey({
         <div className="cl-notice" data-tone="danger" role="alert">
           <Icon name="shield" />
           <span>
-            <strong>{c.host} answered with a different host key.</strong> Nova refused to connect
-            and sent nothing. This happens when the machine was reinstalled or its keys were
-            changed, and also when something is intercepting the connection. Check the key on the
-            machine itself (for example with <code>ssh-keygen -lf</code> on its host key file)
-            before you replace the pinned key.
+            <strong>{HOST_KEY_TEXT.mismatchTitle({ host: c.host })}</strong>{' '}
+            {rich(HOST_KEY_TEXT.mismatchBody, { command: <code>{KEYGEN_COMMAND}</code> })}
           </span>
         </div>
       ) : null}
       <p className="cm7-hostkey-line">
         <span id={id} className="muted">
-          {pinned ? 'Pinned host key' : 'Host key'}
-          {pinned && key ? ` (${key.type})` : ''}:
+          {pinned
+            ? key
+              ? HOST_KEY_TEXT.pinnedType({ type: key.type })
+              : HOST_KEY_TEXT.pinned
+            : HOST_KEY_TEXT.hostKey}
         </span>{' '}
         {pinned ? (
           fp ? (
             <code className="cl-break">{fp}</code>
           ) : (
-            <span>its fingerprint cannot be shown here.</span>
+            <span>{HOST_KEY_TEXT.noFingerprint}</span>
           )
         ) : (
-          <span>not pinned yet. Nova pins the key the host shows on the first connection.</span>
+          <span>{HOST_KEY_TEXT.notPinned}</span>
         )}
       </p>
       <div className="cl-actions">
@@ -136,56 +178,60 @@ export function SshHostKey({
             setReplacing(true);
           }}
         >
-          <Icon name="edit" /> {pinned ? 'Replace the pinned key…' : 'Pin a key…'}
+          <Icon name="edit" /> {pinned ? HOST_KEY_TEXT.replace : HOST_KEY_TEXT.pin}
         </Button>
         {pinned ? (
           <Button variant="ghost" onClick={() => setForgetting(true)}>
-            <Icon name="trash" /> Forget the pinned key…
+            <Icon name="trash" /> {HOST_KEY_TEXT.forget}
           </Button>
         ) : null}
       </div>
       <ConfirmAction
         open={replacing}
-        title={pinned ? `Replace the host key of ${c.host}?` : `Pin a host key for ${c.host}`}
-        description="Paste the host’s public key, as in its .pub file or known_hosts. Compare its fingerprint with the one the host shows."
-        confirmLabel={pinned ? 'Replace key' : 'Pin key'}
+        title={
+          pinned
+            ? HOST_KEY_TEXT.replaceTitle({ host: c.host })
+            : HOST_KEY_TEXT.pinTitle({ host: c.host })
+        }
+        description={HOST_KEY_TEXT.pasteBody}
+        confirmLabel={pinned ? HOST_KEY_TEXT.replaceKey : HOST_KEY_TEXT.pinKey}
         danger={!!pinned}
-        errorText={(err) => codeM7ErrorMessage(err, 'Could not save the host key.')}
+        errorText={(err) => codeM7ErrorMessage(err, HOST_KEY_TEXT.saveFailed)}
         onClose={() => setReplacing(false)}
         onConfirm={async () => {
           const k = parseHostKey(draft);
-          if (!k) throw new Error('That is not a public key line such as “ssh-ed25519 AAAA…”.');
+          if (!k) throw new Error(HOST_KEY_TEXT.notAKey);
           const next = await m6.updateEnvironment(env.id, {
             connection: { hostKey: `${k.type} ${k.blob}` },
           });
           setReplacing(false);
           onChanged(next);
-          announce(`The host key of ${c.host} is pinned.`);
+          announce(HOST_KEY_TEXT.pinnedAnnounce({ host: c.host }));
         }}
       >
         <TextArea
           id={`${id}-key`}
-          label="Host public key"
+          label={HOST_KEY_TEXT.publicKey}
           value={draft}
           rows={3}
-          placeholder="ssh-ed25519 AAAAC3Nza…"
-          hint={draftFp ? `Its fingerprint: ${draftFp}` : undefined}
+          placeholder={HOST_KEY_TEXT.keyExample}
+          hint={draftFp ? HOST_KEY_TEXT.fingerprint({ fingerprint: draftFp }) : undefined}
           onChange={setDraft}
         />
       </ConfirmAction>
       <ConfirmAction
         open={forgetting}
-        title={`Forget the host key of ${c.host}?`}
-        description="Nova then trusts whatever key the host shows on the next connection, and pins that. Do this only when you know why the key changed."
-        confirmLabel="Forget key"
+        title={HOST_KEY_TEXT.forgetTitle({ host: c.host })}
+        description={HOST_KEY_TEXT.forgetBody}
+        confirmLabel={HOST_KEY_TEXT.forgetKey}
         danger
-        errorText={(err) => codeM7ErrorMessage(err, 'Could not forget the host key.')}
+        errorText={(err) => codeM7ErrorMessage(err, HOST_KEY_TEXT.forgetFailed)}
         onClose={() => setForgetting(false)}
         onConfirm={async () => {
           const next = await m6.updateEnvironment(env.id, { connection: { hostKey: null } });
           setForgetting(false);
           onChanged(next);
-          announce(`The host key of ${c.host} is forgotten.`);
+          announce(HOST_KEY_TEXT.forgotten({ host: c.host }));
         }}
       />
     </div>

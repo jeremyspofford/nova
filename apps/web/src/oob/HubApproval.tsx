@@ -6,12 +6,23 @@
 // what the decision changed.
 import { useEffect, useState } from 'react';
 import { Icon, Spinner } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { ApprovalCard } from '../chat/ApprovalCard.tsx';
 import { awaitsUser, type ClientApproval } from '../chat/thread-state.ts';
 import { useHubStream } from '../hub-events.ts';
 import { useServices } from '../services.tsx';
 import { followLink } from '../work/nav.tsx';
 import { oobErrorMessage } from './format.ts';
+
+export const HUB_APPROVAL_TEXT = defineMessages('oob.approval', {
+  alsoInApprovals: 'It also waits on the Approvals page.',
+  hereOrApprovals: 'Answer it here or on the Approvals page.',
+  loadFailed: 'Could not load the approval.',
+  loading: 'Loading the approval',
+  open: 'Open in Approvals',
+});
+
+const S = HUB_APPROVAL_TEXT;
 
 const APPROVAL_CHANGES = ['approval.decided', 'approval.cancelled'] as const;
 /** The Approvals page (src/dispatch/ApprovalsPage.tsx), focused on one card. */
@@ -22,9 +33,7 @@ const approvalsPath = (id: string) => `/approvals?focus=${encodeURIComponent(id)
  * (src/chat/ApprovalCard.tsx), so only the way to the Approvals page is added.
  */
 export function answerWhereText(a: Pick<ClientApproval, 'answerIn'>): string {
-  return a.answerIn === 'hub'
-    ? 'It also waits on the Approvals page.'
-    : 'Answer it here or on the Approvals page.';
+  return a.answerIn === 'hub' ? S.alsoInApprovals : S.hereOrApprovals;
 }
 
 export function InlineApproval({
@@ -59,10 +68,10 @@ export function InlineApproval({
   if (error && !approval)
     return (
       <p role="alert" className="nv-field-error">
-        {oobErrorMessage(error, 'Could not load the approval.')}
+        {oobErrorMessage(error, S.loadFailed)}
       </p>
     );
-  if (!approval) return <Spinner label="Loading the approval" />;
+  if (!approval) return <Spinner label={S.loading} />;
   const waiting = awaitsUser(approval);
   return (
     <div className="oob-approval">
@@ -73,7 +82,7 @@ export function InlineApproval({
             href={approvalsPath(approval.id)}
             onClick={(e) => followLink(e, approvalsPath(approval.id))}
           >
-            Open in Approvals
+            {S.open}
           </a>
         </p>
       ) : null}

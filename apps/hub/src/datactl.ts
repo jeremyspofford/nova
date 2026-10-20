@@ -42,6 +42,13 @@ import type { HubArea, HubContext } from './hub-context.ts';
 
 export interface DatactlArea extends HubArea {
   data: DataControls;
+  /**
+   * For `team.useExporter`: a removed member's data as the owner downloads it before the purge
+   * (one account's `.novaexport`; the team route checks the owner and audits its own entry).
+   */
+  memberExporter: (
+    accountId: string,
+  ) => Promise<{ fileName: string; contentType: string; body: AsyncGenerator<Buffer> }>;
   retention: RetentionService;
   crash: CrashReports;
   spend: SpendCaps;
@@ -466,6 +473,11 @@ export function setupDatactl(ctx: HubContext, deps: DatactlDeps): Promise<Datact
 
   return Promise.resolve({
     data,
+    memberExporter: (accountId: string) => {
+      const owner = hubOwnerId(ctx.db);
+      if (!owner) return Promise.reject(ownerOnlyError("the Hub's data"));
+      return data.exportAccount(owner, accountId);
+    },
     retention,
     crash,
     spend,

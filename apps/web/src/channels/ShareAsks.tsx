@@ -9,6 +9,7 @@
 // Hub gap: the request carries no marker that it is a share ask, so the Channels page finds them
 // by thread (a binding's thread) and the card's title assumes it.
 import { useCallback, useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { ChannelBindingViewM7, ServerRequestView } from '@nova/shared';
 import { Button, StatusChip, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
@@ -16,6 +17,38 @@ import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useChannelEvents, useDebouncedCallback } from './events.ts';
 import { formatStamp } from './format.ts';
+
+/**
+ * The share asks' words (FR-016). The question is the Hub's text; the two share choices are
+ * protocol values the Hub sends, shown in the active locale; any other choice is shown as sent.
+ */
+export const ASKS_TEXT = defineMessages('channels.asks', {
+  fallbackQuestion: 'Nova has a question for you.',
+  answered: 'Answered: {choice}.',
+  elsewhere: 'This was already answered on another device.',
+  expired: 'This expired before your answer arrived.',
+  sendFailed: 'Could not send the answer.',
+  shareTitle: 'Share a private detail?',
+  questionTitle: 'Nova has a question',
+  context: '{context} · {waiting}',
+  waitingShare: 'Waiting until {when}; no answer by then means it is not shared.',
+  waiting: 'Waiting until {when}.',
+  answers: 'Answers',
+  openThreadLabel: "Open the channel's thread",
+  openThread: 'Open thread',
+  share: 'Share',
+  doNotShare: 'Do not share',
+  heading: 'Waiting for your decision',
+  intro:
+    'A reply in a shared channel would include something from your private conversations or memory. It is held until you decide.',
+});
+
+/** A choice as shown: the share choices in the active locale, any other as the Hub sent it. */
+function choiceLabel(choice: string): string {
+  if (choice === 'Share') return ASKS_TEXT.share;
+  if (choice === 'Do not share') return ASKS_TEXT.doNotShare;
+  return choice;
+}
 
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x) : [];
@@ -58,10 +91,12 @@ export function QuestionCard({
   const question =
     typeof request.payload.question === 'string' && request.payload.question
       ? request.payload.question
-      : 'Nova has a question for you.';
+      : ASKS_TEXT.fallbackQuestion;
   const choices = strings(request.payload.choices);
   const threadId = request.correlation.threadId ?? null;
   const share = isShareAsk(request);
+  const when = formatStamp(request.expiresAt);
+  const waiting = share ? ASKS_TEXT.waitingShare({ when }) : ASKS_TEXT.waiting({ when });
 
   const answer = async (choice: string) => {
     if (busy) return;
@@ -69,19 +104,17 @@ export function QuestionCard({
     setError(null);
     try {
       await api.respondRequest(request.id, { choice });
-      toast.show(`Answered: ${choice}.`, { tone: 'success' });
+      toast.show(ASKS_TEXT.answered({ choice: choiceLabel(choice) }), { tone: 'success' });
       onAnswered();
     } catch (err) {
       // The card leaves the list on a refetch, so these outcomes are told by a toast.
       if (err instanceof ApiError && err.status === 409) {
-        toast.show('This was already answered on another device.', { tone: 'info' });
+        toast.show(ASKS_TEXT.elsewhere, { tone: 'info' });
         onAnswered();
       } else if (err instanceof ApiError && err.status === 410) {
-        toast.show('This expired before your answer arrived.', {
-          tone: 'info',
-        });
+        toast.show(ASKS_TEXT.expired, { tone: 'info' });
         onAnswered();
-      } else setError(errorMessage(err, 'Could not send the answer.'));
+      } else setError(errorMessage(err, ASKS_TEXT.sendFailed));
     } finally {
       setBusy(false);
     }
@@ -91,28 +124,29 @@ export function QuestionCard({
     <article className="ch-ask" aria-labelledby={`${id}-title`}>
       <div className="ch-ask-head">
         <h4 id={`${id}-title`} className="ch-ask-title">
-          {share ? 'Share a private detail?' : 'Nova has a question'}
+          {share ? ASKS_TEXT.shareTitle : ASKS_TEXT.questionTitle}
         </h4>
         <StatusChip status="needs_input" />
       </div>
-      <p className="ch-ask-question">{question}</p>
-      <p className="muted ch-ask-meta">
-        {context ? `${context} · ` : ''}Waiting until {formatStamp(request.expiresAt)}
-        {share ? '; no answer by then means it is not shared.' : '.'}
+      <p className="ch-ask-question" dir="auto">
+        {question}
       </p>
-      <div className="row" role="group" aria-label="Answers">
+      <p className="muted ch-ask-meta">
+        {context ? ASKS_TEXT.context({ context, waiting }) : waiting}
+      </p>
+      <div className="row" role="group" aria-label={ASKS_TEXT.answers}>
         {choices.map((c) => (
           <Button key={c} disabled={busy} onClick={() => void answer(c)}>
-            {c}
+            {choiceLabel(c)}
           </Button>
         ))}
         {threadId && showThreadLink ? (
           <Button
             variant="ghost"
             onClick={() => navigate(chatPath(threadId))}
-            aria-label="Open the channel's thread"
+            aria-label={ASKS_TEXT.openThreadLabel}
           >
-            Open thread
+            {ASKS_TEXT.openThread}
           </Button>
         ) : null}
       </div>
@@ -165,11 +199,8 @@ export function ChannelShareAsks({ bindings }: { bindings: ChannelBindingViewM7[
   if (!items.length) return null;
   return (
     <section className="settings-section" aria-labelledby="ch-asks">
-      <h3 id="ch-asks">Waiting for your decision</h3>
-      <p className="muted">
-        A reply in a shared channel would include something from your private conversations or
-        memory. It is held until you decide.
-      </p>
+      <h3 id="ch-asks">{ASKS_TEXT.heading}</h3>
+      <p className="muted">{ASKS_TEXT.intro}</p>
       <div className="stack" aria-live="polite">
         {items.map((r) => (
           <QuestionCard

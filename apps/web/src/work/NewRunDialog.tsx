@@ -2,12 +2,48 @@
 // autonomy and budgets (defaults from Settings → General → Work runs), and optionally a project, a
 // goal, a declared output and the Deep research template. Starting navigates to the run.
 import { useId, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { ProjectView, RunAutonomy, RunView } from '@nova/shared';
 import { Button, Dialog, RadioGroup, SelectField, Spinner, TextField } from '@nova/ui';
 import { errorMessage, type Api } from '../api.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
-import { AUTONOMY_TEXT } from './format.ts';
+import { AUTONOMY_TEXT, OUTPUT_KIND_TEXT, WORK_TEXT } from './format.ts';
+
+/** The New run dialog. */
+export const NEW_RUN_TEXT = defineMessages('work.newRun', {
+  minutes: 'Enter the time in whole minutes, from {min} to {max}.',
+  tokens: 'Enter a token budget from {min} to {max}.',
+  cost: 'Enter a cost limit from {min} to {max} US dollars, or leave it blank.',
+  startFailed: 'Could not start the run.',
+  title: 'New run',
+  description:
+    'Describe the outcome you want. The run plans the steps, works through them and reports a result.',
+  objective: 'What should the run do?',
+  template: 'Template',
+  standard: 'Standard run',
+  deepResearch: 'Deep research',
+  deepResearchHint:
+    'Plans sub-questions, gathers sources with read-only research sub-agents and writes a cited report.',
+  autonomy: 'Autonomy',
+  /** After the autonomous level's description when no reviewer model is chosen. */
+  needsReviewer: 'Needs a reviewer model (Settings → Code).',
+  chooseReviewer:
+    'Choose a reviewer model in Settings → Code first, or pick another autonomy level.',
+  budgets: 'Budgets',
+  budgetsHint: 'The run pauses when it reaches a budget and asks before going further.',
+  time: 'Time (minutes)',
+  tokensLabel: 'Tokens',
+  costLabel: 'Cost limit (US dollars)',
+  costHint: 'Blank uses the provider spend cap.',
+  more: 'Goal and expected output (optional)',
+  goal: 'Goal',
+  /** {n} characters typed of at most {max}. */
+  goalHint:
+    'The run keeps working toward the goal until it is complete or a budget is reached. {n} / {max, plural, one {# character} other {# characters}}',
+  outputHint: 'The run succeeds only when this output is verified.',
+  start: 'Start run',
+});
 
 const OBJECTIVE_MAX = 8000;
 const GOAL_MAX = 4000;
@@ -28,14 +64,14 @@ export function parseBudgets(
 ): { budgets: NonNullable<CreateRunBody['budgets']> } | { error: string } {
   const min = Number(d.minutes);
   if (!/^\d+$/.test(d.minutes.trim()) || min < 1 || min > MAX_MINUTES)
-    return { error: `Enter the time in whole minutes, from 1 to ${MAX_MINUTES}.` };
+    return { error: NEW_RUN_TEXT.minutes({ min: 1, max: MAX_MINUTES }) };
   const tokens = Number(d.tokens);
   if (!/^\d+$/.test(d.tokens.trim()) || tokens < 1_000 || tokens > 100_000_000)
-    return { error: 'Enter a token budget from 1,000 to 100,000,000.' };
+    return { error: NEW_RUN_TEXT.tokens({ min: 1_000, max: 100_000_000 }) };
   const costText = d.cost.trim();
   const cost = costText ? Number(costText) : null;
   if (cost !== null && (!Number.isFinite(cost) || cost < 0 || cost > 100_000))
-    return { error: 'Enter a cost limit from 0 to 100,000 US dollars, or leave it blank.' };
+    return { error: NEW_RUN_TEXT.cost({ min: 0, max: 100_000 }) };
   return { budgets: { timeSeconds: min * 60, tokens, costUsd: cost } };
 }
 
@@ -101,6 +137,7 @@ function NewRunForm({
   // Autonomous runs send consequential actions to the reviewer model (FR-085).
   const reviewer = settings.get('review.model').value;
   const needsReviewer = autonomy === 'autonomous' && !reviewer;
+  const S = NEW_RUN_TEXT;
   const submit = async () => {
     if (!objective.trim() || busy || 'error' in parsed || needsReviewer) return;
     setBusy(true);
@@ -125,7 +162,7 @@ function NewRunForm({
     try {
       onCreated(await api.createRun(body));
     } catch (err) {
-      setError(errorMessage(err, 'Could not start the run.'));
+      setError(errorMessage(err, S.startFailed));
       setBusy(false);
     }
   };
@@ -133,8 +170,8 @@ function NewRunForm({
   return (
     <Dialog
       open
-      title="New run"
-      description="Describe the outcome you want. The run plans the steps, works through them and reports a result."
+      title={S.title}
+      description={S.description}
       onClose={onClose}
       initialFocusRef={objectiveRef}
       className="ws-wide-dialog"
@@ -149,7 +186,7 @@ function NewRunForm({
       >
         <div className="nv-field">
           <label className="nv-field-label" htmlFor={`${formId}-objective`}>
-            What should the run do?
+            {S.objective}
           </label>
           <textarea
             ref={objectiveRef}
@@ -163,43 +200,37 @@ function NewRunForm({
             onChange={(e) => setObjective(e.target.value)}
           />
           <span id={`${formId}-objective-count`} className="nv-field-hint">
-            {objective.length.toLocaleString('en-US')} / {OBJECTIVE_MAX.toLocaleString('en-US')}{' '}
-            characters
+            {WORK_TEXT.characters({ n: objective.length, max: OBJECTIVE_MAX })}
           </span>
         </div>
         <TextField
-          label="Title (optional)"
+          label={WORK_TEXT.titleOptional}
           value={title}
           maxLength={200}
           autoComplete="off"
           onChange={(e) => setTitle(e.target.value)}
         />
         <RadioGroup
-          legend="Template"
+          legend={S.template}
           name={`${formId}-template`}
           value={template || 'none'}
           onChange={(v) => setTemplate(v === 'deep_research' ? 'deep_research' : '')}
           options={[
-            { value: 'none', label: 'Standard run' },
-            {
-              value: 'deep_research',
-              label: 'Deep research',
-              description:
-                'Plans sub-questions, gathers sources with read-only research sub-agents and writes a cited report.',
-            },
+            { value: 'none', label: S.standard },
+            { value: 'deep_research', label: S.deepResearch, description: S.deepResearchHint },
           ]}
         />
         <SelectField
-          label="Project"
+          label={WORK_TEXT.project}
           value={projectId}
           onChange={setProjectId}
           options={[
-            { value: '', label: 'No project' },
+            { value: '', label: WORK_TEXT.noProject },
             ...projects.map((p) => ({ value: p.id, label: p.name })),
           ]}
         />
         <RadioGroup
-          legend="Autonomy"
+          legend={S.autonomy}
           name={`${formId}-autonomy`}
           value={autonomy}
           onChange={(v) => setAutonomy(v as RunAutonomy)}
@@ -208,23 +239,21 @@ function NewRunForm({
             label: AUTONOMY_TEXT[a].label,
             description:
               a === 'autonomous' && !reviewer
-                ? `${AUTONOMY_TEXT[a].description} Needs a reviewer model (Settings → Code).`
+                ? `${AUTONOMY_TEXT[a].description} ${S.needsReviewer}`
                 : AUTONOMY_TEXT[a].description,
           }))}
         />
         {needsReviewer ? (
           <p className="nv-field-error" role="alert">
-            Choose a reviewer model in Settings → Code first, or pick another autonomy level.
+            {S.chooseReviewer}
           </p>
         ) : null}
         <fieldset className="ws-fieldset">
-          <legend>Budgets</legend>
-          <p className="muted ws-flush">
-            The run pauses when it reaches a budget and asks before going further.
-          </p>
+          <legend>{S.budgets}</legend>
+          <p className="muted ws-flush">{S.budgetsHint}</p>
           <div className="work-budget-fields">
             <TextField
-              label="Time (minutes)"
+              label={S.time}
               type="number"
               inputMode="numeric"
               className="ws-number"
@@ -235,7 +264,7 @@ function NewRunForm({
               onChange={(e) => setBudget((b) => ({ ...b, minutes: e.target.value }))}
             />
             <TextField
-              label="Tokens"
+              label={S.tokensLabel}
               type="number"
               inputMode="numeric"
               className="ws-number"
@@ -245,13 +274,13 @@ function NewRunForm({
               onChange={(e) => setBudget((b) => ({ ...b, tokens: e.target.value }))}
             />
             <TextField
-              label="Cost limit (US dollars)"
+              label={S.costLabel}
               type="number"
               inputMode="decimal"
               className="ws-number"
               min={0}
               step={0.01}
-              hint="Blank uses the provider spend cap."
+              hint={S.costHint}
               value={budget.cost}
               onChange={(e) => setBudget((b) => ({ ...b, cost: e.target.value }))}
             />
@@ -263,11 +292,11 @@ function NewRunForm({
           ) : null}
         </fieldset>
         <details className="ws-advanced">
-          <summary>Goal and expected output (optional)</summary>
+          <summary>{S.more}</summary>
           <div className="stack">
             <div className="nv-field">
               <label className="nv-field-label" htmlFor={`${formId}-goal`}>
-                Goal
+                {S.goal}
               </label>
               <textarea
                 id={`${formId}-goal`}
@@ -279,26 +308,24 @@ function NewRunForm({
                 onChange={(e) => setGoal(e.target.value)}
               />
               <span id={`${formId}-goal-hint`} className="nv-field-hint">
-                The run keeps working toward the goal until it is complete or a budget is reached.{' '}
-                {goal.length.toLocaleString('en-US')} / {GOAL_MAX.toLocaleString('en-US')}{' '}
-                characters
+                {S.goalHint({ n: goal.length, max: GOAL_MAX })}
               </span>
             </div>
             <SelectField
-              label="Expected output"
+              label={WORK_TEXT.expectedOutput}
               value={output}
               onChange={(v) => setOutput(v as typeof output)}
-              hint="The run succeeds only when this output is verified."
+              hint={S.outputHint}
               options={[
-                { value: '', label: 'None' },
-                { value: 'artifact', label: 'An artifact' },
-                { value: 'message', label: 'A delivered message' },
-                { value: 'file', label: 'A file' },
+                { value: '', label: OUTPUT_KIND_TEXT.none },
+                { value: 'artifact', label: OUTPUT_KIND_TEXT.artifact },
+                { value: 'message', label: OUTPUT_KIND_TEXT.message },
+                { value: 'file', label: OUTPUT_KIND_TEXT.file },
               ]}
             />
             {output ? (
               <TextField
-                label="Output name or path (optional)"
+                label={WORK_TEXT.outputRef}
                 value={outputRef}
                 maxLength={1000}
                 onChange={(e) => setOutputRef(e.target.value)}
@@ -312,13 +339,13 @@ function NewRunForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{WORK_TEXT.cancel}</Button>
           <Button
             type="submit"
             variant="primary"
             disabled={busy || !objective.trim() || budgetError !== null || needsReviewer}
           >
-            {busy ? <Spinner /> : null} Start run
+            {busy ? <Spinner /> : null} {S.start}
           </Button>
         </div>
       </form>

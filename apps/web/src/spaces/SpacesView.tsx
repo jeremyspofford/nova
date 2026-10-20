@@ -1,15 +1,27 @@
 // Spaces and Pages (FR-036): a space holds Markdown pages that the user and agents write together.
 // /spaces lists the spaces, /spaces/:spaceId shows one (its pages, how agent edits land, and the
 // new pages agents propose), and /spaces/:spaceId/:pageId opens a page in the editor. Every save
-// is a version; agent edits arrive as proposals or as direct versions, as the space says.
-import { useEffect, useId, useRef, useState } from 'react';
-import type { PageProposalView, PageSummaryView, SpaceAgentEdits, SpaceView } from '@nova/shared';
+// is a version; agent edits arrive as proposals or as direct versions, as the space says. M8:
+// pages are reordered by dragging, with Move up, Move down and "Move to…" as the keyboard and menu
+// ways, all in one write; a page's menu deletes it after saying what goes with it, and deleted
+// pages stay under "Recently deleted pages" to restore.
+import { useEffect, useId, useRef, useState, type DragEvent } from 'react';
+import { defineMessages } from '@nova/i18n';
+import type {
+  DeletedPageView,
+  PageProposalView,
+  PageSummaryView,
+  SpaceAgentEdits,
+  SpaceView,
+} from '@nova/shared';
 import {
   Button,
   Dialog,
   EmptyState,
   Icon,
+  Menu,
   RadioGroup,
+  SelectField,
   Spinner,
   TextField,
   useToast,
@@ -18,12 +30,19 @@ import { ApiError, errorMessage } from '../api.ts';
 import { navigate } from '../router.ts';
 import { useAnnounce } from '../services.tsx';
 import { useSetting } from '../settings.tsx';
-import { focusMoved, formatWhen, moveItem, plural } from '../settings/common.ts';
+import { focusMoved, formatWhen, moveItem } from '../settings/common.ts';
 import { useDebounced } from '../work/events.ts';
 import { followLink } from '../work/nav.tsx';
 import { useSpacesApi } from './api.ts';
 import { eventIds, useHubEvents, SPACES_EVENTS } from './events.ts';
-import { AGENT_EDITS_TEXT, agentEditsShort, spacePath } from './format.ts';
+import {
+  AGENT_EDITS_TEXT,
+  SPACES_TEXT,
+  agentEditsShort,
+  refusalText,
+  spacePath,
+} from './format.ts';
+import { DeletePageDialog, toastDeleted } from './PageDelete.tsx';
 import { PageEditor } from './PageEditor.tsx';
 import { PageMarkdown } from './PageMarkdown.tsx';
 import '../workspace.css';
@@ -44,15 +63,115 @@ export function sortPages<T extends { position: number; createdAt: string }>(lis
   );
 }
 
-const AGENT_EDIT_OPTIONS = (['propose', 'direct'] as const).map((value) => ({
-  value,
-  label: AGENT_EDITS_TEXT[value].label,
-  description: AGENT_EDITS_TEXT[value].description,
-}));
+/** M8 words of the space view: ordering, a page's menu, deleted pages. {title} is a page's title. */
+export const SPACE_PAGES_TEXT = defineMessages('spaces.pages', {
+  moved: 'Moved “{title}” to position {at} of {of}.',
+  /** {why} is the Hub's own words (English, D9). */
+  moveFailed: 'Could not move it: {why}',
+  dragHint: 'Drag a page to move it, or use its Up, Down and Move to buttons.',
+  grip: 'Drag to move {title}',
+  more: 'More actions for {title}',
+  moveTo: 'Move to…',
+  moveTop: 'Move to the top',
+  moveBottom: 'Move to the bottom',
+  delete: 'Delete…',
+  moveTitle: 'Move “{title}”',
+  position: 'New position',
+  positionHere: '{n} (where it is now)',
+  positionOf: '{n} (now “{title}”)',
+  move: 'Move',
+  cancel: 'Cancel',
+  deletedTitle: 'Recently deleted pages',
+  deletedIntro:
+    'Deleted pages keep their history and comments. Restore one to put it back where it was.',
+  deletedWhen: 'Deleted {when}',
+  deletedComments: '{n, plural, one {# comment} other {# comments}}',
+  restore: 'Restore',
+  restoreLabel: 'Restore {title}',
+  restored: 'Restored “{title}”.',
+  restoreFailed: 'Could not restore it: {why}',
+});
+const P = SPACE_PAGES_TEXT;
+
+/** The spaces list and one space. {name} is a space's name, {title} a page's title. */
+export const SPACE_VIEW_TEXT = defineMessages('spaces.view', {
+  breadcrumb: 'Breadcrumb',
+  spaces: 'Spaces',
+  loadFailed: 'Could not load your spaces.',
+  newSpace: 'New space',
+  intro:
+    'A space holds pages you and Nova write together. Every save is a version you can restore, and you choose whether agent edits wait for your review.',
+  loading: 'Loading spaces',
+  empty: 'No spaces yet',
+  emptyHint: 'Create a space for notes, a handbook or a report, then add pages to it.',
+  create: 'Create a space',
+  pageCount: '{n, plural, one {# page} other {# pages}}',
+  updated: 'Updated {when}',
+  saveFailed: 'Could not save the space.',
+  rename: 'Rename space',
+  name: 'Name',
+  description: 'Description (optional)',
+  agentEdits: 'When an agent edits a page',
+  createSubmit: 'Create space',
+  spaceFailed: 'Could not load this space.',
+  nowPropose: 'Agent edits now wait for your review.',
+  nowDirect: 'Agents now edit pages directly.',
+  changeFailed: 'Could not change it: {why}',
+  addedPage: 'Added the page “{title}”.',
+  rejected: 'Proposal rejected.',
+  acceptFailed: 'Could not accept it: {why}',
+  rejectFailed: 'Could not reject it: {why}',
+  notFound: 'Space not found',
+  notFoundHint: 'It may have been deleted.',
+  allSpaces: 'All spaces',
+  loadingSpace: 'Loading the space',
+  renameButton: 'Rename',
+  pages: 'Pages',
+  newPage: 'New page',
+  loadingPages: 'Loading pages',
+  noPages: 'No pages yet. Add one to start writing.',
+  version: 'Version {v}',
+  /** When a page changed and who changed it. */
+  updatedBy: '{who, select, agent {Updated {when} by an agent} other {Updated {when} by you}}',
+  openComments: '{n, plural, one {# open comment} other {# open comments}}',
+  proposals: '{n, plural, one {# proposal} other {# proposals}}',
+  moveUp: 'Move {title} up',
+  moveDown: 'Move {title} down',
+  up: 'Up',
+  down: 'Down',
+  proposed: 'Proposed new pages',
+  proposedIntro: 'An agent suggested these pages. Nothing is added until you accept.',
+  saved: 'Space saved.',
+  deleteTitle: 'Delete this space?',
+  /** {n} counts the space's pages. */
+  deleteBody:
+    '{n, plural, one {“{name}” and its # page, with their versions and comments, are deleted. This cannot be undone.} other {“{name}” and its # pages, with their versions and comments, are deleted. This cannot be undone.}}',
+  deleted: 'Deleted “{name}”.',
+  deleteFailed: 'Could not delete it: {why}',
+  deleteSpace: 'Delete space',
+  agent: 'Agent',
+  proposedWhen: 'Proposed {when}',
+  accept: 'Accept',
+  reject: 'Reject',
+  hidePage: 'Hide the page',
+  showPage: 'Show the page',
+  addFailed: 'Could not add the page.',
+  title: 'Title',
+  addPage: 'Add page',
+});
+const V = SPACE_VIEW_TEXT;
+
+function agentEditOptions() {
+  return (['propose', 'direct'] as const).map((value) => ({
+    value,
+    label: AGENT_EDITS_TEXT[value].label,
+    description: AGENT_EDITS_TEXT[value].description,
+  }));
+}
 
 function Breadcrumb({ href, label }: { href: string; label: string }) {
   return (
-    <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+    <nav aria-label={V.breadcrumb} className="ws-breadcrumb">
       <a href={href} onClick={(e) => followLink(e, href)}>
         <Icon name="back" /> {label}
       </a>
@@ -77,7 +196,7 @@ function SpaceList() {
         setItems(list);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load your spaces.')),
+      (err: unknown) => alive && setError(errorMessage(err, V.loadFailed)),
     );
     return () => {
       alive = false;
@@ -92,33 +211,30 @@ function SpaceList() {
   return (
     <div className="ws-page spaces-page">
       <header className="ws-page-header">
-        <h1>Spaces</h1>
+        <h1>{V.spaces}</h1>
         <Button variant="primary" onClick={() => setCreating(true)}>
-          <Icon name="plus" /> New space
+          <Icon name="plus" /> {V.newSpace}
         </Button>
       </header>
-      <p className="muted ws-flush">
-        A space holds pages you and Nova write together. Every save is a version you can restore,
-        and you choose whether agent edits wait for your review.
-      </p>
+      <p className="muted ws-flush">{V.intro}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{SPACES_TEXT.retry}</Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading spaces" /> : null}
+      {items === null && !error ? <Spinner label={V.loading} /> : null}
       {items?.length === 0 ? (
         <EmptyState
-          title="No spaces yet"
-          description="Create a space for notes, a handbook or a report, then add pages to it."
+          title={V.empty}
+          description={V.emptyHint}
           icon="edit"
           level={2}
-          action={<Button onClick={() => setCreating(true)}>Create a space</Button>}
+          action={<Button onClick={() => setCreating(true)}>{V.create}</Button>}
         />
       ) : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="Spaces">
+        <ul className="ws-list" aria-label={V.spaces}>
           {items.map((s) => (
             <li key={s.id} className="ws-list-row">
               <div className="spaces-row-main">
@@ -126,14 +242,19 @@ function SpaceList() {
                   href={spacePath(s.id)}
                   className="ws-card-link"
                   onClick={(e) => followLink(e, spacePath(s.id))}
+                  dir="auto"
                 >
                   {s.name}
                 </a>
-                {s.description ? <p className="spaces-desc">{s.description}</p> : null}
+                {s.description ? (
+                  <p className="spaces-desc" dir="auto">
+                    {s.description}
+                  </p>
+                ) : null}
                 <span className="muted ws-row-meta">
-                  <span>{plural(s.pageCount, 'page')}</span>
+                  <span>{V.pageCount({ n: s.pageCount })}</span>
                   <span>{agentEditsShort(s.agentEdits)}</span>
-                  <span>Updated {formatWhen(s.updatedAt)}</span>
+                  <span>{V.updated({ when: formatWhen(s.updatedAt) })}</span>
                 </span>
               </div>
             </li>
@@ -185,7 +306,7 @@ function SpaceDialog({
           : await api.createSpace({ name: name.trim(), description: desc, agentEdits: mode }),
       );
     } catch (err) {
-      setError(errorMessage(err, 'Could not save the space.'));
+      setError(errorMessage(err, V.saveFailed));
       setBusy(false);
     }
   };
@@ -193,7 +314,7 @@ function SpaceDialog({
   return (
     <Dialog
       open
-      title={editing ? 'Rename space' : 'New space'}
+      title={editing ? V.rename : V.newSpace}
       onClose={onClose}
       initialFocusRef={nameRef}
     >
@@ -207,14 +328,14 @@ function SpaceDialog({
       >
         <TextField
           ref={nameRef}
-          label="Name"
+          label={V.name}
           value={name}
           maxLength={200}
           onChange={(e) => setName(e.target.value)}
         />
         <div className="nv-field">
           <label className="nv-field-label" htmlFor={`${formId}-desc`}>
-            Description (optional)
+            {V.description}
           </label>
           <textarea
             id={`${formId}-desc`}
@@ -227,10 +348,10 @@ function SpaceDialog({
         </div>
         {editing ? null : (
           <RadioGroup
-            legend="When an agent edits a page"
+            legend={V.agentEdits}
             name={`${formId}-agent-edits`}
             value={mode}
-            options={AGENT_EDIT_OPTIONS}
+            options={agentEditOptions()}
             onChange={(v) => setMode(v === 'direct' ? 'direct' : 'propose')}
           />
         )}
@@ -240,9 +361,9 @@ function SpaceDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{SPACES_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim()}>
-            {busy ? <Spinner /> : null} {editing ? 'Save' : 'Create space'}
+            {busy ? <Spinner /> : null} {editing ? SPACES_TEXT.save : V.createSubmit}
           </Button>
         </div>
       </form>
@@ -259,13 +380,20 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
   const [space, setSpace] = useState<SpaceView | null>(null);
   const [pages, setPages] = useState<PageSummaryView[] | null>(null);
   const [proposals, setProposals] = useState<PageProposalView[]>([]);
+  const [deleted, setDeleted] = useState<DeletedPageView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [dialog, setDialog] = useState<'rename' | 'delete' | 'page' | null>(null);
+  const [pageDialog, setPageDialog] = useState<{
+    kind: 'move' | 'delete';
+    page: PageSummaryView;
+  } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
+  const [drag, setDrag] = useState<{ id: string; over: number | null } | null>(null);
   const pageList = useRef<HTMLOListElement>(null);
+  const newPageButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -273,18 +401,20 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
       api.getSpace(spaceId),
       api.listSpacePages(spaceId),
       api.listSpaceProposals(spaceId, { status: 'open' }),
+      api.listDeletedPages(spaceId),
     ]).then(
-      ([s, p, x]) => {
+      ([s, p, x, d]) => {
         if (!alive) return;
         setSpace(s);
         setPages(sortPages(p.items));
         setProposals(x.items.filter((q) => q.pageId === null));
+        setDeleted(d.items);
         setError(null);
       },
       (err: unknown) => {
         if (!alive) return;
         if (err instanceof ApiError && err.status === 404) setGone(true);
-        else setError(errorMessage(err, 'Could not load this space.'));
+        else setError(errorMessage(err, V.spaceFailed));
       },
     );
     return () => {
@@ -299,36 +429,76 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
   });
 
   /**
-   * Move a page one place up or down. Distinct positions swap (two updates); pages that share a
-   * position (the Hub then orders them by creation time) are renumbered in the new order.
+   * Put `page` at `to` in the order (M8): the whole new order goes to the Hub in one write, so a
+   * move never leaves pages half-renumbered; a list that went stale meanwhile is refused and the
+   * Hub's order comes back.
    */
-  const move = (index: number, dir: 'up' | 'down') => {
+  const moveTo = (page: PageSummaryView, to: number, focus?: 'up' | 'down') => {
     if (!pages || moving) return;
-    const a = pages[index];
-    const b = pages[dir === 'up' ? index - 1 : index + 1];
-    if (!a || !b) return;
-    const order = moveItem(pages, index, dir === 'up' ? -1 : 1);
-    const updates =
-      a.position !== b.position
-        ? [
-            { id: a.id, position: b.position },
-            { id: b.id, position: a.position },
-          ]
-        : order.flatMap((p, i) => (p.position === i ? [] : [{ id: p.id, position: i }]));
-    const next = new Map(updates.map((u) => [u.id, u.position]));
-    setPages(order.map((p) => ({ ...p, position: next.get(p.id) ?? p.position })));
-    focusMoved(pageList.current, a.id, dir);
+    const from = pages.findIndex((p) => p.id === page.id);
+    if (from < 0 || to === from || to < 0 || to >= pages.length) return;
+    const order = moveItem(pages, from, to - from).map((p, i) => ({ ...p, position: i }));
+    setPages(order);
+    if (focus) focusMoved(pageList.current, page.id, focus);
     setMoving(true);
-    Promise.all(updates.map((u) => api.updateSpacePage(spaceId, u.id, { position: u.position })))
+    api
+      .reorderSpacePages(
+        spaceId,
+        order.map((p) => p.id),
+      )
       .then(
-        () =>
-          announce(`Moved “${a.title}” to position ${order.indexOf(a) + 1} of ${order.length}.`),
-        (err: unknown) => toast.show(`Could not move it: ${errorMessage(err)}`, { tone: 'error' }),
+        () => announce(P.moved({ title: page.title, at: to + 1, of: order.length })),
+        (err: unknown) =>
+          toast.show(P.moveFailed({ why: refusalText(err, '') }), { tone: 'error' }),
       )
       .finally(() => {
         setMoving(false);
-        // The Hub's order is the truth, whether the moves went through or not.
+        // The Hub's order is the truth, whether the move went through or not.
         setAttempt((n) => n + 1);
+      });
+  };
+
+  const move = (index: number, dir: 'up' | 'down') => {
+    const page = pages?.[index];
+    if (page) moveTo(page, dir === 'up' ? index - 1 : index + 1, dir);
+  };
+
+  // Dragging: the drop place is before the row under the pointer, or after it in its lower half.
+  const dragOver = (e: DragEvent<HTMLLIElement>, i: number) => {
+    if (!drag) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    const r = e.currentTarget.getBoundingClientRect();
+    const over = r.height > 0 && e.clientY > r.top + r.height / 2 ? i + 1 : i;
+    if (drag.over !== over) setDrag({ ...drag, over });
+  };
+  const drop = (e: DragEvent<HTMLLIElement>) => {
+    e.preventDefault();
+    const d = drag;
+    setDrag(null);
+    if (!d || d.over === null || !pages) return;
+    const from = pages.findIndex((p) => p.id === d.id);
+    const page = pages[from];
+    if (!page) return;
+    moveTo(page, d.over > from ? d.over - 1 : d.over);
+  };
+
+  const restore = (d: DeletedPageView) => {
+    setBusy(d.id);
+    api
+      .undeleteSpacePage(spaceId, d.id)
+      .then(
+        () => {
+          setDeleted((list) => list.filter((x) => x.id !== d.id));
+          toast.show(P.restored({ title: d.title }), { tone: 'success' });
+          announce(P.restored({ title: d.title }));
+        },
+        (err: unknown) =>
+          toast.show(P.restoreFailed({ why: errorMessage(err) }), { tone: 'error' }),
+      )
+      .finally(() => {
+        setBusy(null);
+        reload();
       });
   };
 
@@ -339,15 +509,11 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
     api.updateSpace(spaceId, { agentEdits: mode }).then(
       (s) => {
         setSpace(s);
-        announce(
-          mode === 'propose'
-            ? 'Agent edits now wait for your review.'
-            : 'Agents now edit pages directly.',
-        );
+        announce(mode === 'propose' ? V.nowPropose : V.nowDirect);
       },
       (err: unknown) => {
         setSpace(before);
-        toast.show(`Could not change it: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(V.changeFailed({ why: errorMessage(err) }), { tone: 'error' });
       },
     );
   };
@@ -356,18 +522,21 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
     setBusy(x.id);
     const call = accept
       ? api.acceptSpaceProposal(spaceId, x.id).then((p) => {
-          toast.show(`Added the page “${p.title}”.`, { tone: 'success' });
+          toast.show(V.addedPage({ title: p.title }), { tone: 'success' });
         })
       : api.rejectSpaceProposal(spaceId, x.id).then(() => {
-          toast.show('Proposal rejected.');
+          toast.show(V.rejected);
         });
     call
       .then(
         () => setProposals((list) => list.filter((q) => q.id !== x.id)),
         (err: unknown) =>
-          toast.show(`Could not ${accept ? 'accept' : 'reject'} it: ${errorMessage(err)}`, {
-            tone: 'error',
-          }),
+          toast.show(
+            accept
+              ? V.acceptFailed({ why: errorMessage(err) })
+              : V.rejectFailed({ why: errorMessage(err) }),
+            { tone: 'error' },
+          ),
       )
       .finally(() => {
         setBusy(null);
@@ -378,88 +547,124 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
   if (gone)
     return (
       <div className="ws-page spaces-page">
-        <Breadcrumb href={spacePath()} label="Spaces" />
+        <Breadcrumb href={spacePath()} label={V.spaces} />
         <EmptyState
-          title="Space not found"
-          description="It may have been deleted."
+          title={V.notFound}
+          description={V.notFoundHint}
           level={2}
-          action={<Button onClick={() => navigate(spacePath())}>All spaces</Button>}
+          action={<Button onClick={() => navigate(spacePath())}>{V.allSpaces}</Button>}
         />
       </div>
     );
 
   return (
     <div className="ws-page spaces-page">
-      <Breadcrumb href={spacePath()} label="Spaces" />
+      <Breadcrumb href={spacePath()} label={V.spaces} />
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setAttempt((n) => n + 1)}>{SPACES_TEXT.retry}</Button>
         </div>
       ) : null}
-      {!space && !error ? <Spinner label="Loading the space" /> : null}
+      {!space && !error ? <Spinner label={V.loadingSpace} /> : null}
       {space ? (
         <>
           <header className="ws-page-header">
-            <h1>{space.name}</h1>
+            <h1 dir="auto">{space.name}</h1>
             <div className="spaces-actions">
               <Button onClick={() => setDialog('rename')}>
-                <Icon name="edit" /> Rename
+                <Icon name="edit" /> {V.renameButton}
               </Button>
               <Button variant="danger" onClick={() => setDialog('delete')}>
-                <Icon name="trash" /> Delete
+                <Icon name="trash" /> {SPACES_TEXT.delete}
               </Button>
             </div>
           </header>
-          {space.description ? <p className="spaces-desc">{space.description}</p> : null}
+          {space.description ? (
+            <p className="spaces-desc" dir="auto">
+              {space.description}
+            </p>
+          ) : null}
           <RadioGroup
-            legend="When an agent edits a page"
+            legend={V.agentEdits}
             name={`agent-edits-${space.id}`}
             value={space.agentEdits}
-            options={AGENT_EDIT_OPTIONS}
+            options={agentEditOptions()}
             onChange={(v) => setMode(v === 'direct' ? 'direct' : 'propose')}
           />
 
           <section className="ws-section" aria-labelledby="space-pages">
             <div className="ws-section-header">
-              <h2 id="space-pages">Pages</h2>
-              <Button onClick={() => setDialog('page')}>
-                <Icon name="plus" /> New page
+              <h2 id="space-pages">{V.pages}</h2>
+              <Button ref={newPageButton} onClick={() => setDialog('page')}>
+                <Icon name="plus" /> {V.newPage}
               </Button>
             </div>
-            {pages === null ? <Spinner label="Loading pages" /> : null}
-            {pages?.length === 0 ? (
-              <p className="muted ws-flush">No pages yet. Add one to start writing.</p>
-            ) : null}
+            {pages && pages.length > 1 ? <p className="muted ws-flush">{P.dragHint}</p> : null}
+            {pages === null ? <Spinner label={V.loadingPages} /> : null}
+            {pages?.length === 0 ? <p className="muted ws-flush">{V.noPages}</p> : null}
             {pages?.length ? (
-              <ol ref={pageList} className="ws-list" aria-label="Pages">
+              <ol ref={pageList} className="ws-list" aria-label={V.pages}>
                 {pages.map((p, i) => (
-                  <li key={p.id} className="ws-list-row" data-move-key={p.id}>
+                  <li
+                    key={p.id}
+                    className="ws-list-row spaces-page-row"
+                    data-move-key={p.id}
+                    draggable={!moving}
+                    data-dragging={drag?.id === p.id || undefined}
+                    data-drop={
+                      drag?.over === i
+                        ? 'before'
+                        : drag?.over === pages.length && i === pages.length - 1
+                          ? 'after'
+                          : undefined
+                    }
+                    onDragStart={(e) => {
+                      if (e.dataTransfer) {
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/plain', p.id);
+                      }
+                      setDrag({ id: p.id, over: null });
+                    }}
+                    onDragOver={(e) => dragOver(e, i)}
+                    onDrop={drop}
+                    onDragEnd={() => setDrag(null)}
+                  >
+                    <span
+                      className="spaces-grip"
+                      title={P.grip({ title: p.title })}
+                      aria-hidden="true"
+                    >
+                      <Icon name="grip" />
+                    </span>
                     <div className="spaces-row-main">
                       <a
                         href={spacePath(spaceId, p.id)}
                         className="ws-card-link"
                         onClick={(e) => followLink(e, spacePath(spaceId, p.id))}
+                        dir="auto"
                       >
                         {p.title}
                       </a>
                       <span className="muted ws-row-meta">
-                        <span>Version {p.version}</span>
+                        <span>{V.version({ v: p.version })}</span>
                         <span>
-                          Updated {formatWhen(p.updatedAt)} by{' '}
-                          {p.updatedBy === 'agent' ? 'an agent' : 'you'}
+                          {V.updatedBy({
+                            who: p.updatedBy === 'agent' ? 'agent' : 'user',
+                            when: formatWhen(p.updatedAt),
+                          })}
                         </span>
                       </span>
                     </div>
                     <span className="spaces-badges">
                       {p.openComments ? (
                         <span className="ws-badge">
-                          <Icon name="chat" /> {plural(p.openComments, 'open comment')}
+                          <Icon name="chat" /> {V.openComments({ n: p.openComments })}
                         </span>
                       ) : null}
                       {p.openProposals ? (
                         <span className="ws-badge" data-tone="warn">
-                          <Icon name="edit" /> {plural(p.openProposals, 'proposal')}
+                          <Icon name="edit" /> {V.proposals({ n: p.openProposals })}
                         </span>
                       ) : null}
                     </span>
@@ -467,21 +672,51 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
                       <Button
                         variant="ghost"
                         data-move="up"
-                        aria-label={`Move ${p.title} up`}
+                        aria-label={V.moveUp({ title: p.title })}
                         disabled={i === 0}
                         onClick={() => move(i, 'up')}
                       >
-                        Up
+                        {V.up}
                       </Button>
                       <Button
                         variant="ghost"
                         data-move="down"
-                        aria-label={`Move ${p.title} down`}
+                        aria-label={V.moveDown({ title: p.title })}
                         disabled={i === pages.length - 1}
                         onClick={() => move(i, 'down')}
                       >
-                        Down
+                        {V.down}
                       </Button>
+                      <Menu
+                        label={P.more({ title: p.title })}
+                        trigger={<Icon name="more" />}
+                        items={[
+                          {
+                            id: 'move',
+                            label: P.moveTo,
+                            disabled: pages.length < 2,
+                            onSelect: () => setPageDialog({ kind: 'move', page: p }),
+                          },
+                          {
+                            id: 'top',
+                            label: P.moveTop,
+                            disabled: i === 0,
+                            onSelect: () => moveTo(p, 0),
+                          },
+                          {
+                            id: 'bottom',
+                            label: P.moveBottom,
+                            disabled: i === pages.length - 1,
+                            onSelect: () => moveTo(p, pages.length - 1),
+                          },
+                          {
+                            id: 'delete',
+                            label: P.delete,
+                            danger: true,
+                            onSelect: () => setPageDialog({ kind: 'delete', page: p }),
+                          },
+                        ]}
+                      />
                     </span>
                   </li>
                 ))}
@@ -489,13 +724,40 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
             ) : null}
           </section>
 
+          {deleted.length ? (
+            <section className="ws-section" aria-labelledby="space-deleted">
+              <h2 id="space-deleted">{P.deletedTitle}</h2>
+              <p className="muted">{P.deletedIntro}</p>
+              <ul className="ws-list" aria-label={P.deletedTitle}>
+                {deleted.map((d) => (
+                  <li key={d.id} className="ws-list-row">
+                    <div className="spaces-row-main">
+                      <span className="ws-card-link" dir="auto">
+                        {d.title}
+                      </span>
+                      <span className="muted ws-row-meta">
+                        <span>{P.deletedWhen({ when: formatWhen(d.deletedAt) })}</span>
+                        {d.comments ? <span>{P.deletedComments({ n: d.comments })}</span> : null}
+                      </span>
+                    </div>
+                    <Button
+                      aria-label={P.restoreLabel({ title: d.title })}
+                      disabled={busy === d.id}
+                      onClick={() => restore(d)}
+                    >
+                      <Icon name="undo" /> {P.restore}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
           {proposals.length ? (
             <section className="ws-section" aria-labelledby="space-new-pages">
-              <h2 id="space-new-pages">Proposed new pages</h2>
-              <p className="muted">
-                An agent suggested these pages. Nothing is added until you accept.
-              </p>
-              <ul className="ws-list" aria-label="Proposed new pages">
+              <h2 id="space-new-pages">{V.proposed}</h2>
+              <p className="muted">{V.proposedIntro}</p>
+              <ul className="ws-list" aria-label={V.proposed}>
                 {proposals.map((x) => (
                   <NewPageProposal
                     key={x.id}
@@ -515,7 +777,35 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
               onSaved={(s) => {
                 setDialog(null);
                 setSpace(s);
-                toast.show('Space saved.', { tone: 'success' });
+                toast.show(V.saved, { tone: 'success' });
+              }}
+            />
+          ) : null}
+          {pageDialog?.kind === 'move' && pages ? (
+            <MovePageDialog
+              pages={pages}
+              page={pageDialog.page}
+              onClose={() => setPageDialog(null)}
+              onMove={(to) => {
+                setPageDialog(null);
+                moveTo(pageDialog.page, to);
+              }}
+            />
+          ) : null}
+          {pageDialog?.kind === 'delete' ? (
+            <DeletePageDialog
+              spaceId={spaceId}
+              pageId={pageDialog.page.id}
+              title={pageDialog.page.title}
+              onClose={() => setPageDialog(null)}
+              fallbackFocus={() => newPageButton.current}
+              onDelete={async () => {
+                const p = pageDialog.page;
+                await api.deleteSpacePage(spaceId, p.id);
+                setPageDialog(null);
+                setPages((list) => list?.filter((x) => x.id !== p.id) ?? null);
+                toastDeleted(toast, api, spaceId, p.id, p.title, reload);
+                reload();
               }}
             />
           ) : null}
@@ -531,27 +821,30 @@ function SpaceDetail({ spaceId }: { spaceId: string }) {
           ) : null}
           <Dialog
             open={dialog === 'delete'}
-            title="Delete this space?"
-            description={`“${space.name}” and its ${plural(pages?.length ?? space.pageCount, 'page')}, with their versions and comments, are deleted. This cannot be undone.`}
+            title={V.deleteTitle}
+            description={V.deleteBody({
+              name: space.name,
+              n: pages?.length ?? space.pageCount,
+            })}
             onClose={() => setDialog(null)}
             footer={
               <>
-                <Button onClick={() => setDialog(null)}>Cancel</Button>
+                <Button onClick={() => setDialog(null)}>{SPACES_TEXT.cancel}</Button>
                 <Button
                   variant="danger"
                   onClick={() => {
                     setDialog(null);
                     api.deleteSpace(spaceId).then(
                       () => {
-                        toast.show(`Deleted “${space.name}”.`, { tone: 'success' });
+                        toast.show(V.deleted({ name: space.name }), { tone: 'success' });
                         navigate(spacePath());
                       },
                       (err: unknown) =>
-                        toast.show(`Could not delete it: ${errorMessage(err)}`, { tone: 'error' }),
+                        toast.show(V.deleteFailed({ why: errorMessage(err) }), { tone: 'error' }),
                     );
                   }}
                 >
-                  Delete space
+                  {V.deleteSpace}
                 </Button>
               </>
             }
@@ -574,21 +867,27 @@ function NewPageProposal({
   const [open, setOpen] = useState(false);
   return (
     <li className="ws-card">
-      <span className="ws-card-link">{x.title}</span>
-      <span className="muted ws-row-meta">
-        <span>Agent</span>
-        <span>Proposed {formatWhen(x.createdAt)}</span>
+      <span className="ws-card-link" dir="auto">
+        {x.title}
       </span>
-      {x.summary ? <p className="spaces-item-body">{x.summary}</p> : null}
+      <span className="muted ws-row-meta">
+        <span>{V.agent}</span>
+        <span>{V.proposedWhen({ when: formatWhen(x.createdAt) })}</span>
+      </span>
+      {x.summary ? (
+        <p className="spaces-item-body" dir="auto">
+          {x.summary}
+        </p>
+      ) : null}
       <div className="spaces-actions">
         <Button variant="primary" disabled={busy} onClick={() => onDecide(true)}>
-          Accept
+          {V.accept}
         </Button>
         <Button disabled={busy} onClick={() => onDecide(false)}>
-          Reject
+          {V.reject}
         </Button>
         <Button variant="ghost" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-          {open ? 'Hide the page' : 'Show the page'}
+          {open ? V.hidePage : V.showPage}
         </Button>
       </div>
       {open ? (
@@ -597,6 +896,52 @@ function NewPageProposal({
         </div>
       ) : null}
     </li>
+  );
+}
+
+/** "Move to…": pick the page's new place; the keyboard and menu way to reorder (M8). */
+function MovePageDialog({
+  pages,
+  page,
+  onClose,
+  onMove,
+}: {
+  pages: PageSummaryView[];
+  page: PageSummaryView;
+  onClose: () => void;
+  onMove: (to: number) => void;
+}) {
+  const from = pages.findIndex((p) => p.id === page.id);
+  const [to, setTo] = useState(String(Math.max(0, from)));
+  return (
+    <Dialog
+      open
+      title={P.moveTitle({ title: page.title })}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>{P.cancel}</Button>
+          <Button
+            variant="primary"
+            disabled={Number(to) === from}
+            onClick={() => onMove(Number(to))}
+          >
+            {P.move}
+          </Button>
+        </>
+      }
+    >
+      <SelectField
+        label={P.position}
+        value={to}
+        onChange={setTo}
+        options={pages.map((p, i) => ({
+          value: String(i),
+          label:
+            i === from ? P.positionHere({ n: i + 1 }) : P.positionOf({ n: i + 1, title: p.title }),
+        }))}
+      />
+    </Dialog>
   );
 }
 
@@ -622,12 +967,12 @@ function NewPageDialog({
       const p = await api.createSpacePage(spaceId, { title: title.trim(), content: '' });
       onCreated(p.id);
     } catch (err) {
-      setError(errorMessage(err, 'Could not add the page.'));
+      setError(errorMessage(err, V.addFailed));
       setBusy(false);
     }
   };
   return (
-    <Dialog open title="New page" onClose={onClose} initialFocusRef={ref}>
+    <Dialog open title={V.newPage} onClose={onClose} initialFocusRef={ref}>
       <form
         className="stack"
         onSubmit={(e) => {
@@ -637,7 +982,7 @@ function NewPageDialog({
       >
         <TextField
           ref={ref}
-          label="Title"
+          label={V.title}
           value={title}
           maxLength={200}
           onChange={(e) => setTitle(e.target.value)}
@@ -648,9 +993,9 @@ function NewPageDialog({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{SPACES_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !title.trim()}>
-            {busy ? <Spinner /> : null} Add page
+            {busy ? <Spinner /> : null} {V.addPage}
           </Button>
         </div>
       </form>

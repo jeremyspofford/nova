@@ -2,19 +2,32 @@
 // does, and why one cannot be picked now. Auto needs a reviewer model (`review.model`); Bypass
 // needs a VM or container environment and `code.allowBypass`. The Hub enforces the same rules and
 // managed policy can remove modes; the UI only explains them before a request fails.
+import { defineMessages } from '@nova/i18n';
 import { PERMISSION_MODES, type EnvironmentView, type PermissionMode } from '@nova/shared';
 
 export { PERMISSION_MODES };
 
-export const MODE_LABEL: Record<PermissionMode, string> = {
+export const MODE_LABEL = defineMessages('code.modes', {
   manual: 'Manual',
   accept_edits: 'Accept edits',
   plan: 'Plan',
   auto: 'Auto',
   bypass: 'Bypass',
-};
+}) satisfies Record<PermissionMode, string>;
 
-export const MODE_DESCRIPTION: Record<PermissionMode, string> = {
+/** Why a mode cannot be picked now, as a phrase after its name, and how a picker shows it. */
+export const MODE_TEXT = defineMessages('code.modeUnavailable', {
+  reviewer: 'needs a reviewer model in Settings → Code',
+  isolatedAndAllow: 'needs a VM or container environment and Allow Bypass in Settings → Code',
+  isolated: 'needs a VM or container environment',
+  allow: 'needs Allow Bypass in Settings → Code',
+  /** A disabled choice: "Auto (needs a reviewer model in Settings → Code)". */
+  option: '{mode} ({reason})',
+  /** Its tooltip: "Auto needs a reviewer model in Settings → Code." */
+  title: '{mode} {reason}.',
+});
+
+export const MODE_DESCRIPTION = defineMessages('code.modeDescription', {
   manual: 'Asks before every action that is not read-only. Edits show the diff first.',
   accept_edits:
     'File edits in the project are made and shown as diffs. Commands still ask unless a rule allows them.',
@@ -22,7 +35,7 @@ export const MODE_DESCRIPTION: Record<PermissionMode, string> = {
   auto: 'A reviewer model checks every consequential action and can only make it stricter.',
   bypass:
     'Does not ask where a tool default would. Your rules, managed policy and confirmation steps still apply.',
-};
+}) satisfies Record<PermissionMode, string>;
 
 export interface ModeContext {
   /** The `review.model` setting. */
@@ -43,13 +56,12 @@ export function isIsolatedEnvironment(
 
 /** Why `mode` cannot be picked now, as a short phrase, or null when it can. */
 export function modeUnavailable(mode: PermissionMode, ctx: ModeContext): string | null {
-  if (mode === 'auto' && !ctx.reviewerModel) return 'needs a reviewer model in Settings → Code';
+  if (mode === 'auto' && !ctx.reviewerModel) return MODE_TEXT.reviewer;
   if (mode === 'bypass') {
     const isolated = isIsolatedEnvironment(ctx.environment);
-    if (!isolated && !ctx.allowBypass)
-      return 'needs a VM or container environment and Allow Bypass in Settings → Code';
-    if (!isolated) return 'needs a VM or container environment';
-    if (!ctx.allowBypass) return 'needs Allow Bypass in Settings → Code';
+    if (!isolated && !ctx.allowBypass) return MODE_TEXT.isolatedAndAllow;
+    if (!isolated) return MODE_TEXT.isolated;
+    if (!ctx.allowBypass) return MODE_TEXT.allow;
   }
   return null;
 }
@@ -63,9 +75,9 @@ export function modeOptions(
     const why = modeUnavailable(m, ctx);
     return {
       value: m,
-      label: why ? `${MODE_LABEL[m]} (${why})` : MODE_LABEL[m],
+      label: why ? MODE_TEXT.option({ mode: MODE_LABEL[m], reason: why }) : MODE_LABEL[m],
       disabled: why !== null,
-      title: why ? `${MODE_LABEL[m]} ${why}.` : MODE_DESCRIPTION[m],
+      title: why ? MODE_TEXT.title({ mode: MODE_LABEL[m], reason: why }) : MODE_DESCRIPTION[m],
     };
   });
 }

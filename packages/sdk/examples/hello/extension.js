@@ -1,5 +1,5 @@
 // @ts-check
-// A sample Nova extension (docs/14 §4): a command, a panel and a tool, plus a status item, a
+// A sample Nova extension (docs/14 §4): a command, a panel and tools, plus a status item, a
 // keybinding, a menu item, a hook and an event listener. It runs in an isolated engine with only
 // what .nova-plugin/extension.json declares; anything else is refused and turns it off.
 
@@ -57,6 +57,28 @@ export function activate(nova) {
     handler: async (args) => {
       await nova.fs.write('${extensionData}/note.txt', /** @type {{text: string}} */ (args).text);
       return 'Saved.';
+    },
+  });
+
+  // Network access is declared per host: api.example.com is in extension.json. The request below
+  // is made by the extension's own code, so for any other host Nova refuses it before it leaves
+  // the Hub, records it in the audit log and turns the extension off.
+  nova.tools.register({
+    name: 'check_status',
+    title: 'Check a status page',
+    description: "Fetch a host's /status page and report its HTTP status.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        host: { type: 'string', description: 'The host, for example api.example.com' },
+      },
+      required: ['host'],
+    },
+    annotations: { readOnly: true },
+    handler: async (args) => {
+      const { host } = /** @type {{host: string}} */ (args);
+      const res = await nova.net.fetch(`https://${host}/status`);
+      return `${host} answered ${res.status}.`;
     },
   });
 

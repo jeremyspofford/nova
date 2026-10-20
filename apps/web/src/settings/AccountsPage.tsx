@@ -4,6 +4,7 @@
 // and its spend cap (M8, FR-115, FR-116). Name, username and avatar moved to Profile & usage
 // (FR-113).
 import { useEffect, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { ProviderAccountView, ProviderKind } from '@nova/shared';
 import { Button, Dialog, RadioGroup, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -13,6 +14,48 @@ import { ProviderSetup } from '../providers/ProviderSetup.tsx';
 import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useModels } from '../stores.tsx';
+import { embed } from './embed.tsx';
+
+export const ACCOUNTS_TEXT = defineMessages('settings.accounts', {
+  title: 'Accounts',
+  profileIn: 'Your name, username and avatar are in {link}.',
+  profileLink: 'Profile & usage',
+  providers: 'Model providers',
+  loadFailed: 'Could not load providers.',
+  loading: 'Loading providers',
+  none: 'No providers connected yet.',
+  keyStored: 'key stored',
+  active: 'Active',
+  test: 'Test',
+  remove: 'Remove',
+  cancel: 'Cancel',
+  add: 'Add a provider',
+  connected: '{name} is connected.',
+  connectedModels: '{name} is connected ({n, plural, one {# model} other {# models}}).',
+  couldNotConnect: '{name} could not connect: {detail}',
+  unknownError: 'unknown error',
+  testFailed: 'Test failed: {error}',
+  nowActive: '{name} is now the active {provider} account.',
+  switchFailed: 'Could not switch accounts: {error}',
+  added: '{name} connected.',
+  addedModels: '{name} connected with {n, plural, one {# model} other {# models}}.',
+  activeAccounts: 'Active accounts',
+  activeHelp:
+    'When you have more than one account with a provider, new chats and the built-in presets ' +
+    'use the active one. Chats that already picked an account keep it.',
+  activeLegend: 'Active {provider} account',
+  noneChosen: 'None is chosen yet; Nova uses the first that works.',
+  tools: 'Tools',
+  toolsIn: 'MCP servers and tool defaults are in {link}.',
+  toolsLink: 'Tools & MCP',
+  removeTitle: 'Remove this provider?',
+  removeBody:
+    '{name} and its stored key are deleted. Chats that use its models will need another model.',
+  removed: '{name} removed.',
+  removeFailed: 'Could not remove: {error}',
+  status: { active: 'active', expired: 'expired', revoked: 'revoked', error: 'needs attention' },
+});
+const S = ACCOUNTS_TEXT;
 
 /** `active` arrives with M4 (PATCH /providers/:id); older Hubs leave it out. */
 type Account = ProviderAccountView;
@@ -62,7 +105,7 @@ export function AccountsPage() {
     let alive = true;
     api.listProviders().then(
       ({ items }) => alive && setProviders(items),
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load providers.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -80,13 +123,15 @@ export function AccountsPage() {
       const r = await api.testProvider(p.id);
       toast.show(
         r.ok
-          ? `${p.label} is connected${r.models !== undefined ? ` (${r.models} models)` : ''}.`
-          : `${p.label} could not connect: ${r.detail ?? 'unknown error'}`,
+          ? r.models !== undefined
+            ? S.connectedModels({ name: p.label, n: r.models })
+            : S.connected({ name: p.label })
+          : S.couldNotConnect({ name: p.label, detail: r.detail ?? S.unknownError }),
         { tone: r.ok ? 'success' : 'error' },
       );
       reload();
     } catch (err) {
-      toast.show(`Test failed: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.testFailed({ error: errorMessage(err) }), { tone: 'error' });
     } finally {
       setTesting(null);
     }
@@ -98,11 +143,11 @@ export function AccountsPage() {
     setSwitching(kind);
     try {
       await api.setActiveProvider(id);
-      toast.show(`${target.label} is now the active ${PROVIDER_NAMES[kind] ?? kind} account.`, {
+      toast.show(S.nowActive({ name: target.label, provider: PROVIDER_NAMES[kind] ?? kind }), {
         tone: 'success',
       });
     } catch (err) {
-      toast.show(`Could not switch accounts: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.switchFailed({ error: errorMessage(err) }), { tone: 'error' });
     } finally {
       setSwitching(null);
       reload();
@@ -113,16 +158,17 @@ export function AccountsPage() {
 
   return (
     <div className="settings-page">
-      <h2>Accounts</h2>
+      <h2>{S.title}</h2>
       <p className="muted">
-        Your name, username and avatar are in{' '}
-        <SettingsLink section="profile">Profile &amp; usage</SettingsLink>.
+        {embed(S.profileIn, {
+          link: <SettingsLink section="profile">{S.profileLink}</SettingsLink>,
+        })}
       </p>
       <section className="settings-section" aria-labelledby="acct-providers">
-        <h3 id="acct-providers">Model providers</h3>
+        <h3 id="acct-providers">{S.providers}</h3>
         {error ? <p role="alert">{error}</p> : null}
-        {providers === null && !error ? <Spinner label="Loading providers" /> : null}
-        {providers?.length === 0 ? <p className="muted">No providers connected yet.</p> : null}
+        {providers === null && !error ? <Spinner label={S.loading} /> : null}
+        {providers?.length === 0 ? <p className="muted">{S.none}</p> : null}
         {providers?.length ? (
           <ul className="provider-list">
             {providers.map((p) => (
@@ -131,21 +177,21 @@ export function AccountsPage() {
                   <strong>{p.label}</strong>{' '}
                   <span className="muted">
                     {PROVIDER_NAMES[p.provider] ?? p.provider}
-                    {p.baseUrl ? ` · ${p.baseUrl}` : ''} · {STATUS_TEXT[p.status]}
-                    {p.hasSecret ? ' · key stored' : ''}
+                    {p.baseUrl ? ` · ${p.baseUrl}` : ''} · {S.status[p.status]}
+                    {p.hasSecret ? ` · ${S.keyStored}` : ''}
                   </span>{' '}
                   {p.active === true && groups.some((g) => g.provider === p.provider) ? (
                     <span className="ws-badge" data-tone="ok">
-                      Active
+                      {S.active}
                     </span>
                   ) : null}
                 </div>
                 <div className="row">
                   <Button onClick={() => void test(p)} disabled={testing === p.id}>
-                    {testing === p.id ? <Spinner /> : null} Test
+                    {testing === p.id ? <Spinner /> : null} {S.test}
                   </Button>
                   <Button variant="ghost" onClick={() => setRemoving(p)}>
-                    Remove
+                    {S.remove}
                   </Button>
                 </div>
               </li>
@@ -158,46 +204,43 @@ export function AccountsPage() {
               onConnected={({ account, test: t }) => {
                 setAdding(false);
                 toast.show(
-                  `${account.label} connected${t.models !== undefined ? ` with ${t.models} models` : ''}.`,
+                  t.models !== undefined
+                    ? S.addedModels({ name: account.label, n: t.models })
+                    : S.added({ name: account.label }),
                   { tone: 'success' },
                 );
                 reload();
               }}
             />
             <Button variant="ghost" onClick={() => setAdding(false)}>
-              Cancel
+              {S.cancel}
             </Button>
           </div>
         ) : (
           <Button variant="primary" onClick={() => setAdding(true)}>
-            Add a provider
+            {S.add}
           </Button>
         )}
       </section>
       {groups.length ? (
         <section className="settings-section" aria-labelledby="acct-active">
-          <h3 id="acct-active">Active accounts</h3>
-          <p className="muted">
-            When you have more than one account with a provider, new chats and the built-in presets
-            use the active one. Chats that already picked an account keep it.
-          </p>
+          <h3 id="acct-active">{S.activeAccounts}</h3>
+          <p className="muted">{S.activeHelp}</p>
           {groups.map((g) => {
             const kind = PROVIDER_NAMES[g.provider] ?? g.provider;
             return (
               <RadioGroup
                 key={g.provider}
-                legend={`Active ${kind} account`}
+                legend={S.activeLegend({ provider: kind })}
                 name={`active-${g.provider}`}
                 value={g.activeId ?? ''}
                 locked={switching === g.provider}
-                hint={
-                  g.activeId ? undefined : 'None is chosen yet; Nova uses the first that works.'
-                }
+                hint={g.activeId ? undefined : S.noneChosen}
                 onChange={(id) => void makeActive(g.provider, id)}
                 options={g.accounts.map((a) => ({
                   value: a.id,
                   label: a.label,
-                  description: [a.baseUrl, STATUS_TEXT[a.status]].filter(Boolean).join(' · '),
+                  description: [a.baseUrl, S.status[a.status]].filter(Boolean).join(' · '),
                 }))}
               />
             );
@@ -206,24 +249,21 @@ export function AccountsPage() {
       ) : null}
       <ProviderLimitsSection key={version} />
       <section className="settings-section">
-        <h3>Tools</h3>
+        <h3>{S.tools}</h3>
         <p className="muted">
-          MCP servers and tool defaults are in{' '}
-          <SettingsLink section="tools">Tools &amp; MCP</SettingsLink>.
+          {embed(S.toolsIn, {
+            link: <SettingsLink section="tools">{S.toolsLink}</SettingsLink>,
+          })}
         </p>
       </section>
       <Dialog
         open={removing !== null}
-        title="Remove this provider?"
-        description={
-          removing
-            ? `${removing.label} and its stored key are deleted. Chats that use its models will need another model.`
-            : undefined
-        }
+        title={S.removeTitle}
+        description={removing ? S.removeBody({ name: removing.label }) : undefined}
         onClose={() => setRemoving(null)}
         footer={
           <>
-            <Button onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button onClick={() => setRemoving(null)}>{S.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -232,15 +272,15 @@ export function AccountsPage() {
                 if (!p) return;
                 api.deleteProvider(p.id).then(
                   () => {
-                    toast.show(`${p.label} removed.`, { tone: 'success' });
+                    toast.show(S.removed({ name: p.label }), { tone: 'success' });
                     reload();
                   },
                   (err: unknown) =>
-                    toast.show(`Could not remove: ${errorMessage(err)}`, { tone: 'error' }),
+                    toast.show(S.removeFailed({ error: errorMessage(err) }), { tone: 'error' }),
                 );
               }}
             >
-              Remove
+              {S.remove}
             </Button>
           </>
         }
@@ -248,10 +288,3 @@ export function AccountsPage() {
     </div>
   );
 }
-
-const STATUS_TEXT: Record<ProviderAccountView['status'], string> = {
-  active: 'active',
-  expired: 'expired',
-  revoked: 'revoked',
-  error: 'needs attention',
-};

@@ -23,6 +23,7 @@ import type { ManagedPolicyView, ManagedRestrict, ManagedSourceView } from '@nov
 import { ToastProvider } from '@nova/ui';
 import { ApiError } from '../src/api.ts';
 import type { ManagedApi } from '../src/managed/api-m8.ts';
+import { ManagedLockNotes } from '../src/managed/ManagedNote.tsx';
 import { AnnouncerProvider, ServicesProvider } from '../src/services.tsx';
 import { SettingsProvider } from '../src/settings.tsx';
 import { DONE_ONBOARDING, createHub, fakeEventSource, testRegistry } from './fakes.ts';
@@ -55,6 +56,7 @@ export function noPolicy(): ManagedPolicyView {
     sources: [localSource()],
     settings: [],
     restrict: [],
+    egress: null,
     ignored: [],
     checkedAt: CHECKED,
   };
@@ -116,6 +118,7 @@ export function lockPolicy(over: Partial<ManagedPolicyView> = {}): ManagedPolicy
     ],
     checkedAt: CHECKED,
     ...over,
+    egress: over.egress ?? null,
   };
 }
 
@@ -222,8 +225,11 @@ export async function renderWithManaged(
   ) as typeof hub.api;
   const api = opts.unsupported ? older : { ...hub.api, ...mocks };
   const { settings } = await hub.api.settings();
+  // As App.tsx: locked @nova/ui fields draw the note that names the policy's source.
   const inner = createElement(ToastProvider, {
-    children: createElement(AnnouncerProvider, { children: ui }),
+    children: createElement(AnnouncerProvider, {
+      children: createElement(ManagedLockNotes, { children: ui }),
+    }),
   });
   const utils = render(
     createElement(ServicesProvider, {

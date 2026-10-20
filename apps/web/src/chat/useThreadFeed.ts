@@ -19,6 +19,7 @@ import type {
 import { ApiError, errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
 import { THREAD_EVENTS, openStream } from '../sse.ts';
+import { CHAT_TEXT } from './strings.ts';
 import { initialThreadState, pendingApprovals, threadReducer } from './thread-state.ts';
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -125,8 +126,8 @@ export function useThreadFeed(
           type: 'load_failed',
           message:
             err instanceof ApiError && err.status === 404
-              ? 'This chat was deleted or does not exist.'
-              : errorMessage(err, 'Could not load this chat.'),
+              ? CHAT_TEXT.missing
+              : errorMessage(err, CHAT_TEXT.loadFailed),
         });
       },
     );

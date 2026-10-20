@@ -2,9 +2,15 @@
 // color alone, docs/04 §7), a confirmation dialog for destructive or outward-facing actions, and
 // an error banner with Retry.
 import type { ReactNode } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, Icon, Spinner, type IconName } from '@nova/ui';
 import type { Tone } from './m6-format.ts';
 import './code.css';
+
+export const PARTS_TEXT = defineMessages('code.parts', {
+  retry: 'Retry',
+  cancel: 'Cancel',
+});
 
 export function Badge({
   tone,
@@ -26,7 +32,7 @@ export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: (
   return (
     <div role="alert" className="ws-error">
       <p>{message}</p>
-      {onRetry ? <Button onClick={onRetry}>Retry</Button> : null}
+      {onRetry ? <Button onClick={onRetry}>{PARTS_TEXT.retry}</Button> : null}
     </div>
   );
 }
@@ -63,7 +69,7 @@ export function ConfirmDialog({
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{PARTS_TEXT.cancel}</Button>
           <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={onConfirm}>
             {busy ? <Spinner /> : null} {confirmLabel}
           </Button>

@@ -12,9 +12,9 @@ import { Menu } from '@nova/ui';
 import { ShareDialog, notShareableReason, useShareMenu } from '../src/team/ShareDialog.tsx';
 import { SharedList } from '../src/team/SharedList.tsx';
 import { SharedThreadPage, authorLine } from '../src/team/SharedThreadPage.tsx';
-import { FakeEventSource, createHub, thread } from './fakes.ts';
+import { DONE_ONBOARDING, FakeEventSource, createHub, message, thread } from './fakes.ts';
 import { MEMBER_ID, OWNER_ID, person, renderWithTeam, sharedThread } from './fakes-m7-team.ts';
-import { resetDom } from './render.tsx';
+import { renderApp, resetDom } from './render.tsx';
 
 afterEach(() => {
   resetDom();
@@ -312,5 +312,56 @@ describe('render sanity', () => {
     }
     render(<Harness />);
     expect(screen.getByTestId('n').textContent).toBe('0');
+  });
+});
+
+describe('who wrote what in the ordinary chat view (FR-217)', () => {
+  const text = (t: string) => [{ type: 'text' as const, text: t }];
+
+  it('names each person in a shared chat, says You for yours, and nobody in a private chat', async () => {
+    const hub = createHub({
+      threads: [thread({ id: 't1', title: 'Trip' }), thread({ id: 't2', title: 'Diary' })],
+    });
+    hub.state.settings = { 'onboarding.state': DONE_ONBOARDING };
+    hub.state.messages.set('t1', [
+      message('t1', {
+        id: 'm1',
+        parts: text('Where to?'),
+        author: { accountId: OWNER_ID, displayName: 'Sam' },
+      }),
+      message('t1', { id: 'm2', role: 'assistant', parts: text('Somewhere warm.') }),
+      message('t1', {
+        id: 'm3',
+        parts: text('The coast'),
+        author: { accountId: MEMBER_ID, displayName: 'Alex' },
+      }),
+      message('t1', {
+        id: 'm4',
+        parts: text('Or the hills'),
+        author: { accountId: 'acc-kim', displayName: null },
+      }),
+    ]);
+    hub.state.messages.set('t2', [message('t2', { id: 'm5', parts: text('Just me') })]);
+    await renderApp({ hub, path: '/chat/t1' });
+    const alex = await screen.findByRole('article', { name: 'Alex' });
+    expect(within(alex).getByText('The coast')).toBeTruthy();
+    expect(
+      within(screen.getByRole('article', { name: 'Someone' })).getByText('Or the hills'),
+    ).toBeTruthy();
+    // Yours say You once the Hub has said who you are.
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('article', { name: 'You' })).getByText('Where to?'),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByRole('article', { name: 'Sam' })).toBeNull();
+    expect(screen.getByRole('article', { name: 'Assistant' })).toBeTruthy();
+    resetDom();
+
+    await renderApp({ hub, path: '/chat/t2' });
+    expect(
+      within(await screen.findByRole('article', { name: 'You' })).getByText('Just me'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('article', { name: 'Someone' })).toBeNull();
   });
 });

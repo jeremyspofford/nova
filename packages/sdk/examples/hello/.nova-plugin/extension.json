@@ -18,7 +18,8 @@
     ],
     "tools": {
       "greet": { "action": "read", "default": "allow" },
-      "save_note": { "action": "write" }
+      "save_note": { "action": "write" },
+      "check_status": { "action": "read", "default": "allow" }
     },
     "hooks": [
       { "id": "note-greetings", "event": "tool.post", "matcher": "ext:com.example.hello/greet" }

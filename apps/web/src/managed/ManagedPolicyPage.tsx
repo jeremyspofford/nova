@@ -19,12 +19,13 @@ import {
   CHANNEL_LABEL,
   IGNORE_REASON,
   MANAGED_STRINGS as S,
-  SOURCE_STATUS,
   derivedText,
+  egressLines,
   formatPolicyValue,
   isOwnerOnlyError,
   managedErrorMessage,
   restrictionLines,
+  sourceStatus,
   sourceStatusText,
 } from './format.ts';
 import { useManagedView } from './store.ts';
@@ -70,7 +71,7 @@ export function ManagedPolicyPage() {
       put(view);
       setStatus(before && sameApplied(before, view) ? S.reloadedSame : S.reloaded);
     } catch (err) {
-      setReloadError(managedErrorMessage(err, 'Could not check the policy.'));
+      setReloadError(managedErrorMessage(err, S.checkFailed));
     } finally {
       setReloading(false);
     }
@@ -92,10 +93,10 @@ export function ManagedPolicyPage() {
       {!view && !hidden && m.error ? (
         <div role="alert" className="ws-error">
           <p>{managedErrorMessage(m.error, S.loadError)}</p>
-          <Button onClick={() => void refresh()}>Retry</Button>
+          <Button onClick={() => void refresh()}>{S.retry}</Button>
         </div>
       ) : null}
-      {!view && !m.error && m.supported ? <Spinner label="Loading the managed policy" /> : null}
+      {!view && !m.error && m.supported ? <Spinner label={S.loading} /> : null}
       {!m.supported ? <p>{S.none}</p> : null}
       {view ? (
         <>
@@ -109,9 +110,7 @@ export function ManagedPolicyPage() {
                 {reloading ? S.reloading : S.reload}
               </Button>
             )}
-            <span className="muted">
-              {S.checkedAt}: {formatWhen(view.checkedAt)}
-            </span>
+            <span className="muted">{S.lastChecked({ when: formatWhen(view.checkedAt) })}</span>
           </div>
           <p role="status" className="muted">
             {status}
@@ -137,9 +136,9 @@ function Precedence() {
     <section className="settings-section" aria-labelledby={id}>
       <h3 id={id}>{S.precedenceTitle}</h3>
       <ol className="mg-lines">
-        {S.precedence.map((line) => (
-          <li key={line}>{line}</li>
-        ))}
+        <li>{S.precedence.defaults}</li>
+        <li>{S.precedence.hub}</li>
+        <li>{S.precedence.policy}</li>
       </ol>
       <p className="muted">{S.precedenceBoth}</p>
     </section>
@@ -154,7 +153,9 @@ function Summary({ view }: { view: ManagedPolicyView }) {
         <div className="stack">
           <p className="mg-strong">{S.failClosedTitle}</p>
           <p>{S.failClosed}</p>
-          <p className="muted mg-detail">{view.failClosed}</p>
+          <p className="muted mg-detail" dir="auto">
+            {view.failClosed}
+          </p>
         </div>
       </div>
     );
@@ -173,7 +174,7 @@ function Sources({ view }: { view: ManagedPolicyView }) {
       <h3 id={id}>{S.sourcesTitle}</h3>
       <ul className="mg-sources">
         {view.sources.map((s) => {
-          const spec = SOURCE_STATUS[s.status];
+          const spec = sourceStatus(s.status);
           return (
             <li key={s.channel} className="mg-source">
               <div className="mg-source-head">
@@ -188,7 +189,9 @@ function Sources({ view }: { view: ManagedPolicyView }) {
               <dl className="ws-dl">
                 <dt>{S.location}</dt>
                 <dd>
-                  <code className="mg-code">{s.location}</code>
+                  <code className="mg-code" dir="ltr">
+                    {s.location}
+                  </code>
                 </dd>
                 {s.serial !== null ? (
                   <>
@@ -227,12 +230,18 @@ function Restrictions({ view }: { view: ManagedPolicyView }) {
       {groups.map((g) => (
         <div key={g.channel} className="mg-channel">
           {groups.length > 1 ? <h4>{CHANNEL_LABEL[g.channel]}</h4> : null}
-          <ul className="mg-lines" aria-label={`${S.restrictTitle}: ${CHANNEL_LABEL[g.channel]}`}>
+          <ul
+            className="mg-lines"
+            aria-label={S.restrictionsFrom({ source: CHANNEL_LABEL[g.channel] })}
+          >
             {g.lines.map((line) => (
               <li key={line}>{line}</li>
             ))}
           </ul>
         </div>
+      ))}
+      {egressLines(view.egress).map((line) => (
+        <p key={line}>{line}</p>
       ))}
     </section>
   );
@@ -303,7 +312,10 @@ function Ignored({ view }: { view: ManagedPolicyView }) {
                 <td>
                   {IGNORE_REASON[i.reason]}
                   {i.reason === 'invalid_value' ? (
-                    <span className="muted mg-detail"> {i.message}</span>
+                    <span className="muted mg-detail" dir="auto">
+                      {' '}
+                      {i.message}
+                    </span>
                   ) : null}
                 </td>
               </tr>

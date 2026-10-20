@@ -3,9 +3,31 @@
 // start; a run proposed in a chat (FR-186) can be started here too. Plans can also be amended
 // while the run works.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { RunView } from '@nova/shared';
 import { Button, Icon, IconButton, Spinner } from '@nova/ui';
-import { STEP_ICON, STEP_TEXT, stepLine } from './format.ts';
+import { STEP_ICON, STEP_TEXT, WORK_TEXT, stepLine } from './format.ts';
+
+/** The plan card and its editor. */
+export const PLAN_TEXT = defineMessages('work.plan', {
+  heading: 'Plan',
+  writing: 'Writing the plan',
+  writingText: 'Writing the plan…',
+  autonomous: 'Autonomous runs skip the plan and work step by step.',
+  onStart: 'The run writes its plan when it starts.',
+  none: 'No plan yet.',
+  steps: 'Plan steps',
+  review: 'Review the plan, then start the run.',
+  proposed: 'This run was proposed in a chat. It starts when you accept it.',
+  edit: 'Edit plan',
+  approve: 'Approve and start',
+  start: 'Start run',
+  /** {n} counts the steps from 1. */
+  step: 'Step {n}',
+  removeStep: 'Remove step {n}',
+  addStep: 'Add step',
+  save: 'Save plan',
+});
 
 export interface PlanDraftStep {
   key: number;
@@ -41,6 +63,7 @@ export function PlanCard({
     run.status === 'paused' ||
     run.status === 'waiting_approval';
   const progress = stepLine(plan);
+  const S = PLAN_TEXT;
 
   const startEdit = () =>
     setDraft((plan ?? []).map((s) => ({ key: ++keySeq, title: s.title, detail: s.detail ?? '' })));
@@ -61,7 +84,7 @@ export function PlanCard({
   return (
     <section className="panel-inset work-plan" aria-labelledby={headingId}>
       <div className="work-goal-head">
-        <h2 id={headingId}>Plan</h2>
+        <h2 id={headingId}>{S.heading}</h2>
         {progress ? <span className="muted">{progress}</span> : null}
       </div>
       {draft ? (
@@ -75,19 +98,15 @@ export function PlanCard({
       ) : plan === null ? (
         run.status === 'planning' && !awaitingApproval ? (
           <p className="muted ws-flush">
-            <Spinner label="Writing the plan" /> Writing the plan…
+            <Spinner label={S.writing} /> {S.writingText}
           </p>
         ) : (
           <p className="muted ws-flush">
-            {run.autonomy === 'autonomous'
-              ? 'Autonomous runs skip the plan and work step by step.'
-              : awaitingApproval
-                ? 'The run writes its plan when it starts.'
-                : 'No plan yet.'}
+            {run.autonomy === 'autonomous' ? S.autonomous : awaitingApproval ? S.onStart : S.none}
           </p>
         )
       ) : (
-        <ol className="work-steps" aria-label="Plan steps">
+        <ol className="work-steps" aria-label={S.steps}>
           {plan.map((s) => {
             const icon = STEP_ICON[s.status];
             return (
@@ -96,8 +115,14 @@ export function PlanCard({
                   {icon ? <Icon name={icon} /> : <Spinner />}
                   {STEP_TEXT[s.status]}
                 </span>
-                <span className="work-step-title">{s.title}</span>
-                {s.detail ? <span className="muted work-step-detail">{s.detail}</span> : null}
+                <span className="work-step-title" dir="auto">
+                  {s.title}
+                </span>
+                {s.detail ? (
+                  <span className="muted work-step-detail" dir="auto">
+                    {s.detail}
+                  </span>
+                ) : null}
               </li>
             );
           })}
@@ -105,18 +130,15 @@ export function PlanCard({
       )}
       {awaitingApproval && !draft ? (
         <p className="ws-flush" role="note">
-          <Icon name="hand" />{' '}
-          {plan
-            ? 'Review the plan, then start the run.'
-            : 'This run was proposed in a chat. It starts when you accept it.'}
+          <Icon name="hand" /> {plan ? S.review : S.proposed}
         </p>
       ) : null}
       {!draft && (editable || awaitingApproval) ? (
         <div className="ws-toolbar">
-          {editable && plan ? <Button onClick={startEdit}>Edit plan</Button> : null}
+          {editable && plan ? <Button onClick={startEdit}>{S.edit}</Button> : null}
           {awaitingApproval ? (
             <Button variant="primary" onClick={onApprove}>
-              {plan ? 'Approve and start' : 'Start run'}
+              {plan ? S.approve : S.start}
             </Button>
           ) : null}
         </div>
@@ -142,10 +164,11 @@ function PlanEditor({
   const set = (key: number, patch: Partial<PlanDraftStep>) =>
     onChange(steps.map((s) => (s.key === key ? { ...s, ...patch } : s)));
   const valid = steps.some((s) => s.title.trim());
+  const S = PLAN_TEXT;
   return (
     <form
       className="stack"
-      aria-label="Edit plan"
+      aria-label={S.edit}
       onSubmit={(e) => {
         e.preventDefault();
         onSave();
@@ -155,7 +178,7 @@ function PlanEditor({
         {steps.map((s, i) => (
           <li key={s.key} className="work-plan-edit-row">
             <label className="nv-vh" htmlFor={`${base}-${s.key}`}>
-              Step {i + 1}
+              {S.step({ n: i + 1 })}
             </label>
             <input
               id={`${base}-${s.key}`}
@@ -166,7 +189,7 @@ function PlanEditor({
               onChange={(e) => set(s.key, { title: e.target.value })}
             />
             <IconButton
-              label={`Remove step ${i + 1}`}
+              label={S.removeStep({ n: i + 1 })}
               icon={<Icon name="trash" />}
               variant="ghost"
               disabled={steps.length === 1}
@@ -180,12 +203,12 @@ function PlanEditor({
           disabled={steps.length >= 50}
           onClick={() => onChange([...steps, { key: ++keySeq, title: '', detail: '' }])}
         >
-          <Icon name="plus" /> Add step
+          <Icon name="plus" /> {S.addStep}
         </Button>
         <Button type="submit" variant="primary" disabled={busy || !valid}>
-          {busy ? <Spinner /> : null} Save plan
+          {busy ? <Spinner /> : null} {S.save}
         </Button>
-        <Button onClick={onCancel}>Cancel</Button>
+        <Button onClick={onCancel}>{WORK_TEXT.cancel}</Button>
       </div>
     </form>
   );

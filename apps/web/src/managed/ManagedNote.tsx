@@ -4,8 +4,10 @@
 // section while a policy is in force or failing closed. Both read the shared managed view; the
 // note renders the plain text when there is no Hub client or no view (an older Hub, a member).
 import type { ManagedChannel } from '@nova/shared';
-import { Icon } from '@nova/ui';
+import { Icon, LockNoteProvider, UI_TEXT, type LockNoteRenderer } from '@nova/ui';
+import type { ReactNode } from 'react';
 import { useHubStream } from '../hub-events.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useOptionalServices, useServices } from '../services.tsx';
 import {
   CHANNEL_LABEL,
@@ -36,7 +38,7 @@ function NoteText({
   const Tag = as;
   return (
     <Tag id={id} className="nv-field-hint nv-field-lock mg-note">
-      <span>{S.managed}</span>
+      <span>{UI_TEXT.managed}</span>
       {source ? <span className="mg-note-source">{LOCK_SOURCE[source]}</span> : null}
     </Tag>
   );
@@ -52,6 +54,18 @@ export function ManagedNote(props: ManagedNoteProps) {
   const services = useOptionalServices();
   if (!services) return <NoteText id={props.id} as={props.as} source={null} />;
   return <NoteFromHub {...props} api={services.api} />;
+}
+
+const managedLockNote: LockNoteRenderer = ({ id, setting }) => (
+  <ManagedNote id={id} setting={setting} />
+);
+
+/**
+ * Every locked @nova/ui field (select, radio group, color) inside shows this note, naming the
+ * policy's source, under the id its control's aria-describedby points to.
+ */
+export function ManagedLockNotes({ children }: { children: ReactNode }) {
+  return <LockNoteProvider render={managedLockNote}>{children}</LockNoteProvider>;
 }
 
 /**
@@ -84,7 +98,14 @@ export function ManagedBanner() {
           <ul className="mg-banner-sources">
             {inForce.map((s) => (
               <li key={s.channel}>
-                {CHANNEL_LABEL[s.channel]}: <code className="mg-code">{s.location}</code>
+                {rich(S.sourceAt, {
+                  source: CHANNEL_LABEL[s.channel],
+                  location: (
+                    <code className="mg-code" dir="ltr">
+                      {s.location}
+                    </code>
+                  ),
+                })}
               </li>
             ))}
           </ul>

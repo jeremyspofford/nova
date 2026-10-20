@@ -3,28 +3,63 @@
 // as password fields; they go to the vault), and the permissions Nova proposes, which you confirm
 // or narrow. An unverified bundle needs an explicit sideload confirmation.
 import { useRef, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { BundleConfigField, BundlePreview, McpServerView } from '@nova/shared';
 import { Button, Dialog, Icon, RadioGroup, Spinner, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
-import { formatBytes, readAsBase64 } from '../chat/attachments.ts';
+import { readAsBase64 } from '../chat/attachments.ts';
 import { useServices } from '../services.tsx';
 import { VerifiedBadge } from './badges.tsx';
 
 /** The Hub accepts bundles up to 50 MB. */
 export const BUNDLE_MAX_BYTES = 50 * 1024 * 1024;
 
-const SERVER_TYPE: Record<BundlePreview['serverType'], string> = {
-  node: 'Node.js',
-  python: 'Python',
-  uv: 'Python (built with uv)',
-  binary: 'a program for this platform',
-};
+export const BUNDLE_TEXT = defineMessages('settings.bundle', {
+  serverType: {
+    node: 'Node.js',
+    python: 'Python',
+    uv: 'Python (built with uv)',
+    binary: 'a program for this platform',
+  },
+  fs: {
+    none: 'No file access',
+    read: 'Read the files and folders entered above',
+    project: 'Read and write the folders entered above',
+  },
+  needValue: 'Enter {field}.',
+  notNumber: '{field} must be a number.',
+  tooBig: '{name} is {size}; bundles can be at most {max}.',
+  readFailed: 'Could not read {name}: {error}',
+  install: 'Install a bundle',
+  file: 'Bundle file',
+  installFailed: 'Could not install the bundle.',
+  title: 'Install {name} {version}?',
+  cancel: 'Cancel',
+  installButton: 'Install',
+  by: 'by {author}',
+  runsWith: 'Runs with {runtime}',
+  unverified:
+    'Unverified: this bundle is not signed by a publisher you trust. It stays labelled ' +
+    'Unverified in your server list and the audit log.',
+  sideload: 'I trust where this bundle came from; install it unverified',
+  warnings: 'Warnings',
+  tools: 'Tools it offers',
+  toolsAsk: 'Its tools ask you first until you change their defaults.',
+  settings: 'Settings',
+  permissions: 'Permissions to confirm',
+  hosts: 'Hosts it may reach',
+  noNetwork: 'No network access.',
+  files: 'Files',
+  notSandboxed:
+    "Nova records these permissions with the server. MCP servers are not sandboxed yet: this one runs as the Hub's user, so install it only if you trust where it came from.",
+  optional: '{field} (optional)',
+  sensitiveHint: 'Stored in the vault; it is never shown again.',
+  pathHint: 'A full path on the Hub.',
+  perLine: 'One per line.',
+});
+const S = BUNDLE_TEXT;
 
-const FS_OPTIONS: { value: BundlePreview['permissions']['fs']; label: string }[] = [
-  { value: 'none', label: 'No file access' },
-  { value: 'read', label: 'Read the files and folders entered above' },
-  { value: 'project', label: 'Read and write the folders entered above' },
-];
+const FS_VALUES: readonly BundlePreview['permissions']['fs'][] = ['none', 'read', 'project'];
 
 export type ConfigDraft = Record<string, string | boolean>;
 
@@ -58,12 +93,12 @@ export function configValues(
     }
     const text = typeof raw === 'string' ? raw.trim() : '';
     if (!text) {
-      if (f.required) errors[f.key] = `Enter ${f.title.toLowerCase()}.`;
+      if (f.required) errors[f.key] = S.needValue({ field: f.title.toLowerCase() });
       continue;
     }
     if (f.type === 'number') {
       const n = Number(text);
-      if (!Number.isFinite(n)) errors[f.key] = `${f.title} must be a number.`;
+      if (!Number.isFinite(n)) errors[f.key] = S.notNumber({ field: f.title });
       else values[f.key] = n;
       continue;
     }
@@ -90,7 +125,11 @@ export function BundleInstallButton({ onInstalled }: { onInstalled: (s: McpServe
   const pick = async (file: File) => {
     if (file.size > BUNDLE_MAX_BYTES) {
       toast.show(
-        `${file.name} is ${formatBytes(file.size)}; bundles can be at most ${formatBytes(BUNDLE_MAX_BYTES)}.`,
+        S.tooBig({
+          name: file.name,
+          size: fmt.bytes(file.size),
+          max: fmt.bytes(BUNDLE_MAX_BYTES),
+        }),
         { tone: 'error' },
       );
       return;
@@ -100,7 +139,7 @@ export function BundleInstallButton({ onInstalled }: { onInstalled: (s: McpServe
       const data = await readAsBase64(file);
       setPreview(await api.previewBundle({ name: file.name, data }));
     } catch (err) {
-      toast.show(`Could not read ${file.name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.readFailed({ name: file.name, error: errorMessage(err) }), { tone: 'error' });
     } finally {
       setReading(false);
     }
@@ -109,14 +148,14 @@ export function BundleInstallButton({ onInstalled }: { onInstalled: (s: McpServe
   return (
     <>
       <Button onClick={() => input.current?.click()} disabled={reading}>
-        {reading ? <Spinner /> : <Icon name="download" />} Install a bundle
+        {reading ? <Spinner /> : <Icon name="download" />} {S.install}
       </Button>
       <input
         ref={input}
         type="file"
         accept=".mcpb,.zip,application/zip"
         hidden
-        aria-label="Bundle file"
+        aria-label={S.file}
         onChange={(e) => {
           const file = e.target.files?.[0];
           e.target.value = '';
@@ -176,7 +215,7 @@ function BundlePreviewDialog({
         }),
       );
     } catch (err) {
-      setFailure(errorMessage(err, 'Could not install the bundle.'));
+      setFailure(errorMessage(err, S.installFailed));
       setBusy(false);
     }
   };
@@ -184,19 +223,19 @@ function BundlePreviewDialog({
   return (
     <Dialog
       open
-      title={`Install ${title} ${preview.version}?`}
+      title={S.title({ name: title, version: preview.version })}
       description={preview.description}
       onClose={onClose}
       className="ws-wide-dialog"
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.cancel}</Button>
           <Button
             variant="primary"
             disabled={busy || (unverified && !sideload)}
             onClick={() => void install()}
           >
-            {busy ? <Spinner /> : null} Install
+            {busy ? <Spinner /> : null} {S.installButton}
           </Button>
         </>
       }
@@ -204,31 +243,32 @@ function BundlePreviewDialog({
       <div className="stack">
         <p className="ws-row-meta">
           <VerifiedBadge verified={!unverified} />
-          <code className="ws-code-inline">{preview.name}</code>
-          {preview.author ? <span className="muted">by {preview.author}</span> : null}
-          <span className="muted">Runs with {SERVER_TYPE[preview.serverType]}</span>
+          <code className="ws-code-inline" dir="ltr">
+            {preview.name}
+          </code>
+          {preview.author ? (
+            <span className="muted">{S.by({ author: preview.author })}</span>
+          ) : null}
+          <span className="muted">{S.runsWith({ runtime: S.serverType[preview.serverType] })}</span>
         </p>
         {unverified ? (
           <div className="ws-callout" role="note">
             <Icon name="alert" />
             <div className="stack">
-              <p>
-                Unverified: this bundle is not signed by a publisher you trust. It stays labelled
-                Unverified in your server list and the audit log.
-              </p>
+              <p>{S.unverified}</p>
               <label className="ws-check">
                 <input
                   type="checkbox"
                   checked={sideload}
                   onChange={(e) => setSideload(e.target.checked)}
                 />
-                <span>I trust where this bundle came from; install it unverified</span>
+                <span>{S.sideload}</span>
               </label>
             </div>
           </div>
         ) : null}
         {preview.warnings.length ? (
-          <ul className="ws-plain-list" aria-label="Warnings">
+          <ul className="ws-plain-list" aria-label={S.warnings}>
             {preview.warnings.map((w) => (
               <li key={w}>{w}</li>
             ))}
@@ -237,23 +277,25 @@ function BundlePreviewDialog({
         {preview.tools.length ? (
           <section aria-labelledby="bundle-tools">
             <h3 id="bundle-tools" className="ws-subhead">
-              Tools it offers
+              {S.tools}
             </h3>
             <ul className="ws-plain-list">
               {preview.tools.map((t) => (
                 <li key={t.name}>
-                  <code className="ws-code-inline">{t.name}</code>
+                  <code className="ws-code-inline" dir="ltr">
+                    {t.name}
+                  </code>
                   {t.description ? ` ${t.description}` : ''}
                 </li>
               ))}
             </ul>
-            <p className="muted">Its tools ask you first until you change their defaults.</p>
+            <p className="muted">{S.toolsAsk}</p>
           </section>
         ) : null}
         {preview.userConfig.length ? (
           <section aria-labelledby="bundle-config" className="stack">
             <h3 id="bundle-config" className="ws-subhead">
-              Settings
+              {S.settings}
             </h3>
             {preview.userConfig.map((f) => (
               <ConfigField
@@ -268,11 +310,11 @@ function BundlePreviewDialog({
         ) : null}
         <section aria-labelledby="bundle-perms" className="stack">
           <h3 id="bundle-perms" className="ws-subhead">
-            Permissions to confirm
+            {S.permissions}
           </h3>
           {preview.permissions.network.length ? (
             <fieldset className="ws-fieldset">
-              <legend>Hosts it may reach</legend>
+              <legend>{S.hosts}</legend>
               {preview.permissions.network.map((h) => (
                 <label key={h} className="ws-check">
                   <input
@@ -287,24 +329,21 @@ function BundlePreviewDialog({
                       })
                     }
                   />
-                  <span>{h}</span>
+                  <span dir="ltr">{h}</span>
                 </label>
               ))}
             </fieldset>
           ) : (
-            <p className="muted">No network access.</p>
+            <p className="muted">{S.noNetwork}</p>
           )}
           <RadioGroup
-            legend="Files"
+            legend={S.files}
             name="bundle-fs"
             value={fs}
             onChange={(v) => setFs(v as BundlePreview['permissions']['fs'])}
-            options={FS_OPTIONS}
+            options={FS_VALUES.map((value) => ({ value, label: S.fs[value] }))}
           />
-          <p className="muted">
-            Nova records these permissions with the server. MCP servers are not sandboxed yet: this
-            one runs as the Hub's user, so install it only if you trust where it came from.
-          </p>
+          <p className="muted">{S.notSandboxed}</p>
         </section>
         {failure ? (
           <p role="alert" className="nv-field-error">
@@ -327,13 +366,13 @@ function ConfigField({
   error: string | undefined;
   onChange: (v: string | boolean) => void;
 }) {
-  const label = `${f.title}${f.required ? '' : ' (optional)'}`;
+  const label = f.required ? f.title : S.optional({ field: f.title });
   const hint =
     [
       f.description,
-      f.sensitive ? 'Stored in the vault; it is never shown again.' : null,
-      f.type === 'directory' || f.type === 'file' ? 'A full path on the Hub.' : null,
-      f.multiple ? 'One per line.' : null,
+      f.sensitive ? S.sensitiveHint : null,
+      f.type === 'directory' || f.type === 'file' ? S.pathHint : null,
+      f.multiple ? S.perLine : null,
     ]
       .filter(Boolean)
       .join(' ') || undefined;

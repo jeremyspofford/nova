@@ -5,6 +5,7 @@
 // history, "Remember more / less" per category and the "Reference past chats" switch (FR-204,
 // FR-205; MemoryConsolidation.tsx).
 import { useEffect, useId, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { MemoryItemView } from '@nova/shared';
 import {
   Button,
@@ -22,7 +23,7 @@ import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useThreads } from '../stores.tsx';
-import { formatWhen, plural } from './common.ts';
+import { formatWhen } from './common.ts';
 import { SwitchField } from './controls.tsx';
 import {
   ConsolidationSection,
@@ -34,7 +35,93 @@ import '../workspace.css';
 
 type Status = MemoryItemView['status'];
 
-export const UNCATEGORIZED = 'Other';
+export const MEMORY_TEXT = defineMessages('settings.memory', {
+  /** The group of memories without a category. */
+  uncategorized: 'Other',
+  loadFailed: 'Could not load memories.',
+  undo: 'Undo',
+  updateFailed: 'Could not update the memory: {error}',
+  deleted: 'Memory deleted.',
+  deleteFailed: 'Could not delete the memory: {error}',
+  title: 'Memory',
+  enabled: 'Use saved memories',
+  enabledHint:
+    'Nova saves lasting facts from your chats here and uses them in replies. Temporary chats ' +
+    'and chats you opt out of are never used.',
+  saveFailed: 'Could not save: {error}',
+  off:
+    'Memory is off. Saved memories are kept for you to review, but they are not used and ' +
+    'nothing new is saved.',
+  saved: 'Saved memories',
+  filter: 'Filter memories',
+  show: 'Show',
+  inUse: 'In use',
+  dismissed: 'Dismissed',
+  add: 'Add memory',
+  import: 'Import',
+  retry: 'Retry',
+  loading: 'Loading memories',
+  none: 'No memories yet',
+  noneDismissed: 'No dismissed memories',
+  noneHint:
+    'When memory is on, lasting facts from your chats appear here. You can also add one ' +
+    'yourself or import an export.',
+  noneDismissedHint: 'Memories you dismiss are listed here so you can restore them.',
+  noMatch: 'No memories match “{filter}”.',
+  added: 'Memory added.',
+  deleteTitle: 'Delete this memory?',
+  deleteBody: 'It is removed for good. To stop using it but keep it for later, dismiss it instead.',
+  cancel: 'Cancel',
+  delete: 'Delete',
+  source: {
+    manual: 'Added by you',
+    import: 'Imported',
+    consolidation: 'Summarized from your chats',
+    ambient: 'From ambient capture',
+    chat: 'From a chat',
+  },
+  corrected: 'Memory corrected.',
+  pinned: 'Pinned',
+  fromChat: 'From “{title}”',
+  updated: 'Updated {when}',
+  wasUnpinned: 'Memory unpinned.',
+  wasPinned: 'Memory pinned.',
+  unpin: 'Unpin',
+  pin: 'Pin',
+  correct: 'Correct',
+  wasDismissed: 'Memory dismissed.',
+  dismiss: 'Dismiss',
+  wasRestored: 'Memory restored.',
+  restore: 'Restore',
+  correctForm: 'Correct this memory',
+  memory: 'Memory',
+  category: 'Category',
+  categoryHint: 'Optional, for example Work or Travel.',
+  save: 'Save',
+  addFailed: 'Could not add the memory.',
+  addTitle: 'Add a memory',
+  addBody: 'Something Nova should keep in mind in your chats.',
+  addPlaceholder: 'I prefer metric units.',
+  notJson: 'This is not valid JSON. Check the pasted text, or choose “One per line”.',
+  notArray: 'Expected a JSON array of memories, like ["I live in Lisbon"].',
+  badEntry: 'Each entry must be text or an object with a "content" field.',
+  importFailed: 'Could not import.',
+  importTitle: 'Import memories',
+  importBody:
+    'Paste an export from another assistant or your own list. Memories you already have are ' +
+    'skipped.',
+  importMore: 'Import more',
+  done: 'Done',
+  importResult:
+    'Imported {imported, plural, one {# memory} other {# memories}}. Skipped {skipped, plural, one {# duplicate} other {# duplicates}}.',
+  format: 'Format',
+  perLine: 'One per line',
+  perLineHint: 'Each line is one memory.',
+  json: 'JSON',
+  jsonHint: 'An array of text, or of objects with "content" and "category".',
+  exportData: 'Export to import',
+});
+const S = MEMORY_TEXT;
 
 /** Groups by category, named categories A–Z and uncategorized last; item order is kept. */
 export function groupMemories(
@@ -83,7 +170,7 @@ export function MemoryPage() {
         setItems(sortMemories(list));
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load memories.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -108,13 +195,13 @@ export function MemoryPage() {
       if (done) {
         const undo =
           patch.status !== undefined
-            ? { label: 'Undo', onClick: () => void update(next, { status: m.status }) }
+            ? { label: S.undo, onClick: () => void update(next, { status: m.status }) }
             : undefined;
         toast.show(done, { tone: 'success', ...(undo ? { action: undo } : {}) });
       }
       return true;
     } catch (err) {
-      toast.show(`Could not update the memory: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.updateFailed({ error: errorMessage(err) }), { tone: 'error' });
       return false;
     }
   };
@@ -124,9 +211,9 @@ export function MemoryPage() {
     try {
       await api.deleteMemory(m.id);
       setItems((list) => list?.filter((x) => x.id !== m.id) ?? null);
-      toast.show('Memory deleted.', { tone: 'success' });
+      toast.show(S.deleted, { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not delete the memory: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.deleteFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -138,85 +225,80 @@ export function MemoryPage() {
 
   return (
     <div className="settings-page">
-      <h2>Memory</h2>
+      <h2>{S.title}</h2>
       <section className="settings-section">
         <SwitchField
-          label="Use saved memories"
-          description="Nova saves lasting facts from your chats here and uses them in replies. Temporary chats and chats you opt out of are never used."
+          label={S.enabled}
+          description={S.enabledHint}
           checked={enabled.value}
           locked={enabled.locked}
           onChange={(v) =>
             void settings
               .set('memory.enabled', v)
               .catch((err: unknown) =>
-                toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' }),
+                toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' }),
               )
           }
         />
         {!enabled.value ? (
           <p className="muted" role="status">
-            Memory is off. Saved memories are kept for you to review, but they are not used and
-            nothing new is saved.
+            {S.off}
           </p>
         ) : null}
         <PastChatsSwitch />
       </section>
       <ConsolidationSection />
       <section className="settings-section" aria-labelledby="memory-items">
-        <h3 id="memory-items">Saved memories</h3>
+        <h3 id="memory-items">{S.saved}</h3>
         <div className="ws-toolbar">
           <TextField
-            label="Filter memories"
+            label={S.filter}
             type="search"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
           <SelectField
-            label="Show"
+            label={S.show}
             value={status}
             onChange={(v) => {
               setStatus(v as Status);
               setEditing(null);
             }}
             options={[
-              { value: 'active', label: 'In use' },
-              { value: 'dismissed', label: 'Dismissed' },
+              { value: 'active', label: S.inUse },
+              { value: 'dismissed', label: S.dismissed },
             ]}
           />
           <Button variant="primary" onClick={() => setAdding(true)}>
-            <Icon name="plus" /> Add memory
+            <Icon name="plus" /> {S.add}
           </Button>
-          <Button onClick={() => setImporting(true)}>Import</Button>
+          <Button onClick={() => setImporting(true)}>{S.import}</Button>
         </div>
         {error ? (
           <div role="alert" className="ws-error">
             <p>{error}</p>
-            <Button onClick={reload}>Retry</Button>
+            <Button onClick={reload}>{S.retry}</Button>
           </div>
         ) : null}
-        {items === null && !error ? <Spinner label="Loading memories" /> : null}
+        {items === null && !error ? <Spinner label={S.loading} /> : null}
         {items?.length === 0 ? (
           <EmptyState
             level={3}
-            title={status === 'active' ? 'No memories yet' : 'No dismissed memories'}
-            description={
-              status === 'active'
-                ? 'When memory is on, lasting facts from your chats appear here. You can also add one yourself or import an export.'
-                : 'Memories you dismiss are listed here so you can restore them.'
-            }
+            title={status === 'active' ? S.none : S.noneDismissed}
+            description={status === 'active' ? S.noneHint : S.noneDismissedHint}
           />
         ) : null}
         {items?.length && shown.length === 0 ? (
-          <p className="muted">No memories match “{filter.trim()}”.</p>
+          <p className="muted">{S.noMatch({ filter: filter.trim() })}</p>
         ) : null}
         {groups.map((g) => (
           <section
             key={g.category ?? '\u0000'}
             className="ws-memory-group"
-            aria-label={g.category ?? UNCATEGORIZED}
+            aria-label={g.category ?? S.uncategorized}
           >
             <div className="ws-group-head">
-              <h4>{g.category ?? UNCATEGORIZED}</h4>
+              <h4 dir="auto">{g.category ?? S.uncategorized}</h4>
               {g.category ? (
                 <TopicControls
                   topic={g.category}
@@ -248,43 +330,36 @@ export function MemoryPage() {
         onAdded={(m) => {
           setAdding(false);
           if (status === 'active') setItems((list) => sortMemories([m, ...(list ?? [])]));
-          toast.show('Memory added.', { tone: 'success' });
+          toast.show(S.added, { tone: 'success' });
         }}
       />
       <ImportDialog open={importing} onClose={() => setImporting(false)} onImported={reload} />
       <Dialog
         open={deleting !== null}
-        title="Delete this memory?"
-        description="It is removed for good. To stop using it but keep it for later, dismiss it instead."
+        title={S.deleteTitle}
+        description={S.deleteBody}
         onClose={() => setDeleting(null)}
         footer={
           <>
-            <Button onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button onClick={() => setDeleting(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => deleting && void remove(deleting)}>
-              Delete
+              {S.delete}
             </Button>
           </>
         }
       >
-        {deleting ? <p className="ws-quote">{deleting.content}</p> : null}
+        {deleting ? (
+          <p className="ws-quote" dir="auto">
+            {deleting.content}
+          </p>
+        ) : null}
       </Dialog>
     </div>
   );
 }
 
 function sourceText(m: MemoryItemView): string {
-  switch (m.sourceKind) {
-    case 'manual':
-      return 'Added by you';
-    case 'import':
-      return 'Imported';
-    case 'consolidation':
-      return 'Summarized from your chats';
-    case 'ambient':
-      return 'From ambient capture';
-    case 'chat':
-      return 'From a chat';
-  }
+  return S.source[m.sourceKind];
 }
 
 function MemoryRow({
@@ -329,16 +404,18 @@ function MemoryRow({
               onEditDone();
             };
             if (!patch) finish();
-            else void onUpdate(item, patch, 'Memory corrected.').then((ok) => ok && finish());
+            else void onUpdate(item, patch, S.corrected).then((ok) => ok && finish());
           }}
         />
       ) : (
         <div className="ws-memory-main">
-          <p className="ws-memory-content">{item.content}</p>
+          <p className="ws-memory-content" dir="auto">
+            {item.content}
+          </p>
           <span className="muted ws-row-meta">
             {item.pinned ? (
               <span className="ws-badge">
-                <Icon name="pin" /> Pinned
+                <Icon name="pin" /> {S.pinned}
               </span>
             ) : null}
             {item.sourceThreadId ? (
@@ -350,12 +427,12 @@ function MemoryRow({
                   navigate(chatPath(item.sourceThreadId, item.sourceMessageId ?? undefined));
                 }}
               >
-                {source?.title ? `From “${source.title}”` : sourceText(item)}
+                {source?.title ? S.fromChat({ title: source.title }) : sourceText(item)}
               </a>
             ) : (
               <span>{sourceText(item)}</span>
             )}
-            <span>Updated {formatWhen(item.updatedAt)}</span>
+            <span>{S.updated({ when: formatWhen(item.updatedAt) })}</span>
           </span>
         </div>
       )}
@@ -367,32 +444,32 @@ function MemoryRow({
               void onUpdate(
                 item,
                 { pinned: !item.pinned },
-                item.pinned ? 'Memory unpinned.' : 'Memory pinned.',
+                item.pinned ? S.wasUnpinned : S.wasPinned,
               )
             }
           >
-            {item.pinned ? 'Unpin' : 'Pin'}
+            {item.pinned ? S.unpin : S.pin}
           </Button>
           <Button ref={correct} variant="ghost" onClick={onEdit}>
-            Correct
+            {S.correct}
           </Button>
           {item.status === 'active' ? (
             <Button
               variant="ghost"
-              onClick={() => void onUpdate(item, { status: 'dismissed' }, 'Memory dismissed.')}
+              onClick={() => void onUpdate(item, { status: 'dismissed' }, S.wasDismissed)}
             >
-              Dismiss
+              {S.dismiss}
             </Button>
           ) : (
             <Button
               variant="ghost"
-              onClick={() => void onUpdate(item, { status: 'active' }, 'Memory restored.')}
+              onClick={() => void onUpdate(item, { status: 'active' }, S.wasRestored)}
             >
-              Restore
+              {S.restore}
             </Button>
           )}
           <Button variant="ghost" onClick={onDelete}>
-            Delete
+            {S.delete}
           </Button>
         </div>
       ) : null}
@@ -419,7 +496,7 @@ function CorrectForm({
   return (
     <form
       className="stack ws-memory-edit"
-      aria-label="Correct this memory"
+      aria-label={S.correctForm}
       onSubmit={(e) => {
         e.preventDefault();
         if (content.trim()) onDone(changed ? patch : null);
@@ -434,11 +511,12 @@ function CorrectForm({
     >
       <div className="nv-field">
         <label className="nv-field-label" htmlFor={`${id}-content`}>
-          Memory
+          {S.memory}
         </label>
         <textarea
           id={`${id}-content`}
           className="nv-input ws-textarea"
+          dir="auto"
           rows={2}
           maxLength={2000}
           autoFocus
@@ -447,17 +525,17 @@ function CorrectForm({
         />
       </div>
       <TextField
-        label="Category"
+        label={S.category}
         value={category}
         maxLength={60}
-        hint="Optional, for example Work or Travel."
+        hint={S.categoryHint}
         onChange={(e) => setCategory(e.target.value)}
       />
       <div className="row">
         <Button type="submit" variant="primary" disabled={!content.trim()}>
-          Save
+          {S.save}
         </Button>
-        <Button onClick={() => onDone(null)}>Cancel</Button>
+        <Button onClick={() => onDone(null)}>{S.cancel}</Button>
       </div>
     </form>
   );
@@ -502,7 +580,7 @@ function AddMemoryForm({
         }),
       );
     } catch (err) {
-      setError(errorMessage(err, 'Could not add the memory.'));
+      setError(errorMessage(err, S.addFailed));
       setBusy(false);
     }
   };
@@ -510,8 +588,8 @@ function AddMemoryForm({
   return (
     <Dialog
       open
-      title="Add a memory"
-      description="Something Nova should keep in mind in your chats."
+      title={S.addTitle}
+      description={S.addBody}
       onClose={onClose}
       initialFocusRef={contentRef}
     >
@@ -525,24 +603,25 @@ function AddMemoryForm({
       >
         <div className="nv-field">
           <label className="nv-field-label" htmlFor={`${id}-content`}>
-            Memory
+            {S.memory}
           </label>
           <textarea
             ref={contentRef}
             id={`${id}-content`}
             className="nv-input ws-textarea"
+            dir="auto"
             rows={3}
             maxLength={2000}
-            placeholder="I prefer metric units."
+            placeholder={S.addPlaceholder}
             value={content}
             onChange={(e) => setContent(e.target.value)}
           />
         </div>
         <TextField
-          label="Category"
+          label={S.category}
           value={category}
           maxLength={60}
-          hint="Optional, for example Work or Travel."
+          hint={S.categoryHint}
           onChange={(e) => setCategory(e.target.value)}
         />
         {error ? (
@@ -551,9 +630,9 @@ function AddMemoryForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{S.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !content.trim()}>
-            {busy ? <Spinner /> : null} Add memory
+            {busy ? <Spinner /> : null} {S.add}
           </Button>
         </div>
       </form>
@@ -579,10 +658,9 @@ export function checkMemoryJson(text: string): string | null {
   try {
     parsed = JSON.parse(text);
   } catch {
-    return 'This is not valid JSON. Check the pasted text, or choose “One per line”.';
+    return S.notJson;
   }
-  if (!Array.isArray(parsed))
-    return 'Expected a JSON array of memories, like ["I live in Lisbon"].';
+  if (!Array.isArray(parsed)) return S.notArray;
   const ok = parsed.every(
     (x) =>
       typeof x === 'string' ||
@@ -590,7 +668,7 @@ export function checkMemoryJson(text: string): string | null {
         x !== null &&
         typeof (x as { content?: unknown }).content === 'string'),
   );
-  return ok ? null : 'Each entry must be text or an object with a "content" field.';
+  return ok ? null : S.badEntry;
 }
 
 function ImportForm({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
@@ -617,7 +695,7 @@ function ImportForm({ onClose, onImported }: { onClose: () => void; onImported: 
       setData('');
       onImported();
     } catch (err) {
-      setError(errorMessage(err, 'Could not import.'));
+      setError(errorMessage(err, S.importFailed));
     } finally {
       setBusy(false);
     }
@@ -626,15 +704,15 @@ function ImportForm({ onClose, onImported }: { onClose: () => void; onImported: 
   return (
     <Dialog
       open
-      title="Import memories"
-      description="Paste an export from another assistant or your own list. Memories you already have are skipped."
+      title={S.importTitle}
+      description={S.importBody}
       onClose={onClose}
       footer={
         result ? (
           <>
-            <Button onClick={() => setResult(null)}>Import more</Button>
+            <Button onClick={() => setResult(null)}>{S.importMore}</Button>
             <Button variant="primary" onClick={onClose}>
-              Done
+              {S.done}
             </Button>
           </>
         ) : undefined
@@ -642,8 +720,7 @@ function ImportForm({ onClose, onImported }: { onClose: () => void; onImported: 
     >
       {result ? (
         <p role="status" className="ws-import-result">
-          Imported {plural(result.imported, 'memory', 'memories')}. Skipped{' '}
-          {plural(result.skipped, 'duplicate')}.
+          {S.importResult({ imported: result.imported, skipped: result.skipped })}
         </p>
       ) : (
         <form
@@ -654,7 +731,7 @@ function ImportForm({ onClose, onImported }: { onClose: () => void; onImported: 
           }}
         >
           <RadioGroup
-            legend="Format"
+            legend={S.format}
             name={`${id}-format`}
             value={format}
             onChange={(v) => {
@@ -662,17 +739,13 @@ function ImportForm({ onClose, onImported }: { onClose: () => void; onImported: 
               setError(null);
             }}
             options={[
-              { value: 'text', label: 'One per line', description: 'Each line is one memory.' },
-              {
-                value: 'json',
-                label: 'JSON',
-                description: 'An array of text, or of objects with "content" and "category".',
-              },
+              { value: 'text', label: S.perLine, description: S.perLineHint },
+              { value: 'json', label: S.json, description: S.jsonHint },
             ]}
           />
           <div className="nv-field">
             <label className="nv-field-label" htmlFor={`${id}-data`}>
-              Export to import
+              {S.exportData}
             </label>
             <textarea
               id={`${id}-data`}
@@ -693,9 +766,9 @@ function ImportForm({ onClose, onImported }: { onClose: () => void; onImported: 
             </p>
           ) : null}
           <div className="nv-dialog-footer">
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={onClose}>{S.cancel}</Button>
             <Button type="submit" variant="primary" disabled={busy || !data.trim()}>
-              {busy ? <Spinner /> : null} Import
+              {busy ? <Spinner /> : null} {S.import}
             </Button>
           </div>
         </form>

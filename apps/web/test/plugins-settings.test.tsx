@@ -399,6 +399,97 @@ describe('Settings → Plugins & skills: plugins (FR-045)', () => {
     );
   });
 
+  it('replaces a signed extension only after the new publisher is accepted (M8)', async () => {
+    const warning =
+      "Not signed by the publisher of the installed extension com.example.tracker (Example Labs). Installing it needs your confirmation and clears the extension's secrets and data.";
+    const hub = createHub({
+      m4: m4State({
+        pluginPreview: pluginPreview({ verified: false, warnings: [] }),
+        pluginTakeover: warning,
+      }),
+    });
+    await renderApp({ hub, path: '/settings/plugins' });
+    await userEvent.type(
+      await screen.findByRole('textbox', { name: 'Plugin folder' }),
+      '/home/me/plugins/tracker',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Install Tracker 2.0.0?' });
+    // The preview says it first.
+    expect(
+      within(dialog).getByRole('list', { name: 'Warnings' }).firstElementChild!.textContent,
+    ).toBe(warning);
+    const install = within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Install' });
+    await userEvent.click(
+      within(dialog).getByRole('checkbox', { name: 'I trust its source; install it unverified' }),
+    );
+    await userEvent.click(install);
+    // The Hub asks for the acceptance: the form stays, Install waits for the tick.
+    const accept = await within(dialog).findByRole('checkbox', {
+      name: 'I accept the new publisher; delete its stored secrets and data',
+    });
+    expect(document.activeElement).toBe(accept);
+    expect(dialog.textContent).toContain('deletes the secrets you stored for the extension');
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+    expect(install.disabled).toBe(true);
+    expect(hub.state.m4.plugins.some((p) => p.name === 'Tracker')).toBe(false);
+    await userEvent.click(accept);
+    expect(install.disabled).toBe(false);
+    await userEvent.click(install);
+    expect(await screen.findByText(/Tracker 2\.0\.0 installed/)).toBeTruthy();
+    expect(hub.api.installPlugin).toHaveBeenCalledTimes(2);
+    expect(hub.api.installPlugin).toHaveBeenLastCalledWith(
+      expect.objectContaining({ acceptPublisherChange: true, confirmSideload: true }),
+    );
+  });
+
+  it('asks for the new publisher before the first Install when the preview says so (M8)', async () => {
+    const warning =
+      "Not signed by the publisher of the installed extension com.example.tracker (Example Labs). Installing it needs your confirmation and clears the extension's secrets and data.";
+    const hub = createHub({
+      m4: m4State({
+        pluginPreview: pluginPreview({
+          verified: false,
+          warnings: [warning],
+          publisherChange: {
+            from: { key: 'k'.repeat(43), name: 'Example Labs', fingerprint: '1a2b', trusted: true },
+            to: { key: null, name: null, fingerprint: null, trusted: false },
+          },
+        }),
+        // The Hub refuses an install without the acceptance.
+        pluginTakeover: warning,
+      }),
+    });
+    await renderApp({ hub, path: '/settings/plugins' });
+    await userEvent.type(
+      await screen.findByRole('textbox', { name: 'Plugin folder' }),
+      '/home/me/plugins/tracker',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Install Tracker 2.0.0?' });
+    // Who it was and who it is, before anything is sent.
+    expect(dialog.textContent).toContain('The installed version: Signed by Example Labs.');
+    expect(dialog.textContent).toContain('This version: Not signed.');
+    const install = within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Install' });
+    await userEvent.click(
+      within(dialog).getByRole('checkbox', { name: 'I trust its source; install it unverified' }),
+    );
+    expect(install.disabled).toBe(true);
+    await userEvent.click(
+      within(dialog).getByRole('checkbox', {
+        name: 'I accept the new publisher; delete its stored secrets and data',
+      }),
+    );
+    expect(install.disabled).toBe(false);
+    await userEvent.click(install);
+    expect(await screen.findByText(/Tracker 2\.0\.0 installed/)).toBeTruthy();
+    // One Install, accepted the first time: no refusal round trip.
+    expect(hub.api.installPlugin).toHaveBeenCalledTimes(1);
+    expect(hub.api.installPlugin).toHaveBeenLastCalledWith(
+      expect.objectContaining({ acceptPublisherChange: true, confirmSideload: true }),
+    );
+  });
+
   it('previews from a Git address and refuses a non-https one', async () => {
     const hub = createHub({ m4: m4State({ pluginPreview: pluginPreview() }) });
     await renderApp({ hub, path: '/settings/plugins' });

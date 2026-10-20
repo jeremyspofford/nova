@@ -75,7 +75,7 @@ describe('document previews (FR-219)', () => {
       await screen.findByRole('button', { name: 'Open artifact: Report.docx (Document (DOCX))' }),
     );
     const viewer = await within(inspector()).findByRole('article', { name: 'Report.docx' });
-    expect(viewer.textContent).toContain('Document (DOCX), version 1, 4.0 KB');
+    expect(viewer.textContent).toContain('Document (DOCX), version 1, 4 KB');
     expect(await within(viewer).findByRole('heading', { name: 'Summary', level: 4 })).toBeTruthy();
     expect(within(viewer).getByText('Revenue grew 12% in Q3')).toBeTruthy();
     const items = within(viewer)

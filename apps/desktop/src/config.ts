@@ -4,6 +4,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { shellConfigSchema, type ShellConfig } from '@nova/shared';
+import { CONFIG_TEXT } from './text.ts';
 
 export const CONFIG_FILE = 'shell.json';
 
@@ -33,7 +34,7 @@ export function loadConfig(dir: string): { config: ShellConfig; problem: string 
     }
     return {
       config: defaultConfig(),
-      problem: 'The app settings file was damaged and was set aside.',
+      problem: CONFIG_TEXT.damaged,
     };
   }
 }

@@ -321,8 +321,11 @@ agent as author) has actor `system` and correlation `{threadId,turnId}` when kno
 | `space.proposal.decided` | yes | `{spaceId,pageId,proposalId,status: accepted\|rejected}`; not sent when deleting a page or space rejects its open proposals |
 | `site.created` / `.updated` / `.deleted` | yes | `{siteId}` (FR-037) |
 | `site.version.created` | yes | `{siteId,version}` |
-| `site.published` | yes | `{siteId,version,target: {kind: folder,folder}\|{kind: zip}}` |
+| `site.published` | yes | `{siteId,version,target: {kind: folder,folder}\|{kind: zip}\|{kind: remote,targetId,folder}}` (M8 adds the remote target) |
 | `site.unpublished` | yes | `{siteId,version}`: the version live after the undo, `null` when nothing is published |
+| `space.pages.reordered` | yes | `{spaceId}` (M8): the order of the space's pages changed in one write |
+| `space.page.undeleted` | yes | `{spaceId,pageId,version,authorKind: user}` (M8): a deleted page is back with its history and comments |
+| `site.target.changed` | yes | `{targetId,change: created\|updated\|checked\|deleted}` (M8): a hosting target (owner) |
 
 ### ambient (`docs/24`)
 
@@ -373,9 +376,13 @@ A rebuild sends `environment.updated` `{change: rebuilding}` (code above).
 | `team.member.joined` | yes | `{accountId,invitationId,via: local\|oidc}`: to the inviting owner's account |
 | `team.member.removed` | yes | `{accountId,sessionsEnded}`; actor `user` |
 | `team.task.updated` | yes | `{taskId,agentId,status: running\|done\|failed\|cancelled}` (FR-091): to the account that gave the task, when it starts and when it ends |
+| `team.member.purged` | yes | `{accountId,cause: grace\|request,rows}` (M8, decision 5): a removed member's data was purged; `accountId` is the removed member, `rows` the number of rows deleted or redacted; to the account that asked (the owner's for the grace sweep); actor `user` for a request, `system` for the sweep. Emitted when the rows are committed, before files and vault entries are cleaned up |
 
 `thread.shared` (chat & turns above) announces sharing changes; `settings.changed` carries
-`scope: member` for a member's own preferences (system below).
+`scope: member` for a member's own preferences (system below). Since M8 removing a member also stops their
+channel pollers and revokes their email mailboxes' OAuth tokens (`channel.oauth.revoke`, audit
+only); a mailbox's OAuth sign-in or sign-out emits `channel.binding.changed` `{change: updated}`, and
+each file a binding sends adds a `channel.message.sent`.
 
 ### external agents (M7, flagged, `docs/08`)
 
@@ -386,6 +393,44 @@ Correlation `{threadId}` (the Code session's thread).
 | `delegation.started` | yes | `{delegationId,threadId,adapterId}` (FR-203) |
 | `delegation.updated` | no | `{delegationId,message?,thought?,toolCalls?: [{title?,status?}],droppedToolCalls?,plan?}`: the agent's progress, coalesced to at most one event per 250 ms; `message` and `thought` are the text since the last event (redacted), at most 10 tool-call updates per event with the rest counted in `droppedToolCalls`, `plan: true` when the agent's plan changed. Replaces the earlier one-update-per-event `{kind,text}` shape |
 | `delegation.finished` | yes | `{delegationId,threadId,status: completed\|failed\|cancelled,stopReason}` |
+
+
+### extensions & marketplace (M8, `docs/14` §4-§5, ADR-097 D1-D3)
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `extension.changed` | yes | `{extensionId,change: installed\|updated\|enabled\|disabled\|removed}` (FR-117); actor `user` (also when a plugin install adopts an extension) |
+| `extension.status.changed` | yes | `{extensionId,status: running\|starting\|stopped\|disabled\|error,error}`; actor `system` |
+| `extension.contributions.changed` | no | `{extensionId}`: what the extension registered changed (commands, panels, themes, keybindings, menus, status items); coalesced to one per extension per tick |
+| `extension.access.denied` | yes | `{extensionId,what,target}` (`target` at most 300 characters): undeclared access, after which the extension is turned off; actor `system` |
+| `market.installed` | yes | `{kind: plugin\|skill\|theme\|pet\|mcp,itemId,version,verified,catalogId}` (FR-049); actor `user` |
+| `market.updated` | yes | the same, when something was installed under the id |
+| `market.removed` | yes | `{kind,itemId,version}` (`version` null when neither a record nor an installed copy names one) |
+
+SDK hooks report through `hook.trust.changed` (tools above) like every hook. Extensions observe
+(never block) only these events, when declared: `chat.message.created`, `chat.message.completed`,
+`chat.message.deleted`, `thread.created`, `thread.updated`, `thread.deleted`, `turn.started`,
+`turn.completed`, `turn.interrupted`, `tool.call.started`, `tool.call.completed`, `run.created`,
+`run.status.changed`, `run.completed`, `approval.requested`, `approval.decided`, `project.created`,
+`project.updated`, `project.deleted`, `schedule.fired`, `agent.status.changed` (aliases
+`thread.message`, `run.end`, `tool.call`), delivered as `{name, at, payload, correlation}`,
+redacted and at most 64 KiB.
+
+### managed policy & data controls (M8, `docs/12` §9-§10, ADR-097 D4-D5)
+
+| Name | Persisted | Payload |
+| --- | --- | --- |
+| `managed.policy.changed` | yes | `{active,failClosed: boolean,sources: [{channel: local\|remote\|test,status}]}` (FR-106): after any change of what applies (not at the first load); no account; actor `system` |
+| `data.exported` | yes | `{encrypted,bytes,tables,files,scope?}` (FR-105); actor `user`; `scope: {accountId}` for a removed member's account export (never sealed), absent for a whole-Hub export |
+| `data.deleted` | yes | `{tables,rows,files,secrets}`; the first event after delete-all |
+| `data.imported` | yes | `{tables,rows,files,secrets}`; to the archive owner's account |
+| `data.retention.swept` | yes | `{sweepId,trigger: schedule\|manual,removed,skipped}`; to the owner's account; actor `system` |
+| `spend.cap.warning` | yes | `{provider,spentUsd,limitUsd,warnAt,period: day\|month,periodStart,resetsAt,hardStop}` (FR-116): once per period, with an `attention` notification linking to `/settings/profile?cap=<provider>#spend-caps` |
+| `spend.cap.reached` | yes | the same, when spend reaches the cap |
+
+A policy change also emits `settings.changed` `{key, scope: managed, before, after}` for each key
+whose policy value changed and for `managed.restrict` (`before` and `after` are the policy's own
+values); the ops subscriber audits security keys from it as `setting.changed`.
 
 ### system
 
@@ -408,7 +453,7 @@ Correlation `{threadId}` (the Code session's thread).
 | `audit.appended` | yes | `{auditId,kind,hash}` |
 | `import.completed` | yes | `{importId,imported,duplicates,disabled,secretsMigrated}` (FR-200) |
 | `flag.changed` | yes | `{key,stage,enabled,source}` (ADR-082) |
-| `app.authorization.changed` | yes | `{authorizationId,kind: mcp_client\|app,clientName,status: active\|revoked}` (FR-192, FR-222) |
+| `app.authorization.changed` | yes | `{authorizationId,kind: mcp_client\|app,clientName,status: active\|revoked}` (FR-192, FR-222). M8: an app's first approval (`active`) and its revocation; a second approval that adds scopes emits none (audited `app_authorization.update`) |
 
 ## Consumer rules
 
@@ -462,6 +507,15 @@ Correlation `{threadId}` (the Code session's thread).
   leaves the vault), boot (requests and trials fail, the PXE token stops) and browser areas
   (consents and bridge grants are revoked) through the devices service's own revocation hook, not
   through an event.
+- **M8 Hub areas**: the MCP, SDK, hooks and OTLP areas listen for `managed.policy.changed`: MCP
+  servers are checked again, extensions refused by the new policy stop (and allowed ones start),
+  managed hooks are read again without a restart, and the exporter reconfigures; the SDK area also
+  re-applies policy on `settings.changed` of `plugins.trustedPublishers` and starts or stops every
+  worker on `settings.changed` of `sdk.enabled`; the marketplace drops its index cache on
+  `settings.changed` of `plugins.catalogs` or `plugins.trustedPublishers`; the OTLP area counts
+  every event (`nova.events`) and reconfigures on `settings.changed` of `telemetry.otlp.*` and
+  `managed.restrict`; spend alerts are evaluated on `chat.message.completed` with a cost; the
+  channels area acts on `team.member.removed` (pollers, mailbox tokens).
 - Ordering is per-correlation; global order is not guaranteed. Consumers must be idempotent.
 
 ## Backpressure

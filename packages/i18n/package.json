@@ -1,0 +1,19 @@
+{
+  "name": "@nova/i18n",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Nova localization: typed messages, an ICU subset formatter, locales, pseudo-locales and formatting helpers.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./check": "./src/check.ts",
+    "./eslint": "./src/eslint-rule.ts",
+    "./testing": "./src/testing.ts",
+    "./residue": "./src/residue.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  }
+}

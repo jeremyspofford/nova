@@ -1,5 +1,6 @@
 // Git details the Code views show and suggest (FR-070, docs/10 §8): the branch a commit on the
 // default branch moves to (`nova/<slug>`), and whether the session is on the default branch.
+import { defineMessages } from '@nova/i18n';
 import type { CodeSessionView } from '@nova/shared';
 
 /** Lowercase words joined by hyphens, at most `max` characters, cut at a word boundary. */
@@ -43,12 +44,17 @@ export function onDefaultBranch(repo: Repo | null): boolean {
 }
 
 /** A branch name Git accepts, roughly: no spaces, no `..`, no leading or trailing slash or dot. */
+export const BRANCH_TEXT = defineMessages('code.branch', {
+  enterName: 'Enter a branch name.',
+  other: 'Choose a branch other than {current}.',
+  invalid: 'Use letters, digits, hyphens and slashes, for example nova/fix-login.',
+});
+
 export function branchProblem(name: string, current: string | null): string | null {
   const n = name.trim();
-  if (!n) return 'Enter a branch name.';
-  if (current && n === current) return `Choose a branch other than ${current}.`;
-  if (/\s|\.\.|[~^:?*[\\]|@\{|\/\/|^[/.]|[/.]$|\.lock$/.test(n))
-    return 'Use letters, digits, hyphens and slashes, for example nova/fix-login.';
+  if (!n) return BRANCH_TEXT.enterName;
+  if (current && n === current) return BRANCH_TEXT.other({ current });
+  if (/\s|\.\.|[~^:?*[\\]|@\{|\/\/|^[/.]|[/.]$|\.lock$/.test(n)) return BRANCH_TEXT.invalid;
   return null;
 }
 

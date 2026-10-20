@@ -3,6 +3,7 @@
 // Autonomy, budgets and proactive research start from Settings → Agents. A full page, so it works
 // the same on a phone. After it is created the agent's page opens on its main thread.
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { RunAutonomy } from '@nova/shared';
 import { Button, Icon, IconButton, SelectField, Spinner, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -21,9 +22,37 @@ import {
   parseBudgets,
   type BudgetDraft,
 } from './fields.tsx';
-import { AGENTS_PATH, agentPath } from './format.ts';
+import { AGENTS_PATH, AGENTS_TEXT, agentPath } from './format.ts';
 import '../workspace.css';
 import './agents.css';
+
+export const NEW_AGENT_TEXT = defineMessages('agents.newAgent', {
+  goalFailed: 'The agent was created, but its goal was not set: {reason}',
+  ready: '{name} is ready.',
+  createFailed: 'Could not create the agent.',
+  heading: 'New agent',
+  who: 'Who it is',
+  instructionsHint:
+    'How it should work, what to watch for, and how to reach you. You can change this later.',
+  responsibilities: 'Responsibilities',
+  respIntro: "Each responsibility is tracked on its own, with the agent's progress notes.",
+  respN: 'Responsibility {n}',
+  respPlaceholder: 'For example: Answer support questions in #help',
+  respDetailsN: 'Details for responsibility {n} (optional)',
+  removeRespN: 'Remove responsibility {n}',
+  addResp: 'Add a responsibility',
+  goal: 'Goal (optional)',
+  goalHint:
+    'An outcome it keeps working toward, turn after turn, until it is complete or a budget is ' +
+    'reached. Held by the first responsibility.',
+  how: 'How it works',
+  proactiveHint:
+    'While idle, at most once an hour by default, it reads your connected sources with ' +
+    'read-only tools and brings you suggestions. It never acts on its own findings.',
+  memoryHint:
+    'It keeps notes and what it learns in conversation. You can read, edit and forget any of it.',
+  create: 'Create agent',
+});
 
 const INSTRUCTIONS_MAX = 16_000;
 const GOAL_MAX = 4000;
@@ -66,7 +95,7 @@ export function NewAgentPage() {
   const submit = async () => {
     const parsed = parseBudgets(budgets);
     const next: typeof errors = {};
-    if (!name.trim()) next.name = 'Give the agent a name.';
+    if (!name.trim()) next.name = AGENTS_TEXT.nameRequired;
     if ('errors' in parsed) next.budgets = parsed.errors;
     setErrors(next);
     setFailure(null);
@@ -99,32 +128,32 @@ export function NewAgentPage() {
             ...(holder ? { responsibilityId: holder.id } : {}),
           });
         } catch (err) {
-          toast.show(`The agent was created, but its goal was not set: ${errorMessage(err)}`, {
+          toast.show(NEW_AGENT_TEXT.goalFailed({ reason: errorMessage(err) }), {
             tone: 'error',
           });
         }
       }
-      toast.show(`${agent.name} is ready.`, { tone: 'success' });
+      toast.show(NEW_AGENT_TEXT.ready({ name: agent.name }), { tone: 'success' });
       navigate(agentPath(agent.id));
     } catch (err) {
-      setFailure(errorMessage(err, 'Could not create the agent.'));
+      setFailure(errorMessage(err, NEW_AGENT_TEXT.createFailed));
       setBusy(false);
     }
   };
 
   return (
     <div className="ws-page agents-page">
-      <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+      <nav aria-label={AGENTS_TEXT.breadcrumb} className="ws-breadcrumb">
         <a href={AGENTS_PATH} onClick={(e) => followLink(e, AGENTS_PATH)}>
-          <Icon name="back" /> Agents
+          <Icon name="back" /> {AGENTS_TEXT.agents}
         </a>
       </nav>
       <header className="ws-page-header">
-        <h1>New agent</h1>
+        <h1>{NEW_AGENT_TEXT.heading}</h1>
       </header>
       <form
         className="stack agent-form"
-        aria-label="New agent"
+        aria-label={NEW_AGENT_TEXT.heading}
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
@@ -132,9 +161,9 @@ export function NewAgentPage() {
         }}
       >
         <section className="panel-inset stack" aria-labelledby={`${id}-who`}>
-          <h2 id={`${id}-who`}>Who it is</h2>
+          <h2 id={`${id}-who`}>{NEW_AGENT_TEXT.who}</h2>
           <TextField
-            label="Name"
+            label={AGENTS_TEXT.name}
             value={name}
             maxLength={100}
             autoComplete="off"
@@ -154,42 +183,40 @@ export function NewAgentPage() {
           />
           <div className="nv-field">
             <label className="nv-field-label" htmlFor={`${id}-instr`}>
-              Instructions
+              {AGENTS_TEXT.instructions}
             </label>
             <textarea
               id={`${id}-instr`}
               className="nv-input ws-textarea"
               rows={5}
               maxLength={INSTRUCTIONS_MAX}
+              dir="auto"
               value={instructions}
               aria-describedby={`${id}-instr-hint`}
               onChange={(e) => setInstructions(e.target.value)}
             />
             <span id={`${id}-instr-hint`} className="nv-field-hint">
-              How it should work, what to watch for, and how to reach you. You can change this
-              later.
+              {NEW_AGENT_TEXT.instructionsHint}
             </span>
           </div>
         </section>
 
         <section className="panel-inset stack" aria-labelledby={`${id}-resp`}>
-          <h2 id={`${id}-resp`}>Responsibilities</h2>
-          <p className="muted ws-flush">
-            Each responsibility is tracked on its own, with the agent&apos;s progress notes.
-          </p>
+          <h2 id={`${id}-resp`}>{NEW_AGENT_TEXT.responsibilities}</h2>
+          <p className="muted ws-flush">{NEW_AGENT_TEXT.respIntro}</p>
           <ol className="agent-resp-drafts">
             {resps.map((r, i) => (
               <li key={r.key} className="agent-resp-draft">
                 <TextField
-                  label={`Responsibility ${i + 1}`}
+                  label={NEW_AGENT_TEXT.respN({ n: i + 1 })}
                   value={r.title}
                   maxLength={200}
                   autoComplete="off"
-                  placeholder="For example: Answer support questions in #help"
+                  placeholder={NEW_AGENT_TEXT.respPlaceholder}
                   onChange={(e) => setResp(r.key, { title: e.target.value })}
                 />
                 <TextField
-                  label={`Details for responsibility ${i + 1} (optional)`}
+                  label={NEW_AGENT_TEXT.respDetailsN({ n: i + 1 })}
                   value={r.instructions}
                   maxLength={4000}
                   autoComplete="off"
@@ -197,7 +224,7 @@ export function NewAgentPage() {
                 />
                 {resps.length > 1 ? (
                   <IconButton
-                    label={`Remove responsibility ${i + 1}`}
+                    label={NEW_AGENT_TEXT.removeRespN({ n: i + 1 })}
                     icon={<Icon name="trash" />}
                     variant="ghost"
                     onClick={() => setResps((list) => list.filter((x) => x.key !== r.key))}
@@ -220,32 +247,32 @@ export function NewAgentPage() {
                   ])
                 }
               >
-                <Icon name="plus" /> Add a responsibility
+                <Icon name="plus" /> {NEW_AGENT_TEXT.addResp}
               </Button>
             </div>
           ) : null}
           <div className="nv-field">
             <label className="nv-field-label" htmlFor={`${id}-goal`}>
-              Goal (optional)
+              {NEW_AGENT_TEXT.goal}
             </label>
             <textarea
               id={`${id}-goal`}
               className="nv-input ws-textarea"
               rows={2}
               maxLength={GOAL_MAX}
+              dir="auto"
               value={goal}
               aria-describedby={`${id}-goal-hint`}
               onChange={(e) => setGoal(e.target.value)}
             />
             <span id={`${id}-goal-hint`} className="nv-field-hint">
-              An outcome it keeps working toward, turn after turn, until it is complete or a budget
-              is reached. Held by the first responsibility.
+              {NEW_AGENT_TEXT.goalHint}
             </span>
           </div>
         </section>
 
         <section className="panel-inset stack" aria-labelledby={`${id}-how`}>
-          <h2 id={`${id}-how`}>How it works</h2>
+          <h2 id={`${id}-how`}>{NEW_AGENT_TEXT.how}</h2>
           <AutonomyField value={autonomy} onChange={setAutonomy} disabled={busy} />
           <BudgetFields
             value={budgets}
@@ -257,24 +284,24 @@ export function NewAgentPage() {
             disabled={busy}
           />
           <SwitchField
-            label="Proactive research"
-            description="While idle, at most once an hour by default, it reads your connected sources with read-only tools and brings you suggestions. It never acts on its own findings."
+            label={AGENTS_TEXT.proactive}
+            description={NEW_AGENT_TEXT.proactiveHint}
             checked={proactive}
             onChange={setProactive}
             disabled={busy}
           />
           <SwitchField
-            label="Memory"
-            description="It keeps notes and what it learns in conversation. You can read, edit and forget any of it."
+            label={AGENTS_TEXT.memory}
+            description={NEW_AGENT_TEXT.memoryHint}
             checked={memory}
             onChange={setMemory}
             disabled={busy}
           />
           <SelectField
-            label="Model"
+            label={AGENTS_TEXT.model}
             value={model}
             onChange={setModel}
-            options={[{ value: '', label: 'The default chat model' }]}
+            options={[{ value: '', label: AGENTS_TEXT.defaultModel }]}
             groups={modelGroups(models)}
           />
         </section>
@@ -286,10 +313,10 @@ export function NewAgentPage() {
         ) : null}
         <div className="ws-toolbar">
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? <Spinner /> : null} Create agent
+            {busy ? <Spinner /> : null} {NEW_AGENT_TEXT.create}
           </Button>
           <Button onClick={() => navigate(AGENTS_PATH)} disabled={busy}>
-            Cancel
+            {AGENTS_TEXT.cancel}
           </Button>
         </div>
       </form>

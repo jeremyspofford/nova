@@ -55,14 +55,15 @@ export function datactlApi(call: HubCall, fetchImpl: typeof fetch = (i, init) =>
     getDataOverview: () => call<DataOverviewView>('GET', `${V1}/data`),
     /**
      * A one-use ticket (2 minutes) for the browser download; the passphrase (at least 12
-     * characters) seals the archive and includes the vault's secrets.
+     * characters) seals the archive and includes the vault's secrets. A sealed export needs
+     * `confirm`, the Hub's name (400 `{reason: confirmation_mismatch}`), and is refused from a
+     * paired device's session (403 `{reason: hub_only}`).
      */
-    createExportTicket: (passphrase?: string) =>
-      call<{ ticket: string; expiresAt: string }>(
-        'POST',
-        `${V1}/data/export/ticket`,
-        passphrase !== undefined ? { passphrase } : {},
-      ),
+    createExportTicket: (passphrase?: string, confirm?: string) =>
+      call<{ ticket: string; expiresAt: string }>('POST', `${V1}/data/export/ticket`, {
+        ...(passphrase !== undefined ? { passphrase } : {}),
+        ...(passphrase !== undefined && confirm !== undefined ? { confirm } : {}),
+      }),
     /** The download address for a ticket (404 `{reason: ticket_expired}` once used or expired). */
     exportDownloadUrl: (ticket: string) => `${V1}/data/export/download?ticket=${enc(ticket)}`,
 

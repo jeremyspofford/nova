@@ -2,7 +2,15 @@
 // validate (folders, bundles, JSON), keys kept 0600 outside any repository, pack signed and
 // unsigned bundles the Hub verifies, dev loading into a (fake) Hub with the owner token from the
 // environment and reloading on a change, mcp stdio and data wired, usage errors.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,6 +57,29 @@ describe('help and usage', () => {
 });
 
 describe('init, validate, keys and pack', () => {
+  it('init leaves no reference to the template id or name in any file', async () => {
+    const name = `Tom's "ext" <b>`;
+    expect(await runCli(['init', 'mine', '--id', 'com.acme.mine', '--name', name], io)).toBe(0);
+    const root = join(dir, 'mine');
+    const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((f) =>
+      statSync(join(root, f)).isFile(),
+    );
+    expect(files).toContain(join('panels', 'hello.html'));
+    for (const f of files) {
+      const text = readFileSync(join(root, f), 'utf8');
+      expect(text, f).not.toContain('com.example.hello');
+      expect(text, f).not.toContain('Hello extension');
+    }
+    expect(readFileSync(join(root, 'panels', 'hello.html'), 'utf8')).toContain(
+      "'ext:com.acme.mine/greet'",
+    );
+    const plugin = JSON.parse(
+      readFileSync(join(root, '.nova-plugin', 'plugin.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(plugin).toMatchObject({ id: 'com.acme.mine', name });
+    expect(await runCli(['validate', 'mine'], io)).toBe(0);
+  });
+
   it('creates an extension from the template that validates, packs signed and verifies', async () => {
     expect(await runCli(['init', 'my-ext', '--id', 'com.acme.myext', '--name', 'My ext'], io)).toBe(
       0,
@@ -68,7 +99,7 @@ describe('init, validate, keys and pack', () => {
     out = [];
     expect(await runCli(['validate', 'my-ext'], io)).toBe(0);
     expect(text()).toMatch(
-      /com\.acme\.myext 0\.1\.0 is valid: 1 commands, 1 panels, 2 tools, 1 hooks, 1 events/,
+      /com\.acme\.myext 0\.1\.0 is valid: 1 commands, 1 panels, 3 tools, 1 hooks, 1 events/,
     );
     expect(await runCli(['validate', 'my-ext', '--json'], io)).toBe(0);
     expect(JSON.parse(out.at(-1)!)).toMatchObject({ ok: true, id: 'com.acme.myext' });
@@ -123,6 +154,25 @@ describe('init, validate, keys and pack', () => {
     expect(errors()).toMatch(/nothing was packed/);
     expect(await runCli(['validate', 'nowhere'], io)).toBe(1);
     expect(await runCli(['pack', 'nowhere'], io)).toBe(1);
+  });
+
+  it('never packs a .env file or a private key, and names the file', async () => {
+    await runCli(['init', 'leaky'], io);
+    writeFileSync(join(dir, 'leaky', '.env'), 'TOKEN=abc\n');
+    writeFileSync(join(dir, 'leaky', '.env.example'), 'TOKEN=\n');
+    mkdirSync(join(dir, 'leaky', 'keys'));
+    writeFileSync(
+      join(dir, 'leaky', 'keys', 'publisher.key'),
+      // secret-scan: fake
+      '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIA==\n-----END PRIVATE KEY-----\n',
+    );
+    expect(await runCli(['pack', 'leaky', '--unsigned'], io)).toBe(1);
+    expect(errors()).toMatch(/\.env: refusing to pack this file: an environment file/);
+    expect(errors()).toMatch(
+      /keys\/publisher\.key: refusing to pack this file: it holds a PEM private key/,
+    );
+    expect(errors()).not.toMatch(/\.env\.example/);
+    expect(errors()).toMatch(/nothing was packed/);
   });
 
   it('keeps keys out of repositories and warns about loose permissions', async () => {
@@ -185,9 +235,15 @@ describe('nova dev', () => {
       auth: 'Bearer owner-token',
     });
     expect(requests[0]!.body).toMatchObject({ confirmSideload: true, trustHooks: true });
+    expect(requests[0]!.body).not.toHaveProperty('acceptPublisherChange');
     const entries = readBundleEntries(Buffer.from(String(requests[0]!.body.bundle), 'base64'));
     expect(entries.has('.nova-plugin/extension.json')).toBe(true);
     expect(text()).toMatch(/loaded com\.acme\.dev 0\.1\.0: running; 1 commands, 1 panels, 2 tools/);
+  });
+
+  it('replaces a signed install only with --accept-publisher-change', async () => {
+    expect(await runCli(['dev', 'dev-ext', '--once', '--accept-publisher-change'], io)).toBe(0);
+    expect(requests[0]!.body).toMatchObject({ acceptPublisherChange: true });
   });
 
   it('reports a refusal, an unreachable Hub and an invalid extension', async () => {

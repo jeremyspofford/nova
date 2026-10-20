@@ -9,6 +9,7 @@ import { ApiError } from '../api.ts';
 import { readCachedTheme } from '../appearance.ts';
 import { teamErrorMessage } from '../team/format.ts';
 import { memberClient, type MemberClient } from './client.ts';
+import { JOIN_MEMBER_TEXT, PROFILE_TEXT as S } from './strings.ts';
 import './joinmember.css';
 
 export const PROFILE_PATH = '/profile';
@@ -70,8 +71,8 @@ export function PublicProfilePage({
         <span className="brand">Nova</span>
       </header>
       <main className="main" id="main">
-        <section className="panel joinm-panel" aria-label="Public profile">
-          {state.kind === 'loading' ? <Spinner label="Loading the card" /> : null}
+        <section className="panel joinm-panel" aria-label={S.region}>
+          {state.kind === 'loading' ? <Spinner label={S.loading} /> : null}
           {state.kind === 'card' ? (
             <div className="joinm-card">
               {avatar ? (
@@ -82,28 +83,30 @@ export function PublicProfilePage({
                 </span>
               )}
               <div className="stack">
-                <h1 className="joinm-flush">{state.card.displayName ?? state.card.handle}</h1>
-                <p className="muted joinm-flush">@{state.card.handle}</p>
+                <h1 className="joinm-flush" dir="auto">
+                  {state.card.displayName ?? state.card.handle}
+                </h1>
+                <p className="muted joinm-flush" dir="ltr">
+                  @{state.card.handle}
+                </p>
               </div>
             </div>
           ) : null}
           {state.kind === 'missing' ? (
             <>
-              <h1 className="joinm-flush">No public card here</h1>
-              <p className="muted joinm-flush">
-                Nobody on this Hub shows a public card at this handle.
-              </p>
+              <h1 className="joinm-flush">{S.missingTitle}</h1>
+              <p className="muted joinm-flush">{S.missingBody}</p>
             </>
           ) : null}
           {state.kind === 'error' ? (
             <div role="alert">
-              <h1 className="joinm-flush">Cannot show this card</h1>
+              <h1 className="joinm-flush">{S.errorTitle}</h1>
               <p className="muted joinm-flush">
-                {teamErrorMessage(state.error, 'The Hub did not answer.')}
+                {teamErrorMessage(state.error, JOIN_MEMBER_TEXT.noAnswer)}
               </p>
             </div>
           ) : null}
-          <p className="muted joinm-flush joinm-foot">A public card from a Nova Hub.</p>
+          <p className="muted joinm-flush joinm-foot">{S.foot}</p>
         </section>
       </main>
     </div>

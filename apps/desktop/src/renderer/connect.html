@@ -7,49 +7,46 @@
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Connect to your Hub</title>
+    <title></title>
     <link rel="stylesheet" href="shell.css" />
+    <script src="text.js" defer></script>
     <script src="connect.js" defer></script>
   </head>
   <body>
     <main aria-labelledby="title">
       <div class="stack">
-        <h1 id="title">Connect to your Hub</h1>
-        <p class="muted">
-          Nova checks that it is talking to your own Hub before it sends anything to it.
-        </p>
+        <h1 id="title" data-t="title"></h1>
+        <p class="muted" data-t="intro"></p>
       </div>
 
       <p id="current" class="muted" hidden></p>
       <div id="problem" class="error" role="alert" hidden></div>
 
       <section id="replace" class="panel" aria-labelledby="replace-h" hidden>
-        <h2 id="replace-h">Replace your Hub?</h2>
+        <h2 id="replace-h" data-t="replaceTitle"></h2>
         <p id="replace-text"></p>
         <div class="actions end">
-          <button id="replace-cancel" type="button">Keep the current Hub</button>
+          <button id="replace-cancel" type="button" data-t="keep"></button>
           <button id="replace-confirm" type="button" class="primary"></button>
         </div>
       </section>
 
       <form id="link-form" class="panel" aria-labelledby="link-h" novalidate>
-        <h2 id="link-h">Add this computer</h2>
-        <p class="hint">
-          On the Hub, open Devices, choose Add a device and Client, then paste the link it shows.
-        </p>
-        <label for="link">Add Device link</label>
+        <h2 id="link-h" data-t="addTitle"></h2>
+        <p class="hint" data-t="addHint"></p>
+        <label for="link" data-t="linkLabel"></label>
         <textarea id="link" rows="3" spellcheck="false" autocomplete="off"></textarea>
         <div class="actions end">
-          <button type="submit" class="primary">Connect</button>
+          <button type="submit" class="primary" data-t="connect"></button>
         </div>
       </form>
 
-      <p class="or">or</p>
+      <p class="or" data-t="or"></p>
 
       <form id="manual-form" class="panel" aria-labelledby="manual-h" novalidate>
-        <h2 id="manual-h">Enter the address and fingerprint</h2>
+        <h2 id="manual-h" data-t="manualTitle"></h2>
         <div class="stack">
-          <label for="url">Hub address</label>
+          <label for="url" data-t="urlLabel"></label>
           <input
             id="url"
             type="text"
@@ -60,7 +57,7 @@
           />
         </div>
         <div class="stack">
-          <label for="pin">Hub fingerprint</label>
+          <label for="pin" data-t="pinLabel"></label>
           <input
             id="pin"
             type="text"
@@ -68,12 +65,10 @@
             spellcheck="false"
             aria-describedby="pin-hint"
           />
-          <p id="pin-hint" class="hint">
-            The Hub shows it under Network, Trust: 43 letters, digits, - and _.
-          </p>
+          <p id="pin-hint" class="hint" data-t="pinHint"></p>
         </div>
         <div class="actions end">
-          <button type="submit">Connect</button>
+          <button type="submit" data-t="connect"></button>
         </div>
       </form>
 

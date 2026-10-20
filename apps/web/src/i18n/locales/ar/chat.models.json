@@ -1,0 +1,6 @@
+{
+  "nth": "{provider} ({n})",
+  "presets": "الإعدادات المسبقة",
+  "unavailable": "{model} (غير متاح)",
+  "uses": "يستخدم {model}"
+}

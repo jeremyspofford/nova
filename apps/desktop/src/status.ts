@@ -3,13 +3,17 @@
 // and Ready, most recent first within a group. The shell never derives a status itself.
 import type { DerivedStatus, ShellStatusItemView } from '@nova/shared';
 import type { StatusSources } from './hub-client.ts';
+import { STATUS_TEXT } from './text.ts';
 
-export const STATUS_LABEL: Record<DerivedStatus, string> = {
-  needs_input: 'Needs input',
-  blocked: 'Blocked',
-  running: 'Running',
-  ready: 'Ready',
-};
+/** A status's name in the active locale. */
+export function statusLabel(status: DerivedStatus): string {
+  return STATUS_TEXT.status[status];
+}
+
+/** What kind of item a row is, in the active locale. */
+export function kindLabel(kind: ShellStatusItemView['kind']): string {
+  return STATUS_TEXT.kind[kind];
+}
 
 const RANK: Record<DerivedStatus, number> = { needs_input: 0, blocked: 1, running: 2, ready: 3 };
 
@@ -27,7 +31,7 @@ export function statusItems(src: StatusSources, limit = 8): ShellStatusItemView[
     items.push({
       kind: 'thread',
       id: t.id,
-      title: t.title ?? 'New chat',
+      title: t.title ?? STATUS_TEXT.newChat,
       status: t.derived?.status ?? 'ready',
       reason: t.derived?.reason ?? null,
       path: `/chat/${encodeURIComponent(t.id)}`,
@@ -78,22 +82,26 @@ export function statusItems(src: StatusSources, limit = 8): ShellStatusItemView[
 export function statusSummary(items: readonly ShellStatusItemView[]): string {
   const needs = items.filter((i) => i.status === 'needs_input').length;
   const blocked = items.filter((i) => i.status === 'blocked').length;
-  const parts: string[] = [];
-  if (needs) parts.push(`${needs} ${needs === 1 ? 'needs' : 'need'} input`);
-  if (blocked) parts.push(`${blocked} blocked`);
-  return parts.length ? `Nova: ${parts.join(', ')}` : 'Nova';
+  if (needs && blocked) return STATUS_TEXT.trayBoth({ needs, blocked });
+  if (needs) return STATUS_TEXT.trayNeeds({ n: needs });
+  if (blocked) return STATUS_TEXT.trayBlocked({ n: blocked });
+  return 'Nova';
 }
 
-const KIND_LABEL: Record<ShellStatusItemView['kind'], string> = {
-  thread: 'Chat',
-  run: 'Work run',
-  session: 'Code',
-  agent: 'Agent',
-};
+/** What the quick overlay writes for each row: status, detail and the row's accessible name. */
+export function quickRows(
+  items: readonly ShellStatusItemView[],
+): { status: string; detail: string; label: string }[] {
+  return items.map((item) => {
+    const status = statusLabel(item.status);
+    const detail = item.reason || kindLabel(item.kind);
+    return { status, detail, label: STATUS_TEXT.rowLabel({ status, title: item.title, detail }) };
+  });
+}
 
 /** One tray menu row: status first, as the overlay shows it (docs/04 §1.1). */
 export function statusMenuLabel(item: ShellStatusItemView): string {
   const title = item.title.length > 40 ? `${item.title.slice(0, 39)}…` : item.title;
-  const detail = item.reason ?? KIND_LABEL[item.kind];
-  return `${STATUS_LABEL[item.status]}: ${title} (${detail})`;
+  const detail = item.reason ?? kindLabel(item.kind);
+  return STATUS_TEXT.row({ status: statusLabel(item.status), title, detail });
 }

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arialabs.ai/schemas/catalog-signature.json",
+  "title": "CatalogSignature",
+  "description": "A catalog index's signature file, next to the index as <index>.sig (catalog.json.sig, nova-catalog.json.sig) (FR-049, docs/08 §7, ADR-097 D2). digest is the hex SHA-256 of the index file's exact bytes; signature is Ed25519 by publisher over the UTF-8 bytes of \"nova-catalog-v1\\n\" + digest, so it can never pass for a bundle's signature (\"nova-extension-v1\\n\", extension-signature.json). A catalog that pins a key (plugins.catalogs[].publisherKey) verifies only with that key, and a missing signature file is then invalid; without a pin a good signature by a key outside plugins.trustedPublishers is untrusted. An invalid signature refuses the whole catalog. Mirrors signatureFileSchema in packages/core/src/market/signing.ts.",
+  "type": "object",
+  "required": ["v", "publisher", "digest", "signature"],
+  "properties": {
+    "v": { "const": 1 },
+    "publisher": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" }
+  }
+}

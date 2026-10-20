@@ -1,0 +1,19 @@
+{
+  "arguments": "الوسائط",
+  "card": "استدعاء أداة: {title}",
+  "error": "خطأ",
+  "mcpServer": "خادم MCP {server}",
+  "noDetails": "لا توجد تفاصيل بعد.",
+  "outputSoFar": "المخرجات حتى الآن",
+  "result": "النتيجة",
+  "resultNote": "(مخرجات الأداة، معروضة كنص عادي)",
+  "source.browser": "المتصفح",
+  "source.builtin": "مدمجة",
+  "source.computer": "الحاسوب",
+  "source.device": "جهاز",
+  "source.mcp": "خادم MCP",
+  "source.page": "صفحة ويب",
+  "source.plugin": "مكوّن إضافي",
+  "toolCall": "استدعاء أداة",
+  "toolName": "أداة"
+}

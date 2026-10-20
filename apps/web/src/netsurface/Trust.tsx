@@ -4,24 +4,126 @@
 // install hints for each platform, the Hub certificate's names and expiry, the mesh certificate,
 // renewal, every certificate issued and the problems the Hub reports.
 import { useId, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import { TRUST_MODES, type TrustCertificateView, type TrustView } from '@nova/shared';
 import { Button, Icon, RadioGroup, Spinner, useToast } from '@nova/ui';
 import { formatWhen } from '../settings/common.ts';
+import { embed } from '../settings/embed.tsx';
 import { SwitchField } from '../settings/controls.tsx';
 import { useAnnounce } from '../services.tsx';
 import { useDebounced } from '../work/events.ts';
 import { useNetworkSurfaceApi, type TrustPatchBody } from './api.ts';
 import { TRUST_EVENTS, useNetworkEvents } from './events.ts';
 import {
-  CERT_KIND_LABEL,
-  INSTALL_HINTS,
-  TRUST_MODE_INFO,
+  certKindLabel,
+  installHints,
   meshCertChip,
   netErrorMessage,
+  trustModeInfo,
+  valuesText,
 } from './format.ts';
 import { Chip, CopyButton, Fact, LoadError, useLoad } from './parts.tsx';
 
-const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' });
+const S = defineMessages('netsurface.trust', {
+  loadFailed: 'Could not load the certificates.',
+  loading: 'Loading the certificates',
+  refreshFailed: 'Could not refresh the certificates.',
+  serving: {
+    unknown: 'The Hub has not reported how it serves yet.',
+    http: 'The Hub serves plain HTTP now.',
+    explicit:
+      'The Hub serves HTTPS with the certificate set when it was started ({variable}), which takes precedence over the mode below.',
+    https: 'The Hub serves HTTPS with the certificates below.',
+    fallback:
+      'The Hub could not read its certificates when it started, so it serves plain HTTP on this computer only: {reason}',
+    restart:
+      'Restart the Hub to apply the trust mode: switching between HTTP and HTTPS happens when it starts.',
+    problems: 'Certificate problems',
+    fixExpired:
+      'Native apps warn about an expired certificate. Renew it below; with the local CA, devices that ask must install the root again.',
+    fixExpiring: 'It renews on its own before it expires. If it does not, renew it below.',
+    fixNames:
+      'The CA may sign only the names it was made for. Reach the Hub by one of those names, or use mesh certificates for that one.',
+    fixOther: 'Renew the certificates below, then check again.',
+  },
+  mode: {
+    title: 'Trust mode',
+    help: 'Browsers need HTTPS for the camera, microphone, notifications and installing the app. A device may use more than one path: the local CA at home, mesh certificates away.',
+    unknown: 'The Hub uses a mode this page does not know: {mode}.',
+    legend: 'How clients trust the Hub',
+    meshCerts: 'Also serve mesh certificates',
+    meshCertsHelp:
+      'Clients that reach the Hub by its mesh name get the mesh certificate, so they need no root installed.',
+    pin: 'Native apps pin this Hub',
+    pinHelp:
+      "Nova's apps check the Hub's key, kept when the device was added, before they trust its certificate.",
+    httpsOff: 'Turning HTTPS off applies when the Hub next starts.',
+    httpsOn: 'HTTPS starts when the Hub next starts. Devices can install the root before that.',
+    savedRestart: 'Saved. Restart the Hub to apply it.',
+    saved: 'Saved. You can roll this back from the Overview.',
+    savedShort: 'Trust settings saved.',
+    saveFailed: 'Could not save the trust settings.',
+    save: 'Save',
+    reset: 'Reset',
+  },
+  identity: {
+    title: "This Hub's identity",
+    help: 'Apps check this fingerprint, from the code or QR used to add them, before trusting the Hub.',
+    fingerprint: 'Hub fingerprint',
+    copy: 'Copy fingerprint',
+    copied: 'Fingerprint copied.',
+    copyFailed: 'Could not copy. Select the fingerprint and copy it yourself.',
+    noKey:
+      'The Hub cannot load its identity key right now, so apps cannot check it. The problems above say why.',
+  },
+  root: {
+    title: "The Hub's root certificate",
+    making: 'The Hub is making its certificate authority. Check back in a moment.',
+    onlyLocalCa: 'Only the Hub local CA mode has a root to install.',
+    fingerprint: 'Fingerprint (SHA-256)',
+    name: 'Name',
+    validUntil: 'Valid until',
+    downloadCrt: 'Download for phones and Windows ({ext})',
+    downloadPem: 'Download for macOS and Linux ({ext})',
+    checkFingerprint:
+      'Check that the fingerprint your device shows matches the one above before you trust it.',
+    howTo: 'How to install it',
+    onlyWhileLocalCa: 'The root is offered for download only while the mode is Hub local CA.',
+    maySign: 'What it may sign',
+    constraints: 'Names: {names}. Addresses: {addresses}.',
+    none: 'none',
+  },
+  certs: {
+    title: 'Certificates the Hub serves',
+    renewed: '{what, select, leaf {Hub certificate renewed.} other {Mesh certificate renewed.}}',
+    renewFailed: 'Could not renew the certificate.',
+    hub: 'Hub certificate',
+    validUntil: 'Valid until',
+    renews: 'Renews',
+    renewsOn: '{date}, on its own',
+    names: 'Names',
+    renewNow: 'Renew now',
+    notIssued: 'Not issued yet.',
+    onlyLocalCa: 'Used only with the Hub local CA.',
+    mesh: 'Mesh certificate',
+    name: 'Name',
+    noneYet: 'None yet. Network Setup gets one when the mesh offers certificates.',
+  },
+  status: { revoked: 'Revoked', replaced: 'Replaced', expired: 'Expired', inUse: 'In use' },
+  issued: {
+    title: 'Certificates issued',
+    row: '{kind} {subject}',
+    until: 'until {date}',
+    issued: 'issued {when}',
+    showAll: 'Show all {n}',
+    none: 'None yet.',
+  },
+});
+
+const date = (iso: string) => fmt.date(iso);
+
+/** The Hub's setting for a certificate of its own (code, not words). */
+const TLS_VARIABLE = 'NOVA_TLS_CERT';
 
 export function TrustSection() {
   const api = useNetworkSurfaceApi();
@@ -31,23 +133,15 @@ export function TrustSection() {
   const t = trust.data;
   if (!t)
     return trust.error ? (
-      <LoadError
-        error={trust.error}
-        fallback="Could not load the certificates."
-        onRetry={trust.reload}
-      />
+      <LoadError error={trust.error} fallback={S.loadFailed} onRetry={trust.reload} />
     ) : (
-      <Spinner label="Loading the certificates" />
+      <Spinner label={S.loading} />
     );
   const set = (next: TrustView) => trust.setData(() => next);
   return (
     <div className="stack net-section">
       {trust.error ? (
-        <LoadError
-          error={trust.error}
-          fallback="Could not refresh the certificates."
-          onRetry={trust.reload}
-        />
+        <LoadError error={trust.error} fallback={S.refreshFailed} onRetry={trust.reload} />
       ) : null}
       <Serving t={t} />
       <Mode t={t} onSaved={set} />
@@ -65,33 +159,29 @@ function Serving({ t }: { t: TrustView }) {
     <div className="stack net-tight net-first">
       <p className="ws-flush">
         {!s
-          ? 'The Hub has not reported how it serves yet.'
+          ? S.serving.unknown
           : s.scheme === 'http'
-            ? 'The Hub serves plain HTTP now.'
+            ? S.serving.http
             : s.source === 'explicit'
-              ? 'The Hub serves HTTPS with the certificate set when it was started (NOVA_TLS_CERT), which takes precedence over the mode below.'
-              : 'The Hub serves HTTPS with the certificates below.'}
+              ? embed(S.serving.explicit, {
+                  variable: <code className="ws-code-inline">{TLS_VARIABLE}</code>,
+                })
+              : S.serving.https}
       </p>
       {s?.fallbackReason ? (
         <div className="net-notice" data-tone="bad" role="status">
           <Icon name="alert" />
-          <p>
-            The Hub could not read its certificates when it started, so it serves plain HTTP on this
-            computer only: {s.fallbackReason}
-          </p>
+          <p>{S.serving.fallback({ reason: s.fallbackReason })}</p>
         </div>
       ) : null}
       {t.restartRequired ? (
         <div className="net-notice" data-tone="warn" role="status">
           <Icon name="alert" />
-          <p>
-            Restart the Hub to apply the trust mode: switching between HTTP and HTTPS happens when
-            it starts.
-          </p>
+          <p>{S.serving.restart}</p>
         </div>
       ) : null}
       {t.problems.length ? (
-        <ul className="ws-list" aria-label="Certificate problems">
+        <ul className="ws-list" aria-label={S.serving.problems}>
           {t.problems.map((p, i) => (
             <li key={`${i}-${p}`} className="net-problem">
               <p className="net-problem-text">
@@ -99,12 +189,12 @@ function Serving({ t }: { t: TrustView }) {
               </p>
               <p className="muted ws-flush">
                 {/expired/i.test(p)
-                  ? 'Native apps warn about an expired certificate. Renew it below; with the local CA, devices that ask must install the root again.'
+                  ? S.serving.fixExpired
                   : /expires|expiring/i.test(p)
-                    ? 'It renews on its own before it expires. If it does not, renew it below.'
+                    ? S.serving.fixExpiring
                     : /outside|constraint|name/i.test(p)
-                      ? 'The CA may sign only the names it was made for. Reach the Hub by one of those names, or use mesh certificates for that one.'
-                      : 'Renew the certificates below, then check again.'}
+                      ? S.serving.fixNames
+                      : S.serving.fixOther}
               </p>
             </li>
           ))}
@@ -142,15 +232,10 @@ function Mode({ t, onSaved }: { t: TrustView; onSaved: (t: TrustView) => void })
       const next = await api.updateTrust(patch);
       setDraft({});
       onSaved(next);
-      toast.show(
-        next.restartRequired
-          ? 'Saved. Restart the Hub to apply it.'
-          : 'Saved. You can roll this back from the Overview.',
-        { tone: 'success' },
-      );
-      announce('Trust settings saved.');
+      toast.show(next.restartRequired ? S.mode.savedRestart : S.mode.saved, { tone: 'success' });
+      announce(S.mode.savedShort);
     } catch (err) {
-      setFailure(netErrorMessage(err, 'Could not save the trust settings.'));
+      setFailure(netErrorMessage(err, S.mode.saveFailed));
     } finally {
       setBusy(false);
     }
@@ -158,24 +243,21 @@ function Mode({ t, onSaved }: { t: TrustView; onSaved: (t: TrustView) => void })
 
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>Trust mode</h2>
-      <p className="muted">
-        Browsers need HTTPS for the camera, microphone, notifications and installing the app. A
-        device may use more than one path: the local CA at home, mesh certificates away.
-      </p>
+      <h2 id={headingId}>{S.mode.title}</h2>
+      <p className="muted">{S.mode.help}</p>
       {!known ? (
         <p className="ws-warning" role="note">
-          <Icon name="alert" /> The Hub uses a mode this page does not know: {t.mode}.
+          <Icon name="alert" /> {S.mode.unknown({ mode: t.mode })}
         </p>
       ) : null}
       <RadioGroup
-        legend="How clients trust the Hub"
+        legend={S.mode.legend}
         name="net-trust-mode"
         value={mode}
         options={TRUST_MODES.map((m) => ({
           value: m,
-          label: TRUST_MODE_INFO[m]?.label ?? m,
-          description: TRUST_MODE_INFO[m]?.description,
+          label: trustModeInfo(m)?.label ?? m,
+          description: trustModeInfo(m)?.description,
         }))}
         onChange={(v) => {
           const m = TRUST_MODES.find((x) => x === v);
@@ -184,23 +266,21 @@ function Mode({ t, onSaved }: { t: TrustView; onSaved: (t: TrustView) => void })
       />
       {mode === 'local-ca' ? (
         <SwitchField
-          label="Also serve mesh certificates"
-          description="Clients that reach the Hub by its mesh name get the mesh certificate, so they need no root installed."
+          label={S.mode.meshCerts}
+          description={S.mode.meshCertsHelp}
           checked={meshCerts}
           onChange={(v) => setDraft((d) => ({ ...d, meshCerts: v }))}
         />
       ) : null}
       <SwitchField
-        label="Native apps pin this Hub"
-        description="Nova's apps check the Hub's key, kept when the device was added, before they trust its certificate."
+        label={S.mode.pin}
+        description={S.mode.pinHelp}
         checked={pin}
         onChange={(v) => setDraft((d) => ({ ...d, pinNativeShells: v }))}
       />
       {switchesScheme ? (
         <p className="muted ws-flush net-small">
-          {patch.mode === 'none'
-            ? 'Turning HTTPS off applies when the Hub next starts.'
-            : 'HTTPS starts when the Hub next starts. Devices can install the root before that.'}
+          {patch.mode === 'none' ? S.mode.httpsOff : S.mode.httpsOn}
         </p>
       ) : null}
       {failure ? (
@@ -210,9 +290,9 @@ function Mode({ t, onSaved }: { t: TrustView; onSaved: (t: TrustView) => void })
       ) : null}
       <div className="row">
         <Button variant="primary" disabled={!dirty || busy} onClick={() => void save()}>
-          {busy ? <Spinner /> : null} Save
+          {busy ? <Spinner /> : null} {S.mode.save}
         </Button>
-        {dirty ? <Button onClick={() => setDraft({})}>Reset</Button> : null}
+        {dirty ? <Button onClick={() => setDraft({})}>{S.mode.reset}</Button> : null}
       </div>
     </section>
   );
@@ -222,21 +302,29 @@ function Identity({ t }: { t: TrustView }) {
   const headingId = useId();
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>This Hub&apos;s identity</h2>
-      <p className="muted">
-        Apps check this fingerprint, from the code or QR used to add them, before trusting the Hub.
-      </p>
+      <h2 id={headingId}>{S.identity.title}</h2>
+      <p className="muted">{S.identity.help}</p>
       {t.hubFingerprint ? (
         <div className="row net-center">
-          <code className="ws-code-inline net-break" aria-label="Hub fingerprint">
+          <code
+            role="group"
+            className="ws-code-inline net-break"
+            aria-label={S.identity.fingerprint}
+          >
             {t.hubFingerprint}
           </code>
-          <CopyButton value={t.hubFingerprint} what="Fingerprint" />
+          <CopyButton
+            value={t.hubFingerprint}
+            text={{
+              copy: S.identity.copy,
+              copied: S.identity.copied,
+              failed: S.identity.copyFailed,
+            }}
+          />
         </div>
       ) : (
         <p className="ws-warning" role="note">
-          <Icon name="alert" /> The Hub cannot load its identity key right now, so apps cannot check
-          it. The problems above say why.
+          <Icon name="alert" /> {S.identity.noKey}
         </p>
       )}
     </section>
@@ -249,21 +337,19 @@ function Root({ t }: { t: TrustView }) {
   const ca = t.ca;
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>The Hub&apos;s root certificate</h2>
+      <h2 id={headingId}>{S.root.title}</h2>
       {!ca ? (
         <p className="muted ws-flush">
-          {t.mode === 'local-ca'
-            ? 'The Hub is making its certificate authority. Check back in a moment.'
-            : 'Only the Hub local CA mode has a root to install.'}
+          {t.mode === 'local-ca' ? S.root.making : S.root.onlyLocalCa}
         </p>
       ) : (
         <>
           <dl className="net-facts">
-            <Fact term="Fingerprint (SHA-256)">
+            <Fact term={S.root.fingerprint}>
               <code className="ws-code-inline net-break">{ca.fingerprint}</code>
             </Fact>
-            <Fact term="Name">{ca.subject}</Fact>
-            <Fact term="Valid until">{date(ca.notAfter)}</Fact>
+            <Fact term={S.root.name}>{ca.subject}</Fact>
+            <Fact term={S.root.validUntil}>{date(ca.notAfter)}</Fact>
           </dl>
           {t.mode === 'local-ca' ? (
             <>
@@ -274,21 +360,18 @@ function Root({ t }: { t: TrustView }) {
                   href={api.trustCaUrl('crt')}
                   download="nova-hub-ca.crt"
                 >
-                  <Icon name="download" /> Download for phones and Windows (.crt)
+                  <Icon name="download" /> {S.root.downloadCrt({ ext: '.crt' })}
                 </a>
                 <a className="nv-btn" href={api.trustCaUrl('pem')} download="nova-hub-ca.pem">
-                  <Icon name="download" /> Download for macOS and Linux (.pem)
+                  <Icon name="download" /> {S.root.downloadPem({ ext: '.pem' })}
                 </a>
               </div>
-              <p className="muted ws-flush net-small">
-                Check that the fingerprint your device shows matches the one above before you trust
-                it.
-              </p>
+              <p className="muted ws-flush net-small">{S.root.checkFingerprint}</p>
               <details className="ws-advanced">
-                <summary>How to install it</summary>
+                <summary>{S.root.howTo}</summary>
                 <div className="net-hints">
-                  {INSTALL_HINTS.map((h) => (
-                    <div key={h.platform}>
+                  {installHints().map((h) => (
+                    <div key={h.id}>
                       <h3 className="ws-subhead">{h.platform}</h3>
                       <ol className="ws-plain-list">
                         {h.steps.map((s) => (
@@ -301,15 +384,19 @@ function Root({ t }: { t: TrustView }) {
               </details>
             </>
           ) : (
-            <p className="muted ws-flush">
-              The root is offered for download only while the mode is Hub local CA.
-            </p>
+            <p className="muted ws-flush">{S.root.onlyWhileLocalCa}</p>
           )}
           <details className="ws-advanced">
-            <summary>What it may sign</summary>
+            <summary>{S.root.maySign}</summary>
             <p className="muted ws-flush net-small">
-              Names: {ca.nameConstraints.dns.join(', ') || 'none'}. Addresses:{' '}
-              {ca.nameConstraints.ip.join(', ') || 'none'}.
+              {S.root.constraints({
+                names: ca.nameConstraints.dns.length
+                  ? valuesText(ca.nameConstraints.dns)
+                  : S.root.none,
+                addresses: ca.nameConstraints.ip.length
+                  ? valuesText(ca.nameConstraints.ip)
+                  : S.root.none,
+              })}
             </p>
           </details>
         </>
@@ -330,18 +417,17 @@ function Certificates({ t, onRenewed }: { t: TrustView; onRenewed: (t: TrustView
     setFailure(null);
     try {
       onRenewed(await api.renewTrust(target));
-      const what = target === 'leaf' ? 'Hub certificate' : 'Mesh certificate';
-      toast.show(`${what} renewed.`, { tone: 'success' });
-      announce(`${what} renewed.`);
+      toast.show(S.certs.renewed({ what: target }), { tone: 'success' });
+      announce(S.certs.renewed({ what: target }));
     } catch (err) {
-      setFailure(netErrorMessage(err, 'Could not renew the certificate.'));
+      setFailure(netErrorMessage(err, S.certs.renewFailed));
     } finally {
       setBusy(null);
     }
   };
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>Certificates the Hub serves</h2>
+      <h2 id={headingId}>{S.certs.title}</h2>
       {failure ? (
         <p role="alert" className="nv-field-error">
           {failure}
@@ -349,50 +435,48 @@ function Certificates({ t, onRenewed }: { t: TrustView; onRenewed: (t: TrustView
       ) : null}
       <div className="ws-diag-grid">
         <div className="ws-card ws-diag-card">
-          <h3 className="ws-subhead">Hub certificate</h3>
+          <h3 className="ws-subhead">{S.certs.hub}</h3>
           {t.leaf ? (
             <>
               <dl className="ws-dl">
-                <dt>Valid until</dt>
+                <dt>{S.certs.validUntil}</dt>
                 <dd>{date(t.leaf.notAfter)}</dd>
-                <dt>Renews</dt>
-                <dd>{date(t.leaf.renewAt)}, on its own</dd>
-                <dt>Names</dt>
-                <dd>{t.leaf.sans.join(', ')}</dd>
+                <dt>{S.certs.renews}</dt>
+                <dd>{S.certs.renewsOn({ date: date(t.leaf.renewAt) })}</dd>
+                <dt>{S.certs.names}</dt>
+                <dd>{valuesText(t.leaf.sans)}</dd>
               </dl>
               <div>
                 <Button onClick={() => void renew('leaf')} disabled={busy !== null}>
-                  {busy === 'leaf' ? <Spinner /> : <Icon name="refresh" />} Renew now
+                  {busy === 'leaf' ? <Spinner /> : <Icon name="refresh" />} {S.certs.renewNow}
                 </Button>
               </div>
             </>
           ) : (
             <p className="muted ws-flush">
-              {t.mode === 'local-ca' ? 'Not issued yet.' : 'Used only with the Hub local CA.'}
+              {t.mode === 'local-ca' ? S.certs.notIssued : S.certs.onlyLocalCa}
             </p>
           )}
         </div>
         <div className="ws-card ws-diag-card">
-          <h3 className="ws-subhead">Mesh certificate</h3>
+          <h3 className="ws-subhead">{S.certs.mesh}</h3>
           {t.meshCert ? (
             <>
               <Chip spec={meshCertChip(t.meshCert.status)} />
               <dl className="ws-dl">
-                <dt>Name</dt>
+                <dt>{S.certs.name}</dt>
                 <dd>{t.meshCert.host}</dd>
-                <dt>Valid until</dt>
+                <dt>{S.certs.validUntil}</dt>
                 <dd>{date(t.meshCert.notAfter)}</dd>
               </dl>
               <div>
                 <Button onClick={() => void renew('mesh')} disabled={busy !== null}>
-                  {busy === 'mesh' ? <Spinner /> : <Icon name="refresh" />} Renew now
+                  {busy === 'mesh' ? <Spinner /> : <Icon name="refresh" />} {S.certs.renewNow}
                 </Button>
               </div>
             </>
           ) : (
-            <p className="muted ws-flush">
-              None yet. Network Setup gets one when the mesh offers certificates.
-            </p>
+            <p className="muted ws-flush">{S.certs.noneYet}</p>
           )}
         </div>
       </div>
@@ -405,11 +489,11 @@ function certStatus(c: TrustCertificateView): {
   tone: 'ready' | 'blocked' | 'neutral';
   icon: 'check' | 'stop' | 'clock';
 } {
-  if (c.revokedAt) return { text: 'Revoked', tone: 'blocked', icon: 'stop' };
-  if (c.supersededAt) return { text: 'Replaced', tone: 'neutral', icon: 'clock' };
+  if (c.revokedAt) return { text: S.status.revoked, tone: 'blocked', icon: 'stop' };
+  if (c.supersededAt) return { text: S.status.replaced, tone: 'neutral', icon: 'clock' };
   if (Date.parse(c.notAfter) < Date.now())
-    return { text: 'Expired', tone: 'blocked', icon: 'stop' };
-  return { text: 'In use', tone: 'ready', icon: 'check' };
+    return { text: S.status.expired, tone: 'blocked', icon: 'stop' };
+  return { text: S.status.inUse, tone: 'ready', icon: 'check' };
 }
 
 function Issued({ items }: { items: TrustCertificateView[] }) {
@@ -418,29 +502,29 @@ function Issued({ items }: { items: TrustCertificateView[] }) {
   const shown = all ? items : items.slice(0, 10);
   return (
     <section className="ws-section" aria-labelledby={headingId}>
-      <h2 id={headingId}>Certificates issued</h2>
+      <h2 id={headingId}>{S.issued.title}</h2>
       {items.length ? (
         <>
-          <ul className="ws-list" aria-label="Certificates issued">
+          <ul className="ws-list" aria-label={S.issued.title}>
             {shown.map((c) => (
               <li
                 key={c.id}
                 className="ws-list-row"
-                aria-label={`${CERT_KIND_LABEL[c.kind] ?? c.kind} ${c.subject}`}
+                aria-label={S.issued.row({ kind: certKindLabel(c.kind), subject: c.subject })}
               >
                 <div className="net-row-main">
                   <div className="net-row-head">
-                    <span className="net-strong">{CERT_KIND_LABEL[c.kind] ?? c.kind}</span>
+                    <span className="net-strong">{certKindLabel(c.kind)}</span>
                     <Chip spec={certStatus(c)} />
                   </div>
                   <span className="muted ws-row-meta">
                     <span>{c.subject}</span>
                     {c.role ? <span>{c.role}</span> : null}
-                    <span>until {date(c.notAfter)}</span>
-                    <span>issued {formatWhen(c.createdAt)}</span>
+                    <span>{S.issued.until({ date: date(c.notAfter) })}</span>
+                    <span>{S.issued.issued({ when: formatWhen(c.createdAt) })}</span>
                   </span>
                   {c.sans.length ? (
-                    <span className="muted net-small net-break">{c.sans.join(', ')}</span>
+                    <span className="muted net-small net-break">{valuesText(c.sans)}</span>
                   ) : null}
                 </div>
               </li>
@@ -449,13 +533,13 @@ function Issued({ items }: { items: TrustCertificateView[] }) {
           {items.length > shown.length ? (
             <div>
               <Button variant="ghost" onClick={() => setAll(true)}>
-                Show all {items.length}
+                {S.issued.showAll({ n: items.length })}
               </Button>
             </div>
           ) : null}
         </>
       ) : (
-        <p className="muted ws-flush">None yet.</p>
+        <p className="muted ws-flush">{S.issued.none}</p>
       )}
     </section>
   );

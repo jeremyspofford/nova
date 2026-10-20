@@ -10,6 +10,7 @@ export {
 export {
   ManagedRestrictions,
   NO_RESTRICTIONS,
+  effectiveEgressAllow,
   extensionOfTool,
   globMatch,
   managedDenied,

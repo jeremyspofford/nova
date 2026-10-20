@@ -79,8 +79,15 @@ export function extensionDigest(files: Iterable<readonly [string, Uint8Array]>):
 /** A zip entry name as a safe relative path with `/` separators; throws `validation` otherwise. */
 export function safeBundlePath(name: string): string {
   const bad = () =>
-    new NovaError('validation', `the bundle contains an unsafe path: ${name.slice(0, 200)}`);
-  if (!name || name.length > 512 || name.includes('\0') || name.includes('\\')) throw bad();
+    new NovaError(
+      'validation',
+      `the bundle contains an unsafe path: ${JSON.stringify(name.slice(0, 200))}`,
+    );
+  if (!name || name.length > 512 || name.includes('\\')) throw bad();
+  // No control characters: a newline in a path could merge lines of the D2 listing, so one signed
+  // listing could stand for a different set of files (M8 supply review #5).
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(name)) throw bad();
   if (name.startsWith('/') || /^[A-Za-z]:/.test(name)) throw bad();
   const segs = name.split('/').filter((s) => s !== '.');
   if (!segs.length || segs.some((s) => s === '' || s === '..')) throw bad();
@@ -239,6 +246,26 @@ export function folderBundleFiles(root: string): Map<string, Uint8Array> {
   for (const e of walkTree(root)) {
     if (skipped(e.path) || e.path === EXTENSION_SIGNATURE_FILE) continue;
     out.set(safeBundlePath(e.path), readFileSync(e.source));
+  }
+  return out;
+}
+
+const PRIVATE_KEY = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/;
+
+/**
+ * Files that look like secrets and must never be packed: `.env` files and PEM private keys (by
+ * name or by content). `nova pack`, `nova dev` and `nova validate` refuse a folder holding one.
+ */
+export function secretFileProblems(
+  files: Map<string, Uint8Array>,
+): { path: string; why: string }[] {
+  const out: { path: string; why: string }[] = [];
+  for (const [path, data] of files) {
+    const name = path.split('/').pop() ?? path;
+    if (/^\.env(\..*)?$/i.test(name) && !/\.(example|sample|template)$/i.test(name))
+      out.push({ path, why: 'an environment file (.env) usually holds secrets' });
+    else if (data.length <= 1024 * 1024 && PRIVATE_KEY.test(Buffer.from(data).toString('latin1')))
+      out.push({ path, why: 'it holds a PEM private key' });
   }
   return out;
 }

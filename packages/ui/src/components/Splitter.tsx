@@ -4,6 +4,7 @@
 // pointer drag moves it with the pointer. A PaneGroup lays out panes in a row or column with a
 // splitter between each pair; sizes are fractions that always sum to 1 (FR-005).
 import { Children, isValidElement, useRef, type ReactNode } from 'react';
+import { readingDirection } from '../focus.ts';
 
 export type SplitterOrientation = 'vertical' | 'horizontal';
 
@@ -41,12 +42,20 @@ export function Splitter({
   controls,
   className,
 }: SplitterProps) {
-  const drag = useRef<{ start: number; from: number; size: number; applied: number } | null>(null);
+  const drag = useRef<{
+    start: number;
+    from: number;
+    size: number;
+    applied: number;
+    sign: number;
+  } | null>(null);
   const vertical = orientation === 'vertical';
   const clamp = (v: number) => Math.min(max, Math.max(min, v));
+  // In right-to-left the first pane is on the right: moving the boundary left grows it (FR-016).
+  const signAt = (el: Element) => (vertical && readingDirection(el) === 'rtl' ? -1 : 1);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    const big = e.shiftKey ? step * 4 : step;
+    const big = (e.shiftKey ? step * 4 : step) * signAt(e.currentTarget);
     let target: number | null = null;
     if (e.key === (vertical ? 'ArrowLeft' : 'ArrowUp')) target = value - big;
     else if (e.key === (vertical ? 'ArrowRight' : 'ArrowDown')) target = value + big;
@@ -81,12 +90,18 @@ export function Splitter({
         e.preventDefault();
         e.currentTarget.setPointerCapture?.(e.pointerId);
         e.currentTarget.focus();
-        drag.current = { start: point(e), from: value, size, applied: 0 };
+        drag.current = {
+          start: point(e),
+          from: value,
+          size,
+          applied: 0,
+          sign: signAt(e.currentTarget),
+        };
       }}
       onPointerMove={(e) => {
         const d = drag.current;
         if (!d) return;
-        const wanted = ((point(e) - d.start) / d.size) * 100;
+        const wanted = ((point(e) - d.start) / d.size) * 100 * d.sign;
         // Apply only what is left after earlier moves of this drag, within the limits.
         const next = clamp(d.from + wanted) - (d.from + d.applied);
         if (Math.abs(next) < 0.05) return;

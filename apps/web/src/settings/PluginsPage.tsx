@@ -3,6 +3,7 @@
 // from a catalog, a folder on the Hub or a Git URL through a preview, the skills list and the
 // hooks list with trust by content hash.
 import { useEffect, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { CatalogEntryView, CatalogView, PluginPreview, PluginView } from '@nova/shared';
 import {
   Button,
@@ -16,10 +17,11 @@ import {
   useToast,
 } from '@nova/ui';
 import { errorMessage, type PluginSourceRequest } from '../api.ts';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { StateChip, VerifiedBadge } from './badges.tsx';
-import { MANAGED, formatWhen, plural } from './common.ts';
+import { formatWhen } from './common.ts';
 import { HooksSection } from './HooksSection.tsx';
 import { isAbsolutePath } from './PermissionsPage.tsx';
 import { PluginPreviewDialog } from './PluginInstall.tsx';
@@ -29,17 +31,109 @@ import '../workspace.css';
 
 type Previewing = { preview: PluginPreview; current: PluginView | null };
 
+export const PLUGINS_TEXT = defineMessages('settings.plugins', {
+  components: {
+    skills: '{n, plural, one {# skill} other {# skills}}',
+    commands: '{n, plural, one {# command} other {# commands}}',
+    agents: '{n, plural, one {# agent role} other {# agent roles}}',
+    hooks: '{n, plural, one {# hook} other {# hooks}}',
+    mcpServers: '{n, plural, one {# MCP server} other {# MCP servers}}',
+    uiEntryPoints: '{n, plural, one {# app screen} other {# app screens}}',
+    none: 'No components',
+  },
+  loadFailed: 'Could not load plugins.',
+  readFailed: 'Could not read the plugin.',
+  previewFailed: 'Could not preview {name}: {error}',
+  title: 'Plugins & skills',
+  done: '{action, select, update {{name} updated.} other {{name} installed.}}',
+  doneNeedsTrust:
+    '{action, select, update {{name} updated. Some hooks still need your trust.} other {{name} installed. Some hooks still need your trust.}}',
+  turnedOn: '{name} turned on.',
+  turnedOff: '{name} turned off. Its servers and hooks stopped.',
+  changeFailed: 'Could not change {name}: {error}',
+  uninstalled: '{name} uninstalled.',
+  uninstallFailed: 'Could not uninstall {name}: {error}',
+  installed: 'Installed plugins',
+  installedHint:
+    'Plugins bring skills, commands, MCP servers, hooks and app screens. Each one runs within ' +
+    'the permissions you confirmed when you installed it.',
+  retry: 'Retry',
+  loading: 'Loading plugins',
+  none: 'No plugins installed',
+  noneHint: 'Browse a catalog below, or install one from a folder on the Hub.',
+  by: 'by {author}',
+  installedAt: 'installed {when}',
+  permissions: 'Permissions',
+  turnOn: 'Turn on {name}',
+  updateTo: 'Update {name} to {version}',
+  updateToShort: 'Update to {version}',
+  uninstall: 'Uninstall',
+  uninstallTitle: 'Uninstall {name}?',
+  uninstallThis: 'Uninstall this plugin?',
+  uninstallBody:
+    'Its skills, commands, agent roles, hooks, MCP servers and app screens are removed. Chats ' +
+    'that used them are kept.',
+  cancel: 'Cancel',
+  catalogKind: { local: 'folder on the Hub', url: 'web address', git: 'Git repository' },
+  searchFailed: 'Could not search the catalogs.',
+  catalog: 'Catalog',
+  from: 'From {catalogs}.',
+  catalogItem: '{name} ({kind})',
+  noCatalogs: 'No catalogs are set up. You can still install from a folder.',
+  search: 'Search plugins',
+  loadingCatalog: 'Loading the catalog',
+  noMatch: 'No plugins match “{query}”.',
+  catalogsEmpty: 'The catalogs are empty.',
+  catalogPlugins: 'Catalog plugins',
+  installedVersion: 'Installed: {version}',
+  installName: '{action, select, update {Update {name}} other {Install {name}}}',
+  update: 'Update',
+  install: 'Install',
+  isInstalled: 'Installed',
+  catalogsSaveFailed: 'Could not save the catalogs: {error}',
+  needCatalogName: 'Enter a name for the catalog.',
+  needLocation: 'Enter a full folder path on the Hub or an https:// address.',
+  added: '{name} added.',
+  removed: '{name} removed.',
+  yourCatalogs: 'Your catalogs',
+  removeName: 'Remove {name}',
+  remove: 'Remove',
+  noOwnCatalogs: 'You have not added a catalog.',
+  catalogName: 'Catalog name',
+  catalogLocation: 'Catalog location',
+  catalogLocationExample: '/srv/catalog or https://catalog.example.com',
+  catalogLocationHint: 'A folder on the Hub, an https:// address or an https:// Git repository.',
+  addCatalog: 'Add catalog',
+  needPath:
+    'Enter the full path of the plugin folder on the Hub, for example /home/me/plugins/notes.',
+  needGit: 'Enter an https:// Git address.',
+  local: 'Install from a folder or Git',
+  where: 'Where the plugin is',
+  aFolder: 'A folder on the Hub',
+  aGit: 'A Git repository',
+  folder: 'Plugin folder',
+  folderExample: '/home/me/plugins/notes',
+  folderHint: 'The folder that contains .nova-plugin/plugin.json.',
+  git: 'Git address',
+  gitExample: 'https://git.example.com/me/notes-plugin.git',
+  ref: 'Branch, tag or commit (optional)',
+  preview: 'Preview',
+  previewHint: 'You see what it can do before anything is installed.',
+});
+const S = PLUGINS_TEXT;
+
 /** "2 skills · 1 hook · 1 MCP server"; parts with zero are left out. */
 export function componentsText(c: PluginView['components']): string {
+  const C = S.components;
   const parts = [
-    c.skills ? plural(c.skills, 'skill') : null,
-    c.commands ? plural(c.commands, 'command') : null,
-    c.agents ? plural(c.agents, 'agent role') : null,
-    c.hooks ? plural(c.hooks, 'hook') : null,
-    c.mcpServers ? plural(c.mcpServers, 'MCP server') : null,
-    c.uiEntryPoints ? plural(c.uiEntryPoints, 'app screen') : null,
+    c.skills ? C.skills({ n: c.skills }) : null,
+    c.commands ? C.commands({ n: c.commands }) : null,
+    c.agents ? C.agents({ n: c.agents }) : null,
+    c.hooks ? C.hooks({ n: c.hooks }) : null,
+    c.mcpServers ? C.mcpServers({ n: c.mcpServers }) : null,
+    c.uiEntryPoints ? C.uiEntryPoints({ n: c.uiEntryPoints }) : null,
   ].filter((p): p is string => p !== null);
-  return parts.length ? parts.join(' · ') : 'No components';
+  return parts.length ? parts.join(' · ') : C.none;
 }
 
 /** The newest catalog entry for each plugin id. */
@@ -72,7 +166,7 @@ export function PluginsPage() {
         setPlugins(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load plugins.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -93,7 +187,7 @@ export function PluginsPage() {
       setPreviewing({ preview: p, current: plugins?.find((x) => x.id === id) ?? null });
       return null;
     } catch (err) {
-      return errorMessage(err, 'Could not read the plugin.');
+      return errorMessage(err, S.readFailed);
     } finally {
       setLoadingPreview(null);
     }
@@ -104,14 +198,14 @@ export function PluginsPage() {
       { kind: 'catalog', catalogId: e.catalogId, pluginId: e.pluginId, version: e.version },
       `${e.catalogId}/${e.pluginId}`,
     );
-    if (failed) toast.show(`Could not preview ${e.name}: ${failed}`, { tone: 'error' });
+    if (failed) toast.show(S.previewFailed({ name: e.name, error: failed }), { tone: 'error' });
   };
 
   const newest = newestEntries(entries);
 
   return (
     <div className="settings-page">
-      <h2>Plugins &amp; skills</h2>
+      <h2>{S.title}</h2>
       <InstalledSection
         plugins={plugins}
         error={error}
@@ -146,10 +240,10 @@ export function PluginsPage() {
           onInstalled={(p) => {
             const update = previewing.preview.replaces !== null;
             setPreviewing(null);
-            toast.show(
-              `${p.name} ${p.version} ${update ? 'updated' : 'installed'}${p.status === 'needs_trust' ? '. Some hooks still need your trust' : ''}.`,
-              { tone: 'success' },
-            );
+            const done = { action: update ? 'update' : 'install', name: `${p.name} ${p.version}` };
+            toast.show(p.status === 'needs_trust' ? S.doneNeedsTrust(done) : S.done(done), {
+              tone: 'success',
+            });
             changed();
           }}
         />
@@ -188,14 +282,11 @@ function InstalledSection({
     setBusy(p.id);
     try {
       onReplace(await api.updatePlugin(p.id, { enabled: on }));
-      toast.show(
-        on ? `${p.name} turned on.` : `${p.name} turned off. Its servers and hooks stopped.`,
-        {
-          tone: 'success',
-        },
-      );
+      toast.show(on ? S.turnedOn({ name: p.name }) : S.turnedOff({ name: p.name }), {
+        tone: 'success',
+      });
     } catch (err) {
-      toast.show(`Could not change ${p.name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.changeFailed({ name: p.name, error: errorMessage(err) }), { tone: 'error' });
     } finally {
       setBusy(null);
     }
@@ -205,36 +296,29 @@ function InstalledSection({
     setRemoving(null);
     try {
       await api.uninstallPlugin(p.id);
-      toast.show(`${p.name} uninstalled.`, { tone: 'success' });
+      toast.show(S.uninstalled({ name: p.name }), { tone: 'success' });
       onChanged();
     } catch (err) {
-      toast.show(`Could not uninstall ${p.name}: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.uninstallFailed({ name: p.name, error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
   return (
     <section className="settings-section" aria-labelledby="plugins-installed">
-      <h3 id="plugins-installed">Installed plugins</h3>
-      <p className="muted">
-        Plugins bring skills, commands, MCP servers, hooks and app screens. Each one runs within the
-        permissions you confirmed when you installed it.
-      </p>
+      <h3 id="plugins-installed">{S.installed}</h3>
+      <p className="muted">{S.installedHint}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={onRetry}>Retry</Button>
+          <Button onClick={onRetry}>{S.retry}</Button>
         </div>
       ) : null}
-      {plugins === null && !error ? <Spinner label="Loading plugins" /> : null}
+      {plugins === null && !error ? <Spinner label={S.loading} /> : null}
       {plugins?.length === 0 ? (
-        <EmptyState
-          level={3}
-          title="No plugins installed"
-          description="Browse a catalog below, or install one from a folder on the Hub."
-        />
+        <EmptyState level={3} title={S.none} description={S.noneHint} />
       ) : null}
       {plugins?.length ? (
-        <ul className="ws-list" aria-label="Installed plugins">
+        <ul className="ws-list" aria-label={S.installed}>
           {plugins.map((p) => {
             const s = PLUGIN_STATUS[p.status];
             const entry = newest.get(p.id);
@@ -248,19 +332,27 @@ function InstalledSection({
                     <StateChip {...s} />
                     <VerifiedBadge verified={p.verified} />
                   </span>
-                  {p.description ? <span className="muted">{p.description}</span> : null}
+                  {p.description ? (
+                    <span className="muted" dir="auto">
+                      {p.description}
+                    </span>
+                  ) : null}
                   <span className="muted ws-row-meta">
                     {componentsText(p.components)}
-                    {p.author ? ` · by ${p.author}` : ''} · installed {formatWhen(p.installedAt)}
+                    {p.author ? ` · ${S.by({ author: p.author })}` : ''}
+                    {' · '}
+                    {S.installedAt({ when: formatWhen(p.installedAt) })}
                   </span>
-                  <code className="ws-code-inline">{p.origin}</code>
+                  <code className="ws-code-inline" dir="ltr">
+                    {p.origin}
+                  </code>
                   {p.error ? (
                     <p className="ws-warning">
                       <Icon name="alert" /> <span>{p.error}</span>
                     </p>
                   ) : null}
                   <details className="ws-advanced">
-                    <summary>Permissions</summary>
+                    <summary>{S.permissions}</summary>
                     <ul className="ws-plain-list">
                       {permissionLines(p.permissions).map((l) => (
                         <li key={l}>{l}</li>
@@ -270,7 +362,7 @@ function InstalledSection({
                 </div>
                 <div className="row ws-row-actions">
                   <Switch
-                    label={`Turn on ${p.name}`}
+                    label={S.turnOn({ name: p.name })}
                     checked={p.enabled}
                     disabled={busy === p.id}
                     onChange={(v) => void toggle(p, v)}
@@ -279,16 +371,16 @@ function InstalledSection({
                     <Button
                       onClick={() => onUpdate(update)}
                       disabled={loadingPreview !== null}
-                      aria-label={`Update ${p.name} to ${update.version}`}
+                      aria-label={S.updateTo({ name: p.name, version: update.version })}
                     >
                       {loadingPreview === `${update.catalogId}/${update.pluginId}` ? (
                         <Spinner />
                       ) : null}{' '}
-                      Update to {update.version}
+                      {S.updateToShort({ version: update.version })}
                     </Button>
                   ) : null}
                   <Button variant="ghost" onClick={() => setRemoving(p)}>
-                    Uninstall
+                    {S.uninstall}
                   </Button>
                 </div>
               </li>
@@ -298,14 +390,14 @@ function InstalledSection({
       ) : null}
       <Dialog
         open={removing !== null}
-        title={removing ? `Uninstall ${removing.name}?` : 'Uninstall this plugin?'}
-        description="Its skills, commands, agent roles, hooks, MCP servers and app screens are removed. Chats that used them are kept."
+        title={removing ? S.uninstallTitle({ name: removing.name }) : S.uninstallThis}
+        description={S.uninstallBody}
         onClose={() => setRemoving(null)}
         footer={
           <>
-            <Button onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button onClick={() => setRemoving(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => removing && void uninstall(removing)}>
-              Uninstall
+              {S.uninstall}
             </Button>
           </>
         }
@@ -316,11 +408,7 @@ function InstalledSection({
 
 // ---- catalogs ----------------------------------------------------------------------------------
 
-const CATALOG_KIND: Record<CatalogView['kind'], string> = {
-  local: 'folder on the Hub',
-  url: 'web address',
-  git: 'Git repository',
-};
+const CATALOG_KIND: Readonly<Record<CatalogView['kind'], string>> = S.catalogKind;
 
 function CatalogSection({
   installedKey,
@@ -365,7 +453,7 @@ function CatalogSection({
         // Update offers use the full list, not a filtered one.
         if (!query) onEntries(items);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not search the catalogs.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.searchFailed)),
     );
     return () => {
       alive = false;
@@ -376,42 +464,33 @@ function CatalogSection({
 
   return (
     <section className="settings-section" aria-labelledby="plugins-catalog">
-      <h3 id="plugins-catalog">Catalog</h3>
+      <h3 id="plugins-catalog">{S.catalog}</h3>
       {catalogs?.length ? (
         <p className="muted">
-          From{' '}
-          {catalogs.map((c, i) => (
-            <span key={c.id}>
-              {i ? ', ' : ''}
-              {c.name} ({CATALOG_KIND[c.kind]})
-            </span>
-          ))}
-          .
+          {S.from({
+            catalogs: fmt.list(
+              catalogs.map((c) => S.catalogItem({ name: c.name, kind: CATALOG_KIND[c.kind] })),
+              { type: 'unit' },
+            ),
+          })}
         </p>
       ) : catalogs ? (
-        <p className="muted">No catalogs are set up. You can still install from a folder.</p>
+        <p className="muted">{S.noCatalogs}</p>
       ) : null}
       <CatalogSources onChanged={() => setSourcesVersion((v) => v + 1)} />
-      <TextField
-        label="Search plugins"
-        type="search"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-      />
+      <TextField label={S.search} type="search" value={q} onChange={(e) => setQ(e.target.value)} />
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setRetry((r) => r + 1)}>Retry</Button>
+          <Button onClick={() => setRetry((r) => r + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {entries === null && !error ? <Spinner label="Loading the catalog" /> : null}
+      {entries === null && !error ? <Spinner label={S.loadingCatalog} /> : null}
       {entries?.length === 0 ? (
-        <p className="muted">
-          {query ? `No plugins match “${query}”.` : 'The catalogs are empty.'}
-        </p>
+        <p className="muted">{query ? S.noMatch({ query }) : S.catalogsEmpty}</p>
       ) : null}
       {entries?.length ? (
-        <ul className="ws-list" aria-label="Catalog plugins">
+        <ul className="ws-list" aria-label={S.catalogPlugins}>
           {entries.map((e) => {
             const key = `${e.catalogId}/${e.pluginId}`;
             const newer =
@@ -425,9 +504,15 @@ function CatalogSection({
                     <VerifiedBadge verified={e.verified} />
                     <span className="muted">{names.get(e.catalogId) ?? e.catalogId}</span>
                   </span>
-                  {e.description ? <span className="muted">{e.description}</span> : null}
+                  {e.description ? (
+                    <span className="muted" dir="auto">
+                      {e.description}
+                    </span>
+                  ) : null}
                   {e.installedVersion ? (
-                    <span className="muted">Installed: {e.installedVersion}</span>
+                    <span className="muted">
+                      {S.installedVersion({ version: e.installedVersion })}
+                    </span>
                   ) : null}
                 </div>
                 <div className="row ws-row-actions">
@@ -435,13 +520,16 @@ function CatalogSection({
                     <Button
                       variant={newer ? 'default' : 'primary'}
                       disabled={loadingPreview !== null}
-                      aria-label={`${newer ? 'Update' : 'Install'} ${e.name}`}
+                      aria-label={S.installName({
+                        action: newer ? 'update' : 'install',
+                        name: e.name,
+                      })}
                       onClick={() => onInstall(e)}
                     >
-                      {loadingPreview === key ? <Spinner /> : null} {newer ? 'Update' : 'Install'}
+                      {loadingPreview === key ? <Spinner /> : null} {newer ? S.update : S.install}
                     </Button>
                   ) : (
-                    <span className="muted">Installed</span>
+                    <span className="muted">{S.isInstalled}</span>
                   )}
                 </div>
               </li>
@@ -496,7 +584,7 @@ function CatalogSources({ onChanged }: { onChanged: () => void }) {
         return true;
       },
       (err: unknown) => {
-        toast.show(`Could not save the catalogs: ${errorMessage(err)}`, { tone: 'error' });
+        toast.show(S.catalogsSaveFailed({ error: errorMessage(err) }), { tone: 'error' });
         return false;
       },
     );
@@ -504,15 +592,14 @@ function CatalogSources({ onChanged }: { onChanged: () => void }) {
   const add = async () => {
     const n = name.trim();
     const loc = location.trim();
-    if (!n) return setError('Enter a name for the catalog.');
-    if (!isCatalogLocation(loc))
-      return setError('Enter a full folder path on the Hub or an https:// address.');
+    if (!n) return setError(S.needCatalogName);
+    if (!isCatalogLocation(loc)) return setError(S.needLocation);
     setError(null);
     const id = catalogId(
       n,
       entry.value.map((c) => c.id),
     );
-    if (await save([...entry.value, { id, name: n, location: loc }], `${n} added.`)) {
+    if (await save([...entry.value, { id, name: n, location: loc }], S.added({ name: n }))) {
       setName('');
       setLocation('');
     }
@@ -520,35 +607,41 @@ function CatalogSources({ onChanged }: { onChanged: () => void }) {
 
   return (
     <details className="ws-advanced">
-      <summary>Your catalogs</summary>
+      <summary>{S.yourCatalogs}</summary>
       <div className="stack">
-        {entry.locked ? <p className="muted">{MANAGED}.</p> : null}
+        {entry.locked ? <ManagedNote as="p" id="catalogs-lock" setting="plugins.catalogs" /> : null}
         {entry.value.length ? (
-          <ul className="ws-list" aria-label="Your catalogs">
+          <ul
+            className="ws-list"
+            aria-label={S.yourCatalogs}
+            aria-describedby={entry.locked ? 'catalogs-lock' : undefined}
+          >
             {entry.value.map((c) => (
               <li key={c.id} className="ws-list-row" aria-label={c.name}>
                 <div className="ws-source-main">
                   <strong>{c.name}</strong>
-                  <code className="ws-code-inline">{c.location}</code>
+                  <code className="ws-code-inline" dir="ltr">
+                    {c.location}
+                  </code>
                 </div>
                 <Button
                   variant="ghost"
                   disabled={entry.locked}
-                  aria-label={`Remove ${c.name}`}
+                  aria-label={S.removeName({ name: c.name })}
                   onClick={() =>
                     void save(
                       entry.value.filter((x) => x.id !== c.id),
-                      `${c.name} removed.`,
+                      S.removed({ name: c.name }),
                     )
                   }
                 >
-                  Remove
+                  {S.remove}
                 </Button>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="muted">You have not added a catalog.</p>
+          <p className="muted">{S.noOwnCatalogs}</p>
         )}
         <form
           className="stack"
@@ -558,19 +651,20 @@ function CatalogSources({ onChanged }: { onChanged: () => void }) {
           }}
         >
           <TextField
-            label="Catalog name"
+            label={S.catalogName}
             value={name}
             maxLength={100}
             disabled={entry.locked}
+            aria-describedby={entry.locked ? 'catalogs-lock' : undefined}
             onChange={(e) => setName(e.target.value)}
           />
           <TextField
-            label="Catalog location"
+            label={S.catalogLocation}
             value={location}
             spellCheck={false}
             disabled={entry.locked}
-            placeholder="/srv/catalog or https://catalog.example.com"
-            hint="A folder on the Hub, an https:// address or an https:// Git repository."
+            placeholder={S.catalogLocationExample}
+            hint={S.catalogLocationHint}
             onChange={(e) => setLocation(e.target.value)}
           />
           {error ? (
@@ -580,7 +674,7 @@ function CatalogSources({ onChanged }: { onChanged: () => void }) {
           ) : null}
           <div className="row">
             <Button type="submit" disabled={entry.locked}>
-              Add catalog
+              {S.addCatalog}
             </Button>
           </div>
         </form>
@@ -610,16 +704,14 @@ function LocalInstall({
     if (kind === 'path') {
       const p = path.trim();
       if (!isAbsolutePath(p)) {
-        setError(
-          'Enter the full path of the plugin folder on the Hub, for example /home/me/plugins/notes.',
-        );
+        setError(S.needPath);
         return;
       }
       source = { kind: 'path', path: p };
     } else {
       const u = url.trim();
       if (!isHttps(u)) {
-        setError('Enter an https:// Git address.');
+        setError(S.needGit);
         return;
       }
       source = ref.trim() ? { kind: 'git', url: u, ref: ref.trim() } : { kind: 'git', url: u };
@@ -630,7 +722,7 @@ function LocalInstall({
 
   return (
     <section className="settings-section" aria-labelledby="plugins-local">
-      <h3 id="plugins-local">Install from a folder or Git</h3>
+      <h3 id="plugins-local">{S.local}</h3>
       <form
         className="stack"
         onSubmit={(e) => {
@@ -639,38 +731,38 @@ function LocalInstall({
         }}
       >
         <SelectField
-          label="Where the plugin is"
+          label={S.where}
           value={kind}
           onChange={(v) => {
             setKind(v as 'path' | 'git');
             setError(null);
           }}
           options={[
-            { value: 'path', label: 'A folder on the Hub' },
-            { value: 'git', label: 'A Git repository' },
+            { value: 'path', label: S.aFolder },
+            { value: 'git', label: S.aGit },
           ]}
         />
         {kind === 'path' ? (
           <TextField
-            label="Plugin folder"
+            label={S.folder}
             value={path}
             spellCheck={false}
-            placeholder="/home/me/plugins/notes"
-            hint="The folder that contains .nova-plugin/plugin.json."
+            placeholder={S.folderExample}
+            hint={S.folderHint}
             onChange={(e) => setPath(e.target.value)}
           />
         ) : (
           <>
             <TextField
-              label="Git address"
+              label={S.git}
               type="url"
               value={url}
               spellCheck={false}
-              placeholder="https://git.example.com/me/notes-plugin.git"
+              placeholder={S.gitExample}
               onChange={(e) => setUrl(e.target.value)}
             />
             <TextField
-              label="Branch, tag or commit (optional)"
+              label={S.ref}
               value={ref}
               spellCheck={false}
               onChange={(e) => setRef(e.target.value)}
@@ -684,10 +776,10 @@ function LocalInstall({
         ) : null}
         <div className="row">
           <Button type="submit" disabled={busy}>
-            {busy ? <Spinner /> : null} Preview
+            {busy ? <Spinner /> : null} {S.preview}
           </Button>
         </div>
-        <p className="muted">You see what it can do before anything is installed.</p>
+        <p className="muted">{S.previewHint}</p>
       </form>
     </section>
   );

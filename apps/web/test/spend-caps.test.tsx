@@ -275,7 +275,47 @@ describe('provider limits on Accounts', () => {
 });
 
 describe('the cap-reached error in a chat', () => {
-  it('links a reply a spend cap stopped to that cap, and leaves other errors alone', async () => {
+  it('links a reply a spend cap stopped to that cap from the error details', async () => {
+    const t = thread({ title: 'Costs' });
+    const hub = createHub({ threads: [t] });
+    hub.state.messages.set(t.id, [
+      message(t.id, { role: 'user', parts: [{ type: 'text', text: 'Hi' }] }),
+      message(t.id, {
+        role: 'assistant',
+        status: 'error',
+        parts: [
+          {
+            type: 'error',
+            code: 'over_budget',
+            // The details decide, whatever the sentence says.
+            message: 'Calls to this provider are paused for now.',
+            details: { reason: 'spend_cap', provider: 'openai' },
+          },
+        ],
+      }),
+      message(t.id, {
+        role: 'assistant',
+        status: 'error',
+        parts: [
+          {
+            type: 'error',
+            code: 'over_budget',
+            // Another structured stop that happens to mention a cap: no link.
+            message: 'The openai spend cap of the provider account is used up.',
+            details: { reason: 'provider_quota' },
+          },
+        ],
+      }),
+    ]);
+    await renderApp({ hub, path: `/chat/${t.id}` });
+    expect(await screen.findByText(/Calls to this provider are paused/)).toBeTruthy();
+    const links = screen.getAllByRole('link', { name: 'Raise the cap' });
+    expect(links).toHaveLength(1);
+    expect(links[0]!.getAttribute('href')).toBe('/settings/profile?cap=openai#spend-caps');
+    expect(screen.getByText(/spend cap of the provider account is used up/)).toBeTruthy();
+  });
+
+  it('still links an older reply by its sentence, and leaves other errors alone', async () => {
     const t = thread({ title: 'Costs' });
     const hub = createHub({ threads: [t] });
     hub.state.messages.set(t.id, [
@@ -326,6 +366,19 @@ describe('data-controls words', () => {
       capReachedProvider('over_budget', 'the provider account has a billing problem'),
     ).toBeUndefined();
     expect(capReachedProvider('rate_limited', 'The openai spend cap of')).toBeUndefined();
+    // The structured field wins over the sentence, both ways.
+    expect(
+      capReachedProvider('over_budget', 'Paused.', { reason: 'spend_cap', provider: 'anthropic' }),
+    ).toBe('anthropic');
+    expect(capReachedProvider('over_budget', 'Paused.', { reason: 'spend_cap' })).toBeNull();
+    expect(
+      capReachedProvider('over_budget', 'The openai spend cap of $5.00 a day is reached', {
+        reason: 'unknown_model',
+      }),
+    ).toBeUndefined();
+    expect(
+      capReachedProvider('over_budget', 'The openai spend cap of $5.00 a day is reached', null),
+    ).toBe('openai');
     expect(capPath(null)).toBe('/settings/profile#spend-caps');
   });
 
@@ -346,7 +399,7 @@ describe('data-controls words', () => {
       field: 'warn',
     });
     expect(formatSize(512)).toBe('512 B');
-    expect(formatSize(3 * 1024 ** 3)).toBe('3.0 GB');
+    expect(formatSize(3 * 1024 ** 3)).toBe('3 GB');
     expect(formatUsd(0.004)).toBe('under $0.01');
     expect(retentionOptions(1, 45).map((o) => o.value)).toEqual([
       'forever',

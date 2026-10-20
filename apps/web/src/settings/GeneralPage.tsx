@@ -3,6 +3,7 @@
 // follow-up suggestions (FR-028), the setup guide (FR-014), and M5's Work runs: default budgets
 // (FR-182), autonomy (docs/09 §3) and turning chat requests into runs (FR-186).
 import { useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, RadioGroup, SelectField, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { modelGroups } from '../providers/model-groups.ts';
@@ -12,10 +13,52 @@ import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useModels } from '../stores.tsx';
 import { AUTONOMY_TEXT } from '../work/format.ts';
-import { MANAGED } from './common.ts';
 import { SwitchField } from './controls.tsx';
 import '../workspace.css';
 import '../work/work.css';
+
+export const GENERAL_TEXT = defineMessages('settings.general', {
+  title: 'General',
+  saveFailed: 'Could not save: {error}',
+  sendWith: 'Send messages with',
+  enter: 'Enter',
+  enterHint: 'Shift+Enter adds a new line.',
+  modEnterHint: 'Enter adds a new line.',
+  followUp: 'While a reply is streaming, new messages',
+  steer: 'Steer the reply',
+  steerHint: 'Join the running reply and change its direction at its next step.',
+  queue: 'Wait in a queue',
+  queueHint: 'Are sent one by one after the current reply finishes.',
+  defaultModel: 'Default model for new chats',
+  firstAvailable: 'First available model',
+  defaultModelHint: 'You can still pick another model in each chat.',
+  noModels: 'No models yet. Connect a provider in Accounts.',
+  suggestions: 'Suggest follow-ups',
+  suggestionsHint: 'After a reply, offer a few short prompts to continue with.',
+  setupGuide: 'Setup guide',
+  setupGuideHint: 'Walk through connecting a provider and running a sample task again.',
+  openSetupGuide: 'Open the setup guide',
+  ttl: 'Delete temporary chats after (hours)',
+  ttlHint:
+    'Temporary chats and their files are deleted this long after their last activity. {min} to {max, plural, one {# hour} other {# hours}}.',
+  wholeRange: 'Enter a whole number from {min} to {max}.',
+  numberRange: 'Enter a number from {min} to {max}.',
+  workRuns: 'Work runs',
+  workRunsHint: 'Defaults for new runs. A run pauses at a budget and asks before going further.',
+  timeBudget: 'Time budget (minutes)',
+  tokenBudget: 'Token budget',
+  costLimit: 'Cost limit (US dollars)',
+  costLimitHint: 'Blank uses the provider spend cap.',
+  autonomy: 'Autonomy of new runs',
+  escalation: 'Turn multi-step chat requests into runs',
+  propose: 'Propose a run',
+  proposeHint: 'Show the plan and budget in the chat; the run starts when you accept it.',
+  auto: 'Start the run',
+  autoHint: 'Start at once in the chat, with Stop always visible.',
+  never: 'Never',
+  neverHint: 'Answer in the chat without a run.',
+});
+const S = GENERAL_TEXT;
 
 export function GeneralPage() {
   const { registry } = useServices();
@@ -29,16 +72,16 @@ export function GeneralPage() {
   const mac = registry.platform.mac;
 
   const fail = (err: unknown) =>
-    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+    toast.show(S.saveFailed({ error: errorMessage(err) }), { tone: 'error' });
 
   const groups = modelGroups(models);
 
   return (
     <div className="settings-page">
-      <h2>General</h2>
+      <h2>{S.title}</h2>
       <section className="settings-section">
         <RadioGroup
-          legend="Send messages with"
+          legend={S.sendWith}
           name="enter-to-send"
           value={enter.value}
           locked={enter.locked}
@@ -46,18 +89,18 @@ export function GeneralPage() {
             void settings.set('general.enterToSend', v as 'enter' | 'mod+enter').catch(fail)
           }
           options={[
-            { value: 'enter', label: 'Enter', description: 'Shift+Enter adds a new line.' },
+            { value: 'enter', label: S.enter, description: S.enterHint },
             {
               value: 'mod+enter',
               label: bindingText('mod+enter', mac),
-              description: 'Enter adds a new line.',
+              description: S.modEnterHint,
             },
           ]}
         />
       </section>
       <section className="settings-section">
         <RadioGroup
-          legend="While a reply is streaming, new messages"
+          legend={S.followUp}
           name="follow-up"
           value={followUp.value}
           locked={followUp.locked}
@@ -67,13 +110,13 @@ export function GeneralPage() {
           options={[
             {
               value: 'steer',
-              label: 'Steer the reply',
-              description: 'Join the running reply and change its direction at its next step.',
+              label: S.steer,
+              description: S.steerHint,
             },
             {
               value: 'queue',
-              label: 'Wait in a queue',
-              description: 'Are sent one by one after the current reply finishes.',
+              label: S.queue,
+              description: S.queueHint,
             },
           ]}
         />
@@ -83,23 +126,19 @@ export function GeneralPage() {
       </section>
       <section className="settings-section">
         <SelectField
-          label="Default model for new chats"
+          label={S.defaultModel}
           value={model.value ?? ''}
           locked={model.locked}
           onChange={(v) => void settings.set('chat.defaultModel', v || null).catch(fail)}
-          options={[{ value: '', label: 'First available model' }]}
+          options={[{ value: '', label: S.firstAvailable }]}
           groups={groups}
-          hint={
-            models.length
-              ? 'You can still pick another model in each chat.'
-              : 'No models yet. Connect a provider in Accounts.'
-          }
+          hint={models.length ? S.defaultModelHint : S.noModels}
         />
       </section>
       <section className="settings-section">
         <SwitchField
-          label="Suggest follow-ups"
-          description="After a reply, offer a few short prompts to continue with."
+          label={S.suggestions}
+          description={S.suggestionsHint}
           checked={suggestions.value}
           locked={suggestions.locked}
           onChange={(v) => void settings.set('chat.suggestions', v).catch(fail)}
@@ -107,9 +146,9 @@ export function GeneralPage() {
       </section>
       <WorkRunsSection onError={fail} />
       <section className="settings-section">
-        <h3>Setup guide</h3>
-        <p className="muted">Walk through connecting a provider and running a sample task again.</p>
-        <Button onClick={() => navigate('/onboarding')}>Open the setup guide</Button>
+        <h3>{S.setupGuide}</h3>
+        <p className="muted">{S.setupGuideHint}</p>
+        <Button onClick={() => navigate('/onboarding')}>{S.openSetupGuide}</Button>
       </section>
     </div>
   );
@@ -136,8 +175,10 @@ function TemporaryRetention({ onError }: { onError: (err: unknown) => void }) {
 
   return (
     <TextField
-      label="Delete temporary chats after (hours)"
-      hint={`${ttl.locked ? `${MANAGED}. ` : ''}Temporary chats and their files are deleted this long after their last activity. ${TTL_MIN} to ${TTL_MAX} hours.`}
+      label={S.ttl}
+      hint={S.ttlHint({ min: TTL_MIN, max: TTL_MAX })}
+      locked={ttl.locked}
+      setting="chat.temporaryTtlHours"
       type="number"
       className="ws-number"
       inputMode="numeric"
@@ -146,7 +187,7 @@ function TemporaryRetention({ onError }: { onError: (err: unknown) => void }) {
       step={1}
       value={text}
       disabled={ttl.locked}
-      error={invalid ? `Enter a whole number from ${TTL_MIN} to ${TTL_MAX}.` : undefined}
+      error={invalid ? S.wholeRange({ min: TTL_MIN, max: TTL_MAX }) : undefined}
       onChange={(e) => setDraft({ base: ttl.value, text: e.target.value })}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -172,13 +213,11 @@ function WorkRunsSection({ onError }: { onError: (err: unknown) => void }) {
     void settings.set('runs.defaultBudgets', { ...b, ...patch }).catch(onError);
   return (
     <section className="settings-section" aria-labelledby="work-runs-heading">
-      <h3 id="work-runs-heading">Work runs</h3>
-      <p className="muted">
-        Defaults for new runs. A run pauses at a budget and asks before going further.
-      </p>
+      <h3 id="work-runs-heading">{S.workRuns}</h3>
+      <p className="muted">{S.workRunsHint}</p>
       <div className="work-budget-fields">
         <NumberSetting
-          label="Time budget (minutes)"
+          label={S.timeBudget}
           value={Math.round(b.timeSeconds / 60)}
           min={1}
           max={MAX_MINUTES}
@@ -186,7 +225,7 @@ function WorkRunsSection({ onError }: { onError: (err: unknown) => void }) {
           onSave={(n) => save({ timeSeconds: n * 60 })}
         />
         <NumberSetting
-          label="Token budget"
+          label={S.tokenBudget}
           value={b.tokens}
           min={1_000}
           max={100_000_000}
@@ -194,18 +233,18 @@ function WorkRunsSection({ onError }: { onError: (err: unknown) => void }) {
           onSave={(n) => save({ tokens: n })}
         />
         <NumberSetting
-          label="Cost limit (US dollars)"
+          label={S.costLimit}
           value={b.costUsd}
           min={0}
           max={100_000}
           decimals
           locked={budgets.locked}
-          hint="Blank uses the provider spend cap."
+          hint={S.costLimitHint}
           onSave={(n) => save({ costUsd: n })}
         />
       </div>
       <RadioGroup
-        legend="Autonomy of new runs"
+        legend={S.autonomy}
         name="runs-autonomy"
         value={autonomy.value}
         locked={autonomy.locked}
@@ -221,7 +260,7 @@ function WorkRunsSection({ onError }: { onError: (err: unknown) => void }) {
         }))}
       />
       <RadioGroup
-        legend="Turn multi-step chat requests into runs"
+        legend={S.escalation}
         name="chat-escalation"
         value={escalation.value}
         locked={escalation.locked}
@@ -231,15 +270,15 @@ function WorkRunsSection({ onError }: { onError: (err: unknown) => void }) {
         options={[
           {
             value: 'propose',
-            label: 'Propose a run',
-            description: 'Show the plan and budget in the chat; the run starts when you accept it.',
+            label: S.propose,
+            description: S.proposeHint,
           },
           {
             value: 'auto',
-            label: 'Start the run',
-            description: 'Start at once in the chat, with Stop always visible.',
+            label: S.auto,
+            description: S.autoHint,
           },
-          { value: 'off', label: 'Never', description: 'Answer in the chat without a run.' },
+          { value: 'off', label: S.never, description: S.neverHint },
         ]}
       />
     </section>
@@ -293,12 +332,10 @@ function NumberSetting<N extends number | null>({
       max={max}
       step={decimals ? 0.01 : 1}
       value={text}
-      disabled={locked}
-      hint={`${locked ? `${MANAGED}. ` : ''}${hint ?? ''}` || undefined}
+      locked={locked}
+      hint={hint}
       error={
-        invalid
-          ? `Enter ${decimals ? 'a number' : 'a whole number'} from ${min.toLocaleString('en-US')} to ${max.toLocaleString('en-US')}.`
-          : undefined
+        !invalid ? undefined : decimals ? S.numberRange({ min, max }) : S.wholeRange({ min, max })
       }
       onChange={(e) => setDraft({ base: shown, text: e.target.value })}
       onBlur={commit}

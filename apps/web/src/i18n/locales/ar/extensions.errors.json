@@ -1,0 +1,15 @@
+{
+  "fallback": "حدث خطأ ما.",
+  "reason.owner_only": "لا يستطيع إدارة الإضافات إلا مالك هذا الـ Hub.",
+  "reason.signature_invalid": "رُفضت هذه الحزمة: ملفاتها لا تطابق توقيعها، لذا ربما عُدّلت بعد توقيعها. لا يمكن تثبيتها، ولا حتى دون توثيق.",
+  "reason.not_an_extension": "هذه ليست إضافة: لا تحتوي الحزمة على .nova-plugin/extension.json.",
+  "reason.fs_scope_refused": "تطلب هذه الإضافة ملفات داخل بيانات الـ Hub نفسه، وهذا غير مسموح به أبدًا.",
+  "reason.sideload_confirmation_required": "هذه الإضافة غير موثّقة. حدّد أنك تثق بمصدرها لتثبيتها دون توثيق.",
+  "reason.publisher_change_confirmation_required": "يأتي هذا الإصدار من ناشر غير ناشر الإصدار المثبّت. حدّد أنك تقبل الناشر الجديد لتثبيته.",
+  "reason.request_expired": "انتهت صلاحية هذه المعاينة. اختر الملف مرة أخرى.",
+  "reason.conflict": "تغيّرت الإضافة منذ المعاينة. اختر الملف مرة أخرى.",
+  "reason.not_found": "لم يعد هذا موجودًا. ربما أُزيلت الإضافة أو أُوقف تشغيلها.",
+  "managed": "تديره مؤسستك: {message}",
+  "policyDenied": "رفضته السياسة: {message}",
+  "validation": "رُفض هذا: {message}."
+}

@@ -33,7 +33,10 @@ export const RETENTION_SETTING_KEYS = {
 
 // ---- export ------------------------------------------------------------------------------------
 
-/** `POST /api/v1/data/export`: the body (JSON, or a form post from the web app). */
+/**
+ * `POST /api/v1/data/export` and `POST /api/v1/data/export/ticket` (a browser then downloads with
+ * `GET /api/v1/data/export/download?ticket=`): the body.
+ */
 export const dataExportSchema = z
   .object({
     /** Seals the archive and includes the vault's secrets; without it they are left out. */
@@ -81,8 +84,14 @@ export const exportManifestSchema = z.object({
   /** The last migration the exporting Hub had applied. */
   schemaVersion: z.number().int().min(1),
   createdAt: z.string(),
-  /** M8 exports the whole Hub (every account on it); the owner exports it. */
-  accountScope: z.literal('hub'),
+  /**
+   * `hub`: the whole Hub (every account on it), which an import restores. `{accountId}`: one
+   * account's own data (the owner keeps a removed member's before the purge); not importable.
+   */
+  accountScope: z.union([
+    z.literal('hub'),
+    z.object({ accountId: z.string().min(1).max(100) }).strict(),
+  ]),
   ownerAccountId: z.string().max(100).nullable(),
   /** The exporting Hub's data folder: an import moves absolute paths under it to its own. */
   dataDir: z.string().min(1).max(4096).optional(),

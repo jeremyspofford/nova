@@ -11,7 +11,7 @@ import { VerifiedBadge } from '../settings/badges.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useSettings } from '../settings.tsx';
 import type { MarketApi } from './api-m8.ts';
-import { KIND_TEXT, MARKET_TEXT, marketErrorMessage } from './format.ts';
+import { KIND_TEXT, MARKET_TEXT, REMOVE_BODY_TEXT, marketErrorMessage } from './format.ts';
 import { MarketPermissions } from './InstallDialog.tsx';
 
 export interface RemoveTarget {
@@ -67,25 +67,25 @@ export function InstalledTab({ market }: { market: MarketApi }) {
           >
             <div className="ws-source-main">
               <span className="ws-row-meta">
-                <strong>{it.name}</strong>
+                <strong dir="auto">{it.name}</strong>
                 <span>{KIND_TEXT[it.kind].one}</span>
-                <span>{MARKET_TEXT.version(it.version)}</span>
+                <span>{MARKET_TEXT.version({ version: it.version })}</span>
                 <VerifiedBadge verified={it.verified} />
               </span>
               <span className="muted">
-                {MARKET_TEXT.from(it.origin)} · {formatWhen(it.updatedAt)}
+                {MARKET_TEXT.from({ origin: it.origin })} · {formatWhen(it.updatedAt)}
               </span>
               <details className="ws-advanced">
                 <summary>{MARKET_TEXT.canAccess}</summary>
                 <MarketPermissions
                   lines={it.permissions}
-                  label={`${MARKET_TEXT.canAccess}: ${it.name}`}
+                  label={MARKET_TEXT.canAccessOf({ name: it.name })}
                 />
               </details>
             </div>
             <Button
               variant="ghost"
-              aria-label={MARKET_TEXT.removeOf(it.name)}
+              aria-label={MARKET_TEXT.removeOf({ name: it.name })}
               onClick={() => setRemoving({ kind: it.kind, id: it.itemId, name: it.name })}
             >
               {MARKET_TEXT.remove}
@@ -104,7 +104,7 @@ export function InstalledTab({ market }: { market: MarketApi }) {
           target={removing}
           onClose={() => setRemoving(null)}
           onRemoved={() => {
-            const msg = MARKET_TEXT.removed(removing.name);
+            const msg = MARKET_TEXT.removed({ name: removing.name });
             setRemoving(null);
             toast.show(msg, { tone: 'success' });
             announce(msg);
@@ -150,8 +150,8 @@ export function RemoveDialog({
   return (
     <Dialog
       open
-      title={MARKET_TEXT.removeTitle(target.name)}
-      description={MARKET_TEXT.removeBody(target.kind)}
+      title={MARKET_TEXT.removeTitle({ name: target.name })}
+      description={REMOVE_BODY_TEXT[target.kind]}
       onClose={onClose}
       footer={
         <>

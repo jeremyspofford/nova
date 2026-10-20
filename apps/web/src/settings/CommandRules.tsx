@@ -3,6 +3,7 @@
 // examples on every save and names the one that fails; that message is shown next to the
 // examples. "Test a command" asks the Hub which rule decides a command line, as you type.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { CommandRuleView, ProjectView } from '@nova/shared';
 import {
   Button,
@@ -17,9 +18,76 @@ import {
 } from '@nova/ui';
 import { ApiError, errorMessage, type CreateCommandRuleRequest } from '../api.ts';
 import { useServices } from '../services.tsx';
-import { MANAGED } from './common.ts';
+import { ManagedNote } from '../managed/ManagedNote.tsx';
 import { COMMAND_DECISION_TEXT, lines, parsePattern, patternText } from './policy-text.ts';
 import '../workspace.css';
+
+export const COMMAND_RULES_TEXT = defineMessages('settings.commandRules', {
+  loadFailed: 'Could not load the command rules.',
+  changeFailed: 'Could not change the command rule: {error}',
+  deleted: 'Command rule deleted.',
+  deleteFailed: 'Could not delete the command rule: {error}',
+  title: 'Command rules',
+  intro:
+    'Decide by the first words of a command whether it runs, asks or is refused. An allow rule ' +
+    'only skips the question; the command still runs in the sandbox.',
+  add: 'Add command rule',
+  retry: 'Retry',
+  loading: 'Loading command rules',
+  none: 'No command rules yet.',
+  project: 'Project: {name}',
+  scope:
+    '{kind, select, thread {Chat: {ref}} tool {Tool: {ref}} site {Website: {ref}} other {{kind}: {ref}}}',
+  matches: 'Matches: {commands}',
+  notMatches: 'Does not match: {commands}',
+  fromPlugin: 'From a plugin',
+  toggle: 'Use command rule: {pattern}',
+  edit: 'Edit',
+  delete: 'Delete',
+  addTitle: 'Add a command rule',
+  editTitle: 'Edit command rule',
+  added: 'Command rule added.',
+  saved: 'Command rule saved.',
+  deleteTitle: 'Delete this command rule?',
+  deleteBody: "Commands it matched go back to the exec tool's default.",
+  cancel: 'Cancel',
+  needMatch: 'Add at least one command this rule should match.',
+  needNotMatch: 'Add at least one command this rule should not match.',
+  tooLong: 'Keep it under {max} characters.',
+  priorityRange: 'Enter a whole number from 0 to {max}.',
+  chooseProject: 'Choose a project.',
+  saveFailed: 'Could not save the command rule.',
+  examplesHint: 'One command per line. Checked every time the rule is saved.',
+  startsWith: 'Command starts with',
+  startsWithHint:
+    'The first words of the command. Separate alternatives with |, for example git status|diff|log.',
+  then: 'Then',
+  why: 'Why',
+  whyHint: 'Shown when the rule asks or refuses. For a refusal, name what to use instead.',
+  shouldMatch: 'Commands it should match',
+  shouldNotMatch: 'Commands it should not match',
+  appliesTo: 'Applies to',
+  everywhere: 'Everywhere',
+  oneProject: 'One project',
+  projectLabel: 'Project',
+  pickProject: 'Choose a project',
+  advanced: 'Advanced',
+  priority: 'Priority',
+  priorityHint: '0 to 1000, default 100. Used to order rules when several match.',
+  saveRule: 'Save command rule',
+  testFailed: 'Could not test the command.',
+  test: 'Test a command',
+  testHint: 'See which command rule decides it. Nothing runs.',
+  noRule: 'No command rule matches. {reason}',
+  decided: '{decision}: {reason}',
+  decidedByRule: '{decision} (rule {rule}): {reason}',
+});
+const S = COMMAND_RULES_TEXT;
+// Examples typed into fields: commands, the same in every language.
+const PATTERN_EXAMPLE = 'git status|diff|log';
+const MATCH_EXAMPLE = 'git status';
+const NOT_MATCH_EXAMPLE = 'git push';
+const TEST_EXAMPLE = 'git push origin main';
 
 type Decision = CommandRuleView['decision'];
 const DECISIONS: Decision[] = ['allow', 'ask', 'deny'];
@@ -43,7 +111,7 @@ export function CommandRulesSection() {
         setRules(items);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the command rules.')),
+      (err: unknown) => alive && setError(errorMessage(err, S.loadFailed)),
     );
     api.listProjects().then(
       ({ items }) => alive && setProjects(items),
@@ -66,7 +134,7 @@ export function CommandRulesSection() {
     try {
       replace(await api.updateCommandRule(r.id, { enabled }));
     } catch (err) {
-      toast.show(`Could not change the command rule: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.changeFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -75,34 +143,31 @@ export function CommandRulesSection() {
     try {
       await api.deleteCommandRule(r.id);
       setRules((list) => list?.filter((x) => x.id !== r.id) ?? null);
-      toast.show('Command rule deleted.', { tone: 'success' });
+      toast.show(S.deleted, { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not delete the command rule: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.deleteFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
   return (
     <section className="settings-section" aria-labelledby="perm-commands">
-      <h3 id="perm-commands">Command rules</h3>
-      <p className="muted">
-        Decide by the first words of a command whether it runs, asks or is refused. An allow rule
-        only skips the question; the command still runs in the sandbox.
-      </p>
+      <h3 id="perm-commands">{S.title}</h3>
+      <p className="muted">{S.intro}</p>
       <div className="row">
         <Button onClick={() => setEditing('new')}>
-          <Icon name="plus" /> Add command rule
+          <Icon name="plus" /> {S.add}
         </Button>
       </div>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {rules === null && !error ? <Spinner label="Loading command rules" /> : null}
-      {rules?.length === 0 ? <p className="muted">No command rules yet.</p> : null}
+      {rules === null && !error ? <Spinner label={S.loading} /> : null}
+      {rules?.length === 0 ? <p className="muted">{S.none}</p> : null}
       {rules?.length ? (
-        <ul className="ws-list" aria-label="Command rules">
+        <ul className="ws-list" aria-label={S.title}>
           {rules.map((r) => {
             const text = patternText(r.pattern);
             const managed = r.source === 'managed';
@@ -110,38 +175,54 @@ export function CommandRulesSection() {
               <li key={r.id} className="ws-list-row" aria-label={text}>
                 <div className="ws-source-main">
                   <span className="ws-row-meta">
-                    <code className="ws-code-inline">{text}</code>
+                    <code className="ws-code-inline" dir="ltr">
+                      {text}
+                    </code>
                     <span className="ws-badge">{COMMAND_DECISION_TEXT[r.decision]}</span>
                     {r.scopeKind !== 'global' ? (
                       <span className="muted">
                         {r.scopeKind === 'project'
-                          ? `Project: ${projects.find((p) => p.id === r.scopeRef)?.name ?? r.scopeRef ?? '?'}`
-                          : `${r.scopeKind}: ${r.scopeRef ?? '?'}`}
+                          ? S.project({
+                              name:
+                                projects.find((p) => p.id === r.scopeRef)?.name ??
+                                r.scopeRef ??
+                                '?',
+                            })
+                          : S.scope({ kind: r.scopeKind, ref: r.scopeRef ?? '?' })}
                       </span>
                     ) : null}
                   </span>
-                  {r.justification ? <span className="muted">{r.justification}</span> : null}
+                  {r.justification ? (
+                    <span className="muted" dir="auto">
+                      {r.justification}
+                    </span>
+                  ) : null}
                   <span className="muted ws-row-meta">
-                    <span>Matches: {r.matchExamples.join(', ')}</span>
-                    <span>Does not match: {r.notMatchExamples.join(', ')}</span>
+                    <span>
+                      {S.matches({ commands: fmt.list(r.matchExamples, { type: 'unit' }) })}
+                    </span>
+                    <span>
+                      {S.notMatches({ commands: fmt.list(r.notMatchExamples, { type: 'unit' }) })}
+                    </span>
                   </span>
-                  {managed ? <span className="nv-field-hint nv-field-lock">{MANAGED}</span> : null}
-                  {r.source === 'plugin' ? <span className="muted">From a plugin</span> : null}
+                  {managed ? <ManagedNote id={`cmd-lock-${r.id}`} /> : null}
+                  {r.source === 'plugin' ? <span className="muted">{S.fromPlugin}</span> : null}
                 </div>
                 <div className="row ws-row-actions">
                   <Switch
-                    label={`Use command rule: ${text}`}
+                    label={S.toggle({ pattern: text })}
                     checked={r.enabled}
                     disabled={managed}
+                    aria-describedby={managed ? `cmd-lock-${r.id}` : undefined}
                     onChange={(v) => void toggle(r, v)}
                   />
                   {r.source === 'user' ? (
                     <>
                       <Button variant="ghost" onClick={() => setEditing(r)}>
-                        Edit
+                        {S.edit}
                       </Button>
                       <Button variant="ghost" onClick={() => setDeleting(r)}>
-                        Delete
+                        {S.delete}
                       </Button>
                     </>
                   ) : null}
@@ -154,7 +235,7 @@ export function CommandRulesSection() {
       <TestCommand rules={rules ?? []} />
       <Dialog
         open={editing !== null}
-        title={editing === 'new' ? 'Add a command rule' : 'Edit command rule'}
+        title={editing === 'new' ? S.addTitle : S.editTitle}
         onClose={() => setEditing(null)}
       >
         {editing !== null ? (
@@ -166,28 +247,30 @@ export function CommandRulesSection() {
               const added = editing === 'new';
               setEditing(null);
               replace(r);
-              toast.show(added ? 'Command rule added.' : 'Command rule saved.', {
-                tone: 'success',
-              });
+              toast.show(added ? S.added : S.saved, { tone: 'success' });
             }}
           />
         ) : null}
       </Dialog>
       <Dialog
         open={deleting !== null}
-        title="Delete this command rule?"
-        description="Commands it matched go back to the exec tool's default."
+        title={S.deleteTitle}
+        description={S.deleteBody}
         onClose={() => setDeleting(null)}
         footer={
           <>
-            <Button onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button onClick={() => setDeleting(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => deleting && void remove(deleting)}>
-              Delete
+              {S.delete}
             </Button>
           </>
         }
       >
-        {deleting ? <p className="ws-quote">{patternText(deleting.pattern)}</p> : null}
+        {deleting ? (
+          <p className="ws-quote" dir="ltr">
+            {patternText(deleting.pattern)}
+          </p>
+        ) : null}
       </Dialog>
     </section>
   );
@@ -241,13 +324,13 @@ function CommandRuleForm({
     if ('error' in parsed) next.pattern = parsed.error;
     const m = lines(match);
     const n = lines(notMatch);
-    if (!m.length) next.matchExamples = 'Add at least one command this rule should match.';
-    if (!n.length) next.notMatchExamples = 'Add at least one command this rule should not match.';
-    if (justification.length > 500) next.justification = 'Keep it under 500 characters.';
+    if (!m.length) next.matchExamples = S.needMatch;
+    if (!n.length) next.notMatchExamples = S.needNotMatch;
+    if (justification.length > 500) next.justification = S.tooLong({ max: 500 });
     const prio = Number(priority);
     if (!/^\d+$/.test(priority.trim()) || prio > 1000)
-      next.priority = 'Enter a whole number from 0 to 1000.';
-    if (scopeKind === 'project' && !scopeRef) next.scope = 'Choose a project.';
+      next.priority = S.priorityRange({ max: 1000 });
+    if (scopeKind === 'project' && !scopeRef) next.scope = S.chooseProject;
     setErrors(next);
     setFailure(null);
     if (Object.keys(next).length || 'error' in parsed) return;
@@ -270,7 +353,7 @@ function CommandRuleForm({
       );
     } catch (err) {
       const field = exampleField(err);
-      const msg = errorMessage(err, 'Could not save the command rule.');
+      const msg = errorMessage(err, S.saveFailed);
       if (field) setErrors({ [field]: msg });
       else setFailure(msg);
       setBusy(false);
@@ -303,7 +386,7 @@ function CommandRuleForm({
         }}
       />
       <span id={`${id}-${field}-hint`} className="nv-field-hint">
-        One command per line. Checked every time the rule is saved.
+        {S.examplesHint}
       </span>
       {errors[field] ? (
         <span id={`${id}-${field}-error`} className="nv-field-error" role="alert">
@@ -316,7 +399,7 @@ function CommandRuleForm({
   return (
     <form
       className="stack"
-      aria-label={rule ? 'Edit command rule' : 'Add a command rule'}
+      aria-label={rule ? S.editTitle : S.addTitle}
       noValidate
       onSubmit={(e) => {
         e.preventDefault();
@@ -324,66 +407,66 @@ function CommandRuleForm({
       }}
     >
       <TextField
-        label="Command starts with"
+        label={S.startsWith}
         value={pattern}
         spellCheck={false}
         autoComplete="off"
-        placeholder="git status|diff|log"
-        hint="The first words of the command. Separate alternatives with |, for example git status|diff|log."
+        placeholder={PATTERN_EXAMPLE}
+        hint={S.startsWithHint}
         error={errors.pattern}
         onChange={(e) => setPattern(e.target.value)}
       />
       <RadioGroup
-        legend="Then"
+        legend={S.then}
         name={`${id}-decision`}
         value={decision}
         onChange={(v) => setDecision(v as Decision)}
         options={DECISIONS.map((d) => ({ value: d, label: COMMAND_DECISION_TEXT[d] }))}
       />
       <TextField
-        label="Why"
+        label={S.why}
         value={justification}
         maxLength={500}
-        hint="Shown when the rule asks or refuses. For a refusal, name what to use instead."
+        hint={S.whyHint}
         error={errors.justification}
         onChange={(e) => setJustification(e.target.value)}
       />
-      {area('matchExamples', 'Commands it should match', match, setMatch, 'git status')}
-      {area('notMatchExamples', 'Commands it should not match', notMatch, setNotMatch, 'git push')}
+      {area('matchExamples', S.shouldMatch, match, setMatch, MATCH_EXAMPLE)}
+      {area('notMatchExamples', S.shouldNotMatch, notMatch, setNotMatch, NOT_MATCH_EXAMPLE)}
       {!keepScope ? (
         <SelectField
-          label="Applies to"
+          label={S.appliesTo}
           value={scopeKind}
           onChange={(v) => {
             setScopeKind(v as 'global' | 'project');
             setScopeRef('');
           }}
           options={[
-            { value: 'global', label: 'Everywhere' },
-            { value: 'project', label: 'One project' },
+            { value: 'global', label: S.everywhere },
+            { value: 'project', label: S.oneProject },
           ]}
         />
       ) : null}
       {!keepScope && scopeKind === 'project' ? (
         <SelectField
-          label="Project"
+          label={S.projectLabel}
           value={scopeRef ?? ''}
           error={errors.scope}
           onChange={setScopeRef}
           options={[
-            { value: '', label: 'Choose a project' },
+            { value: '', label: S.pickProject },
             ...projects.map((p) => ({ value: p.id, label: p.name })),
           ]}
         />
       ) : null}
       <details className="ws-advanced">
-        <summary>Advanced</summary>
+        <summary>{S.advanced}</summary>
         <TextField
-          label="Priority"
+          label={S.priority}
           className="ws-number"
           inputMode="numeric"
           value={priority}
-          hint="0 to 1000, default 100. Used to order rules when several match."
+          hint={S.priorityHint}
           error={errors.priority}
           onChange={(e) => setPriority(e.target.value)}
         />
@@ -394,9 +477,9 @@ function CommandRuleForm({
         </p>
       ) : null}
       <div className="nv-dialog-footer">
-        <Button onClick={onCancel}>Cancel</Button>
+        <Button onClick={onCancel}>{S.cancel}</Button>
         <Button type="submit" variant="primary" disabled={busy}>
-          {busy ? <Spinner /> : null} {rule ? 'Save command rule' : 'Add command rule'}
+          {busy ? <Spinner /> : null} {rule ? S.saveRule : S.add}
         </Button>
       </div>
     </form>
@@ -423,8 +506,7 @@ function TestCommand({ rules }: { rules: CommandRuleView[] }) {
           setFailure(null);
         },
         (err: unknown) =>
-          alive &&
-          setFailure({ command: trimmed, text: errorMessage(err, 'Could not test the command.') }),
+          alive && setFailure({ command: trimmed, text: errorMessage(err, S.testFailed) }),
       );
     }, TEST_DEBOUNCE_MS);
     return () => {
@@ -438,21 +520,27 @@ function TestCommand({ rules }: { rules: CommandRuleView[] }) {
   const rule = shown?.ruleId ? rules.find((r) => r.id === shown.ruleId) : undefined;
 
   return (
-    <div className="panel-inset" role="group" aria-label="Test a command">
+    <div className="panel-inset" role="group" aria-label={S.test}>
       <TextField
-        label="Test a command"
+        label={S.test}
         value={command}
         spellCheck={false}
         autoComplete="off"
-        placeholder="git push origin main"
-        hint="See which command rule decides it. Nothing runs."
+        placeholder={TEST_EXAMPLE}
+        hint={S.testHint}
         onChange={(e) => setCommand(e.target.value)}
       />
       <p role="status" className="ws-flush">
         {trimmed && shown
           ? shown.decision === null
-            ? `No command rule matches. ${shown.reason}`
-            : `${COMMAND_DECISION_TEXT[shown.decision]}${rule ? ` (rule ${patternText(rule.pattern)})` : ''}: ${shown.reason}`
+            ? S.noRule({ reason: shown.reason })
+            : rule
+              ? S.decidedByRule({
+                  decision: COMMAND_DECISION_TEXT[shown.decision],
+                  rule: patternText(rule.pattern),
+                  reason: shown.reason,
+                })
+              : S.decided({ decision: COMMAND_DECISION_TEXT[shown.decision], reason: shown.reason })
           : ''}
       </p>
       {trimmed && failed ? (

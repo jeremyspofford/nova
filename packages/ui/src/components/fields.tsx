@@ -1,30 +1,74 @@
 // Form fields beyond TextField (docs/04 §4.2): SelectField, ColorField and RadioGroup. Each has a
 // visible label, links hint and error text, and shows a managed-policy lock (docs/14 §1.2).
-import { useId, useState, type ReactNode, type SelectHTMLAttributes } from 'react';
+import {
+  createContext,
+  useContext,
+  useId,
+  useState,
+  type ReactNode,
+  type SelectHTMLAttributes,
+} from 'react';
+import { subscribe } from '@nova/i18n';
+import { UI_TEXT } from '../strings.ts';
 
 const HEX6 = /^#[0-9a-f]{6}$/i;
 
-/** Shown on controls whose value comes from managed policy. */
-export const MANAGED_TEXT = 'Managed by your organization';
+/**
+ * Shown on controls whose value comes from managed policy, in the active locale. A live binding:
+ * read it at render time (copying it into a constant at load freezes the language); prefer
+ * `UI_TEXT.managed`.
+ */
+export let MANAGED_TEXT = UI_TEXT.managed;
+subscribe(() => {
+  MANAGED_TEXT = UI_TEXT.managed;
+});
+
+/** Draws the note of a locked field: `id` must stay on the element the field points to. */
+export type LockNoteRenderer = (note: { id: string; setting?: string }) => ReactNode;
+
+const LockNoteContext = createContext<LockNoteRenderer | null>(null);
+
+/**
+ * Lets the app draw every locked field's note itself, e.g. "Managed by your organization (policy
+ * file)" with where the policy comes from (docs/14 §1.2). Without it the note is the plain words.
+ */
+export function LockNoteProvider({
+  render,
+  children,
+}: {
+  render: LockNoteRenderer;
+  children: ReactNode;
+}) {
+  return <LockNoteContext.Provider value={render}>{children}</LockNoteContext.Provider>;
+}
+
+/** The note of a locked field, with the `id` the field's aria-describedby names (WCAG 1.3.1). */
+export function LockNote({ id, setting }: { id: string; setting?: string }) {
+  const render = useContext(LockNoteContext);
+  if (render) return <>{render({ id, setting })}</>;
+  return (
+    <span id={id} className="nv-field-hint nv-field-lock">
+      {UI_TEXT.managed}
+    </span>
+  );
+}
 
 function Described({
   id,
   hint,
   error,
   locked,
+  setting,
 }: {
   id: string;
   hint?: ReactNode;
   error?: string;
   locked?: boolean;
+  setting?: string;
 }) {
   return (
     <>
-      {locked ? (
-        <span id={`${id}-lock`} className="nv-field-hint nv-field-lock">
-          {MANAGED_TEXT}
-        </span>
-      ) : null}
+      {locked ? <LockNote id={`${id}-lock`} setting={setting} /> : null}
       {hint ? (
         <span id={`${id}-hint`} className="nv-field-hint">
           {hint}
@@ -68,6 +112,8 @@ export interface SelectFieldProps extends Omit<
   hint?: ReactNode;
   error?: string;
   locked?: boolean;
+  /** The setting a lock comes from, so its note can name the policy's source. */
+  setting?: string;
   /** Hide the label visually (it stays the accessible name). */
   hideLabel?: boolean;
 }
@@ -81,6 +127,7 @@ export function SelectField({
   hint,
   error,
   locked,
+  setting,
   hideLabel,
   disabled,
   className,
@@ -114,7 +161,7 @@ export function SelectField({
           </optgroup>
         ))}
       </select>
-      <Described id={id} hint={hint} error={error} locked={locked} />
+      <Described id={id} hint={hint} error={error} locked={locked} setting={setting} />
     </div>
   );
 }
@@ -129,6 +176,8 @@ export interface ColorFieldProps {
   onReset: () => void;
   hint?: ReactNode;
   locked?: boolean;
+  /** The setting a lock comes from, so its note can name the policy's source. */
+  setting?: string;
   resetLabel?: string;
 }
 
@@ -141,7 +190,8 @@ export function ColorField({
   onReset,
   hint,
   locked,
-  resetLabel = 'Reset to theme',
+  setting,
+  resetLabel = UI_TEXT.color.reset,
 }: ColorFieldProps) {
   const id = `c${useId()}`;
   const shown = (value ?? fallback).toLowerCase();
@@ -173,7 +223,9 @@ export function ColorField({
         <input
           type="text"
           className="nv-input nv-color-hex"
-          aria-label={`${label} hex value`}
+          dir="ltr"
+          aria-label={UI_TEXT.color.hex({ label })}
+          aria-describedby={locked ? `${id}-lock` : undefined}
           aria-invalid={invalid ? true : undefined}
           value={text}
           disabled={locked}
@@ -194,7 +246,7 @@ export function ColorField({
           data-variant="ghost"
           disabled={locked || value === null}
           onClick={onReset}
-          aria-label={`${resetLabel}: ${label}`}
+          aria-label={UI_TEXT.color.resetFor({ action: resetLabel, label })}
         >
           {resetLabel}
         </button>
@@ -203,7 +255,8 @@ export function ColorField({
         id={id}
         hint={hint}
         locked={locked}
-        error={invalid ? 'Enter a hash sign and six hex digits (0–9, a–f)' : undefined}
+        setting={setting}
+        error={invalid ? UI_TEXT.color.invalid : undefined}
       />
     </div>
   );
@@ -222,6 +275,8 @@ export interface RadioGroupProps {
   options: RadioOption[];
   onChange: (value: string) => void;
   locked?: boolean;
+  /** The setting a lock comes from, so its note can name the policy's source. */
+  setting?: string;
   hint?: ReactNode;
   className?: string;
 }
@@ -234,6 +289,7 @@ export function RadioGroup({
   options,
   onChange,
   locked,
+  setting,
   hint,
   className,
 }: RadioGroupProps) {
@@ -255,7 +311,12 @@ export function RadioGroup({
             checked={value === o.value}
             disabled={locked}
             aria-labelledby={`${id}-${i}-label`}
-            aria-describedby={o.description ? `${id}-${i}-desc` : undefined}
+            // Each choice also names the lock, so it is heard on the choice itself.
+            aria-describedby={
+              [o.description ? `${id}-${i}-desc` : null, locked ? `${id}-lock` : null]
+                .filter(Boolean)
+                .join(' ') || undefined
+            }
             onChange={() => onChange(o.value)}
           />
           <span className="nv-radio-text">
@@ -268,7 +329,7 @@ export function RadioGroup({
           </span>
         </label>
       ))}
-      <Described id={id} hint={hint} locked={locked} />
+      <Described id={id} hint={hint} locked={locked} setting={setting} />
     </fieldset>
   );
 }

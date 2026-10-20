@@ -99,11 +99,14 @@ export class ManagedRestrictions {
   /** Why the policy fails closed (every agent tool denied), or null. */
   readonly failClosed: string | null;
   readonly #home: string;
+  /** The egress allow list in force, worked out against the owner's own list by the policy. */
+  readonly #egressAllow: readonly string[] | null;
 
   constructor(value: ManagedRestrictSetting, opts: ManagedRestrictionsOptions = {}) {
     this.layers = value.layers;
     this.failClosed = value.failClosed;
     this.#home = opts.home ?? homedir();
+    this.#egressAllow = value.egressAllow ?? null;
   }
 
   /** Something is restricted (or the policy fails closed). */
@@ -182,6 +185,17 @@ export class ManagedRestrictions {
       const why = this.browserDomain(host);
       if (why) return why;
     }
+    const network =
+      opts.remote === true ||
+      t.annotations?.requiresNetwork === true ||
+      t.effects?.includes('network') === true;
+    // A host outside the policy's egress allow lists is refused, not asked about.
+    if (
+      host &&
+      network &&
+      !this.egressCeilings().every((c) => c.some((p) => hostMatch(p, host.toLowerCase())))
+    )
+      return `${host} is not among the hosts agents may reach ${BY_POLICY}`;
     if (
       this.egressOff() &&
       (opts.remote === true ||
@@ -358,6 +372,25 @@ export class ManagedRestrictions {
     return this.layers.some((l) => l.egress?.mode === 'off');
   }
 
+  /** Each source's egress allow list: the ceiling a host must stay within (every one of them). */
+  egressCeilings(): string[][] {
+    return this.layers.flatMap((l) => (l.egress?.allow ? [l.egress.allow] : []));
+  }
+
+  /** Whether every host an allow pattern names stays within every ceiling. */
+  egressCovered(pattern: string): boolean {
+    return this.egressCeilings().every((c) => patternCovered(c, pattern));
+  }
+
+  /**
+   * The hosts agents may reach without asking, given the owner's own list (`network.egressAllow`):
+   * the list the policy worked out, else `effectiveEgressAllow` over the ceilings.
+   */
+  egressAllow(own: readonly string[]): string[] {
+    if (this.#egressAllow) return [...this.#egressAllow];
+    return effectiveEgressAllow(this.egressCeilings(), own);
+  }
+
   /** Why telemetry export (OTLP, FR-223) is refused. */
   telemetryExport(): string | null {
     return this.layers.some((l) => l.telemetryExport === false)
@@ -414,6 +447,23 @@ export function managedRestrictions(
       : { layers: [], failClosed: 'the managed restrictions are unreadable' },
     opts,
   );
+}
+
+/**
+ * The policy's egress allow lists are a ceiling (ADR-097): with no list of the owner's own (unset
+ * or empty: the owner never narrowed anything) the hosts every ceiling covers apply; with one, the
+ * owner's hosts that every ceiling covers, so the owner chooses within it. No ceiling: the
+ * owner's list as it is.
+ */
+export function effectiveEgressAllow(
+  ceilings: readonly (readonly string[])[],
+  own: readonly string[],
+): string[] {
+  const first = ceilings[0];
+  if (!first) return [...own];
+  // With two sources, the first one's hosts that the others cover too (both narrow).
+  const base = own.length ? own : first;
+  return [...new Set(base.filter((p) => ceilings.every((c) => patternCovered(c, p))))];
 }
 
 /** No policy: nothing restricted. */

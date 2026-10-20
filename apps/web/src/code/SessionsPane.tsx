@@ -5,6 +5,7 @@
 // model output and shown as text.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { CodeSessionView, SideAnswerView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, Dialog, EmptyState, Icon, Spinner, StatusChip, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useAnnounce, useServices } from '../services.tsx';
@@ -14,6 +15,49 @@ import { AppLink } from './CodeNav.tsx';
 import { useCoalesced } from './events.ts';
 import { branchText, sessionPath, sessionTitle, sortSessions } from './labels.ts';
 import { ConfirmDialog, ErrorBanner } from './parts.tsx';
+
+export const SESSIONS_PANE_TEXT = defineMessages('code.sessionsPane', {
+  loadFailed: 'Could not load the other sessions.',
+  archived: 'Archived “{title}”.',
+  archiveFailed: 'Could not archive the session.',
+  title: 'Sessions',
+  askIntro:
+    'Ask a side question about this session. The answer uses its conversation and adds nothing to it.',
+  askSide: 'Ask a side question…',
+  others: 'Other sessions',
+  loading: 'Loading the other sessions',
+  noneTitle: 'No other sessions',
+  noneBody: 'Sessions you start in other folders or worktrees show up here.',
+  updated: 'Updated {when}',
+  message: 'Message…',
+  ask: 'Ask…',
+  archive: 'Archive…',
+  sentAnnounce: 'Message sent to {title}.',
+  sent: 'Sent to “{title}”.',
+  archiveTitle: 'Archive “{title}”?',
+  archiveBody:
+    'It stops taking turns. Its worktree lease is released; a clean worktree is removed unless Settings → Code keeps it. You can find it later under archived chats.',
+  archiveConfirm: 'Archive',
+  sendFailed: 'Could not send the message.',
+  messageTitle: 'Message “{title}”',
+  messageBody:
+    'Sent as you, in that session’s conversation. It starts a turn there, or follows the running one.',
+  messageLabel: 'Message',
+  cancel: 'Cancel',
+  send: 'Send',
+  answerReady: 'Answer ready.',
+  answerFailed: 'Could not answer the question.',
+  sideTitle: 'Side question: {title}',
+  sideBody: 'Answered from the session’s conversation. Nothing is added to it and nothing runs.',
+  youAsked: 'You asked: {question}',
+  answeredBy: 'Answered by {model}',
+  another: 'Another question',
+  question: 'Question',
+  answering: 'Answering',
+  reading: 'Reading the session…',
+  close: 'Close',
+  askButton: 'Ask',
+});
 
 export function SessionsPane({
   session,
@@ -45,7 +89,7 @@ export function SessionsPane({
           setOthers(sortSessions(items.filter((s) => s.id !== session.id)));
           setError(null);
         },
-        (err: unknown) => setError(errorMessage(err, 'Could not load the other sessions.')),
+        (err: unknown) => setError(errorMessage(err, SESSIONS_PANE_TEXT.loadFailed)),
       ),
     [api, session.id],
   );
@@ -63,37 +107,34 @@ export function SessionsPane({
       await api.updateThread(s.threadId, { archived: true });
       setOthers((list) => list?.filter((x) => x.id !== s.id) ?? null);
       setArchiving(null);
-      toast.show(`Archived “${sessionTitle(s)}”.`, { tone: 'success' });
+      toast.show(SESSIONS_PANE_TEXT.archived({ title: sessionTitle(s) }), { tone: 'success' });
     } catch (err) {
-      setArchiveError(errorMessage(err, 'Could not archive the session.'));
+      setArchiveError(errorMessage(err, SESSIONS_PANE_TEXT.archiveFailed));
     } finally {
       setArchiveBusy(false);
     }
   };
 
   return (
-    <section className="code-sessions-pane" aria-label="Sessions">
+    <section className="code-sessions-pane" aria-label={SESSIONS_PANE_TEXT.title}>
       <div className="code-subhead">
-        <p className="ws-flush">
-          Ask a side question about this session. The answer uses its conversation and adds nothing
-          to it.
-        </p>
+        <p className="ws-flush">{SESSIONS_PANE_TEXT.askIntro}</p>
         <Button variant="primary" onClick={() => onAsk(session)}>
-          <Icon name="chat" /> Ask a side question…
+          <Icon name="chat" /> {SESSIONS_PANE_TEXT.askSide}
         </Button>
       </div>
-      <h3>Other sessions</h3>
+      <h3>{SESSIONS_PANE_TEXT.others}</h3>
       {error ? <ErrorBanner message={error} onRetry={reload} /> : null}
-      {others === null && !error ? <Spinner label="Loading the other sessions" /> : null}
+      {others === null && !error ? <Spinner label={SESSIONS_PANE_TEXT.loading} /> : null}
       {others?.length === 0 ? (
         <EmptyState
           level={3}
-          title="No other sessions"
-          description="Sessions you start in other folders or worktrees show up here."
+          title={SESSIONS_PANE_TEXT.noneTitle}
+          description={SESSIONS_PANE_TEXT.noneBody}
         />
       ) : null}
       {others?.length ? (
-        <ul className="ws-list" aria-label="Other sessions">
+        <ul className="ws-list" aria-label={SESSIONS_PANE_TEXT.others}>
           {others.map((s) => {
             const title = sessionTitle(s);
             return (
@@ -106,19 +147,21 @@ export function SessionsPane({
                     <StatusChip status={s.derived.status} reason={s.derived.reason ?? undefined} />
                   </div>
                   <span className="muted code-row-meta">
-                    <span className="code-path">{s.folder.path}</span>
+                    <span className="code-path" dir="ltr">
+                      {s.folder.path}
+                    </span>
                     <span>
                       <Icon name="branch" /> {branchText(s.repo)}
                     </span>
-                    <span>Updated {formatWhen(s.updatedAt)}</span>
+                    <span>{SESSIONS_PANE_TEXT.updated({ when: formatWhen(s.updatedAt) })}</span>
                   </span>
                 </div>
                 <div className="ws-row-actions code-actions">
                   <Button onClick={() => setMessaging(s)}>
-                    <Icon name="send" /> Message…
+                    <Icon name="send" /> {SESSIONS_PANE_TEXT.message}
                   </Button>
                   <Button onClick={() => onAsk(s)}>
-                    <Icon name="chat" /> Ask…
+                    <Icon name="chat" /> {SESSIONS_PANE_TEXT.ask}
                   </Button>
                   <Button
                     onClick={() => {
@@ -126,7 +169,7 @@ export function SessionsPane({
                       setArchiving(s);
                     }}
                   >
-                    <Icon name="archive" /> Archive…
+                    <Icon name="archive" /> {SESSIONS_PANE_TEXT.archive}
                   </Button>
                 </div>
               </li>
@@ -139,15 +182,17 @@ export function SessionsPane({
         onClose={() => setMessaging(null)}
         onSent={(s) => {
           setMessaging(null);
-          announce(`Message sent to ${sessionTitle(s)}.`);
-          toast.show(`Sent to “${sessionTitle(s)}”.`, { tone: 'success' });
+          announce(SESSIONS_PANE_TEXT.sentAnnounce({ title: sessionTitle(s) }));
+          toast.show(SESSIONS_PANE_TEXT.sent({ title: sessionTitle(s) }), { tone: 'success' });
         }}
       />
       <ConfirmDialog
         open={archiving !== null}
-        title={`Archive “${archiving ? sessionTitle(archiving) : ''}”?`}
-        description="It stops taking turns. Its worktree lease is released; a clean worktree is removed unless Settings → Code keeps it. You can find it later under archived chats."
-        confirmLabel="Archive"
+        title={SESSIONS_PANE_TEXT.archiveTitle({
+          title: archiving ? sessionTitle(archiving) : '',
+        })}
+        description={SESSIONS_PANE_TEXT.archiveBody}
+        confirmLabel={SESSIONS_PANE_TEXT.archiveConfirm}
         busy={archiveBusy}
         error={archiveError}
         onConfirm={() => void archive()}
@@ -193,7 +238,7 @@ function MessageForm({
       await api.sendMessage(target.threadId, { text: text.trim() });
       onSent(target);
     } catch (err) {
-      setError(errorMessage(err, 'Could not send the message.'));
+      setError(errorMessage(err, SESSIONS_PANE_TEXT.sendFailed));
       setBusy(false);
     }
   };
@@ -201,8 +246,8 @@ function MessageForm({
   return (
     <Dialog
       open
-      title={`Message “${sessionTitle(target)}”`}
-      description="Sent as you, in that session’s conversation. It starts a turn there, or follows the running one."
+      title={SESSIONS_PANE_TEXT.messageTitle({ title: sessionTitle(target) })}
+      description={SESSIONS_PANE_TEXT.messageBody}
       onClose={onClose}
       initialFocusRef={ref}
     >
@@ -215,7 +260,7 @@ function MessageForm({
       >
         <div className="nv-field">
           <label className="nv-field-label" htmlFor={id}>
-            Message
+            {SESSIONS_PANE_TEXT.messageLabel}
           </label>
           <textarea
             ref={ref}
@@ -233,9 +278,9 @@ function MessageForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{SESSIONS_PANE_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !text.trim()}>
-            {busy ? <Spinner /> : null} Send
+            {busy ? <Spinner /> : null} {SESSIONS_PANE_TEXT.send}
           </Button>
         </div>
       </form>
@@ -273,9 +318,9 @@ function SideQuestionForm({ target, onClose }: { target: CodeSessionView; onClos
       const a = await m6.askCodeSession(target.id, q);
       setAnswer({ ...a, question: q });
       setQuestion('');
-      announce('Answer ready.');
+      announce(SESSIONS_PANE_TEXT.answerReady);
     } catch (err) {
-      setError(errorMessage(err, 'Could not answer the question.'));
+      setError(errorMessage(err, SESSIONS_PANE_TEXT.answerFailed));
     } finally {
       setBusy(false);
       ref.current?.focus();
@@ -285,8 +330,8 @@ function SideQuestionForm({ target, onClose }: { target: CodeSessionView; onClos
   return (
     <Dialog
       open
-      title={`Side question: ${sessionTitle(target)}`}
-      description="Answered from the session’s conversation. Nothing is added to it and nothing runs."
+      title={SESSIONS_PANE_TEXT.sideTitle({ title: sessionTitle(target) })}
+      description={SESSIONS_PANE_TEXT.sideBody}
       onClose={onClose}
       initialFocusRef={ref}
     >
@@ -299,14 +344,22 @@ function SideQuestionForm({ target, onClose }: { target: CodeSessionView; onClos
       >
         {answer ? (
           <div className="code-answer" aria-live="polite">
-            <p className="muted ws-flush">You asked: {answer.question}</p>
-            <p className="code-answer-text">{answer.answer}</p>
-            {answer.model ? <p className="muted ws-flush">Answered by {answer.model}</p> : null}
+            <p className="muted ws-flush">
+              {SESSIONS_PANE_TEXT.youAsked({ question: answer.question })}
+            </p>
+            <p className="code-answer-text" dir="auto">
+              {answer.answer}
+            </p>
+            {answer.model ? (
+              <p className="muted ws-flush">
+                {SESSIONS_PANE_TEXT.answeredBy({ model: answer.model })}
+              </p>
+            ) : null}
           </div>
         ) : null}
         <div className="nv-field">
           <label className="nv-field-label" htmlFor={id}>
-            {answer ? 'Another question' : 'Question'}
+            {answer ? SESSIONS_PANE_TEXT.another : SESSIONS_PANE_TEXT.question}
           </label>
           <textarea
             ref={ref}
@@ -331,13 +384,13 @@ function SideQuestionForm({ target, onClose }: { target: CodeSessionView; onClos
         ) : null}
         {busy ? (
           <p className="muted">
-            <Spinner label="Answering" /> Reading the session…
+            <Spinner label={SESSIONS_PANE_TEXT.answering} /> {SESSIONS_PANE_TEXT.reading}
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onClose}>{SESSIONS_PANE_TEXT.close}</Button>
           <Button type="submit" variant="primary" disabled={busy || !question.trim()}>
-            Ask
+            {SESSIONS_PANE_TEXT.askButton}
           </Button>
         </div>
       </form>

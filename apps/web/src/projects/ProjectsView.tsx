@@ -3,15 +3,32 @@
 // command uses it).
 import { useEffect, useState } from 'react';
 import type { ProjectView } from '@nova/shared';
+import { defineMessages } from '@nova/i18n';
 import { Button, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { navigate, projectPath, useLocation } from '../router.ts';
 import { useServices } from '../services.tsx';
-import { formatWhen, plural } from '../settings/common.ts';
+import { formatWhen } from '../settings/common.ts';
 import { onProjectsChanged } from './events.ts';
 import { NewProjectDialog } from './NewProjectDialog.tsx';
 import { ProjectDetail } from './ProjectDetail.tsx';
 import '../workspace.css';
+
+export const PROJECTS_TEXT = defineMessages('projects', {
+  title: 'Projects',
+  new: 'New project',
+  intro:
+    'A project groups chats, sources and instructions. Its instructions apply to every chat in it.',
+  loadFailed: 'Could not load projects.',
+  retry: 'Retry',
+  loading: 'Loading projects',
+  emptyTitle: 'No projects yet',
+  emptyBody: 'Create a project to keep related chats, files and instructions together.',
+  /** A project card's counts and age: "2 chats · 1 source · updated 5 minutes ago". */
+  cardMeta:
+    '{chats, plural, one {# chat} other {# chats}} · {sources, plural, one {# source} other {# sources}} · updated {when}',
+  created: 'Project “{name}” created.',
+});
 
 export function ProjectsView({ projectId }: { projectId: string | null }) {
   return projectId ? <ProjectDetail key={projectId} projectId={projectId} /> : <ProjectList />;
@@ -41,7 +58,7 @@ function ProjectList() {
         setProjects([...items].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load projects.')),
+      (err: unknown) => alive && setError(errorMessage(err, PROJECTS_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -52,37 +69,35 @@ function ProjectList() {
   return (
     <div className="ws-page">
       <header className="ws-page-header">
-        <h1>Projects</h1>
+        <h1>{PROJECTS_TEXT.title}</h1>
         <Button variant="primary" onClick={() => setCreating(true)}>
-          <Icon name="plus" /> New project
+          <Icon name="plus" /> {PROJECTS_TEXT.new}
         </Button>
       </header>
-      <p className="muted">
-        A project groups chats, sources and instructions. Its instructions apply to every chat in
-        it.
-      </p>
+      <p className="muted">{PROJECTS_TEXT.intro}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{PROJECTS_TEXT.retry}</Button>
         </div>
       ) : null}
-      {projects === null && !error ? <Spinner label="Loading projects" /> : null}
+      {projects === null && !error ? <Spinner label={PROJECTS_TEXT.loading} /> : null}
       {projects?.length === 0 ? (
         <EmptyState
-          title="No projects yet"
-          description="Create a project to keep related chats, files and instructions together."
+          title={PROJECTS_TEXT.emptyTitle}
+          description={PROJECTS_TEXT.emptyBody}
           level={2}
-          action={<Button onClick={() => setCreating(true)}>New project</Button>}
+          action={<Button onClick={() => setCreating(true)}>{PROJECTS_TEXT.new}</Button>}
         />
       ) : null}
       {projects?.length ? (
-        <ul className="ws-cards" aria-label="Projects">
+        <ul className="ws-cards" aria-label={PROJECTS_TEXT.title}>
           {projects.map((p) => (
             <li key={p.id} className="ws-card">
               <a
                 href={projectPath(p.id)}
                 className="ws-card-link"
+                dir="auto"
                 onClick={(e) => {
                   if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
                   e.preventDefault();
@@ -92,8 +107,11 @@ function ProjectList() {
                 {p.name}
               </a>
               <span className="muted ws-card-meta">
-                {plural(p.threadCount, 'chat')} · {plural(p.sourceCount, 'source')} · updated{' '}
-                {formatWhen(p.updatedAt)}
+                {PROJECTS_TEXT.cardMeta({
+                  chats: p.threadCount,
+                  sources: p.sourceCount,
+                  when: formatWhen(p.updatedAt),
+                })}
               </span>
             </li>
           ))}
@@ -104,7 +122,7 @@ function ProjectList() {
         onClose={() => setCreating(false)}
         onCreated={(p) => {
           setCreating(false);
-          toast.show(`Project “${p.name}” created.`, { tone: 'success' });
+          toast.show(PROJECTS_TEXT.created({ name: p.name }), { tone: 'success' });
           navigate(projectPath(p.id));
         }}
       />

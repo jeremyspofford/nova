@@ -6,6 +6,7 @@
 // email triggers made elsewhere are listed as not available yet, with the reason. Live through
 // trigger and subscription events.
 import { useCallback, useEffect, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type {
   AgentView,
   ChannelBindingViewM7,
@@ -17,6 +18,7 @@ import type {
 } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
@@ -25,10 +27,12 @@ import { runPath } from '../work/format.ts';
 import { useChannelsApi } from './api.ts';
 import { TRIGGER_EVENTS, useChannelEvents, useDebouncedCallback } from './events.ts';
 import {
+  CREDENTIAL_TEXT,
   EVENT_STATUS,
   SUBSCRIPTION_STATUS,
   TRIGGER_KIND_TEXT,
   absoluteUrl,
+  chips,
   eventDetail,
   formatStamp,
   randomSecret,
@@ -40,6 +44,99 @@ import './channels.css';
 
 const CHANNELS_PATH = '/settings/channels';
 const TOOLS_PATH = '/settings/tools';
+
+/** Settings → Triggers' words (FR-016). Names, events and the Hub's errors are data. */
+export const TRIGGERS_TEXT = defineMessages('channels.triggers', {
+  title: 'Triggers',
+  intro:
+    'Start work when something happens: a call to a webhook, an event from an MCP server, or a message in a Slack conversation you choose. What an event says is passed along as untrusted data and never counts as your instruction. Scheduled work is in {scheduled}.',
+  scheduled: 'Work → Scheduled',
+  yourTriggers: 'Your triggers',
+  newTrigger: 'New trigger',
+  webhook: 'Webhook',
+  mcpEvent: 'MCP event',
+  channelWatch: 'Channel watch',
+  loadFailed: 'Could not load triggers.',
+  retry: 'Retry',
+  loading: 'Loading triggers',
+  emptyTitle: 'No triggers yet',
+  emptyDescription:
+    "Add a webhook for another service to call, subscribe to an MCP server's event, or watch a Slack conversation.",
+  list: 'Triggers',
+  wakes: 'Wakes {agent}',
+  anAgent: 'an agent',
+  aProject: 'a project',
+  anMcpServer: 'An MCP server',
+  startsRunIn: 'Starts a Work run in {project}',
+  startsRun: 'Starts a Work run',
+  asksFirst: '{starts} · asks before acting',
+  renewedBefore: 'Renewed before {when}',
+  noExpiry: 'Does not expire',
+  lastDelivery: 'Last delivery {when}',
+  noDeliveries: 'No deliveries yet',
+  deletedChannel: 'A channel that was deleted',
+  containing: 'Only messages containing “{text}”',
+  lastFired: 'Last fired {when}',
+  notFired: 'Not fired yet',
+  onLabel: '{name} on',
+  unsubscribedHint: 'Unsubscribed; add a new MCP event trigger.',
+  deliveriesOf: 'Deliveries of {name}',
+  deliveries: 'Deliveries',
+  editName: 'Edit {name}',
+  edit: 'Edit',
+  newSecretFor: 'New token and secret for {name}',
+  newSecret: 'New secret',
+  unsubscribeName: 'Unsubscribe {name}',
+  unsubscribe: 'Unsubscribe',
+  deleteName: 'Delete {name}',
+  delete: 'Delete',
+  address: 'Webhook address',
+  done: 'Done',
+  where: 'MCP servers are connected in {tools}; Slack channels in {channels}.',
+  tools: 'Tools & MCP',
+  channels: 'Channels',
+  turnedOn: '{name} is on.',
+  turnedOff: '{name} is off.',
+  changeFailed: 'Could not change the trigger: {error}',
+  deleted: '{name} deleted.',
+  deleteFailed: 'Could not delete: {error}',
+  unsubscribed: 'Unsubscribed from {event}. The trigger is off.',
+  unsubscribeFailed: 'Could not unsubscribe: {error}',
+  rotateFailed: 'Could not make new credentials: {error}',
+  deleteTitle: 'Delete {name}?',
+  deleteThis: 'Delete this trigger?',
+  deleteMcp: 'Nova unsubscribes from the server first. Runs it started are kept.',
+  deleteOther: 'Events stop starting work at once. Runs it started are kept.',
+  cancel: 'Cancel',
+  unsubscribeTitle: 'Unsubscribe from this event?',
+  unsubscribeWhat:
+    'The server stops sending it and the trigger turns off. To subscribe again, add a new MCP event trigger.',
+  rotateTitle: 'Make a new token and secret?',
+  rotateWhat:
+    'The current ones stop working at once. Give the new ones to the service that calls this webhook.',
+  rotateConfirm: 'Make new ones',
+  log: {
+    loadFailed: 'Could not load the deliveries.',
+    loading: 'Loading deliveries',
+    empty: 'No deliveries yet. They are listed here with what each one started.',
+    openRun: 'Open run',
+    openThread: 'Open thread',
+  },
+});
+
+/** Whether a trigger runs, as a chip. */
+const TRIGGER_STATE = chips(
+  defineMessages('channels.triggers.stateChip', {
+    unavailable: 'Not available yet',
+    on: 'On',
+    off: 'Off',
+  }),
+  {
+    unavailable: { icon: 'alert' },
+    on: { icon: 'check', tone: 'ready' },
+    off: { icon: 'stop' },
+  },
+);
 
 function go(path: string) {
   return (e: { preventDefault: () => void }) => {
@@ -78,7 +175,7 @@ export function TriggersPage() {
         setItems(list);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load triggers.')),
+      (err: unknown) => alive && setError(errorMessage(err, TRIGGERS_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -140,11 +237,14 @@ export function TriggersPage() {
     try {
       const next = await api.updateTrigger(t.id, { enabled: !t.enabled });
       replace(next);
-      toast.show(next.enabled ? `${next.title} is on.` : `${next.title} is off.`, {
-        tone: 'success',
-      });
+      toast.show(
+        next.enabled
+          ? TRIGGERS_TEXT.turnedOn({ name: next.title })
+          : TRIGGERS_TEXT.turnedOff({ name: next.title }),
+        { tone: 'success' },
+      );
     } catch (err) {
-      toast.show(`Could not change the trigger: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(TRIGGERS_TEXT.changeFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -153,9 +253,9 @@ export function TriggersPage() {
     try {
       await api.deleteTrigger(t.id);
       setItems((list) => list?.filter((x) => x.id !== t.id) ?? null);
-      toast.show(`${t.title} deleted.`, { tone: 'success' });
+      toast.show(TRIGGERS_TEXT.deleted({ name: t.title }), { tone: 'success' });
     } catch (err) {
-      toast.show(`Could not delete: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(TRIGGERS_TEXT.deleteFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -165,11 +265,11 @@ export function TriggersPage() {
     try {
       await api.deleteMcpSubscription(t.subscription.id);
       reload();
-      toast.show(`Unsubscribed from ${t.subscription.event}. The trigger is off.`, {
+      toast.show(TRIGGERS_TEXT.unsubscribed({ event: t.subscription.event }), {
         tone: 'success',
       });
     } catch (err) {
-      toast.show(`Could not unsubscribe: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(TRIGGERS_TEXT.unsubscribeFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
@@ -180,63 +280,64 @@ export function TriggersPage() {
       replace(await api.updateTrigger(t.id, { credentials }));
       setFresh({ id: t.id, ...credentials });
     } catch (err) {
-      toast.show(`Could not make new credentials: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(TRIGGERS_TEXT.rotateFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
+  const S = TRIGGERS_TEXT;
   const agentName = (agentId: string | null) =>
-    agentId ? (agents?.find((a) => a.id === agentId)?.name ?? 'an agent') : 'an agent';
+    agentId ? (agents?.find((a) => a.id === agentId)?.name ?? S.anAgent) : S.anAgent;
   const projectName = (projectId: string | null) =>
-    projectId ? (projects.find((p) => p.id === projectId)?.name ?? 'a project') : null;
+    projectId ? (projects.find((p) => p.id === projectId)?.name ?? S.aProject) : null;
   const serverName = (serverId: string) =>
     sources?.find((s) => s.serverId === serverId)?.name ??
     servers.find((s) => s.id === serverId)?.name ??
-    'An MCP server';
+    S.anMcpServer;
   const bindingOf = (bid: string | null) => bindings.find((b) => b.id === bid) ?? null;
   const slackBindings = bindings.filter((b) => b.kind === 'slack');
 
   return (
     <div className="settings-page">
-      <h2>Triggers</h2>
+      <h2>{S.title}</h2>
       <p className="muted ws-flush">
-        Start work when something happens: a call to a webhook, an event from an MCP server, or a
-        message in a Slack conversation you choose. What an event says is passed along as untrusted
-        data and never counts as your instruction. Scheduled work is in{' '}
-        <a href="/work/scheduled" onClick={go('/work/scheduled')}>
-          Work → Scheduled
-        </a>
-        .
+        {rich(S.intro, {
+          scheduled: (
+            <a href="/work/scheduled" onClick={go('/work/scheduled')}>
+              {S.scheduled}
+            </a>
+          ),
+        })}
       </p>
       <section className="settings-section" aria-labelledby="tr-list">
-        <h3 id="tr-list">Your triggers</h3>
-        <div className="row" role="group" aria-label="New trigger">
+        <h3 id="tr-list">{S.yourTriggers}</h3>
+        <div className="row" role="group" aria-label={S.newTrigger}>
           <Button variant="primary" onClick={() => setCreating('webhook')}>
-            <Icon name="plus" /> Webhook
+            <Icon name="plus" /> {S.webhook}
           </Button>
           <Button onClick={() => setCreating('mcp_event')} disabled={sources === null}>
-            <Icon name="plus" /> MCP event
+            <Icon name="plus" /> {S.mcpEvent}
           </Button>
           <Button onClick={() => setCreating('connector_event')}>
-            <Icon name="plus" /> Channel watch
+            <Icon name="plus" /> {S.channelWatch}
           </Button>
         </div>
         {error ? (
           <div role="alert" className="ws-error">
             <p>{error}</p>
-            <Button onClick={reload}>Retry</Button>
+            <Button onClick={reload}>{S.retry}</Button>
           </div>
         ) : null}
-        {items === null && !error ? <Spinner label="Loading triggers" /> : null}
+        {items === null && !error ? <Spinner label={S.loading} /> : null}
         {items?.length === 0 ? (
           <EmptyState
             level={3}
             icon="activity"
-            title="No triggers yet"
-            description="Add a webhook for another service to call, subscribe to an MCP server's event, or watch a Slack conversation."
+            title={S.emptyTitle}
+            description={S.emptyDescription}
           />
         ) : null}
         {items?.length ? (
-          <ul className="ws-list" aria-label="Triggers">
+          <ul className="ws-list" aria-label={S.list}>
             {items.map((t) => {
               const sub = t.subscription;
               const removed = sub?.status === 'removed';
@@ -246,28 +347,31 @@ export function TriggersPage() {
               const contains = typeof t.config.contains === 'string' ? t.config.contains : null;
               const logOpen = logs.has(t.id);
               const project = projectName(t.projectId);
+              const starts =
+                t.action === 'wake'
+                  ? S.wakes({ agent: agentName(t.agentId) })
+                  : project
+                    ? S.startsRunIn({ project })
+                    : S.startsRun;
               return (
                 <li key={t.id} className="ws-list-row ch-trigger" aria-label={t.title}>
                   <div className="ws-source-main">
-                    <strong className="ws-source-name">{t.title}</strong>
+                    <strong className="ws-source-name" dir="auto">
+                      {t.title}
+                    </strong>
                     <span className="ws-row-meta">
                       <span className="ws-badge">{TRIGGER_KIND_TEXT[t.kind]}</span>
                       {!t.available ? (
-                        <Chip spec={{ text: 'Not available yet', icon: 'alert' }} />
+                        <Chip spec={TRIGGER_STATE.unavailable} />
                       ) : t.enabled ? (
-                        <Chip spec={{ text: 'On', icon: 'check', tone: 'ready' }} />
+                        <Chip spec={TRIGGER_STATE.on} />
                       ) : (
-                        <Chip spec={{ text: 'Off', icon: 'stop' }} />
+                        <Chip spec={TRIGGER_STATE.off} />
                       )}
                       {sub ? <Chip spec={SUBSCRIPTION_STATUS[sub.status]} /> : null}
                     </span>
                     <span className="ws-row-meta">
-                      {t.action === 'wake'
-                        ? `Wakes ${agentName(t.agentId)}`
-                        : project
-                          ? `Starts a Work run in ${project}`
-                          : 'Starts a Work run'}
-                      {t.autonomy === 'ask_first' ? ' · asks before acting' : ''}
+                      {t.autonomy === 'ask_first' ? S.asksFirst({ starts }) : starts}
                     </span>
                     {t.kind === 'mcp_event' && sub ? (
                       <span className="muted ws-row-meta">
@@ -278,14 +382,14 @@ export function TriggersPage() {
                         {sub.status === 'active' || sub.status === 'refreshing' ? (
                           <span>
                             {sub.expiresAt
-                              ? `Renewed before ${formatStamp(sub.expiresAt)}`
-                              : 'Does not expire'}
+                              ? S.renewedBefore({ when: formatStamp(sub.expiresAt) })
+                              : S.noExpiry}
                           </span>
                         ) : null}
                         <span>
                           {sub.lastDeliveryAt
-                            ? `Last delivery ${formatWhen(sub.lastDeliveryAt)}`
-                            : 'No deliveries yet'}
+                            ? S.lastDelivery({ when: formatWhen(sub.lastDeliveryAt) })
+                            : S.noDeliveries}
                         </span>
                       </span>
                     ) : null}
@@ -297,12 +401,12 @@ export function TriggersPage() {
                     {t.kind === 'connector_event' ? (
                       <span className="muted ws-row-meta">
                         <span>
-                          {binding ? binding.label : 'A channel that was deleted'}
+                          {binding ? binding.label : S.deletedChannel}
                           {conversation && conversation !== binding?.externalRef
                             ? ` · ${conversation}`
                             : ''}
                         </span>
-                        {contains ? <span>Only messages containing “{contains}”</span> : null}
+                        {contains ? <span>{S.containing({ text: contains })}</span> : null}
                       </span>
                     ) : null}
                     {t.kind === 'webhook' && t.webhookPath ? (
@@ -318,7 +422,9 @@ export function TriggersPage() {
                       </p>
                     ) : null}
                     <span className="muted ws-row-meta">
-                      {t.lastFiredAt ? `Last fired ${formatWhen(t.lastFiredAt)}` : 'Not fired yet'}
+                      {t.lastFiredAt
+                        ? S.lastFired({ when: formatWhen(t.lastFiredAt) })
+                        : S.notFired}
                     </span>
                   </div>
                   <div className="row ws-row-actions">
@@ -327,8 +433,8 @@ export function TriggersPage() {
                       role="switch"
                       className="nv-switch"
                       aria-checked={t.enabled}
-                      aria-label={`${t.title} on`}
-                      title={removed ? 'Unsubscribed; add a new MCP event trigger.' : undefined}
+                      aria-label={S.onLabel({ name: t.title })}
+                      title={removed ? S.unsubscribedHint : undefined}
                       disabled={removed || !t.available}
                       onClick={() => void toggle(t)}
                     />
@@ -336,7 +442,7 @@ export function TriggersPage() {
                       variant="ghost"
                       aria-expanded={logOpen}
                       aria-controls={`tr-log-${t.id}`}
-                      aria-label={`Deliveries of ${t.title}`}
+                      aria-label={S.deliveriesOf({ name: t.title })}
                       onClick={() =>
                         setLogs((s) => {
                           const next = new Set(s);
@@ -346,58 +452,58 @@ export function TriggersPage() {
                         })
                       }
                     >
-                      Deliveries
+                      {S.deliveries}
                     </Button>
                     <Button
                       variant="ghost"
-                      aria-label={`Edit ${t.title}`}
+                      aria-label={S.editName({ name: t.title })}
                       onClick={() => setEditing(t)}
                     >
-                      Edit
+                      {S.edit}
                     </Button>
                     {t.kind === 'webhook' ? (
                       <Button
                         variant="ghost"
-                        aria-label={`New token and secret for ${t.title}`}
+                        aria-label={S.newSecretFor({ name: t.title })}
                         onClick={() => setRotating(t)}
                       >
-                        New secret
+                        {S.newSecret}
                       </Button>
                     ) : null}
                     {sub && !removed ? (
                       <Button
                         variant="ghost"
-                        aria-label={`Unsubscribe ${t.title}`}
+                        aria-label={S.unsubscribeName({ name: t.title })}
                         onClick={() => setUnsubscribing(t)}
                       >
-                        Unsubscribe
+                        {S.unsubscribe}
                       </Button>
                     ) : null}
                     <Button
                       variant="ghost"
-                      aria-label={`Delete ${t.title}`}
+                      aria-label={S.deleteName({ name: t.title })}
                       onClick={() => setDeleting(t)}
                     >
-                      Delete
+                      {S.delete}
                     </Button>
                   </div>
                   {fresh?.id === t.id ? (
                     <div className="ch-panel stack">
                       <SecretsOnce
                         items={[
-                          { label: 'Bearer token', value: fresh.token },
-                          { label: 'Signing secret', value: fresh.secret },
+                          { label: CREDENTIAL_TEXT.token, value: fresh.token },
+                          { label: CREDENTIAL_TEXT.secret, value: fresh.secret },
                         ]}
                       />
                       {t.webhookPath ? (
                         <CopyValue
-                          label="Webhook address"
+                          label={S.address}
                           value={absoluteUrl(t.webhookPath, publicUrl)}
                         />
                       ) : null}
                       <SigningHelp eventId />
                       <div className="row">
-                        <Button onClick={() => setFresh(null)}>Done</Button>
+                        <Button onClick={() => setFresh(null)}>{S.done}</Button>
                       </div>
                     </div>
                   ) : null}
@@ -412,15 +518,18 @@ export function TriggersPage() {
           </ul>
         ) : null}
         <p className="muted ws-flush">
-          MCP servers are connected in{' '}
-          <a href={TOOLS_PATH} onClick={go(TOOLS_PATH)}>
-            Tools &amp; MCP
-          </a>
-          ; Slack channels in{' '}
-          <a href={CHANNELS_PATH} onClick={go(CHANNELS_PATH)}>
-            Channels
-          </a>
-          .
+          {rich(S.where, {
+            tools: (
+              <a href={TOOLS_PATH} onClick={go(TOOLS_PATH)}>
+                {S.tools}
+              </a>
+            ),
+            channels: (
+              <a href={CHANNELS_PATH} onClick={go(CHANNELS_PATH)}>
+                {S.channels}
+              </a>
+            ),
+          })}
         </p>
       </section>
       {creating ? (
@@ -440,49 +549,45 @@ export function TriggersPage() {
       ) : null}
       <Dialog
         open={deleting !== null}
-        title={deleting ? `Delete ${deleting.title}?` : 'Delete this trigger?'}
-        description={
-          deleting?.kind === 'mcp_event'
-            ? 'Nova unsubscribes from the server first. Runs it started are kept.'
-            : 'Events stop starting work at once. Runs it started are kept.'
-        }
+        title={deleting ? S.deleteTitle({ name: deleting.title }) : S.deleteThis}
+        description={deleting?.kind === 'mcp_event' ? S.deleteMcp : S.deleteOther}
         onClose={() => setDeleting(null)}
         footer={
           <>
-            <Button onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button onClick={() => setDeleting(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => deleting && void remove(deleting)}>
-              Delete
+              {S.delete}
             </Button>
           </>
         }
       />
       <Dialog
         open={unsubscribing !== null}
-        title="Unsubscribe from this event?"
-        description="The server stops sending it and the trigger turns off. To subscribe again, add a new MCP event trigger."
+        title={S.unsubscribeTitle}
+        description={S.unsubscribeWhat}
         onClose={() => setUnsubscribing(null)}
         footer={
           <>
-            <Button onClick={() => setUnsubscribing(null)}>Cancel</Button>
+            <Button onClick={() => setUnsubscribing(null)}>{S.cancel}</Button>
             <Button
               variant="danger"
               onClick={() => unsubscribing && void unsubscribe(unsubscribing)}
             >
-              Unsubscribe
+              {S.unsubscribe}
             </Button>
           </>
         }
       />
       <Dialog
         open={rotating !== null}
-        title="Make a new token and secret?"
-        description="The current ones stop working at once. Give the new ones to the service that calls this webhook."
+        title={S.rotateTitle}
+        description={S.rotateWhat}
         onClose={() => setRotating(null)}
         footer={
           <>
-            <Button onClick={() => setRotating(null)}>Cancel</Button>
+            <Button onClick={() => setRotating(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => rotating && void rotate(rotating)}>
-              Make new ones
+              {S.rotateConfirm}
             </Button>
           </>
         }
@@ -510,7 +615,7 @@ function DeliveryLog({ trigger, version }: { trigger: TriggerView; version: numb
         setItems(list);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the deliveries.')),
+      (err: unknown) => alive && setError(errorMessage(err, TRIGGERS_TEXT.log.loadFailed)),
     );
     return () => {
       alive = false;
@@ -521,18 +626,13 @@ function DeliveryLog({ trigger, version }: { trigger: TriggerView; version: numb
     return (
       <div role="alert" className="ws-error">
         <p>{error}</p>
-        <Button onClick={() => setRetry((r) => r + 1)}>Retry</Button>
+        <Button onClick={() => setRetry((r) => r + 1)}>{TRIGGERS_TEXT.retry}</Button>
       </div>
     );
-  if (items === null) return <Spinner label="Loading deliveries" />;
-  if (!items.length)
-    return (
-      <p className="muted ws-flush">
-        No deliveries yet. They are listed here with what each one started.
-      </p>
-    );
+  if (items === null) return <Spinner label={TRIGGERS_TEXT.log.loading} />;
+  if (!items.length) return <p className="muted ws-flush">{TRIGGERS_TEXT.log.empty}</p>;
   return (
-    <ul className="ch-log" aria-label={`Deliveries of ${trigger.title}`}>
+    <ul className="ch-log" aria-label={TRIGGERS_TEXT.deliveriesOf({ name: trigger.title })}>
       {items.map((e) => {
         const detail = eventDetail(e);
         return (
@@ -548,7 +648,7 @@ function DeliveryLog({ trigger, version }: { trigger: TriggerView; version: numb
                   navigate(runPath(e.runId ?? ''));
                 }}
               >
-                Open run
+                {TRIGGERS_TEXT.log.openRun}
               </a>
             ) : e.threadId ? (
               <a
@@ -558,7 +658,7 @@ function DeliveryLog({ trigger, version }: { trigger: TriggerView; version: numb
                   navigate(chatPath(e.threadId));
                 }}
               >
-                Open thread
+                {TRIGGERS_TEXT.log.openThread}
               </a>
             ) : null}
           </li>

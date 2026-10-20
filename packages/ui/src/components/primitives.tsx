@@ -7,6 +7,8 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
 } from 'react';
+import { spokenKeys } from '../strings.ts';
+import { LockNote } from './fields.tsx';
 
 export type ButtonVariant = 'default' | 'primary' | 'danger' | 'ghost';
 
@@ -51,17 +53,34 @@ export interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElemen
   hint?: string;
   error?: string;
   id?: string;
+  /** Managed policy sets the value: the field is read-only and its note says by whom. */
+  locked?: boolean;
+  /** The setting a lock comes from, so its note can name the policy's source. */
+  setting?: string;
 }
 
 export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function TextField(
-  { label, hint, error, id, className, ...rest },
+  {
+    label,
+    hint,
+    error,
+    id,
+    className,
+    locked,
+    setting,
+    disabled,
+    'aria-describedby': also,
+    ...rest
+  },
   ref,
 ) {
   const auto = useId();
   const inputId = id ?? `f${auto}`;
+  const lockId = locked ? `${inputId}-lock` : undefined;
   const hintId = hint ? `${inputId}-hint` : undefined;
   const errorId = error ? `${inputId}-error` : undefined;
-  const describedBy = [hintId, errorId].filter(Boolean).join(' ') || undefined;
+  // Notes the caller links and the lock come first, then the hint and the error.
+  const describedBy = [also, lockId, hintId, errorId].filter(Boolean).join(' ') || undefined;
   return (
     <div className="nv-field">
       <label className="nv-field-label" htmlFor={inputId}>
@@ -73,8 +92,11 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
         className={className ? `nv-input ${className}` : 'nv-input'}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
+        dir="auto"
+        disabled={disabled || locked}
         {...rest}
       />
+      {lockId ? <LockNote id={lockId} setting={setting} /> : null}
       {hint ? (
         <span id={hintId} className="nv-field-hint">
           {hint}
@@ -97,7 +119,7 @@ export interface KbdProps {
 export function Kbd({ keys }: KbdProps) {
   return (
     // A named image: an aria-label on a plain span is not announced (axe aria-prohibited-attr).
-    <span className="nv-kbds" role="img" aria-label={keys.join(' plus ')}>
+    <span className="nv-kbds" role="img" dir="ltr" aria-label={spokenKeys(keys)}>
       {keys.map((k, i) => (
         <span key={`${k}-${i}`}>
           {i > 0 ? <span aria-hidden="true">+</span> : null}
@@ -116,9 +138,18 @@ export interface SwitchProps {
   label: string;
   disabled?: boolean;
   id?: string;
+  /** Ids of a description or a managed-policy note to read with the switch. */
+  'aria-describedby'?: string;
 }
 
-export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) {
+export function Switch({
+  checked,
+  onChange,
+  label,
+  disabled,
+  id,
+  'aria-describedby': describedBy,
+}: SwitchProps) {
   return (
     <button
       id={id}
@@ -126,6 +157,7 @@ export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) 
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      aria-describedby={describedBy}
       disabled={disabled}
       className="nv-switch"
       onClick={() => onChange(!checked)}

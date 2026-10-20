@@ -2,6 +2,7 @@
 // First run (FR-134): an Add Device link, or the Hub address and its fingerprint. The main
 // process verifies the Hub before anything is sent; this page only collects and reports.
 const api = window.novaLocal;
+const t = window.novaText.t;
 const $ = (id) => document.getElementById(id);
 
 const problem = $('problem');
@@ -14,7 +15,7 @@ function showProblem(message) {
 
 function busy(on) {
   for (const b of document.querySelectorAll('button')) b.disabled = on;
-  status.textContent = on ? 'Checking the Hub…' : '';
+  status.textContent = on ? t('checking') : '';
 }
 
 const replace = $('replace');
@@ -24,7 +25,7 @@ function askReplace(res, payload) {
   // Another Hub: say which one replaces which, and wait for an explicit choice.
   pending = payload;
   $('replace-text').textContent = res.message;
-  $('replace-confirm').textContent = `Replace ${res.replace.current} with ${res.replace.next}`;
+  $('replace-confirm').textContent = res.confirmLabel || '';
   replace.hidden = false;
   $('replace-cancel').focus();
 }
@@ -40,11 +41,11 @@ async function connect(payload) {
       return;
     }
     if (!res || res.ok !== true) {
-      showProblem((res && res.message) || 'The Hub could not be checked.');
+      showProblem((res && res.message) || t('couldNotCheck'));
       problem.focus();
       return;
     }
-    status.textContent = 'Connected.';
+    status.textContent = t('connected');
   } finally {
     busy(false);
   }
@@ -56,7 +57,7 @@ $('replace-confirm').addEventListener('click', () => {
 $('replace-cancel').addEventListener('click', () => {
   pending = null;
   replace.hidden = true;
-  status.textContent = 'Nothing changed.';
+  status.textContent = t('nothingChanged');
 });
 
 $('link-form').addEventListener('submit', (e) => {
@@ -71,15 +72,17 @@ $('manual-form').addEventListener('submit', (e) => {
 
 problem.tabIndex = -1;
 
-void api.invoke('shell.connect.state', {}).then((s) => {
-  if (!s || s.ok !== true) return;
-  if (s.link) $('link').value = s.link;
-  if (s.url) $('url').value = s.url;
-  if (s.pin) $('pin').value = s.pin;
-  showProblem(s.problem || '');
-  if (s.current) {
-    $('current').textContent = `This app uses the Hub at ${s.current}.`;
-    $('current').hidden = false;
-  }
-  (s.link ? $('link') : $('url')).focus();
-});
+void window.novaText.ready
+  .then(() => api.invoke('shell.connect.state', {}))
+  .then((s) => {
+    if (!s || s.ok !== true) return;
+    if (s.link) $('link').value = s.link;
+    if (s.url) $('url').value = s.url;
+    if (s.pin) $('pin').value = s.pin;
+    showProblem(s.problem || '');
+    if (s.currentText) {
+      $('current').textContent = s.currentText;
+      $('current').hidden = false;
+    }
+    (s.link ? $('link') : $('url')).focus();
+  });

@@ -5,6 +5,7 @@
 // replaced by a new one. Setting and clearing go through /agents/:id/goal; edits and status
 // changes through /goals/:id, as a run's goal does. Edits apply at the start of the next turn.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { AgentResponsibilityView, BudgetAmounts, GoalView } from '@nova/shared';
 import { Button, Dialog, Icon, SelectField, Spinner, TextField, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
@@ -12,6 +13,65 @@ import { useServices } from '../services.tsx';
 import { formatCost, formatSpan, formatTokens } from '../work/format.ts';
 import { GoalBadge } from '../work/GoalPanel.tsx';
 import { useAgentsApi } from './api.ts';
+import { FIELDS_TEXT } from './fields.tsx';
+import { AGENTS_TEXT } from './format.ts';
+import { rich } from '../i18n/rich.tsx';
+
+export const GOAL_TEXT = defineMessages('agents.goal', {
+  /** One measure against its limit: "12 min of 60 min". */
+  usedOf: '{used} of {limit}',
+  /** Time, tokens and cost used, each against its limit when one is set. */
+  usage: '{time} · {tokens} tokens · {cost}',
+  loadFailed: 'Could not load the goal.',
+  /** Why a goal action failed when the goal's budget is used up. */
+  budgetUsedUp: 'its budget is used up; raise the goal budget first',
+  changeFailed: 'Could not change the goal: {reason}',
+  setFailed: 'Could not set the goal: {reason}',
+  saveFailed: 'Could not save the goal: {reason}',
+  holderFailed: 'Could not change it: {reason}',
+  clearFailed: 'Could not clear the goal: {reason}',
+  heading: 'Goal',
+  loading: 'Loading the goal',
+  setDone: 'Goal set. The agent starts on it when it is idle.',
+  setGoal: 'Set goal',
+  none:
+    'No goal. A goal keeps the agent working toward an outcome, turn after turn, while it is ' +
+    'idle, until it is complete or a budget is reached.',
+  setAGoal: 'Set a goal',
+  saveGoal: 'Save goal',
+  blocked: 'Blocked: {what} (reported {n, plural, one {once} other {# times}})',
+  budgetLimited: 'The goal budget is used up. Raise it to let the agent continue.',
+  usageLimited: 'Continues when the provider usage limit resets.',
+  lastProgress: 'Last progress:',
+  completed: 'Completed:',
+  used: 'Used:',
+  heldBy: 'Held by',
+  wholeAgent: 'The agent as a whole',
+  heldByHint: 'The responsibility this goal belongs to.',
+  actions: 'Goal actions',
+  pause: 'Pause goal',
+  resume: 'Resume goal',
+  budget: 'Goal budget…',
+  complete: 'Mark complete',
+  clear: 'Clear goal',
+  reopen: 'Reopen goal',
+  setNew: 'Set a new goal',
+  clearTitle: 'Clear the goal?',
+  clearBody: 'The agent stops working toward this goal. Its responsibilities and other work go on.',
+  keep: 'Keep the goal',
+  cleared: 'Goal cleared.',
+  budgetSaved: 'Goal budget saved.',
+  objective: 'Goal objective',
+  count: '{n} / {max} characters. Changes apply at the start of the next turn.',
+  budgetTitle: 'Goal budget',
+  budgetBody:
+    'Used so far: {usage}. Raise a limit to let the agent continue; leave a field blank for no limit.',
+  saveBudget: 'Save budget',
+  budgetFailed: 'Could not save the goal budget.',
+  minutesError: 'Enter whole minutes, at least {min}.',
+  tokensError: '{min, plural, one {Enter at least # token.} other {Enter at least # tokens.}}',
+  costError: 'Enter a cost in US dollars.',
+});
 
 const GOAL_MAX = 4000;
 
@@ -19,15 +79,19 @@ const GOAL_MAX = 4000;
 export function goalUsageLine(goal: Pick<GoalView, 'budgets' | 'usage'>): string {
   const b = goal.budgets;
   const u = goal.usage;
-  const part = (used: string, limit: string | null) => (limit ? `${used} of ${limit}` : used);
-  return [
-    part(
+  const part = (used: string, limit: string | null) =>
+    limit ? GOAL_TEXT.usedOf({ used, limit }) : used;
+  return GOAL_TEXT.usage({
+    time: part(
       formatSpan(u.timeSeconds ?? 0),
       b.timeSeconds !== undefined ? formatSpan(b.timeSeconds) : null,
     ),
-    `${part(formatTokens(u.tokens ?? 0), b.tokens !== undefined ? formatTokens(b.tokens) : null)} tokens`,
-    part(formatCost(u.costUsd ?? 0), b.costUsd !== undefined ? formatCost(b.costUsd) : null),
-  ].join(' · ');
+    tokens: part(
+      formatTokens(u.tokens ?? 0),
+      b.tokens !== undefined ? formatTokens(b.tokens) : null,
+    ),
+    cost: part(formatCost(u.costUsd ?? 0), b.costUsd !== undefined ? formatCost(b.costUsd) : null),
+  });
 }
 
 export function AgentGoal({
@@ -63,7 +127,7 @@ export function AgentGoal({
         setGoal(g);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the goal.')),
+      (err: unknown) => alive && setError(errorMessage(err, GOAL_TEXT.loadFailed)),
     );
     api.listResponsibilities(agentId).then(
       ({ items }) => alive && setResps(items),
@@ -74,12 +138,12 @@ export function AgentGoal({
     };
   }, [api, agentId, version, manual]);
 
-  const fail = (what: string) => (err: unknown) => {
+  const fail = (failed: (p: { reason: string }) => string) => (err: unknown) => {
     const reason =
       err instanceof ApiError && err.body.code === 'budget_exhausted'
-        ? 'its budget is used up; raise the goal budget first'
+        ? GOAL_TEXT.budgetUsedUp
         : errorMessage(err);
-    toast.show(`${what}: ${reason}`, { tone: 'error' });
+    toast.show(failed({ reason }), { tone: 'error' });
   };
   const changed = (g: GoalView | null) => {
     setGoal(g);
@@ -87,12 +151,12 @@ export function AgentGoal({
   };
   const act = (action: 'pause' | 'resume' | 'complete') => {
     if (!goal) return;
-    core.goalAction(goal.id, action).then(changed, fail('Could not change the goal'));
+    core.goalAction(goal.id, action).then(changed, fail(GOAL_TEXT.changeFailed));
   };
 
   const heading = (
     <div className="work-goal-head">
-      <h2 id={headingId}>Goal</h2>
+      <h2 id={headingId}>{GOAL_TEXT.heading}</h2>
       {goal && !replacing ? <GoalBadge goal={goal} /> : null}
     </div>
   );
@@ -103,7 +167,7 @@ export function AgentGoal({
         {heading}
         <div className="ws-error" role="alert">
           <p>{error}</p>
-          <Button onClick={() => setManual((n) => n + 1)}>Retry</Button>
+          <Button onClick={() => setManual((n) => n + 1)}>{AGENTS_TEXT.retry}</Button>
         </div>
       </section>
     );
@@ -111,7 +175,7 @@ export function AgentGoal({
     return (
       <section className="panel-inset agent-section" aria-labelledby={headingId}>
         {heading}
-        <Spinner label="Loading the goal" />
+        <Spinner label={GOAL_TEXT.loading} />
       </section>
     );
 
@@ -122,10 +186,10 @@ export function AgentGoal({
       );
       setReplacing(false);
       setManual((n) => n + 1);
-      toast.show('Goal set. The agent starts on it when it is idle.', { tone: 'success' });
+      toast.show(GOAL_TEXT.setDone, { tone: 'success' });
       return true;
     } catch (err) {
-      fail('Could not set the goal')(err);
+      fail(GOAL_TEXT.setFailed)(err);
       return false;
     }
   };
@@ -137,7 +201,7 @@ export function AgentGoal({
         {editing || replacing ? (
           <GoalEditor
             initial=""
-            saveLabel="Set goal"
+            saveLabel={GOAL_TEXT.setGoal}
             responsibilities={resps}
             onCancel={() => {
               setEditing(false);
@@ -149,12 +213,9 @@ export function AgentGoal({
           />
         ) : (
           <>
-            <p className="muted ws-flush">
-              No goal. A goal keeps the agent working toward an outcome, turn after turn, while it
-              is idle, until it is complete or a budget is reached.
-            </p>
+            <p className="muted ws-flush">{GOAL_TEXT.none}</p>
             <div className="ws-toolbar">
-              <Button onClick={() => setEditing(true)}>Set a goal</Button>
+              <Button onClick={() => setEditing(true)}>{GOAL_TEXT.setAGoal}</Button>
             </div>
           </>
         )}
@@ -174,7 +235,7 @@ export function AgentGoal({
       {editing ? (
         <GoalEditor
           initial={goal.objective}
-          saveLabel="Save goal"
+          saveLabel={GOAL_TEXT.saveGoal}
           responsibilities={null}
           onCancel={() => setEditing(false)}
           onSave={async (text) => {
@@ -182,54 +243,61 @@ export function AgentGoal({
               changed(await core.updateGoal(goal.id, { objective: text }));
               setEditing(false);
             } catch (err) {
-              fail('Could not save the goal')(err);
+              fail(GOAL_TEXT.saveFailed)(err);
             }
           }}
         />
       ) : (
-        <p className="work-goal-objective">{goal.objective}</p>
+        <p className="work-goal-objective" dir="auto">
+          {goal.objective}
+        </p>
       )}
       {s === 'blocked' && goal.blocker ? (
         <p className="ws-callout" role="note">
           <Icon name="stop" />
           <span>
-            Blocked:{' '}
-            <span data-untrusted="true">{goal.blocker.description ?? goal.blocker.key}</span>{' '}
-            (reported {goal.blocker.count === 1 ? 'once' : `${goal.blocker.count} times`})
+            {rich((p) => GOAL_TEXT.blocked({ ...p, n: goal.blocker?.count ?? 1 }), {
+              what: (
+                <span data-untrusted="true" dir="auto">
+                  {goal.blocker.description ?? goal.blocker.key}
+                </span>
+              ),
+            })}
           </span>
         </p>
       ) : null}
       {s === 'budget_limited' ? (
         <p className="ws-callout" role="note">
           <Icon name="stop" />
-          <span>The goal budget is used up. Raise it to let the agent continue.</span>
+          <span>{GOAL_TEXT.budgetLimited}</span>
         </p>
       ) : null}
-      {s === 'usage_limited' ? (
-        <p className="muted ws-flush">Continues when the provider usage limit resets.</p>
-      ) : null}
+      {s === 'usage_limited' ? <p className="muted ws-flush">{GOAL_TEXT.usageLimited}</p> : null}
       {goal.statusReason && s !== 'blocked' ? (
         <p className="muted ws-flush">{goal.statusReason}</p>
       ) : null}
       {goal.progressNote ? (
         <p className="ws-flush">
-          <span className="muted">Last progress: </span>
-          <span data-untrusted="true">{goal.progressNote}</span>
+          <span className="muted">{GOAL_TEXT.lastProgress}</span>{' '}
+          <span data-untrusted="true" dir="auto">
+            {goal.progressNote}
+          </span>
         </p>
       ) : null}
       {s === 'complete' && goal.completionSummary ? (
         <p className="ws-flush">
-          <span className="muted">Completed: </span>
-          <span data-untrusted="true">{goal.completionSummary}</span>
+          <span className="muted">{GOAL_TEXT.completed}</span>{' '}
+          <span data-untrusted="true" dir="auto">
+            {goal.completionSummary}
+          </span>
         </p>
       ) : null}
       <p className="ws-flush" role="status">
-        <span className="muted">Used: </span>
-        {goalUsageLine(goal)}
+        <span className="muted">{GOAL_TEXT.used}</span> {goalUsageLine(goal)}
       </p>
       {open && resps.length ? (
         <SelectField
-          label="Held by"
+          label={GOAL_TEXT.heldBy}
           value={holder?.id ?? ''}
           onChange={(rid) => {
             api
@@ -241,44 +309,44 @@ export function AgentGoal({
               .then((g) => {
                 changed(g);
                 setManual((n) => n + 1);
-              }, fail('Could not change it'));
+              }, fail(GOAL_TEXT.holderFailed));
           }}
           options={[
-            { value: '', label: 'The agent as a whole', disabled: !!holder },
+            { value: '', label: GOAL_TEXT.wholeAgent, disabled: !!holder },
             ...resps.map((r) => ({ value: r.id, label: r.title })),
           ]}
-          hint="The responsibility this goal belongs to."
+          hint={GOAL_TEXT.heldByHint}
         />
       ) : null}
       {editing ? null : (
-        <div className="ws-toolbar" role="group" aria-label="Goal actions">
-          {open ? <Button onClick={() => setEditing(true)}>Edit</Button> : null}
-          {s === 'active' ? <Button onClick={() => act('pause')}>Pause goal</Button> : null}
+        <div className="ws-toolbar" role="group" aria-label={GOAL_TEXT.actions}>
+          {open ? <Button onClick={() => setEditing(true)}>{AGENTS_TEXT.edit}</Button> : null}
+          {s === 'active' ? <Button onClick={() => act('pause')}>{GOAL_TEXT.pause}</Button> : null}
           {s === 'paused' || s === 'blocked' ? (
-            <Button onClick={() => act('resume')}>Resume goal</Button>
+            <Button onClick={() => act('resume')}>{GOAL_TEXT.resume}</Button>
           ) : null}
-          {open ? <Button onClick={() => setBudgeting(true)}>Goal budget…</Button> : null}
-          {open ? <Button onClick={() => act('complete')}>Mark complete</Button> : null}
+          {open ? <Button onClick={() => setBudgeting(true)}>{GOAL_TEXT.budget}</Button> : null}
+          {open ? <Button onClick={() => act('complete')}>{GOAL_TEXT.complete}</Button> : null}
           {open ? (
             <Button variant="ghost" onClick={() => setConfirmClear(true)}>
-              Clear goal
+              {GOAL_TEXT.clear}
             </Button>
           ) : (
             <>
-              <Button onClick={() => act('resume')}>Reopen goal</Button>
-              <Button onClick={() => setReplacing(true)}>Set a new goal</Button>
+              <Button onClick={() => act('resume')}>{GOAL_TEXT.reopen}</Button>
+              <Button onClick={() => setReplacing(true)}>{GOAL_TEXT.setNew}</Button>
             </>
           )}
         </div>
       )}
       <Dialog
         open={confirmClear}
-        title="Clear the goal?"
-        description="The agent stops working toward this goal. Its responsibilities and other work go on."
+        title={GOAL_TEXT.clearTitle}
+        description={GOAL_TEXT.clearBody}
         onClose={() => setConfirmClear(false)}
         footer={
           <>
-            <Button onClick={() => setConfirmClear(false)}>Keep the goal</Button>
+            <Button onClick={() => setConfirmClear(false)}>{GOAL_TEXT.keep}</Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -286,11 +354,11 @@ export function AgentGoal({
                 api.clearAgentGoal(agentId).then(() => {
                   setManual((n) => n + 1);
                   onChanged();
-                  toast.show('Goal cleared.', { tone: 'success' });
-                }, fail('Could not clear the goal'));
+                  toast.show(GOAL_TEXT.cleared, { tone: 'success' });
+                }, fail(GOAL_TEXT.clearFailed));
               }}
             >
-              Clear goal
+              {GOAL_TEXT.clear}
             </Button>
           </>
         }
@@ -302,7 +370,7 @@ export function AgentGoal({
           onSave={async (budgets) => {
             changed(await core.updateGoal(goal.id, { budgets }));
             setBudgeting(false);
-            toast.show('Goal budget saved.', { tone: 'success' });
+            toast.show(GOAL_TEXT.budgetSaved, { tone: 'success' });
           }}
         />
       ) : null}
@@ -344,7 +412,7 @@ function GoalEditor({
     >
       <div className="nv-field">
         <label className="nv-field-label" htmlFor={id}>
-          Goal objective
+          {GOAL_TEXT.objective}
         </label>
         <textarea
           id={id}
@@ -364,17 +432,16 @@ function GoalEditor({
           }}
         />
         <span id={`${id}-hint`} className="nv-field-hint">
-          {text.length.toLocaleString('en-US')} / {GOAL_MAX.toLocaleString('en-US')} characters.
-          Changes apply at the start of the next turn.
+          {GOAL_TEXT.count({ n: text.length, max: GOAL_MAX })}
         </span>
       </div>
       {responsibilities?.length ? (
         <SelectField
-          label="Held by"
+          label={GOAL_TEXT.heldBy}
           value={rid}
           onChange={setRid}
           options={[
-            { value: '', label: 'The agent as a whole' },
+            { value: '', label: GOAL_TEXT.wholeAgent },
             ...responsibilities.map((r) => ({ value: r.id, label: r.title })),
           ]}
         />
@@ -383,7 +450,7 @@ function GoalEditor({
         <Button type="submit" variant="primary" disabled={busy || !text.trim()}>
           {busy ? <Spinner /> : null} {saveLabel}
         </Button>
-        <Button onClick={onCancel}>Cancel</Button>
+        <Button onClick={onCancel}>{AGENTS_TEXT.cancel}</Button>
       </div>
     </form>
   );
@@ -416,7 +483,7 @@ function GoalBudgetDialog({
     try {
       await onSave(parsed.budgets);
     } catch (err) {
-      setFailure(errorMessage(err, 'Could not save the goal budget.'));
+      setFailure(errorMessage(err, GOAL_TEXT.budgetFailed));
       setBusy(false);
     }
   };
@@ -424,39 +491,39 @@ function GoalBudgetDialog({
   return (
     <Dialog
       open
-      title="Goal budget"
-      description={`Used so far: ${goalUsageLine(goal)}. Raise a limit to let the agent continue; leave a field blank for no limit.`}
+      title={GOAL_TEXT.budgetTitle}
+      description={GOAL_TEXT.budgetBody({ usage: goalUsageLine(goal) })}
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{AGENTS_TEXT.cancel}</Button>
           <Button
             variant="primary"
             disabled={'error' in parsed || busy}
             onClick={() => void submit()}
           >
-            {busy ? <Spinner /> : null} Save budget
+            {busy ? <Spinner /> : null} {GOAL_TEXT.saveBudget}
           </Button>
         </>
       }
     >
       <div className="stack">
         <TextField
-          label="Time (minutes)"
+          label={FIELDS_TEXT.minutes}
           inputMode="numeric"
           className="ws-number"
           value={minutes}
           onChange={(e) => setMinutes(e.target.value)}
         />
         <TextField
-          label="Tokens"
+          label={FIELDS_TEXT.tokens}
           inputMode="numeric"
           className="ws-number"
           value={tokens}
           onChange={(e) => setTokens(e.target.value)}
         />
         <TextField
-          label="Cost (US dollars)"
+          label={FIELDS_TEXT.cost}
           inputMode="decimal"
           className="ws-number"
           value={cost}
@@ -487,17 +554,18 @@ export function parseGoalBudget(
   if (minutes.trim()) {
     const m = Number(minutes);
     if (!/^\d+$/.test(minutes.trim()) || m < 1)
-      return { error: 'Enter whole minutes, at least 1.' };
+      return { error: GOAL_TEXT.minutesError({ min: 1 }) };
     out.timeSeconds = m * 60;
   }
   if (tokens.trim()) {
     const t = Number(tokens);
-    if (!/^\d+$/.test(tokens.trim()) || t < 1_000) return { error: 'Enter at least 1,000 tokens.' };
+    if (!/^\d+$/.test(tokens.trim()) || t < 1_000)
+      return { error: GOAL_TEXT.tokensError({ min: 1_000 }) };
     out.tokens = t;
   }
   if (cost.trim()) {
     const c = Number(cost);
-    if (!Number.isFinite(c) || c < 0) return { error: 'Enter a cost in US dollars.' };
+    if (!Number.isFinite(c) || c < 0) return { error: GOAL_TEXT.costError };
     out.costUsd = c;
   }
   return { budgets: out };

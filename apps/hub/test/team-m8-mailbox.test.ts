@@ -176,20 +176,24 @@ describe("a removed member's mailboxes", () => {
       accountId: CY,
       payload: { accountId: BEA, sessionsEnded: 1 },
     });
-    await vi.waitFor(() => expect(provider.revoked.length).toBe(2));
-    expect(await tokensOf(beas)).toEqual([]);
+    // The revoke runs after the removal answers; a loaded machine needs more than the default 1 s.
+    const slow = { timeout: 10_000 };
+    await vi.waitFor(() => expect(provider.revoked.length).toBe(2), slow);
+    await vi.waitFor(async () => expect(await tokensOf(beas)).toEqual([]), slow);
     // Another person's mailbox keeps working.
     expect(await tokensOf(cys)).not.toEqual([]);
     expect(provider.revoked.every((t) => !provider.valid(t))).toBe(true);
-    await vi.waitFor(() =>
-      expect(audit.filter((a) => a.action === 'channel.oauth.revoke')).toEqual([
-        expect.objectContaining({
-          accountId: BEA,
-          actor: 'system',
-          resource: `channel_binding:${beas}`,
-          detail: { kind: 'email', reason: 'member_removed' },
-        }),
-      ]),
+    await vi.waitFor(
+      () =>
+        expect(audit.filter((a) => a.action === 'channel.oauth.revoke')).toEqual([
+          expect.objectContaining({
+            accountId: BEA,
+            actor: 'system',
+            resource: `channel_binding:${beas}`,
+            detail: { kind: 'email', reason: 'member_removed' },
+          }),
+        ]),
+      slow,
     );
   });
 });

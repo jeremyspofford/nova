@@ -5,12 +5,12 @@
 // it used so far). Nothing continues silently.
 import { useId, useRef, useState } from 'react';
 import type { CodeBudgetView } from '@nova/shared';
+import { defineMessages, fmt } from '@nova/i18n';
 import { Button, Dialog, Icon, Spinner, StatusChip, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useAnnounce } from '../services.tsx';
 import { useCodeM6Api } from './api-m6.ts';
 import {
-  BOUND_TEXT,
   costText,
   formatCost,
   formatSpan,
@@ -28,28 +28,71 @@ export interface ExtendDraft {
   cost: string;
 }
 
+export const BUDGET_TEXT = defineMessages('code.budget', {
+  minutesRange: 'Add time in whole minutes, from {min} to {max}.',
+  tokensRange: 'Add tokens from {min} to {max}.',
+  costRange: 'Add a cost from {min} to {max} US dollars.',
+  nothing: 'Add time, tokens or cost.',
+  extendFailed: 'Could not extend the budget: {reason}',
+  reached:
+    '{bound, select, time {Budget reached: time ({amount})} tokens {Budget reached: tokens ({amount})} other {Budget reached: cost ({amount})}}',
+  reachedChip: 'Budget reached',
+  stopped:
+    'The session stopped with its work saved. Its next turn starts only after you extend the budget.',
+  title: 'Budget',
+  time: 'Time',
+  timeHint: 'Time waiting for an approval or your input is not counted.',
+  tokens: 'Tokens',
+  cost: 'Cost',
+  /** Read after a meter's amount by screen readers. */
+  hintSuffix: '. {hint}',
+  noLimits:
+    'No limits: this session runs until you stop it. Used so far: {time}, {tokens} tokens, {cost}.',
+  added30: 'Added 30 minutes.',
+  extend30: 'Extend 30 min',
+  added1M: 'Added 1M tokens.',
+  extend1M: 'Extend 1M tokens',
+  extend: 'Extend budget…',
+  set: 'Set a budget…',
+  extended: 'Budget extended.',
+  noTimeLimit: 'no time limit',
+  timeLimit: '{time} of time',
+  noTokenLimit: 'no token limit',
+  tokenLimit: '{tokens} tokens',
+  noCostLimit: 'no cost limit',
+  extendDialogFailed: 'Could not extend the budget.',
+  extendTitle: 'Extend budget',
+  setTitle: 'Set a budget',
+  now: 'Now: {limits}. Each amount below is added to its limit; where there is none, the limit becomes what the session used plus the amount.',
+  addTime: 'Add time (minutes)',
+  addTokens: 'Add tokens',
+  addCost: 'Add cost (US dollars)',
+  cancel: 'Cancel',
+  extendButton: 'Extend',
+});
+
 /** The amounts to add (within the Hub's bounds), or the first problem. */
 export function parseCodeExtension(d: ExtendDraft): { body: Extension } | { error: string } {
   const body: Extension = {};
   if (d.minutes.trim()) {
     const m = Number(d.minutes);
     if (!/^\d+$/.test(d.minutes.trim()) || m < 1 || m > 7 * 24 * 60)
-      return { error: 'Add time in whole minutes, from 1 to 10,080.' };
+      return { error: BUDGET_TEXT.minutesRange({ min: 1, max: 7 * 24 * 60 }) };
     body.timeSeconds = m * 60;
   }
   if (d.tokens.trim()) {
     const t = Number(d.tokens);
     if (!/^\d+$/.test(d.tokens.trim()) || t < 1_000 || t > 1_000_000_000)
-      return { error: 'Add tokens from 1,000 to 1,000,000,000.' };
+      return { error: BUDGET_TEXT.tokensRange({ min: 1_000, max: 1_000_000_000 }) };
     body.tokens = t;
   }
   if (d.cost.trim()) {
     const c = Number(d.cost);
     if (!Number.isFinite(c) || c < 0.01 || c > 100_000)
-      return { error: 'Add a cost from 0.01 to 100,000 US dollars.' };
+      return { error: BUDGET_TEXT.costRange({ min: 0.01, max: 100_000 }) };
     body.costUsd = c;
   }
-  if (!Object.keys(body).length) return { error: 'Add time, tokens or cost.' };
+  if (!Object.keys(body).length) return { error: BUDGET_TEXT.nothing };
   return { body };
 }
 
@@ -77,7 +120,7 @@ export function BudgetBar({
       onChanged(await m6.extendCodeBudget(sessionId, body));
       announce(said);
     } catch (err) {
-      toast.show(`Could not extend the budget: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(BUDGET_TEXT.extendFailed({ reason: errorMessage(err) }), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -92,43 +135,42 @@ export function BudgetBar({
       {reached ? (
         <div className="code-budget-banner">
           <h2 id={headingId}>
-            Budget reached: {BOUND_TEXT[reached]} (
-            {reached === 'time'
-              ? timeText(budget)
-              : reached === 'tokens'
-                ? tokensText(budget)
-                : costText(budget)}
-            )
+            {BUDGET_TEXT.reached({
+              bound: reached,
+              amount:
+                reached === 'time'
+                  ? timeText(budget)
+                  : reached === 'tokens'
+                    ? tokensText(budget)
+                    : costText(budget),
+            })}
           </h2>
-          <StatusChip status="blocked" reason="Budget reached" />
-          <p className="ws-flush">
-            The session stopped with its work saved. Its next turn starts only after you extend the
-            budget.
-          </p>
+          <StatusChip status="blocked" reason={BUDGET_TEXT.reachedChip} />
+          <p className="ws-flush">{BUDGET_TEXT.stopped}</p>
         </div>
       ) : (
         <h2 id={headingId} className="nv-vh">
-          Budget
+          {BUDGET_TEXT.title}
         </h2>
       )}
       <div className="code-meters">
         {limited || reached ? (
           <>
             <Meter
-              label="Time"
+              label={BUDGET_TEXT.time}
               value={budget.used.timeSeconds}
               max={budget.limits.timeSeconds}
               text={timeText(budget)}
-              hint="Time waiting for an approval or your input is not counted."
+              hint={BUDGET_TEXT.timeHint}
             />
             <Meter
-              label="Tokens"
+              label={BUDGET_TEXT.tokens}
               value={budget.used.tokens}
               max={budget.limits.tokens}
               text={tokensText(budget)}
             />
             <Meter
-              label="Cost"
+              label={BUDGET_TEXT.cost}
               value={budget.used.costUsd}
               max={budget.limits.costUsd}
               text={costText(budget)}
@@ -137,9 +179,11 @@ export function BudgetBar({
         ) : (
           // Without limits one line says what the session used.
           <p className="muted code-budget-note">
-            No limits: this session runs until you stop it. Used so far:{' '}
-            {formatSpan(budget.used.timeSeconds)}, {formatTokens(budget.used.tokens)} tokens,{' '}
-            {formatCost(budget.used.costUsd)}.
+            {BUDGET_TEXT.noLimits({
+              time: formatSpan(budget.used.timeSeconds),
+              tokens: formatTokens(budget.used.tokens),
+              cost: formatCost(budget.used.costUsd),
+            })}
           </p>
         )}
         <div className="code-budget-actions">
@@ -147,22 +191,22 @@ export function BudgetBar({
             <Button
               variant="primary"
               disabled={busy}
-              onClick={() => void quick({ timeSeconds: 1800 }, 'Added 30 minutes.')}
+              onClick={() => void quick({ timeSeconds: 1800 }, BUDGET_TEXT.added30)}
             >
-              Extend 30 min
+              {BUDGET_TEXT.extend30}
             </Button>
           ) : null}
           {reached === 'tokens' ? (
             <Button
               variant="primary"
               disabled={busy}
-              onClick={() => void quick({ tokens: 1_000_000 }, 'Added 1M tokens.')}
+              onClick={() => void quick({ tokens: 1_000_000 }, BUDGET_TEXT.added1M)}
             >
-              Extend 1M tokens
+              {BUDGET_TEXT.extend1M}
             </Button>
           ) : null}
           <Button onClick={() => setExtending(true)}>
-            {limited ? 'Extend budget…' : 'Set a budget…'}
+            {limited ? BUDGET_TEXT.extend : BUDGET_TEXT.set}
           </Button>
         </div>
       </div>
@@ -174,7 +218,7 @@ export function BudgetBar({
         onExtended={(b) => {
           setExtending(false);
           onChanged(b);
-          announce('Budget extended.');
+          announce(BUDGET_TEXT.extended);
         }}
       />
     </section>
@@ -213,7 +257,7 @@ function Meter({
       ) : null}
       <span id={`${id}-t`} className="code-meter-text">
         {text}
-        {hint ? <span className="nv-vh">. {hint}</span> : null}
+        {hint ? <span className="nv-vh">{BUDGET_TEXT.hintSuffix({ hint })}</span> : null}
       </span>
     </div>
   );
@@ -256,11 +300,18 @@ function ExtendForm({
   const parsed = parseCodeExtension(draft);
   const touched = !!(draft.minutes || draft.tokens || draft.cost);
   const { limits } = budget;
-  const current = [
-    limits.timeSeconds === null ? 'no time limit' : `${formatSpan(limits.timeSeconds)} of time`,
-    limits.tokens === null ? 'no token limit' : `${formatTokens(limits.tokens)} tokens`,
-    limits.costUsd === null ? 'no cost limit' : `${formatCost(limits.costUsd)}`,
-  ].join(', ');
+  const current = fmt.list(
+    [
+      limits.timeSeconds === null
+        ? BUDGET_TEXT.noTimeLimit
+        : BUDGET_TEXT.timeLimit({ time: formatSpan(limits.timeSeconds) }),
+      limits.tokens === null
+        ? BUDGET_TEXT.noTokenLimit
+        : BUDGET_TEXT.tokenLimit({ tokens: formatTokens(limits.tokens) }),
+      limits.costUsd === null ? BUDGET_TEXT.noCostLimit : formatCost(limits.costUsd),
+    ],
+    { type: 'unit', style: 'short' },
+  );
 
   const submit = async () => {
     if (busy || 'error' in parsed) return;
@@ -269,7 +320,7 @@ function ExtendForm({
     try {
       onExtended(await m6.extendCodeBudget(sessionId, parsed.body));
     } catch (err) {
-      setError(errorMessage(err, 'Could not extend the budget.'));
+      setError(errorMessage(err, BUDGET_TEXT.extendDialogFailed));
       setBusy(false);
     }
   };
@@ -277,8 +328,8 @@ function ExtendForm({
   return (
     <Dialog
       open
-      title={hasLimits(budget) ? 'Extend budget' : 'Set a budget'}
-      description={`Now: ${current}. Each amount below is added to its limit; where there is none, the limit becomes what the session used plus the amount.`}
+      title={hasLimits(budget) ? BUDGET_TEXT.extendTitle : BUDGET_TEXT.setTitle}
+      description={BUDGET_TEXT.now({ limits: current })}
       onClose={onClose}
       initialFocusRef={first}
     >
@@ -291,7 +342,7 @@ function ExtendForm({
       >
         <TextField
           ref={first}
-          label="Add time (minutes)"
+          label={BUDGET_TEXT.addTime}
           type="number"
           inputMode="numeric"
           className="ws-number"
@@ -301,7 +352,7 @@ function ExtendForm({
           onChange={(e) => setDraft((d) => ({ ...d, minutes: e.target.value }))}
         />
         <TextField
-          label="Add tokens"
+          label={BUDGET_TEXT.addTokens}
           type="number"
           inputMode="numeric"
           className="ws-number"
@@ -311,7 +362,7 @@ function ExtendForm({
           onChange={(e) => setDraft((d) => ({ ...d, tokens: e.target.value }))}
         />
         <TextField
-          label="Add cost (US dollars)"
+          label={BUDGET_TEXT.addCost}
           type="number"
           inputMode="decimal"
           className="ws-number"
@@ -331,9 +382,9 @@ function ExtendForm({
           </p>
         ) : null}
         <div className="nv-dialog-footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{BUDGET_TEXT.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || 'error' in parsed}>
-            {busy ? <Spinner /> : null} <Icon name="clock" /> Extend
+            {busy ? <Spinner /> : null} <Icon name="clock" /> {BUDGET_TEXT.extendButton}
           </Button>
         </div>
       </form>

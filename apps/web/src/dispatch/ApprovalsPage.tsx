@@ -7,6 +7,7 @@
 // here). New task starts a Work run or Code session from the phone.
 // Updates arrive live on the shared event stream.
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { Button, EmptyState, Icon, Spinner, type IconName } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { ApprovalCard } from '../chat/ApprovalCard.tsx';
@@ -24,6 +25,38 @@ import '../workspace.css';
 import './dispatch.css';
 
 export const APPROVALS_PATH = '/approvals';
+
+/** The Approvals page's words (FR-016). Approval actions and conversation titles are Hub data. */
+export const APPROVALS_TEXT = defineMessages('dispatch', {
+  title: 'Approvals',
+  newTask: 'New task',
+  intro:
+    'Actions waiting for your decision, from every chat, run, Code session and agent. Answer here ' +
+    'or in the conversation; the first answer from any device counts.',
+  retry: 'Retry',
+  loading: 'Loading approvals',
+  emptyTitle: 'Nothing is waiting for you',
+  emptyDescription:
+    'When a run, a Code session, a chat or an agent needs your decision, it shows here, and on ' +
+    'devices with notifications on.',
+  startTask: 'Start a task',
+  waiting:
+    '{n, plural, =0 {All answered.} one {# approval is waiting.} other {# approvals are waiting.}}',
+  asked: 'Asked {when}',
+  arrived: 'New approval: {action}.',
+  loadFailed: 'Could not load approvals.',
+  loadOneFailed: 'Could not load that approval.',
+  alreadyAnswered: 'That approval was already answered.',
+  gone: 'That approval no longer exists.',
+  where: {
+    none: 'Not part of a conversation',
+    untitled: 'Untitled',
+    run: 'Work run: {title}',
+    code: 'Code session: {title}',
+    chat: 'Chat: {title}',
+    conversation: 'In a conversation',
+  },
+});
 
 /** The events that change what waits (contracts/events.md, approvals). */
 export const APPROVAL_EVENTS = [
@@ -44,14 +77,15 @@ export interface Where {
  * every approval (`runId`, `codeSessionId`, `threadTitle`).
  */
 export function whereOf(a: ClientApproval): Where {
-  if (!a.threadId) return { icon: 'shield', text: 'Not part of a conversation', href: null };
+  const W = APPROVALS_TEXT.where;
+  if (!a.threadId) return { icon: 'shield', text: W.none, href: null };
   const inThread = `${chatPath(a.threadId)}?approval=${encodeURIComponent(a.id)}`;
-  const title = a.threadTitle?.trim() || 'Untitled';
-  if (a.runId) return { icon: 'work', text: `Work run: ${title}`, href: runPath(a.runId) };
+  const title = a.threadTitle?.trim() || W.untitled;
+  if (a.runId) return { icon: 'work', text: W.run({ title }), href: runPath(a.runId) };
   if (a.codeSessionId)
-    return { icon: 'code', text: `Code session: ${title}`, href: sessionPath(a.codeSessionId) };
-  if (a.threadTitle?.trim()) return { icon: 'chat', text: `Chat: ${title}`, href: inThread };
-  return { icon: 'chat', text: 'In a conversation', href: inThread };
+    return { icon: 'code', text: W.code({ title }), href: sessionPath(a.codeSessionId) };
+  if (a.threadTitle?.trim()) return { icon: 'chat', text: W.chat({ title }), href: inThread };
+  return { icon: 'chat', text: W.conversation, href: inThread };
 }
 
 /** Oldest first, with the focused one on top. */
@@ -98,9 +132,9 @@ export function ApprovalsPage() {
         latest.current = next;
         setItems(next);
         setError(null);
-        if (arrived) announce(`New approval: ${arrived.action}.`);
+        if (arrived) announce(APPROVALS_TEXT.arrived({ action: arrived.action }));
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load approvals.')),
+      (err: unknown) => alive && setError(errorMessage(err, APPROVALS_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -119,14 +153,14 @@ export function ApprovalsPage() {
       (a) => {
         if (!alive) return;
         if (awaitsUser(a)) setItems((prev) => [...(prev ?? []), a]);
-        else setFocusNote('That approval was already answered.');
+        else setFocusNote(APPROVALS_TEXT.alreadyAnswered);
       },
       (err: unknown) =>
         alive &&
         setFocusNote(
           err instanceof ApiError && err.status === 404
-            ? 'That approval no longer exists.'
-            : errorMessage(err, 'Could not load that approval.'),
+            ? APPROVALS_TEXT.gone
+            : errorMessage(err, APPROVALS_TEXT.loadOneFailed),
         ),
     );
     return () => {
@@ -147,15 +181,12 @@ export function ApprovalsPage() {
   return (
     <div className="ws-page dispatch-page">
       <header className="ws-page-header">
-        <h1>Approvals</h1>
+        <h1>{APPROVALS_TEXT.title}</h1>
         <Button variant="primary" onClick={() => setCreating(true)}>
-          <Icon name="plus" /> New task
+          <Icon name="plus" /> {APPROVALS_TEXT.newTask}
         </Button>
       </header>
-      <p className="muted ws-flush">
-        Actions waiting for your decision, from every chat, run, Code session and agent. Answer here
-        or in the conversation; the first answer from any device counts.
-      </p>
+      <p className="muted ws-flush">{APPROVALS_TEXT.intro}</p>
       {focusNote ? (
         <p className="ws-warning" role="status">
           <Icon name="alert" /> {focusNote}
@@ -164,29 +195,25 @@ export function ApprovalsPage() {
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{APPROVALS_TEXT.retry}</Button>
         </div>
       ) : null}
-      {shown === null && !error ? <Spinner label="Loading approvals" /> : null}
+      {shown === null && !error ? <Spinner label={APPROVALS_TEXT.loading} /> : null}
       {shown?.length === 0 ? (
         <EmptyState
-          title="Nothing is waiting for you"
-          description="When a run, a Code session, a chat or an agent needs your decision, it shows here, and on devices with notifications on."
+          title={APPROVALS_TEXT.emptyTitle}
+          description={APPROVALS_TEXT.emptyDescription}
           icon="shield"
           level={2}
-          action={<Button onClick={() => setCreating(true)}>Start a task</Button>}
+          action={<Button onClick={() => setCreating(true)}>{APPROVALS_TEXT.startTask}</Button>}
         />
       ) : null}
       {shown?.length ? (
         <>
           <p className="muted ws-flush" aria-live="polite">
-            {waiting === 0
-              ? 'All answered.'
-              : waiting === 1
-                ? '1 approval is waiting.'
-                : `${waiting} approvals are waiting.`}
+            {APPROVALS_TEXT.waiting({ n: waiting })}
           </p>
-          <ul className="dispatch-list" aria-label="Approvals">
+          <ul className="dispatch-list" aria-label={APPROVALS_TEXT.title}>
             {shown.map((a) => {
               const where = whereOf(a);
               return (
@@ -200,7 +227,9 @@ export function ApprovalsPage() {
                     ) : (
                       <span>{where.text}</span>
                     )}
-                    <span className="muted">Asked {formatWhen(a.createdAt)}</span>
+                    <span className="muted">
+                      {APPROVALS_TEXT.asked({ when: formatWhen(a.createdAt) })}
+                    </span>
                   </p>
                   <ApprovalCard approval={a} onChange={update} focusKey={a.id === focus ? 1 : 0} />
                 </li>

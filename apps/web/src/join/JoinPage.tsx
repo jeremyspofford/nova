@@ -18,6 +18,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Button, Icon, Spinner, TextField, applyTheme, resolveTheme } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { readCachedTheme } from '../appearance.ts';
+import { embed } from '../settings/embed.tsx';
 import { joinClient, type JoinClient, type JoinCommitted } from './client.ts';
 import {
   commitment,
@@ -37,6 +38,8 @@ import {
 import { detectPlatform, installWay, type JoinPlatform } from './platform.ts';
 import { pollStatus, type PollDeps } from './poll.ts';
 import {
+  NoSessionError,
+  RouteDroppedError,
   browserRelayJoin,
   relayJoinError,
   relayParams,
@@ -52,6 +55,7 @@ import {
   type JoinRecord,
   type JoinStore,
 } from './store.ts';
+import { JOIN_ERROR_TEXT as E, JOIN_TEXT as S } from './strings.ts';
 import './join.css';
 
 export const JOIN_PATH = '/add-device';
@@ -134,41 +138,40 @@ export interface JoinPageProps {
 
 /** A refusal of `add/complete` or the status poll, in plain words. */
 export function joinErrorMessage(err: unknown): string {
-  if (!(err instanceof ApiError)) return errorMessage(err, 'Something went wrong.');
+  if (err instanceof NoSessionError || err instanceof RouteDroppedError)
+    return relayJoinError(err).message;
+  if (!(err instanceof ApiError)) return errorMessage(err, E.generic);
   const d = err.body.details ?? {};
   const reason = typeof d.reason === 'string' ? d.reason : null;
   switch (reason ?? err.body.code) {
     case 'wrong_code': {
       const left = typeof d.attemptsLeft === 'number' ? d.attemptsLeft : null;
-      if (left === 0)
-        return 'That code is not right, and the Hub stopped accepting it. Ask for a new code on the Hub.';
-      return left === null
-        ? 'That code is not right. Check it on the Hub.'
-        : `That code is not right. ${left} ${left === 1 ? 'try' : 'tries'} left.`;
+      if (left === 0) return E.wrongCodeStopped;
+      return left === null ? E.wrongCode : E.wrongCodeLeft({ n: left });
     }
     case 'expired':
     case 'request_expired':
-      return 'This code has expired or was already used. Ask for a new code on the Hub.';
+      return E.expired;
     case 'kind_not_allowed':
-      return 'This code is for a compute node or a Wake helper. Run the install command shown on the Hub on that computer instead.';
+      return E.kindNotAllowed;
     case 'key_revoked':
-      return 'This device was revoked on the Hub. Ask the owner to add it again.';
+      return E.keyRevoked;
     case 'key_in_use':
-      return 'This device is already added. Start over to add it with a new key.';
+      return E.keyInUse;
     case 'add_device_disabled':
-      return 'Adding devices is turned off on this Hub.';
+      return E.disabled;
     case 'address_rate_limited':
     case 'rate_limited':
-      return 'Too many tries from this network. Wait a minute and try again.';
+      return E.rateLimited;
     case 'bad_signature':
     case 'missing_proof':
-      return 'The Hub did not accept this device’s signature. Start over.';
+      return E.badSignature;
     case 'bad_reveal':
-      return 'The Hub refused this device’s answer, so the request was dropped. Ask for a new code on the Hub.';
+      return E.badReveal;
     case 'already_revealed':
-      return 'This request was already answered. Ask for a new code on the Hub and start over.';
+      return E.alreadyRevealed;
     default:
-      return errorMessage(err, 'Something went wrong.');
+      return errorMessage(err, E.generic);
   }
 }
 
@@ -221,9 +224,7 @@ export function JoinPage({
   const [codeText, setCodeText] = useState('');
   const [name, setName] = useState(platform.name);
   const [busy, setBusy] = useState(false);
-  const [formError, setFormError] = useState<string | null>(
-    params.badCode ? 'The code in the link is not valid. Type the code shown on the Hub.' : null,
-  );
+  const [formError, setFormError] = useState<string | null>(params.badCode ? S.badLinkCode : null);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [install, setInstall] = useState<InstallPrompt | null>(null);
   const [installed, setInstalled] = useState(false);
@@ -386,7 +387,7 @@ export function JoinPage({
     if (busy) return;
     const code = linkCode ?? normalizePairingCode(codeText);
     if (!code) {
-      setCodeError('Enter the 8-character code shown on the Hub, like ABCD-EFGH.');
+      setCodeError(S.enterCode);
       return;
     }
     const deviceName = name.trim();
@@ -553,27 +554,19 @@ export function JoinPage({
         <section className="panel join-panel" aria-labelledby={`${formId}-h`}>
           {phase.kind === 'checking' ? (
             <>
-              <h1 id={`${formId}-h`}>Add this device</h1>
-              <Spinner label="Checking the Hub" />
+              <h1 id={`${formId}-h`}>{S.addThisDevice}</h1>
+              <Spinner label={S.checkingHub} />
             </>
           ) : null}
 
           {phase.kind === 'insecure' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
-                This page needs a secure connection
+                {S.insecureTitle}
               </h1>
               <div role="alert" className="stack">
-                <p className="join-flush">
-                  This device opened the Hub over plain HTTP at a network address. Browsers allow
-                  the keys this step needs only on a secure connection, so this device cannot ask to
-                  join from here. Nothing was sent to the Hub.
-                </p>
-                <p className="muted join-flush">
-                  On the Hub, open Network → Trust and turn on the Hub&apos;s own certificate
-                  (HTTPS), install its root certificate on this device, then open the link or scan
-                  the QR code again. Or add this device with the Nova app.
-                </p>
+                <p className="join-flush">{S.insecureBody}</p>
+                <p className="muted join-flush">{S.insecureFix}</p>
               </div>
             </>
           ) : null}
@@ -581,12 +574,10 @@ export function JoinPage({
           {phase.kind === 'hub-error' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
-                Cannot reach the Hub
+                {S.cannotReachHub}
               </h1>
               <div role="alert" className="stack">
-                <p className="muted join-flush">
-                  {errorMessage(phase.error, 'The Hub did not answer.')}
-                </p>
+                <p className="muted join-flush">{errorMessage(phase.error, S.noAnswer)}</p>
                 <div className="row">
                   <Button
                     onClick={() => {
@@ -594,7 +585,7 @@ export function JoinPage({
                       setAttempt((n) => n + 1);
                     }}
                   >
-                    Retry
+                    {S.retry}
                   </Button>
                 </div>
               </div>
@@ -604,41 +595,34 @@ export function JoinPage({
           {phase.kind === 'wrong-hub' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
-                <Icon name="alert" /> This is not your Hub
+                <Icon name="alert" /> {S.wrongHubTitle}
               </h1>
               <div role="alert" className="join-stop stack">
-                <p className="join-flush">
-                  This page cannot prove it is the Hub that made the code. Someone may be in the
-                  middle, so this device stops here. Do not approve a request from it on the Hub.
-                </p>
-                <p className="muted join-flush">
-                  Open the link or scan the QR code again on a network you trust, or ask the owner
-                  for a new code.
-                </p>
+                <p className="join-flush">{S.wrongHubBody}</p>
+                <p className="muted join-flush">{S.wrongHubFix}</p>
               </div>
             </>
           ) : null}
 
           {phase.kind === 'form' ? (
             <>
-              <h1 id={`${formId}-h`}>Add this device</h1>
-              <p className="muted join-flush">
-                This asks the Hub to add this device. Nothing is shared until the owner approves it
-                on the Hub.
-                {linkRelay
-                  ? ' It pairs through the Relay, so this device can reach the Hub from anywhere.'
-                  : ''}
-              </p>
+              <h1 id={`${formId}-h`}>{S.addThisDevice}</h1>
+              <p className="muted join-flush">{linkRelay ? S.formIntroRelay : S.formIntro}</p>
               <form className="stack" onSubmit={(e) => void submit(e)} noValidate>
                 {linkCode ? (
                   <p className="join-flush">
-                    Code from the link:{' '}
-                    <code className="join-code">{displayPairingCode(linkCode)}</code>
+                    {embed(S.codeFromLink, {
+                      code: (
+                        <code className="join-code" dir="ltr">
+                          {displayPairingCode(linkCode)}
+                        </code>
+                      ),
+                    })}
                   </p>
                 ) : (
                   <TextField
-                    label="Code shown on the Hub"
-                    hint="8 letters and digits, like ABCD-EFGH"
+                    label={S.codeLabel}
+                    hint={S.codeHint}
                     value={codeText}
                     onChange={(e) => setCodeText(e.target.value)}
                     autoComplete="one-time-code"
@@ -650,12 +634,12 @@ export function JoinPage({
                   />
                 )}
                 <TextField
-                  label="Name for this device"
-                  hint="How it shows on the Hub. The owner can change it."
+                  label={S.nameLabel}
+                  hint={S.nameHint}
                   value={name}
                   maxLength={100}
                   onChange={(e) => setName(e.target.value)}
-                  error={name.trim() ? undefined : 'Enter a name.'}
+                  error={name.trim() ? undefined : S.enterName}
                 />
                 {formError ? (
                   <p role="alert" className="nv-field-error join-flush">
@@ -664,7 +648,7 @@ export function JoinPage({
                 ) : null}
                 <div className="row">
                   <Button type="submit" variant="primary" disabled={busy || !name.trim()}>
-                    {busy ? <Spinner /> : null} Ask to join
+                    {busy ? <Spinner /> : null} {S.askToJoin}
                   </Button>
                 </div>
               </form>
@@ -674,29 +658,28 @@ export function JoinPage({
           {phase.kind === 'waiting' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
-                Approve on the Hub
+                {S.approveTitle}
               </h1>
               <p className="join-flush">
-                On the Hub, type this code to approve {phase.record.name}. Check that it is the same
-                on both screens.
+                {embed(S.approveBody, { name: <bdi>{phase.record.name}</bdi> })}
               </p>
               <p className="join-confirmation">{displayConfirmation(phase.record.confirmation)}</p>
               <div className="join-waiting" role="status">
                 {phase.offline ? (
                   <>
                     <Icon name="alert" />
-                    <span>Cannot reach the Hub. Trying again…</span>
+                    <span>{S.retryingHub}</span>
                   </>
                 ) : (
                   <>
                     <Spinner />
-                    <span>Waiting for the owner to approve this device.</span>
+                    <span>{S.waiting}</span>
                   </>
                 )}
               </div>
               <div className="row">
                 <Button variant="ghost" onClick={startOver}>
-                  Start over
+                  {S.startOver}
                 </Button>
               </div>
             </>
@@ -705,11 +688,10 @@ export function JoinPage({
           {phase.kind === 'relay-waiting' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
-                Approve on the Hub
+                {S.approveTitle}
               </h1>
               <p className="join-flush">
-                On the Hub, type this code to approve {phase.pending.join.name}. Check that it is
-                the same on both screens.
+                {embed(S.approveBody, { name: <bdi>{phase.pending.join.name}</bdi> })}
               </p>
               <p className="join-confirmation">
                 {displayConfirmation(phase.pending.join.confirmation)}
@@ -718,18 +700,18 @@ export function JoinPage({
                 {phase.offline ? (
                   <>
                     <Icon name="alert" />
-                    <span>Cannot reach the Relay. Trying again…</span>
+                    <span>{S.retryingRelay}</span>
                   </>
                 ) : (
                   <>
                     <Spinner />
-                    <span>Waiting for the owner to approve this device, through the Relay.</span>
+                    <span>{S.waitingRelay}</span>
                   </>
                 )}
               </div>
               <div className="row">
                 <Button variant="ghost" onClick={startOver}>
-                  Start over
+                  {S.startOver}
                 </Button>
               </div>
             </>
@@ -738,21 +720,14 @@ export function JoinPage({
           {phase.kind === 'mismatch' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
-                <Icon name="alert" /> The codes do not match
+                <Icon name="alert" /> {S.mismatchTitle}
               </h1>
               <div role="alert" className="join-stop stack">
-                <p className="join-flush">
-                  The Hub answered with a different code than this device worked out. Something
-                  between this device and the Hub may have changed the request, so this device stops
-                  here.
-                </p>
-                <p className="muted join-flush">
-                  Do not approve this request on the Hub. Ask for a new code and try again on a
-                  network you trust.
-                </p>
+                <p className="join-flush">{S.mismatchBody}</p>
+                <p className="muted join-flush">{S.mismatchFix}</p>
               </div>
               <div className="row">
-                <Button onClick={startOver}>Start over</Button>
+                <Button onClick={startOver}>{S.startOver}</Button>
               </div>
             </>
           ) : null}
@@ -760,46 +735,43 @@ export function JoinPage({
           {phase.kind === 'approved' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1} className="join-done">
-                <Icon name="check" /> This device is added
+                <Icon name="check" /> {S.addedTitle}
               </h1>
-              <p className="join-flush">
-                {phase.via === 'relay'
-                  ? 'You are signed in to Nova here. When the Hub’s own address does not answer, Nova reaches it through the Relay, which forwards sealed messages it cannot read.'
-                  : 'You are signed in to Nova here.'}
-              </p>
+              <p className="join-flush">{phase.via === 'relay' ? S.signedInRelay : S.signedIn}</p>
               <div className="row">
                 <Button variant="primary" onClick={() => pageNav.assign('/')}>
-                  Open Nova
+                  {S.openNova}
                 </Button>
               </div>
               <section className="join-install stack" aria-labelledby={`${formId}-install`}>
-                <h2 id={`${formId}-install`}>Install the app</h2>
+                <h2 id={`${formId}-install`}>{S.installTitle}</h2>
                 {installed ? (
-                  <p className="join-flush">Nova is installed. Open it from your apps.</p>
+                  <p className="join-flush">{S.installed}</p>
                 ) : way === 'ios-share' ? (
                   <p className="join-flush">
-                    Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>. Nova then
-                    opens like an app.
+                    {embed(S.iosSteps, {
+                      share: <strong>{S.iosShare}</strong>,
+                      add: <strong>{S.iosAdd}</strong>,
+                    })}
                   </p>
                 ) : way === 'prompt' ? (
                   <>
-                    <p className="join-flush">Install Nova to open it like an app.</p>
+                    <p className="join-flush">{S.promptIntro}</p>
                     <div className="row">
                       <Button onClick={() => void promptInstall()}>
-                        <Icon name="download" /> Install Nova
+                        <Icon name="download" /> {S.installNova}
                       </Button>
                     </div>
                   </>
                 ) : way === 'menu' ? (
                   <p className="join-flush">
-                    Use <strong>Install app</strong> or <strong>Add to Home screen</strong> in your
-                    browser’s menu, or keep using Nova in the browser.
+                    {embed(S.menuSteps, {
+                      install: <strong>{S.menuInstall}</strong>,
+                      add: <strong>{S.menuAdd}</strong>,
+                    })}
                   </p>
                 ) : (
-                  <p className="join-flush">
-                    This browser cannot install Nova as an app. Open it in the browser and bookmark
-                    it.
-                  </p>
+                  <p className="join-flush">{S.cannotInstall}</p>
                 )}
               </section>
             </>
@@ -808,13 +780,13 @@ export function JoinPage({
           {phase.kind === 'denied' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
-                Not approved
+                {S.deniedTitle}
               </h1>
               <p role="alert" className="join-flush">
-                The owner denied this device on the Hub. It was not added.
+                {S.deniedBody}
               </p>
               <div className="row">
-                <Button onClick={startOver}>Use a new code</Button>
+                <Button onClick={startOver}>{S.useNewCode}</Button>
               </div>
             </>
           ) : null}
@@ -822,13 +794,13 @@ export function JoinPage({
           {phase.kind === 'expired' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
-                The request expired
+                {S.expiredTitle}
               </h1>
               <p role="alert" className="join-flush">
-                It was not approved in time. Ask for a new code on the Hub, then try again.
+                {S.expiredBody}
               </p>
               <div className="row">
-                <Button onClick={startOver}>Use a new code</Button>
+                <Button onClick={startOver}>{S.useNewCode}</Button>
               </div>
             </>
           ) : null}
@@ -836,13 +808,13 @@ export function JoinPage({
           {phase.kind === 'failed' ? (
             <>
               <h1 id={`${formId}-h`} ref={headingRef} tabIndex={-1}>
-                This device was not added
+                {S.failedTitle}
               </h1>
               <p role="alert" className="join-flush">
                 {joinErrorMessage(phase.error)}
               </p>
               <div className="row">
-                <Button onClick={startOver}>Start over</Button>
+                <Button onClick={startOver}>{S.startOver}</Button>
               </div>
             </>
           ) : null}

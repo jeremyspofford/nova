@@ -1,5 +1,8 @@
 // Display helpers for Work runs, goals, sub-agents and schedules (docs/04 §1.1, §2.3, §2.3.1;
-// docs/09 §2.1, §6). Pure functions, so the views and their tests share one wording.
+// docs/09 §2.1, §6). Pure functions, so the views and their tests share one wording. The words
+// are messages and the amounts go through `fmt` (FR-016): read them at render time so they follow
+// the active locale.
+import { defineMessages, fmt } from '@nova/i18n';
 import type {
   BudgetAmounts,
   DerivedStatus,
@@ -14,7 +17,33 @@ import type {
 } from '@nova/shared';
 import type { IconName } from '@nova/ui';
 
-export const RUN_STATUS_TEXT: Record<RunStatus, string> = {
+/** Words the Work screens share. */
+export const WORK_TEXT = defineMessages('work', {
+  work: 'Work',
+  retry: 'Retry',
+  cancel: 'Cancel',
+  edit: 'Edit',
+  delete: 'Delete',
+  loading: 'Loading…',
+  paused: 'Paused',
+  titleOptional: 'Title (optional)',
+  project: 'Project',
+  noProject: 'No project',
+  expectedOutput: 'Expected output',
+  outputRef: 'Output name or path (optional)',
+  /** A count of characters typed against the limit: "29 / 8,000 characters". */
+  characters: '{n} / {max, plural, one {# character} other {# characters}}',
+});
+
+/** What a run or a schedule declares it delivers (FR-187). */
+export const OUTPUT_KIND_TEXT = defineMessages('work.outputKinds', {
+  none: 'None',
+  artifact: 'An artifact',
+  message: 'A delivered message',
+  file: 'A file',
+});
+
+export const RUN_STATUS_TEXT = defineMessages('work.runStatus', {
   planning: 'Planning',
   running: 'Running',
   waiting_approval: 'Waiting for approval',
@@ -23,9 +52,9 @@ export const RUN_STATUS_TEXT: Record<RunStatus, string> = {
   output_missing: 'Output missing',
   failed: 'Failed',
   cancelled: 'Cancelled',
-};
+});
 
-export const PAUSE_REASON_TEXT: Record<RunPauseReason, string> = {
+export const PAUSE_REASON_TEXT = defineMessages('work.pauseReason', {
   user: 'Paused by you',
   budget_time: 'Budget reached: time',
   budget_tokens: 'Budget reached: tokens',
@@ -36,7 +65,7 @@ export const PAUSE_REASON_TEXT: Record<RunPauseReason, string> = {
   review_breaker: 'Stopped by auto-review',
   safety: 'Paused by safety monitoring',
   error: 'Paused after an error',
-};
+});
 
 const FINAL: readonly RunStatus[] = ['done', 'output_missing', 'failed', 'cancelled'];
 
@@ -69,14 +98,14 @@ export function budgetBound(
   }
 }
 
-export const GOAL_STATUS_TEXT: Record<GoalStatus, string> = {
+export const GOAL_STATUS_TEXT = defineMessages('work.goalStatus', {
   active: 'Active',
   paused: 'Paused',
   blocked: 'Blocked',
   usage_limited: 'Usage limit',
   budget_limited: 'Budget reached',
   complete: 'Complete',
-};
+});
 
 export const GOAL_STATUS_ICON: Record<GoalStatus, IconName> = {
   active: 'forward',
@@ -87,13 +116,13 @@ export const GOAL_STATUS_ICON: Record<GoalStatus, IconName> = {
   complete: 'check',
 };
 
-export const STEP_TEXT: Record<RunPlanStep['status'], string> = {
+export const STEP_TEXT = defineMessages('work.stepStatus', {
   pending: 'To do',
   running: 'In progress',
   done: 'Done',
   failed: 'Failed',
   skipped: 'Skipped',
-};
+});
 
 export const STEP_ICON: Record<RunPlanStep['status'], IconName | null> = {
   pending: 'clock',
@@ -103,13 +132,13 @@ export const STEP_ICON: Record<RunPlanStep['status'], IconName | null> = {
   skipped: 'forward',
 };
 
-export const SUBAGENT_TEXT: Record<SubagentView['status'], string> = {
+export const SUBAGENT_TEXT = defineMessages('work.subagentStatus', {
   queued: 'Queued',
   running: 'Running',
   done: 'Done',
   failed: 'Failed',
   cancelled: 'Cancelled',
-};
+});
 
 export const SUBAGENT_ICON: Record<SubagentView['status'], IconName | null> = {
   queued: 'clock',
@@ -119,13 +148,13 @@ export const SUBAGENT_ICON: Record<SubagentView['status'], IconName | null> = {
   cancelled: 'stop',
 };
 
-export const OUTCOME_TEXT: Record<ScheduleOutcome, string> = {
+export const OUTCOME_TEXT = defineMessages('work.outcome', {
   done: 'Done',
   output_missing: 'Output missing',
   failed: 'Failed',
   cancelled: 'Cancelled',
   no_news: 'No news',
-};
+});
 
 export const OUTCOME_ICON: Record<ScheduleOutcome, IconName> = {
   done: 'check',
@@ -135,7 +164,7 @@ export const OUTCOME_ICON: Record<ScheduleOutcome, IconName> = {
   no_news: 'bell',
 };
 
-export const AUTONOMY_TEXT: Record<RunView['autonomy'], { label: string; description: string }> = {
+export const AUTONOMY_TEXT = defineMessages('work.autonomy', {
   ask_first: {
     label: 'Ask first',
     description: 'Shows the plan and waits for you to approve it before starting.',
@@ -148,7 +177,7 @@ export const AUTONOMY_TEXT: Record<RunView['autonomy'], { label: string; descrip
     label: 'Autonomous',
     description: 'Skips the plan. Actions still follow your permissions and approvals.',
   },
-};
+});
 
 const RANK: Record<DerivedStatus, number> = { needs_input: 0, blocked: 1, running: 2, ready: 3 };
 
@@ -168,7 +197,35 @@ export function sortByStatus<T extends { derived: StatusView; updatedAt: string 
   );
 }
 
-const trim = (n: number, digits: number) => String(Number(n.toFixed(digits)));
+/** Amounts and progress in words. Formatted amounts arrive as placeholders. */
+export const AMOUNT_TEXT = defineMessages('work.amounts', {
+  /** Whole minutes of run time: "45 min". */
+  minutes: '{n, plural, other {# min}}',
+  days: '{n, plural, one {# day} other {# days}}',
+  /** A token count in thousands: "12.4K". */
+  thousands: '{n}K',
+  /** A token count in millions: "0.5M", "2M". */
+  millions: '{n}M',
+  /** A formatted token count: "2M tokens", "800 tokens". */
+  tokens: '{amount} tokens',
+  /** A cost budget: "$5.00 limit". */
+  costLimit: '{cost} limit',
+  /** The cost budget when none is set: the provider's own spend cap applies (FR-116). */
+  spendCap: 'provider spend cap',
+  /** Run time used against its budget, in whole minutes: "12 / 60 min". */
+  minutesOf: '{used} / {total} min',
+  /** Tokens used against the budget: "0.3M / 2M tokens". */
+  tokensOf: '{used} / {total} tokens',
+  /** An amount used against its budget, both formatted: "$0.12 / $5.00". */
+  of: '{used} / {total}',
+  stepOf: 'Step {n} of {total}',
+  stepsDone: '{done} of {total, plural, one {# step} other {# steps}} done',
+  /** In the progress line after the status: "Running · step 2 of 3 · 12 min · 0.3M tokens". */
+  stepInLine: 'step {n} of {total}',
+  notScheduled: 'Not scheduled',
+});
+
+const trim = (n: number, digits: number) => Number(n.toFixed(digits));
 
 /** Whole minutes, as the run header shows time ("42"). */
 export function minutes(seconds: number): number {
@@ -178,42 +235,43 @@ export function minutes(seconds: number): number {
 /** "45 min", "2 h", "1 h 30 min", "7 days". */
 export function formatSpan(seconds: number): string {
   const m = minutes(seconds);
-  if (m < 60) return `${m} min`;
-  if (m % 1440 === 0) return m === 1440 ? '1 day' : `${m / 1440} days`;
-  const h = Math.floor(m / 60);
-  const rest = m % 60;
-  return rest ? `${h} h ${rest} min` : `${h} h`;
+  if (m < 60) return AMOUNT_TEXT.minutes({ n: m });
+  if (m % 1440 === 0) return AMOUNT_TEXT.days({ n: m / 1440 });
+  return fmt.duration(m * 60_000);
 }
 
 /** "800", "12K", "0.5M", "2M". */
 export function formatTokens(n: number): string {
   const v = Math.max(0, Math.round(n));
-  if (v >= 100_000) return `${trim(v / 1_000_000, 2)}M`;
-  if (v >= 1_000) return `${trim(v / 1_000, 1)}K`;
-  return String(v);
+  if (v >= 100_000) return AMOUNT_TEXT.millions({ n: trim(v / 1_000_000, 2) });
+  if (v >= 1_000) return AMOUNT_TEXT.thousands({ n: trim(v / 1_000, 1) });
+  return fmt.number(v);
 }
 
+/** US dollars, as providers bill: "$1.80". */
 export function formatCost(usd: number): string {
-  return `$${Math.max(0, usd).toFixed(2)}`;
+  return fmt.number(Math.max(0, usd), { style: 'currency', currency: 'USD' });
 }
 
 /** "60 min · 2M tokens · provider spend cap" (docs/04 §2.2.1). */
 export function budgetLine(b: RunView['budgets']): string {
   return [
     formatSpan(b.timeSeconds),
-    `${formatTokens(b.tokens)} tokens`,
-    b.costUsd === null ? 'provider spend cap' : `${formatCost(b.costUsd)} limit`,
+    AMOUNT_TEXT.tokens({ amount: formatTokens(b.tokens) }),
+    b.costUsd === null
+      ? AMOUNT_TEXT.spendCap
+      : AMOUNT_TEXT.costLimit({ cost: formatCost(b.costUsd) }),
   ].join(' · ');
 }
 
 /** "12 / 60 min · 0.3M / 2M tokens · $0.12": consumption against each budget. */
 export function usageLine(used: RunView['used'], b: RunView['budgets']): string {
   return [
-    `${minutes(used.timeSeconds)} / ${minutes(b.timeSeconds)} min`,
-    `${formatTokens(used.tokens)} / ${formatTokens(b.tokens)} tokens`,
+    AMOUNT_TEXT.minutesOf({ used: minutes(used.timeSeconds), total: minutes(b.timeSeconds) }),
+    AMOUNT_TEXT.tokensOf({ used: formatTokens(used.tokens), total: formatTokens(b.tokens) }),
     b.costUsd === null
       ? formatCost(used.costUsd)
-      : `${formatCost(used.costUsd)} / ${formatCost(b.costUsd)}`,
+      : AMOUNT_TEXT.of({ used: formatCost(used.costUsd), total: formatCost(b.costUsd) }),
   ].join(' · ');
 }
 
@@ -221,17 +279,21 @@ export function usageLine(used: RunView['used'], b: RunView['budgets']): string 
 export function stepLine(plan: RunPlanStep[] | null): string | null {
   if (!plan?.length) return null;
   const running = plan.findIndex((s) => s.status === 'running');
-  if (running >= 0) return `Step ${running + 1} of ${plan.length}`;
+  if (running >= 0) return AMOUNT_TEXT.stepOf({ n: running + 1, total: plan.length });
   const done = plan.filter((s) => s.status === 'done' || s.status === 'skipped').length;
-  return `${done} of ${plan.length} steps done`;
+  return AMOUNT_TEXT.stepsDone({ done, total: plan.length });
 }
 
 /** What the run card and the header announce: "Running · step 2 of 3 · 12 min · 0.3M tokens". */
 export function progressLine(r: RunView): string {
   const running = r.plan?.findIndex((s) => s.status === 'running') ?? -1;
   const parts = [runStatusLine(r)];
-  if (running >= 0 && r.plan) parts.push(`step ${running + 1} of ${r.plan.length}`);
-  parts.push(formatSpan(r.used.timeSeconds), `${formatTokens(r.used.tokens)} tokens`);
+  if (running >= 0 && r.plan)
+    parts.push(AMOUNT_TEXT.stepInLine({ n: running + 1, total: r.plan.length }));
+  parts.push(
+    formatSpan(r.used.timeSeconds),
+    AMOUNT_TEXT.tokens({ amount: formatTokens(r.used.tokens) }),
+  );
   return parts.join(' · ');
 }
 
@@ -239,17 +301,17 @@ export function progressLine(r: RunView): string {
 export function amountsText(a: BudgetAmounts): string {
   const parts: string[] = [];
   if (a.timeSeconds !== undefined) parts.push(formatSpan(a.timeSeconds));
-  if (a.tokens !== undefined) parts.push(`${formatTokens(a.tokens)} tokens`);
+  if (a.tokens !== undefined) parts.push(AMOUNT_TEXT.tokens({ amount: formatTokens(a.tokens) }));
   if (a.costUsd !== undefined) parts.push(formatCost(a.costUsd));
-  return parts.join(', ');
+  return fmt.list(parts, { type: 'unit', style: 'short' });
 }
 
 /** A local date and time, e.g. "Oct 20, 2026, 9:00 AM". */
 export function formatDateTime(iso: string | null): string {
-  if (!iso) return 'Not scheduled';
+  if (!iso) return AMOUNT_TEXT.notScheduled;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
+  return fmt.dateTime(d, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

@@ -1,5 +1,14 @@
 // What the joining device is, read from its user agent, only to name it and to say how to
 // install the app on it (docs/22 §4.4). Nothing here decides access: the Hub never trusts it.
+// The name ("Safari on iPhone") is a suggestion in the active locale; browser and device names are
+// product names. `platform` is a protocol value the Hub keeps as it is.
+import { defineMessages } from '@nova/i18n';
+
+const NAME_TEXT = defineMessages('join.deviceName', {
+  browserOn: '{browser} on {device}',
+  otherBrowserOn: 'Browser on {device}',
+  webBrowser: 'Web browser',
+});
 
 export type JoinOs = 'ios' | 'android' | 'macos' | 'windows' | 'chromeos' | 'linux' | 'other';
 export type JoinBrowser = 'safari' | 'chrome' | 'edge' | 'firefox' | 'samsung' | 'other';
@@ -23,13 +32,13 @@ const OS_LABEL: Record<JoinOs, string> = {
   other: 'Unknown',
 };
 
-const BROWSER_LABEL: Record<JoinBrowser, string> = {
+/** Browser product names (not translated); any other browser is named by NAME_TEXT. */
+const BROWSER_LABEL: Record<Exclude<JoinBrowser, 'other'>, string> = {
   safari: 'Safari',
   chrome: 'Chrome',
   edge: 'Edge',
   firefox: 'Firefox',
   samsung: 'Samsung Internet',
-  other: 'Browser',
 };
 
 function osOf(ua: string): { os: JoinOs; device: string } {
@@ -61,8 +70,12 @@ export function detectPlatform(ua: string, touch = 0): JoinPlatform {
     device = 'iPad';
   }
   const browser = browserOf(ua);
-  const b = BROWSER_LABEL[browser];
-  const name = device ? `${b} on ${device}` : b === 'Browser' ? 'Web browser' : b;
+  const b = browser === 'other' ? null : BROWSER_LABEL[browser];
+  const name = device
+    ? b
+      ? NAME_TEXT.browserOn({ browser: b, device })
+      : NAME_TEXT.otherBrowserOn({ device })
+    : (b ?? NAME_TEXT.webBrowser);
   return { os, browser, name: name.slice(0, 100), platform: OS_LABEL[os] };
 }
 

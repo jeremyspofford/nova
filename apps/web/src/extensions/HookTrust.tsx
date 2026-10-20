@@ -4,18 +4,22 @@
 // the hook changed while the dialog was open, the Hub refuses the old hash (409), and the dialog
 // shows the new one for review: a changed hook is never trusted blindly.
 import { useState } from 'react';
+import { fmt, messageFor } from '@nova/i18n';
 import type { ExtensionHookView, ExtensionView } from '@nova/shared';
 import { Button, Dialog, Icon, Spinner } from '@nova/ui';
 import { ApiError } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { useServices } from '../services.tsx';
-import { HOOK_CANNOT_TEXT, HOOK_CAN_TEXT, HOOK_EVENT_TEXT } from '../settings/plugin-text.ts';
+import { HOOK_CANNOT_TEXT, HOOK_CAN_TEXT } from '../settings/plugin-text.ts';
 import type { ExtensionsApi } from './api-m8.ts';
-import { HOOK_STATUS_TEXT, HOOK_TRUST_TEXT, extensionErrorMessage, seconds } from './format.ts';
+import {
+  HOOK_STATUS_TEXT,
+  HOOK_TRUST_TEXT,
+  extensionErrorMessage,
+  hookEventText,
+} from './format.ts';
 
-const eventText = (event: string) =>
-  (HOOK_EVENT_TEXT as Record<string, string | undefined>)[event] ?? event;
-const canText = (event: string) =>
-  (HOOK_CAN_TEXT as Record<string, string | undefined>)[event] ?? null;
+const canText = (event: string) => messageFor(HOOK_CAN_TEXT, event) ?? null;
 
 export function HookTrustDialog({
   extension,
@@ -69,7 +73,10 @@ export function HookTrustDialog({
     <Dialog
       open
       title={HOOK_TRUST_TEXT.title}
-      description={`${hook.id} · ${HOOK_STATUS_TEXT[hook.status].text}`}
+      description={HOOK_TRUST_TEXT.description({
+        id: hook.id,
+        status: HOOK_STATUS_TEXT[hook.status].text,
+      })}
       onClose={onClose}
       className="ws-wide-dialog"
       footer={
@@ -95,16 +102,25 @@ export function HookTrustDialog({
           </dd>
           <dt>{HOOK_TRUST_TEXT.event}</dt>
           <dd>
-            {eventText(hook.event)} <code className="ws-code-inline">{hook.event}</code>
+            {hookEventText(hook.event)}{' '}
+            <code className="ws-code-inline" dir="ltr">
+              {hook.event}
+            </code>
             {hook.matcher ? (
               <>
                 {' '}
-                {HOOK_TRUST_TEXT.matches} <code className="ws-code-inline">{hook.matcher}</code>
+                {rich(HOOK_TRUST_TEXT.matches, {
+                  matcher: (
+                    <code className="ws-code-inline" dir="ltr">
+                      {hook.matcher}
+                    </code>
+                  ),
+                })}
               </>
             ) : null}
           </dd>
           <dt>{HOOK_TRUST_TEXT.runs}</dt>
-          <dd>{HOOK_TRUST_TEXT.runsValue(seconds(hook.timeoutMs))}</dd>
+          <dd>{HOOK_TRUST_TEXT.runsValue({ timeout: fmt.duration(hook.timeoutMs) })}</dd>
           <dt>{HOOK_TRUST_TEXT.failClosed}</dt>
           <dd>{hook.failClosed ? HOOK_TRUST_TEXT.failClosedYes : HOOK_TRUST_TEXT.failClosedNo}</dd>
           <dt>{HOOK_TRUST_TEXT.hash}</dt>

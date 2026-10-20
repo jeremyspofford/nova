@@ -13,6 +13,7 @@ import {
   type DeviceUpdateView,
 } from '@nova/shared';
 import { Button, SelectField, Spinner, useToast } from '@nova/ui';
+import { defineMessages } from '@nova/i18n';
 import { formatWhen } from '../settings/common.ts';
 import { useDevicesApi } from './api.ts';
 import type { PanelProps } from './DevicePage.tsx';
@@ -28,11 +29,63 @@ import {
 import { AvailableBuild } from './ops.tsx';
 import { ConfirmDialog, LoadError, Unavailable, useLoad } from './parts.tsx';
 
-const CHANNEL_TEXT: Record<DeviceUpdateChannel, string> = {
-  stable: 'Stable',
-  beta: 'Beta',
-  nightly: 'Nightly',
-};
+/** The Updates tab's words (FR-016). */
+export const UPDATES_TEXT = defineMessages('devices.updates', {
+  channels: {
+    stable: 'Stable',
+    beta: 'Beta',
+    nightly: 'Nightly',
+  },
+  notJson: 'This file is not an update bundle (it is not JSON).',
+  notBundle: 'This file is not a signed update bundle.',
+  tooMany: '{n, plural, one {At most # bundle at a time.} other {At most # bundles at a time.}}',
+  readFailed: 'Could not read the file.',
+  channelSet: 'Update channel: {channel}.',
+  channelFailed: 'Could not change the channel.',
+  channel: 'Channel',
+  channelLabel: 'Update channel',
+  channelHelp: 'Stable gets tested releases; Beta and Nightly get them earlier.',
+  install: 'Install an update',
+  required: 'Update required.',
+  has: 'This device has novad {version}. It keeps its other capabilities meanwhile.',
+  hasUnknown:
+    'This device has novad of an unknown version. It keeps its other capabilities meanwhile.',
+  needs: '{capability} needs novad {version}',
+  meets: 'novad {version} meets every capability’s minimum.',
+  noVersion: 'The device has not reported its version.',
+  intro:
+    'Choose signed update bundles for this device. novad checks each signature, applies them in order and updates itself last; an update that fails its health check rolls back.',
+  bundles: 'Update bundles (.json)',
+  results: 'Results',
+  rollBack: 'Roll back',
+  canRollBack: 'Modules that can roll back',
+  rollbackRow: '{module}: {from} → {to}',
+  rollBackModule: 'Roll back {module}',
+  rollBackTitle: 'Roll back {module}?',
+  rollBackBare: 'Roll back?',
+  rollBackTo: 'It goes back from version {from} to {to} and restarts.',
+  rollBackPrevious: 'It goes back from version {from} to the previous one and restarts.',
+  rolledBack: '{module} is back on version {version}.',
+  history: 'History',
+  historyFailed: 'Could not load the updates.',
+  loading: 'Loading updates',
+  none: 'No updates yet.',
+  historyList: 'Update history',
+  installTitle:
+    '{n, plural, one {Install this update on {device}?} other {Install # updates on {device}?}}',
+  installBody: 'The device verifies each one before applying it.',
+  installConfirm: 'Install',
+  installed: 'Update installed.',
+  someFailed: 'Some updates did not apply. See the results.',
+  novad: 'novad',
+  bundle: '{target} {version} · {channel} · {size}',
+  fromTo: '{from} → {to}',
+});
+
+const S = UPDATES_TEXT;
+
+/** What an update is for: novad itself or a module. */
+const targetText = (t: string) => (t === 'novad' ? S.novad : moduleLabel(t));
 
 /** Bundles from the chosen files: one bundle per file, or `{bundles: […]}`. */
 export function parseBundleFile(text: string): DeviceUpdateBundle[] {
@@ -40,7 +93,7 @@ export function parseBundleFile(text: string): DeviceUpdateBundle[] {
   try {
     raw = JSON.parse(text);
   } catch {
-    throw new Error('This file is not an update bundle (it is not JSON).');
+    throw new Error(S.notJson);
   }
   const list: unknown[] =
     typeof raw === 'object' && raw !== null && 'bundles' in raw && Array.isArray(raw.bundles)
@@ -48,7 +101,7 @@ export function parseBundleFile(text: string): DeviceUpdateBundle[] {
       : [raw];
   return list.map((b) => {
     const r = deviceUpdateBundleSchema.safeParse(b);
-    if (!r.success) throw new Error('This file is not a signed update bundle.');
+    if (!r.success) throw new Error(S.notBundle);
     return r.data;
   });
 }
@@ -79,11 +132,11 @@ export function UpdatesPanel({ device, onDevice, reload }: PanelProps) {
       onDevice(
         await api.updateNovadDevice(device.id, { updateChannel: channel as DeviceUpdateChannel }),
       );
-      toast.show(`Update channel: ${CHANNEL_TEXT[channel as DeviceUpdateChannel]}.`, {
+      toast.show(S.channelSet({ channel: S.channels[channel as DeviceUpdateChannel] }), {
         tone: 'success',
       });
     } catch (err) {
-      toast.show(deviceErrorMessage(err, 'Could not change the channel.'), { tone: 'error' });
+      toast.show(deviceErrorMessage(err, S.channelFailed), { tone: 'error' });
     } finally {
       setChannelBusy(false);
     }
@@ -96,10 +149,10 @@ export function UpdatesPanel({ device, onDevice, reload }: PanelProps) {
     try {
       const all: DeviceUpdateBundle[] = [];
       for (const f of Array.from(files)) all.push(...parseBundleFile(await f.text()));
-      if (all.length > 10) throw new Error('At most 10 bundles at a time.');
+      if (all.length > 10) throw new Error(S.tooMany({ n: 10 }));
       setBundles(all);
     } catch (err) {
-      setFileError(err instanceof Error ? err.message : 'Could not read the file.');
+      setFileError(err instanceof Error ? err.message : S.readFailed);
     } finally {
       if (fileRef.current) fileRef.current.value = '';
     }
@@ -112,52 +165,46 @@ export function UpdatesPanel({ device, onDevice, reload }: PanelProps) {
   return (
     <div className="stack">
       <section className="ws-section devices-flat" aria-labelledby={`${base}-ch`}>
-        <h2 id={`${base}-ch`}>Channel</h2>
+        <h2 id={`${base}-ch`}>{S.channel}</h2>
         <SelectField
           className="devices-narrow"
-          label="Update channel"
+          label={S.channelLabel}
           value={device.updateChannel}
           disabled={channelBusy || revoked}
           onChange={(v) => void setChannel(v)}
-          hint="Stable gets tested releases; Beta and Nightly get them earlier."
-          options={DEVICE_UPDATE_CHANNELS.map((c) => ({ value: c, label: CHANNEL_TEXT[c] }))}
+          hint={S.channelHelp}
+          options={DEVICE_UPDATE_CHANNELS.map((c) => ({ value: c, label: S.channels[c] }))}
         />
       </section>
 
       <AvailableBuild device={device} />
 
       <section className="ws-section devices-flat" aria-labelledby={`${base}-new`}>
-        <h2 id={`${base}-new`}>Install an update</h2>
+        <h2 id={`${base}-new`}>{S.install}</h2>
         {needs.length ? (
           <div className="devices-note" role="status">
             <p className="ws-flush">
-              <strong>Update required.</strong> This device has novad{' '}
-              {device.novadVersion ?? 'of an unknown version'}. It keeps its other capabilities
-              meanwhile.
+              <strong>{S.required}</strong>{' '}
+              {device.novadVersion ? S.has({ version: device.novadVersion }) : S.hasUnknown}
             </p>
             <ul>
               {needs.map((c) => (
                 <li key={c.name}>
-                  {CAPABILITY_LABEL[c.name]} needs novad {c.minVersion}
+                  {S.needs({ capability: CAPABILITY_LABEL[c.name], version: c.minVersion })}
                 </li>
               ))}
             </ul>
           </div>
         ) : (
           <p className="muted ws-flush">
-            {device.novadVersion
-              ? `novad ${device.novadVersion} meets every capability’s minimum.`
-              : 'The device has not reported its version.'}
+            {device.novadVersion ? S.meets({ version: device.novadVersion }) : S.noVersion}
           </p>
         )}
-        <p className="muted ws-flush">
-          Choose signed update bundles for this device. novad checks each signature, applies them in
-          order and updates itself last; an update that fails its health check rolls back.
-        </p>
+        <p className="muted ws-flush">{S.intro}</p>
         {blocked ? <Unavailable>{blocked}</Unavailable> : null}
         <div className="nv-field">
           <label className="nv-field-label" htmlFor={`${base}-file`}>
-            Update bundles (.json)
+            {S.bundles}
           </label>
           <input
             ref={fileRef}
@@ -176,27 +223,31 @@ export function UpdatesPanel({ device, onDevice, reload }: PanelProps) {
         ) : null}
         {results ? (
           <div aria-live="polite">
-            <h3>Results</h3>
-            <UpdateList items={results} label="Results" />
+            <h3>{S.results}</h3>
+            <UpdateList items={results} label={S.results} />
           </div>
         ) : null}
       </section>
 
       {rollbacks.length ? (
         <section className="ws-section devices-flat" aria-labelledby={`${base}-rb`}>
-          <h2 id={`${base}-rb`}>Roll back</h2>
-          <ul className="ws-list" aria-label="Modules that can roll back">
+          <h2 id={`${base}-rb`}>{S.rollBack}</h2>
+          <ul className="ws-list" aria-label={S.canRollBack}>
             {rollbacks.map((m) => (
               <li key={m.name} className="ws-list-row">
                 <span>
-                  {moduleLabel(m.name)}: {m.version} → {m.previousVersion}
+                  {S.rollbackRow({
+                    module: moduleLabel(m.name),
+                    from: m.version,
+                    to: m.previousVersion ?? '',
+                  })}
                 </span>
                 <Button
                   disabled={Boolean(capabilityBlocked(device, 'services'))}
                   onClick={() => setRollingBack(m)}
-                  aria-label={`Roll back ${moduleLabel(m.name)}`}
+                  aria-label={S.rollBackModule({ module: moduleLabel(m.name) })}
                 >
-                  Roll back
+                  {S.rollBack}
                 </Button>
               </li>
             ))}
@@ -205,24 +256,20 @@ export function UpdatesPanel({ device, onDevice, reload }: PanelProps) {
       ) : null}
 
       <section className="ws-section devices-flat" aria-labelledby={`${base}-hist`}>
-        <h2 id={`${base}-hist`}>History</h2>
+        <h2 id={`${base}-hist`}>{S.history}</h2>
         {history.error ? (
-          <LoadError
-            error={history.error}
-            fallback="Could not load the updates."
-            onRetry={history.reload}
-          />
+          <LoadError error={history.error} fallback={S.historyFailed} onRetry={history.reload} />
         ) : null}
-        {history.loading ? <Spinner label="Loading updates" /> : null}
-        {items?.length === 0 ? <p className="muted ws-flush">No updates yet.</p> : null}
-        {items?.length ? <UpdateList items={items} label="Update history" /> : null}
+        {history.loading ? <Spinner label={S.loading} /> : null}
+        {items?.length === 0 ? <p className="muted ws-flush">{S.none}</p> : null}
+        {items?.length ? <UpdateList items={items} label={S.historyList} /> : null}
       </section>
 
       <ConfirmDialog
         open={bundles !== null}
-        title={`Install ${bundles?.length === 1 ? 'this update' : `${bundles?.length ?? 0} updates`} on ${device.name}?`}
-        description="The device verifies each one before applying it."
-        confirmLabel="Install"
+        title={S.installTitle({ n: bundles?.length ?? 0, device: device.name })}
+        description={S.installBody}
+        confirmLabel={S.installConfirm}
         onClose={() => setBundles(null)}
         onConfirm={async () => {
           if (!bundles) return;
@@ -232,30 +279,35 @@ export function UpdatesPanel({ device, onDevice, reload }: PanelProps) {
           history.reload();
           reload();
           const ok = out.every((u) => u.status === 'applied' || u.status === 'staged');
-          toast.show(ok ? 'Update installed.' : 'Some updates did not apply. See the results.', {
-            tone: ok ? 'success' : 'error',
-          });
+          toast.show(ok ? S.installed : S.someFailed, { tone: ok ? 'success' : 'error' });
         }}
       >
         <ul className="devices-bundles">
           {(bundles ?? []).map((b, i) => (
             <li key={i}>
-              {b.manifest.target === 'novad' ? 'novad' : moduleLabel(b.manifest.target)}{' '}
-              {b.manifest.version} · {CHANNEL_TEXT[b.manifest.channel]} ·{' '}
-              {formatBytes(b.manifest.size)}
+              {S.bundle({
+                target: targetText(b.manifest.target),
+                version: b.manifest.version,
+                channel: S.channels[b.manifest.channel],
+                size: formatBytes(b.manifest.size),
+              })}
             </li>
           ))}
         </ul>
       </ConfirmDialog>
       <ConfirmDialog
         open={rollingBack !== null}
-        title={rollingBack ? `Roll back ${moduleLabel(rollingBack.name)}?` : 'Roll back?'}
+        title={
+          rollingBack ? S.rollBackTitle({ module: moduleLabel(rollingBack.name) }) : S.rollBackBare
+        }
         description={
           rollingBack
-            ? `It goes back from version ${rollingBack.version} to ${rollingBack.previousVersion ?? 'the previous one'} and restarts.`
+            ? rollingBack.previousVersion
+              ? S.rollBackTo({ from: rollingBack.version, to: rollingBack.previousVersion })
+              : S.rollBackPrevious({ from: rollingBack.version })
             : undefined
         }
-        confirmLabel="Roll back"
+        confirmLabel={S.rollBack}
         onClose={() => setRollingBack(null)}
         onConfirm={async () => {
           const m = rollingBack;
@@ -266,7 +318,7 @@ export function UpdatesPanel({ device, onDevice, reload }: PanelProps) {
             ...device,
             modules: device.modules.map((x) => (x.name === module.name ? module : x)),
           });
-          toast.show(`${moduleLabel(m.name)} is back on version ${module.version}.`, {
+          toast.show(S.rolledBack({ module: moduleLabel(m.name), version: module.version }), {
             tone: 'success',
           });
         }}
@@ -282,20 +334,23 @@ function UpdateList({ items, label }: { items: DeviceUpdateView[]; label: string
         <li key={u.id} className="ws-list-row devices-update">
           <div className="devices-row-main">
             <div className="devices-row-head">
-              <strong>{u.target === 'novad' ? 'novad' : moduleLabel(u.target)}</strong>
+              <strong>{targetText(u.target)}</strong>
               <span>
-                {u.fromVersion ? `${u.fromVersion} → ` : ''}
-                {u.toVersion}
+                {u.fromVersion ? S.fromTo({ from: u.fromVersion, to: u.toVersion }) : u.toVersion}
               </span>
               <span className="ws-badge" data-tone={tone(u.status)}>
                 {UPDATE_STATUS_TEXT[u.status] ?? u.status}
               </span>
             </div>
             <span className="muted ws-row-meta">
-              <span>{CHANNEL_TEXT[u.channel]}</span>
+              <span>{S.channels[u.channel]}</span>
               <span>{formatWhen(u.createdAt)}</span>
             </span>
-            {u.detail ? <span className="muted ws-row-meta">{u.detail}</span> : null}
+            {u.detail ? (
+              <span className="muted ws-row-meta" dir="auto">
+                {u.detail}
+              </span>
+            ) : null}
           </div>
         </li>
       ))}

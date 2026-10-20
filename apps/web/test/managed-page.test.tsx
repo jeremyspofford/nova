@@ -9,6 +9,7 @@ import { ApiError } from '../src/api.ts';
 import { ManagedPolicyPage, sameApplied } from '../src/managed/ManagedPolicyPage.tsx';
 import {
   derivedText,
+  egressLines,
   formatPolicyValue,
   lockChannel,
   restrictionLines,
@@ -285,7 +286,7 @@ describe('managed words', () => {
       'The agent browser may open only these sites: *.corp.example.',
       'The agent browser may not open these sites: *.bank.example.',
       'Agents may reach only the hosts that are allowed.',
-      'Hosts agents may reach: registry.npmjs.org.',
+      'Agents may reach hosts only within: registry.npmjs.org.',
       'Hosts agents may never reach: paste.example.',
       'Telemetry export (OpenTelemetry/OTLP) stays off.',
       'Cloud models are turned off: only local models and compute nodes.',
@@ -297,6 +298,28 @@ describe('managed words', () => {
       "Agents' network access is limited.",
     ]);
     expect(restrictionLines({})).toEqual([]);
+  });
+
+  it('says which hosts agents may reach under the egress ceiling, and why (ADR-097)', () => {
+    const ceilings = [['api.example.com']];
+    expect(egressLines(null)).toEqual([]);
+    expect(egressLines({ ceilings, own: [], effective: ['api.example.com'], note: null })).toEqual([
+      'Hosts agents may reach now: api.example.com.',
+    ]);
+    expect(
+      egressLines({
+        ceilings,
+        own: ['a.example', 'api.example.com'],
+        effective: ['api.example.com'],
+        note: null,
+      }),
+    ).toEqual([
+      'Hosts agents may reach now: api.example.com.',
+      "These hosts on your allow list are outside the policy's and do not apply: a.example.",
+    ]);
+    expect(egressLines({ ceilings, own: ['a.example'], effective: [], note: null })[1]).toMatch(
+      /None of the hosts on your own allow list/,
+    );
   });
 
   it('formats values, derived settings, source statuses and lock sources', () => {
@@ -341,6 +364,25 @@ describe('managed words', () => {
         ],
       }),
     ).toBe('test');
+    // A restriction part names the sources whose restrict block sets it.
+    const both = {
+      settings: [],
+      sources: [
+        localSource({ inForce: true }),
+        { ...localSource({ inForce: true }), channel: 'remote' as const },
+      ],
+      restrict: [
+        { channel: 'local' as const, restrict: { unverifiedInstalls: false } },
+        {
+          channel: 'remote' as const,
+          restrict: { unverifiedInstalls: false, extensions: { deny: ['x'] } },
+        },
+      ],
+    };
+    expect(lockChannel(both, 'restrict.extensions')).toBe('remote');
+    expect(lockChannel(both, 'restrict.unverifiedInstalls')).toBe('both');
+    // A part no block sets falls back to the sources in force.
+    expect(lockChannel({ ...both, sources: [both.sources[0]!] }, 'restrict.tools')).toBe('local');
     const later = { ...view, checkedAt: '2027-01-01T00:00:00.000Z' };
     expect(sameApplied(view, later)).toBe(true);
     expect(sameApplied(view, noPolicy())).toBe(false);

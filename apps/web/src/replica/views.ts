@@ -4,6 +4,7 @@
 // the copy does not carry (a chat's model, a page's version, a space's name) comes from the last
 // answer this page saw, when there is one. Messages written here wait in the chat's queue strip
 // until the Hub has them, as queued follow-ups do.
+import { defineMessages } from '@nova/i18n';
 import {
   SYNC_TOMBSTONE,
   THREAD_MODES,
@@ -43,6 +44,13 @@ export interface ViewSource {
 }
 
 const EPOCH = new Date(0).toISOString();
+
+/** Names the views give what has none (read when a view is built, in the active locale). */
+const NAMES = defineMessages('replica.names', {
+  project: 'Project',
+  space: 'Unnamed space',
+  page: 'Untitled',
+});
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 
@@ -315,7 +323,7 @@ export function projectView(src: ViewSource, id: string, threadCount?: number): 
     threadList(src, { projectId: id, limit: 200 }).items.filter((t) => t.mode === 'chat').length;
   return {
     id,
-    name: str(f.name) ?? hint?.name ?? 'Project',
+    name: str(f.name) ?? hint?.name ?? NAMES.project,
     instructions: str(f.instructions),
     memoryScope: hint?.memoryScope ?? 'shared',
     threadCount: count,
@@ -342,8 +350,6 @@ function pagesOf(src: ViewSource, spaceId: string): Entity[] {
   return src.replica.list('page').filter((e) => e.fields.space?.value === spaceId);
 }
 
-const UNNAMED_SPACE = 'Unnamed space';
-
 export function spaceView(src: ViewSource, id: string): SpaceView | null {
   const pages = pagesOf(src, id);
   const e = src.replica.entity('space', id);
@@ -352,7 +358,7 @@ export function spaceView(src: ViewSource, id: string): SpaceView | null {
   if (!e && !hint && !pages.length) return null;
   return {
     id,
-    name: str(f.name) ?? hint?.name ?? UNNAMED_SPACE,
+    name: str(f.name) ?? hint?.name ?? NAMES.space,
     description: hint?.description ?? null,
     projectId: hint?.projectId ?? null,
     agentEdits: hint?.agentEdits ?? 'propose',
@@ -388,14 +394,15 @@ export function pageView(src: ViewSource, spaceId: string, pageId: string): Page
   if (!e || e.fields.space?.value !== spaceId) return null;
   const f = currentFields(src, 'page', pageId) ?? {};
   const hint = src.hints.page(pageId);
-  const title = str(f.title) ?? hint?.title ?? 'Untitled';
+  const named = str(f.title) ?? hint?.title ?? null;
+  const title = named ?? NAMES.page;
   const waiting = src.pending.filter((i) => i.kind === 'page' && i.entityId === pageId).length;
   const synced = typeof f.version === 'number' ? f.version : null;
   return {
     id: pageId,
     spaceId,
     title,
-    slug: hint?.slug ?? slug(title),
+    slug: hint?.slug ?? slug(named ?? 'untitled'),
     position: hint?.position ?? 0,
     version: (synced ?? hint?.version ?? 1) + waiting,
     updatedBy: hint?.updatedBy ?? 'user',

@@ -2,7 +2,8 @@
 // and backdrop click, and returns focus to the element that opened it.
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { focusableWithin, trapTab } from '../focus.ts';
+import { useBackdropDismiss } from '../backdrop.ts';
+import { focusOrigin, focusableWithin, restoreFocus, trapTab } from '../focus.ts';
 
 export interface DialogProps {
   open: boolean;
@@ -48,26 +49,23 @@ function DialogPanel({
   });
 
   useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // The opener, or the control focused last when a busy (disabled) opener dropped focus.
+    const opener = focusOrigin();
     const target =
       initialFocusRef?.current ?? focusableWithin(panel.current)[0] ?? panel.current ?? null;
     target?.focus();
     return () => {
       // Return focus after React finishes removing the dialog.
       queueMicrotask(() => {
-        if (opener && opener.isConnected) opener.focus();
-        else fallbackRef.current?.()?.focus();
+        if (!restoreFocus(opener)) fallbackRef.current?.()?.focus();
       });
     };
   }, [initialFocusRef]);
 
+  const backdrop = useBackdropDismiss(() => onCloseRef.current(), closeOnBackdrop);
+
   return (
-    <div
-      className="nv-dialog-backdrop"
-      onMouseDown={(e) => {
-        if (closeOnBackdrop && e.target === e.currentTarget) onCloseRef.current();
-      }}
-    >
+    <div className="nv-dialog-backdrop" {...backdrop}>
       <div
         ref={panel}
         role="dialog"

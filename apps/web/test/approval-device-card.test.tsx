@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ApprovalView } from '@nova/shared';
 import { ApprovalCard } from '../src/chat/ApprovalCard.tsx';
 import type { ClientApproval } from '../src/chat/thread-state.ts';
-import { HUB_ONLY_TEXT } from '../src/firmware/format.ts';
+import { hubOnlyText } from '../src/firmware/format.ts';
 import { renderWithFirmware } from './fakes-m75-firmware.ts';
 import { resetDom } from './render.tsx';
 
@@ -64,7 +64,7 @@ describe('device approval cards', () => {
   it('says a Hub-only card is answered only in Nova, links its device, and denies plainly', async () => {
     const { hub } = await show(approval());
     const card = screen.getByRole('group', { name: 'Approval needed' });
-    expect(within(card).getByText(HUB_ONLY_TEXT)).toBeTruthy();
+    expect(within(card).getByText(hubOnlyText())).toBeTruthy();
     const link = within(card).getByRole('link', { name: 'On Desk PC' });
     expect(link.getAttribute('href')).toBe('/devices/d1');
     expect(within(card).queryByRole('button', { name: 'Deny and continue…' })).toBeNull();
@@ -89,7 +89,7 @@ describe('device approval cards', () => {
     expect(within(card).getByRole('link', { name: 'On a device' }).getAttribute('href')).toBe(
       '/devices/d%202',
     );
-    expect(within(card).queryByText(HUB_ONLY_TEXT)).toBeNull();
+    expect(within(card).queryByText(hubOnlyText())).toBeNull();
     expect(within(card).getByRole('button', { name: 'Deny' })).toBeTruthy();
   });
 
@@ -106,7 +106,7 @@ describe('device approval cards', () => {
       }),
     );
     const card = screen.getByRole('group', { name: 'Approval needed' });
-    expect(within(card).queryByText(HUB_ONLY_TEXT)).toBeNull();
+    expect(within(card).queryByText(hubOnlyText())).toBeNull();
     expect(within(card).queryByRole('link')).toBeNull();
     await userEvent.click(within(card).getByRole('button', { name: 'Deny and continue…' }));
     expect(

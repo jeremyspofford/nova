@@ -4,12 +4,46 @@
 // as the Hub does, and shows the Hub's own message when it refuses (it never lets every
 // transport go off).
 import { useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import { networkBaseUrlSchema } from '@nova/shared';
 import { Button, Spinner, TextField, useToast } from '@nova/ui';
 import { useAnnounce } from '../services.tsx';
 import { SwitchField } from '../settings/controls.tsx';
 import { useNetworkSurfaceApi, type NetworkPanel, type UpdateNetworkBody } from './api.ts';
-import { TRANSPORT_HELP, errorFields, netErrorMessage } from './format.ts';
+import { NET_TEXT, errorFields, netErrorMessage, transportHelp } from './format.ts';
+
+const S = defineMessages('netsurface.settings', {
+  title: 'Settings',
+  badUrl: 'Enter an http:// or https:// address without a user name, query or fragment.',
+  badName: 'Use lowercase letters, digits and hyphens (not at the start or end).',
+  badSeconds: 'Enter a whole number of seconds from 10 to 3600.',
+  saved: 'Network settings saved. You can roll this back under Changes.',
+  savedShort: 'Network settings saved.',
+  nothingChanged: 'Nothing changed.',
+  saveFailed: 'Could not save the network settings.',
+  transports: 'Transports to advertise',
+  transportsHelp:
+    'Clients try them in this order. Turning one off stops advertising it; the Hub keeps listening, so you are never locked out.',
+  relayHelp: 'Advertised only while the Relay is connected (see Relay).',
+  directHelp: 'Needs the public URL below, and port forwarding or a public host.',
+  publicUrl: 'Public URL',
+  publicUrlHint: 'For example {url}. Advertised last, and only while it passes its test.',
+  mdns: 'Announce on the LAN (mDNS)',
+  mdnsHelp:
+    "Devices on this network find the Hub by name. Only the Hub's version and fingerprint are announced, never a secret.",
+  mdnsName: 'mDNS name',
+  mdnsNameHint: "Clients find the Hub at {name}.local. Leave empty to use this computer's name.",
+  nameWord: 'name',
+  interval: 'Test endpoints every (seconds)',
+  intervalHint: 'From 10 to 3600. An endpoint that fails is withdrawn until it passes again.',
+  moreLan: 'More LAN addresses',
+  loopback: 'Include loopback addresses',
+  loopbackHelp: 'Useful only on this computer.',
+  linkLocal: 'Include link-local addresses',
+  linkLocalHelp: '169.254.x.x addresses, for networks without a router.',
+  save: 'Save',
+  reset: 'Reset',
+});
 
 interface Draft {
   lan: boolean;
@@ -46,19 +80,14 @@ const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 export function checkDraft(d: Draft): Record<string, string> {
   const out: Record<string, string> = {};
   if (!d.lan && !d.mesh && !d.relay && !d.directPublic)
-    out.transports = 'Keep at least one transport on, or clients cannot reach the Hub.';
+    out.transports = NET_TEXT.error.reason.no_transport;
   const url = d.directUrl.trim();
-  if (url && !networkBaseUrlSchema.safeParse(url).success)
-    out['directPublic.url'] =
-      'Enter an http:// or https:// address without a user name, query or fragment.';
-  else if (d.directPublic && !url)
-    out['directPublic.url'] = 'Set the public URL to advertise Direct public.';
+  if (url && !networkBaseUrlSchema.safeParse(url).success) out['directPublic.url'] = S.badUrl;
+  else if (d.directPublic && !url) out['directPublic.url'] = NET_TEXT.error.reason.url_required;
   const name = d.mdnsName.trim();
-  if (name && !DNS_LABEL.test(name))
-    out['lan.mdnsName'] = 'Use lowercase letters, digits and hyphens (not at the start or end).';
+  if (name && !DNS_LABEL.test(name)) out['lan.mdnsName'] = S.badName;
   const secs = Number(d.healthCheckSeconds);
-  if (!Number.isInteger(secs) || secs < 10 || secs > 3600)
-    out.healthCheckSeconds = 'Enter a whole number of seconds from 10 to 3600.';
+  if (!Number.isInteger(secs) || secs < 10 || secs > 3600) out.healthCheckSeconds = S.badSeconds;
   return out;
 }
 
@@ -128,17 +157,12 @@ export function NetworkSettingsForm({
       const res = await api.updateNetworkPanel(body);
       setEdit(null);
       onSaved(res);
-      toast.show(
-        res.change
-          ? 'Network settings saved. You can roll this back under Changes.'
-          : 'Nothing changed.',
-        { tone: 'success' },
-      );
-      announce('Network settings saved.');
+      toast.show(res.change ? S.saved : S.nothingChanged, { tone: 'success' });
+      announce(S.savedShort);
     } catch (err) {
       const fields = errorFields(err);
       setErrors(fields);
-      setFailure(netErrorMessage(err, 'Could not save the network settings.'));
+      setFailure(netErrorMessage(err, S.saveFailed));
     } finally {
       setBusy(false);
     }
@@ -147,7 +171,7 @@ export function NetworkSettingsForm({
   return (
     <section className="ws-section" aria-labelledby={headingId}>
       <h2 id={headingId} tabIndex={-1} className="net-anchor" data-anchor={SETTINGS_ANCHOR}>
-        Settings
+        {S.title}
       </h2>
       <form
         className="stack net-form"
@@ -158,32 +182,29 @@ export function NetworkSettingsForm({
         }}
       >
         <fieldset className="net-fieldset">
-          <legend className="nv-field-label">Transports to advertise</legend>
-          <p className="nv-field-hint">
-            Clients try them in this order. Turning one off stops advertising it; the Hub keeps
-            listening, so you are never locked out.
-          </p>
+          <legend className="nv-field-label">{S.transports}</legend>
+          <p className="nv-field-hint">{S.transportsHelp}</p>
           <SwitchField
-            label="LAN"
-            description={TRANSPORT_HELP.lan}
+            label={NET_TEXT.transport.lan}
+            description={transportHelp('lan')}
             checked={d.lan}
             onChange={(v) => set({ lan: v })}
           />
           <SwitchField
-            label="Mesh"
-            description={TRANSPORT_HELP.mesh}
+            label={NET_TEXT.transport.mesh}
+            description={transportHelp('mesh')}
             checked={d.mesh}
             onChange={(v) => set({ mesh: v })}
           />
           <SwitchField
-            label="Relay"
-            description="Advertised only while the Relay is connected (see Relay)."
+            label={NET_TEXT.transport.relay}
+            description={S.relayHelp}
             checked={d.relay}
             onChange={(v) => set({ relay: v })}
           />
           <SwitchField
-            label="Direct public"
-            description="Needs the public URL below, and port forwarding or a public host."
+            label={NET_TEXT.transport.direct}
+            description={S.directHelp}
             checked={d.directPublic}
             onChange={(v) => set({ directPublic: v })}
           />
@@ -194,8 +215,8 @@ export function NetworkSettingsForm({
           ) : null}
         </fieldset>
         <TextField
-          label="Public URL"
-          hint="For example https://nova.example.com:8443. Advertised last, and only while it passes its test."
+          label={S.publicUrl}
+          hint={S.publicUrlHint({ url: 'https://nova.example.com:8443' })}
           value={d.directUrl}
           inputMode="url"
           autoComplete="off"
@@ -203,16 +224,16 @@ export function NetworkSettingsForm({
           error={errors['directPublic.url']}
         />
         <SwitchField
-          label="Announce on the LAN (mDNS)"
-          description="Devices on this network find the Hub by name. Only the Hub's version and fingerprint are announced, never a secret."
+          label={S.mdns}
+          description={S.mdnsHelp}
           checked={d.mdns}
           onChange={(v) => set({ mdns: v })}
         />
         <TextField
-          label="mDNS name"
-          hint={`Clients find the Hub at ${
-            d.mdnsName.trim() || panel.lan.mdns.name || 'name'
-          }.local. Leave empty to use this computer's name.`}
+          label={S.mdnsName}
+          hint={S.mdnsNameHint({
+            name: d.mdnsName.trim() || panel.lan.mdns.name || S.nameWord,
+          })}
           value={d.mdnsName}
           autoComplete="off"
           spellCheck={false}
@@ -221,8 +242,8 @@ export function NetworkSettingsForm({
           error={errors['lan.mdnsName']}
         />
         <TextField
-          label="Test endpoints every (seconds)"
-          hint="From 10 to 3600. An endpoint that fails is withdrawn until it passes again."
+          label={S.interval}
+          hint={S.intervalHint}
           className="ws-number"
           type="number"
           min={10}
@@ -233,17 +254,17 @@ export function NetworkSettingsForm({
           error={errors.healthCheckSeconds}
         />
         <details className="ws-advanced">
-          <summary>More LAN addresses</summary>
+          <summary>{S.moreLan}</summary>
           <div className="stack">
             <SwitchField
-              label="Include loopback addresses"
-              description="Useful only on this computer."
+              label={S.loopback}
+              description={S.loopbackHelp}
               checked={d.includeLoopback}
               onChange={(v) => set({ includeLoopback: v })}
             />
             <SwitchField
-              label="Include link-local addresses"
-              description="169.254.x.x addresses, for networks without a router."
+              label={S.linkLocal}
+              description={S.linkLocalHelp}
               checked={d.includeLinkLocal}
               onChange={(v) => set({ includeLinkLocal: v })}
             />
@@ -256,7 +277,7 @@ export function NetworkSettingsForm({
         ) : null}
         <div className="row">
           <Button type="submit" variant="primary" disabled={!dirty || busy}>
-            {busy ? <Spinner /> : null} Save
+            {busy ? <Spinner /> : null} {S.save}
           </Button>
           {edit ? (
             <Button
@@ -266,7 +287,7 @@ export function NetworkSettingsForm({
                 setFailure(null);
               }}
             >
-              Reset
+              {S.reset}
             </Button>
           ) : null}
         </div>

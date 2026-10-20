@@ -5,38 +5,68 @@
 // sharing turns memory off for it, so nothing said there becomes anyone's memory. The chat view's
 // menu opens it through `useShareMenu`.
 import { useId, useState, type ReactNode } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { SharedThreadView, TeamMemberView, ThreadView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, useToast, type MenuItem } from '@nova/ui';
 import { ApiError } from '../api.ts';
+import { rich } from '../i18n/rich.tsx';
 import { navigate } from '../router.ts';
 import { useAnnounce } from '../services.tsx';
 import { followLink } from '../work/nav.tsx';
 import { useTeamApi } from './api.ts';
 import {
   MEMBERS_SETTINGS_PATH,
-  NOT_SHARED,
-  SHARED_ACTS_AS,
+  SHARING_TEXT,
+  TEAM_TEXT,
   personName,
   sharedThreadPath,
 } from './format.ts';
 import { FormError, LoadError, useLoad } from './parts.tsx';
 import './team.css';
 
+const SHARE_TEXT = defineMessages('team.share', {
+  temporary: 'A temporary chat cannot be shared.',
+  side: 'A side chat cannot be shared.',
+  onlyChats: 'Only chats can be shared.',
+  inProject: 'A chat in a project cannot be shared: projects stay their owner’s.',
+  chooseSomeone: 'Choose at least one person.',
+  sharedWith: 'Shared with {names}.',
+  takenOut: 'Taken out of the chat.',
+  loadingPeople: 'Loading people',
+  loadFailed: 'Could not load who can see this chat.',
+  inThisChat: 'In this chat',
+  startedIt: '(started it)',
+  takeOutLabel: 'Take {name} out of this chat',
+  takeOut: 'Take out',
+  shareWith: 'Share with',
+  everyoneIn: 'Everyone on this Hub is in this chat.',
+  nobodyElse: 'Nobody else uses this Hub yet',
+  ownerInvites: 'The owner invites people in {link}.',
+  onlyOwnerAdds: 'Only {name} can add people to this chat.',
+  title: 'Share this chat',
+  about: '“{title}” with people of this Hub.',
+  openShared: 'Open the shared view',
+  share: 'Share',
+  whatSharingDoes: 'What sharing does',
+  notShared: 'What is not shared',
+  seesAll: 'Everyone in the chat sees all of it, including what was said before you shared it.',
+  shareFailed: 'Could not share the chat.',
+  menuItem: 'Share with people…',
+});
+
 /** Why a thread cannot be shared, or null (the Hub's rule: a plain chat outside a project). */
 export function notShareableReason(
   t: Pick<ThreadView, 'mode' | 'temporary' | 'side' | 'projectId'>,
 ): string | null {
-  if (t.temporary) return 'A temporary chat cannot be shared.';
-  if (t.side) return 'A side chat cannot be shared.';
-  if (t.mode !== 'chat') return 'Only chats can be shared.';
-  if (t.projectId) return 'A chat in a project cannot be shared: projects stay their owner’s.';
+  if (t.temporary) return SHARE_TEXT.temporary;
+  if (t.side) return SHARE_TEXT.side;
+  if (t.mode !== 'chat') return SHARE_TEXT.onlyChats;
+  if (t.projectId) return SHARE_TEXT.inProject;
   return null;
 }
 
 function names(people: { displayName: string | null; username: string | null }[]): string {
-  const list = people.map((p) => personName(p));
-  if (list.length <= 1) return list.join('');
-  return `${list.slice(0, -1).join(', ')} and ${list.at(-1) ?? ''}`;
+  return fmt.list(people.map((p) => personName(p)));
 }
 
 export function ShareDialog({
@@ -77,7 +107,7 @@ export function ShareDialog({
   const share = async () => {
     const ids = [...chosen];
     if (!ids.length) {
-      setError(new Error('Choose at least one person.'));
+      setError(new Error(SHARE_TEXT.chooseSomeone));
       return;
     }
     setBusy(true);
@@ -87,7 +117,7 @@ export function ShareDialog({
       sharing.setData(() => out);
       setChosen(new Set());
       const added = (people.data ?? []).filter((p) => ids.includes(p.accountId));
-      const text = `Shared with ${names(added)}.`;
+      const text = SHARE_TEXT.sharedWith({ names: names(added) });
       toast.show(text, { tone: 'success' });
       announce(text);
     } catch (err) {
@@ -103,7 +133,7 @@ export function ShareDialog({
     try {
       await api.unshareThread(thread.id, accountId);
       sharing.reload();
-      announce('Taken out of the chat.');
+      announce(SHARE_TEXT.takenOut);
     } catch (err) {
       setError(err);
     } finally {
@@ -121,12 +151,12 @@ export function ShareDialog({
 
   let body: ReactNode;
   if (why) body = <p className="ws-flush">{why}</p>;
-  else if (loading) body = <Spinner label="Loading people" />;
+  else if (loading) body = <Spinner label={SHARE_TEXT.loadingPeople} />;
   else if (people.error || sharing.error)
     body = (
       <LoadError
         error={people.error ?? sharing.error}
-        fallback="Could not load who can see this chat."
+        fallback={SHARE_TEXT.loadFailed}
         onRetry={() => {
           people.reload();
           sharing.reload();
@@ -139,25 +169,26 @@ export function ShareDialog({
         {s ? (
           <section aria-labelledby={`${listId}-in`} className="stack team-in-chat">
             <h3 id={`${listId}-in`} className="team-subhead">
-              In this chat
+              {SHARE_TEXT.inThisChat}
             </h3>
             <ul className="ws-list">
               <li className="ws-list-row">
                 <span>
-                  {personName(s.owner)} <span className="muted">(started it)</span>
+                  <span dir="auto">{personName(s.owner)}</span>{' '}
+                  <span className="muted">{SHARE_TEXT.startedIt}</span>
                 </span>
               </li>
               {s.participants.map((p) => (
                 <li key={p.accountId} className="ws-list-row">
-                  <span>{personName(p)}</span>
+                  <span dir="auto">{personName(p)}</span>
                   {isOwner ? (
                     <Button
                       variant="ghost"
                       disabled={removing !== null}
-                      aria-label={`Take ${personName(p)} out of this chat`}
+                      aria-label={SHARE_TEXT.takeOutLabel({ name: personName(p) })}
                       onClick={() => void takeOut(p.accountId)}
                     >
-                      {removing === p.accountId ? <Spinner /> : null} Take out
+                      {removing === p.accountId ? <Spinner /> : null} {SHARE_TEXT.takeOut}
                     </Button>
                   ) : null}
                 </li>
@@ -168,7 +199,7 @@ export function ShareDialog({
         {isOwner ? (
           others.length ? (
             <fieldset className="ws-fieldset">
-              <legend>Share with</legend>
+              <legend>{SHARE_TEXT.shareWith}</legend>
               {others.map((p) => (
                 <label key={p.accountId} className="ws-check">
                   <input
@@ -176,20 +207,19 @@ export function ShareDialog({
                     checked={chosen.has(p.accountId)}
                     onChange={() => toggle(p)}
                   />
-                  <span>{personName(p)}</span>
+                  <span dir="auto">{personName(p)}</span>
                 </label>
               ))}
             </fieldset>
           ) : s ? (
-            <p className="muted ws-flush">Everyone on this Hub is in this chat.</p>
+            <p className="muted ws-flush">{SHARE_TEXT.everyoneIn}</p>
           ) : (
             <EmptyState
               level={3}
               icon="at"
-              title="Nobody else uses this Hub yet"
-              description={
-                <>
-                  The owner invites people in{' '}
+              title={SHARE_TEXT.nobodyElse}
+              description={rich(SHARE_TEXT.ownerInvites, {
+                link: (
                   <a
                     href={MEMBERS_SETTINGS_PATH}
                     onClick={(e) => {
@@ -197,15 +227,16 @@ export function ShareDialog({
                       followLink(e, MEMBERS_SETTINGS_PATH);
                     }}
                   >
-                    Settings → Members
+                    {TEAM_TEXT.membersLink}
                   </a>
-                  .
-                </>
-              }
+                ),
+              })}
             />
           )
         ) : (
-          <p className="muted ws-flush">Only {personName(s.owner)} can add people to this chat.</p>
+          <p className="muted ws-flush">
+            {SHARE_TEXT.onlyOwnerAdds({ name: personName(s.owner) })}
+          </p>
         )}
       </div>
     );
@@ -213,8 +244,8 @@ export function ShareDialog({
   return (
     <Dialog
       open
-      title="Share this chat"
-      description={`“${thread.title?.trim() || 'Untitled chat'}” with people of this Hub.`}
+      title={SHARE_TEXT.title}
+      description={SHARE_TEXT.about({ title: thread.title?.trim() || TEAM_TEXT.untitledChat })}
       onClose={onClose}
       className="ws-wide-dialog"
       footer={
@@ -227,13 +258,15 @@ export function ShareDialog({
                 navigate(sharedThreadPath(thread.id));
               }}
             >
-              Open the shared view
+              {SHARE_TEXT.openShared}
             </Button>
           ) : null}
-          <Button onClick={onClose}>{why || !others.length ? 'Close' : 'Cancel'}</Button>
+          <Button onClick={onClose}>
+            {why || !others.length ? TEAM_TEXT.close : TEAM_TEXT.cancel}
+          </Button>
           {!why && isOwner && others.length ? (
             <Button variant="primary" disabled={busy} onClick={() => void share()}>
-              {busy ? <Spinner /> : null} Share
+              {busy ? <Spinner /> : null} {SHARE_TEXT.share}
             </Button>
           ) : null}
         </>
@@ -241,22 +274,20 @@ export function ShareDialog({
     >
       {body}
       {!why ? (
-        <div className="team-not-shared" aria-label="What sharing does">
+        <div role="group" className="team-not-shared" aria-label={SHARE_TEXT.whatSharingDoes}>
           <p className="team-strong ws-flush">
-            <Icon name="shield" /> What is not shared
+            <Icon name="shield" /> {SHARE_TEXT.notShared}
           </p>
           <ul className="ws-plain-list">
-            {NOT_SHARED.map((t) => (
-              <li key={t}>{t}</li>
+            {Object.entries(SHARING_TEXT.notShared).map(([key, t]) => (
+              <li key={key}>{t}</li>
             ))}
           </ul>
-          <p className="muted ws-flush">{SHARED_ACTS_AS}</p>
-          <p className="muted ws-flush">
-            Everyone in the chat sees all of it, including what was said before you shared it.
-          </p>
+          <p className="muted ws-flush">{SHARING_TEXT.actsAs}</p>
+          <p className="muted ws-flush">{SHARE_TEXT.seesAll}</p>
         </div>
       ) : null}
-      <FormError error={error} fallback="Could not share the chat." />
+      <FormError error={error} fallback={SHARE_TEXT.shareFailed} />
     </Dialog>
   );
 }
@@ -273,7 +304,7 @@ export function useShareMenu(thread: ThreadView | null): { items: MenuItem[]; di
     items: [
       {
         id: 'share',
-        label: 'Share with people…',
+        label: SHARE_TEXT.menuItem,
         onSelect: () => setOpen(true),
         ...(why ? { disabled: true, description: why } : {}),
       },

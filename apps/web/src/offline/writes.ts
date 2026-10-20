@@ -6,6 +6,7 @@
 // value the edit started from. The request then succeeds as the Hub would have answered it, from
 // the copy with the change laid over, so every view keeps working. Anything else fails as before;
 // without a copy nothing is queued (offline views are read-only).
+import { defineMessages } from '@nova/i18n';
 import {
   uuidv7,
   type CreateThreadRequest,
@@ -25,7 +26,7 @@ import {
   threadView,
   type ViewSource,
 } from '../replica/views.ts';
-import type { NewQueueItem, OutboundQueue, QueueItem } from './queue.ts';
+import type { NewQueueItem, OutboundQueue, QueueItem, QueueSubject } from './queue.ts';
 import { splitPath } from './reads.ts';
 
 export interface WriteContext {
@@ -37,8 +38,14 @@ export interface WriteContext {
   queue: OutboundQueue;
 }
 
-const quoted = (s: string | null | undefined, fallback: string) =>
-  s?.trim() ? `“${s.trim().length > 60 ? `${s.trim().slice(0, 59)}…` : s.trim()}”` : fallback;
+/** Refusals the app's request gets back, read when thrown (shown as the request's error). */
+const WRITE_TEXT = defineMessages('offline.writes', {
+  noFiles: 'Files cannot be sent while the Hub is unreachable. Send them when it is back.',
+  beingSent: 'It is being sent right now.',
+});
+
+/** A name as a change's subject keeps it: trimmed, or null when there is none. */
+const named = (s: unknown): string | null => (typeof s === 'string' && s.trim() ? s.trim() : null);
 
 /** The clock of the value an edit starts from: this device's last waiting change, or the copy's. */
 function baseOf(ctx: WriteContext, kind: SyncKind, id: string, field: string): string | null {
@@ -81,20 +88,21 @@ async function enqueue(
   return added;
 }
 
+/** Request fields to the copy's field names (protocol names, not UI text). */
 const THREAD_FIELDS: Record<string, string> = {
+  // eslint-disable-next-line nova-i18n/no-literal-ui-text -- a sync field name
   title: 'title',
   pinned: 'pinned',
   archived: 'archived',
   projectId: 'project',
 };
 
-function chatEditLabel(body: Record<string, unknown>, title: string | null): string {
-  const name = quoted(title, 'a chat');
-  if ('title' in body)
-    return `Rename ${name} to ${quoted(body.title as string | null, 'no title')}`;
-  if ('archived' in body) return `${body.archived ? 'Archive' : 'Restore'} ${name}`;
-  if ('pinned' in body) return `${body.pinned ? 'Pin' : 'Unpin'} ${name}`;
-  return `Move ${name} to another project`;
+function chatEditSubject(body: Record<string, unknown>, title: string | null): QueueSubject {
+  const name = named(title);
+  if ('title' in body) return { action: 'renameChat', name, to: named(body.title) };
+  if ('archived' in body) return { action: body.archived ? 'archiveChat' : 'restoreChat', name };
+  if ('pinned' in body) return { action: body.pinned ? 'pinChat' : 'unpinChat', name };
+  return { action: 'moveChat', name };
 }
 
 /**
@@ -119,7 +127,7 @@ export async function takeWrite(
     if (b.projectId) fields.project = b.projectId;
     await enqueue(ctx, {
       kind: 'chat',
-      label: `New chat ${quoted(b.title, '')}`.trim(),
+      subject: { action: 'newChat', name: named(b.title) },
       threadId,
       entityId: threadId,
       text: null,
@@ -141,16 +149,13 @@ export async function takeWrite(
     const b = body as Partial<SendMessageRequest>;
     const thread = threadView(ctx.source, id);
     if (!thread) return null;
-    if (b.attachments?.length)
-      throw offlineError(
-        'Files cannot be sent while the Hub is unreachable. Send them when it is back.',
-      );
+    if (b.attachments?.length) throw offlineError(WRITE_TEXT.noFiles);
     const text = typeof b.text === 'string' ? b.text : '';
     if (!text.trim()) return null;
     const messageId = uuidv7();
     await enqueue(ctx, {
       kind: 'message',
-      label: `Message in ${quoted(thread.title, 'a chat')}`,
+      subject: { action: 'message', name: named(thread.title) },
       threadId: id,
       entityId: messageId,
       text,
@@ -185,7 +190,7 @@ export async function takeWrite(
     if (!(await ctx.queue.discard(item.id)))
       throw new ApiError(409, {
         code: 'conflict',
-        message: 'It is being sent right now.',
+        message: WRITE_TEXT.beingSent,
         retryable: true,
       });
     return { data: { ok: true } };
@@ -200,7 +205,7 @@ export async function takeWrite(
     const fields = Object.fromEntries(keys.map((k) => [THREAD_FIELDS[k]!, body[k] ?? null]));
     await enqueue(ctx, {
       kind: 'chat_edit',
-      label: chatEditLabel(body, before.title),
+      subject: chatEditSubject(body, before.title),
       threadId: id,
       entityId: id,
       text: null,
@@ -216,13 +221,13 @@ export async function takeWrite(
     if (!keys.length || keys.some((k) => k !== 'name' && k !== 'instructions')) return null;
     const before = currentFields(ctx.source, 'project', id);
     if (!before || !ctx.replica.entity('project', id)) return null;
-    const name = quoted(typeof before.name === 'string' ? before.name : null, 'a project');
+    const name = named(before.name);
     await enqueue(ctx, {
       kind: 'project',
-      label:
+      subject:
         'instructions' in body
-          ? `Change the instructions of ${name}`
-          : `Rename ${name} to ${quoted(body.name as string, 'a new name')}`,
+          ? { action: 'projectInstructions', name }
+          : { action: 'renameProject', name, to: named(body.name) },
       threadId: null,
       entityId: id,
       text: null,
@@ -240,7 +245,14 @@ export async function takeWrite(
     if (!before || !ctx.replica.entity('space', id)) return null;
     await enqueue(ctx, {
       kind: 'space',
-      label: `Rename the space ${quoted(before.name, 'without a name')} to ${quoted(body.name, 'a new name')}`,
+      subject: {
+        action: 'renameSpace',
+        // The name it has, not the view's stand-in for none.
+        name: named(
+          currentFields(ctx.source, 'space', id)?.name ?? ctx.source.hints.space(id)?.name,
+        ),
+        to: named(body.name),
+      },
       threadId: null,
       entityId: id,
       text: null,
@@ -260,7 +272,12 @@ export async function takeWrite(
     if (!Object.keys(fields).length) return null;
     await enqueue(ctx, {
       kind: 'page',
-      label: `Edit the page ${quoted(before.title, 'without a title')}`,
+      subject: {
+        action: 'editPage',
+        name: named(
+          currentFields(ctx.source, 'page', subId)?.title ?? ctx.source.hints.page(subId)?.title,
+        ),
+      },
       threadId: null,
       entityId: subId,
       text: null,

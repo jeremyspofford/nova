@@ -2,14 +2,45 @@
 // (PNG, JPEG or WebP up to 2 MB; no cropping), then local usage insights, spend caps per provider
 // and "clear usage data" (M8, FR-116).
 import { useEffect, useRef, useState } from 'react';
+import { defineMessages, fmt } from '@nova/i18n';
 import type { AccountView } from '@nova/shared';
 import { Button, Spinner, TextField, useToast } from '@nova/ui';
 import { errorMessage, type UpdateProfileRequest } from '../api.ts';
-import { formatBytes, readAsBase64 } from '../chat/attachments.ts';
+import { readAsBase64 } from '../chat/attachments.ts';
 import { SpendCapsSection } from '../datactl/SpendCaps.tsx';
 import { useServices } from '../services.tsx';
 import { UsageSection } from './UsageSection.tsx';
 import '../workspace.css';
+
+export const PROFILE_TEXT = defineMessages('settings.profile', {
+  usernameRule:
+    'Use 2 to 32 lowercase letters, digits, hyphens and underscores, starting with a letter or ' +
+    'digit.',
+  title: 'Profile & usage',
+  loadFailed: 'Could not load your profile.',
+  profile: 'Profile',
+  retry: 'Retry',
+  loading: 'Loading your profile',
+  saved: 'Profile saved.',
+  saveFailed: 'Could not save your profile.',
+  wrongType: 'Choose a PNG, JPEG or WebP image.',
+  tooBig: 'That image is {size}; the limit is {limit}.',
+  avatarUpdated: 'Avatar updated.',
+  avatarUpdateFailed: 'Could not update your avatar: {error}',
+  avatarRemoved: 'Avatar removed.',
+  avatarRemoveFailed: 'Could not remove your avatar: {error}',
+  local: 'Your account is local to this Hub.',
+  yourAvatar: 'Your avatar',
+  changeAvatar: 'Change avatar',
+  uploadAvatar: 'Upload avatar',
+  removeAvatar: 'Remove avatar',
+  avatarImage: 'Avatar image',
+  displayName: 'Display name',
+  username: 'Username',
+  usernameHint: 'Optional. 2 to 32 lowercase letters, digits, hyphens and underscores.',
+  save: 'Save profile',
+});
+const S = PROFILE_TEXT;
 
 export const USERNAME = /^[a-z0-9][a-z0-9_-]{1,31}$/;
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
@@ -23,11 +54,7 @@ export function profileChanges(
 ): { body: UpdateProfileRequest | null } | { error: string } {
   const name = form.displayName.trim();
   const user = form.username.trim();
-  if (user && !USERNAME.test(user))
-    return {
-      error:
-        'Use 2 to 32 lowercase letters, digits, hyphens and underscores, starting with a letter or digit.',
-    };
+  if (user && !USERNAME.test(user)) return { error: S.usernameRule };
   const body: UpdateProfileRequest = {};
   if ((name || null) !== account.displayName) body.displayName = name || null;
   if ((user || null) !== account.username) body.username = user || null;
@@ -39,7 +66,7 @@ export function ProfilePage({ onDisplayName }: { onDisplayName?: (name: string |
   const [usageVersion, setUsageVersion] = useState(0);
   return (
     <div className="settings-page">
-      <h2>Profile &amp; usage</h2>
+      <h2>{S.title}</h2>
       <ProfileSection onDisplayName={onDisplayName} />
       <UsageSection key={usageVersion} />
       <SpendCapsSection onCleared={() => setUsageVersion((v) => v + 1)} />
@@ -69,7 +96,7 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
         setAccount(a);
         setLoadError(null);
       },
-      (err: unknown) => alive && setLoadError(errorMessage(err, 'Could not load your profile.')),
+      (err: unknown) => alive && setLoadError(errorMessage(err, S.loadFailed)),
     );
     return () => {
       alive = false;
@@ -79,14 +106,14 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
   if (loadError)
     return (
       <section className="settings-section" aria-labelledby="profile-me">
-        <h3 id="profile-me">Profile</h3>
+        <h3 id="profile-me">{S.profile}</h3>
         <div role="alert" className="ws-error">
           <p>{loadError}</p>
-          <Button onClick={() => setRetry((r) => r + 1)}>Retry</Button>
+          <Button onClick={() => setRetry((r) => r + 1)}>{S.retry}</Button>
         </div>
       </section>
     );
-  if (!account) return <Spinner label="Loading your profile" />;
+  if (!account) return <Spinner label={S.loading} />;
 
   const shown = form ?? {
     displayName: account.displayName ?? '',
@@ -110,10 +137,10 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
     setFailure(null);
     setBusy(true);
     try {
-      saved(await api.updateProfile(changes.body), 'Profile saved.');
+      saved(await api.updateProfile(changes.body), S.saved);
       setForm(null);
     } catch (err) {
-      setFailure(errorMessage(err, 'Could not save your profile.'));
+      setFailure(errorMessage(err, S.saveFailed));
     } finally {
       setBusy(false);
     }
@@ -121,11 +148,13 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
 
   const upload = async (f: File) => {
     if (!(AVATAR_TYPES as readonly string[]).includes(f.type)) {
-      toast.show('Choose a PNG, JPEG or WebP image.', { tone: 'error' });
+      toast.show(S.wrongType, { tone: 'error' });
       return;
     }
     if (f.size > AVATAR_MAX_BYTES) {
-      toast.show(`That image is ${formatBytes(f.size)}; the limit is 2 MB.`, { tone: 'error' });
+      toast.show(S.tooBig({ size: fmt.bytes(f.size), limit: fmt.bytes(AVATAR_MAX_BYTES) }), {
+        tone: 'error',
+      });
       return;
     }
     setBusy(true);
@@ -133,11 +162,11 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
       const data = await readAsBase64(f);
       saved(
         await api.updateProfile({ avatar: { mime: f.type as AvatarMime, data } }),
-        'Avatar updated.',
+        S.avatarUpdated,
       );
       setAvatarVersion((v) => v + 1);
     } catch (err) {
-      toast.show(`Could not update your avatar: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.avatarUpdateFailed({ error: errorMessage(err) }), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -146,10 +175,10 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
   const removeAvatar = async () => {
     setBusy(true);
     try {
-      saved(await api.updateProfile({ avatar: null }), 'Avatar removed.');
+      saved(await api.updateProfile({ avatar: null }), S.avatarRemoved);
       setAvatarVersion((v) => v + 1);
     } catch (err) {
-      toast.show(`Could not remove your avatar: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(S.avatarRemoveFailed({ error: errorMessage(err) }), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -157,14 +186,14 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
 
   return (
     <section className="settings-section" aria-labelledby="profile-me">
-      <h3 id="profile-me">Profile</h3>
-      <p className="muted">Your account is local to this Hub.</p>
+      <h3 id="profile-me">{S.profile}</h3>
+      <p className="muted">{S.local}</p>
       <div className="ws-avatar-row">
         {account.hasAvatar ? (
           <img
             className="ws-avatar"
             src={`${api.avatarUrl()}?v=${avatarVersion}`}
-            alt="Your avatar"
+            alt={S.yourAvatar}
             width={64}
             height={64}
           />
@@ -175,11 +204,11 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
         )}
         <div className="row">
           <Button onClick={() => file.current?.click()} disabled={busy}>
-            {account.hasAvatar ? 'Change avatar' : 'Upload avatar'}
+            {account.hasAvatar ? S.changeAvatar : S.uploadAvatar}
           </Button>
           {account.hasAvatar ? (
             <Button variant="ghost" onClick={() => void removeAvatar()} disabled={busy}>
-              Remove avatar
+              {S.removeAvatar}
             </Button>
           ) : null}
         </div>
@@ -188,7 +217,7 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
           type="file"
           accept={AVATAR_TYPES.join(',')}
           hidden
-          aria-label="Avatar image"
+          aria-label={S.avatarImage}
           onChange={(e) => {
             const f = e.target.files?.[0];
             e.target.value = '';
@@ -204,19 +233,19 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
         }}
       >
         <TextField
-          label="Display name"
+          label={S.displayName}
           value={shown.displayName}
           maxLength={100}
           autoComplete="name"
           onChange={(e) => setForm({ ...shown, displayName: e.target.value })}
         />
         <TextField
-          label="Username"
+          label={S.username}
           value={shown.username}
           maxLength={32}
           spellCheck={false}
           autoComplete="username"
-          hint="Optional. 2 to 32 lowercase letters, digits, hyphens and underscores."
+          hint={S.usernameHint}
           error={error ?? undefined}
           onChange={(e) => setForm({ ...shown, username: e.target.value })}
         />
@@ -231,7 +260,7 @@ function ProfileSection({ onDisplayName }: { onDisplayName?: (name: string | nul
             variant="primary"
             disabled={busy || ('body' in changes && changes.body === null)}
           >
-            {busy ? <Spinner /> : null} Save profile
+            {busy ? <Spinner /> : null} {S.save}
           </Button>
         </div>
       </form>

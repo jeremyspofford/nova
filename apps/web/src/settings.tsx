@@ -17,6 +17,7 @@ import { SETTINGS, type SettingKey, type SettingValue as SharedValue } from '@no
 import type { ThemeChoice } from '@nova/ui';
 import type { Api, ResolvedSetting } from './api.ts';
 import { useHubStream } from './hub-events.ts';
+import { STORE_TEXT } from './strings.ts';
 
 export type OnboardingStep = 'provider' | 'model' | 'profile' | 'tool' | 'sample' | 'done';
 
@@ -131,7 +132,7 @@ export function SettingsProvider({
       opts: SetSettingOptions = {},
     ): Promise<void> => {
       const before = latest.current.get(key);
-      if (before?.locked) throw new Error(`${key} is managed by your organization`);
+      if (before?.locked) throw new Error(STORE_TEXT.locked({ key }));
       setValues((m) => {
         const next = new Map(m);
         next.set(key, { key, value, source: 'global', locked: false });

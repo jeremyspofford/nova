@@ -19,7 +19,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import {
   EXTENSION_BUNDLE_MAX_BYTES,
@@ -27,6 +27,7 @@ import {
   uuidv7,
   type DevExtensionRequest,
   type ExtensionCommandResult,
+  type ExtensionPermissionLine,
   type ExtensionContributionsView,
   type ExtensionHookView,
   type ExtensionPreviewView,
@@ -34,6 +35,7 @@ import {
   type ExtensionSignature,
   type ExtensionSource,
   type ExtensionStatus,
+  type ExtensionStopView,
   type ExtensionView,
   type InstallExtensionRequest,
   type PluginPreview,
@@ -42,7 +44,7 @@ import {
   type TrustedPublisher,
 } from '@nova/shared';
 import { isWithin } from '@nova/security';
-import { secretRef, type SecretStore } from '@nova/secrets';
+import type { SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
@@ -50,7 +52,9 @@ import type { PluginPermissionSource, PluginPermissions } from '../extensions/ty
 import { hookRef, hookStatus, type DiscoveredHook, type HookStore } from '../hooks/store.ts';
 import type { HookMcpClient } from '../hooks/handlers.ts';
 import { ManagedRestrictions, NO_RESTRICTIONS, managedDenied } from '../managed/restrictions.ts';
-import type { PluginHookChange, PluginService } from '../plugins/service.ts';
+import type { PluginHookChange, PluginPublisherChange, PluginService } from '../plugins/service.ts';
+import { loadPluginHooks } from '../plugins/manifest.ts';
+import { walkTree } from '../plugins/paths.ts';
 import type { PluginManifest } from '../plugins/types.ts';
 import type {
   AuditSink,
@@ -63,15 +67,18 @@ import type {
 import {
   EXTENSION_MANIFEST_PATH,
   checkFiles,
+  extensionDigest,
   extractBundle,
   folderBundleFiles,
   packBundle,
   verifyBundle,
   type BundleCheck,
 } from './bundle.ts';
-import { extensionPermissionLines, extensionPermissionDiff } from './describe.ts';
+import { extensionPermissionLines, extensionPermissionDiff, type PluginParts } from './describe.ts';
 import {
   ExtensionHost,
+  extensionSecretPrefix,
+  extensionSecretRef,
   toToolResult,
   type ExtensionEgress,
   type ExtensionHostOptions,
@@ -94,7 +101,7 @@ import {
   type LoadedExtension,
 } from './manifest.ts';
 
-const { extensionInstall, pluginInstall } = schema;
+const { agentRole, extensionInstall, pluginInstall } = schema;
 type Row = typeof extensionInstall.$inferSelect;
 
 /** Previews expire after 30 minutes, like plugin previews. */
@@ -245,6 +252,32 @@ export class ExtensionService {
     });
     this.#managed = opts.managed ?? null;
     this.#unlisten = opts.plugins.hooks.onChange((c) => this.#onPluginChange(c));
+    // The plugins routes (a folder or Git) go through the same change-of-publisher check.
+    opts.plugins.useInstallGuard({ confirmationNeeded: (i) => this.#pluginTakeover(i) });
+  }
+
+  /**
+   * An install through the plugins area over a signed extension: adopted, it has no publisher,
+   * so it is a change of publisher and needs the owner's confirmation. Not asked of this
+   * service's own installs (checked in #install) or of the plugin preview of its staging folder.
+   */
+  async #pluginTakeover(i: {
+    accountId: string;
+    pluginId: string;
+    root: string;
+  }): Promise<PluginPublisherChange | null> {
+    if (this.#busy.has(`${i.accountId}\n${i.pluginId}`) || this.#closed) return null;
+    if (pathWithin(join(this.extensionsDir, '.staging'), resolve(i.root))) return null;
+    const row = await this.#row(i.accountId, i.pluginId);
+    if (!publisherChanged(row, null)) return null;
+    const trusted = await this.#trusted();
+    const from = this.#publisher(row!.publisherKey, trusted);
+    return {
+      message: `Not signed by the publisher of the installed extension ${i.pluginId} (${from.name ?? from.fingerprint}). Installing it needs your confirmation and clears the extension's secrets and data.`,
+      from,
+      // A folder or Git plugin carries no signature: the other side is unsigned.
+      to: this.#publisher(null, trusted),
+    };
   }
 
   /** Wire the hooks area's store (SDK hooks become rows with source `extension`). */
@@ -277,13 +310,28 @@ export class ExtensionService {
    * installs are refused. `verified` is the live verdict (its key still trusted).
    */
   async #refusal(id: string, verified: boolean): Promise<string | null> {
+    return (await this.#managedStop(id, verified))?.text ?? null;
+  }
+
+  /** The refusal with which part of the policy makes it, for the extension's view. */
+  async #managedStop(
+    id: string,
+    verified: boolean,
+  ): Promise<{ text: string; stop: ExtensionStopView } | null> {
     const m = await this.#restrictions();
     if (m.failClosed)
-      return `Extensions are off: your organization's managed policy could not be read (${m.failClosed})`;
+      return {
+        text: `Extensions are off: your organization's managed policy could not be read (${m.failClosed})`,
+        stop: { reason: 'managed_unreadable', policy: null },
+      };
+    const managed = (text: string | null, policy: ExtensionStopView['policy']) =>
+      text ? { text, stop: { reason: 'managed' as const, policy } } : null;
     return (
-      m.extension(id) ??
-      m.plugin(id) ??
-      (verified ? null : m.unverifiedInstall('an unverified extension'))
+      managed(m.extension(id), 'extensions') ??
+      managed(m.plugin(id), 'plugins') ??
+      (verified
+        ? null
+        : managed(m.unverifiedInstall('an unverified extension'), 'unverifiedInstalls'))
     );
   }
 
@@ -431,20 +479,29 @@ export class ExtensionService {
     const publisher = this.#publisher(row.publisherKey, trusted);
     const enabled = plugin?.enabled ?? false;
     const host = this.host.status(row.accountId, row.pluginId);
-    const refused = enabled
-      ? await this.#refusal(row.pluginId, await this.#liveVerified(row))
+    const managedStop = enabled
+      ? await this.#managedStop(row.pluginId, await this.#liveVerified(row))
       : null;
+    const refused = managedStop?.text ?? null;
     let status: ExtensionStatus;
+    let stopped: ExtensionStopView | null = null;
     if (!enabled) status = 'disabled';
-    else if (refused) status = 'stopped';
-    else if (!(await this.#o.settings.enabled())) status = 'stopped';
+    else if (managedStop) {
+      status = 'stopped';
+      stopped = managedStop.stop;
+    } else if (!(await this.#o.settings.enabled())) {
+      status = 'stopped';
+      stopped = { reason: 'sdk_off', policy: null };
+    }
+    // Stopped with a recorded reason (its files changed, it did not start): an error.
+    else if (host.status === 'stopped' && row.lastError) status = 'error';
     else status = host.status;
     const reg = this.host.registrations(row.accountId, row.pluginId);
     const secrets: { name: string; set: boolean }[] = [];
     for (const name of manifest.permissions.secrets ?? [])
       secrets.push({
         name,
-        set: await this.#o.secrets.has(secretRef('extension', row.pluginId, name)),
+        set: await this.#o.secrets.has(extensionSecretRef(row.accountId, row.pluginId, name)),
       });
     return {
       id: row.pluginId,
@@ -459,8 +516,9 @@ export class ExtensionService {
       digest: row.digest,
       enabled,
       status,
+      stopped,
       error: refused ?? host.error ?? row.lastError,
-      permissions: extensionPermissionLines(manifest, pluginManifest),
+      permissions: await this.#installedLines(row),
       hooks: this.#hookViews(row, manifest),
       registered: {
         commands: reg?.commands.size ?? 0,
@@ -559,6 +617,12 @@ export class ExtensionService {
         },
       );
     }
+    // The plugin installer never copies `.git`: such a bundle could not match its digest later.
+    if ([...check.files.keys()].some((f) => f.split('/').includes('.git')))
+      throw new NovaError(
+        'validation',
+        'the bundle contains a .git folder; pack it with nova pack',
+      );
     if (!check.files.has(EXTENSION_MANIFEST_PATH))
       throw new NovaError('validation', `not an extension: ${EXTENSION_MANIFEST_PATH} is missing`, {
         details: { reason: 'not_an_extension' },
@@ -630,42 +694,35 @@ export class ExtensionService {
   /** A filesystem scope inside the Hub's own data is refused at install (docs/12 §7.2). */
   #checkScopes(accountId: string, loaded: LoadedExtension): void {
     const id = loaded.plugin.manifest.id;
+    const data = realOrResolved(this.#o.dataDir);
     for (const s of fsScopes(loaded.manifest, {
       data: this.dataFolder(accountId, id),
       root: loaded.root,
-    }))
-      if (
-        s.declared.startsWith('/') &&
-        (s.path === this.#o.dataDir ||
-          s.path.startsWith(`${this.#o.dataDir}/`) ||
-          this.#o.dataDir.startsWith(`${s.path}/`))
-      )
+    })) {
+      if (!s.declared.startsWith('/')) continue;
+      // Containment both ways, on real paths: a scope inside the Hub's data, or one that holds it
+      // (`/` included), is refused (supply review #8).
+      const scope = realOrResolved(s.path);
+      if (pathWithin(scope, data) || pathWithin(data, scope))
         throw new NovaError(
           'validation',
           `extension.json permissions.fs: ${s.declared} would reach the Hub's own data`,
-          {
-            details: { reason: 'fs_scope_refused' },
-          },
+          { details: { reason: 'fs_scope_refused' } },
         );
+    }
   }
 
   async #previewView(rec: PreviewRecord): Promise<ExtensionPreviewView> {
     const m = rec.loaded.manifest;
     const pm = rec.loaded.plugin.manifest;
     const id = pm.id;
-    const lines = extensionPermissionLines(m, pm);
+    const lines = extensionPermissionLines(m, pm, {
+      hooks: rec.loaded.plugin.hooks.map((h) => h.hook),
+      roles: rec.loaded.plugin.roles,
+    });
     const current = await this.#row(rec.accountId, id);
     let diff: ExtensionPreviewView['diff'] = null;
-    if (current) {
-      const before = await this.#pluginRow(rec.accountId, id);
-      const beforeManifest = before
-        ? parseJson<PluginManifest>(before.manifestJson, { permissions: {} } as PluginManifest)
-        : ({ permissions: {} } as PluginManifest);
-      diff = extensionPermissionDiff(
-        extensionPermissionLines(this.#manifest(current), beforeManifest),
-        lines,
-      );
-    }
+    if (current) diff = extensionPermissionDiff(await this.#installedLines(current), lines);
     const verified = rec.check.status === 'verified' && !rec.dev;
     const trusted = await this.#trusted();
     const signature: ExtensionSignature = rec.dev ? 'dev' : verified ? 'verified' : 'unverified';
@@ -683,6 +740,21 @@ export class ExtensionService {
     ];
     if (diff?.added.length)
       warnings.push(`This update asks for more: ${diff.added.map((l) => l.text).join('; ')}.`);
+    if (diff?.changed.length)
+      warnings.push(`This update changes: ${diff.changed.map((c) => c.text).join('; ')}.`);
+    const newPublisher = rec.dev ? null : rec.check.publisher;
+    const publisherChange = publisherChanged(current, newPublisher)
+      ? {
+          from: this.#publisher(current?.publisherKey ?? null, trusted),
+          to: this.#publisher(newPublisher, trusted),
+        }
+      : null;
+    if (publisherChange)
+      warnings.unshift(
+        newPublisher
+          ? `Another publisher: the installed version is signed by ${publisherChange.from.name ?? publisherChange.from.fingerprint}, this one by ${publisherChange.to.name ?? publisherChange.to.fingerprint}. Installing it clears the extension's secrets and data.`
+          : `Not signed by the publisher of the installed version (${publisherChange.from.name ?? publisherChange.from.fingerprint}). Installing it clears the extension's secrets and data.`,
+      );
     return {
       previewId: rec.id,
       id,
@@ -697,6 +769,7 @@ export class ExtensionService {
       sideloadReason,
       permissions: lines,
       diff,
+      publisherChange,
       hooks: (m.permissions.hooks ?? []).map((h) => ({
         id: hookRef({ source: 'extension', pluginId: id, projectId: null, key: h.id }),
         event: h.event,
@@ -715,6 +788,32 @@ export class ExtensionService {
       warnings,
       replaces: current ? { version: current.version } : null,
     };
+  }
+
+  /** The permission lines of the installed version (its plugin's hooks and roles included). */
+  async #installedLines(row: Row): Promise<ExtensionPermissionLine[]> {
+    const plugin = await this.#pluginRow(row.accountId, row.pluginId);
+    const pm = plugin
+      ? parseJson<PluginManifest>(plugin.manifestJson, { permissions: {} } as PluginManifest)
+      : ({ permissions: {} } as PluginManifest);
+    let hooks: PluginParts['hooks'] = [];
+    if (plugin)
+      try {
+        hooks = loadPluginHooks(plugin.installPath, pm).map((h) => h.hook);
+      } catch {
+        hooks = [];
+      }
+    const roles = (
+      await this.#db.orm
+        .select()
+        .from(agentRole)
+        .where(and(eq(agentRole.accountId, row.accountId), eq(agentRole.pluginId, row.pluginId)))
+    ).map((r) => ({
+      key: r.roleKey,
+      tools: parseJson<string[]>(r.toolsJson, []),
+      modelHint: r.modelHint,
+    }));
+    return extensionPermissionLines(this.#manifest(row), pm, { hooks, roles });
   }
 
   // ---- install, update, dev reload ---------------------------------------------------------------
@@ -764,7 +863,13 @@ export class ExtensionService {
         : [];
       return this.#install(
         accountId,
-        { previewId: preview.previewId, confirmSideload: true, enable: true, trustHooks },
+        {
+          previewId: preview.previewId,
+          confirmSideload: true,
+          enable: true,
+          trustHooks,
+          ...(req.acceptPublisherChange ? { acceptPublisherChange: true } : {}),
+        },
         true,
       );
     });
@@ -822,6 +927,22 @@ export class ExtensionService {
     );
     const trust = req.trustHooks ?? [];
     const current = await this.#row(accountId, id);
+    // Another publisher (or none) taking over an installed id: shown in the preview, and only with
+    // the owner's explicit acceptance; its secrets and data then start empty (supply review #3).
+    const publisherChange = publisherChanged(current, p.dev ? null : p.check.publisher);
+    if (publisherChange && req.acceptPublisherChange !== true)
+      throw new NovaError(
+        'validation',
+        current?.publisherKey && (p.dev ? null : p.check.publisher)
+          ? 'this update is signed by another publisher than the installed extension; confirm the change of publisher'
+          : 'this update is not signed by the publisher of the installed extension; confirm the change of publisher',
+        {
+          details: {
+            field: 'acceptPublisherChange',
+            reason: 'publisher_change_confirmation_required',
+          },
+        },
+      );
     const wasRunning = this.host.status(accountId, id).status === 'running';
     const prov = { ...p.provenance, ...provenance };
     const origin = prov.origin ?? p.origin;
@@ -872,11 +993,29 @@ export class ExtensionService {
         if (opts.rollback) await this.#undo(accountId, id, previous);
         throw err;
       }
+      if (publisherChange) await this.#forNewPublisher(accountId, id, current, p);
       if (enable) await this.#start(accountId, id);
     } finally {
       this.#busy.delete(key);
     }
     return this.get(accountId, id);
+  }
+
+  /** An accepted change of publisher: the extension starts over, its secrets and data cleared. */
+  async #forNewPublisher(
+    accountId: string,
+    id: string,
+    current: Row | null,
+    p: PreviewRecord,
+  ): Promise<void> {
+    for (const ref of await this.#o.secrets.list(extensionSecretPrefix(accountId, id)))
+      await this.#o.secrets.delete(ref);
+    rmSync(this.dataFolder(accountId, id), { recursive: true, force: true });
+    await this.#audit(accountId, 'extension.publisher.change', id, {
+      from: current?.publisherKey ?? null,
+      to: p.dev ? null : p.check.publisher,
+      clearedSecretsAndData: true,
+    });
   }
 
   /** The steps after the plugin installed: the row, the hooks, the kept bundle, audit, events. */
@@ -1023,6 +1162,8 @@ export class ExtensionService {
       {
         previewId: preview.previewId,
         confirmSideload: true,
+        // Putting the previous version back restores its own publisher.
+        acceptPublisherChange: true,
         enable: state.enabled,
         trustHooks: state.trust,
       },
@@ -1065,10 +1206,30 @@ export class ExtensionService {
       );
     const changes = await store.sync(accountId, { source: 'extension', pluginId: id }, found, keys);
     const rows = store.list(accountId).filter((r) => r.source === 'extension' && r.pluginId === id);
+    // With the SDK switched off no extension runs, so none of its hooks applies.
+    const live = enabled && (await this.#o.settings.enabled());
+    // A hook whose tool managed policy refuses (`tools.deny: ['ext:*']`, an allow list without
+    // it) is off: its gate check would fail, and a failing guard blocks what it guards.
+    const m = live ? await this.#restrictions() : null;
+    const wanted = (key: string) =>
+      live &&
+      !m?.tool({
+        name: extensionHookTool(id, key),
+        source: 'plugin',
+        pluginId: id,
+        annotations: { readOnly: true, action: 'read' },
+      });
+    const on = rows.filter((r) => wanted(r.key));
+    const off = rows.filter((r) => !wanted(r.key));
     await store.setEnabled(
       accountId,
-      rows.filter((r) => r.enabled !== enabled).map((r) => r.id),
-      enabled,
+      on.filter((r) => !r.enabled).map((r) => r.id),
+      true,
+    );
+    await store.setEnabled(
+      accountId,
+      off.filter((r) => r.enabled).map((r) => r.id),
+      false,
     );
     for (const c of changes)
       await Promise.resolve(
@@ -1113,6 +1274,17 @@ export class ExtensionService {
     }
     const spec = await this.#spec(accountId, id);
     if (!spec) return;
+    // What runs is what was installed: the files must still match the recorded digest.
+    let actual: string;
+    try {
+      actual = extensionDigest(installedFiles(spec.root));
+    } catch {
+      actual = '';
+    }
+    if (actual !== row.digest) {
+      await this.#tampered(accountId, row);
+      return;
+    }
     // Its hooks run again (a refusal turned them off).
     await this.#syncHooks(accountId, id, spec.manifest, spec.digest, true, [], 'system');
     const r = await this.host.start(spec);
@@ -1154,6 +1326,24 @@ export class ExtensionService {
     await this.#emitStatus(accountId, id);
   }
 
+  /** The installed files changed after install: the worker does not start (supply review). */
+  async #tampered(accountId: string, row: Row): Promise<void> {
+    const id = row.pluginId;
+    const why =
+      'the installed files no longer match what was installed (digest mismatch); reinstall the extension';
+    await this.host.stop(accountId, id);
+    await this.#syncHooks(accountId, id, this.#manifest(row), row.digest, false, [], 'system');
+    await this.#db.transaction(async () => {
+      await this.#db.orm
+        .update(extensionInstall)
+        .set({ lastError: why })
+        .where(eq(extensionInstall.id, row.id));
+    });
+    this.#log.warn('extension files changed after install; not started', { extensionId: id });
+    await this.#audit(accountId, 'extension.tampered', id, { digest: row.digest }, 'system');
+    await this.#emitStatus(accountId, id);
+  }
+
   /**
    * Managed policy changed (`managed.policy.changed`) or trusted publishers did: stop every
    * extension it now refuses, and start the ones it allows again.
@@ -1168,6 +1358,17 @@ export class ExtensionService {
           if (refusal) await this.#refuse(row.accountId, row, refusal);
           else if (this.host.status(row.accountId, row.pluginId).status !== 'running')
             await this.#start(row.accountId, row.pluginId);
+          // Running and allowed: its hooks follow the tool rules now in force (`ext:*` denied).
+          else
+            await this.#syncHooks(
+              row.accountId,
+              row.pluginId,
+              this.#manifest(row),
+              row.digest,
+              true,
+              [],
+              'system',
+            );
         } catch (err) {
           this.#log.warn('extension policy not applied', { extensionId: row.pluginId, err });
         }
@@ -1177,7 +1378,9 @@ export class ExtensionService {
 
   /** Start every installed, enabled extension (Hub start, the SDK switch turned on). */
   async startAll(): Promise<void> {
-    if (!(await this.#o.settings.enabled())) return;
+    // Switched off at Hub start: nothing runs, so no extension hook applies either (an enabled
+    // fail-closed hook of an extension that will not run would block every call it guards).
+    if (!(await this.#o.settings.enabled())) return this.stopAll();
     const rows = await this.#db.orm.select().from(extensionInstall);
     for (const r of rows) {
       if (this.#closed) return;
@@ -1209,6 +1412,7 @@ export class ExtensionService {
   async close(): Promise<void> {
     this.#closed = true;
     this.#unlisten();
+    this.#o.plugins.useInstallGuard(null);
     for (const t of this.#pendingNotices.values()) clearImmediate(t);
     this.#pendingNotices.clear();
     await this.host.close();
@@ -1282,7 +1486,7 @@ export class ExtensionService {
         .where(and(eq(extensionInstall.accountId, accountId), eq(extensionInstall.pluginId, id)));
     });
     await this.#syncHooks(accountId, id, null, '', false, [], 'system');
-    for (const ref of await this.#o.secrets.list(`secret://extension/${id}/`))
+    for (const ref of await this.#o.secrets.list(extensionSecretPrefix(accountId, id)))
       await this.#o.secrets.delete(ref);
     this.host.clearError(accountId, id);
     rmSync(this.#bundleFile(accountId, id), { force: true });
@@ -1351,8 +1555,11 @@ export class ExtensionService {
     const plugin = await this.#pluginRow(accountId, id);
     if (!plugin) return;
     await this.host.stop(accountId, id);
+    // Adopted, it has no publisher: over a signed extension that is a change of publisher (the
+    // plugins area asked for the confirmation), so its secrets and data start empty.
+    const takeover = publisherChanged(row, null);
     if (!isExtensionFolder(plugin.installPath)) {
-      if (row) await this.#forget(accountId, id, false);
+      if (row) await this.#forget(accountId, id, takeover);
       return;
     }
     let loaded: LoadedExtension;
@@ -1361,11 +1568,16 @@ export class ExtensionService {
       this.#checkScopes(accountId, loaded);
     } catch (err) {
       this.#log.warn('installed plugin has an invalid extension.json', { pluginId: id, err });
-      if (row) await this.#forget(accountId, id, false);
+      if (row) await this.#forget(accountId, id, takeover);
       return;
     }
     const files = installedFiles(plugin.installPath);
     const digest = checkFiles(files, null, []).digest;
+    if (takeover) {
+      for (const ref of await this.#o.secrets.list(extensionSecretPrefix(accountId, id)))
+        await this.#o.secrets.delete(ref);
+      rmSync(this.dataFolder(accountId, id), { recursive: true, force: true });
+    }
     const now = this.#now().toISOString();
     const next: Row = {
       id: row?.id ?? uuidv7(),
@@ -1391,6 +1603,13 @@ export class ExtensionService {
     });
     await this.#syncHooks(accountId, id, loaded.manifest, digest, plugin.enabled, [], 'user');
     this.#keepBundle(accountId, id, packBundle(files).bytes);
+    if (takeover)
+      await this.#audit(accountId, 'extension.publisher.change', id, {
+        from: row!.publisherKey,
+        to: null,
+        via: 'plugins',
+        clearedSecretsAndData: true,
+      });
     await this.#audit(accountId, row ? 'extension.update' : 'extension.install', id, {
       version: plugin.version,
       signature: 'unverified',
@@ -1456,13 +1675,13 @@ export class ExtensionService {
     const row = await this.#mustRow(accountId, id);
     if (!(this.#manifest(row).permissions.secrets ?? []).includes(name))
       throw new NovaError('validation', `${id} does not declare the secret ${name}`);
-    await this.#o.secrets.put(secretRef('extension', id, name), value);
+    await this.#o.secrets.put(extensionSecretRef(accountId, id, name), value);
     await this.#audit(accountId, 'extension.secret.set', id, { name }, 'user', 'secret');
   }
 
   async deleteSecret(accountId: string, id: string, name: string): Promise<void> {
     await this.#mustRow(accountId, id);
-    await this.#o.secrets.delete(secretRef('extension', id, name));
+    await this.#o.secrets.delete(extensionSecretRef(accountId, id, name));
     await this.#audit(accountId, 'extension.secret.delete', id, { name }, 'user', 'secret');
   }
 
@@ -1501,7 +1720,13 @@ export class ExtensionService {
       for (const m of reg.menus.values())
         out.menus.push({ extensionId, where: m.where, items: m.items });
       for (const s of reg.status.values())
-        out.statusItems.push({ extensionId, id: s.id, text: s.text, command: s.command });
+        out.statusItems.push({
+          extensionId,
+          id: s.id,
+          text: s.text,
+          command: s.command,
+          clickable: s.command !== null || s.clickable,
+        });
     }
     return out;
   }
@@ -1668,7 +1893,8 @@ export class ExtensionService {
           // A refused extension's hook gets no allow here (and is not handed to the base gate).
           const row = await this.#row(req.accountId, p.extensionId);
           const refusal = row
-            ? await this.#refusal(p.extensionId, await this.#liveVerified(row))
+            ? ((await this.#refusal(p.extensionId, await this.#liveVerified(row))) ??
+              (await this.#restrictions()).tool(req.tool))
             : 'the extension is not installed';
           if (refusal) {
             await this.#audit(
@@ -1829,8 +2055,35 @@ export class ExtensionService {
  * writes converted commands into is left out (a plugin may not bring it, docs/08 §3.1).
  */
 function installedFiles(root: string): Map<string, Uint8Array> {
-  const files = folderBundleFiles(root);
-  for (const path of [...files.keys()])
-    if (path.startsWith('.nova-plugin/commands/')) files.delete(path);
+  const files = new Map<string, Uint8Array>();
+  for (const e of walkTree(root))
+    if (!e.path.startsWith('.nova-plugin/commands/')) files.set(e.path, readFileSync(e.source));
   return files;
+}
+
+/**
+ * Whether an update changes who stands behind an installed extension: it was signed by a key and
+ * the new bundle is signed by another or not at all. An unsigned install gaining a signature is
+ * not a change of publisher (supply review #3).
+ */
+function publisherChanged(
+  current: { publisherKey: string | null } | null,
+  next: string | null,
+): boolean {
+  return !!current?.publisherKey && current.publisherKey !== next;
+}
+
+/** The real path of a folder that exists, else the resolved path. */
+function realOrResolved(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/** Whether `child` is `parent` or inside it (path.relative, so `/` holds everything). */
+function pathWithin(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }

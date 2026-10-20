@@ -164,8 +164,13 @@ export type ManagedPolicyDocument = z.infer<typeof managedPolicySchema>;
  */
 export const managedRestrictSettingSchema = z
   .object({
-    layers: z.array(managedRestrictSchema).max(2),
+    layers: z.array(managedRestrictSchema).max(8),
     failClosed: z.string().max(1000).nullable(),
+    /**
+     * The hosts agents may reach under the policy's egress allow lists, worked out against the
+     * owner's own list (see `ManagedEgressView`); absent or null when the policy sets no list.
+     */
+    egressAllow: z.array(z.string().max(253)).max(500).nullable().optional(),
   })
   .strict();
 export type ManagedRestrictSetting = z.infer<typeof managedRestrictSettingSchema>;
@@ -238,6 +243,22 @@ export interface ManagedSettingView {
   derivedFrom: string | null;
 }
 
+/**
+ * The policy's egress allow lists are a ceiling (ADR-097): with no list of the owner's own (unset or
+ * empty) the policy's hosts apply; with one, the owner's hosts that every policy list covers apply,
+ * so the owner chooses within the ceiling. Deny lists always add up.
+ */
+export interface ManagedEgressView {
+  /** Each source's allow list (a host must be within every one). */
+  ceilings: string[][];
+  /** The owner's own allow list (`network.egressAllow`). */
+  own: string[];
+  /** What agents may reach without asking: the hosts in force. */
+  effective: string[];
+  /** Said when the result needs the owner's attention (none of their hosts is allowed). */
+  note: string | null;
+}
+
 /** GET /api/v1/managed: what applies and where it comes from. */
 export interface ManagedPolicyView {
   /** A source is in force. */
@@ -247,6 +268,8 @@ export interface ManagedPolicyView {
   sources: ManagedSourceView[];
   settings: ManagedSettingView[];
   restrict: { channel: ManagedChannel; restrict: ManagedRestrict }[];
+  /** The egress allow list in force, when the policy sets one. */
+  egress: ManagedEgressView | null;
   ignored: ManagedIgnoredView[];
   checkedAt: string;
 }

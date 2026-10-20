@@ -2,14 +2,34 @@
 // or Work run, linked), its environment (linked), its usage against its caps live, near-cap and
 // capped states with Raise caps, Cancel (asks first), and Keep a file as an artifact of its thread.
 import { useEffect, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import type { CodeSessionView } from '@nova/shared';
 import { Button, Spinner } from '@nova/ui';
 import { useServices } from '../services.tsx';
 import { formatWhen } from '../settings/common.ts';
 import { useCloudApi } from './api.ts';
 import { CloudRunCard, useCloudRun } from './CloudRunCard.tsx';
-import { CLOUD_SETTINGS_PATH, RUN_KIND, cloudEnvPath, cloudErrorMessage } from './format.ts';
+import {
+  CLOUD_SETTINGS_PATH,
+  CLOUD_TEXT,
+  RUN_KIND,
+  cloudEnvPath,
+  cloudErrorMessage,
+} from './format.ts';
 import { BackLink, Fact, InAppLink, useLoad } from './parts.tsx';
+
+/** One cloud run's page. */
+export const RUN_PAGE_TEXT = defineMessages('cloud.runPage', {
+  loadFailed: 'Could not load the run.',
+  loading: 'Loading the run',
+  for: 'For',
+  workRun: 'The Work run',
+  codeSession: 'The Code session',
+  environment: 'Environment',
+  started: 'Started',
+  ended: 'Ended',
+  notYet: 'Not yet',
+});
 
 export function CloudRunPage({ id }: { id: string }) {
   const api = useCloudApi();
@@ -35,17 +55,18 @@ export function CloudRunPage({ id }: { id: string }) {
     };
   }, [hub, sessionId]);
 
+  const S = RUN_PAGE_TEXT;
   if (!r)
     return (
       <div className="stack cl-page">
-        <BackLink to={CLOUD_SETTINGS_PATH} label="Cloud runner" />
+        <BackLink to={CLOUD_SETTINGS_PATH} label={CLOUD_TEXT.cloudRunner} />
         {run.error ? (
           <div className="ws-error" role="alert">
-            <p>{cloudErrorMessage(run.error, 'Could not load the run.')}</p>
-            <Button onClick={run.reload}>Retry</Button>
+            <p>{cloudErrorMessage(run.error, S.loadFailed)}</p>
+            <Button onClick={run.reload}>{CLOUD_TEXT.retry}</Button>
           </div>
         ) : (
-          <Spinner label="Loading the run" />
+          <Spinner label={S.loading} />
         )}
       </div>
     );
@@ -53,7 +74,7 @@ export function CloudRunPage({ id }: { id: string }) {
   const envLabel = env.data?.label ?? null;
   return (
     <div className="stack cl-page">
-      <BackLink to={CLOUD_SETTINGS_PATH} label="Cloud runner" />
+      <BackLink to={CLOUD_SETTINGS_PATH} label={CLOUD_TEXT.cloudRunner} />
       <CloudRunCard
         run={r}
         headingLevel={2}
@@ -61,26 +82,26 @@ export function CloudRunPage({ id }: { id: string }) {
         onChange={(next) => run.setData(() => next)}
       />
       <dl className="cl-facts">
-        <Fact term="For">
+        <Fact term={S.for}>
           {r.kind === 'work' && r.workRunId ? (
-            <InAppLink to={`/work/${encodeURIComponent(r.workRunId)}`}>The Work run</InAppLink>
+            <InAppLink to={`/work/${encodeURIComponent(r.workRunId)}`}>{S.workRun}</InAppLink>
           ) : r.kind === 'code' && sessionId ? (
             <InAppLink to={`/code/${encodeURIComponent(sessionId)}`}>
-              {session?.title ?? 'The Code session'}
+              {session?.title ?? S.codeSession}
             </InAppLink>
           ) : (
             RUN_KIND[r.kind]
           )}
         </Fact>
-        <Fact term="Environment">
+        <Fact term={S.environment}>
           {env.data ? (
             <InAppLink to={cloudEnvPath(r.environmentId)}>{env.data.label}</InAppLink>
           ) : (
-            'A removed environment'
+            CLOUD_TEXT.removedEnvironment
           )}
         </Fact>
-        <Fact term="Started">{formatWhen(r.createdAt)}</Fact>
-        <Fact term="Ended">{r.endedAt ? formatWhen(r.endedAt) : 'Not yet'}</Fact>
+        <Fact term={S.started}>{formatWhen(r.createdAt)}</Fact>
+        <Fact term={S.ended}>{r.endedAt ? formatWhen(r.endedAt) : S.notYet}</Fact>
       </dl>
     </div>
   );

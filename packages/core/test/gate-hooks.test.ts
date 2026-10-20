@@ -423,6 +423,49 @@ describe('plugin permissions in the gate (FR-045)', () => {
     expect(notes.at(-1)?.title).toBe('Plugin com.example.sample was blocked');
   });
 
+  it("an extension's tool that oversteps names the extension and leads to Settings → Extensions", async () => {
+    const notes: NotificationInput[] = [];
+    gate = makeGate({ notifier: { notify: (n) => (notes.push(n), Promise.resolve()) } });
+    const check = tool({
+      name: 'ext:com.example.hello/check_status',
+      source: 'plugin',
+      pluginId: 'com.example.hello',
+      description: 'Check a status page',
+      annotations: { requiresNetwork: true },
+    });
+    gate.usePluginPermissions({
+      forTool: (_a, t) =>
+        Promise.resolve(
+          t.pluginId === 'com.example.hello'
+            ? {
+                ...SAMPLE,
+                pluginId: 'com.example.hello',
+                tools: {
+                  'ext:com.example.hello/check_status': { action: 'read', default: 'allow' },
+                },
+              }
+            : null,
+        ),
+    });
+    const disabled: string[] = [];
+    gate.usePluginViolations((_a, p) => (disabled.push(p), Promise.resolve()));
+    const no = await gate.check(
+      req({ tool: check, args: { host: 'https://evil.example.org/status' } }),
+      new AbortController().signal,
+    );
+    expect(no).toMatchObject({
+      effect: 'deny',
+      reason: 'evil.example.org is not a host this plugin declared',
+    });
+    expect(disabled).toEqual(['com.example.hello']);
+    expect(notes).toEqual([
+      expect.objectContaining({
+        title: 'Extension com.example.hello was turned off',
+        href: '/settings/extensions',
+      }),
+    ]);
+  });
+
   it('applies per-tool and per-action defaults; an undeclared tool asks', async () => {
     await expectAsk(req({ tool: panel, args: { value: 1 } }));
     const rows = await store.listApprovals(ACCOUNT, { status: 'all' });

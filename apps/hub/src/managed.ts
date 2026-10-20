@@ -5,7 +5,8 @@
 // read through `ctx.setting`), and serves:
 //   GET  /api/v1/managed         what applies, each value's source, what was ignored and why
 //   POST /api/v1/managed/reload  read the file and fetch the remote policy again
-// Both need a session and the Hub's owner. The settings route never writes `managed.*`, a
+// Both need a session: anyone the policy applies to may read it (a member route, ADR-097 D7); only
+// the Hub's owner may reload it. The settings route never writes `managed.*`, a
 // Code session mode, an autonomy or an approval policy the policy turns off. Every refusal
 // managed policy causes on any route (`policy_denied` `{reason: managed}`) is audited here as
 // `managed.denied` (tool calls are audited by the gate); loads and changes are audited too.
@@ -89,6 +90,14 @@ export function managedSettingRefusal(
   if (AUTONOMY_KEYS.has(key) && typeof value === 'string') return checks.autonomy(value);
   if (key === 'tools.approvalPolicy' && typeof value === 'string')
     return checks.approvalPolicy(value as 'never_ask');
+  // The owner chooses within the policy's egress allow lists (ADR-097): a host outside is refused.
+  if (key === 'network.egressAllow' && Array.isArray(value)) {
+    const outside = value.filter(
+      (h): h is string => typeof h === 'string' && !checks.egressCovered(h),
+    );
+    if (outside.length)
+      return `${outside.join(', ')} ${outside.length === 1 ? 'is' : 'are'} outside the hosts your organization's policy allows`;
+  }
   return null;
 }
 
@@ -178,16 +187,28 @@ export async function setupManaged(
 
   ctx.diagnostics.add('managed', () => Promise.resolve(summary(policy.view())));
 
+  /** The owner's own global settings: what the policy's ceilings are worked out against. */
+  const globalSettings = (): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    const rows = ctx.db.raw
+      .prepare("SELECT key, value_json AS v FROM setting WHERE scope_kind = 'global'")
+      .all() as { key: string; v: string }[];
+    for (const r of rows) {
+      try {
+        out[r.key] = JSON.parse(r.v) as unknown;
+      } catch {
+        // an unreadable row resolves to the default, as in the settings layers
+      }
+    }
+    return out;
+  };
+
   const ownerOf = async (req: FastifyRequest): Promise<string> => {
     const accountId = await ctx.accountOf(req);
     if (!isHubOwner(ctx.db, accountId))
-      throw new NovaError(
-        'policy_denied',
-        "only the Hub's owner can see or reload its managed policy",
-        {
-          details: { reason: 'owner_only' },
-        },
-      );
+      throw new NovaError('policy_denied', "only the Hub's owner can reload its managed policy", {
+        details: { reason: 'owner_only' },
+      });
     return accountId;
   };
 
@@ -227,7 +248,7 @@ export async function setupManaged(
     // Everyone the policy applies to may see it (a member route, ADR-097 D7); reload is the owner's.
     app.get('/api/v1/managed', async (req) => {
       await ctx.accountOf(req);
-      return policy.view();
+      return policy.view(globalSettings());
     });
 
     app.post('/api/v1/managed/reload', async (req) => {
@@ -235,7 +256,7 @@ export async function setupManaged(
       managedReloadSchema.parse(req.body ?? {});
       const view = await policy.reload();
       await record('managed.policy.reload', summary(view), { accountId, actor: 'user' });
-      return view;
+      return policy.view(globalSettings());
     });
   }
 

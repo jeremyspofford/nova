@@ -4,6 +4,7 @@
 // can be answered from a channel only by an owner (and never `confirm_at_action` or
 // `handoff_required` ones, which need a Nova client). Names are untrusted and shown as text.
 import { useEffect, useId, useState } from 'react';
+import { defineMessages } from '@nova/i18n';
 import {
   channelIdentityM7Schema,
   type ChannelIdentityViewM7,
@@ -17,19 +18,50 @@ import { KIND_TEXT, errorField, issueErrors } from './format.ts';
 
 const KINDS: ChannelKindM7[] = ['slack', 'teams', 'telegram', 'email', 'webhook'];
 
-const ROLE_TEXT: Record<ChannelRole, string> = {
+const ROLE_TEXT: Record<ChannelRole, string> = defineMessages('channels.people.role', {
   owner: 'Owner',
   member: 'Member',
-};
+});
 
-const ID_HINT: Partial<Record<ChannelKindM7, string>> = {
+const ID_HINT: Partial<Record<ChannelKindM7, string>> = defineMessages('channels.people.idHint', {
   slack: 'Their Slack member ID, like U0123ABCD.',
   teams: 'Their Teams user ID.',
   telegram: 'Their Telegram user ID, a number (not their @name).',
   webhook: 'The sender id your service sends in "from".',
   email:
     'Their email address. Mail counts as theirs only when their mail server vouches for it (DMARC), unless the channel trusts the From address.',
-};
+});
+
+/** The People section's words (FR-016). Names and ids are the other service's data. */
+export const PEOPLE_TEXT = defineMessages('channels.people', {
+  title: 'People',
+  intro:
+    'Who agents answer in channels. In a private channel, only owners. In a shared channel, owners and members, and others only when the channel allows it. Only an owner can answer an approval from a channel.',
+  loadFailed: 'Could not load people.',
+  retry: 'Retry',
+  loading: 'Loading people',
+  empty: 'Nobody yet. Add yourself as an owner first.',
+  list: 'People',
+  removeName: 'Remove {name}',
+  remove: 'Remove',
+  addForm: 'Add a person',
+  where: 'Where',
+  theirId: 'Their ID',
+  name: 'Name (optional)',
+  role: 'Role',
+  member: 'Member',
+  ownerYou: 'Owner (you)',
+  add: 'Add person',
+  added: '{role, select, owner {{name} added as owner.} other {{name} added as member.}}',
+  addFailed: 'Could not add the person.',
+  addFailedWith: 'Could not add: {error}',
+  removed: '{name} removed.',
+  removeFailed: 'Could not remove: {error}',
+  removeTitle: 'Remove {name}?',
+  removeThis: 'Remove?',
+  removeWhat: 'Agents stop answering them in channels that only answer known people.',
+  cancel: 'Cancel',
+});
 
 export function PeopleSection() {
   const api = useChannelsApi();
@@ -54,7 +86,7 @@ export function PeopleSection() {
         setItems(list);
         setError(null);
       },
-      (err: unknown) => alive && setError(errorMessage(err, 'Could not load people.')),
+      (err: unknown) => alive && setError(errorMessage(err, PEOPLE_TEXT.loadFailed)),
     );
     return () => {
       alive = false;
@@ -84,14 +116,14 @@ export function PeopleSection() {
       });
       setExternalId('');
       setDisplayName('');
-      toast.show(`${v.displayName ?? v.externalId} added as ${ROLE_TEXT[v.role].toLowerCase()}.`, {
+      toast.show(PEOPLE_TEXT.added({ name: v.displayName ?? v.externalId, role: v.role }), {
         tone: 'success',
       });
     } catch (err) {
       const field = errorField(err);
-      const message = errorMessage(err, 'Could not add the person.');
+      const message = errorMessage(err, PEOPLE_TEXT.addFailed);
       if (field) setErrors({ [field]: message });
-      else toast.show(`Could not add: ${message}`, { tone: 'error' });
+      else toast.show(PEOPLE_TEXT.addFailedWith({ error: message }), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -102,36 +134,35 @@ export function PeopleSection() {
     try {
       await api.removeChannelIdentity(p.id);
       setItems((list) => list?.filter((x) => x.id !== p.id) ?? null);
-      toast.show(`${p.displayName ?? p.externalId} removed.`, { tone: 'success' });
+      toast.show(PEOPLE_TEXT.removed({ name: p.displayName ?? p.externalId }), {
+        tone: 'success',
+      });
     } catch (err) {
-      toast.show(`Could not remove: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(PEOPLE_TEXT.removeFailed({ error: errorMessage(err) }), { tone: 'error' });
     }
   };
 
+  const S = PEOPLE_TEXT;
   return (
     <section className="settings-section" aria-labelledby={`${id}-h`}>
-      <h3 id={`${id}-h`}>People</h3>
-      <p className="muted">
-        Who agents answer in channels. In a private channel, only owners. In a shared channel,
-        owners and members, and others only when the channel allows it. Only an owner can answer an
-        approval from a channel.
-      </p>
+      <h3 id={`${id}-h`}>{S.title}</h3>
+      <p className="muted">{S.intro}</p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
-          <Button onClick={() => setVersion((v) => v + 1)}>Retry</Button>
+          <Button onClick={() => setVersion((v) => v + 1)}>{S.retry}</Button>
         </div>
       ) : null}
-      {items === null && !error ? <Spinner label="Loading people" /> : null}
-      {items?.length === 0 ? (
-        <p className="muted">Nobody yet. Add yourself as an owner first.</p>
-      ) : null}
+      {items === null && !error ? <Spinner label={S.loading} /> : null}
+      {items?.length === 0 ? <p className="muted">{S.empty}</p> : null}
       {items?.length ? (
-        <ul className="ws-list" aria-label="People">
+        <ul className="ws-list" aria-label={S.list}>
           {items.map((p) => (
             <li key={p.id} className="ws-list-row" aria-label={p.displayName ?? p.externalId}>
               <div className="ws-source-main">
-                <strong className="ws-source-name">{p.displayName ?? p.externalId}</strong>
+                <strong className="ws-source-name" dir="auto">
+                  {p.displayName ?? p.externalId}
+                </strong>
                 <span className="muted ws-row-meta">
                   <span>{KIND_TEXT[p.kind]}</span>
                   <code className="ws-code-inline">{p.externalId}</code>
@@ -143,10 +174,10 @@ export function PeopleSection() {
               </div>
               <Button
                 variant="ghost"
-                aria-label={`Remove ${p.displayName ?? p.externalId}`}
+                aria-label={S.removeName({ name: p.displayName ?? p.externalId })}
                 onClick={() => setRemoving(p)}
               >
-                Remove
+                {S.remove}
               </Button>
             </li>
           ))}
@@ -154,7 +185,7 @@ export function PeopleSection() {
       ) : null}
       <form
         className="ws-fieldset"
-        aria-label="Add a person"
+        aria-label={S.addForm}
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
@@ -163,13 +194,13 @@ export function PeopleSection() {
       >
         <div className="row ch-person-form">
           <SelectField
-            label="Where"
+            label={S.where}
             value={kind}
             onChange={(v) => setKind(v as ChannelKindM7)}
             options={KINDS.map((k) => ({ value: k, label: KIND_TEXT[k] }))}
           />
           <TextField
-            label="Their ID"
+            label={S.theirId}
             value={externalId}
             spellCheck={false}
             autoComplete="off"
@@ -178,38 +209,42 @@ export function PeopleSection() {
             onChange={(e) => setExternalId(e.target.value)}
           />
           <TextField
-            label="Name (optional)"
+            label={S.name}
             value={displayName}
             maxLength={200}
             error={errors.displayName}
             onChange={(e) => setDisplayName(e.target.value)}
           />
           <SelectField
-            label="Role"
+            label={S.role}
             value={role}
             onChange={(v) => setRole(v as ChannelRole)}
             options={[
-              { value: 'member', label: 'Member' },
-              { value: 'owner', label: 'Owner (you)' },
+              { value: 'member', label: S.member },
+              { value: 'owner', label: S.ownerYou },
             ]}
           />
         </div>
         <div className="row">
           <Button type="submit" disabled={busy}>
-            <Icon name="plus" /> Add person
+            <Icon name="plus" /> {S.add}
           </Button>
         </div>
       </form>
       <Dialog
         open={removing !== null}
-        title={removing ? `Remove ${removing.displayName ?? removing.externalId}?` : 'Remove?'}
-        description="Agents stop answering them in channels that only answer known people."
+        title={
+          removing
+            ? S.removeTitle({ name: removing.displayName ?? removing.externalId })
+            : S.removeThis
+        }
+        description={S.removeWhat}
         onClose={() => setRemoving(null)}
         footer={
           <>
-            <Button onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button onClick={() => setRemoving(null)}>{S.cancel}</Button>
             <Button variant="danger" onClick={() => removing && void remove(removing)}>
-              Remove
+              {S.remove}
             </Button>
           </>
         }
