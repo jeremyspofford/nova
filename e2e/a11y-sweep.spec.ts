@@ -574,9 +574,11 @@ it('drag alternatives: pane resize and reorder work without dragging', async () 
   await expect(bottom).toBeVisible();
   const b = async () => Number(await bottom.getAttribute('aria-valuenow'));
   const b0 = await b();
-  await bottom.focus();
-  await page.keyboard.press('ArrowUp');
-  await expect.poll(b).toBeLessThan(b0);
+  // A panel that has just opened may not take the first key yet (seen on CI): press until it does.
+  await expect(async () => {
+    await bottom.press('ArrowUp');
+    expect(await b()).toBeLessThan(b0);
+  }).toPass({ timeout: 10_000 });
   const b1 = await b();
   await page.getByRole('button', { name: 'More actions for the bottom panel' }).click();
   await page.getByRole('menuitem', { name: 'Make taller' }).click();

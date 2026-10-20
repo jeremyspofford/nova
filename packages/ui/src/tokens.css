@@ -167,6 +167,14 @@
   text-align: center;
 }
 
+.nv-table-scroll {
+  max-inline-size: 100%;
+  overflow-x: auto;
+}
+.nv-table-scroll:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 2px;
+}
 .nv-switch {
   position: relative;
   width: 36px;

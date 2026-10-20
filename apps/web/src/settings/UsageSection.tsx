@@ -5,7 +5,7 @@
 import { useEffect, useId, useState } from 'react';
 import { defineMessages, fmt } from '@nova/i18n';
 import type { UsageSummary } from '@nova/shared';
-import { Button, SelectField, Spinner } from '@nova/ui';
+import { Button, SelectField, Spinner, TableScroll } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
@@ -174,23 +174,25 @@ export function DayBars({
       ) : null}
       <details className="ws-advanced">
         <summary>{S.showTable}</summary>
-        <table className="ws-table">
-          <caption className="nv-vh">{title}</caption>
-          <thead>
-            <tr>
-              <th scope="col">{S.day}</th>
-              <th scope="col">{column}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {days.map((d, i) => (
-              <tr key={d.day}>
-                <th scope="row">{shortDay(d.day)}</th>
-                <td>{format(values[i] ?? 0)}</td>
+        <TableScroll label={title}>
+          <table className="ws-table">
+            <caption className="nv-vh">{title}</caption>
+            <thead>
+              <tr>
+                <th scope="col">{S.day}</th>
+                <th scope="col">{column}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {days.map((d, i) => (
+                <tr key={d.day}>
+                  <th scope="row">{shortDay(d.day)}</th>
+                  <td>{format(values[i] ?? 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       </details>
     </figure>
   );
@@ -306,68 +308,74 @@ export function UsageSection() {
             value={(i) => days[i]?.costUsd ?? 0}
             format={formatCost}
           />
-          <table className="ws-table">
-            <caption>{S.byModel}</caption>
-            <thead>
-              <tr>
-                <th scope="col">{S.model}</th>
-                <th scope="col">{S.tokensIn}</th>
-                <th scope="col">{S.tokensOut}</th>
-                <th scope="col">{S.cost}</th>
-                <th scope="col">{S.replies}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {usage.byModel.length ? (
-                usage.byModel.map((m) => (
-                  <tr key={`${m.provider}/${m.model}`}>
-                    <th scope="row">
-                      {m.model} <span className="muted">({m.provider})</span>
-                    </th>
-                    <td>{num(m.inputTokens)}</td>
-                    <td>{num(m.outputTokens)}</td>
-                    <td>{formatCost(m.costUsd)}</td>
-                    <td>{num(m.turns)}</td>
-                  </tr>
-                ))
-              ) : (
+          <TableScroll label={S.byModel}>
+            <table className="ws-table">
+              <caption>{S.byModel}</caption>
+              <thead>
                 <tr>
-                  <td colSpan={5} className="muted">
-                    {S.noneInRange}
-                  </td>
+                  <th scope="col">{S.model}</th>
+                  <th scope="col">{S.tokensIn}</th>
+                  <th scope="col">{S.tokensOut}</th>
+                  <th scope="col">{S.cost}</th>
+                  <th scope="col">{S.replies}</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-          <table className="ws-table">
-            <caption>{S.byProject}</caption>
-            <thead>
-              <tr>
-                <th scope="col">{S.project}</th>
-                <th scope="col">{S.tokensIn}</th>
-                <th scope="col">{S.tokensOut}</th>
-                <th scope="col">{S.cost}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {usage.byProject.length ? (
-                usage.byProject.map((p) => (
-                  <tr key={p.projectId ?? 'none'}>
-                    <th scope="row">{p.projectId ? (p.name ?? S.deletedProject) : S.noProject}</th>
-                    <td>{num(p.inputTokens)}</td>
-                    <td>{num(p.outputTokens)}</td>
-                    <td>{formatCost(p.costUsd)}</td>
+              </thead>
+              <tbody>
+                {usage.byModel.length ? (
+                  usage.byModel.map((m) => (
+                    <tr key={`${m.provider}/${m.model}`}>
+                      <th scope="row">
+                        {m.model} <span className="muted">({m.provider})</span>
+                      </th>
+                      <td>{num(m.inputTokens)}</td>
+                      <td>{num(m.outputTokens)}</td>
+                      <td>{formatCost(m.costUsd)}</td>
+                      <td>{num(m.turns)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="muted">
+                      {S.noneInRange}
+                    </td>
                   </tr>
-                ))
-              ) : (
+                )}
+              </tbody>
+            </table>
+          </TableScroll>
+          <TableScroll label={S.byProject}>
+            <table className="ws-table">
+              <caption>{S.byProject}</caption>
+              <thead>
                 <tr>
-                  <td colSpan={4} className="muted">
-                    {S.noneInRange}
-                  </td>
+                  <th scope="col">{S.project}</th>
+                  <th scope="col">{S.tokensIn}</th>
+                  <th scope="col">{S.tokensOut}</th>
+                  <th scope="col">{S.cost}</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {usage.byProject.length ? (
+                  usage.byProject.map((p) => (
+                    <tr key={p.projectId ?? 'none'}>
+                      <th scope="row">
+                        {p.projectId ? (p.name ?? S.deletedProject) : S.noProject}
+                      </th>
+                      <td>{num(p.inputTokens)}</td>
+                      <td>{num(p.outputTokens)}</td>
+                      <td>{formatCost(p.costUsd)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="muted">
+                      {S.noneInRange}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </TableScroll>
         </>
       ) : null}
     </section>

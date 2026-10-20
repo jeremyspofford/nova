@@ -1168,10 +1168,12 @@ kind is still a placeholder: a Code session shows its diff in its own Diff tab (
   - **Contrast**: field edges use the derived token `--u-control-border` (3:1 in every theme, 1.4.11)
     and placeholders the muted text color.
   - **Page titles**: each page names the browser tab "<page> - Nova" (2.4.2).
-  - Reflow at 320 px (the top bar wraps; grids and fields no longer widen the page), a 2 px focus
-    ring on the composer, roles on elements that carried a name screen readers ignored (the live
-    screen view is an `application` while you control it), and `one-time-code` autocomplete on the
-    setup code.
+  - Reflow at 320 px (the top bar wraps; grids and fields no longer widen the page; a data table
+    wider than the screen scrolls inside its own region, `TableScroll` in packages/ui, which is a
+    named keyboard stop only while it overflows, as WCAG 1.4.10 allows for two-dimensional
+    tables), a 2 px focus ring on the composer, roles on elements that carried a name screen
+    readers ignored (the live screen view is an `application` while you control it), and
+    `one-time-code` autocomplete on the setup code.
 
 #### WCAG 2.2 A and AA conformance (M8)
 

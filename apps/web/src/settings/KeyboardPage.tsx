@@ -4,7 +4,7 @@
 // operating systems.
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { defineMessages, fmt } from '@nova/i18n';
-import { Button, Dialog, Icon, Kbd, useToast } from '@nova/ui';
+import { Button, Dialog, Icon, Kbd, TableScroll, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import type { Command } from '../commands.ts';
 import { bindingText, eventToBinding, formatBinding } from '../keys.ts';
@@ -173,108 +173,114 @@ export function KeyboardPage() {
         </div>
       ) : null}
 
-      <table className="keyboard-table" aria-describedby={locked ? 'keyboard-lock' : undefined}>
-        <caption className="nv-vh">{S.table}</caption>
-        <thead>
-          <tr>
-            <th scope="col">{S.command}</th>
-            <th scope="col">{S.shortcut}</th>
-            <th scope="col">
-              <span className="nv-vh">{S.actions}</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map((c) => {
-            const b = registry.bindingsFor(c.id);
-            const custom = registry.isCustomized(c.id);
-            const isCapturing = capturing === c.id;
-            return (
-              <tr key={c.id} data-command={c.id} data-conflict={conflictIds.has(c.id) || undefined}>
-                <th scope="row">
-                  <span className="muted">{S.category({ category: c.category })} </span>
-                  {c.title}
-                  {custom ? <span className="muted"> {S.changed}</span> : null}
-                </th>
-                <td className="kb-shortcut">
-                  {b[0] ? (
-                    <Kbd keys={formatBinding(b[0], mac)} />
-                  ) : (
-                    <span className="muted">{S.notBound}</span>
-                  )}
-                  {conflictIds.has(c.id) ? (
-                    <span className="kb-conflict">
-                      <Icon name="alert" /> {S.conflict}
-                    </span>
-                  ) : null}
-                </td>
-                <td className="kb-actions">
-                  <div>
-                    {isCapturing ? (
-                      <button
-                        type="button"
-                        className="nv-btn kb-capture"
-                        data-variant="primary"
-                        autoFocus
-                        aria-label={S.pressNew({ command: c.title })}
-                        onBlur={() => setCapturing(null)}
-                        onKeyDown={(e) => {
-                          // Plain Tab leaves capture, so the keyboard is never trapped here.
-                          if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                            setCapturing(null);
-                            return;
-                          }
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (e.key === 'Escape') {
-                            setCapturing(null);
-                            return;
-                          }
-                          const combo = eventToBinding(e, mac);
-                          if (!combo) return;
-                          setCapturing(null);
-                          assign(c, combo);
-                        }}
-                      >
-                        {S.capturing}
-                      </button>
+      <TableScroll label={S.table}>
+        <table className="keyboard-table" aria-describedby={locked ? 'keyboard-lock' : undefined}>
+          <caption className="nv-vh">{S.table}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{S.command}</th>
+              <th scope="col">{S.shortcut}</th>
+              <th scope="col">
+                <span className="nv-vh">{S.actions}</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((c) => {
+              const b = registry.bindingsFor(c.id);
+              const custom = registry.isCustomized(c.id);
+              const isCapturing = capturing === c.id;
+              return (
+                <tr
+                  key={c.id}
+                  data-command={c.id}
+                  data-conflict={conflictIds.has(c.id) || undefined}
+                >
+                  <th scope="row">
+                    <span className="muted">{S.category({ category: c.category })} </span>
+                    {c.title}
+                    {custom ? <span className="muted"> {S.changed}</span> : null}
+                  </th>
+                  <td className="kb-shortcut">
+                    {b[0] ? (
+                      <Kbd keys={formatBinding(b[0], mac)} />
                     ) : (
-                      <Button
-                        variant="ghost"
-                        disabled={locked}
-                        onClick={() => setCapturing(c.id)}
-                        aria-label={S.changeFor({ command: c.title })}
-                      >
-                        {S.change}
-                      </Button>
+                      <span className="muted">{S.notBound}</span>
                     )}
-                    {b.length ? (
-                      <Button
-                        variant="ghost"
-                        disabled={locked}
-                        onClick={() => write({ ...bindings.value, [c.id]: '' })}
-                        aria-label={S.removeFor({ command: c.title })}
-                      >
-                        {S.remove}
-                      </Button>
+                    {conflictIds.has(c.id) ? (
+                      <span className="kb-conflict">
+                        <Icon name="alert" /> {S.conflict}
+                      </span>
                     ) : null}
-                    {custom ? (
-                      <Button
-                        variant="ghost"
-                        disabled={locked}
-                        onClick={() => resetOne(c.id)}
-                        aria-label={S.resetFor({ command: c.title })}
-                      >
-                        {S.reset}
-                      </Button>
-                    ) : null}
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                  </td>
+                  <td className="kb-actions">
+                    <div>
+                      {isCapturing ? (
+                        <button
+                          type="button"
+                          className="nv-btn kb-capture"
+                          data-variant="primary"
+                          autoFocus
+                          aria-label={S.pressNew({ command: c.title })}
+                          onBlur={() => setCapturing(null)}
+                          onKeyDown={(e) => {
+                            // Plain Tab leaves capture, so the keyboard is never trapped here.
+                            if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                              setCapturing(null);
+                              return;
+                            }
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (e.key === 'Escape') {
+                              setCapturing(null);
+                              return;
+                            }
+                            const combo = eventToBinding(e, mac);
+                            if (!combo) return;
+                            setCapturing(null);
+                            assign(c, combo);
+                          }}
+                        >
+                          {S.capturing}
+                        </button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          disabled={locked}
+                          onClick={() => setCapturing(c.id)}
+                          aria-label={S.changeFor({ command: c.title })}
+                        >
+                          {S.change}
+                        </Button>
+                      )}
+                      {b.length ? (
+                        <Button
+                          variant="ghost"
+                          disabled={locked}
+                          onClick={() => write({ ...bindings.value, [c.id]: '' })}
+                          aria-label={S.removeFor({ command: c.title })}
+                        >
+                          {S.remove}
+                        </Button>
+                      ) : null}
+                      {custom ? (
+                        <Button
+                          variant="ghost"
+                          disabled={locked}
+                          onClick={() => resetOne(c.id)}
+                          aria-label={S.resetFor({ command: c.title })}
+                        >
+                          {S.reset}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </TableScroll>
       {shown.length === 0 ? (
         <p className="muted">
           {keyFilter ? S.noCommandUses({ keys: bindingText(keyFilter, mac) }) : S.noMatches}

@@ -12,7 +12,7 @@ import type {
   ImportRecordView,
   ImportResult,
 } from '@nova/shared';
-import { Button, Icon, Spinner } from '@nova/ui';
+import { Button, Icon, Spinner, TableScroll } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { useServices } from '../services.tsx';
 import { formatWhen } from './common.ts';
@@ -580,35 +580,37 @@ function ImportRecords({ version }: { version: number }) {
       {records === null && !error ? <Spinner label={S.loadingRecords} /> : null}
       {records?.length === 0 ? <p className="muted">{S.noRecords}</p> : null}
       {records?.length ? (
-        <table className="ws-table">
-          <caption className="nv-vh">{S.records}</caption>
-          <thead>
-            <tr>
-              <th scope="col">{S.became}</th>
-              <th scope="col">{S.kindCol}</th>
-              <th scope="col">{S.from}</th>
-              <th scope="col">{S.hash}</th>
-              <th scope="col">{S.when}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {records.map((r) => (
-              <tr key={r.id}>
-                <th scope="row">{r.target}</th>
-                <td>{KIND_LABEL[r.kind]}</td>
-                <td>
-                  <code className="ws-code-inline" dir="ltr">
-                    {r.sourcePath}
-                  </code>
-                </td>
-                <td title={r.sha256} translate="no">
-                  {shortHash(r.sha256)}
-                </td>
-                <td>{formatWhen(r.createdAt)}</td>
+        <TableScroll label={S.records}>
+          <table className="ws-table">
+            <caption className="nv-vh">{S.records}</caption>
+            <thead>
+              <tr>
+                <th scope="col">{S.became}</th>
+                <th scope="col">{S.kindCol}</th>
+                <th scope="col">{S.from}</th>
+                <th scope="col">{S.hash}</th>
+                <th scope="col">{S.when}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {records.map((r) => (
+                <tr key={r.id}>
+                  <th scope="row">{r.target}</th>
+                  <td>{KIND_LABEL[r.kind]}</td>
+                  <td>
+                    <code className="ws-code-inline" dir="ltr">
+                      {r.sourcePath}
+                    </code>
+                  </td>
+                  <td title={r.sha256} translate="no">
+                    {shortHash(r.sha256)}
+                  </td>
+                  <td>{formatWhen(r.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       ) : null}
     </section>
   );

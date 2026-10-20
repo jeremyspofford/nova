@@ -11,6 +11,7 @@ export * from './components/PresetScale.tsx';
 export * from './components/Tree.tsx';
 export * from './components/CodeBlock.tsx';
 export * from './components/Splitter.tsx';
+export * from './components/TableScroll.tsx';
 export * from './strings.ts';
 export * from './highlight.ts';
 export * from './themes/builtin.ts';
