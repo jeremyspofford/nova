@@ -42,19 +42,20 @@ export function inHome(home, p) {
 
 // Git history is the audit trail: the home is a local repository, and every
 // finished turn is a commit. Best-effort: Nova works without git installed.
-// Memory stays out of it, so forgetting leaves no copy behind in old commits.
+// Memory, skills and connection secrets stay out of it, so forgetting a
+// memory or removing a skill leaves no copy behind in old commits.
 const git = (home, ...args) => new Promise((ok) => {
   execFile('git', ['-C', home, ...args], { timeout: 15_000 }, (err, stdout) => ok(err ? null : stdout));
 });
 
-const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md'];
+const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'skills/', 'connectors/'];
 
-function ignoreMemory(home) {
+function ignorePrivate(home) {
   const path = join(home, '.gitignore');
   const have = existsSync(path) ? readFileSync(path, 'utf8') : '';
   const missing = UNTRACKED.filter((l) => !have.split('\n').includes(l));
   if (!missing.length) return false;
-  const head = have.includes('# Nova:') ? '' : '# Nova: memory is kept out of history, so forgetting is final.\n';
+  const head = have.includes('# Nova:') ? '' : '# Nova: kept out of history, so forgetting and removing are final.\n';
   appendFileSync(path, `${have && !have.endsWith('\n') ? '\n' : ''}${head}${missing.join('\n')}\n`);
   return true;
 }
@@ -62,13 +63,13 @@ function ignoreMemory(home) {
 const commit = (home, message) => git(home, '-c', 'user.name=Nova', '-c', 'user.email=nova@localhost', 'commit', '-q', '-m', message);
 
 export async function ensureGit(home) {
-  const changed = ignoreMemory(home);
+  const changed = ignorePrivate(home);
   if (existsSync(join(home, '.git'))) {
-    // A home from before memory was untracked: stop tracking it from here on.
+    // A home from before these were untracked: stop tracking them from here on.
     if (changed) {
-      await git(home, 'rm', '-r', '-q', '--cached', '--ignore-unmatch', 'MEMORY.md', 'memory');
+      await git(home, 'rm', '-r', '-q', '--cached', '--ignore-unmatch', 'MEMORY.md', 'memory', 'skills', 'connectors');
       await git(home, 'add', '-A');
-      await commit(home, 'Nova: memory kept out of history');
+      await commit(home, 'Nova: memory, skills and connections kept out of history');
     }
     return true;
   }

@@ -12,6 +12,16 @@ import { inHome } from './home.js';
 const MAX_READ = 200_000;
 const MAX_OUTPUT = 16_000;
 const MAX_FETCH = 20_000;
+const UA = 'Nova/0.1 (personal agent)';
+export const SEARCH_URL = 'https://html.duckduckgo.com/html/';
+
+// Connection secrets live in ~/connectors/. No tool reads or writes them.
+function guard(home, path, verb) {
+  const abs = inHome(home, path);
+  const rel = relative(home, abs);
+  if (rel === 'connectors' || rel.startsWith(`connectors${sep}`)) throw new Error(`Connection secrets in connectors/ can't be ${verb}`);
+  return { abs, rel };
+}
 
 export const TOOLS = {
   read_file: {
@@ -19,7 +29,7 @@ export const TOOLS = {
     doc: 'Read a text file in your home (standing files, memory/, workspace/).',
     needsApproval: false,
     async run({ path }, { home }) {
-      const abs = inHome(home, path);
+      const { abs } = guard(home, path, 'read');
       if (statSync(abs).isDirectory()) throw new Error(`${path} is a folder`);
       const text = readFileSync(abs, 'utf8');
       return text.length > MAX_READ ? `${text.slice(0, MAX_READ)}\n[truncated: file is ${text.length} characters]` : text;
@@ -30,8 +40,7 @@ export const TOOLS = {
     doc: 'Create or replace a text file in your home: your workspace and the standing files. MEMORY.md and memory/ are kept with memory blocks instead (below).',
     needsApproval: false,
     async run({ path, content }, { home }) {
-      const abs = inHome(home, path);
-      const rel = relative(home, abs);
+      const { abs, rel } = guard(home, path, 'written');
       if (rel === 'sessions' || rel.startsWith(`sessions${sep}`)) throw new Error('Session logs are an audit trail and cannot be edited');
       if (rel === 'MEMORY.md' || rel === 'memory' || rel.startsWith(`memory${sep}`)) throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
       if (typeof content !== 'string') throw new Error('content must be a string');
@@ -53,11 +62,12 @@ export const TOOLS = {
     signature: '{"url": "https://example.com"}',
     doc: 'Fetch a web page (http or https) and read it as text.',
     needsApproval: false,
+    online: true,
     async run({ url }, { signal }) {
       if (!/^https?:\/\//i.test(String(url))) throw new Error('Only http and https URLs can be fetched');
       const res = await fetch(url, {
         signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(20_000)]),
-        headers: { 'user-agent': 'Nova/0.1 (personal agent)' },
+        headers: { 'user-agent': UA },
       });
       const type = res.headers.get('content-type') ?? '';
       let text = await res.text();
@@ -66,11 +76,91 @@ export const TOOLS = {
       return head + (text.length > MAX_FETCH ? `${text.slice(0, MAX_FETCH)}\n[truncated]` : text);
     },
   },
+  web_search: {
+    signature: '{"query": "merino wool hiking socks"}',
+    doc: 'Search the web. You get the top results: a title, a link and a line about each.',
+    needsApproval: false,
+    online: true,
+    async run({ query }, { signal, searchUrl = SEARCH_URL }) {
+      const q = String(query ?? '').trim();
+      if (!q) throw new Error('query is required');
+      let res;
+      try {
+        res = await fetch(`${searchUrl}?q=${encodeURIComponent(q)}`, {
+          signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(20_000)]),
+          headers: { 'user-agent': UA },
+        });
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        throw new Error("Couldn't reach the search engine. Check the connection and try again.");
+      }
+      if (!res.ok) throw new Error(`The search engine didn't answer (HTTP ${res.status}).`);
+      const results = parseSearch(await res.text());
+      if (!results.length) return { output: `No results for “${q}”.`, summary: 'no results' };
+      return {
+        output: results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}${r.snippet ? `\n${r.snippet}` : ''}`).join('\n\n'),
+        summary: `${results.length} results`,
+      };
+    },
+  },
+  use_skill: {
+    signature: '{"name": "email-summary"}',
+    doc: "Load a skill's playbook (see Skills) before doing that kind of work.",
+    needsApproval: false,
+    available: (ctx) => ctx.skills > 0,
+    run({ name }, ctx) { return ctx.useSkill(String(name ?? '')); },
+  },
+  gmail_search: {
+    signature: '{"query": "in:inbox newer_than:1d", "max": 20}',
+    doc: "Search the person's Gmail with Gmail search syntax. Read-only.",
+    needsApproval: false,
+    available: (ctx) => ctx.gmail,
+    mail: true,
+    run(args, { gmail, signal }) { return gmail.search(args, { signal }); },
+  },
+  gmail_read: {
+    signature: '{"id": "<id from gmail_search>"}',
+    doc: 'Read one email in full. Read-only.',
+    needsApproval: false,
+    available: (ctx) => ctx.gmail,
+    mail: true,
+    run(args, { gmail, signal }) { return gmail.readMessage(args, { signal }); },
+  },
 };
 
-export function toolProtocol() {
-  const list = Object.entries(TOOLS)
-    .map(([name, t]) => `- ${name} ${t.signature}\n  ${t.doc}`)
+// The tools on offer right now: Gmail's only while it's connected, use_skill
+// only when a skill is installed.
+export function availableTools({ gmail = false, skills = 0 } = {}) {
+  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills }));
+}
+
+// DuckDuckGo's HTML results page, without ads.
+export function parseSearch(html, limit = 8) {
+  const out = [];
+  const seen = new Set();
+  for (const chunk of String(html).split(/(?=<a\b[^>]*class="result__a")/).slice(1)) {
+    const tag = chunk.match(/^<a\b[^>]*>/)?.[0] ?? '';
+    let url = (tag.match(/href="([^"]+)"/)?.[1] ?? '').replace(/&amp;/g, '&');
+    if (url.startsWith('//')) url = `https:${url}`;
+    try {
+      const u = new URL(url);
+      if (u.hostname.endsWith('duckduckgo.com') && u.searchParams.get('uddg')) url = u.searchParams.get('uddg');
+      const real = new URL(url);
+      if (!/^https?:$/.test(real.protocol) || real.hostname.endsWith('duckduckgo.com')) continue;
+    } catch { continue; }
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const title = htmlToText(chunk.match(/^<a\b[^>]*>([\s\S]*?)<\/a>/)?.[1] ?? '');
+    const snippet = htmlToText(chunk.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/)?.[1] ?? '');
+    out.push({ title: title || url, url, snippet });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+export function toolProtocol(names = availableTools()) {
+  const list = names
+    .map((name) => `- ${name} ${TOOLS[name].signature}\n  ${TOOLS[name].doc}`)
     .join('\n');
   return `# Tools
 
@@ -157,14 +247,17 @@ export function extractMemory(raw) {
 }
 
 // Splits a finished model message into the prose the user sees and the tool call.
-export function parseToolCall(raw) {
+export function parseToolCall(raw, names = Object.keys(TOOLS)) {
   const at = raw.indexOf(OPEN);
   if (at < 0) return { visible: raw.trim(), call: null, error: null };
   const visible = raw.slice(0, at).replace(/```\w*\s*$/, '').trim();
   const m = raw.slice(at).match(CALL_RE);
   if (!m) return { visible, call: null, error: 'The tool call was not closed with </tool_call>.' };
   const [, name, body] = m;
-  if (!TOOLS[name]) return { visible, call: { name, args: {} }, error: `There is no tool named ${name}.` };
+  if (!names.includes(name)) {
+    const why = TOOLS[name]?.mail ? 'Gmail is not connected, so there is no tool named' : 'There is no tool named';
+    return { visible, call: { name, args: {} }, error: `${why} ${name}.` };
+  }
   let args;
   try {
     args = JSON.parse(body.trim() || '{}');
@@ -197,7 +290,11 @@ export function runCommand(command, { cwd, signal, timeoutMs = 120_000 }) {
   });
 }
 
-const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" };
+const ENTITIES = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '–', mdash: '—', hellip: '…',
+  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', laquo: '«', raquo: '»', middot: '·', bull: '•',
+  copy: '©', reg: '®', trade: '™', times: '×', deg: '°', euro: '€', pound: '£', cent: '¢', yen: '¥',
+};
 
 export function htmlToText(html) {
   return html

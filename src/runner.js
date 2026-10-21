@@ -9,10 +9,12 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { runAgent, AgentError } from './agent.js';
-import { buildPrompt, buildSystem } from './context.js';
+import { buildPrompt, buildSystem, skillsSection } from './context.js';
 import { Memory } from './memory.js';
+import { Skills } from './skills.js';
+import { Gmail, googleEndpoints } from './connectors/gmail.js';
 import { commitHome } from './home.js';
-import { TOOLS, ToolTagFilter, extractMemory, parseToolCall } from './tools.js';
+import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 
 const shortId = () => randomUUID().slice(0, 8);
@@ -25,6 +27,8 @@ export class Runner extends EventEmitter {
     this.agent = agent;
     this.active = new Map(); // sessionId → live run
     this.memory = new Memory(config.home, config.timezone);
+    this.skills = new Skills(config.root, config.home);
+    this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), timezone: config.timezone });
   }
 
   record(sessionId, ev) {
@@ -90,7 +94,9 @@ export class Runner extends EventEmitter {
 
   start(sessionId, turn, attempt) {
     const controller = new AbortController();
-    const run = { controller, pending: null, live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
+    // skills: the playbooks this reply follows. tainted: mail has been read in
+    // this conversation, so going online asks first.
+    const run = { controller, pending: null, skills: new Map(), tainted: false, live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
     this.active.set(sessionId, run);
     this.emit('live', sessionId, { ...run.live });
     run.done = this.loop(sessionId, run)
@@ -108,21 +114,29 @@ export class Runner extends EventEmitter {
     const { turn, attempt } = run.live;
     const tag = { turn, attempt };
     const { signal } = run.controller;
-    const question = reduce(this.store.read(sessionId)).turns.find((t) => t.id === turn).text;
+    const before = reduce(this.store.read(sessionId));
+    const question = before.turns.find((t) => t.id === turn).text;
+    // Once Nova has read mail in a conversation, the mail is in its context,
+    // so going online asks first for the rest of that conversation.
+    run.tainted = before.turns.some((t) => t.items.some((i) => i.kind === 'tool' && TOOLS[i.name]?.mail && i.result?.ok));
 
     // The log keeps where each note came from, not its words: what is
     // forgotten later stays gone from the conversation view too.
     const recall = this.memory.search(question);
     if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall.map(({ id, source }) => ({ id, source })) });
+    for (const s of this.skills.match(question)) this.follow(sessionId, tag, run, s, 'matched');
 
     for (let step = 0; step <= this.config.maxSteps; step++) {
       const session = reduce(this.store.read(sessionId));
+      const installed = this.skills.installed();
+      const tools = availableTools({ gmail: this.gmail.status().connected, skills: installed.length });
+      const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
       const filter = new ToolTagFilter();
       this.setLive(sessionId, { phase: 'thinking', text: '' });
       let streamed = '';
       const { text, aborted } = await this.agent({
         cmd: this.config.agentCmd,
-        system: buildSystem(this.config),
+        system: buildSystem(this.config, new Date(), { tools, skills }),
         prompt: buildPrompt(session, recall, this.config),
         signal,
         onText: (chunk) => {
@@ -142,7 +156,7 @@ export class Runner extends EventEmitter {
       }
 
       const { text: said, ops } = extractMemory(text);
-      const { visible, call, error } = parseToolCall(said);
+      const { visible, call, error } = parseToolCall(said, tools);
       if (visible) this.record(sessionId, { type: 'assistant', ...tag, id: shortId(), text: visible });
       run.live.text = '';
       if (ops.length) this.keep(sessionId, tag, ops);
@@ -155,7 +169,7 @@ export class Runner extends EventEmitter {
 
       const id = shortId();
       const tool = TOOLS[call?.name];
-      const needsApproval = !!tool?.needsApproval && !error;
+      const needsApproval = !error && (!!tool?.needsApproval || (!!tool?.online && run.tainted));
       this.record(sessionId, { type: 'tool_call', ...tag, id, name: call?.name ?? 'unknown', args: call?.args ?? {}, needs_approval: needsApproval });
       if (error) {
         this.record(sessionId, { type: 'tool_result', ...tag, id, ok: false, output: error });
@@ -177,9 +191,14 @@ export class Runner extends EventEmitter {
 
       this.setLive(sessionId, { phase: 'tool' });
       let output;
+      let summary;
       let ok = true;
       try {
-        output = await tool.run(call.args, { home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs });
+        output = await tool.run(call.args, {
+          home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
+          gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
+        });
+        if (output && typeof output === 'object') ({ output, summary } = output);
       } catch (e) {
         ok = false;
         output = e.code === 'ENOENT' ? `No such file: ${call.args.path ?? ''}` : e.message;
@@ -189,8 +208,28 @@ export class Runner extends EventEmitter {
         this.record(sessionId, { type: 'stopped', ...tag });
         return;
       }
-      this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output) });
+      if (tool.mail && ok) run.tainted = true;
+      this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output), ...(summary ? { summary } : {}) });
     }
+  }
+
+  // A skill this reply follows: its playbook goes into the instructions for
+  // every model call that's left. The log keeps which skill, not its text.
+  follow(sessionId, tag, run, skill, how) {
+    if (run.skills.has(skill.id)) return false;
+    run.skills.set(skill.id, skill);
+    this.record(sessionId, { type: 'skill', ...tag, skill: skill.id, name: skill.name, how });
+    return true;
+  }
+
+  useSkill(sessionId, tag, run, name) {
+    const skill = this.skills.get(name.trim().toLowerCase());
+    if (!skill) {
+      const have = this.skills.installed().map((s) => s.id).join(', ');
+      throw new Error(`There's no installed skill called ${name}.${have ? ` Installed: ${have}.` : ''}`);
+    }
+    const fresh = this.follow(sessionId, tag, run, skill, 'asked');
+    return { output: `${fresh ? 'Loaded' : 'Already following'} ${skill.name}. Its playbook is now in your instructions under Skills; follow it.`, summary: skill.name };
   }
 
   // Memory is written before the reply is marked done. The log records what

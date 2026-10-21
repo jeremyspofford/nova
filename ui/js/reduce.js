@@ -44,6 +44,9 @@ function applyTurnEvent(t, ev) {
     case 'memory':
       t.items.push({ kind: 'memory', ops: ev.ops ?? [] });
       break;
+    case 'skill':
+      t.items.push({ kind: 'skill', id: ev.skill, name: ev.name, how: ev.how });
+      break;
     case 'assistant':
       t.items.push({ kind: 'text', id: ev.id, text: ev.text, ts: ev.ts });
       break;

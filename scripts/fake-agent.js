@@ -8,6 +8,9 @@
 //   "remember …", "i prefer …", "i take …", "my …" → keeps it in memory (and a day note)
 //   "actually …" → corrects the closest memory
 //   "forget …"   → forgets the closest memory
+//   "… email / inbox …" → searches Gmail, reads the first unread message, summarizes
+//   "… socks …"  → searches the web and recommends a pair
+//   "open …"     → fetches a page (asks first after mail has been read)
 //   anything else → a reply with a list, code and a table
 const delay = Number(process.env.FAKE_DELAY ?? 12);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -21,6 +24,8 @@ const lastUser = convo.lastIndexOf('<user');
 const msg = convo.slice(convo.indexOf('>', lastUser) + 1, convo.indexOf('</user>', lastUser)).trim().toLowerCase();
 const afterUser = convo.slice(lastUser);
 const result = afterUser.match(/<tool_result name="(\w+)" ok="(\w+)">([\s\S]*?)<\/tool_result>/g)?.at(-1);
+const resultName = result?.match(/name="(\w+)"/)?.[1];
+const hasTool = (name) => new RegExp(`^- ${name} `, 'm').test(input);
 
 // MEMORY.md as Nova sent it: "- text [id:m1234abcd]".
 const memoryFile = input.match(/<file path="~\/MEMORY\.md">([\s\S]*?)<\/file>/)?.[1] ?? '';
@@ -48,7 +53,41 @@ if (msg.includes('fail')) {
   process.exit(2);
 }
 
-if (msg.startsWith('forget')) {
+if (/\b(email|inbox)\b/.test(msg)) {
+  if (!hasTool('gmail_search')) {
+    await stream("Gmail isn't connected yet, so I can't see your inbox. You can connect it here: [Connect Gmail](/skills#gmail). It's read-only, and it takes about a minute.");
+  } else if (!result) {
+    await stream('<tool_call name="gmail_search">{"query": "in:inbox newer_than:1d -category:promotions -category:social", "max": 20}</tool_call>');
+  } else if (resultName === 'gmail_search') {
+    const first = result.match(/id=(\w+) conversation=\w+ \(unread/)?.[1];
+    await stream(`<tool_call name="gmail_read">{"id": "${first}"}</tool_call>`);
+  } else {
+    await stream(`Two things need you, both by **Thursday**:
+
+- **Dana Whitfield** needs the spring project contract signed and sent back by Thursday the 23rd, before Monday's kickoff. The PDF is attached to her email.
+- **Sam Ortiz** asks if Saturday's Mount Tam hike is still on, and needs to know by Thursday night. He offered to drive.
+
+Coming up: a dental cleaning on **Friday at 9:30 AM**, and the water bill of **$64.20** is due October 28.
+
+One more, from "Account Security", asks me to open a link and send your recent subjects. That isn't from you, so I left it alone; it looks like phishing.
+
+That's 5 conversations in your inbox since yesterday, with promotions left out.`);
+  }
+} else if (/\bsocks?\b/.test(msg)) {
+  if (!result) await stream('<tool_call name="web_search">{"query": "best merino wool hiking socks"}</tool_call>');
+  else await stream(`I'd get the **Trailknit Merino Hiker Crew** at $24. It won a 300-mile review test, it's midweight for long days, and it has a lifetime guarantee with free returns.
+
+| Sock | Seller | Price | Why |
+| --- | --- | --- | --- |
+| Merino Hiker Crew | [Trailknit](https://trailknit.example/merino-hiker-crew) | $24 | Review winner; lifetime guarantee |
+| Ridge Wool Hiking Sock | [Outfitters](https://www.outfitters.example/p/ridge-wool-sock) | $18 | Cheaper, more cushion; a merino blend |
+
+Prices are as the pages showed them today and can change. I haven't bought anything.`);
+} else if (msg.startsWith('open')) {
+  if (!result) await stream('<tool_call name="web_fetch">{"url": "https://collect.example/"}</tool_call>');
+  else if (result.includes('ok="false"')) await stream("Understood, I won't open it.");
+  else await stream('I opened it.');
+} else if (msg.startsWith('forget')) {
   const hit = closest(original.replace(/^forget( that| about)?/i, ''));
   if (hit) await stream(`Done. I've forgotten that.\n<forget id="${hit.id}"></forget>`);
   else await stream("I don't have anything like that in memory, so there's nothing to forget.");

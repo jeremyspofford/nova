@@ -106,21 +106,25 @@ test('entries written by hand can be read, edited and forgotten', () => {
 import { execFileSync } from 'node:child_process';
 import { ensureGit, commitHome } from '../src/home.js';
 
-test('memory stays out of the home folder\'s git history, so forgetting is final', async () => {
+test('memory, skills and secrets stay out of the home folder\'s git history', async () => {
   const { h, m } = fresh();
   mkdirSync(join(h, 'memory'), { recursive: true });
   writeFileSync(join(h, 'memory', 'README.md'), '# memory/\n');
   writeFileSync(join(h, 'USER.md'), '# USER.md\n');
   assert.equal(await ensureGit(h), true);
+  mkdirSync(join(h, 'skills', 'shopping'), { recursive: true });
+  writeFileSync(join(h, 'skills', 'shopping', 'SKILL.md'), '# Shopping\n');
+  mkdirSync(join(h, 'connectors', 'gmail'), { recursive: true });
+  writeFileSync(join(h, 'connectors', 'gmail', 'token.json'), '{"refresh_token":"secret-token"}');
   m.remember({ kind: 'fact', text: 'Allergic to penicillin.', from: 's/t1' }, now);
   m.note({ text: 'Mentioned the penicillin allergy.', from: 's/t1' }, now);
   await commitHome(h, 'Nova: turn');
   const tracked = execFileSync('git', ['-C', h, 'ls-files'], { encoding: 'utf8' });
   assert.match(tracked, /USER\.md/);
   assert.match(tracked, /memory\/README\.md/);
-  assert.doesNotMatch(tracked, /MEMORY\.md|2026-10-21/);
+  assert.doesNotMatch(tracked, /MEMORY\.md|2026-10-21|skills\/|connectors\//);
   const everything = execFileSync('git', ['-C', h, 'log', '--all', '-p'], { encoding: 'utf8' });
-  assert.doesNotMatch(everything, /penicillin/);
+  assert.doesNotMatch(everything, /penicillin|secret-token|# Shopping/);
 });
 
 test('an older home that tracked memory stops tracking it', async () => {

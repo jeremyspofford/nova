@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readStanding } from './home.js';
 import { Memory } from './memory.js';
-import { memoryProtocol, toolProtocol } from './tools.js';
+import { availableTools, memoryProtocol, toolProtocol } from './tools.js';
 
 const MAX_TRANSCRIPT = 120_000; // characters; older turns drop off first
 
@@ -16,7 +16,23 @@ export function formatNow(now, timezone) {
   return `${f.format(now)} (${timezone})`;
 }
 
-export function buildSystem({ root, home, timezone }, now = new Date()) {
+// Installed skills are listed every time; the ones this reply follows are
+// read in full, with the docs of the connectors they need.
+export function skillsSection(installed = [], active = [], connectorDoc = () => '') {
+  if (!installed.length) return '';
+  const list = installed.map((s) => `- ${s.id}: ${s.name}. Use when: ${s.when || s.about}`).join('\n');
+  const loaded = active.map((s) => {
+    const docs = s.needs.map((c) => connectorDoc(c)).filter(Boolean).map((d, i) => `<connector name="${s.needs[i]}">\n${d}\n</connector>`);
+    return `<skill name="${s.id}">\n${s.body}\n</skill>${docs.length ? `\n${docs.join('\n')}` : ''}`;
+  });
+  return `# Skills
+
+Skills are playbooks for particular kinds of work, kept in ~/skills/. When a message calls for one that isn't loaded below, load it with use_skill before you start, then follow it.
+
+${list}${loaded.length ? `\n\nLoaded for this message. Follow ${loaded.length > 1 ? 'these' : 'this'} closely:\n\n${loaded.join('\n\n')}` : ''}`;
+}
+
+export function buildSystem({ root, home, timezone }, now = new Date(), { tools = availableTools(), skills = '' } = {}) {
   const base = readFileSync(join(root, 'system', 'system_prompt.md'), 'utf8').trim();
   const memory = new Memory(home, timezone);
   const standing = readStanding(home)
@@ -32,13 +48,14 @@ export function buildSystem({ root, home, timezone }, now = new Date()) {
     base,
     `# Standing files\n\nThese are your home's standing files, read fresh for this message.\n\n${standing}`,
     days.length ? `# Recent notes\n\n${days.join('\n\n')}` : '',
-    toolProtocol(),
+    skills,
+    toolProtocol(tools),
     memoryProtocol(),
     `# Now\n\nIt is ${formatNow(now, timezone)}.`,
   ].filter(Boolean).join('\n\n');
 }
 
-const esc = (s) => String(s).replace(/<\/(tool_result|user|nova|note|remember|forget)>/g, '<\\/$1>');
+const esc = (s) => String(s).replace(/<\/(tool_result|user|nova|note|remember|forget|skill|connector)>/g, '<\\/$1>');
 
 function renderTurn(t, timezone) {
   const when = t.ts ? ` time="${formatNow(new Date(t.ts), timezone)}"` : '';
