@@ -13,7 +13,7 @@ const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const QUOTE = /^\s{0,3}>\s?/;
 const LIST = /^(\s*)([-*+]|\d{1,9}[.)])\s+/;
-const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$|^\s*\|\s*:?-+:?\s*\|\s*$/;
 
 const indentOf = (l) => l.match(/^\s*/)[0].replace(/\t/g, '    ').length;
 const isBlank = (l) => /^\s*$/.test(l);
@@ -95,8 +95,10 @@ function parseBlocks(lines) {
         }
         if (isBlank(l)) {
           const next = lines[i + 1];
-          if (next !== undefined && (indentOf(next) > base || (LIST.test(next) && indentOf(next.match(LIST)[1]) === base))) {
-            if (items.length) loose = loose || !LIST.test(next) || indentOf(next) === base;
+          const nm = next?.match(LIST);
+          const sameList = nm && indentOf(nm[1]) === base && ordered(nm[2]) === isOrdered;
+          if (next !== undefined && !isBlank(next) && (indentOf(next) > base || sameList)) {
+            loose = true;
             cur?.lines.push('');
             i++;
             continue;

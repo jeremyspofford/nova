@@ -160,6 +160,7 @@ export function htmlToText(html) {
     .replace(/<[^>]+>/g, ' ')
     .replace(/&(#?\w+);/g, (m, e) => ENTITIES[e] ?? (e.startsWith('#') ? String.fromCodePoint(parseInt(e.slice(1).replace(/^x/, '0x'))) : m))
     .replace(/[ \t\f\v]+/g, ' ')
+    .replace(/ *\n */g, '\n')
     .replace(/\n\s*\n\s*/g, '\n\n')
     .trim();
 }

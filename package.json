@@ -10,7 +10,7 @@
     "start": "node src/server.js",
     "dev:follow": "node scripts/dev-follow.js",
     "dev": "NOVA_DEV=1 node --watch-path=src --watch-path=system --watch-path=templates --watch-path=ui/js src/server.js",
-    "test": "node --test tests/",
+    "test": "node --test 'tests/*.test.js'",
     "lint:tokens": "node scripts/lint-tokens.js",
     "check:themes": "node scripts/check-themes.js",
     "check": "npm run lint:tokens && npm run check:themes && npm test",
