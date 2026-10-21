@@ -22,6 +22,13 @@ export function applyEvent(s, ev) {
     case 'user':
       s.turns.push({ id: ev.turn, text: ev.text, ts: ev.ts, attempt: 0, items: [], state: 'open', endedAt: null });
       break;
+    case 'handoff':
+      // A report from scheduled work: an entry of its own, between replies.
+      s.turns.push({
+        id: ev.id, kind: 'handoff', name: ev.name, schedule: ev.schedule, run: ev.run, text: ev.text, ok: ev.ok !== false,
+        late: !!ev.late, manual: !!ev.manual, due: ev.due, ts: ev.ts, attempt: 0, items: [], state: 'done', endedAt: ev.ts,
+      });
+      break;
     case 'attempt': {
       const t = turn(s, ev.turn);
       if (t) Object.assign(t, { attempt: ev.attempt, items: [], state: 'open', endedAt: null });
@@ -55,7 +62,7 @@ function applyTurnEvent(t, ev) {
       break;
     case 'approval': {
       const tool = t.items.find((i) => i.kind === 'tool' && i.id === ev.id);
-      if (tool) tool.approval = { decision: ev.decision, ts: ev.ts };
+      if (tool) tool.approval = { decision: ev.decision, ts: ev.ts, ...(ev.auto ? { auto: true } : {}) };
       break;
     }
     case 'tool_result': {

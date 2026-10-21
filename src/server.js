@@ -10,6 +10,8 @@ import { Runner, BusyError } from './runner.js';
 import { SkillError } from './skills.js';
 import { GmailError } from './connectors/gmail.js';
 import { ZipError, unzip } from './zip.js';
+import { ScheduleError } from './schedules.js';
+import { Scheduler } from './scheduler.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -21,6 +23,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
   const store = new SessionStore(config.home, config.timezone);
   const runner = new Runner(config, store, deps);
+  runner.ensureMain();
+  const scheduler = new Scheduler({ schedules: runner.schedules, runner, store, timezone: config.timezone });
   const ui = join(config.root, 'ui');
   const subscribers = new Map(); // sessionId → Set<res>
 
@@ -41,6 +45,25 @@ export function createNova(config = loadConfig(), deps = {}) {
   const titles = () => Object.fromEntries(store.list().map((s) => [s.id, s.title]));
   const saved = () => announce('memory'); // memory isn't in git history, so there's nothing to commit
   const { skills, gmail } = runner;
+  scheduler.on('change', () => announce('schedules'));
+  runner.on('schedules', () => { scheduler.tick(); announce('schedules'); });
+  scheduler.on('ran', ({ target, handoff }) => { announce('schedules'); announce('handoff', { target, handoff }); });
+  const { schedules } = runner;
+  const schedulesView = () => {
+    const latest = schedules.latest();
+    const queued = new Set(scheduler.queue.map((q) => q.id));
+    return {
+      set: schedules.list().map((s) => ({
+        ...s,
+        next: schedules.next(s)?.toISOString() ?? null,
+        last: latest.get(s.id) ?? null,
+        running: scheduler.running?.id === s.id ? scheduler.running : null,
+        queued: queued.has(s.id),
+      })),
+      available: schedules.available(),
+      timezone: config.timezone,
+    };
+  };
   const skillsView = () => ({
     installed: skills.installed(),
     available: skills.available(),
@@ -96,7 +119,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   }
 
   function serveStatic(req, res, path) {
-    if (path === '/' || path === '/memory' || path === '/skills' || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
+    if (['/', '/new', '/memory', '/skills', '/schedules'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
@@ -186,6 +209,29 @@ export function createNova(config = loadConfig(), deps = {}) {
       }
     }
 
+    if (resource === 'schedules') {
+      if (req.method === 'GET' && !id) return json(res, 200, schedulesView());
+      if (req.method !== 'POST' || !id || !action) return json(res, 405, { error: 'Method not allowed' });
+      try {
+        let body;
+        if (action === 'run') {
+          if (!schedules.get(id)) return json(res, 404, { error: 'That schedule is gone. It may have been removed.' });
+          body = { queued: scheduler.runNow(id) };
+        } else if (action === 'pause') body = { schedule: schedules.setPaused(id, true) };
+        else if (action === 'resume') body = { schedule: schedules.setPaused(id, false) };
+        else if (action === 'remove') body = { text: schedules.remove(id).text };
+        else if (action === 'restore') body = { schedule: schedules.restore(id, (await readBody(req)).text) };
+        else if (action === 'setup') body = { schedule: schedules.setup(id, await readBody(req)) };
+        else return json(res, 404, { error: 'Not found' });
+        scheduler.tick();
+        announce('schedules');
+        return json(res, 200, body);
+      } catch (e) {
+        if (e instanceof ScheduleError) return json(res, e.status, { error: e.message });
+        throw e;
+      }
+    }
+
     if (resource === 'connectors') {
       if (id !== 'gmail') return json(res, 404, { error: 'Not found' });
       if (req.method === 'GET' && !action) return json(res, 200, gmail.status());
@@ -243,7 +289,12 @@ export function createNova(config = loadConfig(), deps = {}) {
         if (!String(text ?? '').trim()) return json(res, 400, { error: 'Write a message first.' });
         return json(res, 202, { turn: runner.send(id, String(text)) });
       }
-      if (action === 'regenerate') return json(res, 202, { turn: runner.regenerate(id) });
+      if (action === 'regenerate') {
+        try { return json(res, 202, { turn: runner.regenerate(id) }); } catch (e) {
+          if (e.message === 'Nothing to regenerate') return json(res, 409, { error: 'There is no reply to regenerate.' });
+          throw e;
+        }
+      }
       if (action === 'stop') return json(res, 200, { stopped: runner.stop(id) });
       if (action === 'approvals' && sub) {
         const { decision } = await readBody(req);
@@ -284,13 +335,14 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
   });
 
-  return { server, runner, store, config, seeded, started };
+  return { server, runner, store, scheduler, config, seeded, started };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const nova = createNova();
   const { config } = nova;
   ensureGit(config.home);
+  nova.scheduler.start();
   nova.server.listen(config.port, config.host, () => {
     const ms = Math.round(performance.now() - nova.started);
     if (nova.seeded.length) console.log(`Seeded ${nova.seeded.length} files into ${config.home}`);
@@ -300,7 +352,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log('Warning: Nova is listening beyond this machine. Anyone who can reach it can talk to Nova and approve commands.');
     }
   });
-  const quit = () => { for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); process.exit(0); };
+  const quit = () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); process.exit(0); };
   process.on('SIGINT', quit);
   process.on('SIGTERM', quit);
 }

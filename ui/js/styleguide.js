@@ -1,7 +1,7 @@
 // Renders the style reference from the live tokens and the app's own views.
 import { CONTRACT } from './contract.js';
 import { THEMES, MODES, apply, choose, current } from './theme.js';
-import { icons, memoryIndex, renderEmpty, renderMemory, renderNotes, renderSkills, renderToc, renderTurn } from './view.js';
+import { icons, memoryIndex, renderEmpty, renderHandoff, renderMemory, renderNotes, renderSchedules, renderSkills, renderToc, renderToday, renderTurn } from './view.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -97,6 +97,19 @@ function render() {
     ['--shadow-1', '--shadow-2'].map((n) => `<div class="sg-swatch"><div class="sg-box" style="border-radius: var(--r-card); box-shadow: var(${n})">elevation</div><span class="sg-name">${n}</span></div>`).join('');
   const motion = ['--m-fast', '--m-med', '--m-slow'].map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-track"><span class="sg-dot" style="transition: left var(${n}) var(--ease)"></span></div></div>`).join('');
 
+  const at = (h) => new Date(t0.getTime() + h * 3600_000).toISOString();
+  const sched = (id, name, when, more = {}) => ({ id, name, when, cron: '0 7 * * *', deliver: 'main', prompt: 'Write the morning digest.', next: at(20), last: null, ...more });
+  const scheduleSample = {
+    set: [
+      sched('morning-digest', 'Morning digest', 'Every day at 7:00 AM', { last: { ok: true, finished: at(-1), delivered: 'main', handoff: 'h1', summary: 'One thing matters today: the contract, due Thursday.' } }),
+      sched('inbox', 'Inbox sweep', 'Every 2 hours', { running: { started: at(0) } }),
+      sched('weekly', 'Weekly review', 'Fridays at 4:00 PM', { paused: true, next: null }),
+      sched('plants', 'Water the plants', 'Mondays at 8:00 AM', { last: { missed: true, due: at(-26) } }),
+      sched('bills', 'Bills check', 'On the 1st of every month at 9:00 AM', { last: { ok: false, finished: at(-2), delivered: 'main', handoff: 'h3', error: "Nova couldn't reach the model." } }),
+      sched('broken', 'Broken', '', { error: "Nova can't read when this runs: A schedule needs five parts.", next: null }),
+    ],
+    available: [{ id: 'evening', name: 'Evening wrap-up', about: 'What got done today, and what is waiting for tomorrow.', cron: '0 18 * * *', prompt: 'Wrap up the day.' }],
+  };
   sg.innerHTML = [
     section('Color', `Every theme defines these ${CONTRACT.color.length} tokens. Components use nothing else.`, `<div class="sg-grid">${colors}</div>`),
     section('Type', `Serif is the voice of record in Paper: dates, empty states, and anything Nova concludes. Chrome stays sans. Font families: ${tokenList(['--font', '--font-display', '--font-mono'])}.`, type),
@@ -132,6 +145,13 @@ function render() {
       <div class="thread">${renderTurn(usedSkill, { skills: new Set(['email-summary']) })}</div>
       <p class="sg-label">Skills, with a connection</p>
       <div class="sg-frame"><div class="thread memory skills">${renderSkills(skillSample)}</div></div>
+      <p class="sg-label">A report on the front page, one that ran late, and one that didn't finish</p>
+      <div class="thread">${renderHandoff({ id: 'h1', name: 'Morning digest', schedule: 'morning-digest', ok: true, ts: t0.toISOString(), due: t0.toISOString(), text: 'One thing matters today: the contract, due Thursday.\n\n**Needs you**\n\n- **Dana Whitfield** needs the spring contract signed by Thursday.\n\nWant me to draft a note to Dana?' })}</div>
+      <div class="thread">${renderHandoff({ id: 'h2', name: 'Morning digest', schedule: 'morning-digest', ok: true, late: true, ts: new Date(t0.getTime() + 5400_000).toISOString(), due: t0.toISOString(), text: 'A quiet morning: nothing is due today.' })}</div>
+      <div class="thread">${renderHandoff({ id: 'h3', name: 'Bills check', schedule: 'bills', ok: false, ts: t0.toISOString(), text: "Bills check didn't finish. Nova couldn't reach the model." })}</div>
+      <div class="thread">${renderToday(t0)}</div>
+      <p class="sg-label">Schedules: done, running, paused, missed, failed, unreadable, and one to set up</p>
+      <div class="sg-frame"><div class="thread memory skills schedules">${renderSchedules(scheduleSample, t0)}</div></div>
       <p class="sg-label">Toast</p>
       <div class="sg-frame" style="position: relative; min-height: 80px"><div class="toast">Forgotten, with 1 day note that said the same.<button type="button" class="toast-btn">Undo</button></div></div>
       <p class="sg-label">Empty state</p>

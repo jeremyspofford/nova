@@ -72,7 +72,7 @@ test('matching: a skill whose words appear is loaded; others are only listed', (
 });
 
 test('tools on offer follow what is installed and connected', () => {
-  assert.deepEqual(availableTools(), ['read_file', 'write_file', 'exec', 'web_fetch', 'web_search']);
+  assert.deepEqual(availableTools(), ['read_file', 'write_file', 'exec', 'web_fetch', 'web_search', 'schedule_set', 'schedule_remove']);
   assert.ok(availableTools({ skills: 1 }).includes('use_skill'));
   assert.ok(availableTools({ gmail: true }).includes('gmail_read'));
   const offered = availableTools();

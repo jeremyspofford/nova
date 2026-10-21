@@ -330,6 +330,55 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 /* A turn or memory a link pointed at: a wash that fades. */
 .is-found { animation: found calc(var(--m-slow) * 4) var(--ease) both; border-radius: var(--r-card); }
 
+/* ---- the front page: reports from scheduled work ---------------------------- */
+
+.today-line { font: var(--t-margin); color: var(--text-3); padding-bottom: var(--s6); }
+.handoff { gap: var(--s3); scroll-margin-top: var(--s7); }
+.handoff-kicker {
+  font: var(--t-caption);
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.handoff-kicker a { color: inherit; text-decoration: none; }
+.handoff-kicker a:hover { color: var(--accent); }
+/* Anything Nova concludes is set in the voice of record; its first line is
+   the headline. */
+.handoff-body { font-family: var(--font-display); }
+.handoff-body > p:first-child { font: var(--t-display); color: var(--text); text-wrap: balance; }
+.place-dot {
+  display: inline-block;
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+}
+
+/* ---- schedules ---------------------------------------------------------------- */
+
+.schedule .skill-head { justify-content: flex-start; }
+.schedule-actions { display: flex; flex-wrap: wrap; gap: var(--s1); margin-left: auto; }
+.schedule.is-paused .skill-name, .schedule.is-paused .schedule-when { color: var(--text-3); }
+.schedule-when { margin-top: var(--s1); color: var(--text-2); }
+.schedule-next { color: var(--text-3); }
+.schedule-last { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--s1); margin-top: var(--s2); font: var(--t-callout); color: var(--text-2); }
+.schedule-last a { color: var(--accent); text-underline-offset: 3px; }
+.schedule-last.is-warn::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-right: var(--s1);
+  border-radius: var(--r-pill);
+  background: var(--warning);
+}
+.schedule-last .pulse { margin-right: var(--s1); }
+.schedule-headline { margin-top: var(--s1); font: var(--t-margin); color: var(--text); }
+.schedule-setup { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s3); margin-top: var(--s3); }
+.schedule-setup .field-label { flex: 0 1 180px; }
+.schedule-setup .field, .schedule-setup .btn { box-sizing: border-box; height: 44px; }
+.approval-next { display: block; font: var(--t-callout); color: var(--text-3); }
+
 /* ---- memory: what Nova knows ------------------------------------------------- */
 
 .memory { gap: var(--s6); }

@@ -91,7 +91,7 @@ export function runAgent({ cmd, system, prompt, signal, onText = () => {} }) {
       rmSync(dir, { recursive: true, force: true });
       if (finished) return resolve({ text, aborted: false });
       if (aborted) return resolve({ text, aborted: true });
-      const program = cmd.trim().split(/\s+/)[0];
+      const program = cmd.trim().split(/\s+/).find((w) => !/^\w+=/.test(w)) ?? cmd.trim();
       if (code === 127) return reject(new AgentError(`Nova couldn't find \`${program}\`. Check that it's installed and on your PATH, or set agent_cmd in nova.config.json.`, stderr.trim()));
       if (failure) return reject(new AgentError('The model ran into a problem and stopped.', failure));
       if (code !== 0 && !text) return reject(new AgentError(`\`${program}\` exited before replying.`, stderr.trim() || `exit code ${code}`));

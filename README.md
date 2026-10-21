@@ -75,6 +75,20 @@ connect at `localhost` on the machine Nova runs on. Google signs apps in
 Testing out after 7 days; publish yours under Audience to stay connected
 (Google will call it unverified, which is expected for an app only you use).
 
+**The main conversation and schedules.** Opening Nova (`/`) shows the main
+conversation, a front page that reports from scheduled work land in; + or
+⌘⇧O starts a separate conversation. A schedule is a markdown file in
+`~/Nova/schedules/` (`name`, a five-field `cron` on your time zone, where to
+`deliver`, and the instructions as its body). Nova runs it unattended, one at
+a time, and anything that would need your OK is declined and suggested in the
+report instead. The Schedules view (`/schedules`) shows what's set, when it
+last ran and what it said, with Run now, Pause and Remove. Nova ships one
+schedule, the morning digest, to turn on there; you can also ask for one in
+any conversation ("Every Friday at 4, remind me to send my timesheet"), which
+waits for your OK. Schedules run only while Nova is running: a run missed in
+the last six hours runs when Nova starts, and older ones are recorded as
+missed. Every run is logged in `schedules/runs.jsonl`.
+
 ## Configure
 
 Optional `nova.config.json` at the repo root (environment variables win):
@@ -107,8 +121,9 @@ the Playwright default.
 
 ```
 src/            server, runner (the agent loop), context assembly, tools, memory,
-                skills, connectors/ (Gmail)
+                skills, schedules (cron, scheduler), connectors/ (Gmail)
 skills/         the skills Nova ships (SKILL.md playbooks)
+schedules/      the schedules Nova offers (the morning digest)
 connectors/     connector docs (CONNECTOR.md: capabilities, limits, auth)
 system/         Nova's system prompt
 templates/home/ the standing files a new home is seeded from

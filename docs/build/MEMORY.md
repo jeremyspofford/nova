@@ -5,12 +5,13 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 
 ## Where things are
 
-- Phases 1 and 2 approved and merged (#198, #199). Phase 3 (skills, Add your
-  own with Claude's format, and the Gmail connector) delivered for review; do not start Phase 4 without
-  Jeremy's approval.
+- Phases 1 to 3 approved and merged (#198, #199, #200). Phase 4 (schedules,
+  the main conversation as the front page, the morning digest) delivered for
+  review; do not start Phase 5 without Jeremy's approval.
 - Reviews: [../phase-1-review.md](../phase-1-review.md),
   [../phase-2-review.md](../phase-2-review.md),
-  [../phase-3-review.md](../phase-3-review.md). Screenshots:
+  [../phase-3-review.md](../phase-3-review.md),
+  [../phase-4-review.md](../phase-4-review.md). Screenshots:
   [../screenshots/](../screenshots/).
 - The previous attempt is preserved at the `archive/attempt-6` tag.
 
@@ -41,3 +42,6 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 - Nothing real reaches Gmail from the build container: there are no Google
   credentials here. Gmail is verified against the stand-in, plus the real
   model reading the stand-in's mailbox.
+- Scheduled runs are unattended: approvals are auto-declined (`auto: true` on
+  the approval event). Don't make a run wait for a person; it would block the
+  queue behind it.

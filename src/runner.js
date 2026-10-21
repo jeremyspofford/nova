@@ -9,9 +9,10 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { runAgent, AgentError } from './agent.js';
-import { buildPrompt, buildSystem, skillsSection } from './context.js';
+import { buildPrompt, buildSystem, runSection, schedulesSection, skillsSection } from './context.js';
 import { Memory } from './memory.js';
 import { Skills } from './skills.js';
+import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
 import { commitHome } from './home.js';
 import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall } from './tools.js';
@@ -28,6 +29,7 @@ export class Runner extends EventEmitter {
     this.active = new Map(); // sessionId → live run
     this.memory = new Memory(config.home, config.timezone);
     this.skills = new Skills(config.root, config.home);
+    this.schedules = new Schedules(config.root, config.home, config.timezone);
     this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone });
   }
 
@@ -59,19 +61,41 @@ export class Runner extends EventEmitter {
     return id;
   }
 
-  send(sessionId, text) {
+  // The main conversation: where reports from schedules arrive, and what the
+  // front page shows. It exists from the first start.
+  ensureMain() {
+    if (!this.store.exists('main')) this.record('main', { type: 'session', id: 'main', title: 'Main conversation', kind: 'main', v: 1 });
+  }
+
+  // unattended: { id, name, due, late } for a scheduled run, where no one is
+  // there to approve anything.
+  send(sessionId, text, { unattended = null } = {}) {
     if (this.active.has(sessionId)) throw new BusyError();
     const turn = shortId();
-    this.record(sessionId, { type: 'user', turn, text });
-    this.start(sessionId, turn, 0);
+    this.record(sessionId, { type: 'user', turn, text, ...(unattended ? { schedule: unattended.id } : {}) });
+    this.start(sessionId, turn, 0, { unattended });
     return turn;
+  }
+
+  // Resolves once the conversation has no reply in progress.
+  async idle(sessionId) {
+    while (this.active.has(sessionId)) await this.active.get(sessionId).done;
+  }
+
+  // A report from scheduled work, added to a conversation between replies.
+  async deliver(sessionId, handoff) {
+    if (sessionId === 'main') this.ensureMain();
+    await this.idle(sessionId);
+    const line = this.record(sessionId, handoff);
+    if (this.config.commit !== false) await commitHome(this.config.home, `Nova: ${handoff.name} report`);
+    return line;
   }
 
   regenerate(sessionId) {
     if (this.active.has(sessionId)) throw new BusyError();
     const session = reduce(this.store.read(sessionId));
     const last = session.turns.at(-1);
-    if (!last) throw new Error('Nothing to regenerate');
+    if (!last || last.kind === 'handoff') throw new Error('Nothing to regenerate');
     const attempt = last.attempt + 1;
     this.record(sessionId, { type: 'attempt', turn: last.id, attempt });
     this.start(sessionId, last.id, attempt);
@@ -92,11 +116,11 @@ export class Runner extends EventEmitter {
     return true;
   }
 
-  start(sessionId, turn, attempt) {
+  start(sessionId, turn, attempt, { unattended = null } = {}) {
     const controller = new AbortController();
     // skills: the playbooks this reply follows. tainted: mail has been read in
     // this conversation, so going online asks first.
-    const run = { controller, pending: null, skills: new Map(), tainted: false, live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
+    const run = { controller, pending: null, skills: new Map(), tainted: false, unattended, live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
     this.active.set(sessionId, run);
     this.emit('live', sessionId, { ...run.live });
     run.done = this.loop(sessionId, run)
@@ -131,12 +155,14 @@ export class Runner extends EventEmitter {
       const installed = this.skills.installed();
       const tools = availableTools({ gmail: this.gmail.status().connected, skills: installed.length });
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
+      const schedules = schedulesSection(this.schedules.list(), this.config.timezone);
+      const scheduled = run.unattended ? runSection(run.unattended, this.config.timezone) : '';
       const filter = new ToolTagFilter();
       this.setLive(sessionId, { phase: 'thinking', text: '' });
       let streamed = '';
       const { text, aborted } = await this.agent({
         cmd: this.config.agentCmd,
-        system: buildSystem(this.config, new Date(), { tools, skills }),
+        system: buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled }),
         prompt: buildPrompt(session, recall, this.config),
         signal,
         onText: (chunk) => {
@@ -172,6 +198,7 @@ export class Runner extends EventEmitter {
       const ctx = {
         home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
         gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
+        schedules: this.schedules, sessionId,
       };
       // A tool that changes something outside Nova shows exactly what will
       // change before the person decides; if that can't be worked out, it fails here.
@@ -185,6 +212,12 @@ export class Runner extends EventEmitter {
       this.record(sessionId, { type: 'tool_call', ...tag, id, name: call?.name ?? 'unknown', args: call?.args ?? {}, needs_approval: needsApproval, ...(preview ? { preview } : {}) });
       if (failed) {
         this.record(sessionId, { type: 'tool_result', ...tag, id, ok: false, output: failed });
+        continue;
+      }
+
+      // A scheduled run has no one to ask, so what needs an OK doesn't happen.
+      if (needsApproval && run.unattended) {
+        this.record(sessionId, { type: 'approval', ...tag, id, decision: 'deny', auto: true });
         continue;
       }
 
@@ -219,6 +252,7 @@ export class Runner extends EventEmitter {
         return;
       }
       if (tool.mail && ok) run.tainted = true;
+      if (call.name.startsWith('schedule_') && ok) this.emit('schedules');
       this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output), ...(summary ? { summary } : {}), ...(link ? { link } : {}) });
     }
   }

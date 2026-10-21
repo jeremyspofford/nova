@@ -77,6 +77,9 @@ results.budgets.serverStartMs = Math.round(serverMs);
   await p.evaluate(() => document.activeElement.blur());
   await p.keyboard.press('/');
   check('"/" focuses the composer', await p.evaluate(() => document.activeElement.id === 'input'));
+  // The front page is the main conversation; this one starts a conversation of its own.
+  await p.keyboard.press('Control+Shift+O');
+  await p.waitForSelector('.empty');
   await p.keyboard.type('What should I focus on today?');
   // Measured in the page: from the Enter keydown to the first frame painted
   // with the message on the page and Nova visibly working.
@@ -113,7 +116,7 @@ results.budgets.serverStartMs = Math.round(serverMs);
   // New conversation from the keyboard, then an approval
   await p.keyboard.press('Control+Shift+O');
   await p.waitForSelector('.empty');
-  check('⌘/Ctrl ⇧ O starts a new conversation', await p.evaluate(() => location.pathname === '/' && document.activeElement.id === 'input'));
+  check('⌘/Ctrl ⇧ O starts a new conversation', await p.evaluate(() => location.pathname === '/new' && document.activeElement.id === 'input'));
   await p.keyboard.type('Run git status in my workspace before standup');
   await p.keyboard.press('Enter');
   await p.waitForSelector('.approval [data-action="allow"]:focus', { timeout: 8000 });
@@ -270,7 +273,7 @@ results.budgets.serverStartMs = Math.round(serverMs);
 
   // Before Gmail is connected, the skill says so and Nova points to it.
   check('an installed skill says its connection is missing', /isn't connected yet/.test(await p.textContent('#s-email-summary')));
-  await p.goto(base);
+  await p.goto(`${base}/new`);
   await p.waitForSelector('.empty');
   await p.fill('#input', "What's in my email?");
   await p.keyboard.press('Enter');
@@ -433,6 +436,119 @@ results.budgets.serverStartMs = Math.round(serverMs);
   check('skills have no script errors', p.errors.length === 0, p.errors.join(' | '));
 }
 
+// ---- schedules: the morning digest, reminders, and the front page ----------------
+{
+  const p = await page();
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await p.goto(`${base}/schedules`);
+  await p.waitForSelector('html[data-ready] #sc-morning-digest .schedule-setup');
+  await p.waitForTimeout(500);
+  await shot(p, 'paper-schedules-empty');
+  check('nothing scheduled: says how to start, and offers the morning digest', /Nothing is scheduled yet/.test(await p.textContent('#schedules')));
+  await p.keyboard.press('Tab');
+  check('Tab reaches the first schedule', await p.evaluate(() => document.activeElement.id === 'sc-morning-digest'));
+
+  // Turn the digest on at a time you pick.
+  await p.fill('#sc-morning-digest [name="time"]', '06:45');
+  await p.selectOption('#sc-morning-digest [name="days"]', 'weekdays');
+  await p.click('#sc-morning-digest .schedule-setup button');
+  await p.waitForSelector('#sc-morning-digest.schedule');
+  await p.waitForFunction(() => /is on: weekdays at 6:45 AM/.test(document.querySelector('#toast').textContent));
+  check('turning on the digest writes a plain schedule file', /^cron: 45 6 \* \* 1-5$/m.test(readFileSync(join(home, 'schedules', 'morning-digest.md'), 'utf8')));
+  check('it says when, and when next', /Weekdays at 6:45 AM · Next: \w+/.test(await p.textContent('#sc-morning-digest .schedule-when')));
+
+  // Run now: it works unattended, then the report lands on the front page.
+  await p.waitForSelector('#toast', { state: 'hidden' });
+  await p.click('#sc-morning-digest [data-action="run-schedule"]');
+  await p.waitForSelector('#sc-morning-digest .schedule-last.is-running');
+  await p.waitForTimeout(250);
+  await shot(p, 'paper-schedules-running');
+  check('a run in progress shows, and Run now waits', await p.$eval('#sc-morning-digest [data-action="run-schedule"]', (b) => b.disabled));
+  await p.waitForSelector('#sc-morning-digest .schedule-last a', { timeout: 20000 });
+  await p.click('#sc-morning-digest .skill-playbook summary');
+  await p.waitForSelector('#toast', { state: 'hidden' });
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-schedules');
+  check('the last run and its headline show in Schedules', /Last ran today at/.test(await p.textContent('#sc-morning-digest')) && /A contract to sign/.test(await p.textContent('#sc-morning-digest .schedule-headline')));
+  check('a new report marks the main conversation', await p.isVisible('#main-dot'));
+  const runs = readFileSync(join(home, 'schedules', 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  check('every run is recorded in runs.jsonl', runs.length === 1 && runs[0].ok && runs[0].delivered === 'main' && runs[0].manual);
+  const listed = await (await fetch(`${base}/api/sessions`)).json();
+  check("the run's own log isn't listed among conversations", !listed.some((s) => s.id === runs[0].run) && existsSync(join(home, 'sessions', `${runs[0].run}.jsonl`)));
+
+  await p.click('#sc-morning-digest .schedule-last a');
+  await p.waitForSelector('.handoff.is-found');
+  await p.waitForTimeout(1200);
+  await shot(p, 'paper-front');
+  check('"Read the report" opens the front page at the report', await p.evaluate(() => location.pathname === '/' && /^#h-/.test(location.hash)));
+  check('the report reads as a front page: name and time, then a serif headline', /Morning digest · \d+:\d{2} [AP]M/i.test(await p.textContent('.handoff-kicker')) && await p.$eval('.handoff-body > p', (e) => getComputedStyle(e).fontFamily !== getComputedStyle(document.body).fontFamily));
+  check('opening the main conversation clears its mark', !(await p.isVisible('#main-dot')) && (await p.getAttribute('#main-link', 'aria-current')) === 'page');
+  const scheduleCalls = readFileSync(join(home, 'sessions', `${runs[0].run}.jsonl`), 'utf8');
+  check('the run read Gmail on its own, and asked for nothing', /"name":"gmail_search"/.test(scheduleCalls) && !/"needs_approval":true/.test(scheduleCalls));
+
+  // Reply right under it: the conversation continues from the report.
+  await p.focus('#input');
+  await p.keyboard.type('Draft a reply to Sam saying yes');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.approval .approval-letter');
+  check('replying in the main conversation picks up from the report', /Sam Ortiz/.test(await p.textContent('.approval')));
+  await p.keyboard.press('Escape');
+  await settle(p);
+
+  // Asked in a conversation, a reminder waits for an OK, then lives in Schedules.
+  await p.goto(`${base}/new`);
+  await p.waitForSelector('.empty');
+  await p.keyboard.type('Remind me tomorrow to call the dentist about Friday');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.approval [data-action="allow"]:focus', { timeout: 8000 });
+  await p.waitForTimeout(450);
+  await shot(p, 'paper-schedule-approval');
+  const ask = await p.textContent('.approval');
+  check('the card says what, when and where reports go, before anything is set', /Call the dentist/.test(ask) && /Once, on \w+day/.test(ask) && /This conversation/.test(ask) && !existsSync(join(home, 'schedules', 'call-the-dentist.md')));
+  await p.keyboard.press('Enter');
+  await settle(p);
+  check('allowed, the reminder is set', /Set up “Call the dentist”/.test(await p.textContent('#thread')) && existsSync(join(home, 'schedules', 'call-the-dentist.md')));
+  const reminderChat = p.url();
+
+  await p.goto(`${base}/schedules#sc-call-the-dentist`);
+  await p.waitForFunction(() => document.activeElement?.id === 'sc-call-the-dentist');
+  check('a reminder shows once, and where it reports', /Once, on/.test(await p.textContent('#sc-call-the-dentist')) && /conversation where you asked/.test(await p.textContent('#sc-call-the-dentist')));
+
+  // Pause and resume.
+  await p.click('#sc-morning-digest [data-action="pause-schedule"]');
+  await p.waitForSelector('#sc-morning-digest.is-paused');
+  await p.waitForSelector('#toast', { state: 'visible' });
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-schedules-paused');
+  check('paused: says so, shows no next run, and the file says so too', /Paused/.test(await p.textContent('#sc-morning-digest')) && !/Next:/.test(await p.textContent('#sc-morning-digest')) && /^paused: true$/m.test(readFileSync(join(home, 'schedules', 'morning-digest.md'), 'utf8')));
+  await p.click('#sc-morning-digest [data-action="resume-schedule"]');
+  await p.waitForSelector('#sc-morning-digest:not(.is-paused)');
+
+  // Remove by keyboard, then Undo.
+  await p.focus('#sc-call-the-dentist');
+  await p.keyboard.press('Delete');
+  await p.waitForSelector('.toast-btn');
+  check('Delete removes a schedule, file and all', !existsSync(join(home, 'schedules', 'call-the-dentist.md')));
+  await p.keyboard.press(`${mod}+Z`);
+  await p.waitForFunction(() => /exactly as it was/.test(document.querySelector('#toast').textContent));
+  check('Undo puts it back', existsSync(join(home, 'schedules', 'call-the-dentist.md')));
+
+  // A run that fails says so where its report would have gone, with a way to try again.
+  writeFileSync(join(home, 'schedules', 'bills.md'), `---\nname: Bills check\ncron: 0 9 * * 1\ndeliver: ${reminderChat.split('/c/')[1]}\n---\n\nPlease fail.\n`);
+  await p.goto(`${base}/schedules#sc-bills`);
+  await p.waitForSelector('#sc-bills');
+  await p.click('#sc-bills [data-action="run-schedule"]');
+  await p.waitForSelector('#sc-bills .schedule-last.is-warn', { timeout: 20000 });
+  check("a failed run says so in Schedules", /didn't finish/.test(await p.textContent('#sc-bills')));
+  await p.goto(reminderChat);
+  await p.waitForSelector('.handoff.is-failed');
+  await p.waitForTimeout(500);
+  await shot(p, 'paper-schedule-failed');
+  check('a failed report offers Run it again', (await p.$('.handoff.is-failed [data-action="run-schedule"]')) !== null);
+  await (await fetch(`${base}/api/schedules/bills/remove`, { method: 'POST', headers: { 'x-nova': '1' } })).json();
+  check('schedules have no script errors', p.errors.length === 0, p.errors.join(' | '));
+}
+
 // ---- long content and scrolling -------------------------------------------------
 {
   const api = (path, body) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -483,7 +599,12 @@ results.budgets.serverStartMs = Math.round(serverMs);
 const golden = async (opts, prefix) => {
   const p = await page(opts);
   await p.goto(base);
-  await p.waitForSelector('html[data-ready] .empty');
+  await p.waitForSelector('html[data-ready] .handoff');
+  await p.evaluate(() => { document.activeElement.blur(); [...document.querySelectorAll('.handoff')].at(-1).scrollIntoView({ block: 'start' }); });
+  await p.waitForTimeout(600);
+  await shot(p, `${prefix}-front`);
+  await p.goto(`${base}/new`);
+  await p.waitForSelector('.empty');
   await p.waitForTimeout(600);
   await shot(p, `${prefix}-empty`);
   const list = await (await fetch(`${base}/api/sessions`)).json();
@@ -492,7 +613,7 @@ const golden = async (opts, prefix) => {
   await p.waitForSelector('.prose');
   await p.waitForTimeout(500);
   await shot(p, `${prefix}-chat`);
-  await p.goto(base);
+  await p.goto(`${base}/new`);
   await p.waitForSelector('.empty');
   await p.fill('#input', 'run git status for the screenshot');
   await p.keyboard.press('Enter');
@@ -509,6 +630,10 @@ const golden = async (opts, prefix) => {
   await p.waitForSelector('.skill');
   await p.waitForTimeout(500);
   await shot(p, `${prefix}-skills`);
+  await p.goto(`${base}/schedules`);
+  await p.waitForSelector('.schedule');
+  await p.waitForTimeout(500);
+  await shot(p, `${prefix}-schedules`);
   check(`${prefix}: no script errors`, p.errors.length === 0, p.errors.join(' | '));
 };
 await golden({ theme: 'paper', mode: 'dark' }, 'paper-dark');
@@ -538,6 +663,19 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForTimeout(500);
   await shot(p, 'mobile-skills');
   overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
+  await p.goto(`${base}/schedules`);
+  await p.waitForSelector('.schedule');
+  await p.waitForTimeout(500);
+  await shot(p, 'mobile-schedules');
+  overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
+  await p.goto(base);
+  await p.waitForSelector('.handoff');
+  await p.evaluate(() => document.querySelector('.handoff').scrollIntoView({ block: 'start' }));
+  await p.waitForTimeout(500);
+  await shot(p, 'mobile-front');
+  overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
+  await p.goto(`${base}/skills`);
+  await p.waitForSelector('.skill');
   check('mobile: no horizontal page scroll', !overflow);
 
   // Disconnecting deletes the app password, and says how to remove it at Google too.
