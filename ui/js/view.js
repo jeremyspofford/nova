@@ -74,6 +74,7 @@ const host = (url) => { try { return new URL(url).host; } catch { return url; } 
 
 export function toolLabel(tool, state) {
   const a = tool.args ?? {};
+  const sum = tool.result?.summary ?? '';
   const code = (s) => `<code>${esc(s)}</code>`;
   const cmd = String(a.command ?? '').split('\n')[0];
   const labels = {
@@ -81,7 +82,12 @@ export function toolLabel(tool, state) {
     write_file: { running: `Saving ${code(a.path)}`, done: `Saved ${code(a.path)}`, failed: `Couldn't save ${code(a.path)}` },
     web_fetch: { running: `Reading ${esc(host(a.url))}`, done: `Read ${esc(host(a.url))}`, failed: `Couldn't reach ${esc(host(a.url))}` },
     exec: { running: `Running ${code(cmd)}`, done: `Ran ${code(cmd)}`, failed: `${code(cmd)} didn't finish`, declined: `Didn't run ${code(cmd)}`, waiting: `Waiting to run ${code(cmd)}` },
+    web_search: { running: `Searching the web for “${esc(a.query)}”`, done: `Searched the web for “${esc(a.query)}”`, failed: "Couldn't search the web", declined: `Didn't search for “${esc(a.query)}”` },
+    gmail_search: { running: 'Searching your Gmail', done: `Searched your Gmail${sum ? `: ${esc(sum)}` : ''}`, failed: "Couldn't search your Gmail" },
+    gmail_read: { running: 'Reading an email', done: sum ? `Read “${esc(sum)}”` : 'Read an email', failed: "Couldn't read that email" },
+    use_skill: { running: 'Opening a skill', done: `Opened ${esc(sum || a.name)}`, failed: `Couldn't open the skill ${esc(a.name)}` },
   };
+  labels.web_fetch.declined = `Didn't open ${esc(host(a.url))}`;
   const l = labels[tool.name] ?? { running: `Using ${esc(tool.name)}`, done: `Used ${esc(tool.name)}`, failed: `${esc(tool.name)} didn't work` };
   return l[state] ?? l.failed;
 }
@@ -94,13 +100,25 @@ export function toolState(tool, turnOpen) {
   return 'running';
 }
 
+// Why Nova is asking, in one sentence. Web tools ask only after mail has
+// been read in the conversation.
+const ONLINE = 'It has read your email in this conversation, so it checks with you before anything goes online.';
+function approvalBody(tool) {
+  const a = tool.args ?? {};
+  if (tool.name === 'web_fetch') return `Nova wants to open <code>${esc(host(a.url))}</code>. ${ONLINE}`;
+  if (tool.name === 'web_search') return `Nova wants to search the web for “${esc(a.query)}”. ${ONLINE}`;
+  const cmd = String(a.command ?? '');
+  return `Nova wants to run ${cmd.includes('\n') || cmd.length > 72 ? 'this command' : `<code>${esc(cmd)}</code>`} in your workspace.`;
+}
+
 function renderApproval(tool) {
   const cmd = String(tool.args?.command ?? '');
-  const multi = cmd.includes('\n') || cmd.length > 72;
+  const multi = tool.name === 'exec' && (cmd.includes('\n') || cmd.length > 72);
+  const url = tool.name === 'web_fetch' ? String(tool.args?.url ?? '') : '';
   return `<div class="approval" role="group" aria-labelledby="ap-${esc(tool.id)}" data-tool="${esc(tool.id)}">
   <p class="approval-title" id="ap-${esc(tool.id)}">A small decision, when you're ready</p>
-  <p class="approval-body">Nova wants to run ${multi ? 'this command' : `<code>${esc(cmd)}</code>`} in your workspace.</p>
-  ${multi ? `<pre class="approval-cmd">${esc(cmd)}</pre>` : ''}
+  <p class="approval-body">${approvalBody(tool)}</p>
+  ${multi ? `<pre class="approval-cmd">${esc(cmd)}</pre>` : ''}${url ? `<pre class="approval-cmd">${esc(url)}</pre>` : ''}
   <div class="approval-actions">
     <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}">Allow once</button>
     <button type="button" class="btn" data-action="deny" data-tool="${esc(tool.id)}">Deny</button>
@@ -116,7 +134,7 @@ function renderTool(tool, turnOpen) {
     ? `<span class="stamp${tool.approval.decision === 'deny' ? ' is-declined' : ''}">${tool.approval.decision === 'deny' ? 'Declined' : 'Allowed'}</span>`
     : '';
   const when = tool.approval?.ts ? `<span class="record-time">${esc(clock(new Date(tool.approval.ts)))}</span>` : '';
-  const label = state === 'skipped' ? `Never ran ${tool.name === 'exec' ? `<code>${esc(String(tool.args?.command ?? '').split('\n')[0])}</code>` : esc(tool.name)}` : toolLabel(tool, state);
+  const label = state === 'skipped' ? `Never ran ${tool.name === 'exec' ? `<code>${esc(String(tool.args?.command ?? '').split('\n')[0])}</code>` : 'that step'}` : toolLabel(tool, state);
   const cls = `record is-${state}" data-tool="${esc(tool.id)}`;
   const output = tool.result?.output;
   if (state === 'running') return `<div class="${cls}" role="status"><span class="pulse" aria-hidden="true"></span>${label}…</div>`;
@@ -155,7 +173,15 @@ export function renderKept(ops, memory = new Map(), when = null) {
 
 // One exchange: the user's message and everything Nova did in reply.
 // live: { phase, text } while this turn is running, else null.
-export function renderTurn(turn, { live = null, isLast = false, memory = new Map() } = {}) {
+// The skill a reply followed, linked to it in Skills while it's installed.
+export function renderSkillNote(item, skills = null) {
+  const here = !skills || skills.has(item.id);
+  return here
+    ? `<p class="margin-note">following <a class="margin-link" href="/skills#s-${esc(item.id)}">${esc(item.name)}</a></p>`
+    : `<p class="margin-note is-quiet">followed ${esc(item.name)}, since removed</p>`;
+}
+
+export function renderTurn(turn, { live = null, isLast = false, memory = new Map(), skills = null } = {}) {
   const open = turn.state === 'open';
   const running = open && !!live;
   let nova = '';
@@ -165,8 +191,9 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
       const notes = it.kind === 'recall' ? renderNotes(it.notes, memory) : renderKept(it.ops, memory, turn.ts);
       if (notes) nova += `<aside class="margins" aria-label="${it.kind === 'recall' ? 'From memory' : 'Kept in memory'}">${notes}</aside>`;
     }
+    if (it.kind === 'skill') nova += `<aside class="margins" aria-label="Skill">${renderSkillNote(it, skills)}</aside>`;
     if (it.kind === 'text') { nova += `<div class="prose" data-text="${esc(it.id)}">${renderMarkdown(it.text)}</div>`; lastTextId = it.id; }
-    if (it.kind === 'tool') nova += renderTool(it, running);
+    if (it.kind === 'tool' && !(it.name === 'use_skill' && it.result?.ok)) nova += renderTool(it, running);
     if (it.kind === 'error') {
       nova += `<div class="error" role="alert"><p class="error-title">${esc(it.message)}</p>` +
         (it.detail ? `<details class="error-detail"><summary>Details</summary><pre tabindex="0">${esc(it.detail)}</pre></details>` : '') +
@@ -190,14 +217,14 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
 }
 
 // Each turn is keyed, with a dateline when a new day begins ("days are chapters").
-export function renderBlocks(session, live, now = new Date(), memory = new Map()) {
+export function renderBlocks(session, live, now = new Date(), memory = new Map(), skills = null) {
   let day = null;
   return session.turns.map((t, i) => {
     const d = new Date(t.ts);
     const line = dayKey(d) !== day ? `<h2 class="dateline">${esc(longDate(d, now))}</h2>` : '';
     day = dayKey(d);
     const isLive = live && live.turn === t.id && live.attempt === t.attempt ? live : null;
-    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === session.turns.length - 1, memory }) };
+    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === session.turns.length - 1, memory, skills }) };
   });
 }
 
@@ -277,5 +304,87 @@ ${days.map((d) => {
     return `<h3 class="memory-day">${esc(longDate(new Date(y, m - 1, dd), now))}</h3><ul class="memory-list">${d.entries.map((e) => memoryItem(e, titles, now)).join('')}</ul>`;
   }).join('')}</section>`);
   }
+  return out.join('\n');
+}
+
+// ---- skills ----------------------------------------------------------------
+
+const longDay = (iso) => new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'long' });
+
+function skillNeeds(s, gmail) {
+  if (!s.needs.includes('gmail')) return '';
+  if (gmail?.connected) return `<p class="skill-needs">Reads your Gmail, which is connected.</p>`;
+  if (gmail?.broken) return `<p class="skill-needs is-warn">Reads your Gmail, which <a href="#gmail" data-action="to-gmail">needs reconnecting</a>.</p>`;
+  return `<p class="skill-needs is-warn">Reads your Gmail, which <a href="#gmail" data-action="to-gmail">isn't connected yet</a>.</p>`;
+}
+
+function skillItem(s, gmail, installed) {
+  const action = installed
+    ? `<button type="button" class="act" data-action="remove-skill">Remove</button>`
+    : `<button type="button" class="btn" data-action="install-skill">Install</button>`;
+  const tryIt = installed && s.try ? `<button type="button" class="act skill-try" data-action="try-skill" data-try="${esc(s.try)}">Try “${esc(s.try)}”</button>` : '';
+  return `<li class="skill${installed ? '' : ' is-available'}" id="s-${esc(s.id)}" data-id="${esc(s.id)}" tabindex="0">
+  <div class="skill-head"><h3 class="skill-name">${esc(s.name)}</h3>${action}</div>
+  <p class="skill-about">${esc(s.about || s.when)}</p>
+  ${installed ? skillNeeds(s, gmail) : ''}
+  <details class="skill-playbook"><summary>How Nova does it</summary><div class="prose">${renderMarkdown(s.body.replace(/^# .*\n+/, ''))}</div></details>
+  ${tryIt}
+</li>`;
+}
+
+const CLIENT_STEPS = `<ol class="steps">
+  <li>In <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud</a>, create a project, then <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener">turn on the Gmail API</a> for it.</li>
+  <li>Under <a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener">Google Auth Platform</a>, set up sign-in for External users, and add your own address as a test user.</li>
+  <li>Under <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener">Clients</a>, create a client of type <b>Desktop app</b> and download its JSON.</li>
+  <li>Paste the JSON here.</li>
+</ol>`;
+
+export function renderGmail(gmail, { local = true } = {}) {
+  const g = gmail ?? {};
+  const state = g.connected ? 'connected' : g.broken ? 'broken' : g.client ? 'ready' : 'setup';
+  const pill = { connected: 'Connected', broken: 'Needs reconnecting', ready: 'Not connected', setup: 'Not set up' }[state];
+  let body = '';
+  if (state === 'connected') {
+    body = `<p class="skill-about">Connected as <b>${esc(g.account ?? 'your account')}</b>${g.since ? ` since ${esc(longDay(g.since))}` : ''}. Nova can search and read your mail. It can't send, change or delete anything.</p>
+<div class="connection-actions"><button type="button" class="btn" data-action="disconnect-gmail">Disconnect</button>
+<span class="connection-note">Disconnecting removes Nova's access at Google and deletes the sign-in from this computer.</span></div>`;
+  } else if (state === 'broken') {
+    body = `<p class="skill-about">Google stopped accepting Nova's sign-in. That happens when access is removed in your Google account, or after 7 days while your Google app is in Testing.</p>
+<div class="connection-actions">${local ? '<button type="button" class="btn primary" data-action="connect-gmail">Reconnect Gmail</button>' : ''}<button type="button" class="btn" data-action="disconnect-gmail">Disconnect</button></div>`;
+  } else if (state === 'ready') {
+    body = `<p class="skill-about">Read-only: Nova can search and read your mail, and can't send, change or delete anything.</p>
+<div class="connection-actions">${local ? '<button type="button" class="btn primary" data-action="connect-gmail">Connect Gmail</button>' : ''}<button type="button" class="act" data-action="forget-client">Use a different OAuth client</button></div>`;
+  } else {
+    body = `<p class="skill-about">Read-only: Nova can search and read your mail, and can't send, change or delete anything. Gmail lets Nova in through a Google sign-in client of your own, so no one else's app sits between you and your mail. Setting it up takes about five minutes, once.</p>
+${CLIENT_STEPS}
+<label class="sr-only" for="gmail-client">Your OAuth client JSON</label>
+<textarea class="field" id="gmail-client" rows="3" spellcheck="false" placeholder='{"installed": {"client_id": "….apps.googleusercontent.com", …}}'></textarea>
+<div class="connection-actions"><button type="button" class="btn primary" data-action="save-client">Save client</button>
+<span class="connection-note">Google signs apps in Testing out after 7 days. To stay connected, publish yours under Audience; Google will call it unverified, which is expected for an app only you use.</span></div>`;
+  }
+  const away = local || state === 'connected' ? '' : '<p class="connection-note">To connect, open Nova at localhost on the computer it runs on. Google sends you back to that computer only.</p>';
+  return `<div class="connection" data-state="${state}">
+  <div class="skill-head"><h3 class="skill-name">Gmail</h3><span class="pill${state === 'connected' ? ' is-on' : state === 'broken' ? ' is-warn' : ''}">${pill}</span></div>
+  ${body}${away}
+</div>`;
+}
+
+export function renderSkills(data, { local = true } = {}) {
+  const installed = data?.installed ?? [];
+  const available = data?.available ?? [];
+  const gmail = data?.connectors?.gmail;
+  const out = [`<header class="memory-intro"><p class="empty-date">Skills</p>
+<p class="memory-lede">Playbooks Nova follows for particular kinds of work. Each one is a plain file in your Nova folder, and removing it leaves nothing behind.</p></header>`];
+  out.push(`<section class="memory-section" aria-labelledby="ks-installed"><h2 class="memory-heading" id="ks-installed">Installed</h2>
+${installed.length
+    ? `<ul class="skill-list">${installed.map((s) => skillItem(s, gmail, true)).join('')}</ul>`
+    : '<p class="memory-none">No skills yet. Install one below, and Nova uses it whenever a message calls for it.</p>'}</section>`);
+  if (available.length) {
+    out.push(`<section class="memory-section" aria-labelledby="ks-available"><h2 class="memory-heading" id="ks-available">Available</h2>
+<ul class="skill-list">${available.map((s) => skillItem(s, gmail, false)).join('')}</ul></section>`);
+  }
+  out.push(`<section class="memory-section" id="gmail" aria-labelledby="ks-connections"><h2 class="memory-heading" id="ks-connections">Connections</h2>
+<p class="memory-kind">Services a skill can reach on your behalf.</p>
+${renderGmail(gmail, { local })}</section>`);
   return out.join('\n');
 }

@@ -4,6 +4,7 @@ about: Tells you what in your inbox needs you, without opening Gmail.
 when: The person asks what's in their email or inbox, what needs a reply, or for a summary of recent mail.
 words: email, emails, inbox, gmail, mail, unread
 needs: gmail
+try: What in my inbox needs me today?
 ---
 
 # Email summary
@@ -25,7 +26,7 @@ Tell the person what in their mail needs them, in a few lines, so they don't hav
 ## Read what matters
 
 - Search once with a good query before reading anything. Each result has the sender, subject, date, a snippet and whether it's unread.
-- Open in full only the messages that may need the person: questions or requests to them, deadlines, bills, appointments, replies in threads they started. Read at most five per summary.
+- Open in full the messages that may need the person: questions or requests to them, deadlines, bills, appointments, replies in threads they started. Read every message you're about to list as needing them, up to five; leave newsletters and notifications at their snippet.
 - A snippet is a lead, not the source. Don't state a deadline, amount or time you saw only in a snippet; read the message first, or say it's from the preview.
 
 ## Write the summary

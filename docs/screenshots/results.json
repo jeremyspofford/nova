@@ -1,22 +1,22 @@
 {
   "budgets": {
-    "serverStartMs": 130,
-    "pageInteractiveMs": 141,
-    "domContentLoadedMs": 74,
-    "sendFeedbackMs": 6,
+    "serverStartMs": 125,
+    "pageInteractiveMs": 144,
+    "domContentLoadedMs": 79,
+    "sendFeedbackMs": 8,
     "scroll": {
       "frames": 384,
-      "mainThreadP95Ms": 3.72,
-      "mainThreadMaxMs": 6.42,
+      "mainThreadP95Ms": 3.85,
+      "mainThreadMaxMs": 8.58,
       "frameIntervalP95Ms": 16.8,
-      "slowIntervals": 3
+      "slowIntervals": 15
     }
   },
   "checks": [
     {
       "name": "cold start ≤ 2 s (server + page)",
       "ok": true,
-      "detail": "130 ms server + 141 ms page"
+      "detail": "125 ms server + 144 ms page"
     },
     {
       "name": "the composer is focused on arrival",
@@ -31,7 +31,7 @@
     {
       "name": "send → visible feedback ≤ 100 ms",
       "ok": true,
-      "detail": "6 ms"
+      "detail": "8 ms"
     },
     {
       "name": "reply rendered markdown: list, code, table",
@@ -154,6 +154,101 @@
       "detail": ""
     },
     {
+      "name": "no skills yet: says what installing does",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Tab reaches the first skill's Install button",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "installing puts the playbook in the Nova folder",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "an installed skill says its connection is missing",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "asked about email before connecting, Nova links to Connect Gmail",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the link lands on the Gmail card, ready to paste",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "connecting Gmail returns to Skills with a confirmation",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the Gmail sign-in is readable only by you",
+      "ok": true,
+      "detail": "600"
+    },
+    {
+      "name": "Try fills the composer with the skill's example",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the reply follows the skill, shown in the margin",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "it searches Gmail, then reads only what matters",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "after reading mail, opening a web page asks first",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "shopping searches the web and recommends one, with links",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "removing a skill leaves no file behind",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Undo puts the skill back",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "no playbook or sign-in is in the Nova folder's history",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "old conversations still say which skill they followed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a skill margin note links to the skill",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "skills have no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
       "name": "a long conversation opens at its latest message",
       "ok": true,
       "detail": "0 px from the end"
@@ -161,7 +256,7 @@
     {
       "name": "scrolling a long thread holds 60 fps",
       "ok": true,
-      "detail": "page work p95 3.7 ms/frame (max 6.4) over 385 frames; frame interval p95 16.8 ms on this GPU-less machine"
+      "detail": "page work p95 3.8 ms/frame (max 8.6) over 385 frames; frame interval p95 16.8 ms on this GPU-less machine"
     },
     {
       "name": "paper-dark: no script errors",
@@ -189,6 +284,11 @@
       "detail": ""
     },
     {
+      "name": "disconnecting revokes at Google and deletes the sign-in",
+      "ok": true,
+      "detail": ""
+    },
+    {
       "name": "reduced motion: no translation (Paper crossfades only)",
       "ok": true,
       "detail": "0px"
@@ -209,5 +309,5 @@
       "detail": ""
     }
   ],
-  "longId": "2026-10-21-yafied"
+  "longId": "2026-10-21-020aw0"
 }

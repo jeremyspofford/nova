@@ -2,7 +2,8 @@
 name: Shopping research
 about: Finds and compares things to buy, and recommends one. It never buys anything.
 when: The person wants help finding, comparing or choosing something to buy, or wants the best price for something.
-words: buy, buying, shop, shopping, price, prices, cheapest, deal, deals, recommend, compare, purchase
+words: buy, buying, shop, shopping, pick, price, prices, cheapest, deals, recommend, compare, purchase
+try: Help me pick merino hiking socks, under $25 a pair.
 ---
 
 # Shopping research
@@ -17,6 +18,7 @@ Find products that meet every requirement, from sellers worth trusting, at a goo
 
 - Settle what decides whether a product is right before searching: who it's for, the size, the device or part it must fit, the budget limit, and whether used or refurbished is fine.
 - Check memory first. Use a stored size, brand preference or budget only when it matches exactly: the same category, sizing system and person.
+- For anything worn, who it's for and their size are deciding details; so is the device a part must fit. Ask before searching unless memory already has them.
 - If one deciding detail is missing, ask one short question before searching. If several are, ask them together in one message. When a useful search is already possible, search instead of asking.
 - Never infer someone's gender from a name, and never assume a size.
 
@@ -25,7 +27,8 @@ Find products that meet every requirement, from sellers worth trusting, at a goo
 - Use `web_search` with every requirement in the query. Search from two or three angles: the product itself, a recent "best" review roundup, and the brand's own store.
 - Search results are leads. Open product pages with `web_fetch` to check the exact name, variant, price and that it's in stock. Some shops refuse to be read; say which ones you couldn't check instead of quoting a price you didn't see.
 - Prefer the brand's store and established retailers in the person's country. A crossed-out "was" price doesn't prove a deal, and a sponsored result isn't a recommendation.
-- Stop searching when another search is unlikely to change the recommendation.
+- Read about six pages at most per request, and stop searching when another search is unlikely to change the recommendation.
+- Shops often refuse automated reading. When the brand's page and the big retailers all refuse, recommend from the sources that agree, mark those prices as reported rather than seen, and say so in one line.
 
 ## Recommend
 

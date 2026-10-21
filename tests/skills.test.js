@@ -62,6 +62,7 @@ test('matching: a skill whose words appear is loaded; others are only listed', (
   assert.deepEqual(skills.match("What's in my inbox?").map((s) => s.id), ['email-summary']);
   assert.deepEqual(skills.match('Where can I buy good socks?').map((s) => s.id), ['shopping']);
   assert.deepEqual(skills.match('Write me a haiku about autumn'), []);
+  assert.deepEqual(skills.match('Anything I need to deal with from overnight?'), []);
 
   const section = skillsSection(skills.installed(), skills.match('anything new in my email'), (c) => skills.connectorDoc(c));
   assert.match(section, /- email-summary: Email summary\. Use when:/);
@@ -79,8 +80,10 @@ test('tools on offer follow what is installed and connected', () => {
 
   const { home } = fresh();
   const system = buildSystem({ root, home, timezone: 'UTC' }, new Date(), { tools: offered });
-  assert.doesNotMatch(system, /gmail_search|use_skill/);
-  assert.match(system, /web_search/);
+  const tools = system.slice(system.indexOf('# Tools'));
+  assert.doesNotMatch(tools, /gmail_search|use_skill/);
+  assert.match(tools, /web_search/);
+  assert.doesNotMatch(system, /# Skills/);
 });
 
 test('no tool reads or writes connection secrets', async () => {

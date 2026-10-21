@@ -5,10 +5,12 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 
 ## Where things are
 
-- Phase 1 approved and merged (#198). Phase 2 (memory) delivered for review;
-  do not start Phase 3 without Jeremy's approval.
+- Phases 1 and 2 approved and merged (#198, #199). Phase 3 (skills and the
+  Gmail connector) delivered for review; do not start Phase 4 without
+  Jeremy's approval.
 - Reviews: [../phase-1-review.md](../phase-1-review.md),
-  [../phase-2-review.md](../phase-2-review.md). Screenshots:
+  [../phase-2-review.md](../phase-2-review.md),
+  [../phase-3-review.md](../phase-3-review.md). Screenshots:
   [../screenshots/](../screenshots/).
 - The previous attempt is preserved at the `archive/attempt-6` tag.
 
@@ -21,6 +23,9 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 - `npm run shots` — the browser walkthrough: golden screens, keyboard path,
   budgets. Set `CHROMIUM=/path/to/chrome` if Chromium is elsewhere.
 - `NOVA_AGENT_CMD="node scripts/fake-agent.js"` runs without a model.
+- `node scripts/fake-google.js` starts a stand-in Google (OAuth, Gmail, search)
+  on :4399; point Nova at it with `NOVA_GOOGLE_BASE=http://127.0.0.1:4399` and
+  `NOVA_SEARCH_URL=http://127.0.0.1:4399/search`. All its mail is made up.
 
 ## Rules learned the hard way
 
@@ -33,3 +38,6 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 - Memory is gitignored inside the home folder (Jeremy agreed), so Forget
   never needs to rewrite history. Code that rewrites git history is blocked
   by the build environment's safety check anyway.
+- Nothing real reaches Gmail from the build container: there are no Google
+  credentials here. Gmail is verified against the stand-in, plus the real
+  model reading the stand-in's mailbox.

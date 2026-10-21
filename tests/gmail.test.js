@@ -90,7 +90,7 @@ test('read: headers, attachments listed, HTML turned to text', async () => {
   const a = await g.readMessage({ id: '19a0c1d2e3f4a501' });
   assert.equal(a.summary, 'Contract for the spring project: signature by Thursday');
   assert.match(a.output, /Attachments \(not opened\): spring-project-contract\.pdf \(180 KB\)/);
-  assert.match(a.output, /Could you sign it and send it back by Thursday the 23rd\?/);
+  assert.match(a.output, /Could you sign it and send it back by Thursday\?/);
   const b = await g.readMessage({ id: '19a0c1d2e3f4a503' });
   assert.match(b.output, /cleaning on Friday at 9:30 AM/);
   assert.doesNotMatch(b.output, /<b>|&nbsp;/);

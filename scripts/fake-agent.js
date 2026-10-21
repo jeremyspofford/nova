@@ -64,7 +64,7 @@ if (/\b(email|inbox)\b/.test(msg)) {
   } else {
     await stream(`Two things need you, both by **Thursday**:
 
-- **Dana Whitfield** needs the spring project contract signed and sent back by Thursday the 23rd, before Monday's kickoff. The PDF is attached to her email.
+- **Dana Whitfield** needs the spring project contract signed and sent back by Thursday, before Monday's kickoff. The PDF is attached to her email.
 - **Sam Ortiz** asks if Saturday's Mount Tam hike is still on, and needs to know by Thursday night. He offered to drive.
 
 Coming up: a dental cleaning on **Friday at 9:30 AM**, and the water bill of **$64.20** is due October 28.

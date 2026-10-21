@@ -30,6 +30,7 @@ function readSkill(dir, id) {
     name: meta.name || id,
     about: meta.about || '',
     when: meta.when || '',
+    try: meta.try || '',
     words: list(meta.words),
     needs: list(meta.needs),
     body,

@@ -3,11 +3,12 @@
 // captures the golden screens in every theme, walks the keyboard path,
 // exercises each state, and measures the performance budgets.
 // Usage: node scripts/shots.js [outDir]   (CHROMIUM=/path/to/chrome to override)
-import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
+import { startFakeGoogle } from './fake-google.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
 const out = resolve(process.argv[2] ?? join(root, 'docs/screenshots'));
@@ -18,10 +19,12 @@ const base = `http://localhost:${port}`;
 const results = { budgets: {}, checks: [] };
 const check = (name, ok, detail = '') => { results.checks.push({ name, ok, detail }); console.log(`${ok ? '✓' : '✗'} ${name}${detail ? `: ${detail}` : ''}`); };
 
+const google = await startFakeGoogle();
+
 function startServer() {
   const t0 = performance.now();
   const child = spawn(process.execPath, [join(root, 'src/server.js')], {
-    env: { ...process.env, NOVA_HOME: home, NOVA_PORT: String(port), NOVA_AGENT_CMD: `FAKE_DELAY=${process.env.FAKE_DELAY ?? 18} node ${join(root, 'scripts/fake-agent.js')}` },
+    env: { ...process.env, NOVA_HOME: home, NOVA_PORT: String(port), NOVA_GOOGLE_BASE: google.base, NOVA_SEARCH_URL: `${google.base}/search`, NOVA_AGENT_CMD: `FAKE_DELAY=${process.env.FAKE_DELAY ?? 18} node ${join(root, 'scripts/fake-agent.js')}` },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   return new Promise((ok) => child.stdout.on('data', (d) => { if (String(d).includes('ready')) ok({ child, ms: performance.now() - t0 }); }));
@@ -244,6 +247,128 @@ results.budgets.serverStartMs = Math.round(serverMs);
   check('memory view has no script errors', p.errors.length === 0, p.errors.join(' | '));
 }
 
+// ---- skills: install, connect, use, remove ----------------------------------------------
+{
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  const p = await page();
+  await p.goto(`${base}/skills`);
+  await p.waitForSelector('html[data-ready] .skill.is-available');
+  await p.waitForTimeout(500);
+  await shot(p, 'paper-skills-empty');
+  check('no skills yet: says what installing does', /No skills yet/.test(await p.textContent('#skills')));
+
+  // Install by keyboard: Tab to the first skill, Tab to Install, Enter.
+  await p.keyboard.press('Tab');
+  await p.keyboard.press('Tab');
+  check('Tab reaches the first skill\'s Install button', await p.evaluate(() => document.activeElement.dataset.action === 'install-skill'));
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('#s-email-summary:not(.is-available)');
+  check('installing puts the playbook in the Nova folder', existsSync(join(home, 'skills', 'email-summary', 'SKILL.md')));
+
+  // Before Gmail is connected, the skill says so and Nova points to it.
+  check('an installed skill says its connection is missing', /isn't connected yet/.test(await p.textContent('#s-email-summary')));
+  await p.goto(base);
+  await p.waitForSelector('.empty');
+  await p.fill('#input', "What's in my email?");
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.prose a[href="/skills#gmail"]');
+  await settle(p);
+  check('asked about email before connecting, Nova links to Connect Gmail', true);
+  await p.click('.prose a[href="/skills#gmail"]');
+  await p.waitForSelector('.connection textarea');
+  await p.waitForTimeout(500);
+  await shot(p, 'paper-skills-gmail-setup');
+  check('the link lands on the Gmail card, ready to paste', await p.evaluate(() => document.activeElement.id === 'gmail-client'));
+
+  // Save the OAuth client, connect through (stand-in) Google, come back connected.
+  await p.keyboard.type(JSON.stringify({ installed: { client_id: '123-abc.apps.googleusercontent.com', client_secret: 'stand-in' } }));
+  await p.click('[data-action="save-client"]');
+  await p.waitForSelector('[data-action="connect-gmail"]');
+  await p.click('[data-action="connect-gmail"]');
+  await p.waitForSelector('.connection[data-state="connected"]');
+  await p.waitForFunction(() => /Gmail is connected as/.test(document.querySelector('#toast').textContent));
+  check('connecting Gmail returns to Skills with a confirmation', true);
+  const mode = (f) => (statSync(join(home, 'connectors', 'gmail', f)).mode & 0o777).toString(8);
+  check('the Gmail sign-in is readable only by you', mode('token.json') === '600' && mode('client.json') === '600', mode('token.json'));
+  await p.waitForTimeout(3400);
+  await p.click('#s-email-summary .skill-playbook summary');
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-skills');
+
+  // Use: "Try" starts a conversation with the skill's example.
+  await p.click('#s-email-summary [data-action="try-skill"]');
+  check('Try fills the composer with the skill\'s example', (await p.inputValue('#input')) === 'What in my inbox needs me today?');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.turn .prose');
+  await settle(p);
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-skill-email');
+  const thread = await p.textContent('#thread');
+  check('the reply follows the skill, shown in the margin', /following Email summary/.test(thread));
+  check('it searches Gmail, then reads only what matters', /Searched your Gmail: 5 messages/.test(thread) && (thread.match(/Read “/g) ?? []).length === 1);
+
+  // Mail is in the conversation now: going online waits for you.
+  await p.keyboard.type('open that link');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.approval');
+  await p.waitForTimeout(400);
+  await shot(p, 'paper-skill-approval');
+  check('after reading mail, opening a web page asks first', /read your email in this conversation/.test(await p.textContent('.approval')));
+  await p.keyboard.press('Escape');
+  await settle(p);
+  const emailChat = p.url();
+
+  // A second skill: shopping research.
+  await p.goto(`${base}/skills`);
+  await p.waitForSelector('#s-shopping');
+  await p.click('#s-shopping [data-action="install-skill"]');
+  await p.waitForSelector('#s-shopping:not(.is-available)');
+  await p.click('#s-shopping [data-action="try-skill"]');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.turn .prose table');
+  await settle(p);
+  await p.waitForSelector('#toast', { state: 'hidden' });
+  await shot(p, 'paper-skill-shopping');
+  const shop = await p.textContent('#thread');
+  check('shopping searches the web and recommends one, with links', /following Shopping research/.test(shop) && /Searched the web for/.test(shop) && (await p.$$('.prose a[href^="https://"]')).length >= 2);
+  const shopChat = p.url();
+
+  // Remove by keyboard: nothing of it left; Undo brings it back exactly.
+  await p.goto(`${base}/skills#s-shopping`);
+  await p.waitForSelector('#s-shopping.is-found');
+  await p.keyboard.press('Delete');
+  await p.waitForSelector('.toast-btn');
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-skills-removed');
+  const leftovers = () => {
+    const hits = [];
+    const walk = (d) => { for (const f of readdirSync(d, { withFileTypes: true })) { if (['.git', 'sessions'].includes(f.name)) continue; const q = join(d, f.name); if (f.isDirectory()) walk(q); else if (/Shopping research/.test(readFileSync(q, 'utf8'))) hits.push(q); } };
+    walk(home);
+    return hits;
+  };
+  check('removing a skill leaves no file behind', !existsSync(join(home, 'skills', 'shopping')) && leftovers().length === 0, leftovers().join(', '));
+  await p.keyboard.press(`${mod}+Z`);
+  await p.waitForFunction(() => /exactly as it was/.test(document.querySelector('#toast').textContent));
+  check('Undo puts the skill back', existsSync(join(home, 'skills', 'shopping', 'SKILL.md')));
+  await p.focus('#s-shopping');
+  await p.keyboard.press('Delete');
+  await p.waitForSelector('.toast-btn');
+  await p.waitForTimeout(8500); // past Undo
+  execFileSync('git', ['-C', home, 'add', '-A']);
+  let history = '';
+  try { history = execFileSync('git', ['-C', home, 'log', '--all', '-p'], { encoding: 'utf8' }); } catch {}
+  check("no playbook or sign-in is in the Nova folder's history", !/Nova researches; the person buys|refresh_token|rt-fake|client_secret/.test(history));
+  await p.goto(shopChat);
+  await p.waitForSelector('.margins');
+  check('old conversations still say which skill they followed', /followed Shopping research, since removed/.test(await p.textContent('#thread')));
+  await p.goto(emailChat);
+  await p.waitForSelector('.margins');
+  await p.click('.margin-link[href="/skills#s-email-summary"]');
+  await p.waitForSelector('#s-email-summary.is-found');
+  check('a skill margin note links to the skill', await p.evaluate(() => document.activeElement.id === 's-email-summary'));
+  check('skills have no script errors', p.errors.length === 0, p.errors.join(' | '));
+}
+
 // ---- long content and scrolling -------------------------------------------------
 {
   const api = (path, body) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -316,6 +441,10 @@ const golden = async (opts, prefix) => {
   await p.waitForSelector('.memory-item');
   await p.waitForTimeout(500);
   await shot(p, `${prefix}-memory`);
+  await p.goto(`${base}/skills`);
+  await p.waitForSelector('.skill');
+  await p.waitForTimeout(500);
+  await shot(p, `${prefix}-skills`);
   check(`${prefix}: no script errors`, p.errors.length === 0, p.errors.join(' | '));
 };
 await golden({ theme: 'paper', mode: 'dark' }, 'paper-dark');
@@ -339,8 +468,18 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForSelector('.memory-item');
   await p.waitForTimeout(500);
   await shot(p, 'mobile-memory');
-  const overflow = await p.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+  let overflow = await p.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+  await p.goto(`${base}/skills`);
+  await p.waitForSelector('.skill');
+  await p.waitForTimeout(500);
+  await shot(p, 'mobile-skills');
+  overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
   check('mobile: no horizontal page scroll', !overflow);
+
+  // Disconnecting: Google lets go, the sign-in is deleted, the skill says so.
+  await p.click('[data-action="disconnect-gmail"]');
+  await p.waitForSelector('.connection[data-state="ready"]');
+  check('disconnecting revokes at Google and deletes the sign-in', google.state.revoked && !existsSync(join(home, 'connectors', 'gmail', 'token.json')));
 }
 
 // ---- reduced motion ------------------------------------------------------------------
@@ -383,6 +522,7 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
 
 writeFileSync(join(out, 'results.json'), `${JSON.stringify(results, null, 2)}\n`);
 await browser.close();
+await google.close();
 const failed = results.checks.filter((c) => !c.ok);
 console.log(`\n${results.checks.length - failed.length}/${results.checks.length} checks passed. Budgets: ${JSON.stringify(results.budgets)}`);
 process.exit(failed.length ? 1 : 0);

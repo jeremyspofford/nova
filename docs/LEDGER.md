@@ -36,6 +36,51 @@ forgetting leaves no copy in old commits, and no history is ever rewritten.
 Conversations and standing files keep their audit trail. Agreed with Jeremy
 in the thread.
 
+**2026-10-21 (Phase 3): skills are playbooks, loaded by their words.** A
+skill is `SKILL.md` with front matter (`name`, `about` for the person, `when`
+for the model, `words`, `needs`, `try`) and a markdown procedure. Nova ships
+two in `skills/`; installing copies the folder into the home. When a message
+contains one of a skill's `words`, the runner loads its playbook (and the docs
+of the connectors it needs) before the first model call, which saves a round
+trip. Every installed skill is also listed, so the model can load one with
+`use_skill` when the words miss. Real model: "Anything I need to deal with
+from overnight?" matched nothing and the model loaded Email summary itself.
+
+**2026-10-21 (Phase 3): skills and sign-ins stay out of the home's history.**
+`skills/` and `connectors/` join the memory files in the home's
+`.gitignore`, so removing a skill leaves nothing in old commits and no token
+is ever committed. Conversations still record which skill they followed (by
+name), and show "since removed" afterwards.
+
+**2026-10-21 (Phase 3): Gmail is read-only, through the person's own OAuth
+client.** Scope `gmail.readonly` only: the email summary needs nothing more,
+and nothing Nova does can change the mailbox. Sign-in uses PKCE and a
+loopback redirect to Nova's own server (Google's flow for desktop apps), so it
+works only when Nova is opened at localhost; a hub deployment will need a
+different flow. The refresh token lives in `~/connectors/gmail/token.json`
+(mode 600); access tokens stay in memory; no tool can read `connectors/`.
+Rejected: an app password over IMAP, which grants full mailbox access
+including sending, and a shared client id, which would put someone else's app
+between the person and their mail.
+
+**2026-10-21 (Phase 3): after mail is read, going online asks first.** Email
+is outside content, and a malicious message can ask the model to put mailbox
+details into a URL. In a conversation where Gmail has been read, `web_fetch`
+and `web_search` wait for the person's approval. Real model: told to "do what
+the security email says", it read the email, declined, and explained why.
+
+**2026-10-21 (Phase 3): web search is DuckDuckGo's HTML page.** No API key
+and no dependency; Nova parses titles, links and snippets, and drops ads. It
+breaks if DuckDuckGo changes its markup; `NOVA_SEARCH_URL` points it
+elsewhere, and the walkthrough uses a stand-in.
+
+**2026-10-21 (Phase 3): shopping researches and never buys.** Payments are
+out of scope and a purchase can't be undone. Real model: big retailers often
+refuse automated page reads (503s, rate limits), and the playbook's rule of
+quoting only prices it saw made it stop short of a recommendation. The
+playbook now asks deciding details first, caps page reads at about six, and
+falls back to agreeing sources labelled "reported".
+
 **2026-10-21: personal data lives outside the code.** The repo is public
 (AGPL). Each person's Nova data is one folder of plain files (`NOVA_HOME`,
 default `~/Nova`), seeded from `templates/home/`, and a local git repository

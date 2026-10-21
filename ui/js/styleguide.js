@@ -1,7 +1,7 @@
 // Renders the style reference from the live tokens and the app's own views.
 import { CONTRACT } from './contract.js';
 import { THEMES, MODES, apply, choose, current } from './theme.js';
-import { icons, memoryIndex, renderEmpty, renderMemory, renderNotes, renderToc, renderTurn } from './view.js';
+import { icons, memoryIndex, renderEmpty, renderMemory, renderNotes, renderSkills, renderToc, renderTurn } from './view.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -33,6 +33,21 @@ const turnDone = {
     { kind: 'text', id: 't1', text: sample },
   ],
 };
+const skillSample = {
+  installed: [{ id: 'email-summary', name: 'Email summary', about: 'Tells you what in your inbox needs you, without opening Gmail.', needs: ['gmail'], try: 'What in my inbox needs me today?', body: '## Choose the window\n\n- With no window given, cover the inbox since yesterday.' }],
+  available: [{ id: 'shopping', name: 'Shopping research', about: 'Finds and compares things to buy, and recommends one. It never buys anything.', needs: [], body: '## Search\n\n- Search results are leads.' }],
+  connectors: { gmail: { client: true, connected: true, account: 'you@example.com', since: '2026-10-21T09:00:00Z' } },
+};
+const usedSkill = {
+  id: 'sg3', text: 'What in my inbox needs me today?', ts: Date.now(), attempt: 0, state: 'done',
+  items: [
+    { kind: 'skill', id: 'email-summary', name: 'Email summary', how: 'matched' },
+    { kind: 'tool', id: 'g1', name: 'gmail_search', args: { query: 'in:inbox newer_than:1d' }, result: { ok: true, output: '5 messages in 5 conversations, newest first.', summary: '5 messages' } },
+    { kind: 'tool', id: 'g2', name: 'gmail_read', args: { id: '19a0c1d2e3f4a501' }, result: { ok: true, output: 'From: Dana Whitfield', summary: 'Contract for the spring project' } },
+    { kind: 'text', id: 'g3', text: 'One thing needs you: **Dana Whitfield** needs the contract signed by Thursday.' },
+  ],
+};
+
 const memorySample = {
   titles: { '2026-10-21-aaaaaa': 'Morning plan' },
   sections: [
@@ -113,6 +128,10 @@ function render() {
       <div class="thread">${renderTurn(kept, { memory: memoryIndex(memorySample) })}</div>
       <p class="sg-label">Memory</p>
       <div class="sg-frame"><div class="thread memory">${renderMemory(memorySample)}</div></div>
+      <p class="sg-label">A reply that followed a skill</p>
+      <div class="thread">${renderTurn(usedSkill, { skills: new Set(['email-summary']) })}</div>
+      <p class="sg-label">Skills, with a connection</p>
+      <div class="sg-frame"><div class="thread memory skills">${renderSkills(skillSample)}</div></div>
       <p class="sg-label">Toast</p>
       <div class="sg-frame" style="position: relative; min-height: 80px"><div class="toast">Forgotten, with 1 day note that said the same.<button type="button" class="toast-btn">Undo</button></div></div>
       <p class="sg-label">Empty state</p>

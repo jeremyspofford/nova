@@ -15,7 +15,7 @@ export function sampleMail(now = Date.now()) {
       id: '19a0c1d2e3f4a501', threadId: '19a0c1d2e3f4a501', labelIds: ['INBOX', 'UNREAD', 'IMPORTANT'], at: now - 1.5 * hour,
       from: 'Dana Whitfield <dana@whitfield-studio.example>', subject: 'Contract for the spring project: signature by Thursday',
       snippet: 'The contract is attached. Could you sign and send it back by Thursday?',
-      text: 'Hi,\n\nThe contract for the spring project is attached. Could you sign it and send it back by Thursday the 23rd? Legal wants it before the kickoff on Monday.\n\nThanks,\nDana',
+      text: 'Hi,\n\nThe contract for the spring project is attached. Could you sign it and send it back by Thursday? Legal wants it before the kickoff on Monday.\n\nThanks,\nDana',
       files: [{ name: 'spring-project-contract.pdf', size: 184_320 }],
     },
     {
