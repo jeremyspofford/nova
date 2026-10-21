@@ -133,7 +133,7 @@ export function renderNotes(notes) {
   }).join('');
 }
 
-// One exchange: Jeremy's message and everything Nova did in reply.
+// One exchange: the user's message and everything Nova did in reply.
 // live: { phase, text } while this turn is running, else null.
 export function renderTurn(turn, { live = null, isLast = false } = {}) {
   const open = turn.state === 'open';

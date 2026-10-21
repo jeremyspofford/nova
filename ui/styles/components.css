@@ -165,6 +165,13 @@
   gap: var(--s4);
   padding-bottom: var(--s6);
 }
+/* Long threads: the browser skips laying out and painting turns that are off
+   screen. The newest turns always render, so a conversation opens exactly at
+   its end; `auto` remembers each turn's real height once it has been seen. */
+.block:not(:nth-last-child(-n + 3)) > .turn {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
+}
 
 .msg-user {
   align-self: flex-end;
@@ -194,7 +201,9 @@
   opacity: 0;
   transition: opacity var(--m-fast) var(--ease);
 }
-.msg-user .actions { margin-left: 0; margin-right: calc(-1 * var(--s2)); }
+/* Beside the bubble, so it costs no vertical space. */
+.msg-user { position: relative; }
+.msg-user .actions { position: absolute; right: 100%; top: 50%; translate: 0 -50%; margin: 0 var(--s1) 0 0; }
 .msg-user:hover .actions, .msg-nova:hover .actions, .actions:focus-within { opacity: 1; }
 @media (hover: none) { .actions { opacity: 1; } }
 .act {
@@ -543,3 +552,4 @@ kbd {
 
 .block { display: contents; }
 .no-anim, .no-anim * { animation: none !important; }
+.msg-user .act span { display: none; }

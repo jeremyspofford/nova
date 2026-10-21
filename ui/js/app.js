@@ -257,7 +257,7 @@ function placeCaret() {
 }
 
 function afterRender() {
-  // A new approval takes focus, unless Jeremy is in the middle of typing.
+  // A new approval takes focus, unless the user is in the middle of typing.
   const card = el.thread.querySelector('.approval');
   if (card && !approvalsShown.has(card.dataset.tool)) {
     approvalsShown.add(card.dataset.tool);
@@ -358,6 +358,7 @@ async function send() {
   state.pending = { text, since: new Date().toISOString(), sessionId };
   el.input.value = '';
   autosize();
+  clearTimeout(draftTimer); // a pending save would bring the sent text back as a draft
   try { localStorage.removeItem(draftKey()); } catch {}
   state.stick = true;
   renderThread();
