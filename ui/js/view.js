@@ -124,24 +124,47 @@ function renderTool(tool, turnOpen) {
   return `<details class="${cls}"><summary>${stamp}<span class="record-label">${label}</span>${when}</summary><pre class="record-output" tabindex="0">${esc(output)}</pre></details>`;
 }
 
-export function renderNotes(notes) {
+const fromDay = (day) => {
+  const [y, m, d] = day.split('-').map(Number);
+  return shortDay(new Date(y, m - 1, d)).replace(/^(Today|Yesterday)$/, (w) => w.toLowerCase());
+};
+const clip = (t, n = 90) => (t.length > n ? `${t.slice(0, n - 2).replace(/\s+\S*$/, '')}…` : t);
+
+// What Nova recalled for this message. Notes are looked up by id in today's
+// memory, so a note forgotten since then is not shown again.
+export function renderNotes(notes, memory = new Map()) {
   return notes.map((n) => {
-    const day = n.source.match(/(\d{4})-(\d{2})-(\d{2})/);
-    const from = day ? shortDay(new Date(+day[1], +day[2] - 1, +day[3])).replace(/^(Today|Yesterday)$/, (w) => w.toLowerCase()) : n.source;
-    const text = n.text.length > 90 ? `${n.text.slice(0, 88).replace(/\s+\S*$/, '')}…` : n.text;
-    return `<p class="margin-note" title="${esc(n.source)}">recalled from ${esc(from)}: ${esc(text)}</p>`;
+    const text = n.id ? memory.get(n.id)?.text : n.text;
+    if (!text) return '';
+    const day = n.source.match(/(\d{4}-\d{2}-\d{2})/);
+    return `<p class="margin-note" title="${esc(n.source)}">recalled from ${esc(day ? fromDay(day[1]) : n.source)}: ${esc(clip(text))}</p>`;
+  }).join('');
+}
+
+// What Nova kept from this exchange, in the margin, linked to the Memory view.
+export function renderKept(ops, memory = new Map(), when = null) {
+  return ops.filter((o) => o.ok && !o.existing).map((o) => {
+    if (o.op === 'forget') return '<p class="margin-note is-quiet">forgot something, as you asked</p>';
+    const entry = memory.get(o.id);
+    if (!entry) return '<p class="margin-note is-quiet">kept in memory, since forgotten</p>';
+    const later = !o.replaced && entry.updated && when && entry.updated > when;
+    const verb = o.op === 'note' ? 'noted for the day' : o.replaced ? 'corrected in memory' : later ? 'kept in memory, since changed' : 'kept in memory';
+    return `<p class="margin-note"><a class="margin-link" href="/memory#m-${esc(o.id)}">${verb}</a>: ${esc(clip(entry.text))}</p>`;
   }).join('');
 }
 
 // One exchange: the user's message and everything Nova did in reply.
 // live: { phase, text } while this turn is running, else null.
-export function renderTurn(turn, { live = null, isLast = false } = {}) {
+export function renderTurn(turn, { live = null, isLast = false, memory = new Map() } = {}) {
   const open = turn.state === 'open';
   const running = open && !!live;
   let nova = '';
   let lastTextId = null;
   for (const it of turn.items) {
-    if (it.kind === 'recall') nova += `<aside class="margins" aria-label="From memory">${renderNotes(it.notes)}</aside>`;
+    if (it.kind === 'recall' || it.kind === 'memory') {
+      const notes = it.kind === 'recall' ? renderNotes(it.notes, memory) : renderKept(it.ops, memory, turn.ts);
+      if (notes) nova += `<aside class="margins" aria-label="${it.kind === 'recall' ? 'From memory' : 'Kept in memory'}">${notes}</aside>`;
+    }
     if (it.kind === 'text') { nova += `<div class="prose" data-text="${esc(it.id)}">${renderMarkdown(it.text)}</div>`; lastTextId = it.id; }
     if (it.kind === 'tool') nova += renderTool(it, running);
     if (it.kind === 'error') {
@@ -159,7 +182,7 @@ export function renderTurn(turn, { live = null, isLast = false } = {}) {
   if (lastTextId && !running) actions.push(`<button type="button" class="act" data-action="copy" data-copy="${esc(lastTextId)}" aria-label="Copy reply">${icons.copy}<span>Copy</span></button>`);
   if (isLast && !running) actions.push(`<button type="button" class="act" data-action="regenerate" aria-label="Regenerate reply">${icons.again}<span>Regenerate</span></button>`);
 
-  return `<section class="turn" data-turn="${esc(turn.id)}">
+  return `<section class="turn" id="t-${esc(turn.id)}" data-turn="${esc(turn.id)}">
   <div class="msg-user"><div class="bubble">${esc(turn.text)}</div>
     <div class="actions"><button type="button" class="act" data-action="copy-user" data-turn="${esc(turn.id)}" aria-label="Copy message">${icons.copy}<span>Copy</span></button></div></div>
   <div class="msg-nova">${nova}${actions.length ? `<div class="actions">${actions.join('')}</div>` : ''}</div>
@@ -167,18 +190,92 @@ export function renderTurn(turn, { live = null, isLast = false } = {}) {
 }
 
 // Each turn is keyed, with a dateline when a new day begins ("days are chapters").
-export function renderBlocks(session, live, now = new Date()) {
+export function renderBlocks(session, live, now = new Date(), memory = new Map()) {
   let day = null;
   return session.turns.map((t, i) => {
     const d = new Date(t.ts);
     const line = dayKey(d) !== day ? `<h2 class="dateline">${esc(longDate(d, now))}</h2>` : '';
     day = dayKey(d);
     const isLive = live && live.turn === t.id && live.attempt === t.attempt ? live : null;
-    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === session.turns.length - 1 }) };
+    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === session.turns.length - 1, memory }) };
   });
 }
 
-export function renderThread(session, live, now = new Date()) {
+export function renderThread(session, live, now = new Date(), memory = new Map()) {
   if (!session.turns.length) return renderEmpty(now);
-  return renderBlocks(session, live, now).map((b) => `<div class="block" data-key="${esc(b.key)}">${b.html}</div>`).join('');
+  return renderBlocks(session, live, now, memory).map((b) => `<div class="block" data-key="${esc(b.key)}">${b.html}</div>`).join('');
+}
+
+// ---- memory ----------------------------------------------------------------
+
+// id → { text, day } for every entry, so conversations can show what Nova
+// kept or recalled without storing the words themselves.
+export function memoryIndex(data) {
+  const index = new Map();
+  for (const s of data?.sections ?? []) for (const e of s.entries) index.set(e.id, { text: e.text, updated: e.updated });
+  for (const d of data?.days ?? []) for (const e of d.entries) index.set(e.id, { text: e.text, day: d.day });
+  return index;
+}
+
+const KIND_NOTES = {
+  Facts: 'Who you are and what is true about your life.',
+  Preferences: 'How you like things done.',
+  Decisions: 'What you settled, so it stays settled.',
+  Commitments: 'What you or Nova said would happen.',
+};
+
+function memorySource(e, titles, now) {
+  const when = (iso) => shortDay(new Date(iso), now).replace(/^(Today|Yesterday)$/, (w) => w.toLowerCase());
+  const bits = [];
+  if (e.time) bits.push(esc(e.time));
+  if (e.by === 'hand') bits.push('written into MEMORY.md by hand');
+  else if (e.from) {
+    const [sid, turn] = e.from.split('/');
+    const title = titles?.[sid];
+    bits.push(title
+      ? `from <a class="memory-from" href="/c/${esc(sid)}${turn ? `#t-${esc(turn)}` : ''}">“${esc(clip(title, 48))}”</a>${e.at && !e.time ? `, ${esc(when(e.at))}` : ''}`
+      : `from a conversation${e.at && !e.time ? `, ${esc(when(e.at))}` : ''}`);
+  }
+  if (e.by === 'you' && e.updated) bits.push(`edited by you ${esc(when(e.updated))}`);
+  else if (e.updated) bits.push(`corrected ${esc(when(e.updated))}`);
+  return bits.join(' · ');
+}
+
+function memoryItem(e, titles, now) {
+  return `<li class="memory-item" id="m-${esc(e.id)}" data-id="${esc(e.id)}" tabindex="0">
+  <p class="memory-text">${esc(e.text)}</p>
+  <p class="memory-source">${memorySource(e, titles, now)}</p>
+  <div class="memory-actions">
+    <button type="button" class="act" data-action="edit-memory" aria-label="Edit">Edit</button>
+    <button type="button" class="act" data-action="forget-memory" aria-label="Forget">Forget</button>
+  </div>
+</li>`;
+}
+
+export function renderMemory(data, now = new Date()) {
+  const sections = data?.sections ?? [];
+  const days = data?.days ?? [];
+  const count = sections.reduce((n, s) => n + s.entries.length, 0) + days.reduce((n, d) => n + d.entries.length, 0);
+  if (!count) {
+    return `<div class="empty memory-empty"><p class="empty-date">What Nova knows</p><p class="empty-line">Nothing kept yet.</p>
+<p class="memory-lede">As you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.</p></div>`;
+  }
+  const titles = data.titles ?? {};
+  const out = [`<header class="memory-intro"><p class="empty-date">What Nova knows</p>
+<p class="memory-lede">Nova reads this before every reply. Change anything, or forget it.</p></header>`];
+  for (const s of sections) {
+    const hid = `ms-${s.title.toLowerCase().replace(/\W+/g, '-')}`;
+    out.push(`<section class="memory-section" aria-labelledby="${hid}"><h2 class="memory-heading" id="${hid}">${esc(s.title)}</h2>
+${KIND_NOTES[s.title] ? `<p class="memory-kind">${KIND_NOTES[s.title]}</p>` : ''}
+${s.entries.length ? `<ul class="memory-list">${s.entries.map((e) => memoryItem(e, titles, now)).join('')}</ul>` : '<p class="memory-none">Nothing yet.</p>'}</section>`);
+  }
+  if (days.length) {
+    out.push(`<section class="memory-section" aria-labelledby="ms-days"><h2 class="memory-heading" id="ms-days">Day notes</h2>
+<p class="memory-kind">Detail from each day. Nova looks here when a message calls for it.</p>
+${days.map((d) => {
+    const [y, m, dd] = d.day.split('-').map(Number);
+    return `<h3 class="memory-day">${esc(longDate(new Date(y, m - 1, dd), now))}</h3><ul class="memory-list">${d.entries.map((e) => memoryItem(e, titles, now)).join('')}</ul>`;
+  }).join('')}</section>`);
+  }
+  return out.join('\n');
 }

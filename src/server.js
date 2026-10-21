@@ -7,6 +7,7 @@ import { loadConfig } from './config.js';
 import { ensureGit, seedHome } from './home.js';
 import { SessionStore, validId } from './sessions.js';
 import { Runner, BusyError } from './runner.js';
+import { commitHome } from './home.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -27,6 +28,16 @@ export function createNova(config = loadConfig(), deps = {}) {
   runner.on('event', (id, ev) => broadcast(id, 'event', ev));
   runner.on('live', (id, live) => broadcast(id, 'live', live));
   runner.on('delta', (id, d) => broadcast(id, 'delta', d));
+
+  // One stream for things that aren't a single conversation: memory changes
+  // and the conversation list.
+  const watchers = new Set();
+  const announce = (event, data = {}) => { for (const res of watchers) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+  runner.on('memory', () => announce('memory'));
+  runner.on('event', (_, ev) => { if (ev.type === 'session' || ev.type === 'title') announce('sessions'); });
+  const memory = runner.memory;
+  const titles = () => Object.fromEntries(store.list().map((s) => [s.id, s.title]));
+  const saved = (message) => { announce('memory'); if (config.commit !== false) commitHome(config.home, message); };
 
   const json = (res, code, body) => {
     res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -73,7 +84,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   }
 
   function serveStatic(req, res, path) {
-    if (path === '/' || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
+    if (path === '/' || path === '/memory' || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
@@ -93,6 +104,43 @@ export function createNova(config = loadConfig(), deps = {}) {
 
     if (resource === 'health') return json(res, 200, { ok: true, agent: config.agentCmd.trim().split(/\s+/)[0] });
     if (resource === 'config') return json(res, 200, { theme: config.theme, timezone: config.timezone });
+
+    if (resource === 'events' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+      res.write(': nova\n\n');
+      watchers.add(res);
+      const beat = setInterval(() => res.write(': beat\n\n'), 20_000);
+      req.on('close', () => { clearInterval(beat); watchers.delete(res); });
+      return;
+    }
+
+    if (resource === 'memory') {
+      if (req.method === 'GET' && !id) return json(res, 200, { ...memory.read(), titles: titles() });
+      if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
+      if (id === 'restore') {
+        const { items } = await readBody(req);
+        if (!Array.isArray(items)) return json(res, 400, { error: 'items must be a list' });
+        memory.restore(items);
+        saved('Nova: memory restored');
+        return json(res, 200, { ok: true });
+      }
+      if (!/^[mnh][0-9a-f]{8}$/.test(String(id))) return json(res, 404, { error: 'No such memory' });
+      if (action === 'forget') {
+        const removed = memory.forget(id);
+        if (!removed.length) return json(res, 404, { error: 'That was already forgotten.' });
+        saved('Nova: forgot something');
+        return json(res, 200, { removed });
+      }
+      if (!action) {
+        const { text } = await readBody(req);
+        let entry;
+        try { entry = memory.edit(id, text); } catch (e) { return json(res, 400, { error: e.message }); }
+        if (!entry) return json(res, 404, { error: 'That memory is gone. It may have been forgotten.' });
+        saved('Nova: memory edited');
+        return json(res, 200, { entry });
+      }
+      return json(res, 404, { error: 'Not found' });
+    }
 
     if (resource !== 'sessions') return json(res, 404, { error: 'Not found' });
     if (!id) {

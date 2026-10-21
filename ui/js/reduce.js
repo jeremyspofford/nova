@@ -41,6 +41,9 @@ function applyTurnEvent(t, ev) {
     case 'recall':
       t.items.push({ kind: 'recall', notes: ev.notes });
       break;
+    case 'memory':
+      t.items.push({ kind: 'memory', ops: ev.ops ?? [] });
+      break;
     case 'assistant':
       t.items.push({ kind: 'text', id: ev.id, text: ev.text, ts: ev.ts });
       break;

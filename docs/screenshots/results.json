@@ -1,22 +1,22 @@
 {
   "budgets": {
-    "serverStartMs": 152,
-    "pageInteractiveMs": 146,
-    "domContentLoadedMs": 90,
-    "sendFeedbackMs": 18,
+    "serverStartMs": 130,
+    "pageInteractiveMs": 141,
+    "domContentLoadedMs": 74,
+    "sendFeedbackMs": 6,
     "scroll": {
       "frames": 384,
-      "mainThreadP95Ms": 3.88,
-      "mainThreadMaxMs": 6.09,
+      "mainThreadP95Ms": 3.72,
+      "mainThreadMaxMs": 6.42,
       "frameIntervalP95Ms": 16.8,
-      "slowIntervals": 14
+      "slowIntervals": 3
     }
   },
   "checks": [
     {
       "name": "cold start ≤ 2 s (server + page)",
       "ok": true,
-      "detail": "152 ms server + 146 ms page"
+      "detail": "130 ms server + 141 ms page"
     },
     {
       "name": "the composer is focused on arrival",
@@ -31,7 +31,7 @@
     {
       "name": "send → visible feedback ≤ 100 ms",
       "ok": true,
-      "detail": "18 ms"
+      "detail": "6 ms"
     },
     {
       "name": "reply rendered markdown: list, code, table",
@@ -94,6 +94,66 @@
       "detail": ""
     },
     {
+      "name": "empty memory says what will appear there",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "memory is written before the reply completes",
+      "ok": true,
+      "detail": "session → user → assistant → memory → done"
+    },
+    {
+      "name": "the conversation shows what was kept, in the margin",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a correction replaces the superseded entry",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "each memory says where it came from",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Tab goes straight to the first memory",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "editing is one gesture, and lands in the file",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "forgetting removes it from memory and the day notes",
+      "ok": true,
+      "detail": "Forgotten, with 1 day note that said the same.Undo"
+    },
+    {
+      "name": "Undo brings it back",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a forgotten memory disappears from the conversation view",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a margin note links to the memory itself",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "memory view has no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
       "name": "a long conversation opens at its latest message",
       "ok": true,
       "detail": "0 px from the end"
@@ -101,7 +161,7 @@
     {
       "name": "scrolling a long thread holds 60 fps",
       "ok": true,
-      "detail": "page work p95 3.9 ms/frame (max 6.1) over 385 frames; frame interval p95 16.8 ms on this GPU-less machine"
+      "detail": "page work p95 3.7 ms/frame (max 6.4) over 385 frames; frame interval p95 16.8 ms on this GPU-less machine"
     },
     {
       "name": "paper-dark: no script errors",
@@ -149,5 +209,5 @@
       "detail": ""
     }
   ],
-  "longId": "2026-10-21-aosawv"
+  "longId": "2026-10-21-yafied"
 }

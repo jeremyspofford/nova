@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ToolTagFilter, parseToolCall, TOOLS, htmlToText, toolProtocol } from '../src/tools.js';
+import { ToolTagFilter, extractMemory, parseToolCall, TOOLS, htmlToText, toolProtocol } from '../src/tools.js';
 import { seedHome } from '../src/home.js';
 
 const home = () => { const h = mkdtempSync(join(tmpdir(), 'nova-t-')); seedHome(h, new URL('../templates/home', import.meta.url).pathname); return h; };
@@ -34,11 +34,13 @@ test('parseToolCall reports bad calls instead of throwing', () => {
   assert.match(parseToolCall('<tool_call name="exec">{"a":1}').error, /not closed/);
 });
 
-test('file tools stay inside home and protect the session logs', async () => {
+test('file tools stay inside home and protect the session logs and memory', async () => {
   const h = home();
-  assert.match(await TOOLS.write_file.run({ path: 'memory/2026-10-21.md', content: '- note' }, { home: h }), /Wrote 6 bytes/);
-  assert.equal(readFileSync(join(h, 'memory/2026-10-21.md'), 'utf8'), '- note');
-  assert.equal(await TOOLS.read_file.run({ path: '~/memory/2026-10-21.md' }, { home: h }), '- note');
+  assert.match(await TOOLS.write_file.run({ path: 'workspace/plan.md', content: '- step' }, { home: h }), /Wrote 6 bytes/);
+  assert.equal(readFileSync(join(h, 'workspace/plan.md'), 'utf8'), '- step');
+  assert.equal(await TOOLS.read_file.run({ path: '~/workspace/plan.md' }, { home: h }), '- step');
+  await assert.rejects(TOOLS.write_file.run({ path: 'MEMORY.md', content: '' }, { home: h }), /memory blocks|<remember>/);
+  await assert.rejects(TOOLS.write_file.run({ path: 'memory/2026-10-21.md', content: '' }, { home: h }), /<remember>/);
   await assert.rejects(TOOLS.read_file.run({ path: '../../etc/passwd' }, { home: h }), /outside Nova's home/);
   await assert.rejects(TOOLS.write_file.run({ path: '/etc/x', content: '' }, { home: h }), /outside Nova's home/);
   await assert.rejects(TOOLS.write_file.run({ path: 'sessions/x.jsonl', content: '' }, { home: h }), /audit trail/);
@@ -64,4 +66,24 @@ test('htmlToText keeps the words and drops the markup', () => {
 test('the protocol lists every tool', () => {
   const p = toolProtocol();
   for (const name of Object.keys(TOOLS)) assert.ok(p.includes(name));
+});
+
+test('memory blocks are taken out of the reply', () => {
+  const raw = 'Noted, black it is.\n\n<remember kind="preference">Takes coffee black.</remember>\n<remember replaces="m1a2b3c4">Lives in Porto.</remember>\n<note>Bought beans.</note>\n<forget id="m0000aaaa"></forget>';
+  const { text, ops } = extractMemory(raw);
+  assert.equal(text.trim(), 'Noted, black it is.');
+  assert.deepEqual(ops, [
+    { op: 'remember', kind: 'preference', replaces: undefined, text: 'Takes coffee black.' },
+    { op: 'remember', kind: undefined, replaces: 'm1a2b3c4', text: 'Lives in Porto.' },
+    { op: 'note', text: 'Bought beans.' },
+    { op: 'forget', id: 'm0000aaaa' },
+  ]);
+});
+
+test('the stream filter hides memory blocks, even split across chunks, and keeps the text after them', () => {
+  const f = new ToolTagFilter();
+  const chunks = ['Sure. <rem', 'ember kind="fact">Has a ', 'dog.</remember> Anything', ' else? a < b'];
+  assert.equal(chunks.map((c) => f.push(c)).join(''), 'Sure.  Anything else? a < b');
+  const g = new ToolTagFilter();
+  assert.equal(['Checking. <no', 'te>x</note>', '<tool_call name="read_file">{}</tool_call> never'].map((c) => g.push(c)).join(''), 'Checking. ');
 });

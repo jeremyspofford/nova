@@ -14,6 +14,23 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-21 (Phase 2): memory is kept with blocks, not tools.** The model
+ends its reply with `<remember>`, `<note>` and `<forget>` blocks; the runner
+strips them from the stream and applies them before `done`. A tool call per
+memory would cost a model round trip (~1.5 s each). Entries stay markdown
+bullets with a trailing `<!-- id=… from=… at=… -->` comment, so they remain
+readable and editable by hand, and the Memory view, corrections and forgetting
+all point at the id.
+
+**2026-10-21 (Phase 2): session logs record memory by id only.** The words
+live in the memory files; conversations look them up. Forgetting therefore
+removes a memory from every conversation view too.
+
+**2026-10-21 (Phase 2): forgetting a memory forgets matching day notes.**
+Same exchange and one shared word stem, or most of its word stems anywhere.
+Otherwise search would bring it back. Git history is untouched pending
+Jeremy's decision.
+
 **2026-10-21: personal data lives outside the code.** The repo is public
 (AGPL). Each person's Nova data is one folder of plain files (`NOVA_HOME`,
 default `~/Nova`), seeded from `templates/home/`, and a local git repository

@@ -10,9 +10,9 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { runAgent, AgentError } from './agent.js';
 import { buildPrompt, buildSystem } from './context.js';
-import { searchMemory } from './memory.js';
+import { Memory } from './memory.js';
 import { commitHome } from './home.js';
-import { TOOLS, ToolTagFilter, parseToolCall } from './tools.js';
+import { TOOLS, ToolTagFilter, extractMemory, parseToolCall } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 
 const shortId = () => randomUUID().slice(0, 8);
@@ -24,6 +24,7 @@ export class Runner extends EventEmitter {
     this.store = store;
     this.agent = agent;
     this.active = new Map(); // sessionId → live run
+    this.memory = new Memory(config.home, config.timezone);
   }
 
   record(sessionId, ev) {
@@ -109,8 +110,10 @@ export class Runner extends EventEmitter {
     const { signal } = run.controller;
     const question = reduce(this.store.read(sessionId)).turns.find((t) => t.id === turn).text;
 
-    const recall = searchMemory(this.config.home, question);
-    if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall });
+    // The log keeps where each note came from, not its words: what is
+    // forgotten later stays gone from the conversation view too.
+    const recall = this.memory.search(question);
+    if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall.map(({ id, source }) => ({ id, source })) });
 
     for (let step = 0; step <= this.config.maxSteps; step++) {
       const session = reduce(this.store.read(sessionId));
@@ -138,9 +141,11 @@ export class Runner extends EventEmitter {
         return;
       }
 
-      const { visible, call, error } = parseToolCall(text);
+      const { text: said, ops } = extractMemory(text);
+      const { visible, call, error } = parseToolCall(said);
       if (visible) this.record(sessionId, { type: 'assistant', ...tag, id: shortId(), text: visible });
       run.live.text = '';
+      if (ops.length) this.keep(sessionId, tag, ops);
       if (!call && !error) { this.record(sessionId, { type: 'done', ...tag }); return; }
 
       if (step === this.config.maxSteps) {
@@ -186,6 +191,25 @@ export class Runner extends EventEmitter {
       }
       this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output) });
     }
+  }
+
+  // Memory is written before the reply is marked done. The log records what
+  // changed by id only; the words live in the memory files.
+  keep(sessionId, tag, ops) {
+    const from = `${sessionId}/${tag.turn}`;
+    const results = ops.map((o) => {
+      try {
+        if (o.op === 'remember') return this.memory.remember({ ...o, from });
+        if (o.op === 'note') return this.memory.note({ ...o, from });
+        const removed = this.memory.forget(o.id);
+        if (removed.length) this.emit('forgot', removed);
+        return { op: 'forget', ok: removed.length > 0, id: o.id, also: removed.length > 1 ? removed.length - 1 : undefined };
+      } catch (e) {
+        return { op: o.op, ok: false, error: e.message };
+      }
+    }).map(({ op, ok, id, kind, replaced, existing, day, also }) => ({ op, ok, id, kind, replaced, existing, day, also }));
+    this.record(sessionId, { type: 'memory', ...tag, ops: results });
+    this.emit('memory');
   }
 }
 

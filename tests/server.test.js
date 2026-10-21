@@ -133,3 +133,36 @@ test('first run seeds the standing files without overwriting', () => {
   assert.ok(readdirSync(join(home, 'memory')).includes('README.md'));
   assert.ok(existsSync(join(home, 'workspace')));
 });
+
+test('memory: kept before the reply is done, shown with its source, edited, forgotten and restored', async () => {
+  const { id } = await (await post('/api/sessions', { text: 'I prefer tea in the afternoon' })).json();
+  const s = await settle(id);
+  const turn = s.session.turns[0];
+  assert.equal(turn.items.at(-1).kind, 'memory');
+  assert.equal(turn.items[0].text, "Got it. I'll remember that.", 'memory blocks never reach the reply');
+  const log = readFileSync(join(nova.config.home, 'sessions', `${id}.jsonl`), 'utf8');
+  assert.ok(log.indexOf('"type":"memory"') < log.indexOf('"type":"done"'));
+  assert.doesNotMatch(log.split('"type":"memory"')[1], /tea/, 'the log keeps ids, not the words');
+
+  let mem = await (await fetch(`${base}/api/memory`)).json();
+  const entry = mem.sections.find((x) => x.title === 'Preferences').entries[0];
+  assert.equal(entry.text, 'Prefers tea in the afternoon.');
+  assert.equal(entry.from, `${id}/${turn.id}`);
+  assert.equal(mem.titles[id], 'I prefer tea in the afternoon');
+
+  assert.equal((await post(`/api/memory/${entry.id}`, { text: 'Prefers green tea after 2pm.' }, {})).status, 403, 'writes need the X-Nova header');
+  const edited = await (await post(`/api/memory/${entry.id}`, { text: 'Prefers green tea after 2pm.' })).json();
+  assert.equal(edited.entry.by, 'you');
+  assert.equal((await post(`/api/memory/${entry.id}`, { text: '  ' })).status, 400);
+
+  const { removed } = await (await post(`/api/memory/${entry.id}/forget`)).json();
+  assert.equal(removed.length, 2, 'the matching day note goes too');
+  assert.doesNotMatch(readFileSync(join(nova.config.home, 'MEMORY.md'), 'utf8'), /tea/);
+  assert.equal((await post(`/api/memory/${entry.id}/forget`)).status, 404);
+  await post('/api/memory/restore', { items: removed });
+  mem = await (await fetch(`${base}/api/memory`)).json();
+  assert.equal(mem.sections.find((x) => x.title === 'Preferences').entries[0].text, 'Prefers green tea after 2pm.');
+  assert.equal((await post('/api/memory/restore', { items: [{ file: '../../etc/passwd', line: '- x' }] })).status, 200);
+  assert.ok(!existsSync(join(nova.config.home, '..', '..', 'etc', 'passwd.md')));
+  assert.equal((await post('/api/memory/zzz/forget')).status, 404);
+});

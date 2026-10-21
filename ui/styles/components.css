@@ -28,6 +28,10 @@
 .icon-btn svg { width: 20px; height: 20px; }
 .icon-btn:hover { background: var(--wash); color: var(--text); }
 
+.places { margin: 0 calc(-1 * var(--s2)) var(--s5); padding: 0 var(--s2); }
+.place { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); }
+.place-count { font: var(--t-caption); color: var(--text-3); }
+
 .toc { flex: 1; min-height: 0; overflow-y: auto; margin: 0 calc(-1 * var(--s2)); padding: 0 var(--s2); }
 .toc-day + .toc-day { margin-top: var(--s5); }
 .toc-label {
@@ -320,6 +324,105 @@
   }
 }
 
+a.margin-link { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.margin-note.is-quiet { color: var(--text-3); }
+
+/* A turn or memory a link pointed at: a wash that fades. */
+.is-found { animation: found calc(var(--m-slow) * 4) var(--ease) both; border-radius: var(--r-card); }
+
+/* ---- memory: what Nova knows ------------------------------------------------- */
+
+.memory { gap: var(--s6); }
+.memory:focus-visible { outline: none; } /* focused on arrival only so Tab starts here */
+.memory-intro .empty-date { text-align: left; }
+.memory-lede { margin-top: var(--s2); color: var(--text-2); }
+.memory-empty .memory-lede { max-width: 420px; margin: var(--s3) auto 0; }
+.memory-heading {
+  font: var(--t-caption);
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--hairline);
+}
+.memory-kind { margin-top: var(--s2); font: var(--t-margin); color: var(--text-2); }
+.memory-none { margin-top: var(--s3); font: var(--t-callout); color: var(--text-3); }
+.memory-day { margin-top: var(--s5); font: var(--t-margin); color: var(--text-2); }
+.memory-list { list-style: none; margin: var(--s2) 0 0; padding: 0; }
+.memory-item {
+  position: relative;
+  padding: var(--s3) var(--s3);
+  margin: 0 calc(-1 * var(--s3));
+  border-radius: var(--r-card);
+  outline-offset: -2px;
+  transition: background-color var(--m-fast) var(--ease), opacity var(--m-med) var(--ease);
+}
+.memory-item:hover, .memory-item:focus-within { background: var(--wash); }
+.memory-item + .memory-item { margin-top: 1px; }
+.memory-text { cursor: text; overflow-wrap: anywhere; }
+.memory-source { margin-top: var(--s1); font: var(--t-callout); color: var(--text-2); }
+.memory-from { color: inherit; text-decoration: underline; text-decoration-color: var(--hairline); text-underline-offset: 3px; }
+.memory-from:hover { text-decoration-color: var(--accent); }
+.memory-actions {
+  position: absolute;
+  top: var(--s2);
+  right: var(--s2);
+  display: flex;
+  gap: var(--s1);
+  opacity: 0;
+  transition: opacity var(--m-fast) var(--ease);
+}
+.memory-item:hover .memory-actions, .memory-item:focus-within .memory-actions { opacity: 1; }
+@media (hover: none) { .memory-actions { position: static; opacity: 1; margin: var(--s1) 0 0 calc(-1 * var(--s2)); } }
+.memory-item.is-editing .memory-actions { display: none; }
+.memory-item.is-leaving { opacity: 0.35; }
+.memory-edit {
+  display: block;
+  box-sizing: border-box;
+  width: calc(100% + 2 * var(--s3));
+  padding: var(--s1) var(--s3);
+  margin: calc(-1 * var(--s1) - 1px) calc(-1 * var(--s3));
+  border: 1px solid var(--accent);
+  border-radius: var(--r-input);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  resize: none;
+  overflow: hidden;
+}
+.memory-edit:focus-visible { outline: none; }
+
+/* ---- toast: a short confirmation, with Undo when something went ------------- */
+
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: var(--s5);
+  translate: -50% 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s2) var(--s2) var(--s4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: var(--raised);
+  box-shadow: var(--shadow-2);
+  font: var(--t-callout);
+  color: var(--text);
+  z-index: 5;
+  max-width: calc(100% - 2 * var(--s4));
+}
+.toast:not(:has(.toast-btn)) { padding-right: var(--s4); }
+.toast-btn {
+  padding: var(--s1) var(--s3);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--wash);
+  font: var(--t-callout);
+  color: var(--accent);
+}
+.toast-btn:hover { color: var(--text); }
+
 /* ---- records: what Nova did, one line each -------------------------------- */
 
 .record { font: var(--t-callout); color: var(--text-2); }
@@ -541,6 +644,7 @@ kbd {
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes rise { from { opacity: 0; translate: 0 var(--shift); } }
 @keyframes breathe { from { opacity: 0.3; } to { opacity: 1; } }
+@keyframes found { from { background-color: var(--accent-wash); } to { background-color: transparent; } }
 @keyframes stamp { from { opacity: 0; scale: 1.35; } 60% { opacity: 1; } }
 
 .view-enter { animation: rise var(--m-med) var(--ease) both; }

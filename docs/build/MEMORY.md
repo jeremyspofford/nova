@@ -5,9 +5,10 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 
 ## Where things are
 
-- Phase: **1 delivered, waiting for Jeremy's review.** Do not start Phase 2
-  without his approval.
-- Review: [../phase-1-review.md](../phase-1-review.md). Screenshots:
+- Phase 1 approved and merged (#198). Phase 2 (memory) delivered for review;
+  do not start Phase 3 without Jeremy's approval.
+- Reviews: [../phase-1-review.md](../phase-1-review.md),
+  [../phase-2-review.md](../phase-2-review.md). Screenshots:
   [../screenshots/](../screenshots/).
 - The previous attempt is preserved at the `archive/attempt-6` tag.
 
@@ -29,3 +30,6 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
   the agent's environment (`agentEnv()` in `src/agent.js`).
 - Don't `pkill -f` a pattern that appears in your own command line.
 - Components never use raw values; the lint will say so.
+- Code that rewrites git history (e.g. scrubbing forgotten memory from the
+  home repo) is blocked by the build environment's safety check unless the
+  person explicitly approves it first.
