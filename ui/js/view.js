@@ -66,8 +66,14 @@ export function renderToc(list, currentId, now = new Date()) {
 
 // ---- conversation --------------------------------------------------------
 
-export function renderEmpty(now = new Date()) {
-  return `<div class="empty"><p class="empty-date">${esc(longDate(now, now))}</p><p class="empty-line">Nothing needs you yet.</p></div>`;
+// The front page with nothing on it yet, or a fresh conversation.
+export function renderEmpty(now = new Date(), { fresh = false } = {}) {
+  return `<div class="empty"><p class="empty-date">${esc(longDate(now, now))}</p><p class="empty-line">${fresh ? 'A new conversation, apart from the main one.' : 'Nothing needs you yet.'}</p></div>`;
+}
+
+// Today's page in the main conversation, before anything has happened today.
+export function renderToday(now = new Date()) {
+  return `<h2 class="dateline">${esc(longDate(now, now))}</h2><p class="today-line">Nothing needs you yet.</p>`;
 }
 
 const host = (url) => { try { return new URL(url).host; } catch { return url; } };
@@ -87,6 +93,8 @@ export function toolLabel(tool, state) {
     gmail_draft: { running: 'Saving the draft in Gmail', done: `Saved a draft in Gmail${sum ? `: “${esc(sum)}”` : ''}`, failed: "Couldn't save the draft", declined: "Didn't save the draft", waiting: 'Waiting to save a draft' },
     gmail_organize: { running: 'Changing your Gmail', done: sum ? esc(sum) : 'Changed your Gmail', failed: "Couldn't change your Gmail", declined: 'Left your Gmail as it was', waiting: 'Waiting to change your Gmail' },
     gmail_read: { running: 'Reading an email', done: sum ? `Read “${esc(sum)}”` : 'Read an email', failed: "Couldn't read that email" },
+    schedule_set: { running: 'Setting up the schedule', done: `Set up “${esc(sum || a.name)}”`, failed: "Couldn't set up the schedule", declined: `Didn't set up “${esc(a.name)}”`, waiting: 'Waiting to set up a schedule' },
+    schedule_remove: { running: 'Removing the schedule', done: `Removed the schedule “${esc(sum || a.id)}”`, failed: "Couldn't remove the schedule", declined: 'Kept the schedule', waiting: 'Waiting to remove a schedule' },
     use_skill: { running: 'Opening a skill', done: `Opened ${esc(sum || a.name)}`, failed: `Couldn't open the skill ${esc(a.name)}` },
   };
   labels.web_fetch.declined = `Didn't open ${esc(host(a.url))}`;
@@ -113,6 +121,12 @@ function approvalBody(tool) {
     const made = p.create?.length ? ` That makes the new label${p.create.length > 1 ? 's' : ''} ${p.create.map((l) => `“${esc(l)}”`).join(' and ')}.` : '';
     return `Nova wants to change your Gmail: ${esc((p.verb ?? 'change some emails').replace(/^\w/, (c) => c.toLowerCase()))}.${made}`;
   }
+  if (tool.name === 'schedule_set') {
+    return p.replaces
+      ? `Nova wants to change the schedule ${esc(p.replaces)}. From then on it runs on its own and sends you a report.`
+      : `Nova wants to set up ${p.once ? 'a reminder' : 'a schedule'}. It runs on its own and sends you ${p.once ? 'one report, then removes itself' : 'a report each time'}.`;
+  }
+  if (tool.name === 'schedule_remove') return `Nova wants to remove the schedule ${esc(p.name ?? tool.args?.id ?? '')}${p.when ? ` (${esc(p.when.replace(/^\w/, (c) => c.toLowerCase()))})` : ''}. It won't run again.`;
   if (tool.name === 'web_fetch') return `Nova wants to open <code>${esc(host(a.url))}</code>. ${ONLINE}`;
   if (tool.name === 'web_search') return `Nova wants to search the web for “${esc(a.query)}”. ${ONLINE}`;
   const cmd = String(a.command ?? '');
@@ -127,6 +141,11 @@ function approvalDetail(tool) {
     return `<div class="approval-mail"><dl class="approval-fields"><dt>To</dt><dd>${esc(p.to)}</dd>${p.cc ? `<dt>Cc</dt><dd>${esc(p.cc)}</dd>` : ''}<dt>Subject</dt><dd>${esc(p.subject || '(no subject)')}</dd></dl>
 <div class="approval-letter" tabindex="0">${esc(p.body)}</div></div>`;
   }
+  if (tool.name === 'schedule_set') {
+    const to = p.deliver === 'main' ? 'The main conversation' : p.deliver === 'here' ? 'This conversation' : 'Another conversation';
+    return `<div class="approval-mail"><dl class="approval-fields"><dt>Name</dt><dd>${esc(p.name)}</dd><dt>When</dt><dd>${esc(p.when)}${p.once ? '' : `<span class="approval-next">Next: ${esc(p.next)}</span>`}</dd><dt>Reports</dt><dd>${to}</dd></dl>
+<div class="approval-letter" tabindex="0">${esc(p.prompt)}</div></div>`;
+  }
   if (tool.name === 'gmail_organize') {
     return `<ul class="approval-list">${(p.messages ?? []).map((m) => `<li><span class="approval-subject">${esc(m.subject)}</span> <span class="approval-from">${esc(m.from)}</span></li>`).join('')}</ul>`;
   }
@@ -137,15 +156,17 @@ function renderApproval(tool) {
   const cmd = String(tool.args?.command ?? '');
   const multi = tool.name === 'exec' && (cmd.includes('\n') || cmd.length > 72);
   const url = tool.name === 'web_fetch' ? String(tool.args?.url ?? '') : '';
-  const change = tool.name.startsWith('gmail_');
+  const change = tool.name.startsWith('gmail_') || tool.name.startsWith('schedule_');
+  const yes = { gmail_draft: 'Save draft', schedule_set: tool.preview?.replaces ? 'Change it' : 'Set it up', schedule_remove: 'Remove it' }[tool.name] ?? (change ? 'Make the change' : 'Allow once');
+  const verb = { gmail_draft: 'save', schedule_set: 'set it up', schedule_remove: 'remove it' }[tool.name] ?? (change ? 'make it' : 'allow');
   return `<div class="approval" role="group" aria-labelledby="ap-${esc(tool.id)}" data-tool="${esc(tool.id)}">
   <p class="approval-title" id="ap-${esc(tool.id)}">A small decision, when you're ready</p>
   <p class="approval-body">${approvalBody(tool)}</p>
   ${multi ? `<pre class="approval-cmd">${esc(cmd)}</pre>` : ''}${url ? `<pre class="approval-cmd">${esc(url)}</pre>` : ''}${approvalDetail(tool)}
   <div class="approval-actions">
-    <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}">${tool.name === 'gmail_draft' ? 'Save draft' : change ? 'Make the change' : 'Allow once'}</button>
+    <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}">${yes}</button>
     <button type="button" class="btn" data-action="deny" data-tool="${esc(tool.id)}">${change ? 'Not now' : 'Deny'}</button>
-    <span class="keys" aria-hidden="true"><kbd>Enter</kbd> ${change ? (tool.name === 'gmail_draft' ? 'save' : 'make it') : 'allow'} · <kbd>Esc</kbd> ${change ? 'not now' : 'deny'}</span>
+    <span class="keys" aria-hidden="true"><kbd>Enter</kbd> ${verb} · <kbd>Esc</kbd> ${change ? 'not now' : 'deny'}</span>
   </div>
 </div>`;
 }
@@ -154,7 +175,7 @@ function renderTool(tool, turnOpen) {
   const state = toolState(tool, turnOpen);
   if (state === 'waiting') return renderApproval(tool);
   const stamp = tool.approval
-    ? `<span class="stamp${tool.approval.decision === 'deny' ? ' is-declined' : ''}">${tool.approval.decision === 'deny' ? 'Declined' : 'Allowed'}</span>`
+    ? `<span class="stamp${tool.approval.decision === 'deny' ? ' is-declined' : ''}">${tool.approval.auto ? 'Not asked' : tool.approval.decision === 'deny' ? 'Declined' : 'Allowed'}</span>`
     : '';
   const when = tool.approval?.ts ? `<span class="record-time">${esc(clock(new Date(tool.approval.ts)))}</span>` : '';
   const label = state === 'skipped' ? `Never ran ${tool.name === 'exec' ? `<code>${esc(String(tool.args?.command ?? '').split('\n')[0])}</code>` : 'that step'}` : toolLabel(tool, state);
@@ -240,15 +261,33 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
 </section>`;
 }
 
+// A report from scheduled work, set as a front page: what it is and when,
+// then Nova's writing in the voice of record.
+export function renderHandoff(h) {
+  const when = clock(new Date(h.ts));
+  const due = h.due ? clock(new Date(h.due)) : '';
+  const late = h.late && due && due !== when ? ` · late, Nova wasn't running at ${esc(due)}` : '';
+  const body = h.ok
+    ? `<div class="prose handoff-body" data-text="${esc(h.id)}">${renderMarkdown(h.text)}</div>`
+    : `<div class="error" role="alert"><p class="error-title">${esc(h.text)}</p><button type="button" class="btn" data-action="run-schedule" data-schedule="${esc(h.schedule)}">Run it again</button></div>`;
+  return `<section class="turn handoff${h.ok ? '' : ' is-failed'}" id="h-${esc(h.id)}" data-turn="${esc(h.id)}" aria-label="${esc(h.name)}">
+  <p class="handoff-kicker"><a href="/schedules#sc-${esc(h.schedule)}">${esc(h.name)}</a> · ${esc(when)}${late}</p>
+  ${body}
+  ${h.ok ? `<div class="actions"><button type="button" class="act" data-action="copy" data-copy="${esc(h.id)}" aria-label="Copy report">${icons.copy}<span>Copy</span></button></div>` : ''}
+</section>`;
+}
+
 // Each turn is keyed, with a dateline when a new day begins ("days are chapters").
 export function renderBlocks(session, live, now = new Date(), memory = new Map(), skills = null) {
   let day = null;
+  const last = session.turns.length - 1;
   return session.turns.map((t, i) => {
     const d = new Date(t.ts);
     const line = dayKey(d) !== day ? `<h2 class="dateline">${esc(longDate(d, now))}</h2>` : '';
     day = dayKey(d);
+    if (t.kind === 'handoff') return { key: t.id, html: line + renderHandoff(t) };
     const isLive = live && live.turn === t.id && live.attempt === t.attempt ? live : null;
-    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === session.turns.length - 1, memory, skills }) };
+    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === last, memory, skills }) };
   });
 }
 
@@ -453,5 +492,85 @@ ${installed.length
   out.push(`<section class="memory-section" id="gmail" aria-labelledby="ks-connections"><h2 class="memory-heading" id="ks-connections">Connections</h2>
 <p class="memory-kind">Services a skill can reach on your behalf.</p>
 ${renderGmail(gmail, { local })}</section>`);
+  return out.join('\n');
+}
+
+// ---- schedules ---------------------------------------------------------------
+
+// "today at 7:00 AM", "tomorrow at 7:00 AM", "Friday at 7:00 AM", "October 30 at 7:00 AM".
+export function relWhen(iso, now = new Date(), timeZone = undefined) {
+  const d = new Date(iso);
+  const key = (x) => x.toLocaleDateString('en-CA', { timeZone });
+  const days = Math.round((Date.parse(key(d)) - Date.parse(key(now))) / 86_400_000);
+  const time = d.toLocaleTimeString('en-US', { timeZone, hour: 'numeric', minute: '2-digit' });
+  if (days === 0) return `today at ${time}`;
+  if (days === 1) return `tomorrow at ${time}`;
+  if (days === -1) return `yesterday at ${time}`;
+  if (days > 1 && days < 7) return `${d.toLocaleDateString('en-US', { timeZone, weekday: 'long' })} at ${time}`;
+  return `${d.toLocaleDateString('en-US', { timeZone, month: 'long', day: 'numeric' })} at ${time}`;
+}
+
+// What happened last time, in a sentence: running, missed, failed, or the
+// report's headline with a way to read it.
+function scheduleLast(s, now, tz) {
+  if (s.running) return '<p class="schedule-last is-running" role="status"><span class="pulse" aria-hidden="true"></span>Running now…</p>';
+  if (s.queued) return '<p class="schedule-last">Waiting for another schedule to finish.</p>';
+  const r = s.last;
+  if (!r) return '';
+  if (r.missed) return `<p class="schedule-last is-warn">Missed ${esc(relWhen(r.due, now, tz))}: Nova wasn't running then.</p>`;
+  const when = relWhen(r.finished ?? r.ts, now, tz);
+  const where = r.delivered === 'main' ? `/#h-${esc(r.handoff)}` : `/c/${esc(r.delivered)}#h-${esc(r.handoff)}`;
+  if (!r.ok) return `<p class="schedule-last is-warn">Last run, ${esc(when)}, didn't finish: ${esc(r.error ?? 'something went wrong')} <a href="${where}">See it</a></p>`;
+  return `<p class="schedule-last">Last ran ${esc(when)}${r.late ? ', late' : ''}. <a href="${where}">Read the report</a></p>${r.summary ? `<p class="schedule-headline">${esc(r.summary)}</p>` : ''}`;
+}
+
+function scheduleItem(s, now, tz) {
+  const state = s.error ? '' : s.paused ? '<span class="pill">Paused</span>' : '';
+  const next = s.next ? `<span class="schedule-next">Next: ${esc(relWhen(s.next, now, tz))}</span>` : '';
+  const busy = s.running || s.queued;
+  const actions = s.error ? '' : `<button type="button" class="act" data-action="run-schedule"${busy ? ' disabled' : ''}>Run now</button>
+    <button type="button" class="act" data-action="${s.paused ? 'resume-schedule' : 'pause-schedule'}">${s.paused ? 'Resume' : 'Pause'}</button>`;
+  const elsewhere = s.deliver !== 'main' ? `<p class="skill-needs">Reports go to <a href="/c/${esc(s.deliver)}">the conversation where you asked for it</a>.</p>` : '';
+  return `<li class="skill schedule${s.paused ? ' is-paused' : ''}" id="sc-${esc(s.id)}" data-id="${esc(s.id)}" tabindex="0">
+  <div class="skill-head"><h3 class="skill-name">${esc(s.name)}</h3>${state}<span class="schedule-actions">${actions}<button type="button" class="act" data-action="remove-schedule">Remove</button></span></div>
+  ${s.error ? `<p class="skill-needs is-warn">${esc(s.error)}</p>` : `<p class="schedule-when">${esc(s.when)}${next ? ` · ${next}` : ''}</p>`}
+  ${elsewhere}${scheduleLast(s, now, tz)}
+  <details class="skill-playbook"><summary>What Nova does</summary><div class="prose">${renderMarkdown(s.prompt)}</div></details>
+</li>`;
+}
+
+const hhmm = (cron) => {
+  const [m, h] = String(cron).split(/\s+/);
+  return /^\d+$/.test(m) && /^\d+$/.test(h) ? `${h.padStart(2, '0')}:${m.padStart(2, '0')}` : '07:00';
+};
+
+function offerItem(s) {
+  return `<li class="skill is-available" id="sc-${esc(s.id)}" data-id="${esc(s.id)}" tabindex="0">
+  <div class="skill-head"><h3 class="skill-name">${esc(s.name)}</h3></div>
+  <p class="skill-about">${esc(s.about)}</p>
+  <form class="schedule-setup" data-form="setup-schedule">
+    <label class="field-label">Time<input class="field" type="time" name="time" value="${hhmm(s.cron)}" required></label>
+    <label class="field-label">Days<select class="field" name="days"><option value="every">Every day</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option></select></label>
+    <button type="submit" class="btn">Turn on</button>
+  </form>
+  <details class="skill-playbook"><summary>What Nova does</summary><div class="prose">${renderMarkdown(s.prompt)}</div></details>
+</li>`;
+}
+
+export function renderSchedules(data, now = new Date()) {
+  const set = data?.set ?? [];
+  const available = data?.available ?? [];
+  const tz = data?.timezone;
+  const out = [`<header class="memory-intro"><p class="empty-date">Schedules</p>
+<p class="memory-lede">Work Nova does on its own, at times you choose. Reports arrive in the main conversation, and each schedule is a plain file in your Nova folder.</p></header>`];
+  out.push(`<section class="memory-section" aria-labelledby="sc-set"><h2 class="memory-heading" id="sc-set">Set</h2>
+${set.length
+    ? `<ul class="skill-list">${set.map((s) => scheduleItem(s, now, tz)).join('')}</ul>`
+    : `<p class="memory-none">Nothing is scheduled yet. Turn on the morning digest below, or ask Nova in any conversation, such as “Every Friday at 4, remind me to send my timesheet.”</p>`}
+${set.length ? '<p class="memory-kind">Nova runs schedules while it\'s running. If it was off at a run\'s time, the run happens when Nova starts, if that\'s within six hours.</p>' : ''}</section>`);
+  if (available.length) {
+    out.push(`<section class="memory-section" aria-labelledby="sc-offer"><h2 class="memory-heading" id="sc-offer">Ready to set up</h2>
+<ul class="skill-list">${available.map(offerItem).join('')}</ul></section>`);
+  }
   return out.join('\n');
 }

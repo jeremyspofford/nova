@@ -12,6 +12,11 @@ import { lastRun, nextRun } from './cron.js';
 import { reduce } from '../ui/js/reduce.js';
 
 const CATCH_UP = 6 * 3600_000;
+// A report's first line, as plain words, for the Schedules view.
+const headline = (text) => {
+  const first = text.split('\n').find((l) => l.trim())?.replace(/[*_`#>]/g, '').trim() ?? '';
+  return first.length > 140 ? `${first.slice(0, 138).replace(/\s+\S*$/, '')}…` : first;
+};
 const LATE = 2 * 60_000;
 
 export class Scheduler extends EventEmitter {
@@ -121,7 +126,7 @@ export class Scheduler extends EventEmitter {
     await runner.deliver(target, handoff);
     this.schedules.record({
       schedule: s.id, name: s.name, run, due: handoff.due, started: started.toISOString(), finished: new Date().toISOString(),
-      ok, ...(late ? { late: true } : {}), ...(manual ? { manual: true } : {}), ...(ok ? {} : { error: failure }),
+      ok, ...(late ? { late: true } : {}), ...(manual ? { manual: true } : {}), ...(ok ? { summary: headline(report) } : { error: failure }),
       delivered: target, handoff: handoff.id,
     });
     if (s.once && this.schedules.get(s.id)) this.schedules.remove(s.id);

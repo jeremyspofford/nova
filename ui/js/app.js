@@ -3,7 +3,7 @@
 // nothing that is already on screen animates twice.
 import { applyEvent, emptySession } from './reduce.js';
 import { renderMarkdown } from './markdown.js';
-import { icons, memoryIndex, renderBlocks, renderEmpty, renderMemory, renderSkills, renderToc } from './view.js';
+import { dayKey, icons, memoryIndex, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderSkills, renderToc, renderToday } from './view.js';
 import { THEMES, MODES, apply as applyTheme, choose as chooseTheme, current as currentTheme } from './theme.js';
 
 const $ = (id) => document.getElementById(id);
@@ -14,6 +14,8 @@ const el = {
   settings: $('settings'), appearance: $('appearance'),
   memory: $('memory'), memoryLink: $('memory-link'), memoryCount: $('memory-count'), dock: $('dock'), toast: $('toast'),
   skills: $('skills'), skillsLink: $('skills-link'), skillsCount: $('skills-count'),
+  schedules: $('schedules'), schedulesLink: $('schedules-link'), schedulesCount: $('schedules-count'),
+  mainLink: $('main-link'), mainDot: $('main-dot'),
 };
 
 const state = {
@@ -26,7 +28,7 @@ const state = {
   online: navigator.onLine,
   stick: true,
   notice: '',
-  view: 'chat',         // 'chat' | 'memory' | 'skills'
+  view: 'chat',         // 'chat' | 'memory' | 'skills' | 'schedules'
   memory: null,         // what Nova knows, from /api/memory
   memoryError: '',
   memIndex: new Map(),  // id → entry, for the notes in conversation margins
@@ -35,6 +37,8 @@ const state = {
   skillsError: '',
   skillIds: null,       // installed skill ids, for conversation margins
   noticeAt: 0,          // the last Gmail sign-in notice shown
+  schedules: null,      // what's scheduled, from /api/schedules
+  schedulesError: '',
 };
 
 let stream = null;
@@ -110,11 +114,43 @@ function loadSkills() {
     });
 }
 
-// Changes that aren't one conversation's: memory, skills, and the list of conversations.
+function loadSchedules() {
+  return fetch('/api/schedules')
+    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+    .then((data) => {
+      state.schedules = data;
+      state.schedulesError = '';
+      const on = data.set.filter((s) => !s.paused && !s.error).length;
+      el.schedulesCount.textContent = on ? String(on) : '';
+      // A report that arrived in the main conversation since it was last open.
+      const latest = data.set.map((s) => s.last).filter((r) => r?.delivered === 'main' && r.finished).map((r) => r.finished).sort().at(-1);
+      if (latest && latest > seenMain() && !onMain()) el.mainDot.hidden = false;
+      if (state.view === 'schedules') renderSchedulesView();
+    })
+    .catch(() => {
+      state.schedulesError = "Nova's server didn't answer, so schedules can't be shown right now.";
+      if (state.view === 'schedules' && !state.schedules) renderSchedulesView();
+    });
+}
+
+const onMain = () => state.view === 'chat' && state.id === 'main';
+const seenMain = () => { try { return localStorage.getItem('nova.mainSeen') ?? ''; } catch { return ''; } };
+function markMainSeen() {
+  el.mainDot.hidden = true;
+  try { localStorage.setItem('nova.mainSeen', new Date().toISOString()); } catch {}
+}
+
+// Changes that aren't one conversation's: memory, skills, schedules, and the list of conversations.
 function watch() {
   const es = new EventSource('/api/events');
   es.addEventListener('memory', () => loadMemory());
   es.addEventListener('skills', () => loadSkills());
+  es.addEventListener('schedules', () => loadSchedules());
+  es.addEventListener('handoff', (e) => {
+    if (JSON.parse(e.data).target !== 'main') return;
+    if (onMain()) markMainSeen();
+    else el.mainDot.hidden = false;
+  });
   es.addEventListener('sessions', () => loadList());
 }
 
@@ -137,12 +173,20 @@ function setReachable(ok) {
 
 // ---- routing -------------------------------------------------------------
 
+// "/" is the main conversation, the front page; "/new" starts another.
 function route() {
-  const m = location.pathname.match(/^\/c\/([\w-]+)$/);
-  if (location.pathname === '/memory') showMemory();
-  else if (location.pathname === '/skills') showSkills();
-  else if (m) open(m[1]);
-  else startNew();
+  const path = location.pathname;
+  const m = path.match(/^\/c\/([\w-]+)$/);
+  if (path === '/memory') showMemory();
+  else if (path === '/skills') showSkills();
+  else if (path === '/schedules') showSchedules();
+  else if (path === '/new') startNew();
+  else if (m && m[1] !== 'main') open(m[1]);
+  else {
+    if (path !== '/') history.replaceState(null, '', `/${location.hash}`);
+    open('main');
+    if (!location.hash) el.input.focus({ preventScroll: true });
+  }
 }
 
 function setView(view) {
@@ -150,9 +194,10 @@ function setView(view) {
   el.thread.hidden = view !== 'chat';
   el.memory.hidden = view !== 'memory';
   el.skills.hidden = view !== 'skills';
+  el.schedules.hidden = view !== 'schedules';
   el.dock.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
-  for (const [link, v] of [[el.memoryLink, 'memory'], [el.skillsLink, 'skills']]) {
+  for (const [link, v] of [[el.memoryLink, 'memory'], [el.skillsLink, 'skills'], [el.schedulesLink, 'schedules']]) {
     if (view === v) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
@@ -178,6 +223,7 @@ function open(id, { quiet = false } = {}) {
   setView('chat');
   if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true });
   restoreDraft();
+  if (id === 'main') markMainSeen();
   const es = new EventSource(`/api/sessions/${id}/events`);
   stream = es;
   let first = true;
@@ -185,7 +231,7 @@ function open(id, { quiet = false } = {}) {
     const snap = JSON.parse(e.data);
     state.session = snap.session;
     state.live = snap.live;
-    if (state.pending && state.session.turns.some((t) => t.text === state.pending.text && t.ts >= state.pending.since)) state.pending = null;
+    if (state.pending && state.session.turns.some((t) => !t.kind && t.text === state.pending.text && t.ts >= state.pending.since)) state.pending = null;
     renderAll({ enter: first && !quiet });
     first = false;
   });
@@ -240,7 +286,7 @@ function renderAll({ enter = false } = {}) {
   }
   renderChrome();
   renderToc_();
-  const target = location.hash.startsWith('#t-') && document.getElementById(location.hash.slice(1));
+  const target = /^#[th]-/.test(location.hash) && document.getElementById(location.hash.slice(1));
   if (target) {
     state.stick = false;
     target.scrollIntoView({ block: 'start' });
@@ -259,11 +305,14 @@ function renderThread() {
   const session = viewSession();
   const wasNear = nearBottom();
   if (!session.turns.length) {
-    if (!el.thread.querySelector('.empty')) { el.thread.innerHTML = renderEmpty(); rendered = new Map(); }
+    if (!el.thread.querySelector('.empty')) { el.thread.innerHTML = renderEmpty(new Date(), { fresh: !state.id }); rendered = new Map(); }
     return;
   }
   el.thread.querySelector('.empty')?.remove();
   const blocks = renderBlocks(session, viewLive(), new Date(), state.memIndex, state.skillIds);
+  // The front page always ends on today, even before anything has happened.
+  const lastTs = session.turns.at(-1).ts;
+  if (state.id === 'main' && lastTs && dayKey(new Date(lastTs)) !== dayKey(new Date())) blocks.push({ key: 'today', html: renderToday() });
   const keep = new Set(blocks.map((b) => b.key));
   for (const node of [...el.thread.children]) if (!keep.has(node.dataset.key)) { node.remove(); rendered.delete(node.dataset.key); }
   let prev = null;
@@ -371,7 +420,9 @@ function running() {
 }
 
 function renderChrome() {
-  const title = { memory: 'Memory', skills: 'Skills' }[state.view] ?? (state.id ? state.session.title || 'Untitled' : '');
+  const title = { memory: 'Memory', skills: 'Skills', schedules: 'Schedules' }[state.view] ?? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : '');
+  if (onMain()) el.mainLink.setAttribute('aria-current', 'page');
+  else el.mainLink.removeAttribute('aria-current');
   el.title.textContent = title;
   document.title = title ? `${title} · Nova` : 'Nova';
 
@@ -513,7 +564,7 @@ async function copy(text, button) {
 
 // Links between conversations and memory stay inside the app.
 function followLink(e) {
-  const a = e.target.closest('a[href^="/memory"], a[href^="/skills"], a[href^="/c/"]');
+  const a = e.target.closest('a[href^="/memory"], a[href^="/skills"], a[href^="/schedules"], a[href^="/c/"], a[href^="/#"], a[href="/"]');
   if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return false;
   e.preventDefault();
   navigate(a.getAttribute('href'));
@@ -527,9 +578,12 @@ el.thread.addEventListener('click', (e) => {
   const action = b.dataset.action;
   if (action === 'allow' || action === 'deny') decide(b.dataset.tool, action, b);
   if (action === 'regenerate') regenerate();
+  if (action === 'run-schedule') runSchedule(b.dataset.schedule, b);
   if (action === 'copy-code') copy(b.closest('.code-block').querySelector('code').textContent, b);
   if (action === 'copy-user') copy(state.session.turns.find((t) => t.id === b.dataset.turn)?.text ?? '', b);
   if (action === 'copy') {
+    const report = state.session.turns.find((t) => t.kind === 'handoff' && t.id === b.dataset.copy);
+    if (report) { copy(report.text, b); return; }
     for (const t of state.session.turns) {
       const it = t.items.find((i) => i.kind === 'text' && i.id === b.dataset.copy);
       if (it) {
@@ -777,7 +831,7 @@ async function removeSkill(item) {
 }
 
 function trySkill(text) {
-  navigate('/');
+  navigate('/new');
   el.input.value = text;
   autosize();
   saveDraft();
@@ -950,6 +1004,140 @@ el.skillsLink.addEventListener('click', (e) => {
   navigate('/skills');
 });
 
+// ---- schedules -------------------------------------------------------------
+
+function showSchedules() {
+  stream?.close();
+  stream = null;
+  Object.assign(state, { id: null, live: null, pending: null });
+  setView('schedules');
+  el.scroller.scrollTop = 0;
+  renderChrome();
+  renderToc_();
+  renderSchedulesView({ enter: true });
+  loadSchedules().then(() => {
+    const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
+    if (target) { target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); flash(target); }
+    else el.schedules.focus({ preventScroll: true });
+  });
+}
+
+function renderSchedulesView({ enter = false } = {}) {
+  const focused = document.activeElement;
+  const focusKey = focused?.closest?.('.skill')?.id;
+  const inForm = focused?.closest?.('form') ? focused.name : null;
+  const open = [...el.schedules.querySelectorAll('.skill-playbook[open]')].map((d) => d.closest('.skill').id);
+  const typed = Object.fromEntries([...el.schedules.querySelectorAll('.schedule-setup')].map((f) => [f.closest('.skill').id, { time: f.time.value, days: f.days.value }]));
+  if (state.schedules) el.schedules.innerHTML = renderSchedules(state.schedules, new Date());
+  else if (state.schedulesError) el.schedules.innerHTML = `<div class="empty"><p class="empty-line">Schedules couldn't be shown.</p><p class="memory-lede">${state.schedulesError}</p><button type="button" class="btn" data-action="retry-schedules">Try again</button></div>`;
+  else el.schedules.innerHTML = '';
+  for (const id of open) document.querySelector(`#${CSS.escape(id)} .skill-playbook`)?.setAttribute('open', '');
+  for (const [id, v] of Object.entries(typed)) {
+    const f = document.querySelector(`#${CSS.escape(id)} .schedule-setup`);
+    if (f) { f.time.value = v.time; f.days.value = v.days; }
+  }
+  if (focusKey) {
+    const item = $(focusKey);
+    (inForm && item?.querySelector(`[name="${inForm}"]`) || item)?.focus({ preventScroll: true });
+  }
+  if (enter) {
+    el.schedules.classList.remove('view-enter');
+    void el.schedules.offsetWidth;
+    el.schedules.classList.add('view-enter');
+  }
+}
+// "Next: tomorrow at 7:00 AM" stays true as the clock moves.
+setInterval(() => { if (state.view === 'schedules' && !document.hidden) renderSchedulesView(); }, 60_000);
+
+const scheduleName = (id) => state.schedules?.set.find((s) => s.id === id)?.name ?? 'The schedule';
+
+async function runSchedule(id, button) {
+  if (button) button.disabled = true;
+  try {
+    const { queued } = await post(`/api/schedules/${id}/run`);
+    toast(queued ? `Running ${scheduleName(id)} now. Its report arrives in the main conversation.` : `${scheduleName(id)} is already running.`);
+    loadSchedules();
+  } catch (e) { if (button) button.disabled = false; toast(e.message); }
+}
+
+async function pauseSchedule(item, paused) {
+  try {
+    await post(`/api/schedules/${item.dataset.id}/${paused ? 'pause' : 'resume'}`);
+    await loadSchedules();
+    $(`sc-${item.dataset.id}`)?.querySelector(`[data-action="${paused ? 'resume' : 'pause'}-schedule"]`)?.focus({ preventScroll: true });
+    toast(paused ? `Paused. ${scheduleName(item.dataset.id)} won't run until you resume it.` : `Resumed. ${scheduleName(item.dataset.id)} runs on its schedule again.`);
+  } catch (e) { toast(e.message); }
+}
+
+async function removeSchedule(item) {
+  const id = item.dataset.id;
+  const name = scheduleName(id);
+  const items = [...el.schedules.querySelectorAll('.schedule')];
+  const next = items[items.indexOf(item) + 1] ?? items[items.indexOf(item) - 1];
+  item.classList.add('is-leaving');
+  try {
+    const { text } = await post(`/api/schedules/${id}/remove`);
+    state.undo = async () => {
+      try {
+        await post(`/api/schedules/${id}/restore`, { text });
+        await loadSchedules();
+        $(`sc-${id}`)?.focus();
+        toast('Back, exactly as it was.');
+      } catch (e) { toast(e.message); }
+    };
+    await loadSchedules();
+    (next && $(next.id) ? $(next.id) : el.schedules).focus({ preventScroll: true });
+    toast(`Removed ${name}. It won't run again.`, { undo: true });
+  } catch (e) { item.classList.remove('is-leaving'); toast(e.message); }
+}
+
+async function setupSchedule(form) {
+  const item = form.closest('.skill');
+  const button = form.querySelector('button');
+  button.disabled = true;
+  try {
+    await post(`/api/schedules/${item.dataset.id}/setup`, { time: form.time.value, days: form.days.value });
+    await loadSchedules();
+    const now = $(`sc-${item.dataset.id}`);
+    now?.focus({ preventScroll: true });
+    if (now) { now.scrollIntoView({ block: 'nearest' }); flash(now); }
+    const s = state.schedules.set.find((x) => x.id === item.dataset.id);
+    toast(`${s?.name ?? 'It'} is on: ${(s?.when ?? '').replace(/^\w/, (c) => c.toLowerCase())}.`);
+  } catch (e) { button.disabled = false; toast(e.message); }
+}
+
+el.schedules.addEventListener('submit', (e) => {
+  if (e.target.dataset.form !== 'setup-schedule') return;
+  e.preventDefault();
+  setupSchedule(e.target);
+});
+el.schedules.addEventListener('click', (e) => {
+  if (followLink(e)) return;
+  const b = e.target.closest('[data-action]');
+  const item = e.target.closest('.skill');
+  const action = b?.dataset.action;
+  if (action === 'run-schedule') runSchedule(item.dataset.id, b);
+  else if (action === 'pause-schedule') pauseSchedule(item, true);
+  else if (action === 'resume-schedule') pauseSchedule(item, false);
+  else if (action === 'remove-schedule') removeSchedule(item);
+  else if (action === 'retry-schedules') loadSchedules();
+});
+el.schedules.addEventListener('keydown', (e) => {
+  const item = e.target.closest('.skill');
+  if (!item || e.target !== item) return;
+  const items = [...el.schedules.querySelectorAll('.skill')];
+  const i = items.indexOf(item);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
+  if (e.key === 'Enter') { e.preventDefault(); const d = item.querySelector('.skill-playbook'); d.open = !d.open; }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && item.classList.contains('schedule')) { e.preventDefault(); removeSchedule(item); }
+});
+el.schedulesLink.addEventListener('click', (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  closeDrawer();
+  navigate('/schedules');
+});
+
 // ---- navigation ------------------------------------------------------------
 
 el.toc.addEventListener('click', (e) => {
@@ -961,7 +1149,13 @@ el.toc.addEventListener('click', (e) => {
 });
 document.querySelector('[data-nav="home"]').addEventListener('click', (e) => { e.preventDefault(); closeDrawer(); navigate('/'); });
 el.newChat.innerHTML = icons.plus;
-el.newChat.addEventListener('click', () => { closeDrawer(); navigate('/'); });
+el.newChat.addEventListener('click', () => { closeDrawer(); navigate('/new'); });
+el.mainLink.addEventListener('click', (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  closeDrawer();
+  navigate('/');
+});
 window.addEventListener('popstate', route);
 
 el.menu.innerHTML = icons.menu;
@@ -987,7 +1181,7 @@ function step(dir) {
 document.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   const inField = e.target.closest?.('input, textarea, [contenteditable]');
-  if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); navigate('/'); return; }
+  if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); navigate('/new'); return; }
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); return; }
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view !== 'chat' && state.undo) { e.preventDefault(); runUndo(); return; }
   if (e.key === '/' && !inField && !el.settings.open && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
@@ -1023,6 +1217,7 @@ applyTheme();
 loadList();
 loadMemory();
 loadSkills();
+loadSchedules();
 watch();
 route();
 document.documentElement.dataset.ready = 'true';

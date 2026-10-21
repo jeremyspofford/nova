@@ -103,6 +103,35 @@ quoting only prices it saw made it stop short of a recommendation. The
 playbook now asks deciding details first, caps page reads at about six, and
 falls back to agreeing sources labelled "reported".
 
+**2026-10-21 (Phase 4): the main conversation is the front page.** "/"
+opens one long conversation (`sessions/main.jsonl`) that scheduled reports are
+delivered into, and a reply to a report continues there. New conversations
+moved to `/new` (+, ⌘⇧O). A report's first sentence is set as a headline, so
+the digest reads as a front page rather than a notification.
+
+**2026-10-21 (Phase 4): a schedule is a markdown file with cron.** Front
+matter (`name`, `cron`, `deliver`, `once`, `paused`) and the instructions as
+the body, in `~/Nova/schedules/`. Five-field cron evaluated on the wall clock
+of the configured time zone; a time skipped by daylight saving runs just
+after, a repeated one runs once. No scheduler library: the evaluator is under
+200 lines and tested on DST edges.
+
+**2026-10-21 (Phase 4): schedules run only while Nova runs.** The scheduler
+ticks every 30 s and runs one job at a time. On start, a run missed in the
+last six hours runs late, once; older ones are recorded as missed in
+`runs.jsonl`. Running while Nova is closed needs an always-on host (the hub
+idea), which is out of scope.
+
+**2026-10-21 (Phase 4): unattended runs decline approvals.** A run is its own
+session (`kind: "run"`, hidden from the list). Anything that would ask for
+approval is declined and recorded as not asked; the model is told to suggest
+it in the report. Waiting for a person would stall the queue.
+
+**2026-10-21 (Phase 4): schedules are set through an approval.** The model
+uses `schedule_set` and `schedule_remove`, which always show a card with the
+exact instructions; `write_file` refuses `schedules/`, so there's no way
+around the card. The system prompt forbids promising a follow-up without one.
+
 **2026-10-21: personal data lives outside the code.** The repo is public
 (AGPL). Each person's Nova data is one folder of plain files (`NOVA_HOME`,
 default `~/Nova`), seeded from `templates/home/`, and a local git repository
