@@ -50,6 +50,13 @@ Nova ships two, Email summary and Shopping research, and the Skills view
 `~/Nova/skills/`, where you can read and edit them; removing one deletes its
 folder, and nothing else refers to it.
 
+Add your own under **Add your own** in Skills: a folder or a .zip with a
+`SKILL.md`, up to 200 files and 5 MB. Nova reads Claude's skill format too
+(`name` and `description` in the front matter, then the steps), so skills
+written for Claude work as they are. Other files in the folder come along,
+and Nova reads them when the steps point to them. A skill is instructions
+Nova follows, so add ones you trust; anything it would run still asks first.
+
 **Gmail.** Email summary reads your mail, saves drafts and organizes it
 (archive, labels, read or unread). It never sends or deletes, and every draft
 and change waits for your OK on a card that shows exactly what will happen.

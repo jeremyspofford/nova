@@ -9,6 +9,7 @@ import { SessionStore, validId } from './sessions.js';
 import { Runner, BusyError } from './runner.js';
 import { SkillError } from './skills.js';
 import { GmailError } from './connectors/gmail.js';
+import { ZipError, unzip } from './zip.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -55,10 +56,10 @@ export function createNova(config = loadConfig(), deps = {}) {
     res.end(JSON.stringify(body));
   };
 
-  const readBody = (req) => new Promise((ok, fail) => {
+  const readBody = (req, limit = 1_000_000) => new Promise((ok, fail) => {
     let size = 0;
     const parts = [];
-    req.on('data', (c) => { size += c.length; if (size > 1_000_000) { fail(new Error('too large')); req.destroy(); } else parts.push(c); });
+    req.on('data', (c) => { size += c.length; if (size > limit) { fail(new Error('too large')); req.destroy(); } else parts.push(c); });
     req.on('end', () => { try { ok(parts.length ? JSON.parse(Buffer.concat(parts).toString('utf8')) : {}); } catch { fail(new Error('bad json')); } });
     req.on('error', fail);
   });
@@ -156,6 +157,20 @@ export function createNova(config = loadConfig(), deps = {}) {
     if (resource === 'skills') {
       if (req.method === 'GET' && !id) return json(res, 200, skillsView());
       if (req.method !== 'POST' || !id) return json(res, 405, { error: 'Method not allowed' });
+      // A skill the person brings: a folder's files, or a .zip.
+      if (id === 'add' && !action) {
+        let body;
+        try { body = await readBody(req, 8_000_000); } catch { return json(res, 413, { error: 'That skill is too big to add. Skills can be up to 5 MB.' }); }
+        try {
+          const skill = skills.add(body.zip ? unzip(Buffer.from(String(body.zip), 'base64')) : body.files);
+          announce('skills');
+          return json(res, 200, { skill });
+        } catch (e) {
+          if (e instanceof SkillError) return json(res, e.status, { error: e.message });
+          if (e instanceof ZipError) return json(res, 400, { error: e.message });
+          throw e;
+        }
+      }
       try {
         let skill = null;
         let files;

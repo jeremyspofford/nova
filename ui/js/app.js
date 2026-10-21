@@ -710,7 +710,7 @@ function showSkills() {
     if (target) {
       target.scrollIntoView({ block: 'center' });
       (target.matches('.skill') ? target : target.querySelector('input, button, textarea') ?? target).focus({ preventScroll: true });
-      flash(target.matches('.skill') ? target : target.querySelector('.connection'));
+      flash(target.matches('.skill') ? target : target.querySelector('.connection, .dropzone') ?? target);
     } else el.skills.focus({ preventScroll: true });
   });
 }
@@ -838,6 +838,78 @@ async function gmailAction(action, button) {
   finally { if (button?.isConnected) button.disabled = false; }
 }
 
+// ---- adding a skill: a folder or a .zip, chosen or dropped ----
+
+const MAX_SKILL = 5_000_000;
+function base64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+async function addSkill(body) {
+  try {
+    const { skill } = await post('/api/skills/add', body);
+    await loadSkills();
+    const now = $(`s-${skill.id}`);
+    if (now) { now.scrollIntoView({ block: 'center' }); now.focus({ preventScroll: true }); flash(now); }
+    toast(`Added ${skill.name}. Nova uses it from your next message.`);
+  } catch (e) { toast(e.message); }
+}
+
+// [{ path, file }] → the request body.
+async function addFiles(list) {
+  const size = list.reduce((n, f) => n + f.file.size, 0);
+  if (size > MAX_SKILL) { toast('That skill is too big to add. Skills can be up to 5 MB.'); return; }
+  if (list.length === 1 && /\.zip$/i.test(list[0].path)) return addSkill({ zip: base64(await list[0].file.arrayBuffer()) });
+  const files = {};
+  for (const { path, file } of list) files[path] = { base64: base64(await file.arrayBuffer()) };
+  return addSkill({ files });
+}
+
+// A dropped folder arrives as entries to walk.
+async function walkEntry(entry, prefix = '') {
+  if (entry.isFile) return [{ path: prefix + entry.name, file: await new Promise((ok, fail) => entry.file(ok, fail)) }];
+  const reader = entry.createReader();
+  const all = [];
+  for (;;) {
+    const batch = await new Promise((ok, fail) => reader.readEntries(ok, fail));
+    if (!batch.length) break;
+    all.push(...batch);
+  }
+  return (await Promise.all(all.map((e) => walkEntry(e, `${prefix}${entry.name}/`)))).flat();
+}
+
+el.skills.addEventListener('change', (e) => {
+  const files = [...(e.target.files ?? [])];
+  if (!files.length) return;
+  if (e.target.id === 'add-zip-input') addFiles([{ path: files[0].name, file: files[0] }]);
+  if (e.target.id === 'add-folder-input') addFiles(files.map((f) => ({ path: f.webkitRelativePath || f.name, file: f })));
+  e.target.value = '';
+});
+el.skills.addEventListener('dragover', (e) => {
+  const zone = e.target.closest('.dropzone');
+  if (!zone) return;
+  e.preventDefault();
+  zone.classList.add('is-over');
+});
+el.skills.addEventListener('dragleave', (e) => {
+  const zone = e.target.closest('.dropzone');
+  if (zone && !zone.contains(e.relatedTarget)) zone.classList.remove('is-over');
+});
+el.skills.addEventListener('drop', async (e) => {
+  const zone = e.target.closest('.dropzone');
+  if (!zone) return;
+  e.preventDefault();
+  zone.classList.remove('is-over');
+  const entries = [...e.dataTransfer.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  const list = entries.length
+    ? (await Promise.all(entries.map((en) => walkEntry(en)))).flat()
+    : [...e.dataTransfer.files].map((f) => ({ path: f.name, file: f }));
+  if (list.length) addFiles(list);
+});
+
 el.skills.addEventListener('submit', (e) => {
   if (e.target.dataset.form !== 'gmail-password') return;
   e.preventDefault();
@@ -849,6 +921,7 @@ el.skills.addEventListener('click', (e) => {
   const item = e.target.closest('.skill');
   const action = b?.dataset.action;
   if (action === 'connect-password') return; // the form's submit handles it
+  if (action === 'add-folder' || action === 'add-zip') return $(`${action}-input`).click();
   if (action === 'install-skill') installSkill(item);
   else if (action === 'remove-skill') removeSkill(item);
   else if (action === 'try-skill') trySkill(b.dataset.try);

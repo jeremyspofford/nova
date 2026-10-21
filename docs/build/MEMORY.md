@@ -5,8 +5,8 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 
 ## Where things are
 
-- Phases 1 and 2 approved and merged (#198, #199). Phase 3 (skills and the
-  Gmail connector) delivered for review; do not start Phase 4 without
+- Phases 1 and 2 approved and merged (#198, #199). Phase 3 (skills, Add your
+  own with Claude's format, and the Gmail connector) delivered for review; do not start Phase 4 without
   Jeremy's approval.
 - Reviews: [../phase-1-review.md](../phase-1-review.md),
   [../phase-2-review.md](../phase-2-review.md),

@@ -350,7 +350,7 @@ function skillItem(s, gmail, installed) {
   return `<li class="skill${installed ? '' : ' is-available'}" id="s-${esc(s.id)}" data-id="${esc(s.id)}" tabindex="0">
   <div class="skill-head"><h3 class="skill-name">${esc(s.name)}</h3>${action}</div>
   <p class="skill-about">${esc(s.about || s.when)}</p>
-  ${installed ? skillNeeds(s, gmail) : ''}
+  ${installed ? skillNeeds(s, gmail) : ''}${installed && s.own ? `<p class="skill-needs">Added by you${s.files?.length ? `, with ${s.files.length} more file${s.files.length === 1 ? '' : 's'} in its folder` : ''}.</p>` : ''}
   <details class="skill-playbook"><summary>How Nova does it</summary><div class="prose">${renderMarkdown(s.body.replace(/^# .*\n+/, ''))}</div></details>
   ${tryIt}
 </li>`;
@@ -442,6 +442,14 @@ ${installed.length
     out.push(`<section class="memory-section" aria-labelledby="ks-available"><h2 class="memory-heading" id="ks-available">Available</h2>
 <ul class="skill-list">${available.map((s) => skillItem(s, gmail, false)).join('')}</ul></section>`);
   }
+  out.push(`<section class="memory-section" id="add" aria-labelledby="ks-add"><h2 class="memory-heading" id="ks-add">Add your own</h2>
+<div class="dropzone" data-drop="skill">
+  <p class="skill-about">A skill is a folder with a SKILL.md: a name, a description of when to use it, then the steps. Nova reads its own format and Claude's, so skills made for Claude work here too.</p>
+  <div class="connection-actions"><button type="button" class="btn" data-action="add-folder">Choose a folder</button><button type="button" class="btn" data-action="add-zip">Choose a .zip</button><span class="connection-note">or drop one here.</span></div>
+  <p class="connection-note">A skill is instructions Nova follows, so add ones you trust. Anything a skill would run still asks you first.</p>
+</div>
+<input type="file" id="add-folder-input" webkitdirectory multiple hidden>
+<input type="file" id="add-zip-input" accept=".zip,application/zip" hidden></section>`);
   out.push(`<section class="memory-section" id="gmail" aria-labelledby="ks-connections"><h2 class="memory-heading" id="ks-connections">Connections</h2>
 <p class="memory-kind">Services a skill can reach on your behalf.</p>
 ${renderGmail(gmail, { local })}</section>`);

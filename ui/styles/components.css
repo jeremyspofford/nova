@@ -493,6 +493,15 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 .field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s3); margin-top: var(--s4); }
 .field-label { display: block; font: var(--t-callout); color: var(--text-2); }
 .field-label .field { margin-top: var(--s1); font: var(--t-body); }
+.dropzone {
+  margin-top: var(--s3);
+  padding: var(--s4);
+  border: 1px dashed var(--hairline);
+  border-radius: var(--r-card);
+  transition: background-color var(--m-fast) var(--ease), border-color var(--m-fast) var(--ease);
+}
+.dropzone.is-over { border-color: var(--accent); background: var(--surface); }
+.dropzone .skill-about { margin-top: 0; }
 .connection-advanced { margin-top: var(--s5); padding-top: var(--s4); border-top: 1px solid var(--hairline); }
 .connection-more { margin-top: var(--s2); }
 .field:focus-visible { outline: none; border-color: var(--accent); }

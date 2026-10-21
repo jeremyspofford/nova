@@ -8,16 +8,17 @@ There are exactly two, each built completely:
 - **Shopping research** finds and compares things to buy, and never buys anything.
 
 Installing, using and removing a skill is a designed experience. Removing one
-leaves nothing behind.
+leaves nothing behind. You can also add your own, in Nova's format or
+Claude's.
 
 Evidence:
 
-- `npm run shots`: 65 of 65 checks pass, including 26 skill checks
+- `npm run shots`: 68 of 68 checks pass
   ([results](screenshots/results.json)).
-- `npm test`: 90 pass.
+- `npm run check`: 94 tests pass, plus the token lint and theme contract.
 - The real `claude -p` ran both skills: Email summary against a stand-in
   Gmail mailbox (summary, a draft reply, archiving), Shopping research
-  against the live web.
+  against the live web, and a Claude-format skill added from a .zip.
 
 ## Added after your first look
 
@@ -67,6 +68,37 @@ login, through an environment variable. Nova now strips that variable from
 the model's environment, as it already did for Claude's memory, and a test
 covers it. The playbook also says to sign off only with a name from
 USER.md. On the rerun, it ended without a name and said why.
+
+## Add your own skills
+
+You said yes to plugins in this phase: Claude's skill format, plus an
+"Add a skill" button. MCP connectors stay a later phase.
+
+- **Skills → Add your own** takes a folder or a .zip, by button or by
+  dropping it on the box ([add](screenshots/paper-skills-add.png)). The
+  added skill lists like the shipped ones, with "Added by you" and how many
+  other files its folder has ([added](screenshots/paper-skills-added.png)).
+- **Claude's format works as is.** A `SKILL.md` with just `name` and
+  `description` is read: the name becomes the title ("meeting-notes" →
+  Meeting notes), and the description serves as both what you see and when
+  Nova uses it. Multi-line descriptions (`>` and `|`) and quoted values parse.
+- **Extra files come along.** Templates, references and scripts are copied
+  into `~/Nova/skills/<name>/`. When Nova loads the skill, it's told which
+  files are there and reads them with `read_file` when the steps point to
+  them. A script only runs through `exec`, which always asks you first.
+- **It says no plainly** to a folder without a `SKILL.md`, a missing name,
+  description or steps, a name already taken, paths that climb out of the
+  folder, encrypted zips, and anything over 200 files or 5 MB. Mac and Git
+  clutter (`__MACOSX`, `.DS_Store`, `.git`) is skipped.
+- **A skill is instructions Nova follows**, so the box says to add ones you
+  trust. It can't do anything Nova couldn't already: outside changes and
+  commands still wait for your OK.
+- **Removing it** deletes its folder, like any other skill.
+
+**Real model:** a Claude-format "meeting-notes" skill with a `template.md`,
+added from a .zip. Asked to tidy some rough notes, it loaded the skill, read
+`template.md`, and returned decisions and action items in that layout,
+asking about the missing owners and dates (10.9 s).
 
 ## How skills work
 
@@ -257,7 +289,6 @@ installed to used in one click.
    - The real model has used it against the stand-in mailbox.
    - If something breaks on your first connect, the message on screen should
      say what. Tell me what it says.
-5. **Still open from your plugins question:** reading Claude's standard
-   `SKILL.md` format, plus an "Add a skill" button for a folder or .zip. I
-   haven't built it, since you haven't said yes. MCP connectors would be
-   their own phase.
+5. **Plugins: Claude's skill format and Add your own are built**, as you
+   said yes to. MCP connectors (other services, the way Claude and ChatGPT
+   plug them in) would be their own phase after this one.

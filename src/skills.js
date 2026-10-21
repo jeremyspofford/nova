@@ -1,21 +1,45 @@
 // Skills are markdown playbooks: front matter says what the skill is and when
 // to use it, the body says how. Nova ships a few in skills/; installing one
 // copies its folder into the home's skills/, where the person can read and
-// change it. Removing one deletes that folder. Nothing else refers to it, and
-// skills/ is kept out of the home's history, so nothing is left behind.
+// change it. The person can also add their own folder or .zip, in Nova's
+// format or Claude's (name + description). Removing one deletes that folder.
+// Nothing else refers to it, and skills/ is kept out of the home's history,
+// so nothing is left behind.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
+const MAX_FILES = 200;
+const MAX_BYTES = 5_000_000;
+const JUNK = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|\.git)(\/|$)/;
+export const slug = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+// "pdf-processing" → "Pdf processing"; a written-out name stays as it is.
+const displayName = (name, id) => {
+  const n = String(name || id);
+  return ID.test(n) ? n.charAt(0).toUpperCase() + n.slice(1).replace(/-/g, ' ') : n;
+};
 const list = (v) => String(v ?? '').split(',').map((w) => w.trim().toLowerCase()).filter(Boolean);
 
 export function parseFrontMatter(text) {
   const m = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
   const meta = {};
   if (m) {
-    for (const line of m[1].split(/\r?\n/)) {
-      const kv = line.match(/^([\w-]+):\s*(.*)$/);
-      if (kv) meta[kv[1]] = kv[2].trim();
+    // Plain "key: value" lines, quoted values, and the folded (>) or literal
+    // (|) blocks Claude's skills often use for a long description. Nested
+    // keys are skipped.
+    const lines = m[1].split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const kv = lines[i].match(/^([\w-]+):\s*(.*)$/);
+      if (!kv) continue;
+      let value = kv[2].trim();
+      if (/^[>|][+-]?$/.test(value)) {
+        const block = [];
+        while (i + 1 < lines.length && (/^\s+\S/.test(lines[i + 1]) || !lines[i + 1].trim())) block.push(lines[++i].trim());
+        value = value.startsWith('>') ? block.join(' ').replace(/\s+/g, ' ') : block.join('\n');
+      } else if (/^(["']).*\1$/.test(value)) {
+        value = value.slice(1, -1).replace(/\\"/g, '"').replace(/''/g, "'");
+      }
+      meta[kv[1]] = value.trim();
     }
   }
   return { meta, body: (m ? text.slice(m[0].length) : String(text)).trim() };
@@ -25,11 +49,14 @@ function readSkill(dir, id) {
   const path = join(dir, id, 'SKILL.md');
   if (!ID.test(id) || !existsSync(path)) return null;
   const { meta, body } = parseFrontMatter(readFileSync(path, 'utf8'));
+  const files = Object.keys(filesIn(join(dir, id), { names: true })).filter((f) => f !== 'SKILL.md');
   return {
     id,
-    name: meta.name || id,
-    about: meta.about || '',
-    when: meta.when || '',
+    name: displayName(meta.name, id),
+    // Claude's format has one description for both.
+    about: meta.about || meta.description || '',
+    when: meta.when || meta.description || '',
+    files,
     try: meta.try || '',
     words: list(meta.words),
     needs: list(meta.needs),
@@ -42,17 +69,33 @@ function readAll(dir) {
   return readdirSync(dir).sort().map((id) => readSkill(dir, id)).filter(Boolean);
 }
 
-function filesIn(dir) {
+// path → text, or { base64 } for a file that isn't UTF-8 text.
+function filesIn(dir, { names = false } = {}) {
   const out = {};
   const walk = (d) => {
-    for (const name of readdirSync(d)) {
+    for (const name of readdirSync(d).sort()) {
       const p = join(d, name);
       if (statSync(p).isDirectory()) walk(p);
-      else out[relative(dir, p).split(sep).join('/')] = readFileSync(p, 'utf8');
+      else out[relative(dir, p).split(sep).join('/')] = names ? true : encodeFile(readFileSync(p));
     }
   };
   walk(dir);
   return out;
+}
+
+function encodeFile(buf) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { return { base64: buf.toString('base64') }; }
+}
+
+const decodeFile = (v) => (typeof v === 'string' ? Buffer.from(v) : typeof v?.base64 === 'string' ? Buffer.from(v.base64, 'base64') : null);
+
+function writeFiles(dir, files) {
+  for (const [p, data] of files) {
+    const abs = resolve(dir, p);
+    if (!abs.startsWith(dir + sep)) throw new SkillError(400, `“${p}” would land outside the skill's folder.`);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, data);
+  }
 }
 
 export class Skills {
@@ -94,14 +137,41 @@ export class Skills {
     if (!ID.test(String(id))) throw new SkillError(400, 'Not a skill name.');
     const dir = resolve(this.dir, id);
     if (existsSync(dir)) throw new SkillError(409, 'That skill is already installed.');
-    const entries = Object.entries(files ?? {});
+    const entries = Object.entries(files ?? {}).map(([p, v]) => [p, decodeFile(v)]);
     if (!entries.some(([p]) => p === 'SKILL.md')) throw new SkillError(400, 'A skill needs its SKILL.md.');
-    for (const [p, text] of entries) {
-      const abs = resolve(dir, p);
-      if (!abs.startsWith(dir + sep) || typeof text !== 'string') throw new SkillError(400, 'That skill has a file Nova can\'t put back.');
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, text);
+    for (const [p, data] of entries) {
+      if (!data || !resolve(dir, p).startsWith(dir + sep)) throw new SkillError(400, 'That skill has a file Nova can\'t put back.');
     }
+    writeFiles(dir, entries);
+    return this.get(id);
+  }
+
+  // A skill the person brings: a folder's files or a .zip's, as
+  // { path: Buffer | string | { base64 } }. SKILL.md may sit at the top or in
+  // one folder; its name (or that folder's) becomes the skill's id.
+  add(given) {
+    let entries = Object.entries(given ?? {})
+      .map(([p, v]) => [String(p).replace(/\\/g, '/').replace(/^\/+/, ''), Buffer.isBuffer(v) ? v : decodeFile(v)])
+      .filter(([p]) => p && !JUNK.test(p));
+    if (entries.some(([, d]) => !d)) throw new SkillError(400, "Some of those files couldn't be read.");
+    const top = entries.find(([p]) => p === 'SKILL.md') ? '' : entries.map(([p]) => p).find((p) => /^[^/]+\/SKILL\.md$/.test(p))?.split('/')[0];
+    if (top === undefined) throw new SkillError(400, 'There\'s no SKILL.md in that. A skill is a folder with a SKILL.md at the top.');
+    if (top) entries = entries.filter(([p]) => p.startsWith(`${top}/`)).map(([p, d]) => [p.slice(top.length + 1), d]);
+    if (entries.length > MAX_FILES) throw new SkillError(400, `That skill has more than ${MAX_FILES} files.`);
+    if (entries.reduce((n, [, d]) => n + d.length, 0) > MAX_BYTES) throw new SkillError(400, `That skill is bigger than ${MAX_BYTES / 1e6} MB.`);
+    const text = entries.find(([p]) => p === 'SKILL.md')[1].toString('utf8');
+    const { meta, body } = parseFrontMatter(text);
+    if (!(meta.description || meta.about || meta.when)) {
+      throw new SkillError(400, 'Its SKILL.md needs a description at the top: what the skill does and when to use it.');
+    }
+    if (!body) throw new SkillError(400, 'Its SKILL.md has no instructions below the description.');
+    const id = slug(meta.name) || slug(top);
+    if (!ID.test(id)) throw new SkillError(400, 'Its SKILL.md needs a name.');
+    if (existsSync(join(this.dir, id))) throw new SkillError(409, `You already have a skill called ${displayName(meta.name, id)}. Remove it first to replace it.`);
+    if (existsSync(join(this.catalogDir, id, 'SKILL.md'))) throw new SkillError(409, `Nova comes with a skill called ${id}. Give yours another name.`);
+    const dir = resolve(this.dir, id);
+    for (const [p] of entries) if (!resolve(dir, p).startsWith(dir + sep)) throw new SkillError(400, `“${p}” would land outside the skill's folder.`);
+    writeFiles(dir, entries);
     return this.get(id);
   }
 

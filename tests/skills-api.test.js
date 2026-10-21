@@ -174,3 +174,20 @@ test('an app password connects Gmail; drafts and changes wait for the person and
   const off = await (await post('/api/connectors/gmail/disconnect')).json();
   assert.deepEqual([off.connected, off.password], [false, true]);
 });
+
+test('adding your own skill, from a .zip or a folder, and removing it', async () => {
+  const { makeZip } = await import('../scripts/make-zip.js');
+  const skill = '---\nname: meeting-notes\ndescription: Turns meeting notes into decisions and action items.\n---\n\nList decisions, then action items.\n';
+  const r = await post('/api/skills/add', { zip: makeZip({ 'meeting-notes/SKILL.md': skill }).toString('base64') });
+  assert.equal(r.status, 200);
+  assert.deepEqual((await r.json()).skill.name, 'Meeting notes');
+  const mine = (await get('/api/skills')).installed.find((s) => s.id === 'meeting-notes');
+  assert.equal(mine.own, true);
+  assert.equal((await post('/api/skills/add', { zip: makeZip({ 'meeting-notes/SKILL.md': skill }).toString('base64') })).status, 409);
+  assert.equal((await post('/api/skills/add', { zip: Buffer.from('nope').toString('base64') })).status, 400);
+  assert.equal((await post('/api/skills/add', { files: { 'a/SKILL.md': skill.replace('meeting-notes', 'standup') } })).status, 200);
+  const big = await post('/api/skills/add', { zip: 'A'.repeat(9_000_000) }).catch(() => ({ status: 413 }));
+  assert.equal(big.status, 413);
+  assert.equal((await post('/api/skills/meeting-notes/remove')).status, 200);
+  assert.equal((await post('/api/skills/standup/remove')).status, 200);
+});

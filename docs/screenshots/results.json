@@ -1,22 +1,22 @@
 {
   "budgets": {
-    "serverStartMs": 138,
-    "pageInteractiveMs": 159,
-    "domContentLoadedMs": 93,
-    "sendFeedbackMs": 8,
+    "serverStartMs": 151,
+    "pageInteractiveMs": 154,
+    "domContentLoadedMs": 98,
+    "sendFeedbackMs": 10,
     "scroll": {
       "frames": 384,
-      "mainThreadP95Ms": 4.11,
-      "mainThreadMaxMs": 7.56,
+      "mainThreadP95Ms": 4.09,
+      "mainThreadMaxMs": 7.13,
       "frameIntervalP95Ms": 33.3,
-      "slowIntervals": 26
+      "slowIntervals": 27
     }
   },
   "checks": [
     {
       "name": "cold start ≤ 2 s (server + page)",
       "ok": true,
-      "detail": "138 ms server + 159 ms page"
+      "detail": "151 ms server + 154 ms page"
     },
     {
       "name": "the composer is focused on arrival",
@@ -31,7 +31,7 @@
     {
       "name": "send → visible feedback ≤ 100 ms",
       "ok": true,
-      "detail": "8 ms"
+      "detail": "10 ms"
     },
     {
       "name": "reply rendered markdown: list, code, table",
@@ -274,6 +274,21 @@
       "detail": ""
     },
     {
+      "name": "#add lands on Choose a folder",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a skill in Claude's format, from a .zip, installs as it is",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "your own skill says so",
+      "ok": true,
+      "detail": ""
+    },
+    {
       "name": "skills have no script errors",
       "ok": true,
       "detail": ""
@@ -286,7 +301,7 @@
     {
       "name": "scrolling a long thread holds 60 fps",
       "ok": true,
-      "detail": "page work p95 4.1 ms/frame (max 7.6) over 385 frames; frame interval p95 33.3 ms on this GPU-less machine"
+      "detail": "page work p95 4.1 ms/frame (max 7.1) over 385 frames; frame interval p95 33.3 ms on this GPU-less machine"
     },
     {
       "name": "paper-dark: no script errors",
@@ -339,5 +354,5 @@
       "detail": ""
     }
   ],
-  "longId": "2026-10-21-cntcih"
+  "longId": "2026-10-21-fnr0m1"
 }

@@ -108,3 +108,68 @@ test("the model's environment carries none of the host session's memory or ident
   const env = agentEnv({ PATH: '/bin', CLAUDE_CODE_USER_EMAIL: 'someone@example.com', CLAUDE_CODE_MEMORY_DIR: '/m', CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1', HOME: '/h' });
   assert.deepEqual(Object.keys(env).sort(), ['HOME', 'PATH']);
 });
+
+const CLAUDE_SKILL = `---
+name: meeting-notes
+description: >
+  Turns rough meeting notes into a summary with decisions and action items.
+  Use when the person pastes notes from a meeting.
+license: MIT
+---
+
+# Meeting notes
+
+1. Read the notes.
+2. List decisions, then action items with owners. See template.md.
+`;
+
+test("Claude's skill format works as-is: description, folded lines, extra files", () => {
+  const { home, skills } = fresh();
+  const s = skills.add({ 'meeting-notes/SKILL.md': CLAUDE_SKILL, 'meeting-notes/template.md': '## Decisions\n', 'meeting-notes/logo.png': { base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]).toString('base64') }, '__MACOSX/meeting-notes/._SKILL.md': 'junk', 'meeting-notes/.DS_Store': 'junk' });
+  assert.equal(s.id, 'meeting-notes');
+  assert.equal(s.name, 'Meeting notes');
+  assert.equal(s.about, 'Turns rough meeting notes into a summary with decisions and action items. Use when the person pastes notes from a meeting.');
+  assert.equal(s.when, s.about);
+  assert.deepEqual(s.files, ['logo.png', 'template.md']);
+  assert.deepEqual(readdirSync(join(home, 'skills', 'meeting-notes')).sort(), ['SKILL.md', 'logo.png', 'template.md']);
+  assert.deepEqual(readFileSync(join(home, 'skills', 'meeting-notes', 'logo.png')), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]));
+  assert.equal(skills.installed()[0].own, true);
+
+  // The model is told where the other files are.
+  const section = skillsSection(skills.installed(), [s]);
+  assert.match(section, /- meeting-notes: Meeting notes\. Use when: Turns rough meeting notes/);
+  assert.match(section, /folder is ~\/skills\/meeting-notes\/\. It also has: logo\.png, template\.md\./);
+
+  // Removing and Undo keep binary files exact.
+  const files = skills.remove('meeting-notes');
+  assert.deepEqual(files['logo.png'], { base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]).toString('base64') });
+  skills.restore('meeting-notes', JSON.parse(JSON.stringify(files)));
+  assert.deepEqual(readFileSync(join(home, 'skills', 'meeting-notes', 'logo.png')), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]));
+});
+
+test('adding a skill: plain words for everything that can be wrong', () => {
+  const { skills } = fresh();
+  assert.throws(() => skills.add({ 'notes.md': 'x' }), /no SKILL\.md/);
+  assert.throws(() => skills.add({ 'SKILL.md': '# Steps\nDo it.' }), /needs a description/);
+  assert.throws(() => skills.add({ 'SKILL.md': '---\ndescription: Does things.\n---\n' }), /no instructions/);
+  assert.throws(() => skills.add({ 'SKILL.md': '---\ndescription: Does things.\n---\nDo it.' }), /needs a name/);
+  assert.throws(() => skills.add({ 'SKILL.md': '---\nname: email-summary\ndescription: Mine.\n---\nDo it.' }), /comes with a skill called email-summary/);
+  assert.throws(() => skills.add({ 'SKILL.md': '---\nname: x\ndescription: d\n---\nDo it.', '../../escape.md': 'x' }), /outside the skill's folder/);
+  const many = Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`f${i}.md`, 'x']));
+  assert.throws(() => skills.add({ ...many, 'SKILL.md': '---\nname: x\ndescription: d\n---\nDo it.' }), /more than 200 files/);
+  skills.add({ 'SKILL.md': '---\nname: Weekly review\ndescription: d\n---\nDo it.' });
+  assert.ok(skills.get('weekly-review'));
+  assert.throws(() => skills.add({ 'SKILL.md': '---\nname: Weekly Review\ndescription: d\n---\nDo it.' }), /already have a skill called Weekly Review/);
+});
+
+test('a .zip of a skill unpacks; a broken or oversized one is refused', async () => {
+  const { unzip } = await import('../src/zip.js');
+  const { makeZip } = await import('../scripts/make-zip.js');
+  const files = unzip(makeZip({ 'meeting-notes/SKILL.md': CLAUDE_SKILL, 'meeting-notes/template.md': 'é'.repeat(5000) }));
+  assert.deepEqual(Object.keys(files), ['meeting-notes/SKILL.md', 'meeting-notes/template.md']);
+  assert.equal(files['meeting-notes/template.md'].toString(), 'é'.repeat(5000));
+  assert.throws(() => unzip(Buffer.from('not a zip at all, no really')), /isn't a \.zip/);
+  assert.throws(() => unzip(makeZip({ 'big.txt': 'x'.repeat(2000) }), { maxBytes: 1000 }), /unpacks to more than/);
+  const { skills } = fresh();
+  assert.equal(skills.add(files).id, 'meeting-notes');
+});

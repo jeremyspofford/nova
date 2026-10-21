@@ -46,6 +46,16 @@ trip. Every installed skill is also listed, so the model can load one with
 `use_skill` when the words miss. Real model: "Anything I need to deal with
 from overnight?" matched nothing and the model loaded Email summary itself.
 
+**2026-10-21 (Phase 3): Nova reads Claude's skill format, and people can add
+their own.** Jeremy asked for plugins like Claude's and ChatGPT's. Skills are
+the part that fits Nova now: a `SKILL.md` with only `name` and `description`
+loads (the description is both the summary and the trigger), and its other
+files are copied and listed to the model. Adding takes a folder or a .zip
+(read with a small zip reader in `src/zip.js`, no dependency), capped at 200
+files and 5 MB, refusing name clashes and paths outside the folder. An added
+skill is trusted instructions, not code: scripts only run through `exec`,
+which always asks. MCP connectors are a later phase.
+
 **2026-10-21 (Phase 3): skills and sign-ins stay out of the home's history.**
 `skills/` and `connectors/` join the memory files in the home's
 `.gitignore`, so removing a skill leaves nothing in old commits and no token

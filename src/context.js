@@ -23,7 +23,8 @@ export function skillsSection(installed = [], active = [], connectorDoc = () => 
   const list = installed.map((s) => `- ${s.id}: ${s.name}. Use when: ${s.when || s.about}`).join('\n');
   const loaded = active.map((s) => {
     const docs = s.needs.map((c) => connectorDoc(c)).filter(Boolean).map((d, i) => `<connector name="${s.needs[i]}">\n${d}\n</connector>`);
-    return `<skill name="${s.id}">\n${s.body}\n</skill>${docs.length ? `\n${docs.join('\n')}` : ''}`;
+    const files = s.files?.length ? `\n\nThis skill's folder is ~/skills/${s.id}/. It also has: ${s.files.join(', ')}. Read them with read_file when the playbook points to them.` : '';
+    return `<skill name="${s.id}">\n${s.body}${files}\n</skill>${docs.length ? `\n${docs.join('\n')}` : ''}`;
   });
   return `# Skills
 

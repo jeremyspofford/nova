@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { sampleMail, startFakeGoogle, startFakeImap } from './fake-google.js';
+import { makeZip } from './make-zip.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
 const out = resolve(process.argv[2] ?? join(root, 'docs/screenshots'));
@@ -407,6 +408,28 @@ results.budgets.serverStartMs = Math.round(serverMs);
   await p.click('.margin-link[href="/skills#s-email-summary"]');
   await p.waitForSelector('#s-email-summary.is-found');
   check('a skill margin note links to the skill', await p.evaluate(() => document.activeElement.id === 's-email-summary'));
+
+  // Your own skill: a .zip made for Claude, added as it is.
+  await p.goto(`${base}/skills#add`);
+  await p.waitForSelector('.dropzone');
+  await p.evaluate(() => document.querySelector('#add').scrollIntoView({ block: 'start' }));
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-skills-add');
+  check('#add lands on Choose a folder', await p.evaluate(() => document.activeElement.dataset.action === 'add-folder'));
+  const zipPath = join(home, '..', `meeting-notes-${port}.zip`);
+  writeFileSync(zipPath, makeZip({
+    'meeting-notes/SKILL.md': '---\nname: meeting-notes\ndescription: >\n  Turns rough meeting notes into decisions and action items with owners.\n  Use when the person pastes notes from a meeting.\nlicense: MIT\n---\n\n# Meeting notes\n\n1. Read the notes through once.\n2. List the **decisions**, one line each.\n3. List **action items** with an owner and a date; ask if either is missing.\n4. Use the layout in `template.md`.\n',
+    'meeting-notes/template.md': '## Decisions\n\n## Action items\n',
+    '__MACOSX/meeting-notes/._SKILL.md': 'junk',
+  }));
+  await p.setInputFiles('#add-zip-input', zipPath);
+  await p.waitForSelector('#s-meeting-notes');
+  await p.waitForFunction(() => /Added Meeting notes/.test(document.querySelector('#toast').textContent));
+  check("a skill in Claude's format, from a .zip, installs as it is", existsSync(join(home, 'skills', 'meeting-notes', 'template.md')) && !existsSync(join(home, 'skills', 'meeting-notes', '__MACOSX')));
+  await p.click('#s-meeting-notes .skill-playbook summary');
+  await p.waitForTimeout(400);
+  await shot(p, 'paper-skills-added');
+  check('your own skill says so', /Added by you, with 1 more file/.test(await p.textContent('#s-meeting-notes')));
   check('skills have no script errors', p.errors.length === 0, p.errors.join(' | '));
 }
 
