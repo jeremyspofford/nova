@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ToolTagFilter, extractMemory, parseToolCall, TOOLS, htmlToText, toolProtocol } from '../src/tools.js';
+import { ToolTagFilter, extractMemory, parseToolCall, TOOLS, htmlToText, toolProtocol, availableTools } from '../src/tools.js';
 import { seedHome } from '../src/home.js';
 
 const home = () => { const h = mkdtempSync(join(tmpdir(), 'nova-t-')); seedHome(h, new URL('../templates/home', import.meta.url).pathname); return h; };
@@ -63,8 +63,8 @@ test('htmlToText keeps the words and drops the markup', () => {
   assert.equal(htmlToText('<html><head><title>x</title></head><body><script>bad()</script><p>Hello &amp; <b>welcome</b></p><li>one</li></body></html>'), 'Hello & welcome\n- one');
 });
 
-test('the protocol lists every tool', () => {
-  const p = toolProtocol();
+test('the protocol lists every tool on offer', () => {
+  const p = toolProtocol(availableTools({ gmail: true, skills: 1 }));
   for (const name of Object.keys(TOOLS)) assert.ok(p.includes(name));
 });
 

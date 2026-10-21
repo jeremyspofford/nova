@@ -392,6 +392,120 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 }
 .memory-edit:focus-visible { outline: none; }
 
+/* ---- skills: playbooks, and the connections they reach --------------------- */
+
+.skill-list { list-style: none; margin: var(--s2) 0 0; padding: 0; }
+.skill {
+  position: relative;
+  padding: var(--s3);
+  margin: 0 calc(-1 * var(--s3));
+  border-radius: var(--r-card);
+  outline-offset: -2px;
+  transition: background-color var(--m-fast) var(--ease), opacity var(--m-med) var(--ease);
+}
+.skill:hover, .skill:focus-within { background: var(--wash); }
+.skill + .skill { margin-top: 1px; }
+.skill.is-leaving { opacity: 0.35; }
+.skill-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); min-height: 32px; }
+.skill-name { font: var(--t-body); font-weight: 600; }
+.skill-about { margin-top: var(--s1); color: var(--text-2); overflow-wrap: anywhere; }
+.skill-about b { color: var(--text); font-weight: 600; }
+.skill-needs { margin-top: var(--s1); font: var(--t-callout); color: var(--text-2); }
+.skill-needs a { color: var(--accent); text-underline-offset: 3px; }
+.skill-playbook { margin-top: var(--s2); }
+.skill-playbook > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: fit-content;
+  list-style: none;
+  border-radius: var(--r-input);
+  font: var(--t-callout);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.skill-playbook > summary::-webkit-details-marker { display: none; }
+.skill-playbook > summary::after {
+  content: '›';
+  color: var(--text-3);
+  transition: rotate var(--m-fast) var(--ease);
+}
+.skill-playbook[open] > summary::after { rotate: 90deg; }
+.skill-playbook > summary:hover { color: var(--text); }
+.skill-playbook > .prose {
+  margin-top: var(--s3);
+  padding: var(--s1) 0 var(--s1) var(--s4);
+  border-left: 2px solid var(--hairline);
+  font: var(--t-callout);
+}
+.skill-playbook > .prose h2 { font: var(--t-callout); font-weight: 600; margin-top: var(--s4); }
+.skill-try { margin: var(--s2) 0 0 calc(-1 * var(--s2)); color: var(--accent); }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: var(--s1) var(--s3);
+  border-radius: var(--r-pill);
+  background: var(--wash);
+  font: var(--t-caption);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.pill.is-on::before, .pill.is-warn::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--success);
+}
+.pill.is-warn::before { background: var(--warning); }
+
+.connection {
+  margin-top: var(--s3);
+  padding: var(--s4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+.connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); margin-top: var(--s4); }
+.connection-note { margin-top: var(--s3); font: var(--t-callout); color: var(--text-3); }
+.connection-actions .connection-note { margin-top: 0; flex: 1 1 260px; }
+.connection-note a, .connection .skill-about a { color: var(--accent); text-underline-offset: 3px; }
+.steps { margin: var(--s3) 0 0; padding-left: var(--s5); color: var(--text-2); }
+.steps li + li { margin-top: var(--s1); }
+.steps a { color: var(--accent); text-underline-offset: 3px; }
+.steps b { color: var(--text); font-weight: 600; }
+.field {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-input);
+  background: var(--raised);
+  color: var(--text);
+  font: var(--t-mono);
+  resize: vertical;
+}
+.field::placeholder { color: var(--text-3); }
+.field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s3); margin-top: var(--s4); }
+.field-label { display: block; font: var(--t-callout); color: var(--text-2); }
+.field-label .field { margin-top: var(--s1); font: var(--t-body); }
+.dropzone {
+  margin-top: var(--s3);
+  padding: var(--s4);
+  border: 1px dashed var(--hairline);
+  border-radius: var(--r-card);
+  transition: background-color var(--m-fast) var(--ease), border-color var(--m-fast) var(--ease);
+}
+.dropzone.is-over { border-color: var(--accent); background: var(--surface); }
+.dropzone .skill-about { margin-top: 0; }
+.connection-advanced { margin-top: var(--s5); padding-top: var(--s4); border-top: 1px solid var(--hairline); }
+.connection-more { margin-top: var(--s2); }
+.field:focus-visible { outline: none; border-color: var(--accent); }
+
 /* ---- toast: a short confirmation, with Undo when something went ------------- */
 
 .toast {
@@ -490,6 +604,36 @@ details.record { display: block; }
   background: var(--code-bg);
   border-radius: var(--r-input);
 }
+.approval-mail {
+  margin-top: var(--s3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-input);
+  background: var(--surface);
+}
+.approval-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--s1) var(--s3);
+  margin: 0;
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--hairline);
+  font: var(--t-callout);
+}
+.approval-fields dt { color: var(--text-2); }
+.approval-fields dd { margin: 0; overflow-wrap: anywhere; }
+.approval-letter {
+  max-height: 280px;
+  overflow: auto;
+  padding: var(--s3) var(--s4);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.approval-list { margin: var(--s3) 0 0; padding: 0; list-style: none; font: var(--t-callout); }
+.approval-list li { padding: var(--s2) 0; border-top: 1px solid var(--hairline); }
+.approval-list li:last-child { border-bottom: 1px solid var(--hairline); }
+.approval-from { color: var(--text-2); }
+.approval-from::before { content: "· "; }
+.record-link { margin-left: var(--s2); color: var(--accent); text-underline-offset: 3px; }
 .approval-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s4); }
 .keys { margin-left: auto; font: var(--t-caption); color: var(--text-2); }
 kbd {

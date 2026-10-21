@@ -7,6 +7,9 @@ import { loadConfig } from './config.js';
 import { ensureGit, seedHome } from './home.js';
 import { SessionStore, validId } from './sessions.js';
 import { Runner, BusyError } from './runner.js';
+import { SkillError } from './skills.js';
+import { GmailError } from './connectors/gmail.js';
+import { ZipError, unzip } from './zip.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -37,16 +40,26 @@ export function createNova(config = loadConfig(), deps = {}) {
   const memory = runner.memory;
   const titles = () => Object.fromEntries(store.list().map((s) => [s.id, s.title]));
   const saved = () => announce('memory'); // memory isn't in git history, so there's nothing to commit
+  const { skills, gmail } = runner;
+  const skillsView = () => ({
+    installed: skills.installed(),
+    available: skills.available(),
+    connectors: { gmail: gmail.status() },
+  });
+
+  // Google sends the person back to the address they're using Nova at, so a
+  // sign-in returns to the same page. Only this machine can receive it.
+  const loopback = (host) => ['localhost', '127.0.0.1', '::1'].includes(String(host ?? '').replace(/:\d+$/, '').replace(/^\[|\]$/g, ''));
 
   const json = (res, code, body) => {
     res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     res.end(JSON.stringify(body));
   };
 
-  const readBody = (req) => new Promise((ok, fail) => {
+  const readBody = (req, limit = 1_000_000) => new Promise((ok, fail) => {
     let size = 0;
     const parts = [];
-    req.on('data', (c) => { size += c.length; if (size > 1_000_000) { fail(new Error('too large')); req.destroy(); } else parts.push(c); });
+    req.on('data', (c) => { size += c.length; if (size > limit) { fail(new Error('too large')); req.destroy(); } else parts.push(c); });
     req.on('end', () => { try { ok(parts.length ? JSON.parse(Buffer.concat(parts).toString('utf8')) : {}); } catch { fail(new Error('bad json')); } });
     req.on('error', fail);
   });
@@ -83,7 +96,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   }
 
   function serveStatic(req, res, path) {
-    if (path === '/' || path === '/memory' || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
+    if (path === '/' || path === '/memory' || path === '/skills' || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
@@ -139,6 +152,62 @@ export function createNova(config = loadConfig(), deps = {}) {
         return json(res, 200, { entry });
       }
       return json(res, 404, { error: 'Not found' });
+    }
+
+    if (resource === 'skills') {
+      if (req.method === 'GET' && !id) return json(res, 200, skillsView());
+      if (req.method !== 'POST' || !id) return json(res, 405, { error: 'Method not allowed' });
+      // A skill the person brings: a folder's files, or a .zip.
+      if (id === 'add' && !action) {
+        let body;
+        try { body = await readBody(req, 8_000_000); } catch { return json(res, 413, { error: 'That skill is too big to add. Skills can be up to 5 MB.' }); }
+        try {
+          const skill = skills.add(body.zip ? unzip(Buffer.from(String(body.zip), 'base64')) : body.files);
+          announce('skills');
+          return json(res, 200, { skill });
+        } catch (e) {
+          if (e instanceof SkillError) return json(res, e.status, { error: e.message });
+          if (e instanceof ZipError) return json(res, 400, { error: e.message });
+          throw e;
+        }
+      }
+      try {
+        let skill = null;
+        let files;
+        if (action === 'install') skill = skills.install(id);
+        else if (action === 'remove') files = skills.remove(id);
+        else if (action === 'restore') skill = skills.restore(id, (await readBody(req)).files);
+        else return json(res, 404, { error: 'Not found' });
+        announce('skills');
+        return json(res, 200, files ? { files } : { skill });
+      } catch (e) {
+        if (e instanceof SkillError) return json(res, e.status, { error: e.message });
+        throw e;
+      }
+    }
+
+    if (resource === 'connectors') {
+      if (id !== 'gmail') return json(res, 404, { error: 'Not found' });
+      if (req.method === 'GET' && !action) return json(res, 200, gmail.status());
+      if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
+      try {
+        let body;
+        if (action === 'password') {
+          const { email, password } = await readBody(req);
+          body = await gmail.connectPassword({ email, password });
+        } else if (action === 'client') body = gmail.setClient((await readBody(req)).json);
+        else if (action === 'forget-client') body = gmail.forgetClient();
+        else if (action === 'disconnect') body = await gmail.disconnect();
+        else if (action === 'connect') {
+          if (!loopback(req.headers.host)) return json(res, 400, { error: 'Open Nova on this computer, at localhost, to connect Gmail. Google sends you back to this computer only.' });
+          return json(res, 200, { url: gmail.authUrl(`http://${req.headers.host}/oauth/gmail`) });
+        } else return json(res, 404, { error: 'Not found' });
+        announce('skills');
+        return json(res, 200, body);
+      } catch (e) {
+        if (e instanceof GmailError) return json(res, 400, { error: e.message });
+        throw e;
+      }
     }
 
     if (resource !== 'sessions') return json(res, 404, { error: 'Not found' });
@@ -200,6 +269,13 @@ export function createNova(config = loadConfig(), deps = {}) {
         return req.on('close', () => devClients.delete(res));
       }
       if (parts[1] === 'api') return await api(req, res, parts);
+      if (url.pathname === '/oauth/gmail' && req.method === 'GET') {
+        const q = Object.fromEntries(url.searchParams);
+        await runner.gmail.finish({ code: q.code, state: q.state, error: q.error });
+        announce('skills');
+        res.writeHead(303, { location: '/skills#gmail', 'cache-control': 'no-store' });
+        return res.end();
+      }
       if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
       serveStatic(req, res, url.pathname);
     } catch (e) {

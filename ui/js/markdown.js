@@ -131,9 +131,11 @@ function parseBlocks(lines) {
   return blocks;
 }
 
+// Web and mail links, and links to Nova's own views (Skills, Memory, a conversation).
+const IN_APP = /^\/(skills|memory|c\/[\w-]+)(#[\w-]*)?$/;
 function safeUrl(url) {
   const u = url.trim();
-  return /^(https?:\/\/|mailto:)/i.test(u) ? u : null;
+  return /^(https?:\/\/|mailto:)/i.test(u) || IN_APP.test(u) ? u : null;
 }
 
 export function renderInline(src) {
@@ -147,7 +149,8 @@ export function renderInline(src) {
   s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (all, text, url) => {
     const href = safeUrl(url);
     if (!href) return all;
-    links.push(`<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${renderEmphasis(escapeHtml(text))}</a>`);
+    const away = IN_APP.test(href) ? '' : ' target="_blank" rel="noopener noreferrer"';
+    links.push(`<a href="${escapeHtml(href)}"${away}>${renderEmphasis(escapeHtml(text))}</a>`);
     return `\u0001${links.length - 1}\u0001`;
   });
   s = s.replace(/\bhttps?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/g, (url) => {

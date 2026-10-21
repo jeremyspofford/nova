@@ -3,7 +3,7 @@
 // nothing that is already on screen animates twice.
 import { applyEvent, emptySession } from './reduce.js';
 import { renderMarkdown } from './markdown.js';
-import { icons, memoryIndex, renderBlocks, renderEmpty, renderMemory, renderToc } from './view.js';
+import { icons, memoryIndex, renderBlocks, renderEmpty, renderMemory, renderSkills, renderToc } from './view.js';
 import { THEMES, MODES, apply as applyTheme, choose as chooseTheme, current as currentTheme } from './theme.js';
 
 const $ = (id) => document.getElementById(id);
@@ -13,6 +13,7 @@ const el = {
   jump: $('jump'), status: $('status'), menu: $('menu'), scrim: $('scrim'), newChat: $('new-chat'),
   settings: $('settings'), appearance: $('appearance'),
   memory: $('memory'), memoryLink: $('memory-link'), memoryCount: $('memory-count'), dock: $('dock'), toast: $('toast'),
+  skills: $('skills'), skillsLink: $('skills-link'), skillsCount: $('skills-count'),
 };
 
 const state = {
@@ -25,11 +26,15 @@ const state = {
   online: navigator.onLine,
   stick: true,
   notice: '',
-  view: 'chat',         // 'chat' | 'memory'
+  view: 'chat',         // 'chat' | 'memory' | 'skills'
   memory: null,         // what Nova knows, from /api/memory
   memoryError: '',
   memIndex: new Map(),  // id → entry, for the notes in conversation margins
-  forgotten: null,      // the last forget, for Undo
+  undo: null,           // the last forget or removal: () => Promise
+  skills: null,         // installed and available skills, and connections
+  skillsError: '',
+  skillIds: null,       // installed skill ids, for conversation margins
+  noticeAt: 0,          // the last Gmail sign-in notice shown
 };
 
 let stream = null;
@@ -80,10 +85,36 @@ function loadMemory() {
   return memoryLoad;
 }
 
-// Changes that aren't one conversation's: memory, and the list of conversations.
+function loadSkills() {
+  return fetch('/api/skills')
+    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+    .then((data) => {
+      state.skills = data;
+      state.skillsError = '';
+      state.skillIds = new Set(data.installed.map((s) => s.id));
+      el.skillsCount.textContent = data.installed.length ? String(data.installed.length) : '';
+      // How a Gmail sign-in went, once, on the page Google sent the person back to.
+      const notice = data.connectors?.gmail?.notice;
+      if (notice && notice.at !== state.noticeAt && state.view === 'skills' && location.hash === '#gmail' && !state.leaving) {
+        state.noticeAt = notice.at;
+        let seen = 0;
+        try { seen = Number(sessionStorage.getItem('nova.notice')) || 0; sessionStorage.setItem('nova.notice', String(notice.at)); } catch {}
+        if (seen !== notice.at) toast(notice.text);
+      }
+      if (state.view === 'skills') renderSkillsView();
+      else if (state.session.turns.length) renderThread();
+    })
+    .catch(() => {
+      state.skillsError = "Nova's server didn't answer, so skills can't be shown right now.";
+      if (state.view === 'skills' && !state.skills) renderSkillsView();
+    });
+}
+
+// Changes that aren't one conversation's: memory, skills, and the list of conversations.
 function watch() {
   const es = new EventSource('/api/events');
   es.addEventListener('memory', () => loadMemory());
+  es.addEventListener('skills', () => loadSkills());
   es.addEventListener('sessions', () => loadList());
 }
 
@@ -109,6 +140,7 @@ function setReachable(ok) {
 function route() {
   const m = location.pathname.match(/^\/c\/([\w-]+)$/);
   if (location.pathname === '/memory') showMemory();
+  else if (location.pathname === '/skills') showSkills();
   else if (m) open(m[1]);
   else startNew();
 }
@@ -117,10 +149,13 @@ function setView(view) {
   state.view = view;
   el.thread.hidden = view !== 'chat';
   el.memory.hidden = view !== 'memory';
+  el.skills.hidden = view !== 'skills';
   el.dock.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
-  el.memoryLink.toggleAttribute('aria-current', view === 'memory');
-  if (view === 'memory') el.memoryLink.setAttribute('aria-current', 'page');
+  for (const [link, v] of [[el.memoryLink, 'memory'], [el.skillsLink, 'skills']]) {
+    if (view === v) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
 }
 
 function navigate(path) {
@@ -228,7 +263,7 @@ function renderThread() {
     return;
   }
   el.thread.querySelector('.empty')?.remove();
-  const blocks = renderBlocks(session, viewLive(), new Date(), state.memIndex);
+  const blocks = renderBlocks(session, viewLive(), new Date(), state.memIndex, state.skillIds);
   const keep = new Set(blocks.map((b) => b.key));
   for (const node of [...el.thread.children]) if (!keep.has(node.dataset.key)) { node.remove(); rendered.delete(node.dataset.key); }
   let prev = null;
@@ -336,7 +371,7 @@ function running() {
 }
 
 function renderChrome() {
-  const title = state.view === 'memory' ? 'Memory' : state.id ? state.session.title || 'Untitled' : '';
+  const title = { memory: 'Memory', skills: 'Skills' }[state.view] ?? (state.id ? state.session.title || 'Untitled' : '');
   el.title.textContent = title;
   document.title = title ? `${title} · Nova` : 'Nova';
 
@@ -478,7 +513,7 @@ async function copy(text, button) {
 
 // Links between conversations and memory stay inside the app.
 function followLink(e) {
-  const a = e.target.closest('a[href^="/memory"], a[href^="/c/"]');
+  const a = e.target.closest('a[href^="/memory"], a[href^="/skills"], a[href^="/c/"]');
   if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return false;
   e.preventDefault();
   navigate(a.getAttribute('href'));
@@ -591,7 +626,7 @@ async function forgetMemory(item) {
   item.classList.add('is-leaving');
   try {
     const { removed } = await post(`/api/memory/${item.dataset.id}/forget`);
-    state.forgotten = removed;
+    state.undo = () => undoForget(removed);
     await loadMemory();
     (next && document.getElementById(next.id) || el.memory.querySelector('.memory-item') || el.memoryLink).focus({ preventScroll: true });
     const notes = removed.length - 1;
@@ -602,10 +637,7 @@ async function forgetMemory(item) {
   }
 }
 
-async function undoForget() {
-  const items = state.forgotten;
-  if (!items) return;
-  state.forgotten = null;
+async function undoForget(items) {
   try {
     await post('/api/memory/restore', { items });
     await loadMemory();
@@ -622,10 +654,17 @@ function toast(text, { undo = false } = {}) {
   void el.toast.offsetWidth;
   el.toast.classList.add('view-enter');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.toast.hidden = true; if (undo) state.forgotten = null; }, undo ? 8000 : 3200);
+  toastTimer = setTimeout(() => { el.toast.hidden = true; if (undo) state.undo = null; }, undo ? 8000 : 3200);
+}
+function runUndo() {
+  const undo = state.undo;
+  if (!undo) return;
+  state.undo = null;
+  el.toast.hidden = true;
+  undo();
 }
 el.toast.addEventListener('click', (e) => {
-  if (e.target.closest('[data-action="undo"]')) { el.toast.hidden = true; undoForget(); }
+  if (e.target.closest('[data-action="undo"]')) runUndo();
 });
 
 el.memory.addEventListener('click', (e) => {
@@ -651,6 +690,264 @@ el.memoryLink.addEventListener('click', (e) => {
   e.preventDefault();
   closeDrawer();
   navigate('/memory');
+});
+
+// ---- skills ----------------------------------------------------------------
+
+const isLocal = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+
+function showSkills() {
+  stream?.close();
+  stream = null;
+  Object.assign(state, { id: null, live: null, pending: null });
+  setView('skills');
+  el.scroller.scrollTop = 0;
+  renderChrome();
+  renderToc_();
+  renderSkillsView({ enter: true });
+  loadSkills().then(() => {
+    const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
+    if (target) {
+      target.scrollIntoView({ block: 'center' });
+      (target.matches('.skill') ? target : target.querySelector('input, button, textarea') ?? target).focus({ preventScroll: true });
+      flash(target.matches('.skill') ? target : target.querySelector('.connection, .dropzone') ?? target);
+    } else el.skills.focus({ preventScroll: true });
+  });
+}
+
+const GMAIL_FIELDS = ['gmail-client', 'gmail-email', 'gmail-password'];
+
+function renderSkillsView({ enter = false } = {}) {
+  // What the person was typing survives a re-render (another tab, a sign-in).
+  const typed = Object.fromEntries(GMAIL_FIELDS.map((id) => [id, $(id)?.value]).filter(([, v]) => v));
+  const focused = document.activeElement;
+  const focusKey = focused?.closest?.('.skill')?.id ?? (GMAIL_FIELDS.includes(focused?.id) ? focused.id : null);
+  const advancedOpen = el.skills.querySelector('.connection-advanced')?.open;
+  const open = [...el.skills.querySelectorAll('.skill-playbook[open]')].map((d) => d.closest('.skill').id);
+  if (state.skills) el.skills.innerHTML = renderSkills(state.skills, { local: isLocal() });
+  else if (state.skillsError) el.skills.innerHTML = `<div class="empty"><p class="empty-line">Skills couldn't be shown.</p><p class="memory-lede">${state.skillsError}</p><button type="button" class="btn" data-action="retry-skills">Try again</button></div>`;
+  else el.skills.innerHTML = '';
+  for (const id of open) document.querySelector(`#${CSS.escape(id)} .skill-playbook`)?.setAttribute('open', '');
+  for (const [id, v] of Object.entries(typed)) if ($(id)) $(id).value = v;
+  if (advancedOpen) el.skills.querySelector('.connection-advanced')?.setAttribute('open', '');
+  if (focusKey) $(focusKey)?.focus({ preventScroll: true });
+  if (enter) {
+    el.skills.classList.remove('view-enter');
+    void el.skills.offsetWidth;
+    el.skills.classList.add('view-enter');
+  }
+}
+
+async function installSkill(item) {
+  const button = item.querySelector('[data-action="install-skill"]');
+  button.disabled = true;
+  try {
+    await post(`/api/skills/${item.dataset.id}/install`);
+    await loadSkills();
+    const now = $(`s-${item.dataset.id}`);
+    now?.focus({ preventScroll: true });
+    if (now) { now.scrollIntoView({ block: 'nearest' }); flash(now); }
+    toast('Installed. Nova uses it from your next message.');
+  } catch (e) { button.disabled = false; toast(e.message); }
+}
+
+async function removeSkill(item) {
+  const id = item.dataset.id;
+  const name = item.querySelector('.skill-name').textContent;
+  const items = [...el.skills.querySelectorAll('.skill:not(.is-available)')];
+  const next = items[items.indexOf(item) + 1] ?? items[items.indexOf(item) - 1];
+  item.classList.add('is-leaving');
+  try {
+    const { files } = await post(`/api/skills/${id}/remove`);
+    state.undo = async () => {
+      try {
+        await post(`/api/skills/${id}/restore`, { files });
+        await loadSkills();
+        $(`s-${id}`)?.focus();
+        toast('Back, exactly as it was.');
+      } catch (e) { toast(e.message); }
+    };
+    await loadSkills();
+    (next && $(next.id) || el.skills.querySelector('.skill') || el.skillsLink).focus({ preventScroll: true });
+    toast(`Removed ${name}. Nothing of it is left.`, { undo: true });
+  } catch (e) {
+    item.classList.remove('is-leaving');
+    toast(e.message);
+  }
+}
+
+function trySkill(text) {
+  navigate('/');
+  el.input.value = text;
+  autosize();
+  saveDraft();
+  renderChrome();
+  el.input.focus();
+  el.input.setSelectionRange(text.length, text.length);
+}
+
+async function gmailAction(action, button) {
+  if (button) button.disabled = true;
+  try {
+    if (action === 'connect-password') {
+      const email = $('gmail-email').value.trim();
+      const password = $('gmail-password').value;
+      if (!email) { toast('Enter your Gmail address.'); $('gmail-email').focus(); return; }
+      if (!password.trim()) { toast('Paste the app password Google showed you.'); $('gmail-password').focus(); return; }
+      if (button) button.textContent = 'Connecting…';
+      try {
+        const status = await post('/api/connectors/gmail/password', { email, password });
+        $('gmail-password').value = '';
+        await loadSkills();
+        el.skills.querySelector('[data-action="disconnect-gmail"]')?.focus({ preventScroll: true });
+        flash(el.skills.querySelector('.connection'));
+        toast(status.notice?.text ?? 'Gmail is connected.');
+      } catch (e) {
+        if (button?.isConnected) button.textContent = 'Connect Gmail';
+        toast(e.message);
+        $('gmail-password')?.select();
+      }
+      return;
+    }
+    if (action === 'save-client') {
+      const json = $('gmail-client').value.trim();
+      if (!json) { toast('Paste the JSON you downloaded from Google first.'); $('gmail-client').focus(); return; }
+      await post('/api/connectors/gmail/client', { json });
+      await loadSkills();
+      el.skills.querySelector('[data-action="connect-gmail"]')?.focus();
+      toast('Saved. Now connect Gmail.');
+    }
+    if (action === 'connect-gmail') {
+      const { url } = await post('/api/connectors/gmail/connect');
+      state.leaving = true; // this page is about to go to Google
+      location.assign(url);
+      return;
+    }
+    if (action === 'disconnect-gmail') {
+      const { revoked, password } = await post('/api/connectors/gmail/disconnect');
+      await loadSkills();
+      toast(password ? 'Disconnected. The app password is gone from this computer.'
+        : revoked ? 'Disconnected. Google no longer lets Nova into your mail.' : "Disconnected here. Google didn't answer, so also remove Nova in your Google account's security settings.");
+    }
+    if (action === 'forget-client') {
+      await post('/api/connectors/gmail/forget-client');
+      await loadSkills();
+      $('gmail-client')?.focus();
+    }
+  } catch (e) { toast(e.message); }
+  finally { if (button?.isConnected) button.disabled = false; }
+}
+
+// ---- adding a skill: a folder or a .zip, chosen or dropped ----
+
+const MAX_SKILL = 5_000_000;
+function base64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+async function addSkill(body) {
+  try {
+    const { skill } = await post('/api/skills/add', body);
+    await loadSkills();
+    const now = $(`s-${skill.id}`);
+    if (now) { now.scrollIntoView({ block: 'center' }); now.focus({ preventScroll: true }); flash(now); }
+    toast(`Added ${skill.name}. Nova uses it from your next message.`);
+  } catch (e) { toast(e.message); }
+}
+
+// [{ path, file }] → the request body.
+async function addFiles(list) {
+  const size = list.reduce((n, f) => n + f.file.size, 0);
+  if (size > MAX_SKILL) { toast('That skill is too big to add. Skills can be up to 5 MB.'); return; }
+  if (list.length === 1 && /\.zip$/i.test(list[0].path)) return addSkill({ zip: base64(await list[0].file.arrayBuffer()) });
+  const files = {};
+  for (const { path, file } of list) files[path] = { base64: base64(await file.arrayBuffer()) };
+  return addSkill({ files });
+}
+
+// A dropped folder arrives as entries to walk.
+async function walkEntry(entry, prefix = '') {
+  if (entry.isFile) return [{ path: prefix + entry.name, file: await new Promise((ok, fail) => entry.file(ok, fail)) }];
+  const reader = entry.createReader();
+  const all = [];
+  for (;;) {
+    const batch = await new Promise((ok, fail) => reader.readEntries(ok, fail));
+    if (!batch.length) break;
+    all.push(...batch);
+  }
+  return (await Promise.all(all.map((e) => walkEntry(e, `${prefix}${entry.name}/`)))).flat();
+}
+
+el.skills.addEventListener('change', (e) => {
+  const files = [...(e.target.files ?? [])];
+  if (!files.length) return;
+  if (e.target.id === 'add-zip-input') addFiles([{ path: files[0].name, file: files[0] }]);
+  if (e.target.id === 'add-folder-input') addFiles(files.map((f) => ({ path: f.webkitRelativePath || f.name, file: f })));
+  e.target.value = '';
+});
+el.skills.addEventListener('dragover', (e) => {
+  const zone = e.target.closest('.dropzone');
+  if (!zone) return;
+  e.preventDefault();
+  zone.classList.add('is-over');
+});
+el.skills.addEventListener('dragleave', (e) => {
+  const zone = e.target.closest('.dropzone');
+  if (zone && !zone.contains(e.relatedTarget)) zone.classList.remove('is-over');
+});
+el.skills.addEventListener('drop', async (e) => {
+  const zone = e.target.closest('.dropzone');
+  if (!zone) return;
+  e.preventDefault();
+  zone.classList.remove('is-over');
+  const entries = [...e.dataTransfer.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  const list = entries.length
+    ? (await Promise.all(entries.map((en) => walkEntry(en)))).flat()
+    : [...e.dataTransfer.files].map((f) => ({ path: f.name, file: f }));
+  if (list.length) addFiles(list);
+});
+
+el.skills.addEventListener('submit', (e) => {
+  if (e.target.dataset.form !== 'gmail-password') return;
+  e.preventDefault();
+  gmailAction('connect-password', e.target.querySelector('[data-action="connect-password"]'));
+});
+el.skills.addEventListener('click', (e) => {
+  if (followLink(e)) return;
+  const b = e.target.closest('[data-action]');
+  const item = e.target.closest('.skill');
+  const action = b?.dataset.action;
+  if (action === 'connect-password') return; // the form's submit handles it
+  if (action === 'add-folder' || action === 'add-zip') return $(`${action}-input`).click();
+  if (action === 'install-skill') installSkill(item);
+  else if (action === 'remove-skill') removeSkill(item);
+  else if (action === 'try-skill') trySkill(b.dataset.try);
+  else if (action === 'retry-skills') loadSkills();
+  else if (action === 'to-gmail') {
+    e.preventDefault();
+    const card = el.skills.querySelector('.connection');
+    card.scrollIntoView({ block: 'center' });
+    (card.querySelector('#gmail-email, .btn.primary, textarea') ?? card.querySelector('button'))?.focus({ preventScroll: true });
+    flash(card);
+  } else if (action) gmailAction(action, b);
+});
+el.skills.addEventListener('keydown', (e) => {
+  const item = e.target.closest('.skill');
+  if (!item || e.target !== item) return;
+  const items = [...el.skills.querySelectorAll('.skill')];
+  const i = items.indexOf(item);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
+  if (e.key === 'Enter') { e.preventDefault(); const d = item.querySelector('.skill-playbook'); d.open = !d.open; }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !item.classList.contains('is-available')) { e.preventDefault(); removeSkill(item); }
+});
+el.skillsLink.addEventListener('click', (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  closeDrawer();
+  navigate('/skills');
 });
 
 // ---- navigation ------------------------------------------------------------
@@ -692,7 +989,7 @@ document.addEventListener('keydown', (e) => {
   const inField = e.target.closest?.('input, textarea, [contenteditable]');
   if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); navigate('/'); return; }
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); return; }
-  if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view === 'memory' && state.forgotten) { e.preventDefault(); el.toast.hidden = true; undoForget(); return; }
+  if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view !== 'chat' && state.undo) { e.preventDefault(); runUndo(); return; }
   if (e.key === '/' && !inField && !el.settings.open && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
   if (e.key === 'Escape' && !el.settings.open) {
     if (el.app.classList.contains('drawer-open')) { closeDrawer(); el.menu.focus(); return; }
@@ -725,6 +1022,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) load
 applyTheme();
 loadList();
 loadMemory();
+loadSkills();
 watch();
 route();
 document.documentElement.dataset.ready = 'true';

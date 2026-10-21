@@ -36,6 +36,73 @@ forgetting leaves no copy in old commits, and no history is ever rewritten.
 Conversations and standing files keep their audit trail. Agreed with Jeremy
 in the thread.
 
+**2026-10-21 (Phase 3): skills are playbooks, loaded by their words.** A
+skill is `SKILL.md` with front matter (`name`, `about` for the person, `when`
+for the model, `words`, `needs`, `try`) and a markdown procedure. Nova ships
+two in `skills/`; installing copies the folder into the home. When a message
+contains one of a skill's `words`, the runner loads its playbook (and the docs
+of the connectors it needs) before the first model call, which saves a round
+trip. Every installed skill is also listed, so the model can load one with
+`use_skill` when the words miss. Real model: "Anything I need to deal with
+from overnight?" matched nothing and the model loaded Email summary itself.
+
+**2026-10-21 (Phase 3): Nova reads Claude's skill format, and people can add
+their own.** Jeremy asked for plugins like Claude's and ChatGPT's. Skills are
+the part that fits Nova now: a `SKILL.md` with only `name` and `description`
+loads (the description is both the summary and the trigger), and its other
+files are copied and listed to the model. Adding takes a folder or a .zip
+(read with a small zip reader in `src/zip.js`, no dependency), capped at 200
+files and 5 MB, refusing name clashes and paths outside the folder. An added
+skill is trusted instructions, not code: scripts only run through `exec`,
+which always asks. MCP connectors are a later phase.
+
+**2026-10-21 (Phase 3): skills and sign-ins stay out of the home's history.**
+`skills/` and `connectors/` join the memory files in the home's
+`.gitignore`, so removing a skill leaves nothing in old commits and no token
+is ever committed. Conversations still record which skill they followed (by
+name), and show "since removed" afterwards.
+
+**2026-10-21 (Phase 3): Gmail connects with an app password, over IMAP;
+your own OAuth client is the Advanced way.** Jeremy found the OAuth-client
+setup (Google Cloud project, consent screen, Desktop client, JSON) too much
+for anyone to do. The one-click "Connect" other assistants offer needs a
+Google-verified app; Gmail scopes are "restricted", so that means Google's
+review (weeks) and a yearly third-party security assessment, and until then a
+warning screen and a 100-user cap. Not now. An app password takes about two
+minutes and no Google Cloud at all. Costs: it needs 2-Step Verification, it
+opens the whole mailbox (no read-only), and work or school accounts often
+can't make one, which is what Advanced is for. The OAuth path (PKCE, loopback
+redirect, so localhost only) stays as it was, now with `gmail.modify`.
+Connecting one way disconnects the other. This reverses the earlier call to
+reject IMAP; what kept it safe is below.
+
+**2026-10-21 (Phase 3): Gmail drafts and organizes; it never sends or
+deletes.** Jeremy asked for actions. Drafts, archive, labels and read state
+are all reversible from Gmail; sending and deleting aren't, so Nova has no
+code for either (no SMTP, no delete call). Every draft and change waits for
+the person on an approval card that shows the exact draft or the exact
+messages, worked out before asking; a draft or change that can't be worked
+out (a gone message, a label that doesn't exist) fails before the card.
+Reading uses `BODY.PEEK`, so it never marks mail read.
+
+**2026-10-21 (Phase 3): after mail is read, going online asks first.** Email
+is outside content, and a malicious message can ask the model to put mailbox
+details into a URL. In a conversation where Gmail has been read, `web_fetch`
+and `web_search` wait for the person's approval. Real model: told to "do what
+the security email says", it read the email, declined, and explained why.
+
+**2026-10-21 (Phase 3): web search is DuckDuckGo's HTML page.** No API key
+and no dependency; Nova parses titles, links and snippets, and drops ads. It
+breaks if DuckDuckGo changes its markup; `NOVA_SEARCH_URL` points it
+elsewhere, and the walkthrough uses a stand-in.
+
+**2026-10-21 (Phase 3): shopping researches and never buys.** Payments are
+out of scope and a purchase can't be undone. Real model: big retailers often
+refuse automated page reads (503s, rate limits), and the playbook's rule of
+quoting only prices it saw made it stop short of a recommendation. The
+playbook now asks deciding details first, caps page reads at about six, and
+falls back to agreeing sources labelled "reported".
+
 **2026-10-21: personal data lives outside the code.** The repo is public
 (AGPL). Each person's Nova data is one folder of plain files (`NOVA_HOME`,
 default `~/Nova`), seeded from `templates/home/`, and a local git repository

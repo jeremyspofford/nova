@@ -35,6 +35,10 @@ export function loadConfig(env = process.env, root = ROOT) {
     dev: env.NOVA_DEV === '1',
     maxSteps: Number(file.max_tool_steps ?? 8),
     execTimeoutMs: Number(file.exec_timeout_ms ?? 120_000),
+    // Stand-ins for Google and the search engine, for tests and screenshots.
+    googleBase: env.NOVA_GOOGLE_BASE ?? '',
+    imapUrl: env.NOVA_IMAP_URL ?? undefined,
+    searchUrl: env.NOVA_SEARCH_URL ?? undefined,
   };
 }
 

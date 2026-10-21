@@ -44,11 +44,14 @@ function applyTurnEvent(t, ev) {
     case 'memory':
       t.items.push({ kind: 'memory', ops: ev.ops ?? [] });
       break;
+    case 'skill':
+      t.items.push({ kind: 'skill', id: ev.skill, name: ev.name, how: ev.how });
+      break;
     case 'assistant':
       t.items.push({ kind: 'text', id: ev.id, text: ev.text, ts: ev.ts });
       break;
     case 'tool_call':
-      t.items.push({ kind: 'tool', id: ev.id, name: ev.name, args: ev.args, needsApproval: !!ev.needs_approval, approval: null, result: null, ts: ev.ts });
+      t.items.push({ kind: 'tool', id: ev.id, name: ev.name, args: ev.args, needsApproval: !!ev.needs_approval, preview: ev.preview ?? null, approval: null, result: null, ts: ev.ts });
       break;
     case 'approval': {
       const tool = t.items.find((i) => i.kind === 'tool' && i.id === ev.id);
@@ -57,7 +60,7 @@ function applyTurnEvent(t, ev) {
     }
     case 'tool_result': {
       const tool = t.items.find((i) => i.kind === 'tool' && i.id === ev.id);
-      if (tool) tool.result = { ok: ev.ok, output: ev.output, summary: ev.summary };
+      if (tool) tool.result = { ok: ev.ok, output: ev.output, summary: ev.summary, link: ev.link };
       break;
     }
     case 'error':
