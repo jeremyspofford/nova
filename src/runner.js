@@ -14,6 +14,7 @@ import { Memory } from './memory.js';
 import { Skills } from './skills.js';
 import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
+import { Permissions, kindOf, permissionsSection } from './permissions.js';
 import { commitHome } from './home.js';
 import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
@@ -31,6 +32,7 @@ export class Runner extends EventEmitter {
     this.skills = new Skills(config.root, config.home);
     this.schedules = new Schedules(config.root, config.home, config.timezone);
     this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone });
+    this.permissions = new Permissions(config.home);
     this.helpers = null; // set by the server: where delegate hands work
   }
 
@@ -176,8 +178,9 @@ export class Runner extends EventEmitter {
         .filter((n) => !(run.helper && n.startsWith('schedule_')));
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
       const schedules = run.helper ? '' : schedulesSection(this.schedules.list(), this.config.timezone);
-      const scheduled = run.unattended ? runSection(run.unattended, this.config.timezone) : '';
-      const helper = run.helper ? helperSection(run.helper) : '';
+      const allowed = run.alone ? permissionsSection(this.permissions.read()) : '';
+      const scheduled = run.unattended ? runSection(run.unattended, this.config.timezone, allowed) : '';
+      const helper = run.helper ? helperSection(run.helper, allowed) : '';
       const filter = new ToolTagFilter();
       this.setLive(sessionId, { phase: 'thinking', text: '' });
       let streamed = '';
@@ -237,13 +240,14 @@ export class Runner extends EventEmitter {
         continue;
       }
 
-      // A scheduled run or a helper has no one to ask, so what needs an OK doesn't happen.
+      // No one is watching a scheduled run or a helper, so it takes the steps
+      // permissions.md says it may take on its own. One set to "ask" isn't
+      // done; the model suggests it in its report instead.
       if (needsApproval && run.alone) {
-        this.record(sessionId, { type: 'approval', ...tag, id, decision: 'deny', auto: true });
-        continue;
-      }
-
-      if (needsApproval) {
+        const yes = this.permissions.allows(kindOf(call.name, { tainted: run.tainted }));
+        this.record(sessionId, { type: 'approval', ...tag, id, decision: yes ? 'allow' : 'deny', auto: true });
+        if (!yes) continue;
+      } else if (needsApproval) {
         this.setLive(sessionId, { phase: 'approval', approval: id });
         const decision = await new Promise((resolve) => {
           run.pending = { id, resolve };

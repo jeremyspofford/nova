@@ -592,6 +592,11 @@ let helperRun;
   await p.fill('#input', 'Ask a helper to take it slow reading the lease');
   await p.keyboard.press('Enter');
   await settle(p);
+  // A scheduled run takes a step that would ask in a conversation, on its own.
+  writeFileSync(join(home, 'schedules', 'standup-check.md'), '---\nname: Standup check\ncron: 0 9 * * 1-5\n---\n\nRun git status before standup.\n');
+  await fetch(`${base}/api/schedules/standup-check/run`, { method: 'POST', headers: { 'x-nova': '1' } });
+  const ran = () => readFileSync(join(home, 'schedules', 'runs.jsonl'), 'utf8').includes('"schedule":"standup-check"');
+  for (let i = 0; i < 200 && !ran(); i++) await p.waitForTimeout(100);
   await p.goto(`${base}/new`);
   await p.waitForSelector('.empty');
   await p.keyboard.type('Run git status in my workspace');
@@ -608,6 +613,7 @@ let helperRun;
   check('Now shows what is working and what waits for you', /Working/.test(nowText) && /Waiting for you/.test(nowText) && /Go to it/.test(nowText));
   check('the Activity place counts what waits', (await p.getAttribute('#activity-link', 'aria-label')) === 'Activity, 1 waiting for you');
   check('each day says what happened in a sentence', /\d+ (repl(y|ies)|helpers?)/.test(await p.textContent('.act-summary')));
+  check('a run took a step on its own, and Activity says so', /On its own/.test(await p.textContent('.act-day')) && /took one step that would ask you/.test(await p.textContent('.act-summary')));
   check('no tool output is dumped: steps are one line each', await p.evaluate(() => [...document.querySelectorAll('.act-step-list li')].every((li) => li.textContent.length < 200)));
 
   // The keyboard: ↓ and ↑ walk entries, Enter opens the steps.

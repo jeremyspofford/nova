@@ -46,23 +46,23 @@ ${lines.length ? lines.join('\n') : 'None are set yet.'}`;
 }
 
 // For a scheduled run: who asked, and that no one is watching.
-export function runSection({ id, name, due, late }, timezone = 'UTC') {
+export function runSection({ id, name, due, late }, timezone = 'UTC', allowed = '') {
   return `# This is a scheduled run
 
 This turn runs on its own: the schedule “${name}” (${id}), which the person set up. Its instructions are the message below; treat them as the person's own request. No one is watching. Your final message is handed to the person as a report, so write it for them: finished, self-contained, and leading with what matters. Don't narrate your steps or mention that this is a scheduled run.
 
-Anything that needs the person's OK (drafts, changes in Gmail, commands, going online after reading mail, changing schedules) will be declined now. Don't try it. Suggest it in the report instead; they can say yes when they read it.${late ? `\n\nThis run was due at ${formatWhen(due, timezone)}, and is running late because Nova wasn't running then. Keep that in mind for anything time-sensitive.` : ''}`;
+${allowed}${late ? `\n\nThis run was due at ${formatWhen(due, timezone)}, and is running late because Nova wasn't running then. Keep that in mind for anything time-sensitive.` : ''}`;
 }
 
 // For a helper: its scoped context. It knows who the person is, and gets the
 // files Nova passed along; the conversation and memory stay behind.
-export function helperSection({ title, files = [] }) {
+export function helperSection({ title, files = [] }, allowed = '') {
   const passed = files.map((f) => `<file path="~/${f.path}">\n${f.text || '(empty)'}\n</file>`).join('\n\n');
   return `# You are a helper
 
 Nova handed you one piece of work, “${title}”: the message below is your brief, and it's all you know of the conversation it came from. You don't see that conversation or the person's memory; only who they are (above)${files.length ? ' and the files Nova passed along (below)' : ''}. No one is watching. Your final message goes back to that conversation as a report, so write it for the person: finished, self-contained, and leading with what matters. Don't narrate your steps or mention that you're a helper.
 
-Anything that needs the person's OK (drafts, changes in Gmail, commands, going online after reading mail) will be declined now. Don't try it. Suggest it in the report instead.${passed ? `\n\n${passed}` : ''}`;
+${allowed}${passed ? `\n\n${passed}` : ''}`;
 }
 
 // helper: a helper's section; its context is scoped, so it gets no memory,
@@ -104,7 +104,7 @@ function renderTurn(t, timezone) {
     if (it.kind === 'text') parts.push(`<nova>\n${esc(it.text)}\n</nova>`);
     if (it.kind === 'tool') {
       parts.push(`<tool_call name="${it.name}">${JSON.stringify(it.args)}</tool_call>`);
-      if (it.approval?.auto) parts.push(`<tool_result name="${it.name}" ok="false">Not done: this runs on its own, and no one was there to approve it. Suggest it in your report instead.</tool_result>`);
+      if (it.approval?.auto && it.approval.decision === 'deny') parts.push(`<tool_result name="${it.name}" ok="false">Not done: this runs on its own, and no one was there to approve it. Suggest it in your report instead.</tool_result>`);
       else if (it.approval?.decision === 'deny') parts.push(`<tool_result name="${it.name}" ok="false">The user declined this.</tool_result>`);
       else if (it.result) parts.push(`<tool_result name="${it.name}" ok="${it.result.ok}">\n${esc(it.result.output)}\n</tool_result>`);
     }

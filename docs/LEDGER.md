@@ -103,6 +103,17 @@ quoting only prices it saw made it stop short of a recommendation. The
 playbook now asks deciding details first, caps page reads at about six, and
 falls back to agreeing sources labelled "reported".
 
+**2026-10-21 (Phase 5): full autonomy while no one is watching.** Jeremy:
+"Nova is supposed to be proactive, reactive, autonomous, and unsupervised",
+and he chose full autonomy over standing permissions or waiting for him.
+Scheduled runs and helpers take every step that asks in a conversation
+(drafts, Gmail tidying, schedules, going online after reading mail,
+commands), recorded as `approval {decision: allow, auto: true}` and shown as
+"On its own". `~/permissions.md` (seeded, all "yes") lets him set a kind to
+"ask", which is then declined and suggested, as Phase 4 did for everything.
+`write_file` can't edit it. This replaces Phase 4's "unattended runs decline
+approvals". Conversations still ask.
+
 **2026-10-21 (Phase 5): helpers start fresh.** A helper is its own session
 (`kind: "helper"`, hidden from the list) with a scoped context: the base
 prompt, AGENTS/SOUL/IDENTITY/USER, skills, its brief and up to five files the

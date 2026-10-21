@@ -44,6 +44,7 @@ export const TOOLS = {
       if (rel === 'sessions' || rel.startsWith(`sessions${sep}`)) throw new Error('Session logs are an audit trail and cannot be edited');
       if (rel === 'MEMORY.md' || rel === 'memory' || rel.startsWith(`memory${sep}`)) throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
       if (rel === 'schedules' || rel.startsWith(`schedules${sep}`)) throw new Error('Schedules are set with schedule_set, which the person approves, not write_file');
+      if (rel === 'permissions.md') throw new Error('Only the person changes what Nova may do on its own');
       if (typeof content !== 'string') throw new Error('content must be a string');
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, content);

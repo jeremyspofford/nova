@@ -11,6 +11,7 @@ import { runAgent } from '../src/agent.js';
 import { buildPrompt } from '../src/context.js';
 import { summarize } from '../src/activity.js';
 import { reduce } from '../ui/js/reduce.js';
+import { daySentence } from '../ui/js/view.js';
 import { createNova } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { startFakeGoogle } from '../scripts/fake-google.js';
@@ -98,13 +99,24 @@ test("a helper's context is scoped: its brief, who the person is, and the files 
   assert.match(parent.system, /Takes coffee black/);
 });
 
-test("a helper can't ask the person anything: what needs an OK is declined, and the report says so", async () => {
+test('a helper takes steps that would ask on its own, as permissions.md allows', async () => {
   nova.helpers.spawn({ title: 'Workspace check', task: 'Run ls in the workspace and tell me what is there.', parent: asked });
   const h = await wait(async () => (await handoffs(asked)).find((x) => x.name === 'Workspace check'));
   const exec = reduce(nova.store.read(h.run)).turns[0].items.find((i) => i.kind === 'tool');
-  assert.deepEqual([exec.name, exec.approval.decision, exec.approval.auto], ['exec', 'deny', true]);
-  assert.match(h.text, /helpers can't ask/);
-  assert.match(buildPrompt(reduce(nova.store.read(h.run)), [], { timezone: LA }), /Not done: this runs on its own, and no one was there to approve it/);
+  assert.deepEqual([exec.name, exec.approval.decision, exec.approval.auto, exec.result.ok], ['exec', 'allow', true, true]);
+  assert.match(h.text, /on my own/);
+});
+
+test('a kind set to "ask" is not done by a helper, and the report says so', async () => {
+  nova.runner.permissions.set('commands', false);
+  try {
+    nova.helpers.spawn({ title: 'Workspace again', task: 'Run ls in the workspace and tell me what is there.', parent: asked });
+    const h = await wait(async () => (await handoffs(asked)).find((x) => x.name === 'Workspace again'));
+    const exec = reduce(nova.store.read(h.run)).turns[0].items.find((i) => i.kind === 'tool');
+    assert.deepEqual([exec.name, exec.approval.decision, exec.approval.auto, exec.result], ['exec', 'deny', true, null]);
+    assert.match(h.text, /helpers can't ask/);
+    assert.match(buildPrompt(reduce(nova.store.read(h.run)), [], { timezone: LA }), /Not done: this runs on its own, and no one was there to approve it/);
+  } finally { nova.runner.permissions.set('commands', true); }
 });
 
 test('briefs and files are checked before a helper starts', () => {
@@ -217,7 +229,12 @@ test('missed runs are in the timeline; the summary counts what was asked and wha
   const n = summarize([
     { kind: 'reply', steps: [{ kind: 'tool', approval: { decision: 'allow' } }, { kind: 'tool', approval: { decision: 'deny' } }, { kind: 'memory', kept: 1 }] },
     { kind: 'schedule', missed: true, steps: [] },
-    { kind: 'helper', steps: [{ kind: 'tool', approval: { decision: 'deny', auto: true } }] },
+    { kind: 'helper', steps: [{ kind: 'tool', approval: { decision: 'deny', auto: true } }, { kind: 'tool', approval: { decision: 'allow', auto: true } }] },
   ]);
-  assert.deepEqual(n, { replies: 1, schedules: 0, helpers: 1, missed: 1, asked: 2, allowed: 1, declined: 1, notAsked: 1, kept: 1 });
+  assert.deepEqual(n, { replies: 1, schedules: 0, helpers: 1, missed: 1, asked: 2, allowed: 1, declined: 1, onOwn: 1, notAsked: 1, kept: 1 });
+});
+
+test("a day's sentence says what Nova did on its own", () => {
+  const n = { replies: 2, schedules: 1, helpers: 0, missed: 0, asked: 1, allowed: 1, declined: 0, onOwn: 3, notAsked: 1, kept: 0 };
+  assert.equal(daySentence(n, ['Morning digest']), "Two replies and the morning digest. You were asked once and said yes. While you were away, Nova took three steps that would ask you in a conversation. One step set to ask in permissions.md came up while you were away, so it was suggested instead.");
 });

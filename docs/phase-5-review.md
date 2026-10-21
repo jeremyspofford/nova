@@ -13,9 +13,9 @@ Phase 5 lets Nova hand work off and shows you what it's doing.
 
 Evidence:
 
-- `npm run shots`: 108 of 108 checks pass
+- `npm run shots`: 109 of 109 checks pass
   ([results](screenshots/results.json)).
-- `npm run check`: 116 tests pass, plus the token lint and theme contract.
+- `npm run check`: 124 tests pass, plus the token lint and theme contract.
 - The real `claude -p` delegated a research task with a self-contained brief
   and the right file, and its helper reported back on its own (see Real
   model, below).
@@ -32,10 +32,11 @@ Evidence:
   conversation, your memory, your day notes or your schedules, and it keeps
   nothing in memory. The walkthrough checks that a helper's log has no trace
   of the conversation or memory, and that it used the notes it was handed.
-- **What a helper can't do.** It can't ask you anything, so whatever needs
-  your OK (drafts, Gmail changes, commands, going online after reading mail)
-  is declined, and the helper is told to suggest it in the report. It can't
-  start helpers of its own or set schedules.
+- **It acts on its own.** A helper can't ask you anything, so it takes the
+  steps that would ask in a conversation (drafts, Gmail changes, commands,
+  going online after reading mail) by itself, as `permissions.md` allows.
+  See "Acting while you're away" below. It can't start helpers of its own or
+  set schedules.
 - **How many.** Up to three run at once; more wait their turn ("Waiting its
   turn" in Activity).
 - **The report** arrives in the conversation that asked, with a caption that
@@ -98,11 +99,32 @@ accent color when something needs your OK.
 | Server unreachable | "Activity couldn't be shown." with Try again | not pictured |
 | Mobile, themes | One column, no sideways scroll; every theme | [mobile-activity](screenshots/mobile-activity.png), `*-activity.png` |
 
-## Safety
+## Acting while you're away
 
-- **A helper can't approve anything.** Approvals are declined as they are in
-  scheduled runs, and marked "Not asked" in its log. The walkthrough's test
-  helper tries `exec` and is declined.
+You chose full autonomy. Scheduled runs and helpers now take every step that
+would ask you in a conversation, without asking, and nothing is declined.
+
+- **`~/Nova/permissions.md`** lists the five kinds of step, all set to
+  "yes": write Gmail drafts, tidy Gmail, set up schedules, go online after
+  reading mail, and run commands. To pull one back, change its "yes" to
+  "ask". A step set to "ask" isn't taken while you're away; Nova suggests it
+  in the report instead.
+- **Nova can't grant itself anything.** `write_file` refuses
+  `permissions.md`. A command could still change it, which the file says
+  next to "commands".
+- **In a conversation, Nova still asks.** The cards stay, because you're
+  right there.
+- **Every step shows.** A step taken this way is stamped **On its own** in
+  the run's log and in Activity, and the day's sentence counts them: "While
+  you were away, Nova took one step that would ask you in a conversation."
+  ([Activity](screenshots/paper-activity.png))
+- **What full autonomy risks.** Nova has no code to send or delete email,
+  whatever the file says. Going online after reading mail is the risky one:
+  an email could carry instructions telling Nova to post your mail to a
+  website, and nothing now stops a run from doing it. Set `online: ask` if
+  that worries you.
+
+## Safety
 - **Scoped context is also a privacy line.** Memory never reaches a helper,
   so a helper's search queries can't carry what Nova remembers about you.
   Only the files Nova chooses to pass are shared, and only from inside your
@@ -198,9 +220,10 @@ it was suggested instead."
 You said Phase 4 worked and to continue, so its open decisions went with the
 recommended defaults. Any of them can change:
 
-1. "/" is the main conversation, the front page.
+1. "/" is the main conversation, the front page. You confirmed this.
 2. Schedules run only while Nova is running, with a six-hour catch-up.
-3. Unattended runs decline anything that needs approval.
+3. ~~Unattended runs decline anything that needs approval.~~ You changed
+   this: runs and helpers act on their own (above).
 4. The digest has no weather, calendar or news yet.
 5. Run logs were hidden until now. Activity's Every step now opens them.
 
@@ -210,16 +233,12 @@ recommended defaults. Any of them can change:
    own. The other choice is for Nova to read each report and add a line,
    which costs a model call per report and puts words between you and the
    work.
-2. **Helpers can't approve anything.** If a helper needs a draft or a
-   command, it suggests it and you do it in the conversation. The other
-   choice is for a helper to pause and wait for you, which blocks one of
-   only three slots.
-3. **At most three at once.** This keeps a burst of delegation from using up
+2. **At most three at once.** This keeps a burst of delegation from using up
    your rate limit. It's one number in `src/helpers.js`.
-4. **Helpers get no memory.** Memory is what makes Nova yours, and a helper
+3. **Helpers get no memory.** Memory is what makes Nova yours, and a helper
    that searches the web shouldn't carry it out. If a helper needs a fact,
    Nova writes it into the brief.
-5. **Activity is derived, a week at a time.** Nothing new is stored. A very
+4. **Activity is derived, a week at a time.** Nothing new is stored. A very
    busy week (6,000 replies) still loads in under 150 ms, though the page
    would be long to scroll.
 

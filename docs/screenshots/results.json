@@ -1,23 +1,23 @@
 {
   "budgets": {
-    "serverStartMs": 142,
-    "pageInteractiveMs": 165,
-    "domContentLoadedMs": 76,
-    "sendFeedbackMs": 6,
-    "activityMs": 4,
+    "serverStartMs": 102,
+    "pageInteractiveMs": 123,
+    "domContentLoadedMs": 62,
+    "sendFeedbackMs": 12,
+    "activityMs": 2,
     "scroll": {
       "frames": 384,
-      "mainThreadP95Ms": 3.9,
-      "mainThreadMaxMs": 7.8,
-      "frameIntervalP95Ms": 33.3,
-      "slowIntervals": 22
+      "mainThreadP95Ms": 2.96,
+      "mainThreadMaxMs": 6.21,
+      "frameIntervalP95Ms": 16.8,
+      "slowIntervals": 16
     }
   },
   "checks": [
     {
       "name": "cold start ≤ 2 s (server + page)",
       "ok": true,
-      "detail": "142 ms server + 165 ms page"
+      "detail": "102 ms server + 123 ms page"
     },
     {
       "name": "the composer is focused on arrival",
@@ -32,7 +32,7 @@
     {
       "name": "send → visible feedback ≤ 100 ms",
       "ok": true,
-      "detail": "6 ms"
+      "detail": "12 ms"
     },
     {
       "name": "reply rendered markdown: list, code, table",
@@ -460,6 +460,11 @@
       "detail": ""
     },
     {
+      "name": "a run took a step on its own, and Activity says so",
+      "ok": true,
+      "detail": ""
+    },
+    {
       "name": "no tool output is dumped: steps are one line each",
       "ok": true,
       "detail": ""
@@ -487,7 +492,7 @@
     {
       "name": "Activity loads in ≤ 100 ms",
       "ok": true,
-      "detail": "4 ms for 18 logs"
+      "detail": "2 ms for 19 logs"
     },
     {
       "name": "helpers and Activity have no script errors",
@@ -502,7 +507,7 @@
     {
       "name": "scrolling a long thread holds 60 fps",
       "ok": true,
-      "detail": "page work p95 3.9 ms/frame (max 7.8) over 399 frames; frame interval p95 33.3 ms on this GPU-less machine"
+      "detail": "page work p95 3.0 ms/frame (max 6.2) over 399 frames; frame interval p95 16.8 ms on this GPU-less machine"
     },
     {
       "name": "paper-dark: no script errors",
@@ -555,5 +560,5 @@
       "detail": ""
     }
   ],
-  "longId": "2026-10-21-ze75gh"
+  "longId": "2026-10-21-qh5rqb"
 }

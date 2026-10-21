@@ -64,7 +64,8 @@ if (input.includes('# You are a helper')) {
   // The brief, and nothing of the conversation it came from.
   if (/\bslow\b/.test(msg)) await stream('Working through this one step at a time, so there is time to watch it in Activity and stop it if you want to.', 400);
   else if (/\brun\b/.test(msg) && !result) await stream('<tool_call name="exec">{"command": "ls ~/workspace"}</tool_call>');
-  else if (/\brun\b/.test(msg)) await stream("I couldn't list your workspace: running commands needs your OK, and helpers can't ask. If you'd like, I can run `ls ~/workspace` with you in the conversation.");
+  else if (/\brun\b/.test(msg) && result.includes('ok="false"')) await stream("I couldn't list your workspace: you've asked to be asked before commands run, and helpers can't ask. If you'd like, I can run `ls ~/workspace` with you in the conversation.");
+  else if (/\brun\b/.test(msg)) await stream('Your workspace is listed above: I ran `ls ~/workspace` on my own, as your permissions allow.');
   else if (/\bcompare\b/.test(msg) && hasTool('web_search') && !result) await stream('<tool_call name="web_search">{"query": "best commuter e-bikes under $2000 2026"}</tool_call>');
   else {
     const notes = input.includes('<file path="~/workspace/bikes.md">') ? ' Your notes say the ride is 9 miles with one long hill, so I weighted torque and range.' : '';

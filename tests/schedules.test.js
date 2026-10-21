@@ -210,15 +210,23 @@ test('the morning digest: set up, run now, and its report lands in the main conv
   assert.match(prompt, /<handoff from="Morning digest" schedule="morning-digest" time="[^"]+">\nA quiet morning/);
 });
 
-test('a scheduled run asks no one: what needs an OK is declined, and the report says so', async () => {
+test('a scheduled run takes steps that would ask on its own; one set to "ask" is not done', async () => {
   nova.runner.schedules.set({ name: 'Standup check', cron: '0 9 * * 1-5', prompt: 'Run git status before standup.' });
   await post('/api/schedules/standup-check/run');
   const h = await wait(async () => (await main()).session.turns.find((t) => t.schedule === 'standup-check'));
-  const run = reduce(nova.store.read(h.run)).turns[0];
-  const exec = run.items.find((i) => i.kind === 'tool');
-  assert.deepEqual([exec.name, exec.approval.decision, exec.approval.auto, exec.result], ['exec', 'deny', true, null]);
-  assert.match(h.text, /won't run it/);
-  assert.equal(nova.runner.liveState(h.run), null);
+  const exec = reduce(nova.store.read(h.run)).turns[0].items.find((i) => i.kind === 'tool');
+  assert.deepEqual([exec.name, exec.approval.decision, exec.approval.auto, exec.result.ok], ['exec', 'allow', true, true]);
+  assert.match(h.text, /nothing to commit/);
+
+  nova.runner.permissions.set('commands', false);
+  try {
+    await post('/api/schedules/standup-check/run');
+    const again = await wait(async () => (await main()).session.turns.filter((t) => t.schedule === 'standup-check')[1]);
+    const asked = reduce(nova.store.read(again.run)).turns[0].items.find((i) => i.kind === 'tool');
+    assert.deepEqual([asked.approval.decision, asked.approval.auto, asked.result], ['deny', true, null]);
+    assert.match(again.text, /won't run it/);
+    assert.equal(nova.runner.liveState(again.run), null);
+  } finally { nova.runner.permissions.set('commands', true); }
 });
 
 test('a run that fails says so in the main conversation', async () => {

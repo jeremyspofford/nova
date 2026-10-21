@@ -120,9 +120,9 @@ function render() {
     ],
     days: [{
       day: t0.toISOString().slice(0, 10),
-      summary: { replies: 2, schedules: 1, helpers: 2, missed: 1, asked: 2, allowed: 1, declined: 1, notAsked: 1, kept: 1 },
+      summary: { replies: 2, schedules: 1, helpers: 2, missed: 1, asked: 2, allowed: 1, declined: 1, onOwn: 2, notAsked: 0, kept: 1 },
       entries: [
-        entry('helper', 'Compare e-bikes', 'done', { brief: 'Compare commuter e-bikes under $2,000 for a 9-mile ride with one hill.', parent: 'main', parentTitle: 'Main conversation', report: { to: 'main', handoff: 'h9' }, steps: [tool('web_search', { query: 'best commuter e-bikes 2026' }, { result: { ok: true, summary: '8 results' } }), tool('web_fetch', { url: 'https://ridgeline.example/c2' }), tool('web_fetch', { url: 'https://voltway.example/metro' }), tool('exec', { command: 'open lease.pdf' }, { needsApproval: true, approval: { decision: 'deny', auto: true }, result: null })] }),
+        entry('helper', 'Compare e-bikes', 'done', { brief: 'Compare commuter e-bikes under $2,000 for a 9-mile ride with one hill.', parent: 'main', parentTitle: 'Main conversation', report: { to: 'main', handoff: 'h9' }, steps: [tool('web_search', { query: 'best commuter e-bikes 2026' }, { result: { ok: true, summary: '8 results' } }), tool('web_fetch', { url: 'https://ridgeline.example/c2' }), tool('web_fetch', { url: 'https://voltway.example/metro' }), tool('exec', { command: 'ls ~/workspace/bikes' }, { needsApproval: true, approval: { decision: 'allow', auto: true }, result: { ok: true } })] }),
         entry('schedule', 'Morning digest', 'done', { report: { to: 'main', handoff: 'h1' }, steps: [{ kind: 'skill', id: 'email-summary', name: 'Email summary' }, tool('gmail_search', {}, { result: { ok: true, summary: '5 messages' } })] }),
         entry('reply', 'Trip planning', 'done', { text: 'Draft a reply to Sam saying yes', first: true, steps: [tool('gmail_draft', {}, { needsApproval: true, approval: { decision: 'allow' }, result: { ok: true, summary: 'Re: Saturday hike' } })] }),
         entry('reply', 'Main conversation', 'done', { text: 'I take my coffee black', session: 'main', steps: [{ kind: 'memory', kept: 1, forgot: 0 }] }),

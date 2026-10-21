@@ -139,7 +139,7 @@ export function buildActivity({ store, runner, helpers, scheduler, schedules, ti
 
 // One day in numbers, for a sentence under its date.
 export function summarize(list) {
-  const n = { replies: 0, schedules: 0, helpers: 0, missed: 0, asked: 0, allowed: 0, declined: 0, notAsked: 0, kept: 0 };
+  const n = { replies: 0, schedules: 0, helpers: 0, missed: 0, asked: 0, allowed: 0, declined: 0, onOwn: 0, notAsked: 0, kept: 0 };
   for (const e of list) {
     if (e.missed) n.missed++;
     else if (e.kind === 'reply') n.replies++;
@@ -148,7 +148,7 @@ export function summarize(list) {
     for (const s of e.steps) {
       if (s.kind === 'memory') n.kept += s.kept;
       if (s.kind !== 'tool' || !s.approval) continue;
-      if (s.approval.auto) n.notAsked++;
+      if (s.approval.auto) s.approval.decision === 'deny' ? n.notAsked++ : n.onOwn++;
       else { n.asked++; s.approval.decision === 'deny' ? n.declined++ : n.allowed++; }
     }
   }

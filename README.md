@@ -80,8 +80,9 @@ conversation, a front page that reports from scheduled work land in; + or
 ⌘⇧O starts a separate conversation. A schedule is a markdown file in
 `~/Nova/schedules/` (`name`, a five-field `cron` on your time zone, where to
 `deliver`, and the instructions as its body). Nova runs it unattended, one at
-a time, and anything that would need your OK is declined and suggested in the
-report instead. The Schedules view (`/schedules`) shows what's set, when it
+a time, and takes the steps that would ask you in a conversation on its own,
+as `~/Nova/permissions.md` allows (every kind is "yes" to start; set one to
+"ask" and it's suggested in the report instead). The Schedules view (`/schedules`) shows what's set, when it
 last ran and what it said, with Run now, Pause and Remove. Nova ships one
 schedule, the morning digest, to turn on there; you can also ask for one in
 any conversation ("Every Friday at 4, remind me to send my timesheet"), which
@@ -93,8 +94,8 @@ missed. Every run is logged in `schedules/runs.jsonl`.
 comparing options, going through files) to a helper with the `delegate` tool,
 so the conversation stays with you. A helper starts fresh: it sees only Nova's
 brief, who you are, and up to five files Nova passes. It doesn't see the
-conversation or your memory, keeps nothing in memory, and can't ask you
-anything, so whatever needs your OK is declined and suggested instead. Up to
+conversation or your memory, keeps nothing in memory, and acts on its own
+as `permissions.md` allows, since it can't ask you. Up to
 three run at once; more wait their turn. The report comes back to the
 conversation that asked. The Activity view (`/activity`) shows what Nova is
 doing and did, a week at a time: each reply, scheduled run and helper, with

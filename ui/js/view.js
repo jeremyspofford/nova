@@ -172,11 +172,15 @@ function renderApproval(tool) {
 </div>`;
 }
 
+// How an approval ended. "On its own": no one was watching, and
+// permissions.md said Nova may. "Not asked": no one was watching, and it said ask.
+const stampWord = (a) => (a.auto ? (a.decision === 'deny' ? 'Not asked' : 'On its own') : a.decision === 'deny' ? 'Declined' : 'Allowed');
+
 function renderTool(tool, turnOpen) {
   const state = toolState(tool, turnOpen);
   if (state === 'waiting') return renderApproval(tool);
   const stamp = tool.approval
-    ? `<span class="stamp${tool.approval.decision === 'deny' ? ' is-declined' : ''}">${tool.approval.auto ? 'Not asked' : tool.approval.decision === 'deny' ? 'Declined' : 'Allowed'}</span>`
+    ? `<span class="stamp${tool.approval.decision === 'deny' ? ' is-declined' : ''}">${stampWord(tool.approval)}</span>`
     : '';
   const when = tool.approval?.ts ? `<span class="record-time">${esc(clock(new Date(tool.approval.ts)))}</span>` : '';
   const label = state === 'skipped' ? `Never ran ${tool.name === 'exec' ? `<code>${esc(String(tool.args?.command ?? '').split('\n')[0])}</code>` : 'that step'}` : toolLabel(tool, state);
@@ -421,7 +425,7 @@ const CLIENT_STEPS = `<ol class="steps">
 </ol>`;
 
 const APP_PASSWORDS = 'https://myaccount.google.com/apppasswords';
-const PROMISE = 'Nova can read your mail, save drafts and organize it: archive, labels, read or unread. It never sends or deletes anything, and every change waits for your OK.';
+const PROMISE = 'Nova can read your mail, save drafts and organize it: archive, labels, read or unread. It never sends or deletes anything. In a conversation every change waits for your OK; while you\'re away, Nova makes them on its own, as permissions.md in your Nova folder allows.';
 
 function passwordForm(g, again = false) {
   return `<form class="connection-form" data-form="gmail-password">
@@ -624,7 +628,8 @@ export function daySentence(n, schedules = []) {
     const yes = n.allowed === n.asked ? `said yes${each}` : n.allowed ? `said yes ${n.allowed === 1 ? 'once' : n.allowed === 2 ? 'twice' : count(n.allowed, 'time')}` : `said no${each}`;
     out += ` You were asked ${times} and ${yes}.`;
   }
-  if (n.notAsked) out += ` ${count(n.notAsked, 'step').replace(/^\w/, (c) => c.toUpperCase())} needed your OK while you were away, so ${n.notAsked === 1 ? 'it was' : 'they were'} suggested instead.`;
+  if (n.onOwn) out += ` While you were away, Nova took ${count(n.onOwn, 'step')} that would ask you in a conversation.`;
+  if (n.notAsked) out += ` ${count(n.notAsked, 'step').replace(/^\w/, (c) => c.toUpperCase())} set to ask in permissions.md came up while you were away, so ${n.notAsked === 1 ? 'it was' : 'they were'} suggested instead.`;
   if (n.kept) out += ` ${count(n.kept, 'thing').replace(/^\w/, (c) => c.toUpperCase())} went into memory.`;
   if (n.missed) out += ` ${count(n.missed, 'scheduled run').replace(/^\w/, (c) => c.toUpperCase())} missed while Nova was off.`;
   return out.trim();
@@ -636,7 +641,7 @@ function stepLine(s, open = false) {
   if (s.kind === 'error') return `<span class="act-problem">${esc(s.message)}</span>`;
   const st = toolState(s, open);
   const label = toolLabel(s, st === 'skipped' ? 'failed' : st);
-  const stamp = s.approval ? `<span class="stamp${s.approval.decision === 'deny' ? ' is-declined' : ''}">${s.approval.auto ? 'Not asked' : s.approval.decision === 'deny' ? 'Declined' : 'Allowed'}</span>` : '';
+  const stamp = s.approval ? `<span class="stamp${s.approval.decision === 'deny' ? ' is-declined' : ''}">${stampWord(s.approval)}</span>` : '';
   return `${stamp}${label}`;
 }
 
@@ -698,7 +703,7 @@ export function activityEntry(e, now = new Date()) {
 
 export function renderActivity(data, now = new Date()) {
   const out = [`<header class="memory-intro"><p class="empty-date">Activity</p>
-<p class="memory-lede">What Nova is doing and has done: each reply, scheduled run and helper, with the steps it took and what it asked you. It's read from the conversation logs in your Nova folder.</p></header>`];
+<p class="memory-lede">What Nova is doing and has done: each reply, scheduled run and helper, with the steps it took and what it asked you. While you're away, Nova takes steps on its own as permissions.md in your Nova folder allows. All of this is read from the conversation logs there.</p></header>`];
   if (data.now?.length) {
     out.push(`<section class="memory-section act-now" aria-labelledby="act-now"><h2 class="memory-heading" id="act-now">Now</h2>
 <ol class="act-list">${data.now.map((e) => activityEntry(e, now)).join('')}</ol></section>`);

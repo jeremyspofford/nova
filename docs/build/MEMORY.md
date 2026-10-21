@@ -43,9 +43,10 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 - Nothing real reaches Gmail from the build container: there are no Google
   credentials here. Gmail is verified against the stand-in, plus the real
   model reading the stand-in's mailbox.
-- Scheduled runs are unattended: approvals are auto-declined (`auto: true` on
-  the approval event). Don't make a run wait for a person; it would block the
-  queue behind it.
+- Scheduled runs and helpers are unattended: steps that would ask are taken
+  on their own as `~/permissions.md` allows (all "yes" by default, Jeremy's
+  choice), recorded with `auto: true`. A kind set to "ask" is declined, not
+  waited on: a waiting run would block the scheduler's queue.
 - Helpers are sessions too (`kind: "helper"`). Their context is scoped in
   `buildSystem(..., { helper })`; keep memory out of it. A helper's report is
   delivered by `Helpers.hand()`, which also records `delivered` in the
