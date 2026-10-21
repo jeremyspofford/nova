@@ -28,7 +28,7 @@ export function applyEvent(s, ev) {
       s.title = ev.title;
       break;
     case 'user':
-      s.turns.push({ id: ev.turn, text: ev.text, ts: ev.ts, attempt: 0, items: [], state: 'open', endedAt: null });
+      s.turns.push({ id: ev.turn, text: ev.text, ts: ev.ts, attempt: 0, items: [], state: 'open', endedAt: null, ...(ev.followup ? { followup: ev.followup } : {}) });
       break;
     case 'handoff':
       // A report from scheduled work: an entry of its own, between replies.

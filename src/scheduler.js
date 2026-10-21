@@ -25,6 +25,7 @@ export class Scheduler extends EventEmitter {
     this.next = new Map();    // id → { cron, at }
     this.queue = [];
     this.running = null;      // { id, run, started }
+    this.waiting = new Map(); // id → { id, run, started }: runs waiting for the person's answer
     this.busy = Promise.resolve();
   }
 
@@ -79,7 +80,7 @@ export class Scheduler extends EventEmitter {
   }
 
   enqueue(id, how) {
-    if (this.running?.id === id || this.queue.some((q) => q.id === id)) return false;
+    if (this.running?.id === id || this.waiting.has(id) || this.queue.some((q) => q.id === id)) return false;
     this.queue.push({ id, ...how });
     this.emit('change');
     this.busy = this.busy.then(() => this.work());
@@ -91,16 +92,27 @@ export class Scheduler extends EventEmitter {
     if (!job) return;
     const s = this.schedules.get(job.id);
     if (!s || s.error) { this.emit('change'); return; } // removed while it waited
-    try { await this.execute(s, job); } catch (e) {
-      this.schedules.record({ schedule: s.id, name: s.name, due: job.due.toISOString(), ok: false, error: e.message });
-    } finally {
+    const failed = (e) => this.schedules.record({ schedule: s.id, name: s.name, due: job.due.toISOString(), ok: false, error: e.message });
+    try {
+      const { run, started } = this.begin(s, job);
+      // A run waiting for the person's answer steps aside, so the schedules
+      // behind it aren't held up; it finishes whenever they answer.
+      if (await this.asks(run)) {
+        this.waiting.set(s.id, this.running);
+        this.running = null;
+        this.emit('change');
+        this.finish(s, job, run, started).catch(failed).finally(() => { this.waiting.delete(s.id); this.emit('change'); });
+        return;
+      }
+      await this.finish(s, job, run, started);
+    } catch (e) { failed(e); } finally {
       this.running = null;
       this.emit('change');
     }
   }
 
-  // One unattended run, then its report handed off.
-  async execute(s, { due, late = false, manual = false }) {
+  // One unattended run; finish() hands off its report.
+  begin(s, { due, late = false }) {
     const { runner, store } = this;
     const run = store.newId();
     const started = new Date();
@@ -108,6 +120,21 @@ export class Scheduler extends EventEmitter {
     this.emit('change');
     runner.record(run, { type: 'session', id: run, title: s.name, kind: 'run', schedule: s.id, due: due.toISOString(), v: 1 });
     runner.send(run, s.prompt, { unattended: { id: s.id, name: s.name, due, late } });
+    return { run, started };
+  }
+
+  // True as soon as the run waits for an answer, false if it finishes first.
+  asks(run) {
+    const { runner } = this;
+    return new Promise((resolve) => {
+      const on = (id, live) => { if (id === run && live?.approval) { runner.off('live', on); resolve(true); } };
+      runner.on('live', on);
+      runner.idle(run).then(() => { runner.off('live', on); resolve(false); });
+    });
+  }
+
+  async finish(s, { due, late = false, manual = false }, run, started) {
+    const { runner, store } = this;
     await runner.idle(run);
 
     const { ok, text: report, failure } = runner.report(run);

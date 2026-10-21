@@ -43,10 +43,13 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 - Nothing real reaches Gmail from the build container: there are no Google
   credentials here. Gmail is verified against the stand-in, plus the real
   model reading the stand-in's mailbox.
-- Scheduled runs and helpers are unattended: steps that would ask are taken
-  on their own as `~/permissions.md` allows (all "yes" by default, Jeremy's
-  choice), recorded with `auto: true`. A kind set to "ask" is declined, not
-  waited on: a waiting run would block the scheduler's queue.
+- Permissions: every tool that needs an OK declares `permission`; Settings
+  lists them from the tools, all "ask" by default (Jeremy's choice), stored in
+  `~/permissions.md`. Switched on: taken without asking anywhere
+  (`auto: true`). Off: unattended runs and helpers wait for the answer; a
+  waiting scheduled run moves to `scheduler.waiting` so the queue continues.
+- After a helper's report, `runner.followUp()` starts a turn with no user
+  text (`followup: <handoff id>`) so Nova comments on it.
 - Helpers are sessions too (`kind: "helper"`). Their context is scoped in
   `buildSystem(..., { helper })`; keep memory out of it. A helper's report is
   delivered by `Helpers.hand()`, which also records `delivered` in the

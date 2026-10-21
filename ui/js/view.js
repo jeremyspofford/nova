@@ -172,9 +172,9 @@ function renderApproval(tool) {
 </div>`;
 }
 
-// How an approval ended. "On its own": no one was watching, and
-// permissions.md said Nova may. "Not asked": no one was watching, and it said ask.
-const stampWord = (a) => (a.auto ? (a.decision === 'deny' ? 'Not asked' : 'On its own') : a.decision === 'deny' ? 'Declined' : 'Allowed');
+// How an approval ended. "Without asking": Settings lets Nova take this kind
+// of step without asking. "Not asked": an older run that couldn't ask, so didn't.
+const stampWord = (a) => (a.auto ? (a.decision === 'deny' ? 'Not asked' : 'Without asking') : a.decision === 'deny' ? 'Declined' : 'Allowed');
 
 function renderTool(tool, turnOpen) {
   const state = toolState(tool, turnOpen);
@@ -261,8 +261,8 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
   if (isLast && !running && !readOnly) actions.push(`<button type="button" class="act" data-action="regenerate" aria-label="Regenerate reply">${icons.again}<span>Regenerate</span></button>`);
 
   return `<section class="turn" id="t-${esc(turn.id)}" data-turn="${esc(turn.id)}">
-  <div class="msg-user"><div class="bubble">${esc(turn.text)}</div>
-    <div class="actions"><button type="button" class="act" data-action="copy-user" data-turn="${esc(turn.id)}" aria-label="Copy message">${icons.copy}<span>Copy</span></button></div></div>
+  ${turn.followup ? '' : `<div class="msg-user"><div class="bubble">${esc(turn.text)}</div>
+    <div class="actions"><button type="button" class="act" data-action="copy-user" data-turn="${esc(turn.id)}" aria-label="Copy message">${icons.copy}<span>Copy</span></button></div></div>`}
   <div class="msg-nova">${nova}${actions.length ? `<div class="actions">${actions.join('')}</div>` : ''}</div>
 </section>`;
 }
@@ -425,7 +425,7 @@ const CLIENT_STEPS = `<ol class="steps">
 </ol>`;
 
 const APP_PASSWORDS = 'https://myaccount.google.com/apppasswords';
-const PROMISE = 'Nova can read your mail, save drafts and organize it: archive, labels, read or unread. It never sends or deletes anything. In a conversation every change waits for your OK; while you\'re away, Nova makes them on its own, as permissions.md in your Nova folder allows.';
+const PROMISE = 'Nova can read your mail, save drafts and organize it: archive, labels, read or unread. It never sends or deletes anything, and every change waits for your OK unless you turn that off in Settings.';
 
 function passwordForm(g, again = false) {
   return `<form class="connection-form" data-form="gmail-password">
@@ -535,6 +535,7 @@ export function relWhen(iso, now = new Date(), timeZone = undefined) {
 // What happened last time, in a sentence: running, missed, failed, or the
 // report's headline with a way to read it.
 function scheduleLast(s, now, tz) {
+  if (s.running?.waiting) return `<p class="schedule-last is-warn" role="status">Waiting for your OK. <a href="/c/${esc(s.running.run)}">See what it's asking</a></p>`;
   if (s.running) return '<p class="schedule-last is-running" role="status"><span class="pulse" aria-hidden="true"></span>Running now…</p>';
   if (s.queued) return '<p class="schedule-last">Waiting for another schedule to finish.</p>';
   const r = s.last;
@@ -628,8 +629,8 @@ export function daySentence(n, schedules = []) {
     const yes = n.allowed === n.asked ? `said yes${each}` : n.allowed ? `said yes ${n.allowed === 1 ? 'once' : n.allowed === 2 ? 'twice' : count(n.allowed, 'time')}` : `said no${each}`;
     out += ` You were asked ${times} and ${yes}.`;
   }
-  if (n.onOwn) out += ` While you were away, Nova took ${count(n.onOwn, 'step')} that would ask you in a conversation.`;
-  if (n.notAsked) out += ` ${count(n.notAsked, 'step').replace(/^\w/, (c) => c.toUpperCase())} set to ask in permissions.md came up while you were away, so ${n.notAsked === 1 ? 'it was' : 'they were'} suggested instead.`;
+  if (n.onOwn) out += ` Nova took ${count(n.onOwn, 'step')} without asking, as Settings allows.`;
+  if (n.notAsked) out += ` ${count(n.notAsked, 'step').replace(/^\w/, (c) => c.toUpperCase())} needed your OK while no one could ask, so ${n.notAsked === 1 ? 'it was' : 'they were'} suggested instead.`;
   if (n.kept) out += ` ${count(n.kept, 'thing').replace(/^\w/, (c) => c.toUpperCase())} went into memory.`;
   if (n.missed) out += ` ${count(n.missed, 'scheduled run').replace(/^\w/, (c) => c.toUpperCase())} missed while Nova was off.`;
   return out.trim();
@@ -659,6 +660,7 @@ export const activityId = (e) => (e.kind === 'reply' ? `a-${e.session}-${e.turn}
 
 // What it was, in a line: "You asked “…”", "Morning digest", "A helper: Compare e-bikes".
 function entryTitle(e) {
+  if (e.followup) return `Nova on “${esc(e.followup)}”`;
   if (e.kind === 'reply') return `<span class="act-quote">“${esc(e.text)}”</span>`;
   if (e.kind === 'helper') return `Helper: ${esc(e.title)}`;
   return esc(e.title);
@@ -703,7 +705,7 @@ export function activityEntry(e, now = new Date()) {
 
 export function renderActivity(data, now = new Date()) {
   const out = [`<header class="memory-intro"><p class="empty-date">Activity</p>
-<p class="memory-lede">What Nova is doing and has done: each reply, scheduled run and helper, with the steps it took and what it asked you. While you're away, Nova takes steps on its own as permissions.md in your Nova folder allows. All of this is read from the conversation logs there.</p></header>`];
+<p class="memory-lede">What Nova is doing and has done: each reply, scheduled run and helper, with the steps it took and what it asked you. It's read from the conversation logs in your Nova folder.</p></header>`];
   if (data.now?.length) {
     out.push(`<section class="memory-section act-now" aria-labelledby="act-now"><h2 class="memory-heading" id="act-now">Now</h2>
 <ol class="act-list">${data.now.map((e) => activityEntry(e, now)).join('')}</ol></section>`);
@@ -724,3 +726,20 @@ ${entries.length ? `<ol class="act-list">${entries.map((e) => activityEntry(e, n
   if (data.more) out.push(`<p class="act-more"><button type="button" class="btn" data-action="earlier" data-before="${esc(data.before)}">Show the week before</button></p>`);
   return out.join('\n');
 }
+
+// ---- settings --------------------------------------------------------------
+
+// Each permission is one kind of step that normally asks first. The list comes
+// from the tools Nova has, so a new tool brings its own switch, starting off.
+export function renderSettings(list) {
+  const rows = list.map((p) => `<li class="perm" id="p-${esc(p.id)}">
+  <div class="perm-text"><p class="perm-label" id="pl-${esc(p.id)}">${esc(p.label)}</p>${p.note ? `<p class="perm-note">${esc(p.note)}.</p>` : ''}</div>
+  <button type="button" class="switch" role="switch" aria-checked="${p.yes}" aria-labelledby="pl-${esc(p.id)}" data-action="toggle-permission" data-id="${esc(p.id)}"><span class="switch-word">${p.yes ? 'Without asking' : 'Ask first'}</span><span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span></button>
+</li>`).join('');
+  return `<header class="memory-intro"><p class="empty-date">Settings</p>
+<p class="memory-lede">Everything Nova can do that changes something outside the conversation asks you first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time.</p></header>
+<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
+${list.length ? `<ul class="perm-list">${rows}</ul>` : '<p class="memory-none">Nothing Nova can do asks first right now.</p>'}
+<p class="perm-foot">When Nova gets a new tool, from an update, a plugin or a connector, anything it can change shows up here, set to Ask first. These switches are kept in permissions.md in your Nova folder.</p></section>`;
+}
+

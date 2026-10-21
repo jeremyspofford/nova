@@ -3,7 +3,7 @@
 // nothing that is already on screen animates twice.
 import { applyEvent, emptySession } from './reduce.js';
 import { renderMarkdown } from './markdown.js';
-import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
+import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderSettings as renderSettingsPage, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { THEMES, MODES, apply as applyTheme, choose as chooseTheme, current as currentTheme } from './theme.js';
 
 const $ = (id) => document.getElementById(id);
@@ -17,6 +17,7 @@ const el = {
   schedules: $('schedules'), schedulesLink: $('schedules-link'), schedulesCount: $('schedules-count'),
   mainLink: $('main-link'), mainDot: $('main-dot'),
   activity: $('activity'), activityLink: $('activity-link'), activityPulse: $('activity-pulse'), activityWaiting: $('activity-waiting'),
+  settings: $('settings-view'), settingsLink: $('settings-link'),
 };
 
 const state = {
@@ -178,6 +179,7 @@ function watch() {
   es.addEventListener('memory', () => loadMemory());
   es.addEventListener('skills', () => loadSkills());
   es.addEventListener('schedules', () => loadSchedules());
+  es.addEventListener('permissions', () => { if (state.view === 'settings') loadPermissions(); });
   es.addEventListener('handoff', (e) => {
     if (JSON.parse(e.data).target !== 'main') return;
     if (onMain()) markMainSeen();
@@ -213,6 +215,7 @@ function route() {
   else if (path === '/skills') showSkills();
   else if (path === '/schedules') showSchedules();
   else if (path === '/activity') showActivity();
+  else if (path === '/settings') showSettings();
   else if (path === '/new') startNew();
   else if (m && m[1] !== 'main') open(m[1]);
   else {
@@ -229,9 +232,10 @@ function setView(view) {
   el.skills.hidden = view !== 'skills';
   el.schedules.hidden = view !== 'schedules';
   el.activity.hidden = view !== 'activity';
+  el.settings.hidden = view !== 'settings';
   el.dock.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
-  for (const [link, v] of [[el.memoryLink, 'memory'], [el.skillsLink, 'skills'], [el.schedulesLink, 'schedules'], [el.activityLink, 'activity']]) {
+  for (const [link, v] of [[el.memoryLink, 'memory'], [el.skillsLink, 'skills'], [el.schedulesLink, 'schedules'], [el.activityLink, 'activity'], [el.settingsLink, 'settings']]) {
     if (view === v) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
@@ -458,7 +462,7 @@ function running() {
 const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state.session.kind);
 
 function renderChrome() {
-  const title = { memory: 'Memory', skills: 'Skills', schedules: 'Schedules', activity: 'Activity' }[state.view] ?? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : '');
+  const title = { memory: 'Memory', skills: 'Skills', schedules: 'Schedules', activity: 'Activity', settings: 'Settings' }[state.view] ?? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : '');
   el.dock.hidden = state.view !== 'chat' || readOnly();
   if (onMain()) el.mainLink.setAttribute('aria-current', 'page');
   else el.mainLink.removeAttribute('aria-current');
@@ -603,7 +607,7 @@ async function copy(text, button) {
 
 // Links between conversations and memory stay inside the app.
 function followLink(e) {
-  const a = e.target.closest('a[href^="/memory"], a[href^="/skills"], a[href^="/schedules"], a[href^="/activity"], a[href^="/c/"], a[href^="/#"], a[href="/"]');
+  const a = e.target.closest('a[href^="/memory"], a[href^="/skills"], a[href^="/schedules"], a[href^="/activity"], a[href^="/settings"], a[href^="/c/"], a[href^="/#"], a[href="/"]');
   if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return false;
   e.preventDefault();
   navigate(a.getAttribute('href'));
@@ -1280,6 +1284,74 @@ el.activityLink.addEventListener('click', (e) => {
   e.preventDefault();
   closeDrawer();
   navigate('/activity');
+});
+
+// ---- settings --------------------------------------------------------------
+
+let permissions = null;
+let permissionsError = '';
+function loadPermissions() {
+  return fetch('/api/permissions')
+    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+    .then((data) => { permissions = data.permissions; permissionsError = ''; if (state.view === 'settings') renderSettingsView(); })
+    .catch(() => {
+      permissionsError = "Nova's server didn't answer, so settings can't be shown right now.";
+      if (state.view === 'settings' && !permissions) renderSettingsView();
+    });
+}
+
+function showSettings() {
+  stream?.close();
+  stream = null;
+  Object.assign(state, { id: null, live: null, pending: null });
+  setView('settings');
+  el.scroller.scrollTop = 0;
+  renderChrome();
+  renderToc_();
+  renderSettingsView({ enter: true });
+  loadPermissions().then(() => {
+    const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
+    if (target) { target.scrollIntoView({ block: 'center' }); target.querySelector('.switch')?.focus({ preventScroll: true }); flash(target); }
+    else el.settings.focus({ preventScroll: true });
+  });
+}
+
+function renderSettingsView({ enter = false } = {}) {
+  const focusId = document.activeElement?.dataset?.action === 'toggle-permission' ? document.activeElement.dataset.id : null;
+  if (permissions) el.settings.innerHTML = renderSettingsPage(permissions);
+  else if (permissionsError) el.settings.innerHTML = `<div class="empty"><p class="empty-line">Settings couldn't be shown.</p><p class="memory-lede">${permissionsError}</p><button type="button" class="btn" data-action="retry-settings">Try again</button></div>`;
+  else el.settings.innerHTML = '';
+  if (focusId) el.settings.querySelector(`[data-id="${CSS.escape(focusId)}"]`)?.focus({ preventScroll: true });
+  if (enter) {
+    el.settings.classList.remove('view-enter');
+    void el.settings.offsetWidth;
+    el.settings.classList.add('view-enter');
+  }
+}
+
+async function togglePermission(button) {
+  const yes = button.getAttribute('aria-checked') !== 'true';
+  const label = permissions.find((p) => p.id === button.dataset.id)?.label ?? 'That';
+  button.disabled = true;
+  try {
+    ({ permissions } = await post(`/api/permissions/${encodeURIComponent(button.dataset.id)}/${yes ? 'allow' : 'ask'}`));
+    renderSettingsView();
+    el.settings.querySelector(`[data-id="${CSS.escape(button.dataset.id)}"]`)?.focus({ preventScroll: true });
+    toast(yes ? `${label}: Nova does this without asking now.` : `${label}: Nova asks first now.`);
+  } catch (e) { button.disabled = false; toast(e.message); }
+}
+
+el.settings.addEventListener('click', (e) => {
+  if (followLink(e)) return;
+  const b = e.target.closest('[data-action]');
+  if (b?.dataset.action === 'toggle-permission') togglePermission(b);
+  else if (b?.dataset.action === 'retry-settings') loadPermissions();
+});
+el.settingsLink.addEventListener('click', (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  closeDrawer();
+  navigate('/settings');
 });
 
 // ---- navigation ------------------------------------------------------------

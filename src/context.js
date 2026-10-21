@@ -99,7 +99,9 @@ const esc = (s) => String(s).replace(/<\/(tool_result|user|nova|note|remember|fo
 function renderTurn(t, timezone) {
   const when = t.ts ? ` time="${formatNow(new Date(t.ts), timezone)}"` : '';
   if (t.kind === 'handoff') return `<handoff from="${esc(t.name).replace(/"/g, "'")}" ${t.helper ? `helper="${t.helper}"` : `schedule="${t.schedule}"`}${when}>\n${esc(t.text)}\n</handoff>`;
-  const parts = [`<user${when}>\n${esc(t.text)}\n</user>`];
+  const parts = [t.followup
+    ? `<followup${when}>The helper's report above just arrived. Say what it means for the person, briefly: your take, and what you'd do next or what they need to decide. Don't repeat the report.</followup>`
+    : `<user${when}>\n${esc(t.text)}\n</user>`];
   for (const it of t.items) {
     if (it.kind === 'text') parts.push(`<nova>\n${esc(it.text)}\n</nova>`);
     if (it.kind === 'tool') {
@@ -128,5 +130,5 @@ export function buildPrompt(session, recall, { timezone }) {
     ? `<memory_search>\n${recall.map((n) => `<note source="~/${n.source}" id="${n.id ?? ''}">${esc(n.text)}</note>`).join('\n')}\n</memory_search>\n\n`
     : '';
   return `${memory}<conversation>\n${omitted ? `<note>${omitted} earlier exchanges omitted for length.</note>\n` : ''}${kept.join('\n\n')}\n</conversation>\n\n` +
-    "Continue as Nova: reply to the user's latest message. Write only your reply.";
+    (session.turns.at(-1)?.followup ? 'Continue as Nova: comment on the report, as the last <followup> asks. Write only your comment.' : "Continue as Nova: reply to the user's latest message. Write only your reply.");
 }

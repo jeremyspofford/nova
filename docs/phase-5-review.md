@@ -13,9 +13,9 @@ Phase 5 lets Nova hand work off and shows you what it's doing.
 
 Evidence:
 
-- `npm run shots`: 109 of 109 checks pass
+- `npm run shots`: 112 of 112 checks pass
   ([results](screenshots/results.json)).
-- `npm run check`: 124 tests pass, plus the token lint and theme contract.
+- `npm run check`: 125 tests pass, plus the token lint and theme contract.
 - The real `claude -p` delegated a research task with a self-contained brief
   and the right file, and its helper reported back on its own (see Real
   model, below).
@@ -32,11 +32,13 @@ Evidence:
   conversation, your memory, your day notes or your schedules, and it keeps
   nothing in memory. The walkthrough checks that a helper's log has no trace
   of the conversation or memory, and that it used the notes it was handed.
-- **It acts on its own.** A helper can't ask you anything, so it takes the
-  steps that would ask in a conversation (drafts, Gmail changes, commands,
-  going online after reading mail) by itself, as `permissions.md` allows.
-  See "Acting while you're away" below. It can't start helpers of its own or
-  set schedules.
+- **Asking.** A step that needs your OK waits for you, unless you've
+  switched that permission on in Settings (below). It can't start helpers of
+  its own or set schedules.
+- **Nova's take.** Right after a report arrives, Nova adds a short comment
+  under it, with no message from you: what the report means for you, and
+  what it would do next ("My take: get the Ridgeline C2… Want me to find a
+  shop near you?"). It's an ordinary reply, so you can answer it.
 - **How many.** Up to three run at once; more wait their turn ("Waiting its
   turn" in Activity).
 - **The report** arrives in the conversation that asked, with a caption that
@@ -98,31 +100,38 @@ accent color when something needs your OK.
 | Earlier week, empty | "Nothing happened that week." | not pictured |
 | Server unreachable | "Activity couldn't be shown." with Try again | not pictured |
 | Mobile, themes | One column, no sideways scroll; every theme | [mobile-activity](screenshots/mobile-activity.png), `*-activity.png` |
+| Settings, all Ask first | Five switches, off, with what each can reach | [paper-settings](screenshots/paper-settings.png), `*-settings.png`, [mobile](screenshots/mobile-settings.png) |
+| A switch turned on | On, "Without asking", and a toast | [paper-settings-on](screenshots/paper-settings-on.png) |
+| A run waiting for your OK | Schedules: "Waiting for your OK. See what it's asking"; Activity: Waiting for you | tests |
 
-## Acting while you're away
+## Permissions and Settings
 
-You chose full autonomy. Scheduled runs and helpers now take every step that
-would ask you in a conversation, without asking, and nothing is declined.
+Everything Nova can do that changes something outside the conversation asks
+you first, unless you switch it on in **Settings** (bottom of the sidebar,
+next to Appearance; [screenshot](screenshots/paper-settings.png)).
 
-- **`~/Nova/permissions.md`** lists the five kinds of step, all set to
-  "yes": write Gmail drafts, tidy Gmail, set up schedules, go online after
-  reading mail, and run commands. To pull one back, change its "yes" to
-  "ask". A step set to "ask" isn't taken while you're away; Nova suggests it
-  in the report instead.
-- **Nova can't grant itself anything.** `write_file` refuses
-  `permissions.md`. A command could still change it, which the file says
-  next to "commands".
-- **In a conversation, Nova still asks.** The cards stay, because you're
-  right there.
-- **Every step shows.** A step taken this way is stamped **On its own** in
-  the run's log and in Activity, and the day's sentence counts them: "While
-  you were away, Nova took one step that would ask you in a conversation."
-  ([Activity](screenshots/paper-activity.png))
-- **What full autonomy risks.** Nova has no code to send or delete email,
-  whatever the file says. Going online after reading mail is the risky one:
-  an email could carry instructions telling Nova to post your mail to a
-  website, and nothing now stops a run from doing it. Set `online: ask` if
-  that worries you.
+- **One switch per permission:** run commands, go online after reading your
+  mail, save Gmail drafts, tidy Gmail, and set up schedules. All start at
+  **Ask first**.
+- **On means "without asking", everywhere:** in a conversation, in a
+  scheduled run and in a helper. Activity and the logs stamp each such step
+  **Without asking**, and the day's sentence counts them.
+- **Off means Nova asks.** In a conversation that's the usual card. In a
+  scheduled run or a helper, nobody is there, so the work **waits for your
+  answer** instead of being dropped: Activity shows it under Now as "Waiting
+  for you" with Go to it, the sidebar says "1 waiting", and Schedules says
+  "Waiting for your OK. See what it's asking". A waiting run steps aside, so
+  the schedules behind it still run.
+- **The list builds itself.** Each tool that needs an OK declares its
+  permission. A tool added later (by an update, by Nova, from a plugin or an
+  MCP connector) shows up in Settings on its own, set to Ask first. One that
+  declares nothing gets a switch named after it.
+- **Files are truth.** The switches live in `~/Nova/permissions.md`, one line
+  each (`- commands: ask (...)`), so you can read or edit them by hand.
+  Nova's `write_file` can't change that file. A command could, which is why
+  "Run commands" says what it can reach.
+- **Keyboard:** Tab to a switch, Space or Enter flips it, and a toast says
+  what changed ([after](screenshots/paper-settings-on.png)).
 
 ## Safety
 - **Scoped context is also a privacy line.** Memory never reaches a helper,
@@ -223,24 +232,22 @@ recommended defaults. Any of them can change:
 1. "/" is the main conversation, the front page. You confirmed this.
 2. Schedules run only while Nova is running, with a six-hour catch-up.
 3. ~~Unattended runs decline anything that needs approval.~~ You changed
-   this: runs and helpers act on their own (above).
+   this: they ask and wait, unless a permission is switched on in Settings.
 4. The digest has no weather, calendar or news yet.
 5. Run logs were hidden until now. Activity's Every step now opens them.
 
-## Decisions for you
+## Your answers
 
-1. **A helper's report arrives as it is.** Nova doesn't reply to it on its
-   own. The other choice is for Nova to read each report and add a line,
-   which costs a model call per report and puts words between you and the
-   work.
-2. **At most three at once.** This keeps a burst of delegation from using up
-   your rate limit. It's one number in `src/helpers.js`.
-3. **Helpers get no memory.** Memory is what makes Nova yours, and a helper
-   that searches the web shouldn't carry it out. If a helper needs a fact,
-   Nova writes it into the brief.
-4. **Activity is derived, a week at a time.** Nothing new is stored. A very
-   busy week (6,000 replies) still loads in under 150 ms, though the page
-   would be long to scroll.
+1. **Nova comments on a helper's report.** Built (above).
+2. **At most three helpers at once.** Kept. It's one number in
+   `src/helpers.js`.
+3. **Helpers get no memory.** Kept. Nova puts what a helper needs into its
+   brief.
+4. **Permissions default to Ask first,** with a Settings page that grows
+   with Nova's tools. Built (above).
+
+Activity stays derived from the logs, a week at a time; nothing new is
+stored.
 
 ## Known limits
 
@@ -248,5 +255,7 @@ recommended defaults. Any of them can change:
   collapsing older days is the next step.
 - The helper was only checked against the stand-in search, and the build
   container's network rate-limited real pages.
+- A helper waiting for your answer keeps its slot, so three waiting helpers
+  hold up a fourth until you answer one.
 - This is the last planned phase. MCP connectors were agreed as a later
   extra and haven't started.

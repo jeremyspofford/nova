@@ -103,16 +103,24 @@ quoting only prices it saw made it stop short of a recommendation. The
 playbook now asks deciding details first, caps page reads at about six, and
 falls back to agreeing sources labelled "reported".
 
-**2026-10-21 (Phase 5): full autonomy while no one is watching.** Jeremy:
-"Nova is supposed to be proactive, reactive, autonomous, and unsupervised",
-and he chose full autonomy over standing permissions or waiting for him.
-Scheduled runs and helpers take every step that asks in a conversation
-(drafts, Gmail tidying, schedules, going online after reading mail,
-commands), recorded as `approval {decision: allow, auto: true}` and shown as
-"On its own". `~/permissions.md` (seeded, all "yes") lets him set a kind to
-"ask", which is then declined and suggested, as Phase 4 did for everything.
-`write_file` can't edit it. This replaces Phase 4's "unattended runs decline
-approvals". Conversations still ask.
+**2026-10-21 (Phase 5): permissions, all "ask" by default, in Settings.**
+Jeremy first chose full autonomy for unattended work, then revised: every
+permission defaults to ask, with a Settings page of switches whose list is
+dynamic. Each tool that needs an OK declares `permission: {id, label,
+note}`; tools without one get a permission named after the tool, so plugin,
+MCP or Nova-made tools appear without code changes. Going online after
+reading mail is the one permission not tied to a tool. On = take the step
+without asking everywhere (`approval {allow, auto: true}`, stamped "Without
+asking"). Off = ask; with no one watching, the run or helper waits for the
+answer, and a waiting scheduled run steps aside so the queue keeps moving.
+Stored in `~/permissions.md`; `write_file` can't edit it. This replaces
+Phase 4's "unattended runs decline approvals".
+
+**2026-10-21 (Phase 5): Nova comments on a helper's report.** Jeremy's call.
+After a helper's report is delivered (ok, not stopped), the runner starts a
+turn with no message from the person (`user {text: '', followup: <handoff
+id>}`), prompted with a `<followup>` note asking for its take and the next
+step. Nothing is shown for the person's side of that turn.
 
 **2026-10-21 (Phase 5): helpers start fresh.** A helper is its own session
 (`kind: "helper"`, hidden from the list) with a scoped context: the base
@@ -121,14 +129,9 @@ parent passes. No MEMORY.md, day notes, recall or schedules, and memory blocks
 it writes are ignored. The parent writes a self-contained brief, which keeps
 the helper's context small and its work checkable from the log.
 
-**2026-10-21 (Phase 5): a helper's report is delivered as it is.** It arrives
-as a handoff in the conversation that asked, like a schedule's report. The
-parent doesn't reply to it automatically: that would spend a model call on
-every report and put words between the person and the work.
-
-**2026-10-21 (Phase 5): helpers can't approve, nest or schedule.** Approvals
-are auto-declined as in unattended runs; `delegate` and `schedule_*` aren't
-offered. Up to three run at once and the rest queue. Stop and Try again are
+**2026-10-21 (Phase 5): helpers can't nest or schedule.** A step that needs
+an OK waits for the person, per Settings (above); `delegate` and
+`schedule_*` aren't offered. Up to three run at once and the rest queue. Stop and Try again are
 in Activity and on the report; on start, a helper cut off by a shutdown
 reports that it didn't finish.
 

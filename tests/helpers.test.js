@@ -99,24 +99,39 @@ test("a helper's context is scoped: its brief, who the person is, and the files 
   assert.match(parent.system, /Takes coffee black/);
 });
 
-test('a helper takes steps that would ask on its own, as permissions.md allows', async () => {
-  nova.helpers.spawn({ title: 'Workspace check', task: 'Run ls in the workspace and tell me what is there.', parent: asked });
+test('a helper asks before a step that needs an OK, and waits for the answer', async () => {
+  const { run } = nova.helpers.spawn({ title: 'Workspace check', task: 'Run ls in the workspace and tell me what is there.', parent: asked });
+  const live = await wait(() => nova.runner.liveState(run)?.approval && nova.runner.liveState(run));
+  const busy = await get('/api/activity');
+  assert.equal(busy.busy.waiting, 1);
+  assert.equal(busy.now.find((e) => e.session === run).state, 'waiting');
+  await post(`/api/sessions/${run}/approvals/${live.approval}`, { decision: 'allow' });
   const h = await wait(async () => (await handoffs(asked)).find((x) => x.name === 'Workspace check'));
   const exec = reduce(nova.store.read(h.run)).turns[0].items.find((i) => i.kind === 'tool');
-  assert.deepEqual([exec.name, exec.approval.decision, exec.approval.auto, exec.result.ok], ['exec', 'allow', true, true]);
-  assert.match(h.text, /on my own/);
+  assert.deepEqual([exec.name, exec.approval.decision, !!exec.approval.auto, exec.result.ok], ['exec', 'allow', false, true]);
+  await idle();
 });
 
-test('a kind set to "ask" is not done by a helper, and the report says so', async () => {
-  nova.runner.permissions.set('commands', false);
+test('with its switch on in Settings, a helper takes that step without asking', async () => {
+  assert.equal((await post('/api/permissions/commands/allow')).status, 200);
   try {
     nova.helpers.spawn({ title: 'Workspace again', task: 'Run ls in the workspace and tell me what is there.', parent: asked });
     const h = await wait(async () => (await handoffs(asked)).find((x) => x.name === 'Workspace again'));
     const exec = reduce(nova.store.read(h.run)).turns[0].items.find((i) => i.kind === 'tool');
-    assert.deepEqual([exec.name, exec.approval.decision, exec.approval.auto, exec.result], ['exec', 'deny', true, null]);
-    assert.match(h.text, /helpers can't ask/);
-    assert.match(buildPrompt(reduce(nova.store.read(h.run)), [], { timezone: LA }), /Not done: this runs on its own, and no one was there to approve it/);
-  } finally { nova.runner.permissions.set('commands', true); }
+    assert.deepEqual([exec.name, exec.approval.decision, exec.approval.auto, exec.result.ok], ['exec', 'allow', true, true]);
+    assert.match(calls.findLast((c) => c.system.includes('Workspace again')).system, /lets you do these without asking: run commands on this computer/);
+  } finally { await post('/api/permissions/commands/ask'); }
+  await idle();
+});
+
+test("after a helper's report, Nova says what it means, under it, with no message from the person", async () => {
+  const turns = (await convo(asked)).session.turns;
+  const report = turns.findIndex((t) => t.kind === 'handoff' && t.name === 'Compare e-bikes');
+  const next = turns[report + 1];
+  assert.equal(next.followup, turns[report].id);
+  assert.equal(next.text, '');
+  assert.match(next.items.find((i) => i.kind === 'text').text, /My take: get the \*\*Ridgeline C2\*\*/);
+  assert.match(calls.find((c) => c.prompt.includes('<followup')).prompt, /comment on the report, as the last <followup> asks/);
 });
 
 test('briefs and files are checked before a helper starts', () => {
@@ -199,7 +214,8 @@ test('Activity: each reply, run and helper as an entry with its steps, newest fi
 
   const coffee = today.entries.find((e) => e.text === 'I take my coffee black, no sugar');
   assert.deepEqual(coffee.steps, [{ kind: 'memory', kept: 2, forgot: 0 }]);
-  const delegated = today.entries.find((e) => e.session === asked);
+  const delegated = today.entries.find((e) => e.session === asked && e.first);
+  assert.ok(today.entries.some((e) => e.session === asked && e.followup === 'Compare e-bikes'));
   assert.deepEqual(delegated.steps.map((s) => [s.name, s.result.summary]), [['delegate', 'Compare e-bikes']]);
 
   // Answer it, and the day's numbers count it.
@@ -208,7 +224,7 @@ test('Activity: each reply, run and helper as an entry with its steps, newest fi
   const after = await get('/api/activity');
   assert.equal(after.now.length, 0);
   const n = after.days[0].summary;
-  assert.deepEqual([n.asked, n.declined, n.notAsked, n.schedules, n.kept], [1, 1, 1, 1, 2]);
+  assert.deepEqual([n.asked, n.allowed, n.declined, n.onOwn, n.notAsked, n.schedules, n.kept], [2, 1, 1, 1, 0, 1, 2]);
   assert.ok(n.helpers >= 6 && n.replies >= 3);
 });
 
@@ -236,5 +252,5 @@ test('missed runs are in the timeline; the summary counts what was asked and wha
 
 test("a day's sentence says what Nova did on its own", () => {
   const n = { replies: 2, schedules: 1, helpers: 0, missed: 0, asked: 1, allowed: 1, declined: 0, onOwn: 3, notAsked: 1, kept: 0 };
-  assert.equal(daySentence(n, ['Morning digest']), "Two replies and the morning digest. You were asked once and said yes. While you were away, Nova took three steps that would ask you in a conversation. One step set to ask in permissions.md came up while you were away, so it was suggested instead.");
+  assert.equal(daySentence(n, ['Morning digest']), 'Two replies and the morning digest. You were asked once and said yes. Nova took three steps without asking, as Settings allows. One step needed your OK while no one could ask, so it was suggested instead.');
 });

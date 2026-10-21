@@ -1,23 +1,23 @@
 {
   "budgets": {
-    "serverStartMs": 102,
-    "pageInteractiveMs": 123,
-    "domContentLoadedMs": 62,
-    "sendFeedbackMs": 12,
+    "serverStartMs": 124,
+    "pageInteractiveMs": 142,
+    "domContentLoadedMs": 76,
+    "sendFeedbackMs": 10,
     "activityMs": 2,
     "scroll": {
       "frames": 384,
       "mainThreadP95Ms": 2.96,
-      "mainThreadMaxMs": 6.21,
+      "mainThreadMaxMs": 6.39,
       "frameIntervalP95Ms": 16.8,
-      "slowIntervals": 16
+      "slowIntervals": 1
     }
   },
   "checks": [
     {
       "name": "cold start ≤ 2 s (server + page)",
       "ok": true,
-      "detail": "102 ms server + 123 ms page"
+      "detail": "124 ms server + 142 ms page"
     },
     {
       "name": "the composer is focused on arrival",
@@ -32,7 +32,7 @@
     {
       "name": "send → visible feedback ≤ 100 ms",
       "ok": true,
-      "detail": "12 ms"
+      "detail": "10 ms"
     },
     {
       "name": "reply rendered markdown: list, code, table",
@@ -420,6 +420,11 @@
       "detail": ""
     },
     {
+      "name": "then Nova says what the report means, with no message from you",
+      "ok": true,
+      "detail": ""
+    },
+    {
       "name": "the hand-off says where to follow it",
       "ok": true,
       "detail": ""
@@ -445,6 +450,16 @@
       "detail": ""
     },
     {
+      "name": "Settings lists a switch per permission, each set to ask first",
+      "ok": true,
+      "detail": "commands, online, gmail-drafts, gmail-tidy, schedules"
+    },
+    {
+      "name": "a switch flips from the keyboard, says so, and is kept in permissions.md",
+      "ok": true,
+      "detail": ""
+    },
+    {
       "name": "Now shows what is working and what waits for you",
       "ok": true,
       "detail": ""
@@ -460,7 +475,7 @@
       "detail": ""
     },
     {
-      "name": "a run took a step on its own, and Activity says so",
+      "name": "a run took a step without asking, as Settings allowed, and Activity says so",
       "ok": true,
       "detail": ""
     },
@@ -507,7 +522,7 @@
     {
       "name": "scrolling a long thread holds 60 fps",
       "ok": true,
-      "detail": "page work p95 3.0 ms/frame (max 6.2) over 399 frames; frame interval p95 16.8 ms on this GPU-less machine"
+      "detail": "page work p95 3.0 ms/frame (max 6.4) over 398 frames; frame interval p95 16.8 ms on this GPU-less machine"
     },
     {
       "name": "paper-dark: no script errors",
@@ -560,5 +575,5 @@
       "detail": ""
     }
   ],
-  "longId": "2026-10-21-qh5rqb"
+  "longId": "2026-10-21-42ucsb"
 }

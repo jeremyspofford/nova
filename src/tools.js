@@ -55,6 +55,7 @@ export const TOOLS = {
     signature: '{"command": "git status"}',
     doc: 'Run a shell command in ~/workspace. The user approves every command before it runs.',
     needsApproval: true,
+    permission: { id: 'commands', label: 'Run commands on this computer', note: 'A command can change anything your account can' },
     run({ command }, { home, signal, timeoutMs }) {
       if (typeof command !== 'string' || !command.trim()) throw new Error('command is required');
       return runCommand(command, { cwd: join(home, 'workspace'), signal, timeoutMs });
@@ -134,6 +135,7 @@ export const TOOLS = {
     signature: '{"reply_to": "<id from gmail_search>", "body": "..."} or {"to": "sam@example.com", "subject": "...", "body": "..."}',
     doc: 'Save a draft in Gmail, as a reply in the same conversation or a new email. It is never sent: the person reviews it and sends it from Gmail. The person approves every draft.',
     needsApproval: true,
+    permission: { id: 'gmail-drafts', label: 'Save Gmail drafts', note: 'Nova has no way to send email' },
     available: (ctx) => ctx.gmail,
     async preview(args, { gmail, signal }) {
       const p = await gmail.planDraft(args, { signal });
@@ -145,6 +147,7 @@ export const TOOLS = {
     signature: '{"ids": ["<id>", "<id>"], "archive": true, "read": true, "add_labels": ["Bills"], "remove_labels": []}',
     doc: 'Archive emails (archive false puts them back in the inbox), mark them read or unread, and add or remove labels. Give only what should change. The person approves every change. Nothing is deleted.',
     needsApproval: true,
+    permission: { id: 'gmail-tidy', label: 'Tidy Gmail: archive, mark read or unread, labels', note: 'Nova has no way to delete email' },
     available: (ctx) => ctx.gmail,
     async preview(args, { gmail, signal }) {
       const p = await gmail.planChange(args, { signal });
@@ -166,6 +169,7 @@ export const TOOLS = {
     signature: '{"name": "Morning digest", "cron": "0 7 * * 1-5", "prompt": "What to do each time, as instructions to yourself"}',
     doc: 'Set up work that runs on its own at set times: a five-field cron in the person\'s timezone, and instructions you will follow unattended each time. To change a schedule, give its "id". Reports come to this conversation; add "deliver": "main" to send them to the main conversation. Add "once": true for a one-time reminder. The person approves every schedule.',
     needsApproval: true,
+    permission: { id: 'schedules', label: 'Set up, change and remove schedules' },
     preview(args, { schedules, sessionId }) {
       const p = schedules.plan(args, { from: sessionId });
       return { name: p.name, when: p.when, next: p.next, deliver: p.deliver === sessionId ? 'here' : p.deliver, prompt: p.prompt, replaces: p.replaces, once: p.once };
@@ -179,6 +183,7 @@ export const TOOLS = {
     signature: '{"id": "morning-digest"}',
     doc: 'Remove a schedule so it never runs again. The person approves it.',
     needsApproval: true,
+    permission: { id: 'schedules', label: 'Set up, change and remove schedules' },
     preview({ id }, { schedules }) {
       const s = schedules.get(String(id ?? ''));
       if (!s) throw new Error(`There's no schedule with the id ${id}.`);

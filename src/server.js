@@ -1,7 +1,7 @@
 // Nova's local web server: the UI, a small JSON API, and a server-sent event
 // stream per conversation. Binds to 127.0.0.1 by default.
 import { createServer } from 'node:http';
-import { createReadStream, existsSync, readFileSync, statSync, watch } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { loadConfig } from './config.js';
 import { ensureGit, seedHome } from './home.js';
@@ -14,6 +14,7 @@ import { ScheduleError } from './schedules.js';
 import { Scheduler } from './scheduler.js';
 import { HelperError, Helpers } from './helpers.js';
 import { buildActivity } from './activity.js';
+import { render as renderPermissions } from './permissions.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -26,6 +27,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   const store = new SessionStore(config.home, config.timezone);
   const runner = new Runner(config, store, deps);
   runner.ensureMain();
+  // permissions.md is written once, so it can be read and edited by hand; Settings keeps it current.
+  if (!existsSync(runner.permissions.file)) writeFileSync(runner.permissions.file, renderPermissions(runner.permissions.list()));
   const scheduler = new Scheduler({ schedules: runner.schedules, runner, store, timezone: config.timezone });
   const helpers = new Helpers({ runner, store });
   runner.helpers = helpers;
@@ -78,7 +81,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         ...s,
         next: schedules.next(s)?.toISOString() ?? null,
         last: latest.get(s.id) ?? null,
-        running: scheduler.running?.id === s.id ? scheduler.running : null,
+        running: scheduler.running?.id === s.id ? scheduler.running : scheduler.waiting.has(s.id) ? { ...scheduler.waiting.get(s.id), waiting: true } : null,
         queued: queued.has(s.id),
       })),
       available: schedules.available(),
@@ -140,7 +143,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   }
 
   function serveStatic(req, res, path) {
-    if (['/', '/new', '/memory', '/skills', '/schedules', '/activity'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
+    if (['/', '/new', '/memory', '/skills', '/schedules', '/activity', '/settings'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
@@ -251,6 +254,16 @@ export function createNova(config = loadConfig(), deps = {}) {
         if (e instanceof ScheduleError) return json(res, e.status, { error: e.message });
         throw e;
       }
+    }
+
+    if (resource === 'permissions') {
+      const { permissions } = runner;
+      if (req.method === 'GET' && !id) return json(res, 200, { permissions: permissions.list() });
+      if (req.method !== 'POST' || !id || !['allow', 'ask'].includes(action)) return json(res, 405, { error: 'Method not allowed' });
+      if (!permissions.list().some((p) => p.id === id)) return json(res, 404, { error: "That permission doesn't exist any more." });
+      const list = permissions.set(id, action === 'allow');
+      announce('permissions');
+      return json(res, 200, { permissions: list });
     }
 
     if (resource === 'activity') {

@@ -85,6 +85,9 @@
   color: var(--text-2);
 }
 .quiet-btn:hover { color: var(--text); }
+.foot-links { display: inline-flex; gap: var(--s4); }
+a.quiet-btn { text-decoration: none; }
+a.quiet-btn[aria-current="page"] { color: var(--text); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 4px; }
 .status { font: var(--t-callout); color: var(--text-2); display: inline-flex; align-items: center; gap: var(--s2); }
 .status[data-state="offline"]::before {
   content: "";
@@ -428,6 +431,61 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 
 @media (max-width: 720px) {
   .act-entry { grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
+}
+
+/* ---- settings ---------------------------------------------------------------- */
+
+.perm-list { list-style: none; margin: var(--s2) 0 0; padding: 0; }
+.perm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.perm-text { min-width: 0; }
+.perm-label { margin: 0; font: var(--t-body); }
+.perm-note { margin: 2px 0 0; font: var(--t-callout); color: var(--text-2); }
+.perm-foot { margin-top: var(--s4); font: var(--t-callout); color: var(--text-2); }
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: var(--t-callout);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.switch-track {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  border-radius: var(--r-pill);
+  background: var(--text-3);
+  transition: background var(--m-fast) var(--ease);
+}
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  transition: transform var(--m-fast) var(--ease);
+}
+.switch[aria-checked="true"] { color: var(--text); }
+.switch[aria-checked="true"] .switch-track { background: var(--accent); }
+.switch[aria-checked="true"] .switch-knob { transform: translateX(16px); }
+.switch:disabled { opacity: 0.6; cursor: default; }
+@media (max-width: 720px) {
+  .switch-word { display: none; }
 }
 
 /* ---- schedules ---------------------------------------------------------------- */

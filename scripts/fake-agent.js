@@ -60,7 +60,13 @@ if (msg.includes('fail')) {
   process.exit(2);
 }
 
-if (input.includes('# You are a helper')) {
+if (convo.lastIndexOf('<followup') > lastUser) {
+  // Nova's word on a helper's report that just arrived.
+  const ebikes = /Ridgeline C2/.test(convo.slice(convo.lastIndexOf('<handoff')));
+  await stream(ebikes
+    ? "My take: get the **Ridgeline C2**. The mid-drive handles your hill, and it's $151 under budget. Want me to find a shop near you where you can test-ride one?"
+    : 'That report is in. Tell me if you want me to act on any of it.');
+} else if (input.includes('# You are a helper')) {
   // The brief, and nothing of the conversation it came from.
   if (/\bslow\b/.test(msg)) await stream('Working through this one step at a time, so there is time to watch it in Activity and stop it if you want to.', 400);
   else if (/\brun\b/.test(msg) && !result) await stream('<tool_call name="exec">{"command": "ls ~/workspace"}</tool_call>');

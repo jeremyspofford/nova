@@ -14,7 +14,7 @@ import { Memory } from './memory.js';
 import { Skills } from './skills.js';
 import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
-import { Permissions, kindOf, permissionsSection } from './permissions.js';
+import { Permissions, permissionFor, permissionsSection } from './permissions.js';
 import { commitHome } from './home.js';
 import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
@@ -32,7 +32,7 @@ export class Runner extends EventEmitter {
     this.skills = new Skills(config.root, config.home);
     this.schedules = new Schedules(config.root, config.home, config.timezone);
     this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone });
-    this.permissions = new Permissions(config.home);
+    this.permissions = new Permissions(config.home, () => TOOLS);
     this.helpers = null; // set by the server: where delegate hands work
   }
 
@@ -73,10 +73,10 @@ export class Runner extends EventEmitter {
   // unattended: { id, name, due, late } for a scheduled run. helper:
   // { title, files } for a helper's work. Either way no one is there to
   // approve anything.
-  send(sessionId, text, { unattended = null, helper = null } = {}) {
+  send(sessionId, text, { unattended = null, helper = null, followup = null } = {}) {
     if (this.active.has(sessionId)) throw new BusyError();
     const turn = shortId();
-    this.record(sessionId, { type: 'user', turn, text, ...(unattended ? { schedule: unattended.id } : {}) });
+    this.record(sessionId, { type: 'user', turn, text, ...(unattended ? { schedule: unattended.id } : {}), ...(followup ? { followup } : {}) });
     this.start(sessionId, turn, 0, { unattended, helper });
     return turn;
   }
@@ -92,6 +92,15 @@ export class Runner extends EventEmitter {
     const failure = turn.items.find((i) => i.kind === 'error')?.message
       ?? (stopped ? 'Nova was stopped before it finished.' : !text ? 'It finished without writing a report.' : '');
     return { ok: turn.state === 'done' && !!text, text, failure, stopped };
+  }
+
+  // Nova's own word on a report that just arrived: a turn with no message
+  // from the person, started once the conversation is free.
+  async followUp(sessionId, handoff) {
+    for (;;) {
+      await this.idle(sessionId);
+      try { return this.send(sessionId, '', { followup: handoff }); } catch (e) { if (!(e instanceof BusyError)) throw e; }
+    }
   }
 
   // Resolves once the conversation has no reply in progress.
@@ -178,7 +187,7 @@ export class Runner extends EventEmitter {
         .filter((n) => !(run.helper && n.startsWith('schedule_')));
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
       const schedules = run.helper ? '' : schedulesSection(this.schedules.list(), this.config.timezone);
-      const allowed = run.alone ? permissionsSection(this.permissions.read()) : '';
+      const allowed = run.alone ? permissionsSection(this.permissions.list()) : '';
       const scheduled = run.unattended ? runSection(run.unattended, this.config.timezone, allowed) : '';
       const helper = run.helper ? helperSection(run.helper, allowed) : '';
       const filter = new ToolTagFilter();
@@ -240,13 +249,11 @@ export class Runner extends EventEmitter {
         continue;
       }
 
-      // No one is watching a scheduled run or a helper, so it takes the steps
-      // permissions.md says it may take on its own. One set to "ask" isn't
-      // done; the model suggests it in its report instead.
-      if (needsApproval && run.alone) {
-        const yes = this.permissions.allows(kindOf(call.name, { tainted: run.tainted }));
-        this.record(sessionId, { type: 'approval', ...tag, id, decision: yes ? 'allow' : 'deny', auto: true });
-        if (!yes) continue;
+      // A step the person lets Nova take without asking (Settings) goes ahead.
+      // Otherwise Nova asks and waits, even with no one watching: a scheduled
+      // run or a helper waits for the answer, and Activity shows it waiting.
+      if (needsApproval && this.permissions.allows(permissionFor(call.name, tool, { tainted: run.tainted }))) {
+        this.record(sessionId, { type: 'approval', ...tag, id, decision: 'allow', auto: true });
       } else if (needsApproval) {
         this.setLive(sessionId, { phase: 'approval', approval: id });
         const decision = await new Promise((resolve) => {

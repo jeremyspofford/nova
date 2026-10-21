@@ -39,7 +39,7 @@
       </nav>
       <nav class="toc" id="toc" aria-label="Conversations by day"></nav>
       <div class="sidebar-foot">
-        <button type="button" class="quiet-btn" id="appearance" aria-haspopup="dialog">Appearance</button>
+        <span class="foot-links"><a class="quiet-btn" href="/settings" id="settings-link">Settings</a><button type="button" class="quiet-btn" id="appearance" aria-haspopup="dialog">Appearance</button></span>
         <span class="status" id="status" role="status"></span>
       </div>
     </aside>
@@ -56,6 +56,7 @@
         <div class="thread memory skills" id="skills" tabindex="-1" aria-label="Skills" hidden></div>
         <div class="thread memory skills schedules" id="schedules" tabindex="-1" aria-label="Schedules" hidden></div>
         <div class="thread memory activity" id="activity" tabindex="-1" aria-label="Activity" hidden></div>
+        <div class="thread memory settings" id="settings-view" tabindex="-1" aria-label="Settings" hidden></div>
       </div>
       <div class="toast" id="toast" role="status" hidden></div>
       <button type="button" class="jump" id="jump" hidden>Jump to latest</button>

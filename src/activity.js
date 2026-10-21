@@ -99,6 +99,7 @@ export function buildActivity({ store, runner, helpers, scheduler, schedules, ti
           report: s.delivered ? { to: s.delivered.to, toTitle: titles.get(s.delivered.to) ?? 'a conversation', handoff: s.delivered.handoff } : null });
       } else {
         Object.assign(e, { kind: 'reply', title: s.kind === 'main' ? 'Main conversation' : s.title, text: clip(t.text, 140), first: t === s.turns[0] });
+        if (t.followup) e.followup = s.turns.find((x) => x.id === t.followup)?.name ?? 'a helper';
       }
       if (isLive && l.approval) e.approval = l.approval;
       entries.push(e);

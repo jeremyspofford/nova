@@ -95,6 +95,8 @@ export class Helpers extends EventEmitter {
     await this.runner.deliver(target, handoff);
     this.runner.record(job.run, { type: 'delivered', to: target, handoff: handoff.id });
     this.emit('ran', { target, handoff: handoff.id });
+    // Then Nova says what the report means, under it, as the person asked.
+    if (ok && !stopped) this.runner.followUp(target, handoff.id).catch(() => {});
   }
 
   // Stop one, working or waiting. Returns false if it isn't either.
