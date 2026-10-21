@@ -1,7 +1,7 @@
 // Renders the style reference from the live tokens and the app's own views.
 import { CONTRACT } from './contract.js';
 import { THEMES, MODES, apply, choose, current } from './theme.js';
-import { icons, renderEmpty, renderNotes, renderToc, renderTurn } from './view.js';
+import { icons, memoryIndex, renderEmpty, renderMemory, renderNotes, renderToc, renderTurn } from './view.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -32,6 +32,20 @@ const turnDone = {
     { kind: 'recall', notes: [{ source: 'memory/2026-10-20.md', text: 'Flying Tools is the only client work this week.' }] },
     { kind: 'text', id: 't1', text: sample },
   ],
+};
+const memorySample = {
+  titles: { '2026-10-21-aaaaaa': 'Morning plan' },
+  sections: [
+    { title: 'Facts', entries: [{ id: 'm00000001', text: 'Daughter June starts kindergarten at Maple Street in September.', from: '2026-10-21-aaaaaa/a', at: t0.toISOString(), by: 'nova' }] },
+    { title: 'Preferences', entries: [{ id: 'm00000002', text: 'Takes coffee with oat milk.', from: '2026-10-21-aaaaaa/a', at: t0.toISOString(), updated: t0.toISOString(), by: 'nova' }, { id: 'h00000003', text: 'Short replies before 9am.', by: 'hand' }] },
+    { title: 'Decisions', entries: [] },
+    { title: 'Commitments', entries: [{ id: 'm00000004', text: 'Nova drafts the migration PR description on Thursday.', at: t0.toISOString(), updated: t0.toISOString(), by: 'you' }] },
+  ],
+  days: [{ day: t0.toISOString().slice(0, 10), entries: [{ id: 'n00000005', time: '08:12', text: 'Comparing flights to Lisbon for March.', from: '2026-10-21-aaaaaa/a', by: 'nova' }] }],
+};
+const kept = {
+  id: 'k', text: 'I take my coffee with oat milk now.', ts: t0.toISOString(), attempt: 0, state: 'done',
+  items: [{ kind: 'text', id: 'k1', text: "Got it, oat milk from now on." }, { kind: 'memory', ops: [{ op: 'remember', ok: true, id: 'm00000002', replaced: true }, { op: 'note', ok: true, id: 'n00000005' }] }],
 };
 const tools = {
   id: 'b', text: 'Check the repo before standup.', ts: t0.toISOString(), attempt: 0, state: 'done',
@@ -95,6 +109,12 @@ function render() {
       <div class="banner">You're offline. Nova can still read your files, but replies need a connection.</div>
       <p class="sg-label">Composer</p>
       <form class="composer" onsubmit="return false"><textarea rows="1" placeholder="Write to Nova…" aria-label="Sample composer"></textarea><button class="send" aria-label="Send">${icons.send}</button></form>
+      <p class="sg-label">What Nova kept, in the margin</p>
+      <div class="thread">${renderTurn(kept, { memory: memoryIndex(memorySample) })}</div>
+      <p class="sg-label">Memory</p>
+      <div class="sg-frame"><div class="thread memory">${renderMemory(memorySample)}</div></div>
+      <p class="sg-label">Toast</p>
+      <div class="sg-frame" style="position: relative; min-height: 80px"><div class="toast">Forgotten, with 1 day note that said the same.<button type="button" class="toast-btn">Undo</button></div></div>
       <p class="sg-label">Empty state</p>
       <div class="sg-frame"><div class="thread">${renderEmpty()}</div></div>
     </div>`),

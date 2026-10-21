@@ -5,6 +5,9 @@
 //   "read …"  → reads USER.md
 //   "fail"    → exits with an error
 //   "slow"    → streams slowly, for stop tests
+//   "remember …", "i prefer …", "i take …", "my …" → keeps it in memory (and a day note)
+//   "actually …" → corrects the closest memory
+//   "forget …"   → forgets the closest memory
 //   anything else → a reply with a list, code and a table
 const delay = Number(process.env.FAKE_DELAY ?? 12);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -19,6 +22,23 @@ const msg = convo.slice(convo.indexOf('>', lastUser) + 1, convo.indexOf('</user>
 const afterUser = convo.slice(lastUser);
 const result = afterUser.match(/<tool_result name="(\w+)" ok="(\w+)">([\s\S]*?)<\/tool_result>/g)?.at(-1);
 
+// MEMORY.md as Nova sent it: "- text [id:m1234abcd]".
+const memoryFile = input.match(/<file path="~\/MEMORY\.md">([\s\S]*?)<\/file>/)?.[1] ?? '';
+const entries = [...memoryFile.matchAll(/^- (.*) \[id:(\w+)\]$/gm)].map((m) => ({ text: m[1], id: m[2] }));
+const words = (t) => new Set(t.toLowerCase().match(/[a-z]{4,}/g) ?? []);
+function closest(text) {
+  const want = words(text);
+  let best = null;
+  for (const e of entries) {
+    const score = [...words(e.text)].filter((w) => want.has(w)).length;
+    if (score && (!best || score > best.score)) best = { ...e, score };
+  }
+  return best;
+}
+const original = convo.slice(convo.indexOf('>', lastUser) + 1, convo.indexOf('</user>', lastUser)).trim();
+const sentence = (t) => { const x = t.trim().replace(/[.!]*$/, ''); return `${x[0].toUpperCase()}${x.slice(1)}.`; };
+const third = (t) => t.replace(/^i (\w+) my /i, (_, v) => `${v}s `).replace(/^i (\w+)/i, (_, v) => (v.endsWith('s') ? v : `${v}s`)).replace(/^my /i, '').replace(/\bmy\b/gi, 'their').replace(/\bI'm\b/g, 'they are').replace(/\bme\b/gi, 'them');
+
 async function stream(text, ms = delay) {
   for (const piece of text.match(/\S+\s*|\s+/g)) { process.stdout.write(piece); await sleep(ms); }
 }
@@ -28,7 +48,19 @@ if (msg.includes('fail')) {
   process.exit(2);
 }
 
-if (msg.startsWith('run') || msg.includes('git status')) {
+if (msg.startsWith('forget')) {
+  const hit = closest(original.replace(/^forget( that| about)?/i, ''));
+  if (hit) await stream(`Done. I've forgotten that.\n<forget id="${hit.id}"></forget>`);
+  else await stream("I don't have anything like that in memory, so there's nothing to forget.");
+} else if (msg.startsWith('actually')) {
+  const fact = sentence(third(original.replace(/^actually,?\s*/i, '')));
+  const hit = closest(fact);
+  await stream(`Thanks for the correction. I've updated it.\n<remember ${hit ? `replaces="${hit.id}"` : 'kind="fact"'}>${fact}</remember>`);
+} else if (/^(remember|i prefer|i take|i like|my )/.test(msg)) {
+  const fact = sentence(third(original.replace(/^remember( that)?\s*/i, '')));
+  const kind = /^(i prefer|i take|i like)/.test(msg) ? 'preference' : 'fact';
+  await stream(`Got it. I'll remember that.\n\n<remember kind="${kind}">${fact}</remember>\n<note>Mentioned: ${fact}</note>`);
+} else if (msg.startsWith('run') || msg.includes('git status')) {
   if (!result) {
     await stream("I'll check the working tree before standup.\n\n<tool_call name=\"exec\">{\"command\": \"git status --short --branch\"}</tool_call>");
   } else if (result.includes('ok="false"')) {

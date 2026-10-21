@@ -3,7 +3,7 @@
 // nothing that is already on screen animates twice.
 import { applyEvent, emptySession } from './reduce.js';
 import { renderMarkdown } from './markdown.js';
-import { icons, renderBlocks, renderEmpty, renderToc } from './view.js';
+import { icons, memoryIndex, renderBlocks, renderEmpty, renderMemory, renderToc } from './view.js';
 import { THEMES, MODES, apply as applyTheme, choose as chooseTheme, current as currentTheme } from './theme.js';
 
 const $ = (id) => document.getElementById(id);
@@ -12,6 +12,7 @@ const el = {
   input: $('input'), send: $('send'), composer: $('composer'), hint: $('hint'), banner: $('banner'),
   jump: $('jump'), status: $('status'), menu: $('menu'), scrim: $('scrim'), newChat: $('new-chat'),
   settings: $('settings'), appearance: $('appearance'),
+  memory: $('memory'), memoryLink: $('memory-link'), memoryCount: $('memory-count'), dock: $('dock'), toast: $('toast'),
 };
 
 const state = {
@@ -24,6 +25,11 @@ const state = {
   online: navigator.onLine,
   stick: true,
   notice: '',
+  view: 'chat',         // 'chat' | 'memory'
+  memory: null,         // what Nova knows, from /api/memory
+  memoryError: '',
+  memIndex: new Map(),  // id → entry, for the notes in conversation margins
+  forgotten: null,      // the last forget, for Undo
 };
 
 let stream = null;
@@ -54,6 +60,33 @@ async function loadList() {
   renderToc_();
 }
 
+let memoryLoad = null;
+function loadMemory() {
+  memoryLoad = fetch('/api/memory')
+    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+    .then((data) => {
+      state.memory = data;
+      state.memoryError = '';
+      state.memIndex = memoryIndex(data);
+      const kept = data.sections.reduce((n, sec) => n + sec.entries.length, 0);
+      el.memoryCount.textContent = kept ? String(kept) : '';
+      if (state.view === 'memory') renderMemoryView();
+      else if (state.session.turns.length) renderThread();
+    })
+    .catch(() => {
+      state.memoryError = "Nova's server didn't answer, so memory can't be read right now.";
+      if (state.view === 'memory' && !state.memory) renderMemoryView();
+    });
+  return memoryLoad;
+}
+
+// Changes that aren't one conversation's: memory, and the list of conversations.
+function watch() {
+  const es = new EventSource('/api/events');
+  es.addEventListener('memory', () => loadMemory());
+  es.addEventListener('sessions', () => loadList());
+}
+
 let healthTimer = null;
 function setReachable(ok) {
   if (state.reachable === ok) return;
@@ -75,18 +108,30 @@ function setReachable(ok) {
 
 function route() {
   const m = location.pathname.match(/^\/c\/([\w-]+)$/);
-  if (m) open(m[1]);
+  if (location.pathname === '/memory') showMemory();
+  else if (m) open(m[1]);
   else startNew();
 }
 
+function setView(view) {
+  state.view = view;
+  el.thread.hidden = view !== 'chat';
+  el.memory.hidden = view !== 'memory';
+  el.dock.hidden = view !== 'chat';
+  if (view !== 'chat') el.jump.hidden = true;
+  el.memoryLink.toggleAttribute('aria-current', view === 'memory');
+  if (view === 'memory') el.memoryLink.setAttribute('aria-current', 'page');
+}
+
 function navigate(path) {
-  if (location.pathname !== path) history.pushState(null, '', path);
+  if (location.pathname + location.hash !== path) history.pushState(null, '', path);
   route();
 }
 
 function startNew() {
   stream?.close();
   stream = null;
+  setView('chat');
   Object.assign(state, { id: null, session: emptySession(), live: null, pending: null, stick: true });
   restoreDraft();
   renderAll({ enter: true });
@@ -95,6 +140,7 @@ function startNew() {
 
 function open(id, { quiet = false } = {}) {
   stream?.close();
+  setView('chat');
   if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true });
   restoreDraft();
   const es = new EventSource(`/api/sessions/${id}/events`);
@@ -159,7 +205,19 @@ function renderAll({ enter = false } = {}) {
   }
   renderChrome();
   renderToc_();
-  scrollToEnd(true);
+  const target = location.hash.startsWith('#t-') && document.getElementById(location.hash.slice(1));
+  if (target) {
+    state.stick = false;
+    target.scrollIntoView({ block: 'start' });
+    flash(target);
+  } else scrollToEnd(true);
+}
+
+// Briefly mark what a link pointed at.
+function flash(node) {
+  node.classList.remove('is-found');
+  void node.offsetWidth;
+  node.classList.add('is-found');
 }
 
 function renderThread() {
@@ -170,7 +228,7 @@ function renderThread() {
     return;
   }
   el.thread.querySelector('.empty')?.remove();
-  const blocks = renderBlocks(session, viewLive());
+  const blocks = renderBlocks(session, viewLive(), new Date(), state.memIndex);
   const keep = new Set(blocks.map((b) => b.key));
   for (const node of [...el.thread.children]) if (!keep.has(node.dataset.key)) { node.remove(); rendered.delete(node.dataset.key); }
   let prev = null;
@@ -278,7 +336,7 @@ function running() {
 }
 
 function renderChrome() {
-  const title = state.id ? state.session.title || 'Untitled' : '';
+  const title = state.view === 'memory' ? 'Memory' : state.id ? state.session.title || 'Untitled' : '';
   el.title.textContent = title;
   document.title = title ? `${title} · Nova` : 'Nova';
 
@@ -305,7 +363,7 @@ function renderChrome() {
 }
 
 function renderToc_() {
-  el.toc.innerHTML = renderToc(state.list, state.id);
+  el.toc.innerHTML = renderToc(state.list, state.view === 'chat' ? state.id : null);
 }
 
 // ---- scrolling -----------------------------------------------------------
@@ -418,7 +476,17 @@ async function copy(text, button) {
   setTimeout(() => { button.classList.remove('is-done'); label.textContent = before; }, 1600);
 }
 
+// Links between conversations and memory stay inside the app.
+function followLink(e) {
+  const a = e.target.closest('a[href^="/memory"], a[href^="/c/"]');
+  if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return false;
+  e.preventDefault();
+  navigate(a.getAttribute('href'));
+  return true;
+}
+
 el.thread.addEventListener('click', (e) => {
+  if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
   if (!b) return;
   const action = b.dataset.action;
@@ -436,6 +504,153 @@ el.thread.addEventListener('click', (e) => {
       }
     }
   }
+});
+
+// ---- memory ------------------------------------------------------------------
+
+function showMemory() {
+  stream?.close();
+  stream = null;
+  Object.assign(state, { id: null, live: null, pending: null });
+  setView('memory');
+  el.scroller.scrollTop = 0;
+  renderChrome();
+  renderToc_();
+  renderMemoryView({ enter: true });
+  loadMemory().then(() => {
+    const target = location.hash.startsWith('#m-') && document.getElementById(location.hash.slice(1));
+    if (target) { target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); flash(target); }
+    else el.memory.focus({ preventScroll: true }); // Tab goes straight to the first memory
+
+  });
+}
+
+let memoryDeferred = false;
+function renderMemoryView({ enter = false } = {}) {
+  if (el.memory.querySelector('.is-editing')) { memoryDeferred = true; return; }
+  memoryDeferred = false;
+  const focused = document.activeElement?.closest?.('.memory-item')?.dataset.id;
+  if (state.memory) el.memory.innerHTML = renderMemory(state.memory);
+  else if (state.memoryError) el.memory.innerHTML = `<div class="empty"><p class="empty-line">Memory couldn't be read.</p><p class="memory-lede">${state.memoryError}</p><button type="button" class="btn" data-action="retry-memory">Try again</button></div>`;
+  else el.memory.innerHTML = '';
+  if (focused) document.getElementById(`m-${focused}`)?.focus({ preventScroll: true });
+  if (enter) {
+    el.memory.classList.remove('view-enter');
+    void el.memory.offsetWidth;
+    el.memory.classList.add('view-enter');
+  }
+}
+
+function autosizeField(field) {
+  field.style.height = 'auto';
+  field.style.height = `${field.scrollHeight + field.offsetHeight - field.clientHeight}px`;
+}
+
+function editMemory(item) {
+  if (item.classList.contains('is-editing')) return;
+  const text = item.querySelector('.memory-text');
+  const field = document.createElement('textarea');
+  field.className = 'memory-edit';
+  field.rows = 1;
+  field.value = text.textContent;
+  field.setAttribute('aria-label', 'Edit this memory');
+  item.classList.add('is-editing');
+  text.hidden = true;
+  text.after(field);
+  autosizeField(field);
+  field.focus();
+  field.setSelectionRange(field.value.length, field.value.length);
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const next = field.value.replace(/\s+/g, ' ').trim();
+    const before = text.textContent;
+    field.remove();
+    text.hidden = false;
+    item.classList.remove('is-editing');
+    item.focus({ preventScroll: true });
+    if (save && next && next !== before) {
+      text.textContent = next;
+      try { await post(`/api/memory/${item.dataset.id}`, { text: next }); toast('Saved. Nova will use it from the next message.'); }
+      catch (e) { text.textContent = before; toast(e.message); }
+    }
+    if (memoryDeferred) renderMemoryView();
+  };
+  field.addEventListener('input', () => autosizeField(field));
+  field.addEventListener('blur', () => finish(true));
+  field.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+  });
+}
+
+async function forgetMemory(item) {
+  const items = [...el.memory.querySelectorAll('.memory-item')];
+  const next = items[items.indexOf(item) + 1] ?? items[items.indexOf(item) - 1];
+  item.classList.add('is-leaving');
+  try {
+    const { removed } = await post(`/api/memory/${item.dataset.id}/forget`);
+    state.forgotten = removed;
+    await loadMemory();
+    (next && document.getElementById(next.id) || el.memory.querySelector('.memory-item') || el.memoryLink).focus({ preventScroll: true });
+    const notes = removed.length - 1;
+    toast(notes ? `Forgotten, with ${notes} day note${notes > 1 ? 's' : ''} that said the same.` : 'Forgotten.', { undo: true });
+  } catch (e) {
+    item.classList.remove('is-leaving');
+    toast(e.message);
+  }
+}
+
+async function undoForget() {
+  const items = state.forgotten;
+  if (!items) return;
+  state.forgotten = null;
+  try {
+    await post('/api/memory/restore', { items });
+    await loadMemory();
+    document.getElementById(`m-${items[0].id}`)?.focus();
+    toast('Back in memory.');
+  } catch (e) { toast(e.message); }
+}
+
+let toastTimer = 0;
+function toast(text, { undo = false } = {}) {
+  el.toast.innerHTML = `<span>${text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])}</span>${undo ? '<button type="button" class="toast-btn" data-action="undo">Undo</button>' : ''}`;
+  el.toast.hidden = false;
+  el.toast.classList.remove('view-enter');
+  void el.toast.offsetWidth;
+  el.toast.classList.add('view-enter');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.toast.hidden = true; if (undo) state.forgotten = null; }, undo ? 8000 : 3200);
+}
+el.toast.addEventListener('click', (e) => {
+  if (e.target.closest('[data-action="undo"]')) { el.toast.hidden = true; undoForget(); }
+});
+
+el.memory.addEventListener('click', (e) => {
+  if (followLink(e)) return;
+  const b = e.target.closest('[data-action]');
+  const item = e.target.closest('.memory-item');
+  if (b?.dataset.action === 'edit-memory') editMemory(item);
+  else if (b?.dataset.action === 'forget-memory') forgetMemory(item);
+  else if (b?.dataset.action === 'retry-memory') loadMemory();
+  else if (item && e.target.closest('.memory-text')) editMemory(item);
+});
+el.memory.addEventListener('keydown', (e) => {
+  const item = e.target.closest('.memory-item');
+  if (!item || e.target !== item) return;
+  const items = [...el.memory.querySelectorAll('.memory-item')];
+  const i = items.indexOf(item);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
+  if (e.key === 'Enter') { e.preventDefault(); editMemory(item); }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); forgetMemory(item); }
+});
+el.memoryLink.addEventListener('click', (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  closeDrawer();
+  navigate('/memory');
 });
 
 // ---- navigation ------------------------------------------------------------
@@ -477,7 +692,8 @@ document.addEventListener('keydown', (e) => {
   const inField = e.target.closest?.('input, textarea, [contenteditable]');
   if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); navigate('/'); return; }
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); return; }
-  if (e.key === '/' && !inField && !el.settings.open) { e.preventDefault(); el.input.focus(); return; }
+  if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view === 'memory' && state.forgotten) { e.preventDefault(); el.toast.hidden = true; undoForget(); return; }
+  if (e.key === '/' && !inField && !el.settings.open && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
   if (e.key === 'Escape' && !el.settings.open) {
     if (el.app.classList.contains('drawer-open')) { closeDrawer(); el.menu.focus(); return; }
     const card = e.target.closest?.('.approval');
@@ -508,5 +724,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) load
 
 applyTheme();
 loadList();
+loadMemory();
+watch();
 route();
 document.documentElement.dataset.ready = 'true';

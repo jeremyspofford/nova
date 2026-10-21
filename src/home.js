@@ -1,6 +1,6 @@
 // Nova's home: the standing files, memory, workspace and session logs.
 // Seeded from templates/home on first run. Seeding never overwrites a file.
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, resolve, sep } from 'node:path';
 
@@ -42,15 +42,39 @@ export function inHome(home, p) {
 
 // Git history is the audit trail: the home is a local repository, and every
 // finished turn is a commit. Best-effort: Nova works without git installed.
+// Memory stays out of it, so forgetting leaves no copy behind in old commits.
 const git = (home, ...args) => new Promise((ok) => {
   execFile('git', ['-C', home, ...args], { timeout: 15_000 }, (err, stdout) => ok(err ? null : stdout));
 });
 
+const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md'];
+
+function ignoreMemory(home) {
+  const path = join(home, '.gitignore');
+  const have = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  const missing = UNTRACKED.filter((l) => !have.split('\n').includes(l));
+  if (!missing.length) return false;
+  const head = have.includes('# Nova:') ? '' : '# Nova: memory is kept out of history, so forgetting is final.\n';
+  appendFileSync(path, `${have && !have.endsWith('\n') ? '\n' : ''}${head}${missing.join('\n')}\n`);
+  return true;
+}
+
+const commit = (home, message) => git(home, '-c', 'user.name=Nova', '-c', 'user.email=nova@localhost', 'commit', '-q', '-m', message);
+
 export async function ensureGit(home) {
-  if (existsSync(join(home, '.git'))) return true;
+  const changed = ignoreMemory(home);
+  if (existsSync(join(home, '.git'))) {
+    // A home from before memory was untracked: stop tracking it from here on.
+    if (changed) {
+      await git(home, 'rm', '-r', '-q', '--cached', '--ignore-unmatch', 'MEMORY.md', 'memory');
+      await git(home, 'add', '-A');
+      await commit(home, 'Nova: memory kept out of history');
+    }
+    return true;
+  }
   if ((await git(home, 'init', '-q')) === null) return false;
   await git(home, 'add', '-A');
-  await git(home, '-c', 'user.name=Nova', '-c', 'user.email=nova@localhost', 'commit', '-q', '-m', 'Nova: home seeded');
+  await commit(home, 'Nova: home seeded');
   return true;
 }
 
@@ -59,7 +83,7 @@ export function commitHome(home, message) {
   queue = queue.then(async () => {
     if (!existsSync(join(home, '.git'))) return;
     await git(home, 'add', '-A');
-    await git(home, '-c', 'user.name=Nova', '-c', 'user.email=nova@localhost', 'commit', '-q', '-m', message);
+    await commit(home, message);
   });
   return queue;
 }

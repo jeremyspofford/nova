@@ -30,9 +30,18 @@ Nova keeps your data in **`~/Nova`**: the standing files (`AGENTS.md`, `SOUL.md`
 `workspace/`, and one JSONL log per conversation in `sessions/`. The folder is
 seeded from `templates/home/` on first run, and nothing is ever overwritten.
 It is a local git repository, with a commit after every reply, so its history
-is the audit trail. Back it up by putting it wherever you keep things that
+is the audit trail (for conversations and standing files; memory stays out). Back it up by putting it wherever you keep things that
 matter (a NAS, iCloud, an Obsidian vault). Set `NOVA_HOME` to move it.
 **Never point it inside this repo**, which is public.
+
+**Memory.** Nova keeps what lasts in `MEMORY.md` (facts, preferences,
+decisions, commitments) and day detail in `memory/YYYY-MM-DD.md`, written
+before each reply finishes. Each entry ends with a small comment saying where
+it came from. The Memory view (`/memory`) shows all of it: edit an entry by
+clicking it, forget it with one click (or Delete), and undo for a few seconds
+after. Forgetting a memory also forgets the day notes that say the same thing.
+Memory files are kept out of the folder's git history, so a forgotten memory
+leaves no copy behind.
 
 ## Configure
 
@@ -64,7 +73,7 @@ the Playwright default.
 ## Layout
 
 ```
-src/            server, runner (the agent loop), context assembly, tools, memory search
+src/            server, runner (the agent loop), context assembly, tools, memory
 system/         Nova's system prompt
 templates/home/ the standing files a new home is seeded from
 ui/             the web UI: themes/ (token files only), styles/, js/

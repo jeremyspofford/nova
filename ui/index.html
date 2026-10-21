@@ -30,6 +30,9 @@
         <a class="wordmark" href="/" data-nav="home">Nova</a>
         <button type="button" class="icon-btn" id="new-chat" aria-label="New conversation" title="New conversation (⌘⇧O)"></button>
       </div>
+      <nav class="places" aria-label="Places">
+        <a class="toc-item place" href="/memory" id="memory-link">Memory <span class="place-count" id="memory-count"></span></a>
+      </nav>
       <nav class="toc" id="toc" aria-label="Conversations by day"></nav>
       <div class="sidebar-foot">
         <button type="button" class="quiet-btn" id="appearance" aria-haspopup="dialog">Appearance</button>
@@ -45,9 +48,11 @@
       <div class="banner" id="banner" role="status" hidden></div>
       <div class="scroller" id="scroller">
         <div class="thread" id="thread"></div>
+        <div class="thread memory" id="memory" tabindex="-1" aria-label="Memory" hidden></div>
       </div>
+      <div class="toast" id="toast" role="status" hidden></div>
       <button type="button" class="jump" id="jump" hidden>Jump to latest</button>
-      <div class="dock">
+      <div class="dock" id="dock">
         <form class="composer" id="composer">
           <label class="sr-only" for="input">Message Nova</label>
           <textarea id="input" rows="1" placeholder="Write to Nova…" autocomplete="off" spellcheck="true"></textarea>

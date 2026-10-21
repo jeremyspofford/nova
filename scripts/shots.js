@@ -4,7 +4,7 @@
 // exercises each state, and measures the performance budgets.
 // Usage: node scripts/shots.js [outDir]   (CHROMIUM=/path/to/chrome to override)
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -171,6 +171,79 @@ results.budgets.serverStartMs = Math.round(serverMs);
   check('page has no script errors', p.errors.length === 0, p.errors.join(' | '));
 }
 
+// ---- memory you can see and steer ----------------------------------------------------
+{
+  const disk = () => readFileSync(join(home, 'MEMORY.md'), 'utf8');
+  const notes = () => (existsSync(join(home, 'memory')) ? readdirSync(join(home, 'memory')).filter((f) => /^\d{4}/.test(f)).map((f) => readFileSync(join(home, 'memory', f), 'utf8')).join('') : '');
+  const p = await page();
+  await p.goto(`${base}/memory`);
+  await p.waitForSelector('html[data-ready] .memory-empty');
+  await p.waitForTimeout(500);
+  await shot(p, 'paper-memory-empty');
+  check('empty memory says what will appear there', /Nothing kept yet/.test(await p.textContent('#memory')));
+
+  // Remember, by keyboard from a new conversation.
+  await p.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+O' : 'Control+Shift+O');
+  await p.waitForSelector('.empty');
+  await p.keyboard.type('I take my coffee black, no sugar');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.margin-note a.margin-link');
+  await settle(p);
+  const log = readFileSync(join(home, 'sessions', `${p.url().split('/c/')[1]}.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l).type);
+  check('memory is written before the reply completes', /Takes coffee black/.test(disk()) && log.indexOf('memory') >= 0 && log.indexOf('memory') < log.lastIndexOf('done'), log.join(' → '));
+  check('the conversation shows what was kept, in the margin', /kept in memory: Takes coffee black/.test(await p.textContent('.margins')));
+
+  for (const t of ['remember that my daughter June starts kindergarten in September', 'actually I take my coffee with oat milk']) {
+    await p.keyboard.type(t);
+    await p.keyboard.press('Enter');
+    await p.waitForFunction((n) => document.querySelectorAll('.turn').length === n && !document.querySelector('.thinking, [data-live]'), t.startsWith('remember') ? 2 : 3);
+    await settle(p);
+  }
+  const prefs = disk().split('## Preferences')[1].split('##')[0];
+  check('a correction replaces the superseded entry', /oat milk/.test(prefs) && !/black/.test(prefs) && prefs.match(/^- /gm).length === 1);
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-memory-chat');
+
+  // The Memory view: where each entry came from; edit and forget by keyboard.
+  await p.click('#memory-link');
+  await p.waitForSelector('.memory-item');
+  await p.waitForTimeout(500);
+  await shot(p, 'paper-memory');
+  check('each memory says where it came from', (await p.$$('.memory-item .memory-from')).length >= 2);
+  await p.keyboard.press('Tab');
+  check('Tab goes straight to the first memory', await p.evaluate(() => document.activeElement.classList.contains('memory-item')));
+  await p.keyboard.press('Enter');
+  await p.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+  await p.keyboard.type('Daughter June starts kindergarten at Maple Street in September.');
+  await shot(p, 'paper-memory-edit');
+  await p.keyboard.press('Enter');
+  await p.waitForFunction(() => /Saved/.test(document.querySelector('#toast').textContent));
+  check('editing is one gesture, and lands in the file', /Maple Street.*by=you/.test(disk()));
+  await p.waitForTimeout(3400);
+  await p.keyboard.press('Delete');
+  await p.waitForSelector('.toast-btn');
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-memory-forgot');
+  check('forgetting removes it from memory and the day notes', !/June/.test(disk()) && !/June/.test(notes()), await p.textContent('#toast'));
+  await p.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await p.waitForFunction(() => /Back in memory/.test(document.querySelector('#toast').textContent));
+  check('Undo brings it back', /Maple Street/.test(disk()) && /June/.test(notes()));
+  await p.focus('.memory-item');
+  await p.keyboard.press('Delete');
+  await p.waitForSelector('.toast-btn');
+
+  // A forgotten memory is gone from conversations too; links land on the entry.
+  await p.goBack();
+  await p.waitForSelector('.margins');
+  await p.waitForTimeout(300);
+  const margins = await p.textContent('#thread');
+  check('a forgotten memory disappears from the conversation view', !/June/.test(margins.split('kindergarten in September')[1] ?? margins) && /since forgotten/.test(margins));
+  await p.click('a.margin-link');
+  await p.waitForSelector('.memory-item.is-found');
+  check('a margin note links to the memory itself', await p.evaluate(() => document.activeElement.classList.contains('memory-item') && /oat milk/.test(document.activeElement.textContent)));
+  check('memory view has no script errors', p.errors.length === 0, p.errors.join(' | '));
+}
+
 // ---- long content and scrolling -------------------------------------------------
 {
   const api = (path, body) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -239,6 +312,10 @@ const golden = async (opts, prefix) => {
   await shot(p, `${prefix}-approval`);
   await p.keyboard.press('Escape');
   await settle(p);
+  await p.goto(`${base}/memory`);
+  await p.waitForSelector('.memory-item');
+  await p.waitForTimeout(500);
+  await shot(p, `${prefix}-memory`);
   check(`${prefix}: no script errors`, p.errors.length === 0, p.errors.join(' | '));
 };
 await golden({ theme: 'paper', mode: 'dark' }, 'paper-dark');
@@ -258,6 +335,10 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.click('#menu');
   await p.waitForTimeout(450);
   await shot(p, 'mobile-drawer');
+  await p.click('#memory-link');
+  await p.waitForSelector('.memory-item');
+  await p.waitForTimeout(500);
+  await shot(p, 'mobile-memory');
   const overflow = await p.evaluate(() => document.documentElement.scrollWidth > innerWidth);
   check('mobile: no horizontal page scroll', !overflow);
 }

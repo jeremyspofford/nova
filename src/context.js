@@ -1,9 +1,10 @@
 // Context assembly, in the order the build prompt sets:
 // system prompt → standing files → memory search → the conversation.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readStanding } from './home.js';
-import { toolProtocol } from './tools.js';
+import { Memory } from './memory.js';
+import { memoryProtocol, toolProtocol } from './tools.js';
 
 const MAX_TRANSCRIPT = 120_000; // characters; older turns drop off first
 
@@ -17,18 +18,27 @@ export function formatNow(now, timezone) {
 
 export function buildSystem({ root, home, timezone }, now = new Date()) {
   const base = readFileSync(join(root, 'system', 'system_prompt.md'), 'utf8').trim();
+  const memory = new Memory(home, timezone);
   const standing = readStanding(home)
-    .map(({ name, text }) => `<file path="~/${name}">\n${text || '(empty)'}\n</file>`)
+    .map(({ name, text }) => `<file path="~/${name}">\n${(name === 'MEMORY.md' ? memory.forContext(text) : text) || '(empty)'}\n</file>`)
     .join('\n\n');
+  // Today's and yesterday's notes, so a day carries across conversations.
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  const days = [memory.today(yesterday), memory.today(now)]
+    .map((d) => [d, join(home, 'memory', `${d}.md`)])
+    .filter(([, p]) => existsSync(p))
+    .map(([d, p]) => `<file path="~/memory/${d}.md">\n${memory.forContext(readFileSync(p, 'utf8').trim()).slice(-8000)}\n</file>`);
   return [
     base,
     `# Standing files\n\nThese are your home's standing files, read fresh for this message.\n\n${standing}`,
+    days.length ? `# Recent notes\n\n${days.join('\n\n')}` : '',
     toolProtocol(),
+    memoryProtocol(),
     `# Now\n\nIt is ${formatNow(now, timezone)}.`,
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 }
 
-const esc = (s) => String(s).replace(/<\/(tool_result|user|nova|note)>/g, '<\\/$1>');
+const esc = (s) => String(s).replace(/<\/(tool_result|user|nova|note|remember|forget)>/g, '<\\/$1>');
 
 function renderTurn(t, timezone) {
   const when = t.ts ? ` time="${formatNow(new Date(t.ts), timezone)}"` : '';
@@ -57,7 +67,7 @@ export function buildPrompt(session, recall, { timezone }) {
   }
   const omitted = turns.length - kept.length;
   const memory = recall.length
-    ? `<memory_search>\n${recall.map((n) => `<note source="~/${n.source}">${esc(n.text)}</note>`).join('\n')}\n</memory_search>\n\n`
+    ? `<memory_search>\n${recall.map((n) => `<note source="~/${n.source}" id="${n.id ?? ''}">${esc(n.text)}</note>`).join('\n')}\n</memory_search>\n\n`
     : '';
   return `${memory}<conversation>\n${omitted ? `<note>${omitted} earlier exchanges omitted for length.</note>\n` : ''}${kept.join('\n\n')}\n</conversation>\n\n` +
     "Continue as Nova: reply to the user's latest message. Write only your reply.";
