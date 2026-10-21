@@ -1,9 +1,13 @@
-// A stand-in for Google (OAuth and the Gmail API) and for the search engine,
-// for tests and screenshots. Everything in it is made up.
+// A stand-in for Google (OAuth, the Gmail API and Gmail's IMAP) and for the
+// search engine, for tests and screenshots. Everything in it is made up.
 //   startFakeGoogle() → { base, state, close() }
-// Point Nova at it with NOVA_GOOGLE_BASE=<base> and NOVA_SEARCH_URL=<base>/search.
+//   startFakeImap()   → { url, state, close() }
+// Point Nova at them with NOVA_GOOGLE_BASE=<base>, NOVA_SEARCH_URL=<base>/search
+// and NOVA_IMAP_URL=<url>. Both can share one mailbox, so changes show in both.
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createServer as createTcpServer } from 'node:net';
+import { parse } from '../src/connectors/imap.js';
 
 const hour = 3600_000;
 const b64 = (s) => Buffer.from(s).toString('base64url');
@@ -48,7 +52,38 @@ export function sampleMail(now = Date.now()) {
       snippet: 'Markets, weather and a long read for the weekend.', text: 'Markets, weather and a long read for the weekend.',
     },
   ];
+  for (const m of mail) m.userLabels = [];
+  mail[3].userLabels = ['Bills'];
   return mail;
+}
+
+// Which messages a Gmail search matches, roughly as Gmail would.
+export function matches(m, query = '') {
+  const q = query.toLowerCase();
+  if (/-category:promotions/.test(q) && m.labelIds.includes('CATEGORY_PROMOTIONS')) return false;
+  if (/is:unread/.test(q) && !m.labelIds.includes('UNREAD')) return false;
+  if (/in:inbox/.test(q) && !m.labelIds.includes('INBOX')) return false;
+  const label = q.match(/label:(\S+)/)?.[1];
+  if (label && !m.userLabels.some((l) => l.toLowerCase() === label)) return false;
+  const from = q.match(/from:(\S+)/)?.[1];
+  if (from && !m.from.toLowerCase().includes(from)) return false;
+  return true;
+}
+
+// The message as Gmail stores it: headers, then a MIME body.
+export function toRaw(m) {
+  const head = [
+    `From: ${m.from}`, 'To: you@example.com', `Subject: ${m.subject}`, `Date: ${new Date(m.at).toUTCString().replace('GMT', '+0000')}`,
+    `Message-ID: <${m.id}@mail.example>`, 'MIME-Version: 1.0',
+  ];
+  const text = m.html
+    ? ['Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: quoted-printable', '', m.html.replace(/=/g, '=3D')].join('\r\n')
+    : ['Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: 8bit', '', Buffer.from(m.text).toString('latin1').replace(/\n/g, '\r\n')].join('\r\n');
+  if (!m.files?.length) return `${head.join('\r\n')}\r\n${text}\r\n`;
+  const b = `b-${m.id}`;
+  const files = m.files.map((f) => [`--${b}`, `Content-Type: application/pdf; name="${f.name}"`, `Content-Disposition: attachment; filename="${f.name}"`, 'Content-Transfer-Encoding: base64', '',
+    Buffer.alloc(f.size, 37).toString('base64').replace(/.{76}/g, '$&\r\n').trimEnd()].join('\r\n'));
+  return `${head.join('\r\n')}\r\nContent-Type: multipart/mixed; boundary="${b}"\r\n\r\n--${b}\r\n${text}\r\n${files.join('\r\n')}\r\n--${b}--\r\n`;
 }
 
 function toApi(m, format) {
@@ -73,7 +108,7 @@ const SEARCH = `<!doctype html><html><body>
 </body></html>`;
 
 export function startFakeGoogle({ port = 0, mail = sampleMail() } = {}) {
-  const state = { challenge: null, redirect: null, revoked: false, deny: false, refreshes: 0, account: 'you@example.com', calls: [] };
+  const state = { challenge: null, redirect: null, revoked: false, deny: false, refreshes: 0, account: 'you@example.com', calls: [], drafts: [], labels: ['Bills', 'Receipts'] };
   const tokens = new Set();
   let n = 0;
   const send = (res, code, body, type = 'application/json') => {
@@ -84,6 +119,11 @@ export function startFakeGoogle({ port = 0, mail = sampleMail() } = {}) {
     let s = '';
     req.on('data', (c) => { s += c; });
     req.on('end', () => ok(Object.fromEntries(new URLSearchParams(s))));
+  });
+  const json = (req) => new Promise((ok) => {
+    let s = '';
+    req.on('data', (c) => { s += c; });
+    req.on('end', () => { try { ok(JSON.parse(s)); } catch { ok({}); } });
   });
   const issue = () => { const t = `at-${++n}`; tokens.add(t); return t; };
 
@@ -96,6 +136,7 @@ export function startFakeGoogle({ port = 0, mail = sampleMail() } = {}) {
 
     if (url.pathname === '/o/oauth2/v2/auth') {
       state.challenge = q.get('code_challenge');
+      state.scope = q.get('scope');
       state.redirect = q.get('redirect_uri');
       const back = new URL(q.get('redirect_uri'));
       back.searchParams.set('state', q.get('state'));
@@ -113,7 +154,7 @@ export function startFakeGoogle({ port = 0, mail = sampleMail() } = {}) {
           createHash('sha256').update(f.code_verifier ?? '').digest('base64url') === state.challenge;
         if (!ok) return send(res, 400, { error: 'invalid_grant' });
         state.revoked = false;
-        return send(res, 200, { access_token: issue(), refresh_token: 'rt-fake', expires_in: 3599, scope: 'https://www.googleapis.com/auth/gmail.readonly', token_type: 'Bearer' });
+        return send(res, 200, { access_token: issue(), refresh_token: 'rt-fake', expires_in: 3599, scope: state.scope, token_type: 'Bearer' });
       }
       if (f.grant_type === 'refresh_token') {
         if (state.revoked || f.refresh_token !== 'rt-fake') return send(res, 400, { error: 'invalid_grant' });
@@ -137,15 +178,35 @@ export function startFakeGoogle({ port = 0, mail = sampleMail() } = {}) {
       if (path === '/profile') return send(res, 200, { emailAddress: state.account, messagesTotal: mail.length });
       if (path === '/messages') {
         const query = q.get('q') ?? '';
-        let found = mail;
-        if (/-category:promotions/.test(query)) found = found.filter((m) => !m.labelIds.includes('CATEGORY_PROMOTIONS'));
-        if (/is:unread/.test(query)) found = found.filter((m) => m.labelIds.includes('UNREAD'));
+        const found = mail.filter((m) => matches(m, query));
         const max = Number(q.get('maxResults') ?? 100);
         return send(res, 200, {
           messages: found.slice(0, max).map(({ id, threadId }) => ({ id, threadId })),
           resultSizeEstimate: found.length,
           ...(found.length > max ? { nextPageToken: 'more' } : {}),
         });
+      }
+      if (path === '/labels' && req.method === 'GET') {
+        return send(res, 200, { labels: [...['INBOX', 'UNREAD', 'IMPORTANT'].map((id) => ({ id, name: id, type: 'system' })), ...state.labels.map((name) => ({ id: `Label_${name}`, name, type: 'user' }))] });
+      }
+      if (path === '/labels' && req.method === 'POST') {
+        const { name } = await json(req);
+        state.labels.push(name);
+        return send(res, 200, { id: `Label_${name}`, name, type: 'user' });
+      }
+      if (path === '/drafts' && req.method === 'POST') {
+        const { message } = await json(req);
+        state.drafts.push(Buffer.from(message.raw, 'base64url').toString('utf8'));
+        return send(res, 200, { id: `r${state.drafts.length}`, message: { id: `d${state.drafts.length}`, threadId: message.threadId ?? `d${state.drafts.length}` } });
+      }
+      if (path === '/messages/batchModify' && req.method === 'POST') {
+        const { ids, addLabelIds = [], removeLabelIds = [] } = await json(req);
+        for (const m of mail.filter((x) => ids.includes(x.id))) {
+          for (const l of addLabelIds) if (l.startsWith('Label_')) m.userLabels = [...new Set([...m.userLabels, l.slice(6)])]; else if (!m.labelIds.includes(l)) m.labelIds.push(l);
+          for (const l of removeLabelIds) if (l.startsWith('Label_')) m.userLabels = m.userLabels.filter((x) => x !== l.slice(6)); else m.labelIds = m.labelIds.filter((x) => x !== l);
+        }
+        res.writeHead(204);
+        return res.end();
       }
       const one = path.match(/^\/messages\/([\w-]+)$/);
       const m = one && mail.find((x) => x.id === one[1]);
@@ -158,8 +219,160 @@ export function startFakeGoogle({ port = 0, mail = sampleMail() } = {}) {
   return new Promise((ok) => {
     server.listen(port, '127.0.0.1', () => {
       const base = `http://127.0.0.1:${server.address().port}`;
-      ok({ base, state, server, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) });
+      ok({ base, state, mail, server, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) });
     });
+  });
+}
+
+
+// Gmail's IMAP, as far as Nova uses it: LOGIN, LIST, EXAMINE/SELECT, UID
+// SEARCH (X-GM-RAW, X-GM-MSGID), UID FETCH, UID STORE, CREATE, APPEND.
+// The password is "abcd efgh ijkl mnop" (spaces don't matter); the Google
+// account password "my-google-password" gets the app-password alert.
+export function startFakeImap({ port = 0, mail = sampleMail(), labels = ['Bills', 'Receipts'] } = {}) {
+  const state = { email: 'you@example.com', password: 'abcdefghijklmnop', logins: 0, drafts: [], labels, commands: [], down: false };
+  const uid = (m) => mail.length - mail.indexOf(m);
+  const dec = (hex) => BigInt(`0x${hex}`).toString();
+  const sockets = new Set();
+
+  const server = createTcpServer((sock) => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+    sock.setEncoding('latin1');
+    if (state.down) return sock.destroy();
+    let buf = '';
+    let cmd = '';
+    let need = 0;
+    let authed = false;
+    const out = (line) => sock.write(`${line}\r\n`, 'latin1');
+    out('* OK [CAPABILITY IMAP4rev1 X-GM-EXT-1] Stand-in Gmail ready');
+
+    const lit = (v) => `{${Buffer.byteLength(v, 'latin1')}}\r\n${v}`;
+    const q = (v) => `"${String(v).replace(/[\\"]/g, '\\$&')}"`;
+    const fetch = (m, items) => {
+      const raw = toRaw(m);
+      const split = raw.indexOf('\r\n\r\n');
+      const head = raw.slice(0, split + 2);
+      const body = raw.slice(split + 4);
+      const parts = [];
+      for (const item of items) {
+        const it = String(item).toUpperCase();
+        if (it === 'UID') parts.push(`UID ${uid(m)}`);
+        else if (it === 'X-GM-MSGID') parts.push(`X-GM-MSGID ${dec(m.id)}`);
+        else if (it === 'X-GM-THRID') parts.push(`X-GM-THRID ${dec(m.threadId)}`);
+        else if (it === 'FLAGS') parts.push(`FLAGS (${m.labelIds.includes('UNREAD') ? '' : '\\Seen'})`);
+        else if (it === 'INTERNALDATE') {
+          const d = new Date(m.at);
+          const mon = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+          parts.push(`INTERNALDATE "${String(d.getUTCDate()).padStart(2, '0')}-${mon}-${d.getUTCFullYear()} ${d.toISOString().slice(11, 19)} +0000"`);
+        } else if (it === 'X-GM-LABELS') {
+          const sys = [m.labelIds.includes('INBOX') ? '"\\\\Inbox"' : '', m.labelIds.includes('IMPORTANT') ? '"\\\\Important"' : ''].filter(Boolean);
+          parts.push(`X-GM-LABELS (${[...sys, ...m.userLabels.map(q)].join(' ')})`);
+        } else if (it.startsWith('BODY.PEEK[HEADER.FIELDS')) {
+          const want = it.match(/\(([^)]*)\)/)[1].split(/\s+/);
+          const lines = head.split('\r\n').filter((l) => want.includes(l.split(':')[0].toUpperCase()));
+          parts.push(`${it.replace('.PEEK', '')} ${lit(`${lines.join('\r\n')}\r\n\r\n`)}`);
+        } else if (it.startsWith('BODY.PEEK[TEXT]') || it.startsWith('BODY.PEEK[]')) {
+          const whole = it.startsWith('BODY.PEEK[]') ? raw : body;
+          const [, from = '0', len] = it.match(/<(\d+)\.(\d+)>/) ?? [];
+          const key = it.replace('.PEEK', '').replace(/<(\d+)\.\d+>/, '<$1>');
+          parts.push(`${key} ${lit(len ? whole.slice(Number(from), Number(from) + Number(len)) : whole)}`);
+        }
+      }
+      return parts.join(' ');
+    };
+
+    const handle = (line) => {
+      const [, tag, rest] = line.match(/^(\S+) ([\s\S]*)$/) ?? [];
+      if (!tag) return;
+      const args = parse(rest);
+      const verb = String(args[0]).toUpperCase();
+      state.commands.push(verb === 'LOGIN' ? 'LOGIN' : rest.split('\r\n')[0]);
+      const ok = (text = 'Success') => out(`${tag} OK ${text}`);
+      if (verb === 'LOGOUT') { out('* BYE LOGOUT Requested'); ok(); return sock.end(); }
+      if (verb === 'LOGIN') {
+        const pass = String(args[2]).replace(/\s+/g, '');
+        if (pass === 'my-google-password') return out(`${tag} NO [ALERT] Application-specific password required: https://support.google.com/accounts/answer/185833 (Failure)`);
+        if (String(args[1]).toLowerCase() !== state.email || pass !== state.password) return out(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)`);
+        authed = true;
+        state.logins++;
+        return ok(`${state.email} authenticated (Success)`);
+      }
+      if (!authed) return out(`${tag} BAD Not logged in`);
+      if (verb === 'LIST') {
+        out('* LIST (\\HasNoChildren) "/" "INBOX"');
+        out('* LIST (\\HasChildren \\Noselect) "/" "[Gmail]"');
+        out('* LIST (\\All \\HasNoChildren) "/" "[Gmail]/All Mail"');
+        out('* LIST (\\Drafts \\HasNoChildren) "/" "[Gmail]/Drafts"');
+        for (const l of state.labels) out(`* LIST (\\HasNoChildren) "/" ${q(l)}`);
+        return ok();
+      }
+      if (verb === 'EXAMINE' || verb === 'SELECT') { out(`* ${mail.length} EXISTS`); return ok(verb === 'EXAMINE' ? '[READ-ONLY] EXAMINE' : '[READ-WRITE] SELECT'); }
+      if (verb === 'CREATE') { state.labels.push(String(args[1])); return ok(); }
+      if (verb === 'APPEND') { state.drafts.push(Buffer.from(String(args.at(-1)), 'latin1').toString('utf8')); return ok(`[APPENDUID 1 ${state.drafts.length}] APPEND completed`); }
+      if (verb !== 'UID') return out(`${tag} BAD Unknown command`);
+      const sub = String(args[1]).toUpperCase();
+      if (sub === 'SEARCH') {
+        let found;
+        const raw = args.findIndex((a) => String(a).toUpperCase() === 'X-GM-RAW');
+        if (raw >= 0) found = mail.filter((m) => matches(m, String(args[raw + 1])));
+        else {
+          const ids = args.filter((a, i) => String(args[i - 1]).toUpperCase() === 'X-GM-MSGID').map(String);
+          found = mail.filter((m) => ids.includes(dec(m.id)));
+        }
+        out(`* SEARCH ${found.map(uid).sort((a, b) => a - b).join(' ')}`.trimEnd());
+        return ok('SEARCH completed (Success)');
+      }
+      const set = String(args[2]).split(',').map(Number);
+      const picked = mail.filter((m) => set.includes(uid(m)));
+      if (sub === 'FETCH') {
+        for (const m of picked) out(`* ${mail.indexOf(m) + 1} FETCH (${fetch(m, args[3])})`);
+        return ok('Success');
+      }
+      if (sub === 'STORE') {
+        const op = String(args[3]).toUpperCase();
+        const add = op.startsWith('+');
+        for (const m of picked) {
+          for (const v of args[4]) {
+            const l = String(v);
+            if (/^\\inbox$/i.test(l)) m.labelIds = add ? [...new Set([...m.labelIds, 'INBOX'])] : m.labelIds.filter((x) => x !== 'INBOX');
+            else if (/^\\seen$/i.test(l)) m.labelIds = add ? m.labelIds.filter((x) => x !== 'UNREAD') : [...new Set([...m.labelIds, 'UNREAD'])];
+            else m.userLabels = add ? [...new Set([...m.userLabels, l])] : m.userLabels.filter((x) => x !== l);
+          }
+        }
+        return ok('STORE completed');
+      }
+      return out(`${tag} BAD Unknown command`);
+    };
+
+    sock.on('data', (d) => {
+      buf += d;
+      for (;;) {
+        if (need) {
+          if (buf.length < need) return;
+          cmd += buf.slice(0, need);
+          buf = buf.slice(need);
+          need = 0;
+        }
+        const eol = buf.indexOf('\r\n');
+        if (eol < 0) return;
+        const line = buf.slice(0, eol);
+        buf = buf.slice(eol + 2);
+        const m = line.match(/\{(\d+)\+?\}$/);
+        if (m) { cmd += `${line}\r\n`; need = Number(m[1]); out('+ go ahead'); continue; }
+        cmd += line;
+        const whole = cmd;
+        cmd = '';
+        handle(whole);
+      }
+    });
+  });
+
+  return new Promise((ok) => {
+    server.listen(port, '127.0.0.1', () => ok({
+      url: `imap://127.0.0.1:${server.address().port}`, state, mail, server,
+      close: () => new Promise((r) => { for (const s of sockets) s.destroy(); server.close(r); }),
+    }));
   });
 }
 

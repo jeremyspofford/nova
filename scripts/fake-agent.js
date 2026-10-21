@@ -8,6 +8,8 @@
 //   "remember …", "i prefer …", "i take …", "my …" → keeps it in memory (and a day note)
 //   "actually …" → corrects the closest memory
 //   "forget …"   → forgets the closest memory
+//   "draft …"    → saves a reply to Sam as a Gmail draft (asks first)
+//   "archive …"  → archives the water bill and the newsletter and marks them read (asks first)
 //   "… email / inbox …" → searches Gmail, reads the first unread message, summarizes
 //   "… socks …"  → searches the web and recommends a pair
 //   "open …"     → fetches a page (asks first after mail has been read)
@@ -53,9 +55,17 @@ if (msg.includes('fail')) {
   process.exit(2);
 }
 
-if (/\b(email|inbox)\b/.test(msg)) {
+if (msg.startsWith('draft') && hasTool('gmail_draft')) {
+  if (!result) await stream("Here's a reply to Sam for you to look over.\n\n<tool_call name=\"gmail_draft\">{\"reply_to\": \"19a0c1d2e3f4a502\", \"body\": \"Hi Sam,\\n\\nYes, Saturday is still on. I'd love a ride, thank you. Could you pick me up at 7:30?\\n\\nSee you then\"}</tool_call>");
+  else if (result.includes('ok="false"')) await stream("Okay, I didn't save it. Tell me what to change and I'll write it again.");
+  else await stream("It's in your Gmail drafts, in the same conversation as Sam's email. It hasn't been sent: open it in Gmail when you're ready.");
+} else if (msg.startsWith('archive') && hasTool('gmail_organize')) {
+  if (!result) await stream('<tool_call name="gmail_organize">{"ids": ["19a0c1d2e3f4a504", "19a0c1d2e3f4a506"], "archive": true, "read": true}</tool_call>');
+  else if (result.includes('ok="false"')) await stream("Okay, I've left them where they are.");
+  else await stream("Done. Both are out of your inbox and marked read. They're still in All Mail if you need them.");
+} else if (/\b(email|inbox)\b/.test(msg)) {
   if (!hasTool('gmail_search')) {
-    await stream("Gmail isn't connected yet, so I can't see your inbox. You can connect it here: [Connect Gmail](/skills#gmail). It's read-only, and it takes about a minute.");
+    await stream("Gmail isn't connected yet, so I can't see your inbox. You can connect it here: [Connect Gmail](/skills#gmail). It takes about two minutes.");
   } else if (!result) {
     await stream('<tool_call name="gmail_search">{"query": "in:inbox newer_than:1d -category:promotions -category:social", "max": 20}</tool_call>');
   } else if (resultName === 'gmail_search') {

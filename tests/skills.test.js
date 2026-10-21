@@ -102,3 +102,9 @@ test('web search results: real links, no ads, no duplicates', () => {
     { title: 'Other', url: 'https://other.example/', snippet: '' },
   ]);
 });
+
+test("the model's environment carries none of the host session's memory or identity", async () => {
+  const { agentEnv } = await import('../src/agent.js');
+  const env = agentEnv({ PATH: '/bin', CLAUDE_CODE_USER_EMAIL: 'someone@example.com', CLAUDE_CODE_MEMORY_DIR: '/m', CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1', HOME: '/h' });
+  assert.deepEqual(Object.keys(env).sort(), ['HOME', 'PATH']);
+});

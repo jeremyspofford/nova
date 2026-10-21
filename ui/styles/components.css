@@ -471,6 +471,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 .connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); margin-top: var(--s4); }
 .connection-note { margin-top: var(--s3); font: var(--t-callout); color: var(--text-3); }
 .connection-actions .connection-note { margin-top: 0; flex: 1 1 260px; }
+.connection-note a, .connection .skill-about a { color: var(--accent); text-underline-offset: 3px; }
 .steps { margin: var(--s3) 0 0; padding-left: var(--s5); color: var(--text-2); }
 .steps li + li { margin-top: var(--s1); }
 .steps a { color: var(--accent); text-underline-offset: 3px; }
@@ -489,6 +490,11 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   resize: vertical;
 }
 .field::placeholder { color: var(--text-3); }
+.field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s3); margin-top: var(--s4); }
+.field-label { display: block; font: var(--t-callout); color: var(--text-2); }
+.field-label .field { margin-top: var(--s1); font: var(--t-body); }
+.connection-advanced { margin-top: var(--s5); padding-top: var(--s4); border-top: 1px solid var(--hairline); }
+.connection-more { margin-top: var(--s2); }
 .field:focus-visible { outline: none; border-color: var(--accent); }
 
 /* ---- toast: a short confirmation, with Undo when something went ------------- */
@@ -589,6 +595,36 @@ details.record { display: block; }
   background: var(--code-bg);
   border-radius: var(--r-input);
 }
+.approval-mail {
+  margin-top: var(--s3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-input);
+  background: var(--surface);
+}
+.approval-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--s1) var(--s3);
+  margin: 0;
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--hairline);
+  font: var(--t-callout);
+}
+.approval-fields dt { color: var(--text-2); }
+.approval-fields dd { margin: 0; overflow-wrap: anywhere; }
+.approval-letter {
+  max-height: 280px;
+  overflow: auto;
+  padding: var(--s3) var(--s4);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.approval-list { margin: var(--s3) 0 0; padding: 0; list-style: none; font: var(--t-callout); }
+.approval-list li { padding: var(--s2) 0; border-top: 1px solid var(--hairline); }
+.approval-list li:last-child { border-bottom: 1px solid var(--hairline); }
+.approval-from { color: var(--text-2); }
+.approval-from::before { content: "· "; }
+.record-link { margin-left: var(--s2); color: var(--accent); text-underline-offset: 3px; }
 .approval-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s4); }
 .keys { margin-left: auto; font: var(--t-caption); color: var(--text-2); }
 kbd {

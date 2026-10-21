@@ -23,7 +23,7 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 - `npm run shots` — the browser walkthrough: golden screens, keyboard path,
   budgets. Set `CHROMIUM=/path/to/chrome` if Chromium is elsewhere.
 - `NOVA_AGENT_CMD="node scripts/fake-agent.js"` runs without a model.
-- `node scripts/fake-google.js` starts a stand-in Google (OAuth, Gmail, search)
+- `node scripts/fake-google.js` starts a stand-in Google (OAuth, Gmail API, search); `startFakeImap()` in the same file is a stand-in Gmail IMAP (app password `abcd efgh ijkl mnop`)
   on :4399; point Nova at it with `NOVA_GOOGLE_BASE=http://127.0.0.1:4399` and
   `NOVA_SEARCH_URL=http://127.0.0.1:4399/search`. All its mail is made up.
 

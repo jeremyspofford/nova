@@ -1,8 +1,9 @@
-// Gmail, read-only, through the person's own Google OAuth client.
+// Gmail, through the person's own Google OAuth client. Nova reads, saves
+// drafts and organizes (archive, read state, labels). It never sends or deletes.
 //
 // Connecting: the person saves a "Desktop app" OAuth client from Google Cloud
 // once. Nova sends them to Google's consent screen (PKCE, a loopback redirect
-// back to Nova's own server, the gmail.readonly scope only) and keeps the
+// back to Nova's own server, the gmail.modify scope only) and keeps the
 // refresh token in ~/connectors/gmail/token.json: readable only by them, out
 // of the home's history, never shown to the model. Disconnecting revokes it at
 // Google and deletes it.
@@ -10,10 +11,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { htmlToText } from '../tools.js';
+import { GmailImap, IMAP_URL } from './gmail-imap.js';
+import { GmailError, asReply, checkId, nothing, readResult, searchArgs, searchResult, when, changeArgs, changeResult, changeWords, checkDraft, draftArgs, draftResult, drafts, matchLabels, mime, name } from './mail.js';
 
-export const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
-const MAX_BODY = 12_000;
-const MAX_RESULTS = 50;
+export { GmailError, changeWords, mime };
+
+export const SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
 const PENDING_MS = 10 * 60_000;
 
 // Google's endpoints, or a stand-in server's (tests and screenshots).
@@ -29,15 +32,12 @@ export function googleEndpoints(base = '') {
   return { auth: `${base}/o/oauth2/v2/auth`, token: `${base}/token`, revoke: `${base}/revoke`, api: `${base}/gmail/v1/users/me` };
 }
 
-// code: not_connected | reconnect | bad_client | unreachable | denied | expired | google | missing
-export class GmailError extends Error {
-  constructor(message, code) { super(message); this.code = code; }
-}
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 
-export class Gmail {
+export class GmailOAuth {
   constructor(home, { endpoints = googleEndpoints(), timezone = 'UTC', fetch: f = globalThis.fetch } = {}) {
+    this.home = home;
     this.dir = join(home, 'connectors', 'gmail');
     this.e = endpoints;
     this.timezone = timezone;
@@ -135,7 +135,7 @@ export class Gmail {
         client_id: c.id, client_secret: c.secret, code_verifier: p.verifier,
       }, 'sign-in');
       if (tok.scope && !tok.scope.split(' ').includes(SCOPE)) {
-        throw new GmailError('Google didn\'t give Nova permission to read your email. Connect again and leave "Read your email" ticked.', 'denied');
+        throw new GmailError('Google didn\'t give Nova permission to use your email. Connect again and leave the Gmail box ticked.', 'denied');
       }
       if (!tok.refresh_token) throw new GmailError("Google didn't give Nova a lasting sign-in. Remove Nova's access in your Google account, then connect again.", 'google');
       this.access = { token: tok.access_token, expires: Date.now() + (Number(tok.expires_in) || 3600) * 1000 - 60_000 };
@@ -210,14 +210,16 @@ export class Gmail {
     return this.access.token;
   }
 
-  async api(path, params = {}, { signal, retried = false } = {}) {
+  async api(path, params = {}, { signal, method = 'GET', body, retried = false } = {}) {
     const token = await this.accessToken();
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) for (const one of [v].flat()) if (one !== undefined) q.append(k, String(one));
     let res;
     try {
       res = await this.fetch(`${this.e.api}${path}${q.size ? `?${q}` : ''}`, {
-        headers: { authorization: `Bearer ${token}` },
+        method,
+        headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(20_000)]),
       });
     } catch (e) {
@@ -226,9 +228,9 @@ export class Gmail {
     }
     if (res.status === 401 && !retried) {
       this.access = null;
-      return this.api(path, params, { signal, retried: true });
+      return this.api(path, params, { signal, method, body, retried: true });
     }
-    if (res.ok) return res.json();
+    if (res.ok) return res.status === 204 ? {} : res.json().catch(() => ({}));
     const data = await res.json().catch(() => ({}));
     const why = String(data.error?.message ?? '');
     if (res.status === 401 || (res.status === 403 && /insufficient|scope/i.test(why))) {
@@ -242,51 +244,92 @@ export class Gmail {
 
   // ---- reading -----------------------------------------------------------------
 
-  when(ms) {
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: this.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-    }).format(new Date(Number(ms)));
-  }
+  when(ms) { return when(ms, this.timezone); }
 
-  async search({ query = 'in:inbox newer_than:1d', max = 20 } = {}, { signal } = {}) {
-    const q = String(query ?? '').trim() || 'in:inbox newer_than:1d';
-    const n = Math.min(Math.max(Math.round(Number(max) || 20), 1), MAX_RESULTS);
+  async search({ query, max } = {}, { signal } = {}) {
+    const { q, n } = searchArgs({ query, max });
     const list = await this.api('/messages', { q, maxResults: n }, { signal });
     const ids = (list.messages ?? []).map((m) => m.id);
-    if (!ids.length) return { output: `Nothing matched ${q}.`, summary: 'nothing matched' };
+    if (!ids.length) return nothing(q);
     // A few at a time, to stay well inside Gmail's per-person rate limit.
     const found = [];
     for (let i = 0; i < ids.length; i += 10) {
       found.push(...await Promise.all(ids.slice(i, i + 10).map((id) =>
         this.api(`/messages/${id}`, { format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] }, { signal }))));
     }
-    const threads = new Set(found.map((m) => m.threadId));
-    const more = list.nextPageToken ? ' More messages match; widen max or narrow the query to see them.' : '';
-    const head = `${found.length} message${found.length === 1 ? '' : 's'} in ${threads.size} conversation${threads.size === 1 ? '' : 's'}, newest first.${more}`;
-    const rows = found.map((m, i) => {
+    return searchResult(found.map((m) => {
       const h = headers(m.payload);
-      const flags = [(m.labelIds ?? []).includes('UNREAD') ? 'unread' : 'read', (m.labelIds ?? []).includes('IMPORTANT') ? 'important' : ''].filter(Boolean).join(', ');
-      return `[${i + 1}] id=${m.id} conversation=${m.threadId} (${flags})\nFrom: ${h.from ?? '(unknown)'}\nSubject: ${h.subject ?? '(no subject)'}\nDate: ${this.when(m.internalDate)}\n${htmlToText(m.snippet ?? '')}`;
-    });
-    return { output: `${head}\n\n${rows.join('\n\n')}`, summary: `${found.length} message${found.length === 1 ? '' : 's'}` };
+      const labels = m.labelIds ?? [];
+      return { id: m.id, threadId: m.threadId, unread: labels.includes('UNREAD'), important: labels.includes('IMPORTANT'), from: h.from, subject: h.subject, at: Number(m.internalDate), snippet: htmlToText(m.snippet ?? '') };
+    }), { more: !!list.nextPageToken, when: (ms) => this.when(ms) });
   }
 
   async readMessage({ id } = {}, { signal } = {}) {
-    if (!/^[A-Za-z0-9_-]{6,64}$/.test(String(id ?? ''))) throw new GmailError('That isn\'t a message id from gmail_search.', 'missing');
+    checkId(id);
     const m = await this.api(`/messages/${id}`, { format: 'full' }, { signal });
     const h = headers(m.payload);
-    const files = attachments(m.payload);
-    let body = bodyText(m.payload) || htmlToText(m.snippet ?? '') || '(no text)';
-    if (body.length > MAX_BODY) body = `${body.slice(0, MAX_BODY)}\n[the rest of this message was cut]`;
-    const lines = [
-      `From: ${h.from ?? '(unknown)'}`,
-      h.to ? `To: ${h.to}` : '',
-      h.cc ? `Cc: ${h.cc}` : '',
-      `Subject: ${h.subject ?? '(no subject)'}`,
-      `Date: ${this.when(m.internalDate)}`,
-      files.length ? `Attachments (not opened): ${files.join(', ')}` : '',
-    ].filter(Boolean);
-    return { output: `${lines.join('\n')}\n\n${body}`, summary: h.subject ?? '(no subject)' };
+    return readResult({
+      ...h, at: Number(m.internalDate), files: attachments(m.payload),
+      body: bodyText(m.payload) || htmlToText(m.snippet ?? ''),
+    }, { when: (ms) => this.when(ms) });
+  }
+
+  // ---- drafting ------------------------------------------------------------------
+
+  async planDraft(args, { signal } = {}) {
+    const plan = draftArgs(args);
+    if (plan.replyTo) {
+      const m = await this.api(`/messages/${plan.replyTo}`, { format: 'metadata', metadataHeaders: ['From', 'Reply-To', 'Subject', 'Message-ID', 'References'] }, { signal });
+      plan.threadId = m.threadId;
+      asReply(plan, headers(m.payload));
+    }
+    return checkDraft(plan);
+  }
+
+  async draft(args, { signal } = {}) {
+    const plan = await this.planDraft(args, { signal });
+    const raw = Buffer.from(mime(plan)).toString('base64url');
+    await this.api('/drafts', {}, { signal, method: 'POST', body: { message: { raw, ...(plan.threadId ? { threadId: plan.threadId } : {}) } } });
+    return draftResult(plan, drafts(this.read('token.json')?.account));
+  }
+
+  // ---- organizing ------------------------------------------------------------------
+
+  async planChange(args, { signal } = {}) {
+    const plan = changeArgs(args);
+    let labels = [];
+    if (plan.add.length || plan.remove.length) {
+      labels = (await this.api('/labels', {}, { signal })).labels ?? [];
+      matchLabels(plan, labels.filter((l) => l.type === 'user').map((l) => l.name));
+    }
+    plan.labelId = (n) => labels.find((l) => l.name === n)?.id;
+    for (let i = 0; i < plan.ids.length; i += 10) {
+      plan.messages.push(...await Promise.all(plan.ids.slice(i, i + 10).map(async (id) => {
+        const m = await this.api(`/messages/${id}`, { format: 'metadata', metadataHeaders: ['From', 'Subject'] }, { signal });
+        const h = headers(m.payload);
+        return { id, from: name(h.from), subject: h.subject ?? '(no subject)' };
+      })));
+    }
+    plan.verb = changeWords(plan);
+    return plan;
+  }
+
+  async change(args, { signal } = {}) {
+    const plan = await this.planChange(args, { signal });
+    const add = [];
+    const remove = [];
+    for (const n of plan.create) {
+      const made = await this.api('/labels', {}, { signal, method: 'POST', body: { name: n, labelListVisibility: 'labelShow', messageListVisibility: 'show' } });
+      add.push(made.id);
+    }
+    for (const n of plan.add) if (!plan.create.includes(n)) add.push(plan.labelId(n));
+    for (const n of plan.remove) remove.push(plan.labelId(n));
+    if (plan.archive === true) remove.push('INBOX');
+    if (plan.archive === false) add.push('INBOX');
+    if (plan.read === true) remove.push('UNREAD');
+    if (plan.read === false) add.push('UNREAD');
+    await this.api('/messages/batchModify', {}, { signal, method: 'POST', body: { ids: plan.ids, addLabelIds: add, removeLabelIds: remove } });
+    return changeResult(plan);
   }
 }
 
@@ -294,7 +337,7 @@ function headers(payload) {
   const out = {};
   for (const { name, value } of payload?.headers ?? []) {
     const k = name.toLowerCase();
-    if (['from', 'to', 'cc', 'subject', 'date'].includes(k) && !(k in out)) out[k] = value;
+    if (['from', 'to', 'cc', 'subject', 'date', 'reply-to', 'message-id', 'references'].includes(k) && !(k in out)) out[k] = value;
   }
   return out;
 }
@@ -326,11 +369,58 @@ function attachments(payload) {
   const out = [];
   const walk = (p) => {
     if (!p) return;
-    if (p.filename) out.push(`${p.filename}${p.body?.size ? ` (${size(p.body.size)})` : ''}`);
+    if (p.filename) out.push({ name: p.filename, size: p.body?.size ?? null });
     for (const c of p.parts ?? []) walk(c);
   };
   walk(payload);
   return out;
 }
 
-const size = (n) => (n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 ** 2).toFixed(1)} MB`);
+
+
+// Gmail as the rest of Nova sees it. Two ways in, one connected at a time:
+// an app password over IMAP (the quick way), or the person's own Google OAuth
+// client over the Gmail API (Advanced). Tools don't know which.
+export class Gmail extends GmailOAuth {
+  constructor(home, { imapUrl, openImap, ...opts } = {}) {
+    super(home, opts);
+    this.imap = new GmailImap(this, { url: imapUrl ?? IMAP_URL, timezone: this.timezone, ...(openImap ? { open: openImap } : {}) });
+  }
+
+  get way() { return this.imap.saved() ? this.imap : null; }
+
+  status() {
+    const google = super.status();
+    const pw = this.imap.status();
+    if (pw) return { ...google, ...pw, method: 'password' };
+    return { ...google, method: google.connected || google.broken ? 'google' : null };
+  }
+
+  // Connecting one way disconnects the other.
+  async connectPassword(creds) {
+    const status = await this.imap.connect(creds);
+    if (this.read('token.json')) await super.disconnect();
+    return { ...this.status(), notice: { ok: true, text: `Gmail is connected as ${status.account}.`, at: Date.now() } };
+  }
+
+  async finish(params) {
+    const notice = await super.finish(params);
+    if (notice.ok) this.imap.forget();
+    return notice;
+  }
+
+  async disconnect() {
+    if (this.imap.saved()) {
+      this.imap.forget();
+      return { ...this.status(), revoked: false, password: true };
+    }
+    return super.disconnect();
+  }
+
+  search(args, o) { return this.way ? this.imap.search(args, o) : super.search(args, o); }
+  readMessage(args, o) { return this.way ? this.imap.readMessage(args, o) : super.readMessage(args, o); }
+  planDraft(args, o) { return this.way ? this.imap.planDraft(args, o) : super.planDraft(args, o); }
+  draft(args, o) { return this.way ? this.imap.draft(args, o) : super.draft(args, o); }
+  planChange(args, o) { return this.way ? this.imap.planChange(args, o) : super.planChange(args, o); }
+  change(args, o) { return this.way ? this.imap.change(args, o) : super.change(args, o); }
+}

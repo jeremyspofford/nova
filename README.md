@@ -50,14 +50,23 @@ Nova ships two, Email summary and Shopping research, and the Skills view
 `~/Nova/skills/`, where you can read and edit them; removing one deletes its
 folder, and nothing else refers to it.
 
-**Gmail.** Email summary reads Gmail, read-only, through a Google OAuth client
-of your own: in Google Cloud, turn on the Gmail API, set up sign-in for
-External users with yourself as a test user, create a **Desktop app** client,
-and paste its JSON into Skills. Then Connect Gmail, at `localhost` on the
-machine Nova runs on. Google signs apps in Testing out after 7 days; publish
-yours under Audience to stay connected (Google will call it unverified, which
-is expected for an app only you use). The sign-in is stored in
-`~/Nova/connectors/gmail/`, readable only by you, and Disconnect revokes it.
+**Gmail.** Email summary reads your mail, saves drafts and organizes it
+(archive, labels, read or unread). It never sends or deletes, and every draft
+and change waits for your OK on a card that shows exactly what will happen.
+To connect, open **App passwords** in your Google account
+(<https://myaccount.google.com/apppasswords>; it needs 2-Step Verification),
+create one called "Nova", and paste it into Skills with your Gmail address.
+Nova talks to Gmail over IMAP. The password is stored in
+`~/Nova/connectors/gmail/`, readable only by you; Disconnect deletes it, and
+you can remove it at Google any time.
+
+Work and school accounts often can't make app passwords. Under **Advanced**,
+connect with a Google OAuth client of your own instead: in Google Cloud, turn
+on the Gmail API, set up sign-in for External users with yourself as a test
+user, create a **Desktop app** client, and paste its JSON into Skills. Then
+connect at `localhost` on the machine Nova runs on. Google signs apps in
+Testing out after 7 days; publish yours under Audience to stay connected
+(Google will call it unverified, which is expected for an app only you use).
 
 ## Configure
 
@@ -70,6 +79,7 @@ Optional `nova.config.json` at the repo root (environment variables win):
 | `host` | `NOVA_HOST` | `127.0.0.1` |
 | `agent_cmd` | `NOVA_AGENT_CMD` | `claude -p …` (see `src/config.js`) |
 | `timezone` | `NOVA_TZ` | the system timezone |
+|  | `NOVA_IMAP_URL` | `imaps://imap.gmail.com:993` (tests point it at a stand-in) |
 
 `agent_cmd` is the one place a model is chosen. Nova writes the assembled
 system prompt to a file and substitutes its path for `{system_file}`, sends the

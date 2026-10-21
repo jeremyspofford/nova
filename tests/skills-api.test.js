@@ -7,26 +7,30 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createNova } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
-import { startFakeGoogle } from '../scripts/fake-google.js';
+import { sampleMail, startFakeGoogle, startFakeImap } from '../scripts/fake-google.js';
 
 const root = new URL('..', import.meta.url).pathname;
 const CLIENT = JSON.stringify({ installed: { client_id: '123-abc.apps.googleusercontent.com', client_secret: 'shh' } });
 let nova;
 let google;
+let imap;
 let base;
 
 before(async () => {
-  google = await startFakeGoogle();
+  const mail = sampleMail();
+  google = await startFakeGoogle({ mail });
+  imap = await startFakeImap({ mail, labels: google.state.labels });
   nova = createNova(loadConfig({
     NOVA_HOME: mkdtempSync(join(tmpdir(), 'nova-sk-')),
     NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`,
     NOVA_GOOGLE_BASE: google.base,
     NOVA_SEARCH_URL: `${google.base}/search`,
+    NOVA_IMAP_URL: imap.url,
   }));
   await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));
   base = `http://localhost:${nova.server.address().port}`;
 });
-after(async () => { nova.server.close(); await google.close(); });
+after(async () => { nova.server.close(); await google.close(); await imap.close(); });
 
 const post = (path, body = {}) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify(body) });
 const get = async (path) => (await fetch(base + path)).json();
@@ -124,4 +128,49 @@ test('disconnecting takes the Gmail tools away', async () => {
   assert.deepEqual([g.connected, g.revoked], [false, true]);
   const { s } = await ask("What's in my email?");
   assert.match(s.session.turns[0].items.at(-1).text, /isn't connected/);
+});
+
+test('an app password connects Gmail; drafts and changes wait for the person and show exactly what', async () => {
+  const bad = await post('/api/connectors/gmail/password', { email: 'you@example.com', password: 'my-google-password' });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /Nova needs an app password/);
+  const ok = await (await post('/api/connectors/gmail/password', { email: 'you@example.com', password: 'abcd efgh ijkl mnop' })).json();
+  assert.deepEqual([ok.connected, ok.method], [true, 'password']);
+  assert.ok(!JSON.stringify(await get('/api/skills')).includes('abcdefghijklmnop'));
+
+  // A draft: the card shows the whole draft; Allow saves it, and nothing is sent.
+  const { id } = await (await post('/api/sessions', { text: 'Draft a reply to Sam saying yes' })).json();
+  let s = await settle(id, (x) => x.live?.phase === 'approval');
+  let tool = s.session.turns[0].items.find((i) => i.kind === 'tool');
+  assert.deepEqual([tool.name, tool.needsApproval, tool.preview.to, tool.preview.subject, tool.preview.reply], ['gmail_draft', true, 'Sam Ortiz <sam.ortiz@example.com>', 'Re: Saturday hike?', true]);
+  assert.match(tool.preview.body, /^Hi Sam,\n\nYes, Saturday is still on\./);
+  const drafts = imap.state.drafts.length;
+  await post(`/api/sessions/${id}/approvals/${tool.id}`, { decision: 'allow' });
+  s = await settle(id);
+  tool = s.session.turns[0].items.find((i) => i.kind === 'tool');
+  assert.deepEqual([tool.result.ok, tool.result.summary, tool.result.link], [true, 'Re: Saturday hike?', 'https://mail.google.com/mail/?authuser=you%40example.com#drafts']);
+  assert.equal(imap.state.drafts.length, drafts + 1);
+
+  // A change, declined: nothing moves. Then allowed.
+  const water = imap.mail.find((m) => m.id === '19a0c1d2e3f4a504');
+  const c = await (await post('/api/sessions', { text: 'Archive the water bill and the newsletter' })).json();
+  s = await settle(c.id, (x) => x.live?.phase === 'approval');
+  tool = s.session.turns[0].items.find((i) => i.kind === 'tool');
+  assert.equal(tool.preview.verb, 'Archive 2 emails and mark them read');
+  assert.deepEqual(tool.preview.messages.map((m) => m.from), ['City Water', 'The Morning Brief']);
+  await post(`/api/sessions/${c.id}/approvals/${tool.id}`, { decision: 'deny' });
+  s = await settle(c.id);
+  assert.match(s.session.turns[0].items.at(-1).text, /left them where they are/);
+  assert.ok(water.labelIds.includes('INBOX'));
+
+  await post(`/api/sessions/${c.id}/messages`, { text: 'Archive them after all' });
+  s = await settle(c.id, (x) => x.live?.phase === 'approval');
+  tool = s.session.turns[1].items.find((i) => i.kind === 'tool');
+  await post(`/api/sessions/${c.id}/approvals/${tool.id}`, { decision: 'allow' });
+  s = await settle(c.id);
+  assert.equal(s.session.turns[1].items.find((i) => i.kind === 'tool').result.summary, 'Archived 2 emails and marked them read');
+  assert.ok(!water.labelIds.includes('INBOX'));
+
+  const off = await (await post('/api/connectors/gmail/disconnect')).json();
+  assert.deepEqual([off.connected, off.password], [false, true]);
 });

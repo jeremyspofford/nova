@@ -84,6 +84,8 @@ export function toolLabel(tool, state) {
     exec: { running: `Running ${code(cmd)}`, done: `Ran ${code(cmd)}`, failed: `${code(cmd)} didn't finish`, declined: `Didn't run ${code(cmd)}`, waiting: `Waiting to run ${code(cmd)}` },
     web_search: { running: `Searching the web for “${esc(a.query)}”`, done: `Searched the web for “${esc(a.query)}”`, failed: "Couldn't search the web", declined: `Didn't search for “${esc(a.query)}”` },
     gmail_search: { running: 'Searching your Gmail', done: `Searched your Gmail${sum ? `: ${esc(sum)}` : ''}`, failed: "Couldn't search your Gmail" },
+    gmail_draft: { running: 'Saving the draft in Gmail', done: `Saved a draft in Gmail${sum ? `: “${esc(sum)}”` : ''}`, failed: "Couldn't save the draft", declined: "Didn't save the draft", waiting: 'Waiting to save a draft' },
+    gmail_organize: { running: 'Changing your Gmail', done: sum ? esc(sum) : 'Changed your Gmail', failed: "Couldn't change your Gmail", declined: 'Left your Gmail as it was', waiting: 'Waiting to change your Gmail' },
     gmail_read: { running: 'Reading an email', done: sum ? `Read “${esc(sum)}”` : 'Read an email', failed: "Couldn't read that email" },
     use_skill: { running: 'Opening a skill', done: `Opened ${esc(sum || a.name)}`, failed: `Couldn't open the skill ${esc(a.name)}` },
   };
@@ -105,24 +107,45 @@ export function toolState(tool, turnOpen) {
 const ONLINE = 'It has read your email in this conversation, so it checks with you before anything goes online.';
 function approvalBody(tool) {
   const a = tool.args ?? {};
+  const p = tool.preview ?? {};
+  if (tool.name === 'gmail_draft') return `Nova wants to save this ${p.reply ? 'reply' : 'email'} as a draft in your Gmail. It won't be sent; you send it from Gmail when you're happy with it.`;
+  if (tool.name === 'gmail_organize') {
+    const made = p.create?.length ? ` That makes the new label${p.create.length > 1 ? 's' : ''} ${p.create.map((l) => `“${esc(l)}”`).join(' and ')}.` : '';
+    return `Nova wants to change your Gmail: ${esc((p.verb ?? 'change some emails').replace(/^\w/, (c) => c.toLowerCase()))}.${made}`;
+  }
   if (tool.name === 'web_fetch') return `Nova wants to open <code>${esc(host(a.url))}</code>. ${ONLINE}`;
   if (tool.name === 'web_search') return `Nova wants to search the web for “${esc(a.query)}”. ${ONLINE}`;
   const cmd = String(a.command ?? '');
   return `Nova wants to run ${cmd.includes('\n') || cmd.length > 72 ? 'this command' : `<code>${esc(cmd)}</code>`} in your workspace.`;
 }
 
+// Exactly what will change in Gmail, so the decision is about the real thing.
+function approvalDetail(tool) {
+  const p = tool.preview;
+  if (!p) return '';
+  if (tool.name === 'gmail_draft') {
+    return `<div class="approval-mail"><dl class="approval-fields"><dt>To</dt><dd>${esc(p.to)}</dd>${p.cc ? `<dt>Cc</dt><dd>${esc(p.cc)}</dd>` : ''}<dt>Subject</dt><dd>${esc(p.subject || '(no subject)')}</dd></dl>
+<div class="approval-letter" tabindex="0">${esc(p.body)}</div></div>`;
+  }
+  if (tool.name === 'gmail_organize') {
+    return `<ul class="approval-list">${(p.messages ?? []).map((m) => `<li><span class="approval-subject">${esc(m.subject)}</span> <span class="approval-from">${esc(m.from)}</span></li>`).join('')}</ul>`;
+  }
+  return '';
+}
+
 function renderApproval(tool) {
   const cmd = String(tool.args?.command ?? '');
   const multi = tool.name === 'exec' && (cmd.includes('\n') || cmd.length > 72);
   const url = tool.name === 'web_fetch' ? String(tool.args?.url ?? '') : '';
+  const change = tool.name.startsWith('gmail_');
   return `<div class="approval" role="group" aria-labelledby="ap-${esc(tool.id)}" data-tool="${esc(tool.id)}">
   <p class="approval-title" id="ap-${esc(tool.id)}">A small decision, when you're ready</p>
   <p class="approval-body">${approvalBody(tool)}</p>
-  ${multi ? `<pre class="approval-cmd">${esc(cmd)}</pre>` : ''}${url ? `<pre class="approval-cmd">${esc(url)}</pre>` : ''}
+  ${multi ? `<pre class="approval-cmd">${esc(cmd)}</pre>` : ''}${url ? `<pre class="approval-cmd">${esc(url)}</pre>` : ''}${approvalDetail(tool)}
   <div class="approval-actions">
-    <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}">Allow once</button>
-    <button type="button" class="btn" data-action="deny" data-tool="${esc(tool.id)}">Deny</button>
-    <span class="keys" aria-hidden="true"><kbd>Enter</kbd> allow · <kbd>Esc</kbd> deny</span>
+    <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}">${tool.name === 'gmail_draft' ? 'Save draft' : change ? 'Make the change' : 'Allow once'}</button>
+    <button type="button" class="btn" data-action="deny" data-tool="${esc(tool.id)}">${change ? 'Not now' : 'Deny'}</button>
+    <span class="keys" aria-hidden="true"><kbd>Enter</kbd> ${change ? (tool.name === 'gmail_draft' ? 'save' : 'make it') : 'allow'} · <kbd>Esc</kbd> ${change ? 'not now' : 'deny'}</span>
   </div>
 </div>`;
 }
@@ -138,8 +161,9 @@ function renderTool(tool, turnOpen) {
   const cls = `record is-${state}" data-tool="${esc(tool.id)}`;
   const output = tool.result?.output;
   if (state === 'running') return `<div class="${cls}" role="status"><span class="pulse" aria-hidden="true"></span>${label}…</div>`;
-  if (!output) return `<div class="${cls}">${stamp}<span class="record-label">${label}</span>${when}</div>`;
-  return `<details class="${cls}"><summary>${stamp}<span class="record-label">${label}</span>${when}</summary><pre class="record-output" tabindex="0">${esc(output)}</pre></details>`;
+  const link = state === 'done' && tool.result?.link ? ` <a class="record-link" href="${esc(tool.result.link)}" target="_blank" rel="noopener">Open in Gmail</a>` : '';
+  if (!output) return `<div class="${cls}">${stamp}<span class="record-label">${label}</span>${link}${when}</div>`;
+  return `<details class="${cls}"><summary>${stamp}<span class="record-label">${label}</span>${link}${when}</summary><pre class="record-output" tabindex="0">${esc(output)}</pre></details>`;
 }
 
 const fromDay = (day) => {
@@ -313,9 +337,9 @@ const longDay = (iso) => new Date(iso).toLocaleDateString('en-US', { day: 'numer
 
 function skillNeeds(s, gmail) {
   if (!s.needs.includes('gmail')) return '';
-  if (gmail?.connected) return `<p class="skill-needs">Reads your Gmail, which is connected.</p>`;
-  if (gmail?.broken) return `<p class="skill-needs is-warn">Reads your Gmail, which <a href="#gmail" data-action="to-gmail">needs reconnecting</a>.</p>`;
-  return `<p class="skill-needs is-warn">Reads your Gmail, which <a href="#gmail" data-action="to-gmail">isn't connected yet</a>.</p>`;
+  if (gmail?.connected) return `<p class="skill-needs">Uses your Gmail, which is connected.</p>`;
+  if (gmail?.broken) return `<p class="skill-needs is-warn">Uses your Gmail, which <a href="#gmail" data-action="to-gmail">needs reconnecting</a>.</p>`;
+  return `<p class="skill-needs is-warn">Uses your Gmail, which <a href="#gmail" data-action="to-gmail">isn't connected yet</a>.</p>`;
 }
 
 function skillItem(s, gmail, installed) {
@@ -339,33 +363,68 @@ const CLIENT_STEPS = `<ol class="steps">
   <li>Paste the JSON here.</li>
 </ol>`;
 
-export function renderGmail(gmail, { local = true } = {}) {
-  const g = gmail ?? {};
-  const state = g.connected ? 'connected' : g.broken ? 'broken' : g.client ? 'ready' : 'setup';
-  const pill = { connected: 'Connected', broken: 'Needs reconnecting', ready: 'Not connected', setup: 'Not set up' }[state];
-  let body = '';
-  if (state === 'connected') {
-    body = `<p class="skill-about">Connected as <b>${esc(g.account ?? 'your account')}</b>${g.since ? ` since ${esc(longDay(g.since))}` : ''}. Nova can search and read your mail. It can't send, change or delete anything.</p>
-<div class="connection-actions"><button type="button" class="btn" data-action="disconnect-gmail">Disconnect</button>
-<span class="connection-note">Disconnecting removes Nova's access at Google and deletes the sign-in from this computer.</span></div>`;
-  } else if (state === 'broken') {
-    body = `<p class="skill-about">Google stopped accepting Nova's sign-in. That happens when access is removed in your Google account, or after 7 days while your Google app is in Testing.</p>
-<div class="connection-actions">${local ? '<button type="button" class="btn primary" data-action="connect-gmail">Reconnect Gmail</button>' : ''}<button type="button" class="btn" data-action="disconnect-gmail">Disconnect</button></div>`;
-  } else if (state === 'ready') {
-    body = `<p class="skill-about">Read-only: Nova can search and read your mail, and can't send, change or delete anything.</p>
-<div class="connection-actions">${local ? '<button type="button" class="btn primary" data-action="connect-gmail">Connect Gmail</button>' : ''}<button type="button" class="act" data-action="forget-client">Use a different OAuth client</button></div>`;
-  } else {
-    body = `<p class="skill-about">Read-only: Nova can search and read your mail, and can't send, change or delete anything. Gmail lets Nova in through a Google sign-in client of your own, so no one else's app sits between you and your mail. Setting it up takes about five minutes, once.</p>
+const APP_PASSWORDS = 'https://myaccount.google.com/apppasswords';
+const PROMISE = 'Nova can read your mail, save drafts and organize it: archive, labels, read or unread. It never sends or deletes anything, and every change waits for your OK.';
+
+function passwordForm(g, again = false) {
+  return `<form class="connection-form" data-form="gmail-password">
+${again ? '' : `<ol class="steps">
+  <li>Open <a href="${APP_PASSWORDS}" target="_blank" rel="noopener">App passwords</a> in your Google account. If Google says they aren't available, turn on <a href="https://myaccount.google.com/signinoptions/twosv" target="_blank" rel="noopener">2-Step Verification</a> first.</li>
+  <li>Name it “Nova” and create it. Google shows a 16-letter password, once.</li>
+  <li>Paste it here with your Gmail address.</li>
+</ol>`}
+<div class="field-row">
+  <label class="field-label">Gmail address<input class="field" id="gmail-email" type="email" autocomplete="email" spellcheck="false" placeholder="you@gmail.com" value="${esc(g.account ?? '')}"></label>
+  <label class="field-label">App password<input class="field" id="gmail-password" type="password" autocomplete="off" spellcheck="false" placeholder="abcd efgh ijkl mnop"></label>
+</div>
+<div class="connection-actions"><button type="submit" class="btn primary" data-action="connect-password">${again ? 'Reconnect Gmail' : 'Connect Gmail'}</button>
+<span class="connection-note">An app password opens your mail only, not the rest of your Google account. You can remove it at Google whenever you like.</span></div>
+</form>`;
+}
+
+// The way in with your own Google OAuth client, for work or school accounts
+// that don't allow app passwords.
+function advanced(g, local) {
+  const away = local ? '' : '<p class="connection-note">To connect this way, open Nova at localhost on the computer it runs on. Google sends you back to that computer only.</p>';
+  const inner = g.client
+    ? `<p class="skill-about">Your Google client is saved.</p>
+<div class="connection-actions">${local ? '<button type="button" class="btn" data-action="connect-gmail">Connect with Google</button>' : ''}<button type="button" class="act" data-action="forget-client">Use a different OAuth client</button></div>${away}`
+    : `<p class="skill-about">For work or school accounts, which often can't make app passwords. Google lets Nova in through a sign-in client of your own, so no one else's app sits between you and your mail. It takes about five minutes, once.</p>
 ${CLIENT_STEPS}
 <label class="sr-only" for="gmail-client">Your OAuth client JSON</label>
 <textarea class="field" id="gmail-client" rows="3" spellcheck="false" placeholder='{"installed": {"client_id": "….apps.googleusercontent.com", …}}'></textarea>
-<div class="connection-actions"><button type="button" class="btn primary" data-action="save-client">Save client</button>
-<span class="connection-note">Google signs apps in Testing out after 7 days. To stay connected, publish yours under Audience; Google will call it unverified, which is expected for an app only you use.</span></div>`;
+<div class="connection-actions"><button type="button" class="btn" data-action="save-client">Save client</button>
+<span class="connection-note">Google signs apps in Testing out after 7 days. To stay connected, publish yours under Audience; Google will call it unverified, which is expected for an app only you use.</span></div>${away}`;
+  return `<details class="skill-playbook connection-advanced"${g.client ? ' open' : ''}><summary>Advanced: your own Google client</summary><div class="connection-more">${inner}</div></details>`;
+}
+
+export function renderGmail(gmail, { local = true } = {}) {
+  const g = gmail ?? {};
+  const pw = g.method === 'password';
+  const state = g.connected ? 'connected' : g.broken ? 'broken' : 'setup';
+  const pill = { connected: 'Connected', broken: 'Needs reconnecting', setup: 'Not connected' }[state];
+  let body = '';
+  if (state === 'connected') {
+    body = `<p class="skill-about">Connected as <b>${esc(g.account ?? 'your account')}</b>${pw ? ' with an app password' : ' with your own Google client'}${g.since ? `, since ${esc(longDay(g.since))}` : ''}. ${PROMISE}</p>
+<div class="connection-actions"><button type="button" class="btn" data-action="disconnect-gmail">Disconnect</button>
+<span class="connection-note">${pw
+    ? `Disconnecting deletes the app password from this computer. To switch it off at Google too, remove it in <a href="${APP_PASSWORDS}" target="_blank" rel="noopener">App passwords</a>.`
+    : "Disconnecting removes Nova's access at Google and deletes the sign-in from this computer."}</span></div>`;
+  } else if (state === 'broken' && pw) {
+    body = `<p class="skill-about">Google stopped accepting the app password for <b>${esc(g.account ?? 'your account')}</b>. That happens when it's removed at Google or your Google password changes. Make a new one in <a href="${APP_PASSWORDS}" target="_blank" rel="noopener">App passwords</a> and paste it here.</p>
+${passwordForm(g, true)}
+<div class="connection-actions"><button type="button" class="act" data-action="disconnect-gmail">Disconnect</button></div>`;
+  } else if (state === 'broken') {
+    body = `<p class="skill-about">Google stopped accepting Nova's sign-in. That happens when access is removed in your Google account, or after 7 days while your Google app is in Testing.</p>
+<div class="connection-actions">${local ? '<button type="button" class="btn primary" data-action="connect-gmail">Reconnect Gmail</button>' : ''}<button type="button" class="btn" data-action="disconnect-gmail">Disconnect</button></div>`;
+  } else {
+    body = `<p class="skill-about">${PROMISE}</p>
+${passwordForm(g)}
+${advanced(g, local)}`;
   }
-  const away = local || state === 'connected' ? '' : '<p class="connection-note">To connect, open Nova at localhost on the computer it runs on. Google sends you back to that computer only.</p>';
-  return `<div class="connection" data-state="${state}">
+  return `<div class="connection" data-state="${state}"${g.method ? ` data-method="${esc(g.method)}"` : ''}>
   <div class="skill-head"><h3 class="skill-name">Gmail</h3><span class="pill${state === 'connected' ? ' is-on' : state === 'broken' ? ' is-warn' : ''}">${pill}</span></div>
-  ${body}${away}
+  ${body}
 </div>`;
 }
 

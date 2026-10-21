@@ -28,7 +28,7 @@ export class Runner extends EventEmitter {
     this.active = new Map(); // sessionId → live run
     this.memory = new Memory(config.home, config.timezone);
     this.skills = new Skills(config.root, config.home);
-    this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), timezone: config.timezone });
+    this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone });
   }
 
   record(sessionId, ev) {
@@ -169,10 +169,22 @@ export class Runner extends EventEmitter {
 
       const id = shortId();
       const tool = TOOLS[call?.name];
-      const needsApproval = !error && (!!tool?.needsApproval || (!!tool?.online && run.tainted));
-      this.record(sessionId, { type: 'tool_call', ...tag, id, name: call?.name ?? 'unknown', args: call?.args ?? {}, needs_approval: needsApproval });
-      if (error) {
-        this.record(sessionId, { type: 'tool_result', ...tag, id, ok: false, output: error });
+      const ctx = {
+        home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
+        gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
+      };
+      // A tool that changes something outside Nova shows exactly what will
+      // change before the person decides; if that can't be worked out, it fails here.
+      let failed = error;
+      let preview;
+      if (!failed && tool.preview) {
+        this.setLive(sessionId, { phase: 'tool' });
+        try { preview = await tool.preview(call.args, ctx); } catch (e) { failed = e.message; }
+      }
+      const needsApproval = !failed && (!!tool?.needsApproval || (!!tool?.online && run.tainted));
+      this.record(sessionId, { type: 'tool_call', ...tag, id, name: call?.name ?? 'unknown', args: call?.args ?? {}, needs_approval: needsApproval, ...(preview ? { preview } : {}) });
+      if (failed) {
+        this.record(sessionId, { type: 'tool_result', ...tag, id, ok: false, output: failed });
         continue;
       }
 
@@ -192,13 +204,11 @@ export class Runner extends EventEmitter {
       this.setLive(sessionId, { phase: 'tool' });
       let output;
       let summary;
+      let link;
       let ok = true;
       try {
-        output = await tool.run(call.args, {
-          home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
-          gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
-        });
-        if (output && typeof output === 'object') ({ output, summary } = output);
+        output = await tool.run(call.args, ctx);
+        if (output && typeof output === 'object') ({ output, summary, link } = output);
       } catch (e) {
         ok = false;
         output = e.code === 'ENOENT' ? `No such file: ${call.args.path ?? ''}` : e.message;
@@ -209,7 +219,7 @@ export class Runner extends EventEmitter {
         return;
       }
       if (tool.mail && ok) run.tainted = true;
-      this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output), ...(summary ? { summary } : {}) });
+      this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output), ...(summary ? { summary } : {}), ...(link ? { link } : {}) });
     }
   }
 

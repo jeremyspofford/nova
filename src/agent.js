@@ -11,9 +11,10 @@ export class AgentError extends Error {
 }
 
 // Nova's files are the agent's only memory. When Nova itself runs inside a
-// Claude Code session, that session's memory and extra CLAUDE.md folders
-// arrive through the environment; strip them so they can't leak in.
-const LEAKY = /^CLAUDE\w*(MEMORY|ADDITIONAL_DIRECTORIES|CLAUDE_MD)/;
+// Claude Code session, that session's memory, extra CLAUDE.md folders and the
+// signed-in account's email arrive through the environment; strip them so
+// they can't leak in. (A real run signed a draft with a name only that email held.)
+const LEAKY = /^CLAUDE\w*(MEMORY|ADDITIONAL_DIRECTORIES|CLAUDE_MD|USER_EMAIL)/;
 export function agentEnv(env = process.env) {
   return Object.fromEntries(Object.entries(env).filter(([k]) => !LEAKY.test(k)));
 }

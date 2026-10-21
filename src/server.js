@@ -177,7 +177,10 @@ export function createNova(config = loadConfig(), deps = {}) {
       if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
       try {
         let body;
-        if (action === 'client') body = gmail.setClient((await readBody(req)).json);
+        if (action === 'password') {
+          const { email, password } = await readBody(req);
+          body = await gmail.connectPassword({ email, password });
+        } else if (action === 'client') body = gmail.setClient((await readBody(req)).json);
         else if (action === 'forget-client') body = gmail.forgetClient();
         else if (action === 'disconnect') body = await gmail.disconnect();
         else if (action === 'connect') {

@@ -112,7 +112,7 @@ export const TOOLS = {
   },
   gmail_search: {
     signature: '{"query": "in:inbox newer_than:1d", "max": 20}',
-    doc: "Search the person's Gmail with Gmail search syntax. Read-only.",
+    doc: "Search the person's Gmail with Gmail search syntax.",
     needsApproval: false,
     available: (ctx) => ctx.gmail,
     mail: true,
@@ -120,11 +120,33 @@ export const TOOLS = {
   },
   gmail_read: {
     signature: '{"id": "<id from gmail_search>"}',
-    doc: 'Read one email in full. Read-only.',
+    doc: 'Read one email in full.',
     needsApproval: false,
     available: (ctx) => ctx.gmail,
     mail: true,
     run(args, { gmail, signal }) { return gmail.readMessage(args, { signal }); },
+  },
+  gmail_draft: {
+    signature: '{"reply_to": "<id from gmail_search>", "body": "..."} or {"to": "sam@example.com", "subject": "...", "body": "..."}',
+    doc: 'Save a draft in Gmail, as a reply in the same conversation or a new email. It is never sent: the person reviews it and sends it from Gmail. The person approves every draft.',
+    needsApproval: true,
+    available: (ctx) => ctx.gmail,
+    async preview(args, { gmail, signal }) {
+      const p = await gmail.planDraft(args, { signal });
+      return { to: p.to, cc: p.cc, subject: p.subject, body: p.body, reply: !!p.threadId };
+    },
+    run(args, { gmail, signal }) { return gmail.draft(args, { signal }); },
+  },
+  gmail_organize: {
+    signature: '{"ids": ["<id>", "<id>"], "archive": true, "read": true, "add_labels": ["Bills"], "remove_labels": []}',
+    doc: 'Archive emails (archive false puts them back in the inbox), mark them read or unread, and add or remove labels. Give only what should change. The person approves every change. Nothing is deleted.',
+    needsApproval: true,
+    available: (ctx) => ctx.gmail,
+    async preview(args, { gmail, signal }) {
+      const p = await gmail.planChange(args, { signal });
+      return { verb: p.verb, create: p.create, messages: p.messages.map(({ from, subject }) => ({ from, subject })) };
+    },
+    run(args, { gmail, signal }) { return gmail.change(args, { signal }); },
   },
 };
 
@@ -255,7 +277,7 @@ export function parseToolCall(raw, names = Object.keys(TOOLS)) {
   if (!m) return { visible, call: null, error: 'The tool call was not closed with </tool_call>.' };
   const [, name, body] = m;
   if (!names.includes(name)) {
-    const why = TOOLS[name]?.mail ? 'Gmail is not connected, so there is no tool named' : 'There is no tool named';
+    const why = name.startsWith('gmail_') && TOOLS[name] ? 'Gmail is not connected, so there is no tool named' : 'There is no tool named';
     return { visible, call: { name, args: {} }, error: `${why} ${name}.` };
   }
   let args;

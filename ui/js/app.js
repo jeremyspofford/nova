@@ -709,23 +709,27 @@ function showSkills() {
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) {
       target.scrollIntoView({ block: 'center' });
-      (target.matches('.skill') ? target : target.querySelector('button, textarea') ?? target).focus({ preventScroll: true });
+      (target.matches('.skill') ? target : target.querySelector('input, button, textarea') ?? target).focus({ preventScroll: true });
       flash(target.matches('.skill') ? target : target.querySelector('.connection'));
     } else el.skills.focus({ preventScroll: true });
   });
 }
 
+const GMAIL_FIELDS = ['gmail-client', 'gmail-email', 'gmail-password'];
+
 function renderSkillsView({ enter = false } = {}) {
-  const field = $('gmail-client');
-  const draft = field?.value;
+  // What the person was typing survives a re-render (another tab, a sign-in).
+  const typed = Object.fromEntries(GMAIL_FIELDS.map((id) => [id, $(id)?.value]).filter(([, v]) => v));
   const focused = document.activeElement;
-  const focusKey = focused?.closest?.('.skill')?.id ?? (focused?.id === 'gmail-client' ? 'gmail-client' : null);
+  const focusKey = focused?.closest?.('.skill')?.id ?? (GMAIL_FIELDS.includes(focused?.id) ? focused.id : null);
+  const advancedOpen = el.skills.querySelector('.connection-advanced')?.open;
   const open = [...el.skills.querySelectorAll('.skill-playbook[open]')].map((d) => d.closest('.skill').id);
   if (state.skills) el.skills.innerHTML = renderSkills(state.skills, { local: isLocal() });
   else if (state.skillsError) el.skills.innerHTML = `<div class="empty"><p class="empty-line">Skills couldn't be shown.</p><p class="memory-lede">${state.skillsError}</p><button type="button" class="btn" data-action="retry-skills">Try again</button></div>`;
   else el.skills.innerHTML = '';
   for (const id of open) document.querySelector(`#${CSS.escape(id)} .skill-playbook`)?.setAttribute('open', '');
-  if (draft && $('gmail-client')) $('gmail-client').value = draft;
+  for (const [id, v] of Object.entries(typed)) if ($(id)) $(id).value = v;
+  if (advancedOpen) el.skills.querySelector('.connection-advanced')?.setAttribute('open', '');
   if (focusKey) $(focusKey)?.focus({ preventScroll: true });
   if (enter) {
     el.skills.classList.remove('view-enter');
@@ -785,6 +789,26 @@ function trySkill(text) {
 async function gmailAction(action, button) {
   if (button) button.disabled = true;
   try {
+    if (action === 'connect-password') {
+      const email = $('gmail-email').value.trim();
+      const password = $('gmail-password').value;
+      if (!email) { toast('Enter your Gmail address.'); $('gmail-email').focus(); return; }
+      if (!password.trim()) { toast('Paste the app password Google showed you.'); $('gmail-password').focus(); return; }
+      if (button) button.textContent = 'Connecting…';
+      try {
+        const status = await post('/api/connectors/gmail/password', { email, password });
+        $('gmail-password').value = '';
+        await loadSkills();
+        el.skills.querySelector('[data-action="disconnect-gmail"]')?.focus({ preventScroll: true });
+        flash(el.skills.querySelector('.connection'));
+        toast(status.notice?.text ?? 'Gmail is connected.');
+      } catch (e) {
+        if (button?.isConnected) button.textContent = 'Connect Gmail';
+        toast(e.message);
+        $('gmail-password')?.select();
+      }
+      return;
+    }
     if (action === 'save-client') {
       const json = $('gmail-client').value.trim();
       if (!json) { toast('Paste the JSON you downloaded from Google first.'); $('gmail-client').focus(); return; }
@@ -800,9 +824,10 @@ async function gmailAction(action, button) {
       return;
     }
     if (action === 'disconnect-gmail') {
-      const { revoked } = await post('/api/connectors/gmail/disconnect');
+      const { revoked, password } = await post('/api/connectors/gmail/disconnect');
       await loadSkills();
-      toast(revoked ? 'Disconnected. Google no longer lets Nova read your mail.' : "Disconnected here. Google didn't answer, so also remove Nova in your Google account's security settings.");
+      toast(password ? 'Disconnected. The app password is gone from this computer.'
+        : revoked ? 'Disconnected. Google no longer lets Nova into your mail.' : "Disconnected here. Google didn't answer, so also remove Nova in your Google account's security settings.");
     }
     if (action === 'forget-client') {
       await post('/api/connectors/gmail/forget-client');
@@ -813,11 +838,17 @@ async function gmailAction(action, button) {
   finally { if (button?.isConnected) button.disabled = false; }
 }
 
+el.skills.addEventListener('submit', (e) => {
+  if (e.target.dataset.form !== 'gmail-password') return;
+  e.preventDefault();
+  gmailAction('connect-password', e.target.querySelector('[data-action="connect-password"]'));
+});
 el.skills.addEventListener('click', (e) => {
   if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
   const item = e.target.closest('.skill');
   const action = b?.dataset.action;
+  if (action === 'connect-password') return; // the form's submit handles it
   if (action === 'install-skill') installSkill(item);
   else if (action === 'remove-skill') removeSkill(item);
   else if (action === 'try-skill') trySkill(b.dataset.try);
@@ -826,7 +857,7 @@ el.skills.addEventListener('click', (e) => {
     e.preventDefault();
     const card = el.skills.querySelector('.connection');
     card.scrollIntoView({ block: 'center' });
-    (card.querySelector('.btn.primary, textarea') ?? card.querySelector('button'))?.focus({ preventScroll: true });
+    (card.querySelector('#gmail-email, .btn.primary, textarea') ?? card.querySelector('button'))?.focus({ preventScroll: true });
     flash(card);
   } else if (action) gmailAction(action, b);
 });

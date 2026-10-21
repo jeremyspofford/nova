@@ -3,7 +3,8 @@
 Phase 3 adds skills: markdown playbooks Nova follows for one kind of work.
 There are exactly two, each built completely:
 
-- **Email summary** reads your Gmail through a new read-only connector.
+- **Email summary** reads your Gmail, drafts replies and tidies up when you
+  ask. It never sends or deletes.
 - **Shopping research** finds and compares things to buy, and never buys anything.
 
 Installing, using and removing a skill is a designed experience. Removing one
@@ -11,11 +12,61 @@ leaves nothing behind.
 
 Evidence:
 
-- `npm run shots`: 59 of 59 checks pass, including 20 new skill checks
+- `npm run shots`: 65 of 65 checks pass, including 26 skill checks
   ([results](screenshots/results.json)).
-- `npm test`: 78 pass.
+- `npm test`: 90 pass.
 - The real `claude -p` ran both skills: Email summary against a stand-in
-  Gmail mailbox, Shopping research against the live web.
+  Gmail mailbox (summary, a draft reply, archiving), Shopping research
+  against the live web.
+
+## Added after your first look
+
+You asked for two changes: acting on mail, and a simpler way to connect.
+
+**Connecting takes about two minutes, with an app password.**
+
+- You open App passwords in your Google account, create one called "Nova",
+  and paste it with your address
+  ([setup](screenshots/paper-skills-gmail-setup.png)). There's no Google
+  Cloud step. Nova talks to Gmail over IMAP.
+- Paste your normal Google password by mistake, and Nova says it needs an
+  app password and where to make one.
+- Your own Google client is still there under **Advanced**, for work and
+  school accounts, which often can't make app passwords
+  ([advanced](screenshots/paper-skills-gmail-advanced.png)).
+- Connecting one way disconnects the other. Disconnect deletes the app
+  password here and links to where you remove it at Google.
+
+**Nova drafts replies and organizes mail. It never sends or deletes.**
+
+- `gmail_draft` saves a reply in the same conversation, or a new email, to
+  your Drafts. `gmail_organize` archives, marks read or unread, and adds or
+  removes labels, making a label if it's new.
+- Every draft and change waits for you on a card that shows exactly what will
+  happen: the whole draft with To and Subject
+  ([draft](screenshots/paper-skill-draft.png)), or each email by subject and
+  sender ([change](screenshots/paper-skill-organize.png)). The buttons say
+  what they do: Save draft or Make the change, and Not now.
+- Afterwards a line records it, with Open in Gmail for drafts
+  ([saved](screenshots/paper-skill-drafted.png)).
+- There is no code that sends or deletes: no SMTP and no delete call.
+  Reading never marks mail read.
+- Both ways in (app password and your own client) do the same things, with
+  the same words for the model, so the playbook doesn't care which you use.
+
+**Real model, against the stand-in mailbox:**
+
+| Asked | What it did | Time |
+| --- | --- | --- |
+| "Draft a reply to Sam saying yes to Saturday, and that I'd love the ride" | loaded the skill, searched, read Sam's email, then a short draft on the card; after Save, "in your Drafts, not sent", with a reminder that Sam needs an answer by Thursday night | 11.4 s |
+| "Archive the water bill and the morning brief newsletter, and mark them read" | one search, then one change for both; flagged the phishing email unprompted; afterwards noted autopay is off, so the bill is still on you | 9.9 s |
+
+**A leak, found and fixed.** In its first draft, the real model signed with a
+name Nova never gave it. The name came from this build machine's Claude
+login, through an environment variable. Nova now strips that variable from
+the model's environment, as it already did for Claude's memory, and a test
+covers it. The playbook also says to sign off only with a name from
+USER.md. On the rerun, it ended without a name and said why.
 
 ## How skills work
 
@@ -37,8 +88,8 @@ Evidence:
   "followed Shopping research, since removed".
 - **Gmail** ([CONNECTOR.md](../connectors/gmail/CONNECTOR.md)) documents its
   capabilities, limits and auth, the way Muse documents its connectors.
-  - It is read-only (`gmail.readonly`), through two tools: `gmail_search` and
-    `gmail_read`.
+  - Four tools: `gmail_search` and `gmail_read`, then `gmail_draft` and
+    `gmail_organize`, which always ask first.
   - Those tools exist only while Gmail is connected.
 
 ## Every state designed
@@ -46,12 +97,16 @@ Evidence:
 | State | What you see | Evidence |
 | --- | --- | --- |
 | No skills | What installing does, and both skills ready to install | [paper-skills-empty](screenshots/paper-skills-empty.png) |
-| Installed, Gmail not connected | "Reads your Gmail, which isn't connected yet" links to the card | walkthrough check |
+| Installed, Gmail not connected | "Uses your Gmail, which isn't connected yet" links to the card | walkthrough check |
 | Asked about email before connecting | Nova says so in one line and links to Connect Gmail; the link lands with the field focused | walkthrough check |
-| Gmail: not set up | Read-only promise, four steps with links, a field for the client JSON, and the 7-day Testing warning | [paper-skills-gmail-setup](screenshots/paper-skills-gmail-setup.png) |
-| Gmail: ready, connected, needs reconnecting | Connect, "Connected as … since …" with Disconnect, or Reconnect with the likely reason | [paper-skills](screenshots/paper-skills.png) |
-| Gmail opened from another machine | "Open Nova at localhost to connect"; Google returns only there | `renderGmail` |
+| Gmail: not connected | What Nova will and won't do, three steps with links, address and app password, and Advanced folded away | [paper-skills-gmail-setup](screenshots/paper-skills-gmail-setup.png) |
+| Gmail: Advanced | Your own Google client: steps, the JSON field, the 7-day Testing warning | [paper-skills-gmail-advanced](screenshots/paper-skills-gmail-advanced.png) |
+| Wrong password | Your Google password: "Nova needs an app password", with where to make one. A wrong app password: "Check both; spaces don't matter" | walkthrough check, `tests/gmail-imap.test.js` |
+| Gmail: connected, needs reconnecting | "Connected as … with an app password, since …" with Disconnect; or the likely reason and a field for a new app password | [paper-skills](screenshots/paper-skills.png) |
+| Advanced, opened from another machine | "Open Nova at localhost to connect"; Google returns only there. App passwords work from anywhere | `renderGmail` |
 | Sign-in cancelled, expired or refused | One plain sentence in a toast on return; nothing half-saved | `tests/gmail.test.js` |
+| A draft or change | A card with the whole draft, or each email by subject and sender; a gone message or unknown label fails before the card | [paper-skill-draft](screenshots/paper-skill-draft.png), [paper-skill-organize](screenshots/paper-skill-organize.png) |
+| Declined | "Didn't save the draft" or "Left your Gmail as it was"; nothing changes | `tests/skills-api.test.js` |
 | Using a skill | Margin note, then one line per Gmail call ("Searched your Gmail: 5 messages", "Read “Contract…”") | [paper-skill-email](screenshots/paper-skill-email.png) |
 | Going online after reading mail | An approval card that says why it's asking | [paper-skill-approval](screenshots/paper-skill-approval.png) |
 | Shopping | "Searched the web for …", one recommendation, a comparison table with links | [paper-skill-shopping](screenshots/paper-skill-shopping.png) |
@@ -70,17 +125,17 @@ Evidence:
   - Nothing outside the conversation logs mentions the skill.
   - `git log --all -p` holds neither the playbook nor any token.
 - Conversations keep a record of which skill they followed, by name.
-- Disconnecting Gmail is separate. It revokes the sign-in at Google and
-  deletes it here. The walkthrough checks both.
+- Disconnecting Gmail is separate. It deletes the app password here (or, for
+  your own client, revokes it at Google too). The walkthrough checks it.
 
 ## Safety
 
-- **Read-only Gmail.** Nova can't send, label, archive or delete, and it
-  leaves read state as it was.
-- **Your own Google client.** You set up your own OAuth client (about five
-  minutes, once), so no one else's app sits between you and your mail.
-  - The sign-in is in `~/Nova/connectors/gmail/` (mode 600).
-  - No tool can read `connectors/`.
+- **Gmail never sends or deletes.** There's no code for either. Drafts and
+  changes are reversible in Gmail, and each one waits for you on a card that
+  shows exactly what will happen. Reading leaves read state as it was.
+- **The app password stays here.** It's in `~/Nova/connectors/gmail/`
+  (mode 600), out of history. No tool can read `connectors/`, and the model
+  never sees it.
 - **Mail is outside content.** The stand-in mailbox includes a phishing email
   that tells the assistant to put your recent subjects into a URL.
   - After any mail has been read in a conversation, `web_fetch` and
@@ -180,13 +235,11 @@ installed to used in one click.
 
 ## Decisions for you
 
-1. **Gmail asks you to make your own Google OAuth client.** That takes about
-   five minutes once, and the README and the Gmail card walk through it.
-   - The alternative is a shared client that Nova ships. That would put
-     someone else's app between you and your mail, and Google requires
-     verification for it.
-   - Connecting works only at localhost on the machine Nova runs on. A hub
-     deployment will need another flow later.
+1. **Gmail connects with an app password, as you chose.** It opens the whole
+   mailbox, not read-only, and work or school accounts often can't make one;
+   Advanced covers those. A one-click "Connect" needs a Google-verified app,
+   which means Google's review and a yearly security assessment. I'd revisit
+   that only once other people use Nova.
 2. **The second skill is Shopping research, from your two samples.** It
    researches only; buying is out of scope.
 3. **Mail that Nova reads is saved in that conversation's log.** That is the
@@ -197,8 +250,14 @@ installed to used in one click.
      again when needed, like memory ids. That's slower, but no mail would be
      kept outside Gmail.
    - I kept it simple for now. Tell me if you'd rather have the alternative.
-4. **Gmail isn't live-tested.** This environment has no Google credentials,
-   so the first real Google sign-in will be yours.
-   - Everything up to Google is verified against a stand-in Google, including
-     PKCE, refresh, revocation and every error.
-   - The real model has used the connector against the stand-in mailbox.
+4. **Gmail isn't live-tested.** This build machine has no Gmail account, so
+   your first real connection will be the first one.
+   - Everything up to Gmail is verified against a stand-in Gmail that speaks
+     IMAP (with Gmail's extensions) and the Gmail API, including every error.
+   - The real model has used it against the stand-in mailbox.
+   - If something breaks on your first connect, the message on screen should
+     say what. Tell me what it says.
+5. **Still open from your plugins question:** reading Claude's standard
+   `SKILL.md` format, plus an "Add a skill" button for a folder or .zip. I
+   haven't built it, since you haven't said yes. MCP connectors would be
+   their own phase.

@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
-import { startFakeGoogle } from './fake-google.js';
+import { sampleMail, startFakeGoogle, startFakeImap } from './fake-google.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
 const out = resolve(process.argv[2] ?? join(root, 'docs/screenshots'));
@@ -19,12 +19,14 @@ const base = `http://localhost:${port}`;
 const results = { budgets: {}, checks: [] };
 const check = (name, ok, detail = '') => { results.checks.push({ name, ok, detail }); console.log(`${ok ? '✓' : '✗'} ${name}${detail ? `: ${detail}` : ''}`); };
 
-const google = await startFakeGoogle();
+const mailbox = sampleMail();
+const google = await startFakeGoogle({ mail: mailbox });
+const imap = await startFakeImap({ mail: mailbox, labels: google.state.labels });
 
 function startServer() {
   const t0 = performance.now();
   const child = spawn(process.execPath, [join(root, 'src/server.js')], {
-    env: { ...process.env, NOVA_HOME: home, NOVA_PORT: String(port), NOVA_GOOGLE_BASE: google.base, NOVA_SEARCH_URL: `${google.base}/search`, NOVA_AGENT_CMD: `FAKE_DELAY=${process.env.FAKE_DELAY ?? 18} node ${join(root, 'scripts/fake-agent.js')}` },
+    env: { ...process.env, NOVA_HOME: home, NOVA_PORT: String(port), NOVA_GOOGLE_BASE: google.base, NOVA_SEARCH_URL: `${google.base}/search`, NOVA_IMAP_URL: imap.url, NOVA_AGENT_CMD: `FAKE_DELAY=${process.env.FAKE_DELAY ?? 18} node ${join(root, 'scripts/fake-agent.js')}` },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   return new Promise((ok) => child.stdout.on('data', (d) => { if (String(d).includes('ready')) ok({ child, ms: performance.now() - t0 }); }));
@@ -275,21 +277,35 @@ results.budgets.serverStartMs = Math.round(serverMs);
   await settle(p);
   check('asked about email before connecting, Nova links to Connect Gmail', true);
   await p.click('.prose a[href="/skills#gmail"]');
-  await p.waitForSelector('.connection textarea');
+  await p.waitForSelector('.connection #gmail-email');
   await p.waitForTimeout(500);
   await shot(p, 'paper-skills-gmail-setup');
-  check('the link lands on the Gmail card, ready to paste', await p.evaluate(() => document.activeElement.id === 'gmail-client'));
+  check('the link lands on the Gmail card, ready to type', await p.evaluate(() => document.activeElement.id === 'gmail-email'));
 
-  // Save the OAuth client, connect through (stand-in) Google, come back connected.
-  await p.keyboard.type(JSON.stringify({ installed: { client_id: '123-abc.apps.googleusercontent.com', client_secret: 'stand-in' } }));
-  await p.click('[data-action="save-client"]');
-  await p.waitForSelector('[data-action="connect-gmail"]');
-  await p.click('[data-action="connect-gmail"]');
+  // The Advanced way, for work accounts: your own Google client.
+  await p.click('.connection-advanced summary');
+  await p.waitForTimeout(300);
+  await p.evaluate(() => document.querySelector('.connection-advanced').scrollIntoView({ block: 'start' }));
+  await p.waitForTimeout(200);
+  await shot(p, 'paper-skills-gmail-advanced');
+  check('Advanced keeps the own-client way, with its steps', /Desktop app/.test(await p.textContent('.connection-advanced')));
+  await p.click('.connection-advanced summary');
+
+  // Connect with an app password. The Google password first, as people will.
+  await p.focus('#gmail-email');
+  await p.keyboard.type('you@example.com');
+  await p.keyboard.press('Tab');
+  await p.keyboard.type('my-google-password');
+  await p.keyboard.press('Enter');
+  await p.waitForFunction(() => /That's your Google password/.test(document.querySelector('#toast').textContent));
+  check("the Google password instead of an app password: says what's needed", true);
+  await p.fill('#gmail-password', 'abcd efgh ijkl mnop');
+  await p.keyboard.press('Enter');
   await p.waitForSelector('.connection[data-state="connected"]');
   await p.waitForFunction(() => /Gmail is connected as/.test(document.querySelector('#toast').textContent));
-  check('connecting Gmail returns to Skills with a confirmation', true);
+  check('an app password connects Gmail, with a confirmation', true);
   const mode = (f) => (statSync(join(home, 'connectors', 'gmail', f)).mode & 0o777).toString(8);
-  check('the Gmail sign-in is readable only by you', mode('token.json') === '600' && mode('client.json') === '600', mode('token.json'));
+  check('the app password is readable only by you', mode('password.json') === '600', mode('password.json'));
   await p.waitForTimeout(3400);
   await p.click('#s-email-summary .skill-playbook summary');
   await p.waitForTimeout(300);
@@ -318,6 +334,31 @@ results.budgets.serverStartMs = Math.round(serverMs);
   await settle(p);
   const emailChat = p.url();
 
+  // A draft: the card shows the whole reply; nothing is sent.
+  await p.keyboard.type('Draft a reply to Sam saying yes');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.approval .approval-letter');
+  await p.waitForTimeout(400);
+  await shot(p, 'paper-skill-draft');
+  const card = await p.textContent('.approval');
+  check('a draft waits for you, showing who, what and that it won\'t be sent', /Sam Ortiz/.test(card) && /Re: Saturday hike\?/.test(card) && /won't be sent/.test(card));
+  await p.keyboard.press('Enter');
+  await settle(p);
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-skill-drafted');
+  check('the draft is in Gmail, with a way to open it', imap.state.drafts.length === 1 && (await p.$('.record-link[href*="#drafts"]')) !== null);
+
+  // Tidying: the card lists the emails; Not now leaves them be.
+  await p.keyboard.type('Archive the water bill and the newsletter');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.approval .approval-list');
+  await p.waitForTimeout(400);
+  await shot(p, 'paper-skill-organize');
+  check('a change lists the emails it touches', /Your bill is ready/.test(await p.textContent('.approval-list')) && /archive 2 emails and mark them read/.test(await p.textContent('.approval')));
+  await p.keyboard.press('Enter');
+  await settle(p);
+  check('allowed, the change happens in Gmail', !mailbox[3].labelIds.includes('INBOX') && /Archived 2 emails and marked them read/.test(await p.textContent('#thread')));
+
   // A second skill: shopping research.
   await p.goto(`${base}/skills`);
   await p.waitForSelector('#s-shopping');
@@ -335,7 +376,7 @@ results.budgets.serverStartMs = Math.round(serverMs);
 
   // Remove by keyboard: nothing of it left; Undo brings it back exactly.
   await p.goto(`${base}/skills#s-shopping`);
-  await p.waitForSelector('#s-shopping.is-found');
+  await p.waitForFunction(() => document.activeElement?.id === 's-shopping');
   await p.keyboard.press('Delete');
   await p.waitForSelector('.toast-btn');
   await p.waitForTimeout(300);
@@ -357,7 +398,7 @@ results.budgets.serverStartMs = Math.round(serverMs);
   execFileSync('git', ['-C', home, 'add', '-A']);
   let history = '';
   try { history = execFileSync('git', ['-C', home, 'log', '--all', '-p'], { encoding: 'utf8' }); } catch {}
-  check("no playbook or sign-in is in the Nova folder's history", !/Nova researches; the person buys|refresh_token|rt-fake|client_secret/.test(history));
+  check("no playbook or sign-in is in the Nova folder's history", !/Nova researches; the person buys|refresh_token|rt-fake|client_secret|abcdefghijklmnop|abcd efgh/.test(history));
   await p.goto(shopChat);
   await p.waitForSelector('.margins');
   check('old conversations still say which skill they followed', /followed Shopping research, since removed/.test(await p.textContent('#thread')));
@@ -476,10 +517,10 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
   check('mobile: no horizontal page scroll', !overflow);
 
-  // Disconnecting: Google lets go, the sign-in is deleted, the skill says so.
+  // Disconnecting deletes the app password, and says how to remove it at Google too.
   await p.click('[data-action="disconnect-gmail"]');
-  await p.waitForSelector('.connection[data-state="ready"]');
-  check('disconnecting revokes at Google and deletes the sign-in', google.state.revoked && !existsSync(join(home, 'connectors', 'gmail', 'token.json')));
+  await p.waitForSelector('.connection[data-state="setup"]');
+  check('disconnecting deletes the app password', !existsSync(join(home, 'connectors', 'gmail', 'password.json')) && /app password is gone/.test(await p.textContent('#toast')));
 }
 
 // ---- reduced motion ------------------------------------------------------------------
@@ -523,6 +564,7 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
 writeFileSync(join(out, 'results.json'), `${JSON.stringify(results, null, 2)}\n`);
 await browser.close();
 await google.close();
+await imap.close();
 const failed = results.checks.filter((c) => !c.ok);
 console.log(`\n${results.checks.length - failed.length}/${results.checks.length} checks passed. Budgets: ${JSON.stringify(results.budgets)}`);
 process.exit(failed.length ? 1 : 0);

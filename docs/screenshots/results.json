@@ -1,22 +1,22 @@
 {
   "budgets": {
-    "serverStartMs": 125,
-    "pageInteractiveMs": 144,
-    "domContentLoadedMs": 79,
+    "serverStartMs": 138,
+    "pageInteractiveMs": 159,
+    "domContentLoadedMs": 93,
     "sendFeedbackMs": 8,
     "scroll": {
       "frames": 384,
-      "mainThreadP95Ms": 3.85,
-      "mainThreadMaxMs": 8.58,
-      "frameIntervalP95Ms": 16.8,
-      "slowIntervals": 15
+      "mainThreadP95Ms": 4.11,
+      "mainThreadMaxMs": 7.56,
+      "frameIntervalP95Ms": 33.3,
+      "slowIntervals": 26
     }
   },
   "checks": [
     {
       "name": "cold start ≤ 2 s (server + page)",
       "ok": true,
-      "detail": "125 ms server + 144 ms page"
+      "detail": "138 ms server + 159 ms page"
     },
     {
       "name": "the composer is focused on arrival",
@@ -179,17 +179,27 @@
       "detail": ""
     },
     {
-      "name": "the link lands on the Gmail card, ready to paste",
+      "name": "the link lands on the Gmail card, ready to type",
       "ok": true,
       "detail": ""
     },
     {
-      "name": "connecting Gmail returns to Skills with a confirmation",
+      "name": "Advanced keeps the own-client way, with its steps",
       "ok": true,
       "detail": ""
     },
     {
-      "name": "the Gmail sign-in is readable only by you",
+      "name": "the Google password instead of an app password: says what's needed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "an app password connects Gmail, with a confirmation",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the app password is readable only by you",
       "ok": true,
       "detail": "600"
     },
@@ -210,6 +220,26 @@
     },
     {
       "name": "after reading mail, opening a web page asks first",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a draft waits for you, showing who, what and that it won't be sent",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the draft is in Gmail, with a way to open it",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a change lists the emails it touches",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "allowed, the change happens in Gmail",
       "ok": true,
       "detail": ""
     },
@@ -256,7 +286,7 @@
     {
       "name": "scrolling a long thread holds 60 fps",
       "ok": true,
-      "detail": "page work p95 3.8 ms/frame (max 8.6) over 385 frames; frame interval p95 16.8 ms on this GPU-less machine"
+      "detail": "page work p95 4.1 ms/frame (max 7.6) over 385 frames; frame interval p95 33.3 ms on this GPU-less machine"
     },
     {
       "name": "paper-dark: no script errors",
@@ -284,7 +314,7 @@
       "detail": ""
     },
     {
-      "name": "disconnecting revokes at Google and deletes the sign-in",
+      "name": "disconnecting deletes the app password",
       "ok": true,
       "detail": ""
     },
@@ -309,5 +339,5 @@
       "detail": ""
     }
   ],
-  "longId": "2026-10-21-020aw0"
+  "longId": "2026-10-21-cntcih"
 }

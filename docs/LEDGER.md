@@ -52,16 +52,28 @@ from overnight?" matched nothing and the model loaded Email summary itself.
 is ever committed. Conversations still record which skill they followed (by
 name), and show "since removed" afterwards.
 
-**2026-10-21 (Phase 3): Gmail is read-only, through the person's own OAuth
-client.** Scope `gmail.readonly` only: the email summary needs nothing more,
-and nothing Nova does can change the mailbox. Sign-in uses PKCE and a
-loopback redirect to Nova's own server (Google's flow for desktop apps), so it
-works only when Nova is opened at localhost; a hub deployment will need a
-different flow. The refresh token lives in `~/connectors/gmail/token.json`
-(mode 600); access tokens stay in memory; no tool can read `connectors/`.
-Rejected: an app password over IMAP, which grants full mailbox access
-including sending, and a shared client id, which would put someone else's app
-between the person and their mail.
+**2026-10-21 (Phase 3): Gmail connects with an app password, over IMAP;
+your own OAuth client is the Advanced way.** Jeremy found the OAuth-client
+setup (Google Cloud project, consent screen, Desktop client, JSON) too much
+for anyone to do. The one-click "Connect" other assistants offer needs a
+Google-verified app; Gmail scopes are "restricted", so that means Google's
+review (weeks) and a yearly third-party security assessment, and until then a
+warning screen and a 100-user cap. Not now. An app password takes about two
+minutes and no Google Cloud at all. Costs: it needs 2-Step Verification, it
+opens the whole mailbox (no read-only), and work or school accounts often
+can't make one, which is what Advanced is for. The OAuth path (PKCE, loopback
+redirect, so localhost only) stays as it was, now with `gmail.modify`.
+Connecting one way disconnects the other. This reverses the earlier call to
+reject IMAP; what kept it safe is below.
+
+**2026-10-21 (Phase 3): Gmail drafts and organizes; it never sends or
+deletes.** Jeremy asked for actions. Drafts, archive, labels and read state
+are all reversible from Gmail; sending and deleting aren't, so Nova has no
+code for either (no SMTP, no delete call). Every draft and change waits for
+the person on an approval card that shows the exact draft or the exact
+messages, worked out before asking; a draft or change that can't be worked
+out (a gone message, a label that doesn't exist) fails before the card.
+Reading uses `BODY.PEEK`, so it never marks mail read.
 
 **2026-10-21 (Phase 3): after mail is read, going online asks first.** Email
 is outside content, and a malicious message can ask the model to put mailbox

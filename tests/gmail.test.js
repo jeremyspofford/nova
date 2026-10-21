@@ -33,11 +33,11 @@ test('the OAuth client must be a Desktop app client', () => {
   assert.throws(() => fresh().authUrl('http://localhost/oauth/gmail'), /OAuth client first/);
 });
 
-test('connecting: PKCE, read-only scope, token kept private', async () => {
+test('connecting: PKCE, the modify scope (never send or delete), token kept private', async () => {
   const g = fresh();
   g.setClient(CLIENT);
   const url = new URL(g.authUrl('http://localhost:4317/oauth/gmail'));
-  assert.equal(url.searchParams.get('scope'), 'https://www.googleapis.com/auth/gmail.readonly');
+  assert.equal(url.searchParams.get('scope'), 'https://www.googleapis.com/auth/gmail.modify');
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
   assert.equal(url.searchParams.get('access_type'), 'offline');
 
@@ -81,7 +81,7 @@ test('search: newest first, conversations counted, promotions left out', async (
 
   const few = await g.search({ query: 'in:inbox', max: 2 });
   assert.match(few.output, /More messages match/);
-  assert.match((await g.search({ query: 'from:nobody is:unread label:none', max: 0 })).output, /^\d+ message/);
+  assert.equal((await g.search({ query: 'from:nobody is:unread', max: 0 })).output, 'Nothing matched from:nobody is:unread.');
 });
 
 test('read: headers, attachments listed, HTML turned to text', async () => {
@@ -150,4 +150,24 @@ test('bodies: plain text preferred, charsets honoured', () => {
   assert.equal(bodyText(alt), 'Hi there');
   assert.equal(bodyText({ mimeType: 'multipart/mixed', parts: [part('text/html', '<p>Only <i>HTML</i></p>')] }), 'Only HTML');
   assert.equal(bodyText(part('text/plain', 'Café crème', 'iso-8859-1')), 'Café crème');
+});
+
+test('with your own client: drafts and organizing go through the Gmail API', async () => {
+  const g = fresh();
+  await connect(g);
+  const r = await g.draft({ reply_to: '19a0c1d2e3f4a502', body: 'Yes, see you Saturday.' });
+  assert.equal(r.summary, 'Re: Saturday hike?');
+  const raw = google.state.drafts.at(-1);
+  assert.match(raw, /^To: Sam Ortiz <sam\.ortiz@example\.com>\r\n/);
+
+  const plan = await g.planChange({ ids: ['19a0c1d2e3f4a504'], archive: true, add_labels: ['Receipts', 'Home'] });
+  assert.deepEqual(plan.create, ['Home']);
+  assert.equal(plan.verb, 'Archive 1 email and label it “Receipts” and “Home”');
+  const done = await g.change({ ids: ['19a0c1d2e3f4a504'], archive: true, add_labels: ['Receipts', 'Home'] });
+  assert.equal(done.summary, 'Archived 1 email and labelled it “Receipts” and “Home”');
+  const water = google.mail.find((m) => m.id === '19a0c1d2e3f4a504');
+  assert.ok(!water.labelIds.includes('INBOX'));
+  assert.deepEqual([...water.userLabels].sort(), ['Bills', 'Home', 'Receipts']);
+  await g.change({ ids: ['19a0c1d2e3f4a504'], archive: false, remove_labels: ['Home', 'Receipts'] });
+  assert.ok(water.labelIds.includes('INBOX'));
 });
