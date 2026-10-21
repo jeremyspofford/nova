@@ -241,7 +241,7 @@
 .prose { overflow-wrap: break-word; min-width: 0; }
 .prose > * + * { margin-top: var(--s3); }
 .prose h1, .prose h2, .prose h3 { font: var(--t-title); font-family: var(--font-display); margin-top: var(--s5); }
-.prose h1, .prose h2 { font-weight: 400; font-size: 1.2em; }
+.prose h1, .prose h2 { font-weight: 400; }
 .prose h4, .prose h5, .prose h6 { font: var(--t-title); margin-top: var(--s4); }
 .prose > :first-child { margin-top: 0; }
 .prose ul, .prose ol { padding-left: var(--s5); }
@@ -260,7 +260,6 @@
 .prose hr { border: 0; border-top: 1px solid var(--hairline); margin: var(--s5) 0; }
 .prose :not(pre) > code, .approval code, .record code {
   font: var(--t-mono);
-  font-size: 0.88em;
   padding: 1px 5px;
   border-radius: calc(var(--r-input) * 0.5);
   background: var(--code-bg);
@@ -369,7 +368,7 @@ details.record { display: block; }
   box-shadow: var(--shadow-1);
   animation: rise var(--m-med) var(--ease) both;
 }
-.approval-title { font: var(--t-title); font-family: var(--font-display); font-weight: 400; font-size: 1.1em; }
+.approval-title { font: var(--t-title); font-family: var(--font-display); font-weight: 400; }
 .approval-body { margin-top: var(--s1); color: var(--text-2); font: var(--t-callout); }
 .approval-cmd {
   margin-top: var(--s3);
@@ -504,7 +503,7 @@ kbd {
 }
 .sheet[open] { animation: rise var(--m-med) var(--ease) both; }
 .sheet::backdrop { background: color-mix(in srgb, var(--text) 18%, transparent); }
-.sheet h2 { font: var(--t-title); font-family: var(--font-display); font-weight: 400; font-size: 1.3em; }
+.sheet h2 { font: var(--t-title); font-family: var(--font-display); font-weight: 400; }
 .sheet fieldset { border: 0; margin: var(--s5) 0 0; padding: 0; }
 .sheet legend { font: var(--t-caption); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-2); margin-bottom: var(--s2); }
 .choices { display: grid; gap: var(--s2); }

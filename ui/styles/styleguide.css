@@ -1,0 +1,46 @@
+/* The living style reference. Tokens only, like everything else. */
+.sg { height: auto; min-height: 100%; }
+.sg-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s4);
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--s6) var(--s5) var(--s4);
+  border-bottom: 1px solid var(--hairline);
+}
+.sg-sub { margin-top: var(--s2); color: var(--text-2); font: var(--t-callout); }
+.sg-switch { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.sg-switch .choices { display: flex; gap: var(--s1); }
+.sg-switch .choice { padding: var(--s1) var(--s3); }
+.sg-main { max-width: 1080px; margin: 0 auto; padding: var(--s5) var(--s5) var(--s7); }
+.sg-section { padding: var(--s6) 0; border-bottom: 1px solid var(--hairline); }
+.sg-section > h2 { font: var(--t-display); margin-bottom: var(--s2); }
+.sg-section > p { color: var(--text-2); margin-bottom: var(--s5); max-width: 640px; }
+.sg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s4); }
+.sg-swatch { display: flex; flex-direction: column; gap: var(--s2); }
+.sg-chip { height: 64px; border-radius: var(--r-card); border: 1px solid var(--hairline); }
+.sg-name { font: var(--t-mono); color: var(--text); }
+.sg-value { font: var(--t-caption); color: var(--text-2); overflow-wrap: anywhere; }
+.sg-row { display: grid; grid-template-columns: 140px 1fr; gap: var(--s4); align-items: baseline; padding: var(--s3) 0; border-top: 1px solid var(--hairline); }
+.sg-row:first-of-type { border-top: 0; }
+.sg-bar { height: 12px; background: var(--accent); border-radius: var(--r-pill); }
+.sg-box { height: 88px; background: var(--raised); border: 1px solid var(--hairline); display: grid; place-items: center; color: var(--text-2); font: var(--t-callout); }
+.sg-track { position: relative; height: 32px; border-bottom: 1px solid var(--hairline); }
+.sg-dot {
+  position: absolute;
+  left: 0;
+  bottom: var(--s2);
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+}
+.sg-dot.is-moved { left: calc(100% - 12px); }
+.sg-demo { max-width: var(--column); display: flex; flex-direction: column; gap: var(--s4); }
+.sg-demo .thread { padding: 0; min-height: 0; }
+.sg-label { font: var(--t-caption); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-2); margin-top: var(--s5); }
+.sg-frame { border: 1px solid var(--hairline); border-radius: var(--r-card); background: var(--surface); padding: var(--s5); }
+.sg-frame.is-bg { background: var(--bg); }
