@@ -43,6 +43,7 @@ export const TOOLS = {
       const { abs, rel } = guard(home, path, 'written');
       if (rel === 'sessions' || rel.startsWith(`sessions${sep}`)) throw new Error('Session logs are an audit trail and cannot be edited');
       if (rel === 'MEMORY.md' || rel === 'memory' || rel.startsWith(`memory${sep}`)) throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
+      if (rel === 'schedules' || rel.startsWith(`schedules${sep}`)) throw new Error('Schedules are set with schedule_set, which the person approves, not write_file');
       if (typeof content !== 'string') throw new Error('content must be a string');
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, content);
@@ -147,6 +148,33 @@ export const TOOLS = {
       return { verb: p.verb, create: p.create, messages: p.messages.map(({ from, subject }) => ({ from, subject })) };
     },
     run(args, { gmail, signal }) { return gmail.change(args, { signal }); },
+  },
+  schedule_set: {
+    signature: '{"name": "Morning digest", "cron": "0 7 * * 1-5", "prompt": "What to do each time, as instructions to yourself"}',
+    doc: 'Set up work that runs on its own at set times: a five-field cron in the person\'s timezone, and instructions you will follow unattended each time. To change a schedule, give its "id". Reports come to this conversation; add "deliver": "main" to send them to the main conversation. Add "once": true for a one-time reminder. The person approves every schedule.',
+    needsApproval: true,
+    preview(args, { schedules, sessionId }) {
+      const p = schedules.plan(args, { from: sessionId });
+      return { name: p.name, when: p.when, next: p.next, deliver: p.deliver === sessionId ? 'here' : p.deliver, prompt: p.prompt, replaces: p.replaces, once: p.once };
+    },
+    run(args, { schedules, sessionId }) {
+      const s = schedules.set(args, { from: sessionId });
+      return { output: `${s.name} is set: ${s.when}. The next run is ${s.next}. Reports go to ${s.deliver === 'main' ? 'the main conversation' : 'this conversation'}.`, summary: s.name };
+    },
+  },
+  schedule_remove: {
+    signature: '{"id": "morning-digest"}',
+    doc: 'Remove a schedule so it never runs again. The person approves it.',
+    needsApproval: true,
+    preview({ id }, { schedules }) {
+      const s = schedules.get(String(id ?? ''));
+      if (!s) throw new Error(`There's no schedule with the id ${id}.`);
+      return { name: s.name, when: s.when };
+    },
+    run({ id }, { schedules }) {
+      const s = schedules.remove(String(id ?? ''));
+      return { output: `Removed ${s.name}. It won't run again.`, summary: s.name };
+    },
   },
 };
 

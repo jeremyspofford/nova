@@ -13,6 +13,8 @@
 //   "… email / inbox …" → searches Gmail, reads the first unread message, summarizes
 //   "… socks …"  → searches the web and recommends a pair
 //   "open …"     → fetches a page (asks first after mail has been read)
+//   "remind me …" → sets a one-time schedule for tomorrow at 9 (asks first)
+//   a scheduled run → the morning digest: searches Gmail if it's connected, then a front page
 //   anything else → a reply with a list, code and a table
 const delay = Number(process.env.FAKE_DELAY ?? 12);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -55,7 +57,37 @@ if (msg.includes('fail')) {
   process.exit(2);
 }
 
-if (msg.startsWith('draft') && hasTool('gmail_draft')) {
+if (input.includes('# This is a scheduled run') && /\b(digest|fail)\b/.test(msg)) {
+  if (msg.includes('fail')) {
+    process.stderr.write('fake-agent: simulated failure (connection refused)\n');
+    process.exit(2);
+  }
+  if (hasTool('gmail_search') && !result) {
+    await stream('<tool_call name="gmail_search">{"query": "in:inbox newer_than:1d -category:promotions -category:social", "max": 20}</tool_call>');
+  } else {
+    await stream(`${hasTool('gmail_search') ? 'A contract to sign and a hike to confirm, both by Thursday.' : 'A quiet morning: nothing is due today.'}
+
+**Needs you**
+
+- **Dana Whitfield** needs the spring project contract signed and returned by Thursday, before Monday's kickoff.
+- **Sam Ortiz** wants to know if Saturday's hike is on, by Thursday night. He offered to drive.
+
+**Coming up**
+
+- Dental cleaning with Dr. Patel, **Friday at 9:30 AM**.
+- The water bill, **$64.20**, is due October 28; autopay is off.
+
+An email from "Account Security" asks for your recent subjects. It looks like phishing, so I left it alone.
+
+Want me to draft a yes to Sam, or a short note to Dana saying when she'll have the contract?`);
+  }
+} else if (/^remind me\b/.test(msg) && hasTool('schedule_set')) {
+  const t = new Date(Date.now() + 86_400_000);
+  if (!result) {
+    await stream(`I'll set a reminder for tomorrow morning.\n\n<tool_call name="schedule_set">${JSON.stringify({ name: 'Call the dentist', cron: `0 9 ${t.getDate()} ${t.getMonth() + 1} *`, prompt: "Remind the person to call Dr. Patel's office to move Friday's cleaning. Keep it to one line.", once: true })}</tool_call>`);
+  } else if (result.includes('ok="false"')) await stream("Okay, no reminder. Tell me if you'd like a different time.");
+  else await stream("Done. I'll remind you here tomorrow at 9:00 AM.");
+} else if (msg.startsWith('draft') && hasTool('gmail_draft')) {
   if (!result) await stream("Here's a reply to Sam for you to look over.\n\n<tool_call name=\"gmail_draft\">{\"reply_to\": \"19a0c1d2e3f4a502\", \"body\": \"Hi Sam,\\n\\nYes, Saturday is still on. I'd love a ride, thank you. Could you pick me up at 7:30?\\n\\nSee you then\"}</tool_call>");
   else if (result.includes('ok="false"')) await stream("Okay, I didn't save it. Tell me what to change and I'll write it again.");
   else await stream("It's in your Gmail drafts, in the same conversation as Sam's email. It hasn't been sent: open it in Gmail when you're ready.");

@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readStanding } from './home.js';
 import { Memory } from './memory.js';
+import { formatWhen } from './schedules.js';
 import { availableTools, memoryProtocol, toolProtocol } from './tools.js';
 
 const MAX_TRANSCRIPT = 120_000; // characters; older turns drop off first
@@ -33,7 +34,27 @@ Skills are playbooks for particular kinds of work, kept in ~/skills/. When a mes
 ${list}${loaded.length ? `\n\nLoaded for this message. Follow ${loaded.length > 1 ? 'these' : 'this'} closely:\n\n${loaded.join('\n\n')}` : ''}`;
 }
 
-export function buildSystem({ root, home, timezone }, now = new Date(), { tools = availableTools(), skills = '' } = {}) {
+// The schedules that are set, so Nova changes one rather than adding a twin.
+export function schedulesSection(list = [], timezone = 'UTC') {
+  const where = (s) => (s.deliver === 'main' ? 'the main conversation' : `conversation ${s.deliver}`);
+  const lines = list.map((s) => `- ${s.id}: ${s.name}. ${s.error ? s.error : `${s.when}${s.paused ? ' (paused)' : ''}`}; reports go to ${where(s)}.`);
+  return `# Schedules
+
+Schedules are work you do on your own at set times, kept in ~/schedules/ as files. Each run happens unattended, and its final message arrives as a <handoff> report in the main conversation, or in the conversation where the schedule was asked for. Set one up or change it with schedule_set, and remove one with schedule_remove; the person approves both. Before setting one up, check this list: change an existing schedule instead of adding a second that does the same thing. A one-time reminder is a schedule with "once": true. Times are in ${timezone}.
+
+${lines.length ? lines.join('\n') : 'None are set yet.'}`;
+}
+
+// For a scheduled run: who asked, and that no one is watching.
+export function runSection({ id, name, due, late }, timezone = 'UTC') {
+  return `# This is a scheduled run
+
+This turn runs on its own: the schedule “${name}” (${id}), which the person set up. Its instructions are the message below; treat them as the person's own request. No one is watching. Your final message is handed to the person as a report, so write it for them: finished, self-contained, and leading with what matters. Don't narrate your steps or mention that this is a scheduled run.
+
+Anything that needs the person's OK (drafts, changes in Gmail, commands, going online after reading mail, changing schedules) will be declined now. Don't try it. Suggest it in the report instead; they can say yes when they read it.${late ? `\n\nThis run was due at ${formatWhen(due, timezone)}, and is running late because Nova wasn't running then. Keep that in mind for anything time-sensitive.` : ''}`;
+}
+
+export function buildSystem({ root, home, timezone }, now = new Date(), { tools = availableTools(), skills = '', schedules = '', scheduled = '' } = {}) {
   const base = readFileSync(join(root, 'system', 'system_prompt.md'), 'utf8').trim();
   const memory = new Memory(home, timezone);
   const standing = readStanding(home)
@@ -50,22 +71,26 @@ export function buildSystem({ root, home, timezone }, now = new Date(), { tools 
     `# Standing files\n\nThese are your home's standing files, read fresh for this message.\n\n${standing}`,
     days.length ? `# Recent notes\n\n${days.join('\n\n')}` : '',
     skills,
+    schedules,
+    scheduled,
     toolProtocol(tools),
     memoryProtocol(),
     `# Now\n\nIt is ${formatNow(now, timezone)}.`,
   ].filter(Boolean).join('\n\n');
 }
 
-const esc = (s) => String(s).replace(/<\/(tool_result|user|nova|note|remember|forget|skill|connector)>/g, '<\\/$1>');
+const esc = (s) => String(s).replace(/<\/(tool_result|user|nova|note|remember|forget|skill|connector|handoff)>/g, '<\\/$1>');
 
 function renderTurn(t, timezone) {
   const when = t.ts ? ` time="${formatNow(new Date(t.ts), timezone)}"` : '';
+  if (t.kind === 'handoff') return `<handoff from="${esc(t.name).replace(/"/g, "'")}" schedule="${t.schedule}"${when}>\n${esc(t.text)}\n</handoff>`;
   const parts = [`<user${when}>\n${esc(t.text)}\n</user>`];
   for (const it of t.items) {
     if (it.kind === 'text') parts.push(`<nova>\n${esc(it.text)}\n</nova>`);
     if (it.kind === 'tool') {
       parts.push(`<tool_call name="${it.name}">${JSON.stringify(it.args)}</tool_call>`);
-      if (it.approval?.decision === 'deny') parts.push(`<tool_result name="${it.name}" ok="false">The user declined this.</tool_result>`);
+      if (it.approval?.auto) parts.push(`<tool_result name="${it.name}" ok="false">Not done: this is a scheduled run, and no one was there to approve it. Suggest it in your report instead.</tool_result>`);
+      else if (it.approval?.decision === 'deny') parts.push(`<tool_result name="${it.name}" ok="false">The user declined this.</tool_result>`);
       else if (it.result) parts.push(`<tool_result name="${it.name}" ok="${it.result.ok}">\n${esc(it.result.output)}\n</tool_result>`);
     }
   }

@@ -4,7 +4,8 @@ import { appendFileSync, existsSync, openSync, readSync, closeSync, readdirSync,
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
-const ID = /^\d{4}-\d{2}-\d{2}-[a-z0-9]{6}$/;
+// Dated ids for conversations, plus the one main conversation.
+const ID = /^(\d{4}-\d{2}-\d{2}-[a-z0-9]{6}|main)$/;
 export const validId = (id) => ID.test(String(id));
 
 export class SessionStore {
@@ -41,17 +42,21 @@ export class SessionStore {
     return out;
   }
 
+  // The conversations the person started. The main conversation and the
+  // logs of scheduled runs are kept here too, but not listed.
   list() {
     if (!existsSync(this.dir)) return [];
     return readdirSync(this.dir)
-      .filter((f) => f.endsWith('.jsonl') && validId(f.slice(0, -6)))
+      .filter((f) => f.endsWith('.jsonl') && validId(f.slice(0, -6)) && f !== 'main.jsonl')
       .map((f) => {
         const p = join(this.dir, f);
         const head = firstLine(p);
         let meta = {};
         try { meta = JSON.parse(head); } catch {}
-        return { id: f.slice(0, -6), title: meta.title || 'Untitled', created: meta.ts ?? null, updated: statSync(p).mtime.toISOString() };
+        return { id: f.slice(0, -6), title: meta.title || 'Untitled', created: meta.ts ?? null, updated: statSync(p).mtime.toISOString(), kind: meta.kind };
       })
+      .filter((s) => s.kind !== 'run')
+      .map(({ kind, ...s }) => s)
       .sort((a, b) => (b.created ?? '').localeCompare(a.created ?? ''));
   }
 }
