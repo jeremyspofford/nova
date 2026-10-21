@@ -346,6 +346,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
    the headline. */
 .handoff-body { font-family: var(--font-display); }
 .handoff-body > p:first-child { font: var(--t-display); color: var(--text); text-wrap: balance; }
+.handoff.is-helper .handoff-body > p:first-child { font: inherit; } /* a helper's report reads as writing, not a front page */
 .place-dot {
   display: inline-block;
   align-self: center;
@@ -353,6 +354,80 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   height: 6px;
   border-radius: var(--r-pill);
   background: var(--accent);
+}
+
+/* ---- activity ----------------------------------------------------------------- */
+
+.place-pulse { align-self: center; margin-left: auto; }
+.place-count.is-waiting { color: var(--accent); }
+.act-summary { margin-top: calc(-1 * var(--s2)); font: var(--t-margin); color: var(--text-2); }
+.act-list { list-style: none; margin: var(--s3) 0 0; padding: 0; }
+.act-entry {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--s3);
+  padding: var(--s3);
+  margin: 0 calc(-1 * var(--s3));
+  border-radius: var(--r-card);
+  outline-offset: -2px;
+  transition: background-color var(--m-fast) var(--ease);
+}
+.act-entry:hover, .act-entry:focus-within { background: var(--wash); }
+.act-entry + .act-entry { margin-top: 1px; }
+.act-time { padding-top: 2px; font: var(--t-caption); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.act-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); }
+.act-title { font: var(--t-body); font-weight: 600; overflow-wrap: anywhere; }
+.act-quote { font-weight: 400; }
+.act-state { display: inline-flex; align-items: center; gap: var(--s1); font: var(--t-caption); color: var(--text-2); }
+.act-state.is-working, .act-state.is-waiting { color: var(--accent); }
+.act-state.is-warn::before { content: ''; width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--warning); }
+.act-brief { margin-top: var(--s1); font: var(--t-margin); color: var(--text-2); overflow-wrap: anywhere; }
+.act-meta { margin-top: var(--s1); font: var(--t-callout); color: var(--text-2); }
+.act-meta a { color: var(--accent); text-underline-offset: 3px; }
+.act-actions { margin-left: auto; }
+.act-go { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); margin-top: var(--s2); font: var(--t-callout); color: var(--text-2); }
+.act-step-list { list-style: none; margin: var(--s2) 0 0; padding: 0; }
+.act-step-list > li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding: 2px 0; font: var(--t-callout); color: var(--text-2); overflow-wrap: anywhere; }
+.act-step-list a { color: inherit; text-underline-offset: 3px; }
+.act-step-list code { font: var(--t-mono); }
+.act-problem { color: var(--danger); }
+.act-steps { margin-top: var(--s2); }
+.act-steps > summary {
+  display: inline;
+  list-style: none;
+  cursor: pointer;
+  font: var(--t-callout);
+  color: var(--text-2);
+  border-radius: var(--r-input);
+}
+.act-steps > summary code { font: var(--t-mono); }
+.act-steps > summary::-webkit-details-marker { display: none; }
+.act-steps > summary::after {
+  content: '›';
+  display: inline-block;
+  margin-left: var(--s1);
+  transition: rotate var(--m-fast) var(--ease);
+}
+.act-steps[open] > summary::after { rotate: 90deg; }
+.act-steps > summary:hover { color: var(--text); }
+.act-steps[open] > summary { color: var(--text-3); }
+.act-entry.is-missed .act-title, .act-entry.is-stopped .act-title { color: var(--text-2); }
+.act-day + .act-day { margin-top: var(--s6); }
+.act-now .act-list { margin-top: var(--s2); }
+.act-more { text-align: center; }
+.act-empty { margin-top: 0; }
+.work-note {
+  padding-left: var(--s3);
+  border-left: 2px solid var(--hairline);
+  margin-bottom: var(--s5);
+  font: var(--t-margin);
+  color: var(--text-2);
+}
+.work-note a { color: var(--accent); text-underline-offset: 3px; }
+.handoff-stopped { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+
+@media (max-width: 720px) {
+  .act-entry { grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
 }
 
 /* ---- schedules ---------------------------------------------------------------- */

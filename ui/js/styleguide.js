@@ -1,7 +1,7 @@
 // Renders the style reference from the live tokens and the app's own views.
 import { CONTRACT } from './contract.js';
 import { THEMES, MODES, apply, choose, current } from './theme.js';
-import { icons, memoryIndex, renderEmpty, renderHandoff, renderMemory, renderNotes, renderSchedules, renderSkills, renderToc, renderToday, renderTurn } from './view.js';
+import { icons, memoryIndex, renderActivity, renderEmpty, renderHandoff, renderMemory, renderNotes, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -110,6 +110,29 @@ function render() {
     ],
     available: [{ id: 'evening', name: 'Evening wrap-up', about: 'What got done today, and what is waiting for tomorrow.', cron: '0 18 * * *', prompt: 'Wrap up the day.' }],
   };
+  const tool = (name, args, more = {}) => ({ kind: 'tool', id: name, name, args, ts: at(-1), result: { ok: true }, ...more });
+  const entry = (kind, title, state, more = {}) => ({ id: `${kind}-${title}`, kind, title, state, session: '2026-10-21-aaaaaa', turn: 't1', started: at(-1), ended: at(-0.99), steps: [], ...more });
+  const activitySample = {
+    now: [
+      entry('helper', 'Read the lease', 'working', { brief: 'Read the lease in workspace/flat and list anything unusual: fees, notice periods, who fixes what.', parent: 'main', parentTitle: 'Main conversation', steps: [tool('read_file', { path: 'workspace/flat/lease.md' })] }),
+      entry('reply', 'Main conversation', 'waiting', { text: 'Run git status in my workspace', session: 'main', approval: 'exec', steps: [{ kind: 'tool', id: 'exec', name: 'exec', args: { command: 'git status' }, needsApproval: true, approval: null, result: null }] }),
+      entry('helper', 'Compare flights', 'queued', { parent: 'main', parentTitle: 'Main conversation', ended: null, steps: [] }),
+    ],
+    days: [{
+      day: t0.toISOString().slice(0, 10),
+      summary: { replies: 2, schedules: 1, helpers: 2, missed: 1, asked: 2, allowed: 1, declined: 1, notAsked: 1, kept: 1 },
+      entries: [
+        entry('helper', 'Compare e-bikes', 'done', { brief: 'Compare commuter e-bikes under $2,000 for a 9-mile ride with one hill.', parent: 'main', parentTitle: 'Main conversation', report: { to: 'main', handoff: 'h9' }, steps: [tool('web_search', { query: 'best commuter e-bikes 2026' }, { result: { ok: true, summary: '8 results' } }), tool('web_fetch', { url: 'https://ridgeline.example/c2' }), tool('web_fetch', { url: 'https://voltway.example/metro' }), tool('exec', { command: 'open lease.pdf' }, { needsApproval: true, approval: { decision: 'deny', auto: true }, result: null })] }),
+        entry('schedule', 'Morning digest', 'done', { report: { to: 'main', handoff: 'h1' }, steps: [{ kind: 'skill', id: 'email-summary', name: 'Email summary' }, tool('gmail_search', {}, { result: { ok: true, summary: '5 messages' } })] }),
+        entry('reply', 'Trip planning', 'done', { text: 'Draft a reply to Sam saying yes', first: true, steps: [tool('gmail_draft', {}, { needsApproval: true, approval: { decision: 'allow' }, result: { ok: true, summary: 'Re: Saturday hike' } })] }),
+        entry('reply', 'Main conversation', 'done', { text: 'I take my coffee black', session: 'main', steps: [{ kind: 'memory', kept: 1, forgot: 0 }] }),
+        entry('helper', 'Check the bus times', 'stopped', { parent: 'main', parentTitle: 'Main conversation', steps: [] }),
+        entry('schedule', 'Water the plants', 'missed', { missed: true, session: null, ended: null, steps: [] }),
+      ],
+    }],
+    more: true,
+    before: t0.toISOString().slice(0, 10),
+  };
   sg.innerHTML = [
     section('Color', `Every theme defines these ${CONTRACT.color.length} tokens. Components use nothing else.`, `<div class="sg-grid">${colors}</div>`),
     section('Type', `Serif is the voice of record in Paper: dates, empty states, and anything Nova concludes. Chrome stays sans. Font families: ${tokenList(['--font', '--font-display', '--font-mono'])}.`, type),
@@ -152,6 +175,15 @@ function render() {
       <div class="thread">${renderToday(t0)}</div>
       <p class="sg-label">Schedules: done, running, paused, missed, failed, unreadable, and one to set up</p>
       <div class="sg-frame"><div class="thread memory skills schedules">${renderSchedules(scheduleSample, t0)}</div></div>
+      <p class="sg-label">A helper's report, and one you stopped</p>
+      <div class="thread">${renderHandoff({ id: 'h9', name: 'Compare e-bikes', helper: '2026-10-21-cccccc', ok: true, ts: t0.toISOString(), text: 'The **Ridgeline C2** is the one to get: $1,849, with a mid-drive motor that climbs well.\n\n| Bike | Price |\n| --- | --- |\n| Ridgeline C2 | $1,849 |\n| Voltway Metro | $1,499 |' })}</div>
+      <div class="thread">${renderHandoff({ id: 'h8', name: 'Check the bus times', helper: '2026-10-21-dddddd', ok: false, stopped: true, ts: t0.toISOString(), text: 'You stopped this helper before it finished.' })}</div>
+      <p class="sg-label">A helper's own log, read-only</p>
+      <div class="thread">${renderWorkNote({ kind: 'helper', title: 'Compare e-bikes', parent: 'main', delivered: { to: 'main', handoff: 'h9' } }, 'the main conversation')}</div>
+      <p class="sg-label">Activity: working, waiting for you, waiting its turn; then a day of done, declined, stopped and missed</p>
+      <div class="sg-frame"><div class="thread memory activity">${renderActivity(activitySample, t0)}</div></div>
+      <p class="sg-label">Activity, empty</p>
+      <div class="sg-frame"><div class="thread memory activity">${renderActivity({ now: [], days: [], more: false }, t0)}</div></div>
       <p class="sg-label">Toast</p>
       <div class="sg-frame" style="position: relative; min-height: 80px"><div class="toast">Forgotten, with 1 day note that said the same.<button type="button" class="toast-btn">Undo</button></div></div>
       <p class="sg-label">Empty state</p>

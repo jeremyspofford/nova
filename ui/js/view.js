@@ -96,6 +96,7 @@ export function toolLabel(tool, state) {
     schedule_set: { running: 'Setting up the schedule', done: `Set up “${esc(sum || a.name)}”`, failed: "Couldn't set up the schedule", declined: `Didn't set up “${esc(a.name)}”`, waiting: 'Waiting to set up a schedule' },
     schedule_remove: { running: 'Removing the schedule', done: `Removed the schedule “${esc(sum || a.id)}”`, failed: "Couldn't remove the schedule", declined: 'Kept the schedule', waiting: 'Waiting to remove a schedule' },
     use_skill: { running: 'Opening a skill', done: `Opened ${esc(sum || a.name)}`, failed: `Couldn't open the skill ${esc(a.name)}` },
+    delegate: { running: 'Starting a helper', done: `Asked a helper: “${esc(sum || a.title)}”`, failed: "Couldn't start a helper" },
   };
   labels.web_fetch.declined = `Didn't open ${esc(host(a.url))}`;
   const l = labels[tool.name] ?? { running: `Using ${esc(tool.name)}`, done: `Used ${esc(tool.name)}`, failed: `${esc(tool.name)} didn't work` };
@@ -182,7 +183,8 @@ function renderTool(tool, turnOpen) {
   const cls = `record is-${state}" data-tool="${esc(tool.id)}`;
   const output = tool.result?.output;
   if (state === 'running') return `<div class="${cls}" role="status"><span class="pulse" aria-hidden="true"></span>${label}…</div>`;
-  const link = state === 'done' && tool.result?.link ? ` <a class="record-link" href="${esc(tool.result.link)}" target="_blank" rel="noopener">Open in Gmail</a>` : '';
+  const inside = tool.result?.link?.startsWith('/');
+  const link = state === 'done' && tool.result?.link ? ` <a class="record-link" href="${esc(tool.result.link)}"${inside ? '' : ' target="_blank" rel="noopener"'}>${inside ? 'Follow it in Activity' : 'Open in Gmail'}</a>` : '';
   if (!output) return `<div class="${cls}">${stamp}<span class="record-label">${label}</span>${link}${when}</div>`;
   return `<details class="${cls}"><summary>${stamp}<span class="record-label">${label}</span>${link}${when}</summary><pre class="record-output" tabindex="0">${esc(output)}</pre></details>`;
 }
@@ -226,7 +228,7 @@ export function renderSkillNote(item, skills = null) {
     : `<p class="margin-note is-quiet">followed ${esc(item.name)}, since removed</p>`;
 }
 
-export function renderTurn(turn, { live = null, isLast = false, memory = new Map(), skills = null } = {}) {
+export function renderTurn(turn, { live = null, isLast = false, memory = new Map(), skills = null, readOnly = false } = {}) {
   const open = turn.state === 'open';
   const running = open && !!live;
   let nova = '';
@@ -242,7 +244,7 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
     if (it.kind === 'error') {
       nova += `<div class="error" role="alert"><p class="error-title">${esc(it.message)}</p>` +
         (it.detail ? `<details class="error-detail"><summary>Details</summary><pre tabindex="0">${esc(it.detail)}</pre></details>` : '') +
-        `<button type="button" class="btn" data-action="regenerate">Try again</button></div>`;
+        `${readOnly ? '' : '<button type="button" class="btn" data-action="regenerate">Try again</button>'}</div>`;
     }
   }
   if (running && live.text) nova += `<div class="prose is-live" data-live>${renderMarkdown(live.text)}<span class="caret" aria-hidden="true"></span></div>`;
@@ -252,7 +254,7 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
 
   const actions = [];
   if (lastTextId && !running) actions.push(`<button type="button" class="act" data-action="copy" data-copy="${esc(lastTextId)}" aria-label="Copy reply">${icons.copy}<span>Copy</span></button>`);
-  if (isLast && !running) actions.push(`<button type="button" class="act" data-action="regenerate" aria-label="Regenerate reply">${icons.again}<span>Regenerate</span></button>`);
+  if (isLast && !running && !readOnly) actions.push(`<button type="button" class="act" data-action="regenerate" aria-label="Regenerate reply">${icons.again}<span>Regenerate</span></button>`);
 
   return `<section class="turn" id="t-${esc(turn.id)}" data-turn="${esc(turn.id)}">
   <div class="msg-user"><div class="bubble">${esc(turn.text)}</div>
@@ -261,20 +263,36 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
 </section>`;
 }
 
-// A report from scheduled work, set as a front page: what it is and when,
-// then Nova's writing in the voice of record.
+// A report from scheduled work or a helper, set as a front page: what it is
+// and when, then Nova's writing in the voice of record.
 export function renderHandoff(h) {
   const when = clock(new Date(h.ts));
   const due = h.due ? clock(new Date(h.due)) : '';
   const late = h.late && due && due !== when ? ` · late, Nova wasn't running at ${esc(due)}` : '';
+  const again = h.helper
+    ? `<button type="button" class="btn" data-action="retry-helper" data-run="${esc(h.helper)}">Try again</button>`
+    : `<button type="button" class="btn" data-action="run-schedule" data-schedule="${esc(h.schedule)}">Run it again</button>`;
   const body = h.ok
     ? `<div class="prose handoff-body" data-text="${esc(h.id)}">${renderMarkdown(h.text)}</div>`
-    : `<div class="error" role="alert"><p class="error-title">${esc(h.text)}</p><button type="button" class="btn" data-action="run-schedule" data-schedule="${esc(h.schedule)}">Run it again</button></div>`;
-  return `<section class="turn handoff${h.ok ? '' : ' is-failed'}" id="h-${esc(h.id)}" data-turn="${esc(h.id)}" aria-label="${esc(h.name)}">
-  <p class="handoff-kicker"><a href="/schedules#sc-${esc(h.schedule)}">${esc(h.name)}</a> · ${esc(when)}${late}</p>
+    : h.stopped
+      ? `<p class="notice handoff-stopped">${esc(h.text)} ${again.replace('class="btn"', 'class="act"')}</p>`
+      : `<div class="error" role="alert"><p class="error-title">${esc(h.text)}</p>${again}</div>`;
+  const name = h.helper ? `<a href="/activity#a-${esc(h.helper)}">${esc(h.name)}</a> · a helper` : `<a href="/schedules#sc-${esc(h.schedule)}">${esc(h.name)}</a>`;
+  return `<section class="turn handoff${h.helper ? ' is-helper' : ''}${h.ok ? '' : h.stopped ? ' is-stopped' : ' is-failed'}" id="h-${esc(h.id)}" data-turn="${esc(h.id)}" aria-label="${esc(h.name)}">
+  <p class="handoff-kicker">${name} · ${esc(when)}${late}</p>
   ${body}
   ${h.ok ? `<div class="actions"><button type="button" class="act" data-action="copy" data-copy="${esc(h.id)}" aria-label="Copy report">${icons.copy}<span>Copy</span></button></div>` : ''}
 </section>`;
+}
+
+// A helper's or a scheduled run's own log, opened from Activity: it reads
+// like a conversation, but there's no one there to reply to.
+export function renderWorkNote(session, parentTitle = '') {
+  const report = session.delivered ? ` <a href="${where(session.delivered.to)}#h-${esc(session.delivered.handoff)}">Read its report</a>.` : '';
+  const text = session.kind === 'helper'
+    ? `This is a helper's work on “${esc(session.title)}”, asked for in <a href="${where(session.parent)}">${esc(parentTitle || 'a conversation')}</a>. It worked on its own, so there's nothing to reply to here.${report}`
+    : `This is ${esc(session.title)} at work, on its own. Its report went to the conversation it reports to; <a href="/activity#a-${esc(session.id)}">see it in Activity</a>.`;
+  return `<p class="work-note">${text}</p>`;
 }
 
 // Each turn is keyed, with a dateline when a new day begins ("days are chapters").
@@ -287,7 +305,7 @@ export function renderBlocks(session, live, now = new Date(), memory = new Map()
     day = dayKey(d);
     if (t.kind === 'handoff') return { key: t.id, html: line + renderHandoff(t) };
     const isLive = live && live.turn === t.id && live.attempt === t.attempt ? live : null;
-    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === last, memory, skills }) };
+    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === last, memory, skills, readOnly: session.kind === 'helper' || session.kind === 'run' }) };
   });
 }
 
@@ -572,5 +590,132 @@ ${set.length ? '<p class="memory-kind">Nova runs schedules while it\'s running. 
     out.push(`<section class="memory-section" aria-labelledby="sc-offer"><h2 class="memory-heading" id="sc-offer">Ready to set up</h2>
 <ul class="skill-list">${available.map(offerItem).join('')}</ul></section>`);
   }
+  return out.join('\n');
+}
+
+// ---- activity --------------------------------------------------------------
+
+const where = (session) => (session === 'main' ? '/' : `/c/${esc(session)}`);
+const lower = (s) => s.replace(/^\w/, (c) => c.toLowerCase());
+const count = (n, one, many = `${one}s`) => `${n === 1 ? 'one' : n < 10 ? ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][n] : n} ${n === 1 ? one : many}`;
+const list = (parts) => (parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`);
+
+// How long something took, in the largest unit that reads well.
+export function took(from, to) {
+  const s = Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 1000));
+  if (s < 1) return 'under a second';
+  if (s < 60) return `${s} s`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+// A day in one sentence: what Nova did, then what it asked and what it
+// couldn't ask. "Six replies, the morning digest and two helpers. You were
+// asked twice and said yes once."
+export function daySentence(n, schedules = []) {
+  const did = [];
+  if (n.replies) did.push(count(n.replies, 'reply', 'replies'));
+  if (n.schedules) did.push(schedules.length === 1 && n.schedules === 1 ? `the ${lower(schedules[0])}` : count(n.schedules, 'scheduled run'));
+  if (n.helpers) did.push(count(n.helpers, 'helper'));
+  let out = did.length ? `${list(did).replace(/^\w/, (c) => c.toUpperCase())}.` : '';
+  if (n.asked) {
+    const times = n.asked === 1 ? 'once' : n.asked === 2 ? 'twice' : `${count(n.asked, 'time')}`;
+    const each = n.asked === 1 ? '' : ' each time';
+    const yes = n.allowed === n.asked ? `said yes${each}` : n.allowed ? `said yes ${n.allowed === 1 ? 'once' : n.allowed === 2 ? 'twice' : count(n.allowed, 'time')}` : `said no${each}`;
+    out += ` You were asked ${times} and ${yes}.`;
+  }
+  if (n.notAsked) out += ` ${count(n.notAsked, 'step').replace(/^\w/, (c) => c.toUpperCase())} needed your OK while you were away, so ${n.notAsked === 1 ? 'it was' : 'they were'} suggested instead.`;
+  if (n.kept) out += ` ${count(n.kept, 'thing').replace(/^\w/, (c) => c.toUpperCase())} went into memory.`;
+  if (n.missed) out += ` ${count(n.missed, 'scheduled run').replace(/^\w/, (c) => c.toUpperCase())} missed while Nova was off.`;
+  return out.trim();
+}
+
+function stepLine(s, open = false) {
+  if (s.kind === 'skill') return `Followed <a href="/skills#s-${esc(s.id)}">${esc(s.name)}</a>`;
+  if (s.kind === 'memory') return s.forgot && !s.kept ? 'Forgot something, as asked' : `Kept ${count(s.kept, 'thing')} in memory${s.forgot ? ', forgot one' : ''}`;
+  if (s.kind === 'error') return `<span class="act-problem">${esc(s.message)}</span>`;
+  const st = toolState(s, open);
+  const label = toolLabel(s, st === 'skipped' ? 'failed' : st);
+  const stamp = s.approval ? `<span class="stamp${s.approval.decision === 'deny' ? ' is-declined' : ''}">${s.approval.auto ? 'Not asked' : s.approval.decision === 'deny' ? 'Declined' : 'Allowed'}</span>` : '';
+  return `${stamp}${label}`;
+}
+
+const STATE = {
+  working: '<span class="act-state is-working"><span class="pulse" aria-hidden="true"></span>Working</span>',
+  waiting: '<span class="act-state is-waiting">Waiting for you</span>',
+  queued: '<span class="act-state">Waiting its turn</span>',
+  stopped: '<span class="act-state">Stopped</span>',
+  failed: '<span class="act-state is-warn">Didn\'t finish</span>',
+  interrupted: '<span class="act-state is-warn">Interrupted</span>',
+  missed: '<span class="act-state is-warn">Missed</span>',
+};
+
+export const activityId = (e) => (e.kind === 'reply' ? `a-${e.session}-${e.turn}` : `a-${e.session ?? e.id.replace(/[^\w-]/g, '-')}`);
+
+// What it was, in a line: "You asked “…”", "Morning digest", "A helper: Compare e-bikes".
+function entryTitle(e) {
+  if (e.kind === 'reply') return `<span class="act-quote">“${esc(e.text)}”</span>`;
+  if (e.kind === 'helper') return `Helper: ${esc(e.title)}`;
+  return esc(e.title);
+}
+
+// Where it happened and how it ended, with links to the conversation and the report.
+function entryMeta(e) {
+  const bits = [];
+  if (e.kind === 'reply') bits.push(e.first && e.session !== 'main' ? `started <a href="${where(e.session)}">a conversation</a>` : `in <a href="${where(e.session)}#t-${esc(e.turn)}">${esc(e.title)}</a>`);
+  if (e.kind === 'helper' && e.parent) bits.push(`asked in <a href="${where(e.parent)}">${esc(clip(e.parentTitle ?? '', 40))}</a>`);
+  if (e.kind === 'schedule' && !e.missed) bits.push(e.manual ? 'run now, by you' : e.late ? 'ran late' : 'on schedule');
+  if (e.missed) bits.push("Nova wasn't running then");
+  if (e.ended && e.state !== 'working' && e.state !== 'waiting') bits.push(took(e.started, e.ended));
+  if (e.report) bits.push(`<a href="${where(e.report.to)}#h-${esc(e.report.handoff)}">${e.state === 'done' ? 'Read the report' : 'See what it said'}</a>`);
+  if (e.kind !== 'reply' && e.session && !e.missed && e.state !== 'queued') bits.push(`<a href="/c/${esc(e.session)}">Every step</a>`);
+  return bits.join(' · ');
+}
+
+export function activityEntry(e, now = new Date()) {
+  const live = e.state === 'working' || e.state === 'waiting';
+  const waitingStep = e.approval ? e.steps.find((s) => s.id === e.approval) : null;
+  const shown = e.steps.filter((s) => s !== waitingStep);
+  const steps = shown.map((s) => stepLine(s, live));
+  const time = clock(new Date(e.started));
+  const stop = e.kind === 'helper' && ['working', 'queued'].includes(e.state) ? `<button type="button" class="act" data-action="stop-helper" data-run="${esc(e.session)}">Stop</button>` : '';
+  const retry = e.kind === 'helper' && ['failed', 'stopped', 'interrupted'].includes(e.state) ? `<button type="button" class="act" data-action="retry-helper" data-run="${esc(e.session)}">Try again</button>` : '';
+  const head = `<p class="act-head"><span class="act-title">${entryTitle(e)}</span>${STATE[e.state] ?? ''}${stop || retry ? `<span class="act-actions">${stop}${retry}</span>` : ''}</p>`;
+  const go = waitingStep ? `<p class="act-go"><a class="btn" href="${where(e.session)}#t-${esc(e.turn)}">Go to it</a> ${esc(clip(toolLabel(waitingStep, 'waiting').replace(/<[^>]+>/g, ''), 80))}</p>` : '';
+  let body = '';
+  if (steps.length > 3) {
+    const first = shown.slice(0, 3).map((s) => stepLine(s, live).replace(/<span class="stamp[^>]*>[^<]*<\/span>/, '').replace(/<a [^>]*>([^<]*)<\/a>/g, '$1'));
+    body = `<details class="act-steps"><summary>${first.join(' · ')} · and ${steps.length - 3} more</summary><ol class="act-step-list">${steps.map((s) => `<li>${s}</li>`).join('')}</ol></details>`;
+  } else if (steps.length) {
+    body = `<ol class="act-step-list is-short">${steps.map((s) => `<li>${s}</li>`).join('')}</ol>`;
+  }
+  const brief = e.brief ? `<p class="act-brief">${esc(e.brief)}</p>` : '';
+  return `<li class="act-entry is-${esc(e.kind)} is-${esc(e.state)}" id="${esc(activityId(e))}" tabindex="0">
+  <time class="act-time" datetime="${esc(e.started)}">${esc(time)}</time>
+  <div class="act-body">${head}${brief}<p class="act-meta">${entryMeta(e)}</p>${go}${body}</div>
+</li>`;
+}
+
+export function renderActivity(data, now = new Date()) {
+  const out = [`<header class="memory-intro"><p class="empty-date">Activity</p>
+<p class="memory-lede">What Nova is doing and has done: each reply, scheduled run and helper, with the steps it took and what it asked you. It's read from the conversation logs in your Nova folder.</p></header>`];
+  if (data.now?.length) {
+    out.push(`<section class="memory-section act-now" aria-labelledby="act-now"><h2 class="memory-heading" id="act-now">Now</h2>
+<ol class="act-list">${data.now.map((e) => activityEntry(e, now)).join('')}</ol></section>`);
+  }
+  const days = (data.days ?? []).map((d) => {
+    const [y, m, dd] = d.day.split('-').map(Number);
+    const date = new Date(y, m - 1, dd);
+    const names = [...new Set(d.entries.filter((e) => e.kind === 'schedule' && !e.missed).map((e) => e.title))];
+    const entries = d.entries.filter((e) => e.state !== 'working' && e.state !== 'waiting');
+    return `<section class="act-day" aria-label="${esc(shortDay(date, now))}"><h2 class="dateline">${esc(longDate(date, now))}</h2>
+<p class="act-summary">${esc(daySentence(d.summary, names))}</p>
+${entries.length ? `<ol class="act-list">${entries.map((e) => activityEntry(e, now)).join('')}</ol>` : ''}</section>`;
+  });
+  if (!days.length && !data.now?.length) {
+    out.push(`<p class="memory-none act-empty">${data.earlier ? 'Nothing happened that week.' : 'Nothing yet this week. When you talk with Nova, or a schedule or helper runs, each step shows up here.'}</p>`);
+  }
+  out.push(...days);
+  if (data.more) out.push(`<p class="act-more"><button type="button" class="btn" data-action="earlier" data-before="${esc(data.before)}">Show the week before</button></p>`);
   return out.join('\n');
 }

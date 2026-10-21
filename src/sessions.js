@@ -43,7 +43,7 @@ export class SessionStore {
   }
 
   // The conversations the person started. The main conversation and the
-  // logs of scheduled runs are kept here too, but not listed.
+  // logs of scheduled runs and helpers are kept here too, but not listed.
   list() {
     if (!existsSync(this.dir)) return [];
     return readdirSync(this.dir)
@@ -55,7 +55,7 @@ export class SessionStore {
         try { meta = JSON.parse(head); } catch {}
         return { id: f.slice(0, -6), title: meta.title || 'Untitled', created: meta.ts ?? null, updated: statSync(p).mtime.toISOString(), kind: meta.kind };
       })
-      .filter((s) => s.kind !== 'run')
+      .filter((s) => s.kind !== 'run' && s.kind !== 'helper')
       .map(({ kind, ...s }) => s)
       .sort((a, b) => (b.created ?? '').localeCompare(a.created ?? ''));
   }

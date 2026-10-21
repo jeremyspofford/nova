@@ -1,22 +1,23 @@
 {
   "budgets": {
-    "serverStartMs": 149,
-    "pageInteractiveMs": 159,
-    "domContentLoadedMs": 79,
-    "sendFeedbackMs": 9,
+    "serverStartMs": 142,
+    "pageInteractiveMs": 165,
+    "domContentLoadedMs": 76,
+    "sendFeedbackMs": 6,
+    "activityMs": 4,
     "scroll": {
       "frames": 384,
-      "mainThreadP95Ms": 3.8,
-      "mainThreadMaxMs": 10.74,
-      "frameIntervalP95Ms": 16.8,
-      "slowIntervals": 16
+      "mainThreadP95Ms": 3.9,
+      "mainThreadMaxMs": 7.8,
+      "frameIntervalP95Ms": 33.3,
+      "slowIntervals": 22
     }
   },
   "checks": [
     {
       "name": "cold start ≤ 2 s (server + page)",
       "ok": true,
-      "detail": "149 ms server + 159 ms page"
+      "detail": "142 ms server + 165 ms page"
     },
     {
       "name": "the composer is focused on arrival",
@@ -31,7 +32,7 @@
     {
       "name": "send → visible feedback ≤ 100 ms",
       "ok": true,
-      "detail": "9 ms"
+      "detail": "6 ms"
     },
     {
       "name": "reply rendered markdown: list, code, table",
@@ -409,6 +410,91 @@
       "detail": ""
     },
     {
+      "name": "a helper's report comes back to the conversation that asked",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the helper read only the notes it was handed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the hand-off says where to follow it",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the helper worked from its brief alone, not the conversation or memory",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a helper's own log isn't listed among conversations",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the report's name opens it in Activity",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a helper's log is read-only and says where it came from",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Now shows what is working and what waits for you",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the Activity place counts what waits",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "each day says what happened in a sentence",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "no tool output is dumped: steps are one line each",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "↓/↑ move between entries",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Stop stops a helper, and Activity says so",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a stopped helper says so where its report would go, with Try again",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "\"Show the week before\" adds the earlier week",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Activity loads in ≤ 100 ms",
+      "ok": true,
+      "detail": "4 ms for 18 logs"
+    },
+    {
+      "name": "helpers and Activity have no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
       "name": "a long conversation opens at its latest message",
       "ok": true,
       "detail": "0 px from the end"
@@ -416,7 +502,7 @@
     {
       "name": "scrolling a long thread holds 60 fps",
       "ok": true,
-      "detail": "page work p95 3.8 ms/frame (max 10.7) over 385 frames; frame interval p95 16.8 ms on this GPU-less machine"
+      "detail": "page work p95 3.9 ms/frame (max 7.8) over 399 frames; frame interval p95 33.3 ms on this GPU-less machine"
     },
     {
       "name": "paper-dark: no script errors",
@@ -469,5 +555,5 @@
       "detail": ""
     }
   ],
-  "longId": "2026-10-21-z0gfbv"
+  "longId": "2026-10-21-ze75gh"
 }

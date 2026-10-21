@@ -9,7 +9,6 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { lastRun, nextRun } from './cron.js';
-import { reduce } from '../ui/js/reduce.js';
 
 const CATCH_UP = 6 * 3600_000;
 // A report's first line, as plain words, for the Schedules view.
@@ -111,12 +110,7 @@ export class Scheduler extends EventEmitter {
     runner.send(run, s.prompt, { unattended: { id: s.id, name: s.name, due, late } });
     await runner.idle(run);
 
-    const turn = reduce(store.read(run)).turns[0];
-    const lastTool = turn.items.findLastIndex((i) => i.kind === 'tool');
-    const report = turn.items.slice(lastTool + 1).filter((i) => i.kind === 'text').map((i) => i.text).join('\n\n').trim();
-    const failure = turn.items.find((i) => i.kind === 'error')?.message
-      ?? (turn.state === 'stopped' ? 'Nova was stopped before it finished.' : !report ? 'It finished without writing a report.' : '');
-    const ok = turn.state === 'done' && !!report;
+    const { ok, text: report, failure } = runner.report(run);
     const target = s.deliver !== 'main' && store.exists(s.deliver) ? s.deliver : 'main';
     const handoff = {
       type: 'handoff', id: randomUUID().slice(0, 8), schedule: s.id, name: s.name, run, ok,

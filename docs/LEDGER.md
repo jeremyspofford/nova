@@ -103,6 +103,35 @@ quoting only prices it saw made it stop short of a recommendation. The
 playbook now asks deciding details first, caps page reads at about six, and
 falls back to agreeing sources labelled "reported".
 
+**2026-10-21 (Phase 5): helpers start fresh.** A helper is its own session
+(`kind: "helper"`, hidden from the list) with a scoped context: the base
+prompt, AGENTS/SOUL/IDENTITY/USER, skills, its brief and up to five files the
+parent passes. No MEMORY.md, day notes, recall or schedules, and memory blocks
+it writes are ignored. The parent writes a self-contained brief, which keeps
+the helper's context small and its work checkable from the log.
+
+**2026-10-21 (Phase 5): a helper's report is delivered as it is.** It arrives
+as a handoff in the conversation that asked, like a schedule's report. The
+parent doesn't reply to it automatically: that would spend a model call on
+every report and put words between the person and the work.
+
+**2026-10-21 (Phase 5): helpers can't approve, nest or schedule.** Approvals
+are auto-declined as in unattended runs; `delegate` and `schedule_*` aren't
+offered. Up to three run at once and the rest queue. Stop and Try again are
+in Activity and on the report; on start, a helper cut off by a shutdown
+reports that it didn't finish.
+
+**2026-10-21 (Phase 5): Activity is derived, not stored.** `/api/activity`
+reads the session logs and `runs.jsonl` for a week in the person's time zone,
+caching each parsed log by size and modified time. Steps keep only a few
+arguments (path, url, command, query, name, id, title); tool output stays in
+the logs. An `activity` server event (throttled) keeps the "N waiting" count
+in the sidebar current.
+
+**2026-10-21 (Phase 5): a fetch that fails is a failed step.** `web_fetch`
+now throws on an HTTP error status instead of returning the error page, so
+Activity and the transcript don't show a 429 as "Read".
+
 **2026-10-21 (Phase 4): the main conversation is the front page.** "/"
 opens one long conversation (`sessions/main.jsonl`) that scheduled reports are
 delivered into, and a reply to a report continues there. New conversations

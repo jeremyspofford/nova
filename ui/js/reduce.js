@@ -6,15 +6,23 @@
 // same turn; the view shows the latest attempt, and the log keeps every one.
 
 export function emptySession(id = null) {
-  return { id, title: '', created: null, turns: [] };
+  return { id, title: '', created: null, kind: null, turns: [] };
 }
 
 export function applyEvent(s, ev) {
   switch (ev.type) {
     case 'session':
+      // kind: "main", "run" (a schedule's work) or "helper"; a person's
+      // conversations have none. Helpers know which conversation asked.
       s.id = ev.id;
       s.title = ev.title ?? '';
       s.created = ev.ts;
+      s.kind = ev.kind ?? null;
+      if (ev.parent) s.parent = ev.parent;
+      if (ev.schedule) s.schedule = ev.schedule;
+      break;
+    case 'delivered':
+      s.delivered = { to: ev.to, handoff: ev.handoff };
       break;
     case 'title':
       s.title = ev.title;
@@ -25,7 +33,7 @@ export function applyEvent(s, ev) {
     case 'handoff':
       // A report from scheduled work: an entry of its own, between replies.
       s.turns.push({
-        id: ev.id, kind: 'handoff', name: ev.name, schedule: ev.schedule, run: ev.run, text: ev.text, ok: ev.ok !== false,
+        id: ev.id, kind: 'handoff', name: ev.name, schedule: ev.schedule, helper: ev.helper, stopped: !!ev.stopped, run: ev.run, text: ev.text, ok: ev.ok !== false,
         late: !!ev.late, manual: !!ev.manual, due: ev.due, ts: ev.ts, attempt: 0, items: [], state: 'done', endedAt: ev.ts,
       });
       break;

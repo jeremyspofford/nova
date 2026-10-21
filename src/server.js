@@ -12,6 +12,8 @@ import { GmailError } from './connectors/gmail.js';
 import { ZipError, unzip } from './zip.js';
 import { ScheduleError } from './schedules.js';
 import { Scheduler } from './scheduler.js';
+import { HelperError, Helpers } from './helpers.js';
+import { buildActivity } from './activity.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -25,6 +27,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   const runner = new Runner(config, store, deps);
   runner.ensureMain();
   const scheduler = new Scheduler({ schedules: runner.schedules, runner, store, timezone: config.timezone });
+  const helpers = new Helpers({ runner, store });
+  runner.helpers = helpers;
   const ui = join(config.root, 'ui');
   const subscribers = new Map(); // sessionId → Set<res>
 
@@ -48,6 +52,23 @@ export function createNova(config = loadConfig(), deps = {}) {
   scheduler.on('change', () => announce('schedules'));
   runner.on('schedules', () => { scheduler.tick(); announce('schedules'); });
   scheduler.on('ran', ({ target, handoff }) => { announce('schedules'); announce('handoff', { target, handoff }); });
+  helpers.on('ran', ({ target, handoff }) => announce('handoff', { target, handoff }));
+
+  // Activity: a nudge, a few times a second at most, whenever Nova's work
+  // moves; open pages fetch the timeline again. The nudge says how much is
+  // working and how much is waiting for the person, for the sidebar.
+  const busy = () => {
+    const live = [...runner.active.keys()].map((id) => runner.liveState(id));
+    return { working: live.length + helpers.queue.length + scheduler.queue.length, waiting: live.filter((l) => l?.approval).length };
+  };
+  let nudge = null;
+  const moved = () => { nudge ??= setTimeout(() => { nudge = null; announce('activity', busy()); }, 150); };
+  const STEPS = new Set(['session', 'user', 'tool_call', 'approval', 'tool_result', 'skill', 'memory', 'done', 'error', 'stopped', 'delivered']);
+  runner.on('event', (_, ev) => { if (STEPS.has(ev.type)) moved(); });
+  runner.on('live', moved);
+  helpers.on('change', moved);
+  scheduler.on('change', moved);
+  const activity = (before) => buildActivity({ store, runner, helpers, scheduler, schedules: runner.schedules, timezone: config.timezone, before });
   const { schedules } = runner;
   const schedulesView = () => {
     const latest = schedules.latest();
@@ -119,7 +140,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   }
 
   function serveStatic(req, res, path) {
-    if (['/', '/new', '/memory', '/skills', '/schedules'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
+    if (['/', '/new', '/memory', '/skills', '/schedules', '/activity'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
@@ -232,6 +253,26 @@ export function createNova(config = loadConfig(), deps = {}) {
       }
     }
 
+    if (resource === 'activity') {
+      if (req.method !== 'GET') return json(res, 405, { error: 'Method not allowed' });
+      const before = new URL(req.url, 'http://nova.local').searchParams.get('before');
+      if (before && !/^\d{4}-\d{2}-\d{2}$/.test(before)) return json(res, 400, { error: 'before must be a day, such as 2026-10-21' });
+      return json(res, 200, { ...activity(before), busy: busy() });
+    }
+
+    if (resource === 'helpers') {
+      if (req.method !== 'POST' || !id || !action) return json(res, 405, { error: 'Method not allowed' });
+      if (!validId(id)) return json(res, 404, { error: 'That helper is gone.' });
+      try {
+        if (action === 'stop') return helpers.stop(id) ? json(res, 200, { stopped: true }) : json(res, 409, { error: 'That helper has already finished.' });
+        if (action === 'retry') return json(res, 200, helpers.retry(id));
+      } catch (e) {
+        if (e instanceof HelperError) return json(res, e.status, { error: e.message });
+        throw e;
+      }
+      return json(res, 404, { error: 'Not found' });
+    }
+
     if (resource === 'connectors') {
       if (id !== 'gmail') return json(res, 404, { error: 'Not found' });
       if (req.method === 'GET' && !action) return json(res, 200, gmail.status());
@@ -335,13 +376,14 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
   });
 
-  return { server, runner, store, scheduler, config, seeded, started };
+  return { server, runner, store, scheduler, helpers, config, seeded, started };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const nova = createNova();
   const { config } = nova;
   ensureGit(config.home);
+  nova.helpers.recover();
   nova.scheduler.start();
   nova.server.listen(config.port, config.host, () => {
     const ms = Math.round(performance.now() - nova.started);

@@ -89,6 +89,19 @@ waits for your OK. Schedules run only while Nova is running: a run missed in
 the last six hours runs when Nova starts, and older ones are recorded as
 missed. Every run is logged in `schedules/runs.jsonl`.
 
+**Helpers and Activity.** Nova can hand a long piece of work (research,
+comparing options, going through files) to a helper with the `delegate` tool,
+so the conversation stays with you. A helper starts fresh: it sees only Nova's
+brief, who you are, and up to five files Nova passes. It doesn't see the
+conversation or your memory, keeps nothing in memory, and can't ask you
+anything, so whatever needs your OK is declined and suggested instead. Up to
+three run at once; more wait their turn. The report comes back to the
+conversation that asked. The Activity view (`/activity`) shows what Nova is
+doing and did, a week at a time: each reply, scheduled run and helper, with
+its steps (what it read, searched, ran and kept), what it asked you and what
+you said. Stop or retry a helper there. Activity is read from the session
+logs; it keeps no data of its own.
+
 ## Configure
 
 Optional `nova.config.json` at the repo root (environment variables win):

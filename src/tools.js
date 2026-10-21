@@ -70,6 +70,8 @@ export const TOOLS = {
         signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(20_000)]),
         headers: { 'user-agent': UA },
       });
+      // A page that didn't come back is a failed step, not a page to read.
+      if (!res.ok) { res.body?.cancel(); throw new Error(`The page answered HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`); }
       const type = res.headers.get('content-type') ?? '';
       let text = await res.text();
       if (/html/i.test(type)) text = htmlToText(text);
@@ -149,6 +151,16 @@ export const TOOLS = {
     },
     run(args, { gmail, signal }) { return gmail.change(args, { signal }); },
   },
+  delegate: {
+    signature: '{"title": "Compare e-bikes", "task": "Everything the helper needs to know, and what to report back", "files": ["workspace/bikes/notes.md"]}',
+    doc: "Hand a self-contained piece of work to a helper that does it in the background while you carry on: research, comparing options, going through files. The helper starts fresh: it sees only the task, who the person is, and the files you list (up to five in your home), so put everything it needs in the task. It can't ask the person anything. Its report arrives in this conversation later as a <handoff>; tell the person what you've started, then don't wait for it or guess what it will say. Up to three helpers work at once.",
+    needsApproval: false,
+    available: (ctx) => ctx.delegate,
+    run(args, ctx) {
+      const h = ctx.delegate(args);
+      return { output: `A helper started on “${h.title}”${h.queued ? ' (it starts as soon as one of the others finishes)' : ''}. Its report will arrive in this conversation as a <handoff> when it's done.`, summary: h.title, link: `/activity#a-${h.run}` };
+    },
+  },
   schedule_set: {
     signature: '{"name": "Morning digest", "cron": "0 7 * * 1-5", "prompt": "What to do each time, as instructions to yourself"}',
     doc: 'Set up work that runs on its own at set times: a five-field cron in the person\'s timezone, and instructions you will follow unattended each time. To change a schedule, give its "id". Reports come to this conversation; add "deliver": "main" to send them to the main conversation. Add "once": true for a one-time reminder. The person approves every schedule.',
@@ -179,9 +191,9 @@ export const TOOLS = {
 };
 
 // The tools on offer right now: Gmail's only while it's connected, use_skill
-// only when a skill is installed.
-export function availableTools({ gmail = false, skills = 0 } = {}) {
-  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills }));
+// only when a skill is installed, delegate only in a conversation with the person.
+export function availableTools({ gmail = false, skills = 0, delegate = false } = {}) {
+  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate }));
 }
 
 // DuckDuckGo's HTML results page, without ads.

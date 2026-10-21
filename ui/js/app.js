@@ -3,7 +3,7 @@
 // nothing that is already on screen animates twice.
 import { applyEvent, emptySession } from './reduce.js';
 import { renderMarkdown } from './markdown.js';
-import { dayKey, icons, memoryIndex, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderSkills, renderToc, renderToday } from './view.js';
+import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { THEMES, MODES, apply as applyTheme, choose as chooseTheme, current as currentTheme } from './theme.js';
 
 const $ = (id) => document.getElementById(id);
@@ -16,6 +16,7 @@ const el = {
   skills: $('skills'), skillsLink: $('skills-link'), skillsCount: $('skills-count'),
   schedules: $('schedules'), schedulesLink: $('schedules-link'), schedulesCount: $('schedules-count'),
   mainLink: $('main-link'), mainDot: $('main-dot'),
+  activity: $('activity'), activityLink: $('activity-link'), activityPulse: $('activity-pulse'), activityWaiting: $('activity-waiting'),
 };
 
 const state = {
@@ -28,7 +29,7 @@ const state = {
   online: navigator.onLine,
   stick: true,
   notice: '',
-  view: 'chat',         // 'chat' | 'memory' | 'skills' | 'schedules'
+  view: 'chat',         // 'chat' | 'memory' | 'skills' | 'schedules' | 'activity'
   memory: null,         // what Nova knows, from /api/memory
   memoryError: '',
   memIndex: new Map(),  // id → entry, for the notes in conversation margins
@@ -39,6 +40,9 @@ const state = {
   noticeAt: 0,          // the last Gmail sign-in notice shown
   schedules: null,      // what's scheduled, from /api/schedules
   schedulesError: '',
+  activity: null,       // this week, from /api/activity
+  earlier: [],          // weeks before it, as the person asks for them
+  activityError: '',
 };
 
 let stream = null;
@@ -140,9 +144,37 @@ function markMainSeen() {
   try { localStorage.setItem('nova.mainSeen', new Date().toISOString()); } catch {}
 }
 
-// Changes that aren't one conversation's: memory, skills, schedules, and the list of conversations.
+let activityLoad = null;
+function loadActivity() {
+  activityLoad = fetch('/api/activity')
+    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+    .then((data) => {
+      state.activity = data;
+      state.activityError = '';
+      showBusy(data.busy);
+      if (state.view === 'activity') renderActivityView();
+    })
+    .catch(() => {
+      state.activityError = "Nova's server didn't answer, so activity can't be shown right now.";
+      if (state.view === 'activity' && !state.activity) renderActivityView();
+    });
+  return activityLoad;
+}
+
+// The sidebar breathes while Nova works anywhere, and says when something waits for the person.
+function showBusy(busy = {}) {
+  el.activityPulse.hidden = !busy.working || !!busy.waiting;
+  el.activityWaiting.textContent = busy.waiting ? `${busy.waiting} waiting` : '';
+  el.activityLink.setAttribute('aria-label', busy.waiting ? `Activity, ${busy.waiting} waiting for you` : busy.working ? 'Activity, Nova is working' : 'Activity');
+}
+
+// Changes that aren't one conversation's: memory, skills, schedules, activity, and the list of conversations.
 function watch() {
   const es = new EventSource('/api/events');
+  es.addEventListener('activity', (e) => {
+    showBusy(JSON.parse(e.data));
+    if (state.view === 'activity' && !document.hidden) loadActivity();
+  });
   es.addEventListener('memory', () => loadMemory());
   es.addEventListener('skills', () => loadSkills());
   es.addEventListener('schedules', () => loadSchedules());
@@ -180,6 +212,7 @@ function route() {
   if (path === '/memory') showMemory();
   else if (path === '/skills') showSkills();
   else if (path === '/schedules') showSchedules();
+  else if (path === '/activity') showActivity();
   else if (path === '/new') startNew();
   else if (m && m[1] !== 'main') open(m[1]);
   else {
@@ -195,9 +228,10 @@ function setView(view) {
   el.memory.hidden = view !== 'memory';
   el.skills.hidden = view !== 'skills';
   el.schedules.hidden = view !== 'schedules';
+  el.activity.hidden = view !== 'activity';
   el.dock.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
-  for (const [link, v] of [[el.memoryLink, 'memory'], [el.skillsLink, 'skills'], [el.schedulesLink, 'schedules']]) {
+  for (const [link, v] of [[el.memoryLink, 'memory'], [el.skillsLink, 'skills'], [el.schedulesLink, 'schedules'], [el.activityLink, 'activity']]) {
     if (view === v) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
@@ -310,6 +344,7 @@ function renderThread() {
   }
   el.thread.querySelector('.empty')?.remove();
   const blocks = renderBlocks(session, viewLive(), new Date(), state.memIndex, state.skillIds);
+  if (readOnly()) blocks.unshift({ key: 'work-note', html: renderWorkNote(session, session.parent === 'main' ? 'the main conversation' : state.list.find((c) => c.id === session.parent)?.title) });
   // The front page always ends on today, even before anything has happened.
   const lastTs = session.turns.at(-1).ts;
   if (state.id === 'main' && lastTs && dayKey(new Date(lastTs)) !== dayKey(new Date())) blocks.push({ key: 'today', html: renderToday() });
@@ -419,8 +454,12 @@ function running() {
   return !!state.pending || !!state.live;
 }
 
+// A helper's or a scheduled run's own log: there to read, not to reply to.
+const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state.session.kind);
+
 function renderChrome() {
-  const title = { memory: 'Memory', skills: 'Skills', schedules: 'Schedules' }[state.view] ?? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : '');
+  const title = { memory: 'Memory', skills: 'Skills', schedules: 'Schedules', activity: 'Activity' }[state.view] ?? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : '');
+  el.dock.hidden = state.view !== 'chat' || readOnly();
   if (onMain()) el.mainLink.setAttribute('aria-current', 'page');
   else el.mainLink.removeAttribute('aria-current');
   el.title.textContent = title;
@@ -564,7 +603,7 @@ async function copy(text, button) {
 
 // Links between conversations and memory stay inside the app.
 function followLink(e) {
-  const a = e.target.closest('a[href^="/memory"], a[href^="/skills"], a[href^="/schedules"], a[href^="/c/"], a[href^="/#"], a[href="/"]');
+  const a = e.target.closest('a[href^="/memory"], a[href^="/skills"], a[href^="/schedules"], a[href^="/activity"], a[href^="/c/"], a[href^="/#"], a[href="/"]');
   if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return false;
   e.preventDefault();
   navigate(a.getAttribute('href'));
@@ -579,6 +618,7 @@ el.thread.addEventListener('click', (e) => {
   if (action === 'allow' || action === 'deny') decide(b.dataset.tool, action, b);
   if (action === 'regenerate') regenerate();
   if (action === 'run-schedule') runSchedule(b.dataset.schedule, b);
+  if (action === 'retry-helper') retryHelper(b.dataset.run, b);
   if (action === 'copy-code') copy(b.closest('.code-block').querySelector('code').textContent, b);
   if (action === 'copy-user') copy(state.session.turns.find((t) => t.id === b.dataset.turn)?.text ?? '', b);
   if (action === 'copy') {
@@ -1138,6 +1178,110 @@ el.schedulesLink.addEventListener('click', (e) => {
   navigate('/schedules');
 });
 
+// ---- activity --------------------------------------------------------------
+
+function showActivity() {
+  stream?.close();
+  stream = null;
+  Object.assign(state, { id: null, live: null, pending: null, earlier: [] });
+  setView('activity');
+  el.scroller.scrollTop = 0;
+  renderChrome();
+  renderToc_();
+  renderActivityView({ enter: true });
+  loadActivity().then(() => {
+    const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
+    if (target) { target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); flash(target); }
+    else el.activity.focus({ preventScroll: true });
+  });
+}
+
+function renderActivityView({ enter = false } = {}) {
+  const focused = document.activeElement;
+  const focusKey = focused?.closest?.('.act-entry')?.id;
+  const focusAction = focused?.dataset?.action ?? null;
+  const open = [...el.activity.querySelectorAll('.act-steps[open]')].map((d) => d.closest('.act-entry').id);
+  const top = el.scroller.scrollTop;
+  if (state.activity) {
+    const days = [...state.activity.days, ...state.earlier.flatMap((w) => w.days)];
+    const last = state.earlier.at(-1) ?? state.activity;
+    el.activity.innerHTML = renderActivity({ ...state.activity, days, more: last.more, before: last.before, earlier: state.earlier.length > 0 }, new Date());
+  } else if (state.activityError) el.activity.innerHTML = `<div class="empty"><p class="empty-line">Activity couldn't be shown.</p><p class="memory-lede">${state.activityError}</p><button type="button" class="btn" data-action="retry-activity">Try again</button></div>`;
+  else el.activity.innerHTML = '';
+  for (const id of open) document.getElementById(id)?.querySelector('.act-steps')?.setAttribute('open', '');
+  if (focusKey) {
+    const item = $(focusKey);
+    (focusAction && item?.querySelector(`[data-action="${focusAction}"]`) || item)?.focus({ preventScroll: true });
+  }
+  if (!enter) el.scroller.scrollTop = top;
+  if (enter) {
+    el.activity.classList.remove('view-enter');
+    void el.activity.offsetWidth;
+    el.activity.classList.add('view-enter');
+  }
+}
+// "Working for 2 min" and the days stay true as the clock moves.
+setInterval(() => { if (state.view === 'activity' && !document.hidden) renderActivityView(); }, 60_000);
+
+async function earlier(button) {
+  button.disabled = true;
+  try {
+    const res = await fetch(`/api/activity?before=${encodeURIComponent(button.dataset.before)}`);
+    if (!res.ok) throw new Error();
+    const week = await res.json();
+    state.earlier.push(week);
+    const had = el.activity.querySelectorAll('.act-day').length;
+    renderActivityView();
+    const first = el.activity.querySelectorAll('.act-day')[had];
+    (first?.querySelector('.act-entry') ?? el.activity.querySelector('[data-action="earlier"]') ?? el.activity).focus({ preventScroll: true });
+    first?.scrollIntoView({ block: 'start' });
+    if (!week.days.length) toast(week.more ? 'Nothing happened that week.' : 'Nothing happened that week, and nothing before it.');
+  } catch { button.disabled = false; toast("Nova's server didn't answer. Try again in a moment."); }
+}
+
+async function stopHelper(run, button) {
+  if (button) button.disabled = true;
+  try {
+    await post(`/api/helpers/${run}/stop`);
+    toast('Stopped. The conversation that asked will say so.');
+  } catch (e) { if (button) button.disabled = false; toast(e.message); }
+}
+
+async function retryHelper(run, button) {
+  if (button) button.disabled = true;
+  try {
+    const h = await post(`/api/helpers/${run}/retry`);
+    toast(`${h.title} is starting again. Its report comes back to the same conversation.`);
+  } catch (e) { if (button) button.disabled = false; toast(e.message); }
+}
+
+el.activity.addEventListener('click', (e) => {
+  if (followLink(e)) return;
+  const b = e.target.closest('[data-action]');
+  const action = b?.dataset.action;
+  if (action === 'stop-helper') stopHelper(b.dataset.run, b);
+  else if (action === 'retry-helper') retryHelper(b.dataset.run, b);
+  else if (action === 'earlier') earlier(b);
+  else if (action === 'retry-activity') loadActivity();
+});
+el.activity.addEventListener('keydown', (e) => {
+  const item = e.target.closest('.act-entry');
+  if (!item || e.target !== item) return;
+  const items = [...el.activity.querySelectorAll('.act-entry')];
+  const i = items.indexOf(item);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
+  if (e.key === 'Enter') {
+    const d = item.querySelector('.act-steps');
+    if (d) { e.preventDefault(); d.open = !d.open; }
+  }
+});
+el.activityLink.addEventListener('click', (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  closeDrawer();
+  navigate('/activity');
+});
+
 // ---- navigation ------------------------------------------------------------
 
 el.toc.addEventListener('click', (e) => {
@@ -1218,6 +1362,7 @@ loadList();
 loadMemory();
 loadSkills();
 loadSchedules();
+loadActivity();
 watch();
 route();
 document.documentElement.dataset.ready = 'true';
