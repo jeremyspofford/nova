@@ -1,0 +1,65 @@
+// Nova's home: the standing files, memory, workspace and session logs.
+// Seeded from templates/home on first run. Seeding never overwrites a file.
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { join, resolve, sep } from 'node:path';
+
+// Read into every conversation, in this order.
+export const STANDING_FILES = ['AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md', 'MEMORY.md'];
+
+export function seedHome(home, templates) {
+  const created = [];
+  const walk = (rel) => {
+    for (const name of readdirSync(join(templates, rel))) {
+      const r = join(rel, name);
+      const src = join(templates, r);
+      const dst = join(home, r);
+      if (statSync(src).isDirectory()) { mkdirSync(dst, { recursive: true }); walk(r); }
+      else if (!existsSync(dst)) { cpSync(src, dst); created.push(r); }
+    }
+  };
+  mkdirSync(home, { recursive: true });
+  walk('.');
+  for (const d of ['memory', 'workspace', 'sessions']) mkdirSync(join(home, d), { recursive: true });
+  return created;
+}
+
+export function readStanding(home) {
+  return STANDING_FILES.map((name) => {
+    const p = join(home, name);
+    return { name, text: existsSync(p) ? readFileSync(p, 'utf8').trim() : '' };
+  });
+}
+
+// Resolve a tool path inside home. "~/x" and "x" both mean home/x.
+export function inHome(home, p) {
+  const rel = String(p ?? '').replace(/^~\/?/, '');
+  const abs = resolve(home, rel);
+  const root = resolve(home);
+  if (abs !== root && !abs.startsWith(root + sep)) throw new Error(`${p} is outside Nova's home`);
+  return abs;
+}
+
+// Git history is the audit trail: the home is a local repository, and every
+// finished turn is a commit. Best-effort: Nova works without git installed.
+const git = (home, ...args) => new Promise((ok) => {
+  execFile('git', ['-C', home, ...args], { timeout: 15_000 }, (err, stdout) => ok(err ? null : stdout));
+});
+
+export async function ensureGit(home) {
+  if (existsSync(join(home, '.git'))) return true;
+  if ((await git(home, 'init', '-q')) === null) return false;
+  await git(home, 'add', '-A');
+  await git(home, '-c', 'user.name=Nova', '-c', 'user.email=nova@localhost', 'commit', '-q', '-m', 'Nova: home seeded');
+  return true;
+}
+
+let queue = Promise.resolve();
+export function commitHome(home, message) {
+  queue = queue.then(async () => {
+    if (!existsSync(join(home, '.git'))) return;
+    await git(home, 'add', '-A');
+    await git(home, '-c', 'user.name=Nova', '-c', 'user.email=nova@localhost', 'commit', '-q', '-m', message);
+  });
+  return queue;
+}

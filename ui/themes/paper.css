@@ -1,0 +1,89 @@
+/*
+ * Paper: the default and reference theme.
+ * "A well-made notebook: warm paper, ink, and a serif voice."
+ *
+ * Token file only (THEMING.md rule 1). Values come from design-system-paper.md.
+ * Values marked "derived" are not in the spec; they fill a contract token the
+ * spec leaves out, or adjust a spec value that fails the contrast check.
+ * See docs/LEDGER.md, "Theme token gaps".
+ */
+:root[data-theme="paper"] {
+  color-scheme: light;
+
+  /* color */
+  --bg: #FAF7F2;
+  --surface: #FFFFFF;
+  --raised: #FFFFFF;
+  --wash: #F3EEE6;
+  --text: #23201B;
+  --text-2: #726C63;           /* derived: spec #7A736A is 4.38:1 on --bg */
+  --text-3: #91887B;           /* derived: spec #A79D8F is 2.5:1 on --bg */
+  --hairline: #E8E1D5;
+  --accent: #C4502B;
+  --accent-wash: rgba(196, 80, 43, 0.08);
+  --accent-text: #FFFFFF;      /* derived (mockups.html) */
+  --success: #4A7A3F;
+  --warning: #A86E14;
+  --danger: #B3352B;
+  --code-bg: #F6F2EB;          /* derived: between --bg and --wash */
+
+  /* type */
+  --font: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: ui-serif, "New York", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;   /* derived */
+  --t-display: 400 30px/38px var(--font-display);
+  --t-wordmark: 400 24px/28px var(--font-display);   /* derived (mockups.html) */
+  --t-title: 600 15px/20px var(--font);
+  --t-body: 400 15.5px/24px var(--font);
+  --t-callout: 400 13px/19px var(--font);
+  --t-caption: 500 11px/14px var(--font);            /* derived */
+  --t-margin: italic 400 13px/19px var(--font-display);
+  --t-mono: 400 13px/20px var(--font-mono);          /* derived */
+
+  /* spacing: 4pt base, editorial rhythm */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 36px; --s7: 56px;
+  --column: 680px;
+
+  /* shape and elevation */
+  --r-card: 10px;
+  --r-bubble: 12px;            /* derived (mockups.html) */
+  --r-input: 10px;
+  --r-pill: 999px;
+  --shadow-1: 0 1px 2px rgba(60, 45, 25, 0.05), 0 6px 20px rgba(60, 45, 25, 0.06);
+  --shadow-2: 0 2px 6px rgba(60, 45, 25, 0.06), 0 16px 40px rgba(60, 45, 25, 0.12); /* derived */
+  --material-blur: 0px;
+
+  /* motion: page-like, gentle */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --m-fast: 200ms;
+  --m-med: 300ms;
+  --m-slow: 450ms;
+  --shift: 8px;                /* view changes translate at most 8px */
+}
+
+/* Evening paper */
+:root[data-theme="paper"][data-mode="dark"] {
+  color-scheme: dark;
+  --bg: #171512;
+  --surface: #1F1C18;
+  --raised: #26221D;           /* derived */
+  --wash: #2A2620;             /* derived */
+  --text: #EDE7DC;
+  --text-2: #A79D8F;
+  --text-3: #8A8175;           /* derived */
+  --hairline: #322D26;
+  --accent: #D9714C;           /* derived: spec sienna is too dark on evening paper */
+  --accent-wash: rgba(217, 113, 76, 0.12);
+  --accent-text: #1A120E;      /* derived */
+  --success: #86B574;          /* derived */
+  --warning: #D9A04A;          /* derived */
+  --danger: #E8776B;           /* derived */
+  --code-bg: #24201B;          /* derived */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.25);
+  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* Reduced motion: pure crossfades, no translation. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="paper"] { --shift: 0px; }
+}

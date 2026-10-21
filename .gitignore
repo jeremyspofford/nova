@@ -1,0 +1,6 @@
+node_modules/
+# Personal data never belongs in this repo. Nova's home defaults to ~/Nova;
+# these cover a home placed inside the checkout by mistake.
+/home/
+/Nova/
+.DS_Store

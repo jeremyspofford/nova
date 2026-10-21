@@ -1,0 +1,118 @@
+/*
+ * Base: reset, page, layout. Consumes theme tokens only (THEMING.md rule 2);
+ * scripts/lint-tokens.js fails the build on any raw color, font, radius,
+ * shadow or motion value here.
+ */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: var(--t-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition: background-color var(--m-med) var(--ease), color var(--m-med) var(--ease);
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+h1, h2, h3, h4, h5, h6, p, ul, ol, pre, blockquote, figure { margin: 0; }
+img, svg { display: block; max-width: 100%; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-input); }
+::selection { background: var(--accent-wash); }
+
+[hidden] { display: none !important; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---- layout ------------------------------------------------------------- */
+
+.app {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+  height: 100dvh;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--s5) var(--s4) var(--s4);
+  border-right: 1px solid var(--hairline);
+  background: var(--bg);
+}
+
+.main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  backdrop-filter: blur(var(--material-blur));
+  -webkit-backdrop-filter: blur(var(--material-blur));
+  container: main / inline-size;
+}
+
+.scroller {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.thread {
+  max-width: var(--column);
+  margin: 0 auto;
+  padding: var(--s6) var(--s5) var(--s6);
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.dock {
+  max-width: var(--column);
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 var(--s5) var(--s4);
+}
+
+.scrim { display: none; }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(86vw, 320px);
+    z-index: 20;
+    box-shadow: var(--shadow-2);
+    opacity: 0;
+    translate: calc(-1 * var(--shift)) 0;
+    visibility: hidden;
+    transition: opacity var(--m-med) var(--ease), translate var(--m-med) var(--ease), visibility 0s linear var(--m-med);
+  }
+  .app.drawer-open .sidebar {
+    opacity: 1;
+    translate: 0 0;
+    visibility: visible;
+    transition: opacity var(--m-med) var(--ease), translate var(--m-med) var(--ease);
+  }
+  .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: color-mix(in srgb, var(--text) 18%, transparent);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--m-med) var(--ease);
+  }
+  .app.drawer-open .scrim { opacity: 1; pointer-events: auto; }
+  .thread { padding: var(--s5) var(--s4); }
+  .dock { padding: 0 var(--s3) var(--s3); }
+}

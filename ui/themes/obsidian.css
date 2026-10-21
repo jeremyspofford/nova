@@ -1,0 +1,62 @@
+/*
+ * Obsidian: optional theme.
+ * "A quiet control room: dark-first, dense, keyboard-driven."
+ *
+ * Token file only (THEMING.md rule 1). Values come from design-system-obsidian.md;
+ * "derived" marks values the spec does not define or names differently
+ * (the spec's --panel is the contract's --surface). Dark in both modes:
+ * the spec defers a light Obsidian to a later derived theme.
+ */
+:root[data-theme="obsidian"] {
+  color-scheme: dark;
+
+  --bg: #0B0C0E;
+  --surface: #131417;          /* spec --panel */
+  --raised: #1A1B1F;
+  --wash: #1A1B1F;             /* derived (mockups.html user bubble) */
+  --text: #E8E9EB;
+  --text-2: #9BA0A6;
+  --text-3: #62666D;
+  --hairline: rgba(255, 255, 255, 0.07);
+  --accent: #E8B34B;
+  --accent-wash: rgba(232, 179, 75, 0.14);  /* spec --accent-dim */
+  --accent-text: #141310;      /* derived (mockups.html) */
+  --success: #4CC38A;
+  --warning: #E8B34B;
+  --danger: #E5534B;
+  --code-bg: #0E0F11;
+
+  --font: "Inter", -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --font-display: var(--font-mono);           /* derived: the empty state is a mono line */
+  --t-display: 500 20px/28px var(--font-display);   /* derived */
+  --t-wordmark: 650 16px/20px var(--font);          /* derived (mockups.html) */
+  --t-title: 600 13px/18px var(--font);
+  --t-body: 400 14px/21px var(--font);
+  --t-callout: 400 12px/17px var(--font);           /* spec --t-small */
+  --t-caption: 500 10.5px/14px var(--font);         /* derived */
+  --t-margin: 400 12px/16px var(--font-mono);       /* derived (mockups.html) */
+  --t-mono: 400 12.5px/18px var(--font-mono);
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px; /* --s7 derived */
+  --column: 760px;
+
+  --r-card: 8px;
+  --r-bubble: 10px;            /* derived (mockups.html) */
+  --r-input: 8px;
+  --r-pill: 999px;
+  --shadow-1: none;            /* derived: borders, not shadows */
+  --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.5);   /* spec --shadow-pop */
+  --material-blur: 0px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --m-fast: 120ms;
+  --m-med: 180ms;
+  --m-slow: 260ms;
+  --shift: 4px;
+}
+
+/* Reduced motion: durations become 1ms; the caret is static. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="obsidian"] { --m-fast: 1ms; --m-med: 1ms; --m-slow: 1ms; --shift: 0px; }
+}
