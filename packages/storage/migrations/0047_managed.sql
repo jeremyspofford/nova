@@ -1,4 +1,0 @@
--- 0047 — M8 managed: no tables. Managed policy (FR-106; docs/12 §10; ADR-078, ADR-097 D4) lives
--- outside the database: the OS-protected local file, the signed remote policy it names, and that
--- policy's last good copy in <dataDir>/managed/remote-policy.json, checked against the pinned key
--- whenever it is read. Data exports never carry it: it is the machine's, not the account's.

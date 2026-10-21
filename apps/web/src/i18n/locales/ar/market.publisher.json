@@ -1,6 +1,0 @@
-{
-  "label": "التوقيع",
-  "notTrusted": "موقّع بالمفتاح {fingerprint}، غير موثوق به",
-  "signedBy": "موقّع من {name}",
-  "signedTrustedKey": "موقّع بمفتاح تثق به ({fingerprint})"
-}
