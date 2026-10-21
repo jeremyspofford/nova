@@ -1,0 +1,153 @@
+{
+  "budgets": {
+    "serverStartMs": 152,
+    "pageInteractiveMs": 146,
+    "domContentLoadedMs": 90,
+    "sendFeedbackMs": 18,
+    "scroll": {
+      "frames": 384,
+      "mainThreadP95Ms": 3.88,
+      "mainThreadMaxMs": 6.09,
+      "frameIntervalP95Ms": 16.8,
+      "slowIntervals": 14
+    }
+  },
+  "checks": [
+    {
+      "name": "cold start ≤ 2 s (server + page)",
+      "ok": true,
+      "detail": "152 ms server + 146 ms page"
+    },
+    {
+      "name": "the composer is focused on arrival",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "\"/\" focuses the composer",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "send → visible feedback ≤ 100 ms",
+      "ok": true,
+      "detail": "18 ms"
+    },
+    {
+      "name": "reply rendered markdown: list, code, table",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "copy works and says so",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "⌘/Ctrl ⇧ O starts a new conversation",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "an approval card takes focus",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Enter allows; the card files itself as a stamped record",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Esc declines, and Nova carries on without it",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Esc stops a reply and keeps what was written",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a model failure reads like a person wrote it, with Try again",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "keyboard focus is visible",
+      "ok": true,
+      "detail": "solid"
+    },
+    {
+      "name": "Alt ↑/↓ moves between conversations",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "offline banner",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "page has no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a long conversation opens at its latest message",
+      "ok": true,
+      "detail": "0 px from the end"
+    },
+    {
+      "name": "scrolling a long thread holds 60 fps",
+      "ok": true,
+      "detail": "page work p95 3.9 ms/frame (max 6.1) over 385 frames; frame interval p95 16.8 ms on this GPU-less machine"
+    },
+    {
+      "name": "paper-dark: no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "aurora: no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "aurora-dark: no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "obsidian: no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "mobile: no horizontal page scroll",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "reduced motion: no translation (Paper crossfades only)",
+      "ok": true,
+      "detail": "0px"
+    },
+    {
+      "name": "reduced motion: Obsidian durations become 1 ms",
+      "ok": true,
+      "detail": "1ms"
+    },
+    {
+      "name": "style reference renders without errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "server unreachable: banner, and the message stays in the box",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "longId": "2026-10-21-aosawv"
+}

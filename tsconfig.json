@@ -1,5 +1,0 @@
-{
-  "extends": "./tsconfig.base.json",
-  "include": ["scripts/**/*.ts", "e2e/**/*.ts", "playwright.config.ts", "eslint.config.js"],
-  "compilerOptions": { "allowJs": true, "checkJs": false, "lib": ["ES2024", "DOM"] }
-}
