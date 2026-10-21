@@ -30,6 +30,6 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
   the agent's environment (`agentEnv()` in `src/agent.js`).
 - Don't `pkill -f` a pattern that appears in your own command line.
 - Components never use raw values; the lint will say so.
-- Code that rewrites git history (e.g. scrubbing forgotten memory from the
-  home repo) is blocked by the build environment's safety check unless the
-  person explicitly approves it first.
+- Memory is gitignored inside the home folder (Jeremy agreed), so Forget
+  never needs to rewrite history. Code that rewrites git history is blocked
+  by the build environment's safety check anyway.

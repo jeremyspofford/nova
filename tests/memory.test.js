@@ -30,7 +30,7 @@ test('no memory folder is not an error', () => {
   assert.deepEqual(searchMemory(join(home, 'nope'), 'inhaler plan'), []);
 });
 
-import { copyFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync } from 'node:fs';
 import { Memory } from '../src/memory.js';
 
 const fresh = () => {
@@ -101,4 +101,35 @@ test('entries written by hand can be read, edited and forgotten', () => {
   assert.equal(edited.by, 'you');
   assert.equal(m.forget(kids.id).length, 1);
   assert.equal(readFileSync(join(h, 'MEMORY.md'), 'utf8'), `# MEMORY.md\n\n## Facts\n\n- Grew up in Columbus, Ohio. <!-- id=${ohio.id} by=you updated=2026-10-21T16:42:00.000Z -->\n`);
+});
+
+import { execFileSync } from 'node:child_process';
+import { ensureGit, commitHome } from '../src/home.js';
+
+test('memory stays out of the home folder\'s git history, so forgetting is final', async () => {
+  const { h, m } = fresh();
+  mkdirSync(join(h, 'memory'), { recursive: true });
+  writeFileSync(join(h, 'memory', 'README.md'), '# memory/\n');
+  writeFileSync(join(h, 'USER.md'), '# USER.md\n');
+  assert.equal(await ensureGit(h), true);
+  m.remember({ kind: 'fact', text: 'Allergic to penicillin.', from: 's/t1' }, now);
+  m.note({ text: 'Mentioned the penicillin allergy.', from: 's/t1' }, now);
+  await commitHome(h, 'Nova: turn');
+  const tracked = execFileSync('git', ['-C', h, 'ls-files'], { encoding: 'utf8' });
+  assert.match(tracked, /USER\.md/);
+  assert.match(tracked, /memory\/README\.md/);
+  assert.doesNotMatch(tracked, /MEMORY\.md|2026-10-21/);
+  const everything = execFileSync('git', ['-C', h, 'log', '--all', '-p'], { encoding: 'utf8' });
+  assert.doesNotMatch(everything, /penicillin/);
+});
+
+test('an older home that tracked memory stops tracking it', async () => {
+  const { h } = fresh();
+  execFileSync('git', ['-C', h, 'init', '-q']);
+  execFileSync('git', ['-C', h, 'add', '-A']);
+  execFileSync('git', ['-C', h, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'old']);
+  await ensureGit(h);
+  assert.doesNotMatch(execFileSync('git', ['-C', h, 'ls-files'], { encoding: 'utf8' }), /MEMORY\.md/);
+  assert.match(readFileSync(join(h, '.gitignore'), 'utf8'), /^MEMORY\.md$/m);
+  assert.ok(existsSync(join(h, 'MEMORY.md')), 'the file itself stays');
 });

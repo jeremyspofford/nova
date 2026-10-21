@@ -7,7 +7,6 @@ import { loadConfig } from './config.js';
 import { ensureGit, seedHome } from './home.js';
 import { SessionStore, validId } from './sessions.js';
 import { Runner, BusyError } from './runner.js';
-import { commitHome } from './home.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -37,7 +36,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   runner.on('event', (_, ev) => { if (ev.type === 'session' || ev.type === 'title') announce('sessions'); });
   const memory = runner.memory;
   const titles = () => Object.fromEntries(store.list().map((s) => [s.id, s.title]));
-  const saved = (message) => { announce('memory'); if (config.commit !== false) commitHome(config.home, message); };
+  const saved = () => announce('memory'); // memory isn't in git history, so there's nothing to commit
 
   const json = (res, code, body) => {
     res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -121,14 +120,14 @@ export function createNova(config = loadConfig(), deps = {}) {
         const { items } = await readBody(req);
         if (!Array.isArray(items)) return json(res, 400, { error: 'items must be a list' });
         memory.restore(items);
-        saved('Nova: memory restored');
+        saved();
         return json(res, 200, { ok: true });
       }
       if (!/^[mnh][0-9a-f]{8}$/.test(String(id))) return json(res, 404, { error: 'No such memory' });
       if (action === 'forget') {
         const removed = memory.forget(id);
         if (!removed.length) return json(res, 404, { error: 'That was already forgotten.' });
-        saved('Nova: forgot something');
+        saved();
         return json(res, 200, { removed });
       }
       if (!action) {
@@ -136,7 +135,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         let entry;
         try { entry = memory.edit(id, text); } catch (e) { return json(res, 400, { error: e.message }); }
         if (!entry) return json(res, 404, { error: 'That memory is gone. It may have been forgotten.' });
-        saved('Nova: memory edited');
+        saved();
         return json(res, 200, { entry });
       }
       return json(res, 404, { error: 'Not found' });

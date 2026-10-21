@@ -5,7 +5,7 @@ facts, preferences, decisions and corrections in `MEMORY.md`, and day detail
 in dated notes. Both are written before each reply finishes. The Memory view
 shows what Nova knows and where each entry came from, and lets you edit or
 forget any entry with one gesture. Evidence comes from `npm run shots`
-(39 of 39 checks, [results](screenshots/results.json)), `npm test` (50 pass),
+(39 of 39 checks, [results](screenshots/results.json)), `npm test` (52 pass),
 and two turns against the real `claude -p`.
 
 ## How memory is kept
@@ -54,12 +54,13 @@ elsewhere that share most of its words. Without that, search could bring the
 memory back. The toast says how many notes went with it. Undo restores all of
 it in its original place.
 
-**Still open: your call on git history.** The home folder commits after every
-change, so older commits still hold forgotten text. I recommended rewriting
-that history on Forget. The build environment blocked me from writing
-history-rewriting code without your explicit go-ahead, so it isn't built.
-What ships deletes the text from the files only, and the toast and README
-don't claim more than that.
+**Nothing left behind in history.** The Nova folder keeps a local git
+history of conversations and standing files, but `MEMORY.md` and the dated
+notes stay out of it. Nova adds them to the folder's `.gitignore`, and an
+older folder that tracked them stops at the next start. Session logs record
+memory by id only. So once something is forgotten, the folder has no copy
+left. Tested: after a remember and a commit, `git log --all -p` never
+contains the memory's words.
 
 ## Motion
 
@@ -121,7 +122,8 @@ exchange opens the entry in Memory.
 
 ## Decisions for you
 
-1. **Git history on Forget** (the card in the thread). See above.
+1. Memory is kept out of the Nova folder's git history (you agreed in the
+   thread), so memory edits have no undo trail beyond the 8-second Undo.
 2. `write_file` can no longer touch `MEMORY.md` or `memory/`. Memory changes
    only through memory blocks, so every entry keeps its id and source.
 3. Today's and yesterday's notes are now read into every conversation, so a

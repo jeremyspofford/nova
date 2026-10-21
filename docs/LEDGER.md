@@ -28,8 +28,13 @@ removes a memory from every conversation view too.
 
 **2026-10-21 (Phase 2): forgetting a memory forgets matching day notes.**
 Same exchange and one shared word stem, or most of its word stems anywhere.
-Otherwise search would bring it back. Git history is untouched pending
-Jeremy's decision.
+Otherwise search would bring it back.
+
+**2026-10-21 (Phase 2): memory stays out of the home's git history.** The
+home folder's `.gitignore` excludes `MEMORY.md` and `memory/*.md`, so
+forgetting leaves no copy in old commits, and no history is ever rewritten.
+Conversations and standing files keep their audit trail. Agreed with Jeremy
+in the thread.
 
 **2026-10-21: personal data lives outside the code.** The repo is public
 (AGPL). Each person's Nova data is one folder of plain files (`NOVA_HOME`,
