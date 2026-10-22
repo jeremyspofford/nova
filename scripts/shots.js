@@ -788,6 +788,23 @@ await golden({ theme: 'aurora', mode: 'light' }, 'aurora');
 await golden({ theme: 'aurora', mode: 'dark' }, 'aurora-dark');
 await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
 
+// ---- appearance: the dialog opens and a pick changes the theme -----------------------
+{
+  const p = await page({ theme: 'paper', mode: 'light' });
+  await p.goto(base);
+  await p.waitForSelector('html[data-ready]');
+  await p.click('#appearance');
+  const opened = await p.waitForFunction(() => document.getElementById('settings').open, null, { timeout: 3000 }).then(() => true, () => false);
+  check('appearance: the dialog opens', opened);
+  if (opened) await p.click('#theme-choices input[value="obsidian"]', { force: true });
+  const theme = await p.evaluate(() => document.documentElement.dataset.theme);
+  check('appearance: picking a theme changes data-theme', theme === 'obsidian', theme);
+  if (opened) await p.click('#settings button[value="done"]');
+  const closed = await p.evaluate(() => !document.getElementById('settings').open && document.activeElement?.id === 'appearance');
+  check('appearance: Done closes the dialog and returns focus', opened && closed);
+  check('appearance: no script errors', p.errors.length === 0, p.errors.join(' | '));
+}
+
 // ---- mobile -------------------------------------------------------------------------
 {
   const p = await page({ width: 390, height: 844 });
