@@ -64,7 +64,7 @@ test('htmlToText keeps the words and drops the markup', () => {
 });
 
 test('the protocol lists every tool on offer', () => {
-  const p = toolProtocol(availableTools({ gmail: true, skills: 1 }));
+  const p = toolProtocol(availableTools({ gmail: true, skills: 1, delegate: true }));
   for (const name of Object.keys(TOOLS)) assert.ok(p.includes(name));
 });
 
@@ -86,4 +86,18 @@ test('the stream filter hides memory blocks, even split across chunks, and keeps
   assert.equal(chunks.map((c) => f.push(c)).join(''), 'Sure.  Anything else? a < b');
   const g = new ToolTagFilter();
   assert.equal(['Checking. <no', 'te>x</note>', '<tool_call name="read_file">{}</tool_call> never'].map((c) => g.push(c)).join(''), 'Checking. ');
+});
+
+test('web_fetch fails when the page answers with an error, and reads it when it answers', async () => {
+  const { createServer } = await import('node:http');
+  const server = createServer((req, res) => {
+    if (req.url === '/busy') { res.writeHead(429, { 'content-type': 'text/html' }); res.end('<p>Slow down</p>'); return; }
+    res.writeHead(200, { 'content-type': 'text/html' }); res.end('<h1>E-bikes</h1><p>Three to compare.</p>');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await assert.rejects(TOOLS.web_fetch.run({ url: `${base}/busy` }, {}), /HTTP 429/);
+    assert.match(await TOOLS.web_fetch.run({ url: `${base}/` }, {}), /^HTTP 200 OK[\s\S]*Three to compare/);
+  } finally { server.close(); }
 });

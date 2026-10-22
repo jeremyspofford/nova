@@ -5,13 +5,14 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 
 ## Where things are
 
-- Phases 1 to 3 approved and merged (#198, #199, #200). Phase 4 (schedules,
-  the main conversation as the front page, the morning digest) delivered for
-  review; do not start Phase 5 without Jeremy's approval.
+- Phases 1 to 4 approved and merged (#198, #199, #200, #201). Phase 5
+  (helpers and the Activity view) delivered for review. It is the last
+  planned phase; MCP connectors were agreed as a later extra, not started.
 - Reviews: [../phase-1-review.md](../phase-1-review.md),
   [../phase-2-review.md](../phase-2-review.md),
   [../phase-3-review.md](../phase-3-review.md),
-  [../phase-4-review.md](../phase-4-review.md). Screenshots:
+  [../phase-4-review.md](../phase-4-review.md),
+  [../phase-5-review.md](../phase-5-review.md). Screenshots:
   [../screenshots/](../screenshots/).
 - The previous attempt is preserved at the `archive/attempt-6` tag.
 
@@ -42,6 +43,16 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 - Nothing real reaches Gmail from the build container: there are no Google
   credentials here. Gmail is verified against the stand-in, plus the real
   model reading the stand-in's mailbox.
-- Scheduled runs are unattended: approvals are auto-declined (`auto: true` on
-  the approval event). Don't make a run wait for a person; it would block the
-  queue behind it.
+- Permissions: every tool that needs an OK declares `permission`; Settings
+  lists them from the tools, all "ask" by default (Jeremy's choice), stored in
+  `~/permissions.md`. Switched on: taken without asking anywhere
+  (`auto: true`). Off: unattended runs and helpers wait for the answer; a
+  waiting scheduled run moves to `scheduler.waiting` so the queue continues.
+- After a helper's report, `runner.followUp()` starts a turn with no user
+  text (`followup: <handoff id>`) so Nova comments on it.
+- Helpers are sessions too (`kind: "helper"`). Their context is scoped in
+  `buildSystem(..., { helper })`; keep memory out of it. A helper's report is
+  delivered by `Helpers.hand()`, which also records `delivered` in the
+  helper's log, so Activity and the log can link to the report.
+- Activity reads every log modified in the week. If it ever gets slow, the
+  per-file cache in `src/activity.js` is the place to look, not a new store.

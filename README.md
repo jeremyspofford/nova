@@ -80,14 +80,36 @@ conversation, a front page that reports from scheduled work land in; + or
 ⌘⇧O starts a separate conversation. A schedule is a markdown file in
 `~/Nova/schedules/` (`name`, a five-field `cron` on your time zone, where to
 `deliver`, and the instructions as its body). Nova runs it unattended, one at
-a time, and anything that would need your OK is declined and suggested in the
-report instead. The Schedules view (`/schedules`) shows what's set, when it
+a time. A step that needs your OK waits for you (Activity shows it), unless
+you've switched that permission on in Settings. The Schedules view (`/schedules`) shows what's set, when it
 last ran and what it said, with Run now, Pause and Remove. Nova ships one
 schedule, the morning digest, to turn on there; you can also ask for one in
 any conversation ("Every Friday at 4, remind me to send my timesheet"), which
 waits for your OK. Schedules run only while Nova is running: a run missed in
 the last six hours runs when Nova starts, and older ones are recorded as
 missed. Every run is logged in `schedules/runs.jsonl`.
+
+**Settings and permissions.** Settings (`/settings`) has one switch per
+permission: each kind of step that changes something outside the
+conversation (running commands, going online after reading mail, Gmail
+drafts and tidying, schedules). All start at Ask first; switched on, Nova
+does that without asking, anywhere, and Activity shows each time. The list
+comes from Nova's tools, so a new tool's permission appears on its own. The
+switches are kept in `~/Nova/permissions.md`.
+
+**Helpers and Activity.** Nova can hand a long piece of work (research,
+comparing options, going through files) to a helper with the `delegate` tool,
+so the conversation stays with you. A helper starts fresh: it sees only Nova's
+brief, who you are, and up to five files Nova passes. It doesn't see the
+conversation or your memory, keeps nothing in memory, and waits for you on
+any step that needs your OK. When its report arrives, Nova adds a short take
+on what it means. Up to
+three run at once; more wait their turn. The report comes back to the
+conversation that asked. The Activity view (`/activity`) shows what Nova is
+doing and did, a week at a time: each reply, scheduled run and helper, with
+its steps (what it read, searched, ran and kept), what it asked you and what
+you said. Stop or retry a helper there. Activity is read from the session
+logs; it keeps no data of its own.
 
 ## Configure
 

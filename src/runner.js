@@ -9,11 +9,12 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { runAgent, AgentError } from './agent.js';
-import { buildPrompt, buildSystem, runSection, schedulesSection, skillsSection } from './context.js';
+import { buildPrompt, buildSystem, helperSection, runSection, schedulesSection, skillsSection } from './context.js';
 import { Memory } from './memory.js';
 import { Skills } from './skills.js';
 import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
+import { Permissions, permissionFor, permissionsSection } from './permissions.js';
 import { commitHome } from './home.js';
 import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
@@ -31,6 +32,8 @@ export class Runner extends EventEmitter {
     this.skills = new Skills(config.root, config.home);
     this.schedules = new Schedules(config.root, config.home, config.timezone);
     this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone });
+    this.permissions = new Permissions(config.home, () => TOOLS);
+    this.helpers = null; // set by the server: where delegate hands work
   }
 
   record(sessionId, ev) {
@@ -67,14 +70,37 @@ export class Runner extends EventEmitter {
     if (!this.store.exists('main')) this.record('main', { type: 'session', id: 'main', title: 'Main conversation', kind: 'main', v: 1 });
   }
 
-  // unattended: { id, name, due, late } for a scheduled run, where no one is
-  // there to approve anything.
-  send(sessionId, text, { unattended = null } = {}) {
+  // unattended: { id, name, due, late } for a scheduled run. helper:
+  // { title, files } for a helper's work. Either way no one is there to
+  // approve anything.
+  send(sessionId, text, { unattended = null, helper = null, followup = null } = {}) {
     if (this.active.has(sessionId)) throw new BusyError();
     const turn = shortId();
-    this.record(sessionId, { type: 'user', turn, text, ...(unattended ? { schedule: unattended.id } : {}) });
-    this.start(sessionId, turn, 0, { unattended });
+    this.record(sessionId, { type: 'user', turn, text, ...(unattended ? { schedule: unattended.id } : {}), ...(followup ? { followup } : {}) });
+    this.start(sessionId, turn, 0, { unattended, helper });
     return turn;
+  }
+
+  // What a run (scheduled, or a helper's) hands back: its writing after the
+  // last tool it used, or why there's none.
+  report(sessionId) {
+    const turn = reduce(this.store.read(sessionId)).turns[0];
+    if (!turn) return { ok: false, text: '', failure: 'It never started.', stopped: false };
+    const lastTool = turn.items.findLastIndex((i) => i.kind === 'tool');
+    const text = turn.items.slice(lastTool + 1).filter((i) => i.kind === 'text').map((i) => i.text).join('\n\n').trim();
+    const stopped = turn.state === 'stopped';
+    const failure = turn.items.find((i) => i.kind === 'error')?.message
+      ?? (stopped ? 'Nova was stopped before it finished.' : !text ? 'It finished without writing a report.' : '');
+    return { ok: turn.state === 'done' && !!text, text, failure, stopped };
+  }
+
+  // Nova's own word on a report that just arrived: a turn with no message
+  // from the person, started once the conversation is free.
+  async followUp(sessionId, handoff) {
+    for (;;) {
+      await this.idle(sessionId);
+      try { return this.send(sessionId, '', { followup: handoff }); } catch (e) { if (!(e instanceof BusyError)) throw e; }
+    }
   }
 
   // Resolves once the conversation has no reply in progress.
@@ -116,11 +142,12 @@ export class Runner extends EventEmitter {
     return true;
   }
 
-  start(sessionId, turn, attempt, { unattended = null } = {}) {
+  start(sessionId, turn, attempt, { unattended = null, helper = null } = {}) {
     const controller = new AbortController();
     // skills: the playbooks this reply follows. tainted: mail has been read in
-    // this conversation, so going online asks first.
-    const run = { controller, pending: null, skills: new Map(), tainted: false, unattended, live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
+    // this conversation, so going online asks first. alone: no one is there
+    // to approve anything.
+    const run = { controller, pending: null, skills: new Map(), tainted: false, unattended, helper, alone: !!(unattended || helper), live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
     this.active.set(sessionId, run);
     this.emit('live', sessionId, { ...run.live });
     run.done = this.loop(sessionId, run)
@@ -145,24 +172,30 @@ export class Runner extends EventEmitter {
     run.tainted = before.turns.some((t) => t.items.some((i) => i.kind === 'tool' && TOOLS[i.name]?.mail && i.result?.ok));
 
     // The log keeps where each note came from, not its words: what is
-    // forgotten later stays gone from the conversation view too.
-    const recall = this.memory.search(question);
+    // forgotten later stays gone from the conversation view too. A helper's
+    // context is scoped to its brief, so it recalls nothing.
+    const recall = run.helper ? [] : this.memory.search(question);
     if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall.map(({ id, source }) => ({ id, source })) });
     for (const s of this.skills.match(question)) this.follow(sessionId, tag, run, s, 'matched');
 
     for (let step = 0; step <= this.config.maxSteps; step++) {
       const session = reduce(this.store.read(sessionId));
       const installed = this.skills.installed();
-      const tools = availableTools({ gmail: this.gmail.status().connected, skills: installed.length });
+      // Helpers and scheduled runs can't hand work to helpers of their own,
+      // and a helper doesn't touch schedules.
+      const tools = availableTools({ gmail: this.gmail.status().connected, skills: installed.length, delegate: !run.alone && !!this.helpers })
+        .filter((n) => !(run.helper && n.startsWith('schedule_')));
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
-      const schedules = schedulesSection(this.schedules.list(), this.config.timezone);
-      const scheduled = run.unattended ? runSection(run.unattended, this.config.timezone) : '';
+      const schedules = run.helper ? '' : schedulesSection(this.schedules.list(), this.config.timezone);
+      const allowed = run.alone ? permissionsSection(this.permissions.list()) : '';
+      const scheduled = run.unattended ? runSection(run.unattended, this.config.timezone, allowed) : '';
+      const helper = run.helper ? helperSection(run.helper, allowed) : '';
       const filter = new ToolTagFilter();
       this.setLive(sessionId, { phase: 'thinking', text: '' });
       let streamed = '';
       const { text, aborted } = await this.agent({
         cmd: this.config.agentCmd,
-        system: buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled }),
+        system: buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper }),
         prompt: buildPrompt(session, recall, this.config),
         signal,
         onText: (chunk) => {
@@ -185,7 +218,7 @@ export class Runner extends EventEmitter {
       const { visible, call, error } = parseToolCall(said, tools);
       if (visible) this.record(sessionId, { type: 'assistant', ...tag, id: shortId(), text: visible });
       run.live.text = '';
-      if (ops.length) this.keep(sessionId, tag, ops);
+      if (ops.length && !run.helper) this.keep(sessionId, tag, ops); // memory is kept in the conversation that asked
       if (!call && !error) { this.record(sessionId, { type: 'done', ...tag }); return; }
 
       if (step === this.config.maxSteps) {
@@ -199,6 +232,7 @@ export class Runner extends EventEmitter {
         home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
         gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
         schedules: this.schedules, sessionId,
+        delegate: (args) => this.helpers.spawn({ ...args, parent: sessionId, turn }),
       };
       // A tool that changes something outside Nova shows exactly what will
       // change before the person decides; if that can't be worked out, it fails here.
@@ -215,13 +249,12 @@ export class Runner extends EventEmitter {
         continue;
       }
 
-      // A scheduled run has no one to ask, so what needs an OK doesn't happen.
-      if (needsApproval && run.unattended) {
-        this.record(sessionId, { type: 'approval', ...tag, id, decision: 'deny', auto: true });
-        continue;
-      }
-
-      if (needsApproval) {
+      // A step the person lets Nova take without asking (Settings) goes ahead.
+      // Otherwise Nova asks and waits, even with no one watching: a scheduled
+      // run or a helper waits for the answer, and Activity shows it waiting.
+      if (needsApproval && this.permissions.allows(permissionFor(call.name, tool, { tainted: run.tainted }))) {
+        this.record(sessionId, { type: 'approval', ...tag, id, decision: 'allow', auto: true });
+      } else if (needsApproval) {
         this.setLive(sessionId, { phase: 'approval', approval: id });
         const decision = await new Promise((resolve) => {
           run.pending = { id, resolve };

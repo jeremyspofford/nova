@@ -15,6 +15,9 @@
 //   "open …"     → fetches a page (asks first after mail has been read)
 //   "remind me …" → sets a one-time schedule for tomorrow at 9 (asks first)
 //   a scheduled run → the morning digest: searches Gmail if it's connected, then a front page
+//   "ask a helper …" → hands the work to a helper (with workspace/bikes.md if it exists)
+//   a helper's brief → "… compare …" searches the web, then reports; "… run …" tries a command
+//     (declined: no one to ask); "… slow …" takes its time; "… fail …" fails
 //   anything else → a reply with a list, code and a table
 const delay = Number(process.env.FAKE_DELAY ?? 12);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -57,7 +60,39 @@ if (msg.includes('fail')) {
   process.exit(2);
 }
 
-if (input.includes('# This is a scheduled run') && /\b(digest|fail)\b/.test(msg)) {
+if (convo.lastIndexOf('<followup') > lastUser) {
+  // Nova's word on a helper's report that just arrived.
+  const ebikes = /Ridgeline C2/.test(convo.slice(convo.lastIndexOf('<handoff')));
+  await stream(ebikes
+    ? "My take: get the **Ridgeline C2**. The mid-drive handles your hill, and it's $151 under budget. Want me to find a shop near you where you can test-ride one?"
+    : 'That report is in. Tell me if you want me to act on any of it.');
+} else if (input.includes('# You are a helper')) {
+  // The brief, and nothing of the conversation it came from.
+  if (/\bslow\b/.test(msg)) await stream('Working through this one step at a time, so there is time to watch it in Activity and stop it if you want to.', 400);
+  else if (/\brun\b/.test(msg) && !result) await stream('<tool_call name="exec">{"command": "ls ~/workspace"}</tool_call>');
+  else if (/\brun\b/.test(msg) && result.includes('ok="false"')) await stream("I couldn't list your workspace: you've asked to be asked before commands run, and helpers can't ask. If you'd like, I can run `ls ~/workspace` with you in the conversation.");
+  else if (/\brun\b/.test(msg)) await stream('Your workspace is listed above: I ran `ls ~/workspace` on my own, as your permissions allow.');
+  else if (/\bcompare\b/.test(msg) && hasTool('web_search') && !result) await stream('<tool_call name="web_search">{"query": "best commuter e-bikes under $2000 2026"}</tool_call>');
+  else {
+    const notes = input.includes('<file path="~/workspace/bikes.md">') ? ' Your notes say the ride is 9 miles with one long hill, so I weighted torque and range.' : '';
+    await stream(`The **Ridgeline C2** is the one to get: $1,849, a mid-drive motor that climbs well, and 60 miles of range.${notes}
+
+| Bike | Price | Motor | Range |
+| --- | --- | --- | --- |
+| Ridgeline C2 | $1,849 | Mid-drive, 85 Nm | 60 mi |
+| Voltway Metro | $1,499 | Hub, 50 Nm | 45 mi |
+| Larkspur City 3 | $1,999 | Mid-drive, 65 Nm | 55 mi |
+
+The Voltway is the budget pick if the hill is gentle. Prices are as the shops listed them today.`);
+  }
+} else if (/^ask a helper\b/.test(msg) && hasTool('delegate')) {
+  if (!result) {
+    const files = input.includes('workspace/bikes.md') || original.includes('notes') ? ['workspace/bikes.md'] : [];
+    const task = original.replace(/^ask a helper (to )?/i, '');
+    await stream(`I'll hand that to a helper so we can keep talking.\n\n<tool_call name="delegate">${JSON.stringify({ title: /e-?bike/i.test(task) ? 'Compare e-bikes' : '', task: `${task[0].toUpperCase()}${task.slice(1)}.${/compare/i.test(task) ? ' Report back with one recommendation and a short comparison table.' : ''}`, files })}</tool_call>`);
+  } else if (result.includes('ok="false"')) await stream("I couldn't start a helper for that. I'll do it here instead if you like.");
+  else await stream("A helper is on it. Its report will come back here when it's done, and you can watch it in Activity.");
+} else if (input.includes('# This is a scheduled run') && /\b(digest|fail)\b/.test(msg)) {
   if (msg.includes('fail')) {
     process.stderr.write('fake-agent: simulated failure (connection refused)\n');
     process.exit(2);

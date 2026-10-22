@@ -103,6 +103,49 @@ quoting only prices it saw made it stop short of a recommendation. The
 playbook now asks deciding details first, caps page reads at about six, and
 falls back to agreeing sources labelled "reported".
 
+**2026-10-21 (Phase 5): permissions, all "ask" by default, in Settings.**
+Jeremy first chose full autonomy for unattended work, then revised: every
+permission defaults to ask, with a Settings page of switches whose list is
+dynamic. Each tool that needs an OK declares `permission: {id, label,
+note}`; tools without one get a permission named after the tool, so plugin,
+MCP or Nova-made tools appear without code changes. Going online after
+reading mail is the one permission not tied to a tool. On = take the step
+without asking everywhere (`approval {allow, auto: true}`, stamped "Without
+asking"). Off = ask; with no one watching, the run or helper waits for the
+answer, and a waiting scheduled run steps aside so the queue keeps moving.
+Stored in `~/permissions.md`; `write_file` can't edit it. This replaces
+Phase 4's "unattended runs decline approvals".
+
+**2026-10-21 (Phase 5): Nova comments on a helper's report.** Jeremy's call.
+After a helper's report is delivered (ok, not stopped), the runner starts a
+turn with no message from the person (`user {text: '', followup: <handoff
+id>}`), prompted with a `<followup>` note asking for its take and the next
+step. Nothing is shown for the person's side of that turn.
+
+**2026-10-21 (Phase 5): helpers start fresh.** A helper is its own session
+(`kind: "helper"`, hidden from the list) with a scoped context: the base
+prompt, AGENTS/SOUL/IDENTITY/USER, skills, its brief and up to five files the
+parent passes. No MEMORY.md, day notes, recall or schedules, and memory blocks
+it writes are ignored. The parent writes a self-contained brief, which keeps
+the helper's context small and its work checkable from the log.
+
+**2026-10-21 (Phase 5): helpers can't nest or schedule.** A step that needs
+an OK waits for the person, per Settings (above); `delegate` and
+`schedule_*` aren't offered. Up to three run at once and the rest queue. Stop and Try again are
+in Activity and on the report; on start, a helper cut off by a shutdown
+reports that it didn't finish.
+
+**2026-10-21 (Phase 5): Activity is derived, not stored.** `/api/activity`
+reads the session logs and `runs.jsonl` for a week in the person's time zone,
+caching each parsed log by size and modified time. Steps keep only a few
+arguments (path, url, command, query, name, id, title); tool output stays in
+the logs. An `activity` server event (throttled) keeps the "N waiting" count
+in the sidebar current.
+
+**2026-10-21 (Phase 5): a fetch that fails is a failed step.** `web_fetch`
+now throws on an HTTP error status instead of returning the error page, so
+Activity and the transcript don't show a 429 as "Read".
+
 **2026-10-21 (Phase 4): the main conversation is the front page.** "/"
 opens one long conversation (`sessions/main.jsonl`) that scheduled reports are
 delivered into, and a reply to a report continues there. New conversations

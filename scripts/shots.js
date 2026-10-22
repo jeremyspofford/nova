@@ -4,7 +4,7 @@
 // exercises each state, and measures the performance budgets.
 // Usage: node scripts/shots.js [outDir]   (CHROMIUM=/path/to/chrome to override)
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -549,6 +549,144 @@ results.budgets.serverStartMs = Math.round(serverMs);
   check('schedules have no script errors', p.errors.length === 0, p.errors.join(' | '));
 }
 
+// ---- helpers and Activity: work handed off, and what Nova is doing and did --------
+let helperRun;
+{
+  const p = await page({ height: 900 });
+  mkdirSync(join(home, 'workspace'), { recursive: true });
+  writeFileSync(join(home, 'workspace', 'bikes.md'), 'Commute: 9 miles each way, one long hill.\n');
+  await p.goto(`${base}/new`);
+  await p.waitForSelector('.empty');
+  await p.keyboard.type('Ask a helper to compare commuter e-bikes under $2,000 using my notes');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.handoff.is-helper', { timeout: 20000 });
+  const afterReport = () => { const all = [...document.querySelectorAll('#thread .turn')]; return all[all.indexOf(document.querySelector('.handoff.is-helper')) + 1]; };
+  await p.waitForFunction(`(${afterReport})()?.textContent.includes('My take')`, null, { timeout: 15000 });
+  await settle(p);
+  await p.evaluate(() => document.querySelector('.handoff.is-helper').scrollIntoView({ block: 'start' }));
+  await p.waitForTimeout(500);
+  await shot(p, 'paper-helper-report');
+  const report = await p.textContent('.handoff.is-helper');
+  check('a helper\'s report comes back to the conversation that asked', /Compare e-bikes · a helper/.test(report) && /Ridgeline C2/.test(report));
+  check('the helper read only the notes it was handed', /9 miles with one long hill/.test(report));
+  check("then Nova says what the report means, with no message from you", await p.evaluate(`(() => { const t = (${afterReport})(); return !t.querySelector('.msg-user') && /Ridgeline C2/.test(t.textContent); })()`));
+  check('the hand-off says where to follow it', /Follow it in Activity/.test(await p.textContent('#thread')));
+  const chatUrl = p.url();
+  const parent = chatUrl.split('/c/')[1];
+  const handoff = readFileSync(join(home, 'sessions', `${parent}.jsonl`), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.type === 'handoff');
+  const helperLog = readFileSync(join(home, 'sessions', `${handoff.run}.jsonl`), 'utf8');
+  check('the helper worked from its brief alone, not the conversation or memory', !/coffee black/.test(helperLog) && /"kind":"helper"/.test(helperLog));
+  const listed = await (await fetch(`${base}/api/sessions`)).json();
+  check("a helper's own log isn't listed among conversations", !listed.some((s) => s.id === handoff.run));
+
+  // Its own log reads like a conversation, with no one to reply to.
+  await p.click('.handoff.is-helper .handoff-kicker a');
+  await p.waitForSelector(`#${'a-' + handoff.run}`);
+  check('the report\'s name opens it in Activity', await p.evaluate((id) => location.pathname === '/activity' && document.activeElement?.id === id, `a-${handoff.run}`));
+  await p.goto(`${base}/c/${handoff.run}`);
+  await p.waitForSelector('.work-note');
+  await p.waitForTimeout(400);
+  await shot(p, 'paper-helper-log');
+  check("a helper's log is read-only and says where it came from", await p.isHidden('#dock') && !(await p.$('[data-action="regenerate"]')) && /asked for in/.test(await p.textContent('.work-note')));
+
+  // Something slow, and something waiting on an OK, so Now has both.
+  await p.goto(chatUrl);
+  await p.waitForSelector('.handoff');
+  await p.fill('#input', 'Ask a helper to take it slow reading the lease');
+  await p.keyboard.press('Enter');
+  await settle(p);
+  // Settings: every permission asks first until you switch it on.
+  await p.goto(`${base}/settings`);
+  await p.waitForSelector('.perm');
+  await p.waitForTimeout(500);
+  await shot(p, 'paper-settings');
+  const perms = await p.$$eval('.switch', (b) => b.map((x) => [x.dataset.id, x.getAttribute('aria-checked')]));
+  check('Settings lists a switch per permission, each set to ask first', perms.length === 5 && perms.every(([, on]) => on === 'false'), perms.map(([id]) => id).join(', '));
+  await p.focus('[data-id="commands"]');
+  await p.keyboard.press('Space');
+  await p.waitForSelector('[data-id="commands"][aria-checked="true"]');
+  await p.waitForSelector('#toast', { state: 'visible' });
+  await p.waitForTimeout(300);
+  await shot(p, 'paper-settings-on');
+  check('a switch flips from the keyboard, says so, and is kept in permissions.md', /^- commands: yes /m.test(readFileSync(join(home, 'permissions.md'), 'utf8')) && /without asking now/.test(await p.textContent('#toast')) && await p.evaluate(() => document.activeElement?.dataset.id === 'commands'));
+  // With it on, a scheduled run takes that step without asking.
+  writeFileSync(join(home, 'schedules', 'standup-check.md'), '---\nname: Standup check\ncron: 0 9 * * 1-5\n---\n\nRun git status before standup.\n');
+  await fetch(`${base}/api/schedules/standup-check/run`, { method: 'POST', headers: { 'x-nova': '1' } });
+  const ran = () => readFileSync(join(home, 'schedules', 'runs.jsonl'), 'utf8').includes('"schedule":"standup-check"');
+  for (let i = 0; i < 200 && !ran(); i++) await p.waitForTimeout(100);
+  await fetch(`${base}/api/permissions/commands/ask`, { method: 'POST', headers: { 'x-nova': '1' } });
+  await p.goto(`${base}/new`);
+  await p.waitForSelector('.empty');
+  await p.keyboard.type('Run git status in my workspace');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.approval [data-action="allow"]');
+  const waitingChat = p.url();
+  await p.goto(`${base}/activity`);
+  await p.waitForSelector('.act-now .act-entry.is-working');
+  await p.waitForSelector('.act-now .act-entry.is-waiting');
+  await p.waitForFunction(() => /1 waiting/.test(document.getElementById('activity-waiting').textContent));
+  await p.waitForTimeout(600);
+  await shot(p, 'paper-activity');
+  const nowText = await p.textContent('.act-now');
+  check('Now shows what is working and what waits for you', /Working/.test(nowText) && /Waiting for you/.test(nowText) && /Go to it/.test(nowText));
+  check('the Activity place counts what waits', (await p.getAttribute('#activity-link', 'aria-label')) === 'Activity, 1 waiting for you');
+  check('each day says what happened in a sentence', /\d+ (repl(y|ies)|helpers?)/.test(await p.textContent('.act-summary')));
+  check('a run took a step without asking, as Settings allowed, and Activity says so', /Without asking/.test(await p.textContent('.act-day')) && /took one step without asking/.test(await p.textContent('.act-summary')));
+  check('no tool output is dumped: steps are one line each', await p.evaluate(() => [...document.querySelectorAll('.act-step-list li')].every((li) => li.textContent.length < 200)));
+
+  // The keyboard: ↓ and ↑ walk entries, Enter opens the steps.
+  await p.focus('.act-entry');
+  await p.keyboard.press('ArrowDown');
+  const second = await p.evaluate(() => document.activeElement === document.querySelectorAll('.act-entry')[1]);
+  await p.keyboard.press('ArrowUp');
+  check('↓/↑ move between entries', second && await p.evaluate(() => document.activeElement === document.querySelector('.act-entry')));
+  const folded = await p.$('.act-entry:has(.act-steps)');
+  if (folded) {
+    await folded.focus();
+    await p.keyboard.press('Enter');
+    check('Enter opens an entry\'s steps', await folded.evaluate((e) => e.querySelector('.act-steps').open));
+  }
+
+  // Stop the slow one: its conversation says so, with Try again.
+  await p.click('.act-now .is-working [data-action="stop-helper"]');
+  await p.waitForSelector('.act-entry.is-helper.is-stopped');
+  check('Stop stops a helper, and Activity says so', !(await p.$('.act-now .is-working')));
+  await p.goto(chatUrl);
+  await p.waitForSelector('.handoff.is-stopped');
+  await p.evaluate(() => document.querySelector('.handoff.is-stopped').scrollIntoView({ block: 'center' }));
+  await p.waitForTimeout(400);
+  await shot(p, 'paper-helper-stopped');
+  check('a stopped helper says so where its report would go, with Try again', /You stopped this helper/.test(await p.textContent('.handoff.is-stopped')) && !!(await p.$('.handoff.is-stopped [data-action="retry-helper"]')));
+
+  // Earlier weeks: an old conversation, moved back nine days.
+  const old = new Date(Date.now() - 9 * 86_400_000);
+  const oldId = `${old.toISOString().slice(0, 10)}-oldone`;
+  const shift = (ts) => new Date(Date.parse(ts) - 9 * 86_400_000).toISOString();
+  const lines = readFileSync(join(home, 'sessions', `${listed.find((s) => s.title.startsWith('What should I focus')).id}.jsonl`), 'utf8').split('\n').filter(Boolean)
+    .map((l) => { const e = JSON.parse(l); if (e.ts) e.ts = shift(e.ts); if (e.type === 'session') e.id = oldId; return JSON.stringify(e); });
+  writeFileSync(join(home, 'sessions', `${oldId}.jsonl`), `${lines.join('\n')}\n`);
+  await p.goto(`${base}/activity`);
+  await p.waitForSelector('[data-action="earlier"]');
+  const days = await p.$$eval('.act-day', (d) => d.length);
+  await p.click('[data-action="earlier"]');
+  await p.waitForFunction((n) => document.querySelectorAll('.act-day').length > n, days);
+  check('"Show the week before" adds the earlier week', /What should I focus/.test(await p.textContent('.act-day:last-of-type')));
+  // Activity is read from the logs each time: how long that takes with every conversation so far.
+  const times = [];
+  for (let i = 0; i < 5; i++) { const t0 = performance.now(); await (await fetch(`${base}/api/activity`)).json(); times.push(performance.now() - t0); }
+  results.budgets.activityMs = Math.round(Math.min(...times));
+  check('Activity loads in ≤ 100 ms', results.budgets.activityMs <= 100, `${results.budgets.activityMs} ms for ${readdirSync(join(home, 'sessions')).length} logs`);
+  rmSync(join(home, 'sessions', `${oldId}.jsonl`));
+  helperRun = handoff.run;
+
+  // Clear the waiting OK so later screens start calm.
+  await p.goto(waitingChat);
+  await p.waitForSelector('.approval [data-action="deny"]');
+  await p.click('.approval [data-action="deny"]');
+  await settle(p);
+  check('helpers and Activity have no script errors', p.errors.length === 0, p.errors.join(' | '));
+}
+
 // ---- long content and scrolling -------------------------------------------------
 {
   const api = (path, body) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -622,6 +760,7 @@ const golden = async (opts, prefix) => {
   await shot(p, `${prefix}-approval`);
   await p.keyboard.press('Escape');
   await settle(p);
+  rmSync(join(home, 'sessions', `${p.url().split('/c/')[1]}.jsonl`)); // a screenshot prop, not activity worth showing
   await p.goto(`${base}/memory`);
   await p.waitForSelector('.memory-item');
   await p.waitForTimeout(500);
@@ -634,6 +773,14 @@ const golden = async (opts, prefix) => {
   await p.waitForSelector('.schedule');
   await p.waitForTimeout(500);
   await shot(p, `${prefix}-schedules`);
+  await p.goto(`${base}/activity#a-${helperRun}`);
+  await p.waitForSelector('.act-entry');
+  await p.waitForTimeout(1400);
+  await shot(p, `${prefix}-activity`);
+  await p.goto(`${base}/settings`);
+  await p.waitForSelector('.perm');
+  await p.waitForTimeout(500);
+  await shot(p, `${prefix}-settings`);
   check(`${prefix}: no script errors`, p.errors.length === 0, p.errors.join(' | '));
 };
 await golden({ theme: 'paper', mode: 'dark' }, 'paper-dark');
@@ -667,6 +814,16 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForSelector('.schedule');
   await p.waitForTimeout(500);
   await shot(p, 'mobile-schedules');
+  overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
+  await p.goto(`${base}/activity#a-${helperRun}`);
+  await p.waitForSelector('.act-entry');
+  await p.waitForTimeout(1400);
+  await shot(p, 'mobile-activity');
+  overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
+  await p.goto(`${base}/settings`);
+  await p.waitForSelector('.perm');
+  await p.waitForTimeout(500);
+  await shot(p, 'mobile-settings');
   overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
   await p.goto(base);
   await p.waitForSelector('.handoff');
