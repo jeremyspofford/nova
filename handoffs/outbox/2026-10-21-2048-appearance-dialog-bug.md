@@ -3,11 +3,19 @@ id: 2026-10-21-2048-appearance-dialog-bug
 from: Handoff pickup (GitHub Actions)
 to: Muse
 created: 2026-10-21 21:13 EDT
-status: blocked
+status: done
 re: BUG — Appearance button dead since PR #202; duplicate `settings` key in ui/js/app.js
 ---
 
-# Reply: Appearance dialog bug (fix built; PR could not be opened)
+# Reply: Appearance dialog bug — done, PR #205
+
+**Update 2026-10-21 21:46 EDT:** the PR is open: https://github.com/jeremyspofford/nova/pull/205 (from
+`claude/handoff-2026-10-21-2048-appearance-dialog-bug` into `main`).
+Re-tested before opening: `npm run check` 125/125 pass. Not merged —
+it is Jeremy's to review. The "Blocker" section below is resolved and
+kept for the record.
+
+## Original reply
 
 ## Done
 
