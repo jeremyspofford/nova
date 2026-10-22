@@ -783,6 +783,17 @@ const golden = async (opts, prefix) => {
   await shot(p, `${prefix}-settings`);
   check(`${prefix}: no script errors`, p.errors.length === 0, p.errors.join(' | '));
 };
+{
+  // A first visit, with nothing stored, lands in the default theme.
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  const p = await ctx.newPage();
+  await p.goto(`${base}/new`);
+  await p.waitForSelector('html[data-ready] .empty');
+  const t = await p.evaluate(() => document.documentElement.dataset.theme);
+  check('a first visit opens in the Nova theme', t === 'nova', t);
+  await ctx.close();
+}
+await golden({ theme: 'nova', mode: 'dark' }, 'nova');
 await golden({ theme: 'paper', mode: 'dark' }, 'paper-dark');
 await golden({ theme: 'aurora', mode: 'light' }, 'aurora');
 await golden({ theme: 'aurora', mode: 'dark' }, 'aurora-dark');
