@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="paper" data-mode="light">
+<html lang="en" data-theme="nova" data-mode="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -9,12 +9,13 @@
   <script>
     // Set the theme before first paint, so it never flashes.
     (function () {
-      var r = document.documentElement, t = 'paper', m = 'system';
+      var r = document.documentElement, t = 'nova', m = 'system';
       try { t = localStorage.getItem('nova.theme') || t; m = localStorage.getItem('nova.mode') || m; } catch (e) {}
       r.dataset.theme = t;
       r.dataset.mode = m === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : m;
     })();
   </script>
+  <link rel="stylesheet" href="/themes/nova.css">
   <link rel="stylesheet" href="/themes/paper.css">
   <link rel="stylesheet" href="/themes/aurora.css">
   <link rel="stylesheet" href="/themes/obsidian.css">

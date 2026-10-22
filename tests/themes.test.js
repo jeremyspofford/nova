@@ -6,8 +6,19 @@ import { lint } from '../scripts/lint-tokens.js';
 
 const themes = readdirSync('ui/themes').filter((f) => f.endsWith('.css'));
 
-test('three themes ship, Paper among them', () => {
-  assert.deepEqual(themes.sort(), ['aurora.css', 'obsidian.css', 'paper.css']);
+test('four themes ship, Nova among them', () => {
+  assert.deepEqual(themes.sort(), ['aurora.css', 'nova.css', 'obsidian.css', 'paper.css']);
+});
+
+test('Nova is the default theme', () => {
+  assert.match(readFileSync('ui/js/theme.js', 'utf8'), /THEMES = \[\n  \{ id: 'nova'/);
+  assert.match(readFileSync('ui/js/theme.js', 'utf8'), /\? theme : 'nova'/);
+  for (const f of ['ui/index.html', 'ui/styleguide.html']) {
+    const html = readFileSync(f, 'utf8');
+    assert.match(html, /data-theme="nova"/, f);
+    assert.match(html, /t = 'nova'/, f);
+    assert.match(html, /href="\/themes\/nova.css"/, f);
+  }
 });
 
 for (const f of themes) {
