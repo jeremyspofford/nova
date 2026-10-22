@@ -36,6 +36,19 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Preflight (reports via annotations Muse can read)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY is empty in this run — the repository secret is missing or named differently."
+            exit 1
+          fi
+          case "$ANTHROPIC_API_KEY" in
+            sk-ant-*) echo "::notice::API key present: Anthropic format, length ${#ANTHROPIC_API_KEY}." ;;
+            *) echo "::error::API key present (length ${#ANTHROPIC_API_KEY}) but NOT in Anthropic format (sk-ant-...) — wrong key or wrong provider." ;;
+          esac
+
       - name: Process the handoffs inbox
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -77,4 +90,14 @@ jobs:
           main. If the inbox has no actionable requests, finish
           quietly without committing anything.
           PROMPT
-          claude -p "$(cat /tmp/pickup-prompt.txt)" --dangerously-skip-permissions --max-turns 80
+          set +e
+          claude -p "$(cat /tmp/pickup-prompt.txt)" --dangerously-skip-permissions --max-turns 80 2>&1 | tee /tmp/claude-out.txt
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            echo "::error::claude exited with code $code — last output lines follow."
+            tail -n 12 /tmp/claude-out.txt | while IFS= read -r line; do
+              esc=$(printf '%s' "$line" | sed 's/%/%25/g; s/\r/%0D/g')
+              echo "::error::$esc"
+            done
+            exit "$code"
+          fi
