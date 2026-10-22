@@ -1,0 +1,70 @@
+name: Handoffs pickup
+
+# Wakes a headless Claude whenever a request lands in handoffs/inbox/.
+# Mailbox replies are committed to main; code changes go to a branch + PR
+# for Jeremy's review. See handoffs/README.md for the protocol.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'handoffs/inbox/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: handoffs-pickup
+  cancel-in-progress: false
+
+jobs:
+  pickup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Process the handoffs inbox
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are the Nova handoff pickup, running headless in GitHub
+            Actions. Muse (Jeremy's personal agent) files requests in
+            handoffs/inbox/ of this repo. Read handoffs/README.md first
+            and follow it.
+
+            For every file in handoffs/inbox/ (ignore .gitkeep):
+
+            1. Read the request fully before acting.
+            2. Mailbox requests (confirmations, questions, status asks —
+               including 2026-10-21-2026-routine-ping.md, for which YOU
+               are the designated pickup): write the reply to
+               handoffs/outbox/ with the SAME filename, move the request
+               file to handoffs/archive/, commit those handoff files
+               directly to main with a clear message, and push.
+            3. Build/fix requests (anything asking for code changes): do
+               the work on a new branch named claude/handoff-<request-id>,
+               run the project's tests, push the branch, and open a pull
+               request into main with `gh pr create`, summarizing the
+               change and the test results. Write the outbox reply (same
+               filename) naming the PR, move the request to
+               handoffs/archive/, and commit those handoff files to main
+               as in step 2. NEVER merge a pull request yourself.
+            4. If a request is ambiguous, or you cannot complete it
+               safely: do not guess and do not archive it. Write the
+               blocker or question as the outbox reply (same filename)
+               and leave the request in the inbox.
+
+            Standing rules: never tag, delete, reset, rebase, or
+            force-push anything; never delete branches; changes outside
+            handoffs/ happen only on a claude/handoff-* branch, never on
+            main. If the inbox has no actionable requests, finish
+            quietly without committing anything.
