@@ -11,7 +11,7 @@ const el = {
   app: $('app'), toc: $('toc'), thread: $('thread'), scroller: $('scroller'), title: $('title'),
   input: $('input'), send: $('send'), composer: $('composer'), hint: $('hint'), banner: $('banner'),
   jump: $('jump'), status: $('status'), menu: $('menu'), scrim: $('scrim'), newChat: $('new-chat'),
-  settings: $('settings'), appearance: $('appearance'),
+  appearanceDialog: $('settings'), appearance: $('appearance'),
   memory: $('memory'), memoryLink: $('memory-link'), memoryCount: $('memory-count'), dock: $('dock'), toast: $('toast'),
   skills: $('skills'), skillsLink: $('skills-link'), skillsCount: $('skills-count'),
   schedules: $('schedules'), schedulesLink: $('schedules-link'), schedulesCount: $('schedules-count'),
@@ -443,7 +443,7 @@ function afterRender() {
   if (card && !approvalsShown.has(card.dataset.tool)) {
     approvalsShown.add(card.dataset.tool);
     const typing = document.activeElement === el.input && el.input.value.trim();
-    if (!typing && !el.settings.open) card.querySelector('[data-action="allow"]').focus({ preventScroll: true });
+    if (!typing && !el.appearanceDialog.open) card.querySelector('[data-action="allow"]').focus({ preventScroll: true });
   }
   for (const rec of el.thread.querySelectorAll('.record[data-tool]')) {
     if (approvalsShown.has(rec.dataset.tool) && rec.querySelector('.stamp')) {
@@ -1400,8 +1400,8 @@ document.addEventListener('keydown', (e) => {
   if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); navigate('/new'); return; }
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); return; }
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view !== 'chat' && state.undo) { e.preventDefault(); runUndo(); return; }
-  if (e.key === '/' && !inField && !el.settings.open && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
-  if (e.key === 'Escape' && !el.settings.open) {
+  if (e.key === '/' && !inField && !el.appearanceDialog.open && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
+  if (e.key === 'Escape' && !el.appearanceDialog.open) {
     if (el.app.classList.contains('drawer-open')) { closeDrawer(); el.menu.focus(); return; }
     const card = e.target.closest?.('.approval');
     if (card) { e.preventDefault(); decide(card.dataset.tool, 'deny', card.querySelector('button')); return; }
@@ -1416,12 +1416,12 @@ function renderSettings() {
   $('theme-choices').innerHTML = THEMES.map((t) => `<label class="choice"><input type="radio" name="theme" value="${t.id}"${t.id === cur.theme ? ' checked' : ''}><span class="choice-name">${t.name}</span><span class="choice-note">${t.note}</span></label>`).join('');
   $('mode-choices').innerHTML = MODES.map((m) => `<label class="choice"><input type="radio" name="mode" value="${m}"${m === cur.mode ? ' checked' : ''}><span class="choice-name">${m[0].toUpperCase()}${m.slice(1)}</span></label>`).join('');
 }
-el.appearance.addEventListener('click', () => { renderSettings(); el.settings.showModal(); });
-el.settings.addEventListener('change', (e) => {
+el.appearance.addEventListener('click', () => { renderSettings(); el.appearanceDialog.showModal(); });
+el.appearanceDialog.addEventListener('change', (e) => {
   if (e.target.name === 'theme') chooseTheme({ theme: e.target.value });
   if (e.target.name === 'mode') chooseTheme({ mode: e.target.value });
 });
-el.settings.addEventListener('close', () => el.appearance.focus());
+el.appearanceDialog.addEventListener('close', () => el.appearance.focus());
 
 // ---- start -----------------------------------------------------------------
 
