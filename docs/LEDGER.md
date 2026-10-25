@@ -226,6 +226,14 @@ Host headers (DNS rebinding) and cross-site POSTs (a custom header CORS never
 grants). Phone access would need `NOVA_HOST` and has no authentication yet;
 the server warns when started that way. Not in Phase 1 scope.
 
+**2026-10-22: Nova is the default theme, as one token file (Path A).**
+Jeremy kept the existing build rather than restarting. `ui/themes/nova.css`
+comes from `design-system-nova.md`, and `nova` is first in `THEMES`, the
+fallback in `theme.js`, and the first paint in `index.html` and
+`styleguide.html`. Paper, Aurora and Obsidian are unchanged and stay
+optional. A browser that already chose a theme keeps it. The Stellar Map is a
+later phase.
+
 ## Theme token gaps
 
 None of the three specs defines every token THEMING.md requires. Gaps are
@@ -239,6 +247,7 @@ contrast check:
 | Paper | `--text-3` | `#A79D8F` | `#91887B` | 2.5:1 on `--bg`; needs 3 |
 | Paper dark | `--accent` | `#C4502B` | `#D9714C` | too dark on evening paper |
 | Aurora dark | `--accent-text` | (none) | `#000000` | white on `#7D7AFF` is 3.4:1 |
+| Nova | `--accent-text` | `#FFFFFF` | `#0A0A0C` | white on `#6E8CF5` is 3.12:1 |
 
 Contract additions this build needed, proposed for THEMING.md (every theme
 defines them, `scripts/check-themes.js` requires them):
@@ -252,6 +261,13 @@ defines them, `scripts/check-themes.js` requires them):
 Obsidian's spec names differ from the contract (`--panel` is `--surface`,
 `--accent-dim` is `--accent-wash`, `--shadow-pop` is `--shadow-2`). Obsidian
 is dark in both modes, as its spec defers a light variant.
+
+Nova (default since 2026-10-22, Path A) is dark in both modes too: its spec
+defines only the dark workspace. Its starlight tokens and `--folder` are not
+shipped yet; they arrive with the surfaces that use them (Stellar Map, Files
+explorer). Its spec gives the sidebar `--surface`, but the shared components
+paint the sidebar `--bg` and the page `--surface`, so in Nova the sidebar is
+the darker of the two. Swapping that is a component change, left for Jeremy.
 
 ## Known limits
 

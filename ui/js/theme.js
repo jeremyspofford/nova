@@ -1,6 +1,7 @@
 // Theme and appearance: a theme is a token file; the mode picks its light or
 // dark values. Stored per browser, since it describes this screen.
 export const THEMES = [
+  { id: 'nova', name: 'Nova', note: 'A dark workspace. The default.' },
   { id: 'paper', name: 'Paper', note: 'Warm paper, ink, a serif voice.' },
   { id: 'aurora', name: 'Aurora', note: 'Frosted glass and morning light.' },
   { id: 'obsidian', name: 'Obsidian', note: 'A quiet control room. Always dark.' },
@@ -16,7 +17,7 @@ const media = matchMedia('(prefers-color-scheme: dark)');
 
 export function apply({ theme, mode } = current()) {
   const root = document.documentElement;
-  root.dataset.theme = THEMES.some((t) => t.id === theme) ? theme : 'paper';
+  root.dataset.theme = THEMES.some((t) => t.id === theme) ? theme : 'nova';
   root.dataset.mode = mode === 'system' ? (media.matches ? 'dark' : 'light') : mode;
 }
 
