@@ -88,7 +88,7 @@ test('schedule files: set, check, change, pause, remove and put back', () => {
   assert.deepEqual([changed.when, changed.prompt], ['Mondays at 8:00 AM', 'Earlier.']);
 
   const once = schedules.set({ name: 'Call the dentist', cron: '0 9 22 10 *', prompt: 'Remind them.', once: true });
-  assert.match(once.when, /^Once, on Thursday, October 22 at 9:00 AM$/);
+  assert.match(once.when, /^Once, on \w+day, October 22 at 9:00 AM$/); // the weekday depends on which year October 22 is next
 
   assert.equal(schedules.setPaused('bills-check', true).paused, true);
   assert.equal(schedules.next(schedules.get('bills-check')), null);

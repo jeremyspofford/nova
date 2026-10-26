@@ -7,11 +7,12 @@
   <title>Nova</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <script>
-    // Set the theme before first paint, so it never flashes.
+    // Set the theme and the sidebar before first paint, so neither flashes.
     (function () {
-      var r = document.documentElement, t = 'nova', m = 'system';
-      try { t = localStorage.getItem('nova.theme') || t; m = localStorage.getItem('nova.mode') || m; } catch (e) {}
+      var r = document.documentElement, t = 'nova', m = 'system', s = 'open';
+      try { t = localStorage.getItem('nova.theme') || t; m = localStorage.getItem('nova.mode') || m; s = localStorage.getItem('nova.sidebar') || s; } catch (e) {}
       r.dataset.theme = t;
+      r.dataset.sidebar = s === 'collapsed' ? 'collapsed' : 'open';
       r.dataset.mode = m === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : m;
     })();
   </script>
@@ -29,7 +30,10 @@
     <aside class="sidebar" id="sidebar" aria-label="Conversations">
       <div class="sidebar-head">
         <a class="wordmark" href="/" data-nav="home">Nova</a>
-        <button type="button" class="icon-btn" id="new-chat" aria-label="New conversation" title="New conversation (⌘⇧O)"></button>
+        <span class="head-btns">
+          <button type="button" class="icon-btn" id="new-chat" aria-label="New conversation" title="New conversation (⌘⇧O)"></button>
+          <button type="button" class="icon-btn collapse-btn" id="collapse" aria-label="Hide sidebar" title="Hide sidebar (⌘\)" aria-controls="sidebar" aria-expanded="true"></button>
+        </span>
       </div>
       <nav class="places" aria-label="Places">
         <a class="toc-item place" href="/" id="main-link">Main conversation <span class="place-dot" id="main-dot" hidden><span class="sr-only">New report</span></span></a>
@@ -40,14 +44,14 @@
       </nav>
       <nav class="toc" id="toc" aria-label="Conversations by day"></nav>
       <div class="sidebar-foot">
-        <span class="foot-links"><a class="quiet-btn" href="/settings" id="settings-link">Settings</a><button type="button" class="quiet-btn" id="appearance" aria-haspopup="dialog">Appearance</button></span>
+        <a class="quiet-btn" href="/settings" id="settings-link">Settings</a>
         <span class="status" id="status" role="status"></span>
       </div>
     </aside>
     <div class="scrim" id="scrim"></div>
     <main class="main" id="main">
       <header class="topbar">
-        <button type="button" class="icon-btn menu-btn" id="menu" aria-label="Show conversations" aria-controls="sidebar" aria-expanded="false"></button>
+        <button type="button" class="icon-btn menu-btn" id="menu" aria-label="Show sidebar" title="Show sidebar" aria-controls="sidebar" aria-expanded="false"></button>
         <h1 class="topbar-title" id="title"></h1>
       </header>
       <div class="banner" id="banner" role="status" hidden></div>
@@ -72,22 +76,5 @@
     </main>
   </div>
 
-  <dialog class="sheet" id="settings" aria-labelledby="settings-title">
-    <form method="dialog">
-      <h2 id="settings-title">Appearance</h2>
-      <fieldset>
-        <legend>Theme</legend>
-        <div class="choices" id="theme-choices"></div>
-      </fieldset>
-      <fieldset>
-        <legend>Light and dark</legend>
-        <div class="choices row" id="mode-choices"></div>
-      </fieldset>
-      <div class="sheet-foot">
-        <a class="sheet-note" href="/styleguide">Style reference</a>
-        <button class="btn primary" value="done">Done</button>
-      </div>
-    </form>
-  </dialog>
 </body>
 </html>
