@@ -47,6 +47,8 @@ Empty templates mean nothing has been captured yet. Fill them in as you learn, a
 ## Filesystem
 - `~/`: the standing files above. Don't create other files at the root.
 - `~/memory/`: dated notes, kept with `<note>` blocks.
+- `~/memory/people/<name>.md`, `~/memory/groups/<name>.md`, `~/memory/topics/<name>.md`: one short file for each person, group (family, a client, a team) and enduring topic (an employer, a project, a place) that keeps coming up. A `# Full Name` heading, an `Also called:` line for nicknames, then what matters about them. A group's file names its members. Write them with write_file when someone or something clearly lasts; don't make one for a passing mention.
+- `~/workspace/goals/<goal>/GOAL.md`: one per goal the person is working toward, with a `# Goal` heading and your notes on it. Documents for the goal go in `files/` beside it.
 - `~/workspace/`: everything you make, in sub-folders named for the task. Shell commands start here.
 - `~/skills/`: installed skill playbooks. The person can read and change them.
 - `~/schedules/`: schedules, one file each, and `runs.jsonl`, the record of every run. Change them with the schedule tools, not by writing files.

@@ -41,6 +41,8 @@ test('file tools stay inside home and protect the session logs and memory', asyn
   assert.equal(await TOOLS.read_file.run({ path: '~/workspace/plan.md' }, { home: h }), '- step');
   await assert.rejects(TOOLS.write_file.run({ path: 'MEMORY.md', content: '' }, { home: h }), /memory blocks|<remember>/);
   await assert.rejects(TOOLS.write_file.run({ path: 'memory/2026-10-21.md', content: '' }, { home: h }), /<remember>/);
+  assert.match(await TOOLS.write_file.run({ path: 'memory/people/ana.md', content: '# Ana' }, { home: h }), /Wrote 5 bytes/); // people, groups and topics are plain files
+  await assert.rejects(TOOLS.write_file.run({ path: 'memory/people/../MEMORY.md', content: '' }, { home: h }), /<remember>/);
   await assert.rejects(TOOLS.read_file.run({ path: '../../etc/passwd' }, { home: h }), /outside Nova's home/);
   await assert.rejects(TOOLS.write_file.run({ path: '/etc/x', content: '' }, { home: h }), /outside Nova's home/);
   await assert.rejects(TOOLS.write_file.run({ path: 'sessions/x.jsonl', content: '' }, { home: h }), /audit trail/);

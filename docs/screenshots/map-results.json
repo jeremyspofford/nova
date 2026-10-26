@@ -1,0 +1,140 @@
+{
+  "checks": [
+    {
+      "name": "the map opens on the galaxy, centred on Nova",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the map is full-bleed, chrome floats over it",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "labels never collide",
+      "ok": true,
+      "detail": "9 labels on"
+    },
+    {
+      "name": "chrome fades after ~3 s idle",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "hover lights a body’s neighbourhood and dims the rest",
+      "ok": true,
+      "detail": "8 dimmed"
+    },
+    {
+      "name": "chrome returns on pointer move",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "click selects and the inspector says why: source, threads, moons",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "drag pans, and the far field moves less than the bodies (parallax)",
+      "ok": true,
+      "detail": "bodies -100 px, far field -14.2 px"
+    },
+    {
+      "name": "double-click dives to the system",
+      "ok": true,
+      "detail": "System"
+    },
+    {
+      "name": "Enter dives again, to the orbit",
+      "ok": true,
+      "detail": "Orbit"
+    },
+    {
+      "name": "Esc backs out one scale at a time",
+      "ok": true,
+      "detail": "System → Galaxy"
+    },
+    {
+      "name": "scroll travels inward through the scales",
+      "ok": true,
+      "detail": "Orbit"
+    },
+    {
+      "name": "⌘K search flies the camera and arrives selected",
+      "ok": true,
+      "detail": "flew → topic:northwind"
+    },
+    {
+      "name": "arrow keys step between linked bodies",
+      "ok": true,
+      "detail": "m:m4d5e6f70, m:m4d5e6f70, m:m4d5e6f70, topic:northwind"
+    },
+    {
+      "name": "a moon reads in place, with Edit and Forget",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Edit from the map edits the file",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Forget from the map forgets it in the file, with Undo",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Undo puts it back",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "a new memory is born as a small flare that settles",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "…and is calm again after ~2 s",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "List shows the same memories as an accessible list",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Map travels back in (push-in)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "no errors through the walkthrough",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Paper: Memory is the list only, no map and no switch",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "reduced motion: no flights, the camera arrives at once",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "phone: the map fits and the inspector is a bottom sheet",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "empty: just the Nova, the starfield, and one line",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "frameMs": 3583.2
+}
