@@ -14,6 +14,33 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-26 (Stellar Map): the map is a view over files, rebuilt on every
+request.** `GET /api/map` reads the home folder (`src/map.js`) and nothing is
+stored. Bodies come from Muse-shaped files: `USER.md` is you (a ringed planet,
+since you are pinned); `memory/people/*.md` are people; `memory/topics/*.md`
+are enduring topics (gas giants); `memory/groups/*.md` are constellations
+(members are the people and topics the file names); `workspace/goals/*/GOAL.md`
+are stars. Memories orbit the first body they name (a whole word with its
+capitals, a `[[slug]]`, or a link to the file); MEMORY.md entries that name no
+one orbit you; day files from the last 30 days are comets; older notes that
+name no one are asteroids. `write_file` may now write the people, groups and
+topics files (MEMORY.md and day notes still go through memory blocks), and
+the system prompt says when to keep them. They are kept out of the home's git
+history, like the rest of memory.
+
+**2026-10-26 (Stellar Map): WebGL2, procedural shaders, no assets.** Bodies
+are shaded spheres with seeded noise surfaces, lit from the core; the far
+field is drawn once into a texture and slid for parallax; nebulae are one
+texture per constellation. No textures, images or libraries are shipped. The
+material constants in the shaders (ocean, rock, cloud) are physical surfaces;
+every colour with meaning comes from the Nova theme's starlight tokens.
+Without WebGL the map says so and points at the list.
+
+**2026-10-26 (Stellar Map): the switch is List | Map, not Files | Map | Split.**
+The Files explorer is not built yet, so the map sits beside the Memory list,
+which is the accessible list the spec asks for. When the explorer lands, the
+switch grows to the spec's three options and the two-way selection follows.
+
 **2026-10-21 (Phase 2): memory is kept with blocks, not tools.** The model
 ends its reply with `<remember>`, `<note>` and `<forget>` blocks; the runner
 strips them from the stream and applies them before `done`. A tool call per
@@ -275,5 +302,8 @@ the darker of the two. Swapping that is a component change, left for Jeremy.
   the serif and sans fall back to Liberation/DejaVu. On a Mac, Safari renders
   New York (`ui-serif`) and Chrome renders Iowan Old Style.
 - Performance numbers come from the build container, not Jeremy's Mac.
+- The Stellar Map's frame times in the walkthrough are SwiftShader's (a
+  software renderer, no GPU). On a real GPU the ambient sky draws at 15 fps
+  and interaction at full rate; if frames slip, drift and twinkle stop first.
 - Margin notes appear when a message matches a dated note. Nothing writes
   dated notes automatically until Phase 2's memory discipline.

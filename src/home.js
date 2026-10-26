@@ -48,7 +48,7 @@ const git = (home, ...args) => new Promise((ok) => {
   execFile('git', ['-C', home, ...args], { timeout: 15_000 }, (err, stdout) => ok(err ? null : stdout));
 });
 
-const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'skills/', 'connectors/'];
+const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'memory/people/', 'memory/groups/', 'memory/topics/', 'skills/', 'connectors/'];
 
 function ignorePrivate(home) {
   const path = join(home, '.gitignore');

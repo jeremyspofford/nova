@@ -37,12 +37,13 @@ export const TOOLS = {
   },
   write_file: {
     signature: '{"path": "workspace/trip/plan.md", "content": "..."}',
-    doc: 'Create or replace a text file in your home: your workspace and the standing files. MEMORY.md and memory/ are kept with memory blocks instead (below).',
+    doc: 'Create or replace a text file in your home: your workspace, the standing files, and the people, groups and topics files in memory/people/, memory/groups/ and memory/topics/. MEMORY.md and the dated notes are kept with memory blocks instead (below).',
     needsApproval: false,
     async run({ path, content }, { home }) {
       const { abs, rel } = guard(home, path, 'written');
       if (rel === 'sessions' || rel.startsWith(`sessions${sep}`)) throw new Error('Session logs are an audit trail and cannot be edited');
-      if (rel === 'MEMORY.md' || rel === 'memory' || rel.startsWith(`memory${sep}`)) throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
+      const entity = /^memory[\\/](people|groups|topics)[\\/][^\\/]+\.md$/.test(rel);
+      if (!entity && (rel === 'MEMORY.md' || rel === 'memory' || rel.startsWith(`memory${sep}`))) throw new Error('Memory is kept with <remember> and <note> blocks, not write_file. People, groups and topics files go in memory/people/, memory/groups/ or memory/topics/.');
       if (rel === 'schedules' || rel.startsWith(`schedules${sep}`)) throw new Error('Schedules are set with schedule_set, which the person approves, not write_file');
       if (rel === 'permissions.md') throw new Error('Only the person changes what Nova may do on its own');
       if (typeof content !== 'string') throw new Error('content must be a string');

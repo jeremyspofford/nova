@@ -14,7 +14,8 @@
     "lint:tokens": "node scripts/lint-tokens.js",
     "check:themes": "node scripts/check-themes.js",
     "check": "npm run lint:tokens && npm run check:themes && npm test",
-    "shots": "node scripts/shots.js"
+    "shots": "node scripts/shots.js",
+    "shots:map": "node scripts/shots-map.js"
   },
   "devDependencies": {
     "playwright-core": "1.56.1"

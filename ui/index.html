@@ -53,6 +53,10 @@
       <header class="topbar">
         <button type="button" class="icon-btn menu-btn" id="menu" aria-label="Show sidebar" title="Show sidebar" aria-controls="sidebar" aria-expanded="false"></button>
         <h1 class="topbar-title" id="title"></h1>
+        <span class="seg" id="memory-switch" role="group" aria-label="Memory view" hidden>
+          <button type="button" class="seg-btn" data-memory-view="list" aria-pressed="true">List</button>
+          <button type="button" class="seg-btn" data-memory-view="map" aria-pressed="false">Map</button>
+        </span>
       </header>
       <div class="banner" id="banner" role="status" hidden></div>
       <div class="scroller" id="scroller">
@@ -63,6 +67,7 @@
         <div class="thread memory activity" id="activity" tabindex="-1" aria-label="Activity" hidden></div>
         <div class="thread memory settings" id="settings-view" tabindex="-1" aria-label="Settings" hidden></div>
       </div>
+      <div class="stellar" id="stellar" hidden></div>
       <div class="toast" id="toast" role="status" hidden></div>
       <button type="button" class="jump" id="jump" hidden>Jump to latest</button>
       <div class="dock" id="dock">

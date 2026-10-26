@@ -24,6 +24,9 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
 - `npm run check` — unit and API tests, token lint, theme contract.
 - `npm run shots` — the browser walkthrough: golden screens, keyboard path,
   budgets. Set `CHROMIUM=/path/to/chrome` if Chromium is elsewhere.
+- `npm run shots:map` — the Stellar Map's walkthrough on a made-up home
+  (`scripts/sample-home.js`): every interaction checked, screenshots saved.
+  WebGL runs on SwiftShader in the container, so it takes several minutes.
 - `NOVA_AGENT_CMD="node scripts/fake-agent.js"` runs without a model.
 - `node scripts/fake-google.js` starts a stand-in Google (OAuth, Gmail API, search); `startFakeImap()` in the same file is a stand-in Gmail IMAP (app password `abcd efgh ijkl mnop`)
   on :4399; point Nova at it with `NOVA_GOOGLE_BASE=http://127.0.0.1:4399` and
@@ -56,3 +59,11 @@ file; decisions with reasons are in [../LEDGER.md](../LEDGER.md).
   helper's log, so Activity and the log can link to the report.
 - Activity reads every log modified in the week. If it ever gets slow, the
   per-file cache in `src/activity.js` is the place to look, not a new store.
+- The Stellar Map (Nova theme only) is drawn from files and nothing else:
+  `buildMap()` in `src/map.js` reads USER.md, MEMORY.md, day notes,
+  `memory/people|groups|topics/*.md` and `workspace/goals/*/GOAL.md`. Layout
+  (`ui/js/stellar/layout.js`) is deterministic from that data, so the same
+  files always give the same sky. Don't add a separate store for positions.
+- Stellar Map colours are the sanctioned starlight tokens in
+  `ui/themes/nova.css`; shaders get them as uniforms. The token lint still
+  applies to its JS.

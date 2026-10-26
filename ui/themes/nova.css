@@ -6,8 +6,8 @@
  * Token file only (THEMING.md rule 1). Values come from design-system-nova.md;
  * "derived" marks values the spec does not define, or a spec value adjusted to
  * pass the contrast check. Dark in both modes: the spec defines only the dark
- * workspace. The starlight tokens and --folder are left out until the surfaces
- * that use them (Stellar Map, Files explorer) are built.
+ * workspace. The starlight block is the Stellar Map's alone (THEMING.md's one
+ * sanctioned exception); --folder waits for the Files explorer.
  */
 :root[data-theme="nova"] {
   color-scheme: dark;
@@ -61,6 +61,31 @@
   --m-med: 200ms;
   --m-slow: 300ms;
   --shift: 4px;                /* derived */
+
+  /* starlight: the Stellar Map only, never in working surfaces */
+  --space-bg: #030409;
+  --starlight: #FFB35C;        /* the Nova core, selection glow */
+  --starlight-2: #FF6B4A;      /* coral: core edge and selection edge only */
+  --starlight-3: #8B7CFF;      /* violet: core edge and selection edge only */
+  --node-person: #7EC8FF;
+  --node-goal: #FFB35C;
+  --node-note: #C9CEDA;
+  --node-project: #8B7CFF;
+  --node-event: #FF8A5C;
+  --node-orphan: #8A8FA3;
+  --nebula-1: #6A4FD0;         /* derived: supernova-remnant violet */
+  --nebula-2: #1F8A99;         /* derived: teal */
+  --nebula-3: #C0703A;         /* derived: amber dust */
+  --milky-warm: #FFD7A6;       /* derived: the Milky Way's core */
+  --milky-cool: #8FA6FF;       /* derived: its edges */
+  --glass: rgba(10, 11, 20, 0.62);          /* derived: map chrome floats as glass */
+  --glass-line: rgba(255, 255, 255, 0.12);
+  --glass-blur: 14px;
+  --label-shadow: 0 1px 6px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.9);
+  --space-vignette: rgba(0, 0, 0, 0.55);
+  --ease-fly: cubic-bezier(0.22, 0.61, 0.21, 1);  /* camera flights only */
+  --m-fly: 800ms;              /* search and dive: the one cinematic motion */
+  --m-enter: 600ms;            /* the push-in from the list into the map */
 }
 
 /* Reduced motion: crossfades only, no travel. */

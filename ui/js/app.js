@@ -18,6 +18,7 @@ const el = {
   mainLink: $('main-link'), mainDot: $('main-dot'),
   activity: $('activity'), activityLink: $('activity-link'), activityPulse: $('activity-pulse'), activityWaiting: $('activity-waiting'),
   settings: $('settings-view'), settingsLink: $('settings-link'),
+  stellar: $('stellar'), memorySwitch: $('memory-switch'), main: $('main'),
 };
 
 const state = {
@@ -176,7 +177,8 @@ function watch() {
     showBusy(JSON.parse(e.data));
     if (state.view === 'activity' && !document.hidden) loadActivity();
   });
-  es.addEventListener('memory', () => loadMemory());
+  es.addEventListener('memory', () => { loadMemory(); if (stellar?.visible) stellar.refresh(); });
+  es.addEventListener('map', () => { if (stellar?.visible) stellar.refresh(); });
   es.addEventListener('skills', () => loadSkills());
   es.addEventListener('schedules', () => loadSchedules());
   es.addEventListener('permissions', () => { if (state.view === 'settings') loadPermissions(); });
@@ -235,6 +237,8 @@ function setView(view) {
   el.settings.hidden = view !== 'settings';
   el.dock.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
+  if (view !== 'memory') hideMap();
+  el.memorySwitch.hidden = view !== 'memory' || !mapAllowed();
   for (const [link, v] of [[el.memoryLink, 'memory'], [el.skillsLink, 'skills'], [el.schedulesLink, 'schedules'], [el.activityLink, 'activity'], [el.settingsLink, 'settings']]) {
     if (view === v) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
@@ -650,6 +654,7 @@ function showMemory() {
   renderChrome();
   renderToc_();
   renderMemoryView({ enter: true });
+  if (mapAllowed() && memoryView() === 'map') { showMap(); return; }
   loadMemory().then(() => {
     const target = location.hash.startsWith('#m-') && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); flash(target); }
@@ -738,10 +743,82 @@ async function forgetMemory(item) {
 async function undoForget(items) {
   try {
     await post('/api/memory/restore', { items });
-    await loadMemory();
+    await Promise.all([loadMemory(), stellar?.visible && stellar.refresh()]);
     document.getElementById(`m-${items[0].id}`)?.focus();
     toast('Back in memory.');
   } catch (e) { toast(e.message); }
+}
+
+// ---- the Stellar Map (Nova theme only) -------------------------------------------
+// The same memories as the list, rendered as a star system. Loaded on first
+// use, so it costs nothing at start-up.
+let stellar = null;
+const MEMORY_VIEW = 'nova.memoryView';
+const memoryView = () => { try { return localStorage.getItem(MEMORY_VIEW) || 'list'; } catch { return 'list'; } };
+const mapAllowed = () => root.dataset.theme === 'nova';
+
+async function showMap({ enter = false } = {}) {
+  if (!stellar) {
+    const { createStellarMap } = await import('./stellar/map.js');
+    stellar = createStellarMap(el.stellar, {
+      onList: () => setMemoryView('list'),
+      forget: forgetEntry,
+      edit: editEntry,
+    });
+    window.__stellar = stellar; // the walkthrough (scripts/shots-map.js) reads where bodies are
+  }
+  if (state.view !== 'memory') return;
+  el.main.classList.add('is-map');
+  el.memory.hidden = true;
+  syncSwitch('map');
+  await stellar.show({ enter });
+}
+
+function hideMap() {
+  el.main.classList.remove('is-map');
+  if (stellar?.visible) stellar.hide();
+  el.stellar.hidden = true;
+  if (state.view === 'memory') el.memory.hidden = false;
+  syncSwitch('list');
+}
+
+function syncSwitch(view) {
+  for (const b of el.memorySwitch.querySelectorAll('[data-memory-view]')) b.setAttribute('aria-pressed', String(b.dataset.memoryView === view));
+}
+
+function setMemoryView(view) {
+  try { localStorage.setItem(MEMORY_VIEW, view); } catch {}
+  if (view === 'map' && mapAllowed()) showMap({ enter: true });
+  else {
+    hideMap();
+    loadMemory().then(() => el.memory.focus({ preventScroll: true }));
+  }
+}
+
+el.memorySwitch.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-memory-view]');
+  if (b) setMemoryView(b.dataset.memoryView);
+});
+
+// Edit and Forget from the map are the list's own actions, with the same Undo.
+async function forgetEntry(id) {
+  try {
+    const { removed } = await post(`/api/memory/${id}/forget`);
+    state.undo = () => undoForget(removed);
+    await Promise.all([loadMemory(), stellar?.refresh()]);
+    const notes = removed.length - 1;
+    toast(notes ? `Forgotten, with ${notes} day note${notes > 1 ? 's' : ''} that said the same.` : 'Forgotten.', { undo: true });
+    return true;
+  } catch (e) { toast(e.message); return false; }
+}
+
+async function editEntry(id, text) {
+  try {
+    await post(`/api/memory/${id}`, { text });
+    toast('Saved. Nova will use it from the next message.');
+    await stellar?.refresh();
+    return true;
+  } catch (e) { toast(e.message); return false; }
 }
 
 let toastTimer = 0;
@@ -1350,7 +1427,7 @@ el.settings.addEventListener('click', (e) => {
 });
 // Appearance lives here too: a pick applies at once and is kept in this browser.
 el.settings.addEventListener('change', (e) => {
-  if (e.target.name === 'theme') chooseTheme({ theme: e.target.value });
+  if (e.target.name === 'theme') { chooseTheme({ theme: e.target.value }); if (!mapAllowed()) hideMap(); }
   if (e.target.name === 'mode') chooseTheme({ mode: e.target.value });
 });
 el.settingsLink.addEventListener('click', (e) => {
@@ -1429,6 +1506,7 @@ document.addEventListener('keydown', (e) => {
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); return; }
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view !== 'chat' && state.undo) { e.preventDefault(); runUndo(); return; }
   if (e.key === '/' && !inField && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
+  if (mod && e.key.toLowerCase() === 'k' && stellar?.visible) { e.preventDefault(); stellar.openSearch(); return; }
   if (e.key === 'Escape') {
     if (el.app.classList.contains('drawer-open')) { closeDrawer(); el.menu.focus(); return; }
     const card = e.target.closest?.('.approval');

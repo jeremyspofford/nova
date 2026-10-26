@@ -14,6 +14,7 @@ import { ScheduleError } from './schedules.js';
 import { Scheduler } from './scheduler.js';
 import { HelperError, Helpers } from './helpers.js';
 import { buildActivity } from './activity.js';
+import { buildMap } from './map.js';
 import { render as renderPermissions } from './permissions.js';
 
 const TYPES = {
@@ -47,6 +48,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   const watchers = new Set();
   const announce = (event, data = {}) => { for (const res of watchers) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
   runner.on('memory', () => announce('memory'));
+  // A finished turn may have changed people, groups or goals: open maps refetch.
+  runner.on('event', (_, ev) => { if (ev.type === 'done') announce('map'); });
   runner.on('event', (_, ev) => { if (ev.type === 'session' || ev.type === 'title') announce('sessions'); });
   const memory = runner.memory;
   const titles = () => Object.fromEntries(store.list().map((s) => [s.id, s.title]));
@@ -172,6 +175,9 @@ export function createNova(config = loadConfig(), deps = {}) {
       req.on('close', () => { clearInterval(beat); watchers.delete(res); });
       return;
     }
+
+    // The Stellar Map: rebuilt from the files on every request, never stored.
+    if (resource === 'map' && req.method === 'GET' && !id) return json(res, 200, buildMap(config.home, { timezone: config.timezone }));
 
     if (resource === 'memory') {
       if (req.method === 'GET' && !id) return json(res, 200, { ...memory.read(), titles: titles() });
