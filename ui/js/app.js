@@ -1445,6 +1445,9 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) load
 
 applyTheme();
 syncSidebar();
+// The composer lines up with the conversation: as wide as the scroller's
+// content, which is narrower by its scrollbar gutters (none for overlay scrollbars).
+new ResizeObserver(() => $('main').style.setProperty('--gutter', `${el.scroller.offsetWidth - el.scroller.clientWidth}px`)).observe(el.scroller);
 loadList();
 loadMemory();
 loadSkills();

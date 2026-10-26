@@ -852,6 +852,24 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   check('sidebar: Ctrl/⌘+\\ toggles it', byKey === 'collapsed' && await p.evaluate(() => document.documentElement.dataset.sidebar) === 'open');
   await shot(p, 'nova-sidebar-open');
   check('sidebar: no script errors', p.errors.length === 0, p.errors.join(' | '));
+  // Half a 1920 screen: nothing runs past the right edge, and the composer lines up with the column.
+  for (const sb of ['open', 'collapsed']) {
+    const h = await page({ theme: 'nova', mode: 'dark', width: 960, height: 900 });
+    await h.addInitScript((v) => localStorage.setItem('nova.sidebar', v), sb);
+    await h.goto(`${base}/c/${chat.id}`);
+    await h.waitForSelector('.prose');
+    await h.waitForTimeout(500);
+    await shot(h, `nova-half-${sb}`);
+    const fit = await h.evaluate(() => {
+      const sc = document.querySelector('.scroller');
+      const edge = sc.getBoundingClientRect().left + sc.clientWidth;
+      const past = [...document.querySelectorAll('.thread *, .dock *')].filter((e) => !e.closest('.table-wrap, pre') && e.getBoundingClientRect().right > edge + 0.5);
+      const t = document.getElementById('thread').getBoundingClientRect(), d = document.getElementById('dock').getBoundingClientRect();
+      return { past: past.length, scroll: sc.scrollWidth - sc.clientWidth, dx: [Math.round(t.left - d.left), Math.round(t.right - d.right)] };
+    });
+    check(`half screen (${sb} sidebar): nothing cut off on the right`, fit.past === 0 && fit.scroll === 0, JSON.stringify(fit));
+    check(`half screen (${sb} sidebar): the composer lines up with the conversation`, fit.dx[0] === 0 && fit.dx[1] === 0, `${fit.dx} px`);
+  }
   // A narrow screen ignores the stored choice: there the sidebar is a drawer.
   const m = await page({ theme: 'nova', mode: 'dark', width: 390, height: 844 });
   await m.addInitScript(() => localStorage.setItem('nova.sidebar', 'collapsed'));

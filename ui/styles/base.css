@@ -34,7 +34,6 @@ img, svg { display: block; max-width: 100%; }
   display: grid;
   grid-template-columns: 264px minmax(0, 1fr);
   height: 100dvh;
-  overflow: hidden;
   transition: grid-template-columns var(--m-med) var(--ease);
 }
 
@@ -66,7 +65,9 @@ img, svg { display: block; max-width: 100%; }
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  /* Both edges, so the column stays centred and lines up with the composer
+     below it; app.js measures the gutters into --gutter for the dock. */
+  scrollbar-gutter: stable both-edges;
 }
 
 .thread {
@@ -80,7 +81,7 @@ img, svg { display: block; max-width: 100%; }
 
 .dock {
   max-width: var(--column);
-  width: 100%;
+  width: calc(100% - var(--gutter, 0px)); /* as wide as the column above it */
   margin: 0 auto;
   padding: 0 var(--s5) var(--s4);
 }
