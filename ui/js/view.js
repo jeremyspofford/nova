@@ -6,8 +6,8 @@ export const icons = {
   send: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.5V4.5M5 9.5l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   stop: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5" fill="currentColor"/></svg>',
   plus: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
-  menu: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6.5h12M4 10h12M4 13.5h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   copy: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="7" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M13 7V5.5A1.5 1.5 0 0 0 11.5 4h-6A1.5 1.5 0 0 0 4 5.5v6A1.5 1.5 0 0 0 5.5 13H7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+  sidebar: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="4.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.5v11" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
   again: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 10a5.5 5.5 0 1 1-1.6-3.9M15.5 4.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
@@ -731,14 +731,32 @@ ${entries.length ? `<ol class="act-list">${entries.map((e) => activityEntry(e, n
 
 // Each permission is one kind of step that normally asks first. The list comes
 // from the tools Nova has, so a new tool brings its own switch, starting off.
-export function renderSettings(list) {
+// Settings: how Nova looks on this screen, then what Nova may do without asking.
+export function renderSettings(list, { appearance, error = '' } = {}) {
+  return `<header class="memory-intro"><p class="empty-date">Settings</p></header>
+${renderAppearance(appearance)}
+${list ? renderPermissions(list) : error ? `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
+<p class="memory-lede">${esc(error)}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''}`;
+}
+
+function renderAppearance({ theme, mode, themes, modes }) {
+  const choice = (name, value, label, note, on) => `<label class="choice"><input type="radio" name="${name}" value="${esc(value)}"${on ? ' checked' : ''}><span class="choice-name">${esc(label)}</span>${note ? `<span class="choice-note">${esc(note)}</span>` : ''}</label>`;
+  return `<section class="memory-section" id="appearance" aria-labelledby="set-look"><h2 class="memory-heading" id="set-look">Appearance</h2>
+<p class="memory-lede">How Nova looks on this screen. It's kept in this browser, so another device can look different.</p>
+<fieldset class="set-field"><legend class="set-legend">Theme</legend>
+<div class="choices set-themes">${themes.map((t) => choice('theme', t.id, t.name, t.note, t.id === theme)).join('')}</div></fieldset>
+<fieldset class="set-field"><legend class="set-legend">Light and dark</legend>
+<div class="choices row">${modes.map((m) => choice('mode', m, m[0].toUpperCase() + m.slice(1), '', m === mode)).join('')}</div></fieldset>
+<p class="perm-foot"><a class="set-link" href="/styleguide">Style reference</a></p></section>`;
+}
+
+function renderPermissions(list) {
   const rows = list.map((p) => `<li class="perm" id="p-${esc(p.id)}">
   <div class="perm-text"><p class="perm-label" id="pl-${esc(p.id)}">${esc(p.label)}</p>${p.note ? `<p class="perm-note">${esc(p.note)}.</p>` : ''}</div>
   <button type="button" class="switch" role="switch" aria-checked="${p.yes}" aria-labelledby="pl-${esc(p.id)}" data-action="toggle-permission" data-id="${esc(p.id)}"><span class="switch-word">${p.yes ? 'Without asking' : 'Ask first'}</span><span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span></button>
 </li>`).join('');
-  return `<header class="memory-intro"><p class="empty-date">Settings</p>
-<p class="memory-lede">Everything Nova can do that changes something outside the conversation asks you first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time.</p></header>
-<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
+  return `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
+<p class="memory-lede">Everything Nova can do that changes something outside the conversation asks you first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time.</p>
 ${list.length ? `<ul class="perm-list">${rows}</ul>` : '<p class="memory-none">Nothing Nova can do asks first right now.</p>'}
 <p class="perm-foot">When Nova gets a new tool, from an update, a plugin or a connector, anything it can change shows up here, set to Ask first. These switches are kept in permissions.md in your Nova folder.</p></section>`;
 }

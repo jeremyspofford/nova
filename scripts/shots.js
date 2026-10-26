@@ -799,21 +799,67 @@ await golden({ theme: 'aurora', mode: 'light' }, 'aurora');
 await golden({ theme: 'aurora', mode: 'dark' }, 'aurora-dark');
 await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
 
-// ---- appearance: the dialog opens and a pick changes the theme -----------------------
+// ---- appearance: a section of Settings, and a pick changes the theme -----------------
 {
-  const p = await page({ theme: 'paper', mode: 'light' });
+  const p = await page({ theme: 'nova', mode: 'dark' });
   await p.goto(base);
   await p.waitForSelector('html[data-ready]');
-  await p.click('#appearance');
-  const opened = await p.waitForFunction(() => document.getElementById('settings').open, null, { timeout: 3000 }).then(() => true, () => false);
-  check('appearance: the dialog opens', opened);
-  if (opened) await p.click('#theme-choices input[value="obsidian"]', { force: true });
-  const theme = await p.evaluate(() => document.documentElement.dataset.theme);
-  check('appearance: picking a theme changes data-theme', theme === 'obsidian', theme);
-  if (opened) await p.click('#settings button[value="done"]');
-  const closed = await p.evaluate(() => !document.getElementById('settings').open && document.activeElement?.id === 'appearance');
-  check('appearance: Done closes the dialog and returns focus', opened && closed);
+  check('appearance: no separate Appearance button in the sidebar', await p.evaluate(() => !document.getElementById('appearance') && !document.querySelector('dialog')));
+  await p.click('#settings-link');
+  await p.waitForSelector('.perm');
+  await p.waitForTimeout(400);
+  await shot(p, 'nova-settings-appearance');
+  check('appearance: Settings shows the theme and light/dark choices', await p.evaluate(() => document.querySelectorAll('#appearance input[name="theme"]').length === 4 && document.querySelectorAll('#appearance input[name="mode"]').length === 3 && document.querySelector('#appearance input[value="nova"]').checked));
+  await p.click('#appearance input[value="paper"]', { force: true });
+  check('appearance: picking a theme changes data-theme', await p.evaluate(() => document.documentElement.dataset.theme) === 'paper');
+  await p.click('#appearance input[value="light"]', { force: true });
+  check('appearance: picking a mode changes data-mode', await p.evaluate(() => document.documentElement.dataset.mode) === 'light');
+  check('appearance: the pick is kept in this browser', await p.evaluate(() => localStorage.getItem('nova.theme') === 'paper' && localStorage.getItem('nova.mode') === 'light'));
+  await p.goto(`${base}/settings#appearance`); // the page's start script puts Nova back, so this lands in Nova again
+  await p.waitForSelector('.perm');
+  check('appearance: /settings#appearance focuses the current theme', await p.evaluate(() => document.activeElement?.name === 'theme' && document.activeElement.value === document.documentElement.dataset.theme));
   check('appearance: no script errors', p.errors.length === 0, p.errors.join(' | '));
+}
+
+// ---- sidebar: collapses and expands, and stays that way across reloads -------------
+{
+  const p = await page({ theme: 'nova', mode: 'dark' });
+  const list = await (await fetch(`${base}/api/sessions`)).json();
+  const chat = list.find((s) => s.title.startsWith('What should I focus'));
+  await p.goto(`${base}/c/${chat.id}`);
+  await p.waitForSelector('.prose');
+  const width = () => p.evaluate(() => Math.round(document.getElementById('main').getBoundingClientRect().width));
+  const open = await width();
+  check('sidebar: open by default, with the expand button hidden', await p.evaluate(() => document.documentElement.dataset.sidebar === 'open' && getComputedStyle(document.getElementById('menu')).display === 'none'));
+  await p.click('#collapse');
+  await p.waitForTimeout(450);
+  await shot(p, 'nova-sidebar-collapsed');
+  const collapsed = await width();
+  check('sidebar: hiding it gives the page the full width', collapsed === 1280 && open < collapsed, `${open} → ${collapsed} px`);
+  check('sidebar: hidden sidebar leaves the tab order, focus moves to Show sidebar', await p.evaluate(() => document.getElementById('sidebar').inert && document.activeElement?.id === 'menu' && document.getElementById('menu').getAttribute('aria-expanded') === 'false'));
+  await p.reload();
+  await p.waitForSelector('.prose');
+  check('sidebar: stays hidden across a reload', await p.evaluate(() => document.documentElement.dataset.sidebar === 'collapsed') && await width() === 1280);
+  await p.click('#menu');
+  await p.waitForTimeout(450);
+  check('sidebar: Show sidebar brings it back', await p.evaluate(() => document.documentElement.dataset.sidebar === 'open' && !document.getElementById('sidebar').inert && document.activeElement?.id === 'collapse') && await width() === open);
+  await p.evaluate(() => document.activeElement.blur());
+  await p.keyboard.press('Control+Backslash');
+  await p.waitForTimeout(450);
+  const byKey = await p.evaluate(() => document.documentElement.dataset.sidebar);
+  await p.keyboard.press('Control+Backslash');
+  await p.waitForTimeout(450);
+  check('sidebar: Ctrl/⌘+\\ toggles it', byKey === 'collapsed' && await p.evaluate(() => document.documentElement.dataset.sidebar) === 'open');
+  await shot(p, 'nova-sidebar-open');
+  check('sidebar: no script errors', p.errors.length === 0, p.errors.join(' | '));
+  // A narrow screen ignores the stored choice: there the sidebar is a drawer.
+  const m = await page({ theme: 'nova', mode: 'dark', width: 390, height: 844 });
+  await m.addInitScript(() => localStorage.setItem('nova.sidebar', 'collapsed'));
+  await m.goto(`${base}/c/${chat.id}`);
+  await m.waitForSelector('.prose');
+  await m.click('#menu');
+  await m.waitForTimeout(450);
+  check('sidebar: on a phone the menu button still opens the drawer', await m.evaluate(() => document.getElementById('app').classList.contains('drawer-open') && !document.getElementById('sidebar').inert && getComputedStyle(document.getElementById('sidebar')).visibility === 'visible'));
 }
 
 // ---- mobile -------------------------------------------------------------------------

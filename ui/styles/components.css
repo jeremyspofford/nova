@@ -12,6 +12,8 @@
   padding: 0 var(--s2) var(--s5);
 }
 .wordmark { font: var(--t-wordmark); color: var(--text); text-decoration: none; }
+.head-btns { display: inline-flex; gap: var(--s1); margin-right: calc(-1 * var(--s2)); }
+@media (max-width: 760px) { .collapse-btn { display: none; } }
 
 .icon-btn {
   display: inline-grid;
@@ -116,6 +118,9 @@ a.quiet-btn[aria-current="page"] { color: var(--text); text-decoration: underlin
   text-overflow: ellipsis;
 }
 .menu-btn { display: none; margin-left: calc(-1 * var(--s2)); }
+@media (min-width: 761px) {
+  :root[data-sidebar="collapsed"] .menu-btn { display: inline-grid; animation: fade-in var(--m-med) var(--ease) both; }
+}
 @media (max-width: 760px) {
   .menu-btn { display: inline-grid; }
   .topbar { padding: var(--s2) var(--s4); }
@@ -928,25 +933,18 @@ kbd {
   animation: rise var(--m-med) var(--ease) both;
 }
 
-/* ---- settings dialog ----------------------------------------------------- */
+/* ---- settings: appearance ----------------------------------------------- */
 
-.sheet {
-  width: min(440px, 92vw);
-  padding: var(--s5);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-card);
-  background: var(--raised);
-  color: var(--text);
-  box-shadow: var(--shadow-2);
-}
-.sheet[open] { animation: rise var(--m-med) var(--ease) both; }
-.sheet::backdrop { background: color-mix(in srgb, var(--text) 18%, transparent); }
-.sheet h2 { font: var(--t-title); font-family: var(--font-display); font-weight: 400; }
-.sheet fieldset { border: 0; margin: var(--s5) 0 0; padding: 0; }
-.sheet legend { font: var(--t-caption); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-2); margin-bottom: var(--s2); }
+.set-field { border: 0; margin: var(--s4) 0 0; padding: 0; min-width: 0; }
+.set-legend { padding: 0; margin-bottom: var(--s2); font: var(--t-callout); color: var(--text-2); }
+.set-themes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 520px) { .set-themes { grid-template-columns: minmax(0, 1fr); } }
+.set-link { color: var(--accent); text-underline-offset: 3px; }
+.set-retry { margin-top: var(--s3); }
 .choices { display: grid; gap: var(--s2); }
-.choices.row { grid-template-columns: repeat(3, 1fr); }
+.choices.row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .choice {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -962,8 +960,6 @@ kbd {
 .choice input { position: absolute; opacity: 0; pointer-events: none; }
 .choice-name { font: var(--t-callout); font-weight: 600; }
 .choice-note { font: var(--t-callout); color: var(--text-2); }
-.sheet-foot { display: flex; justify-content: space-between; align-items: center; margin-top: var(--s5); }
-.sheet-note { font: var(--t-callout); color: var(--text-2); }
 
 /* ---- motion: named, brief, from tokens ----------------------------------- */
 

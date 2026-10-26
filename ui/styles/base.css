@@ -34,15 +34,19 @@ img, svg { display: block; max-width: 100%; }
   display: grid;
   grid-template-columns: 264px minmax(0, 1fr);
   height: 100dvh;
+  overflow: hidden;
+  transition: grid-template-columns var(--m-med) var(--ease);
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
+  width: 264px;
   min-height: 0;
   padding: var(--s5) var(--s4) var(--s4);
   border-right: 1px solid var(--hairline);
   background: var(--bg);
+  transition: opacity var(--m-med) var(--ease), visibility 0s linear;
 }
 
 .main {
@@ -82,6 +86,20 @@ img, svg { display: block; max-width: 100%; }
 }
 
 .scrim { display: none; }
+
+/* Collapsed (wide screens only): the page slides over the sidebar and keeps
+   its width; the sidebar fades and leaves the tab order. */
+@media (min-width: 761px) {
+  :root[data-sidebar="collapsed"] .app { grid-template-columns: 0px minmax(0, 1fr); }
+  :root[data-sidebar="collapsed"] .sidebar {
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--m-med) var(--ease), visibility 0s linear var(--m-med);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app { transition: none; }
+}
 
 @media (max-width: 760px) {
   .app { grid-template-columns: minmax(0, 1fr); }

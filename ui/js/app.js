@@ -11,7 +11,7 @@ const el = {
   app: $('app'), toc: $('toc'), thread: $('thread'), scroller: $('scroller'), title: $('title'),
   input: $('input'), send: $('send'), composer: $('composer'), hint: $('hint'), banner: $('banner'),
   jump: $('jump'), status: $('status'), menu: $('menu'), scrim: $('scrim'), newChat: $('new-chat'),
-  appearanceDialog: $('settings'), appearance: $('appearance'),
+  sidebar: $('sidebar'), collapse: $('collapse'),
   memory: $('memory'), memoryLink: $('memory-link'), memoryCount: $('memory-count'), dock: $('dock'), toast: $('toast'),
   skills: $('skills'), skillsLink: $('skills-link'), skillsCount: $('skills-count'),
   schedules: $('schedules'), schedulesLink: $('schedules-link'), schedulesCount: $('schedules-count'),
@@ -443,7 +443,7 @@ function afterRender() {
   if (card && !approvalsShown.has(card.dataset.tool)) {
     approvalsShown.add(card.dataset.tool);
     const typing = document.activeElement === el.input && el.input.value.trim();
-    if (!typing && !el.appearanceDialog.open) card.querySelector('[data-action="allow"]').focus({ preventScroll: true });
+    if (!typing) card.querySelector('[data-action="allow"]').focus({ preventScroll: true });
   }
   for (const rec of el.thread.querySelectorAll('.record[data-tool]')) {
     if (approvalsShown.has(rec.dataset.tool) && rec.querySelector('.stamp')) {
@@ -1311,17 +1311,18 @@ function showSettings() {
   renderSettingsView({ enter: true });
   loadPermissions().then(() => {
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
-    if (target) { target.scrollIntoView({ block: 'center' }); target.querySelector('.switch')?.focus({ preventScroll: true }); flash(target); }
+    if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked'))?.focus({ preventScroll: true }); flash(target); }
     else el.settings.focus({ preventScroll: true });
   });
 }
 
 function renderSettingsView({ enter = false } = {}) {
-  const focusId = document.activeElement?.dataset?.action === 'toggle-permission' ? document.activeElement.dataset.id : null;
-  if (permissions) el.settings.innerHTML = renderSettingsPage(permissions);
-  else if (permissionsError) el.settings.innerHTML = `<div class="empty"><p class="empty-line">Settings couldn't be shown.</p><p class="memory-lede">${permissionsError}</p><button type="button" class="btn" data-action="retry-settings">Try again</button></div>`;
-  else el.settings.innerHTML = '';
+  const active = document.activeElement;
+  const focusId = active?.dataset?.action === 'toggle-permission' ? active.dataset.id : null;
+  const focusRadio = active?.type === 'radio' && el.settings.contains(active) ? active.name : null;
+  el.settings.innerHTML = renderSettingsPage(permissions, { appearance: { ...currentTheme(), themes: THEMES, modes: MODES }, error: permissionsError });
   if (focusId) el.settings.querySelector(`[data-id="${CSS.escape(focusId)}"]`)?.focus({ preventScroll: true });
+  if (focusRadio) el.settings.querySelector(`input[name="${focusRadio}"]:checked`)?.focus({ preventScroll: true });
   if (enter) {
     el.settings.classList.remove('view-enter');
     void el.settings.offsetWidth;
@@ -1346,6 +1347,11 @@ el.settings.addEventListener('click', (e) => {
   const b = e.target.closest('[data-action]');
   if (b?.dataset.action === 'toggle-permission') togglePermission(b);
   else if (b?.dataset.action === 'retry-settings') loadPermissions();
+});
+// Appearance lives here too: a pick applies at once and is kept in this browser.
+el.settings.addEventListener('change', (e) => {
+  if (e.target.name === 'theme') chooseTheme({ theme: e.target.value });
+  if (e.target.name === 'mode') chooseTheme({ mode: e.target.value });
 });
 el.settingsLink.addEventListener('click', (e) => {
   if (e.metaKey || e.ctrlKey || e.shiftKey) return;
@@ -1374,8 +1380,29 @@ el.mainLink.addEventListener('click', (e) => {
 });
 window.addEventListener('popstate', route);
 
-el.menu.innerHTML = icons.menu;
+// On a wide screen the sidebar collapses and stays that way across reloads;
+// on a narrow one it is a drawer over the page, closed on every visit.
+const narrow = matchMedia('(max-width: 760px)');
+const root = document.documentElement;
+function setSidebar(open, { focus = true } = {}) {
+  root.dataset.sidebar = open ? 'open' : 'collapsed';
+  try { localStorage.setItem('nova.sidebar', root.dataset.sidebar); } catch {}
+  syncSidebar();
+  if (focus) (open ? el.collapse : el.menu).focus({ preventScroll: true });
+}
+function syncSidebar() {
+  const collapsed = !narrow.matches && root.dataset.sidebar === 'collapsed';
+  el.sidebar.inert = collapsed;
+  el.collapse.setAttribute('aria-expanded', String(!collapsed));
+  if (!narrow.matches) el.menu.setAttribute('aria-expanded', String(!collapsed));
+}
+narrow.addEventListener('change', () => { closeDrawer(); syncSidebar(); });
+el.collapse.innerHTML = icons.sidebar;
+el.collapse.addEventListener('click', () => setSidebar(false));
+
+el.menu.innerHTML = icons.sidebar;
 el.menu.addEventListener('click', () => {
+  if (!narrow.matches) { setSidebar(true); return; }
   const opening = !el.app.classList.contains('drawer-open');
   el.app.classList.toggle('drawer-open', opening);
   el.menu.setAttribute('aria-expanded', String(opening));
@@ -1398,30 +1425,17 @@ document.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   const inField = e.target.closest?.('input, textarea, [contenteditable]');
   if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); navigate('/new'); return; }
+  if (mod && e.key === '\\' && !narrow.matches) { e.preventDefault(); setSidebar(root.dataset.sidebar === 'collapsed', { focus: !inField }); return; }
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); return; }
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view !== 'chat' && state.undo) { e.preventDefault(); runUndo(); return; }
-  if (e.key === '/' && !inField && !el.appearanceDialog.open && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
-  if (e.key === 'Escape' && !el.appearanceDialog.open) {
+  if (e.key === '/' && !inField && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
+  if (e.key === 'Escape') {
     if (el.app.classList.contains('drawer-open')) { closeDrawer(); el.menu.focus(); return; }
     const card = e.target.closest?.('.approval');
     if (card) { e.preventDefault(); decide(card.dataset.tool, 'deny', card.querySelector('button')); return; }
     if (state.live) { e.preventDefault(); stop(); }
   }
 });
-
-// ---- appearance ------------------------------------------------------------
-
-function renderSettings() {
-  const cur = currentTheme();
-  $('theme-choices').innerHTML = THEMES.map((t) => `<label class="choice"><input type="radio" name="theme" value="${t.id}"${t.id === cur.theme ? ' checked' : ''}><span class="choice-name">${t.name}</span><span class="choice-note">${t.note}</span></label>`).join('');
-  $('mode-choices').innerHTML = MODES.map((m) => `<label class="choice"><input type="radio" name="mode" value="${m}"${m === cur.mode ? ' checked' : ''}><span class="choice-name">${m[0].toUpperCase()}${m.slice(1)}</span></label>`).join('');
-}
-el.appearance.addEventListener('click', () => { renderSettings(); el.appearanceDialog.showModal(); });
-el.appearanceDialog.addEventListener('change', (e) => {
-  if (e.target.name === 'theme') chooseTheme({ theme: e.target.value });
-  if (e.target.name === 'mode') chooseTheme({ mode: e.target.value });
-});
-el.appearanceDialog.addEventListener('close', () => el.appearance.focus());
 
 // ---- start -----------------------------------------------------------------
 
@@ -1430,6 +1444,7 @@ window.addEventListener('offline', () => { state.online = false; renderChrome();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) loadList(); });
 
 applyTheme();
+syncSidebar();
 loadList();
 loadMemory();
 loadSkills();
