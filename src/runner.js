@@ -23,13 +23,14 @@ import { reduce, titleFrom } from '../ui/js/reduce.js';
 const shortId = () => randomUUID().slice(0, 8);
 
 export class Runner extends EventEmitter {
-  constructor(config, store, { agent = runAgent } = {}) {
+  // records: the core's memory, where MEMORY.md's entries live (passed in by the server).
+  constructor(config, store, { agent = runAgent, records = null } = {}) {
     super();
     this.config = config;
     this.store = store;
     this.agent = agent;
     this.active = new Map(); // sessionId → live run
-    this.memory = new Memory(config.home, config.timezone);
+    this.memory = new Memory(config.home, config.timezone, { records });
     this.skills = new Skills(config.root, config.home);
     this.schedules = new Schedules(config.root, config.home, config.timezone);
     this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone });
@@ -224,6 +225,8 @@ export class Runner extends EventEmitter {
       const filter = new ToolTagFilter();
       this.setLive(sessionId, { phase: 'thinking', text: '' });
       let streamed = '';
+      // MEMORY.md may have been edited by hand since Nova last wrote it: take that in first.
+      if (this.memory.records) this.memory.sync();
       const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, ...(this.identity ? { identity: this.identity.persona() } : {}) });
       const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
       // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
@@ -346,14 +349,14 @@ export class Runner extends EventEmitter {
   }
 
   // Memory is written before the reply is marked done. The log records what
-  // changed by id only; the words live in the memory files.
+  // changed by id only; the words live in the core's memory and the day notes.
   keep(sessionId, tag, ops) {
     const from = `${sessionId}/${tag.turn}`;
     const results = ops.map((o) => {
       try {
         if (o.op === 'remember') return this.memory.remember({ ...o, from });
         if (o.op === 'note') return this.memory.note({ ...o, from });
-        const removed = this.memory.forget(o.id);
+        const removed = this.memory.forget(o.id, { by: 'nova' });
         if (removed.length) this.emit('forgot', removed);
         return { op: 'forget', ok: removed.length > 0, id: o.id, also: removed.length > 1 ? removed.length - 1 : undefined };
       } catch (e) {

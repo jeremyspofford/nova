@@ -30,7 +30,10 @@ export function createNova(config = loadConfig(), deps = {}) {
   const core = createCore({ home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program: config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command', egress: config.agentEgress } });
   if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
   const store = new SessionStore(config.home, config.timezone);
-  const runner = new Runner(config, store, deps);
+  // Curated memory lives in the core; MEMORY.md is rendered from it. The first start imports
+  // an existing MEMORY.md once, and every start takes in hand edits made while Nova was off.
+  const runner = new Runner(config, store, { ...deps, records: core.memory });
+  runner.memory.sync();
   runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault(), receipt: (r) => core.receipts.record(r) };
   runner.ensureMain();
   // permissions.md is written once, so it can be read and edited by hand; Settings keeps it current.
@@ -189,9 +192,10 @@ export function createNova(config = loadConfig(), deps = {}) {
         saved();
         return json(res, 200, { ok: true });
       }
-      if (!/^[mnh][0-9a-f]{8}$/.test(String(id))) return json(res, 404, { error: 'No such memory' });
+      // Ids from Era 2 (m…, n…, h…) and the core's own (a UUID).
+      if (!/^([mnh][0-9a-f]{8}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.test(String(id))) return json(res, 404, { error: 'No such memory' });
       if (action === 'forget') {
-        const removed = memory.forget(id);
+        const removed = memory.forget(id, { by: 'person' });
         if (!removed.length) return json(res, 404, { error: 'That was already forgotten.' });
         saved();
         return json(res, 200, { removed });
