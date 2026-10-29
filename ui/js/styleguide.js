@@ -1,5 +1,7 @@
 // Renders the style reference from the live tokens and the app's own views.
-import { CONTRACT } from './contract.js';
+// The schema comes from the core, never from a copy (src/core/design.ts).
+const schema = await fetch('/api/v1/design-systems/schema').then((r) => r.json());
+const tokensOf = (test) => schema.tokens.filter(test).map((t) => t.css);
 import { THEMES, MODES, apply, choose, current } from './theme.js';
 import { icons, memoryIndex, renderActivity, renderEmpty, renderHandoff, renderMemory, renderNotes, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
 
@@ -89,10 +91,10 @@ const section = (title, intro, body) => `<section class="sg-section"><h2>${title
 const tokenList = (names) => names.map((n) => `<code>${n}</code>`).join(' ');
 
 function render() {
-  const colors = CONTRACT.color.map((n) => `<div class="sg-swatch"><div class="sg-chip" style="background: var(${n})"></div><span class="sg-name">${n}</span><span class="sg-value">${value(n)}</span></div>`).join('');
+  const colors = tokensOf((t) => t.group === 'color').map((n) => `<div class="sg-swatch"><div class="sg-chip" style="background: var(${n})"></div><span class="sg-name">${n}</span><span class="sg-value">${value(n)}</span></div>`).join('');
   const type = ['--t-display', '--t-wordmark', '--t-title', '--t-body', '--t-callout', '--t-caption', '--t-margin', '--t-mono']
     .map((n) => `<div class="sg-row"><span class="sg-name">${n}</span><span style="font: var(${n})">A thoughtful journal that happens to act</span></div>`).join('');
-  const space = CONTRACT.spacing.map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-bar" style="width: var(${n})"></div></div>`).join('');
+  const space = tokensOf((t) => t.name.startsWith('space/')).map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-bar" style="width: var(${n})"></div></div>`).join('');
   const shape = ['--r-card', '--r-bubble', '--r-input', '--r-pill'].map((n) => `<div class="sg-swatch"><div class="sg-box" style="border-radius: var(${n})">${value(n)}</div><span class="sg-name">${n}</span></div>`).join('') +
     ['--shadow-1', '--shadow-2'].map((n) => `<div class="sg-swatch"><div class="sg-box" style="border-radius: var(--r-card); box-shadow: var(${n})">elevation</div><span class="sg-name">${n}</span></div>`).join('');
   const motion = ['--m-fast', '--m-med', '--m-slow'].map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-track"><span class="sg-dot" style="transition: left var(${n}) var(--ease)"></span></div></div>`).join('');
@@ -134,7 +136,7 @@ function render() {
     before: t0.toISOString().slice(0, 10),
   };
   sg.innerHTML = [
-    section('Color', `Every theme defines these ${CONTRACT.color.length} tokens. Components use nothing else.`, `<div class="sg-grid">${colors}</div>`),
+    section('Color', `Every design system defines these ${tokensOf((t) => t.group === 'color').length} colour tokens. Components use nothing else.`, `<div class="sg-grid">${colors}</div>`),
     section('Type', `Serif is the voice of record in Paper: dates, empty states, and anything Nova concludes. Chrome stays sans. Font families: ${tokenList(['--font', '--font-display', '--font-mono'])}.`, type),
     section('Spacing', 'A 4-point base with an editorial rhythm.', space),
     section('Shape and elevation', 'Warm, soft, and sparing.', `<div class="sg-grid">${shape}</div>`),
@@ -201,9 +203,9 @@ function renderSwitch() {
 }
 
 document.getElementById('switch').addEventListener('change', (e) => {
-  choose({ [e.target.name]: e.target.value });
-  requestAnimationFrame(render);
+  choose({ [e.target.name]: e.target.value }).then(() => requestAnimationFrame(render)).catch(() => renderSwitch());
 });
+window.addEventListener('nova:appearance', () => { renderSwitch(); requestAnimationFrame(render); });
 
 apply();
 renderSwitch();

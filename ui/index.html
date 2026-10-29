@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="nova" data-mode="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -7,19 +7,16 @@
   <title>Nova</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <script>
-    // Set the theme and the sidebar before first paint, so neither flashes.
+    // Set the sidebar before first paint, so it doesn't flash.
     (function () {
-      var r = document.documentElement, t = 'nova', m = 'system', s = 'open';
-      try { t = localStorage.getItem('nova.theme') || t; m = localStorage.getItem('nova.mode') || m; s = localStorage.getItem('nova.sidebar') || s; } catch (e) {}
-      r.dataset.theme = t;
+      var r = document.documentElement, s = 'open';
+      try { s = localStorage.getItem('nova.sidebar') || s; } catch (e) {}
       r.dataset.sidebar = s === 'collapsed' ? 'collapsed' : 'open';
-      r.dataset.mode = m === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : m;
     })();
   </script>
-  <link rel="stylesheet" href="/themes/nova.css">
-  <link rel="stylesheet" href="/themes/paper.css">
-  <link rel="stylesheet" href="/themes/aurora.css">
-  <link rel="stylesheet" href="/themes/obsidian.css">
+  <!-- The applied design system as CSS variables. theme.js swaps #ds when the core says it changed. -->
+  <link rel="stylesheet" id="ds-boot" href="/design-system.css">
+  <style id="ds"></style>
   <link rel="stylesheet" href="/styles/base.css">
   <link rel="stylesheet" href="/styles/components.css">
   <link rel="modulepreload" href="/js/app.js">

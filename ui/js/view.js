@@ -742,8 +742,8 @@ ${list ? renderPermissions(list) : error ? `<section class="memory-section" aria
 function renderAppearance({ theme, mode, themes, modes }) {
   const choice = (name, value, label, note, on) => `<label class="choice"><input type="radio" name="${name}" value="${esc(value)}"${on ? ' checked' : ''}><span class="choice-name">${esc(label)}</span>${note ? `<span class="choice-note">${esc(note)}</span>` : ''}</label>`;
   return `<section class="memory-section" id="appearance" aria-labelledby="set-look"><h2 class="memory-heading" id="set-look">Appearance</h2>
-<p class="memory-lede">How Nova looks on this screen. It's kept in this browser, so another device can look different.</p>
-<fieldset class="set-field"><legend class="set-legend">Theme</legend>
+<p class="memory-lede">How Nova looks, on every device you use it on. A pick applies at once.</p>
+<fieldset class="set-field"><legend class="set-legend">Design system</legend>
 <div class="choices set-themes">${themes.map((t) => choice('theme', t.id, t.name, t.note, t.id === theme)).join('')}</div></fieldset>
 <fieldset class="set-field"><legend class="set-legend">Light and dark</legend>
 <div class="choices row">${modes.map((m) => choice('mode', m, m[0].toUpperCase() + m.slice(1), '', m === mode)).join('')}</div></fieldset>

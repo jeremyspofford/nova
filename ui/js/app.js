@@ -1348,11 +1348,13 @@ el.settings.addEventListener('click', (e) => {
   if (b?.dataset.action === 'toggle-permission') togglePermission(b);
   else if (b?.dataset.action === 'retry-settings') loadPermissions();
 });
-// Appearance lives here too: a pick applies at once and is kept in this browser.
+// Appearance lives here too: a pick is applied by the core, for every device, and the page
+// swaps its stylesheet without a reload.
 el.settings.addEventListener('change', (e) => {
-  if (e.target.name === 'theme') chooseTheme({ theme: e.target.value });
-  if (e.target.name === 'mode') chooseTheme({ mode: e.target.value });
+  if (e.target.name !== 'theme' && e.target.name !== 'mode') return;
+  chooseTheme({ [e.target.name]: e.target.value }).catch((err) => { toast(err.message); renderSettingsView(); });
 });
+window.addEventListener('nova:appearance', () => { if (state.view === 'settings') renderSettingsView(); });
 el.settingsLink.addEventListener('click', (e) => {
   if (e.metaKey || e.ctrlKey || e.shiftKey) return;
   e.preventDefault();

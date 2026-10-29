@@ -1,29 +1,33 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
-import { checkTheme, contrast } from '../scripts/check-themes.js';
-import { lint } from '../scripts/lint-tokens.js';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { checkPackage, contrast } from '../scripts/check-themes.js';
+import { lint, LAYOUT_FILE } from '../scripts/lint-tokens.js';
+import { DEFAULT_DESIGN_SYSTEM } from '../src/core/index.ts';
 
-const themes = readdirSync('ui/themes').filter((f) => f.endsWith('.css'));
+const packages = readdirSync('design-systems').filter((f) => f.endsWith('.json'));
 
-test('four themes ship, Nova among them', () => {
-  assert.deepEqual(themes.sort(), ['aurora.css', 'nova.css', 'obsidian.css', 'paper.css']);
+test('six design systems ship: Orb Teal, Companion Light, and Era 2’s four themes', () => {
+  assert.deepEqual(packages.sort(), ['aurora.json', 'companion-light.json', 'nova.json', 'obsidian.json', 'orb-teal.json', 'paper.json']);
+  assert.equal(existsSync('ui/themes'), false, 'the Era 2 theme files are now packages');
 });
 
-test('Nova is the default theme', () => {
-  assert.match(readFileSync('ui/js/theme.js', 'utf8'), /THEMES = \[\n  \{ id: 'nova'/);
-  assert.match(readFileSync('ui/js/theme.js', 'utf8'), /\? theme : 'nova'/);
+test('Orb Teal is the default, and pages load the applied design system, swappable in place', () => {
+  assert.equal(DEFAULT_DESIGN_SYSTEM, 'orb-teal');
   for (const f of ['ui/index.html', 'ui/styleguide.html']) {
     const html = readFileSync(f, 'utf8');
-    assert.match(html, /data-theme="nova"/, f);
-    assert.match(html, /t = 'nova'/, f);
-    assert.match(html, /href="\/themes\/nova.css"/, f);
+    assert.match(html, /<link rel="stylesheet" id="ds-boot" href="\/design-system.css">/, f);
+    assert.match(html, /<style id="ds"><\/style>/, f);
+    assert.doesNotMatch(html, /\/themes\//, f);
   }
+  const theme = readFileSync('ui/js/theme.js', 'utf8');
+  assert.match(theme, /addEventListener\('design-system'/);
+  assert.match(theme, /getElementById\('ds'\)\.textContent/);
 });
 
-for (const f of themes) {
-  test(`${f} passes the theme contract`, () => {
-    const { problems } = checkTheme(readFileSync(`ui/themes/${f}`, 'utf8'));
+for (const f of packages) {
+  test(`${f} passes validation`, () => {
+    const { problems } = checkPackage(JSON.parse(readFileSync(`design-systems/${f}`, 'utf8')));
     assert.deepEqual(problems, []);
   });
 }
@@ -34,8 +38,25 @@ test('contrast math matches WCAG reference values', () => {
 });
 
 test('the lint catches each kind of hardcoded value', () => {
-  const found = lint('x.css', '.a{color:#fff;font:12px Georgia;border-radius:6px;box-shadow:0 1px red;transition:opacity 200ms ease;font-size:13px}');
+  const found = lint('ui/x.css', '.a{color:#fff;font:12px Georgia;border-radius:6px;box-shadow:0 1px red;transition:opacity 200ms ease;font-size:13px}');
   assert.equal(found.length >= 6, true);
-  assert.deepEqual(lint('x.css', '.a{color:var(--text);font:var(--t-body);border-radius:var(--r-card);transition:opacity var(--m-fast) var(--ease)}'), []);
-  assert.equal(lint('x.js', 'el.style.color = "red"; const c = "#C4502B";').length, 2);
+  assert.equal(lint('ui/x.js', 'el.style.color = "red"; const c = "#C4502B";').length, 2);
+});
+
+test('new UI code may reference only schema tokens', () => {
+  const ok = '.a{color:var(--text-primary);background:var(--surface-card);font:var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body);border-radius:var(--radius-card);box-shadow:var(--shadow-card);padding:var(--space-3);transition:opacity var(--motion-duration-fast) var(--motion-ease)}';
+  assert.deepEqual(lint('ui/x.css', ok), []);
+  assert.match(lint('ui/x.css', '.a{color:var(--text-shiny)}')[0][1], /unknown token --text-shiny/);
+  assert.match(lint('ui/x.css', '.a{color:var(--text)}')[0][1], /Era 2 name/);
+  assert.match(lint('ui/x.css', '.a{--bg-base:#000}').map((p) => p[1]).join(' '), /only a design system sets it/);
+  assert.match(lint('ui/x.css', '.a{padding:12px}')[0][1], /spacing must be a space token/);
+  assert.match(lint('ui/x.css', '@media (min-width: 600px){.a{display:none}}')[0][1], /breakpoints belong in/);
+  assert.deepEqual(lint(LAYOUT_FILE, '@media (min-width: 600px){.a{display:none}}'), []);
+  assert.deepEqual(lint('ui/x.js', 'const x = `<span style="color: var(--status-ok)">`;'), []);
+  assert.match(lint('ui/x.js', 'const x = `<span style="color: var(--nope)">`;')[0][1], /unknown token --nope/);
+});
+
+test('Era 2 files may use the temporary aliases, and nothing else outside the schema', () => {
+  assert.deepEqual(lint('ui/styles/components.css', '.a{color:var(--text);padding:12px;font:var(--t-body);border-radius:var(--r-card);transition:opacity var(--m-fast) var(--ease)}'), []);
+  assert.match(lint('ui/styles/components.css', '.a{color:var(--txt)}')[0][1], /unknown token --txt/);
 });
