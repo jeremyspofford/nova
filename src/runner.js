@@ -7,7 +7,7 @@
 // (streaming text, a pending approval) is held in memory and broadcast; if the
 // process dies mid-turn, the log still shows exactly how far it got.
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { runAgent, AgentError } from './agent.js';
 import { permits } from './core/index.ts';
 import { buildPrompt, buildSystem, helperSection, runSection, schedulesSection, skillsSection } from './context.js';
@@ -16,7 +16,7 @@ import { Skills } from './skills.js';
 import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
 import { Permissions, permissionFor, permissionsSection } from './permissions.js';
-import { commitHome } from './home.js';
+import { commitHome, readStanding } from './home.js';
 import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 
@@ -162,6 +162,26 @@ export class Runner extends EventEmitter {
       });
   }
 
+  receipt(sessionId, run, mode, { system, prompt, recall }) {
+    const hash = (s) => createHash('sha256').update(String(s)).digest('hex');
+    const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'model';
+    return {
+      session_id: sessionId,
+      provider: program,
+      model: program,
+      purpose: run.helper ? 'helper' : run.unattended ? 'scheduled run' : 'chat',
+      privacy_mode: mode,
+      egress: this.config.agentEgress === 'remote' ? `remote:${program}` : 'local',
+      context_items: [
+        { kind: 'file', ref: 'system prompt', sha256: hash(system) },
+        ...readStanding(this.config.home).filter((f) => !(run.helper && f.name === 'MEMORY.md')).map((f) => ({ kind: 'standing', ref: `~/${f.name}`, sha256: hash(f.text) })),
+        ...recall.map((n) => ({ kind: 'memory', ref: n.id ?? n.source, sha256: hash(n.text) })),
+        ...[...run.skills.values()].map((s) => ({ kind: 'skill', ref: s.id, sha256: hash(s.body ?? '') })),
+        { kind: 'session', ref: sessionId, sha256: hash(prompt) },
+      ],
+    };
+  }
+
   async loop(sessionId, run) {
     const { turn, attempt } = run.live;
     const tag = { turn, attempt };
@@ -204,10 +224,15 @@ export class Runner extends EventEmitter {
       const filter = new ToolTagFilter();
       this.setLive(sessionId, { phase: 'thinking', text: '' });
       let streamed = '';
+      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, ...(this.identity ? { identity: this.identity.persona() } : {}) });
+      const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
+      // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
+      // hash, and where it went. Written before the call, so it exists even if the call fails.
+      this.identity?.receipt?.(this.receipt(sessionId, run, mode, { system, prompt, recall }));
       const { text, aborted } = await this.agent({
         cmd: this.config.agentCmd,
-        system: buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, ...(this.identity ? { identity: this.identity.persona() } : {}) }),
-        prompt: buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova'),
+        system,
+        prompt,
         signal,
         onText: (chunk) => {
           const visible = filter.push(chunk);

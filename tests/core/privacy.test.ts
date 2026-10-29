@@ -75,3 +75,31 @@ test('local-only offers no tool that reaches the internet', async () => {
   assert.ok(local.includes('read_file') && local.includes('exec'));
   assert.deepEqual(withinPrivacy(all, 'local-preferred'), all);
 });
+
+test('every chat model call leaves a context receipt saying what went in and where it went', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'nova-privacy-'));
+  const nova = createNova({ ...loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none', NOVA_TZ: 'UTC' }), port: 0 });
+  await new Promise<void>((r) => nova.server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${(nova.server.address() as AddressInfo).port}`;
+  try {
+    const { id } = await (await fetch(`${base}/api/sessions`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify({ text: 'hello' }) })).json();
+    for (let i = 0; i < 200; i++) {
+      const s = await (await fetch(`${base}/api/sessions/${id}`)).json();
+      if (s.live === null) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const receipts = await (await fetch(`${base}/api/v1/receipts?session_id=${id}`)).json();
+    assert.ok(receipts.length >= 1);
+    const r = receipts[0];
+    assert.equal(r.purpose, 'chat');
+    assert.equal(r.privacy_mode, 'local-only');
+    assert.equal(r.egress, 'local');
+    const kinds = new Set(r.context_items.map((c: { kind: string }) => c.kind));
+    for (const k of ['file', 'standing', 'session']) assert.ok(kinds.has(k), `has ${k}`);
+    assert.ok(r.context_items.every((c: { sha256: string }) => /^[0-9a-f]{64}$/.test(c.sha256)));
+    assert.deepEqual(await (await fetch(`${base}/api/v1/receipts?egress=remote`)).json(), [], 'the egress log is empty');
+  } finally {
+    nova.server.close();
+    await nova.core.close();
+  }
+});

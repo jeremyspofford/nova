@@ -31,7 +31,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
   const store = new SessionStore(config.home, config.timezone);
   const runner = new Runner(config, store, deps);
-  runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault() };
+  runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault(), receipt: (r) => core.receipts.record(r) };
   runner.ensureMain();
   // permissions.md is written once, so it can be read and edited by hand; Settings keeps it current.
   if (!existsSync(runner.permissions.file)) writeFileSync(runner.permissions.file, renderPermissions(runner.permissions.list()));
