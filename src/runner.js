@@ -195,8 +195,8 @@ export class Runner extends EventEmitter {
       let streamed = '';
       const { text, aborted } = await this.agent({
         cmd: this.config.agentCmd,
-        system: buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper }),
-        prompt: buildPrompt(session, recall, this.config),
+        system: buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, ...(this.identity ? { identity: this.identity.persona() } : {}) }),
+        prompt: buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova'),
         signal,
         onText: (chunk) => {
           const visible = filter.push(chunk);

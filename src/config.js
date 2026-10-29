@@ -31,6 +31,8 @@ export function loadConfig(env = process.env, root = ROOT) {
     port: Number(env.NOVA_PORT ?? file.port ?? 4317),
     agentCmd: env.NOVA_AGENT_CMD ?? file.agent_cmd ?? DEFAULT_AGENT_CMD,
     timezone: env.NOVA_TZ ?? file.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    // Set explicitly (env or file) wins; otherwise the profile's timezone, once setup has one.
+    timezonePinned: Boolean(env.NOVA_TZ ?? file.timezone),
     theme: file.theme ?? 'nova',
     dev: env.NOVA_DEV === '1',
     maxSteps: Number(file.max_tool_steps ?? 8),

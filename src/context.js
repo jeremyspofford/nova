@@ -6,6 +6,7 @@ import { readStanding } from './home.js';
 import { Memory } from './memory.js';
 import { formatWhen } from './schedules.js';
 import { availableTools, memoryProtocol, toolProtocol } from './tools.js';
+import { renderIdentity } from './core/index.ts';
 
 const MAX_TRANSCRIPT = 120_000; // characters; older turns drop off first
 
@@ -67,7 +68,9 @@ ${allowed}${passed ? `\n\n${passed}` : ''}`;
 
 // helper: a helper's section; its context is scoped, so it gets no memory,
 // no recent notes and no schedules, and keeps no memory.
-export function buildSystem({ root, home, timezone }, now = new Date(), { tools = availableTools(), skills = '', schedules = '', scheduled = '', helper = '' } = {}) {
+// identity: "who you are", from the core's identity layer (charter + profile); the default
+// identity when there is no core, as in some tests.
+export function buildSystem({ root, home, timezone }, now = new Date(), { tools = availableTools(), skills = '', schedules = '', scheduled = '', helper = '', identity = renderIdentity() } = {}) {
   const base = readFileSync(join(root, 'system', 'system_prompt.md'), 'utf8').trim();
   const memory = new Memory(home, timezone);
   const standing = readStanding(home)
@@ -81,6 +84,7 @@ export function buildSystem({ root, home, timezone }, now = new Date(), { tools 
     .filter(([, p]) => existsSync(p))
     .map(([d, p]) => `<file path="~/memory/${d}.md">\n${memory.forContext(readFileSync(p, 'utf8').trim()).slice(-8000)}\n</file>`);
   return [
+    identity,
     base,
     `# Standing files\n\nThese are your home's standing files, read fresh for this message.\n\n${standing}`,
     days.length ? `# Recent notes\n\n${days.join('\n\n')}` : '',
@@ -116,7 +120,7 @@ function renderTurn(t, timezone) {
 }
 
 // session: the reduced view, whose last turn is the one being answered.
-export function buildPrompt(session, recall, { timezone }) {
+export function buildPrompt(session, recall, { timezone }, name = 'Nova') {
   const turns = session.turns.map((t) => renderTurn(t, timezone));
   let kept = [];
   let size = 0;
@@ -130,5 +134,5 @@ export function buildPrompt(session, recall, { timezone }) {
     ? `<memory_search>\n${recall.map((n) => `<note source="~/${n.source}" id="${n.id ?? ''}">${esc(n.text)}</note>`).join('\n')}\n</memory_search>\n\n`
     : '';
   return `${memory}<conversation>\n${omitted ? `<note>${omitted} earlier exchanges omitted for length.</note>\n` : ''}${kept.join('\n\n')}\n</conversation>\n\n` +
-    (session.turns.at(-1)?.followup ? 'Continue as Nova: comment on the report, as the last <followup> asks. Write only your comment.' : "Continue as Nova: reply to the user's latest message. Write only your reply.");
+    (session.turns.at(-1)?.followup ? `Continue as ${name}: comment on the report, as the last <followup> asks. Write only your comment.` : `Continue as ${name}: reply to the user's latest message. Write only your reply.`);
 }

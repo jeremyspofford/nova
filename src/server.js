@@ -15,6 +15,7 @@ import { Scheduler } from './scheduler.js';
 import { HelperError, Helpers } from './helpers.js';
 import { buildActivity } from './activity.js';
 import { render as renderPermissions } from './permissions.js';
+import { createCore } from './core/index.ts';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -24,8 +25,13 @@ const TYPES = {
 export function createNova(config = loadConfig(), deps = {}) {
   const started = performance.now();
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
+  // The core (src/core): database, Work Ledger, profile, identity, setup, extensions, /api/v1.
+  const { version } = JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8'));
+  const core = createCore({ home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host) });
+  if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
   const store = new SessionStore(config.home, config.timezone);
   const runner = new Runner(config, store, deps);
+  runner.identity = { persona: core.persona, name: () => core.identity().name };
   runner.ensureMain();
   // permissions.md is written once, so it can be read and edited by hand; Settings keeps it current.
   if (!existsSync(runner.permissions.file)) writeFileSync(runner.permissions.file, renderPermissions(runner.permissions.list()));
@@ -373,6 +379,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         devClients.add(res);
         return req.on('close', () => devClients.delete(res));
       }
+      if (await core.handle(req, res, url)) return;
       if (parts[1] === 'api') return await api(req, res, parts);
       if (url.pathname === '/oauth/gmail' && req.method === 'GET') {
         const q = Object.fromEntries(url.searchParams);
@@ -389,7 +396,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
   });
 
-  return { server, runner, store, scheduler, helpers, config, seeded, started };
+  return { server, runner, store, scheduler, helpers, config, seeded, started, core };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -397,6 +404,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { config } = nova;
   ensureGit(config.home);
   nova.helpers.recover();
+  const recovered = nova.core.start();
+  if (recovered.requeued.length) console.log(`Resumed ${recovered.requeued.length} task(s) that were running when Nova stopped.`);
   nova.scheduler.start();
   nova.server.listen(config.port, config.host, () => {
     const ms = Math.round(performance.now() - nova.started);
@@ -407,7 +416,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log('Warning: Nova is listening beyond this machine. Anyone who can reach it can talk to Nova and approve commands.');
     }
   });
-  const quit = () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); process.exit(0); };
+  const quit = async () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); await nova.core.close(); process.exit(0); };
   process.on('SIGINT', quit);
   process.on('SIGTERM', quit);
 }

@@ -48,7 +48,8 @@ const git = (home, ...args) => new Promise((ok) => {
   execFile('git', ['-C', home, ...args], { timeout: 15_000 }, (err, stdout) => ok(err ? null : stdout));
 });
 
-const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'skills/', 'connectors/'];
+// The core's database, logs and backups, and extension data, are runtime state, not history.
+const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'skills/', 'connectors/', 'nova.db*', 'logs/', 'backups/', 'extensions/', 'exports/', 'kept/'];
 
 function ignorePrivate(home) {
   const path = join(home, '.gitignore');

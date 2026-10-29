@@ -25,7 +25,10 @@ const clean = (s: string) => s.trim().replace(/\s+/g, ' ').replace(/[.!]+$/, '')
 
 // "call me Sam", "I'm Sam", "my name is Sam." → "Sam"
 export function nameFrom(text: string): string | null {
-  const t = clean(text).replace(/^(you can |please )?(call me|i'?m|i am|it'?s|my name is|name'?s|this is)\s+/i, '');
+  const t = clean(text)
+    .replace(/^(hi|hello|hey|hiya|howdy|good (morning|afternoon|evening))( there)?\b[!,.]*\s*/i, '')
+    .replace(/^(you can |please )?(call me|i'?m|i am|it'?s|my name is|name'?s|this is)\s+/i, '')
+    .replace(/[!.,]+$/, '');
   return t && t.length <= 40 && !/[<>{}\n]/.test(t) ? t : null;
 }
 

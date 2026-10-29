@@ -110,6 +110,8 @@ test('names are taken from natural phrasing', () => {
   assert.equal(nameFrom("I'm Ada"), 'Ada');
   assert.equal(nameFrom('my name is Grace Hopper.'), 'Grace Hopper');
   assert.equal(nameFrom('Lin'), 'Lin');
+  assert.equal(nameFrom("Hi! I'm Sam."), 'Sam', 'a greeting is not part of the name');
+  assert.equal(nameFrom('hello there, call me Robin!'), 'Robin');
   assert.equal(nameFrom('<script>'), null);
 });
 
