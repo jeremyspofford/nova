@@ -5,7 +5,9 @@
   "description": "Nova, a personal agent. Plain files are the source of truth.",
   "type": "module",
   "license": "AGPL-3.0-only",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev:follow": "node scripts/dev-follow.js",
@@ -17,6 +19,8 @@
     "shots": "node scripts/shots.js"
   },
   "devDependencies": {
-    "playwright-core": "1.56.1"
+    "@types/node": "26.6.6",
+    "playwright-core": "1.56.1",
+    "typescript": "7.0.2"
   }
 }
