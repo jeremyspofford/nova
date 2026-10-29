@@ -16,6 +16,7 @@ import { Decisions, RulesProvider, Templates } from './decide.ts';
 import { Triggers, type Policy, type RuleInput } from './triggers.ts';
 import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInput, type UserState } from './memory.ts';
 import { Receipts } from './receipts.ts';
+import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { info, type Egress } from './workers.ts';
 import { createApi, type Route } from './api.ts';
@@ -58,7 +59,8 @@ export function createCore(o: CoreOptions) {
   });
   const setup = new Setup({ profile, ledger, now, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
-  const memory = new Memory({ db, home: o.home, now });
+  const backups = new Backups({ dir: join(o.home, 'backups'), log });
+  const memory = new Memory({ db, home: o.home, now, afterForget: (ids) => backups.forget('memory', ids) });
   const receipts = new Receipts({ db, log, now });
 
   const bus = new EventEmitter();
@@ -239,7 +241,7 @@ export function createCore(o: CoreOptions) {
   });
 
   return {
-    db, log, profile, ledger, setup, extensions, workspace, migration, routes, templates, decisions, triggers, memory, receipts,
+    db, log, profile, ledger, setup, extensions, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),

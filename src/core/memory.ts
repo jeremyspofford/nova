@@ -76,10 +76,13 @@ export class Memory {
   readonly exportsDir: string;
   #db: Db;
   #now: () => Date;
+  #afterForget: (ids: string[]) => void;
 
-  constructor(o: { db: Db; home: string; now?: () => Date }) {
+  // afterForget: where else the forgotten records must go (the backups).
+  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[]) => void }) {
     this.#db = o.db;
     this.#now = o.now ?? (() => new Date());
+    this.#afterForget = o.afterForget ?? (() => {});
     this.exportsDir = join(o.home, 'exports');
     // Forgotten content is overwritten on disk, not just unlinked from the table.
     this.#db.raw.exec('PRAGMA secure_delete = ON');
@@ -142,6 +145,7 @@ export class Memory {
     });
     // Old pages in the write-ahead log could still hold the content; fold them in now.
     if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    this.#afterForget(ids);
     return { forgotten: ids };
   }
 
