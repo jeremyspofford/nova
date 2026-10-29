@@ -30,6 +30,13 @@ export interface Manifest {
   on_remove: OnRemove;
 }
 
+// What a kind of extension adds to the host: extra install checks (plain-words problems), and a
+// veto on removal (a reason, or null to allow). Design systems use both (design.ts).
+export interface KindRules {
+  check?: (m: Manifest) => string[];
+  protect?: (x: Installed) => string | null;
+}
+
 export interface Installed { id: string; version: string; kind: Kind; state: 'installed' | 'enabled' | 'disabled'; manifest: Manifest; installed_at: string; updated_at: string }
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/;
@@ -108,14 +115,21 @@ export class Extensions extends EventEmitter {
   #home: string;
   #version: string;
   #now: () => Date;
+  #kinds: Partial<Record<Kind, KindRules>>;
 
-  constructor(o: { db: Db; home: string; novaVersion: string; now?: () => Date }) {
+  constructor(o: { db: Db; home: string; novaVersion: string; now?: () => Date; kinds?: Partial<Record<Kind, KindRules>> }) {
     super();
+    this.#kinds = o.kinds ?? {};
     this.#db = o.db;
     this.#home = o.home;
     this.root = join(o.home, 'extensions');
     this.#version = o.novaVersion;
     this.#now = o.now ?? (() => new Date());
+  }
+
+  // Lets the module that owns a kind (design.ts for design systems) add its rules after the host exists.
+  defineKind(kind: Kind, rules: KindRules): void {
+    this.#kinds[kind] = rules;
   }
 
   list(): Installed[] {
@@ -134,7 +148,7 @@ export class Extensions extends EventEmitter {
 
   // Installed extensions start disabled: the person reviews permissions, then enables.
   install(input: unknown): { extension: Installed; review: string[] } {
-    const m = validateManifest(input);
+    const m = this.#validate(input);
     if (!satisfies(this.#version, m.nova_compat)) throw new CoreError('conflict', `${m.name} needs Nova ${m.nova_compat}; this is ${this.#version}.`);
     if (this.#db.get('SELECT 1 FROM extension WHERE id = ?', m.id)) throw new CoreError('conflict', `${m.name} is already installed. Updates go through the update path.`);
     const at = this.#now().toISOString();
@@ -143,6 +157,18 @@ export class Extensions extends EventEmitter {
     const extension = this.get(m.id);
     this.emit('change', { id: m.id, state: 'installed' });
     return { extension, review: review(m) };
+  }
+
+  // The update path: a newer manifest for an installed extension of the same kind replaces the
+  // old one in place; its state (enabled or not) and its data folder stay as they are.
+  update(input: unknown): Installed {
+    const m = this.#validate(input);
+    const x = this.get(m.id);
+    if (x.kind !== m.kind) throw new CoreError('conflict', `${x.manifest.name} is a ${x.kind}; an update can’t change its kind to ${m.kind}.`);
+    if (!satisfies(this.#version, m.nova_compat)) throw new CoreError('conflict', `${m.name} needs Nova ${m.nova_compat}; this is ${this.#version}.`);
+    this.#db.run('UPDATE extension SET version = ?, manifest = ?, updated_at = ? WHERE id = ?', m.version, JSON.stringify(m), this.#now().toISOString(), m.id);
+    this.emit('change', { id: m.id, state: x.state, version: m.version });
+    return this.get(m.id);
   }
 
   enable(id: string, opts: { approved?: boolean } = {}): Installed {
@@ -160,6 +186,8 @@ export class Extensions extends EventEmitter {
   // deletes the rest, including the record. Nothing of the extension stays behind.
   remove(id: string): { deleted: string[]; kept: string[]; exported: string[] } {
     const x = this.get(id);
+    const veto = this.#kinds[x.kind]?.protect?.(x);
+    if (veto) throw new CoreError('conflict', veto);
     const data = this.dataDir(id);
     const stamp = this.#now().toISOString().replace(/[:.]/g, '-');
     const inside = (p: string) => {
@@ -185,6 +213,13 @@ export class Extensions extends EventEmitter {
     const out: Record<string, number> = { installed: 0, enabled: 0, disabled: 0 };
     for (const r of this.#db.all<{ state: string; n: number }>('SELECT state, COUNT(*) AS n FROM extension GROUP BY state')) out[r.state] = r.n;
     return out;
+  }
+
+  #validate(input: unknown): Manifest {
+    const m = validateManifest(input);
+    const problems = this.#kinds[m.kind]?.check?.(m) ?? [];
+    if (problems.length) throw new CoreError('validation', 'This extension manifest isn’t valid.', problems);
+    return m;
   }
 
   #set(id: string, state: Installed['state']): Installed {

@@ -61,3 +61,42 @@ test('remove follows on_remove: exports what it promised, deletes the rest, leav
   x.install(sampleManifest());
   assert.equal(x.get('example.weather').state, 'installed', 'reinstalling after removal starts clean');
 });
+
+test('kind rules: a kind can add its own install checks and refuse removal of what it protects', () => {
+  const home = mkdtempSync(join(tmpdir(), 'nova-ext-'));
+  const db = new Db(':memory:');
+  db.migrate();
+  const x = new Extensions({
+    db, home, novaVersion: '0.1.0',
+    kinds: {
+      'design-system': {
+        check: (m) => (m.permissions.length ? ['A design system asks for no permissions.'] : []),
+        protect: (ext) => (ext.id === 'example.builtin' ? 'Example Builtin is built in, so it can’t be removed.' : null),
+      },
+    },
+  });
+  const ds = (over: Record<string, unknown> = {}) => sampleManifest({ id: 'example.builtin', kind: 'design-system', permissions: [], secrets: [], on_remove: { delete: [], keep: [], export: [] }, ...over });
+  assert.throws(() => x.install(ds({ permissions: [{ kind: 'network', target: 'x.example', why: 'fonts' }] })), (e: Error & { details?: string[] }) => {
+    assert.deepEqual(e.details, ['A design system asks for no permissions.']);
+    return true;
+  });
+  x.install(ds());
+  assert.throws(() => x.remove('example.builtin'), /built in/);
+  x.install(sampleManifest());
+  assert.ok(x.remove('example.weather'), 'other kinds are untouched by the rule');
+});
+
+test('update replaces an installed manifest in place, keeping its state', () => {
+  const { x } = host();
+  x.install(sampleManifest());
+  x.enable('example.weather', { approved: true });
+  const events: unknown[] = [];
+  x.on('change', (c) => events.push(c));
+  const updated = x.update(sampleManifest({ version: '1.1.0', name: 'Example Weather Plus' }));
+  assert.equal(updated.version, '1.1.0');
+  assert.equal(updated.manifest.name, 'Example Weather Plus');
+  assert.equal(updated.state, 'enabled');
+  assert.deepEqual(events, [{ id: 'example.weather', state: 'enabled', version: '1.1.0' }]);
+  assert.throws(() => x.update(sampleManifest({ id: 'example.absent' })), /No extension/);
+  assert.throws(() => x.update(sampleManifest({ kind: 'plugin' })), /kind/);
+});
