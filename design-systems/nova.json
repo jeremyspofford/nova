@@ -1,0 +1,109 @@
+{
+  "id": "nova",
+  "version": "1.0.0",
+  "kind": "design-system",
+  "name": "Nova",
+  "description": "A dark workspace that happens to contain a universe. Era 2’s default.",
+  "capabilities": [
+    "design-system"
+  ],
+  "permissions": [],
+  "secrets": [],
+  "config_schema": {},
+  "setup_flow": null,
+  "health_check": {
+    "kind": "none"
+  },
+  "nova_compat": ">=0.1.0 <1.0.0",
+  "on_remove": {
+    "delete": [],
+    "keep": [],
+    "export": []
+  },
+  "tokens": {
+    "bg/base": "#0a0a0c",
+    "bg/raised": "#121214",
+    "bg/overlay": "#1a1a1e",
+    "surface/card": "#1a1a1e",
+    "surface/card-hover": "#17171a",
+    "text/primary": "#ececf1",
+    "text/secondary": "#9c9ca5",
+    "text/faint": "#65656e",
+    "border/subtle": "rgba(255, 255, 255, 0.07)",
+    "border/strong": "#62626b",
+    "accent/primary": "#6e8cf5",
+    "accent/secondary": "#4cc38a",
+    "status/ok": "#4cc38a",
+    "status/working": "#6e8cf5",
+    "status/waiting": "#9c9ca5",
+    "status/attention": "#e8b34b",
+    "status/error": "#e5534b",
+    "orb/core": "#6e8cf5",
+    "orb/glow": "rgba(110, 140, 245, 0.35)",
+    "orb/listening": "#6e8cf5",
+    "orb/attention": "#e8b34b",
+    "shadow/card": "0 1px 2px rgba(0, 0, 0, 0.4)",
+    "shadow/raised": "0 12px 32px rgba(0, 0, 0, 0.55)",
+    "font/display": "-apple-system, \"SF Pro Text\", \"Segoe UI\", Inter, sans-serif",
+    "font/body": "-apple-system, \"SF Pro Text\", \"Segoe UI\", Inter, sans-serif",
+    "font/mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+    "type/h1": "26px",
+    "type/h2": "17px",
+    "type/h3": "14px",
+    "type/body": "14.5px",
+    "type/small": "13px",
+    "type/caption": "12px",
+    "type/weight-regular": "400",
+    "type/weight-strong": "600",
+    "type/line-tight": "1.36",
+    "type/line-body": "1.52",
+    "space/1": "4px",
+    "space/2": "8px",
+    "space/3": "12px",
+    "space/4": "16px",
+    "space/5": "24px",
+    "space/6": "32px",
+    "space/7": "48px",
+    "space/8": "64px",
+    "radius/card": "10px",
+    "radius/pill": "999px",
+    "radius/input": "8px",
+    "blur/glass": "0px",
+    "motion/breathe": "6000ms",
+    "motion/pulse": "1600ms",
+    "motion/transition": "200ms",
+    "motion/duration-fast": "120ms",
+    "motion/duration-slow": "300ms",
+    "motion/ease": "cubic-bezier(0.2, 0, 0, 1)",
+    "layout/rail-width": "72px",
+    "layout/content-max": "720px",
+    "layout/card-gap": "12px"
+  },
+  "modes": {},
+  "reduced_motion": {},
+  "components": {
+    "orb": {
+      "core": "orb/core",
+      "glow": "orb/glow",
+      "listening": "orb/listening",
+      "attention": "orb/attention"
+    },
+    "app": {
+      "background": "bg/base"
+    },
+    "stellar-map": {
+      "background": "bg/base",
+      "star": "text/primary",
+      "glow": "accent/primary"
+    }
+  },
+  "content_rules": {},
+  "extras": [
+    {
+      "id": "stellar-map",
+      "name": "Stellar Map",
+      "description": "Nova’s signature surface: memory drawn as a field of stars. Declared here; it arrives in a later phase."
+    }
+  ],
+  "preview": []
+}
