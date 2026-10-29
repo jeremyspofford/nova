@@ -42,6 +42,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   // Curated memory lives in the core; MEMORY.md is rendered from it. The first start imports
   // an existing MEMORY.md once, and every start takes in hand edits made while Nova was off.
   const runner = new Runner(config, store, { ...deps, records: core.memory });
+  // Forgetting through the core's API reaches MEMORY.md and the day notes as well.
+  core.memory.onForget((records) => runner.memory.forgotten(records));
   runner.memory.sync();
   runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault(), receipt: (r) => core.receipts.record(r) };
   runner.ensureMain();

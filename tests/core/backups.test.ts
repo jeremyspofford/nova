@@ -67,3 +67,18 @@ test('a backup that cannot be cleaned is destroyed, and that is reported', async
   assert.match(p?.message ?? '', /couldn’t be cleaned of something you asked Nova to forget/);
   await c.close();
 });
+
+test('forgetting a corrected memory cleans the backups; it does not destroy them (review finding)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'nova-backups-'));
+  const c = core(home);
+  const first = c.memory.remember({ kind: 'fact', content: SECRET, recorded_by: 'person' });
+  const fixed = c.memory.correct(first.id, `${SECRET}, the left one`, 'person');
+  mkdirSync(join(home, 'backups'), { recursive: true });
+  const file = join(home, 'backups', 'nova-chain-v3.db');
+  c.db.raw.exec(`VACUUM INTO '${file}'`);
+  c.memory.forget(fixed.id);
+  assert.equal(existsSync(file), true, 'the backup is still there');
+  assert.equal(contains(file, SECRET), false);
+  assert.equal(c.log.problems().length, 0);
+  await c.close();
+});

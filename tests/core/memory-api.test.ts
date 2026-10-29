@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createNova } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
@@ -56,14 +56,21 @@ test('the person remembers, corrects, confirms, searches and exports memory over
   await stop();
 });
 
-test('forgetting over the API leaves no trace in the database file or the log', async () => {
+test('forgetting over the API leaves no trace anywhere under the home: database, log, MEMORY.md, day notes, backups', async () => {
   const { nova, home, call, stop } = await boot();
   const secret = 'Example Person keeps a spare key under the green pot.';
-  const a = (await call('POST', '/memory', { kind: 'entity', content: secret })).body;
+  const a = (await call('POST', '/memory', { kind: 'fact', content: secret })).body;
   await call('POST', `/memory/${a.id}/correct`, { content: `${secret} Not any more.` });
-  const files = ['nova.db', 'nova.db-wal', join('logs', 'nova.log')].map((f) => join(home, f));
-  const holding = () => files.filter((p) => existsSync(p) && readFileSync(p).includes('green pot'));
-  assert.ok(holding().length > 0, 'the check can see the content on disk while it is remembered');
+  // The same words in every other place they can end up: the rendered MEMORY.md, a day note, a
+  // backup taken while the memory (and its correction) existed.
+  nova.runner.memory.sync();
+  mkdirSync(join(home, 'memory'), { recursive: true });
+  writeFileSync(join(home, 'memory', '2026-10-29.md'), `# 2026-10-29\n\n- ${secret}\n`);
+  mkdirSync(join(home, 'backups'), { recursive: true });
+  nova.core.db.raw.exec(`VACUUM INTO '${join(home, 'backups', 'nova-test-v3.db')}'`);
+  const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
+  const holding = () => walk(home).filter((p) => readFileSync(p).includes('green pot')).map((p) => relative(home, p));
+  for (const f of ['MEMORY.md', join('memory', '2026-10-29.md'), join('backups', 'nova-test-v3.db')]) assert.ok(holding().includes(f), `the check can see it in ${f} first`);
   const gone = await call('DELETE', `/memory/${a.id}`);
   assert.equal(gone.status, 200);
   assert.equal(gone.body.forgotten.length, 2);
@@ -71,7 +78,9 @@ test('forgetting over the API leaves no trace in the database file or the log', 
   const db = nova.core.db;
   const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'");
   for (const t of tables) assert.ok(!JSON.stringify(db.all(`SELECT * FROM "${t.name}"`)).includes('green pot'), t.name);
-  assert.deepEqual(holding(), [], 'no file on disk still holds the content');
+  assert.deepEqual(holding(), [], 'no file under the home still holds the content');
+  assert.deepEqual(nova.runner.memory.search('where is the spare key under the green pot'), [], 'search cannot bring it back to the model');
+  assert.equal(nova.core.log.problems().length, 0, 'the backup was cleaned, not destroyed');
   assert.equal((await call('DELETE', `/memory/${a.id}`)).status, 404);
   await stop();
 });

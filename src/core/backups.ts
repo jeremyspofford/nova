@@ -44,8 +44,13 @@ export class Backups {
           db.exec('PRAGMA secure_delete = ON');
           const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
           if (has) {
+            // The whole chain goes at once, so records that point at each other (a correction and
+            // what it corrected) can't block one another.
+            db.exec('PRAGMA foreign_keys = OFF');
+            db.exec('BEGIN');
             const del = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
             for (const id of ids) del.run(id);
+            db.exec('COMMIT');
             db.exec('VACUUM');
           }
         } finally {

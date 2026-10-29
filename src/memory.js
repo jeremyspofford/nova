@@ -394,11 +394,33 @@ export class Memory {
     const x = this.view(this.latest(rec.id));
     const e = recordEntry(x);
     const index = this.shown().filter((y) => y.r.kind === x.r.kind).findIndex((y) => y.r.id === x.r.id);
-    this.store().forget(rec.id, by);
+    // This path handles the files itself (it keeps what it removed, for undo), so the core's
+    // after-forget hook stands aside while it runs.
+    this.forgetting = true;
+    try {
+      this.store().forget(rec.id, by);
+    } finally {
+      this.forgetting = false;
+    }
     this.publish();
     const removed = [{ id: e.id, file: 'MEMORY.md', section: SHOWN[x.r.kind], index, line: recordLine(x), text: e.text, hand: e.by === 'hand', kind: x.r.kind, from: e.from, at: e.at, by: x.r.recorded_by }];
+    return [...removed, ...this.forgetTwins(e.text, e.from)];
+  }
+
+  // A memory forgotten some other way (the core's API): its words leave MEMORY.md and the day
+  // notes too, so search can't send them to the model again.
+  forgotten(records) {
+    if (this.forgetting) return;
+    this.publish();
+    for (const r of records) this.forgetTwins(r.content, r.source);
+  }
+
+  // The day notes that say the same thing as a forgotten memory.
+  forgetTwins(text, from) {
+    const removed = [];
     const stem = (w) => w.slice(0, 5); // "allergy" and "allergic" are the same thing here
-    const want = [...new Set(terms(e.text).map(stem))];
+    const want = [...new Set(terms(text).map(stem))];
+    if (!want.length) return removed;
     for (const f of this.dayFiles()) {
       const path = join(this.dir, f);
       for (;;) {
@@ -406,7 +428,7 @@ export class Memory {
         const twin = doc.entries.find((n) => {
           const have = new Set(terms(n.text).map(stem));
           const shared = want.filter((w) => have.has(w)).length;
-          const sameTurn = e.from && n.meta.from === e.from;
+          const sameTurn = from && n.meta.from === from;
           return sameTurn ? shared >= 1 : shared >= 2 && shared / want.length >= 0.6;
         });
         if (!twin) break;

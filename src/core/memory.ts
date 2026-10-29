@@ -77,6 +77,7 @@ export class Memory {
   #db: Db;
   #now: () => Date;
   #afterForget: (ids: string[]) => void;
+  #forgetListeners: ((records: MemoryRecord[]) => void)[] = [];
 
   // afterForget: where else the forgotten records must go (the backups).
   constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[]) => void }) {
@@ -137,8 +138,15 @@ export class Memory {
   }
 
   // Real deletion of the record and everything it corrected or was corrected by.
+  // Called with the forgotten records (words included) after they are gone from the database, so
+  // the other places that may hold the same words (rendered files, day notes) can follow.
+  onForget(fn: (records: MemoryRecord[]) => void): void {
+    this.#forgetListeners.push(fn);
+  }
+
   forget(id: string, by = 'person'): { forgotten: string[] } {
     const who = this.#by(by);
+    const records = this.history(id);
     const ids = this.#db.tx(() => {
       const chain = this.history(id).map((r) => r.id);
       for (const m of chain) this.#db.run('DELETE FROM memory WHERE id = ?', m);
@@ -148,6 +156,7 @@ export class Memory {
     // Old pages in the write-ahead log could still hold the content; fold them in now.
     if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     this.#afterForget(ids);
+    for (const fn of this.#forgetListeners) fn(records);
     return { forgotten: ids };
   }
 
