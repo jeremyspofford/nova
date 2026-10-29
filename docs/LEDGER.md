@@ -14,6 +14,50 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M2): triggers are one engine with a visible registry.** Every
+automation is a rule (`event`, `heartbeat`, `proactive`) listed at
+`/api/v1/triggers/rules`; every firing is a trigger record (CONTRACTS §6)
+with its triage decision and reason, and what it led to. The firing pipeline
+runs in this order: dedup (default key is the payload hash, 600 s window),
+cooldown, triage, act. Proactive messages are held during quiet hours.
+Heartbeats run once per due time (`claim_key UNIQUE`); missed runs older
+than 6 h become one "missed" record. Webhooks (`POST /api/v1/hooks/{name}`)
+are the one route exempt from the `X-Nova` guard. They authenticate with a
+per-rule token instead, shown once and stored as a hash, and `api.ts` refuses
+any other route that claims the exemption. When triage escalates, the task
+it creates waits for the person's OK.
+
+**2026-10-29 (M2): System 1 is a provider interface with a local rules
+provider; Jev stays a stub.** The owner chose not to create a Jev account
+yet. `JevProvider` declares what it would answer and refuses to run. Local-only
+uses only providers whose egress is `none` or `local`. Templates are authored
+on cache miss only (propose, then dry runs, then activation). Activation is a
+ledger task whose `test_result` evidence the verifier re-checks by re-running
+the dry runs. The built-in `triage@1` template ships active.
+
+**2026-10-29 (M2): Noul, as the owner defined it.** Noul is Jev's yes/no
+type: one calibrated probability in [0, 1]. Its certainty is
+`|p - 0.5| * 2`, and a provider's separate confidence is ignored for it. A
+mixed template is only as certain as its weakest part. An out-of-range
+answer becomes 0.5 and escalates.
+
+**2026-10-29 (M2): memory is SQLite records (CONTRACTS §7); forgetting is
+complete.** A correction supersedes the old record and keeps the history; a
+forget deletes the whole chain with `secure_delete` and leaves an audit row
+with no content. The owner's standing order makes deletion hold in backups
+too. Each pre-upgrade backup is cleaned in place (rows deleted, file rebuilt),
+so it stays restorable and can't resurrect what was forgotten. The retention
+rule: backups are kept until the person removes them, but a backup Nova
+can't clean is destroyed and reported. Exports the person wrote are theirs
+and are not touched.
+
+**2026-10-29 (M2): a context receipt for every model call.** The chat runner
+records each one before calling the model: the system prompt, standing
+files, recalled notes, skills and conversation, by reference and sha256,
+plus purpose, privacy mode and egress. `GET /api/v1/receipts?egress=remote`
+is the egress log. A receipt that would record a remote call under
+local-only is refused and becomes a problem.
+
 **2026-10-29 (M1): chat honors the privacy mode; the model command declares
 its egress.** Found after the M1 gate passed: setup promised "nothing leaves
 this machine", but chat still defaulted to a cloud model. Now `agent_egress`
