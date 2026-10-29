@@ -1,0 +1,57 @@
+# ROADMAP AND GATES
+
+Build in this order. A milestone is complete only when its gate passes with evidence (OPERATING-RULES). **Continue through milestones autonomously** — do not stop after each one to ask what to do next. Stop only at a gate failure you cannot resolve, a genuine packet conflict, or a Tier-3 decision reserved for the user.
+
+## M0 — Baseline and inventory (no new features)
+- Fresh clone of `origin/main`; verify Era 1/Era 2 state against CAPABILITY-INVENTORY; correct the inventory where code disagrees.
+- Environment baseline: toolchain pinned (Mise), lint/typecheck/tests running in CI.
+- **Do not touch** the user's uncommitted worktree (SYSTEM-MAP hazards).
+- Gate: written inventory delta + green CI on the untouched tree.
+
+## M1 — Core skeleton
+- Modular monolith skeleton (ADR-1): config, logging/observability, health endpoint, extension host skeleton, SQLite + migrations (ADR-4), API surface (ADR-5).
+- Identity/persona layer and charter config (NOVA-SPEC §2).
+- Work Ledger v1 + task envelope (CONTRACTS §1) with one local worker end-to-end.
+- Gate: fresh-user acceptance test #1 — blank profile, conversational setup, one task delegated and verified with evidence, all on local-only mode.
+
+## M2 — Triggers, memory, triage
+- Trigger engine: four classes, registry UI/API, dedup + cooldowns (NOVA-SPEC §4).
+- Long-term memory v1 with provenance, correction, export (CONTRACTS §7); context receipts (CONTRACTS §2).
+- Decision Model Provider interface + rules fallback; decision templates with cache-miss authoring (CONTRACTS §3); Jev adapter behind the interface.
+- Gate: an event trigger and a heartbeat job each produce ledger tasks; a proactive message traces to its trigger record; local-only mode never calls a remote provider (verified by egress log).
+
+## M3 — Design system and PWA
+- Token pipeline + lint (no raw values in components), component library per DESIGN-SYSTEM, two starter packages (Orb Teal, Companion Light), hot swap with preview/rollback.
+- PWA layouts: desktop/laptop, tablet, phone, foldable postures; orb component with state model.
+- Agent errors surface in the UI (fix the known defect class: nothing important lives only in logs).
+- Gate: swap design system live with no restart; resize/posture sweep passes; blank-profile setup completable from the PWA alone.
+
+## M4 — Device mesh
+- Enrollment ceremony (CONTRACTS §5) with hub approval; device registry; hub role + standby promotion; encrypted sync; offline spokes queue and resync.
+- Boot agent + runtime agent split (ADR-3) on at least one real device class.
+- Gate: pair a phone (QR) and a computer (command) to a fresh hub; revoke one; kill the hub and promote the standby; no data loss, no orphaned trust.
+
+## M5 — Agents and integrations
+- Provider registry generalizing `agent_cmd`; adapters: Claude Code, one more coding agent (Codex), one chat-class provider; automation webhook adapter (n8n); Gmail connector; smart-home bridge connector (Home Assistant).
+- Human takeover for browser/computer-use tasks.
+- Gate: the same brief executed by two different providers through the envelope; evidence verified for both; takeover and hand-back mid-task.
+
+## M6 — Capture and local models
+- Capture API + Screenpipe ingest adapter; per-platform capture postures (CONTEXT-AND-CAPTURE).
+- Local model manager: hardware detection, recommendation, download, serve via runtime adapters (Ollama first); GPU spoke wake-and-serve.
+- Fallback chains exercised: local down → policy-allowed fallback; cloud down → local; local-only task during outage → queued with honest status, never silently rerouted.
+- Gate: full day-in-the-life run in local-only mode on hub-class hardware.
+
+## M7 — Self-modification and resilience hardening
+- Governed change pipeline for extensions/config/design systems (ADR-9) with canary + auto-rollback; backup/restore drill; chaos pass (kill providers, hub, network) with repair playbooks.
+- Gate: Nova ships a real change to itself through the pipeline; a sabotaged change is caught by gates and rolled back automatically.
+
+## M8 — Relay adapter
+- Relay stabilized standalone first (its own bounded pass: interface freeze, tests green, contracts documented).
+- Nova↔Relay adapter over the task envelope.
+- Gate: a coding task briefed from Nova is executed by Relay workers in worktrees and reported back with diff evidence.
+
+## Sequencing rules
+- Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.
+- Nothing in CAPABILITY-INVENTORY marked "Later" enters an earlier milestone without a packet amendment.
+- Every milestone updates CAPABILITY-INVENTORY and the decision log in the repo.
