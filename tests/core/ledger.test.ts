@@ -18,8 +18,9 @@ function setup(opts: { workers?: (ws: Workspace) => Worker[]; privacy?: PrivacyM
   const log = new Log(db, null);
   const ws = new Workspace(join(root, 'workspace'));
   const workers = [workspaceWorker(ws), ...(opts.workers?.(ws) ?? [])];
-  const ledger = new Ledger({ db, log, verifier: new Verifier(ws), workers, defaultPrivacy: () => opts.privacy ?? 'local-only' });
-  return { db, log, ws, ledger, root };
+  const verifier = new Verifier(ws);
+  const ledger = new Ledger({ db, log, verifier, workers, defaultPrivacy: () => opts.privacy ?? 'local-only' });
+  return { db, log, ws, ledger, root, verifier };
 }
 
 const writeNote = (over: Partial<TaskInput> = {}): TaskInput => ({
@@ -107,7 +108,8 @@ test('evidence of a kind Nova cannot check yet never counts as proof', async () 
   const t = ledger.create(writeNote({ owner: 'claims', evidence_required: [{ kind: 'confirmation' }] }));
   await ledger.idle();
   assert.equal(ledger.get(t.id).state, 'failed');
-  assert.match(ledger.get(t.id).reason ?? '', /can't check confirmation evidence yet/);
+  // Confirmations are checkable now, but only from systems Nova can read itself; "shop" isn't one.
+  assert.match(ledger.get(t.id).reason ?? '', /can't check confirmations from shop yet, so it can't count as proof/);
 });
 
 test('a local-only task is never handed to a worker that would send data off the device', async () => {
@@ -325,9 +327,102 @@ test('the transition table refuses moves it does not list', () => {
   assert.equal(canMove('verifying', 'done'), true);
 });
 
+// M2 integration: confirmations Nova checks itself, and bounded concurrency by lane.
+
+test('a confirmation counts only when a checker for its system finds it; the checker is given the brief; unknown systems still fail', async () => {
+  const claims = (id: string, system: string) => fake(`claims-${id}-${system}`, 'none', async (b) => report(b, { evidence: [{ kind: 'confirmation', system, id }] }));
+  const { ledger, verifier } = setup({ workers: (ws) => [claims('h1', 'example-log')(ws), claims('h2', 'example-log')(ws), claims('h1', 'elsewhere')(ws)] });
+  const found = new Set(['h1']);
+  const briefs: string[] = [];
+  verifier.registerConfirmation('example-log', (e, brief) => {
+    briefs.push(brief.task_id);
+    if (e.kind !== 'confirmation' || !found.has(e.id)) return { ok: false, why: `Nova looked for ${e.kind === 'confirmation' ? e.id : 'it'} in the example log and it isn't there.` };
+    return { ok: true, why: `Nova found ${e.id} in the example log itself.` };
+  });
+  assert.throws(() => verifier.registerConfirmation('example-log', () => ({ ok: true, why: '' })), /already have a checker/);
+  const need = { evidence_required: [{ kind: 'confirmation' as const }], inputs: {} };
+  const ok = ledger.create(writeNote({ ...need, owner: 'claims-h1-example-log', idempotency_key: 'a' }));
+  const missing = ledger.create(writeNote({ ...need, owner: 'claims-h2-example-log', idempotency_key: 'b' }));
+  const unknown = ledger.create(writeNote({ ...need, owner: 'claims-h1-elsewhere', idempotency_key: 'c' }));
+  await ledger.idle();
+  assert.equal(ledger.get(ok.id).state, 'done');
+  assert.match(ledger.get(ok.id).verification!.checks[0]!.why, /found h1 in the example log itself/);
+  assert.ok(briefs.includes(ok.id));
+  assert.equal(ledger.get(missing.id).state, 'failed');
+  assert.match(ledger.get(missing.id).reason ?? '', /looked for h2 in the example log and it isn't there/);
+  assert.equal(ledger.get(unknown.id).state, 'failed');
+  assert.match(ledger.get(unknown.id).reason ?? '', /can't check confirmations from elsewhere/);
+  assert.ok(verifier.kinds().includes('confirmation'));
+});
+
+test('a worker can run tasks side by side in a lane, up to its limit; other workers still run one at a time', async () => {
+  const running = new Set<string>();
+  let most = 0;
+  const releases: (() => void)[] = [];
+  const laned: Worker & { lane(b: Brief): { key: string; max: number } } = {
+    id: 'laned', name: 'laned', about: 'test worker', egress: 'none', evidence: ['confirmation'], health: () => ({ ok: true }),
+    lane: (b) => (b.inputs?.lane === 'b' ? { key: 'laned:b', max: 1 } : { key: 'laned:a', max: 2 }),
+    run: (b) => new Promise((resolve) => {
+      running.add(b.task_id);
+      most = Math.max(most, running.size);
+      releases.push(() => { running.delete(b.task_id); resolve(report(b, { status: 'failed', summary: 'stopped on purpose' })); });
+    }),
+  };
+  const { ledger } = setup({ workers: () => [laned] });
+  const task = (key: string, lane = 'a') => ledger.create(writeNote({ owner: 'laned', idempotency_key: key, inputs: { lane }, evidence_required: [{ kind: 'confirmation' }] }));
+  const [a1, a2, a3] = [task('a1'), task('a2'), task('a3')];
+  const b1 = task('b1', 'b');
+  const note = ledger.create(writeNote({ idempotency_key: 'n' }));
+  const states = () => [a1, a2, a3, b1].map((t) => ledger.get(t.id).state);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(states(), ['active', 'active', 'queued', 'active'], 'two in lane a, the third waits; lane b is not held up');
+  assert.equal(ledger.get(note.id).state, 'done', 'a task for another worker runs while those are busy');
+  releases.shift()!();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(ledger.get(a3.id).state, 'active', 'the waiting task starts when a place frees up');
+  while (releases.length) releases.shift()!();
+  await ledger.idle();
+  assert.deepEqual(states(), ['failed', 'failed', 'failed', 'failed']);
+  assert.equal(most, 3);
+
+  // A worker without lanes keeps the old rule: one task at a time, across those workers.
+  let inside = 0;
+  let peak = 0;
+  const slow = fake('slow', 'none', async (b, ws) => { inside++; peak = Math.max(peak, inside); await new Promise((r) => setTimeout(r, 10)); inside--; return workspaceWorker(ws).run(b, new AbortController().signal); });
+  const s = setup({ workers: (ws) => [slow(ws)] });
+  for (const k of ['s1', 's2', 's3']) s.ledger.create(writeNote({ owner: 'slow', idempotency_key: k, inputs: { action: 'append', path: 'notes/log.md', content: `${k}\n` }, evidence_required: [{ kind: 'read_back', target: 'notes/log.md' }] }));
+  await s.ledger.idle();
+  assert.equal(peak, 1);
+});
+
+test('a waiting task can be sent back to the queue with the reason why', async () => {
+  let n = 0;
+  const twice = fake('twice', 'none', async (b, ws) => { n += 1; return n === 1 ? report(b, { status: 'blocked', blockers: ['waiting for an answer'] }) : workspaceWorker(ws).run(b, new AbortController().signal); });
+  const { ledger } = setup({ workers: (ws) => [twice(ws)] });
+  const t = ledger.create(writeNote({ owner: 'twice' }));
+  await ledger.idle();
+  ledger.retry(t.id, 'The answer came; carrying on.');
+  await ledger.idle();
+  assert.equal(ledger.get(t.id).state, 'done');
+  const retried = ledger.events(t.id).find((e) => e.kind === 'retried');
+  assert.equal((retried?.detail as { reason: string }).reason, 'The answer came; carrying on.');
+});
+
 test('bad parameters are refused, not stored as problems', () => {
   const { ledger, log } = setup();
   assert.throws(() => ledger.create(writeNote({ parent_id: 'nope' })), /No parent task/);
   assert.throws(() => ledger.create(writeNote({ user_visibility: 'loud' as never })), /user_visibility/);
   assert.equal(log.problems().length, 0);
+});
+
+test('a worker can take longer than the default timeout when it says so', async () => {
+  const slow = (ws: Workspace): Worker => ({ ...fake('slow', 'none', (b) => new Promise((r) => setTimeout(() => r(workspaceWorker(ws).run(b, new AbortController().signal)), 80)))(ws), timeoutMs: 1000 });
+  const root = mkdtempSync(join(tmpdir(), 'nova-ledger-'));
+  const db = new Db(':memory:');
+  db.migrate();
+  const ws = new Workspace(join(root, 'workspace'));
+  const ledger = new Ledger({ db, log: new Log(db, null), verifier: new Verifier(ws), workers: [workspaceWorker(ws), slow(ws)], defaultPrivacy: () => 'local-only', timeoutMs: 20, maxAttempts: 1 });
+  const t = ledger.create(writeNote({ owner: 'slow' }));
+  await ledger.idle();
+  assert.equal(ledger.get(t.id).state, 'done', ledger.get(t.id).reason ?? '');
 });

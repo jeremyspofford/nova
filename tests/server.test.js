@@ -1,7 +1,7 @@
 // End to end through the HTTP API, with the scripted stand-in model.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
@@ -165,4 +165,47 @@ test('memory: kept before the reply is done, shown with its source, edited, forg
   assert.equal((await post('/api/memory/restore', { items: [{ file: '../../etc/passwd', line: '- x' }] })).status, 200);
   assert.ok(!existsSync(join(nova.config.home, '..', '..', 'etc', 'passwd.md')));
   assert.equal((await post('/api/memory/zzz/forget')).status, 404);
+});
+
+test('memory: one store; MEMORY.md is its view, and hand edits are taken in on the Memory view and before Nova reads it', async () => {
+  const file = join(nova.config.home, 'MEMORY.md');
+  const v1 = async (kind) => (await fetch(`${base}/api/v1/memory?kind=${kind}`)).json();
+  // Something remembered through the core's own API is in the Memory view and the file.
+  const made = await (await post('/api/v1/memory', { kind: 'fact', content: 'Keeps a sample logbook.' })).json();
+  let mem = await (await fetch(`${base}/api/memory`)).json();
+  assert.ok(mem.sections.find((x) => x.title === 'Facts').entries.some((e) => e.id === made.id));
+  assert.match(readFileSync(file, 'utf8'), new RegExp(`- Keeps a sample logbook\\. <!-- id=${made.id} `));
+
+  // A bullet added by hand is the person's, once the Memory view loads.
+  writeFileSync(file, readFileSync(file, 'utf8').replace('## Decisions\n', '## Decisions\n\n- Keeps the sample garden going this year.\n'));
+  mem = await (await fetch(`${base}/api/memory`)).json();
+  const entry = mem.sections.find((x) => x.title === 'Decisions').entries[0];
+  assert.equal(entry.text, 'Keeps the sample garden going this year.');
+  assert.equal(entry.by, 'hand');
+  assert.equal((await v1('decision')).find((r) => r.id === entry.id).recorded_by, 'person');
+
+  // A hand edit made just before a message is taken in before Nova reads the file.
+  writeFileSync(file, readFileSync(file, 'utf8').replace('going this year.', 'going, with beans.'));
+  const { id } = await (await post('/api/sessions', { text: 'What should I focus on today?' })).json();
+  await settle(id);
+  const fixed = (await v1('decision')).find((r) => r.content === 'Keeps the sample garden going, with beans.');
+  assert.equal(fixed?.supersedes, entry.id);
+  assert.equal(fixed.recorded_by, 'person');
+  await post(`/api/memory/${fixed.id}/forget`);
+  await post(`/api/memory/${made.id}/forget`);
+});
+
+test('memory: at start, an Era 2 MEMORY.md is imported into the core once', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'nova-s-import-'));
+  writeFileSync(join(home, 'MEMORY.md'), '# MEMORY.md\n\n## Preferences\n\n- Likes sample tea. <!-- id=m00aa11bb from=s1/t1 at=2026-09-01T10:00:00.000Z -->\n- Written by hand.\n');
+  const config = loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: `node ${join(root, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none' });
+  const first = createNova(config);
+  const r = first.core.memory.get('m00aa11bb');
+  assert.deepEqual([r.kind, r.content, r.source, r.observed_at, r.recorded_by], ['preference', 'Likes sample tea.', 's1/t1', '2026-09-01T10:00:00.000Z', 'nova']);
+  assert.equal(first.core.memory.list().length, 2);
+  await first.core.close();
+  const again = createNova(config);
+  assert.equal(again.core.memory.list().length, 2, 'starting again imports nothing twice');
+  assert.match(readFileSync(join(home, 'MEMORY.md'), 'utf8'), /## Preferences\n\n- Likes sample tea\. <!-- id=m00aa11bb from=s1\/t1 at=2026-09-01T10:00:00\.000Z -->\n- Written by hand\. <!-- id=h[0-9a-f]{8} at=\S+ by=you -->\n/);
+  await again.core.close();
 });

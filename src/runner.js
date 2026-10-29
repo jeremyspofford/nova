@@ -7,7 +7,7 @@
 // (streaming text, a pending approval) is held in memory and broadcast; if the
 // process dies mid-turn, the log still shows exactly how far it got.
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { runAgent, AgentError } from './agent.js';
 import { permits } from './core/index.ts';
 import { buildPrompt, buildSystem, helperSection, runSection, schedulesSection, skillsSection } from './context.js';
@@ -16,20 +16,22 @@ import { Skills } from './skills.js';
 import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
 import { Permissions, permissionFor, permissionsSection } from './permissions.js';
-import { commitHome } from './home.js';
+import { commitHome, readStanding } from './home.js';
 import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
+import { stricter } from './chat-run.js';
 
 const shortId = () => randomUUID().slice(0, 8);
 
 export class Runner extends EventEmitter {
-  constructor(config, store, { agent = runAgent } = {}) {
+  // records: the core's memory, where MEMORY.md's entries live (passed in by the server).
+  constructor(config, store, { agent = runAgent, records = null } = {}) {
     super();
     this.config = config;
     this.store = store;
     this.agent = agent;
     this.active = new Map(); // sessionId → live run
-    this.memory = new Memory(config.home, config.timezone);
+    this.memory = new Memory(config.home, config.timezone, { records });
     this.skills = new Skills(config.root, config.home);
     this.schedules = new Schedules(config.root, config.home, config.timezone);
     this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone });
@@ -73,12 +75,13 @@ export class Runner extends EventEmitter {
 
   // unattended: { id, name, due, late } for a scheduled run. helper:
   // { title, files } for a helper's work. Either way no one is there to
-  // approve anything.
-  send(sessionId, text, { unattended = null, helper = null, followup = null } = {}) {
+  // approve anything. privacy: the Work Ledger task's mode, for work the
+  // chat-run worker does; the run keeps to the stricter of it and the setting.
+  send(sessionId, text, { unattended = null, helper = null, followup = null, privacy = null } = {}) {
     if (this.active.has(sessionId)) throw new BusyError();
     const turn = shortId();
     this.record(sessionId, { type: 'user', turn, text, ...(unattended ? { schedule: unattended.id } : {}), ...(followup ? { followup } : {}) });
-    this.start(sessionId, turn, 0, { unattended, helper });
+    this.start(sessionId, turn, 0, { unattended, helper, privacy });
     return turn;
   }
 
@@ -143,12 +146,12 @@ export class Runner extends EventEmitter {
     return true;
   }
 
-  start(sessionId, turn, attempt, { unattended = null, helper = null } = {}) {
+  start(sessionId, turn, attempt, { unattended = null, helper = null, privacy = null } = {}) {
     const controller = new AbortController();
     // skills: the playbooks this reply follows. tainted: mail has been read in
     // this conversation, so going online asks first. alone: no one is there
     // to approve anything.
-    const run = { controller, pending: null, skills: new Map(), tainted: false, unattended, helper, alone: !!(unattended || helper), live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
+    const run = { controller, pending: null, skills: new Map(), tainted: false, unattended, helper, privacy, alone: !!(unattended || helper), live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
     this.active.set(sessionId, run);
     this.emit('live', sessionId, { ...run.live });
     run.done = this.loop(sessionId, run)
@@ -162,15 +165,12 @@ export class Runner extends EventEmitter {
       });
   }
 
-  async loop(sessionId, run) {
-    const { turn, attempt } = run.live;
-    const tag = { turn, attempt };
-    const { signal } = run.controller;
-    const before = reduce(this.store.read(sessionId));
-    const question = before.turns.find((t) => t.id === turn).text;
-    // Privacy first (LOCAL-FIRST-AND-DEVICE-MESH §2): a model that would send this conversation
-    // somewhere the profile doesn't allow is never called. Nothing has been sent when this throws.
-    const mode = this.identity?.privacy?.() ?? 'local-only';
+  // Privacy first (LOCAL-FIRST-AND-DEVICE-MESH §2): a model that would send this conversation
+  // somewhere the setting (or the run's own, stricter mode) doesn't allow is never called. Nothing
+  // has been sent when this throws.
+  privacyFor(run) {
+    const setting = this.identity?.privacy?.() ?? 'local-only';
+    const mode = run.privacy ? stricter(run.privacy, setting) : setting;
     if (!permits(mode, this.config.agentEgress)) {
       const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command';
       throw new AgentError(
@@ -178,6 +178,38 @@ export class Runner extends EventEmitter {
         `agent_egress=${this.config.agentEgress}; privacy=${mode}`,
       );
     }
+    return mode;
+  }
+
+  receipt(sessionId, run, mode, { system, prompt, recall }) {
+    const hash = (s) => createHash('sha256').update(String(s)).digest('hex');
+    const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'model';
+    // "/usr/local/bin/Claude" → "claude": the receipt names a provider, not a path.
+    const name = program.split('/').pop().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 64) || 'model';
+    return {
+      session_id: sessionId,
+      provider: name,
+      model: name,
+      purpose: run.helper ? 'helper' : run.unattended ? 'scheduled run' : 'chat',
+      privacy_mode: mode,
+      egress: this.config.agentEgress === 'remote' ? `remote:${name}` : 'local',
+      context_items: [
+        { kind: 'file', ref: 'system prompt', sha256: hash(system) },
+        ...readStanding(this.config.home).filter((f) => !(run.helper && f.name === 'MEMORY.md')).map((f) => ({ kind: 'standing', ref: `~/${f.name}`, sha256: hash(f.text) })),
+        ...recall.map((n) => ({ kind: 'memory', ref: n.id ?? n.source, sha256: hash(n.text) })),
+        ...[...run.skills.values()].map((s) => ({ kind: 'skill', ref: s.id, sha256: hash(s.body ?? '') })),
+        { kind: 'session', ref: sessionId, sha256: hash(prompt) },
+      ],
+    };
+  }
+
+  async loop(sessionId, run) {
+    const { turn, attempt } = run.live;
+    const tag = { turn, attempt };
+    const { signal } = run.controller;
+    const before = reduce(this.store.read(sessionId));
+    const question = before.turns.find((t) => t.id === turn).text;
+    let mode = this.privacyFor(run);
     // Once Nova has read mail in a conversation, the mail is in its context,
     // so going online asks first for the rest of that conversation.
     run.tainted = before.turns.some((t) => t.items.some((i) => i.kind === 'tool' && TOOLS[i.name]?.mail && i.result?.ok));
@@ -190,6 +222,8 @@ export class Runner extends EventEmitter {
     for (const s of this.skills.match(question)) this.follow(sessionId, tag, run, s, 'matched');
 
     for (let step = 0; step <= this.config.maxSteps; step++) {
+      // Again before every model call: the setting can tighten while a run waits for an OK.
+      mode = this.privacyFor(run);
       const session = reduce(this.store.read(sessionId));
       const installed = this.skills.installed();
       // Helpers and scheduled runs can't hand work to helpers of their own,
@@ -204,10 +238,17 @@ export class Runner extends EventEmitter {
       const filter = new ToolTagFilter();
       this.setLive(sessionId, { phase: 'thinking', text: '' });
       let streamed = '';
+      // MEMORY.md may have been edited by hand since Nova last wrote it: take that in first.
+      if (this.memory.records) this.memory.sync();
+      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, ...(this.identity ? { identity: this.identity.persona() } : {}) });
+      const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
+      // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
+      // hash, and where it went. Written before the call, so it exists even if the call fails.
+      this.identity?.receipt?.(this.receipt(sessionId, run, mode, { system, prompt, recall }));
       const { text, aborted } = await this.agent({
         cmd: this.config.agentCmd,
-        system: buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, ...(this.identity ? { identity: this.identity.persona() } : {}) }),
-        prompt: buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova'),
+        system,
+        prompt,
         signal,
         onText: (chunk) => {
           const visible = filter.push(chunk);
@@ -321,14 +362,14 @@ export class Runner extends EventEmitter {
   }
 
   // Memory is written before the reply is marked done. The log records what
-  // changed by id only; the words live in the memory files.
+  // changed by id only; the words live in the core's memory and the day notes.
   keep(sessionId, tag, ops) {
     const from = `${sessionId}/${tag.turn}`;
     const results = ops.map((o) => {
       try {
         if (o.op === 'remember') return this.memory.remember({ ...o, from });
         if (o.op === 'note') return this.memory.note({ ...o, from });
-        const removed = this.memory.forget(o.id);
+        const removed = this.memory.forget(o.id, { by: 'nova' });
         if (removed.length) this.emit('forgot', removed);
         return { op: 'forget', ok: removed.length > 0, id: o.id, also: removed.length > 1 ? removed.length - 1 : undefined };
       } catch (e) {

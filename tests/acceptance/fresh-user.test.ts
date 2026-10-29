@@ -4,55 +4,24 @@
 // would, with an egress tripwire preloaded. Set NOVA_EVIDENCE=<file> to keep a transcript.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sampleManifest } from '../core/fixtures.ts';
-
-const ROOT = join(import.meta.dirname, '..', '..');
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const freePort = () => new Promise<number>((ok) => { const s = createServer().listen(0, '127.0.0.1', () => { const { port } = s.address() as { port: number }; s.close(() => ok(port)); }); });
-
-interface Running { proc: ChildProcess; out: string[] }
-
-async function start(env: Record<string, string>): Promise<Running> {
-  const out: string[] = [];
-  const proc = spawn(process.execPath, ['--import', join(ROOT, 'tests/acceptance/egress-guard.ts'), 'src/server.js'], { cwd: ROOT, env: { ...env, PATH: process.env.PATH ?? '' } });
-  proc.stdout!.on('data', (d) => out.push(String(d)));
-  proc.stderr!.on('data', (d) => out.push(String(d)));
-  for (let i = 0; i < 200 && !out.join('').includes('Nova is ready'); i++) {
-    if (proc.exitCode !== null) break;
-    await sleep(25);
-  }
-  assert.ok(out.join('').includes('Nova is ready'), `server did not start:\n${out.join('')}`);
-  return { proc, out };
-}
-
-async function stop(r: Running) {
-  r.proc.kill('SIGTERM');
-  for (let i = 0; i < 200 && r.proc.exitCode === null; i++) await sleep(25);
-}
+import { blank, sleep, stop } from './support.ts';
 
 test('fresh user: blank profile → conversational setup → a delegated task verified with evidence, local-only, durable across a restart', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'nova-fresh-'));
-  const home = join(dir, 'nova-home');
-  const egress = join(dir, 'egress.log');
-  writeFileSync(egress, '');
-  const port = await freePort();
   // A new machine: its own user folder, nothing pinned, no config file in play.
-  const env = { HOME: join(dir, 'user'), NOVA_HOME: home, NOVA_PORT: String(port), NOVA_EGRESS_LOG: egress, TZ: 'UTC' };
-  const base = `http://127.0.0.1:${port}/api/v1`;
-  const get = async (p: string) => (await fetch(base + p)).json();
+  const m = blank('nova-fresh-');
+  const { home, egress } = m;
+  const get = (p: string) => m.get(`/api/v1${p}`);
   const post = async (p: string, body: unknown) => {
-    const res = await fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify(body) });
-    return { status: res.status, body: await res.json() };
+    const r = await m.send('POST', `/api/v1${p}`, body);
+    return { status: r.status, body: r.body };
   };
   const evidence: string[] = ['# Fresh-user acceptance test #1', ''];
 
-  let nova = await start(env);
+  let nova = await m.start();
   try {
     // 1. Blank: no profile, setup not done, nothing in the ledger.
     const h0 = await get('/health');
@@ -114,7 +83,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     // 5. An extension, installed and removed cleanly.
     const ext = await post('/extensions', { manifest: sampleManifest() });
     assert.equal(ext.status, 201);
-    const removed = await fetch(`${base}/extensions/example.weather`, { method: 'DELETE', headers: { 'x-nova': '1' } });
+    const removed = await m.send('DELETE', '/api/v1/extensions/example.weather');
     assert.equal(removed.status, 200);
     assert.deepEqual(await get('/extensions'), []);
     assert.deepEqual(readdirSync(join(home, 'extensions')), []);
@@ -124,7 +93,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
   }
 
   // 6. Restart: the profile, the setup state and the finished task are all still there.
-  nova = await start(env);
+  nova = await m.start();
   try {
     const h1 = await get('/health');
     assert.equal(h1.setup.done, true);

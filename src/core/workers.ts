@@ -18,7 +18,12 @@ export interface Worker extends WorkerInfo {
   // Returns a report candidate; the ledger validates it against the envelope before using it.
   run(brief: Brief, signal: AbortSignal): Promise<unknown>;
   health(): { ok: boolean; detail?: string };
+  // How long one run may take before the ledger stops waiting; the ledger's default otherwise.
+  timeoutMs?: number;
 }
+
+const STRICTNESS: PrivacyMode[] = ['local-only', 'local-preferred', 'cloud-allowed'];
+export const stricter = (a: PrivacyMode, b: PrivacyMode): PrivacyMode => (STRICTNESS.indexOf(a) <= STRICTNESS.indexOf(b) ? a : b);
 
 // LOCAL-FIRST-AND-DEVICE-MESH §2: local-only never reaches beyond the mesh. The other modes may,
 // and the context receipt (M2) discloses it.
