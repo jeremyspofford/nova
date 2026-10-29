@@ -421,7 +421,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
   });
 
-  return { server, runner, store, scheduler, helpers, config, seeded, started, core };
+  return { server, runner, store, scheduler, helpers, chatRun, config, seeded, started, core };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
