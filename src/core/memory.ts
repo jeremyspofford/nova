@@ -89,33 +89,35 @@ export class Memory {
   }
 
   remember(input: MemoryInput): MemoryRecord {
-    const i = (input ?? {}) as Partial<MemoryInput>;
-    if (!KINDS.includes(i.kind as Kind)) throw new CoreError('validation', `kind must be one of ${KINDS.join(', ')}.`);
-    const content = this.#content(i.content);
-    const by = this.#by(i.recorded_by);
-    if (i.confidence != null && (typeof i.confidence !== 'number' || !(i.confidence >= 0 && i.confidence <= 1))) throw new CoreError('validation', 'confidence must be a number from 0 to 1, or left out.');
-    const scope = i.scope ?? 'personal';
-    if (typeof scope !== 'string' || !SCOPE.test(scope)) throw new CoreError('validation', 'scope must be a short name in lowercase letters, digits, - or _, like "personal" or "work".');
-    if (i.source != null && typeof i.source !== 'string') throw new CoreError('validation', 'source must be text.');
-    const at = this.#now().toISOString();
-    const observed = i.observed_at == null ? at : date(i.observed_at, 'observed_at');
-    const expires = i.expires == null ? null : date(i.expires, 'expires');
-    return this.#db.tx(() => this.#insert({
-      id: randomUUID(), kind: i.kind as Kind, content, source: i.source?.trim() || null, observed_at: observed, recorded_by: by,
-      confidence: i.confidence ?? null, scope, supersedes: null, superseded_by: null, expires, user_state: this.#stateFor(by), created_at: at,
-    }, 'remembered'));
+    const row = this.#validate(input, randomUUID());
+    return this.#db.tx(() => this.#insert(row, 'remembered'));
+  }
+
+  // Brings in a record kept somewhere else first (Era 2's MEMORY.md), keeping its own id. An id
+  // that is already here, or was forgotten, is skipped, so importing again adds nothing.
+  importRecord(input: MemoryInput & { id: string }): { record: MemoryRecord | null; imported: boolean } {
+    const id = input?.id;
+    if (typeof id !== 'string' || !RECORDER.test(id)) throw new CoreError('validation', 'id must be a short name in letters, digits, ., - or _.');
+    const row = this.#validate(input, id);
+    return this.#db.tx(() => {
+      if (this.#db.get('SELECT 1 FROM memory_event WHERE memory_id = ? AND kind = ?', id, 'forgotten')) return { record: null, imported: false };
+      if (this.#db.get('SELECT 1 FROM memory WHERE id = ?', id)) return { record: this.get(id), imported: false };
+      return { record: this.#insert(row, 'remembered'), imported: true };
+    });
   }
 
   // A new record replaces the old one going forward; the old one is kept, marked corrected.
-  correct(id: string, content: string, by: string): MemoryRecord {
+  // source says where the correction came from (a conversation, say); by default "correction".
+  correct(id: string, content: string, by: string, o: { source?: string } = {}): MemoryRecord {
     const text = this.#content(content);
     const who = this.#by(by);
+    if (o.source != null && typeof o.source !== 'string') throw new CoreError('validation', 'source must be text.');
     return this.#db.tx(() => {
       const old = this.#row(id);
       if (old.superseded_by) throw new CoreError('conflict', `That memory has already been corrected; correct the newer one (${old.superseded_by}) instead.`);
       const at = this.#now().toISOString();
       const next = this.#insert({
-        id: randomUUID(), kind: old.kind, content: text, source: 'correction', observed_at: at, recorded_by: who,
+        id: randomUUID(), kind: old.kind, content: text, source: o.source?.trim() || 'correction', observed_at: at, recorded_by: who,
         confidence: who === 'person' ? null : old.confidence, scope: old.scope, supersedes: old.id, superseded_by: null,
         expires: old.expires, user_state: this.#stateFor(who), created_at: at,
       }, 'corrected');
@@ -229,6 +231,24 @@ export class Memory {
     }
     writeFileSync(markdown, `${lines.join('\n')}\n`);
     return { dir, json, markdown, count: records.length };
+  }
+
+  #validate(input: MemoryInput, id: string): Row {
+    const i = (input ?? {}) as Partial<MemoryInput>;
+    if (!KINDS.includes(i.kind as Kind)) throw new CoreError('validation', `kind must be one of ${KINDS.join(', ')}.`);
+    const content = this.#content(i.content);
+    const by = this.#by(i.recorded_by);
+    if (i.confidence != null && (typeof i.confidence !== 'number' || !(i.confidence >= 0 && i.confidence <= 1))) throw new CoreError('validation', 'confidence must be a number from 0 to 1, or left out.');
+    const scope = i.scope ?? 'personal';
+    if (typeof scope !== 'string' || !SCOPE.test(scope)) throw new CoreError('validation', 'scope must be a short name in lowercase letters, digits, - or _, like "personal" or "work".');
+    if (i.source != null && typeof i.source !== 'string') throw new CoreError('validation', 'source must be text.');
+    const at = this.#now().toISOString();
+    const observed = i.observed_at == null ? at : date(i.observed_at, 'observed_at');
+    const expires = i.expires == null ? null : date(i.expires, 'expires');
+    return {
+      id, kind: i.kind as Kind, content, source: i.source?.trim() || null, observed_at: observed, recorded_by: by,
+      confidence: i.confidence ?? null, scope, supersedes: null, superseded_by: null, expires, user_state: this.#stateFor(by), created_at: at,
+    };
   }
 
   #insert(r: Row, event: 'remembered' | 'corrected'): MemoryRecord {

@@ -168,3 +168,30 @@ test('export writes plain files with exactly the active records', () => {
   assert.match(md, /## Preferences\n\n- Unsure about spicy food\. \(low confidence/);
   assert.ok(!md.includes('Short-lived') && !md.includes('Fact one.'), 'expired and superseded records are left out');
 });
+
+test('importing keeps a record’s own id, time and source, and never imports the same id twice', () => {
+  const { memory } = setup();
+  const r = memory.importRecord({ id: 'm3f9a1c2', kind: 'preference', content: 'Takes coffee black.', source: 's1/t1', observed_at: '2026-09-21T16:42:00Z', recorded_by: 'nova' });
+  assert.ok(r.imported && r.record);
+  assert.equal(r.record.id, 'm3f9a1c2');
+  assert.equal(r.record.observed_at, '2026-09-21T16:42:00.000Z');
+  assert.equal(r.record.source, 's1/t1');
+  assert.equal(r.record.user_state, 'unreviewed');
+  assert.deepEqual(memory.events('m3f9a1c2').map((e) => e.kind), ['remembered']);
+  const again = memory.importRecord({ id: 'm3f9a1c2', kind: 'preference', content: 'Takes coffee black.', recorded_by: 'nova' });
+  assert.equal(again.imported, false);
+  assert.equal(memory.list().length, 1);
+  memory.forget('m3f9a1c2');
+  assert.equal(memory.importRecord({ id: 'm3f9a1c2', kind: 'preference', content: 'Takes coffee black.', recorded_by: 'nova' }).imported, false, 'what was forgotten stays forgotten');
+  assert.equal(memory.list().length, 0);
+  assert.throws(() => memory.importRecord({ id: 'no spaces allowed', kind: 'fact', content: 'x', recorded_by: 'nova' }), /id must be/);
+  assert.throws(() => memory.importRecord({ id: 'h1', kind: 'mood', content: 'x', recorded_by: 'nova' } as never), /kind must be/);
+});
+
+test('a correction can say where it came from', () => {
+  const { memory } = setup();
+  const a = memory.remember({ kind: 'fact', content: 'Lives in a sample town.', recorded_by: 'nova' });
+  assert.equal(memory.correct(a.id, 'Lives in another sample town.', 'nova', { source: 's2/t4' }).source, 's2/t4');
+  const b = memory.remember({ kind: 'fact', content: 'Has a bike.', recorded_by: 'nova' });
+  assert.equal(memory.correct(b.id, 'Has two bikes.', 'person').source, 'correction', 'unchanged when not given');
+});
