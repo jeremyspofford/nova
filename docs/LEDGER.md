@@ -14,6 +14,20 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M2): MEMORY.md is a view of the core's memory.** The curated
+memory lives only in SQLite (ADR-4). `MEMORY.md` is re-rendered after every
+change, with the same headings and `<!-- id= from= at= -->` comments, so the
+model and the person see what they saw before. Existing entries were
+imported once, keeping their ids, sources and times. A hand edit (detected by
+hash before each read) is taken in as the person's: changed words become a
+correction, a new bullet is remembered as confirmed, and a removed bullet is
+forgotten. Trade-offs:
+- Corrections, edits and undo create a new id.
+- Invented headings, prose paragraphs and bullet order don't survive a
+  re-render.
+- Deleting the whole file re-creates it rather than forgetting everything.
+- Day notes stay files until M3.
+
 **2026-10-29 (M2): triggers are one engine with a visible registry.** Every
 automation is a rule (`event`, `heartbeat`, `proactive`) listed at
 `/api/v1/triggers/rules`; every firing is a trigger record (CONTRACTS §6)
