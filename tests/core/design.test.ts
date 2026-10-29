@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Db } from '../../src/core/db.ts';
@@ -205,6 +205,26 @@ test('the six built-ins are present on a blank install, all valid, and Orb Teal 
   assert.equal(profile.isEmpty(), true, 'the default needs no profile record, so setup still sees a blank profile');
   assert.match(design.css(), /Orb Teal/);
   assert.ok(BUILTIN_DIR.endsWith('design-systems'));
+});
+
+test('built-ins install whatever Nova’s version string, and a broken one is reported, never fatal', () => {
+  const db = new Db(':memory:');
+  db.migrate();
+  const extensions = new Extensions({ db, home: mkdtempSync(join(tmpdir(), 'nova-design-')), novaVersion: 'test' });
+  const design = new Design({ extensions, profile: new Profile(db) });
+  assert.deepEqual(design.ensureBuiltins(), []);
+  assert.equal(design.list().length, 6);
+
+  const dir = mkdtempSync(join(tmpdir(), 'nova-builtins-'));
+  writeFileSync(join(dir, 'broken.json'), JSON.stringify({ ...fixture(), id: 'example.broken', permissions: [{ kind: 'network', target: 'x.example', why: 'fonts' }] }));
+  writeFileSync(join(dir, 'slate.json'), JSON.stringify(fixture()));
+  const db2 = new Db(':memory:');
+  db2.migrate();
+  const other = new Design({ extensions: new Extensions({ db: db2, home: dir, novaVersion: '0.1.0' }), profile: new Profile(db2), dir });
+  const problems = other.ensureBuiltins();
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!, /The built-in design system Example Slate couldn’t be installed: .*asks for no permissions/);
+  assert.deepEqual(other.list().map((d) => d.id), ['example.slate']);
 });
 
 test('ensureBuiltins is idempotent and leaves the person’s choice alone', () => {

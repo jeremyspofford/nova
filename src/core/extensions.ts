@@ -147,9 +147,11 @@ export class Extensions extends EventEmitter {
   }
 
   // Installed extensions start disabled: the person reviews permissions, then enables.
-  install(input: unknown): { extension: Installed; review: string[] } {
+  // `builtin`: ships inside this Nova (the core's own design systems), so it is compatible by
+  // construction and nova_compat isn't checked.
+  install(input: unknown, o: { builtin?: boolean } = {}): { extension: Installed; review: string[] } {
     const m = this.#validate(input);
-    if (!satisfies(this.#version, m.nova_compat)) throw new CoreError('conflict', `${m.name} needs Nova ${m.nova_compat}; this is ${this.#version}.`);
+    if (!o.builtin && !satisfies(this.#version, m.nova_compat)) throw new CoreError('conflict', `${m.name} needs Nova ${m.nova_compat}; this is ${this.#version}.`);
     if (this.#db.get('SELECT 1 FROM extension WHERE id = ?', m.id)) throw new CoreError('conflict', `${m.name} is already installed. Updates go through the update path.`);
     const at = this.#now().toISOString();
     this.#db.run('INSERT INTO extension (id, version, kind, manifest, state, installed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', m.id, m.version, m.kind, JSON.stringify(m), 'installed', at, at);
@@ -161,11 +163,11 @@ export class Extensions extends EventEmitter {
 
   // The update path: a newer manifest for an installed extension of the same kind replaces the
   // old one in place; its state (enabled or not) and its data folder stay as they are.
-  update(input: unknown): Installed {
+  update(input: unknown, o: { builtin?: boolean } = {}): Installed {
     const m = this.#validate(input);
     const x = this.get(m.id);
     if (x.kind !== m.kind) throw new CoreError('conflict', `${x.manifest.name} is a ${x.kind}; an update can’t change its kind to ${m.kind}.`);
-    if (!satisfies(this.#version, m.nova_compat)) throw new CoreError('conflict', `${m.name} needs Nova ${m.nova_compat}; this is ${this.#version}.`);
+    if (!o.builtin && !satisfies(this.#version, m.nova_compat)) throw new CoreError('conflict', `${m.name} needs Nova ${m.nova_compat}; this is ${this.#version}.`);
     this.#db.run('UPDATE extension SET version = ?, manifest = ?, updated_at = ? WHERE id = ?', m.version, JSON.stringify(m), this.#now().toISOString(), m.id);
     this.emit('change', { id: m.id, state: x.state, version: m.version });
     return this.get(m.id);

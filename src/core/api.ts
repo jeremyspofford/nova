@@ -19,6 +19,16 @@ export interface Route {
   handle: Handler;
 }
 
+// A handler returns Raw to answer with something other than JSON (the design-system CSS).
+export class Raw {
+  readonly type: string;
+  readonly body: string;
+  constructor(type: string, body: string) {
+    this.type = type;
+    this.body = body;
+  }
+}
+
 // The one route allowed to skip the X-Nova guard. Any other route claiming it is refused at startup.
 export const HOOK_ROUTE = { method: 'POST', path: '/hooks/{name}' } as const;
 
@@ -41,7 +51,7 @@ export function openapi(routes: Route[], version: string): Record<string, unknow
       responses: { [String(r.status ?? 200)]: { description: 'OK' }, default: { description: 'An error: {error, details?}' } },
     };
   }
-  paths[`${PREFIX}/events`] = { get: { summary: 'Live updates as server-sent events: task, problem, setup, profile, extension, trigger, message.', responses: { 200: { description: 'text/event-stream' } } } };
+  paths[`${PREFIX}/events`] = { get: { summary: 'Live updates as server-sent events: task, problem, setup, profile, extension, trigger, message, design-system.', responses: { 200: { description: 'text/event-stream' } } } };
   return { openapi: '3.1.0', info: { title: 'Nova core API', version }, paths };
 }
 
@@ -103,7 +113,10 @@ export function createApi(o: { routes: Route[]; stream: Stream; version: string;
       const params = Object.fromEntries(Object.entries(route.re.exec(path)!.groups ?? {}).map(([k, v]) => [k, decode(v)]));
       const body = route.method === 'GET' || route.method === 'DELETE' ? {} : await readBody(req);
       const out = await route.handle({ params, query: url.searchParams, body, headers: req.headers });
-      send(res, route.status ?? 200, out);
+      if (out instanceof Raw) {
+        res.writeHead(route.status ?? 200, { 'content-type': out.type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        res.end(out.body);
+      } else send(res, route.status ?? 200, out);
     } catch (e) {
       if (e instanceof CoreError) send(res, e.status, { error: e.message, ...(e.details.length ? { details: e.details } : {}) });
       else {

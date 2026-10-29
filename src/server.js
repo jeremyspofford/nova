@@ -412,6 +412,12 @@ export function createNova(config = loadConfig(), deps = {}) {
         return req.on('close', () => devClients.delete(res));
       }
       if (await core.handle(req, res, url)) return;
+      // The active design system as CSS variables (?device= for a device's own choice). Pages
+      // fetch it again on the core's design-system event, so a change needs no reload.
+      if (url.pathname === '/design-system.css' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        return res.end(core.design.css(url.searchParams.get('device')));
+      }
       if (parts[1] === 'api') return await api(req, res, parts);
       if (url.pathname === '/oauth/gmail' && req.method === 'GET') {
         const q = Object.fromEntries(url.searchParams);

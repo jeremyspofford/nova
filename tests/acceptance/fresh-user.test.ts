@@ -27,7 +27,10 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     const h0 = await get('/health');
     assert.equal(h0.ok, true);
     assert.equal(h0.setup.done, false);
-    assert.deepEqual(await get('/profile'), { identity: {}, user: {}, tuning: {}, privacy: {}, policy: {} });
+    assert.deepEqual(await get('/profile'), { identity: {}, user: {}, tuning: {}, privacy: {}, policy: {}, appearance: {} });
+    // The built-in design systems are there without the person doing anything; Orb Teal shows.
+    assert.equal((await get('/design-systems')).length, 6);
+    assert.equal((await get('/design-systems/active')).id, 'orb-teal');
     assert.deepEqual(await get('/tasks'), []);
 
     // 2. Setup, as a conversation.
@@ -50,6 +53,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
       tuning: { directness: 'balanced' },
       privacy: { default: 'local-only' },
       policy: {},
+      appearance: {},
     });
     evidence.push('## Profile written by the conversation', '', '```json', JSON.stringify(profile, null, 2), '```', '');
 
@@ -85,8 +89,8 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     assert.equal(ext.status, 201);
     const removed = await m.send('DELETE', '/api/v1/extensions/example.weather');
     assert.equal(removed.status, 200);
-    assert.deepEqual(await get('/extensions'), []);
-    assert.deepEqual(readdirSync(join(home, 'extensions')), []);
+    assert.deepEqual((await get('/extensions')).filter((x: { kind: string }) => x.kind !== 'design-system'), []);
+    assert.equal(readdirSync(join(home, 'extensions')).includes('example.weather'), false);
     evidence.push('## Extension', '', `- Installed \`example.weather\` (disabled, review: ${ext.body.review.join(' / ')}), then removed: no record, no data folder left.`, '');
   } finally {
     await stop(nova);

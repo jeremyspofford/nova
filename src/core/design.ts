@@ -448,16 +448,25 @@ export class Design extends EventEmitter {
 
   // Built-ins are present on every install without the person doing anything, and are updated
   // in place when Nova ships a newer version. The person's choice is never touched.
-  ensureBuiltins(): void {
+  // Returns what went wrong, in plain words, so the caller can report it as a problem; a broken
+  // built-in never stops Nova from starting.
+  ensureBuiltins(): string[] {
+    const problems: string[] = [];
     for (const pkg of this.#builtins.values()) {
-      const installed = this.#extensions.list().find((x) => x.id === pkg.id);
-      if (!installed) {
-        this.#extensions.install(pkg);
-        this.#extensions.enable(pkg.id);
-      } else if (installed.version !== pkg.version || JSON.stringify(installed.manifest) !== JSON.stringify(pkg)) {
-        this.#extensions.update(pkg);
+      try {
+        const installed = this.#extensions.list().find((x) => x.id === pkg.id);
+        if (!installed) {
+          this.#extensions.install(pkg, { builtin: true });
+          this.#extensions.enable(pkg.id);
+        } else if (installed.version !== pkg.version || JSON.stringify(installed.manifest) !== JSON.stringify(pkg)) {
+          this.#extensions.update(pkg, { builtin: true });
+        }
+      } catch (e) {
+        const details = e instanceof CoreError && e.details.length ? ` ${e.details.join(' ')}` : '';
+        problems.push(`The built-in design system ${pkg.name ?? pkg.id} couldn’t be installed: ${(e as Error).message}${details}`);
       }
     }
+    return problems;
   }
 
   schema() {
