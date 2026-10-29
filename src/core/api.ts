@@ -89,7 +89,8 @@ export function createApi(o: { routes: Route[]; stream: Stream; version: string;
       if (!matches.length) throw new CoreError('not_found', 'Not found.');
       const route = matches.find((r) => r.method === req.method);
       if (!route) { res.writeHead(405, { allow: matches.map((r) => r.method).join(', ') }); res.end(); return true; }
-      const params = Object.fromEntries(Object.entries(route.re.exec(path)!.groups ?? {}).map(([k, v]) => [k, decodeURIComponent(v)]));
+      const decode = (v: string) => { try { return decodeURIComponent(v); } catch { throw new CoreError('validation', 'The address has a malformed escape.'); } };
+      const params = Object.fromEntries(Object.entries(route.re.exec(path)!.groups ?? {}).map(([k, v]) => [k, decode(v)]));
       const body = route.method === 'GET' || route.method === 'DELETE' ? {} : await readBody(req);
       const out = await route.handle({ params, query: url.searchParams, body });
       send(res, route.status ?? 200, out);

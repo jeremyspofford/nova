@@ -1,8 +1,8 @@
 // The workspace: the folder in Nova's home where work products land. The local workspace
 // worker writes here; the verifier reads here on its own to check what the worker claimed.
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { CoreError } from './errors.ts';
 import { ENVELOPE_VERSION, type Brief, type Report } from './envelope.ts';
 import type { Worker } from './workers.ts';
@@ -16,11 +16,17 @@ export class Workspace {
     mkdirSync(this.root, { recursive: true });
   }
 
-  // `notes/x.md` or `workspace:notes/x.md` → an absolute path that is inside the workspace.
+  // `notes/x.md` or `workspace:notes/x.md` → an absolute path that is inside the workspace,
+  // checked on the real path too, so a symlink inside the workspace can't lead out of it.
   resolve(target: string): string {
     const rel = target.replace(/^workspace:/, '');
     const abs = resolve(this.root, rel);
     if (!rel || abs === this.root || !abs.startsWith(this.root + sep)) throw new CoreError('forbidden', `${target} is outside the workspace.`);
+    let existing = abs;
+    while (!existsSync(existing)) existing = dirname(existing);
+    const real = realpathSync(existing);
+    const root = realpathSync(this.root);
+    if (real !== root && !real.startsWith(root + sep)) throw new CoreError('forbidden', `${target} leads outside the workspace.`);
     return abs;
   }
 
@@ -46,7 +52,10 @@ function inputsOf(brief: Brief): WriteInputs {
 
 // A deterministic local worker: writes or appends one file in the workspace, then reads it back
 // and reports what is there. No model, no network, so it serves local-only tasks offline.
-export function workspaceWorker(ws: Workspace): Worker {
+// A brief is applied once per idempotency key, so a retry or a restart never appends twice; the
+// journal of applied keys lives in `stateDir`, outside the workspace.
+export function workspaceWorker(ws: Workspace, stateDir = join(ws.root, '..', 'workers', 'workspace')): Worker {
+  const applied = (key: string) => join(stateDir, `${sha256(key)}.done`);
   return {
     id: 'workspace',
     name: 'Workspace files',
@@ -66,15 +75,21 @@ export function workspaceWorker(ws: Workspace): Worker {
         return { ...base, status: 'blocked', summary: (e as Error).message, evidence: [], blockers: [(e as Error).message], usage: { duration_ms: performance.now() - started } };
       }
       signal.throwIfAborted();
-      mkdirSync(dirname(abs), { recursive: true });
-      if (inputs.action === 'append') appendFileSync(abs, inputs.content);
-      else writeFileSync(abs, inputs.content);
+      const already = existsSync(applied(brief.idempotency_key));
+      if (!already) {
+        mkdirSync(dirname(abs), { recursive: true });
+        if (inputs.action === 'append') appendFileSync(abs, inputs.content);
+        else writeFileSync(abs, inputs.content);
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(applied(brief.idempotency_key), new Date().toISOString());
+      }
       const back = readFileSync(abs);
       const target = ws.target(abs);
+      const rel = target.slice('workspace:'.length);
       return {
         ...base,
         status: 'done',
-        summary: `${inputs.action === 'append' ? 'Added to' : 'Wrote'} ${target.slice('workspace:'.length)} (${back.length} bytes).`,
+        summary: already ? `${rel} was already done (${back.length} bytes); not repeated.` : `${inputs.action === 'append' ? 'Added to' : 'Wrote'} ${rel} (${back.length} bytes).`,
         evidence: [{ kind: 'read_back', target, sha256: sha256(back), bytes: back.length }],
         artifacts: [{ kind: 'file', ref: target, sha256: sha256(back) }],
         blockers: [],

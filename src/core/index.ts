@@ -38,7 +38,7 @@ export function createCore(o: CoreOptions) {
   const profile = new Profile(db, now);
   const workspace = new Workspace(join(o.home, 'workspace'));
   const verifier = new Verifier(workspace, now);
-  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace)], defaultPrivacy: () => profile.privacyDefault(), now });
+  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace'))], defaultPrivacy: () => profile.privacyDefault(), now });
   const setup = new Setup({ profile, ledger, now, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
 
@@ -101,7 +101,9 @@ export function createCore(o: CoreOptions) {
       handle: ({ query }) => {
         const state = query.get('state');
         if (state && !STATES.includes(state as State)) throw new CoreError('validation', `state must be one of ${STATES.join(', ')}.`);
-        return ledger.list({ ...(state ? { state: state as State } : {}), limit: Number(query.get('limit') ?? 50) });
+        const limit = Number(query.get('limit') ?? 50);
+        if (!Number.isInteger(limit)) throw new CoreError('validation', 'limit must be a whole number.');
+        return ledger.list({ ...(state ? { state: state as State } : {}), limit });
       },
     },
     {
@@ -112,6 +114,7 @@ export function createCore(o: CoreOptions) {
     { method: 'GET', path: '/tasks/{id}', summary: 'One task, with its brief, report and verification.', handle: ({ params }) => ledger.get(params.id!) },
     { method: 'GET', path: '/tasks/{id}/events', summary: 'Everything that happened to a task, in order.', handle: ({ params }) => ledger.events(params.id!) },
     { method: 'POST', path: '/tasks/{id}/approve', summary: 'Give the OK a tier-2 or tier-3 task is waiting for. Tier 3 needs {confirm: true}.', body: '{confirm?}', handle: ({ params, body }) => ledger.approve(params.id!, { confirm: body.confirm === true }) },
+    { method: 'POST', path: '/tasks/{id}/retry', summary: 'Try a blocked or partly done task again.', handle: ({ params }) => ledger.retry(params.id!) },
     { method: 'POST', path: '/tasks/{id}/cancel', summary: 'Stop a task. It ends cancelled, with the reason.', body: '{reason?}', handle: ({ params, body }) => ledger.cancel(params.id!, typeof body.reason === 'string' && body.reason.trim() ? body.reason : 'Cancelled by you.') },
     { method: 'GET', path: '/workers', summary: 'Who can do delegated work, where their data goes, and whether they are healthy.', handle: () => [...ledger.workers.values()].map(info) },
     { method: 'GET', path: '/extensions', summary: 'Installed extensions and their state.', handle: () => extensions.list() },

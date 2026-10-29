@@ -122,3 +122,23 @@ test('timezones are understood from a city name too', () => {
   assert.match(s.answer('no, Tokyo').reply, /Asia\/Tokyo it is/);
   assert.equal(profile.get('user', 'timezone'), 'Asia/Tokyo');
 });
+
+test('saying no to the cloud keeps it local (review finding: these used to turn cloud on)', () => {
+  const local = ['no cloud', "don't allow cloud", 'never use the cloud', 'keep it local, no cloud please', 'nothing in the cloud', 'local only'];
+  for (const answer of local) {
+    const { setup: s, profile } = setup();
+    s.view();
+    for (let i = 0; i < 4; i++) s.answer('skip');
+    s.answer(answer);
+    assert.equal(profile.privacyDefault(), 'local-only', answer);
+  }
+});
+
+test('reading the setup state writes nothing', () => {
+  const { setup: s, profile } = setup();
+  s.view();
+  s.view();
+  assert.equal(profile.isEmpty(), true);
+  s.answer('Sam');
+  assert.equal(s.view().transcript.length, 3, 'question, answer, reply');
+});

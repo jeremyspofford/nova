@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Db } from '../../src/core/db.ts';
 import { Log } from '../../src/core/log.ts';
-import { Ledger, type TaskInput } from '../../src/core/ledger.ts';
+import { Ledger, canMove, type TaskInput } from '../../src/core/ledger.ts';
 import { Verifier } from '../../src/core/verify.ts';
 import { Workspace, sha256, workspaceWorker } from '../../src/core/workspace.ts';
 import { ENVELOPE_VERSION, type Brief, type PrivacyMode } from '../../src/core/envelope.ts';
@@ -114,11 +114,8 @@ test('a local-only task is never handed to a worker that would send data off the
   let called = false;
   const cloud = fake('cloud', 'remote', async (b) => { called = true; return report(b); });
   const { ledger } = setup({ workers: (ws) => [cloud(ws)] });
-  const t = ledger.create(writeNote({ owner: 'cloud' }));
+  assert.throws(() => ledger.create(writeNote({ owner: 'cloud' })), /sends data off your devices, and this task is local-only/);
   await ledger.idle();
-  const after = ledger.get(t.id);
-  assert.equal(after.state, 'waiting');
-  assert.match(after.reason ?? '', /Waiting on local capacity/);
   assert.equal(called, false);
   const allowed = ledger.create(writeNote({ owner: 'cloud', privacy_mode: 'cloud-allowed', idempotency_key: 'c2' }));
   await ledger.idle();
@@ -218,4 +215,119 @@ test('pumping an empty queue settles, so idle() returns (regression: it used to 
   const t = ledger.create(writeNote());
   await ledger.idle();
   assert.equal(ledger.get(t.id).state, 'done');
+});
+
+// Review findings (PR #210): each of these failed before its fix.
+
+test('a worker that hangs past the timeout does not block the queue', async () => {
+  const hang = fake('hang', 'none', () => new Promise(() => {}));
+  const root = mkdtempSync(join(tmpdir(), 'nova-ledger-'));
+  const db = new Db(':memory:');
+  db.migrate();
+  const ws = new Workspace(join(root, 'workspace'));
+  const ledger = new Ledger({ db, log: new Log(db, null), verifier: new Verifier(ws), workers: [workspaceWorker(ws), hang(ws)], defaultPrivacy: () => 'local-only', timeoutMs: 40, maxAttempts: 1 });
+  const stuck = ledger.create(writeNote({ owner: 'hang', idempotency_key: 'h' }));
+  const next = ledger.create(writeNote({ idempotency_key: 'n' }));
+  await ledger.idle();
+  assert.equal(ledger.get(stuck.id).state, 'failed');
+  assert.match(ledger.get(stuck.id).reason ?? '', /took longer than/);
+  assert.equal(ledger.get(next.id).state, 'done', 'the next task still ran');
+});
+
+test('cancelling a running task frees the queue', async () => {
+  const hang = fake('hang', 'none', () => new Promise(() => {}));
+  const { ledger } = setup({ workers: (ws) => [hang(ws)] });
+  const stuck = ledger.create(writeNote({ owner: 'hang', idempotency_key: 'h' }));
+  const next = ledger.create(writeNote({ idempotency_key: 'n' }));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(ledger.get(stuck.id).state, 'active');
+  ledger.cancel(stuck.id, 'Taking too long.');
+  await ledger.idle();
+  assert.equal(ledger.get(stuck.id).state, 'cancelled');
+  assert.equal(ledger.get(next.id).state, 'done');
+});
+
+test('a read-back target matches however it is spelled, and an append is not repeated', async () => {
+  const { ledger, ws } = setup();
+  const t = ledger.create(writeNote({ evidence_required: [{ kind: 'read_back', target: 'notes/log.md' }], inputs: { action: 'append', path: 'notes/log.md', content: 'x\n' } }));
+  await ledger.idle();
+  assert.equal(ledger.get(t.id).state, 'done', ledger.get(t.id).reason ?? '');
+  assert.equal(readFileSync(ws.resolve('notes/log.md'), 'utf8'), 'x\n');
+});
+
+test('the workspace worker does not apply the same brief twice', async () => {
+  const { ws } = setup();
+  const w = workspaceWorker(ws);
+  const brief = { envelope: ENVELOPE_VERSION, task_id: 't', goal: 'g', context_refs: [], constraints: {}, privacy_mode: 'local-only', approval_tier: 1, evidence_required: [], idempotency_key: 'once', inputs: { action: 'append', path: 'a.md', content: 'x\n' } } as Brief;
+  await w.run(brief, new AbortController().signal);
+  const again = (await w.run(brief, new AbortController().signal)) as { status: string };
+  assert.equal(again.status, 'done');
+  assert.equal(readFileSync(ws.resolve('a.md'), 'utf8'), 'x\n');
+});
+
+test('a read-back requirement must name its target', () => {
+  const { ledger } = setup();
+  assert.throws(() => ledger.create(writeNote({ evidence_required: [{ kind: 'read_back' }] })), /must name the file/);
+});
+
+test('a local-only task assigned to a worker that sends data off the device is refused up front', () => {
+  const cloud = fake('cloud', 'remote', async (b) => report(b));
+  const { ledger } = setup({ workers: (ws) => [cloud(ws)] });
+  assert.throws(() => ledger.create(writeNote({ owner: 'cloud' })), /local-only/);
+});
+
+test('tier 3 needs a fresh confirmation before every run, including retries', async () => {
+  let n = 0;
+  const flaky = fake('flaky', 'none', async (b, ws) => { n += 1; if (n === 1) throw new Error('first try fails'); return workspaceWorker(ws).run(b, new AbortController().signal); });
+  const { ledger } = setup({ workers: (ws) => [flaky(ws)] });
+  const t = ledger.create(writeNote({ owner: 'flaky', approval_tier: 3 }));
+  await ledger.idle();
+  ledger.approve(t.id, { confirm: true });
+  await ledger.idle();
+  assert.equal(ledger.get(t.id).state, 'waiting', 'the retry waits for a new confirmation');
+  assert.equal(ledger.get(t.id).reason, 'Needs your OK before it runs.');
+  ledger.approve(t.id, { confirm: true });
+  await ledger.idle();
+  assert.equal(ledger.get(t.id).state, 'done');
+});
+
+test('a blocked task can be retried by the person', async () => {
+  let n = 0;
+  const sometimes = fake('sometimes', 'none', async (b, ws) => { n += 1; return n === 1 ? report(b, { status: 'blocked', blockers: ['the folder was locked'] }) : workspaceWorker(ws).run(b, new AbortController().signal); });
+  const { ledger } = setup({ workers: (ws) => [sometimes(ws)] });
+  const t = ledger.create(writeNote({ owner: 'sometimes' }));
+  await ledger.idle();
+  assert.equal(ledger.get(t.id).state, 'waiting');
+  ledger.retry(t.id);
+  await ledger.idle();
+  assert.equal(ledger.get(t.id).state, 'done');
+  assert.throws(() => ledger.retry(t.id), /isn't waiting/);
+});
+
+test('a task that keeps dying with Nova is failed after the attempt limit, not requeued forever', () => {
+  const root = mkdtempSync(join(tmpdir(), 'nova-ledger-'));
+  const db = new Db(join(root, 'nova.db'));
+  db.migrate();
+  const { ledger } = setup({ db, root });
+  const t = ledger.create(writeNote({ approval_tier: 2 }));
+  db.run(`UPDATE task SET state = 'active', attempts = 3 WHERE id = ?`, t.id);
+  ledger.recover();
+  assert.equal(ledger.get(t.id).state, 'failed');
+  assert.match(ledger.get(t.id).reason ?? '', /restarted while this was running/);
+});
+
+test('the transition table refuses moves it does not list', () => {
+  assert.equal(canMove('done', 'queued'), false);
+  assert.equal(canMove('failed', 'active'), false);
+  assert.equal(canMove('cancelled', 'done'), false);
+  assert.equal(canMove('queued', 'done'), false, 'nothing reaches done without verifying');
+  assert.equal(canMove('active', 'done'), false);
+  assert.equal(canMove('verifying', 'done'), true);
+});
+
+test('bad parameters are refused, not stored as problems', () => {
+  const { ledger, log } = setup();
+  assert.throws(() => ledger.create(writeNote({ parent_id: 'nope' })), /No parent task/);
+  assert.throws(() => ledger.create(writeNote({ user_visibility: 'loud' as never })), /user_visibility/);
+  assert.equal(log.problems().length, 0);
 });

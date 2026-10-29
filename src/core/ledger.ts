@@ -24,7 +24,10 @@ const MOVES: Record<State, State[]> = {
   cancelled: [],
 };
 
-export type Visibility = 'silent' | 'handling' | 'attention';
+export const canMove = (from: State, to: State): boolean => MOVES[from].includes(to);
+
+export const VISIBILITY = ['silent', 'handling', 'attention'] as const;
+export type Visibility = (typeof VISIBILITY)[number];
 export interface Origin { kind: 'user' | 'setup' | 'trigger'; ref?: string }
 
 export interface TaskInput {
@@ -128,6 +131,16 @@ export class Ledger extends EventEmitter {
     if (!Array.isArray(input.evidence_required) || !input.evidence_required.length) {
       throw new CoreError('validation', 'A task must say what evidence will prove it done. "Done" without evidence is not done.');
     }
+    // Otherwise any existing file with a known hash would pass as proof.
+    if (input.evidence_required.some((r) => r?.kind === 'read_back' && !r.target)) {
+      throw new CoreError('validation', 'A read-back requirement must name the file to read back.');
+    }
+    const mode = input.privacy_mode ?? this.#defaultPrivacy();
+    if (!permits(mode, worker.egress)) {
+      throw new CoreError('validation', `${worker.name} sends data off your devices, and this task is ${mode}. Pick a worker that keeps it local.`);
+    }
+    if (input.parent_id !== undefined && !this.#db.get('SELECT 1 FROM task WHERE id = ?', input.parent_id)) throw new CoreError('validation', `No parent task ${input.parent_id}.`);
+    if (input.user_visibility !== undefined && !VISIBILITY.includes(input.user_visibility)) throw new CoreError('validation', `user_visibility must be one of ${VISIBILITY.join(', ')}.`);
     const id = randomUUID();
     const brief = validateBrief({
       envelope: ENVELOPE_VERSION,
@@ -135,7 +148,7 @@ export class Ledger extends EventEmitter {
       goal: input.goal,
       context_refs: input.context_refs ?? [],
       constraints: input.constraints ?? {},
-      privacy_mode: input.privacy_mode ?? this.#defaultPrivacy(),
+      privacy_mode: mode,
       approval_tier: input.approval_tier ?? 1,
       evidence_required: input.evidence_required,
       idempotency_key: key,
@@ -189,6 +202,17 @@ export class Ledger extends EventEmitter {
     return next;
   }
 
+  // The person asks for another go at a task that is waiting on something other than approval
+  // (blocked, partly done, or out of local capacity).
+  retry(id: string): Task {
+    const t = this.get(id);
+    if (t.state !== 'waiting' || (t.approval_tier >= 2 && !t.approved_at)) throw new CoreError('conflict', "This task isn't waiting for a retry.");
+    this.#db.run(`UPDATE task SET user_visibility = 'handling' WHERE id = ?`, id);
+    const next = this.#move(id, 'queued', 'Trying again, as you asked.', 'retried');
+    void this.pump();
+    return next;
+  }
+
   cancel(id: string, reason = 'Cancelled.'): Task {
     const t = this.get(id);
     if (TERMINAL.includes(t.state)) throw new CoreError('conflict', `This task is already ${t.state}.`);
@@ -202,7 +226,11 @@ export class Ledger extends EventEmitter {
     const requeued: string[] = [];
     const reverified: string[] = [];
     for (const t of this.list({ state: 'active', limit: 500 })) {
-      this.#move(t.id, 'queued', 'Nova restarted while this was running. It will run again.', 'recovered');
+      if (t.attempts >= this.#maxAttempts) {
+        this.#fail(t.id, `Nova restarted while this was running, ${t.attempts} times. Not trying again.`, undefined, 'recovered');
+        continue;
+      }
+      this.#requeue(t, 'Nova restarted while this was running. It will run again.', 'recovered');
       requeued.push(t.id);
     }
     for (const t of this.list({ state: 'verifying', limit: 500 })) {
@@ -270,14 +298,23 @@ export class Ledger extends EventEmitter {
     const ac = new AbortController();
     this.#running.set(t.id, ac);
     const signal = AbortSignal.any([ac.signal, AbortSignal.timeout(this.#timeoutMs)]);
+    // A worker that ignores the signal must not hold the queue: whichever comes first wins.
+    const stopped = new Promise<never>((_, fail) => {
+      if (signal.aborted) fail(signal.reason);
+      signal.addEventListener('abort', () => fail(signal.reason), { once: true });
+    });
     let raw: unknown;
     try {
-      raw = await worker.run(t.brief, signal);
+      raw = await Promise.race([worker.run(t.brief, signal), stopped]);
     } catch (e) {
       this.#running.delete(t.id);
       if (this.get(t.id).state === 'cancelled') return;
+      if (signal.aborted && (e as Error)?.name === 'TimeoutError') {
+        return this.#retryOrFail(t.id, `${worker.name} took longer than ${Math.round(this.#timeoutMs / 1000)} s.`, undefined, 'timed_out');
+      }
       return this.#retryOrFail(t.id, `${worker.name} stopped with an error: ${(e as Error).message}`, (e as Error).stack);
     }
+    stopped.catch(() => {});
     this.#running.delete(t.id);
     if (this.get(t.id).state === 'cancelled') return;
 
@@ -319,10 +356,16 @@ export class Ledger extends EventEmitter {
     const t = this.get(id);
     if (t.attempts < this.#maxAttempts) {
       this.#log.warn('ledger', why, { task: id, attempt: t.attempts, detail });
-      this.#move(id, 'queued', `${why} Trying again (attempt ${t.attempts + 1} of ${this.#maxAttempts}).`, kind, { detail });
+      this.#requeue(t, `${why} Trying again (attempt ${t.attempts + 1} of ${this.#maxAttempts}).`, kind, { detail });
       return;
     }
     this.#fail(id, `${why} Gave up after ${t.attempts} attempts.`, detail, kind);
+  }
+
+  // Tier 3 is confirmed every time it runs (NOVA-SPEC §6), so a rerun asks again.
+  #requeue(t: Task, reason: string, kind: string, detail?: unknown): void {
+    if (t.approval_tier === 3) this.#db.run('UPDATE task SET approved_at = NULL WHERE id = ?', t.id);
+    this.#move(t.id, 'queued', reason, kind, detail);
   }
 
   #fail(id: string, why: string, detail?: string, kind = 'failed'): void {
@@ -333,7 +376,7 @@ export class Ledger extends EventEmitter {
 
   #move(id: string, to: State, reason: string | null, kind: string, detail?: unknown): Task {
     const t = this.get(id);
-    if (t.state !== to && !MOVES[t.state].includes(to)) throw new CoreError('conflict', `A ${t.state} task can't become ${to}.`);
+    if (t.state !== to && !canMove(t.state, to)) throw new CoreError('conflict', `A ${t.state} task can't become ${to}.`);
     const at = this.#now().toISOString();
     this.#db.tx(() => {
       this.#db.run('UPDATE task SET state = ?, reason = ?, updated_at = ?, completed_at = ? WHERE id = ?', to, reason, at, TERMINAL.includes(to) ? at : null, id);

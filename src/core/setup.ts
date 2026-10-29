@@ -49,11 +49,14 @@ function directnessFrom(text: string): 'gentle' | 'balanced' | 'blunt' | null {
   return null;
 }
 
+// Saying no to the cloud must never turn it on, so refusals and local answers are read first.
 function privacyFrom(text: string): PrivacyMode | null {
-  const t = text.toLowerCase();
+  const t = text.toLowerCase().replace(/’/g, "'");
+  if (/\b(no|not|never|don'?t|do not|without|nothing (in|to|on)( the)?)\b[^.]*\bcloud/.test(t) || /\bcloud\b[^.]*\b(no|never|not)\b/.test(t)) return 'local-only';
+  if (/local[- ]?only|^(keep|stay)|keep (it|everything)|stay local|private|this machine|^yes\b/.test(t)) return 'local-only';
   if (/always.*cloud|cloud.*(always|freely|any ?time|whenever)|cloud[- ]allowed/.test(t)) return 'cloud-allowed';
-  if (/allow|when (it'?s )?needed|fallback|fall back|if needed|local[- ]preferred|cloud/.test(t)) return 'local-preferred';
-  if (/local|keep|only|stay|yes|private/.test(t)) return 'local-only';
+  if (/allow|when (it'?s )?needed|fallback|fall back|if needed|local[- ]preferred|\bcloud\b/.test(t)) return 'local-preferred';
+  if (/\blocal\b/.test(t)) return 'local-only';
   return null;
 }
 
@@ -77,12 +80,10 @@ export class Setup extends EventEmitter {
     this.#detectedTz = o.detectedTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   }
 
+  // Reading never writes: before the first answer, the opening question is shown, not stored.
   view(): SetupView {
     const s = this.#state();
-    if (!s.transcript.length) {
-      s.transcript.push(this.#turn('nova', this.#ask(s.step)));
-      this.#save(s);
-    }
+    if (!s.transcript.length) s.transcript.push(this.#turn('nova', this.#ask(s.step)));
     return { ...s, done: s.step === 'done', question: s.step === 'done' ? null : this.#ask(s.step) };
   }
 
@@ -91,8 +92,8 @@ export class Setup extends EventEmitter {
     const text = typeof input === 'string' ? input.trim() : '';
     if (!text) throw new CoreError('validation', 'Say something, even "skip".');
     if (text.length > 2000) throw new CoreError('validation', 'That’s longer than any setup answer needs to be.');
-    this.view();
     const s = this.#state();
+    if (!s.transcript.length) s.transcript.push(this.#turn('nova', this.#ask(s.step)));
     if (s.step === 'done') throw new CoreError('conflict', 'Setup is already finished. You can change anything by telling me.');
     s.transcript.push(this.#turn('person', text));
 

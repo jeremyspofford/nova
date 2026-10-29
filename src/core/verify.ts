@@ -22,9 +22,11 @@ type Checker = (e: Evidence) => { ok: boolean; why: string };
 export class Verifier {
   #checkers = new Map<string, Checker>();
   #now: () => Date;
+  #ws: Workspace;
 
   constructor(ws: Workspace, now: () => Date = () => new Date()) {
     this.#now = now;
+    this.#ws = ws;
     this.#checkers.set('read_back', (e) => {
       if (e.kind !== 'read_back') return { ok: false, why: 'Not a read-back.' };
       let data: Buffer | null;
@@ -42,13 +44,23 @@ export class Verifier {
     });
   }
 
+  // "notes/a.md" and "workspace:notes/a.md" are the same file.
+  #same(a: string, b: string): boolean {
+    if (a === b) return true;
+    try {
+      return this.#ws.target(this.#ws.resolve(a)) === this.#ws.target(this.#ws.resolve(b));
+    } catch {
+      return false;
+    }
+  }
+
   kinds(): string[] {
     return [...this.#checkers.keys()];
   }
 
   verify(brief: Brief, report: Report): Verification {
     const checks = brief.evidence_required.map((req): Check => {
-      const candidates = report.evidence.filter((e) => e.kind === req.kind && (!req.target || ('target' in e && e.target === req.target)));
+      const candidates = report.evidence.filter((e) => e.kind === req.kind && (!req.target || ('target' in e && this.#same(e.target, req.target))));
       if (!candidates.length) return { requirement: req, evidence: null, ok: false, why: `The report has no ${req.kind.replace('_', '-')} evidence${req.target ? ` for ${req.target}` : ''}.` };
       const checker = this.#checkers.get(req.kind);
       if (!checker) return { requirement: req, evidence: candidates[0] ?? null, ok: false, why: `Nova can't check ${req.kind.replace('_', '-')} evidence yet, so it can't count as proof.` };
