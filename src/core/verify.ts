@@ -17,10 +17,11 @@ export interface Verification {
   at: string;
 }
 
-type Checker = (e: Evidence) => { ok: boolean; why: string };
+export type Checker = (e: Evidence) => { ok: boolean; why: string };
 
 export class Verifier {
   #checkers = new Map<string, Checker>();
+  #tests = new Map<string, Checker>();
   #now: () => Date;
   #ws: Workspace;
 
@@ -42,6 +43,19 @@ export class Verifier {
       }
       return { ok: true, why: `Nova read ${e.target} itself: ${data.length} bytes, sha256 ${actual.slice(0, 12)}…, as reported.` };
     });
+    // A test result counts only if the module that owns the test can run it again itself.
+    this.#checkers.set('test_result', (e) => {
+      if (e.kind !== 'test_result') return { ok: false, why: 'Not a test result.' };
+      const check = [...this.#tests].find(([prefix]) => e.name.startsWith(prefix))?.[1];
+      if (!check) return { ok: false, why: `Nova can't re-run the test "${e.name}" yet, so it can't count as proof.` };
+      return check(e);
+    });
+  }
+
+  // Lets another module check its own test results, by name prefix ("template:").
+  registerTest(prefix: string, check: Checker): void {
+    if (this.#tests.has(prefix)) throw new Error(`Tests named ${prefix}… already have a checker.`);
+    this.#tests.set(prefix, check);
   }
 
   // "notes/a.md" and "workspace:notes/a.md" are the same file.
