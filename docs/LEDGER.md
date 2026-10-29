@@ -14,6 +14,75 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M3a): design systems are token packages; Era 2's names are
+temporary aliases.**
+
+- **Tokens.** The schema is DESIGN-SYSTEM §2 in full, plus:
+  - `type/weight-regular`, `type/weight-strong`, `type/line-tight`,
+    `type/line-body`;
+  - `motion/duration-fast`, `motion/duration-slow`, `motion/ease`.
+
+  It lives only in `src/core/design.ts` (`TOKENS`), and `ui/` reads it from
+  `GET /api/v1/design-systems/schema`. A name maps to a CSS variable by
+  replacing `/` with `-` (`bg/base` → `--bg-base`). Values are literal and
+  checked per family:
+  - colours are hex or `rgb[a]()`, so contrast can be measured;
+  - `type/h*` are sizes, and line heights are plain numbers;
+  - `motion/breathe`, `motion/pulse` and `motion/transition` are durations,
+    paired with `motion/ease`.
+
+  Anything else is refused, so a value can't carry CSS beyond its token.
+- **Package format.** A full CONTRACTS §4 manifest of kind `design-system`.
+  It asks for no permissions, uses no secrets and keeps nothing on removal;
+  the extension host enforces this at install.
+  - `tokens{}`: the full set.
+  - `modes{light?, dark?}`: partial overrides.
+  - `reduced_motion{}`: may only shorten motion; loops must be `0s` and
+    everything else at most 200ms. The core emits safe defaults anyway.
+  - `components{}`: bindings that may name schema tokens only.
+  - `content_rules{}`: DESIGN-SYSTEM §6 as numbers and switches, which may
+    only tighten.
+  - `extras[]`: any component outside §7 must be declared here.
+  - `preview[]`, plus an optional `description`.
+
+  A package that fails validation can be installed and inspected, but it is
+  never applied or previewed. Built-ins come from `design-systems/` on every
+  start, skip the `nova_compat` check (they ship with this Nova), can't be
+  removed, and are updated in place.
+- **Selection.** The profile section `appearance` holds `design_system`,
+  `previous`, `mode` (auto by default) and `device_overrides`, plus
+  `device_previous`, so a device's rollback doesn't lose an older override.
+  With no record, Orb Teal shows, and a blank profile stays blank for setup.
+  The mode is set through `PUT /api/v1/profile/appearance/mode`; the other
+  keys only change through apply and rollback.
+- **Era 2 themes converted.** Nova, Paper, Aurora and Obsidian are packages
+  now, and `ui/themes/` is gone. Their values map onto the new tokens:
+  - `--bg` → `bg/base`, `--surface` → `bg/raised`, `--raised` →
+    `surface/card` and `bg/overlay`, `--wash` → `surface/card-hover`.
+  - Status and orb colours come from each theme's accent and status colours.
+  - `type/*` sizes come from the shorthands, and `weight-strong` and the
+    line heights from the title and body styles.
+
+  Fidelity losses: the `--t-*` shorthands become one strong weight for every
+  heading (Paper's 400-weight serif display is now 600), `--r-bubble` follows
+  `--r-card`, `--code-bg` follows `bg/base`, and `--shift` follows `space/1`.
+
+  Faint text on cards, a pair Era 2 never checked, missed 3:1 by a hair in
+  two themes:
+
+  | Theme | Token | Era 2 | Shipped | Why |
+  | --- | --- | --- | --- | --- |
+  | Nova | `text/faint` | `#62626B` | `#65656e` | 2.87:1 on `surface/card`; needs 3 |
+  | Obsidian | `text/faint` | `#62666D` | `#63676e` | 2.98:1 on `surface/card`; needs 3 |
+- **Temporary aliases.** So today's `ui/` keeps working until the PWA
+  replaces it, the generated CSS also emits Era 2's names (`--bg`, `--text-2`,
+  `--t-body`, `--s3`, `--r-card`, `--m-fast`, …) as `var()` aliases of the
+  new tokens. `--accent-text` is chosen per package for contrast.
+  `lint:tokens` allows these names only in the Era 2 files listed in
+  `LEGACY`. New UI code may use schema tokens only, and there raw spacing and
+  breakpoints outside `ui/styles/layout.css` are errors too. The aliases, the
+  `LEGACY` list and `ERA2_ALIASES` are removed together with the Era 2 UI.
+
 **2026-10-29 (M2): a held message says why it waits.** Messages carry a
 `hold`:
 - `quiet`: delivered when quiet hours end, but only if its rule still exists,
@@ -401,6 +470,9 @@ optional. A browser that already chose a theme keeps it. The Stellar Map is a
 later phase.
 
 ## Theme token gaps
+
+Era 2's record. Since M3a these themes are packages in `design-systems/`,
+and the values below carry over (see the M3a decision above).
 
 None of the three specs defines every token THEMING.md requires. Gaps are
 filled from each theme's own palette (mostly `mockups.html`) and marked
