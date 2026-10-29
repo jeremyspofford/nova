@@ -8,7 +8,7 @@ import { Log } from '../../src/core/log.ts';
 import { Ledger } from '../../src/core/ledger.ts';
 import { Verifier } from '../../src/core/verify.ts';
 import { Workspace, workspaceWorker } from '../../src/core/workspace.ts';
-import { Decisions, JevProvider, RulesProvider, Templates, validateTemplate, type DecisionProvider, type DryRunCase, type TemplateDef } from '../../src/core/decide.ts';
+import { Decisions, JevProvider, RulesProvider, Templates, noulCertainty, validateTemplate, type DecisionProvider, type DryRunCase, type TemplateDef } from '../../src/core/decide.ts';
 import type { PrivacyMode } from '../../src/core/envelope.ts';
 
 function setup(opts: { privacy?: PrivacyMode; providers?: (rules: RulesProvider) => DecisionProvider[] } = {}) {
@@ -54,7 +54,8 @@ test('a choice question must offer "unknown", and must have 1 to 255 options', (
   assert.throws(() => validateTemplate(sorter({ questions: [{ id: 'pile', type: 'choice', options: [...many, 'unknown'] }] })), (e: Error & { details?: string[] }) => /255/.test(e.details?.join(' ') ?? ''));
   assert.doesNotThrow(() => validateTemplate(sorter({ questions: [{ id: 'pile', type: 'choice', options: [...many.slice(1), 'unknown'] }] })));
   assert.throws(() => validateTemplate(sorter({ questions: [{ id: 'u', type: 'score', min: 5, max: 1 }] })), (e: Error & { details?: string[] }) => /min/.test(e.details?.join(' ') ?? ''));
-  assert.throws(() => validateTemplate({ ...sorter(), questions: [{ id: 'x', type: 'noul' }] }), /doesn't match/);
+  assert.doesNotThrow(() => validateTemplate({ ...sorter(), questions: [{ id: 'x', type: 'noul' }] }));
+  assert.throws(() => validateTemplate({ ...sorter(), questions: [{ id: 'x', type: 'noul', options: ['yes', 'no', 'unknown'] } as never] }), (e: Error & { details?: string[] }) => /yes\/no probability/.test(e.details?.join(' ') ?? ''));
   assert.throws(() => validateTemplate({ ...sorter(), escalation: { confidence_floor: 2 } }));
   assert.throws(() => validateTemplate({ ...sorter(), inputs: { subject: 'date' } }));
 });
@@ -175,7 +176,7 @@ test('a template with no local rule answers unknown and escalates instead of gue
 test('local-only never calls a remote decision provider, even when it is registered first', async () => {
   let calls = 0;
   const jev = new JevProvider();
-  const spy: DecisionProvider = { id: jev.id, egress: jev.egress, decide: (t, i) => { calls += 1; return jev.decide(t, i); } };
+  const spy: DecisionProvider = { id: jev.id, egress: jev.egress, questionTypes: jev.questionTypes, decide: (t, i) => { calls += 1; return jev.decide(t, i); } };
   const { decisions, templates, ledger, setPrivacy } = setup({ providers: (rules) => [spy, rules] });
   await author(templates, ledger, sorter(), [{ inputs: { subject: 'a', size: 1 } }]);
   const d = await decisions.decide('example.sort', { subject: 'a', size: 1 });
@@ -194,4 +195,62 @@ test('the remote provider is a stub until it is configured', async () => {
   const { templates } = setup();
   templates.propose(sorter(), 'person');
   await assert.rejects(jev.decide(templates.version('example.sort', 1)!, {}), /not configured/);
+});
+
+// Noul: Jev's yes/no type, one calibrated probability that the answer is yes. No separate confidence.
+const asker = (over: Partial<TemplateDef> = {}): TemplateDef => ({
+  template_id: 'example.ask',
+  version: 1,
+  situation: 'Is this note worth mentioning today?',
+  inputs: { subject: 'string' },
+  questions: [{ id: 'mention', type: 'noul' }],
+  escalation: { confidence_floor: 0.6 },
+  ...over,
+});
+
+test('Noul certainty comes from the probability alone: 0.5 is the least certain', () => {
+  assert.equal(noulCertainty(0.5), 0);
+  assert.equal(noulCertainty(1), 1);
+  assert.equal(noulCertainty(0), 1);
+  assert.ok(Math.abs(noulCertainty(0.9) - 0.8) < 1e-9);
+});
+
+test('a Noul answer carries its own certainty; a separate stated confidence is ignored', async () => {
+  const { rules, templates, ledger, decisions } = setup();
+  let p = 0.9;
+  rules.add('example.ask', () => ({ answers: { mention: p }, confidence: 0.01, why: 'test rule' }));
+  await author(templates, ledger, asker(), [{ inputs: { subject: 'a' } }]);
+  const sure = await decisions.decide('example.ask', { subject: 'a' });
+  assert.equal(sure?.answers.mention, 0.9);
+  assert.ok(Math.abs((sure?.confidence ?? 0) - 0.8) < 1e-9, 'certainty 0.8 from p = 0.9, not the stated 0.01');
+  assert.equal(sure?.escalate, false);
+  p = 0.5;
+  const unsure = await decisions.decide('example.ask', { subject: 'a' });
+  assert.equal(unsure?.confidence, 0);
+  assert.equal(unsure?.escalate, true, 'p = 0.5 is maximum uncertainty and escalates');
+  p = 1.4;
+  const broken = await decisions.decide('example.ask', { subject: 'a' });
+  assert.equal(broken?.answers.mention, 0.5, 'out of range becomes the least certain answer');
+  assert.equal(broken?.escalate, true);
+});
+
+test('with Noul and other questions, the decision is only as certain as its weakest part', async () => {
+  const { rules, templates, ledger, decisions } = setup();
+  rules.add('example.mixed', () => ({ answers: { mention: 0.95, pile: 'keep' }, confidence: 0.7, why: 'test rule' }));
+  const def = asker({ template_id: 'example.mixed', questions: [{ id: 'mention', type: 'noul' }, { id: 'pile', type: 'choice', options: ['keep', 'unknown'] }] });
+  await author(templates, ledger, def, [{ inputs: { subject: 'a' } }]);
+  const d = await decisions.decide('example.mixed', { subject: 'a' });
+  assert.equal(d?.confidence, 0.7, 'min(certainty 0.9, stated 0.7)');
+});
+
+test('a provider is only asked questions it can answer; the Jev stub declares Noul', async () => {
+  assert.ok(new JevProvider().questionTypes.includes('noul'));
+  let asked = 0;
+  const choicesOnly: DecisionProvider = { id: 'choices-only', egress: 'none', questionTypes: ['choice', 'score'], decide: async () => { asked += 1; throw new Error('should not be asked'); } };
+  const { rules, templates, ledger, decisions } = setup({ providers: (r) => [choicesOnly, r] });
+  rules.add('example.ask', () => ({ answers: { mention: 0.2 }, confidence: 1, why: 'test rule' }));
+  await author(templates, ledger, asker(), [{ inputs: { subject: 'a' } }]);
+  const d = await decisions.decide('example.ask', { subject: 'a' });
+  assert.equal(d?.provider, 'rules');
+  assert.equal(asked, 0);
 });

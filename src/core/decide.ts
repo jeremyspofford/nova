@@ -15,9 +15,17 @@ export type InputType = (typeof INPUT_TYPES)[number];
 export type InputValue = string | number | boolean;
 export type Inputs = Record<string, InputValue>;
 
+// Noul is Jev's yes/no type: the answer is one calibrated probability in [0, 1] that the answer is
+// yes. It has no separate confidence: the probability is the certainty, and 0.5 is the least
+// certain an answer can be.
 export type Question =
   | { id: string; type: 'choice'; options: string[] }
-  | { id: string; type: 'score'; min: number; max: number };
+  | { id: string; type: 'score'; min: number; max: number }
+  | { id: string; type: 'noul' };
+export const QUESTION_TYPES = ['choice', 'score', 'noul'] as const;
+
+// How certain a Noul answer is, from 0 (p = 0.5) to 1 (p = 0 or 1).
+export const noulCertainty = (p: number): number => Math.abs(p - 0.5) * 2;
 
 export interface TemplateDef {
   template_id: string;
@@ -57,6 +65,8 @@ export interface Decision {
 export interface DecisionProvider {
   id: string;
   egress: Egress;
+  // The question types this provider can answer; a template with any other type is not sent to it.
+  questionTypes: readonly Question['type'][];
   decide(t: Template, inputs: Record<string, unknown>): Promise<Decision>;
 }
 
@@ -97,8 +107,10 @@ export function validateTemplate(input: unknown): TemplateDef {
         need(options.includes(UNKNOWN), `${at} must offer "${UNKNOWN}", so there is always a way to say it doesn't fit`);
       } else if (x.type === 'score') {
         if (need(isNum(x.min) && isNum(x.max), `${at}.min and max must be numbers`)) need((x.min as number) < (x.max as number), `${at}.min must be below max`);
+      } else if (x.type === 'noul') {
+        need(x.options === undefined && x.min === undefined && x.max === undefined, `${at} is a yes/no probability; it takes no options, min or max`);
       } else {
-        need(false, `${at}.type must be choice or score`);
+        need(false, `${at}.type must be choice, score or noul`);
       }
     });
   }
@@ -118,8 +130,8 @@ export function checkInputs(t: TemplateDef, inputs: Record<string, unknown>): In
   return inputs as Inputs;
 }
 
-// Out-of-schema answers become "unknown" (choice) or are dropped to the minimum (score), and either
-// way the decision escalates.
+// Out-of-schema answers become "unknown" (choice), drop to the minimum (score) or to 0.5, the least
+// certain probability (noul); any of these escalates the decision.
 function normalize(t: TemplateDef, raw: Record<string, unknown>): { answers: Record<string, Answer>; clean: boolean } {
   const answers: Record<string, Answer> = {};
   let clean = true;
@@ -129,6 +141,10 @@ function normalize(t: TemplateDef, raw: Record<string, unknown>): { answers: Rec
       const ok = typeof a === 'string' && q.options.includes(a);
       answers[q.id] = ok ? a : UNKNOWN;
       if (!ok || a === UNKNOWN) clean = false;
+    } else if (q.type === 'noul') {
+      const ok = isNum(a) && a >= 0 && a <= 1;
+      answers[q.id] = ok ? a : 0.5;
+      if (!ok) clean = false;
     } else {
       const ok = isNum(a) && a >= q.min && a <= q.max;
       answers[q.id] = ok ? a : q.min;
@@ -140,7 +156,12 @@ function normalize(t: TemplateDef, raw: Record<string, unknown>): { answers: Rec
 
 function settle(t: TemplateDef, provider: string, raw: { answers?: unknown; confidence?: unknown; escalate?: unknown; why?: unknown }): Decision {
   const { answers, clean } = normalize(t, isObj(raw.answers) ? raw.answers : {});
-  const confidence = isNum(raw.confidence) ? Math.min(1, Math.max(0, raw.confidence)) : 0;
+  const stated = isNum(raw.confidence) ? Math.min(1, Math.max(0, raw.confidence)) : 0;
+  // Noul answers carry their own certainty. A provider's separate confidence counts only for the
+  // other question types; with Noul questions alone it is ignored.
+  const noul = t.questions.filter((q) => q.type === 'noul').map((q) => noulCertainty(answers[q.id] as number));
+  const others = t.questions.some((q) => q.type !== 'noul');
+  const confidence = noul.length ? Math.min(...noul, others ? stated : 1) : stated;
   return {
     template_id: t.template_id,
     version: t.version,
@@ -159,6 +180,7 @@ export type Rule = (inputs: Inputs) => { answers: Record<string, Answer>; confid
 export class RulesProvider implements DecisionProvider {
   readonly id = 'rules';
   readonly egress: Egress = 'none';
+  readonly questionTypes = QUESTION_TYPES;
   #rules = new Map<string, Rule>();
 
   add(templateId: string, rule: Rule): void {
@@ -187,9 +209,12 @@ export class RulesProvider implements DecisionProvider {
 
 // Jev (ADR-7) is a hosted typed-decision API. Its wire format needs the owner's account and docs,
 // so until then this refuses instead of guessing.
+// Jev, the hosted typed-decision API. A stub until the owner decides on an account: it declares
+// what Jev answers (including Noul, Jev's yes/no probability) and refuses to run.
 export class JevProvider implements DecisionProvider {
   readonly id = 'jev';
   readonly egress: Egress = 'remote';
+  readonly questionTypes = QUESTION_TYPES;
   async decide(_t: Template, _inputs: Record<string, unknown>): Promise<Decision> {
     throw new Error('The Jev decision provider is not configured.');
   }
@@ -472,7 +497,8 @@ export class Decisions {
     checkInputs(t, inputs);
     this.#templates.use(t.template_id, t.version);
     const mode = opts.privacy_mode ?? this.#privacy();
-    for (const p of this.#providers.filter((x) => permits(mode, x.egress))) {
+    const able = (x: DecisionProvider) => t.questions.every((q) => x.questionTypes.includes(q.type));
+    for (const p of this.#providers.filter((x) => permits(mode, x.egress) && able(x))) {
       try {
         return settle(t, p.id, await p.decide(t, inputs));
       } catch (e) {

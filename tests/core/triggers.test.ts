@@ -219,7 +219,7 @@ test('a paused heartbeat does not run, and does not catch up for the time it was
 test('in local-only mode the remote decision provider is never called, even when registered first', async () => {
   let calls = 0;
   const jev = new JevProvider();
-  const spy: DecisionProvider = { id: jev.id, egress: jev.egress, decide: (t, i) => { calls += 1; return jev.decide(t, i); } };
+  const spy: DecisionProvider = { id: jev.id, egress: jev.egress, questionTypes: jev.questionTypes, decide: (t, i) => { calls += 1; return jev.decide(t, i); } };
   const { triggers, profile } = setup({ providers: (rules) => [spy, rules] });
   assert.equal(profile.privacyDefault(), 'local-only');
   const { rule } = triggers.createRule({ name: 'Check-in', class: 'proactive', action: { kind: 'message', text: 'Hello.' } }, 'person');
@@ -229,7 +229,7 @@ test('in local-only mode the remote decision provider is never called, even when
 });
 
 test('an unsure triage does not act alone: the task waits for the person', async () => {
-  const unsure: DecisionProvider = { id: 'unsure', egress: 'none', decide: async (t) => ({ template_id: t.template_id, version: t.version, answers: { decision: 'act' }, confidence: 0.2, provider: 'unsure', escalate: false, why: 'guessing' }) };
+  const unsure: DecisionProvider = { id: 'unsure', egress: 'none', questionTypes: ['choice'], decide: async (t) => ({ template_id: t.template_id, version: t.version, answers: { decision: 'act' }, confidence: 0.2, provider: 'unsure', escalate: false, why: 'guessing' }) };
   const { triggers, ledger } = setup({ providers: (rules) => [unsure, rules] });
   const { token } = triggers.createRule({ name: 'Example events', class: 'event', hook: 'example', action: note() }, 'person');
   const t = await triggers.hook('example', token, {});
