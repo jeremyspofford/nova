@@ -22,11 +22,13 @@ before(async () => {
   imap = await startFakeImap({ mail, labels: google.state.labels });
   nova = createNova(loadConfig({
     NOVA_HOME: mkdtempSync(join(tmpdir(), 'nova-sk-')),
-    NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`,
+    NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none',
     NOVA_GOOGLE_BASE: google.base,
     NOVA_SEARCH_URL: `${google.base}/search`,
     NOVA_IMAP_URL: imap.url,
   }));
+  // These tests exercise the web and Gmail, so this person has allowed the network.
+  nova.core.profile.set('privacy', 'default', 'cloud-allowed', 'settings');
   await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));
   base = `http://localhost:${nova.server.address().port}`;
 });

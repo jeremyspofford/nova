@@ -9,6 +9,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { runAgent, AgentError } from './agent.js';
+import { permits } from './core/index.ts';
 import { buildPrompt, buildSystem, helperSection, runSection, schedulesSection, skillsSection } from './context.js';
 import { Memory } from './memory.js';
 import { Skills } from './skills.js';
@@ -16,7 +17,7 @@ import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
 import { Permissions, permissionFor, permissionsSection } from './permissions.js';
 import { commitHome } from './home.js';
-import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall } from './tools.js';
+import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 
 const shortId = () => randomUUID().slice(0, 8);
@@ -167,6 +168,16 @@ export class Runner extends EventEmitter {
     const { signal } = run.controller;
     const before = reduce(this.store.read(sessionId));
     const question = before.turns.find((t) => t.id === turn).text;
+    // Privacy first (LOCAL-FIRST-AND-DEVICE-MESH §2): a model that would send this conversation
+    // somewhere the profile doesn't allow is never called. Nothing has been sent when this throws.
+    const mode = this.identity?.privacy?.() ?? 'local-only';
+    if (!permits(mode, this.config.agentEgress)) {
+      const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command';
+      throw new AgentError(
+        `Your privacy setting is ${mode}, and the model I chat with (${program}) runs in the cloud, so I haven't sent this anywhere. Add a local model (agent_cmd with agent_egress set to local), or allow cloud help in your privacy setting.`,
+        `agent_egress=${this.config.agentEgress}; privacy=${mode}`,
+      );
+    }
     // Once Nova has read mail in a conversation, the mail is in its context,
     // so going online asks first for the rest of that conversation.
     run.tainted = before.turns.some((t) => t.items.some((i) => i.kind === 'tool' && TOOLS[i.name]?.mail && i.result?.ok));
@@ -183,7 +194,7 @@ export class Runner extends EventEmitter {
       const installed = this.skills.installed();
       // Helpers and scheduled runs can't hand work to helpers of their own,
       // and a helper doesn't touch schedules.
-      const tools = availableTools({ gmail: this.gmail.status().connected, skills: installed.length, delegate: !run.alone && !!this.helpers })
+      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: installed.length, delegate: !run.alone && !!this.helpers }), mode)
         .filter((n) => !(run.helper && n.startsWith('schedule_')));
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
       const schedules = run.helper ? '' : schedulesSection(this.schedules.list(), this.config.timezone);

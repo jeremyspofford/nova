@@ -12,7 +12,7 @@ import { sampleManifest } from './fixtures.ts';
 
 async function boot() {
   const home = mkdtempSync(join(tmpdir(), 'nova-api-'));
-  const config = { ...loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: 'node scripts/fake-agent.js', NOVA_TZ: 'UTC' }), port: 0 };
+  const config = { ...loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: 'node scripts/fake-agent.js', NOVA_AGENT_EGRESS: 'none', NOVA_TZ: 'UTC' }), port: 0 };
   const nova = createNova(config);
   await new Promise<void>((r) => nova.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(nova.server.address() as AddressInfo).port}/api/v1`;

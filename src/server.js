@@ -27,11 +27,11 @@ export function createNova(config = loadConfig(), deps = {}) {
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
   // The core (src/core): database, Work Ledger, profile, identity, setup, extensions, /api/v1.
   const { version } = JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8'));
-  const core = createCore({ home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host) });
+  const core = createCore({ home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program: config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command', egress: config.agentEgress } });
   if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
   const store = new SessionStore(config.home, config.timezone);
   const runner = new Runner(config, store, deps);
-  runner.identity = { persona: core.persona, name: () => core.identity().name };
+  runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault() };
   runner.ensureMain();
   // permissions.md is written once, so it can be read and edited by hand; Settings keeps it current.
   if (!existsSync(runner.permissions.file)) writeFileSync(runner.permissions.file, renderPermissions(runner.permissions.list()));

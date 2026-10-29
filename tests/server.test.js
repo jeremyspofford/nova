@@ -15,7 +15,7 @@ let base;
 before(async () => {
   const config = loadConfig({
     NOVA_HOME: mkdtempSync(join(tmpdir(), 'nova-s-')),
-    NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`,
+    NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none',
   });
   nova = createNova(config);
   await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));

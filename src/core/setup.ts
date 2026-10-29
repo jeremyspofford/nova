@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import { CoreError } from './errors.ts';
 import { DEFAULTS, identityOf } from './identity.ts';
 import type { PrivacyMode } from './envelope.ts';
+import type { Egress } from './workers.ts';
 import type { Ledger, Task } from './ledger.ts';
 import type { Profile } from './profile.ts';
 
@@ -71,13 +72,15 @@ export class Setup extends EventEmitter {
   #ledger: Ledger;
   #now: () => Date;
   #detectedTz: string;
+  #chat: { program: string; egress: Egress } | null;
 
-  constructor(o: { profile: Profile; ledger: Ledger; now?: () => Date; detectedTimezone?: string }) {
+  constructor(o: { profile: Profile; ledger: Ledger; now?: () => Date; detectedTimezone?: string; chat?: { program: string; egress: Egress } }) {
     super();
     this.#profile = o.profile;
     this.#ledger = o.ledger;
     this.#now = o.now ?? (() => new Date());
     this.#detectedTz = o.detectedTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    this.#chat = o.chat ?? null;
   }
 
   // Reading never writes: before the first answer, the opening question is shown, not stored.
@@ -179,8 +182,13 @@ export class Setup extends EventEmitter {
         return `I go by ${me.name}. Want to call me something else? (A name, or "keep".)`;
       case 'directness':
         return 'How direct should I be? I’ll always tell you when I think something’s wrong; that part isn’t adjustable. But I can say it gently, plainly, or bluntly.';
-      case 'privacy':
-        return 'Last setting. Right now nothing leaves this machine: no cloud models, no outside services. I’d keep it that way unless you want cloud help when local isn’t enough. Keep it local-only, or allow cloud when needed?';
+      case 'privacy': {
+        // Truthful about the one thing that would leave: the chat model, if it's a cloud one.
+        const chat = this.#chat?.egress === 'remote'
+          ? ` One thing to know: chat is set up to use ${this.#chat.program}, which runs in the cloud. With local-only, chat stays off until you add a local model; everything else works.`
+          : '';
+        return `Last setting: privacy. Local-only means nothing leaves this machine.${chat} I’d keep it local unless you want cloud help when local isn’t enough. Keep it local-only, or allow cloud when needed?`;
+      }
       case 'first_task':
         return `${this.#summary()}\n\nWant a first task to prove the plumbing works? I’ll write a short welcome note into your workspace and check it myself. (Yes or no.)`;
       case 'done':

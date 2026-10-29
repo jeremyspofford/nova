@@ -14,6 +14,20 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M1): chat honors the privacy mode; the model command declares
+its egress.** Found after the M1 gate passed: setup promised "nothing leaves
+this machine", but chat still defaulted to a cloud model. Now `agent_egress`
+(`none` | `local` | `remote`, from `NOVA_AGENT_EGRESS` or `agent_egress` in
+`nova.config.json`) says where the model command sends conversations, and
+undeclared counts as `remote`. With a local-only profile a remote model is
+never started: the person gets a plain error saying nothing was sent, and
+how to change it. Setup says up front when the configured chat model is a
+cloud one. In local-only, tools that reach the internet (web, Gmail) are
+not offered; `exec` still asks every time. Consequence: a new user who
+keeps local-only has no chat until a local model is configured (M6 makes
+that easy). That's the honest trade, per the non-negotiable that local-only
+never falls back to cloud.
+
 **2026-10-29 (M1): the core is TypeScript run directly by Node, inside the
 same server.** `src/core/` is the modular-monolith core (ADR-1). Node 26
 strips types natively, so there is still no build step; `tsc` only

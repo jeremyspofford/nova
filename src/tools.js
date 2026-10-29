@@ -202,6 +202,12 @@ export function availableTools({ gmail = false, skills = 0, delegate = false } =
   return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate }));
 }
 
+// Local-only means nothing leaves the person's devices, so tools that reach the internet (the
+// web, Gmail) aren't offered at all. exec is not filtered: it always asks first.
+export function withinPrivacy(names, mode) {
+  return mode === 'local-only' ? names.filter((n) => !(TOOLS[n]?.online || TOOLS[n]?.mail || n.startsWith('gmail_'))) : names;
+}
+
 // DuckDuckGo's HTML results page, without ads.
 export function parseSearch(html, limit = 8) {
   const out = [];

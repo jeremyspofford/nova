@@ -13,17 +13,20 @@ import { Ledger, STATES, type State, type TaskInput } from './ledger.ts';
 import { Setup } from './setup.ts';
 import { Extensions } from './extensions.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
-import { info } from './workers.ts';
+import { info, type Egress } from './workers.ts';
 import { createApi, type Route } from './api.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 export { render as renderIdentity } from './identity.ts';
+export { permits } from './workers.ts';
 
 export interface CoreOptions {
   home: string;
   version: string;
   trustedOrigin: (host: string) => boolean;
   detectedTimezone?: string;
+  // Where the chat model sends conversations, so setup can say so truthfully.
+  chat?: { program: string; egress: Egress };
   now?: () => Date;
 }
 
@@ -39,7 +42,7 @@ export function createCore(o: CoreOptions) {
   const workspace = new Workspace(join(o.home, 'workspace'));
   const verifier = new Verifier(workspace, now);
   const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace'))], defaultPrivacy: () => profile.privacyDefault(), now });
-  const setup = new Setup({ profile, ledger, now, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}) });
+  const setup = new Setup({ profile, ledger, now, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
 
   const bus = new EventEmitter();

@@ -30,6 +30,10 @@ export function loadConfig(env = process.env, root = ROOT) {
     host: env.NOVA_HOST ?? file.host ?? '127.0.0.1',
     port: Number(env.NOVA_PORT ?? file.port ?? 4317),
     agentCmd: env.NOVA_AGENT_CMD ?? file.agent_cmd ?? DEFAULT_AGENT_CMD,
+    // Where the model command sends the conversation: none (this process), local (this machine or
+    // the person's own devices), remote (a cloud service). Undeclared counts as remote, so a
+    // local-only profile never reaches the cloud by assumption.
+    agentEgress: egress(env.NOVA_AGENT_EGRESS ?? file.agent_egress),
     timezone: env.NOVA_TZ ?? file.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     // Set explicitly (env or file) wins; otherwise the profile's timezone, once setup has one.
     timezonePinned: Boolean(env.NOVA_TZ ?? file.timezone),
@@ -42,6 +46,10 @@ export function loadConfig(env = process.env, root = ROOT) {
     imapUrl: env.NOVA_IMAP_URL ?? undefined,
     searchUrl: env.NOVA_SEARCH_URL ?? undefined,
   };
+}
+
+function egress(v) {
+  return ['none', 'local', 'remote'].includes(v) ? v : 'remote';
 }
 
 function expandHome(p, root) {
