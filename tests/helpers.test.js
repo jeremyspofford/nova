@@ -30,10 +30,12 @@ before(async () => {
   writeFileSync(join(home, 'workspace', 'bikes.md'), 'Commute: 9 miles, one long hill. Budget $2,000.\n');
   nova = createNova(loadConfig({
     NOVA_HOME: home,
-    NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`,
+    NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none',
     NOVA_SEARCH_URL: `${google.base}/search`,
     NOVA_TZ: LA,
   }), { agent: (o) => { calls.push({ system: o.system, prompt: o.prompt }); return runAgent(o); } });
+  // These tests exercise the web and Gmail, so this person has allowed the network.
+  nova.core.profile.set('privacy', 'default', 'cloud-allowed', 'settings');
   await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));
   base = `http://localhost:${nova.server.address().port}`;
 });

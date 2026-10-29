@@ -157,7 +157,7 @@ let base;
 before(async () => {
   nova = createNova(loadConfig({
     NOVA_HOME: mkdtempSync(join(tmpdir(), 'nova-se-')),
-    NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`,
+    NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(root, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none',
     NOVA_TZ: LA,
   }));
   await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));
@@ -287,7 +287,7 @@ test('pause, resume, remove and undo, through the API', async () => {
 test('a handoff waits for a reply in progress to finish', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-sw-'));
   mkdirSync(join(home, 'sessions'), { recursive: true });
-  const n = createNova(loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: `FAKE_DELAY=40 node ${join(root, 'scripts/fake-agent.js')}`, NOVA_TZ: LA }));
+  const n = createNova(loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: `FAKE_DELAY=40 node ${join(root, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none', NOVA_TZ: LA }));
   n.runner.send('main', 'slow please');
   await n.runner.deliver('main', { type: 'handoff', id: 'h1', schedule: 'x', name: 'X', ok: true, text: 'Report.' });
   const kinds = reduce(n.store.read('main')).turns.map((t) => [t.kind ?? 'user', t.state]);

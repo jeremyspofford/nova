@@ -1,0 +1,23 @@
+{
+  // Typecheck only. Node runs the .ts files directly (type stripping), so the source must stay
+  // erasable: no enums, namespaces or parameter properties, and imports name their .ts files.
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    // The JavaScript server modules are read for their inferred types but not checked themselves
+    // until they move to TypeScript.
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}

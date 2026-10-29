@@ -14,6 +14,67 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M1): chat honors the privacy mode; the model command declares
+its egress.** Found after the M1 gate passed: setup promised "nothing leaves
+this machine", but chat still defaulted to a cloud model. Now `agent_egress`
+(`none` | `local` | `remote`, from `NOVA_AGENT_EGRESS` or `agent_egress` in
+`nova.config.json`) says where the model command sends conversations, and
+undeclared counts as `remote`. With a local-only profile a remote model is
+never started: the person gets a plain error saying nothing was sent, and
+how to change it. Setup says up front when the configured chat model is a
+cloud one. In local-only, tools that reach the internet (web, Gmail) are
+not offered; `exec` still asks every time. Consequence: a new user who
+keeps local-only has no chat until a local model is configured (M6 makes
+that easy). That's the honest trade, per the non-negotiable that local-only
+never falls back to cloud.
+
+**2026-10-29 (M1): the core is TypeScript run directly by Node, inside the
+same server.** `src/core/` is the modular-monolith core (ADR-1). Node 26
+strips types natively, so there is still no build step; `tsc` only
+typechecks (`npm run typecheck`). The existing server mounts the core at
+`/api/v1` behind its existing loopback, Host and `X-Nova` guards: one
+process, one Nova, not a second app beside the first. Only `core/index.ts`
+may be imported from outside the core (a test enforces it). The JavaScript
+modules move to TypeScript as they are touched. `engines` is now Node >=26,
+the version actually tested.
+
+**2026-10-29 (M1): SQLite through `node:sqlite`, no ORM.** Structured state
+(profile, ledger, extensions, problems) is in `~/Nova/nova.db` (ADR-4).
+Migrations are forward-only and checksummed, with a backup before every
+upgrade; rollback is restoring that backup. Ported from Era 1's storage
+package without drizzle. The database, logs, backups and extension data
+stay out of the home's git history.
+
+**2026-10-29 (M1): the task envelope gains one optional field, `inputs`.**
+CONTRACTS §1 lists the brief's fields; a deterministic worker (no model)
+can't act on a plain-language goal alone, so `inputs` carries its
+structured parameters. Optional and additive, so envelope version stays 1.
+Recorded here as the contract note the packet asks for.
+
+**2026-10-29 (M1): a task can't be created without an evidence
+requirement, and unknown evidence fails.** "Done without evidence is not
+done" (NOVA-SPEC §3) is enforced at creation, and the verifier fails any
+evidence kind it has no checker for, rather than passing it. Read-back is
+the first checker: Nova re-reads the target itself.
+
+**2026-10-29 (M1): setup is a scripted interview.** It has to work before
+any model is configured and with no network (the M1 gate is local-only), so
+it doesn't use one. Each answer is written to the profile as it is given;
+unclear answers are asked again, never guessed. A model-assisted version
+can replace the parsing later without changing the records it writes.
+
+**2026-10-29 (M1): the persona moved out of `system/system_prompt.md`.**
+"Who you are" is now rendered by `src/core/identity.ts` from the fixed
+charter plus the profile (name, tuning), and the chat runner gets it from
+the core. The old Truth / Respect / Restraint values are kept, as the
+charter and the speech rules.
+
+**2026-10-29 (M1): known debt, owned.** Era 2's helpers and schedules still
+run outside the ledger, so for now there are two records of background
+work. Schedules move onto the ledger in M2 (its gate requires it), and
+helpers with them. The ledger runs one task at a time. A timezone set in
+setup reaches the chat and scheduler side on the next restart.
+
 **2026-10-29 (M0): the builder packet governs; the current tree is the base.**
 From here on `docs/builder-packet/` is the authoritative design, and where it
 and this ledger disagree, the packet wins. The build continues from this tree
