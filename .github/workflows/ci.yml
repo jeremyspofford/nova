@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   checks:
-    name: lint · syntax · themes · tests
+    name: lint · typecheck · themes · tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -24,9 +24,10 @@ jobs:
       - run: npm ci
       # No raw colours, sizes or font names in UI code.
       - run: npm run lint:tokens
-      # The current tree is plain JavaScript with no type system; until the TypeScript core
-      # lands (M1), this is a parse check of every source file, not a typecheck.
-      - name: syntax
+      # The TypeScript core (src/core) is typechecked; the JavaScript modules that predate it
+      # get a parse check until they move to TypeScript.
+      - run: npm run typecheck
+      - name: syntax (JavaScript)
         run: |
           set -e
           for f in $(git ls-files 'src/*.js' 'src/**/*.js' 'scripts/*.js' 'tests/*.js' 'ui/js/*.js'); do
