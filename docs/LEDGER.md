@@ -14,6 +14,24 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M0): the builder packet governs; the current tree is the base.**
+From here on `docs/builder-packet/` is the authoritative design, and where it
+and this ledger disagree, the packet wins. The build continues from this tree
+(Era 2) rather than restoring Era 1: it is the owner's deliberate clean slate
+(`7ea842b5`), it is small and fully tested, and restoring Era 1's ~465k lines
+wholesale would break the packet's per-component reuse rule. Era 1 components
+whose design already matches the contracts (device pairing, the secrets
+vault, browser takeover, the migration runner) are ported in the milestone
+that needs them, with their tests and without their framework dependencies.
+Evidence: `docs/inventory/M0-DELTA.md`.
+
+**2026-10-29 (M0): CI runs on every PR; the toolchain is pinned.** Nothing
+ran the suite on GitHub before. `.github/workflows/ci.yml` runs the token
+lint, a parse check of every JS source (not a typecheck: there are no types
+until the TypeScript core lands), the theme contract, the tests and
+`npm audit`. Node 26.3.1 is pinned in `mise.toml` and CI installs it from
+there, so local and CI match.
+
 **2026-10-21 (Phase 2): memory is kept with blocks, not tools.** The model
 ends its reply with `<remember>`, `<note>` and `<forget>` blocks; the runner
 strips them from the stream and applies them before `done`. A tool call per
