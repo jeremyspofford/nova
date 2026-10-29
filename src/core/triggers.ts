@@ -135,7 +135,9 @@ export interface TriggersOptions {
   now?: () => Date;
 }
 
-interface FireInput { class: TriggerClass; source: string; rule?: string; payload: unknown; dedup_key?: string; claim_key?: string }
+// A firing without a rule in the registry (an Era 2 schedule file is its own rule) brings its own
+// action and a name for it; it is recorded, triaged and traced like any other.
+export interface FireInput { class: TriggerClass; source: string; rule?: string; payload: unknown; dedup_key?: string; claim_key?: string; action?: Action; name?: string }
 
 export class Triggers extends EventEmitter {
   #db: Db;
@@ -289,14 +291,15 @@ export class Triggers extends EventEmitter {
     }
 
     // 4. Triage, through System 1 when the template is there, else the same rules directly.
-    const action = rule?.action ?? null;
+    const action = rule?.action ?? input.action ?? null;
+    const name = rule?.name ?? input.name ?? input.source;
     const policy = this.#policy();
     const off = Array.isArray(policy.proactive_off) ? policy.proactive_off.map((x) => String(x).toLowerCase()) : [];
     const inputs: Inputs = {
       class: input.class,
       action: action?.kind ?? 'none',
       quiet_hours: this.#quiet(at),
-      category_off: off.includes(input.class) || (!!rule && off.includes(rule.name.toLowerCase())),
+      category_off: off.includes(input.class) || ((!!rule || !!input.name) && off.includes(name.toLowerCase())),
     };
     let triage: Triage;
     const d = await this.#decisions.decide(TRIAGE.template_id, inputs);
@@ -313,9 +316,9 @@ export class Triggers extends EventEmitter {
     // 5. Act.
     let ledger_task_id: string | null = null;
     let message: Message | null = null;
-    if (action && rule && (triage.decision === 'act' || triage.decision === 'queue')) {
+    if (action && (triage.decision === 'act' || triage.decision === 'queue')) {
       if (action.kind === 'task') {
-        const open = input.class === 'event' ? this.#openTask(rule, at) : null;
+        const open = rule && input.class === 'event' ? this.#openTask(rule, at) : null;
         if (open) {
           ledger_task_id = open.id;
           triage = { ...triage, decision: 'queue', reason: `Added to "${open.title}".` };
@@ -325,7 +328,7 @@ export class Triggers extends EventEmitter {
             const task = this.#ledger.create({ ...action.task, ...(tier !== undefined ? { approval_tier: tier } : {}), origin: { kind: 'trigger', ref: trigger_id }, idempotency_key: `trigger:${trigger_id}` });
             ledger_task_id = task.id;
           } catch (e) {
-            const why = `Nova couldn't start the task for "${rule.name}": ${(e as Error).message}`;
+            const why = `Nova couldn't start the task for "${name}": ${(e as Error).message}`;
             this.#log.problem('triggers', why, { detail: (e as Error).stack });
             triage = { ...triage, decision: 'drop', reason: why };
           }

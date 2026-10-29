@@ -250,6 +250,29 @@ test('with the triage template retired, triage falls back to the local rules and
   assert.equal(t.triage.model, null);
 });
 
+test('a firing whose rule lives elsewhere (a schedule file) brings its own action: recorded, triaged, claimed once, and traced to its task', async () => {
+  const { triggers, ledger, profile } = setup();
+  const input = { class: 'heartbeat' as const, source: 'schedule:example', name: 'Example schedule', payload: { due: '2026-03-02T12:00:00.000Z' }, claim_key: 'schedule:example@2026-03-02T12:00:00.000Z', action: note('notes/schedule.md') };
+  const t = await triggers.fire(input);
+  assert.ok(t);
+  assert.deepEqual([t.class, t.source, t.rule_id, t.triage.decision], ['heartbeat', 'schedule:example', null, 'act']);
+  const task = ledger.get(t.ledger_task_id!);
+  assert.deepEqual(task.origin, { kind: 'trigger', ref: t.trigger_id });
+  assert.equal(await triggers.fire(input), null, 'the same due time is claimed once');
+  await ledger.idle();
+  assert.equal(ledger.get(task.id).state, 'done');
+
+  // Turned off by name in the person's policy: dropped. A task the ledger refuses: dropped, with the reason.
+  profile.set('policy', 'proactive_off', ['example schedule'], 'settings');
+  const off = await triggers.fire({ ...input, claim_key: 'schedule:example@2026-03-02T13:00:00.000Z' });
+  assert.equal(off?.triage.decision, 'drop');
+  assert.equal(off?.ledger_task_id, null);
+  profile.set('policy', 'proactive_off', [], 'settings');
+  const refused = await triggers.fire({ ...input, claim_key: 'schedule:example@2026-03-02T14:00:00.000Z', action: { kind: 'task', task: { ...(note() as { kind: 'task'; task: Record<string, unknown> }).task, owner: 'nobody' } } as never });
+  assert.equal(refused?.triage.decision, 'drop');
+  assert.match(refused?.triage.reason ?? '', /Nova couldn't start the task for "Example schedule": There is no worker called "nobody"/);
+});
+
 test('a task the person delegates is recorded as a reactive trigger linked to it', () => {
   const { triggers, ledger } = setup();
   const task = ledger.create({ title: 'Write a note', owner: 'workspace', goal: 'g', origin: { kind: 'user' }, evidence_required: [{ kind: 'read_back', target: 'workspace:a.md' }], inputs: { action: 'write', path: 'a.md', content: 'a' } });

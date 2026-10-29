@@ -8,8 +8,8 @@ import { Db } from './db.ts';
 import { Log } from './log.ts';
 import { Profile, SECTIONS, type Section } from './profile.ts';
 import { Workspace, workspaceWorker } from './workspace.ts';
-import { Verifier } from './verify.ts';
-import { Ledger, STATES, type State, type TaskInput } from './ledger.ts';
+import { Verifier, type Checker } from './verify.ts';
+import { Ledger, STATES, type LanedWorker, type State, type TaskInput } from './ledger.ts';
 import { Setup } from './setup.ts';
 import { Extensions } from './extensions.ts';
 import { Decisions, RulesProvider, Templates } from './decide.ts';
@@ -24,6 +24,12 @@ import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:
 
 export { render as renderIdentity } from './identity.ts';
 export { permits } from './workers.ts';
+export { ENVELOPE_VERSION } from './envelope.ts';
+export { TERMINAL } from './ledger.ts';
+export type { Brief, Evidence, Report } from './envelope.ts';
+export type { Worker, Egress } from './workers.ts';
+export type { Checker } from './verify.ts';
+export type { Lane, LanedWorker, Task } from './ledger.ts';
 
 export interface CoreOptions {
   home: string;
@@ -32,6 +38,10 @@ export interface CoreOptions {
   detectedTimezone?: string;
   // Where the chat model sends conversations, so setup can say so truthfully.
   chat?: { program: string; egress: Egress };
+  // Workers from outside the core (Era 2's chat-run), run through the same ledger and gates.
+  workers?: LanedWorker[];
+  // Confirmation checkers by system, for systems Nova can read itself ("nova-sessions").
+  confirmations?: Record<string, Checker>;
   now?: () => Date;
 }
 
@@ -46,9 +56,10 @@ export function createCore(o: CoreOptions) {
   const profile = new Profile(db, now);
   const workspace = new Workspace(join(o.home, 'workspace'));
   const verifier = new Verifier(workspace, now);
+  for (const [system, check] of Object.entries(o.confirmations ?? {})) verifier.registerConfirmation(system, check);
   const rules = new RulesProvider();
   const templates = new Templates({ db, verifier, rules, now });
-  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker], defaultPrivacy: () => profile.privacyDefault(), now });
+  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker, ...(o.workers ?? [])], defaultPrivacy: () => profile.privacyDefault(), now });
   templates.bind(ledger);
   // Remote decision providers (JevProvider) are registered only once configured; local-only skips them anyway.
   const decisions = new Decisions({ templates, providers: [rules], privacy: () => profile.privacyDefault(), log });
