@@ -54,6 +54,8 @@ export class ChatRun {
   bind({ runner, store, ledger, kinds }) {
     Object.assign(this, { runner, store, ledger, kinds });
     for (const k of Object.values(kinds)) k.worker = this;
+    // Each run that stepped aside listens for its task until the ledger has settled it.
+    ledger.setMaxListeners(Math.max(ledger.getMaxListeners(), 100));
   }
 
   health() {
@@ -114,8 +116,9 @@ export class ChatRun {
     }
     const out = this.outcome(inputs.run);
     const h = await this.settle(brief.task_id, inputs, out);
-    // The person stopped the run: the task is cancelled, not failed.
-    if (out.stopped && !TERMINAL.includes(this.ledger.get(brief.task_id).state)) this.ledger.cancel(brief.task_id, h.text);
+    // The person stopped the run: the task is cancelled, not failed. (When the ledger stopped it,
+    // by cancelling or on its time limit, the ledger has already settled the task.)
+    if (out.stopped && !signal.aborted && !TERMINAL.includes(this.ledger.get(brief.task_id).state)) this.ledger.cancel(brief.task_id, h.text);
     return finish(h);
   }
 
