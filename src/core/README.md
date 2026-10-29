@@ -17,6 +17,8 @@ The modular-monolith core (ADR-1), in TypeScript that Node runs directly. The de
 | `identity.ts` | Fixed charter + tunable persona, rendered for any model. | NOVA-SPEC §2, §5 |
 | `setup.ts` | First-run setup as a conversation. | PROFILES |
 | `extensions.ts` | Manifest validation and lifecycle (install, enable, disable, remove). | CONTRACTS §4 |
+| `memory.ts` | Long-term memory with provenance: remember, correct (supersedes, keeps history), confirm, forget (real deletion of the chain), search, plain-file export. | CONTRACTS §7 |
+| `receipts.ts` | Context receipts: what each model call was told and where it went; the egress log; local-only violations refused as problems. | CONTRACTS §2 |
 
 Rules: modules get what they need passed in; nothing outside `src/core` imports anything but `index.ts` (tested); source stays erasable TypeScript (no enums, namespaces or parameter properties) so Node can run it without a build.
 

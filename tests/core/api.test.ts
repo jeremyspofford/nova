@@ -53,7 +53,7 @@ test('health reports each part in plain words', async () => {
   assert.equal(body.ok, true);
   assert.equal(body.setup.done, false);
   assert.equal(body.checks.database.ok, true);
-  assert.match(body.checks.database.detail, /Schema version 1/);
+  assert.match(body.checks.database.detail, /Schema version \d+\./);
   assert.equal(body.checks.workers.workers[0].id, 'workspace');
   assert.equal(body.checks.workers.workers[0].egress, 'none');
   await stop();
