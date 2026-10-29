@@ -17,6 +17,10 @@ The modular-monolith core (ADR-1), in TypeScript that Node runs directly. The de
 | `identity.ts` | Fixed charter + tunable persona, rendered for any model. | NOVA-SPEC §2, §5 |
 | `setup.ts` | First-run setup as a conversation. | PROFILES |
 | `extensions.ts` | Manifest validation and lifecycle (install, enable, disable, remove). | CONTRACTS §4 |
+| `decide.ts` | System 1: decision templates (propose, dry runs, activation as a verified ledger task), decision providers (local rules; the remote Jev stub), `decide()` with escalation and the privacy rule. | CONTRACTS §3, ADR-7 |
+| `triggers.ts` | The trigger engine: the rule registry, one record per firing, triage, dedup, cooldowns, batching, quiet hours, the heartbeat, webhooks, and proactive messages that always trace to a trigger. | CONTRACTS §6, NOVA-SPEC §4 |
+
+Every change through the API needs the `X-Nova` header, except `POST /api/v1/hooks/{name}`: webhooks are called by automations and authenticate with their own `x-nova-hook-token` instead. That is the only exemption, and `api.ts` refuses any other route that claims it.
 
 Rules: modules get what they need passed in; nothing outside `src/core` imports anything but `index.ts` (tested); source stays erasable TypeScript (no enums, namespaces or parameter properties) so Node can run it without a build.
 

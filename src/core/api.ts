@@ -1,10 +1,10 @@
 // The core's HTTP API (ADR-5): REST under /api/v1 and one server-sent event stream. Every UI
 // capability is an API capability. One route table serves requests and generates the OpenAPI
 // document, so the two cannot drift apart.
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import { CoreError } from './errors.ts';
 
-export interface Ctx { params: Record<string, string>; query: URLSearchParams; body: Record<string, unknown> }
+export interface Ctx { params: Record<string, string>; query: URLSearchParams; body: Record<string, unknown>; headers: IncomingHttpHeaders }
 export type Handler = (ctx: Ctx) => unknown;
 
 export interface Route {
@@ -13,8 +13,14 @@ export interface Route {
   summary: string;
   body?: string;                 // what the JSON body carries, for the document
   status?: number;
+  // Set only on the webhook route: automations call it with their own token
+  // (x-nova-hook-token), which the handler checks, instead of the X-Nova header.
+  auth?: 'hook-token';
   handle: Handler;
 }
+
+// The one route allowed to skip the X-Nova guard. Any other route claiming it is refused at startup.
+export const HOOK_ROUTE = { method: 'POST', path: '/hooks/{name}' } as const;
 
 export interface Stream { on(listener: (event: string, data: unknown) => void): () => void }
 
@@ -35,7 +41,7 @@ export function openapi(routes: Route[], version: string): Record<string, unknow
       responses: { [String(r.status ?? 200)]: { description: 'OK' }, default: { description: 'An error: {error, details?}' } },
     };
   }
-  paths[`${PREFIX}/events`] = { get: { summary: 'Live updates as server-sent events: task, problem, setup, profile, extension.', responses: { 200: { description: 'text/event-stream' } } } };
+  paths[`${PREFIX}/events`] = { get: { summary: 'Live updates as server-sent events: task, problem, setup, profile, extension, trigger, message.', responses: { 200: { description: 'text/event-stream' } } } };
   return { openapi: '3.1.0', info: { title: 'Nova core API', version }, paths };
 }
 
@@ -57,6 +63,9 @@ const readBody = (req: IncomingMessage, limit = 1_000_000): Promise<Record<strin
 });
 
 export function createApi(o: { routes: Route[]; stream: Stream; version: string; trustedOrigin: (host: string) => boolean; onError: (e: unknown) => void }) {
+  for (const r of o.routes) {
+    if (r.auth && (r.method !== HOOK_ROUTE.method || r.path !== HOOK_ROUTE.path)) throw new Error(`${r.method} ${r.path} can't skip the X-Nova guard; only ${HOOK_ROUTE.method} ${HOOK_ROUTE.path} may.`);
+  }
   const table = o.routes.map((r) => ({ ...r, re: compile(r.path) }));
   const doc = openapi(o.routes, o.version);
 
@@ -70,8 +79,11 @@ export function createApi(o: { routes: Route[]; stream: Stream; version: string;
     if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) return false;
     const path = url.pathname.slice(PREFIX.length) || '/';
     try {
-      // Same rule as the rest of the server: changes come only from Nova's own page.
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
+      const matches = table.filter((r) => r.re.test(path));
+      const route = matches.find((r) => r.method === req.method);
+      // Same rule as the rest of the server: changes come only from Nova's own page. The webhook
+      // route is the one exception; it checks its own token.
+      if (req.method !== 'GET' && req.method !== 'HEAD' && route?.auth !== 'hook-token') {
         if (req.headers['x-nova'] !== '1') throw new CoreError('forbidden', 'Missing X-Nova header.');
         const origin = req.headers.origin;
         if (origin && !o.trustedOrigin(new URL(origin).host)) throw new CoreError('forbidden', 'Cross-origin request refused.');
@@ -85,14 +97,12 @@ export function createApi(o: { routes: Route[]; stream: Stream; version: string;
         req.on('close', () => { clearInterval(beat); off(); });
         return true;
       }
-      const matches = table.filter((r) => r.re.test(path));
       if (!matches.length) throw new CoreError('not_found', 'Not found.');
-      const route = matches.find((r) => r.method === req.method);
       if (!route) { res.writeHead(405, { allow: matches.map((r) => r.method).join(', ') }); res.end(); return true; }
       const decode = (v: string) => { try { return decodeURIComponent(v); } catch { throw new CoreError('validation', 'The address has a malformed escape.'); } };
       const params = Object.fromEntries(Object.entries(route.re.exec(path)!.groups ?? {}).map(([k, v]) => [k, decode(v)]));
       const body = route.method === 'GET' || route.method === 'DELETE' ? {} : await readBody(req);
-      const out = await route.handle({ params, query: url.searchParams, body });
+      const out = await route.handle({ params, query: url.searchParams, body, headers: req.headers });
       send(res, route.status ?? 200, out);
     } catch (e) {
       if (e instanceof CoreError) send(res, e.status, { error: e.message, ...(e.details.length ? { details: e.details } : {}) });

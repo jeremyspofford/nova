@@ -7,7 +7,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createNova } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
-import { createApi } from '../../src/core/api.ts';
+import { createApi, HOOK_ROUTE } from '../../src/core/api.ts';
 import { sampleManifest } from './fixtures.ts';
 
 async function boot() {
@@ -138,6 +138,120 @@ test('an unexpected error answers 500 and is recorded as a problem, not only log
   assert.match((await res.json()).error, /recorded as a problem/);
   assert.equal(problems.length, 1);
   server.close();
+});
+
+const noteAction = (path: string) => ({
+  kind: 'task',
+  task: { title: 'Note the event', owner: 'workspace', goal: 'The event is noted.', evidence_required: [{ kind: 'read_back', target: `workspace:${path}` }], inputs: { action: 'write', path, content: 'event\n' } },
+});
+
+test('webhooks are the one route outside the X-Nova guard, and they check their own token', async () => {
+  const { call, stop } = await boot();
+  const created = await call('POST', '/triggers/rules', { name: 'Example events', class: 'event', hook: 'example', action: noteAction('notes/hook.md') });
+  assert.equal(created.status, 201);
+  const token: string = created.body.token;
+  assert.ok(token);
+  assert.equal(created.body.rule.hook_path, '/api/v1/hooks/example');
+
+  assert.equal((await call('POST', '/hooks/example', { n: 1 }, {})).status, 403, 'no token');
+  assert.equal((await call('POST', '/hooks/example', { n: 1 }, { 'x-nova-hook-token': 'wrong' })).status, 403, 'wrong token');
+  assert.equal((await call('POST', '/hooks/example', { n: 1 }, { 'x-nova': '1' })).status, 403, 'X-Nova is not a hook token');
+  assert.equal((await call('POST', '/hooks/nothing', { n: 1 }, { 'x-nova-hook-token': token })).status, 404, 'unknown hook');
+
+  const fired = await call('POST', '/hooks/example', { n: 1 }, { 'x-nova-hook-token': token, origin: 'http://automation.example' });
+  assert.equal(fired.status, 202);
+  assert.equal(fired.body.decision, 'act');
+  const record = (await call('GET', `/triggers/${fired.body.trigger_id}`)).body;
+  assert.ok(record.ledger_task_id);
+  assert.deepEqual((await call('GET', `/tasks/${record.ledger_task_id}`)).body.origin, { kind: 'trigger', ref: record.trigger_id });
+
+  const again = await call('POST', '/hooks/example', { n: 1 }, { 'x-nova-hook-token': token });
+  assert.equal(again.body.decision, 'drop', 'the same event twice is deduped');
+
+  await call('POST', `/triggers/rules/${created.body.rule.id}/pause`);
+  const paused = await call('POST', '/hooks/example', { n: 2 }, { 'x-nova-hook-token': token });
+  assert.equal(paused.status, 202);
+  assert.equal(paused.body.decision, 'drop');
+  const listed = (await call('GET', `/triggers?rule=${created.body.rule.id}`)).body;
+  assert.equal(listed.length, 3);
+  assert.match(listed[0].triage.reason, /paused/);
+
+  // Other changes still need X-Nova.
+  assert.equal((await call('POST', `/triggers/rules/${created.body.rule.id}/resume`, {}, { 'x-nova-hook-token': token })).status, 403);
+  await stop();
+});
+
+test('the guard exemption is explicit: only the webhook route has it, and no other route can claim it', async () => {
+  const { nova, stop } = await boot();
+  const exempt = nova.core.routes.filter((r) => r.auth);
+  assert.deepEqual(exempt.map((r) => `${r.method} ${r.path}`), [`${HOOK_ROUTE.method} ${HOOK_ROUTE.path}`]);
+  assert.throws(() => createApi({
+    routes: [{ method: 'POST', path: '/tasks', summary: 'x', auth: 'hook-token', handle: () => null }],
+    stream: { on: () => () => {} }, version: '0', trustedOrigin: () => true, onError: () => {},
+  }), /can't skip the X-Nova guard/);
+  await stop();
+});
+
+test('the trigger registry over the API: add, edit, pause, remove; tokens never listed; tasks you delegate are reactive triggers', async () => {
+  const { call, stop } = await boot();
+  const beat = await call('POST', '/triggers/rules', { name: 'Mornings', class: 'heartbeat', cron: '0 7 * * 1-5', action: noteAction('notes/morning.md') });
+  assert.equal(beat.status, 201);
+  assert.equal(beat.body.token, undefined);
+  assert.equal(beat.body.rule.schedule, 'Weekdays at 7:00 AM');
+  const hook = (await call('POST', '/triggers/rules', { name: 'Example events', class: 'event', hook: 'example', action: noteAction('notes/hook.md') })).body;
+  assert.equal((await call('POST', '/triggers/rules', { name: 'Bad', class: 'heartbeat', cron: 'whenever', action: noteAction('x.md') })).status, 400);
+
+  const rules = (await call('GET', '/triggers/rules')).body;
+  assert.equal(rules.length, 2);
+  assert.equal(JSON.stringify(rules).includes(hook.token), false);
+  assert.equal(JSON.stringify(rules).includes('hash'), false);
+
+  assert.equal((await call('PUT', `/triggers/rules/${beat.body.rule.id}`, { cron: '30 8 * * *' })).body.schedule, 'Every day at 8:30 AM');
+  assert.equal((await call('POST', `/triggers/rules/${beat.body.rule.id}/pause`)).body.paused, true);
+  assert.equal((await call('POST', `/triggers/rules/${beat.body.rule.id}/resume`)).body.paused, false);
+  assert.equal((await call('DELETE', `/triggers/rules/${beat.body.rule.id}`)).status, 200);
+  assert.equal((await call('GET', `/triggers/rules/${beat.body.rule.id}`)).status, 404);
+
+  const msg = (await call('POST', '/triggers/rules', { name: 'Check-in', class: 'proactive', action: { kind: 'message', text: 'A reminder you asked for.' } })).body.rule;
+  const fired = await call('POST', `/triggers/rules/${msg.id}/fire`, {});
+  assert.equal(fired.body.triage.decision, 'act');
+  const [message] = (await call('GET', '/messages')).body;
+  assert.equal(message.text, 'A reminder you asked for.');
+  const origin = (await call('GET', `/triggers/${message.trigger_id}`)).body;
+  assert.equal(origin.message_id, message.id);
+  assert.equal(origin.class, 'proactive');
+  assert.ok((await call('POST', `/messages/${message.id}/read`)).body.read_at);
+
+  const task = (await call('POST', '/tasks', { title: 'Save a list', owner: 'workspace', goal: 'g', evidence_required: [{ kind: 'read_back', target: 'workspace:l.md' }], inputs: { action: 'write', path: 'l.md', content: 'x' } })).body;
+  const reactive = (await call('GET', '/triggers')).body.find((t: { class: string }) => t.class === 'reactive');
+  assert.equal(reactive.ledger_task_id, task.id);
+
+  const health = (await call('GET', '/health')).body;
+  assert.equal(health.checks.triggers.counts.rules, 2);
+  assert.ok(health.checks.triggers.counts.triggers >= 2);
+  await stop();
+});
+
+test('the test clock route exists only when NOVA_TEST_CLOCK=1', async () => {
+  const plain = await boot();
+  assert.equal(plain.nova.core.routes.some((r) => r.path === '/triggers/tick'), false);
+  assert.notEqual((await plain.call('POST', '/triggers/tick', { now: '2026-03-02T12:00:00Z' })).status, 200);
+  await plain.stop();
+
+  process.env.NOVA_TEST_CLOCK = '1';
+  const clocked = await boot();
+  delete process.env.NOVA_TEST_CLOCK;
+  try {
+    const rule = (await clocked.call('POST', '/triggers/rules', { name: 'Every minute', class: 'heartbeat', cron: '* * * * *', action: noteAction('notes/beat.md') })).body.rule;
+    const due = new Date(Date.parse(rule.created_at) + 61_000).toISOString();
+    const first = await clocked.call('POST', '/triggers/tick', { now: due });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.length, 1);
+    assert.equal((await clocked.call('POST', '/triggers/tick', { now: due })).body.length, 0, 'the same due time runs once');
+    assert.equal((await clocked.call('POST', '/triggers/tick', { now: 'not a time' })).status, 400);
+  } finally {
+    await clocked.stop();
+  }
 });
 
 test('module boundary: outside src/core, only src/core/index.ts is imported', () => {
