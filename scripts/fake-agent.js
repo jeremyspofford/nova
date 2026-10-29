@@ -36,7 +36,7 @@ const hasTool = (name) => new RegExp(`^- ${name} `, 'm').test(input);
 
 // MEMORY.md as Nova sent it: "- text [id:m1234abcd]".
 const memoryFile = input.match(/<file path="~\/MEMORY\.md">([\s\S]*?)<\/file>/)?.[1] ?? '';
-const entries = [...memoryFile.matchAll(/^- (.*) \[id:(\w+)\]$/gm)].map((m) => ({ text: m[1], id: m[2] }));
+const entries = [...memoryFile.matchAll(/^- (.*) \[id:([\w-]+)\]$/gm)].map((m) => ({ text: m[1], id: m[2] }));
 const words = (t) => new Set(t.toLowerCase().match(/[a-z]{4,}/g) ?? []);
 function closest(text) {
   const want = words(text);
