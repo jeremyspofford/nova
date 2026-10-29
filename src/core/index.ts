@@ -14,6 +14,8 @@ import { Setup } from './setup.ts';
 import { Extensions } from './extensions.ts';
 import { Decisions, RulesProvider, Templates } from './decide.ts';
 import { Triggers, type Policy, type RuleInput } from './triggers.ts';
+import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInput, type UserState } from './memory.ts';
+import { Receipts } from './receipts.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { info, type Egress } from './workers.ts';
 import { createApi, type Route } from './api.ts';
@@ -56,6 +58,8 @@ export function createCore(o: CoreOptions) {
   });
   const setup = new Setup({ profile, ledger, now, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
+  const memory = new Memory({ db, home: o.home, now });
+  const receipts = new Receipts({ db, log, now });
 
   const bus = new EventEmitter();
   bus.setMaxListeners(100);
@@ -90,6 +94,8 @@ export function createCore(o: CoreOptions) {
       extensions: { ok: true, counts: extensions.counts() },
       triggers: { ok: true, counts: triggers.counts() },
       problems: { ok: true, open: log.problems({ open: true }).length },
+      memory: { ok: true, counts: memory.counts() },
+      receipts: { ok: true, counts: receipts.counts() },
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -181,6 +187,32 @@ export function createCore(o: CoreOptions) {
     { method: 'POST', path: '/messages/{id}/read', summary: 'Mark a message as read.', handle: ({ params }) => triggers.read(params.id!) },
     { method: 'GET', path: '/problems', summary: 'Things that went wrong and matter to the person. ?open=1 for unresolved only.', handle: ({ query }) => log.problems({ open: query.get('open') === '1' }) },
     { method: 'POST', path: '/problems/{id}/resolve', summary: 'Mark a problem as dealt with.', handle: ({ params }) => { log.resolve(Number(params.id)); return { ok: true }; } },
+    {
+      method: 'GET', path: '/memory', summary: 'Everything Nova remembers, newest first, corrected and expired records included and marked. Filter with ?kind=&scope=&state=.',
+      handle: ({ query }) => memory.list({
+        ...(query.get('kind') ? { kind: query.get('kind') as MemoryKind } : {}),
+        ...(query.get('scope') ? { scope: query.get('scope')! } : {}),
+        ...(query.get('state') ? { state: query.get('state') as UserState } : {}),
+      }),
+    },
+    {
+      method: 'POST', path: '/memory', status: 201, summary: `Remember something, as the person. kind is one of ${MEMORY_KINDS.join(', ')}.`,
+      body: '{kind, content, source?, observed_at?, confidence?, scope?, expires?}',
+      handle: ({ body }) => memory.remember({ ...(body as unknown as MemoryInput), recorded_by: 'person' }),
+    },
+    { method: 'GET', path: '/memory/search', summary: 'Find active memories that share words with ?q=, with the list of what was retrieved. Also ?scope=&limit=.', handle: ({ query }) => memory.search(str(query.get('q'), 'q'), { ...(query.get('scope') ? { scope: query.get('scope')! } : {}), ...(query.get('limit') ? { limit: Number(query.get('limit')) } : {}) }) },
+    { method: 'POST', path: '/memory/export', summary: 'Write the active memories as plain files (memory.json and memory.md) and return where they are.', handle: () => memory.export() },
+    { method: 'POST', path: '/memory/{id}/correct', summary: 'Correct a memory. The correction supersedes it; the old record is kept, marked corrected.', body: '{content}', handle: ({ params, body }) => memory.correct(params.id!, str(body.content, 'content'), 'person') },
+    { method: 'POST', path: '/memory/{id}/confirm', summary: 'Confirm a memory is right.', handle: ({ params }) => memory.confirm(params.id!, 'person') },
+    { method: 'DELETE', path: '/memory/{id}', summary: 'Forget a memory for real: it and every correction of it are deleted, leaving only a note that something was forgotten.', handle: ({ params }) => memory.forget(params.id!, 'person') },
+    {
+      method: 'GET', path: '/receipts', summary: 'What each model call was told and where it went, newest first. ?egress=remote is the egress log; also ?task_id=&session_id=.',
+      handle: ({ query }) => receipts.list({
+        ...(query.get('task_id') ? { task_id: query.get('task_id')! } : {}),
+        ...(query.get('session_id') ? { session_id: query.get('session_id')! } : {}),
+        ...(query.get('egress') ? { egress: query.get('egress') as 'local' | 'remote' } : {}),
+      }),
+    },
   ];
 
   // Tests drive the heartbeat's clock through the API; this route doesn't exist otherwise.
@@ -207,7 +239,7 @@ export function createCore(o: CoreOptions) {
   });
 
   return {
-    db, log, profile, ledger, setup, extensions, workspace, migration, routes, templates, decisions, triggers,
+    db, log, profile, ledger, setup, extensions, workspace, migration, routes, templates, decisions, triggers, memory, receipts,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
