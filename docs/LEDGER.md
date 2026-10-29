@@ -14,6 +14,25 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M2): scheduled runs and helpers are ledger tasks; the M1 debt
+is paid.** Each scheduled run is a heartbeat trigger record (source
+`schedule:<id>`, claimed once per due time) whose task belongs to the
+`chat-run` worker (`src/chat-run.js`); each helper is a `chat-run` task whose
+origin names the conversation that asked. The worker runs them through the
+Era 2 runner and reports a `confirmation` from `nova-sessions`, which Nova
+checks itself by reading the report in the target conversation. The ledger
+now runs tasks in lanes: scheduled runs one at a time, helpers three at once,
+every other worker sharing one lane of one, as before. A run waiting for the
+person's OK reports `blocked` and waits, giving up its place (in Era 2 such a
+helper kept one of the three); when the run ends it is requeued to hand over
+its report. A run interrupted by a restart is not run again (its steps may
+have changed things): its conversation hears it didn't finish. A run uses the
+stricter of its task's privacy mode and the current setting; if that refuses
+the model, the task waits on local capacity. Schedule files stay the
+schedules' registry, so the trigger engine takes a rule-less firing with its
+own action; `runs.jsonl` stays as the per-schedule history the Schedules view
+and catch-up read, each entry naming its task.
+
 **2026-10-29 (M1): chat honors the privacy mode; the model command declares
 its egress.** Found after the M1 gate passed: setup promised "nothing leaves
 this machine", but chat still defaulted to a cloud model. Now `agent_egress`

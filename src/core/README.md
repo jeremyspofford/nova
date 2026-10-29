@@ -9,8 +9,8 @@ The modular-monolith core (ADR-1), in TypeScript that Node runs directly. The de
 | `db.ts` + `migrations/` | SQLite, forward-only checksummed migrations, backup before upgrade. | ADR-4 |
 | `log.ts` | JSON-lines log with redaction; problems, which are stored and shown, never only logged. | NOVA-SPEC §8 |
 | `envelope.ts` | Brief and Report, validated. | CONTRACTS §1 |
-| `ledger.ts` | Work Ledger: tasks, states, events, approval and privacy gates, retries, recovery. | WORK-LEDGER |
-| `verify.ts` | Checks evidence before done; Nova reads the target itself. | WORK-LEDGER |
+| `ledger.ts` | Work Ledger: tasks, states, events, approval and privacy gates, retries, recovery, lanes (bounded concurrency per worker lane). | WORK-LEDGER |
+| `verify.ts` | Checks evidence before done; Nova reads the target itself. Confirmations count only from systems with a registered checker (`createCore({confirmations})`). | WORK-LEDGER |
 | `workers.ts` | Worker interface and egress rules. | LOCAL-FIRST §2 |
 | `workspace.ts` | The workspace folder and its local worker. | — |
 | `profile.ts` | Person-specific records; core ships with none. | PROFILES |
