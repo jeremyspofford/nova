@@ -1,0 +1,37 @@
+# Every change to Nova passes these before it can merge (OPERATING-RULES: a red suite blocks merges).
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: lint · syntax · themes · tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Installs the toolchain pinned in mise.toml.
+      - uses: jdx/mise-action@v5
+      - run: node --version
+      - run: npm ci
+      # No raw colours, sizes or font names in UI code.
+      - run: npm run lint:tokens
+      # The current tree is plain JavaScript with no type system; until the TypeScript core
+      # lands (M1), this is a parse check of every source file, not a typecheck.
+      - name: syntax
+        run: |
+          set -e
+          for f in $(git ls-files 'src/*.js' 'src/**/*.js' 'scripts/*.js' 'tests/*.js' 'ui/js/*.js'); do
+            node --check "$f"
+          done
+      - run: npm run check:themes
+      - run: npm test
+      - run: npm audit --audit-level=high

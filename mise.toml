@@ -1,0 +1,4 @@
+# Pinned toolchain. CI installs exactly this (jdx/mise-action), so local and CI match.
+# `mise install` in the checkout sets it up.
+[tools]
+node = "26.3.1"
