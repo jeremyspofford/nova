@@ -27,3 +27,22 @@ These rules bind any agent or human building Nova from this packet.
 - Secrets never enter the repo, logs, or prompts. Secrets live in the vault/1Password-class store and are referenced by name.
 - Tests: new behavior ships with tests; a red suite blocks merges; the self-modification pipeline's gates may never be weakened to make a change pass.
 - Follow the user's privacy modes in your own work: do not send packet contents, user data, or code to external services beyond the build tooling the user has approved.
+
+## Addendum — owner's standing orders (2026-10-29)
+These come from the owner and supersede any reading of the packet that waits for owner review. A fresh session inherits them.
+
+1. **Continue without stopping.** Owner review is not a gate. End-of-milestone updates are progress reports, not requests for permission. Work through the milestones in roadmap order. Stop only for the packet's hard limits, and report each with evidence, options and a recommendation:
+   - Tier-3 actions: creating external accounts, spending money, destructive or irreversible actions, core security or permission changes.
+   - A genuine conflict inside the packet.
+   - A gate failure that can't be resolved after a real attempt.
+2. **Merge as you go.** Merge every milestone PR into `main` as soon as its own gate passes and CI is green; don't wait for the owner. If the owner comments later, fix forward in a new PR. This covers PRs from this build only: PR #207 stays untouched, and issue #208 stays alone.
+3. **Decisions already made:**
+   - **Noul** is Jev's yes/no question type. It returns one calibrated probability in [0, 1] that the answer is yes. There is no separate confidence field: the probability is the certainty, and 0.5 means maximum uncertainty. It is part of the decision interface, the Jev stub and decision templates.
+   - **Jev account:** do not create one. The real Jev adapter stays a stub behind the interface until the owner decides. This never blocks a milestone.
+   - **Local-only** never falls back to the cloud, not even with a warning. Making local models easy is M6's job.
+4. **Forgetting is complete.** Deletion of a memory must also hold in backups: either deletion propagates to them, or they are destroyed or rebuilt under a stated retention rule. Tested. This is part of M2.
+5. **Localhost preview.** Keep the latest merged `main` running at http://localhost:4317:
+   - It runs from the nova-build clone, in a persistent tmux session named `nova-preview`, with its own data home `~/Nova-preview`, never the owner's real data. `scripts/preview.sh` does this.
+   - After every merge, restart it from the new `main` and verify that it answers an HTTP request.
+   - Put the URL in every progress report.
+   - Serve only what is built. Don't fake UI that doesn't exist yet.
