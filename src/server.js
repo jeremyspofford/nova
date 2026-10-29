@@ -53,6 +53,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   const helpers = new Helpers({ runner, store, ledger: core.ledger });
   runner.helpers = helpers;
   chatRun.bind({ runner, store, ledger: core.ledger, kinds: { schedule: scheduler, helper: helpers } });
+  chatRun.problem = (message, opts) => core.log.problem('chat-run', message, opts);
   const ui = join(config.root, 'ui');
   const subscribers = new Map(); // sessionId → Set<res>
 
@@ -436,6 +437,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   ensureGit(config.home);
   nova.helpers.recover(); // helper logs from before the ledger; the rest is the ledger's recovery
   const recovered = nova.core.start();
+  nova.chatRun.recover();
   if (recovered.requeued.length) console.log(`Resumed ${recovered.requeued.length} task(s) that were running when Nova stopped.`);
   nova.scheduler.start();
   nova.server.listen(config.port, config.host, () => {

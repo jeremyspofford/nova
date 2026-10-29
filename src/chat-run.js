@@ -134,6 +134,20 @@ export class ChatRun {
     });
   }
 
+  // After a restart, a run that was waiting for the person's OK has no live run behind it any
+  // more, and nothing would ever release it. Requeue it; run() then finds it begun but not live
+  // and reports it as interrupted, which frees its schedule.
+  recover() {
+    const requeued = [];
+    for (const t of this.ledger.list({ state: 'waiting', limit: 500 })) {
+      if (t.owner !== this.id || !/waiting for your OK on a step/i.test(t.reason ?? '')) continue;
+      if (this.runner.active.has(t.brief.inputs?.run)) continue;
+      this.ledger.retry(t.id, 'Nova restarted while this waited for your OK.');
+      requeued.push(t.id);
+    }
+    return requeued;
+  }
+
   // After stepping aside: once the run finishes, the task goes back in the queue to hand off its
   // report; if it was cancelled meanwhile, the report (stopped) is handed off here.
   later(id, inputs) {
@@ -143,7 +157,7 @@ export class ChatRun {
         if (t.state === 'waiting') this.ledger.retry(id, 'The run finished after waiting for you; handing over its report.');
         else if (t.state === 'cancelled') return this.settle(id, inputs, this.outcome(inputs.run));
       })
-      .catch((e) => console.error(`Nova couldn't pick up task ${id} again:`, e));
+      .catch((e) => this.problem?.(`Nova couldn't pick up a task again after it waited for you.`, { detail: e?.stack ?? String(e), taskId: id }));
   }
 
   // Resolves with the task once the ledger has finished handling the worker's last report.
