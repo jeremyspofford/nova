@@ -19,6 +19,7 @@ import { Permissions, permissionFor, permissionsSection } from './permissions.js
 import { commitHome, readStanding } from './home.js';
 import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
+import { stricter } from './chat-run.js';
 
 const shortId = () => randomUUID().slice(0, 8);
 
@@ -73,12 +74,13 @@ export class Runner extends EventEmitter {
 
   // unattended: { id, name, due, late } for a scheduled run. helper:
   // { title, files } for a helper's work. Either way no one is there to
-  // approve anything.
-  send(sessionId, text, { unattended = null, helper = null, followup = null } = {}) {
+  // approve anything. privacy: the Work Ledger task's mode, for work the
+  // chat-run worker does; the run keeps to the stricter of it and the setting.
+  send(sessionId, text, { unattended = null, helper = null, followup = null, privacy = null } = {}) {
     if (this.active.has(sessionId)) throw new BusyError();
     const turn = shortId();
     this.record(sessionId, { type: 'user', turn, text, ...(unattended ? { schedule: unattended.id } : {}), ...(followup ? { followup } : {}) });
-    this.start(sessionId, turn, 0, { unattended, helper });
+    this.start(sessionId, turn, 0, { unattended, helper, privacy });
     return turn;
   }
 
@@ -143,12 +145,12 @@ export class Runner extends EventEmitter {
     return true;
   }
 
-  start(sessionId, turn, attempt, { unattended = null, helper = null } = {}) {
+  start(sessionId, turn, attempt, { unattended = null, helper = null, privacy = null } = {}) {
     const controller = new AbortController();
     // skills: the playbooks this reply follows. tainted: mail has been read in
     // this conversation, so going online asks first. alone: no one is there
     // to approve anything.
-    const run = { controller, pending: null, skills: new Map(), tainted: false, unattended, helper, alone: !!(unattended || helper), live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
+    const run = { controller, pending: null, skills: new Map(), tainted: false, unattended, helper, privacy, alone: !!(unattended || helper), live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
     this.active.set(sessionId, run);
     this.emit('live', sessionId, { ...run.live });
     run.done = this.loop(sessionId, run)
@@ -190,7 +192,8 @@ export class Runner extends EventEmitter {
     const question = before.turns.find((t) => t.id === turn).text;
     // Privacy first (LOCAL-FIRST-AND-DEVICE-MESH §2): a model that would send this conversation
     // somewhere the profile doesn't allow is never called. Nothing has been sent when this throws.
-    const mode = this.identity?.privacy?.() ?? 'local-only';
+    const setting = this.identity?.privacy?.() ?? 'local-only';
+    const mode = run.privacy ? stricter(run.privacy, setting) : setting;
     if (!permits(mode, this.config.agentEgress)) {
       const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command';
       throw new AgentError(
