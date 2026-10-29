@@ -14,6 +14,16 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M2): a held message says why it waits.** Messages carry a
+`hold`:
+- `quiet`: delivered when quiet hours end, but only if its rule still exists,
+  isn't paused and isn't turned off; otherwise `withdrawn`, never delivered.
+- `needs_ok`: triage wasn't sure. Only the person releases it
+  (`POST /api/v1/messages/{id}/approve`).
+Privacy is re-checked before every model step, not once per turn, and a
+caller's mode can only tighten the live setting. All of this is from the M2
+review.
+
 **2026-10-29 (M2): scheduled runs and helpers are ledger tasks; the M1 debt
 is paid.** Each scheduled run is a heartbeat trigger record (source
 `schedule:<id>`, claimed once per due time) whose task belongs to the
@@ -91,7 +101,6 @@ plus purpose, privacy mode and egress. `GET /api/v1/receipts?egress=remote`
 is the egress log. A receipt that would record a remote call under
 local-only is refused and becomes a problem.
 
-||||||| ab279894
 **2026-10-29 (M1): chat honors the privacy mode; the model command declares
 its egress.** Found after the M1 gate passed: setup promised "nothing leaves
 this machine", but chat still defaulted to a cloud model. Now `agent_egress`

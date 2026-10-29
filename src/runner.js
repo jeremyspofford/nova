@@ -165,16 +165,34 @@ export class Runner extends EventEmitter {
       });
   }
 
+  // Privacy first (LOCAL-FIRST-AND-DEVICE-MESH §2): a model that would send this conversation
+  // somewhere the setting (or the run's own, stricter mode) doesn't allow is never called. Nothing
+  // has been sent when this throws.
+  privacyFor(run) {
+    const setting = this.identity?.privacy?.() ?? 'local-only';
+    const mode = run.privacy ? stricter(run.privacy, setting) : setting;
+    if (!permits(mode, this.config.agentEgress)) {
+      const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command';
+      throw new AgentError(
+        `Your privacy setting is ${mode}, and the model I chat with (${program}) runs in the cloud, so I haven't sent this anywhere. Add a local model (agent_cmd with agent_egress set to local), or allow cloud help in your privacy setting.`,
+        `agent_egress=${this.config.agentEgress}; privacy=${mode}`,
+      );
+    }
+    return mode;
+  }
+
   receipt(sessionId, run, mode, { system, prompt, recall }) {
     const hash = (s) => createHash('sha256').update(String(s)).digest('hex');
     const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'model';
+    // "/usr/local/bin/Claude" → "claude": the receipt names a provider, not a path.
+    const name = program.split('/').pop().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 64) || 'model';
     return {
       session_id: sessionId,
-      provider: program,
-      model: program,
+      provider: name,
+      model: name,
       purpose: run.helper ? 'helper' : run.unattended ? 'scheduled run' : 'chat',
       privacy_mode: mode,
-      egress: this.config.agentEgress === 'remote' ? `remote:${program}` : 'local',
+      egress: this.config.agentEgress === 'remote' ? `remote:${name}` : 'local',
       context_items: [
         { kind: 'file', ref: 'system prompt', sha256: hash(system) },
         ...readStanding(this.config.home).filter((f) => !(run.helper && f.name === 'MEMORY.md')).map((f) => ({ kind: 'standing', ref: `~/${f.name}`, sha256: hash(f.text) })),
@@ -191,17 +209,7 @@ export class Runner extends EventEmitter {
     const { signal } = run.controller;
     const before = reduce(this.store.read(sessionId));
     const question = before.turns.find((t) => t.id === turn).text;
-    // Privacy first (LOCAL-FIRST-AND-DEVICE-MESH §2): a model that would send this conversation
-    // somewhere the profile doesn't allow is never called. Nothing has been sent when this throws.
-    const setting = this.identity?.privacy?.() ?? 'local-only';
-    const mode = run.privacy ? stricter(run.privacy, setting) : setting;
-    if (!permits(mode, this.config.agentEgress)) {
-      const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command';
-      throw new AgentError(
-        `Your privacy setting is ${mode}, and the model I chat with (${program}) runs in the cloud, so I haven't sent this anywhere. Add a local model (agent_cmd with agent_egress set to local), or allow cloud help in your privacy setting.`,
-        `agent_egress=${this.config.agentEgress}; privacy=${mode}`,
-      );
-    }
+    let mode = this.privacyFor(run);
     // Once Nova has read mail in a conversation, the mail is in its context,
     // so going online asks first for the rest of that conversation.
     run.tainted = before.turns.some((t) => t.items.some((i) => i.kind === 'tool' && TOOLS[i.name]?.mail && i.result?.ok));
@@ -214,6 +222,8 @@ export class Runner extends EventEmitter {
     for (const s of this.skills.match(question)) this.follow(sessionId, tag, run, s, 'matched');
 
     for (let step = 0; step <= this.config.maxSteps; step++) {
+      // Again before every model call: the setting can tighten while a run waits for an OK.
+      mode = this.privacyFor(run);
       const session = reduce(this.store.read(sessionId));
       const installed = this.skills.installed();
       // Helpers and scheduled runs can't hand work to helpers of their own,

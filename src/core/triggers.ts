@@ -65,7 +65,8 @@ export interface TriggerRecord {
   at: string;
 }
 
-export interface Message { id: string; at: string; text: string; trigger_id: string; delivered_at: string | null; read_at: string | null }
+export type Hold = 'quiet' | 'needs_ok' | 'withdrawn';
+export interface Message { id: string; at: string; text: string; trigger_id: string; delivered_at: string | null; read_at: string | null; hold: Hold | null }
 
 export interface Policy { quiet_hours?: { start: string; end: string }; proactive_off?: string[] }
 
@@ -89,6 +90,7 @@ export function triageRule(i: Inputs): { answers: { decision: TriageDecision }; 
 
 const HOOK_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const CATCH_UP_MS = 6 * 3_600_000;
+const UNSURE = 'Not sure this should happen on its own, so it waits for you.';
 const DEFAULT_DEDUP_S = 600;
 
 type Row = Record<string, string | number | null>;
@@ -309,7 +311,7 @@ export class Triggers extends EventEmitter {
     } else {
       const model = { provider: d.provider, template_id: d.template_id, version: d.version };
       triage = d.escalate
-        ? { decision: 'queue', reason: 'Not sure this should happen on its own, so it waits for you.', model }
+        ? { decision: 'queue', reason: UNSURE, model }
         : { decision: d.answers.decision as TriageDecision, reason: d.why, model };
     }
 
@@ -334,7 +336,8 @@ export class Triggers extends EventEmitter {
           }
         }
       } else {
-        message = this.#message(trigger_id, action.text, triage.decision === 'act' ? at : null);
+        const hold: Hold | null = triage.decision === 'act' ? null : triage.reason.startsWith(UNSURE) ? 'needs_ok' : 'quiet';
+        message = this.#message(trigger_id, action.text, hold ? null : at, hold);
       }
     }
 
@@ -363,8 +366,15 @@ export class Triggers extends EventEmitter {
   async tick(now: Date = this.#now()): Promise<TriggerRecord[]> {
     const out: TriggerRecord[] = [];
     if (!this.#quiet(now)) {
-      for (const m of this.#db.all<Message>('SELECT * FROM message WHERE delivered_at IS NULL ORDER BY at')) {
-        this.#db.run('UPDATE message SET delivered_at = ? WHERE id = ?', now.toISOString(), m.id);
+      for (const m of this.#db.all<Message>(`SELECT * FROM message WHERE delivered_at IS NULL AND hold = 'quiet' ORDER BY at`)) {
+        // Only if what sent it still stands: the rule exists, isn't paused, isn't turned off.
+        const rule = this.#db.get<{ id: string; name: string; class: string; paused: number }>('SELECT r.id, r.name, r.class, r.paused FROM trigger t JOIN trigger_rule r ON r.id = t.rule_id WHERE t.trigger_id = ?', m.trigger_id);
+        const off = this.#policy().proactive_off ?? [];
+        if (!rule || rule.paused || off.includes(rule.class) || off.includes(rule.name)) {
+          this.#db.run(`UPDATE message SET hold = 'withdrawn' WHERE id = ?`, m.id);
+          continue;
+        }
+        this.#db.run('UPDATE message SET delivered_at = ?, hold = NULL WHERE id = ?', now.toISOString(), m.id);
         this.emit('message', this.#getMessage(m.id));
       }
     }
@@ -407,9 +417,19 @@ export class Triggers extends EventEmitter {
     return toTrigger(row);
   }
 
-  // Delivered messages by default; `held` are the ones waiting for quiet hours to end.
+  // The person's OK for a message Nova wasn't sure about. It goes out now.
+  approveMessage(id: string): Message {
+    const m = this.#getMessage(id);
+    if (m.delivered_at || m.hold !== 'needs_ok') throw new CoreError('conflict', "This message isn't waiting for your OK.");
+    this.#db.run('UPDATE message SET delivered_at = ?, hold = NULL WHERE id = ?', this.#now().toISOString(), id);
+    const sent = this.#getMessage(id);
+    this.emit('message', sent);
+    return sent;
+  }
+
+  // Delivered messages by default; `held` are the ones still waiting (quiet hours, or your OK).
   messages(opts: { state?: 'delivered' | 'held' } = {}): Message[] {
-    const where = opts.state === 'held' ? 'delivered_at IS NULL' : 'delivered_at IS NOT NULL';
+    const where = opts.state === 'held' ? `delivered_at IS NULL AND hold IN ('quiet', 'needs_ok')` : 'delivered_at IS NOT NULL';
     return this.#db.all<Message>(`SELECT * FROM message WHERE ${where} ORDER BY at DESC, rowid DESC LIMIT 200`);
   }
 
@@ -425,7 +445,7 @@ export class Triggers extends EventEmitter {
       rules: n('SELECT COUNT(*) AS n FROM trigger_rule'),
       paused: n('SELECT COUNT(*) AS n FROM trigger_rule WHERE paused = 1'),
       triggers: n('SELECT COUNT(*) AS n FROM trigger'),
-      held: n('SELECT COUNT(*) AS n FROM message WHERE delivered_at IS NULL'),
+      held: n(`SELECT COUNT(*) AS n FROM message WHERE delivered_at IS NULL AND hold IN ('quiet', 'needs_ok')`),
       unread: n('SELECT COUNT(*) AS n FROM message WHERE delivered_at IS NOT NULL AND read_at IS NULL'),
     };
   }
@@ -459,9 +479,9 @@ export class Triggers extends EventEmitter {
     ) ?? null;
   }
 
-  #message(trigger_id: string, text: string, deliveredAt: Date | null): Message {
+  #message(trigger_id: string, text: string, deliveredAt: Date | null, hold: Hold | null): Message {
     const id = randomUUID();
-    this.#db.run('INSERT INTO message (id, at, text, trigger_id, delivered_at) VALUES (?, ?, ?, ?, ?)', id, this.#now().toISOString(), text, trigger_id, deliveredAt?.toISOString() ?? null);
+    this.#db.run('INSERT INTO message (id, at, text, trigger_id, delivered_at, hold) VALUES (?, ?, ?, ?, ?, ?)', id, this.#now().toISOString(), text, trigger_id, deliveredAt?.toISOString() ?? null, hold);
     return this.#getMessage(id);
   }
 

@@ -3,7 +3,7 @@
 // acts alone: an unsure or out-of-schema answer escalates. Templates are authored on a cache miss
 // only, and a new one is activated through a ledger task whose dry runs Nova re-runs itself.
 import { CoreError } from './errors.ts';
-import { permits, type Egress, type Worker } from './workers.ts';
+import { permits, stricter, type Egress, type Worker } from './workers.ts';
 import { ENVELOPE_VERSION, type Brief, type PrivacyMode, type Report } from './envelope.ts';
 import type { Db } from './db.ts';
 import type { Ledger, Task } from './ledger.ts';
@@ -78,8 +78,7 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 const isStr = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-// Schema check, listing every problem. The packet's third question type ("Noul") is undefined,
-// so it is refused rather than guessed at.
+// Schema check, listing every problem.
 export function validateTemplate(input: unknown): TemplateDef {
   const errors: string[] = [];
   const need = (ok: boolean, msg: string) => { if (!ok) errors.push(msg); return ok; };
@@ -496,7 +495,8 @@ export class Decisions {
     if (!t) return null;
     checkInputs(t, inputs);
     this.#templates.use(t.template_id, t.version);
-    const mode = opts.privacy_mode ?? this.#privacy();
+    // A caller's mode can only tighten the live setting, never loosen it.
+    const mode = opts.privacy_mode ? stricter(opts.privacy_mode, this.#privacy()) : this.#privacy();
     const able = (x: DecisionProvider) => t.questions.every((q) => x.questionTypes.includes(q.type));
     for (const p of this.#providers.filter((x) => permits(mode, x.egress) && able(x))) {
       try {

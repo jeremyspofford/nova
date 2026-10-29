@@ -207,6 +207,7 @@ export function createCore(o: CoreOptions) {
       method: 'GET', path: '/messages', summary: 'Messages Nova started, newest first. ?state=held for those waiting for quiet hours to end.',
       handle: ({ query }) => triggers.messages(query.get('state') === 'held' ? { state: 'held' } : {}),
     },
+    { method: 'POST', path: '/messages/{id}/approve', summary: 'Send a message Nova held because it wasn’t sure; only you can release it.', handle: ({ params }) => triggers.approveMessage(params.id!) },
     { method: 'POST', path: '/messages/{id}/read', summary: 'Mark a message as read.', handle: ({ params }) => triggers.read(params.id!) },
     { method: 'GET', path: '/problems', summary: 'Things that went wrong and matter to the person. ?open=1 for unresolved only.', handle: ({ query }) => log.problems({ open: query.get('open') === '1' }) },
     { method: 'POST', path: '/problems/{id}/resolve', summary: 'Mark a problem as dealt with.', handle: ({ params }) => { log.resolve(Number(params.id)); return { ok: true }; } },

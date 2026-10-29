@@ -266,7 +266,8 @@ export class Ledger extends EventEmitter {
       try {
         for (;;) {
           this.#dirty = false;
-          for (const row of this.#db.all<Row>(`SELECT * FROM task WHERE state = 'queued' ORDER BY created_at, rowid LIMIT 500`)) {
+          // No limit: a full lane with many queued tasks must not hide the tasks of other lanes.
+          for (const row of this.#db.all<Row>(`SELECT * FROM task WHERE state = 'queued' ORDER BY created_at, rowid`)) {
             const t = toTask(row);
             if (this.#inflight.has(t.id)) continue;
             const lane = this.#lane(t);

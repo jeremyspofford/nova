@@ -305,3 +305,38 @@ test('the registry: rules are validated, editable, pausable and removable, and e
   assert.deepEqual(triggers.ruleEvents(rule.id).map((e) => e.kind), ['created', 'updated', 'paused', 'resumed', 'deleted']);
   assert.equal(triggers.listRules().length, 1);
 });
+
+// Review findings: a held message goes out only when its reason to wait has passed, and only if
+// its rule still stands.
+test('an unsure proactive message waits for the person: no tick delivers it, an approval does', async () => {
+  const unsure: DecisionProvider = { id: 'unsure', egress: 'none', questionTypes: ['choice'], decide: async (t) => ({ template_id: t.template_id, version: t.version, answers: { decision: 'act' }, confidence: 0.2, provider: 'unsure', escalate: false, why: 'guessing' }) };
+  const { triggers, at } = setup({ providers: (rules) => [unsure, rules] });
+  const { rule } = triggers.createRule({ name: 'Check-in', class: 'proactive', action: { kind: 'message', text: 'Maybe say this.' } }, 'person');
+  const t = await triggers.fireRule(rule.id, {});
+  assert.equal(t.triage.decision, 'queue');
+  await triggers.tick(at('2026-03-02T12:01:00Z'));
+  await triggers.tick(at('2026-03-03T12:01:00Z'));
+  assert.deepEqual(triggers.messages(), [], 'never delivered on its own');
+  const [held] = triggers.messages({ state: 'held' });
+  assert.equal(held?.hold, 'needs_ok');
+  const sent = triggers.approveMessage(held!.id);
+  assert.ok(sent.delivered_at);
+  assert.equal(triggers.messages().length, 1);
+  assert.throws(() => triggers.approveMessage(held!.id), /isn't waiting/);
+});
+
+test('a message held for quiet hours is withdrawn if its rule is paused, removed or turned off meanwhile', async () => {
+  for (const change of ['pause', 'delete', 'off'] as const) {
+    const { triggers, profile, at } = setup({ at: '2026-03-02T23:00:00Z' });
+    profile.set('user', 'timezone', 'UTC', 'settings');
+    profile.set('policy', 'quiet_hours', { start: '22:00', end: '07:00' }, 'settings');
+    const { rule } = triggers.createRule({ name: 'Check-in', class: 'proactive', action: { kind: 'message', text: 'Later.' } }, 'person');
+    await triggers.fireRule(rule.id, {});
+    if (change === 'pause') triggers.pause(rule.id);
+    if (change === 'delete') triggers.deleteRule(rule.id);
+    if (change === 'off') profile.set('policy', 'proactive_off', ['proactive'], 'settings');
+    await triggers.tick(at('2026-03-03T07:00:30Z'));
+    assert.deepEqual(triggers.messages(), [], `not delivered after ${change}`);
+    assert.deepEqual(triggers.messages({ state: 'held' }), [], `and no longer held after ${change}`);
+  }
+});
