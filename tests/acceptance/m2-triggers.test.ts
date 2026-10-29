@@ -5,11 +5,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { blank, start, stop, until } from './support.ts';
+import { blank, stop, until } from './support.ts';
 
 test('M2 gate: event and heartbeat triggers make verified ledger tasks; a proactive message traces to its trigger; local-only holds', async () => {
-  const m = await blank('nova-m2-');
-  const nova = await start({ ...m.env, NOVA_TEST_CLOCK: '1' });
+  const m = blank('nova-m2-');
+  const nova = await m.start({ NOVA_TEST_CLOCK: '1' });
   const evidence: string[] = ['# M2 gate', ''];
   const task = (path: string, content: string) => ({
     kind: 'task',

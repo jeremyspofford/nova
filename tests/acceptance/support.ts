@@ -3,18 +3,13 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 export const ROOT = join(import.meta.dirname, '..', '..');
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export const freePort = () => new Promise<number>((ok) => {
-  const s = createServer().listen(0, '127.0.0.1', () => { const { port } = s.address() as { port: number }; s.close(() => ok(port)); });
-});
-
-export interface Running { proc: ChildProcess; out: string[] }
+export interface Running { proc: ChildProcess; out: string[]; port: number }
 
 export async function start(env: Record<string, string>): Promise<Running> {
   const out: string[] = [];
@@ -26,7 +21,11 @@ export async function start(env: Record<string, string>): Promise<Running> {
     await sleep(25);
   }
   assert.ok(out.join('').includes('Nova is ready'), `server did not start:\n${out.join('')}`);
-  return { proc, out };
+  // The server picks its own free port (NOVA_PORT=0) and says which, so no other test can take it
+  // between choosing and binding.
+  const port = Number(/Nova is ready at http:\/\/[^:]+:(\d+)/.exec(out.join(''))?.[1]);
+  assert.ok(port > 0, `no port in:\n${out.join('')}`);
+  return { proc, out, port };
 }
 
 export async function stop(r: Running) {
@@ -34,24 +33,28 @@ export async function stop(r: Running) {
   for (let i = 0; i < 200 && r.proc.exitCode === null; i++) await sleep(25);
 }
 
-// A blank machine: its own user folder and Nova home, a free port, an empty egress log.
-export async function blank(prefix: string) {
+// A blank machine: its own user folder and Nova home, an empty egress log. `start` sets the port.
+export function blank(prefix: string) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const egress = join(dir, 'egress.log');
   writeFileSync(egress, '');
-  const port = await freePort();
   const home = join(dir, 'nova-home');
-  const env = { HOME: join(dir, 'user'), NOVA_HOME: home, NOVA_PORT: String(port), NOVA_EGRESS_LOG: egress, TZ: 'UTC' };
-  const base = `http://127.0.0.1:${port}`;
-  const api = {
-    get: async (p: string) => (await fetch(base + p)).json(),
+  const env = { HOME: join(dir, 'user'), NOVA_HOME: home, NOVA_PORT: '0', NOVA_EGRESS_LOG: egress, TZ: 'UTC' };
+  const m = {
+    dir, home, egress, env, base: '',
+    async start(extra: Record<string, string> = {}) {
+      const r = await start({ ...env, ...extra });
+      m.base = `http://127.0.0.1:${r.port}`;
+      return r;
+    },
+    get: async (p: string) => (await fetch(m.base + p)).json(),
     send: async (method: string, p: string, body?: unknown, headers: Record<string, string> = { 'x-nova': '1' }) => {
-      const res = await fetch(base + p, { method, headers: { 'content-type': 'application/json', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      const res = await fetch(m.base + p, { method, headers: { 'content-type': 'application/json', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       const text = await res.text();
       return { status: res.status, body: text ? JSON.parse(text) : null };
     },
   };
-  return { dir, home, egress, env, base, ...api };
+  return m;
 }
 
 export async function until<T>(read: () => Promise<T>, done: (v: T) => boolean, tries = 200): Promise<T> {

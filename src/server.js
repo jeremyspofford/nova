@@ -439,7 +439,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   nova.server.listen(config.port, config.host, () => {
     const ms = Math.round(performance.now() - nova.started);
     if (nova.seeded.length) console.log(`Seeded ${nova.seeded.length} files into ${config.home}`);
-    console.log(`Nova is ready at http://${config.host === '127.0.0.1' ? 'localhost' : config.host}:${config.port}  (${ms} ms)`);
+    // The real port, so NOVA_PORT=0 (any free port) still says where Nova is.
+    console.log(`Nova is ready at http://${config.host === '127.0.0.1' ? 'localhost' : config.host}:${nova.server.address().port}  (${ms} ms)`);
     console.log(`Home: ${config.home}`);
     if (!['127.0.0.1', 'localhost', '::1'].includes(config.host)) {
       console.log('Warning: Nova is listening beyond this machine. Anyone who can reach it can talk to Nova and approve commands.');
