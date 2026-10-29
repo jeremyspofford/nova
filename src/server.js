@@ -13,7 +13,8 @@ import { ZipError, unzip } from './zip.js';
 import { ScheduleError } from './schedules.js';
 import { Scheduler } from './scheduler.js';
 import { HelperError, Helpers } from './helpers.js';
-import { buildActivity } from './activity.js';
+import { buildActivity, notStarted } from './activity.js';
+import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
 import { createCore } from './core/index.ts';
 
@@ -27,7 +28,15 @@ export function createNova(config = loadConfig(), deps = {}) {
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
   // The core (src/core): database, Work Ledger, profile, identity, setup, extensions, /api/v1.
   const { version } = JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8'));
-  const core = createCore({ home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program: config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command', egress: config.agentEgress } });
+  const program = config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command';
+  // Scheduled runs and helpers are Work Ledger tasks for the chat-run worker, which runs them
+  // through the runner (bound below, once it exists). Its evidence is checked by reading the
+  // conversation the report went to.
+  const chatRun = new ChatRun({ program, egress: config.agentEgress, privacy: () => core.profile.privacyDefault() });
+  const core = createCore({
+    home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
+    workers: [chatRun], confirmations: { [SYSTEM]: (e, brief) => chatRun.confirm(e, brief) },
+  });
   if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
   const store = new SessionStore(config.home, config.timezone);
   // Curated memory lives in the core; MEMORY.md is rendered from it. The first start imports
@@ -38,9 +47,10 @@ export function createNova(config = loadConfig(), deps = {}) {
   runner.ensureMain();
   // permissions.md is written once, so it can be read and edited by hand; Settings keeps it current.
   if (!existsSync(runner.permissions.file)) writeFileSync(runner.permissions.file, renderPermissions(runner.permissions.list()));
-  const scheduler = new Scheduler({ schedules: runner.schedules, runner, store, timezone: config.timezone });
-  const helpers = new Helpers({ runner, store });
+  const scheduler = new Scheduler({ schedules: runner.schedules, runner, store, timezone: config.timezone, ledger: core.ledger, triggers: core.triggers });
+  const helpers = new Helpers({ runner, store, ledger: core.ledger });
   runner.helpers = helpers;
+  chatRun.bind({ runner, store, ledger: core.ledger, kinds: { schedule: scheduler, helper: helpers } });
   const ui = join(config.root, 'ui');
   const subscribers = new Map(); // sessionId → Set<res>
 
@@ -71,28 +81,43 @@ export function createNova(config = loadConfig(), deps = {}) {
   // working and how much is waiting for the person, for the sidebar.
   const busy = () => {
     const live = [...runner.active.keys()].map((id) => runner.liveState(id));
-    return { working: live.length + helpers.queue.length + scheduler.queue.length, waiting: live.filter((l) => l?.approval).length };
+    const queued = notStarted(core.ledger, store, 'helper').length + notStarted(core.ledger, store, 'schedule').length;
+    return { working: live.length + queued, waiting: live.filter((l) => l?.approval).length };
   };
   let nudge = null;
-  const moved = () => { nudge ??= setTimeout(() => { nudge = null; announce('activity', busy()); }, 150); };
+  // Only open pages need it; and once Nova is shutting down, the ledger may already be closed.
+  const moved = () => {
+    nudge ??= setTimeout(() => {
+      nudge = null;
+      if (!watchers.size) return;
+      try { announce('activity', busy()); } catch { /* closing */ }
+    }, 150);
+  };
   const STEPS = new Set(['session', 'user', 'tool_call', 'approval', 'tool_result', 'skill', 'memory', 'done', 'error', 'stopped', 'delivered']);
   runner.on('event', (_, ev) => { if (STEPS.has(ev.type)) moved(); });
   runner.on('live', moved);
   helpers.on('change', moved);
   scheduler.on('change', moved);
-  const activity = (before) => buildActivity({ store, runner, helpers, scheduler, schedules: runner.schedules, timezone: config.timezone, before });
+  core.ledger.on('task', (t) => {
+    if (t.owner !== 'chat-run') return;
+    moved();
+    if (t.brief.inputs?.kind === 'schedule') announce('schedules');
+  });
+  const activity = (before) => buildActivity({ store, runner, ledger: core.ledger, schedules: runner.schedules, timezone: config.timezone, before });
   const { schedules } = runner;
   const schedulesView = () => {
     const latest = schedules.latest();
-    const queued = new Set(scheduler.queue.map((q) => q.id));
     return {
-      set: schedules.list().map((s) => ({
-        ...s,
-        next: schedules.next(s)?.toISOString() ?? null,
-        last: latest.get(s.id) ?? null,
-        running: scheduler.running?.id === s.id ? scheduler.running : scheduler.waiting.has(s.id) ? { ...scheduler.waiting.get(s.id), waiting: true } : null,
-        queued: queued.has(s.id),
-      })),
+      set: schedules.list().map((s) => {
+        const st = scheduler.status(s.id);
+        return {
+          ...s,
+          next: schedules.next(s)?.toISOString() ?? null,
+          last: latest.get(s.id) ?? null,
+          running: st.running ?? null,
+          queued: !!st.queued,
+        };
+      }),
       available: schedules.available(),
       timezone: config.timezone,
     };
@@ -400,14 +425,14 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
   });
 
-  return { server, runner, store, scheduler, helpers, config, seeded, started, core };
+  return { server, runner, store, scheduler, helpers, chatRun, config, seeded, started, core };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const nova = createNova();
   const { config } = nova;
   ensureGit(config.home);
-  nova.helpers.recover();
+  nova.helpers.recover(); // helper logs from before the ledger; the rest is the ledger's recovery
   const recovered = nova.core.start();
   if (recovered.requeued.length) console.log(`Resumed ${recovered.requeued.length} task(s) that were running when Nova stopped.`);
   nova.scheduler.start();

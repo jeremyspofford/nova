@@ -85,11 +85,17 @@ function toTask(r: Row): Task {
   };
 }
 
+// Where a task waits its turn. Tasks in one lane run side by side up to `max`; a worker that
+// names no lane shares the default one, which runs one task at a time.
+export interface Lane { key: string; max: number }
+export type LanedWorker = Worker & { lane?(brief: Brief): Lane };
+const DEFAULT_LANE: Lane = { key: 'default', max: 1 };
+
 export interface LedgerOptions {
   db: Db;
   log: Log;
   verifier: Verifier;
-  workers: Worker[];
+  workers: LanedWorker[];
   defaultPrivacy: () => PrivacyMode;
   now?: () => Date;
   maxAttempts?: number;
@@ -97,7 +103,7 @@ export interface LedgerOptions {
 }
 
 export class Ledger extends EventEmitter {
-  readonly workers: Map<string, Worker>;
+  readonly workers: Map<string, LanedWorker>;
   #db: Db;
   #log: Log;
   #verifier: Verifier;
@@ -106,7 +112,10 @@ export class Ledger extends EventEmitter {
   #maxAttempts: number;
   #timeoutMs: number;
   #pumping: Promise<void> | null = null;
+  #wake: (() => void) | null = null;
+  #dirty = false;
   #running = new Map<string, AbortController>();
+  #inflight = new Map<string, { lane: string; done: Promise<void> }>();
 
   constructor(o: LedgerOptions) {
     super();
@@ -204,11 +213,12 @@ export class Ledger extends EventEmitter {
 
   // The person asks for another go at a task that is waiting on something other than approval
   // (blocked, partly done, or out of local capacity).
-  retry(id: string): Task {
+  // A worker that stepped aside (a blocked report) and is ready again uses it too, with its reason.
+  retry(id: string, reason = 'Trying again, as you asked.'): Task {
     const t = this.get(id);
     if (t.state !== 'waiting' || (t.approval_tier >= 2 && !t.approved_at)) throw new CoreError('conflict', "This task isn't waiting for a retry.");
     this.#db.run(`UPDATE task SET user_visibility = 'handling' WHERE id = ?`, id);
-    const next = this.#move(id, 'queued', 'Trying again, as you asked.', 'retried');
+    const next = this.#move(id, 'queued', reason, 'retried');
     void this.pump();
     return next;
   }
@@ -242,24 +252,52 @@ export class Ledger extends EventEmitter {
     return { requeued, reverified };
   }
 
-  // Run queued tasks, oldest first, one at a time. Calling it while it runs is harmless.
+  // Run queued tasks, oldest first. Each lane runs up to its limit at once; a full lane doesn't
+  // hold up the others. Calling it while it runs wakes it to look at the queue again.
   pump(): Promise<void> {
-    if (this.#pumping) return this.#pumping;
+    if (this.#pumping) {
+      this.#dirty = true;
+      this.#wake?.();
+      return this.#pumping;
+    }
     const run = (async () => {
       // Yield first, so `#pumping` is set before the loop can finish and clear it.
       await null;
       try {
         for (;;) {
-          const row = this.#db.get<Row>(`SELECT * FROM task WHERE state = 'queued' ORDER BY created_at, rowid LIMIT 1`);
-          if (!row) break;
-          await this.#runOne(toTask(row));
+          this.#dirty = false;
+          for (const row of this.#db.all<Row>(`SELECT * FROM task WHERE state = 'queued' ORDER BY created_at, rowid LIMIT 500`)) {
+            const t = toTask(row);
+            if (this.#inflight.has(t.id)) continue;
+            const lane = this.#lane(t);
+            if ([...this.#inflight.values()].filter((x) => x.lane === lane.key).length >= lane.max) continue;
+            const done = this.#runOne(t)
+              .catch((e) => { this.#log.problem('ledger', 'The Work Ledger stumbled while running a task.', { detail: (e as Error)?.stack ?? String(e), taskId: t.id }); })
+              .finally(() => { this.#inflight.delete(t.id); });
+            this.#inflight.set(t.id, { lane: lane.key, done });
+          }
+          if (this.#dirty) continue;
+          if (!this.#inflight.size) break;
+          const woken = new Promise<void>((r) => { this.#wake = r; });
+          await Promise.race([woken, ...[...this.#inflight.values()].map((x) => x.done)]);
+          this.#wake = null;
         }
       } finally {
         this.#pumping = null;
+        this.#wake = null;
       }
     })();
     this.#pumping = run;
     return run;
+  }
+
+  #lane(t: Task): Lane {
+    const w = this.workers.get(t.owner);
+    try {
+      const l = w?.lane?.(t.brief);
+      if (l && typeof l.key === 'string' && Number.isInteger(l.max) && l.max >= 1) return { key: `${w!.id}:${l.key}`, max: l.max };
+    } catch { /* a worker whose lane can't be worked out runs in the default lane */ }
+    return DEFAULT_LANE;
   }
 
   // Resolves when nothing is running or queued.

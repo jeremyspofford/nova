@@ -17,11 +17,13 @@ export interface Verification {
   at: string;
 }
 
-export type Checker = (e: Evidence) => { ok: boolean; why: string };
+// The brief comes along so a checker can find what the task was about (where to look).
+export type Checker = (e: Evidence, brief: Brief) => { ok: boolean; why: string };
 
 export class Verifier {
   #checkers = new Map<string, Checker>();
   #tests = new Map<string, Checker>();
+  #confirmations = new Map<string, Checker>();
   #now: () => Date;
   #ws: Workspace;
 
@@ -44,11 +46,18 @@ export class Verifier {
       return { ok: true, why: `Nova read ${e.target} itself: ${data.length} bytes, sha256 ${actual.slice(0, 12)}…, as reported.` };
     });
     // A test result counts only if the module that owns the test can run it again itself.
-    this.#checkers.set('test_result', (e) => {
+    this.#checkers.set('test_result', (e, brief) => {
       if (e.kind !== 'test_result') return { ok: false, why: 'Not a test result.' };
       const check = [...this.#tests].find(([prefix]) => e.name.startsWith(prefix))?.[1];
       if (!check) return { ok: false, why: `Nova can't re-run the test "${e.name}" yet, so it can't count as proof.` };
-      return check(e);
+      return check(e, brief);
+    });
+    // A confirmation id counts only if Nova can look it up in that system itself.
+    this.#checkers.set('confirmation', (e, brief) => {
+      if (e.kind !== 'confirmation') return { ok: false, why: 'Not a confirmation.' };
+      const check = this.#confirmations.get(e.system);
+      if (!check) return { ok: false, why: `Nova can't check confirmations from ${e.system} yet, so it can't count as proof.` };
+      return check(e, brief);
     });
   }
 
@@ -56,6 +65,12 @@ export class Verifier {
   registerTest(prefix: string, check: Checker): void {
     if (this.#tests.has(prefix)) throw new Error(`Tests named ${prefix}… already have a checker.`);
     this.#tests.set(prefix, check);
+  }
+
+  // Lets another module confirm ids from a system it can read itself ("nova-sessions").
+  registerConfirmation(system: string, check: Checker): void {
+    if (this.#confirmations.has(system)) throw new Error(`Confirmations from ${system} already have a checker.`);
+    this.#confirmations.set(system, check);
   }
 
   // "notes/a.md" and "workspace:notes/a.md" are the same file.
@@ -78,7 +93,7 @@ export class Verifier {
       if (!candidates.length) return { requirement: req, evidence: null, ok: false, why: `The report has no ${req.kind.replace('_', '-')} evidence${req.target ? ` for ${req.target}` : ''}.` };
       const checker = this.#checkers.get(req.kind);
       if (!checker) return { requirement: req, evidence: candidates[0] ?? null, ok: false, why: `Nova can't check ${req.kind.replace('_', '-')} evidence yet, so it can't count as proof.` };
-      const results = candidates.map((e) => ({ e, r: checker(e) }));
+      const results = candidates.map((e) => ({ e, r: checker(e, brief) }));
       const best = results.find((x) => x.r.ok) ?? results[0]!;
       return { requirement: req, evidence: best.e, ok: best.r.ok, why: best.r.why };
     });

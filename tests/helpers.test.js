@@ -150,7 +150,10 @@ test('three helpers work at once and a fourth waits; stopping one, working or wa
   await idle();
   const runs = ['one', 'two', 'three', 'four'].map((n) => nova.helpers.spawn({ title: `Slow ${n}`, task: `Take it slow with ${n}.`, parent: asked }));
   assert.deepEqual(runs.map((r) => r.queued), [false, false, false, true]);
+  // The Work Ledger starts them on its next turn, not inside spawn().
+  await wait(() => nova.helpers.running.size === 3 && nova.helpers.queue.length === 1);
   assert.deepEqual([nova.helpers.running.size, nova.helpers.queue.length], [3, 1]);
+  assert.deepEqual(runs.map((r) => nova.core.ledger.get(r.task).state), ['active', 'active', 'active', 'queued']);
 
   // Activity shows them working now, and the fourth waiting its turn.
   const a = await wait(async () => { const x = await get('/api/activity'); return x.now.filter((e) => e.kind === 'helper' && e.state === 'working').length === 3 && x; });

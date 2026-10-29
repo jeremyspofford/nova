@@ -1,5 +1,6 @@
 // What Nova is doing and did, for the Activity view: a timeline derived from
-// the session logs, with nothing stored of its own.
+// the session logs and the Work Ledger, with nothing stored of its own. Work
+// waiting its turn is read from the ledger's queued tasks.
 //
 // Each reply, scheduled run and helper is one entry. Its steps are what Nova
 // actually did, in order: the skills it followed, what it read, searched and
@@ -11,6 +12,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { reduce } from '../ui/js/reduce.js';
+import { begun, openTasks } from './chat-run.js';
 
 const DAY = 86_400_000;
 const ARG_KEYS = ['path', 'url', 'command', 'query', 'name', 'id', 'title'];
@@ -58,7 +60,10 @@ function steps(turn) {
   return out;
 }
 
-export function buildActivity({ store, runner, helpers, scheduler, schedules, timezone, before = null, days = 7, now = new Date() }) {
+// Work Ledger tasks of one chat-run kind whose run hasn't started.
+export const notStarted = (ledger, store, kind) => openTasks(ledger, kind).filter((t) => !begun(store, t.brief.inputs.run));
+
+export function buildActivity({ store, runner, ledger, schedules, timezone, before = null, days = 7, now = new Date() }) {
   const end = before ?? addDays(dayOf(now.toISOString(), timezone), 1); // exclusive
   const start = addDays(end, -days);
   const since = Date.parse(`${start}T00:00:00Z`) - DAY; // any timezone's start of that day
@@ -115,11 +120,16 @@ export function buildActivity({ store, runner, helpers, scheduler, schedules, ti
     entries.push({ id: `missed:${r.schedule}:${r.due}`, kind: 'schedule', missed: true, title: r.name, schedule: r.schedule, day, started: r.due, state: 'missed', steps: [] });
   }
 
-  // Helpers that haven't started yet, and the schedules waiting their turn.
-  const { queued } = helpers.now();
+  // Helpers and scheduled runs that haven't started yet: Work Ledger tasks still waiting their turn.
   const waiting = [
-    ...queued.map((q) => ({ id: `queued:${q.run}`, kind: 'helper', title: q.title, session: q.run, parent: q.parent, parentTitle: titles.get(q.parent) ?? 'a conversation', started: q.queued, state: 'queued', steps: [] })),
-    ...scheduler.queue.map((q) => ({ id: `queued:${q.id}`, kind: 'schedule', title: schedules.get(q.id)?.name ?? q.id, schedule: q.id, started: q.due.toISOString(), state: 'queued', steps: [] })),
+    ...notStarted(ledger, store, 'helper').map((t) => {
+      const q = t.brief.inputs;
+      return { id: `queued:${q.run}`, kind: 'helper', title: q.title, session: q.run, parent: q.parent, parentTitle: titles.get(q.parent) ?? 'a conversation', started: t.created_at, state: 'queued', steps: [], task: t.id };
+    }),
+    ...notStarted(ledger, store, 'schedule').map((t) => {
+      const q = t.brief.inputs;
+      return { id: `queued:${q.schedule}`, kind: 'schedule', title: schedules.get(q.schedule)?.name ?? q.name, schedule: q.schedule, started: q.due, state: 'queued', steps: [], task: t.id };
+    }),
   ];
 
   entries.sort((a, b) => b.started.localeCompare(a.started));
