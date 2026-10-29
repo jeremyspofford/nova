@@ -335,7 +335,8 @@ export class Ledger extends EventEmitter {
     this.#move(t.id, 'active', `${worker.name} is on it.`, 'dispatched', { attempt: t.attempts + 1 });
     const ac = new AbortController();
     this.#running.set(t.id, ac);
-    const signal = AbortSignal.any([ac.signal, AbortSignal.timeout(this.#timeoutMs)]);
+    const limit = worker.timeoutMs ?? this.#timeoutMs;
+    const signal = AbortSignal.any([ac.signal, AbortSignal.timeout(limit)]);
     // A worker that ignores the signal must not hold the queue: whichever comes first wins.
     const stopped = new Promise<never>((_, fail) => {
       if (signal.aborted) fail(signal.reason);
@@ -348,7 +349,7 @@ export class Ledger extends EventEmitter {
       this.#running.delete(t.id);
       if (this.get(t.id).state === 'cancelled') return;
       if (signal.aborted && (e as Error)?.name === 'TimeoutError') {
-        return this.#retryOrFail(t.id, `${worker.name} took longer than ${Math.round(this.#timeoutMs / 1000)} s.`, undefined, 'timed_out');
+        return this.#retryOrFail(t.id, `${worker.name} took longer than ${Math.round(limit / 1000)} s.`, undefined, 'timed_out');
       }
       return this.#retryOrFail(t.id, `${worker.name} stopped with an error: ${(e as Error).message}`, (e as Error).stack);
     }

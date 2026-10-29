@@ -45,6 +45,8 @@ export class ChatRun {
     this.name = `Nova's chat model (${program})`;
     this.about = 'Does scheduled work and helpers on its own, each in a conversation of its own, and hands the report to the conversation it is for.';
     this.egress = egress;
+    // An unattended run can take a while (several model calls, commands that ask first).
+    this.timeoutMs = 60 * 60_000;
     this.evidence = ['confirmation'];
     this.privacy = privacy;
     this.kinds = {};

@@ -215,6 +215,12 @@ test('work queued under a looser setting waits on local capacity once the settin
     const entry = a.now.find((e) => e.session === h.run);
     assert.deepEqual([entry.kind, entry.state, entry.title, entry.task], ['helper', 'queued', 'Cloud work', h.task]);
     assert.equal(a.busy.working, 1);
+
+    // Loosening the setting again releases it, without anyone retrying it by hand.
+    n.core.profile.set('privacy', 'default', 'cloud-allowed', 'settings');
+    for (let i = 0; i < 200 && !existsSync(called); i++) await new Promise((r) => setTimeout(r, 25));
+    assert.equal(existsSync(called), true, 'the run went ahead once the setting allowed it');
+    assert.ok(n.core.ledger.events(h.task).some((e) => e.kind === 'retried' && /privacy setting changed/.test(e.detail?.reason ?? '')));
   } finally {
     n.server.close();
     await n.core.close();

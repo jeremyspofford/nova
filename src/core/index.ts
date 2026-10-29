@@ -18,7 +18,7 @@ import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInpu
 import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
-import { info, type Egress } from './workers.ts';
+import { info, permits, stricter, type Egress } from './workers.ts';
 import { createApi, type Route } from './api.ts';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 
@@ -80,6 +80,16 @@ export function createCore(o: CoreOptions) {
   log.on('problem', (p) => bus.emit('event', 'problem', p));
   setup.on('change', (v) => bus.emit('event', 'setup', { step: v.step, done: v.done }));
   profile.on('change', (c) => bus.emit('event', 'profile', c));
+  // Loosening the privacy setting releases work that was waiting on local capacity, if its worker
+  // is now allowed under the stricter of the task's own mode and the new setting.
+  profile.on('change', ({ section, key }) => {
+    if (section !== 'privacy' || key !== 'default') return;
+    for (const t of ledger.list({ state: 'waiting', limit: 500 })) {
+      const w = ledger.workers.get(t.owner);
+      if (!w || !t.reason?.includes('local capacity')) continue;
+      if (permits(stricter(t.privacy_mode, profile.privacyDefault()), w.egress)) ledger.retry(t.id, 'Your privacy setting changed, so this can run now.');
+    }
+  });
   extensions.on('change', (c) => bus.emit('event', 'extension', c));
   triggers.on('trigger', (t) => bus.emit('event', 'trigger', { trigger_id: t.trigger_id, rule_id: t.rule_id, class: t.class, decision: t.triage.decision, reason: t.triage.reason, ledger_task_id: t.ledger_task_id, message_id: t.message_id }));
   triggers.on('message', (m) => bus.emit('event', 'message', m));

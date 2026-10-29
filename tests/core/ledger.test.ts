@@ -414,3 +414,15 @@ test('bad parameters are refused, not stored as problems', () => {
   assert.throws(() => ledger.create(writeNote({ user_visibility: 'loud' as never })), /user_visibility/);
   assert.equal(log.problems().length, 0);
 });
+
+test('a worker can take longer than the default timeout when it says so', async () => {
+  const slow = (ws: Workspace): Worker => ({ ...fake('slow', 'none', (b) => new Promise((r) => setTimeout(() => r(workspaceWorker(ws).run(b, new AbortController().signal)), 80)))(ws), timeoutMs: 1000 });
+  const root = mkdtempSync(join(tmpdir(), 'nova-ledger-'));
+  const db = new Db(':memory:');
+  db.migrate();
+  const ws = new Workspace(join(root, 'workspace'));
+  const ledger = new Ledger({ db, log: new Log(db, null), verifier: new Verifier(ws), workers: [workspaceWorker(ws), slow(ws)], defaultPrivacy: () => 'local-only', timeoutMs: 20, maxAttempts: 1 });
+  const t = ledger.create(writeNote({ owner: 'slow' }));
+  await ledger.idle();
+  assert.equal(ledger.get(t.id).state, 'done', ledger.get(t.id).reason ?? '');
+});
