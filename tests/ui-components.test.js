@@ -65,6 +65,14 @@ test('the evidence viewer shows each check, what was found and why', () => {
   assert.match(evidenceViewer(task('q', 'queued')), /Not checked yet/);
 });
 
+test('the evidence viewer names the Relay run a task’s work came from: its id and branch', () => {
+  const run = '0f6c2d1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f';
+  const html = evidenceViewer({ ...verified, report: { ...verified.report, artifacts: [{ kind: 'file', ref: 'workspace:calc/sum.mjs' }, { kind: 'relay-run', ref: run, branch: `relay/${run}`, worktree: '/example/worktree' }] } });
+  assert.match(html, new RegExp(`Relay run ${run}`));
+  assert.match(html, new RegExp(`branch relay/${run}`));
+  assert.doesNotMatch(evidenceViewer(verified), /Relay run/);
+});
+
 test('the approval sheet is tiered: tier 3 needs an explicit confirmation', () => {
   const t2 = approvalSheet(task('a', 'waiting', { approval_tier: 2 }));
   assert.match(t2, /data-tier="2"/);

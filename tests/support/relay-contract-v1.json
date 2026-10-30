@@ -1,0 +1,255 @@
+{
+  "$comment": "Relay HTTP contract v1, the routes an outside client uses. Prose: docs/contract-v1.md. Schemas use a small JSON Schema subset: $ref (#/definitions/...), anyOf, type (string or list; integer included), enum, const, pattern, minLength, maxLength, minimum, properties, required, additionalProperties (false or a schema) and items. test/contract.test.mjs validates real responses against this file.",
+  "api": 1,
+  "transport": {
+    "base": "http://127.0.0.1:<RELAY_PORT> (loopback only, no authentication)",
+    "requestHeaders": { "Host": "127.0.0.1:<port> or localhost:<port>" },
+    "mutationHeaders": { "Content-Type": "application/json", "X-Relay-Client": "relay-local" },
+    "responseContentType": "application/json; charset=utf-8"
+  },
+  "commonErrors": {
+    "400": { "$ref": "#/definitions/error" },
+    "403": { "$ref": "#/definitions/error" },
+    "404": { "$ref": "#/definitions/error" },
+    "413": { "$ref": "#/definitions/error" },
+    "415": { "$ref": "#/definitions/error" },
+    "500": { "$ref": "#/definitions/error" },
+    "503": { "$ref": "#/definitions/error" }
+  },
+  "routes": {
+    "GET /api/status": {
+      "responses": { "200": { "$ref": "#/definitions/status" } }
+    },
+    "POST /api/projects": {
+      "request": {
+        "type": "object", "required": ["directory"],
+        "properties": {
+          "directory": { "type": "string", "minLength": 1, "maxLength": 2000, "$comment": "Absolute path of a Git repository root with at least one commit." },
+          "name": { "type": "string", "maxLength": 120 }
+        }
+      },
+      "responses": { "201": { "$ref": "#/definitions/project" }, "422": { "$ref": "#/definitions/error" } }
+    },
+    "POST /api/tasks": {
+      "request": {
+        "type": "object", "required": ["title", "outcome"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "outcome": { "type": "string", "minLength": 1, "maxLength": 10000 }
+        }
+      },
+      "responses": { "201": { "$ref": "#/definitions/task" } }
+    },
+    "PATCH /api/tasks/:id": {
+      "request": {
+        "type": "object", "required": ["status"],
+        "properties": { "status": { "enum": ["draft", "ready", "archived"] } }
+      },
+      "responses": { "200": { "$ref": "#/definitions/task" } }
+    },
+    "GET /api/state": {
+      "$comment": "The whole durable state; contract v1 covers only profiles.",
+      "responses": {
+        "200": {
+          "type": "object", "required": ["profiles"],
+          "properties": { "profiles": { "type": "array", "items": { "$ref": "#/definitions/profile" } } }
+        }
+      }
+    },
+    "POST /api/workers": {
+      "request": {
+        "type": "object", "required": ["taskId", "projectId", "profileId", "profileRevision", "baseCommit", "requestId"],
+        "properties": {
+          "taskId": { "$ref": "#/definitions/uuid" },
+          "projectId": { "$ref": "#/definitions/uuid" },
+          "profileId": { "$ref": "#/definitions/uuid" },
+          "profileRevision": { "type": "integer", "minimum": 1 },
+          "baseCommit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+          "requestId": { "$ref": "#/definitions/uuid" },
+          "context": { "type": "string", "maxLength": 8000 },
+          "check": { "enum": ["none", "node-test", "npm-test"] },
+          "allowTests": { "type": "boolean", "$comment": "Must be true when check is not none." },
+          "build": { "enum": ["none", "npm-build"] },
+          "allowBuild": { "type": "boolean", "$comment": "Must be true when build is npm-build (Linux only)." },
+          "buildDirectory": { "type": "string" },
+          "buildEntry": { "type": "string" }
+        }
+      },
+      "responses": {
+        "202": { "$ref": "#/definitions/workerStart" },
+        "409": { "$ref": "#/definitions/error" },
+        "422": { "$ref": "#/definitions/error" }
+      }
+    },
+    "GET /api/workers/:id": {
+      "responses": { "200": { "$ref": "#/definitions/workerRun" } }
+    },
+    "GET /api/workers/:id/handoff.json": {
+      "responses": { "200": { "$ref": "#/definitions/handoff" } }
+    },
+    "POST /api/runs/:id/cancel": {
+      "request": { "type": "object", "additionalProperties": false },
+      "responses": {
+        "202": { "type": "object", "required": ["status"], "additionalProperties": false, "properties": { "status": { "const": "cancelling" } } },
+        "409": { "$ref": "#/definitions/error" }
+      }
+    }
+  },
+  "definitions": {
+    "uuid": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+    "timestamp": { "type": "string", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(\\.\\d+)?Z$" },
+    "error": {
+      "type": "object", "required": ["error"], "additionalProperties": false,
+      "properties": {
+        "error": { "type": "string" },
+        "code": { "enum": ["runtime_busy"], "$comment": "runtime_busy: HTTP 409, the single run slot is taken; retry later." }
+      }
+    },
+    "status": {
+      "type": "object", "required": ["name", "version", "api", "workerEgress", "mode", "features", "engines", "dataDirectory", "limits"],
+      "properties": {
+        "name": { "const": "Relay" },
+        "version": { "type": "string" },
+        "api": { "const": 1 },
+        "workerEgress": { "enum": ["local", "remote:anthropic"] },
+        "mode": { "enum": ["local-workers", "conversation-only"] },
+        "features": { "type": "object", "additionalProperties": { "type": "boolean" } },
+        "engines": { "type": "array", "items": { "$ref": "#/definitions/engine" } },
+        "dataDirectory": { "type": "string" },
+        "limits": {
+          "type": "object", "required": ["concurrentRuns", "timeoutSeconds", "workerTimeoutSeconds", "contextCharacters"],
+          "properties": {
+            "concurrentRuns": { "const": 1 },
+            "timeoutSeconds": { "type": "number" },
+            "workerTimeoutSeconds": { "type": "number" },
+            "contextCharacters": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "engine": {
+      "type": "object", "required": ["id", "label", "available", "error"],
+      "properties": {
+        "id": { "enum": ["claude", "codex"] },
+        "label": { "type": "string" },
+        "available": { "type": "boolean" },
+        "workersAvailable": { "type": "boolean" },
+        "version": { "type": "string" },
+        "auth": { "type": "string" },
+        "error": { "type": ["string", "null"] }
+      }
+    },
+    "project": {
+      "type": "object", "required": ["id", "name", "directory", "commit", "branch", "dirty", "submodulesOmitted", "createdAt"], "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/definitions/uuid" },
+        "name": { "type": "string" },
+        "directory": { "type": "string" },
+        "commit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+        "branch": { "type": "string" },
+        "dirty": { "type": "boolean" },
+        "submodulesOmitted": { "type": "boolean" },
+        "createdAt": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "task": {
+      "type": "object", "required": ["id", "title", "outcome", "status", "createdAt", "updatedAt", "sourceConversationId"], "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/definitions/uuid" },
+        "title": { "type": "string" },
+        "outcome": { "type": "string" },
+        "status": { "enum": ["draft", "ready", "archived"] },
+        "createdAt": { "$ref": "#/definitions/timestamp" },
+        "updatedAt": { "$ref": "#/definitions/timestamp" },
+        "sourceConversationId": { "type": ["string", "null"] },
+        "sourceProposalId": { "type": "string" }
+      }
+    },
+    "profile": {
+      "type": "object", "required": ["id", "revision", "name", "engine", "model", "effort"],
+      "properties": {
+        "id": { "$ref": "#/definitions/uuid" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "engine": { "enum": ["claude", "codex"] },
+        "model": { "type": "string" },
+        "effort": { "enum": ["low", "medium", "high"] }
+      }
+    },
+    "workerStatus": { "enum": ["starting", "running", "cancelling", "reviewing", "completed", "failed", "cancelled", "interrupted"] },
+    "workerStart": {
+      "$comment": "The run as recorded at launch, or the earlier run for a repeated requestId. A setup failure is still 202, with status failed and error. Read progress with GET /api/workers/:id; other fields here are not part of v1.",
+      "type": "object", "required": ["id", "taskId", "projectId", "status", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/definitions/uuid" },
+        "taskId": { "$ref": "#/definitions/uuid" },
+        "projectId": { "$ref": "#/definitions/uuid" },
+        "status": { "$ref": "#/definitions/workerStatus" },
+        "error": { "type": "string" },
+        "createdAt": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "worktree": {
+      "type": "object", "required": ["directory", "branch", "baseCommit"], "additionalProperties": false,
+      "properties": {
+        "directory": { "type": "string" },
+        "branch": { "type": "string", "pattern": "^relay/[a-f0-9-]{36}$" },
+        "baseCommit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" }
+      }
+    },
+    "validation": {
+      "type": "object", "required": ["status", "output"],
+      "properties": {
+        "status": { "enum": ["passed", "failed", "not-run", "cancelled", "timed-out"] },
+        "command": { "type": ["string", "null"] },
+        "exitCode": { "type": ["integer", "null"] },
+        "output": { "type": "string" },
+        "finishedAt": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "review": {
+      "type": "object", "required": ["files", "totalFiles", "diff", "truncated"], "additionalProperties": false,
+      "properties": {
+        "files": { "type": "array", "items": { "type": "string" }, "$comment": "Changed, added and deleted paths relative to the worktree; at most 500." },
+        "totalFiles": { "type": "integer", "minimum": 0 },
+        "diff": { "type": "string", "$comment": "git diff --stat --patch against baseCommit, plus untracked file previews; at most 200000 characters." },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "workerRun": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "taskId", "projectId", "status", "text", "usage", "costUsd", "worktree", "validation", "review", "error", "createdAt", "finishedAt"],
+      "properties": {
+        "id": { "$ref": "#/definitions/uuid" },
+        "taskId": { "$ref": "#/definitions/uuid" },
+        "projectId": { "$ref": "#/definitions/uuid" },
+        "status": { "$ref": "#/definitions/workerStatus" },
+        "text": { "type": "string", "$comment": "The worker's handoff summary; empty until it reports." },
+        "usage": {
+          "type": ["object", "null"], "additionalProperties": false,
+          "properties": { "inputTokens": { "type": "integer" }, "outputTokens": { "type": "integer" } }
+        },
+        "costUsd": { "type": ["number", "null"], "$comment": "As the engine reports it; Relay enforces no cost cap." },
+        "worktree": { "anyOf": [{ "type": "null" }, { "$ref": "#/definitions/worktree" }] },
+        "validation": { "anyOf": [{ "type": "null" }, { "$ref": "#/definitions/validation" }] },
+        "review": { "anyOf": [{ "type": "null" }, { "$ref": "#/definitions/review" }] },
+        "error": { "type": ["string", "null"] },
+        "createdAt": { "$ref": "#/definitions/timestamp" },
+        "finishedAt": { "type": ["string", "null"] }
+      }
+    },
+    "handoff": {
+      "$comment": "The file Relay writes when review finishes (artifacts/<runId>/handoff.json).",
+      "type": "object", "required": ["task", "profile", "worktree", "summary", "validation", "review"],
+      "properties": {
+        "task": { "type": "object", "required": ["id", "title", "outcome"] },
+        "profile": { "type": "object", "required": ["id", "revision", "engine"] },
+        "worktree": { "type": "object", "required": ["directory", "branch", "baseCommit"] },
+        "summary": { "type": "string" },
+        "validation": { "$ref": "#/definitions/validation" },
+        "review": { "type": "object", "required": ["files", "totalFiles", "diff", "truncated"] }
+      }
+    }
+  }
+}

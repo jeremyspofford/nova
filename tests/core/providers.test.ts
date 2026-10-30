@@ -96,7 +96,7 @@ test('registry lifecycle: built-ins installed and off; configure checks settings
   const { core } = boot();
   try {
     const ids = core.providers.list().map((p) => p.id).sort();
-    assert.deepEqual(ids, ['claude-code', 'codex', 'custom-cli', 'n8n', 'openai-compatible']);
+    assert.deepEqual(ids, ['claude-code', 'codex', 'custom-cli', 'n8n', 'openai-compatible', 'relay']);
     assert.ok(core.providers.list().every((p) => !p.enabled));
     assert.ok(!core.ledger.workers.has('claude-code'));
     // Health in plain words, without running anything.

@@ -45,7 +45,14 @@ export async function request(method, path, body, retried = false) {
   const stale = fromCache(res);
   if (res.status === 503 && stale) throw new Unreachable('Nova’s server didn’t answer.');
   const json = res.headers.get('content-type')?.startsWith('application/json');
-  const data = json ? await res.json().catch(() => null) : await res.text();
+  const CUT = Symbol('cut');
+  let data = json ? await res.json().catch(() => CUT) : await res.text();
+  // An answer cut off part-way (a page left, a dropped connection) is no answer: the page keeps
+  // what it had instead of taking null for its tasks or requests.
+  if (data === CUT) {
+    if (res.ok) throw new Unreachable('Nova’s answer was cut off.');
+    data = null;
+  }
   if (!res.ok) {
     const e = new Error((data && data.error) || 'Something went wrong.');
     e.details = data?.details ?? [];

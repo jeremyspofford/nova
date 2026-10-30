@@ -27,6 +27,8 @@ export interface TestAsk {
   approved_at: string | null;
   // What the provider's run cost, carried to the report that ends the task.
   usage?: Record<string, unknown>;
+  // What the provider reported of its own run (a Relay run), carried to that report too.
+  artifacts?: Record<string, unknown>[];
 }
 
 const inside = (root: string, abs: string) => abs === root || abs.startsWith(root + sep);
