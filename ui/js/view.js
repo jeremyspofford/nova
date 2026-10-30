@@ -105,7 +105,7 @@ export function toolLabel(tool, state) {
     nova_devices: { running: 'Checking your devices', done: 'Checked your devices', failed: "Couldn't check your devices" },
     nova_schedules: { running: 'Checking schedules', done: 'Checked schedules', failed: "Couldn't check schedules" },
     nova_settings: { running: 'Looking at settings', done: `Looked at settings${a.part ? `: ${esc(a.part)}` : ''}`, failed: "Couldn't read that setting" },
-    memory_import: { running: 'Loading memories', done: `Loaded ${esc(sum || 'memories')} into Memory`, failed: "Couldn't load those memories", declined: 'Left Memory as it was', waiting: 'Waiting to load memories' },
+    memory_import: { running: 'Reading the memories to offer you', done: `Put ${esc(sum || 'memories')} in Memory for your OK`, failed: "Couldn't offer those memories", declined: 'Left Memory as it was', waiting: 'Waiting to offer memories' },
   };
   labels.web_fetch.declined = `Didn't open ${esc(host(a.url))}`;
   const l = labels[tool.name] ?? { running: `Using ${esc(tool.name)}`, done: `Used ${esc(tool.name)}`, failed: `${esc(tool.name)} didn't work` };
@@ -147,7 +147,7 @@ function approvalWhat(tool) {
       : `Nova wants to set up ${p.once ? 'a reminder' : 'a schedule'}. It runs on its own and sends you ${p.once ? 'one report, then removes itself' : 'a report each time'}.`;
   }
   if (tool.name === 'schedule_remove') return `Nova wants to remove the schedule ${esc(p.name ?? tool.args?.id ?? '')}${p.when ? ` (${esc(p.when.replace(/^\w/, (c) => c.toLowerCase()))})` : ''}. It won't run again.`;
-  if (tool.name === 'memory_import') return `Nova wants to load ${p.fresh ?? 'the'} ${p.fresh === 1 ? 'memory' : 'memories'} from <code>${esc(p.path ?? a.path ?? '')}</code> into Memory${p.already ? ` (${p.already} ${p.already === 1 ? 'is' : 'are'} there already)` : ''}. They arrive unreviewed, for you to confirm, correct or forget.`;
+  if (tool.name === 'memory_import') return `Nova wants to offer you ${p.fresh ?? 'the'} ${p.fresh === 1 ? 'memory' : 'memories'} from <code>${esc(p.path ?? a.path ?? '')}</code>${p.already ? ` (${p.already} ${p.already === 1 ? 'is' : 'are'} kept or waiting already)` : ''}. Nova checks the file first, and each one waits for your OK in Memory.`;
   if (tool.name === 'web_fetch') return `Nova wants to open <code>${esc(host(a.url))}</code>.`;
   if (tool.name === 'web_search') return `Nova wants to search the web for “${esc(a.query)}”.`;
   if (tool.name === 'write_file') return `Nova wants to change <code>${esc(a.path)}</code>, one of your standing files.`;
@@ -398,7 +398,9 @@ function waitingItem(c) {
   const from = [...new Set((c.taint ?? []).map((x) => x.origin))].slice(0, 3).join(', ');
   const what = c.op === 'forget' ? (c.target_text ? `Forget “${c.target_text}”` : 'Forget one of your memories') : c.content;
   return `<li class="memory-item" data-candidate="${esc(c.id)}"><p class="memory-text">${esc(what)}</p>
-<p class="memory-source">${String(c.source ?? '').startsWith('device:') ? 'A note from one of your devices, waiting because Nova couldn’t fully check it' : `${c.op === 'note' ? 'A day note' : c.op === 'forget' ? 'A request' : 'A memory'} from a conversation that read ${esc(from || 'something from outside')}`}.</p>
+<p class="memory-source">${String(c.source ?? '').startsWith('device:') ? 'A note from one of your devices, waiting because Nova couldn’t fully check it'
+    : String(c.source ?? '').startsWith('imported from ') ? `${esc(String(c.source).replace(/^imported from /, 'Imported from '))}${(c.taint ?? []).some((t) => t.verdict !== 'pass') ? '; Nova couldn’t fully check it' : ''}`
+      : `${c.op === 'note' ? 'A day note' : c.op === 'forget' ? 'A request' : 'A memory'} from a conversation that read ${esc(from || 'something from outside')}`}.</p>
 <div class="memory-actions"><button type="button" class="act" data-action="keep-candidate">${c.op === 'forget' ? 'Forget it' : 'Keep'}</button><button type="button" class="act" data-action="drop-candidate">${c.op === 'forget' ? 'Keep my memory' : 'Drop'}</button></div></li>`;
 }
 

@@ -1045,7 +1045,7 @@ export function createCore(o: CoreOptions) {
 
   // Grounding (self.ts): the briefing and the agent's read-only status tools, in process.
   const self = new Self({
-    home: o.home, version: o.version, instance: () => o.instance ?? 'production', codeRoot: CODE_ROOT,
+    home: o.home, ingest, version: o.version, instance: () => o.instance ?? 'production', codeRoot: CODE_ROOT,
     profile, memory, providers, models: models!, connectors, capture, devices, triggers, design, log, now,
     hubId: () => meshIdentity.id, role: () => role.role(), online: (d) => deviceView(d).online, setupDone: () => setup.view().done,
     ...(o.chat ? { chat: o.chat } : {}),

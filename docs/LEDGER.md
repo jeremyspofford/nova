@@ -80,11 +80,17 @@ This entry supersedes the one below where they differ.
   - Its read-only `nova_*` tools are Nova's own state: never screened, never taint. A test covers
     this with a stand-in tool.
   - Its `memory_import` needs an OK, so in a tainted run it always asks.
-  - *Open question:* in a run that read nothing from outside, a `memory-import: yes` setting loads
-    a workspace file's records without screening them. The file can be one a command or download
-    put there, and the records arrive unreviewed, which MEMORY.md shows. Screening the import, or
-    making it wait as candidates, is the safer follow-up. I left it, since it is the grounding PR's
-    feature.
+  - **Closed at the lead's request:** `memory_import` went through the gate. An import file is
+    outside content of unknown provenance, so:
+    - It is screened as `read_file` would screen it, and a block refuses the import with the reason.
+    - Its records never go into memory: each becomes a candidate, "imported from <file>", waiting in
+      Memory for the person's OK. This holds in any run, whatever `permissions.md` says.
+    - A record Nova's own checks flag waits flagged; one they block is left out.
+    - The tool doc, its result, the approval card and the briefing say the memories wait for the
+      person's OK, never that they are loaded. The briefing counts waiting memories, never what
+      they say.
+    - Tests: `tests/ingest/import.test.js` (5, through the runner), plus `self.test.ts` and the
+      grounding acceptance test, changed to match.
 - **Still not caught (stated plainly):**
   - hiding by an external stylesheet or by script;
   - a paraphrased injection in visible text when there is no model. It is still never passed, but

@@ -27,6 +27,7 @@ import type { Device, Devices } from './mesh/devices.ts';
 import type { Triggers } from './triggers.ts';
 import type { Design } from './design.ts';
 import type { Egress } from './workers.ts';
+import type { Ingest } from './ingest/screen.ts';
 
 // Where the person puts what they want Nova to learn from: notes, another assistant's export, a
 // Nova memory export (POST /api/v1/memory/export writes memory.json).
@@ -46,6 +47,8 @@ export interface Era2State {
 
 export interface SelfOptions {
   home: string;
+  // The ingest gate: an import file is screened, and its records wait as memory candidates.
+  ingest: Ingest;
   version: string;
   // preview, production or development: what this instance is for (NOVA_INSTANCE).
   instance: () => string;
@@ -267,10 +270,14 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
   #freshLines(): string[] {
     const imports = this.imports();
     const out: string[] = [];
-    if (this.#o.memory.counts().active === 0) {
+    // Memories waiting for the person's OK (from an import, a device, or a conversation that read
+    // outside content) aren't memory yet: say they are there, never what they say.
+    const waiting = this.#o.ingest.candidates().length;
+    if (waiting) out.push(`- ${waiting} ${waiting === 1 ? 'memory waits' : 'memories wait'} for the person’s OK in Memory. They aren’t memory until the person keeps them; if it comes up, point them there.`);
+    if (this.#o.memory.counts().active === 0 && !waiting) {
       out.push(`- First run: this Nova is fresh. Its memory is empty, so beyond the profile above you know nothing about the person yet. When you greet them or they ask what you know about them, say so plainly, say it runs from ${this.#o.home}, and offer the import path up front: they can paste notes here, or put a file (notes, an export from another assistant, or a Nova memory export) in ~/${IMPORT_DIR}/, and you read it and suggest memories they review in Memory.`);
     }
-    for (const p of imports.packs) out.push(`- Found in ~/${IMPORT_DIR}/: a Nova memory export, ${p.path} (${p.count} ${p.count === 1 ? 'memory' : 'memories'}${p.exported_at ? `, exported ${p.exported_at.slice(0, 10)}` : ''}). Offer to load it with memory_import; the person approves, and the memories arrive in Memory for their review.`);
+    for (const p of imports.packs) out.push(`- Found in ~/${IMPORT_DIR}/: a Nova memory export, ${p.path} (${p.count} ${p.count === 1 ? 'memory' : 'memories'}${p.exported_at ? `, exported ${p.exported_at.slice(0, 10)}` : ''}). Offer to load it with memory_import; the person approves, and the memories wait for their OK in Memory: none is in memory until they keep it.`);
     if (imports.files.length) out.push(`- Also in ~/${IMPORT_DIR}/: ${list(imports.files.map((f) => f.path))}. Read one with read_file to distill it into memories.`);
     return out;
   }
@@ -405,7 +412,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     const { abs, rel } = this.#importPath(path);
     const pack = readPack(abs);
     if (!pack) throw new CoreError('validation', `${rel} isn’t a Nova memory export (a memory.json with its records). Read it with read_file and suggest memories instead.`);
-    const have = new Set(this.#o.memory.active().map((r) => plain(r.content).toLowerCase()));
+    const have = this.#kept();
     const kinds: Record<string, number> = {};
     let fresh = 0;
     for (const r of pack.records) {
@@ -416,27 +423,43 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     return { path: rel, total: pack.records.length, fresh, already: pack.records.length - fresh, kinds, exported_at: pack.exported_at };
   }
 
-  // Loads it: each memory not already kept arrives unreviewed (recorded by "import"), for the
-  // person to confirm, correct or forget in Memory.
-  importPack(path: unknown): { path: string; imported: number; skipped: number } {
+  // Loads it through the ingest gate (Amendment 2026-10-30-C Part 3): the file is outside content
+  // of unknown provenance, screened as read_file would screen it. A block refuses the whole import,
+  // with the reason. Otherwise each memory not already kept or already waiting becomes a memory
+  // candidate, "imported from <file>", waiting for the person's OK in Memory, out of every prompt:
+  // in any run, whatever permissions.md says. A record Nova's own checks flag waits flagged, with
+  // its own screen.
+  async importPack(path: unknown): Promise<{ path: string; waiting: number; skipped: number; held: number }> {
     if (this.#o.role() !== 'hub') throw new CoreError('conflict', 'This Nova is a standby copy; load memories on the hub.');
     const { abs, rel } = this.#importPath(path);
     const pack = readPack(abs);
     if (!pack) throw new CoreError('validation', `${rel} isn’t a Nova memory export.`);
-    const have = new Set(this.#o.memory.active().map((r) => plain(r.content).toLowerCase()));
-    let imported = 0;
+    const ingest = this.#o.ingest;
+    const file = await ingest.screen({ text: readFileSync(abs, 'utf8'), source: { kind: 'file', origin: rel } });
+    if (file.verdict === 'block') throw new CoreError('forbidden', `Nova didn’t load ${rel}: it looked like it was trying to give instructions. Tasks has the details.`);
+    const have = this.#kept();
+    let waiting = 0;
+    let held = 0;
     for (const r of pack.records) {
-      const key = plain(r.content).toLowerCase();
+      const content = plain(r.content);
+      const key = content.toLowerCase();
       if (have.has(key)) continue;
-      this.#o.memory.remember({
-        kind: r.kind, content: plain(r.content), recorded_by: 'import', source: `import:${rel}`,
-        ...(r.observed_at ? { observed_at: r.observed_at } : {}),
-        ...(typeof r.confidence === 'number' ? { confidence: r.confidence } : {}),
-      });
+      const own = ingest.screenNow({ text: content, source: { kind: 'file', origin: rel } });
+      if (own.verdict === 'block') { held++; continue; }
+      const flagged = own.flags.some((f) => f.level !== 'note');
+      ingest.candidate({ op: 'remember', kind: r.kind, content, source: `imported from ${rel}`, taint: flagged ? [file.taint, own.taint] : [file.taint] });
       have.add(key);
-      imported++;
+      waiting++;
     }
-    return { path: rel, imported, skipped: pack.records.length - imported };
+    return { path: rel, waiting, skipped: pack.records.length - waiting - held, held };
+  }
+
+  // What is kept already or already waiting, by its words.
+  #kept(): Set<string> {
+    return new Set([
+      ...this.#o.memory.active().map((r) => plain(r.content).toLowerCase()),
+      ...this.#o.ingest.candidates().filter((c) => c.op === 'remember' && c.content).map((c) => plain(c.content).toLowerCase()),
+    ]);
   }
 
   // Only a file inside ~/workspace/import/, reached without links.

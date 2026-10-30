@@ -126,7 +126,7 @@ test('a fresh Nova says it is fresh, names its home, and offers the import path;
   });
 });
 
-test('a Nova memory export in ~/workspace/import/ is offered, loaded unreviewed once approved, and never twice', async () => {
+test('a Nova memory export in ~/workspace/import/ is offered, screened, and its memories wait for the person (the ingest gate), never twice', async () => {
   await withHub(async (h) => {
     const { core } = h;
     const dir = join(h.home, 'workspace', 'import', 'memory-2026-10-01');
@@ -134,16 +134,18 @@ test('a Nova memory export in ~/workspace/import/ is offered, loaded unreviewed 
     writeFileSync(join(dir, 'memory.json'), exportPack([{ kind: 'preference', content: 'Prefers short replies' }, { kind: 'fact', content: 'Works on a placeholder project' }, { kind: 'odd', content: 'An unknown kind becomes a fact' }]));
     writeFileSync(join(h.home, 'workspace', 'import', 'notes.md'), '# Example notes\n');
     const b = await core.self.briefing();
-    assert.match(b, /Found in ~\/workspace\/import\/: a Nova memory export, workspace\/import\/memory-2026-10-01\/memory\.json \(3 memories, exported 2026-10-01\)\. Offer to load it with memory_import/);
+    assert.match(b, /Found in ~\/workspace\/import\/: a Nova memory export, workspace\/import\/memory-2026-10-01\/memory\.json \(3 memories, exported 2026-10-01\)\. Offer to load it with memory_import; the person approves, and the memories wait for their OK in Memory/);
     assert.match(b, /Also in ~\/workspace\/import\/: workspace\/import\/notes\.md\. Read one with read_file/);
     core.memory.remember({ kind: 'preference', content: 'Prefers short replies', recorded_by: 'person' });
     const plan = core.self.planImport('workspace/import/memory-2026-10-01/memory.json');
     assert.deepEqual([plan.total, plan.fresh, plan.already], [3, 2, 1]);
-    const r = core.self.importPack('~/workspace/import/memory-2026-10-01/memory.json');
-    assert.deepEqual([r.imported, r.skipped], [2, 1]);
-    const loaded = core.memory.active().filter((m) => m.recorded_by === 'import');
-    assert.deepEqual(loaded.map((m) => [m.kind, m.user_state, m.source]).sort(), [['fact', 'unreviewed', 'import:workspace/import/memory-2026-10-01/memory.json'], ['fact', 'unreviewed', 'import:workspace/import/memory-2026-10-01/memory.json']]);
-    assert.equal(core.self.importPack('workspace/import/memory-2026-10-01/memory.json').imported, 0, 'never twice');
+    const r = await core.self.importPack('~/workspace/import/memory-2026-10-01/memory.json');
+    assert.deepEqual([r.waiting, r.skipped], [2, 1]);
+    // Outside content of unknown provenance: nothing goes into memory; each waits for the person.
+    assert.deepEqual(core.memory.active().filter((m) => m.recorded_by === 'import'), []);
+    const waiting = core.ingest.candidates();
+    assert.deepEqual(waiting.map((c) => [c.kind, c.source]).sort(), [['fact', 'imported from workspace/import/memory-2026-10-01/memory.json'], ['fact', 'imported from workspace/import/memory-2026-10-01/memory.json']]);
+    assert.equal((await core.self.importPack('workspace/import/memory-2026-10-01/memory.json')).waiting, 0, 'never twice');
     assert.throws(() => core.self.planImport('workspace/import/notes.md'), /isn’t a Nova memory export/);
   });
 });
@@ -155,7 +157,7 @@ test('only a plain file inside ~/workspace/import/ can be loaded', async () => {
     writeFileSync(join(h.home, 'workspace', 'elsewhere.json'), exportPack([{ kind: 'fact', content: 'x' }]));
     symlinkSync(join(h.home, 'workspace', 'elsewhere.json'), join(imp, 'linked.json'));
     for (const p of ['workspace/elsewhere.json', 'workspace/import/../elsewhere.json', 'workspace/import/linked.json', '/etc/passwd', '', 'workspace/import/missing.json']) {
-      assert.throws(() => h.core.self.importPack(p), /workspace\/import|path is the file/, p);
+      await assert.rejects(h.core.self.importPack(p), /workspace\/import|path is the file/, p);
     }
     assert.deepEqual(h.core.self.imports().packs, [], 'a link is never offered either');
   });

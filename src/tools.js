@@ -302,17 +302,21 @@ export const TOOLS = {
   },
   memory_import: {
     signature: '{"path": "workspace/import/memory.json"}',
-    doc: 'Load a Nova memory export from ~/workspace/import/ into Memory. Each memory not already kept arrives unreviewed, for the person to confirm, correct or forget there. The person approves it. For any other file, read it and suggest memories instead.',
+    doc: 'Offer the memories in a Nova memory export in ~/workspace/import/ to the person. The file is screened first, and each memory not already kept waits for the person’s OK in Memory: none is in memory until they keep it. The person approves the step. For any other file, read it and suggest memories instead.',
     needsApproval: true,
-    permission: { id: 'memory-import', label: 'Load memories from a file in workspace/import', note: 'They arrive unreviewed in Memory' },
+    permission: { id: 'memory-import', label: 'Offer memories from a file in workspace/import', note: 'They wait for your OK in Memory' },
     available: (ctx) => ctx.self,
     preview({ path }, { self }) {
       const p = self.planImport(path);
       return { path: p.path, total: p.total, fresh: p.fresh, already: p.already, exported_at: p.exported_at };
     },
-    run({ path }, { self }) {
-      const r = self.importPack(path);
-      return { output: `Loaded ${r.imported} ${r.imported === 1 ? 'memory' : 'memories'} from ${r.path} into Memory, unreviewed${r.skipped ? `; ${r.skipped} ${r.skipped === 1 ? 'was' : 'were'} already there` : ''}. The person reviews them in Memory.`, summary: `${r.imported} memories` };
+    async run({ path }, { self }) {
+      const r = await self.importPack(path);
+      const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+      return {
+        output: `${n(r.waiting, 'memory', 'memories')} from ${r.path} now wait for the person’s OK in Memory; none is in memory until they keep it${r.skipped ? `. ${n(r.skipped, 'was', 'were')} already kept or waiting` : ''}${r.held ? `. ${n(r.held, 'was', 'were')} left out: it looked like it was trying to give instructions` : ''}.`,
+        summary: `${n(r.waiting, 'memory', 'memories')} waiting`,
+      };
     },
   },
 };
