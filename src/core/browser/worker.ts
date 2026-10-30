@@ -6,13 +6,13 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Evidence, type Report } from '../envelope.ts';
+import { ENVELOPE_VERSION, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
 import { Sse } from '../api.ts';
-import type { Ledger, LanedWorker } from '../ledger.ts';
+import type { Ledger, LanedWorker, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
 import { findChromium, type Found } from './chromium.ts';
 import { FINAL_READ, SCREENSHOT, refOf, refetch, squash, taskDir, type FinalRead, type Read } from './evidence.ts';
-import { NO_HUB, allowed, describe, hasEffects, hostOf, marksCommit, planEgress, validatePlan, type Hub, type Plan, type Step } from './plan.ts';
+import { NO_HUB, allowed, describe, hasEffects, hostOf, marksCommit, planEgress, sends, validatePlan, type Hub, type Plan, type Step } from './plan.ts';
 import { INPUT_KEYS, Session, type Holder, type Input, type SessionView } from './session.ts';
 
 export const BROWSER_WORKER = 'browser';
@@ -52,6 +52,11 @@ export class Browser extends EventEmitter {
       // by the time it fails, so the ledger never reruns it by itself (workers.ts, Effects).
       effects: (brief: Brief) => (hasEffects(validatePlan(brief.inputs, self.#hub())) ? 'external' : 'none'),
       commits: (brief: Brief) => marksCommit(validatePlan(brief.inputs, self.#hub())),
+      // Filling in and sending a form sends data outside: it asks first (NOVA-SPEC §6). A plan
+      // that can't run gets no tier here; it is refused when delegated.
+      minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => {
+        try { return sends(validatePlan(input.inputs, self.#hub())) ? 2 : 0; } catch { return 0; }
+      },
       health: () => {
         const f = self.chromium();
         return { ok: f.path !== null || f.from === 'none', detail: f.path ? `${f.detail}${self.#sandbox() ? '' : ' Chromium’s own sandbox is off (NOVA_CHROMIUM_SANDBOX=0).'}` : f.detail };

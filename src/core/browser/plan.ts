@@ -133,6 +133,9 @@ export function hostEgress(raw: string): Egress {
 // the person does by hand. A plan with any of them may have sent something by the time it fails.
 const ACTING: readonly Step['do'][] = ['fill', 'select', 'click', 'person'];
 export const hasEffects = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => ACTING.includes(s.do));
+// Steps that send something on Nova's own initiative (typing, choosing, clicking): sending or
+// sharing data outside asks first (NOVA-SPEC §6, tier 2). A person's own step is theirs to do.
+export const sends = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => s.do === 'fill' || s.do === 'select' || s.do === 'click');
 // Whether the plan marks the step where its outside effect happens.
 export const marksCommit = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => 'commits' in s && s.commits === true);
 
