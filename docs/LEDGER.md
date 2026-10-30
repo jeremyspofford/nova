@@ -25,16 +25,25 @@ The as-built note is in `docs/plans/M8.md` §2.
   secrets.
 - **Where the data goes is what Relay reports, not what the address implies.** Relay is always on
   this computer, but its workers may send the brief to Anthropic.
-  - Providers gained an optional `reportedWhere` hook. The registry checks Relay again at the start
-    of every run, so a local-only task never reaches a remote worker.
+  - Providers gained an optional `reportedWhere` hook. Each run reads its settings once. Relay is
+    asked again at its start, and the provider checks the task's privacy mode against Relay's fresh
+    answer right before a worker starts, so a local-only task never reaches a remote worker.
+  - **What "local" can't tell.** Relay reports `local` when the address Claude Code calls is on this
+    computer. A proxy on this computer that forwards to the cloud would still read as local. The
+    provider's words in Settings › Providers say so.
   - Receipts record Relay's report as the egress (`local` or `remote:anthropic`), with provider
     `relay`. They don't say "remote:anthropic via relay": the receipt format allows only `local` or
-    `remote:<name>`.
-- **No `.git` in the task's folder.** Each attempt commits the task's files into a fresh repository
-  under Nova's state for the task. That location is untracked and not synced.
-  - It is fresh because Relay keeps a connected folder's commit from its first connection.
-  - Relay's worktree is read by Nova itself with git. Copy-back happens only when it matches Relay's
-    file list, and it includes deletions.
+    `remote:<name>`. A receipt is written once a worker has started, with what Relay said then; a
+    busy answer writes none.
+- **No `.git` in the task's folder.** The task's files are committed into a repository under Nova's
+  state for the task, one per content. That location is untracked and not synced.
+  - One per content, because Relay keeps a connected folder's commit from its first connection: the
+    same files reuse it, changed files get a new one.
+  - **Nova never runs git in a folder Relay names** (the review found that a crafted `.git` there
+    could run a command). It walks the worktree with `lstat`, never following a link and skipping
+    `.git`, and compares it with the files it handed Relay. The worktree must be
+    `<dataDirectory>/worktrees/<runId>`. Copy-back happens only when the walk matches Relay's list.
+    It is planned, sized and read in full before anything is written, and it includes deletions.
 - **What Relay reports is kept, but it is never evidence.** The run is kept as a `relay-run`
   artifact: its id, worktree, branch, base commit and Relay's diff. Providers can now return
   `artifacts`, and they are carried through Nova's ask-before-testing step.
@@ -42,13 +51,29 @@ The as-built note is in `docs/plans/M8.md` §2.
     OK.
 - **A busy Relay is a wait, not a failure.** A `runtime_busy` answer is a blocked report with
   `retry_after_s`. The registry asks again by itself, and after a restart too. That is safe, because
-  the worker only edits a copy. The `requestId` is a UUID made from the idempotency key and the
-  attempt number, so the same attempt never starts a second run.
+  the worker only edits a copy.
+  - **The `requestId`** is a UUID made from the task id, its idempotency key, the attempt and the base
+    commit, so the same attempt never starts a second run. One Relay project and task are kept per
+    attempt.
+  - **Nova stops asking after `busy_limit` busy answers in a row** (120 by default, an hour at 30 s).
+    The task then waits for the person: "Relay has been busy for an hour; Nova stopped asking."
+  - **Cancelled while a start is on its way:** the same request is sent again, which names the run,
+    and the run is cancelled.
 - **A dispatch whose work never started isn't an attempt (a ledger change).**
   - **The rule.** A running worker may call `ledger.notStarted(id, why)`. Only a `blocked` report takes that claim. The ledger then gives the dispatch back and records `attempt_returned` ("Relay was busy; this didn't count as an attempt."). A done or failed report is counted regardless.
   - **Restarts.** `recover()` gives back an active task's dispatch if it had claimed not-started.
   - **Relay** claims it only for `runtime_busy`. Relay records a run only after its busy check (`runtime/workers.mjs` 77–100), so reusing the attempt's `requestId` after a give-back starts a fresh run.
   - **Why.** Before this, four busy answers and then one failed verification ended the task failed ("Gave up after 6 attempts").
+- **The independent review of M8b** found eight problems, each now a test in
+  `tests/core/relay-review.test.ts` that failed before its fix:
+  - privacy judged on a stale answer, or on another Relay than the brief went to;
+  - git run in a worktree Relay names;
+  - a stale baseline after a busy wait;
+  - an unbounded busy loop;
+  - an orphan run after a cancel mid-start;
+  - a `requestId` that could recur;
+  - a copy-back that could half-apply or exceed the size limit;
+  - unbounded answers.
 - **A chaos test made robust.** The full-database test (`tests/chaos/disk.test.ts`) depended on how
   full SQLite's last pages happened to be, and Relay's manifest changed that. It now fills to the
   brim.
