@@ -30,6 +30,22 @@ built-ins only.
   `docs/screenshots/m3/`. Each waits for finite animations to finish first.
 - **"No face"** is checked structurally: every orb on the page has exactly its
   four layers and no image, SVG or canvas inside.
+- **Independent review, fixed before merge:**
+  - Offline honesty: health checks are network-only in the service worker, and
+    a cached answer never counts as Nova being reachable (a second outage used
+    to flip the orb back to idle every two seconds). Browser-tested with two
+    real outages; the test fails on the old code.
+  - Tier 3 for Era 2 tool steps: removing a schedule, and commands that look
+    irreversible (rm, dd, force push, hard reset, clean -f, branch -D, find
+    -delete, DROP TABLE, recursive chmod/chown), need the confirm box every
+    time. The command check only adds friction; anything it misses still asks
+    first (tier 2). Settings' "without asking" permissions are the person's own
+    policy and are unchanged.
+  - Turning off the design system in use falls back to the one before, drops
+    device overrides on it, and sends the `design-system` event, as removal
+    does.
+  - Applying "on all devices" from a device with its own choice now says that
+    this device keeps its choice.
 - **Found by the gate and fixed:** setup ignored the curly apostrophe phone
   keyboards type ("I’m Alex" became the name), and setup's transcript replayed
   its entrance animation on every answer.
