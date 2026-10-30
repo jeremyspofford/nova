@@ -15,6 +15,49 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (grounding: the chat agent knows what Nova is).** Branch `agent/self-grounding`
+(`agent/grounding` was already checked out in another worktree). Evidence:
+`docs/evidence/agent-grounding.md`.
+- **Self-briefing.** `src/core/self.ts` (`core.self`) builds a compact briefing from the core's own
+  registries, in process: instance (preview, production or development, from `NOVA_INSTANCE`;
+  `scripts/preview.sh` sets preview), data home, device, version and commit; the person's profile
+  summary and memory counts; the chat model; providers with their health; the hub's Ollama, read
+  now (cached 30 s); connections; capture sources with their detail; devices; schedules and
+  automation rules; approvals; appearance; open problems. About 2,700 characters on a typical
+  instance. The runner builds it once per turn and `buildSystem` puts it after the system prompt.
+  Per turn, not per session: the main conversation lives for weeks, and a briefing from its first
+  turn would go stale. Helpers don't get it; their context is scoped to their brief.
+- **Status tools.** `nova_instance`, `nova_capture`, `nova_devices`, `nova_schedules` and
+  `nova_settings` are read-only and need no approval. They call `core.self` in process, never Nova's
+  HTTP API. `nova_instance` checks an enabled provider that was never checked (up to 2 s).
+- **Secrets and privacy.** The briefing reaches whatever model the conversation uses, cloud ones
+  included. So:
+  - It carries names and states only: a setting whose name says secret shows as "(set)".
+  - Everything passes `redactText`, so a vault value can't slip through an error message.
+  - Memory counts go in, never memory contents. Capture status goes in, never capture text.
+  - Connector accounts and device addresses are left out.
+- **Rules.**
+  - The check-before-answering rule is in `CHARTER`, next to the honesty rule. It carries
+    capability honesty: say it's not in the current setup and how to add it, never "I can't, I run
+    on X".
+  - The obvious-intent and subsystem-status rules are in `SPEECH`.
+- **First run and imports.**
+  - A Nova with no memories says it is fresh and names its home. It offers `~/workspace/import/`
+    (seeded with a README): paste here, or put a file there, and the agent reads it and suggests
+    memories. They arrive unreviewed for the person to check in Memory.
+  - A Nova memory export (`memory.json` from `POST /memory/export`) found there is offered. The new
+    `memory_import` tool asks first and loads it: each memory not already kept is added unreviewed,
+    recorded by `import`, with the file as its source. It only reads plain files inside
+    `~/workspace/import/`, never through a link.
+  - **Gap:** "profile packs" don't exist. The profile archive in PROFILES-AND-CUSTOMIZATION
+    (settings, triggers and extensions, with secrets re-linked) was never built. The only pack
+    Nova offers is a memory export, and a pack is looked for only in the hub's own
+    `~/workspace/import/`. A pack on another device is never looked for.
+  - **Gap:** there is no memory-export button in the PWA (API only), so moving memories between
+    Novas still takes a call to `POST /api/v1/memory/export`.
+- **UI.** The conversation view has plain labels for the new tools and an approval sentence for
+  `memory_import`.
+
 **2026-10-30 (Screenpipe source: edit in the console, API key).** Branch `capture/screenpipe-key`.
 These are two gaps the owner found live.
 - **The address and lookback can now be edited** in Settings › Capture › Address and API key. It

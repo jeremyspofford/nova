@@ -5,7 +5,7 @@
 // choice (OpenRouter), background and scheduled work, appearance, capture status with its quoted
 // error, a fresh instance and its import offer, and that no secret value reaches the model.
 // Neutral placeholders only. The same questions against a real local model: grounding-real-ollama.
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,7 +26,7 @@ const SCRIPT: { match: RegExp; tool: string; args: Record<string, unknown>; answ
   {
     match: /openrouter/i, tool: 'nova_instance', args: {},
     answer: (r) => {
-      const providers = [...r.matchAll(/^- (.+?) \[[\w-]+\]: (on|off)/gm)].map((m) => `${m[1]} (${m[2]})`);
+      const providers = [...r.matchAll(/^- (.+?) \[[\w-]+\]: (on|off|in use)/gm)].map((m) => `${m[1]} (${m[2]})`);
       return `I'll take that as using OpenRouter as a model provider. That's not in my current setup: your providers are ${providers.join(', ')}, and none is OpenRouter. To add it, open Settings › Providers and set an OpenAI-compatible provider to OpenRouter's address, a model and its key; then choose it as the chat model.`;
     },
   },
@@ -71,9 +71,12 @@ function scripted(calls: Call[]) {
   };
 }
 
-async function start(o: { prep?: (home: string) => void } = {}) {
+// NOVA_GROUNDING_EVIDENCE=<file> keeps every conversation as Markdown, for the evidence file.
+const transcript: string[] = [];
+after(() => { if (process.env.NOVA_GROUNDING_EVIDENCE) writeFileSync(process.env.NOVA_GROUNDING_EVIDENCE, transcript.join('\n')); });
+
+async function start() {
   const home = mkdtempSync(join(tmpdir(), 'nova-grounding-'));
-  o.prep?.(home);
   const calls: Call[] = [];
   const nova = createNova({ ...loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: 'example-model-command', NOVA_AGENT_EGRESS: 'none', NOVA_TZ: 'UTC', NOVA_INSTANCE: 'preview' }), port: 0, commit: false } as ReturnType<typeof loadConfig>, { agent: scripted(calls) });
   const ask = async (text: string, approve = false) => {
@@ -88,6 +91,9 @@ async function start(o: { prep?: (home: string) => void } = {}) {
     await nova.runner.idle(id);
     const turn = (nova.runner.snapshot(id).session as { turns: { items: Item[] }[] }).turns[0]!;
     const items: Item[] = turn.items;
+    const tool = items.find((i) => i.kind === 'tool');
+    transcript.push(`#### “${text}”`, '', ...(tool ? [`Tool: \`${tool.name}\` ${JSON.stringify((tool as { args?: unknown }).args ?? {})}`, '', '```text', tool.result?.output ?? '(no result)', '```', ''] : ['Tool: none', '']),
+      'Reply:', '', ...items.filter((i) => i.kind === 'text').map((i) => `> ${String(i.text).replace(/\n/g, '\n> ')}`), '');
     return { turn, tool: items.find((i) => i.kind === 'tool'), reply: items.filter((i) => i.kind === 'text').map((i) => i.text).join('\n') };
   };
   return { home, nova, calls, ask, close: async () => { nova.scheduler.stop(); await nova.core.close(); } };

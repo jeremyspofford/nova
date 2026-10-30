@@ -287,7 +287,7 @@ Not listed means not in this setup yet. Ways to add: a model provider in Setting
     }
     this.#cached = null;
     const chat = this.#chatId();
-    const providers = this.#providerViews().map((p) => `- ${p.name} [${p.id}]: ${p.enabled ? 'on' : 'off'}${p.id === chat ? ', your chat model' : ''}; ${p.class}${addressOf(p.config)}${p.model ? `; model ${p.model}` : ''}; ${plain(p.egress.words)} Health: ${plain(p.health.words)}${p.health.checked_at ? ` (checked ${ago(p.health.checked_at, this.#now())})` : ''}`);
+    const providers = this.#providerViews().map((p) => `- ${p.name} [${p.id}]: ${p.enabled ? 'on' : p.id === chat ? 'in use' : 'off'}${p.id === chat ? ', your chat model' : ''}; ${p.class}${addressOf(p.config)}${p.model ? `; model ${p.model}` : ''}; ${plain(p.egress.words)} Health: ${plain(p.health.words)}${p.health.checked_at ? ` (checked ${ago(p.health.checked_at, this.#now())})` : ''}`);
     const out = [
       `Instance: ${this.#instanceLine()}`,
       `Person: ${this.#personLine()}`,
