@@ -7,9 +7,9 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-export type ScratchKind = 'drill' | 'drill-open' | 'forget' | 'sandbox' | 'release-tests';
+export type ScratchKind = 'drill' | 'drill-open' | 'forget' | 'sandbox' | 'release-tests' | 'export';
 
-const NAME = /^nova-(drill|drill-open|forget|sandbox|release-tests)-p(\d+)-[A-Za-z0-9]{6}$/;
+const NAME = /^nova-(drill|drill-open|forget|sandbox|release-tests|export)-p(\d+)-[A-Za-z0-9]{6}$/;
 
 // Made by this process and not yet given back.
 const inUse = new Set<string>();

@@ -87,6 +87,7 @@ const SKIP_TOP: Record<string, string> = {
   kept: 'Nova’s own scratch',
   connectors: 'Era 2’s connection secrets (the vault holds them now)',
   'nova.pid': 'which process runs this home',
+  'factory-reset.json': 'a factory reset in progress acts on this home only',
 };
 const SKIP_FILE: Record<string, string> = {
   'vault/key': 'the vault’s key never leaves this machine',
@@ -284,6 +285,22 @@ export class NightlyBackups {
   encrypted(): FoundCopy[] {
     const t = this.#o.settings().encrypted_target;
     return t ? this.#scanCopies(t).found : [];
+  }
+
+  // Nova's own backups (or encrypted copies) in one folder, newest first, and the strays there: for
+  // a factory reset, which erases Nova's own in every folder it ever backed up to, strays never.
+  inFolder(folder: string, kind: FolderKind): { found: { path: string; seq: number; seal: string | null }[]; strays: string[] } {
+    if (kind === 'encrypted') {
+      const r = this.#scanCopies(folder);
+      return { found: r.found.map((f) => ({ path: f.path, seq: f.seq, seal: null })), strays: r.strays };
+    }
+    const r = this.#scan(folder);
+    return { found: r.found.map((f) => ({ path: f.path, seq: f.seq, seal: f.manifest.seal ?? null })), strays: r.strays };
+  }
+
+  // Whether a folder is there to act on (the rule forgetting uses: see #reachable).
+  reachable(folder: string, kind: FolderKind): boolean {
+    return this.#reachable(folder, kind);
   }
 
   // Things in the backup folders named like Nova's backups that Nova didn't make (or that were
