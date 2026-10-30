@@ -10,7 +10,7 @@ import { ENVELOPE_VERSION, type Brief, type Evidence, type Report, type Tier } f
 import { Sse } from '../api.ts';
 import type { Ledger, LanedWorker, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
-import { findChromium, type Found } from './chromium.ts';
+import { findChromium, sweepProfiles, type Found } from './chromium.ts';
 import { FINAL_READ, SCREENSHOT, refOf, refetch, squash, taskDir, type FinalRead, type Read } from './evidence.ts';
 import { NO_HUB, allowed, describe, hasEffects, hostOf, marksCommit, planEgress, sends, validateBrowserBrief, validatePlan, type Hub, type Plan, type Step } from './plan.ts';
 import { INPUT_KEYS, Session, type Holder, type Input, type SessionOptions, type SessionView } from './session.ts';
@@ -69,6 +69,14 @@ export class Browser extends EventEmitter {
   bind(ledger: Ledger): void { this.#ledger = ledger; }
 
   chromium(): Found { return findChromium(this.#o.env ?? process.env); }
+
+  // Profiles left behind by a browser that never closed (Nova killed, the machine off) go at
+  // start: they may hold the person's cookies from a takeover. Ones still in use are kept.
+  sweep(): number {
+    const gone = sweepProfiles();
+    if (gone.length) this.#o.log.info('browser', `Removed ${gone.length} browser profile${gone.length === 1 ? '' : 's'} a browser task left behind.`, { count: gone.length });
+    return gone.length;
+  }
 
   #hub(): Hub {
     try { return this.#o.hub?.() ?? NO_HUB; } catch { return NO_HUB; }

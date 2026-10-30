@@ -741,6 +741,7 @@ export function createCore(o: CoreOptions) {
     // A hub recovers the ledger, then starts the heartbeat: once now (to catch up), then every
     // 30 s. A standby starts copying the hub instead, and runs nothing else.
     start() {
+      browser.sweep();
       const recovered = role.role() === 'hub' ? startHub() : { requeued: [], reverified: [] };
       role.start();
       return recovered;

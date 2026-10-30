@@ -11,6 +11,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage } from 'node:http';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { sleep, stop } from '../acceptance/support.ts';
 import { call, enroll } from '../core/mesh-support.ts';
@@ -136,4 +139,35 @@ test('the reviewer’s probe, end to end: a phone that may not approve can’t s
   } finally {
     await stop(nova);
   }
+});
+
+// M5 review, minor 8: Chromium looks up only the declared names, which must still work; its
+// profile names this process (so a later start can tell it was left behind) and goes when it closes.
+test('declared names still resolve under the resolver rules; the profile names its process and is removed on close', { timeout: 60_000 }, async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') return t.skip(b);
+  await b.close();
+  const site = await recorder(() => '<!doctype html><h1 id="t">Declared</h1>');
+  const ours = () => readdirSync(tmpdir()).filter((n) => n.startsWith('nova-browser-')).map((n) => join(tmpdir(), n))
+    .filter((p) => { try { return readFileSync(join(p, '.nova-owner'), 'utf8') === String(process.pid); } catch { return false; } });
+  const before = new Set(ours());
+  for (const [hosts, url] of [
+    [[`localhost:${site.port}`], `http://localhost:${site.port}/`],
+    [[`*.localhost:${site.port}`], `http://app.localhost:${site.port}/`],
+    [[`127.0.0.1:${site.port}`], `http://127.0.0.1:${site.port}/`],
+  ] as [string[], string][]) {
+    const s = session(hosts, NO_HUB);
+    try {
+      await s.open();
+      const mine = ours().filter((p) => !before.has(p));
+      assert.equal(mine.length, 1, 'one profile, naming this process');
+      await s.navigate(url);
+      assert.equal(await s.evaluate<string>('document.getElementById("t")?.textContent ?? ""'), 'Declared', `${hosts}: ${url}`);
+      await s.close();
+      assert.equal(existsSync(mine[0]!), false, 'removed when the browser closed');
+    } finally {
+      await s.close();
+    }
+  }
+  await site.close();
 });
