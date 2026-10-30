@@ -146,9 +146,10 @@ test('M4b over HTTPS: NOVA_CA_FILE carries trust to curl, the boot agent and the
   if (made.status !== 0) return t.skip('openssl is not available to make a test certificate');
   const ca = join(certs, 'cert.pem');
   const m = blank('nova-m4b-tls-');
-  const port = await freePort();
-  const mesh = `https://127.0.0.1:${port}`;
-  const hub = await m.start({ NOVA_MESH_URL: mesh, NOVA_MESH_PUBLIC_URL: mesh, NOVA_TLS_CERT: ca, NOVA_TLS_KEY: join(certs, 'key.pem') });
+  // Port 0: the server picks the mesh port and says which, so no other test can take it between
+  // choosing and binding (a port chosen here first was taken by a parallel test now and then).
+  const hub = await m.start({ NOVA_MESH_URL: 'https://127.0.0.1:0', NOVA_TLS_CERT: ca, NOVA_TLS_KEY: join(certs, 'key.pem') });
+  const mesh = hub.mesh!;
   const deviceHome = join(m.dir, 'device-home');
   const env = { PATH: process.env.PATH ?? '', HOME: join(m.dir, 'user'), NOVA_DEVICE_HOME: deviceHome, NOVA_DEVICE_POLL_MS: '200', NOVA_DEVICE_HEARTBEAT_MS: '300', TZ: 'UTC' };
   let joining: ChildProcess | null = null;
