@@ -78,7 +78,7 @@ test('connecting Gmail through the browser flow', async () => {
   assert.deepEqual([g.connected, g.account, g.notice.ok], [true, 'you@example.com', true]);
 });
 
-test('the email summary: searches, reads, summarizes; then the web asks first', async () => {
+test('the email summary: searches, reads, summarizes; mail is screened, and an address after it that the mail didn’t give asks', async () => {
   const { id, s } = await ask("What's in my email today?");
   const items = s.session.turns[0].items;
   assert.deepEqual(items.map((i) => i.kind === 'tool' ? i.name : i.kind), ['skill', 'gmail_search', 'gmail_read', 'text']);
@@ -86,17 +86,24 @@ test('the email summary: searches, reads, summarizes; then the web asks first', 
   assert.equal(items[2].result.summary, 'Contract for the spring project: signature by Thursday');
   assert.match(items[3].text, /Dana Whitfield/);
   assert.equal(s.session.turns[0].state, 'done');
+  // The ingest gate screened both reads before the model saw them (no sorting model: held back as
+  // unsure, never passed straight through).
+  assert.deepEqual([items[1].result.screen.kind, items[2].result.screen.kind], ['email', 'email']);
+  assert.equal(items[2].result.screen.verdict, 'quarantine');
+  assert.match(items[2].result.screened, /^<outside source="email"/);
 
-  // Same conversation: mail is in context now, so opening a page waits for the person.
+  // Same conversation: mail is in context now. The address isn't one the mail (or the person)
+  // gave, so the model put it together: opening it asks, showing the address (the ingest gate's
+  // outbound rule, review B3). Declined, nothing is fetched.
   await post(`/api/sessions/${id}/messages`, { text: 'open that link' });
   const waiting = await settle(id, (x) => x.live?.phase === 'approval');
   const fetchTool = waiting.session.turns[1].items.find((i) => i.kind === 'tool');
-  assert.deepEqual([fetchTool.name, fetchTool.needsApproval], ['web_fetch', true]);
+  assert.deepEqual([fetchTool.name, fetchTool.needsApproval, fetchTool.guard.what], ['web_fetch', true, 'open an address it put together']);
   await post(`/api/sessions/${id}/approvals/${fetchTool.id}`, { decision: 'deny' });
   const done = await settle(id);
   assert.match(done.session.turns[1].items.at(-1).text, /won't open it/);
 
-  // A fresh conversation hasn't read mail: no approval needed to read a page.
+  // A fresh conversation hasn't read mail: no approval needed to read a page either.
   const other = await (await post('/api/sessions', { text: 'open that link' })).json();
   const o = await settle(other.id, (x) => x.live === null || x.live?.phase === 'approval');
   assert.notEqual(o.live?.phase, 'approval');

@@ -197,7 +197,10 @@ export class ChatRun {
       if (done) return done;
       const kind = this.kinds[inputs.kind];
       const { target, handoff } = kind.handoff(inputs, outcome);
-      const h = { type: 'handoff', id: randomUUID().slice(0, 8), ...handoff, task };
+      // A run that read outside content hands over its taint, and a screened form of its report
+      // for the conversation's model (the ingest gate); the person still reads the report as written.
+      const gate = await this.runner.screenReport?.(inputs.run, handoff) ?? {};
+      const h = { type: 'handoff', id: randomUUID().slice(0, 8), ...handoff, ...gate, task };
       await this.runner.deliver(target, h);
       if (this.store.exists(inputs.run)) this.runner.record(inputs.run, { type: 'delivered', to: target, handoff: h.id, ok: h.ok, task });
       await kind.after?.(inputs, h, target, outcome, task);

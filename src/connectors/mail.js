@@ -154,7 +154,9 @@ export function searchResult(found, { more = false, when: at }) {
 
 const size = (n) => (n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 ** 2).toFixed(1)} MB`);
 
-// m: { from, to, cc, subject, at, files: [{ name, size }], body }
+// m: { from, to, cc, subject, at, files: [{ name, size, type? }], body, html?, 'reply-to'?,
+// 'return-path'?, 'authentication-results'? }. `ingest` is what the ingest screen reads besides
+// the text: the sender's headers, the attachments, and the HTML when there was no plain text.
 export function readResult(m, { when: at }) {
   let body = String(m.body ?? '').trim() || '(no text)';
   if (body.length > MAX_BODY) body = `${body.slice(0, MAX_BODY)}\n[the rest of this message was cut]`;
@@ -167,5 +169,9 @@ export function readResult(m, { when: at }) {
     `Date: ${at(m.at)}`,
     files.length ? `Attachments (not opened): ${files.join(', ')}` : '',
   ].filter(Boolean);
-  return { output: `${lines.join('\n')}\n\n${body}`, summary: m.subject ?? '(no subject)' };
+  const headers = Object.fromEntries(['from', 'reply-to', 'return-path', 'authentication-results'].filter((k) => m[k]).map((k) => [k, String(m[k])]));
+  return {
+    output: `${lines.join('\n')}\n\n${body}`, summary: m.subject ?? '(no subject)',
+    ingest: { headers, attachments: (m.files ?? []).map((f) => ({ name: f.name, ...(f.type ? { type: f.type } : {}) })), ...(m.html ? { html: `${lines.map((l) => `<p>${l.replace(/</g, '&lt;')}</p>`).join('')}${m.html}` } : {}) },
+  };
 }

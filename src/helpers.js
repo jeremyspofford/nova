@@ -37,7 +37,8 @@ export class Helpers extends EventEmitter {
   }
 
   // The delegate tool. Returns at once; the work is a Work Ledger task for the chat-run worker.
-  spawn({ title, task, files = [], parent, turn = null }) {
+  // taint: what outside content the asking run had read (the ingest gate); the helper starts with it.
+  spawn({ title, task, files = [], parent, turn = null, taint = [] }) {
     const brief = String(task ?? '').trim();
     if (!brief) throw new HelperError('A helper needs a task: what to do, and what to report back.');
     if (brief.length > MAX_TASK) throw new HelperError(`The task is too long (${brief.length} characters; the limit is ${MAX_TASK}). Put the details in a file and pass it in "files".`);
@@ -59,7 +60,7 @@ export class Helpers extends EventEmitter {
         ...(up ? { parent_id: up.id } : {}),
         evidence_required: [{ kind: 'confirmation', note: 'The report is in the conversation that asked.' }],
         context_refs: passed.map((f) => ({ kind: 'file', ref: `~/${f.path}`, sha256: createHash('sha256').update(f.text).digest('hex') })),
-        inputs: { kind: 'helper', run, title: name, parent, ...(turn ? { turn } : {}), files: passed },
+        inputs: { kind: 'helper', run, title: name, parent, ...(turn ? { turn } : {}), files: passed, ...(taint?.length ? { taint } : {}) },
       });
     } catch (e) {
       throw new HelperError(e.message);
@@ -123,7 +124,7 @@ export class Helpers extends EventEmitter {
     let task = events.find((e) => e.type === 'user')?.text;
     try { task ??= meta.task ? this.ledger.get(meta.task).brief.goal : undefined; } catch { /* that task is gone */ }
     if (!task) throw new HelperError('That helper never got its brief, so there is nothing to run again.', 409);
-    return this.spawn({ title: meta.title, task, files: (meta.files ?? []).filter((p) => existsSync(join(this.runner.config.home, p))), parent: meta.parent, turn: meta.turn });
+    return this.spawn({ title: meta.title, task, files: (meta.files ?? []).filter((p) => existsSync(join(this.runner.config.home, p))), parent: meta.parent, turn: meta.turn, taint: this.runner.taintOf(reduce(events)) });
   }
 
   // What's working and waiting, for the Activity view.
@@ -142,7 +143,7 @@ export class Helpers extends EventEmitter {
     if (!this.store.exists(inputs.run)) {
       this.runner.record(inputs.run, { type: 'session', id: inputs.run, title: inputs.title, kind: 'helper', parent: inputs.parent, ...(inputs.turn ? { turn: inputs.turn } : {}), files: (inputs.files ?? []).map((f) => f.path), task: brief.task_id, v: 1 });
     }
-    this.runner.send(inputs.run, brief.goal, { helper: { title: inputs.title, files: inputs.files ?? [] }, privacy: brief.privacy_mode });
+    this.runner.send(inputs.run, brief.goal, { helper: { title: inputs.title, files: inputs.files ?? [] }, privacy: brief.privacy_mode, taint: inputs.taint ?? null });
     this.emit('change');
     return null;
   }

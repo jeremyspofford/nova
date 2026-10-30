@@ -84,16 +84,19 @@ test('asked in a conversation, Nova hands the work to a helper and the reply end
   assert.match(run.turns[0].text, /^Compare commuter e-bikes under \$2,000 using my notes\. Report back/);
   assert.deepEqual(run.turns[0].items.filter((i) => i.kind === 'tool').map((i) => i.name), ['web_search']);
 
-  // The next message in the conversation sees the report.
+  // The next message in the conversation sees the report. The helper read the web, so the report
+  // carries that taint and the model gets it screened, as data (the ingest gate).
+  assert.ok(h.taint.some((x) => x.kind === 'search'));
   const prompt = buildPrompt((await convo(id)).session, [], { timezone: LA });
-  assert.match(prompt, new RegExp(`<handoff from="Compare e-bikes" helper="${h.run}" time="[^"]+">\\nThe \\*\\*Ridgeline C2`));
+  assert.match(prompt, new RegExp(`<handoff from="Compare e-bikes" helper="${h.run}" time="[^"]+">\\n<outside source="handoff" screen="[\\w-]+" verdict="quarantine">\\nFrom: Compare e-bikes\\n[^]*?The \\*\\*Ridgeline C2[^]*?</outside>\\n</handoff>`));
 });
 
 test("a helper's context is scoped: its brief, who the person is, and the files passed along; not the conversation, memory or schedules", async () => {
   const helper = calls.find((c) => c.system.includes('# You are a helper'));
   assert.ok(helper);
   assert.match(helper.system, /<file path="~\/USER\.md">/);
-  assert.match(helper.system, /<file path="~\/workspace\/bikes\.md">\nCommute: 9 miles, one long hill/);
+  // The notes file wasn't written by Nova, so it is screened before the helper reads it.
+  assert.match(helper.system, /<file path="~\/workspace\/bikes\.md">\n<outside source="file" screen="[\w-]+" verdict="quarantine">\nFrom: workspace\/bikes\.md\n[^]*?Commute: 9 miles, one long hill[^]*?<\/outside>\n<\/file>/);
   assert.doesNotMatch(helper.system, /MEMORY\.md">|coffee black|# Recent notes|# Schedules|# Memory blocks/);
   assert.doesNotMatch(helper.system, /^- (delegate|schedule_set|schedule_remove) /m);
   assert.doesNotMatch(helper.prompt, /Ask a helper|coffee|<memory_search>/);

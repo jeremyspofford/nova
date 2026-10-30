@@ -181,6 +181,7 @@ export class GmailImap {
       const msg = parseMessage(i['BODY[]'] ?? '');
       return readResult({
         from: header(msg, 'from'), to: header(msg, 'to'), cc: header(msg, 'cc'), subject: header(msg, 'subject'),
+        'reply-to': header(msg, 'reply-to'), 'return-path': header(msg, 'return-path'), 'authentication-results': header(msg, 'authentication-results'),
         at: imapDate(i.INTERNALDATE), files: messageFiles(msg), body: messageText(msg),
       }, { when: (ms) => when(ms, this.timezone) });
     }, { signal });

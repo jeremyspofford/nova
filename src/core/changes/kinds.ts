@@ -3,6 +3,7 @@
 // before it, and how that is put back. The same functions run in the sandbox (on the sandbox's own
 // core) and live, so what was tested is what ships. Nothing here runs code a change carries: an
 // extension's tests and probe are declarative, read by Nova.
+import { GATE_TEMPLATES } from './gates.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -554,7 +555,9 @@ const template: KindOps = {
     out.push(...ownProbe(a));
     return out;
   },
-  tier() { return 1; },
+  // The ingest gate's screen is a security gate: any change to it is tier 3 (gates.ts refuses one
+  // that drops or changes its questions).
+  tier(a) { return GATE_TEMPLATES.has(String(defOf(a).template_id)) ? 3 : 1; },
   asks(a) { const d = defOf(a); return [`Lets System 1 decide “${String(d.situation ?? d.template_id).slice(0, 100)}”.`]; },
   async test(a, live) {
     const d = defOf(a);

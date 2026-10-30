@@ -270,9 +270,10 @@ test('M4 gate: phone by QR and computer by command; revoke one; kill the hub, pr
     assert.ok(moved.find(isComputer)?.online, 'the computer found the new hub by itself');
     const arrived = await until(() => standby.get('/api/v1/tasks') as Promise<any[]>, (ts) => ts.some((x) => x.title === offlineTask.title), 1200);
     assert.equal(arrived.filter((x) => x.title === offlineTask.title).length, 1, 'the queued task arrived once');
-    const notes = (await standby.get('/api/v1/memory') as any[]).filter((m) => m.content === 'Written down while the hub was unreachable.');
+    // A device's note waits for the person's OK (the ingest gate), once, with its provenance.
+    const notes = await until(async () => (await standby.get('/api/v1/ingest/candidates') as any[]).filter((m) => m.content === 'Written down while the hub was unreachable.'), (x) => x.length > 0, 400);
     assert.equal(notes.length, 1, 'the queued note arrived once');
-    assert.match(notes[0].recorded_by, /^device:/, 'with its provenance');
+    assert.match(notes[0].source, /^device:/, 'with its provenance');
     assert.match(agentCli('status', '--json').stdout, new RegExp(`"epoch":\\s*2`));
     step('The computer moved to the new hub by itself (signed roster, epoch 2); its queued task and note each arrived exactly once, with provenance.');
 

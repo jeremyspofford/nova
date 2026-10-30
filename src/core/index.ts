@@ -42,6 +42,7 @@ import { Capture, PROMOTE } from './capture/capture.ts';
 import { captureRoutes } from './capture/routes.ts';
 import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
+import { wireIngest, type ScreenInput } from './ingest/index.ts';
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
 import { FactoryReset } from './resilience/reset.ts';
@@ -123,6 +124,10 @@ export type { CheckpointView, CheckpointManifest } from './resilience/checkpoint
 export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.ts';
 // Every process Nova starts, so none outlives an in-place restart (Era 2's commands register too).
 export { trackChild } from './children.ts';
+// The ingest gate (Amendment 2026-10-30-C Part 3): what Era 2's agent loop screens with, escapes
+// with, and says when something is blocked.
+export { Ingest, BLOCK_LINE, DEFAULT_LINK_CAPS, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, fold, wrapData } from './ingest/index.ts';
+export type { Screened, Source as IngestSource, SourceKind, Taint, Verdict, Candidate as MemoryCandidate, Hold } from './ingest/index.ts';
 // Grounding: what this Nova is, from its own registries, for the chat agent's briefing and tools.
 export { IMPORT_DIR } from './self.ts';
 export type { Self, Era2State } from './self.ts';
@@ -223,7 +228,8 @@ export function createCore(o: CoreOptions) {
       ...Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address)),
     ].filter(Boolean),
   });
-  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}) });
+  // Page reads are screened by the ingest gate (wired below) as they are taken.
+  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}), screen: (r) => ingest.screen({ text: r.text, source: { kind: 'web', origin: r.origin, ref: r.ref } }) });
   const browserChecks = browserCheckers(o.home);
   verifier.registerKind('screenshot', browserChecks.screenshot);
   verifier.registerKind('url', browserChecks.url);
@@ -309,6 +315,16 @@ export function createCore(o: CoreOptions) {
     return hard && answers.decision !== rule ? `your settings say “${rule}” here (${inputs.category_off ? 'this is turned off' : 'quiet hours'}).` : null;
   };
   decisions.register(new LocalModelProvider({ infer: (r) => models!.infer(r), ready: (t) => models!.decidesWithModel(rules.has(t.template_id)), guard: triageGuard }), { first: true });
+  // The ingest security gate (Amendment 2026-10-30-C Part 3): every read of outside content is
+  // screened before a model acts on it. The Noul screen is the local sorting model only, and the
+  // outbound guard knows the vault's values, memory and the standing files.
+  const { ingest } = wireIngest({
+    db, log, home: o.home, now, templates, decisions, ledger, verifier,
+    ready: () => models!.decidesWithModel(false), providerId: LOCAL_MODEL_PROVIDER,
+    infer: (r) => models!.infer(r),
+    secrets: () => { try { return vault.list().map((n) => vault.get(n)).filter((v): v is string => typeof v === 'string'); } catch { return []; } },
+    memory: () => memory.active().map((r) => r.content),
+  });
   const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
   const access = new Access({ devices, mesh: meshInfo });
   // Hub, standby and sync (M4 plan §3).
@@ -373,6 +389,9 @@ export function createCore(o: CoreOptions) {
     meshHosts: () => [...meshHosts()],
     fire: (topic, payload, key) => triggers.connectorEvent('capture', topic, payload, key),
     proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
+    // Captured text is screened before triage reads it: audio and meetings as transcripts, the rest
+    // as screen text (OCR).
+    screen: (r) => ingest.screen({ text: r.text, source: { kind: r.kind === 'audio' || r.kind === 'meeting' ? 'transcript' : 'ocr', origin: r.origin } }),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
     secrets: vault,
@@ -386,6 +405,8 @@ export function createCore(o: CoreOptions) {
   const configRow = (section: string, key: string) => db.get<{ value: string; updated_at: string }>('SELECT value, updated_at FROM profile WHERE section = ? AND key = ?', section, key);
   // A setting's version: its time and value together, so two changes in one millisecond differ.
   const configVersion = (r: { value: string; updated_at: string }) => createHash('sha256').update(`${r.updated_at}\0${r.value}`).digest('hex').slice(0, 16);
+  // A device note's first screen, from the check before the inbox writes, reused when it is kept.
+  const noteScreens = new WeakMap<object, ReturnType<typeof ingest.screenNow>>();
   const spokes = new Spokes({
     db, log, devices, identity: meshIdentity, now, version: o.version,
     effects: {
@@ -394,7 +415,22 @@ export function createCore(o: CoreOptions) {
         triggers.reactive(task, `device:${d.id}`);
         return task;
       },
-      memory: (d, body) => memory.remember({ ...(body as unknown as MemoryInput), kind: (body.kind ?? 'fact') as MemoryKind, recorded_by: `device:${d.id}` }),
+      // A device's note is outside content: it never becomes memory without the person's OK
+      // (Amendment 2026-10-30-C Part 3.6). Every one waits as a memory candidate, out of every
+      // prompt, the same queue as memory from a conversation that read outside content.
+      memory: (d, body) => {
+        const content = String((body as { content?: unknown }).content ?? '');
+        const kind = (body.kind ?? 'fact') as MemoryKind;
+        const first = noteScreens.get(body) ?? ingest.screenNow({ text: content, source: { kind: 'connector', origin: `device:${d.id}` } });
+        return { id: ingest.candidate({ op: 'remember', kind, content, source: `device:${d.id}`, taint: [first.taint] }) };
+      },
+      // A device's note is screened by Nova's own checks before it is kept (the inbox can't wait for
+      // a model): one that tries to give instructions is refused.
+      screenNote: (d, body) => {
+        const s = ingest.screenNow({ text: String((body as { content?: unknown }).content ?? ''), source: { kind: 'connector', origin: `device:${d.id}` } });
+        noteScreens.set(body, s);
+        return s.verdict === 'block' ? 'Nova didn’t keep this note: it looked like it was trying to give instructions.' : null;
+      },
       capture: (d, key, body) => capture.fromDevice(d, key, body),
       config: {
         read: (section, key) => { const r = configRow(section, key); return r ? { value: JSON.parse(r.value), version: configVersion(r) } : null; },
@@ -563,6 +599,7 @@ export function createCore(o: CoreOptions) {
       capture: capture.health(),
       backups: keep.health(),
       changes: changes.health(),
+      ingest: ingest.health(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -604,6 +641,19 @@ export function createCore(o: CoreOptions) {
 
   const routes: Route[] = [
     { method: 'GET', path: '/health', summary: 'Whether each part of the core is working, in plain words.', handle: () => health() },
+    // The ingest gate (Amendment 2026-10-30-C Part 3).
+    { method: 'GET', path: '/ingest/screens', summary: 'The latest screens of outside content: source, scores, flags and verdict, by hash; never the content. ?limit=', handle: ({ query }) => ingest.list(Number(query.get('limit')) || 50) },
+    { method: 'GET', path: '/ingest/candidates', summary: 'Memory waiting for your OK: what a conversation that read outside content, or one of your devices, wanted kept, with where it came from.', handle: () => ingest.candidates() },
+    { method: 'GET', path: '/ingest/screens/{id}', summary: 'One screen of outside content.', handle: ({ params }) => { const r = ingest.get(params.id!); if (!r) throw new CoreError('not_found', 'There is no such screen.'); return r; } },
+    {
+      method: 'POST', path: '/ingest/screen', summary: 'Screen outside content before a model reads it: the verdict (pass, quarantine or block), the scores and flags, and the extract a model may see.', body: '{text?, html?, headers?, attachments?, source: {kind, origin, ref?}}',
+      handle: async ({ body }) => {
+        const input = body as unknown as ScreenInput;
+        if (typeof input.text !== 'string' && typeof input.html !== 'string') throw new CoreError('validation', 'Give the content as text or html.');
+        const { id, verdict, scores, max, flags, extract, partial, model } = await ingest.screen(input);
+        return { id, verdict, scores, max, flags, extract, partial, model };
+      },
+    },
     { method: 'GET', path: '/identity', summary: 'Who Nova is for this person: name, tuning, and the fixed charter.', handle: () => ({ identity: identityOf(profile), charter: CHARTER, rendered: render(identityOf(profile)) }) },
     { method: 'GET', path: '/profile', summary: 'The whole profile (no secrets; those are referenced by name only).', handle: () => profile.all() },
     {
@@ -1002,7 +1052,7 @@ export function createCore(o: CoreOptions) {
 
   // Grounding (self.ts): the briefing and the agent's read-only status tools, in process.
   const self = new Self({
-    home: o.home, version: o.version, instance: () => o.instance ?? 'production', codeRoot: CODE_ROOT,
+    home: o.home, ingest, version: o.version, instance: () => o.instance ?? 'production', codeRoot: CODE_ROOT,
     profile, memory, providers, models: models!, connectors, capture, devices, triggers, design, log, now,
     hubId: () => meshIdentity.id, role: () => role.role(), online: (d) => deviceView(d).online, setupDone: () => setup.view().done,
     ...(o.chat ? { chat: o.chat } : {}),
@@ -1011,7 +1061,7 @@ export function createCore(o: CoreOptions) {
   return {
     self,
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
-    vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
+    ingest, vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
     restartInPlace: (why: string) => restarter.restartInPlace(why),

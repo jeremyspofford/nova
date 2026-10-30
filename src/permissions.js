@@ -14,14 +14,15 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Not a tool of its own: going online once mail has been read in the conversation.
-export const ONLINE = { id: 'online', label: 'Go online after reading your mail', note: 'An email could carry instructions telling Nova to send your mail to a website' };
+// Going online after reading outside content is no longer a blanket question (it was the
+// "online" permission): the ingest gate's outbound guard checks what each request would carry,
+// and asks only when it carries something of the person's (Amendment 2026-10-30-C Part 3).
+// An "online" line left in permissions.md is kept as it is and means nothing now.
 
 // The permissions the given tools declare, in the order the tools are listed.
 export function permissionList(tools) {
   const out = new Map();
   for (const [name, tool] of Object.entries(tools)) {
-    if (tool.online && !out.has(ONLINE.id)) out.set(ONLINE.id, ONLINE);
     if (!tool.needsApproval) continue;
     const p = tool.permission ?? { id: name, label: `Use ${name}` };
     if (!out.has(p.id)) out.set(p.id, p);
@@ -30,9 +31,8 @@ export function permissionList(tools) {
 }
 
 // Which permission a step needs, if any.
-export function permissionFor(name, tool, { tainted = false } = {}) {
+export function permissionFor(name, tool) {
   if (tool?.needsApproval) return tool.permission?.id ?? name;
-  if (tool?.online && tainted) return ONLINE.id;
   return null;
 }
 

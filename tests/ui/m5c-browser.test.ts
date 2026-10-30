@@ -45,6 +45,13 @@ test('M5c: a browser task fills the form on its own and ends Verified, checked b
     assert.equal(shot.headers.get('content-type'), 'image/png');
     assert.equal(shot.headers.get('cache-control'), 'no-store');
 
+    // The page read was screened by the ingest gate as it was taken (Amendment 2026-10-30-C Part 3):
+    // its verdict is kept with it, before any model could ever read it.
+    const reads = JSON.parse(readFileSync(join(m.home, 'workers', 'browser', task.id, 'reads.json'), 'utf8')) as { screen?: { id: string; verdict: string } }[];
+    assert.ok(reads.length > 0 && reads.every((x) => x.screen && /^(pass|quarantine|block)$/.test(x.screen.verdict)), JSON.stringify(reads));
+    const screen = await m.get(`/api/v1/ingest/screens/${reads[0]!.screen!.id}`);
+    assert.equal(screen.kind, 'web');
+
     const ev = await events(m, task.id);
     assert.equal(ev.filter((e) => e.kind === 'step').length, 9, 'every step is in the record');
     // The form reaches nothing else. (Chromium's own calls home are refused at the proxy and

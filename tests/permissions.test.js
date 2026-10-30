@@ -10,7 +10,9 @@ const home = () => mkdtempSync(join(tmpdir(), 'nova-perm-'));
 
 test('every permission comes from a tool, and starts as ask', () => {
   const p = new Permissions(home(), () => TOOLS);
-  assert.deepEqual(p.list().map((x) => x.id), ['commands', 'online', 'gmail-drafts', 'gmail-tidy', 'schedules', 'memory-import']);
+  // No blanket "online" permission: the ingest gate's outbound guard asks when a request would
+  // carry something of the person's (Amendment 2026-10-30-C Part 3).
+  assert.deepEqual(p.list().map((x) => x.id), ['commands', 'gmail-drafts', 'gmail-tidy', 'schedules', 'memory-import']);
   assert.ok(p.list().every((x) => x.yes === false));
   assert.equal(p.allows('commands'), false);
 });
@@ -23,11 +25,10 @@ test('a tool added later brings its own permission, named after it if it declare
   assert.equal(permissionFor('mcp_jira_create', tools.mcp_jira_create), 'mcp_jira_create');
 });
 
-test('each step that asks first maps to its permission; going online only after mail', () => {
+test('each step that asks first maps to its permission; the web has none', () => {
   assert.equal(permissionFor('exec', TOOLS.exec), 'commands');
   assert.equal(permissionFor('schedule_remove', TOOLS.schedule_remove), 'schedules');
   assert.equal(permissionFor('web_fetch', TOOLS.web_fetch), null);
-  assert.equal(permissionFor('web_fetch', TOOLS.web_fetch, { tainted: true }), 'online');
 });
 
 test('set writes plain lines, and keeps lines for permissions no tool declares now', () => {

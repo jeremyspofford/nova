@@ -91,13 +91,15 @@ test('the inbox takes each key exactly once, in order, and keeps what each item 
     assert.deepEqual(r.map((x: { status: string }) => x.status), ['accepted', 'accepted', 'accepted', 'refused', 'refused']);
     assert.ok(r.every((x: { duplicate: boolean }) => x.duplicate === false));
 
-    // The task is in the ledger, from this device; the memory has the device's provenance.
+    // The task is in the ledger, from this device. The note is outside content until it passes the
+    // ingest gate's screen (no sorting model here), so it waits for the person as a memory candidate,
+    // with the device's provenance (Amendment 2026-10-30-C Part 3, review S2).
     const t = (await h.c('GET', `/tasks/${r[1].ref}`)).body;
     assert.equal(t.title, 'Write the test note');
     assert.deepEqual(t.origin, { kind: 'device', ref: dev.deviceId });
-    const m = (await h.c('GET', '/memory')).body.find((x: { id: string }) => x.id === r[2].ref);
-    assert.equal(m.recorded_by, `device:${dev.deviceId}`);
-    assert.equal(m.user_state, 'unreviewed');
+    const m = h.core.ingest.candidates().find((x) => x.id === r[2].ref)!;
+    assert.equal(m.source, `device:${dev.deviceId}`);
+    assert.equal(m.content, 'The test plant needs water on Fridays.');
     // The refusal is kept with its reason and the request itself: a ledger entry is never lost.
     assert.match(r[3].reason, /worker/);
     const refusals = (await h.c('GET', `/mesh/inbox/refusals?device=${dev.deviceId}`)).body;
@@ -109,11 +111,11 @@ test('the inbox takes each key exactly once, in order, and keeps what each item 
     assert.deepEqual(again.body.results.map((x: { status: string; duplicate: boolean; ref?: string }) => [x.status, x.duplicate, x.ref]), r.map((x: { status: string; ref?: string }) => [x.status, true, x.ref]));
     const tasks = (await h.c('GET', '/tasks?limit=500')).body.filter((x: { title: string }) => x.title === 'Write the test note');
     assert.equal(tasks.length, 1);
-    const mems = (await h.c('GET', '/memory')).body.filter((x: { content: string }) => x.content === 'The test plant needs water on Fridays.');
+    const mems = h.core.ingest.candidates().filter((x) => x.content === 'The test plant needs water on Fridays.');
     assert.equal(mems.length, 1);
 
-    // Forgetting the memory leaves nothing of its words in the inbox.
-    assert.equal((await h.c('DELETE', `/memory/${r[2].ref}`)).status, 200);
+    // Dropping the note leaves nothing of its words in the inbox.
+    assert.equal(h.core.ingest.dropCandidate(r[2].ref), true);
     const raw = h.core.db.all<{ body: string | null }>('SELECT body FROM device_inbox');
     assert.ok(raw.every((x) => !String(x.body ?? '').includes('plant')), 'no memory words kept by the inbox');
 

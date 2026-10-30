@@ -161,7 +161,7 @@ test('the four questions are answered from the real registry: providers, schedul
     // 4. Capture status, the actual error quoted.
     a = await n.ask(QUESTIONS.capture);
     system = n.calls.at(-2)!.system;
-    assert.ok(briefingOf(system).includes(`Capture: Screenpipe on ${capture.device.name}: needs a key: “${capture.detail!.replace(/\.$/, '')}”`), briefingOf(system));
+    assert.ok(briefingOf(system).includes(`Capture: Screenpipe on “${capture.device.name}”: needs a key: “${capture.detail!.replace(/\.$/, '')}”`), briefingOf(system));
     assert.equal(a.tool?.name, 'nova_capture');
     assert.ok(a.tool!.result!.output.includes(`(status needs_key). Detail: “${capture.detail!.replace(/\.$/, '')}”`), a.tool!.result!.output);
     assert.match(a.tool!.result!.output, /Recent capture errors: \n- \S+ \(open\): “Screenpipe answered but refused Nova/);
@@ -192,14 +192,19 @@ test('a fresh Nova says it is fresh, names its home and offers the import; a mem
     mkdirSync(join(n.home, 'workspace', 'import'), { recursive: true });
     writeFileSync(join(n.home, 'workspace', 'import', 'memory.json'), JSON.stringify({ exported_at: '2026-10-01T09:00:00.000Z', records: [{ kind: 'preference', content: 'Prefers short replies' }, { kind: 'fact', content: 'Works on a placeholder project' }] }));
     a = await n.ask('Yes, load it.', true);
-    assert.match(briefingOf(n.calls.at(-2)!.system), /Found in ~\/workspace\/import\/: a Nova memory export, workspace\/import\/memory\.json \(2 memories, exported 2026-10-01\)\. Offer to load it with memory_import/);
+    // The import folder by its counts only: a file's name is outside content (review N4).
+    assert.match(briefingOf(n.calls.at(-2)!.system), /1 file waits in ~\/workspace\/import\/ \(1 looks like a Nova memory export\)\. Their names come from outside: list them with import_files\. Offer to load an export with memory_import/);
     assert.equal(a.tool?.name, 'memory_import');
     assert.deepEqual(a.tool!.preview, { path: 'workspace/import/memory.json', total: 2, fresh: 2, already: 0, exported_at: '2026-10-01T09:00:00.000Z' });
-    assert.match(a.tool!.result!.output, /^Loaded 2 memories from workspace\/import\/memory\.json into Memory, unreviewed\./);
-    assert.deepEqual(n.nova.core.memory.active().map((m: { user_state: string; recorded_by: string }) => [m.user_state, m.recorded_by]), [['unreviewed', 'import'], ['unreviewed', 'import']]);
-    // Not fresh any more.
+    // Through the ingest gate: the file is screened, and the memories wait for the person's OK.
+    assert.match(a.tool!.result!.output, /^2 memories from workspace\/import\/memory\.json now wait for the person’s OK in Memory; none is in memory until they keep it\./);
+    assert.deepEqual(n.nova.core.memory.active(), []);
+    assert.deepEqual(n.nova.core.ingest.candidates().map((c: { source: string | null }) => c.source), ['imported from workspace/import/memory.json', 'imported from workspace/import/memory.json']);
+    // Not fresh any more: the memories wait for the person, and the briefing says so (not what they say).
     await n.ask('Hello again.');
     assert.doesNotMatch(n.calls.at(-1)!.system, /this Nova is fresh/);
+    assert.match(briefingOf(n.calls.at(-1)!.system), /2 memories wait for the person’s OK in Memory/);
+    assert.doesNotMatch(n.calls.at(-1)!.system, /Prefers short replies/);
   } finally {
     await n.close();
   }
