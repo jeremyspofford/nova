@@ -625,7 +625,7 @@ export class Providers extends EventEmitter {
     // devices waits with the reason.
     const over = where.coarse === 'remote' ? this.#o.budget?.(brief) ?? null : null;
     if (over) {
-      try { this.#o.ledger.note(brief.task_id, 'waiting_on_model', { role: 'reasoner', kind: 'budget', reason: over }); } catch { /* the reason stands */ }
+      try { this.#o.ledger.note(brief.task_id, 'waiting_on_model', { role: 'reasoner', kind: 'budget', via: 'provider', reason: over }); } catch { /* the reason stands */ }
       return report('blocked', `Waiting on the cloud budget: ${over}`);
     }
     const role = roleOf(config);

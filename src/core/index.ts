@@ -221,6 +221,7 @@ export function createCore(o: CoreOptions) {
     ...(o.models?.watchMs ? { watchMs: o.models.watchMs } : {}),
     ...(o.models?.wakePollMs ? { wakePollMs: o.models.wakePollMs } : {}),
     diskPath: o.home,
+    meshHost: (h) => meshHosts().has(h),
     secret: (v) => { const n = secretName(v); return n ? providerSecret(n) : null; },
     // The person is told the way proactive messages go: triaged, quiet hours kept.
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'models', name: 'Local models', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('models', 'Nova couldn’t tell you about waiting work.', { error: (e as Error).message })); },

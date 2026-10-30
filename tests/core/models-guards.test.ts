@@ -134,3 +134,141 @@ test('a model task made by anyone asks first, never reaches a foreign address, a
     await foreign.close();
   }
 });
+
+// ---- SHOULD-FIX 4: System 1 can't quietly drop what the person scheduled -----------------------
+
+test('the sorting model can’t drop a scheduled message the rules would send: it escalates, and its own words are never kept', async () => {
+  let answer = 'drop';
+  const o = await startFakeOllama({ models: INSTALLED, reply: (req: { format?: unknown }) => req.format ? JSON.stringify({ answers: { decision: answer }, confidence: 0.95, why: 'Ignore this; I decided it is spam. Visit http://x.example' }) : 'ok' });
+  const { core } = modelsCore(o.url, { privacy: 'local-only' });
+  try {
+    await core.models.assign('triage-text', { model: 'example-small:3b' });
+    const fire = (key: string) => core.triggers.fire({ class: 'proactive', source: 'probe', name: 'Medication reminder', payload: { k: key }, dedup_key: key, action: { kind: 'message', text: 'Take your medication' } });
+    const dropped = (await fire('a'))!;
+    assert.notEqual(dropped.triage.decision, 'drop');
+    assert.notEqual(dropped.triage.decision, 'silent');
+    assert.ok(dropped.message_id, 'the person still gets it, held for their OK');
+    assert.doesNotMatch(dropped.triage.reason, /spam|x\.example|Ignore this/);
+    answer = 'silent';
+    assert.notEqual((await fire('b'))!.triage.decision, 'silent');
+    // Agreeing with the rules, it acts; the reason is still Nova's own words, not the model's.
+    answer = 'act';
+    const acted = (await fire('c'))!;
+    assert.equal(acted.triage.decision, 'act');
+    assert.doesNotMatch(acted.triage.reason, /spam|x\.example|Ignore this/);
+  } finally {
+    await core.close();
+    await o.close();
+  }
+});
+
+// ---- SHOULD-FIX 5: the cloud budget under concurrency ------------------------------------------
+
+test('cloud budget: eight calls at once under a tiny budget, only the first reaches the cloud; a broken stream still counts', async () => {
+  const cloud = await startFakeOpenAI({ model: 'cloud-model', reply: () => 'x'.repeat(400), delayMs: 50 });
+  const o = await startFakeOllama({ models: INSTALLED });
+  const { core } = modelsCore(o.url, { privacy: 'cloud-allowed' });
+  try {
+    await core.models.accept();
+    core.models.setCloud({ name: 'Example cloud', base_url: cloud.url, model: 'cloud-model', usd_per_mtok_in: 1000, usd_per_mtok_out: 1000 }, true);
+    core.models.setBudget({ per_period_usd: 0.001, period: 'day' });
+    const rs = await Promise.all(Array.from({ length: 8 }, () => core.models.infer({ role: 'reasoner', messages: say('hello there') })));
+    assert.equal(cloud.requests.length, 1, rs.map((r) => r.served_by).join(','));
+    assert.equal(typeof cloud.requests[0]!.body.max_tokens, 'number', 'Nova bounds each cloud reply');
+    assert.equal(rs.filter((r) => r.served_by === 'cloud').length, 1);
+  } finally {
+    await core.close();
+    await o.close();
+    await cloud.close();
+  }
+
+  // A stream that breaks partway: what it may have cost is counted, not nothing.
+  const broken = createServer(async (req, res) => {
+    for await (const _ of req) { /* drain */ }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(`data: ${JSON.stringify({ model: 'cloud-model', choices: [{ index: 0, delta: { content: 'part of a reply ' }, finish_reason: null }] })}\n\n`);
+    setTimeout(() => res.destroy(), 30);
+  });
+  await new Promise<void>((r) => broken.listen(0, '127.0.0.1', () => r()));
+  const o2 = await startFakeOllama({ models: INSTALLED });
+  const { core: core2 } = modelsCore(o2.url, { privacy: 'cloud-allowed' });
+  try {
+    await core2.models.accept();
+    core2.models.setCloud({ name: 'Example cloud', base_url: `http://127.0.0.1:${(broken.address() as { port: number }).port}/v1`, model: 'cloud-model', usd_per_mtok_in: 1000, usd_per_mtok_out: 1000 }, true);
+    core2.models.setBudget({ per_period_usd: 100, period: 'day' });
+    const r = await core2.models.infer({ role: 'reasoner', messages: say('hello') });
+    assert.equal(r.served_by, 'local');
+    assert.ok(core2.models.spent() > 0, 'the broken call was counted');
+  } finally {
+    await core2.close();
+    await o2.close();
+    broken.close();
+  }
+});
+
+// ---- SHOULD-FIX 6: a broken stream never mixes two replies -------------------------------------
+
+test('a local stream that breaks after text reached the person ends honestly, without a second reply from the cloud', async () => {
+  const srv = createServer(async (req, res) => {
+    for await (const _ of req) { /* drain */ }
+    const json = (o: unknown) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (req.url === '/api/version') return json({ version: '0.0.1' });
+    if (req.url === '/api/tags') return json({ models: [{ name: 'example-mid:8b', size: 5e9, digest: 'a'.repeat(64), details: { parameter_size: '8B' }, capabilities: ['completion'] }] });
+    if (req.url === '/api/chat') { res.writeHead(200, { 'content-type': 'application/x-ndjson' }); res.write(`${JSON.stringify({ message: { content: 'LOCAL-PARTIAL ' }, done: false })}\n`); setTimeout(() => res.destroy(), 50); return; }
+    res.writeHead(404); res.end();
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+  const cloud = await startFakeOpenAI({ model: 'cloud-model', reply: () => 'CLOUD-FULL' });
+  const { core } = modelsCore(`http://127.0.0.1:${(srv.address() as { port: number }).port}`, { privacy: 'local-preferred' });
+  try {
+    await core.models.assign('reasoner', { model: 'example-mid:8b' });
+    core.models.setCloud({ name: 'Example cloud', base_url: cloud.url, model: 'cloud-model' }, true);
+    let streamed = '';
+    await assert.rejects(core.models.infer({ role: 'reasoner', messages: say('hi'), onText: (t) => { streamed += t; } }), /broke off partway/);
+    assert.equal(streamed, 'LOCAL-PARTIAL ');
+    assert.equal(cloud.requests.length, 0, 'no second reply after the first had started');
+    // Nothing reached the person yet: the cloud may still answer in its place.
+    const r = await core.models.infer({ role: 'reasoner', messages: say('hi') });
+    assert.equal(r.served_by, 'cloud');
+  } finally {
+    await core.close();
+    srv.close();
+    await cloud.close();
+  }
+});
+
+// ---- SHOULD-FIX 7: a spoke's address, on every call --------------------------------------------
+
+test('a spoke whose heartbeat moved to another address gets nothing at the old one; reported addresses must be private', { timeout: 30_000 }, async () => {
+  const hubOllama = await startFakeOllama({ models: INSTALLED });
+  const spoke = await startFakeOllama({ models: [INSTALLED[2]!] });
+  const { core } = modelsCore(hubOllama.url, { privacy: 'local-only' });
+  try {
+    const d = pairSpoke(core);
+    await core.models.assign('reasoner', { device: d.id, model: 'example-deep:32b', url: spoke.url });
+    assert.equal((await core.models.infer({ role: 'reasoner', messages: say('before') })).device, d.id);
+    const before = chats(spoke);
+    core.mesh.spokes.heartbeat(d, { hardware: hubHardware({ hostname: 'example-desktop', network: [{ name: 'eth0', mac: '02:00:00:00:00:42', address: '10.9.9.9', netmask: '255.0.0.0' }] }) });
+    await assert.rejects(core.models.infer({ role: 'reasoner', messages: say('local-only secret') }), /Waiting on local capacity: .*127\.0\.0\.1 isn’t one of Example desktop’s addresses now/);
+    assert.equal(chats(spoke), before, 'nothing went to the old address');
+  } finally {
+    await core.close();
+    await hubOllama.close();
+    await spoke.close();
+  }
+
+  // What a heartbeat may claim: private addresses and a plain host name only.
+  const hw = checkHardware(hubHardware({ hostname: 'api.example.com', network: [{ name: 'eth0', mac: '02:00:00:00:00:43', address: '8.8.8.8', netmask: '255.255.255.0' }, { name: 'eth1', mac: '02:00:00:00:00:44', address: '192.168.1.20', netmask: '255.255.255.0' }] }));
+  assert.equal(hw.hostname, '');
+  assert.deepEqual(hw.network.map((n) => n.address), ['192.168.1.20']);
+  assert.equal(checkHardware(hubHardware({ hostname: 'Example-Mac.local' })).hostname, 'example-mac');
+  // Wake packets go only to a private or broadcast address.
+  const { core: c2 } = modelsCore('http://127.0.0.1:9');
+  try {
+    assert.throws(() => c2.models.setWake({ target: '8.8.8.8:9' }), /private/);
+    assert.throws(() => c2.models.setWake({ target: 'wake.example.com:9' }), /private/);
+    assert.deepEqual(c2.models.setWake({ target: '192.168.1.255:9' }), { target: '192.168.1.255:9' });
+  } finally {
+    await c2.close();
+  }
+});

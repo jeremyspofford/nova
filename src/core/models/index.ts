@@ -12,12 +12,13 @@
 //     budget is used, the local model serves and Nova says the answer may be less thorough.
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import { CoreError } from '../errors.ts';
 import { ENVELOPE_VERSION, type Brief, type PrivacyMode, type Report } from '../envelope.ts';
 import { stricter } from '../workers.ts';
 import { chatMessages } from '../providers/openai.ts';
 import { str, type Usage } from '../providers/types.ts';
-import { checkHardware, detectHardware, gb, hardwareWords, type Hardware } from './hardware.ts';
+import { checkHardware, detectHardware, gb, hardwareWords, privateAddress, type Hardware } from './hardware.ts';
 import { Ollama, RuntimeDown, runsRemotely, type InstalledModel, type Message } from './ollama.ts';
 import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, recommend, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
 import { sendMagic } from './wake.ts';
@@ -47,7 +48,9 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 // model. A role on a GPU spoke may name a hub model that small jobs use instead of waking it.
 export interface Placement { device: string; runtime: 'ollama'; url: string; model: string; hub_model?: string }
 
-export interface Cloud { name: string; base_url: string; model: string; api_key?: string; usd_per_mtok_in?: number; usd_per_mtok_out?: number }
+export interface Cloud { name: string; base_url: string; model: string; api_key?: string; usd_per_mtok_in?: number; usd_per_mtok_out?: number; max_tokens?: number }
+// The longest reply a cloud call may give, unless the person set one: it bounds what a call costs.
+export const DEFAULT_MAX_TOKENS = 4096;
 export interface Budget { per_task_usd?: number; per_period_usd?: number; period: Period }
 
 export interface InferRequest {
@@ -116,6 +119,8 @@ export interface ModelsOptions {
   // The disk the hub's models live on, for free space.
   diskPath?: string;
   secret: (v: unknown) => string | null;
+  // Whether a host is one of the person's devices on the mesh (its address there).
+  meshHost?: (host: string) => boolean;
   // Tells the person something, the way proactive messages go (quiet hours and all).
   notify?: (key: string, text: string) => void;
   // How often waiting tasks are checked against returning capacity; how often a waking device is asked.
@@ -138,6 +143,8 @@ export class Models extends EventEmitter {
   #waking = new Map<string, Promise<WakeResult>>();
   #faults = new Set<Role>();
   #told = new Set<string>();
+  // What cloud calls still running may cost at most, held against the budget until they settle.
+  #reserved = new Map<symbol, { task_id: string | null; usd: number }>();
   #timer: ReturnType<typeof setInterval> | null = null;
   #watching = false;
 
@@ -257,6 +264,26 @@ export class Models extends EventEmitter {
     return this.#hw;
   }
 
+  // Why Nova won't send a computer's runtime anything at this address, or null. Checked when a role
+  // is assigned and again before every call and wake: the address must be one the computer's
+  // latest heartbeat reports (its addresses move with DHCP and networks), and a private, LAN or
+  // mesh one, so a prompt never leaves the person's machines. A host name must resolve only to
+  // such addresses.
+  async #spokeAddress(device: string, url: string): Promise<string | null> {
+    const name = this.#deviceName(device);
+    const hw = this.#spokeHardware(device);
+    let host: string;
+    try { host = new URL(url).hostname.replace(/^\[|\]$/g, '').toLowerCase(); } catch { return `${url} isn’t an address`; }
+    const own = new Set([...(hw?.network ?? []).map((n) => n.address), ...(hw?.hostname ? [hw.hostname, `${hw.hostname}.local`] : [])].map((x) => x.toLowerCase()));
+    if (!own.has(host)) return `${host} isn’t one of ${name}’s addresses now${hw ? ` (it reports ${[...own].join(', ') || 'none'})` : ' (it hasn’t reported its hardware yet)'}`;
+    const near = (a: string) => privateAddress(a) || this.#o.meshHost?.(a) === true;
+    if (/^[\d.]+$/.test(host) || host.includes(':')) return near(host) ? null : `${host} isn’t a private, LAN or mesh address`;
+    const found = await lookup(host, { all: true }).catch(() => []);
+    if (!found.length) return `${name}’s name ${host} doesn’t resolve to an address`;
+    const far = found.find((a) => !near(a.address));
+    return far ? `${host} resolves to ${far.address}, which isn’t a private, LAN or mesh address` : null;
+  }
+
   // A paired computer's heartbeat carried its hardware: kept, so the map knows what it can serve
   // and where to send a wake packet.
   heartbeat(device: Device, raw: unknown): void {
@@ -271,6 +298,8 @@ export class Models extends EventEmitter {
       device.id, JSON.stringify(hw), this.#now().toISOString(),
     );
     this.emit('change', { action: 'hardware', device: device.id });
+    // A computer that serves a role is back: work waiting on it can run now.
+    if (ROLES.some((r) => this.placement(r)?.device === device.id)) void this.check();
   }
 
   #spokeHardware(id: string): Hardware | null {
@@ -380,14 +409,9 @@ export class Models extends EventEmitter {
       const d = this.#o.devices.find(device);
       if (!d || d.trust !== 'trusted' || d.kind !== 'computer') throw new CoreError('validation', 'device is the hub, or one of your paired computers.');
       url = str(body.url);
-      const hw = this.#spokeHardware(device);
       if (!url) throw new CoreError('validation', `url is where ${d.name}’s Ollama answers, like http://<its address>:11434.`);
-      let host: string;
-      try { host = new URL(url).hostname.replace(/^\[|\]$/g, ''); } catch { throw new CoreError('validation', `${url} isn’t an address.`); }
-      // The address must be that computer's own, as its heartbeat reports: a role is served on the
-      // person's devices, never at an address that only claims to be one.
-      const own = new Set([...(hw?.network ?? []).map((n) => n.address), ...(hw?.hostname ? [hw.hostname, `${hw.hostname}.local`] : [])].map((x) => x.toLowerCase()));
-      if (!own.has(host.toLowerCase())) throw new CoreError('validation', `${host} isn’t one of ${d.name}’s addresses${hw ? ` (it reports ${[...own].join(', ') || 'none'})` : ' (it hasn’t reported its hardware yet)'}.`);
+      const wrong = await this.#spokeAddress(device, url);
+      if (wrong) throw new CoreError('validation', `${wrong}.`);
       this.#set(`runtime.${device}`, url);
     }
     const inv = await this.inventory(device);
@@ -456,9 +480,13 @@ export class Models extends EventEmitter {
     const order: ('local' | 'cloud')[] = mode === 'local-only' || !cloud ? ['local'] : mode === 'local-preferred' ? ['local', 'cloud'] : ['cloud', 'local'];
     const notes: string[] = [];
     const failed: { where: 'local' | 'cloud'; why: string; budget?: boolean }[] = [];
+    // Falling back happens before any output, never after: once text has reached the person, a
+    // second model's reply would be spliced onto the first one's half.
+    let emitted = false;
+    const call: InferRequest = { ...req, ...(req.onText ? { onText: (t: string) => { emitted = true; req.onText!(t); } } : {}) };
     for (const where of order) {
       try {
-        const r = where === 'local' ? await this.#local(req, mode, notes) : await this.#cloud(cloud!, req, mode);
+        const r = where === 'local' ? await this.#local(call, mode, notes) : await this.#cloud(cloud!, call, mode);
         const local = failed.find((f) => f.where === 'local');
         const away = failed.find((f) => f.where === 'cloud');
         if (where === 'cloud' && local) {
@@ -469,6 +497,9 @@ export class Models extends EventEmitter {
         if (where === 'local') this.#healed(req.role);
         return { ...r, notes };
       } catch (e) {
+        if (emitted && (e instanceof LocalDown || e instanceof CloudDown)) {
+          throw new CoreError('conflict', `The reply broke off partway (${e.message.replace(/\.$/, '')}). Nova doesn’t switch to another model once a reply has started, so what arrived is all there is; ask again.`);
+        }
         if (e instanceof LocalDown) failed.push({ where: 'local', why: e.message });
         else if (e instanceof CloudDown) failed.push({ where: 'cloud', why: e.message });
         else if (e instanceof BudgetBlocked) failed.push({ where: 'cloud', why: e.message, budget: true });
@@ -495,6 +526,8 @@ export class Models extends EventEmitter {
     let url = p.url;
     let model = p.model;
     if (p.device !== HUB) {
+      const wrong = await this.#spokeAddress(p.device, p.url);
+      if (wrong) throw new LocalDown(wrong);
       const awake = await new Ollama(p.url).version(AbortSignal.timeout(1500)).then(() => true, () => false);
       if (!awake) {
         const name = this.#deviceName(p.device);
@@ -548,21 +581,37 @@ export class Models extends EventEmitter {
   }
 
   async #cloud(c: Cloud, req: InferRequest, mode: PrivacyMode): Promise<Omit<InferResult, 'notes'>> {
-    const blocked = this.budgetBlock(req.task_id ?? null, req.max_cost_usd);
+    const blocked = this.budgetBlock(req.task_id ?? null, req.max_cost_usd, { cloud: true });
     if (blocked) throw new BudgetBlocked(blocked);
+    // What this call can cost at most (its prompt, roughly, and a reply capped at max_tokens) is
+    // held against the budget before it is sent, in the same step as the check above, so calls
+    // made at once can't all pass a check none of them has paid for yet.
+    const maxOut = c.max_tokens ?? DEFAULT_MAX_TOKENS;
+    const price = this.#priceOf(c.model);
+    const hold = Symbol('reservation');
+    const estimate = price ? (Math.ceil(JSON.stringify(req.messages).length / 4) * price.in + maxOut * price.out) / 1e6 : null;
+    if (estimate !== null) this.#reserved.set(hold, { task_id: req.task_id ?? null, usd: estimate });
     const egress = cloudEgress(c);
-    // The receipt is written before anything is sent; under local-only it refuses (receipts.ts),
-    // a second wall behind the order above.
-    const receipt = this.#receipt(req, mode, `cloud:${egress.slice('remote:'.length)}`, c.model, egress);
     let out;
+    let received = false;
     try {
-      out = await chatMessages({ base_url: c.base_url, model: c.model, ...(c.api_key ? { api_key: c.api_key } : {}), timeout_s: 600 }, this.#o.secret, req.messages!, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onText ? { onText: req.onText } : {}), json: !!req.format });
-    } catch (e) {
-      throw new CloudDown((e as Error).message);
+      // The receipt is written before anything is sent; under local-only it refuses (receipts.ts),
+      // a second wall behind the order above.
+      const receipt = this.#receipt(req, mode, `cloud:${egress.slice('remote:'.length)}`, c.model, egress);
+      try {
+        out = await chatMessages({ base_url: c.base_url, model: c.model, ...(c.api_key ? { api_key: c.api_key } : {}), timeout_s: 600 }, this.#o.secret, req.messages!, { ...(req.signal ? { signal: req.signal } : {}), onText: (t) => { received = true; req.onText?.(t); }, json: !!req.format, max_tokens: maxOut });
+      } catch (e) {
+        // A reply that broke off partway was still made, and may be billed: the reservation is
+        // counted as spent, since what was used isn't known.
+        if (received) this.#spend({ task_id: req.task_id ?? null, session_id: req.session_id ?? null, provider: egress, model: c.model, tokens_in: null, tokens_out: null, cost_usd: estimate, ref: null });
+        throw new CloudDown((e as Error).message);
+      }
+      const cost = price ? ((out.usage.tokens_in ?? 0) * price.in + (out.usage.tokens_out ?? 0) * price.out) / 1e6 : null;
+      this.#spend({ task_id: req.task_id ?? null, session_id: req.session_id ?? null, provider: egress, model: c.model, tokens_in: out.usage.tokens_in ?? null, tokens_out: out.usage.tokens_out ?? null, cost_usd: cost, ref: null });
+      return { text: out.text, aborted: out.aborted, served_by: 'cloud', device: c.name, model: c.model, provider: egress, egress, receipt_id: receipt, usage: { ...out.usage, ...(cost !== null ? { cost_usd: cost } : {}) } };
+    } finally {
+      this.#reserved.delete(hold);
     }
-    const cost = c.usd_per_mtok_in !== undefined && c.usd_per_mtok_out !== undefined ? ((out.usage.tokens_in ?? 0) * c.usd_per_mtok_in + (out.usage.tokens_out ?? 0) * c.usd_per_mtok_out) / 1e6 : null;
-    this.#spend({ task_id: req.task_id ?? null, session_id: req.session_id ?? null, provider: egress, model: c.model, tokens_in: out.usage.tokens_in ?? null, tokens_out: out.usage.tokens_out ?? null, cost_usd: cost, ref: null });
-    return { text: out.text, aborted: out.aborted, served_by: 'cloud', device: c.name, model: c.model, provider: egress, egress, receipt_id: receipt, usage: { ...out.usage, ...(cost !== null ? { cost_usd: cost } : {}) } };
   }
 
   #receipt(req: InferRequest, mode: PrivacyMode, provider: string, model: string, egress: string): string {
@@ -605,13 +654,15 @@ export class Models extends EventEmitter {
     this.#timer.unref();
   }
 
-  // The waiting tasks Nova itself parked (a waiting_on_model note), by role and kind.
-  #waiters(): { task: Task; role: Role; kind: 'capacity' | 'budget' }[] {
-    const out: { task: Task; role: Role; kind: 'capacity' | 'budget' }[] = [];
+  // The waiting tasks Nova itself parked (a waiting_on_model note), by role and kind, and whether
+  // the model manager parked it (a role it serves) or a provider off the devices did (the budget
+  // alone decides when that one runs).
+  #waiters(): { task: Task; role: Role; kind: 'capacity' | 'budget'; provider: boolean }[] {
+    const out: { task: Task; role: Role; kind: 'capacity' | 'budget'; provider: boolean }[] = [];
     for (const t of this.#o.ledger.list({ state: 'waiting', limit: 500 })) {
       if (!/Waiting on (local capacity|the cloud budget)/.test(t.reason ?? '')) continue;
-      const note = this.#o.ledger.events(t.id).filter((e) => e.kind === 'waiting_on_model').at(-1)?.detail as { role?: Role; kind?: 'capacity' | 'budget' } | undefined;
-      if (note?.role) out.push({ task: t, role: note.role, kind: note.kind ?? 'capacity' });
+      const note = this.#o.ledger.events(t.id).filter((e) => e.kind === 'waiting_on_model').at(-1)?.detail as { role?: Role; kind?: 'capacity' | 'budget'; via?: string } | undefined;
+      if (note?.role) out.push({ task: t, role: note.role, kind: note.kind ?? 'capacity', provider: note.via === 'provider' });
     }
     return out;
   }
@@ -624,8 +675,15 @@ export class Models extends EventEmitter {
       const waiters = this.#waiters();
       const up = new Map<Role, boolean>();
       for (const w of waiters) {
-        if (!up.has(w.role)) up.set(w.role, (await this.probe(w.role)) === null);
-        const can = w.kind === 'budget' ? !this.budgetBlock(w.task.id, w.task.brief.constraints.max_cost_usd) || up.get(w.role) : up.get(w.role);
+        // Each waits on its own condition only: a provider's budget wait isn't released because the
+        // local reasoner is up (it would only run into the budget again), and a role's wait on the
+        // budget is released by the budget, or by its local model coming back.
+        const budgetOk = () => !this.budgetBlock(w.task.id, w.task.brief.constraints.max_cost_usd, { cloud: !w.provider });
+        const roleUp = async () => {
+          if (!up.has(w.role)) up.set(w.role, (await this.probe(w.role)) === null);
+          return up.get(w.role)!;
+        };
+        const can = w.provider ? budgetOk() : w.kind === 'budget' ? budgetOk() || await roleUp() : await roleUp();
         if (!can) continue;
         try {
           this.#o.ledger.retry(w.task.id, w.kind === 'budget' ? 'The cloud budget allows it now, so it runs.' : 'Local capacity is back, so it runs now.');
@@ -673,12 +731,16 @@ export class Models extends EventEmitter {
     const hw = this.#spokeHardware(device);
     const url = this.#urlFor(device);
     if (!url) return { ok: false, waited_ms: 0, limit_ms: 0, words: `Nova doesn’t know where ${name}’s models answer.` };
+    const wrong = await this.#spokeAddress(device, url);
+    if (wrong) return { ok: false, waited_ms: 0, limit_ms: 0, words: `Nova won’t wake ${name}: ${wrong}.` };
     let host = '';
-    try { host = new URL(url).hostname; } catch { /* checked when assigned */ }
+    try { host = new URL(url).hostname; } catch { /* checked above */ }
     const nic = hw?.network.find((n) => n.address === host) ?? hw?.network[0];
     if (!nic) return { ok: false, waited_ms: 0, limit_ms: 0, words: `${name} hasn’t told Nova its network card, so Nova can’t wake it. It needs to be on for its heartbeat once.` };
     const w = this.#get<{ target?: string; wait_s?: number }>('wake') ?? {};
     const target = str(w.target) || (nic.broadcast ? `${nic.broadcast}:9` : '255.255.255.255:9');
+    // Wake packets stay on the person's network, whatever an older heartbeat or setting says.
+    if (!privateAddress(target.split(':')[0]!)) return { ok: false, waited_ms: 0, limit_ms: 0, words: `Nova won’t send a wake packet to ${target}: it isn’t a private or broadcast address on your network.` };
     const measured = this.wakeLatency(device);
     // Honest about latency: wait as long as it took last time, with a margin; never measured,
     // wait the setting (two minutes by default) and say that is a guess.
@@ -724,32 +786,87 @@ export class Models extends EventEmitter {
     return d;
   }
 
-  spent(o: { task_id?: string; since?: Date } = {}): number {
+  // Dollars spent, with usage that came back as tokens and no cost priced from the price table.
+  spent(o: { task_id?: string; since?: Date } = {}): number { return this.#usage(o).usd; }
+
+  #usage(o: { task_id?: string; since?: Date }): { usd: number; unpriced: string[] } {
     const where: string[] = [];
     const args: (string | number)[] = [];
     if (o.task_id) { where.push('task_id = ?'); args.push(o.task_id); }
     if (o.since) { where.push('at >= ?'); args.push(o.since.toISOString()); }
-    return this.#o.db.get<{ s: number | null }>(`SELECT SUM(cost_usd) AS s FROM cloud_usage ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`, ...args)?.s ?? 0;
+    const rows = this.#o.db.all<{ model: string; usd: number | null; tin: number; tout: number }>(
+      `SELECT model, SUM(cost_usd) AS usd, SUM(CASE WHEN cost_usd IS NULL THEN COALESCE(tokens_in, 0) ELSE 0 END) AS tin, SUM(CASE WHEN cost_usd IS NULL THEN COALESCE(tokens_out, 0) ELSE 0 END) AS tout
+       FROM cloud_usage ${where.length ? `WHERE ${where.join(' AND ')}` : ''} GROUP BY model`, ...args);
+    let total = 0;
+    const unpriced: string[] = [];
+    for (const r of rows) {
+      total += r.usd ?? 0;
+      if (r.tin + r.tout <= 0) continue;
+      const p = this.#priceOf(r.model);
+      if (p) total += (r.tin * p.in + r.tout * p.out) / 1e6; else unpriced.push(r.model);
+    }
+    return { usd: total, unpriced };
   }
 
-  // Why the cloud may not be used for this task now, or null. Checked before every cloud call;
-  // a call's own cost can take a budget a little past its limit, never further.
-  budgetBlock(taskId: string | null, maxCost?: number): string | null {
+  // What a model costs per million tokens: the price table the person keeps, or the cloud model's
+  // own price.
+  #priceOf(model: string): { in: number; out: number } | null {
+    const t = this.#get<Record<string, { usd_per_mtok_in?: unknown; usd_per_mtok_out?: unknown }>>('prices');
+    const p = isObj(t) ? t[model] : undefined;
+    if (isObj(p) && typeof p.usd_per_mtok_in === 'number' && typeof p.usd_per_mtok_out === 'number') return { in: p.usd_per_mtok_in, out: p.usd_per_mtok_out };
+    const c = this.cloud();
+    return c && c.model === model && c.usd_per_mtok_in !== undefined && c.usd_per_mtok_out !== undefined ? { in: c.usd_per_mtok_in, out: c.usd_per_mtok_out } : null;
+  }
+
+  #reservedUsd(taskId?: string): number {
+    let n = 0;
+    for (const r of this.#reserved.values()) if (taskId === undefined || r.task_id === taskId) n += r.usd;
+    return n;
+  }
+
+  // Why the cloud may not be used for this task now, or null. Checked before every cloud call,
+  // counting what calls still running may cost at most: a budget can go past its limit by one
+  // call's cost at most, never further. `cloud`: the check is for the cloud model itself, which
+  // Nova must be able to price; a provider off the devices (a coding agent) reports its own cost.
+  budgetBlock(taskId: string | null, maxCost?: number, o: { cloud?: boolean } = {}): string | null {
     const b = this.budget();
     const c = this.cloud();
     const perTask = [b.per_task_usd, maxCost].filter((x): x is number => typeof x === 'number' && x >= 0);
     const limited = perTask.length > 0 || typeof b.per_period_usd === 'number';
-    if (limited && c && (c.usd_per_mtok_in === undefined || c.usd_per_mtok_out === undefined)) return `Nova can’t tell what ${c.name} costs, so with a budget set it doesn’t use it. Add its price in Settings › Models.`;
+    if (limited && o.cloud && c && !this.#priceOf(c.model)) return `Nova can’t tell what ${c.name} costs, so with a budget set it doesn’t use it. Add its price in Settings › Models.`;
+    const unpriced = (u: string[]) => `Nova can’t tell what ${u.join(' and ')} cost (it reported tokens but no price), so with a budget set the cloud waits. Nova needs a price for it (PUT /api/v1/models/prices).`;
     if (typeof b.per_period_usd === 'number') {
-      const used = this.spent({ since: this.periodStart(b.period) });
-      if (used >= b.per_period_usd) return `This ${b.period}’s cloud budget is used: ${usd(used)} of ${usd(b.per_period_usd)}.`;
+      const u = this.#usage({ since: this.periodStart(b.period) });
+      if (u.unpriced.length) return unpriced(u.unpriced);
+      const running = this.#reservedUsd();
+      const used = u.usd + running;
+      if (used >= b.per_period_usd) return `This ${b.period}’s cloud budget is used: ${usd(used)} of ${usd(b.per_period_usd)}${running ? ', counting calls still running' : ''}.`;
     }
     if (taskId && perTask.length) {
       const cap = Math.min(...perTask);
-      const used = this.spent({ task_id: taskId });
-      if (used >= cap) return `This task has used its cloud budget: ${usd(used)} of ${usd(cap)}.`;
+      const u = this.#usage({ task_id: taskId });
+      if (u.unpriced.length) return unpriced(u.unpriced);
+      const running = this.#reservedUsd(taskId);
+      const used = u.usd + running;
+      if (used >= cap) return `This task has used its cloud budget: ${usd(used)} of ${usd(cap)}${running ? ', counting calls still running' : ''}.`;
     }
     return null;
+  }
+
+  // Prices per million tokens, by model, for usage that reports tokens but no cost (a provider
+  // off the devices, or the cloud model before it was priced).
+  setPrices(v: unknown): Record<string, { usd_per_mtok_in: number; usd_per_mtok_out: number }> {
+    if (!isObj(v)) throw new CoreError('validation', 'prices is {"<model>": {usd_per_mtok_in, usd_per_mtok_out}}.');
+    const out: Record<string, { usd_per_mtok_in: number; usd_per_mtok_out: number }> = {};
+    for (const [model, p] of Object.entries(v).slice(0, 200)) {
+      const ok = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1e6;
+      if (!model.trim() || model.length > 200 || !isObj(p) || !ok(p.usd_per_mtok_in) || !ok(p.usd_per_mtok_out)) throw new CoreError('validation', `${model}: a price is {usd_per_mtok_in, usd_per_mtok_out}, US dollars per million tokens.`);
+      out[model] = { usd_per_mtok_in: p.usd_per_mtok_in as number, usd_per_mtok_out: p.usd_per_mtok_out as number };
+    }
+    this.#set('prices', out);
+    this.emit('change', { action: 'prices' });
+    void this.check();
+    return out;
   }
 
   #spend(r: { task_id: string | null; session_id: string | null; provider: string; model: string; tokens_in: number | null; tokens_out: number | null; cost_usd: number | null; ref: string | null }): void {
@@ -1052,7 +1169,7 @@ export class Models extends EventEmitter {
     if (!isObj(v)) throw new CoreError('validation', 'wake is {target?, wait_s?}.');
     const out: { target?: string; wait_s?: number } = {};
     if (v.target !== undefined && v.target !== null && v.target !== '') {
-      if (typeof v.target !== 'string' || !/^[a-z0-9.-]+(:\d{1,5})?$/i.test(v.target)) throw new CoreError('validation', 'target is where wake packets go, host:port (like 192.168.1.255:9).');
+      if (typeof v.target !== 'string' || !/^[\d.]+(:\d{1,5})?$/.test(v.target) || !privateAddress(v.target.split(':')[0]!)) throw new CoreError('validation', 'target is where wake packets go: a private or broadcast address on your network and a port, like 192.168.1.255:9.');
       out.target = v.target;
     }
     if (v.wait_s !== undefined && v.wait_s !== null) {
@@ -1091,7 +1208,7 @@ export class Models extends EventEmitter {
       this.emit('change', { action: 'cloud' });
       return null;
     }
-    if (!isObj(v)) throw new CoreError('validation', 'The cloud model is {name, base_url, model, api_key?, usd_per_mtok_in?, usd_per_mtok_out?}.');
+    if (!isObj(v)) throw new CoreError('validation', 'The cloud model is {name, base_url, model, api_key?, usd_per_mtok_in?, usd_per_mtok_out?, max_tokens?}.');
     const c: Cloud = { name: str(v.name), base_url: str(v.base_url), model: str(v.model) };
     if (!/^[a-z0-9][a-z0-9 ._-]{0,40}$/i.test(c.name)) throw new CoreError('validation', 'name is what to call it, like "Cloud model".');
     try { const u = new URL(c.base_url); if (!['http:', 'https:'].includes(u.protocol) || u.username) throw new Error(); } catch { throw new CoreError('validation', 'base_url is its OpenAI-compatible address, like https://api.example.com/v1.'); }
@@ -1101,6 +1218,10 @@ export class Models extends EventEmitter {
       if (v[k] === undefined || v[k] === null) continue;
       if (typeof v[k] !== 'number' || (v[k] as number) < 0) throw new CoreError('validation', `${k} is the price per million tokens in US dollars.`);
       c[k] = v[k] as number;
+    }
+    if (v.max_tokens !== undefined && v.max_tokens !== null) {
+      if (!Number.isInteger(v.max_tokens) || (v.max_tokens as number) < 1 || (v.max_tokens as number) > 1_000_000) throw new CoreError('validation', 'max_tokens is the longest reply it may give, in tokens.');
+      c.max_tokens = v.max_tokens as number;
     }
     // Where conversations may go is a permission: a new address needs an explicit OK (tier 3).
     const was = this.cloud();
@@ -1124,6 +1245,7 @@ export class Models extends EventEmitter {
       { method: 'PUT', path: '/models/wake', summary: 'Where Wake-on-LAN packets go (host:port; by default the computer’s own broadcast address) and how long to wait for a computer never woken before (wait_s, 120 by default). After the first wake Nova waits as long as it took, half again, plus 2 s.', body: '{target?, wait_s?}', handle: async ({ body }) => { this.setWake(body); return view(); } },
       { method: 'PUT', path: '/models/disk-budget', summary: 'The most disk models may use, in GB (null for none). Downloads past it are refused.', body: '{gb}', handle: async ({ body }) => { this.setDiskBudget(body.gb); return view(); } },
       { method: 'PUT', path: '/models/budget', summary: 'Cloud budgets: per task and per period (day, week or month), in US dollars. Over budget, work waits with the reason; local stays the default.', body: '{per_task_usd?, per_period_usd?, period}', handle: async ({ body }) => { this.setBudget(body); return view(); } },
+      { method: 'PUT', path: '/models/prices', summary: 'Prices per million tokens by model, for cloud usage that reports tokens but no cost (a coding agent off your devices). With a budget set, usage Nova can’t price makes the cloud wait.', body: '{"<model>": {usd_per_mtok_in, usd_per_mtok_out}}', handle: async ({ body }) => { this.setPrices(body); return view(); } },
       { method: 'PUT', path: '/models/cloud', summary: 'The cloud model local-preferred and cloud-allowed work may use when it must (an OpenAI-compatible address; its key in the vault). A new address needs {confirm: true}. {cloud: null} removes it.', body: '{cloud, confirm?}', handle: async ({ body }) => { this.setCloud(body.cloud, body.confirm === true); return view(); } },
       { method: 'PUT', path: '/models/decisions', summary: 'Whether System 1 decisions use the local sorting model (model, the default once one is assigned) or only the rules.', body: '{use: model | rules}', handle: async ({ body }) => { if (body.use !== 'model' && body.use !== 'rules') throw new CoreError('validation', 'use is model or rules.'); this.#set('decisions', body.use); return view(); } },
       { method: 'POST', path: '/models/devices/{id}/wake', summary: 'Wake a paired computer with a Wake-on-LAN packet and wait for its models, as long as waking took last time.', handle: ({ params }) => this.wake(params.id!) },
