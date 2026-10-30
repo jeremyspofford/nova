@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, originHost } from './core/index.ts';
+import { createCore, fromBrowserTask, originHost } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -44,6 +44,13 @@ export function createNova(config = loadConfig(), deps = {}) {
   const core = createCore({
     home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
     mesh: meshInfo,
+    // Nova's own listeners, which a browser task never reaches (browser/plan.ts). Read when a
+    // task is checked or run, by then both are listening (port 0 means the port they got).
+    hubPorts: () => {
+      let bound = [];
+      try { bound = [server, mesh].map((s) => s?.address()?.port); } catch { /* not created yet */ }
+      return [config.port, config.mesh?.port, ...bound].filter((p) => Number.isInteger(p) && p > 0);
+    },
     workers: [chatRun], confirmations: { [SYSTEM]: (e, brief) => chatRun.confirm(e, brief) },
     // Era 2's model command is the custom-cli provider (M5a). A provider's secret://NAME comes from
     // the vault (PUT /api/v1/vault/NAME). NOVA_SECRET_<NAME> in the environment is a fallback for
@@ -368,7 +375,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         else if (action === 'forget-client') body = gmail.forgetClient();
         else if (action === 'disconnect') body = await gmail.disconnect();
         else if (action === 'connect') {
-          if (!loopback(req.headers.host)) return json(res, 400, { error: 'Open Nova on this computer, at localhost, to connect Gmail. Google sends you back to this computer only.' });
+          if (!loopback(req.headers.host) || fromBrowserTask(req.headers)) return json(res, 400, { error: 'Open Nova on this computer, at localhost, to connect Gmail. Google sends you back to this computer only.' });
           return json(res, 200, { url: gmail.authUrl(`http://${req.headers.host}/oauth/gmail`) });
         } else return json(res, 404, { error: 'Not found' });
         announce('skills');

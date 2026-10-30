@@ -9,7 +9,9 @@ import { EventEmitter } from 'node:events';
 import { createServer, type Server, type Socket } from 'node:net';
 import { CoreError } from '../errors.ts';
 import { launch, type Launched } from './chromium.ts';
-import { allowed, hostOf } from './plan.ts';
+import { lookup } from 'node:dns/promises';
+import { BROWSER_TASK_HEADER } from '../mesh/access.ts';
+import { HUB_REFUSAL, NO_HUB, allowed, hostOf, reachesHub, target, thisMachine, type Hub } from './plan.ts';
 import type { Cdp } from './cdp.ts';
 
 export type Mode = 'starting' | 'working' | 'needs_person' | 'taken_over' | 'finishing' | 'closed';
@@ -19,7 +21,8 @@ export interface Holder { key: string; label: string }
 
 // `by`: who asked. A request refused at the proxy can't be told apart: Chromium's own calls home
 // end there, and so does a page's WebSocket, so it is put down to the browser.
-export interface Blocked { host: string; count: number; first_at: string; by: 'page' | 'person' | 'plan' | 'browser'; via: 'fetch' | 'proxy' | 'plan'; kind: string }
+// `reason`: why, in plain words, when it isn't simply a host the task didn't declare.
+export interface Blocked { host: string; count: number; first_at: string; by: 'page' | 'person' | 'plan' | 'browser'; via: 'fetch' | 'proxy' | 'plan'; kind: string; reason?: string }
 
 export interface Frame { seq: number; jpeg: string; width: number; height: number }
 
@@ -62,6 +65,8 @@ export interface SessionOptions {
   now?: () => Date;
   width?: number;
   height?: number;
+  // Where Nova itself listens (plan.ts): refused whatever the declared hosts say.
+  hub?: () => Hub;
 }
 
 export class Session extends EventEmitter {
@@ -184,23 +189,53 @@ export class Session extends EventEmitter {
 
   // Every request of every target: inside the declared hosts it goes on, anything else is refused
   // and recorded (host and port only: a path or query can carry what a page tried to send).
-  async #paused(p: { requestId: string; request: { url: string }; resourceType?: string }, sid?: string): Promise<void> {
+  //
+  // Nova's own listeners are refused even inside the declared hosts. Whatever goes on carries the
+  // task's mark (BROWSER_TASK_HEADER), set here, beneath the page: a page can't remove it, and
+  // Nova treats anything carrying it as nobody in particular (mesh/access.ts), so a page that
+  // got to Nova anyway would get no more than a stranger would.
+  async #paused(p: { requestId: string; request: { url: string; headers?: Record<string, string> }; resourceType?: string }, sid?: string): Promise<void> {
     const cdp = this.#cdp;
     if (!cdp) return;
     const url = p.request.url;
-    if (allowed(url, this.hosts) || /^(data|blob|about):/.test(url)) {
+    if (/^(data|blob|about):/.test(url)) {
       await cdp.send('Fetch.continueRequest', { requestId: p.requestId }, sid).catch(() => {});
       return;
     }
-    this.#block(hostOf(url), this.mode === 'taken_over' ? 'person' : 'page', 'fetch', (p.resourceType ?? 'request').toLowerCase());
+    const by = this.mode === 'taken_over' ? 'person' : 'page';
+    const kind = (p.resourceType ?? 'request').toLowerCase();
+    const nova = await this.#reachesHub(url);
+    if (!nova && allowed(url, this.hosts)) {
+      const headers = Object.entries(p.request.headers ?? {}).filter(([k]) => k.toLowerCase() !== BROWSER_TASK_HEADER).map(([name, value]) => ({ name, value }));
+      headers.push({ name: BROWSER_TASK_HEADER, value: this.taskId });
+      await cdp.send('Fetch.continueRequest', { requestId: p.requestId, headers }, sid).catch(() => {});
+      return;
+    }
+    this.#block(hostOf(url), by, 'fetch', kind, nova ? HUB_REFUSAL : undefined);
     await cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }, sid).catch(() => {});
   }
 
-  #block(host: string, by: Blocked['by'], via: Blocked['via'], kind: string): void {
+  // Whether a URL would reach Nova itself: by its address or this machine's names, or by a name
+  // that resolves to this machine now (asked once per name, and only at Nova's own ports).
+  #resolved = new Map<string, Promise<boolean>>();
+  async #reachesHub(url: string): Promise<boolean> {
+    const hub = (() => { try { return this.#o.hub?.() ?? NO_HUB; } catch { return NO_HUB; } })();
+    if (reachesHub(url, hub)) return true;
+    const t = target(url);
+    if (!t || !hub.ports.includes(t.port) || /^[\d.]+$|^\[/.test(t.host)) return false;
+    let r = this.#resolved.get(t.host);
+    if (!r) {
+      r = lookup(t.host, { all: true }).then((xs) => xs.some((x) => thisMachine(x.address, hub)), () => false);
+      this.#resolved.set(t.host, r);
+    }
+    return r;
+  }
+
+  #block(host: string, by: Blocked['by'], via: Blocked['via'], kind: string, reason?: string): void {
     const seen = this.blocked.get(host);
     if (seen) { seen.count++; return; }
     if (this.blocked.size >= MAX_BLOCKED_HOSTS) return;
-    const b: Blocked = { host, count: 1, first_at: this.#now().toISOString(), by, via, kind };
+    const b: Blocked = { host, count: 1, first_at: this.#now().toISOString(), by, via, kind, ...(reason ? { reason } : {}) };
     this.blocked.set(host, b);
     this.emit('blocked', b);
     this.emit('change');

@@ -3,6 +3,7 @@
 // nothing outside src/core imports anything but this file.
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
+import { hostname, networkInterfaces } from 'node:os';
 import { CoreError } from './errors.ts';
 import { Db } from './db.ts';
 import { Log, addSecretValue } from './log.ts';
@@ -34,6 +35,7 @@ import { Connectors } from './connectors/index.ts';
 import { homeAssistant, type HomeAssistantOptions } from './connectors/home-assistant.ts';
 import { Providers } from './providers/registry.ts';
 import { Browser } from './browser/worker.ts';
+import type { Hub } from './browser/plan.ts';
 import { browserRoutes } from './browser/routes.ts';
 import { checkers as browserCheckers } from './browser/evidence.ts';
 import { createHash } from 'node:crypto';
@@ -57,7 +59,7 @@ export * from './mesh/wire.ts';
 export { SlidingWindowLimiter } from './mesh/limiter.ts';
 export { KINDS as DEVICE_KINDS, ROLE_OF, SESSION_TTL_MS } from './mesh/devices.ts';
 export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS, rateKey } from './mesh/enroll.ts';
-export { PUBLIC_PATHS, SESSION_COOKIE, allows, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
+export { BROWSER_TASK_HEADER, PUBLIC_PATHS, SESSION_COOKIE, allows, fromBrowserTask, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
 export { DEVICE_CONFIG_SECTIONS, INBOX_KINDS, MAX_BATCH as INBOX_MAX_BATCH } from './mesh/spokes.ts';
 export { RUNTIME_FILES, agentFiles, agentTar, joinScript, tar } from './mesh/agent.ts';
 export type { Device, Kind as DeviceKind, Role as DeviceRole, MeshState } from './mesh/devices.ts';
@@ -100,6 +102,8 @@ export interface CoreOptions {
   mesh?: MeshListenerInfo | null;
   // Where the vault's key lives (vault.ts): NOVA_VAULT_KEY by default; tests inject a keychain.
   vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
+  // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
+  hubPorts?: () => number[];
   // Home Assistant's reconnect pauses and timeouts (tests shorten them).
   homeAssistant?: HomeAssistantOptions;
   // The model command Era 2 chats with (agent_cmd, agent_egress): the custom-cli provider (M5a).
@@ -127,7 +131,17 @@ export function createCore(o: CoreOptions) {
   const verifier = new Verifier(workspace, now);
   for (const [system, check] of Object.entries(o.confirmations ?? {})) verifier.registerConfirmation(system, check);
   // Browser work with takeover (M5c): a worker of its own, and the checks for what it proves.
-  const browser = new Browser({ home: o.home, log, now });
+  // Its browser runs here, so it is told where Nova itself listens: this machine's addresses and
+  // names, at the console's and the mesh listener's ports (browser/plan.ts, `Hub`).
+  const hubAddress = (): Hub => ({
+    ports: o.hubPorts?.() ?? [],
+    hosts: [
+      hostname(),
+      ...(o.mesh?.publicUrl ? [(() => { try { return new URL(o.mesh!.publicUrl).hostname; } catch { return ''; } })()] : []),
+      ...Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address)),
+    ].filter(Boolean),
+  });
+  const browser = new Browser({ home: o.home, log, now, hub: hubAddress });
   const browserChecks = browserCheckers(o.home);
   verifier.registerKind('screenshot', browserChecks.screenshot);
   verifier.registerKind('url', browserChecks.url);

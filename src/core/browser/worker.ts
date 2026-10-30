@@ -12,13 +12,14 @@ import type { Ledger, LanedWorker } from '../ledger.ts';
 import type { Log } from '../log.ts';
 import { findChromium, type Found } from './chromium.ts';
 import { FINAL_READ, SCREENSHOT, refOf, refetch, squash, taskDir, type FinalRead, type Read } from './evidence.ts';
-import { allowed, describe, hostOf, planEgress, validatePlan, type Plan, type Step } from './plan.ts';
+import { NO_HUB, allowed, describe, hostOf, planEgress, validatePlan, type Hub, type Plan, type Step } from './plan.ts';
 import { INPUT_KEYS, Session, type Holder, type Input, type SessionView } from './session.ts';
 
 export const BROWSER_WORKER = 'browser';
 const STEP_TIMEOUT_MS = 15_000;
 
-export interface BrowserOptions { home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv }
+// `hub`: where Nova itself listens, which no browser task may reach (plan.ts).
+export interface BrowserOptions { home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv; hub?: () => Hub }
 
 const clip = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const sel = (s: string) => JSON.stringify(s);
@@ -46,7 +47,7 @@ export class Browser extends EventEmitter {
       // A person may take a while over their step.
       timeoutMs: 60 * 60_000,
       lane: () => ({ key: 'browser', max: 2 }),
-      egressFor: (brief: Brief) => planEgress(validatePlan(brief.inputs)),
+      egressFor: (brief: Brief) => planEgress(validatePlan(brief.inputs, self.#hub())),
       health: () => {
         const f = self.chromium();
         return { ok: f.path !== null || f.from === 'none', detail: f.path ? `${f.detail}${self.#sandbox() ? '' : ' Chromium’s own sandbox is off (NOVA_CHROMIUM_SANDBOX=0).'}` : f.detail };
@@ -58,6 +59,10 @@ export class Browser extends EventEmitter {
   bind(ledger: Ledger): void { this.#ledger = ledger; }
 
   chromium(): Found { return findChromium(this.#o.env ?? process.env); }
+
+  #hub(): Hub {
+    try { return this.#o.hub?.() ?? NO_HUB; } catch { return NO_HUB; }
+  }
 
   #sandbox(): boolean {
     const env = this.#o.env ?? process.env;
@@ -111,14 +116,14 @@ export class Browser extends EventEmitter {
       usage: { duration_ms: Date.now() - started }, ...extra,
     });
     let plan: Plan;
-    try { plan = validatePlan(brief.inputs); } catch (e) {
+    try { plan = validatePlan(brief.inputs, this.#hub()); } catch (e) {
       return report('failed', `The browser plan can’t run: ${e instanceof CoreError ? e.details.join('; ') : (e as Error).message}`);
     }
     const found = this.chromium();
     if (!found.path) return report('failed', found.detail);
 
     this.sessions.get(id)?.close('replaced');
-    const s = new Session({ taskId: id, chromium: found.path, hosts: plan.allowed_hosts, sandbox: this.#sandbox(), now: this.#now });
+    const s = new Session({ taskId: id, chromium: found.path, hosts: plan.allowed_hosts, sandbox: this.#sandbox(), now: this.#now, hub: () => this.#hub() });
     this.sessions.set(id, s);
     this.#follow(s);
     const stop = () => { void s.close(signal.reason instanceof Error && signal.reason.name === 'TimeoutError' ? 'the task ran out of time' : 'the task was stopped'); };
