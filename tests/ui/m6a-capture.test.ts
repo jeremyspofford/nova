@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
 import type { Page } from 'playwright-core';
 import { stop, until } from '../acceptance/support.ts';
@@ -43,6 +44,15 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
     assert.match((await section.textContent()) ?? '', /Nothing is captured until you turn a source on/);
     await section.locator('details.raw summary', { hasText: 'What each kind of device can capture' }).click();
     assert.match((await section.textContent()) ?? '', /No passive capture of other apps/);
+    // Private windows: said plainly how they are recognised, and what is surer.
+    assert.match((await section.textContent()) ?? '', /recognises them by the window’s title/);
+    assert.match((await section.textContent()) ?? '', /Screenpipe’s own ignored-windows setting/);
+    // Each exclusion says what it keeps out; an app's can't stop audio.
+    await section.locator('form[data-form="exclusion"] select[name="kind"]').selectOption('app');
+    await section.locator('form[data-form="exclusion"] input[name="value"]').fill('Password Keeper');
+    await section.locator('form[data-form="exclusion"] button[type="submit"]').click();
+    await section.locator('.capture-rules li', { hasText: 'Password Keeper' }).waitFor();
+    assert.match((await section.locator('.capture-rules li', { hasText: 'Password Keeper' }).textContent()) ?? '', /doesn’t stop audio/);
     await section.locator('input[name="url"]').fill(sp.base);
     await section.locator('form[data-form="screenpipe"] button[type="submit"]').click();
     const row = section.locator('.conn[data-source^="screenpipe:"]');
@@ -125,12 +135,48 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
     await page.waitForFunction((id) => !document.querySelector(`#capture-view .capture-item[data-event="${id}"]`), plan.id);
     assert.equal((await m.send('GET', `/api/v1/capture/events/${plan.id}`)).status, 404);
 
-    // Pause everything: the indicator goes.
+    // A suggestion for something with no space: accepting it asks which space, never a silent one.
+    sp.add({ at: new Date(now + 240_000).toISOString(), app: 'Reader', window: 'article', text: 'The library closes early on Fridays' });
+    const library = (await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.some((e: any) => /library/.test(e.text)), 400)).find((e: any) => /library/.test(e.text));
+    assert.equal(library.space, null);
+    // A proposal, as a triage decision with a provider would leave it (no model runs in this test).
+    const db = new DatabaseSync(join(m.home, 'nova.db'));
+    db.prepare(`INSERT INTO capture_proposal (id, event_id, template_id, version, provider, p, state, at) VALUES ('proposal-ui-1', ?, 'capture-promote', 1, 'stand-in', 0.9, 'proposed', ?)`).run(library.id, new Date().toISOString());
+    db.close();
+    await page.goto(`${m.base}/capture`);
+    await ready(page);
+    await view.locator('#cap-suggest').waitFor();
+    await view.locator('[data-action="capture-accept"]').click();
+    const ask = page.locator('#sheet .capture-remember');
+    await ask.waitFor();
+    assert.equal(await ask.locator('input[name="scope"]').inputValue(), '', 'no space chosen for the person');
+    await ask.locator('input[name="scope"]').fill('work');
+    await ask.locator('button[type="submit"]').click();
+    const accepted = await until(() => m.get('/api/v1/memory'), (l: any[]) => l.some((x: any) => /library/.test(x.content)), 400);
+    assert.equal(accepted.find((x: any) => /library/.test(x.content)).scope, 'work');
+
+    // Pause everything: the indicator goes, and the page says Screenpipe itself keeps recording.
     await page.goto(`${m.base}/settings#capture`);
     await ready(page);
     await section.locator('[data-action="capture-pause-all"]').click();
     await indicator(page).waitFor({ state: 'hidden' });
     await page.waitForFunction(() => /Paused/.test(document.querySelector('#capture .conn')?.textContent ?? ''));
+    assert.match((await section.locator('.conn').first().textContent()) ?? '', /Screenpipe itself keeps recording/);
+
+    // Nova's server stops answering: capture may be on there, so the indicator says it can't tell.
+    const cut = await b.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'block' });
+    const cutPage = await cut.newPage();
+    await cutPage.goto(`${m.base}/`);
+    await ready(cutPage);
+    assert.equal(await indicator(cutPage).isVisible(), false, 'paused: nothing captures');
+    await cutPage.route('**/api/v1/capture', (r) => r.abort());
+    await cutPage.evaluate(() => window.dispatchEvent(new Event('online')));
+    await indicator(cutPage).waitFor({ state: 'visible' });
+    assert.match((await indicator(cutPage).textContent()) ?? '', /Capture state unknown/);
+    await cutPage.unroute('**/api/v1/capture');
+    await cutPage.evaluate(() => window.dispatchEvent(new Event('online')));
+    await indicator(cutPage).waitFor({ state: 'hidden' });
+    await cut.close();
     if (shots) await shoot(page, join(shots, 'capture-settings-paused.png'));
     assert.deepEqual(failures, []);
     // Leaving a page cuts its event streams mid-answer; the browser says so, and that's all it is.

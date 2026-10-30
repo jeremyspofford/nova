@@ -3,13 +3,14 @@
 // what is never captured, the person's space signals and switch, retention), and the Capture view
 // (/capture): what Nova suggests remembering, what needs a space, and recent capture, each item
 // one tap from Remember or Forget. Everything shown is the server's real state.
-import { api } from './core.js';
+import { api, on as onCore } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, openSheet, toast } from './shell.js';
 
 let data = null;      // GET /capture: { status, sources, settings, posture }
 let view = null;      // the Capture view: { recent, unclassified, proposals }
 let failed = '';
+let unreachable = ''; // why the last GET /capture failed: then nobody here knows whether capture is on
 let redraw = () => {};
 
 const enc = encodeURIComponent;
@@ -23,11 +24,22 @@ export async function loadCapture() {
   try {
     data = await api('GET', '/capture');
     failed = '';
+    unreachable = '';
   } catch (e) {
     failed = e.message || 'Nova’s server didn’t answer.';
+    unreachable = failed;
   }
   renderIndicator();
   redraw();
+}
+
+// Whether capture is on can change while this page can't hear about it: asked again when the
+// connection comes back, and when it drops (that ask fails, and the indicator says so).
+onCore('open', () => loadCapture());
+onCore('error', () => loadCapture());
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => loadCapture());
+  window.addEventListener('offline', () => { unreachable = 'You’re offline.'; renderIndicator(); });
 }
 
 export async function loadCaptureView() {
@@ -53,14 +65,23 @@ export function captureChanged(viewShowing) {
 // ---- the indicator ---------------------------------------------------------------------------
 
 // On every page while any source is capturing (the top bar is kept even on a phone's Home for it).
+// When Nova's server can't be reached, capture may still be on there: the indicator says the state
+// is unknown rather than hiding.
 export function renderIndicator() {
   const a = document.getElementById('capture-ind');
   if (!a) return;
   const s = data?.status;
-  const on = !!s?.active;
+  const on = !!s?.active || !!unreachable;
   document.body.dataset.capturing = on ? 'on' : 'off';
   a.hidden = !on;
   if (!on) return;
+  if (unreachable) {
+    a.classList.add('is-warn');
+    a.querySelector('.capture-word').textContent = 'Capture state unknown';
+    a.setAttribute('aria-label', 'Capture state unknown: Nova’s server isn’t answering, so this page can’t tell whether anything is capturing. Open Capture.');
+    a.title = `${unreachable} Capture may still be on.`;
+    return;
+  }
   const names = s.capturing.map((c) => (c.device ? `${c.name} on ${c.device}` : c.name));
   a.classList.toggle('is-warn', !!s.problem);
   a.querySelector('.capture-word').textContent = s.problem ? 'Capture needs you' : 'Capturing';
@@ -79,11 +100,14 @@ function counts(s) {
   return `${kept}${left.length ? `; ${left.join(', ')} never stored` : ''}.`;
 }
 
+// Pausing stops what Nova takes in, not Screenpipe itself, which keeps recording on its computer.
+const PAUSED_SCREENPIPE = 'Paused: Nova takes nothing in from it. Screenpipe itself keeps recording on its computer until you pause it there too.';
+
 function sourceRow(s) {
   const [word, tone] = STATE(s);
   const where = s.device?.name ? ` on ${s.device.name}` : '';
   const note = s.enabled
-    ? [s.detail ?? '', counts(s), s.consent ? `On since ${when(s.consent.at)}.` : ''].filter(Boolean).join(' ')
+    ? [s.paused && s.adapter === 'screenpipe' ? PAUSED_SCREENPIPE : '', s.detail ?? '', counts(s), s.consent ? `On since ${when(s.consent.at)}.` : ''].filter(Boolean).join(' ')
     : s.adapter === 'screenpipe' ? `Takes screen text, audio transcripts and the app and window from Screenpipe at ${s.url}. Off until you turn it on.` : `This device offers ${s.kinds.join(', ')}. Off until you turn it on.`;
   const act = (action, label, extra = '') => `<button type="button" class="btn small${extra}" data-action="${action}" data-source="${esc(s.id)}">${label}</button>`;
   const actions = !s.enabled ? act('capture-on', 'Turn on') : `${s.paused ? act('capture-resume', 'Resume') : act('capture-pause', 'Pause')}${act('capture-off', 'Turn off', ' quiet')}`;
@@ -94,12 +118,22 @@ function sourceRow(s) {
 </li>`;
 }
 
+// What each kind of exclusion keeps out, said plainly: audio has no app or site, so only a time
+// window or a space keeps it out.
+const COVERS = {
+  app: 'Screen text and activity in it, and its editions (Beta and so on). Audio has no app, so this doesn’t stop audio: use a time window, or pause.',
+  site: 'Pages there, by their address, or in a browser by the window title or the text on screen. Audio isn’t tied to a site, so this doesn’t stop audio.',
+  space: 'Everything filed in that space, audio included.',
+  time: 'Everything in those hours, audio included, even a recording that only runs into them.',
+};
+
 function exclusionText(e) {
   if (e.kind === 'app') return `The app ${e.app}`;
   if (e.kind === 'site') return `The site ${e.site}`;
   if (e.kind === 'space') return `Anything in the ${e.space} space`;
   return `${e.window.start}–${e.window.end}${e.window.days ? (e.window.days.join() === '1,2,3,4,5' ? ' on weekdays' : ' on some days') : ' every day'}`;
 }
+const exclusionLine = (e) => `${exclusionText(e)}. ${COVERS[e.kind] ?? ''}`.trim();
 
 function signalText(s) {
   if (s.kind === 'app') return `${s.app} → ${s.space}`;
@@ -108,8 +142,8 @@ function signalText(s) {
 }
 const deviceName = (id) => data?.sources.find((s) => s.device.id === id)?.device.name ?? 'a device';
 
-const listOf = (items, text, action) => (items.length
-  ? `<ul class="capture-rules">${items.map((x, i) => `<li><span>${esc(text(x))}</span><button type="button" class="btn small quiet" data-action="${action}" data-index="${i}" aria-label="Remove: ${esc(text(x))}">Remove</button></li>`).join('')}</ul>`
+const listOf = (items, text, action, line = text) => (items.length
+  ? `<ul class="capture-rules">${items.map((x, i) => `<li><span>${esc(line(x))}</span><button type="button" class="btn small quiet" data-action="${action}" data-index="${i}" aria-label="Remove: ${esc(text(x))}">Remove</button></li>`).join('')}</ul>`
   : '');
 
 export function renderCaptureSettings() {
@@ -120,7 +154,7 @@ export function renderCaptureSettings() {
   const lede = 'What Nova may see on your devices, for context. Nothing is captured until you turn a source on, and the top bar shows whenever anything is. Capture stays on your own devices.';
   const now = status.active
     ? `Capturing from ${status.capturing.map((c) => c.name).join(', ')}. ${plural(status.today, 'item')} in the last day.`
-    : status.paused ? `Paused (${plural(status.paused, 'source')}).` : 'Off.';
+    : status.paused ? `Paused (${plural(status.paused, 'source')}): Nova takes nothing in. Screenpipe keeps recording on its computer until you pause it there too.` : 'Off.';
   const spaces = settings.spaces;
   const spaceOptions = spaces.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
   return `${head}
@@ -135,8 +169,8 @@ ${screenpipe ? '' : `<form class="capture-form" data-form="screenpipe"><div clas
 <div class="sheet-actions"><button type="submit" class="btn small">Add Screenpipe</button></div></form>`}
 <details class="raw"><summary>What each kind of device can capture</summary><ul class="capture-posture">${posture.map((p) => `<li><p class="settings-label">${esc(p.label)}</p><p class="settings-note">${esc(p.can)}</p></li>`).join('')}</ul></details>
 <h3 class="conn-sub">Never captured</h3>
-<p class="settings-note">Private and incognito windows, always. And anything you list here.</p>
-${listOf(settings.exclusions, exclusionText, 'capture-unexclude')}
+<p class="settings-note">Private and incognito windows, always: Nova recognises them by the window’s title, in the major browsers’ common languages. That is a best effort, so also list them in Screenpipe’s own ignored-windows setting, which stops Screenpipe recording them at all. And anything you list here.</p>
+${listOf(settings.exclusions, exclusionText, 'capture-unexclude', exclusionLine)}
 <form class="capture-form" data-form="exclusion"><div class="field-row">
 <div><label class="field-label">Kind<select class="field" name="kind"><option value="app">An app</option><option value="site">A site</option><option value="space">A space</option><option value="time">A time of day</option></select></label></div>
 <div><label class="field-label">Which (an app, a site, a space, or 12:00–13:00)<input class="field" name="value" autocomplete="off" spellcheck="false" required></label></div>
@@ -208,14 +242,16 @@ ${more.length ? `<details class="raw"><summary>${plural(more.length, 'more')}</s
 
 const findEvent = (id) => [...(view?.recent ?? []), ...(view?.unclassified ?? []), ...(view?.proposals ?? []).map((p) => p.event)].find((e) => e.id === id);
 
-function rememberSheet(e) {
-  const spaces = data?.settings.spaces ?? ['personal'];
-  const scope = e.space ?? spaces[0] ?? 'personal';
-  return `<form class="capture-remember" data-event="${esc(e.id)}" method="dialog">
+// The space is the event's when it has one; otherwise the person says, never a silent default.
+// With a proposal, the same sheet accepts it.
+function rememberSheet(e, proposal = null) {
+  const spaces = data?.settings.spaces ?? [];
+  return `<form class="capture-remember" data-event="${esc(e.id)}"${proposal ? ` data-proposal="${esc(proposal)}"` : ''} method="dialog">
   <h2 class="sheet-title" id="sheet-title">Remember this?</h2>
   <p class="sheet-line">It becomes a memory, noting it came from what was captured ${esc(when(e.at))}${e.app ? ` in ${esc(e.app)}` : ''}.</p>
   <label class="field-label">What to remember<textarea class="field" name="content" rows="4" required>${esc(e.text ?? '')}</textarea></label>
-  <label class="field-label">Space<input class="field" name="scope" value="${esc(scope)}" list="capture-spaces" required></label>
+  <label class="field-label">Which space${e.space ? '' : ' (it has none yet)'}<input class="field" name="scope" value="${esc(e.space ?? '')}" list="capture-remember-spaces" placeholder="${esc(spaces.join(', '))}" autocomplete="off" spellcheck="false" required></label>
+  <datalist id="capture-remember-spaces">${spaces.map((sp) => `<option value="${esc(sp)}">`).join('')}</datalist>
   <div class="sheet-actions"><button type="submit" class="btn primary">Remember</button><button type="button" class="btn quiet" data-action="close-sheet">Cancel</button></div>
 </form>`;
 }
@@ -257,9 +293,9 @@ export function bindCapture(roots, render) {
       if (a === 'retry-capture') { loadCapture(); loadCaptureView(); }
       else if (a === 'capture-on') act(() => api('POST', `${src(b)}/enable`), (r) => `${r.name} is on. The top bar shows while it captures.`);
       else if (a === 'capture-off') act(() => api('POST', `${src(b)}/disable`), (r) => `${r.name} is off.`);
-      else if (a === 'capture-pause') act(() => api('POST', `${src(b)}/pause`), (r) => `${r.name} is paused.`);
+      else if (a === 'capture-pause') act(() => api('POST', `${src(b)}/pause`), (r) => (r.adapter === 'screenpipe' ? `${r.name} is paused: Nova takes nothing in. Screenpipe keeps recording until you pause it there too.` : `${r.name} is paused.`));
       else if (a === 'capture-resume') act(() => api('POST', `${src(b)}/resume`), (r) => `${r.name} is capturing again, from now.`);
-      else if (a === 'capture-pause-all') act(() => api('POST', '/capture/pause', { paused: true }), 'Capture is paused.');
+      else if (a === 'capture-pause-all') act(() => api('POST', '/capture/pause', { paused: true }), 'Capture is paused: Nova takes nothing in. Screenpipe keeps recording until you pause it there too.');
       else if (a === 'capture-resume-all') act(() => api('POST', '/capture/pause', { paused: false }), 'Capture is on again, from now.');
       else if (a === 'capture-unexclude') act(() => api('PUT', '/capture/settings', { exclusions: s.exclusions.filter((_, i) => i !== Number(b.dataset.index)) }), 'Removed.');
       else if (a === 'capture-unsignal') act(() => api('PUT', '/capture/settings', { signals: s.signals.filter((_, i) => i !== Number(b.dataset.index)) }), 'Removed.');
@@ -269,7 +305,10 @@ export function bindCapture(roots, render) {
       else if (a === 'capture-space') {
         const always = document.getElementById('capture-always')?.checked;
         act(() => api('POST', `/capture/events/${enc(b.dataset.event)}/space`, { space: b.dataset.space, ...(always ? { remember: 'app' } : {}) }), `Filed under ${b.dataset.space}.`);
-      } else if (a === 'capture-accept') act(() => api('POST', `/capture/proposals/${enc(b.dataset.proposal)}/accept`, {}), 'Remembered. It’s in Memory, with where it came from.');
+      } else if (a === 'capture-accept') {
+        const p = view?.proposals.find((x) => x.id === b.dataset.proposal);
+        if (p) openSheet(rememberSheet(p.event, p.id), { label: 'Remember this' });
+      }
       else if (a === 'capture-dismiss') act(() => api('POST', `/capture/proposals/${enc(b.dataset.proposal)}/dismiss`), 'Left as evidence.');
       else if (a === 'capture-remember' || a === 'capture-forget') {
         const e = findEvent(b.dataset.event);
@@ -286,7 +325,8 @@ export function bindCapture(roots, render) {
       else if (form.dataset.form === 'exclusion') {
         const v = String(f.value).trim();
         const rule = f.kind === 'time' ? { kind: 'time', window: parseWindow(v) ?? { start: v, end: v } } : { kind: f.kind, [f.kind]: v };
-        act(() => api('PUT', '/capture/settings', { exclusions: [...s.exclusions, rule] }), 'Added. Nova won’t capture it.');
+        const said = { app: 'Added. Nova won’t take in screen text from it; audio has no app, so this doesn’t stop audio.', site: 'Added. Nova won’t take in pages there; audio isn’t tied to a site.', space: 'Added. Nothing filed in that space is kept, audio included.', time: 'Added. Nothing from those hours is kept, audio included.' };
+        act(() => api('PUT', '/capture/settings', { exclusions: [...s.exclusions, rule] }), said[f.kind] ?? 'Added.');
       } else if (form.dataset.form === 'signal') {
         const v = String(f.value).trim();
         const rule = f.kind === 'calendar' ? { kind: 'calendar', window: parseWindow(v) ?? { start: v, end: v }, space: f.space } : { kind: 'app', app: v, space: f.space };
@@ -301,7 +341,9 @@ export function bindCapture(roots, render) {
     const id = form.dataset.event;
     if (form.classList.contains('capture-remember')) {
       const f = Object.fromEntries(new FormData(form));
-      act(async () => { const r = await api('POST', '/capture/promote', { event_ids: [id], content: f.content, scope: f.scope }); closeSheet(); return r; }, 'Remembered. It’s in Memory, with where it came from.');
+      const body = { content: f.content, scope: String(f.scope).trim() };
+      const send = form.dataset.proposal ? () => api('POST', `/capture/proposals/${enc(form.dataset.proposal)}/accept`, body) : () => api('POST', '/capture/promote', { event_ids: [id], ...body });
+      act(async () => { const r = await send(); closeSheet(); return r; }, 'Remembered. It’s in Memory, with where it came from.');
     } else {
       act(async () => { const r = await api('DELETE', `/capture/events/${enc(id)}`); closeSheet(); return r; }, (r) => (r.memories.length ? 'Forgotten, with the memory made from it.' : 'Forgotten.'));
     }
