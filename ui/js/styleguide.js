@@ -2,8 +2,10 @@
 // The schema comes from the core, never from a copy (src/core/design.ts).
 const schema = await fetch('/api/v1/design-systems/schema').then((r) => r.json());
 const tokensOf = (test) => schema.tokens.filter(test).map((t) => t.css);
-import { THEMES, MODES, apply, choose, current } from './theme.js';
-import { icons, memoryIndex, renderActivity, renderEmpty, renderHandoff, renderMemory, renderNotes, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
+import { MODES, apply, current, previewCss } from './theme.js';
+import { icons, memoryIndex, renderActivity, renderEmpty, renderHandoff, renderMemory, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
+import { ICONS, approvalSheet, briefCard, chatBubble, deviceMeshCard, emptyState, evidenceViewer, handlingCard, healthCard, lookingIntoItCard, memoryHighlightCard, orb, proactiveBanner, settingsRow, status, taskRow, triggerRow, verifiedResultCard, voiceState } from './components.js';
+import { ORB_STATES } from './status.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -89,17 +91,34 @@ const streaming = { id: 'e', text: 'And the weekend?', ts: t0.toISOString(), att
 
 const section = (title, intro, body) => `<section class="sg-section"><h2>${title}</h2><p>${intro}</p>${body}</section>`;
 const tokenList = (names) => names.map((n) => `<code>${n}</code>`).join(' ');
+const label = (text) => `<p class="sg-label">${text}</p>`;
+
+// Sample work for the PWA's components.
+const at = (h) => new Date(t0.getTime() + h * 3600_000).toISOString();
+const task = (id, title, state, more = {}) => ({ id, title, state, reason: null, owner: 'workspace', approval_tier: 1, approved_at: null, user_visibility: 'handling', privacy_mode: 'local-only', brief: { goal: 'A short note is in the workspace, read back and checked.' }, report: null, verification: null, created_at: at(-1), updated_at: at(-0.5), ...more });
+const doneTask = task('v1', 'Write a welcome note', 'done', {
+  completed_at: at(-0.2),
+  report: { summary: 'Wrote welcome.md (242 bytes).', evidence: [] },
+  verification: { ok: true, at: at(-0.2), checks: [{ requirement: { kind: 'read_back', target: 'workspace:welcome.md' }, evidence: { kind: 'read_back', target: 'workspace:welcome.md', sha256: '9ffb9f4f9e55aa0b', bytes: 242 }, ok: true, why: 'Nova read it back itself; it matches what was reported.' }] },
+});
+const workTasks = [
+  task('t1', 'Summarize the week’s notes', 'active'),
+  task('t2', 'Send the draft reply', 'waiting', { approval_tier: 2 }),
+  task('t3', 'Index the photo folder', 'queued'),
+  task('t4', 'Fetch the release notes', 'waiting', { reason: 'Waiting on local capacity.' }),
+  doneTask,
+  task('t5', 'Check the backup', 'failed', { reason: 'The disk wasn’t mounted.' }),
+  task('t6', 'Rename the old drafts', 'cancelled', { reason: 'Cancelled by you.' }),
+];
 
 function render() {
   const colors = tokensOf((t) => t.group === 'color').map((n) => `<div class="sg-swatch"><div class="sg-chip" style="background: var(${n})"></div><span class="sg-name">${n}</span><span class="sg-value">${value(n)}</span></div>`).join('');
-  const type = ['--t-display', '--t-wordmark', '--t-title', '--t-body', '--t-callout', '--t-caption', '--t-margin', '--t-mono']
-    .map((n) => `<div class="sg-row"><span class="sg-name">${n}</span><span style="font: var(${n})">A thoughtful journal that happens to act</span></div>`).join('');
+  const sizes = tokensOf((t) => t.syntax === 'size').map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><span style="font-size: var(${n}); line-height: var(--type-line-tight); font-family: var(--font-display)">A calm companion that acts</span></div>`).join('');
   const space = tokensOf((t) => t.name.startsWith('space/')).map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-bar" style="width: var(${n})"></div></div>`).join('');
-  const shape = ['--r-card', '--r-bubble', '--r-input', '--r-pill'].map((n) => `<div class="sg-swatch"><div class="sg-box" style="border-radius: var(${n})">${value(n)}</div><span class="sg-name">${n}</span></div>`).join('') +
-    ['--shadow-1', '--shadow-2'].map((n) => `<div class="sg-swatch"><div class="sg-box" style="border-radius: var(--r-card); box-shadow: var(${n})">elevation</div><span class="sg-name">${n}</span></div>`).join('');
-  const motion = ['--m-fast', '--m-med', '--m-slow'].map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-track"><span class="sg-dot" style="transition: left var(${n}) var(--ease)"></span></div></div>`).join('');
+  const shape = tokensOf((t) => t.name.startsWith('radius/')).map((n) => `<div class="sg-swatch"><div class="sg-box" style="border-radius: var(${n})">${value(n)}</div><span class="sg-name">${n}</span></div>`).join('') +
+    tokensOf((t) => t.name.startsWith('shadow/')).map((n) => `<div class="sg-swatch"><div class="sg-box" style="border-radius: var(--radius-card); box-shadow: var(${n})">elevation</div><span class="sg-name">${n}</span></div>`).join('');
+  const motion = tokensOf((t) => t.syntax === 'duration').map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-track"><span class="sg-dot" style="transition: left var(${n}) var(--motion-ease)"></span></div></div>`).join('');
 
-  const at = (h) => new Date(t0.getTime() + h * 3600_000).toISOString();
   const sched = (id, name, when, more = {}) => ({ id, name, when, cron: '0 7 * * *', deliver: 'main', prompt: 'Write the morning digest.', next: at(20), last: null, ...more });
   const scheduleSample = {
     set: [
@@ -108,7 +127,6 @@ function render() {
       sched('weekly', 'Weekly review', 'Fridays at 4:00 PM', { paused: true, next: null }),
       sched('plants', 'Water the plants', 'Mondays at 8:00 AM', { last: { missed: true, due: at(-26) } }),
       sched('bills', 'Bills check', 'On the 1st of every month at 9:00 AM', { last: { ok: false, finished: at(-2), delivered: 'main', handoff: 'h3', error: "Nova couldn't reach the model." } }),
-      sched('broken', 'Broken', '', { error: "Nova can't read when this runs: A schedule needs five parts.", next: null }),
     ],
     available: [{ id: 'evening', name: 'Evening wrap-up', about: 'What got done today, and what is waiting for tomorrow.', cron: '0 18 * * *', prompt: 'Wrap up the day.' }],
   };
@@ -116,97 +134,109 @@ function render() {
   const entry = (kind, title, state, more = {}) => ({ id: `${kind}-${title}`, kind, title, state, session: '2026-10-21-aaaaaa', turn: 't1', started: at(-1), ended: at(-0.99), steps: [], ...more });
   const activitySample = {
     now: [
-      entry('helper', 'Read the lease', 'working', { brief: 'Read the lease in workspace/flat and list anything unusual: fees, notice periods, who fixes what.', parent: 'main', parentTitle: 'Main conversation', steps: [tool('read_file', { path: 'workspace/flat/lease.md' })] }),
+      entry('helper', 'Read the lease', 'working', { brief: 'Read the lease in workspace/flat and list anything unusual.', parent: 'main', parentTitle: 'Main conversation', steps: [tool('read_file', { path: 'workspace/flat/lease.md' })] }),
       entry('reply', 'Main conversation', 'waiting', { text: 'Run git status in my workspace', session: 'main', approval: 'exec', steps: [{ kind: 'tool', id: 'exec', name: 'exec', args: { command: 'git status' }, needsApproval: true, approval: null, result: null }] }),
-      entry('helper', 'Compare flights', 'queued', { parent: 'main', parentTitle: 'Main conversation', ended: null, steps: [] }),
     ],
     days: [{
       day: t0.toISOString().slice(0, 10),
-      summary: { replies: 2, schedules: 1, helpers: 2, missed: 1, asked: 2, allowed: 1, declined: 1, onOwn: 2, notAsked: 0, kept: 1 },
+      summary: { replies: 2, schedules: 1, helpers: 1, missed: 1, asked: 2, allowed: 1, declined: 1, onOwn: 0, notAsked: 0, kept: 1 },
       entries: [
-        entry('helper', 'Compare e-bikes', 'done', { brief: 'Compare commuter e-bikes under $2,000 for a 9-mile ride with one hill.', parent: 'main', parentTitle: 'Main conversation', report: { to: 'main', handoff: 'h9' }, steps: [tool('web_search', { query: 'best commuter e-bikes 2026' }, { result: { ok: true, summary: '8 results' } }), tool('web_fetch', { url: 'https://ridgeline.example/c2' }), tool('web_fetch', { url: 'https://voltway.example/metro' }), tool('exec', { command: 'ls ~/workspace/bikes' }, { needsApproval: true, approval: { decision: 'allow', auto: true }, result: { ok: true } })] }),
         entry('schedule', 'Morning digest', 'done', { report: { to: 'main', handoff: 'h1' }, steps: [{ kind: 'skill', id: 'email-summary', name: 'Email summary' }, tool('gmail_search', {}, { result: { ok: true, summary: '5 messages' } })] }),
-        entry('reply', 'Trip planning', 'done', { text: 'Draft a reply to Sam saying yes', first: true, steps: [tool('gmail_draft', {}, { needsApproval: true, approval: { decision: 'allow' }, result: { ok: true, summary: 'Re: Saturday hike' } })] }),
-        entry('reply', 'Main conversation', 'done', { text: 'I take my coffee black', session: 'main', steps: [{ kind: 'memory', kept: 1, forgot: 0 }] }),
         entry('helper', 'Check the bus times', 'stopped', { parent: 'main', parentTitle: 'Main conversation', steps: [] }),
         entry('schedule', 'Water the plants', 'missed', { missed: true, session: null, ended: null, steps: [] }),
       ],
     }],
-    more: true,
-    before: t0.toISOString().slice(0, 10),
+    more: false,
   };
+  const orbs = ORB_STATES.map((s) => `<div class="sg-swatch">${orb({ state: s, size: 'rail' })}<span class="sg-name">${s}</span></div>`).join('');
   sg.innerHTML = [
     section('Color', `Every design system defines these ${tokensOf((t) => t.group === 'color').length} colour tokens. Components use nothing else.`, `<div class="sg-grid">${colors}</div>`),
-    section('Type', `Serif is the voice of record in Paper: dates, empty states, and anything Nova concludes. Chrome stays sans. Font families: ${tokenList(['--font', '--font-display', '--font-mono'])}.`, type),
-    section('Spacing', 'A 4-point base with an editorial rhythm.', space),
-    section('Shape and elevation', 'Warm, soft, and sparing.', `<div class="sg-grid">${shape}</div>`),
-    section('Motion', `Durations and the easing curve are tokens; nothing bounces. Click to play. With reduced motion, movement becomes a crossfade (${tokenList(['--shift'])} is ${value('--shift')}).`, `<div id="motion">${motion}</div><p class="sg-sub">Easing: <code>${value('--ease')}</code></p>`),
-    section('Components', 'The real views, rendered with sample data.', `<div class="sg-demo">
-      <p class="sg-label">Buttons</p>
-      <div class="approval-actions"><button class="btn primary">Allow once</button><button class="btn">Deny</button><button class="btn" disabled>Disabled</button><button class="send" aria-label="Send">${icons.send}</button><button class="send is-stop" aria-label="Stop">${icons.stop}</button></div>
-      <p class="sg-label">Sidebar</p>
-      <div class="sg-frame is-bg"><nav class="toc">${renderToc([{ id: '2026-10-21-aaaaaa', title: 'Morning plan', created: t0.toISOString() }, { id: '2026-10-21-bbbbbb', title: 'Timecard for Monday and Tuesday', created: t0.toISOString() }], '2026-10-21-aaaaaa')}</nav></div>
-      <p class="sg-label">A reply, with a margin note from memory</p>
-      <div class="thread">${renderTurn(turnDone, { isLast: true })}</div>
-      <p class="sg-label">Records, including decided approvals</p>
-      <div class="thread">${renderTurn(tools)}</div>
-      <p class="sg-label">An approval waiting for you</p>
-      <div class="thread">${renderTurn(waiting, { live: { phase: 'approval', text: '' } })}</div>
-      <p class="sg-label">Thinking, then streaming</p>
-      <div class="thread">${renderTurn(streaming, { live: { phase: 'thinking', text: '' } })}</div>
-      <div class="thread">${renderTurn(streaming, { live: { phase: 'streaming', text: 'The weekend is mostly open. Saturday morning has' } })}</div>
-      <p class="sg-label">Errors and interruptions</p>
-      <div class="thread">${renderTurn(failed, { isLast: true })}</div>
-      <div class="thread">${renderTurn({ ...streaming, state: 'stopped', items: [{ kind: 'text', id: 't9', text: 'The weekend is mostly' }] })}</div>
-      <p class="sg-label">Banner</p>
-      <div class="banner">You're offline. Nova can still read your files, but replies need a connection.</div>
-      <p class="sg-label">Composer</p>
-      <form class="composer" onsubmit="return false"><textarea rows="1" placeholder="Write to Nova…" aria-label="Sample composer"></textarea><button class="send" aria-label="Send">${icons.send}</button></form>
-      <p class="sg-label">What Nova kept, in the margin</p>
-      <div class="thread">${renderTurn(kept, { memory: memoryIndex(memorySample) })}</div>
-      <p class="sg-label">Memory</p>
-      <div class="sg-frame"><div class="thread memory">${renderMemory(memorySample)}</div></div>
-      <p class="sg-label">A reply that followed a skill</p>
-      <div class="thread">${renderTurn(usedSkill, { skills: new Set(['email-summary']) })}</div>
-      <p class="sg-label">Skills, with a connection</p>
-      <div class="sg-frame"><div class="thread memory skills">${renderSkills(skillSample)}</div></div>
-      <p class="sg-label">A report on the front page, one that ran late, and one that didn't finish</p>
-      <div class="thread">${renderHandoff({ id: 'h1', name: 'Morning digest', schedule: 'morning-digest', ok: true, ts: t0.toISOString(), due: t0.toISOString(), text: 'One thing matters today: the contract, due Thursday.\n\n**Needs you**\n\n- **Dana Whitfield** needs the spring contract signed by Thursday.\n\nWant me to draft a note to Dana?' })}</div>
-      <div class="thread">${renderHandoff({ id: 'h2', name: 'Morning digest', schedule: 'morning-digest', ok: true, late: true, ts: new Date(t0.getTime() + 5400_000).toISOString(), due: t0.toISOString(), text: 'A quiet morning: nothing is due today.' })}</div>
-      <div class="thread">${renderHandoff({ id: 'h3', name: 'Bills check', schedule: 'bills', ok: false, ts: t0.toISOString(), text: "Bills check didn't finish. Nova couldn't reach the model." })}</div>
-      <div class="thread">${renderToday(t0)}</div>
-      <p class="sg-label">Schedules: done, running, paused, missed, failed, unreadable, and one to set up</p>
-      <div class="sg-frame"><div class="thread memory skills schedules">${renderSchedules(scheduleSample, t0)}</div></div>
-      <p class="sg-label">A helper's report, and one you stopped</p>
-      <div class="thread">${renderHandoff({ id: 'h9', name: 'Compare e-bikes', helper: '2026-10-21-cccccc', ok: true, ts: t0.toISOString(), text: 'The **Ridgeline C2** is the one to get: $1,849, with a mid-drive motor that climbs well.\n\n| Bike | Price |\n| --- | --- |\n| Ridgeline C2 | $1,849 |\n| Voltway Metro | $1,499 |' })}</div>
-      <div class="thread">${renderHandoff({ id: 'h8', name: 'Check the bus times', helper: '2026-10-21-dddddd', ok: false, stopped: true, ts: t0.toISOString(), text: 'You stopped this helper before it finished.' })}</div>
-      <p class="sg-label">A helper's own log, read-only</p>
-      <div class="thread">${renderWorkNote({ kind: 'helper', title: 'Compare e-bikes', parent: 'main', delivered: { to: 'main', handoff: 'h9' } }, 'the main conversation')}</div>
-      <p class="sg-label">Activity: working, waiting for you, waiting its turn; then a day of done, declined, stopped and missed</p>
-      <div class="sg-frame"><div class="thread memory activity">${renderActivity(activitySample, t0)}</div></div>
-      <p class="sg-label">Activity, empty</p>
-      <div class="sg-frame"><div class="thread memory activity">${renderActivity({ now: [], days: [], more: false }, t0)}</div></div>
-      <p class="sg-label">Toast</p>
-      <div class="sg-frame" style="position: relative; min-height: 80px"><div class="toast">Forgotten, with 1 day note that said the same.<button type="button" class="toast-btn">Undo</button></div></div>
-      <p class="sg-label">Empty state</p>
-      <div class="sg-frame"><div class="thread">${renderEmpty()}</div></div>
+    section('Type', `Families: ${tokenList(tokensOf((t) => t.syntax === 'font'))}. Weights and line heights: ${tokenList(tokensOf((t) => t.syntax === 'weight' || t.syntax === 'line'))}.`, sizes),
+    section('Spacing', `Space tokens, plus ${tokenList(tokensOf((t) => t.group === 'layout'))} for the layout.`, space),
+    section('Shape and elevation', `Rounded cards, frosted with ${tokenList(['--blur-glass'])}.`, `<div class="sg-grid">${shape}</div>`),
+    section('Motion', `Slow, small, purposeful. Click to play. Under reduced motion the loops stop and transitions are near-instant. Easing: <code>${value('--motion-ease')}</code>.`, `<div id="motion">${motion}</div>`),
+    section('The orb', 'Nova’s presence: abstract light, no face. One component at every size; its state comes from real signals.', `<div class="sg-grid">${orbs}</div>${label('Hero')}<div class="sg-demo-center">${orb({ state: 'idle', size: 'hero' })}</div>`),
+    section('Status', 'One vocabulary everywhere, each with a fixed colour. Verified always opens its evidence.', `<div class="sg-demo-row">${['quiet', 'working', 'waiting', 'needs-you', 'failed'].map((s) => status(s)).join('')}${status('verified', { task: 'v1' })}</div>`),
+    section('Cards', 'One job each: a headline, a few lines, one action.', `<div class="sg-cards">
+      ${briefCard()}
+      ${handlingCard({ tasks: workTasks, now: t0 })}
+      ${handlingCard({ tasks: [], now: t0 })}
+      ${verifiedResultCard(doneTask, { now: t0 })}
+      ${lookingIntoItCard(workTasks[0])}
+      ${deviceMeshCard({ devices: [{ name: 'This browser', detail: 'desktop layout', online: true, current: true }] })}
+      ${healthCard({ health: { ok: true, checks: { database: { ok: true }, workers: { ok: true, workers: [{}, {}, {}] } } } })}
+      ${healthCard({ health: { ok: true, checks: {} }, problems: [{ id: 1, message: 'The heartbeat couldn’t check the schedules.' }] })}
+      ${memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] })}
+    </div>`),
+    section('Task rows', 'Every ledger state, mapped once.', `<div class="panel"><ul class="task-list">${workTasks.map((t) => taskRow(t, { now: t0 })).join('')}</ul></div>`),
+    section('Sheets', 'Approvals are tiered: tier 3 needs an explicit confirmation. Evidence shows how Nova checked.', `<div class="sg-cards">
+      <div class="sheet-inner panel">${approvalSheet(task('a2', 'Send the draft reply', 'waiting', { approval_tier: 2 }))}</div>
+      <div class="sheet-inner panel">${approvalSheet(task('a3', 'Delete the old backups', 'waiting', { approval_tier: 3 }))}</div>
+      <div class="sheet-inner panel">${evidenceViewer(doneTask)}</div>
+    </div>`),
+    section('Automations, notices, settings', '', `<div class="sg-demo">
+      ${label('Trigger rows')}<ul class="trigger-list">${triggerRow({ id: 'r1', name: 'Weekly review', class: 'heartbeat', schedule: 'Mondays at 9:00', action: { kind: 'message', text: 'Time for the weekly review.' }, paused: false })}${triggerRow({ id: 'r2', name: 'New invoice', class: 'event', hook_path: '/api/v1/hooks/invoice', action: { kind: 'task', task: { title: 'File the invoice' } }, paused: true })}</ul>
+      ${label('Proactive messages')}${proactiveBanner({ id: 'm1', text: 'The weekly review is ready when you are.' })}${proactiveBanner({ id: 'm2', text: 'I held this one because I wasn’t sure it should go out now.', hold: 'needs_ok' })}
+      ${label('Toasts')}<div class="sg-frame sg-toasts"><div class="toast">Forgotten.<button type="button" class="toast-btn">Undo</button></div><div class="toast" data-tone="alert">The heartbeat couldn’t check the schedules.<button type="button" class="toast-btn">See Health</button></div></div>
+      ${label('Banner')}<div class="banner">You’re offline. What you see was saved earlier; nothing new can arrive or be sent until you’re back.</div>
+      ${label('Settings rows')}<ul class="settings-list">${settingsRow({ title: 'Your name', note: 'What Nova calls you.', control: '<input class="input" value="Sam" aria-label="Your name"><button type="button" class="btn small">Save</button>' })}${settingsRow({ title: 'Device id', note: 'It lets this device keep its own appearance.' })}</ul>
+      ${label('Empty state')}${emptyState({ line: 'No tasks yet.', orbState: 'idle' })}
+      ${label('Buttons')}<div class="sg-demo-row"><button class="btn primary">Approve</button><button class="btn">Not now</button><button class="btn quiet">Cancel</button><button class="btn small">Pause</button><button class="btn" disabled>Disabled</button><button class="send" aria-label="Send">${icons.send}</button><button class="send is-stop" aria-label="Stop">${icons.stop}</button></div>
+    </div>`),
+    section('Conversation', 'Nova speaks from beside its orb; your words sit in the accent.', `<div class="sg-demo">
+      ${label('Chat bubbles')}<div class="sg-bubbles">${chatBubble({ from: 'person', text: 'What’s on today?' })}${chatBubble({ from: 'nova', text: 'Two small things. I’ll look into the second.' })}</div>
+      ${label('Composer, with voice off in local-only')}<div class="dock"><form class="composer" onsubmit="return false"><textarea rows="1" placeholder="Ask Nova anything…" aria-label="Sample composer"></textarea><button type="button" class="mic" aria-label="Talk to Nova" disabled>${ICONS.mic}</button><button class="send" aria-label="Send">${icons.send}</button></form><p class="voice-note">${voiceState({ privacy: 'local-only' }).reason}</p></div>
+      ${label('A reply, with a margin note from memory')}<div class="thread">${renderTurn(turnDone, { isLast: true })}</div>
+      ${label('Records, including decided approvals')}<div class="thread">${renderTurn(tools)}</div>
+      ${label('A tool approval waiting for you')}<div class="thread">${renderTurn(waiting, { live: { phase: 'approval', text: '' } })}</div>
+      ${label('Thinking, then streaming')}<div class="thread">${renderTurn(streaming, { live: { phase: 'thinking', text: '' } })}${renderTurn(streaming, { live: { phase: 'streaming', text: 'The weekend is mostly open. Saturday morning has' } })}</div>
+      ${label('Errors and interruptions')}<div class="thread">${renderTurn(failed, { isLast: true })}</div>
+      ${label('What Nova kept, in the margin')}<div class="thread">${renderTurn(kept, { memory: memoryIndex(memorySample) })}</div>
+      ${label('A reply that followed a skill')}<div class="thread">${renderTurn(usedSkill, { skills: new Set(['email-summary']) })}</div>
+      ${label('Reports: on time, and one that didn’t finish')}<div class="thread">${renderHandoff({ id: 'h1', name: 'Morning digest', schedule: 'morning-digest', ok: true, ts: t0.toISOString(), due: t0.toISOString(), text: 'One thing matters today: the contract, due Thursday.' })}${renderHandoff({ id: 'h3', name: 'Bills check', schedule: 'bills', ok: false, ts: t0.toISOString(), text: "Bills check didn't finish. Nova couldn't reach the model." })}${renderToday(t0)}</div>
+      ${label('A helper’s own log, read-only')}<div class="thread">${renderWorkNote({ kind: 'helper', title: 'Compare e-bikes', parent: 'main', delivered: { to: 'main', handoff: 'h9' } }, 'the main conversation')}</div>
+      ${label('Conversations')}<div class="sg-frame"><nav class="toc">${renderToc([{ id: '2026-10-21-aaaaaa', title: 'Morning plan', created: t0.toISOString() }, { id: '2026-10-21-bbbbbb', title: 'Timecard for Monday and Tuesday', created: t0.toISOString() }], '2026-10-21-aaaaaa')}</nav></div>
+      ${label('An empty conversation')}<div class="thread">${renderEmpty()}</div>
+    </div>`),
+    section('Era 2 views, re-homed', 'Memory, Skills, Schedules and Activity, drawn by the app’s own view code.', `<div class="sg-demo">
+      ${label('Memory')}<div class="thread memory">${renderMemory(memorySample)}</div>
+      ${label('Skills, with a connection')}<div class="thread memory skills">${renderSkills(skillSample)}</div>
+      ${label('Schedules')}<div class="thread memory skills schedules">${renderSchedules(scheduleSample, t0)}</div>
+      ${label('Activity')}<div class="thread memory activity">${renderActivity(activitySample, t0)}</div>
     </div>`),
   ].join('');
   sg.querySelector('#motion').addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
 }
 
-function renderSwitch() {
+// The switch previews another design system on this page only; nothing is applied.
+async function renderSwitch() {
   const cur = current();
-  document.getElementById('switch').innerHTML =
-    `<div class="choices" role="radiogroup" aria-label="Theme">${THEMES.map((t) => `<label class="choice"><input type="radio" name="theme" value="${t.id}"${t.id === cur.theme ? ' checked' : ''}><span class="choice-name">${t.name}</span></label>`).join('')}</div>` +
-    `<div class="choices" role="radiogroup" aria-label="Mode">${MODES.map((m) => `<label class="choice"><input type="radio" name="mode" value="${m}"${m === cur.mode ? ' checked' : ''}><span class="choice-name">${m[0].toUpperCase()}${m.slice(1)}</span></label>`).join('')}</div>`;
+  const usable = cur.list.filter((d) => d.valid && d.state !== 'disabled');
+  document.getElementById('switch').innerHTML = `<label class="sg-pick">Design system <select class="input" id="sg-ds">${usable.map((d) => `<option value="${d.id}"${d.id === shown ? ' selected' : ''}>${d.name}</option>`).join('')}</select></label>
+<label class="sg-pick">Mode <select class="input" id="sg-mode">${MODES.map((m) => `<option value="${m}"${m === shownMode ? ' selected' : ''}>${m[0].toUpperCase()}${m.slice(1)}</option>`).join('')}</select></label>`;
+}
+
+let shown = null;
+let shownMode = 'auto';
+async function preview() {
+  const res = await fetch(previewCss(shown, shownMode), { cache: 'no-store' });
+  if (!res.ok) return;
+  document.getElementById('ds').textContent = await res.text();
+  document.getElementById('ds-boot')?.remove();
+  requestAnimationFrame(render);
 }
 
 document.getElementById('switch').addEventListener('change', (e) => {
-  choose({ [e.target.name]: e.target.value }).then(() => requestAnimationFrame(render)).catch(() => renderSwitch());
+  if (e.target.id === 'sg-ds') shown = e.target.value;
+  if (e.target.id === 'sg-mode') shownMode = e.target.value;
+  preview();
 });
-window.addEventListener('nova:appearance', () => { renderSwitch(); requestAnimationFrame(render); });
+window.addEventListener('nova:appearance', () => {
+  const cur = current();
+  if (!shown) { shown = cur.theme; shownMode = cur.mode; }
+  renderSwitch();
+  requestAnimationFrame(render);
+});
 
 apply();
-renderSwitch();
 render();
