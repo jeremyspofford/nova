@@ -228,9 +228,14 @@ export class Providers extends EventEmitter {
     if (impl.probe && !impl.uninstalled?.(c) && !impl.unconfigured(c, this.#secret)) {
       const problem = await impl.probe(c, this.#secret, AbortSignal.timeout(6000)).catch((e) => (e as Error).message);
       this.#probes.set(id, { key: canonicalJson(c), problem, at: this.#now().toISOString() });
-      this.emit('change', { id, health: this.health(id).state });
+      this.emit('change', { id, action: 'checked' });
     }
     return this.view(id);
+  }
+
+  // A check started by a change, not awaited: Nova may be closing by the time it answers.
+  #checkLater(id: string): void {
+    this.check(id).catch(() => { /* the provider was removed, or Nova closed meanwhile */ });
   }
 
   view(id: string) {
@@ -275,7 +280,7 @@ export class Providers extends EventEmitter {
     this.#o.profile.set('providers', `config.${id}`, next, 'settings');
     this.#probes.delete(id);
     this.emit('change', { id, action: 'configured' });
-    if (this.#workers.has(id)) void this.check(id);
+    if (this.#workers.has(id)) this.#checkLater(id);
     return { provider: this.view(id), ...(token ? { token, note: `Give this token to the workflow’s callback (header x-nova-hook-token, to /api/v1/hooks/${id}-callback). Nova keeps only a hash of it and won’t show it again.` } : {}) };
   }
 
@@ -296,7 +301,7 @@ export class Providers extends EventEmitter {
     const h = this.health(id);
     if (h.state === 'not_installed' || h.state === 'not_configured') throw new CoreError('conflict', `Nova can’t turn on ${x.manifest.name} yet. ${h.words}`);
     this.#o.extensions.enable(id, { approved: o.approved === true });
-    if (this.#impl(x).probe) void this.check(id);
+    if (this.#impl(x).probe) this.#checkLater(id);
     return this.view(id);
   }
 

@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { childEnv, runLines, tail } from './cli.ts';
-import { TaskSpace, treeHash, unifiedDiff } from './taskspace.ts';
+import { TaskSpace, safePath, treeHash, unifiedDiff } from './taskspace.ts';
 import type { Brief, Evidence } from '../envelope.ts';
 import type { Workspace } from '../workspace.ts';
 
@@ -74,8 +74,9 @@ export class Checks {
     if (e.kind !== 'file_diff') return { ok: false, why: 'Not a file diff.' };
     const space = this.space(brief.task_id);
     if (!space.exists()) return { ok: false, why: 'Nova checks a file diff in the task’s own folder, and this task has none.' };
+    // The path is read in the task's own folder, where the provider worked.
     let rel: string;
-    try { rel = this.#ws.target(this.#ws.resolve(e.target)).slice('workspace:'.length); } catch (err) { return { ok: false, why: (err as Error).message }; }
+    try { rel = safePath(space.root, e.target.replace(/^workspace:/, '')).rel; } catch (err) { return { ok: false, why: (err as Error).message }; }
     const actual = unifiedDiff(rel, space.readBaseline(rel), space.read(rel));
     if (!actual) return { ok: false, why: `Nova compared ${rel} in the task’s folder with the copy it started from: nothing changed.` };
     if (actual !== e.diff) return { ok: false, why: `Nova compared ${rel} in the task’s folder with the copy it started from, and the change isn’t the one the report shows.` };
