@@ -30,11 +30,11 @@ const CHANGE_KIND: Record<FoundryKind, ChangeKind> = { 'trigger-rules': 'trigger
 // What the provider is asked to write, per kind: always manifest.json, tests.json and probe.json.
 const FORMAT: Record<FoundryKind, string> = {
   'trigger-rules': [
-    'Write three files.',
-    'manifest.json: {"pack": {"id": "lowercase-id", "name": "A short name", "version": "1.0.0"}, "rules": [{"name": "…", "class": "heartbeat", "cron": "M H * * *", "action": {"kind": "message", "text": "what Nova says"}}]}',
-    'tests.json: [{"name": "…", "at": "HH:MM", "expect": {"rule": "the rule’s name", "fires": true, "message": true}}, {"name": "…", "at": "HH:MM at another time", "expect": {"rule": "…", "fires": false}}]',
-    'probe.json: {"name": "…", "path": "/triggers/rules", "expect": [{"at": "length", "op": "gte", "value": 1}]}',
-    'Rules are heartbeat (cron: minute hour day-of-month month day-of-week) or proactive. Messages are short and plain.',
+    'Write three files. The shapes below are filled with an EXAMPLE (a weekday stretch reminder at 10:30); write the person’s own instead, with their times and words.',
+    'manifest.json: {"pack": {"id": "stretch-break", "name": "Stretch break", "version": "1.0.0"}, "rules": [{"name": "Stretch", "class": "heartbeat", "cron": "30 10 * * 1-5", "action": {"kind": "message", "text": "Time to stand up and stretch."}}]}',
+    'tests.json: [{"name": "fires at half past ten", "at": "10:30", "expect": {"rule": "Stretch", "fires": true, "message": true}}, {"name": "quiet at noon", "at": "12:00", "expect": {"rule": "Stretch", "fires": false}}]',
+    'probe.json: {"name": "the reminder is listed", "path": "/triggers/rules", "expect": [{"at": "length", "op": "gte", "value": 1}]}',
+    'cron is five numbers or ranges: minute hour day-of-month month day-of-week (“0 21 * * *” is 9 PM every day). A test’s "at" is HH:MM on a 24-hour clock; a rule that fires every day fires on the test’s day too. Messages are short and plain.',
   ].join('\n'),
   template: [
     'Write three files.',

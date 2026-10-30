@@ -79,7 +79,14 @@ plan's §1. Code in `src/core/changes/`, migration `0011_changes.sql` (the integ
 - **Tests:** `tests/core/changes.test.ts` (8, real sandbox processes), `tests/acceptance/
   m7a-changes.test.ts` (2: hub and standby with the egress tripwire, the foundry on the stand-in
   Ollama; canary sabotage over the API), `tests/ui/m7a-changes.test.ts` (Chromium, via
-  `scripts/ui-test.sh`).
+  `scripts/ui-test.sh`), and opt-in `tests/acceptance/m7a-real-ollama.test.ts`
+  (`NOVA_REAL_OLLAMA=1`, read and infer only). Run once here with Qwen3:8b: the first prompt
+  (placeholder shapes) got a pack with `"cron": "M H * * *"`, which the gates stopped at tests;
+  with example-filled shapes it wrote a 21:00 wind-down pack that passed every gate, waited for
+  the OK, canaried and went live. Both outcomes are the pipeline working; only the second is the
+  prompt working.
+- `tests/acceptance/m4b-device-agent.test.ts` now picks its restartable mesh port below the
+  ephemeral range (M4c's `freePort`): the sandboxes' port-0 listeners made the old race show up.
 
 **2026-10-30 (M6b review fixes): the model manager's guards.**
 Branch `m6-fix/models`; tests in `tests/core/models-guards.test.ts` (the reviewer's probes, made
