@@ -15,6 +15,53 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M7 review fixes): the change pipeline's guards.** Branch `m7-fix/changes`; tests in
+`tests/core/changes-guards.test.ts` (the reviewer's probes, made real), each failing on the code
+before its fix (checked against `fdd33ea2`).
+
+- **Only the pipeline makes its tasks.** A worker may be `internal` (`ledger.ts`): the ledger
+  refuses `create()` for it unless the caller holds the worker's own key, before even the
+  idempotency look-up. `changes` and `foundry` are internal, so POST /tasks, a device's
+  task_request, a connector's delegate and a trigger's action (heartbeat, webhook or a firing
+  that carries its own action) can't make one; `createRule` refuses such an owner too. Backstops:
+  the changes worker runs a brief only when its `task_id` is the record's own check/ship/rollback
+  task, its `minTier` is the change's tier for ship and 2 for rollback, and `#ship` refuses a task
+  whose ledger approval is below the change's tier or absent. The approval stage's evidence is read
+  from the ledger (task id, tier, `approved_at`, the `approved` event); `confirmed` is true only for
+  a tier-3 task the ledger approved, never asserted.
+- **The sandbox is inert.** A sandbox core's triggers record a task action as it would have acted
+  and start nothing (`Triggers({sandbox})`). `inert()` also deletes the `backups`, `providers` and
+  `models` profile sections and turns capture sources off with no config (also used by the restore
+  drill, which checks before `inert`; that edit is two lines in `changes/sandbox.ts`). A rule
+  pack's task may be for `workspace` at any tier; any other worker needs an explicit
+  `approval_tier` of 2 or 3; `changes`/`foundry` never (already refused by `weakens`). A change
+  that fails its contract stops at tests without its own tests running on the copy.
+- **Rollback is exact.** An extension's snapshot copies aside, byte for byte, only the paths the
+  change will write (`workers/changes/<id>-previous/`, removed once it is rolled back), with their
+  hashes; rollback writes back only those (a copy that doesn't hash as recorded is not written:
+  the change goes `broken` with the reason) and deletes what wasn't there. `Extensions.restoreState`
+  puts `installed`/`enabled`/`disabled` back exactly; a brand-new extension is removed with
+  `remove(id, {purge: true})` (no kept/ or exports/ copies). Design systems use the same state and
+  purge, and put back only what the change set: the person's choice while it is still this one,
+  and the canary device's own entry; other devices' choices stay.
+- **A rollback by hand during a canary is immediate.** Rollback tasks have their own lane
+  (`rollback:<id>`); the Ship task is cancelled with "You rolled it back during its canary." (the
+  person's decision: no failure, no problem).
+- **The approval card shows what ships.** A rule pack's task line names the worker, tier (in
+  words), privacy mode and the task's inputs as JSON.
+- **Ship and roll back need an approver** (`access: 'approver'`). A canary `device_id` must be the
+  hub or a trusted paired device (`knownDevice`), else the proposal is refused (400).
+- **Minors.** The canary record carries `applied` (false until apply finishes; a rerun applies it
+  again; ticks skip it meanwhile) and `elapsed_ms` measured on a monotonic clock between looks in
+  this process (a wall-clock jump can't end a window early; time Nova was stopped doesn't count;
+  `ends_at` stays as the estimate shown). On the test clock, or with an injected `now` in tests,
+  that clock is the monotonic one. A promotion that throws rolls the change back. Right before
+  apply the artifact is hashed again and the release file read back; a mismatch stops the change
+  unapplied.
+- **Known limits.** The set-aside copies live under `workers/`, which isn't journalled to a
+  standby: rolling back an extension change on a standby promoted mid-canary can't put files back
+  and ends `broken`, saying so.
+
 **2026-10-30 (M7b): the supervisor, code releases, backups, the restore drill and the chaos pass.**
 Branch `m7b/resilience`; the plan's §2–§3. Code in `src/supervisor/` and `src/core/resilience/`,
 migration `0012_resilience.sql` (local tables: playbooks, backup runs, drills).
