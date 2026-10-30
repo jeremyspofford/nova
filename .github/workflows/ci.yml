@@ -36,3 +36,26 @@ jobs:
       - run: npm run check:themes
       - run: npm test
       - run: npm audit --audit-level=high
+
+  ui-gate:
+    # The M3 gate in a real browser: live design-system swap, the resize/posture sweep, and setup
+    # completed from the PWA alone. In CI it never skips: no browser is a failure.
+    name: UI gate (Chromium)
+    runs-on: ubuntu-latest
+    # The Playwright image for the pinned playwright-core (package.json): its Chromium and system
+    # libraries, the same image scripts/ui-test.sh uses locally. (Playwright 1.56 can't install
+    # its browser on the runner's own Ubuntu 26.04.)
+    container: mcr.microsoft.com/playwright:v1.56.1-noble
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: npm ci
+      - run: npm run test:ui
+        env:
+          NOVA_UI_SHOTS: ${{ runner.temp }}/ui-shots
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ui-gate-screenshots
+          path: ${{ runner.temp }}/ui-shots
+          if-no-files-found: ignore

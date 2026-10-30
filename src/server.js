@@ -180,7 +180,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   }
 
   function serveStatic(req, res, path) {
-    if (['/', '/new', '/memory', '/skills', '/schedules', '/activity', '/settings'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
+    // The PWA's places (ui/js/nav.js); Era 2's paths keep working.
+    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
@@ -412,6 +413,12 @@ export function createNova(config = loadConfig(), deps = {}) {
         return req.on('close', () => devClients.delete(res));
       }
       if (await core.handle(req, res, url)) return;
+      // The active design system as CSS variables (?device= for a device's own choice). Pages
+      // fetch it again on the core's design-system event, so a change needs no reload.
+      if (url.pathname === '/design-system.css' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        return res.end(core.design.css(url.searchParams.get('device')));
+      }
       if (parts[1] === 'api') return await api(req, res, parts);
       if (url.pathname === '/oauth/gmail' && req.method === 'GET') {
         const q = Object.fromEntries(url.searchParams);

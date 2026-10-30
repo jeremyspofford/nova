@@ -14,6 +14,174 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M3c): the M3 gate runs in a real browser.**
+
+- **Where:** `tests/ui/*.test.ts` drive Chromium (playwright-core) against the
+  real server process. Locally, with no usable browser, the suite skips with a
+  loud notice; in CI (`CI` set) a missing browser is a failure, so the gate
+  never passes by not running. CI installs the Chromium build matching
+  playwright-core in its own job and keeps the screenshots as an artifact.
+- **This dev host can't start Chromium** (missing system libraries; installing
+  them needs root). `scripts/ui-test.sh` runs the suite in the Playwright image
+  with the host's Node mounted. Server, browser and tests share the container
+  because Docker Desktop's host network doesn't reach WSL.
+- **Screenshots** are written only when `NOVA_UI_SHOTS` names a folder, so a
+  plain test run never rewrites tracked files; `scripts/ui-test.sh` writes
+  `docs/screenshots/m3/`. Each waits for finite animations to finish first.
+- **"No face"** is checked structurally: every orb on the page has exactly its
+  four layers and no image, SVG or canvas inside.
+- **Independent review, fixed before merge:**
+  - Offline honesty: health checks are network-only in the service worker, and
+    a cached answer never counts as Nova being reachable (a second outage used
+    to flip the orb back to idle every two seconds). Browser-tested with two
+    real outages; the test fails on the old code.
+  - Tier 3 for Era 2 tool steps: removing a schedule, and commands that look
+    irreversible (rm, dd, force push, hard reset, clean -f, branch -D, find
+    -delete, DROP TABLE, recursive chmod/chown), need the confirm box every
+    time. The command check only adds friction; anything it misses still asks
+    first (tier 2). Settings' "without asking" permissions are the person's own
+    policy and are unchanged.
+  - Turning off the design system in use falls back to the one before, drops
+    device overrides on it, and sends the `design-system` event, as removal
+    does.
+  - Applying "on all devices" from a device with its own choice now says that
+    this device keeps its choice.
+- **Found by the gate and fixed:** setup ignored the curly apostrophe phone
+  keyboards type ("I’m Alex" became the name), and setup's transcript replayed
+  its entrance animation on every answer.
+
+**2026-10-29 (M3b): the PWA: layouts, navigation, components; Era 2's
+aliases removed.**
+
+- **Breakpoints** live only in `ui/styles/layout.css`. It turns widths into
+  words on `:root` (`--viewport`: narrow < 600 px, medium 600–1023 px, wide
+  ≥ 1024 px; `--aside-room`: yes ≥ 1280 px; `--segments` from the
+  `viewport-segments` media features), and `ui/js/layout.js` combines them
+  with the posture into `<body data-layout data-posture data-aside
+  data-room>`. No script holds a pixel width.
+  - phone: narrow, or `folded`. tablet: medium, or any half-open posture.
+    desktop: wide and flat. The right column (desktop) shows at ≥ 1280 px
+    unless the person closes it (kept per browser); on a tablet the same three
+    quiet cards are the context pane.
+- **Postures**, in Nova's words: `continuous`, `folded` (the cover screen),
+  `half-open-horizontal` (segments side by side, book), `half-open-vertical`
+  (segments stacked, laptop: conversation on top, the active card below).
+  The Device Posture API's own `folded` means half-open, so Nova maps it to
+  half-open by orientation. `?posture=` emulates one for tests and is read
+  once per page load.
+- **Navigation**: nine destinations, Home, Chat, Tasks, Memory, Automations,
+  Skills, Activity, Health, Settings, reachable in every layout
+  (`ui/js/nav.js`, tested). Phone tabs: Home · Chat · Tasks · Memory · More
+  (Automations, Skills, Activity, Health, Settings). Rail: the orb is Home,
+  then Chat, Tasks, Memory, Automations, More (Skills, Activity, Health), and
+  Settings at the foot. `/` is Home now; the main conversation moved to
+  `/chat`; `/schedules` still works and shows Automations. Conversations are
+  a drawer from Chat's top bar in every layout.
+- **Status**: one function maps ledger states (queued → Waiting; active,
+  verifying → Working; waiting for an OK or flagged for attention → Needs you;
+  other waiting → Waiting; done → Verified; failed → Failed; cancelled →
+  Quiet). Era 2's activity states use the same words and never claim
+  Verified. Automation rules and health checks are not work, so they show a
+  plain pill (Paused, Fine), not the vocabulary.
+- **The orb** is CSS light (gradients from `orb/*` tokens), no face. Its state
+  comes from real signals, most urgent first: offline, listening, alert (open
+  problems), attention (an OK waiting), speaking (a reply streaming), working,
+  idle.
+- **Buttons on the accent.** With the aliases gone there is no computed
+  `--accent-text`; primary buttons, Send and the person's bubble are lit with
+  the accent mixed 24% into `bg/raised`, labelled in `text/primary`. A test
+  checks that pair reaches 4.5:1 in every built-in package and mode.
+- **Device id**: `nova.device` in localStorage (a random UUID) is the only
+  appearance state in the browser; the design system and mode come from the
+  API. `scripts/shots.js` gives each browser context its own device id and
+  applies its design system through the API.
+- **Service worker**: the shell is precached, but every request is
+  network-first, so a running Nova always serves fresh code. Offline GETs come
+  from the cache with `x-nova-offline`, and the page says so. Memory and
+  receipts are never cached (forgetting must hold everywhere); changes and
+  event streams are never answered offline. The manifest's colours are Orb
+  Teal's literal values, since a manifest can't read CSS variables.
+- **Honest surfaces**: Devices shows this browser only; the Brief card says
+  no brief exists yet; there is no Smart Home card. Voice is disabled in
+  local-only with the reason under the composer, and elsewhere only where
+  the browser has speech recognition.
+- **Removed**: `ERA2_ALIASES`, `ERA2_NAMES`, `--accent-text`, the schema's
+  `era2_aliases`, and the lint's `LEGACY` list. Every file in `ui/` uses
+  schema tokens only, raw spacing is an error everywhere, and `@container`
+  width queries count as breakpoints.
+- **shots.js** now completes setup through the API first, and its memory
+  margin-link check clicks the oat-milk note by text: since M2 a day note is
+  also a linked memory, so "the first link" was no longer the one meant.
+
+**2026-10-29 (M3a): design systems are token packages; Era 2's names are
+temporary aliases.**
+
+- **Tokens.** The schema is DESIGN-SYSTEM §2 in full, plus:
+  - `type/weight-regular`, `type/weight-strong`, `type/line-tight`,
+    `type/line-body`;
+  - `motion/duration-fast`, `motion/duration-slow`, `motion/ease`.
+
+  It lives only in `src/core/design.ts` (`TOKENS`), and `ui/` reads it from
+  `GET /api/v1/design-systems/schema`. A name maps to a CSS variable by
+  replacing `/` with `-` (`bg/base` → `--bg-base`). Values are literal and
+  checked per family:
+  - colours are hex or `rgb[a]()`, so contrast can be measured;
+  - `type/h*` are sizes, and line heights are plain numbers;
+  - `motion/breathe`, `motion/pulse` and `motion/transition` are durations,
+    paired with `motion/ease`.
+
+  Anything else is refused, so a value can't carry CSS beyond its token.
+- **Package format.** A full CONTRACTS §4 manifest of kind `design-system`.
+  It asks for no permissions, uses no secrets and keeps nothing on removal;
+  the extension host enforces this at install.
+  - `tokens{}`: the full set.
+  - `modes{light?, dark?}`: partial overrides.
+  - `reduced_motion{}`: may only shorten motion; loops must be `0s` and
+    everything else at most 200ms. The core emits safe defaults anyway.
+  - `components{}`: bindings that may name schema tokens only.
+  - `content_rules{}`: DESIGN-SYSTEM §6 as numbers and switches, which may
+    only tighten.
+  - `extras[]`: any component outside §7 must be declared here.
+  - `preview[]`, plus an optional `description`.
+
+  A package that fails validation can be installed and inspected, but it is
+  never applied or previewed. Built-ins come from `design-systems/` on every
+  start, skip the `nova_compat` check (they ship with this Nova), can't be
+  removed, and are updated in place.
+- **Selection.** The profile section `appearance` holds `design_system`,
+  `previous`, `mode` (auto by default) and `device_overrides`, plus
+  `device_previous`, so a device's rollback doesn't lose an older override.
+  With no record, Orb Teal shows, and a blank profile stays blank for setup.
+  The mode is set through `PUT /api/v1/profile/appearance/mode`; the other
+  keys only change through apply and rollback.
+- **Era 2 themes converted.** Nova, Paper, Aurora and Obsidian are packages
+  now, and `ui/themes/` is gone. Their values map onto the new tokens:
+  - `--bg` → `bg/base`, `--surface` → `bg/raised`, `--raised` →
+    `surface/card` and `bg/overlay`, `--wash` → `surface/card-hover`.
+  - Status and orb colours come from each theme's accent and status colours.
+  - `type/*` sizes come from the shorthands, and `weight-strong` and the
+    line heights from the title and body styles.
+
+  Fidelity losses: the `--t-*` shorthands become one strong weight for every
+  heading (Paper's 400-weight serif display is now 600), `--r-bubble` follows
+  `--r-card`, `--code-bg` follows `bg/base`, and `--shift` follows `space/1`.
+
+  Faint text on cards, a pair Era 2 never checked, missed 3:1 by a hair in
+  two themes:
+
+  | Theme | Token | Era 2 | Shipped | Why |
+  | --- | --- | --- | --- | --- |
+  | Nova | `text/faint` | `#62626B` | `#65656e` | 2.87:1 on `surface/card`; needs 3 |
+  | Obsidian | `text/faint` | `#62666D` | `#63676e` | 2.98:1 on `surface/card`; needs 3 |
+- **Temporary aliases.** So today's `ui/` keeps working until the PWA
+  replaces it, the generated CSS also emits Era 2's names (`--bg`, `--text-2`,
+  `--t-body`, `--s3`, `--r-card`, `--m-fast`, …) as `var()` aliases of the
+  new tokens. `--accent-text` is chosen per package for contrast.
+  `lint:tokens` allows these names only in the Era 2 files listed in
+  `LEGACY`. New UI code may use schema tokens only, and there raw spacing and
+  breakpoints outside `ui/styles/layout.css` are errors too. The aliases, the
+  `LEGACY` list and `ERA2_ALIASES` are removed together with the Era 2 UI.
+
 **2026-10-29 (M2): a held message says why it waits.** Messages carry a
 `hold`:
 - `quiet`: delivered when quiet hours end, but only if its rule still exists,
@@ -401,6 +569,9 @@ optional. A browser that already chose a theme keeps it. The Stellar Map is a
 later phase.
 
 ## Theme token gaps
+
+Era 2's record. Since M3a these themes are packages in `design-systems/`,
+and the values below carry over (see the M3a decision above).
 
 None of the three specs defines every token THEMING.md requires. Gaps are
 filled from each theme's own palette (mostly `mockups.html`) and marked

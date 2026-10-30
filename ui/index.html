@@ -1,80 +1,84 @@
 <!doctype html>
-<html lang="en" data-theme="nova" data-mode="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Nova, your personal agent.">
   <title>Nova</title>
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <script>
-    // Set the theme and the sidebar before first paint, so neither flashes.
-    (function () {
-      var r = document.documentElement, t = 'nova', m = 'system', s = 'open';
-      try { t = localStorage.getItem('nova.theme') || t; m = localStorage.getItem('nova.mode') || m; s = localStorage.getItem('nova.sidebar') || s; } catch (e) {}
-      r.dataset.theme = t;
-      r.dataset.sidebar = s === 'collapsed' ? 'collapsed' : 'open';
-      r.dataset.mode = m === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : m;
-    })();
-  </script>
-  <link rel="stylesheet" href="/themes/nova.css">
-  <link rel="stylesheet" href="/themes/paper.css">
-  <link rel="stylesheet" href="/themes/aurora.css">
-  <link rel="stylesheet" href="/themes/obsidian.css">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Nova">
+  <!-- The applied design system as CSS variables. theme.js swaps #ds when the core says it changed. -->
+  <link rel="stylesheet" id="ds-boot" href="/design-system.css">
+  <style id="ds"></style>
   <link rel="stylesheet" href="/styles/base.css">
   <link rel="stylesheet" href="/styles/components.css">
+  <link rel="stylesheet" href="/styles/views.css">
+  <link rel="stylesheet" href="/styles/layout.css">
   <link rel="modulepreload" href="/js/app.js">
   <script type="module" src="/js/app.js"></script>
 </head>
-<body>
-  <div class="app" id="app">
-    <aside class="sidebar" id="sidebar" aria-label="Conversations">
-      <div class="sidebar-head">
-        <a class="wordmark" href="/" data-nav="home">Nova</a>
-        <span class="head-btns">
-          <button type="button" class="icon-btn" id="new-chat" aria-label="New conversation" title="New conversation (⌘⇧O)"></button>
-          <button type="button" class="icon-btn collapse-btn" id="collapse" aria-label="Hide sidebar" title="Hide sidebar (⌘\)" aria-controls="sidebar" aria-expanded="true"></button>
-        </span>
-      </div>
-      <nav class="places" aria-label="Places">
-        <a class="toc-item place" href="/" id="main-link">Main conversation <span class="place-dot" id="main-dot" hidden><span class="sr-only">New report</span></span></a>
-        <a class="toc-item place" href="/memory" id="memory-link">Memory <span class="place-count" id="memory-count"></span></a>
-        <a class="toc-item place" href="/skills" id="skills-link">Skills <span class="place-count" id="skills-count"></span></a>
-        <a class="toc-item place" href="/schedules" id="schedules-link">Schedules <span class="place-count" id="schedules-count"></span></a>
-        <a class="toc-item place" href="/activity" id="activity-link">Activity <span class="place-count is-waiting" id="activity-waiting"></span><span class="pulse place-pulse" id="activity-pulse" hidden></span></a>
-      </nav>
-      <nav class="toc" id="toc" aria-label="Conversations by day"></nav>
-      <div class="sidebar-foot">
-        <a class="quiet-btn" href="/settings" id="settings-link">Settings</a>
-        <span class="status" id="status" role="status"></span>
-      </div>
-    </aside>
-    <div class="scrim" id="scrim"></div>
+<body data-layout="phone" data-posture="continuous" data-aside="off" data-room="no">
+  <a class="skip-link" href="#scroller">Skip to content</a>
+  <div class="shell app" id="app">
+    <nav class="rail" id="rail" aria-label="Nova"></nav>
     <main class="main" id="main">
       <header class="topbar">
-        <button type="button" class="icon-btn menu-btn" id="menu" aria-label="Show sidebar" title="Show sidebar" aria-controls="sidebar" aria-expanded="false"></button>
+        <span class="topbar-orb" id="topbar-orb"></span>
+        <button type="button" class="icon-btn" id="menu" aria-label="Conversations" title="Conversations" aria-controls="sidebar" aria-expanded="false" hidden></button>
         <h1 class="topbar-title" id="title"></h1>
+        <button type="button" class="icon-btn aside-toggle" id="aside-toggle" aria-controls="aside" aria-expanded="true" aria-label="Hide the right column" title="Hide the right column"></button>
       </header>
       <div class="banner" id="banner" role="status" hidden></div>
-      <div class="scroller" id="scroller">
-        <div class="thread" id="thread"></div>
+      <div class="scroller" id="scroller" tabindex="-1">
+        <section class="view home" id="home" aria-label="Home" hidden></section>
+        <div class="thread" id="thread" hidden></div>
+        <section class="view tasks" id="tasks-view" tabindex="-1" aria-label="Tasks" hidden></section>
         <div class="thread memory" id="memory" tabindex="-1" aria-label="Memory" hidden></div>
+        <section class="view automations" id="automations" aria-label="Automations" hidden>
+          <div id="rules"></div>
+          <div class="thread memory skills schedules" id="schedules" tabindex="-1" aria-label="Schedules"></div>
+        </section>
         <div class="thread memory skills" id="skills" tabindex="-1" aria-label="Skills" hidden></div>
-        <div class="thread memory skills schedules" id="schedules" tabindex="-1" aria-label="Schedules" hidden></div>
         <div class="thread memory activity" id="activity" tabindex="-1" aria-label="Activity" hidden></div>
+        <section class="view health" id="health-view" tabindex="-1" aria-label="Health" hidden></section>
         <div class="thread memory settings" id="settings-view" tabindex="-1" aria-label="Settings" hidden></div>
       </div>
-      <div class="toast" id="toast" role="status" hidden></div>
       <button type="button" class="jump" id="jump" hidden>Jump to latest</button>
-      <div class="dock" id="dock">
+      <div class="dock" id="dock" hidden>
         <form class="composer" id="composer">
           <label class="sr-only" for="input">Message Nova</label>
-          <textarea id="input" rows="1" placeholder="Write to Nova…" autocomplete="off" spellcheck="true"></textarea>
+          <textarea id="input" rows="1" placeholder="Ask Nova anything…" autocomplete="off" spellcheck="true"></textarea>
+          <button type="button" class="mic" id="mic" aria-label="Talk to Nova" aria-pressed="false" aria-describedby="voice-note"></button>
           <button type="submit" class="send" id="send" aria-label="Send" disabled></button>
         </form>
+        <p class="voice-note" id="voice-note" hidden></p>
         <p class="hint" id="hint" aria-live="polite"></p>
       </div>
     </main>
+    <aside class="aside" id="aside" aria-label="At a glance"></aside>
+    <nav class="tabs" id="tabs" aria-label="Nova"></nav>
+    <div class="scrim" id="scrim" hidden></div>
+    <aside class="drawer" id="sidebar" aria-label="Conversations">
+      <div class="drawer-head">
+        <h2 class="drawer-title">Conversations</h2>
+        <span class="row-actions">
+          <button type="button" class="icon-btn" id="new-chat" aria-label="New conversation" title="New conversation (Ctrl Shift O)"></button>
+          <button type="button" class="icon-btn" id="drawer-close" aria-label="Close conversations"></button>
+        </span>
+      </div>
+      <nav class="toc" aria-label="Conversations by day">
+        <a class="toc-item" href="/chat" id="main-link">Main conversation <span class="place-dot" id="main-dot" hidden><span class="sr-only">New report</span></span></a>
+        <div id="toc"></div>
+      </nav>
+    </aside>
   </div>
-
+  <div class="more" id="more" role="dialog" aria-label="More places" hidden></div>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <dialog class="sheet" id="sheet" aria-labelledby="sheet-title"><div class="sheet-inner" id="sheet-body"></div></dialog>
+  <div class="setup" id="setup" hidden></div>
 </body>
 </html>

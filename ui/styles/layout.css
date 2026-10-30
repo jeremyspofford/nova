@@ -1,0 +1,120 @@
+/*
+ * Layouts and postures (DESIGN-SYSTEM §5): the one file where breakpoints live.
+ *
+ * Widths become words on :root (--viewport, --aside-room, --segments); ui/js/layout.js reads
+ * them with the posture and sets <body data-layout data-posture data-aside data-room>. Every
+ * other rule here keys off those attributes, so a layout is chosen by viewport and posture,
+ * never by device name, and every layout shows the same destinations, arranged differently.
+ *
+ *   phone    < 600 px, or a folded cover screen: one column, bottom tabs.
+ *   tablet   600–1023 px, or half-open (two viewport segments): rail and two panes.
+ *   desktop  ≥ 1024 px: Calm Control, the rail, a centre column, and at ≥ 1280 px a right
+ *            column of three quiet cards that the person can close.
+ */
+
+:root { --viewport: narrow; --aside-room: no; --segments: none; }
+@media (min-width: 600px) { :root { --viewport: medium; } }
+@media (min-width: 1024px) { :root { --viewport: wide; } }
+@media (min-width: 1280px) { :root { --aside-room: yes; } }
+@media (horizontal-viewport-segments: 2) { :root { --segments: horizontal; } }
+@media (vertical-viewport-segments: 2) { :root { --segments: vertical; } }
+
+/* ---- the shell ---------------------------------------------------------------------------- */
+
+.shell { display: grid; height: 100dvh; min-height: 0; }
+.main { grid-area: main; }
+.rail, .tabs, .aside { display: none; }
+.rail { grid-area: rail; }
+.tabs { grid-area: tabs; }
+.aside { grid-area: aside; }
+
+/* phone: one column; tabs Home · Chat · Tasks · Memory · More along the bottom. */
+body[data-layout="phone"] .shell {
+  grid-template: "main" minmax(0, 1fr) "tabs" auto / minmax(0, 1fr);
+}
+body[data-layout="phone"] .tabs { display: flex; }
+
+/* tablet, foldable inner screen, or half-open: the rail and two panes. */
+body[data-layout="tablet"] .shell {
+  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 3fr) minmax(0, 2fr);
+}
+body[data-layout="tablet"] .rail,
+body[data-layout="tablet"] .aside { display: flex; }
+
+/* Half-open with the segments side by side (book posture): one pane on each. */
+body[data-layout="tablet"][data-posture="half-open-horizontal"] .shell {
+  grid-template-columns: var(--layout-rail-width) minmax(0, 1fr) minmax(0, 1fr);
+}
+/* Half-open with the segments stacked (laptop posture): the conversation on top, the active
+   card below. Also a half-open screen too narrow for panes side by side. */
+body[data-layout="tablet"][data-posture="half-open-vertical"] .shell {
+  grid-template: "rail main" minmax(0, 1fr) "rail aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
+}
+@media (max-width: 599px) {
+  body[data-layout="tablet"] .shell,
+  body[data-layout="tablet"][data-posture="half-open-horizontal"] .shell {
+    grid-template: "rail main" minmax(0, 3fr) "rail aside" minmax(0, 2fr) / var(--layout-rail-width) minmax(0, 1fr);
+  }
+}
+body[data-layout="tablet"][data-posture="half-open-vertical"] .aside,
+body[data-layout="tablet"] .aside { border-left: 1px solid var(--border-subtle); }
+body[data-layout="tablet"][data-posture="half-open-vertical"] .aside { border-left: 0; border-top: 1px solid var(--border-subtle); }
+
+/* desktop: Calm Control. */
+body[data-layout="desktop"] .shell {
+  grid-template: "rail main" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
+}
+body[data-layout="desktop"] .rail { display: flex; }
+body[data-layout="desktop"][data-aside="on"] .shell {
+  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr) calc(var(--space-8) * 5.5);
+}
+body[data-layout="desktop"][data-aside="on"] .aside { display: flex; }
+.aside-toggle { display: none; }
+body[data-layout="desktop"][data-room="yes"] .aside-toggle { display: inline-grid; }
+
+/* ---- per-layout arrangement of the views -------------------------------------------------- */
+
+/* The orb is the hero of Home on a phone and a tablet; on a desktop it lives in the rail. */
+body[data-layout="desktop"] .home-hero .orb { display: none; }
+body[data-layout="desktop"] .home-hero { align-items: flex-start; text-align: left; padding-top: var(--space-6); }
+body[data-layout="phone"] .home-hero .orb { --orb-size: calc(var(--space-8) * 2.6); }
+
+/* Cards the right column already shows aren't repeated on Home. */
+body[data-aside="on"] .home [data-asideable] { display: none; }
+body[data-layout="tablet"] .home [data-asideable] { display: none; }
+
+/* Home's cards: a stack on a phone and in a pane, two across on a wide centre column. */
+body[data-layout="desktop"][data-aside="off"] .home-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* The phone's top bar carries a small orb, since there is no rail; Home has the big one, so a
+   phone shows no top bar there at all. In a conversation the orb is Nova's avatar everywhere. */
+.topbar-orb { display: none; }
+body[data-layout="phone"] .topbar-orb, body[data-view="chat"] .topbar-orb { display: inline-flex; }
+body[data-layout="phone"][data-view="home"] .topbar { display: none; }
+
+/* Activity and Settings rows narrow down on a phone. */
+body[data-layout="phone"] .act-entry { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+body[data-layout="phone"] .switch-word { display: none; }
+body[data-layout="phone"] .ds-grid { grid-template-columns: minmax(0, 1fr); }
+
+/* Memory and skill notes sit in the margin when the centre column has room for one. */
+body[data-layout="desktop"][data-room="yes"][data-aside="off"] .thread .margins {
+  position: absolute;
+  top: calc(var(--space-1) / 2);
+  left: calc(100% + var(--space-6));
+  width: calc(var(--space-8) * 3);
+}
+
+/* Setup takes the whole screen in every layout; on a phone the conversation fills it. */
+body[data-layout="phone"] .setup-panel { border-radius: 0; border: 0; height: 100%; max-height: none; }
+
+/* A phone keeps a narrower gutter. */
+body[data-layout="phone"] .view,
+body[data-layout="phone"] .thread { padding-left: var(--space-4); padding-right: var(--space-4); }
+body[data-layout="phone"] .automations .thread { padding: 0; }
+body[data-layout="phone"] .dock { padding-left: var(--space-4); padding-right: var(--space-4); }
+
+/* Beside the rail, a view's own heading names it; the top bar's title stays for screen readers. */
+body:not([data-layout="phone"]):not([data-view="chat"]) .topbar-title {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}

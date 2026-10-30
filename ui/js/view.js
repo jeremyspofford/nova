@@ -1,6 +1,9 @@
-// Pure view builders: state in, HTML out. Used by the app and by the living
-// style reference, so the reference always shows the real components.
+// Pure view builders for Era 2's surfaces (conversations, Memory, Skills, Schedules, Activity,
+// permissions): state in, HTML out. Used by the app and by the living style reference, so the
+// reference always shows the real components. The PWA's own components are in components.js.
 import { escapeHtml as esc, renderMarkdown } from './markdown.js';
+import { orb, status } from './components.js';
+import { activityStatus, toolTier } from './status.js';
 
 export const icons = {
   send: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.5V4.5M5 9.5l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -160,14 +163,17 @@ function renderApproval(tool) {
   const change = tool.name.startsWith('gmail_') || tool.name.startsWith('schedule_');
   const yes = { gmail_draft: 'Save draft', schedule_set: tool.preview?.replaces ? 'Change it' : 'Set it up', schedule_remove: 'Remove it' }[tool.name] ?? (change ? 'Make the change' : 'Allow once');
   const verb = { gmail_draft: 'save', schedule_set: 'set it up', schedule_remove: 'remove it' }[tool.name] ?? (change ? 'make it' : 'allow');
-  return `<div class="approval" role="group" aria-labelledby="ap-${esc(tool.id)}" data-tool="${esc(tool.id)}">
+  const tier = toolTier(tool.name, tool.args);
+  return `<div class="approval approval-sheet" data-tier="${tier}" role="group" aria-labelledby="ap-${esc(tool.id)}" data-tool="${esc(tool.id)}">
+  <p class="sheet-kicker">${status('needs-you')}</p>
   <p class="approval-title" id="ap-${esc(tool.id)}">A small decision, when you're ready</p>
   <p class="approval-body">${approvalBody(tool)}</p>
   ${multi ? `<pre class="approval-cmd">${esc(cmd)}</pre>` : ''}${url ? `<pre class="approval-cmd">${esc(url)}</pre>` : ''}${approvalDetail(tool)}
+  ${tier === 3 ? `<p class="approval-body">${tool.name === 'exec' ? 'This command looks like it can’t be undone.' : 'This deletes something; it can’t be undone from here.'}</p><label class="confirm"><input type="checkbox" data-confirm="${esc(tool.id)}"> I understand, and I want Nova to do this.</label>` : ''}
   <div class="approval-actions">
-    <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}">${yes}</button>
+    <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}"${tier === 3 ? ' disabled' : ''}>${yes}</button>
     <button type="button" class="btn" data-action="deny" data-tool="${esc(tool.id)}">${change ? 'Not now' : 'Deny'}</button>
-    <span class="keys" aria-hidden="true"><kbd>Enter</kbd> ${verb} · <kbd>Esc</kbd> ${change ? 'not now' : 'deny'}</span>
+    <span class="keys" aria-hidden="true">${tier === 3 ? 'Tick the box first' : `<kbd>Enter</kbd> ${verb}`} · <kbd>Esc</kbd> ${change ? 'not now' : 'deny'}</span>
   </div>
 </div>`;
 }
@@ -263,7 +269,7 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
   return `<section class="turn" id="t-${esc(turn.id)}" data-turn="${esc(turn.id)}">
   ${turn.followup ? '' : `<div class="msg-user"><div class="bubble">${esc(turn.text)}</div>
     <div class="actions"><button type="button" class="act" data-action="copy-user" data-turn="${esc(turn.id)}" aria-label="Copy message">${icons.copy}<span>Copy</span></button></div></div>`}
-  <div class="msg-nova">${nova}${actions.length ? `<div class="actions">${actions.join('')}</div>` : ''}</div>
+  <div class="msg-nova"><span class="msg-avatar">${orb({ size: 'avatar', decorative: true })}</span>${nova}${actions.length ? `<div class="actions">${actions.join('')}</div>` : ''}</div>
 </section>`;
 }
 
@@ -542,7 +548,7 @@ function scheduleLast(s, now, tz) {
   if (!r) return '';
   if (r.missed) return `<p class="schedule-last is-warn">Missed ${esc(relWhen(r.due, now, tz))}: Nova wasn't running then.</p>`;
   const when = relWhen(r.finished ?? r.ts, now, tz);
-  const where = r.delivered === 'main' ? `/#h-${esc(r.handoff)}` : `/c/${esc(r.delivered)}#h-${esc(r.handoff)}`;
+  const where = r.delivered === 'main' ? `/chat#h-${esc(r.handoff)}` : `/c/${esc(r.delivered)}#h-${esc(r.handoff)}`;
   if (!r.ok) return `<p class="schedule-last is-warn">Last run, ${esc(when)}, didn't finish: ${esc(r.error ?? 'something went wrong')} <a href="${where}">See it</a></p>`;
   return `<p class="schedule-last">Last ran ${esc(when)}${r.late ? ', late' : ''}. <a href="${where}">Read the report</a></p>${r.summary ? `<p class="schedule-headline">${esc(r.summary)}</p>` : ''}`;
 }
@@ -600,7 +606,7 @@ ${set.length ? '<p class="memory-kind">Nova runs schedules while it\'s running. 
 
 // ---- activity --------------------------------------------------------------
 
-const where = (session) => (session === 'main' ? '/' : `/c/${esc(session)}`);
+const where = (session) => (session === 'main' ? '/chat' : `/c/${esc(session)}`);
 const lower = (s) => s.replace(/^\w/, (c) => c.toLowerCase());
 const count = (n, one, many = `${one}s`) => `${n === 1 ? 'one' : n < 10 ? ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][n] : n} ${n === 1 ? one : many}`;
 const list = (parts) => (parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`);
@@ -646,14 +652,12 @@ function stepLine(s, open = false) {
   return `${stamp}${label}`;
 }
 
-const STATE = {
-  working: '<span class="act-state is-working"><span class="pulse" aria-hidden="true"></span>Working</span>',
-  waiting: '<span class="act-state is-waiting">Waiting for you</span>',
-  queued: '<span class="act-state">Waiting its turn</span>',
-  stopped: '<span class="act-state">Stopped</span>',
-  failed: '<span class="act-state is-warn">Didn\'t finish</span>',
-  interrupted: '<span class="act-state is-warn">Interrupted</span>',
-  missed: '<span class="act-state is-warn">Missed</span>',
+// Activity states in the one status vocabulary (status.js), with the detail beside it.
+const DETAIL = { waiting: 'waiting for you', queued: 'waiting its turn', stopped: 'stopped', failed: 'didn’t finish', interrupted: 'interrupted', missed: 'missed' };
+const actState = (state) => {
+  if (!['working', 'waiting', 'queued', 'stopped', 'failed', 'interrupted', 'missed'].includes(state)) return '';
+  const pill = status(activityStatus(state));
+  return `<span class="act-state">${pill}${DETAIL[state] ? `<span class="act-detail">${esc(DETAIL[state])}</span>` : ''}</span>`;
 };
 
 export const activityId = (e) => (e.kind === 'reply' ? `a-${e.session}-${e.turn}` : `a-${e.session ?? e.id.replace(/[^\w-]/g, '-')}`);
@@ -687,7 +691,7 @@ export function activityEntry(e, now = new Date()) {
   const time = clock(new Date(e.started));
   const stop = e.kind === 'helper' && ['working', 'queued'].includes(e.state) ? `<button type="button" class="act" data-action="stop-helper" data-run="${esc(e.session)}">Stop</button>` : '';
   const retry = e.kind === 'helper' && ['failed', 'stopped', 'interrupted'].includes(e.state) ? `<button type="button" class="act" data-action="retry-helper" data-run="${esc(e.session)}">Try again</button>` : '';
-  const head = `<p class="act-head"><span class="act-title">${entryTitle(e)}</span>${STATE[e.state] ?? ''}${stop || retry ? `<span class="act-actions">${stop}${retry}</span>` : ''}</p>`;
+  const head = `<p class="act-head"><span class="act-title">${entryTitle(e)}</span>${actState(e.state)}${stop || retry ? `<span class="act-actions">${stop}${retry}</span>` : ''}</p>`;
   const go = waitingStep ? `<p class="act-go"><a class="btn" href="${where(e.session)}#t-${esc(e.turn)}">Go to it</a> ${esc(clip(toolLabel(waitingStep, 'waiting').replace(/<[^>]+>/g, ''), 80))}</p>` : '';
   let body = '';
   if (steps.length > 3) {
@@ -727,30 +731,11 @@ ${entries.length ? `<ol class="act-list">${entries.map((e) => activityEntry(e, n
   return out.join('\n');
 }
 
-// ---- settings --------------------------------------------------------------
+// ---- settings: what Nova may do without asking ---------------------------------------------
 
-// Each permission is one kind of step that normally asks first. The list comes
-// from the tools Nova has, so a new tool brings its own switch, starting off.
-// Settings: how Nova looks on this screen, then what Nova may do without asking.
-export function renderSettings(list, { appearance, error = '' } = {}) {
-  return `<header class="memory-intro"><p class="empty-date">Settings</p></header>
-${renderAppearance(appearance)}
-${list ? renderPermissions(list) : error ? `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
-<p class="memory-lede">${esc(error)}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''}`;
-}
-
-function renderAppearance({ theme, mode, themes, modes }) {
-  const choice = (name, value, label, note, on) => `<label class="choice"><input type="radio" name="${name}" value="${esc(value)}"${on ? ' checked' : ''}><span class="choice-name">${esc(label)}</span>${note ? `<span class="choice-note">${esc(note)}</span>` : ''}</label>`;
-  return `<section class="memory-section" id="appearance" aria-labelledby="set-look"><h2 class="memory-heading" id="set-look">Appearance</h2>
-<p class="memory-lede">How Nova looks on this screen. It's kept in this browser, so another device can look different.</p>
-<fieldset class="set-field"><legend class="set-legend">Theme</legend>
-<div class="choices set-themes">${themes.map((t) => choice('theme', t.id, t.name, t.note, t.id === theme)).join('')}</div></fieldset>
-<fieldset class="set-field"><legend class="set-legend">Light and dark</legend>
-<div class="choices row">${modes.map((m) => choice('mode', m, m[0].toUpperCase() + m.slice(1), '', m === mode)).join('')}</div></fieldset>
-<p class="perm-foot"><a class="set-link" href="/styleguide">Style reference</a></p></section>`;
-}
-
-function renderPermissions(list) {
+// Each permission is one kind of step that normally asks first. The list comes from the tools
+// Nova has, so a new tool brings its own switch, starting off.
+export function renderPermissions(list) {
   const rows = list.map((p) => `<li class="perm" id="p-${esc(p.id)}">
   <div class="perm-text"><p class="perm-label" id="pl-${esc(p.id)}">${esc(p.label)}</p>${p.note ? `<p class="perm-note">${esc(p.note)}.</p>` : ''}</div>
   <button type="button" class="switch" role="switch" aria-checked="${p.yes}" aria-labelledby="pl-${esc(p.id)}" data-action="toggle-permission" data-id="${esc(p.id)}"><span class="switch-word">${p.yes ? 'Without asking' : 'Ask first'}</span><span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span></button>
@@ -760,4 +745,3 @@ function renderPermissions(list) {
 ${list.length ? `<ul class="perm-list">${rows}</ul>` : '<p class="memory-none">Nothing Nova can do asks first right now.</p>'}
 <p class="perm-foot">When Nova gets a new tool, from an update, a plugin or a connector, anything it can change shows up here, set to Ask first. These switches are kept in permissions.md in your Nova folder.</p></section>`;
 }
-

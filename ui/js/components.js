@@ -1,0 +1,281 @@
+// Nova's component inventory (DESIGN-SYSTEM §7): pure functions, data in, HTML out, so the app,
+// the style reference and the appearance preview all draw the same components. Every visual
+// value is a token (components.css); nothing here carries a colour, size or font.
+import { escapeHtml as esc } from './markdown.js';
+import { ORB_WORDS, STATUS, isOpen, label, needsApproval, statusOf } from './status.js';
+
+// ---- icons: line drawings in currentColor -------------------------------------------------
+
+const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" class="icon"${extra}><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${d}</g></svg>`;
+export const ICONS = {
+  home: svg('<path d="M4 11.5 12 5l8 6.5"/><path d="M6.5 10v9h11v-9"/>'),
+  chat: svg('<path d="M5 6.5h14v9H10l-4 3v-3H5z"/>'),
+  tasks: svg('<path d="M9 7h10M9 12h10M9 17h10"/><path d="m4.5 7 1 1 1.6-1.8M4.5 12l1 1 1.6-1.8M4.5 17l1 1 1.6-1.8"/>'),
+  memory: svg('<path d="M12 5.5c-1.7-1.6-4.8-1.4-6 .8-1.3.2-2.2 1.7-1.6 3-1 1-1 2.8.3 3.6-.2 1.6 1 3 2.6 2.9.7 1.6 3 2 4.7.7"/><path d="M12 5.5c1.7-1.6 4.8-1.4 6 .8 1.3.2 2.2 1.7 1.6 3 1 1 1 2.8-.3 3.6.2 1.6-1 3-2.6 2.9-.7 1.6-3 2-4.7.7"/><path d="M12 5.5v13"/>'),
+  automations: svg('<path d="M13 3.5 6 13.5h5.5l-1 7 7-10H12z"/>'),
+  skills: svg('<path d="M12 4.5 13.6 9l4.4 1.5-4.4 1.6L12 16.5l-1.6-4.4L6 10.5 10.4 9z"/><path d="M18 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/>'),
+  activity: svg('<path d="M3.5 12h4l2.5-6 4 12 2.5-6h4"/>'),
+  health: svg('<path d="M12 19s-7-4.3-7-9.3A3.7 3.7 0 0 1 12 7.6a3.7 3.7 0 0 1 7 2.1c0 5-7 9.3-7 9.3z"/>'),
+  settings: svg('<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6"/>'),
+  more: svg('<circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/>'),
+  mic: svg('<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/>'),
+  send: svg('<path d="M12 18.5v-13M6.5 11 12 5.5l5.5 5.5"/>'),
+  stop: svg('<rect x="7.5" y="7.5" width="9" height="9" rx="1.5"/>'),
+  plus: svg('<path d="M12 5.5v13M5.5 12h13"/>'),
+  close: svg('<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>'),
+  check: svg('<path d="m5.5 12.5 4 4 9-9"/>'),
+  device: svg('<rect x="7" y="3.5" width="10" height="17" rx="2.5"/><path d="M11 17.5h2"/>'),
+  search: svg('<circle cx="11" cy="11" r="5.5"/><path d="m15.5 15.5 4 4"/>'),
+  brief: svg('<circle cx="12" cy="12" r="3.5"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M6 18l1.4-1.4M16.6 7.4 18 6"/>'),
+  handling: svg('<path d="M5 19 15 9"/><path d="m15 9 1.5-1.5"/><path d="M17.5 3.5v3M16 5h3M19.5 9.5v2M18.5 10.5h2M10 3.5v2M9 4.5h2"/>'),
+  conversations: svg('<path d="M4.5 6.5h15M4.5 12h15M4.5 17.5h9"/>'),
+  panel: svg('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M14.5 5v14"/>'),
+  back: svg('<path d="M14.5 6 8.5 12l6 6"/>'),
+};
+
+// ---- the orb: Nova's presence. Abstract light only: no face, no features, ever. -----------
+
+export const ORB_SIZES = ['hero', 'rail', 'avatar', 'mini'];
+// `live` orbs follow Nova's state as it changes (shell.js); others show the state they're given.
+export function orb({ state = 'idle', size = 'hero', label: words = null, decorative = false, live = false } = {}) {
+  const name = words ?? ORB_WORDS[state] ?? ORB_WORDS.idle;
+  const a11y = decorative ? 'aria-hidden="true"' : `role="img" aria-label="${esc(name)}"`;
+  return `<span class="orb orb-${size}" data-state="${esc(state)}"${live ? ' data-orb-live' : ''} ${a11y}><span class="orb-glow"></span><span class="orb-core"></span><span class="orb-swirl"></span><span class="orb-sheen"></span></span>`;
+}
+
+// ---- status -------------------------------------------------------------------------------
+
+// A status in the one vocabulary. Verified always carries its evidence affordance.
+export function status(key, { task = null } = {}) {
+  const k = STATUS[key] ? key : 'quiet';
+  if (k === 'verified' && task) {
+    return `<button type="button" class="status" data-status="verified" data-action="evidence" data-task="${esc(task)}" aria-label="Verified: see the evidence">${ICONS.check}<span>Verified</span></button>`;
+  }
+  return `<span class="status" data-status="${k}">${esc(label(k))}</span>`;
+}
+
+// ---- small pieces -------------------------------------------------------------------------
+
+const clip = (t, n = 120) => { const s = String(t ?? ''); return s.length > n ? `${s.slice(0, n - 1).replace(/\s+\S*$/, '')}…` : s; };
+const ago = (iso, now = new Date()) => {
+  if (!iso) return '';
+  const s = Math.max(0, Math.round((now - new Date(iso)) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+export { ago, clip };
+
+// A card: one job, one headline, at most a few lines, at most one action (DESIGN-SYSTEM §6).
+export function card({ kind, title, icon = null, body = '', action = '', id = null, level = 3, attrs = '' }) {
+  const h = `h${level}`;
+  return `<section class="card ${esc(kind)}"${id ? ` id="${esc(id)}"` : ''} aria-labelledby="${esc(kind)}-title"${attrs ? ` ${attrs}` : ''}>
+  <${h} class="card-title" id="${esc(kind)}-title">${icon ? ICONS[icon] : ''}<span>${esc(title)}</span></${h}>
+  <div class="card-body">${body}</div>${action ? `<div class="card-action">${action}</div>` : ''}
+</section>`;
+}
+
+// "Nothing needs you" is a valid, designed state.
+export function emptyState({ title = 'Nothing needs you', line = '', action = '', orbState = null } = {}) {
+  return `<div class="empty-state">${orbState ? orb({ state: orbState, size: 'avatar', decorative: true }) : ''}<p class="empty-title">${esc(title)}</p>${line ? `<p class="empty-sub">${esc(line)}</p>` : ''}${action}</div>`;
+}
+
+// ---- cards ----------------------------------------------------------------------------------
+
+// No brief workflow exists yet, so the Brief card says so plainly.
+export function briefCard({ brief = null } = {}) {
+  const body = brief
+    ? `<p class="card-lead">${esc(clip(brief.headline, 90))}</p>${(brief.lines ?? []).slice(0, 2).map((l) => `<p class="card-line">${esc(clip(l, 90))}</p>`).join('')}`
+    : '<p class="card-lead">No brief yet.</p><p class="card-line">A daily brief arrives here once you set one up.</p>';
+  return card({ kind: 'brief-card', title: 'Brief', icon: 'brief', body });
+}
+
+// One task: plain-language title and status, opening the ledger entry.
+export function taskRow(t, { now = new Date(), compact = false } = {}) {
+  const st = statusOf(t);
+  const when = ago(t.updated_at ?? t.created_at, now);
+  const why = st === 'needs-you' && needsApproval(t) ? 'Needs your OK before it runs.' : t.reason ?? '';
+  return `<li class="task-row" data-status="${st}" data-task="${esc(t.id)}">
+  <button type="button" class="task-open" data-action="open-task" data-task="${esc(t.id)}"><span class="task-title">${esc(clip(t.title, 80))}</span>${compact ? '' : `<span class="task-meta">${esc(clip(why, 90))}${why && when ? ' · ' : ''}${esc(when)}</span>`}</button>
+  ${status(st, { task: st === 'verified' ? t.id : null })}
+</li>`;
+}
+
+// "Nova is handling": background work, up to three rows, then a way to the ledger.
+export function handlingCard({ tasks = [], now = new Date() } = {}) {
+  const open = tasks.filter((t) => isOpen(t) && t.user_visibility !== 'silent');
+  const body = open.length
+    ? `<ul class="task-list">${open.slice(0, 3).map((t) => taskRow(t, { now, compact: true })).join('')}</ul>${open.length > 3 ? `<p class="card-line">and ${open.length - 3} more</p>` : ''}`
+    : '<p class="card-lead">Nothing in progress.</p><p class="card-line">Work Nova takes on shows here until it’s verified.</p>';
+  return card({ kind: 'handling-card', title: 'Nova is handling', icon: 'handling', body, action: '<a class="link" href="/tasks" data-nav="tasks">All tasks</a>' });
+}
+
+// A finished task, with what proved it.
+export function verifiedResultCard(t, { now = new Date() } = {}) {
+  const summary = t.report?.summary ?? t.brief?.goal ?? '';
+  const checks = t.verification?.checks ?? [];
+  const passed = checks.filter((c) => c.ok).length;
+  return `<section class="card verified-result-card" aria-labelledby="vr-${esc(t.id)}" data-task="${esc(t.id)}">
+  ${orb({ state: 'idle', size: 'avatar', decorative: true })}
+  <div class="vr-text">
+    <p class="card-kicker">Verified result</p>
+    <h3 class="card-lead" id="vr-${esc(t.id)}">${esc(clip(t.title, 80))}</h3>
+    <p class="card-line">${esc(clip(summary, 120))}</p>
+    <p class="card-line is-faint">${passed} of ${checks.length} check${checks.length === 1 ? '' : 's'} passed · ${esc(ago(t.completed_at ?? t.updated_at, now))}</p>
+  </div>
+  ${status('verified', { task: t.id })}
+</section>`;
+}
+
+// What proved a task done: each requirement, what Nova found, and why it passed or didn't.
+// The raw report is one tap further down.
+export function evidenceViewer(t) {
+  const v = t.verification;
+  const evidence = (e) => {
+    if (!e) return 'Nothing was offered.';
+    switch (e.kind) {
+      case 'read_back': return `Read back ${esc(e.target)}: ${esc(String(e.bytes))} bytes, fingerprint ${esc(String(e.sha256).slice(0, 12))}…`;
+      case 'test_result': return `Test ${esc(e.name)} ${e.passed ? 'passed' : 'failed'}`;
+      case 'file_diff': return `A change to ${esc(e.target)}`;
+      case 'url': return `Link: ${esc(e.url)}`;
+      case 'screenshot': return `Screenshot ${esc(e.ref)}`;
+      case 'confirmation': return `Confirmed by ${esc(e.system)} (${esc(e.id)})`;
+      default: return esc(e.kind);
+    }
+  };
+  const checks = (v?.checks ?? []).map((c) => `<li class="check" data-ok="${c.ok}">
+    <span class="check-mark" aria-hidden="true">${c.ok ? ICONS.check : ICONS.close}</span>
+    <div><p class="check-what">${esc(c.requirement.kind.replace(/_/g, ' '))}${c.requirement.target ? ` · ${esc(c.requirement.target)}` : ''}</p>
+    <p class="check-found">${evidence(c.evidence)}</p><p class="check-why">${esc(c.why)}</p></div>
+  </li>`).join('');
+  return `<div class="evidence" data-task="${esc(t.id)}">
+  <p class="sheet-kicker">${status(statusOf(t))}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
+  <p class="sheet-line">${esc(t.brief?.goal ?? '')}</p>
+  ${t.report?.summary ? `<p class="sheet-line">${esc(t.report.summary)}</p>` : ''}
+  ${v ? `<h3 class="sheet-heading">How Nova checked</h3><ul class="checks">${checks}</ul><p class="sheet-line is-faint">Checked ${esc(new Date(v.at).toLocaleString('en-US'))}.</p>` : `<p class="sheet-line">${t.state === 'done' ? 'Done.' : 'Not checked yet: Nova checks the evidence before it calls anything done.'}</p>`}
+  <details class="raw"><summary>The ledger entry</summary><pre tabindex="0">${esc(JSON.stringify({ id: t.id, state: t.state, reason: t.reason, owner: t.owner, privacy_mode: t.privacy_mode, approval_tier: t.approval_tier, brief: t.brief, report: t.report, verification: t.verification }, null, 2))}</pre></details>
+</div>`;
+}
+
+// Inline in a conversation while Nova works on something it said it would look into.
+export function lookingIntoItCard(t) {
+  return `<div class="card looking-into-it-card" data-task="${esc(t.id)}" role="status">
+  <span class="lii-icon">${ICONS.search}</span>
+  <div><p class="card-lead">Looking into it</p><p class="card-line">${esc(clip(t.title, 90))}${t.reason ? ` · ${esc(clip(t.reason, 60))}` : ''}</p></div>
+  ${status(statusOf(t))}
+</div>`;
+}
+
+// Devices. Until the device mesh exists (M4), the only device is this one.
+export function deviceRow({ name, detail = '', online = true, current = false }) {
+  return `<li class="device-row">${ICONS.device}<div class="device-text"><p class="device-name">${esc(name)}${current ? ' <span class="device-tag">· this device</span>' : ''}</p>${detail ? `<p class="device-detail">${esc(detail)}</p>` : ''}</div><span class="pill${online ? ' is-on' : ' is-warn'}">${online ? 'Online' : 'Offline'}</span></li>`;
+}
+
+export function deviceMeshCard({ devices = [] } = {}) {
+  const body = `<ul class="device-list">${devices.map(deviceRow).join('')}</ul><p class="card-line is-faint">Only this device for now. Pairing others comes later.</p>`;
+  return card({ kind: 'device-mesh-card', title: 'Devices', icon: 'device', body });
+}
+
+// Health: everything fine, or what isn't, in human terms; detail is on the Health page.
+export function healthCard({ health = null, problems = [], reachable = true } = {}) {
+  let body;
+  if (!reachable) body = '<p class="card-lead">Nova isn’t answering.</p><p class="card-line">This page reconnects when it’s back.</p>';
+  else if (!health) body = '<p class="card-lead">Checking…</p>';
+  else {
+    const bad = Object.entries(health.checks ?? {}).filter(([, c]) => c && c.ok === false);
+    const lead = problems.length ? `${problems.length} problem${problems.length === 1 ? '' : 's'} to look at` : bad.length ? 'Something isn’t right' : 'All systems normal';
+    const lines = problems.length ? [clip(problems[0].message, 90)] : bad.length ? bad.map(([, c]) => clip(c.detail ?? '', 90)) : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
+    body = `<p class="card-lead" data-status="${problems.length || bad.length ? 'failed' : 'verified'}">${esc(lead)}</p>${lines.slice(0, 2).map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
+  }
+  return card({ kind: 'health-card', title: 'System health', icon: 'health', body, action: '<a class="link" href="/health" data-nav="health">Health</a>' });
+}
+
+export function memoryHighlightCard({ records = [] } = {}) {
+  const r = records.find((m) => m.active && m.user_state !== 'forgotten');
+  const body = r
+    ? `<p class="card-lead">${esc(clip(r.content, 90))}</p><p class="card-line is-faint">${esc(r.kind)} · ${esc(ago(r.created_at))}</p>`
+    : '<p class="card-lead">Nothing kept yet.</p><p class="card-line">What lasts from your conversations shows here.</p>';
+  return card({ kind: 'memory-highlight-card', title: 'Memory', icon: 'memory', body, action: '<a class="link" href="/memory" data-nav="memory">Memory</a>' });
+}
+
+// ---- the approval sheet, tiered (NOVA-SPEC §6) ----------------------------------------------
+
+const TIER_WORDS = {
+  2: 'Nova asks before doing this, because it reaches outside Nova or can’t easily be taken back.',
+  3: 'This needs your explicit confirmation every time: it changes something core, deletes data, or can’t be undone.',
+};
+const PRIVACY_WORDS = { 'local-only': 'Nothing leaves this machine.', 'local-preferred': 'Local first; cloud help only if needed, and recorded.', 'cloud-allowed': 'Nova may use cloud services for this.' };
+
+export function approvalSheet(t, { worker = null } = {}) {
+  const tier = Number(t.approval_tier) >= 3 ? 3 : 2;
+  const EGRESS = { none: 'stays on this machine', local: 'stays on your devices', remote: 'reaches the internet' };
+  const where = worker ? `${esc(worker.name ?? worker.id)}${EGRESS[worker.egress] ? ` · ${EGRESS[worker.egress]}` : ''}` : esc(t.owner);
+  return `<form class="approval-sheet" data-tier="${tier}" data-task="${esc(t.id)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
+  <p class="sheet-line">${esc(t.brief?.goal ?? '')}</p>
+  <dl class="facts"><dt>Who does it</dt><dd>${where}</dd><dt>Privacy</dt><dd>${esc(PRIVACY_WORDS[t.privacy_mode] ?? t.privacy_mode ?? '')}</dd><dt>Why it asks</dt><dd>${esc(TIER_WORDS[tier])}</dd></dl>
+  ${tier === 3 ? '<label class="confirm"><input type="checkbox" name="confirm" required> I understand, and I want Nova to do this.</label>' : ''}
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve"${tier === 3 ? ' disabled' : ''}>${tier === 3 ? 'Confirm' : 'Approve'}</button>
+    <button type="button" class="btn" data-action="cancel-task">Cancel the task</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+// ---- automations ------------------------------------------------------------------------------
+
+const CLASS_WORDS = { heartbeat: 'On a schedule', event: 'When something happens', proactive: 'When Nova has something to say' };
+export function triggerRow(r) {
+  const when = r.schedule ?? r.cron ?? (r.hook_path ? `Webhook ${r.hook_path}` : '');
+  const what = r.action?.kind === 'message' ? `Says: “${clip(r.action.text, 60)}”` : r.action?.kind === 'task' ? `Starts: ${clip(r.action.task?.title ?? 'a task', 60)}` : '';
+  return `<li class="trigger-row${r.paused ? ' is-paused' : ''}" id="tr-${esc(r.id)}" data-rule="${esc(r.id)}">
+  <div class="trigger-text"><p class="trigger-name">${esc(r.name)}</p><p class="trigger-meta">${esc(CLASS_WORDS[r.class] ?? r.class)}${when ? ` · ${esc(when)}` : ''}</p>${what ? `<p class="trigger-meta">${esc(what)}</p>` : ''}</div>
+  ${r.paused ? '<span class="pill">Paused</span>' : ''}
+  <span class="row-actions"><button type="button" class="btn small" data-action="${r.paused ? 'resume-rule' : 'pause-rule'}">${r.paused ? 'Resume' : 'Pause'}</button><button type="button" class="btn small quiet" data-action="delete-rule">Delete</button></span>
+</li>`;
+}
+
+// ---- conversation pieces ----------------------------------------------------------------------
+
+// `still`: already on screen before this render, so it doesn't rise in again.
+export function chatBubble({ from = 'nova', text = '', html = null, orbState: os = 'idle', still = false }) {
+  const inner = html ?? esc(text).replace(/\n/g, '<br>');
+  const cls = still ? ' is-still' : '';
+  return from === 'nova'
+    ? `<div class="chat-bubble from-nova${cls}">${orb({ state: os, size: 'avatar', decorative: true })}<div class="bubble-body">${inner}</div></div>`
+    : `<div class="chat-bubble from-person${cls}"><div class="bubble-body">${inner}</div></div>`;
+}
+
+// The voice button and the line that says why it's off, when it is.
+export function voiceState({ privacy = 'local-only', supported = false } = {}) {
+  if (privacy === 'local-only') return { enabled: false, reason: 'Voice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.' };
+  if (!supported) return { enabled: false, reason: 'This browser can’t take voice input.' };
+  return { enabled: true, reason: '' };
+}
+
+// ---- notices ------------------------------------------------------------------------------------
+
+export function toast({ text, tone = 'info', action = null }) {
+  return `<div class="toast-item" data-tone="${esc(tone)}" role="${tone === 'alert' ? 'alert' : 'status'}"><span>${esc(text)}</span>${action ? `<button type="button" class="toast-btn" data-action="${esc(action.id)}"${action.data ? ` data-ref="${esc(action.data)}"` : ''}>${esc(action.label)}</button>` : ''}</div>`;
+}
+
+// A message Nova started (CONTRACTS §6): one line and one action.
+export function proactiveBanner(m) {
+  const held = m.hold === 'needs_ok';
+  return `<div class="proactive-banner" data-message="${esc(m.id)}" role="status">${orb({ state: held ? 'attention' : 'idle', size: 'mini', decorative: true })}
+  <p class="banner-text">${esc(clip(m.text, 140))}</p>
+  <button type="button" class="btn small" data-action="${held ? 'send-message' : 'read-message'}" data-message="${esc(m.id)}">${held ? 'Let it through' : 'Got it'}</button>
+</div>`;
+}
+
+// ---- settings ------------------------------------------------------------------------------
+
+export function settingsRow({ id = '', title, note = '', control = '' }) {
+  return `<li class="settings-row"${id ? ` id="${esc(id)}"` : ''}><div class="settings-text"><p class="settings-label">${esc(title)}</p>${note ? `<p class="settings-note">${esc(note)}</p>` : ''}</div>${control ? `<div class="settings-control">${control}</div>` : ''}</li>`;
+}

@@ -1,33 +1,24 @@
 <!doctype html>
-<html lang="en" data-theme="nova" data-mode="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Style reference · Nova</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <script>
-    (function () {
-      var r = document.documentElement, t = 'nova', m = 'system';
-      try { t = localStorage.getItem('nova.theme') || t; m = localStorage.getItem('nova.mode') || m; } catch (e) {}
-      r.dataset.theme = t;
-      r.dataset.mode = m === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : m;
-    })();
-  </script>
-  <link rel="stylesheet" href="/themes/nova.css">
-  <link rel="stylesheet" href="/themes/paper.css">
-  <link rel="stylesheet" href="/themes/aurora.css">
-  <link rel="stylesheet" href="/themes/obsidian.css">
+  <link rel="stylesheet" id="ds-boot" href="/design-system.css">
+  <style id="ds"></style>
   <link rel="stylesheet" href="/styles/base.css">
   <link rel="stylesheet" href="/styles/components.css">
+  <link rel="stylesheet" href="/styles/views.css">
   <link rel="stylesheet" href="/styles/styleguide.css">
   <script type="module" src="/js/styleguide.js"></script>
 </head>
 <body class="sg">
   <header class="sg-head">
     <div>
-      <a class="wordmark" href="/">Nova</a>
-      <p class="sg-sub">Style reference: every token and component, drawn by the same code as the app.</p>
+      <a class="sg-title" href="/">Nova style reference</a>
+      <p class="sg-sub">Every token and component, drawn by the same code as the app. Previewing another design system here changes nothing else.</p>
     </div>
     <div class="sg-switch" id="switch"></div>
   </header>

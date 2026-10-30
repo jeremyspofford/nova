@@ -1,23 +1,23 @@
 {
   "budgets": {
-    "serverStartMs": 124,
-    "pageInteractiveMs": 142,
-    "domContentLoadedMs": 76,
-    "sendFeedbackMs": 10,
-    "activityMs": 2,
+    "serverStartMs": 331,
+    "pageInteractiveMs": 146,
+    "domContentLoadedMs": 56,
+    "sendFeedbackMs": 15,
+    "activityMs": 4,
     "scroll": {
-      "frames": 384,
-      "mainThreadP95Ms": 2.96,
-      "mainThreadMaxMs": 6.39,
+      "frames": 400,
+      "mainThreadP95Ms": 2.02,
+      "mainThreadMaxMs": 5.08,
       "frameIntervalP95Ms": 16.8,
-      "slowIntervals": 1
+      "slowIntervals": 0
     }
   },
   "checks": [
     {
       "name": "cold start ≤ 2 s (server + page)",
       "ok": true,
-      "detail": "124 ms server + 142 ms page"
+      "detail": "331 ms server + 146 ms page"
     },
     {
       "name": "the composer is focused on arrival",
@@ -32,7 +32,7 @@
     {
       "name": "send → visible feedback ≤ 100 ms",
       "ok": true,
-      "detail": "10 ms"
+      "detail": "15 ms"
     },
     {
       "name": "reply rendered markdown: list, code, table",
@@ -340,7 +340,7 @@
       "detail": ""
     },
     {
-      "name": "\"Read the report\" opens the front page at the report",
+      "name": "\"Read the report\" opens the main conversation at the report",
       "ok": true,
       "detail": ""
     },
@@ -507,7 +507,7 @@
     {
       "name": "Activity loads in ≤ 100 ms",
       "ok": true,
-      "detail": "2 ms for 19 logs"
+      "detail": "4 ms for 19 logs"
     },
     {
       "name": "helpers and Activity have no script errors",
@@ -522,7 +522,17 @@
     {
       "name": "scrolling a long thread holds 60 fps",
       "ok": true,
-      "detail": "page work p95 3.0 ms/frame (max 6.4) over 398 frames; frame interval p95 16.8 ms on this GPU-less machine"
+      "detail": "page work p95 2.0 ms/frame (max 5.1) over 441 frames; frame interval p95 16.8 ms on this GPU-less machine"
+    },
+    {
+      "name": "a first visit opens in Orb Teal, with a device id of its own",
+      "ok": true,
+      "detail": "orb-teal 5cec1ac3-fa41-4522-bd83-01288668e312"
+    },
+    {
+      "name": "nova: no script errors",
+      "ok": true,
+      "detail": ""
     },
     {
       "name": "paper-dark: no script errors",
@@ -545,6 +555,96 @@
       "detail": ""
     },
     {
+      "name": "appearance: Settings lists every design system and the light/dark choices",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "appearance: /settings#appearance focuses the current mode",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "appearance: the preview is a sandboxed frame with that design system only",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "appearance: applied on this device, live, with no reload",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "appearance: the last change on this device rolls back",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "appearance: picking a mode changes data-mode",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "appearance: nothing about the design system is kept in the browser but the device id",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "appearance: no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "desktop: Calm Control, with the right column of quiet cards",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "desktop: the right column closes",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "desktop: and stays closed across a reload",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "desktop: Ctrl/⌘+\\ brings it back",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "the conversations drawer opens from the top bar",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "layouts: no script errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "390 px: the phone layout, nothing cut off on the right",
+      "ok": true,
+      "detail": "{\"layout\":\"phone\",\"past\":0,\"scroll\":0,\"page\":0}"
+    },
+    {
+      "name": "820 px: the tablet layout, nothing cut off on the right",
+      "ok": true,
+      "detail": "{\"layout\":\"tablet\",\"past\":0,\"scroll\":0,\"page\":0}"
+    },
+    {
+      "name": "960 px: the tablet layout, nothing cut off on the right",
+      "ok": true,
+      "detail": "{\"layout\":\"tablet\",\"past\":0,\"scroll\":0,\"page\":0}"
+    },
+    {
+      "name": "1280 px: the desktop layout, nothing cut off on the right",
+      "ok": true,
+      "detail": "{\"layout\":\"desktop\",\"past\":0,\"scroll\":0,\"page\":0}"
+    },
+    {
       "name": "mobile: no horizontal page scroll",
       "ok": true,
       "detail": ""
@@ -555,12 +655,12 @@
       "detail": ""
     },
     {
-      "name": "reduced motion: no translation (Paper crossfades only)",
+      "name": "reduced motion: the orb stops breathing",
       "ok": true,
-      "detail": "0px"
+      "detail": "{\"breathe\":\"0s\",\"orb\":\"0s\"}"
     },
     {
-      "name": "reduced motion: Obsidian durations become 1 ms",
+      "name": "reduced motion: Obsidian transitions become 1 ms",
       "ok": true,
       "detail": "1ms"
     },
@@ -575,5 +675,5 @@
       "detail": ""
     }
   ],
-  "longId": "2026-10-21-42ucsb"
+  "longId": "2026-10-30-kb8voq"
 }

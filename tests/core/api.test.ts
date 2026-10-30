@@ -120,8 +120,9 @@ test('extensions install disabled, enable with an OK, and remove without residue
   assert.equal((await call('POST', '/extensions/example.weather/enable', { approved: true })).body.state, 'enabled');
   const removed = await call('DELETE', '/extensions/example.weather');
   assert.equal(removed.status, 200);
-  assert.deepEqual((await call('GET', '/extensions')).body, []);
-  assert.deepEqual(readdirSync(nova.core.extensions.root), []);
+  // The built-in design systems are extensions too; nothing else is left.
+  assert.deepEqual((await call('GET', '/extensions')).body.filter((x: { kind: string }) => x.kind !== 'design-system'), []);
+  assert.equal(readdirSync(nova.core.extensions.root).includes('example.weather'), false);
   await stop();
 });
 

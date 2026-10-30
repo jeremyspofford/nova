@@ -12,6 +12,7 @@ import { Verifier, type Checker } from './verify.ts';
 import { Ledger, STATES, type LanedWorker, type State, type TaskInput } from './ledger.ts';
 import { Setup } from './setup.ts';
 import { Extensions } from './extensions.ts';
+import { Design, type Scope } from './design.ts';
 import { Decisions, RulesProvider, Templates } from './decide.ts';
 import { Triggers, type Policy, type RuleInput } from './triggers.ts';
 import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInput, type UserState } from './memory.ts';
@@ -19,7 +20,7 @@ import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { info, permits, stricter, type Egress } from './workers.ts';
-import { createApi, type Route } from './api.ts';
+import { createApi, Raw, type Route } from './api.ts';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 
 export { render as renderIdentity } from './identity.ts';
@@ -30,6 +31,8 @@ export type { Brief, Evidence, Report } from './envelope.ts';
 export type { Worker, Egress } from './workers.ts';
 export type { Checker } from './verify.ts';
 export type { Lane, LanedWorker, Task } from './ledger.ts';
+// The design-system schema and its checks, for the token lint and the package check (scripts/).
+export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
 
 export interface CoreOptions {
   home: string;
@@ -42,6 +45,8 @@ export interface CoreOptions {
   workers?: LanedWorker[];
   // Confirmation checkers by system, for systems Nova can read itself ("nova-sessions").
   confirmations?: Record<string, Checker>;
+  // Where the built-in design systems live; defaults to design-systems/ in the repo.
+  designSystems?: string;
   now?: () => Date;
 }
 
@@ -70,9 +75,11 @@ export function createCore(o: CoreOptions) {
   });
   const setup = new Setup({ profile, ledger, now, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
+  const design = new Design({ extensions, profile, ...(o.designSystems ? { dir: o.designSystems } : {}) });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids) => backups.forget('memory', ids) });
   const receipts = new Receipts({ db, log, now });
+  for (const p of design.ensureBuiltins()) log.problem('design', p);
 
   const bus = new EventEmitter();
   bus.setMaxListeners(100);
@@ -91,6 +98,8 @@ export function createCore(o: CoreOptions) {
     }
   });
   extensions.on('change', (c) => bus.emit('event', 'extension', c));
+  // The UI swaps its design-system stylesheet when this arrives: no reload, no restart.
+  design.on('change', (c) => bus.emit('event', 'design-system', c));
   triggers.on('trigger', (t) => bus.emit('event', 'trigger', { trigger_id: t.trigger_id, rule_id: t.rule_id, class: t.class, decision: t.triage.decision, reason: t.triage.reason, ledger_task_id: t.ledger_task_id, message_id: t.message_id }));
   triggers.on('message', (m) => bus.emit('event', 'message', m));
   const stream = {
@@ -115,6 +124,7 @@ export function createCore(o: CoreOptions) {
       workers: { ok: workers.every((w) => w.health.ok), detail: workers.filter((w) => !w.health.ok).map((w) => w.health.detail).join(' ') || `${workers.length} ready.`, workers },
       ledger: { ok: true, counts: ledger.counts() },
       extensions: { ok: true, counts: extensions.counts() },
+      design: { ok: true, active: design.active().id },
       triggers: { ok: true, counts: triggers.counts() },
       problems: { ok: true, open: log.problems({ open: true }).length },
       memory: { ok: true, counts: memory.counts() },
@@ -138,6 +148,11 @@ export function createCore(o: CoreOptions) {
       handle: ({ params, body }) => {
         const section = params.section as Section;
         if (!SECTIONS.includes(section) || section === 'setup') throw new CoreError('validation', `There is no profile section called "${params.section}".`);
+        if (section === 'appearance') {
+          if (params.key !== 'mode') throw new CoreError('validation', 'Choose a design system with POST /api/v1/design-systems/{id}/apply, so it is checked and can be rolled back.');
+          design.setMode(body.value);
+          return profile.section(section);
+        }
         profile.set(section, str(params.key, 'key'), body.value, 'settings');
         return profile.section(section);
       },
@@ -174,6 +189,27 @@ export function createCore(o: CoreOptions) {
     { method: 'POST', path: '/extensions/{id}/enable', summary: 'Enable an extension. Needs {approved: true} when it asks for permissions.', body: '{approved?}', handle: ({ params, body }) => extensions.enable(params.id!, { approved: body.approved === true }) },
     { method: 'POST', path: '/extensions/{id}/disable', summary: 'Disable an extension, keeping it installed.', handle: ({ params }) => extensions.disable(params.id!) },
     { method: 'DELETE', path: '/extensions/{id}', summary: 'Remove an extension, following its on_remove promise; nothing of it stays behind.', handle: ({ params }) => extensions.remove(params.id!) },
+    { method: 'GET', path: '/design-systems', summary: 'Installed design systems, each with whether it is valid and, if not, its problems in plain words.', handle: () => design.list() },
+    { method: 'GET', path: '/design-systems/schema', summary: 'The token schema every design system implements: names, CSS variables, value rules, contrast pairs, content rules.', handle: () => design.schema() },
+    { method: 'GET', path: '/design-systems/active', summary: 'The design system this device shows (?device=), and whether that is its own choice, the person’s, or the default.', handle: ({ query }) => design.active(query.get('device')) },
+    {
+      method: 'POST', path: '/design-systems', status: 201, summary: 'Install a design system from its manifest, through the extension host. It is validated before it can be applied.', body: '{manifest}',
+      handle: ({ body }) => design.install(body.manifest),
+    },
+    {
+      method: 'POST', path: '/design-systems/rollback', summary: 'Go back to the design system shown before the last change, for the person or one device.', body: '{scope: user | device, device_id?}',
+      handle: ({ body }) => design.rollback({ scope: body.scope as Scope, device_id: typeof body.device_id === 'string' ? body.device_id : null }),
+    },
+    { method: 'GET', path: '/design-systems/{id}', summary: 'One design system, with its manifest and validation.', handle: ({ params }) => design.get(params.id!) },
+    { method: 'POST', path: '/design-systems/{id}/validate', summary: 'Check a design system against the schema: completeness, value syntax, contrast, reduced motion, content rules, extras.', handle: ({ params }) => design.validate(params.id!) },
+    {
+      method: 'GET', path: '/design-systems/{id}/preview.css', summary: 'A design system as CSS variables, for a sandboxed preview frame, without applying it. ?mode=light|dark|auto.',
+      handle: ({ params, query }) => new Raw('text/css; charset=utf-8', design.previewCss(params.id!, query.get('mode'))),
+    },
+    {
+      method: 'POST', path: '/design-systems/{id}/apply', summary: 'Apply a valid design system for the person (every device) or one device. The previous one is kept for rollback.', body: '{scope: user | device, device_id?}',
+      handle: ({ params, body }) => design.apply(params.id!, { scope: body.scope as Scope, device_id: typeof body.device_id === 'string' ? body.device_id : null }),
+    },
     { method: 'GET', path: '/triggers/rules', summary: 'Every automation Nova runs: event, heartbeat and proactive rules. Nothing runs that isn’t listed here.', handle: () => triggers.listRules() },
     {
       method: 'POST', path: '/triggers/rules', status: 201, summary: 'Add a rule. For an event rule the reply carries its webhook token, shown this once only.',
@@ -263,7 +299,7 @@ export function createCore(o: CoreOptions) {
   });
 
   return {
-    db, log, profile, ledger, setup, extensions, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
