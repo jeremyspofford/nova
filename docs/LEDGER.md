@@ -64,6 +64,21 @@ failed before the fix.
   asks the hub's `/mesh/hello`; any answer there starts the count again.
   Trade-off: a dead hub behind a proxy that answers 502 isn't taken over
   automatically; the person promotes by hand.
+- **A hub that steps down owns up to what it never copied.** On demotion it
+  counts its sync-log entries past the standby's last ack and says so ("N
+  changes made here were never copied to … they are only on this node").
+  Forgets among them (memory `delete` entries) can't be left behind (order
+  4): their ids, never the words, go to `mesh/owed-forgets.json` (local, not
+  journalled), and the node signs in to the new hub with its own identity
+  key (its old record there: a trusted computer) and calls the new route
+  `POST /mesh/forgotten {ids}` (`access: 'device'`), at once and every 30 s
+  until it lands, also after restarts. The new hub takes it only from a
+  device named `previous_hub` in one of its "Standby promoted to hub" ledger
+  tasks (any other computer gets 403), forgets each memory the whole way
+  (`device:<id>` as who), and says so as a problem. A refusal is a problem on
+  the old node naming the memory ids to forget by hand; it keeps trying. Other
+  uncopied changes are reported, not carried over (still the documented gap:
+  enroll the old node again).
 
 **2026-10-30 (M4 review): trust, pairing and access fixes.**
 

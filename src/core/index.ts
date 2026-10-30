@@ -134,6 +134,7 @@ export function createCore(o: CoreOptions) {
     db, log, home: o.home, now, publicUrl, identity: meshIdentity, devices, access, sync, ledger, verifier, file: place.file,
     becameHub: () => startHub(), becameStandby: () => stopHub(),
     forgotten: (rows) => memory.forgottenElsewhere(rows),
+    forget: (id, by) => { try { memory.forget(id, by); return true; } catch (e) { if (e instanceof CoreError && e.code === 'not_found') return false; throw e; } },
     failoverAfterS: () => { const v = profile.get<number>('mesh', 'auto_failover_after_s'); return typeof v === 'number' && v > 0 ? v : null; },
   });
   const role = meshRole;

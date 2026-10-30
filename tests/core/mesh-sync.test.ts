@@ -530,6 +530,59 @@ test('automatic failover: only when turned on, and only after the hub has been u
   }
 });
 
+test('a hub that steps down says what never reached the new hub, and repeats its forgets there', async () => {
+  const p = await pair();
+  const { h, core } = p;
+  let old: Core | null = null;
+  let os: Awaited<ReturnType<typeof serve>> | null = null;
+  try {
+    // Devices look for the standby at its mesh address.
+    h.core.db.run('UPDATE device SET address = ? WHERE id = ?', p.s.mesh, p.dev.deviceId);
+    const words = 'Spare key under the placeholder stone';
+    const m = h.core.memory.remember({ kind: 'fact', content: words, recorded_by: 'person' });
+    core.start();
+    await synced(p);
+    assert.equal(core.memory.get(m.id).content, words, 'the standby has the memory');
+    // From here the standby gets nothing more (the hub's answers fail), and then the hub is gone:
+    // the forget, and a note made after it, never reach the standby.
+    (h.core.mesh.sync as unknown as { batch: () => never }).batch = () => { throw new Error('placeholder failure'); };
+    h.core.memory.forget(m.id);
+    h.core.memory.remember({ kind: 'fact', content: 'A note made at the last moment.', recorded_by: 'person' });
+    await h.stop();
+    assert.equal((await p.s.api('POST', '/mesh/promote', { confirm: true })).status, 200);
+    assert.equal(core.memory.get(m.id).content, words, 'the new hub still has it');
+
+    // The old hub comes back, finds it was replaced, and steps down.
+    old = createCore({ home: h.home, version: '0.1.0', trustedOrigin: () => true, now: () => new Date(h.clock.t), mesh: { publicUrl: 'http://hub.example:4320', transport: 'network' } });
+    os = await serve(old);
+    assert.equal((await old.mesh.role.fence()).demoted, true);
+    const said = old.log.problems().map((x) => x.message).join('\n');
+    assert.match(said, /changes made here were never copied to “Standby”/, said);
+    assert.match(said, /1 of them forgot a memory/, said);
+    // The forget is repeated on the new hub, the whole way (standing order 4).
+    await until(() => { try { core.memory.get(m.id); return false; } catch { return true; } }, Boolean);
+    assert.throws(() => core.memory.get(m.id), /no memory/, old.log.problems().map((x) => x.message).join('\n'));
+    const hits = everything(p.home).filter((f) => f.text.includes(words) || f.text.includes('placeholder stone')).map((f) => f.path);
+    assert.deepEqual(hits, [], 'nothing on the new hub still holds the words');
+    assert.ok(core.log.problems().some((x) => /forgotten here now/.test(x.message)), 'the new hub says so');
+    await until(() => existsSync(join(h.home, 'mesh', 'owed-forgets.json')), (v) => !v);
+    assert.ok(!existsSync(join(h.home, 'mesh', 'owed-forgets.json')), 'nothing is owed any more');
+
+    // Only a node that was hub before may ask: an ordinary computer can't forget by id.
+    const { dev: computer } = await import('./mesh-support.ts').then((x) => x.enroll({ c: p.s.api, mesh: p.s.mesh, nowS: h.nowS } as never, { kind: 'computer', name: 'Desk computer' }));
+    const cs = await computer.session({ base: p.s.mesh });
+    const kept = core.memory.remember({ kind: 'fact', content: 'Kept.', recorded_by: 'person' });
+    const asked = await call(p.s.mesh, 'POST', '/api/v1/mesh/forgotten', { ids: [kept.id] }, { authorization: `Bearer ${cs.body.token}` });
+    assert.equal(asked.status, 403);
+    assert.equal(core.memory.get(kept.id).content, 'Kept.');
+  } finally {
+    os?.close();
+    await old?.close();
+    p.s.close();
+    await core.close();
+  }
+});
+
 test('automatic failover never fires against a hub that is up: errors and batches it can’t apply are problems, not an outage', async () => {
   const p = await pair({ failoverAfterS: 1 });
   try {

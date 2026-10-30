@@ -7,6 +7,8 @@
 //    own key (the one devices pinned as the standby's), starts the scheduler, triggers and workers,
 //    recovers the ledger, and records the promotion as a verified ledger task.
 import { EventEmitter } from 'node:events';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -19,12 +21,16 @@ import type { Device, Devices } from './devices.ts';
 import type { MeshIdentity } from './identity.ts';
 import { ask, readRole, Replica, SYNC_AAD, writeRole, type RoleFile, type SyncPayload } from './replica.ts';
 import type { SyncLog } from './sync.ts';
-import { verifyRoster, type SignedRoster } from './wire.ts';
+import { sessionMessage, verifyRoster, type SignedRoster } from './wire.ts';
 
 export type NodeRole = 'hub' | 'standby';
 export const FENCE_EVERY_MS = 30_000;
 export const CONFIRMATION_SYSTEM = 'nova-mesh';
 const LAG_EVERY_MS = 15_000;
+// Forgets a hub that stepped down made after the standby's last copy, still to be repeated on the
+// node that took over: memory ids only, never the words. In mesh/, which stays on this node.
+export const OWED_FORGETS = join('mesh', 'owed-forgets.json');
+interface Owed { hub: { id: string; name: string; url: string }; epoch: number; ids: string[]; since: string }
 
 // What this node is, decided before anything else writes: the mesh state once there is one, else
 // the role file, else hub. A standby doesn't record its own writes in the sync log (it copies the
@@ -45,6 +51,8 @@ export interface MeshRoleOptions {
   becameHub: () => { requeued: string[]; reverified: string[] };
   becameStandby: () => void;
   forgotten: (records: Record<string, unknown>[]) => void;
+  // Forgets a memory here as the person would (standing order 4); false when there is none.
+  forget: (id: string, by: string) => boolean;
   failoverAfterS: () => number | null;
 }
 
@@ -57,6 +65,8 @@ export class MeshRole extends EventEmitter {
   #closed = false;
   #started = false;
   #promoting: Promise<unknown> | null = null;
+  #owing: ReturnType<typeof setInterval> | null = null;
+  #lastTime = 0;
 
   constructor(o: MeshRoleOptions) {
     super();
@@ -144,6 +154,7 @@ export class MeshRole extends EventEmitter {
 
   #startStandby(): void {
     this.#o.sync.setLogging(false);
+    if (existsSync(join(this.#o.home, OWED_FORGETS))) this.#keepRepaying();
     const file = this.#file;
     // A hub that stepped down has no hub of its own to copy until it is enrolled again.
     if (!file || file.role !== 'standby' || file.device_id !== this.#o.identity.id) return;
@@ -168,6 +179,7 @@ export class MeshRole extends EventEmitter {
   async close(): Promise<void> {
     this.#closed = true;
     this.#stopHub();
+    if (this.#owing) clearInterval(this.#owing);
     await this.#replica?.stop();
   }
 
@@ -258,6 +270,11 @@ export class MeshRole extends EventEmitter {
   // Steps down: stops recording and running, refuses changes, ends every device session.
   demote(hub: Device, epoch: number, url: string): void {
     const at = this.#o.now().toISOString();
+    // What this node recorded after the standby's last copy never reached the new hub. Most of it
+    // stays here only (the person is told); a forget can't be left like that, so it is repeated there.
+    const acked = this.#o.db.get<{ acked_seq: number }>('SELECT acked_seq FROM sync_state WHERE id = 1')?.acked_seq ?? 0;
+    const uncopied = this.#o.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sync_log WHERE seq > ?', acked)!.n;
+    const forgets = this.#o.db.all<{ pk: string }>(`SELECT DISTINCT pk FROM sync_log WHERE tbl = 'memory' AND op = 'delete' AND seq > ? ORDER BY seq`, acked).map((r) => r.pk);
     this.#o.db.tx(() => {
       this.#o.sync.setLogging(false);
       this.#o.db.run(`UPDATE mesh_state SET role = 'standby', epoch = ?, hub_id = ?, standby_id = ?, updated_at = ? WHERE id = 1`, epoch, hub.id, this.#o.identity.id, at);
@@ -268,8 +285,77 @@ export class MeshRole extends EventEmitter {
     for (const d of this.#o.devices.list()) this.#o.access.close(d.id);
     const why = `“${hub.name}” at ${url} became the hub (epoch ${epoch}) while this node was away. This node stepped down so there is only one hub: it reads, but refuses changes, and every device session here has ended.`;
     this.#o.log.problem('mesh', why);
+    if (uncopied) {
+      this.#o.log.problem('mesh', `${uncopied} ${uncopied === 1 ? 'change' : 'changes'} made here were never copied to “${hub.name}” before it became the hub, so ${uncopied === 1 ? 'it is' : 'they are'} only on this node.${forgets.length ? ` ${forgets.length} of them forgot a memory: Nova repeats ${forgets.length === 1 ? 'that forget' : 'those forgets'} on “${hub.name}”, now and until it can.` : ' Anything you still want from them, add again on the hub.'}`);
+    }
+    if (forgets.length) {
+      this.#saveOwed({ hub: { id: hub.id, name: hub.name, url: url.replace(/\/+$/, '') }, epoch, ids: forgets, since: at });
+      this.#keepRepaying();
+    }
     this.emit('demoted', { hub: hub.id, epoch, reason: why });
     this.emit('change', this.status());
+  }
+
+  // ---- forgets owed to the new hub --------------------------------------------------------------
+
+  #saveOwed(o: Owed | null): void {
+    const file = join(this.#o.home, OWED_FORGETS);
+    if (!o) { rmSync(file, { force: true }); return; }
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(o, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, file);
+  }
+
+  #keepRepaying(): void {
+    void this.repayForgets();
+    this.#owing ??= setInterval(() => { void this.repayForgets(); }, FENCE_EVERY_MS);
+    this.#owing.unref();
+  }
+
+  // Asks the node that took over to forget what this one forgot after the last copy. It signs in
+  // as this node (the new hub has its record and key: it was the hub). Unreachable: tried again
+  // later. Refused: the person is told which memories to forget there by hand.
+  async repayForgets(): Promise<{ done: boolean; reason?: string }> {
+    let owed: Owed;
+    try { owed = JSON.parse(readFileSync(join(this.#o.home, OWED_FORGETS), 'utf8')) as Owed; } catch { this.#stopRepaying(); return { done: true }; }
+    const me = this.#o.identity.id;
+    const caFile = this.#file?.ca_file ?? null;
+    // Refused: said once, and tried again later (a clock put right, say, makes it work).
+    const stop = (reason: string) => {
+      this.#warn(`owed|${owed.hub.id}|${reason}`, `Nova couldn’t repeat ${owed.ids.length === 1 ? 'a forget' : `${owed.ids.length} forgets`} on “${owed.hub.name}”: ${reason} Until then, forget ${owed.ids.length === 1 ? 'that memory' : 'those memories'} there yourself (${owed.ids.join(', ')}).`);
+      return { done: false, reason };
+    };
+    try {
+      const time = (this.#lastTime = Math.max(Math.floor(this.#o.now().getTime() / 1000), this.#lastTime + 1));
+      const s = await ask(`${owed.hub.url}/api/v1/mesh/session`, { method: 'POST', headers: { 'x-nova': '1' }, body: { device_id: me, time, signature: this.#o.identity.sign(sessionMessage(me, time)) }, timeoutMs: 5000, caFile });
+      if (s.status !== 200 || typeof s.body?.token !== 'string') return stop(`it wouldn’t start a session for this node (${s.body?.error ?? s.status}).`);
+      const r = await ask(`${owed.hub.url}/api/v1/mesh/forgotten`, { method: 'POST', headers: { 'x-nova': '1', authorization: `Bearer ${s.body.token}` }, body: { ids: owed.ids }, timeoutMs: 15_000, caFile });
+      if (r.status !== 200) return stop(`it refused (${r.body?.error ?? r.status}).`);
+    } catch {
+      return { done: false, reason: 'unreachable' };
+    }
+    this.#saveOwed(null);
+    this.#stopRepaying();
+    this.#o.log.info('mesh', 'Repeated forgets on the new hub.', { hub: owed.hub.id, count: owed.ids.length });
+    return { done: true };
+  }
+
+  #stopRepaying(): void {
+    if (this.#owing) clearInterval(this.#owing);
+    this.#owing = null;
+  }
+
+  // On the hub: a node that was hub before and stepped down forgot these after the last copy.
+  #repeatForgets(device: Device, raw: unknown): { forgotten: string[]; gone: string[] } {
+    if (this.role() !== 'hub') throw new CoreError('conflict', this.replica()!.reason);
+    const was = this.#o.db.get(`SELECT 1 FROM task WHERE owner = 'mesh' AND idempotency_key LIKE 'mesh:promote:%' AND json_extract(brief, '$.inputs.previous_hub') = ?`, device.id);
+    if (!was) throw new CoreError('forbidden', 'Only a node that was the hub before may repeat its forgets here.');
+    if (!Array.isArray(raw) || raw.length > 1000 || !raw.every((x) => typeof x === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(x))) throw new CoreError('validation', 'ids must be a list of memory ids.');
+    const forgotten: string[] = [];
+    const gone: string[] = [];
+    for (const id of raw as string[]) (this.#o.forget(id, `device:${device.id}`) ? forgotten : gone).push(id);
+    if (forgotten.length) this.#o.log.problem('mesh', `“${device.name}” forgot ${forgotten.length === 1 ? 'a memory' : `${forgotten.length} memories`} before it stopped being the hub, after the last copy this node got. ${forgotten.length === 1 ? 'It is' : 'They are'} forgotten here now, the whole way.`);
+    return { forgotten, gone };
   }
 
   // ---- promotion ------------------------------------------------------------------------------------
@@ -380,6 +466,14 @@ export class MeshRole extends EventEmitter {
           this.#o.sync.ack(Number(body.seq));
           this.checkLag();
           return this.lag();
+        },
+      },
+      {
+        method: 'POST', path: '/mesh/forgotten', access: 'device', body: '{ids}',
+        summary: 'A node that was hub and stepped down repeats here the forgets the standby never copied before it took over (memory ids only).',
+        handle: ({ body, who }) => {
+          if (who.principal.kind !== 'device') throw new CoreError('forbidden', 'Only a node that was the hub before may repeat its forgets here.');
+          return this.#repeatForgets(who.principal.device, body.ids);
         },
       },
       {
