@@ -36,7 +36,7 @@ test('M7a evidence: the foundry on a real local model, through the pipeline', { 
       lines.push(`Change “${settled.title}” v${settled.version}: ${settled.state}${settled.reason ? ` — ${String(settled.reason).replace(/[.\s]+$/, '')}` : ''}.`);
       if (settled.state === 'waiting') {
         assert.equal((await m.send('POST', api(`/changes/${c.id}/ship`), { confirm: true })).status, 200);
-        const live = await until<any>(() => m.get(api(`/changes/${c.id}`)), (x) => !!x.canary?.started_at || x.state !== 'canary', 800);
+        const live = await until<any>(() => m.get(api(`/changes/${c.id}`)), (x) => (!!x.canary?.started_at && x.canary.applied !== false) || x.state !== 'canary', 800);
         for (let i = 1; i <= 3 && live.state === 'canary'; i++) await m.send('POST', api('/changes/tick'), { now: new Date(Date.parse(live.canary.started_at) + i * 15 * 60_000).toISOString() });
         const end = await m.get(api(`/changes/${c.id}`));
         lines.push(`After its canary: ${end.state}.`);

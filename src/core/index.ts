@@ -145,6 +145,8 @@ export interface CoreOptions {
   // none of the hub's outside work (connectors, capture, models, the heartbeat), takes no changes,
   // and answers the sandbox routes.
   sandbox?: boolean;
+  // The change pipeline (M7a), for tests: the monotonic clock its canary windows are measured on.
+  changes?: { monotonic?: () => number };
   now?: () => Date;
 }
 
@@ -188,7 +190,7 @@ export function createCore(o: CoreOptions) {
   // Remote decision providers (JevProvider) are registered only once configured; local-only skips them anyway.
   const decisions = new Decisions({ templates, providers: [rules], privacy: () => profile.privacyDefault(), log });
   const triggers = new Triggers({
-    db, log, ledger, templates, rules, decisions, now,
+    db, log, ledger, templates, rules, decisions, now, sandbox: o.sandbox === true,
     policy: () => profile.section('policy') as Policy,
     timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
   });
@@ -284,6 +286,10 @@ export function createCore(o: CoreOptions) {
   const changes = new Changes({
     db, log, ledger, verifier, home: o.home, now, sandbox: o.sandbox === true, testClock: process.env.NOVA_TEST_CLOCK === '1',
     routes: () => routes, health: () => health(), hubDevice: () => meshIdentity.id, privacy: () => profile.privacyDefault(),
+    knownDevice: (id) => id === meshIdentity.id || devices.find(id)?.trust === 'trusted',
+    // The canary's window on a clock that only moves forward. An injected clock (tests) is the
+    // only clock there is, so it stands in unless a test gives one of its own.
+    ...(o.changes?.monotonic ? { monotonic: o.changes.monotonic } : o.now ? { monotonic: () => now().getTime() } : {}),
     live: {
       db, extensions, design, profile, triggers, templates, ledger, now, novaVersion: o.version,
       timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',

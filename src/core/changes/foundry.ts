@@ -74,6 +74,9 @@ export interface FoundryOptions {
 export class Foundry {
   readonly worker: LanedWorker;
   #o: FoundryOptions;
+  // Only this module makes the foundry's tasks: what it writes becomes a tier-3 change, so the way
+  // in is the person asking (POST /foundry), never a forged brief.
+  #key = Symbol('foundry');
 
   constructor(o: FoundryOptions) {
     this.#o = o;
@@ -89,6 +92,7 @@ export class Foundry {
       health: () => ({ ok: true }),
       timeoutMs: 15 * 60_000,
       lane: () => ({ key: 'author', max: 1 }),
+      internal: { key: this.#key, why: 'Only Nova’s foundry makes its own tasks. Ask it for an extension with POST /foundry.' },
       run: (brief, signal) => this.#run(brief, signal),
     };
   }
@@ -110,7 +114,7 @@ export class Foundry {
       inputs: { need, kind: input.kind, via },
       privacy_mode: this.#o.privacy(),
       approval_tier: 1,
-    });
+    }, { as: this.#key });
   }
 
   folder(taskId: string): string {

@@ -116,7 +116,8 @@ export class Sandbox {
 // The copy is a picture of the person's Nova, not a second one at work (also used by the restore
 // drill and the supervisor's release sandbox, M7b): what was waiting or
 // running is cancelled there, their rules are paused (the change's own are what is tested),
-// providers, automations and connectors are off, and devices have no addresses to reach.
+// providers, automations and connectors are off, devices have no addresses to reach, and no
+// setting names a folder or address of the person's (backups, capture, providers, models).
 export function inert(file: string): void {
   const db = new DatabaseSync(file);
   try {
@@ -127,6 +128,11 @@ export function inert(file: string): void {
     db.exec(`UPDATE extension SET state = 'disabled' WHERE kind IN ('agent-adapter', 'automation-adapter', 'connector')`);
     db.exec('UPDATE device SET address = NULL');
     db.exec('DELETE FROM device_session');
+    // Settings that point outside the copy: the person's backup folders (a backup there would
+    // write into, and prune, their real backups), capture's sources, and where providers and models
+    // are reached. The copy has none, so nothing it does lands anywhere of theirs.
+    db.exec(`DELETE FROM profile WHERE section IN ('backups', 'providers', 'models')`);
+    if (db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'capture_source'`).get()) db.exec(`UPDATE capture_source SET enabled = 0, config = '{}'`);
     db.exec('DELETE FROM sync_log');
   } finally {
     db.close();

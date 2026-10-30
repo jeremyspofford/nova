@@ -77,7 +77,7 @@ test('M7a: the foundry ships a wind-down reminder through every gate, with the t
     assert.equal((await m.send('POST', api(`/changes/${proposed.id}/ship`), { confirm: true })).status, 200);
 
     // The canary on the test clock, then promoted.
-    const started = await settled(m, proposed.id, (c) => !!c.canary?.started_at);
+    const started = await settled(m, proposed.id, (c) => !!c.canary?.started_at && c.canary.applied !== false);
     assert.equal(started.state, 'canary');
     const live = await canary(m, proposed.id, started.canary.started_at);
     assert.equal(live.state, 'live', live.reason);
@@ -130,14 +130,14 @@ test('M7a: sabotage that passes the sandbox fails live and is rolled back by its
   try {
     const v1 = await m.send('POST', api('/changes'), { kind: 'extension', artifact: notesSkill('1.0.0') });
     assert.equal(v1.status, 201, JSON.stringify(v1.body));
-    const c1 = await settled(m, v1.body.id, (c) => !!c.canary?.started_at || ['stopped', 'refused'].includes(c.state));
+    const c1 = await settled(m, v1.body.id, (c) => (!!c.canary?.started_at && c.canary.applied !== false) || ['stopped', 'refused'].includes(c.state));
     assert.equal((await canary(m, v1.body.id, c1.canary.started_at)).state, 'live');
     await m.send('POST', api('/triggers/rules'), { name: 'Weekly review', class: 'heartbeat', cron: '0 9 * * 1', action: { kind: 'message', text: 'Weekly review time.' } });
     const others = async () => JSON.stringify([await m.get(api('/triggers/rules')), (await m.get(api('/extensions'))).filter((x: any) => x.id !== 'example-notes').map((x: any) => [x.id, x.version, x.state]), await m.get(api('/design-systems/active'))]);
     const before = await others();
 
     const v2 = await m.send('POST', api('/changes'), { kind: 'extension', artifact: notesSkill('2.0.0', { maxMemories: 2, text: 'Write each note as two lines.' }) });
-    const c2 = await settled(m, v2.body.id, (c) => !!c.canary?.started_at || ['stopped', 'refused'].includes(c.state));
+    const c2 = await settled(m, v2.body.id, (c) => (!!c.canary?.started_at && c.canary.applied !== false) || ['stopped', 'refused'].includes(c.state));
     assert.equal(c2.state, 'canary', c2.reason);
     assert.equal((await m.get(api('/extensions'))).find((x: any) => x.id === 'example-notes').version, '2.0.0');
     // Live data grows past what its probe allows.

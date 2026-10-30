@@ -141,6 +141,9 @@ export interface TriggersOptions {
   policy: () => Policy;
   timezone: () => string;
   now?: () => Date;
+  // A sandbox copy (the change pipeline's): a rule that fires is recorded as it would have acted,
+  // but its task is never started, so a change's tests can't reach anything outside the copy.
+  sandbox?: boolean;
 }
 
 // A firing without a rule in the registry (an Era 2 schedule file is its own rule) brings its own
@@ -157,6 +160,7 @@ export class Triggers extends EventEmitter {
   #policy: () => Policy;
   #timezone: () => string;
   #now: () => Date;
+  #sandbox: boolean;
 
   constructor(o: TriggersOptions) {
     super();
@@ -167,6 +171,7 @@ export class Triggers extends EventEmitter {
     this.#policy = o.policy;
     this.#timezone = o.timezone;
     this.#now = o.now ?? (() => new Date());
+    this.#sandbox = o.sandbox === true;
     o.templates.builtIn(TRIAGE);
     if (!o.rules.has(TRIAGE.template_id)) o.rules.add(TRIAGE.template_id, triageRule);
   }
@@ -370,6 +375,9 @@ export class Triggers extends EventEmitter {
         if (open) {
           ledger_task_id = open.id;
           triage = { ...triage, decision: 'queue', reason: `Added to "${open.title}".` };
+        } else if (this.#sandbox) {
+          const t = action.task;
+          triage = { ...triage, reason: `${triage.reason} In a sandbox copy: “${t.title}” (${t.owner}, tier ${t.approval_tier ?? 1}) would have started here; nothing ran.` };
         } else {
           try {
             const tier = triage.decision === 'queue' ? Math.max(action.task.approval_tier ?? 1, 2) as 2 | 3 : action.task.approval_tier;
@@ -582,6 +590,8 @@ export class Triggers extends EventEmitter {
       if (!isObj(t) || !isStr(t.title) || !isStr(t.goal)) throw new CoreError('validation', 'A task action needs a task with a title and a goal.');
       if ('origin' in t) throw new CoreError('validation', 'A task action can’t set its own origin; it is always the trigger.');
       if (!isStr(t.owner) || !this.#ledger.workers.has(t.owner)) throw new CoreError('validation', `There is no worker called "${String(t.owner)}".`);
+      const closed = this.#ledger.closed(t.owner);
+      if (closed) throw new CoreError('forbidden', closed);
       if (!Array.isArray(t.evidence_required) || !t.evidence_required.length) throw new CoreError('validation', 'A task action must say what evidence will prove it done.');
     } else {
       throw new CoreError('validation', 'A rule needs an action: {kind: "task", task} or {kind: "message", text}.');

@@ -3,7 +3,8 @@
 // before it, and how that is put back. The same functions run in the sandbox (on the sandbox's own
 // core) and live, so what was tested is what ships. Nothing here runs code a change carries: an
 // extension's tests and probe are declarative, read by Nova.
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { PRIVACY_MODES, type PrivacyMode } from '../envelope.ts';
@@ -15,7 +16,7 @@ import { parseCron, nextRun, describeCron } from '../../cron.js';
 import { probeProblems, type Probe } from './probes.ts';
 import type { ChangeKind } from './gates.ts';
 import type { Db } from '../db.ts';
-import type { Extensions } from '../extensions.ts';
+import type { Extensions, Installed } from '../extensions.ts';
 import type { Design } from '../design.ts';
 import type { Profile, Section } from '../profile.ts';
 import type { Triggers, RuleInput } from '../triggers.ts';
@@ -43,6 +44,7 @@ export interface Check { name: string; ok: boolean; why: string }
 export type Snapshot = Record<string, unknown> & { exists: boolean };
 
 export interface Shape { target: string; title: string; version: string }
+export interface SnapshotOptions { aside: string; device?: string | null }
 
 export interface KindOps {
   // The fields that name the change. Throws (400) when it can't even be named.
@@ -55,14 +57,15 @@ export interface KindOps {
   asks(a: Record<string, unknown>): string[];
   // The change's own tests and the relevant Nova checks, run after `apply` on that core.
   test(a: Record<string, unknown>, live: Live): Promise<Check[]>;
-  // What is live now for this target.
-  snapshot(a: Record<string, unknown>, live: Live): Snapshot;
+  // What is live now for this target. `aside`: a folder of this change's own where files it will
+  // overwrite are copied first, byte for byte; `device`: where a design system's canary shows.
+  snapshot(a: Record<string, unknown>, live: Live, o: SnapshotOptions): Snapshot;
   // Goes live: in the canary's limited scope, or (in the sandbox) for everyone.
   apply(a: Record<string, unknown>, live: Live, o: { scope: 'canary' | 'full'; device: string | null; by: string }): Promise<void>;
   // From the canary's scope to everyone.
   promote(a: Record<string, unknown>, live: Live, o: { device: string | null }): Promise<void>;
   // Puts back exactly what the snapshot holds, undoing this change and nothing else.
-  restore(prev: Snapshot, a: Record<string, unknown>, live: Live): Promise<void>;
+  restore(prev: Snapshot, a: Record<string, unknown>, live: Live, o: SnapshotOptions): Promise<void>;
   // The change's own probe, if it has one.
   probe(a: Record<string, unknown>): Probe | null;
   // Where its problems are filed (log sources): the touched area, for the canary's error probe.
@@ -89,6 +92,13 @@ interface PackTest { name: string; at: string; expect: { rule: string; fires: bo
 const packOf = (a: Record<string, unknown>) => a.pack as { id: string; name: string; version: string };
 const rulesOf = (a: Record<string, unknown>) => (Array.isArray(a.rules) ? a.rules : []) as PackRule[];
 const packMark = (id: string) => `changes:${id}`;
+// Whose work a pack's rule may start. The workspace keeps to Nova's own folder, so its tasks may act
+// without asking; every other worker reaches beyond it (the backup folder, a browser, a model or a
+// connector), so its task must ask first: an explicit approval_tier of 2 or 3. The pipeline and the
+// foundry are never a rule's to start.
+const PACK_FREE_OWNERS: readonly string[] = ['workspace'];
+const PACK_NEVER_OWNERS: readonly string[] = ['changes', 'foundry'];
+const TIER_WORDS = ['acts without asking', 'acts, then tells you', 'asks you first', 'asks you to confirm, every time'];
 const RULE_KEYS = ['name', 'class', 'cron', 'action', 'dedup_window_s', 'cooldown_s'] as const;
 
 // A test's time: an ISO instant, or HH:MM meaning the next such time on the person's clock.
@@ -132,6 +142,13 @@ const triggerRules: KindOps = {
     const far = rulesOf(a).filter((r) => isObj(r.action) && r.action.kind === 'task').map((r) => ({ r, e: live.workerEgress(String((r.action as { task: { owner: string } }).task?.owner)) }));
     const unknown = far.filter((x) => x.e === null);
     const remote = far.filter((x) => x.e === 'remote');
+    const ownerOf = (r: PackRule) => String((r.action as { task: { owner: string } }).task?.owner);
+    const tierOf = (r: PackRule) => (r.action as { task: { approval_tier?: unknown } }).task?.approval_tier;
+    const never = far.find((x) => PACK_NEVER_OWNERS.includes(ownerOf(x.r)));
+    const unasked = far.find((x) => !PACK_FREE_OWNERS.includes(ownerOf(x.r)) && !(tierOf(x.r) === 2 || tierOf(x.r) === 3));
+    if (never) out.push(bad('owners', `“${never.r.name}” would start work for ${ownerOf(never.r)}; a rule pack never starts work for changes or the foundry.`));
+    else if (unasked) out.push(bad('owners', `“${unasked.r.name}” starts work for ${ownerOf(unasked.r)}, which reaches beyond Nova’s own workspace, without asking first. Give its task approval_tier 2 or 3.`));
+    else if (far.length) out.push(ok('owners', `Its tasks are for ${[...new Set(far.map((x) => ownerOf(x.r)))].join(', ')}; any outside the workspace ask you first.`));
     if (unknown.length) out.push(bad('egress', `“${unknown[0]!.r.name}” names a worker Nova doesn’t have.`));
     else if (remote.length && privacy === 'local-only') out.push(bad('egress', `“${remote[0]!.r.name}” would send work off your devices, and your privacy setting is local-only.`));
     else out.push(ok('egress', remote.length ? 'Some of its work leaves your devices; your privacy setting allows it.' : 'Everything it does stays on your devices.'));
@@ -156,7 +173,11 @@ const triggerRules: KindOps = {
       let when = r.class === 'proactive' ? 'when Nova decides to' : '';
       try { if (r.class === 'heartbeat') when = describeCron(String(r.cron)); } catch { /* checked in the contract */ }
       const said = (t: string) => `“${t}”${/[.!?]$/.test(t) ? '' : '.'}`;
-      return isObj(r.action) && r.action.kind === 'message' ? `${when}: sends you ${said(String(r.action.text).slice(0, 80))}` : `${when}: starts ${said(String((r.action as { task?: { title?: string } }).task?.title ?? 'a task'))}`;
+      if (isObj(r.action) && r.action.kind === 'message') return `${when}: sends you ${said(String(r.action.text).slice(0, 80))}`;
+      // Everything that decides what the task does, so the OK is given on what would actually run.
+      const t = (isObj(r.action) && isObj(r.action.task) ? r.action.task : {}) as { title?: unknown; owner?: unknown; approval_tier?: unknown; privacy_mode?: unknown; inputs?: unknown };
+      const tier = typeof t.approval_tier === 'number' ? t.approval_tier : 1;
+      return `${when}: starts “${String(t.title ?? 'a task')}”, run by ${String(t.owner)}, at tier ${tier} (${TIER_WORDS[tier] ?? 'unknown'}), privacy ${typeof t.privacy_mode === 'string' ? t.privacy_mode : 'as your setting says'}, with inputs ${JSON.stringify(t.inputs ?? {})}.`;
     });
   },
   async test(a, live) {
@@ -213,7 +234,6 @@ function reconcile(packId: string, want: (PackRule & { paused?: boolean })[], li
 // ---- design systems --------------------------------------------------------------------------
 
 const manifestOf = (a: Record<string, unknown>) => (isObj(a.manifest) ? a.manifest : {}) as Record<string, unknown>;
-const APPEARANCE = ['design_system', 'previous', 'device_overrides', 'device_previous'] as const;
 
 const designSystem: KindOps = {
   shape(a) {
@@ -243,11 +263,16 @@ const designSystem: KindOps = {
     } catch (e) { out.push(bad('installed', (e as Error).message)); }
     return out;
   },
-  snapshot(a, live) {
+  snapshot(a, live, o) {
     const id = String(manifestOf(a).id);
     const x = live.extensions.list().find((e) => e.id === id);
-    const ap = live.profile.section('appearance');
-    return { exists: !!x, manifest: x?.manifest ?? null, state: x?.state ?? null, appearance: Object.fromEntries(APPEARANCE.map((k) => [k, ap[k] ?? null])) };
+    const ap = live.design.appearance();
+    const device = o.device ?? null;
+    // What the change can alter: the person's choice (on promotion) and the canary device's own.
+    return {
+      exists: !!x, manifest: x?.manifest ?? null, state: x?.state ?? null, device,
+      appearance: { design_system: ap.design_system, previous: ap.previous, ...(device ? { override: ap.device_overrides[device] ?? null, device_previous: device in ap.device_previous ? ap.device_previous[device] ?? null : undefined } : {}) },
+    };
   },
   async apply(a, live, o) {
     const m = manifestOf(a);
@@ -270,14 +295,30 @@ const designSystem: KindOps = {
   },
   async restore(prev, a, live) {
     const id = String(manifestOf(a).id);
-    for (const k of APPEARANCE) {
-      const v = (prev.appearance as Record<string, unknown>)[k];
-      live.profile.set('appearance', k, v ?? (k.startsWith('device_') ? {} : null), 'settings');
+    // Only what this change set, and only where it is still this change's: a look the person chose
+    // meanwhile, on any device or for everyone, stays.
+    const was = (prev.appearance ?? {}) as { design_system?: string | null; previous?: string | null; override?: string | null; device_previous?: string | null };
+    const now = live.design.appearance();
+    if (now.design_system === id) {
+      live.profile.set('appearance', 'design_system', was.design_system ?? null, 'settings');
+      live.profile.set('appearance', 'previous', was.previous ?? null, 'settings');
     }
-    if (!prev.exists) { if (live.extensions.list().some((e) => e.id === id)) live.extensions.remove(id); }
+    const device = typeof prev.device === 'string' ? prev.device : null;
+    // The canary device's own choice: this change's while it shows it, or gone since promotion
+    // (which hands the device back to the person's choice).
+    const own = device ? now.device_overrides[device] : undefined;
+    if (device && (own === id || own === undefined)) {
+      const overrides = { ...now.device_overrides };
+      if (was.override) overrides[device] = was.override; else delete overrides[device];
+      live.profile.set('appearance', 'device_overrides', overrides, 'settings');
+      const previous = { ...now.device_previous };
+      if (was.device_previous === undefined) delete previous[device]; else previous[device] = was.device_previous;
+      live.profile.set('appearance', 'device_previous', previous, 'settings');
+    }
+    if (!prev.exists) { if (live.extensions.list().some((e) => e.id === id)) live.extensions.remove(id, { purge: true }); }
     else {
       live.extensions.update(prev.manifest);
-      if (prev.state === 'disabled') live.extensions.disable(id);
+      live.extensions.restoreState(id, prev.state as Installed['state']);
     }
     // Open pages fetch the stylesheet again.
     live.design.setMode(live.design.appearance().mode);
@@ -301,14 +342,38 @@ function inData(dir: string, rel: string): string {
   return abs;
 }
 
-function readTree(dir: string, rel = '', out: Record<string, string> = {}): Record<string, string> {
-  if (!existsSync(join(dir, rel))) return out;
-  for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
-    const r = rel ? `${rel}/${e.name}` : e.name;
-    if (e.isDirectory()) readTree(dir, r, out);
-    else if (e.isFile() && statSync(join(dir, r)).size <= MAX_FILE_BYTES && Object.keys(out).length < 500) out[r] = readFileSync(join(dir, r), 'utf8');
+const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+
+// Before a change writes its files: each path it will write, as it is now — its bytes copied aside
+// and its hash kept (null when there is no such file). Only those paths: the rest of the folder is
+// never read, so nothing else can come back different.
+function keepAside(dir: string, paths: string[], aside: string): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  rmSync(aside, { recursive: true, force: true });
+  for (const p of paths) {
+    const abs = inData(dir, p);
+    if (!existsSync(abs)) { out[p] = null; continue; }
+    if (!statSync(abs).isFile()) throw new CoreError('conflict', `${p} is a folder in the extension’s data; a change writes files.`);
+    const bytes = readFileSync(abs);
+    const copy = join(aside, 'files', p);
+    mkdirSync(dirname(copy), { recursive: true });
+    writeFileSync(copy, bytes);
+    out[p] = sha256(bytes);
   }
   return out;
+}
+
+// Puts back each path the change wrote, from the copies set aside: removed where there was none.
+// A copy that doesn't hash as recorded isn't written: Nova says so instead of guessing.
+function putBack(dir: string, files: Record<string, string | null>, aside: string): void {
+  for (const [p, hash] of Object.entries(files)) {
+    const abs = inData(dir, p);
+    if (hash === null) { rmSync(abs, { force: true }); continue; }
+    const bytes = readFileSync(join(aside, 'files', p));
+    if (sha256(bytes) !== hash) throw new CoreError('conflict', `The copy of ${p} set aside before the change isn’t what it was.`);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, bytes);
+  }
 }
 
 const extension: KindOps = {
@@ -376,10 +441,10 @@ const extension: KindOps = {
     }
     return out;
   },
-  snapshot(a, live) {
+  snapshot(a, live, o) {
     const id = String(manifestOf(a).id);
     const x = live.extensions.list().find((e) => e.id === id);
-    return { exists: !!x, manifest: x?.manifest ?? null, state: x?.state ?? null, files: x ? readTree(live.extensions.dataDir(id)) : {} };
+    return { exists: !!x, manifest: x?.manifest ?? null, state: x?.state ?? null, files: x ? keepAside(live.extensions.dataDir(id), Object.keys(filesOf(a)), o.aside) : {} };
   },
   async apply(a, live) {
     const m = manifestOf(a);
@@ -390,16 +455,13 @@ const extension: KindOps = {
     live.extensions.enable(id, { approved: true });
   },
   async promote() { /* enabled since the canary began; the canary was its window */ },
-  async restore(prev, a, live) {
+  async restore(prev, a, live, o) {
     const id = String(manifestOf(a).id);
-    if (!prev.exists) { if (live.extensions.list().some((e) => e.id === id)) live.extensions.remove(id); return; }
+    // It wasn't there before: it goes, as if never installed (nothing of it was the person's to keep).
+    if (!prev.exists) { if (live.extensions.list().some((e) => e.id === id)) live.extensions.remove(id, { purge: true }); return; }
     live.extensions.update(prev.manifest);
-    const dir = live.extensions.dataDir(id);
-    const was = (prev.files ?? {}) as Record<string, string>;
-    for (const p of Object.keys(filesOf(a))) if (!(p in was)) rmSync(inData(dir, p), { force: true });
-    writeFiles(dir, was);
-    if (prev.state === 'disabled') live.extensions.disable(id);
-    else if (prev.state === 'enabled') live.extensions.enable(id, { approved: true });
+    putBack(live.extensions.dataDir(id), (prev.files ?? {}) as Record<string, string | null>, o.aside);
+    live.extensions.restoreState(id, prev.state as Installed['state']);
   },
   probe(a) {
     const hc = manifestOf(a).health_check;

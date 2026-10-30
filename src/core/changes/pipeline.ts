@@ -13,7 +13,7 @@
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { ENVELOPE_VERSION, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
@@ -38,7 +38,11 @@ export const PROBE_EVERY_MS = 60_000;
 
 export interface StageEntry { status: 'passed' | 'failed' | 'running'; at: string; summary: string; evidence: unknown }
 export interface CanaryRun { at: string; results: ProbeResult[] }
-export interface Canary { scope: string; device: string | null; started_at: string; window_s: number; ends_at: string; probes: string[]; runs: CanaryRun[]; baseline: { problem_id: number; healthy: string[] } }
+// `applied`: false from the moment the canary is recorded until the change is in place, so a
+// restart in between applies it again instead of watching a change that isn't there.
+// `elapsed_ms`: the window as measured on a clock that only moves forward (`ends_at` is the wall
+// clock's estimate, for people).
+export interface Canary { scope: string; device: string | null; started_at: string; window_s: number; ends_at: string; probes: string[]; runs: CanaryRun[]; baseline: { problem_id: number; healthy: string[] }; applied?: boolean; elapsed_ms?: number }
 
 export interface ChangeRecord {
   id: string; kind: ChangeKind; target: string; title: string; version: string; content_hash: string;
@@ -73,7 +77,11 @@ export interface ChangesOptions {
   // The hub's own device: where a design system's canary shows by default.
   hubDevice: () => string;
   privacy: () => 'local-only' | 'local-preferred' | 'cloud-allowed';
+  // Whether a device id is the hub or a trusted paired device: where a canary may show.
+  knownDevice?: (id: string) => boolean;
   now: () => Date;
+  // A clock that only moves forward (ms), for canary windows (performance.now by default).
+  monotonic?: () => number;
   // This process is itself a sandbox: it answers the sandbox routes and takes no changes.
   sandbox?: boolean;
   // Canary windows on the test clock (NOVA_TEST_CLOCK): only POST /changes/tick moves them.
@@ -91,6 +99,14 @@ export class Changes extends EventEmitter {
   #ticking: Promise<unknown> | null = null;
   #waiters = new Map<string, (r: { ok: boolean; why: string }) => void>();
   #get: Get;
+  // Only this module makes the pipeline's tasks (the ledger refuses anyone else).
+  #key = Symbol('changes');
+  // The last monotonic reading per canary in this process: the window grows by what passes
+  // between looks, never by a jump of the wall clock or the time Nova was stopped.
+  #seen = new Map<string, number>();
+  // A change being applied right now: a rollback by hand (its own lane) waits for it to finish,
+  // so it never restores underneath an apply still writing.
+  #applying = new Map<string, Promise<void>>();
 
   constructor(o: ChangesOptions) {
     super();
@@ -108,7 +124,18 @@ export class Changes extends EventEmitter {
       health: () => ({ ok: true }),
       // A canary runs as long as its window; nothing else waits on it.
       timeoutMs: (GATES.max_canary_s + 3600) * 1000,
-      lane: (brief) => ({ key: String(brief.inputs?.change_id ?? 'change'), max: 1 }),
+      // A rollback by hand has a lane of its own: it mustn't wait behind the canary it ends.
+      lane: (brief) => ({ key: `${brief.inputs?.step === 'rollback' ? 'rollback:' : ''}${String(brief.inputs?.change_id ?? 'change')}`, max: 1 }),
+      internal: { key: this.#key, why: 'Only Nova’s change pipeline makes its own tasks. A change ships with your OK on the change itself (Settings › Changes, or POST /changes/{id}/ship).' },
+      // A backstop should a task ever be made another way: shipping asks at the change's own
+      // tier, and rolling back asks first.
+      minTier: (input) => {
+        const step = input.inputs?.step;
+        if (step === 'rollback') return 2;
+        if (step !== 'ship') return 0;
+        const row = this.#db.get<{ tier: number }>('SELECT tier FROM change_record WHERE id = ?', String(input.inputs?.change_id ?? ''));
+        return (row?.tier ?? 3) as Tier;
+      },
       // Running a step again picks up where the record says it stands.
       effects: () => 'idempotent',
       run: (brief, signal) => self.#run(brief, signal),
@@ -211,6 +238,7 @@ export class Changes extends EventEmitter {
     const tier = Math.max(ops.tier(artifact, this.#o.live), by === 'person' ? 1 : 3) as Tier;
     const window = isObj(p.canary) && Number.isInteger(p.canary.window_s) ? p.canary.window_s as number : MIN_CANARY_S[kind];
     const device = isObj(p.canary) && typeof p.canary.device_id === 'string' ? p.canary.device_id : null;
+    if (device !== null && !(this.#o.knownDevice?.(device) ?? false)) throw new CoreError('validation', `“${device}” isn’t one of your devices. A canary shows on the hub or on a device you’ve paired.`);
     this.#insert({ id, kind, ...shape, hash, artifact, by, author: o.author ?? null, tier, stage: 'proposed', state: 'checking', reason: 'Checking it in a sandbox.', at, canary: { window_s: window, device } });
     const task = this.#o.ledger.create({
       title: `Check “${shape.title}” v${shape.version}`,
@@ -222,7 +250,7 @@ export class Changes extends EventEmitter {
       privacy_mode: 'local-only',
       approval_tier: 0,
       idempotency_key: `change:${id}:check`,
-    });
+    }, { as: this.#key });
     this.#update(id, { check_task_id: task.id });
     this.emit('change', { id, state: 'checking' });
     return this.get(id);
@@ -264,7 +292,7 @@ export class Changes extends EventEmitter {
       privacy_mode: 'local-only',
       approval_tier: 2,
       idempotency_key: `change:${id}:rollback:${randomUUID()}`,
-    });
+    }, { as: this.#key });
     this.#update(id, { rollback_task_id: task.id });
     this.#o.ledger.approve(task.id);
     return this.get(id);
@@ -313,7 +341,7 @@ export class Changes extends EventEmitter {
     while (this.#ticking) await this.#ticking;
     const run = (async () => {
       const out: { id: string; state: ChangeState; why: string }[] = [];
-      for (const c of this.list(500).filter((x) => x.state === 'canary' && x.canary?.started_at)) out.push(await this.#watch(c));
+      for (const c of this.list(500).filter((x) => x.state === 'canary' && x.canary?.started_at && x.canary.applied !== false)) out.push(await this.#watch(c));
       return out;
     })();
     this.#ticking = run;
@@ -332,9 +360,9 @@ export class Changes extends EventEmitter {
         handle: ({ body }) => this.view(this.propose(body as Proposal, { by: typeof body.proposed_by === 'string' && body.proposed_by.startsWith('provider:') ? body.proposed_by : 'person' })),
       },
       { method: 'GET', path: '/changes/{id}', summary: 'One change: every stage with its evidence, the canary’s probe runs, what it asks for, what it replaces.', handle: ({ params }) => ({ ...this.view(this.get(params.id!)), artifact: this.get(params.id!).artifact }) },
-      { method: 'POST', path: '/changes/{id}/ship', summary: 'Ship it: the OK a waiting change asks for, after its sandbox evidence. Tier 3 needs {confirm: true}, every time.', body: '{confirm?}', handle: ({ params, body }) => this.view(this.ship(params.id!, { confirm: body.confirm === true })) },
+      { method: 'POST', path: '/changes/{id}/ship', access: 'approver', summary: 'Ship it: the OK a waiting change asks for, after its sandbox evidence. Tier 3 needs {confirm: true}, every time.', body: '{confirm?}', handle: ({ params, body }) => this.view(this.ship(params.id!, { confirm: body.confirm === true })) },
       { method: 'POST', path: '/changes/{id}/decline', summary: 'Not now: the waiting change goes no further.', handle: ({ params }) => this.view(this.decline(params.id!)) },
-      { method: 'POST', path: '/changes/{id}/rollback', summary: 'Roll back a live change (or one in its canary) by hand: tier 2, {confirm: true}. What was there before comes back; nothing else changes.', body: '{confirm}', handle: ({ params, body }) => this.view(this.rollback(params.id!, { confirm: body.confirm === true })) },
+      { method: 'POST', path: '/changes/{id}/rollback', access: 'approver', summary: 'Roll back a live change (or one in its canary) by hand: tier 2, {confirm: true}. What was there before comes back; nothing else changes.', body: '{confirm}', handle: ({ params, body }) => this.view(this.rollback(params.id!, { confirm: body.confirm === true })) },
     ];
     if (this.#o.testClock) {
       r.push({
@@ -379,6 +407,10 @@ export class Changes extends EventEmitter {
     let c: ChangeRecord;
     try { c = this.get(id); } catch (e) { return report('failed', (e as Error).message); }
     const step = brief.inputs?.step;
+    // Only the task the pipeline made for this step of this change runs it; any other brief that
+    // names the change is refused, whoever made it.
+    const own = step === 'check' ? c.check_task_id : step === 'ship' ? c.ship_task_id : step === 'rollback' ? c.rollback_task_id : null;
+    if (!own || own !== brief.task_id) return report('failed', `Task ${brief.task_id} isn’t one of this change’s own tasks; only the pipeline’s ${String(step)} task for “${c.title}” runs that step.`);
     if (step === 'check') return this.#check(c, signal, report);
     if (step === 'ship') return this.#ship(c, brief, signal, report);
     if (step === 'rollback') return this.#rollbackStep(c, report);
@@ -416,6 +448,10 @@ export class Changes extends EventEmitter {
       }
       this.enter(c.id, 'sandbox', { status: 'passed', summary: `Applied to a sandbox copy of Nova (snapshot ${Math.round(info.snapshot_bytes / 1024)} KB, started in ${info.started_ms} ms).`, evidence: sandboxEvidence });
       if (signal.aborted) throw signal.reason;
+      // A change that fails its contract (a task for a worker it may not start, say) never has its
+      // own tests run, even on the copy.
+      const broken = contract.filter((x) => !x.ok);
+      if (broken.length) return stop('tests', broken.map((x) => x.why).join(' '), { contract });
 
       // 2. Tests: the change's own, the contract checks, and Nova's checks on the sandbox.
       const own = await sandbox.call('POST', '/changes/sandbox/test', { kind: c.kind, artifact: c.artifact });
@@ -542,7 +578,7 @@ export class Changes extends EventEmitter {
       privacy_mode: 'local-only',
       approval_tier: c.tier,
       idempotency_key: `change:${id}:ship`,
-    });
+    }, { as: this.#key });
     const waiting = task.state === 'waiting';
     this.#update(id, { ship_task_id: task.id, state: waiting ? 'waiting' : 'canary', reason: waiting ? (c.tier === 3 ? 'Waiting for your OK. It changes Nova itself, so it is confirmed every time.' : 'Waiting for your OK.') : 'Going live in a canary.' });
     this.emit('change', { id, state: waiting ? 'waiting' : 'canary' });
@@ -561,20 +597,26 @@ export class Changes extends EventEmitter {
     if (c.state === 'rolled_back') return report('failed', c.reason ?? 'It was rolled back.');
     if (c.state !== 'waiting' && c.state !== 'canary') return report('failed', `“${c.title}” is ${STATUS[c.state]}; it can’t ship.`);
     const ops = KIND_OPS[c.kind];
+    // The approval is the ledger's own record of the person's OK on this task, never assumed:
+    // at the change's tier, given (and for tier 3, confirmed) before anything goes live.
     const task = this.#o.ledger.get(brief.task_id);
+    if (task.approval_tier < c.tier || (c.tier >= 2 && !task.approved_at)) {
+      return report('failed', `“${c.title}” hasn’t been OK’d at tier ${c.tier}; it doesn’t go live without that.`);
+    }
     if (c.stages.approval?.status !== 'passed') {
       const sandboxed = STAGES.slice(0, 4).map((s) => `${s}: ${c.stages[s]?.summary ?? ''}`);
+      const approved = this.#o.ledger.events(task.id).filter((e) => e.kind === 'approved').at(-1) ?? null;
       this.enter(c.id, 'approval', {
         status: 'passed',
         summary: c.tier >= 2 ? `OK’d at tier ${c.tier}${c.tier === 3 ? ', confirmed' : ''}, after the sandbox evidence.` : `Tier ${c.tier}: Nova acts and reports.`,
-        evidence: { tier: c.tier, approved_at: task.approved_at, confirmed: c.tier === 3, proposed_by: c.proposed_by, shown: sandboxed },
+        evidence: { tier: task.approval_tier, task_id: task.id, approved_at: task.approved_at, approved_event: approved ? { seq: approved.seq, at: approved.at } : null, confirmed: task.approval_tier === 3 && !!task.approved_at, proposed_by: c.proposed_by, shown: sandboxed },
       });
     }
     let cur = this.get(c.id);
     if (!cur.canary?.started_at) {
       // What is live now is kept before anything changes: a rollback puts exactly this back.
-      const previous = cur.previous ?? ops.snapshot(cur.artifact, this.#o.live);
       const device = cur.kind === 'design-system' ? cur.canary?.device ?? this.#o.hubDevice() : null;
+      const previous = cur.previous ?? ops.snapshot(cur.artifact, this.#o.live, { aside: this.#aside(cur.id), device });
       const start = this.now();
       const window = cur.canary?.window_s ?? MIN_CANARY_S[cur.kind];
       const health = this.#o.health();
@@ -582,19 +624,35 @@ export class Changes extends EventEmitter {
         scope: this.#scopeWords(cur), device, started_at: start.toISOString(), window_s: window, ends_at: new Date(start.getTime() + window * 1000).toISOString(),
         probes: [...CANARY_PROBES.filter((p) => p !== 'own' || ops.probe(cur.artifact))], runs: [],
         baseline: { problem_id: this.#db.get<{ m: number | null }>('SELECT MAX(id) AS m FROM problem')?.m ?? 0, healthy: Object.entries(health.checks).filter(([, v]) => v.ok).map(([k]) => k) },
+        applied: false, elapsed_ms: 0,
       };
       this.#update(c.id, { previous: JSON.stringify(previous), canary: JSON.stringify(canary), state: 'canary', reason: `In its canary until ${canary.ends_at}.` });
+      cur = this.get(c.id);
+    }
+    if (cur.canary!.applied === false) {
+      // Hashed again right before it goes in: what is applied is exactly what was released.
+      const drift = this.#drift(cur);
+      if (drift) {
+        this.#update(c.id, { state: 'stopped', reason: `Not applied: ${drift}` });
+        this.emit('change', { id: c.id, state: 'stopped' });
+        return report('failed', `“${c.title}” wasn’t applied: ${drift}`);
+      }
+      const canary = cur.canary!;
+      const applying = ops.apply(cur.artifact, this.#o.live, { scope: 'canary', device: canary.device, by: `change:${cur.id}` });
+      this.#applying.set(c.id, applying.then(() => {}, () => {}));
       try {
-        await ops.apply(cur.artifact, this.#o.live, { scope: 'canary', device, by: `change:${cur.id}` });
+        await applying;
       } catch (e) {
+        this.#applying.delete(c.id);
         const why = `It couldn’t go live: ${(e as Error).message}`;
         await this.#rollback(this.get(c.id), why, 'auto');
         return report('failed', `${why} What was there before is back.`);
       }
-      this.enter(c.id, 'canary', { status: 'running', summary: `Live on ${canary.scope} until ${canary.ends_at}; probes: ${canary.probes.join(', ')}.`, evidence: { scope: canary.scope, window_s: window, probes: canary.probes } });
-      this.#update(c.id, { state: 'canary' });
+      this.#applying.delete(c.id);
+      this.#update(c.id, { state: 'canary', canary: JSON.stringify({ ...this.get(c.id).canary, applied: true }) });
+      this.#seen.set(c.id, this.#mono());
+      if (!cur.stages.canary) this.enter(c.id, 'canary', { status: 'running', summary: `Live on ${canary.scope} until ${canary.ends_at}; probes: ${canary.probes.join(', ')}.`, evidence: { scope: canary.scope, window_s: canary.window_s, probes: canary.probes } });
       this.emit('change', { id: c.id, state: 'canary' });
-      cur = this.get(c.id);
     }
     // The canary is watched by the clock (tick); this task waits for its outcome.
     const outcome = await new Promise<{ ok: boolean; why: string }>((resolve, reject) => {
@@ -612,6 +670,27 @@ export class Changes extends EventEmitter {
     return report('failed', outcome.why);
   }
 
+  // Why the change on record isn't the one released, or null when it is: the artifact hashed
+  // again, and the released file read back and hashed.
+  #drift(c: ChangeRecord): string | null {
+    if (sha256(canonicalJson(c.artifact)) !== c.content_hash) return 'its artifact no longer matches the hash it was checked and released with.';
+    const file = c.release ? join(this.#o.home, c.release.dir, 'artifact.json') : '';
+    if (!file || !existsSync(file)) return 'its release files aren’t there.';
+    if (sha256(readFileSync(file)) !== c.content_hash) return 'its released artifact no longer matches the hash it was checked with.';
+    return null;
+  }
+
+  // Where a change's previous files are set aside while it could still be rolled back.
+  #aside(id: string): string {
+    return join(this.#o.home, 'workers', 'changes', `${id}-previous`);
+  }
+
+  #mono(): number {
+    // On the test clock there is no other time: the canary follows it.
+    if (this.#o.testClock) return this.now().getTime();
+    return this.#o.monotonic ? this.#o.monotonic() : performance.now();
+  }
+
   async #rollbackStep(c: ChangeRecord, report: (s: Report['status'], m: string, e?: Evidence[]) => Report): Promise<Report> {
     if (c.state === 'rolled_back') return report('done', `“${c.title}” is rolled back.`, [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `${c.id}@rolled_back` }]);
     if (c.state !== 'live' && c.state !== 'canary') return report('failed', `“${c.title}” isn’t live.`);
@@ -627,15 +706,28 @@ export class Changes extends EventEmitter {
     const results = await this.#canaryProbes(c);
     const run: CanaryRun = { at: this.now().toISOString(), results };
     const runs = [...canary.runs, run].slice(-50);
-    this.#update(c.id, { canary: JSON.stringify({ ...canary, runs }) });
+    // The window grows only by monotonic time seen between looks in this process: a wall clock
+    // that jumps ahead can't end it early, and time Nova was stopped doesn't count.
+    const m = this.#mono();
+    const last = this.#seen.get(c.id);
+    const elapsed = (canary.elapsed_ms ?? 0) + (last === undefined ? 0 : Math.max(0, m - last));
+    this.#seen.set(c.id, m);
+    this.#update(c.id, { canary: JSON.stringify({ ...canary, runs, elapsed_ms: elapsed }) });
     const failed = results.find((r) => !r.ok);
     if (failed) {
       await this.#rollback(this.get(c.id), `The canary’s probe failed: ${failed.why}`, 'auto');
       return { id: c.id, state: 'rolled_back', why: failed.why };
     }
     const passes = runs.filter((r) => r.results.every((x) => x.ok)).length;
-    if (this.now() >= new Date(canary.ends_at) && passes >= MIN_PROBE_RUNS) {
-      await this.#promote(this.get(c.id), passes);
+    if (elapsed >= canary.window_s * 1000 && passes >= MIN_PROBE_RUNS) {
+      try {
+        await this.#promote(this.get(c.id), passes);
+      } catch (e) {
+        // Half promoted is neither live nor in a canary: what was there before comes back.
+        const why = `It couldn’t be made live for everyone: ${(e as Error).message}`;
+        await this.#rollback(this.get(c.id), why, 'auto');
+        return { id: c.id, state: this.get(c.id).state, why };
+      }
       return { id: c.id, state: this.get(c.id).state, why: 'Promoted.' };
     }
     this.emit('change', { id: c.id, state: 'canary' });
@@ -709,6 +801,8 @@ export class Changes extends EventEmitter {
   // Puts back what was live before this change, and only that. Automatic: the Ship task ends
   // Failed with the probe's reason, which the ledger opens as a problem in plain words.
   async #rollback(c: ChangeRecord, why: string, how: 'auto' | 'manual'): Promise<void> {
+    const applying = this.#applying.get(c.id);
+    if (applying) { await applying; c = this.get(c.id); }
     if (c.state === 'rolled_back') return;
     const ops = KIND_OPS[c.kind];
     const prev = c.previous;
@@ -716,7 +810,7 @@ export class Changes extends EventEmitter {
     const back = before ? `v${before.version}` : 'what was there before';
     const Back = before ? `Version ${before.version} is back` : 'What was there before is back';
     try {
-      if (prev) await ops.restore(prev, c.artifact, this.#o.live);
+      if (prev) await ops.restore(prev, c.artifact, this.#o.live, { aside: this.#aside(c.id) });
     } catch (e) {
       this.#update(c.id, { state: 'broken', reason: `Nova couldn’t put back ${back}: ${(e as Error).message}` });
       this.#o.log.problem('changes', `Nova couldn’t roll back “${c.title}” v${c.version}: ${(e as Error).message}. Check ${c.title} by hand.`, { ...(c.ship_task_id ? { taskId: c.ship_task_id } : {}) });
@@ -730,11 +824,18 @@ export class Changes extends EventEmitter {
       this.enter(c.id, 'canary', { status: 'failed', at: c.canary.started_at, summary: how === 'auto' ? why : 'Rolled back by hand during its canary.', evidence: { runs: c.canary.runs.length, last: c.canary.runs.at(-1) ?? null } });
     }
     this.#update(c.id, { state: 'rolled_back', reason });
+    this.#seen.delete(c.id);
+    // Nothing of it can come back now, so its copies of what was there before go.
+    rmSync(this.#aside(c.id), { recursive: true, force: true });
     // What it had replaced is what is live again.
     if (before && c.state === 'live') this.#update(before.id, { state: 'live', reason: `Live again: v${c.version} was rolled back.` });
     this.emit('change', { id: c.id, state: 'rolled_back' });
-    this.#waiters.get(c.id)?.({ ok: false, why: `Nova rolled back “${c.title}” v${c.version}: ${why} ${Back}, as it was.` });
+    const waiter = this.#waiters.get(c.id);
     this.#waiters.delete(c.id);
+    if (how === 'manual' && c.state === 'canary' && c.ship_task_id) {
+      // The person ended the canary: its Ship task stops there, their decision, not a failure.
+      try { this.#o.ledger.cancel(c.ship_task_id, 'You rolled it back during its canary.'); } catch { /* already over */ }
+    } else waiter?.({ ok: false, why: `Nova rolled back “${c.title}” v${c.version}: ${why} ${Back}, as it was.` });
   }
 
   // ---- inside -------------------------------------------------------------------------------------

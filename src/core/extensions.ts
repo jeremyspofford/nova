@@ -187,9 +187,19 @@ export class Extensions extends EventEmitter {
     return this.#set(id, 'disabled');
   }
 
+  // Puts a state back exactly as it was (the change pipeline's rollback): an extension that was
+  // only installed, its permissions never OK'd, goes back to installed, not enabled.
+  restoreState(id: string, state: Installed['state']): Installed {
+    if (!['installed', 'enabled', 'disabled'].includes(state)) throw new CoreError('validation', `There is no extension state called ${String(state)}.`);
+    this.get(id);
+    return this.#set(id, state);
+  }
+
   // Follows on_remove: exports what it promises to export, keeps what it promises to keep, and
   // deletes the rest, including the record. Nothing of the extension stays behind.
-  remove(id: string): { deleted: string[]; kept: string[]; exported: string[] } {
+  // `purge`: undoing an install that never stayed (a change rolled back): nothing of it was the
+  // person's to keep, so nothing is copied out.
+  remove(id: string, o: { purge?: boolean } = {}): { deleted: string[]; kept: string[]; exported: string[] } {
     const x = this.get(id);
     const veto = this.#kinds[x.kind]?.protect?.(x);
     if (veto) throw new CoreError('conflict', veto);
@@ -205,8 +215,8 @@ export class Extensions extends EventEmitter {
       cpSync(inside(p), dest, { recursive: true });
       return dest;
     });
-    const exported = copyOut(x.manifest.on_remove.export, join(this.#home, 'exports', `${id}-${stamp}`));
-    const kept = copyOut(x.manifest.on_remove.keep, join(this.#home, 'kept', id));
+    const exported = o.purge ? [] : copyOut(x.manifest.on_remove.export, join(this.#home, 'exports', `${id}-${stamp}`));
+    const kept = o.purge ? [] : copyOut(x.manifest.on_remove.keep, join(this.#home, 'kept', id));
     this.#kinds[x.kind]?.revoke?.(x);
     const deleted = existsSync(data) ? [data] : [];
     rmSync(data, { recursive: true, force: true });
