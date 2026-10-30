@@ -176,7 +176,10 @@ test('claude-code (stand-in speaking stream-json): asks first for the test run, 
     // What Nova sent: the real flags, in the task's folder, the brief on stdin.
     const call = JSON.parse(readFileSync(record, 'utf8').trim().split('\n')[0]!);
     assert.equal(call.cwd, join(ws, 'tasks', t.id));
-    for (const flag of ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--strict-mcp-config']) assert.ok(call.argv.includes(flag), flag);
+    for (const flag of ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--strict-mcp-config', '--safe-mode']) assert.ok(call.argv.includes(flag), flag);
+    // Its tools reach only the task's folder, and the person's own settings and CLAUDE.md stay out.
+    assert.equal(call.argv[call.argv.indexOf('--allowedTools') + 1], 'Read(./**),Edit(./**),Write(./**)');
+    assert.equal(call.argv[call.argv.indexOf('--setting-sources') + 1], 'project');
     assert.match(call.stdin, /Make the failing test in calc\/ pass/);
     assert.match(call.stdin, /Nova runs `node --test calc\/sum.test.mjs` itself/);
     // One receipt per call, naming where it went.

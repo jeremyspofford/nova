@@ -15,7 +15,7 @@ export const claudeCode: Impl = {
     const out: string[] = [];
     if (!str(c.command)) out.push('command is the claude program, or its full path.');
     if (c.permission_mode !== undefined && !MODES.includes(c.permission_mode as string)) out.push(`permission_mode is one of ${MODES.join(', ')}.`);
-    if (c.allowed_tools !== undefined && !(Array.isArray(c.allowed_tools) && c.allowed_tools.every((t) => typeof t === 'string' && /^[A-Za-z][\w()*:. -]*$/.test(t)))) out.push('allowed_tools is a list of tool names, like Read or Edit.');
+    if (c.allowed_tools !== undefined && !(Array.isArray(c.allowed_tools) && c.allowed_tools.every((t) => typeof t === 'string' && /^[A-Za-z][\w()*:./ -]*$/.test(t)))) out.push('allowed_tools is a list of tool names, like Read or Edit(./**).');
     if (c.model !== undefined && typeof c.model !== 'string') out.push('model is a model name, or empty for Claude Code’s default.');
     return out;
   },
@@ -27,13 +27,19 @@ export const claudeCode: Impl = {
   model: (c) => str(c.model) || 'claude-code',
   async work(i: WorkInput): Promise<WorkOutcome> {
     const c = i.config;
-    const tools = Array.isArray(c.allowed_tools) ? (c.allowed_tools as string[]) : ['Read', 'Edit', 'Write', 'Glob', 'Grep'];
+    // Pre-approved only inside the task's folder (./ is the folder it starts in). An unscoped Read
+    // would let it read anywhere on the machine without asking; Glob and Grep inside the folder
+    // need no approval, so they aren't listed.
+    const tools = Array.isArray(c.allowed_tools) ? (c.allowed_tools as string[]) : ['Read(./**)', 'Edit(./**)', 'Write(./**)'];
     const argv = [
       ...words(str(c.command)), '-p', '--output-format', 'stream-json', '--verbose',
       '--permission-mode', (c.permission_mode as string) || 'acceptEdits',
       '--allowedTools', tools.join(','),
-      // Its own MCP servers and saved settings stay out; the brief is the whole context.
-      '--strict-mcp-config', '--no-session-persistence',
+      // Its own MCP servers and saved settings stay out; the brief is the whole context. The
+      // person's user settings aren't loaded (only the project's, which is Nova's home), and safe
+      // mode leaves out CLAUDE.md files, hooks, skills and plugins (flags as `claude --help`
+      // describes them in 2.1.259; not run against a real session, docs/LEDGER.md).
+      '--strict-mcp-config', '--no-session-persistence', '--setting-sources', 'project', '--safe-mode',
       '--append-system-prompt', i.system,
       ...(str(c.model) ? ['--model', str(c.model)] : []),
     ];
