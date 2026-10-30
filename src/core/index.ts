@@ -42,6 +42,7 @@ import { Capture, PROMOTE } from './capture/capture.ts';
 import { captureRoutes } from './capture/routes.ts';
 import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
+import { wireIngest, type ScreenInput } from './ingest/index.ts';
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
 import { FactoryReset } from './resilience/reset.ts';
@@ -301,6 +302,16 @@ export function createCore(o: CoreOptions) {
     return hard && answers.decision !== rule ? `your settings say “${rule}” here (${inputs.category_off ? 'this is turned off' : 'quiet hours'}).` : null;
   };
   decisions.register(new LocalModelProvider({ infer: (r) => models!.infer(r), ready: (t) => models!.decidesWithModel(rules.has(t.template_id)), guard: triageGuard }), { first: true });
+  // The ingest security gate (Amendment 2026-10-30-C Part 3): every read of outside content is
+  // screened before a model acts on it. The Noul screen is the local sorting model only, and the
+  // outbound guard knows the vault's values, memory and the standing files.
+  const { ingest } = wireIngest({
+    db, log, home: o.home, now, templates, decisions, ledger, verifier,
+    ready: () => models!.decidesWithModel(false), providerId: LOCAL_MODEL_PROVIDER,
+    infer: (r) => models!.infer(r),
+    secrets: () => { try { return vault.list().map((n) => vault.get(n)).filter((v): v is string => typeof v === 'string'); } catch { return []; } },
+    memory: () => memory.active().map((r) => r.content),
+  });
   const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
   const access = new Access({ devices, mesh: meshInfo });
   // Hub, standby and sync (M4 plan §3).
@@ -551,6 +562,7 @@ export function createCore(o: CoreOptions) {
       capture: capture.health(),
       backups: keep.health(),
       changes: changes.health(),
+      ingest: ingest.health(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -592,6 +604,18 @@ export function createCore(o: CoreOptions) {
 
   const routes: Route[] = [
     { method: 'GET', path: '/health', summary: 'Whether each part of the core is working, in plain words.', handle: () => health() },
+    // The ingest gate (Amendment 2026-10-30-C Part 3).
+    { method: 'GET', path: '/ingest/screens', summary: 'The latest screens of outside content: source, scores, flags and verdict, by hash; never the content. ?limit=', handle: ({ query }) => ingest.list(Number(query.get('limit')) || 50) },
+    { method: 'GET', path: '/ingest/screens/{id}', summary: 'One screen of outside content.', handle: ({ params }) => { const r = ingest.get(params.id!); if (!r) throw new CoreError('not_found', 'There is no such screen.'); return r; } },
+    {
+      method: 'POST', path: '/ingest/screen', summary: 'Screen outside content before a model reads it: the verdict (pass, quarantine or block), the scores and flags, and the extract a model may see.', body: '{text?, html?, headers?, attachments?, source: {kind, origin, ref?}}',
+      handle: async ({ body }) => {
+        const input = body as unknown as ScreenInput;
+        if (typeof input.text !== 'string' && typeof input.html !== 'string') throw new CoreError('validation', 'Give the content as text or html.');
+        const { id, verdict, scores, max, flags, extract, partial, model } = await ingest.screen(input);
+        return { id, verdict, scores, max, flags, extract, partial, model };
+      },
+    },
     { method: 'GET', path: '/identity', summary: 'Who Nova is for this person: name, tuning, and the fixed charter.', handle: () => ({ identity: identityOf(profile), charter: CHARTER, rendered: render(identityOf(profile)) }) },
     { method: 'GET', path: '/profile', summary: 'The whole profile (no secrets; those are referenced by name only).', handle: () => profile.all() },
     {
@@ -978,7 +1002,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
-    vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
+    ingest, vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
     restartInPlace: (why: string) => restarter.restartInPlace(why),
