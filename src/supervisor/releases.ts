@@ -13,6 +13,11 @@ import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 export const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+// Names the supervisor uses itself: `current` is the link to the running slot, `base` the code it
+// started from. A tag with either name is never a release: deploying it would replace the link
+// with a folder, or stand in for the base.
+export const RESERVED: ReadonlySet<string> = new Set(['current', 'base']);
+export const isRelease = (v: unknown): v is string => typeof v === 'string' && VERSION.test(v) && !RESERVED.has(v.toLowerCase());
 
 export function git(cwd: string, args: string[], timeoutMs = 60_000): Promise<{ ok: boolean; out: string; err: string }> {
   return new Promise((done) => {
@@ -35,16 +40,38 @@ export class Slots {
 
   // The tag's commit, or null when there is no such tag (a branch name is not a release).
   async commit(version: string): Promise<string | null> {
-    if (!VERSION.test(version)) return null;
+    if (!isRelease(version)) return null;
     const r = await git(this.repo, ['rev-parse', '--verify', '--quiet', `refs/tags/${version}^{commit}`]);
     return r.ok && /^[0-9a-f]{40}$/.test(r.out) ? r.out : null;
   }
 
   // The slot for a version: made once from its tag, checked to still be that commit.
   async ensure(version: string): Promise<{ path: string; commit: string }> {
+    if (!isRelease(version)) throw new Error(`${version} can’t be a release’s name: the supervisor uses it itself.`);
     const commit = await this.commit(version);
     if (!commit) throw new Error(`There is no release tagged ${version} in ${this.repo}.`);
-    const path = this.path(version);
+    return this.#at(this.path(version), commit, `release ${version}`);
+  }
+
+  // The code "base" runs: the repository's HEAD commit when the supervisor started, in a slot of
+  // its own, so editing the checkout (or Nova's change pipeline working there) never changes what
+  // runs. Null when there is no commit to pin (not a git checkout).
+  async pinBase(): Promise<{ path: string; commit: string } | null> {
+    const head = await git(this.repo, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+    if (!head.ok || !/^[0-9a-f]{40}$/.test(head.out)) return null;
+    const name = `.base-${head.out.slice(0, 12)}`;
+    const slot = await this.#at(join(this.dir, name), head.out, 'the base');
+    // Older pins are run by nothing any more.
+    for (const e of readdirSync(this.dir)) {
+      if (!/^\.base-[0-9a-f]{12}$/.test(e) || e === name) continue;
+      await git(this.repo, ['worktree', 'remove', '--force', join(this.dir, e)]);
+      rmSync(join(this.dir, e), { recursive: true, force: true });
+    }
+    await git(this.repo, ['worktree', 'prune']);
+    return slot;
+  }
+
+  async #at(path: string, commit: string, what: string): Promise<{ path: string; commit: string }> {
     mkdirSync(this.dir, { recursive: true });
     if (existsSync(path)) {
       const head = await git(path, ['rev-parse', 'HEAD']);
@@ -56,7 +83,7 @@ export class Slots {
       await git(this.repo, ['worktree', 'prune']);
     }
     const add = await git(this.repo, ['worktree', 'add', '--detach', path, commit], 120_000);
-    if (!add.ok) throw new Error(`The release slot for ${version} couldn’t be made: ${add.err}`);
+    if (!add.ok) throw new Error(`The slot for ${what} couldn’t be made: ${add.err}`);
     return { path, commit };
   }
 
@@ -71,6 +98,7 @@ export class Slots {
     mkdirSync(this.dir, { recursive: true });
     const link = join(this.dir, 'current');
     if (version === null) { rmSync(link, { force: true }); return; }
+    if (!isRelease(version)) throw new Error(`${version} can’t be a release’s name: the supervisor uses it itself.`);
     const tmp = join(this.dir, `.current-${process.pid}`);
     rmSync(tmp, { force: true });
     symlinkSync(version, tmp);
@@ -79,7 +107,7 @@ export class Slots {
 
   list(): string[] {
     if (!existsSync(this.dir)) return [];
-    return readdirSync(this.dir).filter((e) => VERSION.test(e) && e !== 'current' && statSync(join(this.dir, e)).isDirectory());
+    return readdirSync(this.dir).filter((e) => isRelease(e) && statSync(join(this.dir, e)).isDirectory());
   }
 }
 

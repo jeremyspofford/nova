@@ -13,13 +13,13 @@
 import { createServer as createHttp, type Server as HttpServer } from 'node:http';
 import { createServer as createNet, type Server as NetServer, type Socket } from 'node:net';
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { copyHome, restoreBackup, smoke, startSandbox, type DeployStage, type ProbeLine, type ReleaseSlot, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
+import { dropScratch, makeScratch } from '../core/resilience/scratch.ts';
 import { runningPid } from '../home.js';
 import { ServerProcess } from './server.ts';
-import { Slots, VERSION, carryProblems, mark, preMigrationBackup, problemsSince, recordProblem, sandboxable, schemaVersion, writesSince } from './releases.ts';
+import { Slots, carryProblems, isRelease, mark, preMigrationBackup, problemsSince, recordProblem, sandboxable, schemaVersion, writesSince, type Mark } from './releases.ts';
 
 // The code the supervisor was started from, when no release is current.
 export const BASE = 'base';
@@ -79,6 +79,12 @@ export class Supervisor {
   #control: NetServer | null = null;
   #page: HttpServer | null = null;
   #checking = false;
+  // The pinned slot "base" runs (the repository's HEAD at start), or null to run `o.base` as it is.
+  #base: string | null = null;
+  // Where each server said the data stood before it ran any work (its `mark` message).
+  #marks = new WeakMap<ServerProcess, Mark>();
+  // When a repair last asked for a restart: at most one a minute.
+  #askedRestartAt = 0;
 
   constructor(o: SupervisorOptions) {
     this.o = o;
@@ -95,6 +101,11 @@ export class Supervisor {
   // ---- running ----------------------------------------------------------------------------------
 
   async run(): Promise<void> {
+    // Its folder holds the control socket and the slots that run: the person's alone, or nothing.
+    const st = statSync(this.o.dir);
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (uid !== null && st.uid !== uid) throw new Error(`The supervisor’s folder ${this.o.dir} belongs to another user. Use a folder of your own.`);
+    if (st.mode & 0o077) throw new Error(`The supervisor’s folder ${this.o.dir} is open to other users (mode ${(st.mode & 0o777).toString(8)}). Close it first: chmod 700 ${this.o.dir}`);
     const other = runningPid(this.o.home);
     if (other) throw new Error(`A Nova server is already running this home (process ${other}). Stop it first: the supervisor starts its own.`);
     const pidFile = join(this.o.dir, 'supervisor.pid');
@@ -103,6 +114,12 @@ export class Supervisor {
     writeFileSync(pidFile, String(process.pid));
     await this.#listen();
     this.state.pid = process.pid;
+    // "base" is the commit the repository was at now, in a slot of its own: the checkout on disk
+    // may be edited while Nova runs, and that must never change what a restart runs.
+    const pinned = await this.slots.pinBase().catch((e: Error) => { this.#say(`The base couldn’t be pinned to a commit: ${e.message}`); return null; });
+    this.#base = pinned?.path ?? null;
+    this.state.releases.base_commit = pinned?.commit ?? null;
+    if (!pinned) this.#say(`${this.o.repo} has no commit to pin, so "base" runs ${this.o.base} as it is on disk.`);
     // Releases on disk are the truth for which one is current.
     const cur = this.slots.current();
     this.state.releases.current = cur && this.slots.list().includes(cur) ? cur : BASE;
@@ -130,7 +147,7 @@ export class Supervisor {
   }
 
   codeRoot(version: string | null = this.state.releases.current): string {
-    return !version || version === BASE ? this.o.base : this.slots.path(version);
+    return !version || version === BASE ? (this.#base ?? this.o.base) : this.slots.path(version);
   }
 
   #start(): void {
@@ -280,11 +297,15 @@ export class Supervisor {
   // ---- the server's requests (the console's API) -----------------------------------------------
 
   async #onMessage(s: ServerProcess, m: unknown): Promise<void> {
-    const msg = m as { nova?: string; id?: string; type?: string; version?: string };
+    const msg = m as { nova?: string; id?: string; type?: string; version?: string; seq?: unknown; problem?: unknown };
+    if (msg?.nova === 'mark') {
+      if (Number.isInteger(msg.seq) && Number.isInteger(msg.problem)) this.#marks.set(s, { seq: msg.seq as number, problem: msg.problem as number });
+      return;
+    }
     if (msg?.nova !== 'request' || typeof msg.id !== 'string') return;
     const reply = (ok: boolean, said: string) => s.send({ nova: 'reply', id: msg.id, ok, said });
     if (msg.type === 'deploy') {
-      if (typeof msg.version !== 'string' || !VERSION.test(msg.version) || msg.version === BASE) return void reply(false, 'That isn’t a release’s tag.');
+      if (!isRelease(msg.version)) return void reply(false, 'That isn’t a release’s tag.');
       if (this.#deploying) return void reply(false, 'A deploy is already running.');
       if (!(await this.slots.commit(msg.version))) return void reply(false, `There is no release tagged ${msg.version}.`);
       reply(true, `Deploying ${msg.version}: its tests, a sandbox start on a copy of your home, smoke probes, the switch, then a canary window. Nova restarts during the switch.`);
@@ -296,16 +317,36 @@ export class Supervisor {
       reply(true, `Going back to ${target === BASE ? 'the code the supervisor started from' : target}. Nova restarts.`);
       void this.rollback({ auto: false, reason: 'You asked to go back.', target });
     } else if (msg.type === 'restart') {
-      reply(true, 'Restarting Nova.');
-      void this.restart('a repair playbook asked');
+      const r = this.#askedRestart();
+      reply(r.ok, r.said);
     } else reply(false, 'The supervisor doesn’t do that.');
+  }
+
+  // A restart a repair asked for (the server's API, from the hub's screen or an approver): at
+  // most one a minute, and each counts toward safe mode like a crash, so nothing that can ask
+  // can keep the hub restarting.
+  #askedRestart(): { ok: boolean; said: string } {
+    if (this.#deploying) return { ok: false, said: 'A deploy is running; it restarts Nova itself.' };
+    if (this.state.mode === 'safe_mode') return { ok: false, said: 'Nova is held in safe mode; run “recover” on this computer.' };
+    const now = Date.now();
+    const since = now - this.#askedRestartAt;
+    if (since < this.t.windowMs) return { ok: false, said: `Nova was restarted on request ${Math.round(since / 1000)} s ago; the supervisor does that at most once every ${Math.round(this.t.windowMs / 1000)} s.` };
+    this.#askedRestartAt = now;
+    this.#crashes = [...this.#crashes.filter((x) => now - x < this.t.windowMs), now];
+    if (this.#crashes.length >= this.t.crashes) {
+      void this.#enterSafeMode(`Nova stopped or was restarted ${this.#crashes.length} times within ${Math.round(this.t.windowMs / 1000)} s (the last time a repair asked for it), so the supervisor stopped restarting it.`, this.server?.tail(15) ?? '');
+      return { ok: true, said: 'Nova was stopped or restarted too often within a minute, so the supervisor holds it in safe mode instead.' };
+    }
+    // A moment's wait, so the answer gets back to whoever asked before the server stops.
+    setTimeout(() => { if (!this.#closed) void this.restart('a repair playbook asked'); }, 300).unref();
+    return { ok: true, said: 'Restarting Nova in a moment.' };
   }
 
   // ---- deploying ---------------------------------------------------------------------------------
 
   async deploy(version: string, say: Say = () => {}): Promise<{ ok: boolean; said: string }> {
     if (this.#deploying) return { ok: false, said: 'A deploy is already running.' };
-    if (!VERSION.test(version) || version === BASE) return { ok: false, said: 'That isn’t a release’s tag.' };
+    if (!isRelease(version)) return { ok: false, said: 'That isn’t a release’s tag.' };
     if (version === this.state.releases.current) return { ok: false, said: `${version} is already running.` };
     this.#deploying = true;
     const from = this.state.releases.current ?? BASE;
@@ -343,7 +384,7 @@ export class Supervisor {
       // 3–4. A sandbox start on a copy of the home, and the smoke probes. What already fails on
       // the live home (a backup drive unplugged) is no fault of the release.
       const baseline = this.server?.port ? (await this.#health(this.server.port)).failing.map((f) => f.name) : [];
-      const scratch = mkdtempSync(join(tmpdir(), 'nova-sandbox-'));
+      const scratch = makeScratch('sandbox');
       try {
         const home = join(scratch, 'home');
         copyHome(this.o.home, home);
@@ -356,25 +397,47 @@ export class Supervisor {
         if (bad.length) return stopped('smoke', bad.map((p) => `${p.name}: ${p.said}`).join(' '));
         stage('smoke', true, `${probes.length} probes passed: ${probes.map((p) => p.name).join(', ')}.`);
       } finally {
-        rmSync(scratch, { recursive: true, force: true });
+        dropScratch(scratch);
       }
 
-      // 5. The switch.
+      // 5. The switch. From the moment the running release stops, anything that goes wrong puts
+      // it back, so a failed switch never leaves Nova stopped.
       const pre = schemaVersion(this.o.home);
       const t0 = Date.now();
       await this.#stopServer();
-      this.slots.point(version);
-      this.state.releases.current = version;
-      this.#start();
-      const port = await this.server?.ready(this.t.readyMs);
-      const post = schemaVersion(this.o.home);
-      const migration = post > pre ? { from: pre, to: post, backup: preMigrationBackup(this.o.home, pre, t0), mark: mark(this.o.home) } : null;
-      this.#slot(version, { migration });
+      let port: number | null | undefined = null;
+      let migration: ReleaseSlot['migration'] = null;
+      try {
+        this.slots.point(version);
+        this.state.releases.current = version;
+        this.#start();
+        const started = this.server;
+        port = await started?.ready(this.t.readyMs);
+        const post = schemaVersion(this.o.home);
+        if (post > pre) {
+          // Where the data stood before the new release ran any work (recovery, the heartbeat),
+          // as it said itself: going back may undo nothing after that. An older release that
+          // can't say it is read now, after its start, and the slot says which it was.
+          const said = started ? await this.#markOf(started) : null;
+          migration = { from: pre, to: post, backup: preMigrationBackup(this.o.home, pre, t0), mark: said ? { ...said, by: 'release' } : { ...mark(this.o.home), by: 'supervisor' } };
+        }
+        this.#slot(version, { migration });
+      } catch (e) {
+        const why = `The switch to ${version} failed: ${(e as Error).message}`;
+        if (this.state.releases.current !== version) {
+          // Nothing of the new release ran: the one before starts again as it was.
+          this.#start();
+          await this.server?.ready(this.t.readyMs);
+          return stopped('switch', `${why}. Nova went back to running ${from === BASE ? 'the code the supervisor started from' : from}.`);
+        }
+        stage('switch', false, why);
+        return await this.rollback({ auto: true, reason: why, target: from, say });
+      }
       if (!port) {
         stage('switch', false, `It didn’t start on your home: ${this.#lastWords()}`);
         return await this.rollback({ auto: true, reason: `Release ${version} didn’t start on your home.`, target: from, say });
       }
-      stage('switch', true, `Running ${version} on your home${migration ? `; the database was upgraded from ${pre} to ${post}, with the backup from before kept` : ''}.`);
+      stage('switch', true, `Running ${version} on your home${migration ? `; the database was upgraded from ${migration.from} to ${migration.to}, with the backup from before kept` : ''}.`);
 
       // 6. The canary window: health on the live home, probe by probe.
       const until = Date.now() + this.t.canaryMs;
@@ -425,6 +488,13 @@ export class Supervisor {
     return { at, ok: true, said: baseline.length && h.failing.length ? `Healthy, apart from what already failed before (${h.failing.map((f) => f.name).join(', ')}).` : 'Healthy.' };
   }
 
+  // The mark a server sent before its work started; the message may come just after its "ready"
+  // line. Null from a release too old to send one.
+  async #markOf(s: ServerProcess): Promise<Mark | null> {
+    for (let i = 0; i < 100 && !this.#marks.has(s) && s.alive; i++) await sleep(50);
+    return this.#marks.get(s) ?? null;
+  }
+
   #lastWords(): string {
     const tail = this.server?.tail(8) ?? '';
     const code = this.state.server.last_exit;
@@ -440,7 +510,7 @@ export class Supervisor {
     if (!existsSync(nm) && existsSync(join(this.o.base, 'node_modules')) && readOr(join(root, 'package-lock.json'), 'a') === readOr(join(this.o.base, 'package-lock.json'), 'b')) {
       try { symlinkSync(join(this.o.base, 'node_modules'), nm); } catch { /* the tests say what's missing */ }
     }
-    const scratch = mkdtempSync(join(tmpdir(), 'nova-release-tests-'));
+    const scratch = makeScratch('release-tests');
     const out: string[] = [];
     try {
       const code = await new Promise<number | null>((resolve) => {
@@ -456,7 +526,7 @@ export class Supervisor {
       if (code === 0) return { ok: true, said: counts ? `${counts[1]} tests passed (${this.o.tests.join(' ')}).` : `${this.o.tests.join(' ')} passed.` };
       return { ok: false, said: `${this.o.tests.join(' ')} failed${counts ? ` (${counts[2]} of ${Number(counts[1]) + Number(counts[2])} tests)` : ''}:\n${text.trim().split('\n').slice(-25).join('\n')}` };
     } finally {
-      rmSync(scratch, { recursive: true, force: true });
+      dropScratch(scratch);
     }
   }
 
@@ -476,6 +546,7 @@ export class Supervisor {
     };
     const wasDeploying = this.#deploying;
     this.#deploying = true;
+    let restored: string | null = null;
     try {
       await this.#stopServer();
       const mig = this.state.releases.slots.find((s) => s.version === cur)?.migration ?? null;
@@ -490,17 +561,29 @@ export class Supervisor {
             ? `Going back to ${name(target)} would lose ${n} change${n === 1 ? '' : 's'} written since ${cur} upgraded the database (${Object.entries(w).map(([t, k]) => `${k} in ${t}`).join(', ')}).`
             : `The backup taken before ${cur} upgraded the database isn’t there any more.`;
           this.#start();
-          await this.server?.ready(this.t.readyMs);
-          step(false, `${why} Nova kept ${cur} running.`);
+          const up = await this.server?.ready(this.t.readyMs);
           if (this.state.deploy?.outcome === 'running') this.state.deploy.outcome = 'refused';
           this.#history(cur, target, 'rollback refused', why);
-          this.#problem({ source: 'supervisor', playbook: 'rollback-refused', subject: cur, said: `Nova couldn’t go back to ${name(target)}: ${why} It kept ${cur} running${o.auto ? `, though its canary failed (${o.reason})` : ''}.`, detail: o.reason });
+          const refused: SupervisorProblem = { source: 'supervisor', playbook: 'rollback-refused', subject: cur, said: `Nova couldn’t go back to ${name(target)}: ${why} It kept ${cur} running${o.auto ? `, though its canary failed (${o.reason})` : ''}.`, detail: o.reason };
+          if (!up) {
+            // Kept, but it doesn't start either: held, with both reasons in the database.
+            step(false, `${why} ${cur} didn’t start again either.`);
+            this.#pending.push(refused);
+            await this.#enterSafeMode(`Going back to ${name(target)} was refused (${why}) and ${cur} didn’t start again.`, this.server?.tail(15) ?? '');
+            return { ok: false, said: `${why} ${cur} didn’t start again either, so Nova is held in safe mode.` };
+          }
+          step(false, `${why} Nova kept ${cur} running.`);
+          this.#problem(refused);
           return { ok: false, said: `${why} Nova kept ${cur} running.` };
         }
         const carried = problemsSince(this.o.home, mig.mark.problem);
         restoreBackup(join(this.o.home, 'nova.db'), mig.backup!);
         carryProblems(this.o.home, carried);
-        step(true, `Restored the database from before ${cur} upgraded it (nothing had been written since).`);
+        // What going back restored, in plain words: the database as it was before the upgrade;
+        // nothing written since was lost, measured from before the newer release ran any work
+        // (or, for a release too old to say, from just after it started).
+        restored = `Restored the database from before ${cur} upgraded it (version ${mig.from}, from ${mig.backup}). Nothing had been written since ${mig.mark.by === 'supervisor' ? `${cur} was up (it is too old to say where the data stood before its own start, so what it did while starting is undone too)` : `before ${cur} ran any work`}; ${carried.length} problem${carried.length === 1 ? ' was' : 's were'} carried over.`;
+        step(true, restored);
       }
       this.slots.point(target === BASE ? null : target);
       this.state.releases.current = target;
@@ -518,9 +601,24 @@ export class Supervisor {
       step(true, `${name(target)} is running again.`);
       if (this.state.deploy?.outcome === 'running') this.state.deploy.outcome = 'rolled_back';
       this.state.mode = 'running';
-      this.#history(cur, target, o.auto ? 'rolled back' : 'went back', o.reason);
-      if (o.auto) this.#problem({ source: 'supervisor', playbook: 'release-rolled-back', subject: cur, said: `Release ${cur} was rolled back by itself: its health failed in the canary window. ${name(target)} is running again, with your data as it was.`, detail: o.reason });
-      return { ok: true, said: `${o.auto ? `Rolled back: ${o.reason} ` : ''}${name(target)} is running again.` };
+      this.#history(cur, target, o.auto ? 'rolled back' : 'went back', `${o.reason}${restored ? ` ${restored}` : ''}`);
+      if (o.auto) this.#problem({ source: 'supervisor', playbook: 'release-rolled-back', subject: cur, said: `Release ${cur} was rolled back by itself: its health failed in the canary window. ${name(target)} is running again, with your data as it was.`, detail: `${o.reason}${restored ? `\n${restored}` : ''}` });
+      return { ok: true, said: `${o.auto ? `Rolled back: ${o.reason} ` : ''}${restored ? `${restored} ` : ''}${name(target)} is running again.` };
+    } catch (e) {
+      // Whatever stopped it, Nova isn't left stopped: the release that ran starts again.
+      const why = (e as Error).message;
+      step(false, `Going back stopped: ${why}`);
+      if (!this.server) {
+        try { this.slots.point(cur === BASE ? null : cur); } catch { /* current stays as it was */ }
+        this.state.releases.current = cur;
+        this.#start();
+        const again = this.server as ServerProcess | null;
+        if (!(await again?.ready(this.t.readyMs))) {
+          await this.#enterSafeMode(`Going back to ${name(target)} stopped (${why}) and ${name(cur)} didn’t start again.`, again?.tail(15) ?? '');
+          return { ok: false, said: `Going back stopped (${why}), and ${name(cur)} didn’t start again: Nova is held in safe mode.` };
+        }
+      }
+      return { ok: false, said: `Going back stopped (${why}); Nova kept ${name(cur)} running.` };
     } finally {
       this.#deploying = wasDeploying;
       // On its own (not inside a deploy, whose end says), it leaves Nova running unless held.
@@ -594,14 +692,22 @@ export class Supervisor {
       const end = (r: { ok: boolean; said: string }) => { if (!sock.destroyed) sock.end(`${JSON.stringify({ done: true, ...r })}\n`); };
       void (async () => {
         if (req.cmd === 'status') return end({ ok: true, said: JSON.stringify(this.state) });
+        // The confirmation is what the person typed (the version, or the word "rollback"), which
+        // the command line collects from them; a bare `true` is not one. The socket is the
+        // person's only (0600, in a folder that is theirs alone), but any program running as them
+        // can still speak to it as the command line would: this guards against a slip, not
+        // against code already running as the person (docs/plans/M7.md, as built).
         if (req.cmd === 'deploy') {
-          if (req.confirm !== true) return end({ ok: false, said: 'Deploying needs your explicit confirmation every time.' });
-          return end(await this.deploy(String(req.version ?? ''), say));
+          const version = String(req.version ?? '');
+          if (req.confirm !== version || !version) return end({ ok: false, said: 'Deploying needs your explicit confirmation every time: type the version.' });
+          return end(await this.deploy(version, say));
         }
         if (req.cmd === 'rollback') {
-          if (req.confirm !== true) return end({ ok: false, said: 'Going back needs your confirmation.' });
+          if (req.confirm !== 'rollback') return end({ ok: false, said: 'Going back needs your confirmation: type rollback.' });
           if (this.#deploying) return end({ ok: false, said: 'A deploy is running; it rolls back by itself if its canary fails.' });
           const target = this.state.mode === 'safe_mode' ? (this.state.safe_mode?.last_good && this.state.safe_mode.last_good !== this.state.releases.current ? this.state.safe_mode.last_good : this.state.releases.previous) : this.state.releases.previous;
+          // Nowhere to go: safe mode holds, rather than leave nothing running.
+          if (!target) return end({ ok: false, said: this.state.mode === 'safe_mode' ? 'There is no other release to go back to, so Nova stays in safe mode. Fix what the reason names, then run recover.' : 'There is no previous release to go back to.' });
           if (this.state.mode === 'safe_mode') { await this.#closePage(); this.state.safe_mode = null; this.#crashes = []; }
           return end(await this.rollback({ auto: false, reason: 'You asked to go back.', target, say }));
         }

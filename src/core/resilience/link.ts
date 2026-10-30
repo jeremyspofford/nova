@@ -6,6 +6,9 @@
 //   supervisor → Nova: {nova: 'problem', source, said, playbook, subject?, detail?, repairs?}
 //   Nova → supervisor: {nova: 'request', id, type: 'deploy' | 'rollback' | 'restart', version?}
 //   supervisor → Nova: {nova: 'reply', id, ok, said}
+//   Nova → supervisor: {nova: 'mark', seq, problem}  where the database stands once it is
+//     upgraded and before any work runs (core.start()), so a release that changed the database
+//     knows exactly what going back would undo: everything after this, the work's own records too.
 import { readFileSync } from 'node:fs';
 
 export type ServerMode = 'starting' | 'running' | 'restarting' | 'safe_mode' | 'deploying' | 'stopped';
@@ -20,7 +23,9 @@ export interface ReleaseSlot {
   commit: string | null;
   created_at: string;
   status: 'ready' | 'live' | 'previous' | 'failed' | 'rolled_back';
-  migration?: { from: number; to: number; backup: string | null; mark: { seq: number; problem: number } } | null;
+  // `mark.by`: 'release' when the release said where the data stood before it ran any work;
+  // 'supervisor' when an older release couldn't, and the supervisor read it after the start.
+  migration?: { from: number; to: number; backup: string | null; mark: { seq: number; problem: number; by?: 'release' | 'supervisor' } } | null;
 }
 
 export interface SupervisorState {
@@ -31,7 +36,9 @@ export interface SupervisorState {
   server: { pid: number | null; port: number | null; started_at: string | null; restarts: number; last_exit: { code: number | null; signal: string | null; at: string } | null; code: string };
   safe_mode: { reason: string; at: string; last_good: string | null; output: string } | null;
   health: { last_check_at: string | null; last_ok_at: string | null; failing: number; said: string | null };
-  releases: { current: string | null; previous: string | null; last_good: string | null; slots: ReleaseSlot[] };
+  // `base_commit`: the commit "base" runs, pinned when the supervisor started (never the
+  // checkout as it is on disk now).
+  releases: { current: string | null; previous: string | null; last_good: string | null; slots: ReleaseSlot[]; base_commit?: string | null };
   deploy: { version: string; from: string | null; started_at: string; stage: Stage['stage']; stages: Stage[]; canary: { until: string; probes: ProbeLine[] } | null; outcome: 'running' | 'promoted' | 'rolled_back' | 'stopped' | 'refused' | null } | null;
   history: { version: string; from: string | null; at: string; outcome: string; said: string }[];
 }
@@ -42,6 +49,8 @@ export interface SupervisorLink {
   state(): SupervisorState | null;
   request(type: 'deploy' | 'rollback' | 'restart', o?: { version?: string }): Promise<{ ok: boolean; said: string }>;
   onProblem(fn: (p: SupervisorProblem) => void): void;
+  // Where the database stands before any work runs (see `mark` above).
+  mark?(m: { seq: number; problem: number }): void;
 }
 
 // The link for a server the supervisor started (server.js passes it to the core), or null.
@@ -77,5 +86,8 @@ export function ipcLink(proc: NodeJS.Process, env: NodeJS.ProcessEnv = process.e
       });
     },
     onProblem(fn) { problems.push(fn); },
+    mark(m) {
+      try { proc.send!({ nova: 'mark', seq: m.seq, problem: m.problem }); } catch { /* the supervisor reads it itself then */ }
+    },
   };
 }

@@ -5,7 +5,7 @@
 //   node src/supervisor/main.ts status    [--dir DIR]
 //   node src/supervisor/main.ts releases  [--dir DIR]
 //   node src/supervisor/main.ts deploy <version> [--confirm <version>]
-//   node src/supervisor/main.ts rollback  [--confirm]
+//   node src/supervisor/main.ts rollback  [--confirm rollback]
 //   node src/supervisor/main.ts recover   leave safe mode and start Nova again
 //
 // `run` keeps the Nova server running (restarts, safe mode, health checks) and takes deploys.
@@ -137,14 +137,15 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     // Tier 3: confirmed every time, by typing the version (or repeating it with --confirm).
     const ok = str(a.flags.confirm) === version || await confirm(`Deploying ${version} changes Nova itself (tier 3). Type the version to go ahead: `, version);
     if (!ok) { process.stderr.write('Not deployed: it needs your explicit confirmation (type the version, or pass --confirm <version>).\n'); return 2; }
-    const r = await ask(dir, { cmd: 'deploy', version, confirm: true });
+    // What was typed goes to the supervisor, which checks it again (a bare yes is refused).
+    const r = await ask(dir, { cmd: 'deploy', version, confirm: version });
     process.stdout.write(`${r.said}\n`);
     return r.ok ? 0 : 1;
   }
   if (a.cmd === 'rollback') {
-    const ok = a.flags.confirm === true || await confirm('Go back to the previous release? Type rollback to go ahead: ', 'rollback');
-    if (!ok) { process.stderr.write('Not rolled back: it needs your confirmation (type rollback, or pass --confirm).\n'); return 2; }
-    const r = await ask(dir, { cmd: 'rollback', confirm: true });
+    const ok = str(a.flags.confirm) === 'rollback' || await confirm('Go back to the previous release? Type rollback to go ahead: ', 'rollback');
+    if (!ok) { process.stderr.write('Not rolled back: it needs your confirmation (type rollback, or pass --confirm rollback).\n'); return 2; }
+    const r = await ask(dir, { cmd: 'rollback', confirm: 'rollback' });
     process.stdout.write(`${r.said}\n`);
     return r.ok ? 0 : 1;
   }
@@ -157,7 +158,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   node src/supervisor/main.ts run [--home DIR] [--dir DIR] [--repo DIR] [--tests "CMD"] [--canary-s N]
   node src/supervisor/main.ts status | releases [--dir DIR] [--json]
   node src/supervisor/main.ts deploy <version> [--confirm <version>]
-  node src/supervisor/main.ts rollback [--confirm]
+  node src/supervisor/main.ts rollback [--confirm rollback]
   node src/supervisor/main.ts recover | restart
 `);
   return a.cmd === 'help' ? 0 : 2;
