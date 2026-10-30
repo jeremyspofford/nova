@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { RESET_MARKER, RESET_REPORT, finishReset, type KeyStore } from '../../src/core/index.ts';
+import { RESET_MARKER, RESET_REPORT, finishReset, stagedPending, type KeyStore } from '../../src/core/index.ts';
 import { open, world } from './resilience-support.ts';
 import { call, enroll, hub } from './mesh-support.ts';
 
@@ -31,7 +31,7 @@ function standInKeychain() {
 
 // Everything a lived-in home has, Era 2's files and Nova's state, plus two files that aren't Nova's.
 function liveIn(home: string) {
-  for (const d of ['checkpoints/000001-before', 'backups', 'logs', 'workers/scratch', 'kept/x', 'captures', 'connectors/gmail', 'sessions', 'skills/a', 'schedules', 'exports/memory-1', 'extensions/x', '.git/objects', 'memory', 'workspace']) mkdirSync(join(home, d), { recursive: true });
+  for (const d of ['checkpoints/000001-before', 'backups', 'logs', 'workers/scratch', 'kept/x', 'connectors/gmail', 'sessions', 'skills/a', 'schedules', 'exports/memory-1', 'extensions/x', '.git/objects', 'memory', 'workspace']) mkdirSync(join(home, d), { recursive: true });
   writeFileSync(join(home, 'checkpoints/000001-before/manifest.json'), '{}');
   writeFileSync(join(home, 'backups/nova-2026-10-29.db'), 'old');
   writeFileSync(join(home, 'connectors/gmail/token.json'), '{"token":"placeholder"}');
@@ -52,7 +52,7 @@ test('the wipe takes every Nova entry by name, keeps the person’s own files an
   c.setup.answer('Sam');
   // What the confirmation lists, before anything happens.
   const p = c.reset.preview();
-  for (const n of ['nova.db', 'mesh', 'vault', 'checkpoints', 'backups', 'logs', 'workers', 'kept', 'captures', 'connectors', '.git', 'nova.pid', 'MEMORY.md', 'memory', 'sessions']) assert.ok(p.wipes.home.includes(n), `${n} is listed to be wiped: ${p.wipes.home}`);
+  for (const n of ['nova.db', 'mesh', 'vault', 'checkpoints', 'backups', 'logs', 'workers', 'kept', 'connectors', '.git', 'nova.pid', 'MEMORY.md', 'memory', 'sessions']) assert.ok(p.wipes.home.includes(n), `${n} is listed to be wiped: ${p.wipes.home}`);
   assert.deepEqual(p.keeps.foreign.sort(), ['my-proxy.js', 'notes-of-mine.txt']);
   assert.match(p.keeps.releases, /code releases stay/);
   const s = await c.reset.stage({ confirm: true, who: CONSOLE });
@@ -66,7 +66,7 @@ test('the wipe takes every Nova entry by name, keeps the person’s own files an
   try {
     assert.ok(!existsSync(join(w.home, RESET_MARKER)), 'the marker is gone once it is done');
     const left = readdirSync(w.home);
-    for (const gone of ['checkpoints', 'backups', 'workers', 'kept', 'captures', 'connectors', 'sessions', 'skills', 'schedules', 'exports', '.git', 'memory', 'MEMORY.md', 'AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md', 'permissions.md', '.gitignore', 'nova.pid']) assert.ok(!left.includes(gone), `${gone} is gone: ${left}`);
+    for (const gone of ['checkpoints', 'backups', 'workers', 'kept', 'connectors', 'sessions', 'skills', 'schedules', 'exports', '.git', 'memory', 'MEMORY.md', 'AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md', 'permissions.md', '.gitignore', 'nova.pid']) assert.ok(!left.includes(gone), `${gone} is gone: ${left}`);
     // A new Nova makes its own fresh folders again; nothing of the old ones is in them.
     assert.ok(!existsSync(join(w.home, 'extensions', 'x')));
     assert.equal(readFileSync(join(w.home, 'my-proxy.js'), 'utf8'), '// a file of the person’s own\n', 'foreign files stay as they were');
@@ -194,5 +194,28 @@ test('only the hub’s own screen may reset or export, and a reset is confirmed 
     assert.deepEqual(view.body.devices.cant_tell.map((d: { name: string }) => d.name), ['Test phone'], 'a phone with nothing open can’t be told, and is named');
   } finally {
     await h.stop();
+  }
+});
+
+test('once devices are told, Nova restarts in place to finish: under the supervisor, a staged restart', async () => {
+  const w = world('nova-reset-restart-');
+  const asked: { type: string; staged?: boolean; pending: boolean }[] = [];
+  const supervisor = {
+    state: () => null,
+    onProblem: () => {},
+    request: async (type: 'deploy' | 'rollback' | 'restart', o: { staged?: boolean } = {}) => {
+      asked.push({ type, ...(o.staged ? { staged: true } : {}), pending: stagedPending(w.home) });
+      return { ok: true, said: 'Restarting.' };
+    },
+  };
+  const c = open(w.home, { supervisor });
+  try {
+    const s = c.reset.stage({ confirm: true, who: CONSOLE });
+    assert.equal(s.restart, 'in-place', 'no manual restart');
+    assert.equal(stagedPending(w.home), true, 'the supervisor sees it staged');
+    await s.done;
+    assert.deepEqual(asked, [{ type: 'restart', staged: true, pending: true }]);
+  } finally {
+    await c.close();
   }
 });

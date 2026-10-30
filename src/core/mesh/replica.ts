@@ -245,6 +245,15 @@ export class Replica extends EventEmitter {
     }
     if (payload.hub_id !== role.hub.id || payload.standby_id !== role.device_id || payload.after !== after) throw new Refused('A sync answer was meant for a different hub or standby.');
     if (payload.epoch < this.#epoch()) throw new Refused(`The node at ${role.hub.url} is at epoch ${payload.epoch}, older than this standby knows (${this.#epoch()}). It isn’t the hub any more.`);
+    // Its own hub at a higher epoch: the hub went back to a checkpoint and its log began again
+    // (M7 amendment §1; promotion elsewhere names another hub, and replacing the hub's keys revokes
+    // the standby). What this standby copied may hold what the restore undid: it copies afresh.
+    if (payload.epoch > this.#epoch() && this.#sync.cursor() > 0) {
+      const gone = this.#sync.fresh();
+      this.#seenEpoch(payload.epoch);
+      this.#log.info('sync', 'The hub went back to a checkpoint; this standby copies it afresh.', { epoch: payload.epoch, ...gone });
+      return true;
+    }
     this.#seenEpoch(payload.epoch);
     // The hub was reset: nothing more is copied. The copy is wiped first, then the hub is told.
     if (payload.reset && typeof payload.reset.id === 'string') {

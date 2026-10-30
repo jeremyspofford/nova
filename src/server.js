@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, finishReset, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
+import { createCore, finishStaged, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -43,9 +43,10 @@ function modelOptions(env) {
 
 export function createNova(config = loadConfig(), deps = {}) {
   const started = performance.now();
-  // A factory reset that was staged finishes first (M7 amendment §2), so the home is seeded fresh
-  // afterwards. It throws when it can't finish: a half-reset Nova never runs.
-  finishReset(config.home);
+  // A restore or a factory reset staged before the last stop (M7 amendment) is applied before
+  // anything touches the home, seeding included, so a reset home is seeded fresh. The core does it
+  // too; the second call finds nothing. It throws when it can't finish: a half-reset Nova never runs.
+  if (process.env.NOVA_SANDBOX !== '1') finishStaged(config.home);
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
   // The core (src/core): database, Work Ledger, profile, identity, setup, extensions, /api/v1.
   const { version } = JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8'));
@@ -583,4 +584,24 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const quit = async () => { rmSync(join(config.home, 'nova.pid'), { force: true }); nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.close(); process.exit(0); };
   process.on('SIGINT', quit);
   process.on('SIGTERM', quit);
+  // Restarting in place (core resilience/restart.ts), for a restore: stop listening, close the core,
+  // and tell the fresh start which ports to take again (the ones it has now, even if it was given 0).
+  nova.core.restarter.attach(async () => {
+    nova.scheduler.stop();
+    for (const id of nova.runner.active.keys()) nova.runner.stop(id);
+    const closed = (s) => new Promise((r) => { if (!s?.listening) return r(); s.close(() => r()); s.closeAllConnections(); });
+    const port = nova.server.address()?.port;
+    const meshPort = nova.mesh?.address()?.port;
+    await Promise.all([closed(nova.server), closed(nova.mesh)]);
+    await nova.core.close();
+    const env = {};
+    if (port) env.NOVA_PORT = String(port);
+    for (const name of ['NOVA_MESH_URL', 'NOVA_MESH_PUBLIC_URL']) {
+      if (!meshPort || !process.env[name]) continue;
+      const u = new URL(process.env[name]);
+      if (u.port === '0') { u.port = String(meshPort); env[name] = u.origin; }
+    }
+    console.log('Nova is restarting to finish what was staged (a restore or a factory reset).');
+    return env;
+  });
 }

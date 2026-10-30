@@ -16,6 +16,7 @@ import { bindConnections, loadConnections, renderConnections } from './connectio
 import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptureSettings, renderCaptureView } from './capture.js';
 import { bindModels, loadModels, renderModels } from './models.js';
 import { bindChanges, loadChanges, renderChanges } from './changes.js';
+import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoints.js';
 import { bindReset, loadReset, renderReset } from './reset.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
@@ -1394,7 +1395,7 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
-  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadReset()]).then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadReset()]).then(() => {
     renderSettingsView({ only: 'you' });
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input'))?.focus({ preventScroll: true }); flash(target); }
@@ -1411,6 +1412,7 @@ const PARTS = {
   capture: () => renderCaptureSettings(),
   models: () => renderModels(),
   changes: () => renderChanges(),
+  checkpoints: () => renderCheckpoints(),
   look: () => core.renderAppearance(),
   devices: () => core.renderDevices(),
   // The Danger zone (M7 amendment §2) stays last, set apart.
@@ -1573,6 +1575,8 @@ bindConnections(el.settings, () => { if (state.view === 'settings' && $('setting
 bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-models')) renderSettingsView({ only: 'models' }); });
 // Settings › Changes (M7a): the change pipeline, the one waiting for you, canaries, roll back.
 bindChanges(el.settings, () => { if (state.view === 'settings' && $('settings-changes')) renderSettingsView({ only: 'changes' }); });
+// Settings › Backups › Checkpoints (M7 amendment): take one, restore (the hub's screen only), delete.
+bindCheckpoints(el.settings, () => { if (state.view === 'settings' && $('settings-checkpoints')) renderSettingsView({ only: 'checkpoints' }); });
 // Settings › Danger zone (M7 amendment §2): export, confirm, erase and start over.
 bindReset(el.settings, () => { if (state.view === 'settings' && $('settings-danger')) renderSettingsView({ only: 'danger' }); });
 // A provider was set up, turned on or off, or checked (M5a): Settings shows it at once.

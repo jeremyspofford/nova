@@ -15,6 +15,7 @@ built-ins only.
 
 ## Decisions
 
+<<<<<<< HEAD
 **2026-10-30 (M7 amendment §2): factory reset, as built.** Branch `m7-amend/reset`; plan
 `docs/plans/M7-amendment.md` §2 has the as-built note.
 - **Nova's own entries, by name.** `OWN_ENTRIES` (`resilience/reset.ts`): the database and its
@@ -45,6 +46,59 @@ built-ins only.
   `m7-checkpoints-reset.test.ts`; the integrator may fold them together). Its server is restarted by
   the test, which stays valid once the restart in place is wired.
 
+||||||| 78fc2394
+=======
+**2026-10-30 (M7 amendment): checkpoints and restore.** Branch `m7-amend/checkpoints`; the plan's §1
+and its as-built note. Every behaviour has a test that failed first.
+- **What a checkpoint is.** The whole home, the identity and vault key file included, in
+  `<home>/checkpoints/<seq>-<slug>/` (0700/0600), with a sealed manifest in the nightly format. Its
+  seal key is `checkpoints/.seal`, not the vault, so a stopped home can be checkpointed. Nightly
+  backups (`SKIP_TOP`) and the standby's journal (`NOT_JOURNALLED`) leave `checkpoints` out.
+- **Retention, as the UI states it.** The newest 10 automatic checkpoints, counted by sequence and
+  never by date. Named ones stay until the person deletes them (tier 2). A new checkpoint is
+  complete before any prune. A disk too full refuses in plain words.
+- **Automatic.** At ship and before a canary that hasn't applied yet: none, and the change waits
+  ("Not shipped: Nova couldn’t take a checkpoint first…"). Before a database upgrade: none, and no
+  upgrade, so no start. Before a release switch: the supervisor, on the stopped home; none, and no
+  switch. A home with no database yet is skipped. Before a restore.
+- **Forgets.** `Backups.also` cleans every checkpoint and a staged restore. One that can't be
+  cleaned is destroyed and reported. Unsealed folders named like checkpoints are cleaned too,
+  because they sit in Nova's own folder.
+- **Restore.** Tier 3, the console only, `{confirm: true}` every time. A damaged checkpoint, or
+  one from a newer schema, is refused. It is staged, then applied before the database opens by
+  renaming top-level entries; each step can be repeated. The record becomes a ledger task once.
+- **Interpretations.**
+  - "Identity" means this node's `mesh/` folder as it is now. A key replaced since is never put
+    back, and the identity is the same in the ordinary case.
+  - "Trust decisions" means the stricter of then and now for approving. Sign-ins that ended stay
+    ended. Unused pairing codes from then are spent.
+  - Forgets: the "forgotten" notes and capture tombstones come along, so nothing forgotten is
+    taken in again.
+  - Problems are matched by time, source and message, not by id, so they survive restores that
+    happen one after another.
+  - Nova's own records of what is outside the home come along: backup runs and drills, the
+    recovery key it showed, and its `nova/*` vault keys. Without them, backups made since would
+    become strays, out of reach of forgets. The person's saved secrets go back with the
+    checkpoint.
+  - Only Nova's own top-level entries (`src/core/resilience/entries.ts`, derived from every place
+    the code writes under the home) are checkpointed and restored. Files in the home that aren't
+    Nova's are never copied, moved or undone, and the confirmation says so.
+- **The standby copies afresh.** It treats its own hub at a higher epoch as a restarted log: it
+  drops what it copied and reads the log from 0. Promotion names another hub, and replacing the
+  hub's keys revokes the standby, so neither triggers this.
+- **Restart in place.** `core.restartInPlace(why)`. Under the supervisor, a `restart` request
+  with `staged: true` is honoured only with a marker on disk, and is no crash. Without the
+  supervisor, the server's release hook closes the listeners and the core, then `process.execve`
+  restarts the same program: same pid, same ports. The reset builder adds its marker to
+  `stagedPending` and `finishStaged`.
+- **Small changes elsewhere.**
+  - `Db.migrate({before})`.
+  - `ChangesOptions.checkpoint`. "Ship it" on an OK'd change that was held back retries its task.
+  - `SupervisorLink.request(…, {staged})`.
+  - `SyncLog.fresh()`.
+  - The service worker never caches `/api/v1/resilience` (shell v8).
+
+>>>>>>> origin/m7-amend/checkpoints
 **2026-10-30 (packet amendment, owner): checkpoints and factory reset, folded into M7.** Added to
 ROADMAP-AND-GATES under M7, binding, and not a new milestone. M7 was already merged (#219), so it
 ships as its own PR; the plan is `docs/plans/M7-amendment.md`.

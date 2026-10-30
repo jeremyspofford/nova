@@ -9,12 +9,13 @@
 // backups from strays. Before anything is wiped the hub tells every paired device it can reach:
 // a phone or browser on its open stream, a computer in its next heartbeat, the standby in its next
 // sync answer (it wipes its copy and reports back). Every session then ends. Nova restarts in place
-// (the restart belongs to the checkpoints work; until it is wired, the marker waits for the next
-// start), and `finishReset` does the wipe before anything opens the database:
+// (restart.ts: the supervisor, or the server re-executing itself), and at that start
+// `finishStaged` (checkpoints.ts) calls `finishReset`, which wipes before anything opens the
+// database:
 //   1. the vault's key, from the keychain (through the vault's own key abstraction) and its file;
 //   2. Nova's own sealed backups and encrypted copies, in every folder it ever backed up to, each
 //      checked again against what was recorded (anything changed since is left, and said);
-//   3. Nova's own entries in its home, by name (OWN_ENTRIES). Anything else there is the person's:
+//   3. Nova's own entries in its home, by name (entries.ts). Anything else there is the person's:
 //      left in place and listed;
 //   4. Nova's leftover scratch folders.
 // Then the report (reset-report.json in the new home), and only then the marker goes. A reset
@@ -42,6 +43,8 @@ import { Vault, type KeyMode, type KeyStore } from '../vault.ts';
 import { encryptDir, readHeader } from './archive.ts';
 import { EXCLUDED, backupFiles, folderProblem, formatRecoveryKey, keyFingerprint, sha256File, type FolderKind, type Manifest, type ManifestFile, type NightlyBackups } from './backup.ts';
 import { dropScratch, freeScratch, makeScratch } from './scratch.ts';
+import { foreignEntries, isNovaEntry } from './entries.ts';
+import type { Restarter } from './restart.ts';
 
 export const RESET_MARKER = 'factory-reset.json';
 export const RESET_REPORT = 'reset-report.json';
@@ -52,38 +55,9 @@ const CANT_TELL_SAID = 'A device that can’t be reached now can’t be told. It
 const NOTICE_SAID = 'The hub was reset: Nova there was erased and starts over. This device is no longer paired with it.';
 const DEFAULT_TELL_MS = 45_000;
 
-// Nova's own entries at the top of its home, by name, and what each is. Nothing else in the home
-// is ever touched. (The database's own files and sync's temporary ones are matched by OWN_PATTERN.)
-export const OWN_ENTRIES: Readonly<Record<string, string>> = {
-  'nova.db': 'the database',
-  vault: 'saved passwords and keys (encrypted), and the vault’s key when it is a file',
-  mesh: 'this hub’s identity, its keys, and its place among your devices',
-  checkpoints: 'restore points',
-  backups: 'the copies kept before database upgrades',
-  '.git': 'the home’s history',
-  '.gitignore': 'what the home’s history leaves out',
-  logs: 'Nova’s logs',
-  workers: 'workers’ scratch folders',
-  kept: 'Nova’s own scratch, and what removed extensions left',
-  captures: 'captured items',
-  connectors: 'connection secrets from before the vault',
-  'nova.pid': 'which process runs this home',
-  'MEMORY.md': 'memory',
-  memory: 'memory notes',
-  'AGENTS.md': 'Nova’s standing instructions',
-  'SOUL.md': 'Nova’s standing instructions',
-  'IDENTITY.md': 'who Nova is',
-  'USER.md': 'who you are',
-  'permissions.md': 'what Nova may do without asking',
-  sessions: 'conversations',
-  skills: 'skills',
-  schedules: 'schedules',
-  workspace: 'Nova’s workspace',
-  extensions: 'extensions and design systems',
-  exports: 'copies Nova made on request inside its home',
-};
-const OWN_PATTERN = [/^nova\.db/, /\.nova-sync-\d+\.tmp$/];
-const isOwn = (name: string) => name in OWN_ENTRIES || OWN_PATTERN.some((p) => p.test(name)) || name === RESET_REPORT;
+// Nova's own entries at the top of its home are listed once, in entries.ts (NOVA_ENTRIES): the
+// wipe takes those by name and nothing else.
+const SQLITE_SIDE = /^nova\.db-/;
 
 // What the export leaves out, and why (shown in its manifest and README).
 const EXPORT_SKIP: Record<string, string> = {
@@ -127,11 +101,12 @@ export interface ResetReport {
 
 // ---- the home ----------------------------------------------------------------------------------
 
-// Nova's own entries in the home, and everything else (the person's), by top-level name.
+// Nova's own entries in the home (entries.ts), and everything else (the person's), by top-level
+// name. The marker is neither: it goes last, once the report is written.
 export function homeEntries(home: string): { own: string[]; foreign: string[] } {
   let names: string[] = [];
   try { names = readdirSync(home).sort(); } catch { /* no home yet */ }
-  return { own: names.filter((n) => n !== RESET_MARKER && isOwn(n)), foreign: names.filter((n) => n !== RESET_MARKER && !isOwn(n)) };
+  return { own: names.filter((n) => n !== RESET_MARKER && isNovaEntry(n)), foreign: foreignEntries(home) };
 }
 
 const inside = (path: string, root: string) => {
@@ -277,11 +252,13 @@ export interface ResetOptions {
   role: MeshRole;
   // The core's event bus: every open stream hears "reset".
   emit: (event: string, data: unknown) => void;
-  // The restart in place that finishes the reset (the checkpoints work owns it). Null: the marker
-  // waits for the next start.
-  restart: (() => void | Promise<void>) | null;
+  // The restart in place (restart.ts) that finishes the reset: under the supervisor, or the server
+  // re-executing itself. Without one (a core in a test) the marker waits for the next start.
+  restarter: Pick<Restarter, 'available' | 'restartInPlace'> | null;
   // How long the hub waits for devices it can reach to hear it.
   tellMs?: number;
+  // A checkpoint's restore is staged (checkpoints.ts): a reset waits until it is done.
+  restorePending?: () => boolean;
 }
 
 export interface Preview {
@@ -452,6 +429,7 @@ export class FactoryReset {
     if (o.confirm !== true) throw new CoreError('validation', `Erasing Nova needs your explicit confirmation every time (confirm: true): “${CONFIRM_WORDS}”`);
     if (this.#o.role.role() !== 'hub') throw new CoreError('conflict', 'This is the standby. Reset the hub: it tells this node to wipe its copy.');
     if (this.staged()) throw new CoreError('conflict', 'Nova is already erasing itself.');
+    if (this.#o.restorePending?.()) throw new CoreError('conflict', 'A restore is staged and finishes when Nova restarts. Erase Nova after that.');
     const b = this.#backups();
     const { own } = homeEntries(this.#o.home);
     const m: Marker = {
@@ -470,13 +448,17 @@ export class FactoryReset {
       for (const d of this.#o.devices.list()) this.#o.access.close(d.id);
       this.#o.spokes.resetNotice = null;
       this.#o.role.resetNotice = null;
-      // WIRE: the checkpoints work's restart in place goes here (index.ts passes it as `restart`).
-      if (this.#o.restart) await this.#o.restart();
+      // Restart in place: the next start finishes the wipe before the database opens.
+      if (this.#canRestart()) {
+        try { await this.#o.restarter!.restartInPlace('a factory reset'); } catch (e) {
+          this.#o.log.problem('reset', 'Nova couldn’t restart itself to finish erasing. Stop it and start it again: the reset finishes as it starts, and until then Nova takes nothing new.', { detail: (e as Error)?.stack ?? String(e) });
+        }
+      }
       return devices;
     });
     return {
-      staged: true, id: m.id, restart: this.#o.restart ? 'in-place' : 'next-start',
-      said: this.#o.restart ? 'Nova is telling your devices, then erasing itself and starting over.' : 'Nova is telling your devices. It finishes erasing itself the next time it starts.',
+      staged: true, id: m.id, restart: this.#canRestart() ? 'in-place' : 'next-start',
+      said: this.#canRestart() ? 'Nova is telling your devices, then erasing itself and starting over.' : 'Nova is telling your devices. It finishes erasing itself the next time it starts.',
       done,
     };
   }
@@ -512,6 +494,10 @@ export class FactoryReset {
 
   #ack: ((d: Device, said: string) => void) | null = null;
 
+  #canRestart(): boolean {
+    return !!this.#o.restarter?.available;
+  }
+
   // ---- on a standby: the hub was reset -----------------------------------------------------------
 
   // Wipes this standby's copy of the hub's data now (every replicated row, the vault and its key,
@@ -538,8 +524,10 @@ export class FactoryReset {
     this.#o.vault.forgetKeys();
     this.#o.vault.clear();
     const keep = new Set(['mesh', 'logs', 'nova.pid', RESET_REPORT]);
-    for (const n of own) if (!keep.has(n) && !OWN_PATTERN[0]!.test(n)) rmSync(join(home, n), { recursive: true, force: true });
+    for (const n of own) if (!keep.has(n) && n !== 'nova.db' && !SQLITE_SIDE.test(n)) rmSync(join(home, n), { recursive: true, force: true });
     this.#o.log.info('reset', 'The hub was reset: this standby wiped its copy.', { id: notice.id, rows });
+    // Once its report has gone back to the hub, it restarts to finish (its keys and role file).
+    if (this.#canRestart()) setTimeout(() => { void this.#o.restarter!.restartInPlace('the hub was reset').catch(() => {}); }, 1000).unref?.();
     return `It wiped its copy: ${plural(rows, 'record')}, the vault and the copied files. Its own keys go when it next starts.`;
   }
 

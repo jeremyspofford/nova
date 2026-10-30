@@ -1,8 +1,9 @@
 // Settings › Danger zone (M7 amendment §2) in a real browser, against the real server: last in
 // Settings and set apart, its one standout the erase button; the export first, with its recovery
 // key shown once and the words about what it leaves out; the confirmation listing what is erased
-// and what is not, the erase button held until the box is ticked; then Nova starts over and the
-// first-run screen shows what the reset did. The export then opens with the key the page showed.
+// and what is not, the erase button held until the box is ticked; then Nova restarts in place, by
+// itself, and the page opens first-run setup with what the reset did. The export then opens with
+// the key the page showed.
 // A throwaway home and folders only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +17,7 @@ test('M7 amendment: the Danger zone — export first, the confirmation, erase, f
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
   const m = blank('nova-ui-m7-reset-');
-  let nova = await m.start();
+  const nova = await m.start();
   const m3 = shotsDir();
   const shots = m3 ? join(dirname(m3), 'm7') : null;
   if (shots) mkdirSync(shots, { recursive: true });
@@ -74,21 +75,22 @@ test('M7 amendment: the Danger zone — export first, the confirmation, erase, f
     await confirm.locator('input[name="confirm"]').check();
     assert.equal(await erase.isDisabled(), false);
     if (shots) await shoot(page, join(shots, 'reset-confirm.png'));
+    // The only console line so far is the folder Nova refused (a 400), on purpose.
+    assert.deepEqual(errors.filter((e) => !/status of 400/.test(e)), []);
+    const before = errors.length;
     await erase.click();
     await page.locator('#sheet .reset-sheet[data-step="erasing"]').waitFor();
-    assert.deepEqual(errors, []);
+    assert.match((await page.locator('#sheet .reset-sheet').textContent()) ?? '', /opens first-run setup once Nova is back/);
 
-    // Nova starts again on the erased home: first-run setup, with what the reset did.
-    await stop(nova);
-    nova = await m.start();
-    const fresh = await device(b, { width: 1280, height: 900 });
-    await fresh.page.goto(m.base);
-    await fresh.page.locator('#setup .reset-result').waitFor();
-    assert.match((await fresh.page.locator('#setup .reset-result').textContent()) ?? '', /Nova was erased on this machine and started over\./);
+    // Nova restarts in place by itself (same address), and this page opens first-run setup, with
+    // what the reset did. Nobody restarted anything.
+    await page.locator('#setup .reset-result').waitFor({ timeout: 60_000 });
+    assert.match((await page.locator('#setup .reset-result').textContent()) ?? '', /Nova was erased on this machine and started over\./);
     assert.equal((await m.get('/api/v1/setup')).done, false);
     assert.deepEqual(await m.get('/api/v1/memory'), [], 'nothing remembered');
-    if (shots) await shoot(fresh.page, join(shots, 'reset-first-run.png'));
-    assert.deepEqual(fresh.errors, []);
+    if (shots) await shoot(page, join(shots, 'reset-first-run.png'));
+    // While Nova was down, its open streams broke and a look for it found nothing: nothing else.
+    assert.deepEqual(errors.slice(before).filter((e) => !/ERR_INCOMPLETE_CHUNKED_ENCODING|ERR_CONNECTION_REFUSED|ERR_EMPTY_RESPONSE|ERR_CONNECTION_RESET/.test(e)), []);
 
     // The export opens with the key the page showed, once.
     const folder = join(out, readdirSync(out)[0]!);
@@ -97,5 +99,6 @@ test('M7 amendment: the Danger zone — export first, the confirmation, erase, f
     assert.ok(readdirSync(folder).includes('memory.md'));
   } finally {
     await stop(nova);
+    await b.close();
   }
 });
