@@ -67,7 +67,10 @@ test('a good change, end to end: sandbox, tests, health, a release in the homeâ€
     const ev = after.stages.health!.evidence as { probes: { name: string; ok: boolean }[] };
     assert.deepEqual(ev.probes.map((p) => p.name), ['health', 'setup', 'ledger', 'memory', 'approval', 'privacy', 'the reminder is listed']);
     const own = (after.stages.tests!.evidence as { own: { name: string; ok: boolean }[] }).own;
-    assert.deepEqual(own.map((x) => [x.name, x.ok]), [['registry', true], ['quiet at noon', true], ['fires at nine in the evening', true]]);
+    // The pack's cases run in time order from the sandbox's real clock, so their order depends on
+    // the time of day; which ran and passed doesn't.
+    assert.deepEqual(own[0] && [own[0].name, own[0].ok], ['registry', true]);
+    assert.deepEqual(own.slice(1).map((x) => [x.name, x.ok]).sort(), [['fires at nine in the evening', true], ['quiet at noon', true]]);
     // The release: files in the home's history, the artifact hashing to the record.
     const rel = after.release!;
     assert.ok(rel.commit, rel.history);
