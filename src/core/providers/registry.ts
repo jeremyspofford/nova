@@ -216,7 +216,10 @@ export class Providers extends EventEmitter {
     if (unset) return { state: 'not_configured', words: `Not configured. ${unset}`, checked_at: null };
     if (!impl.probe) return { state: 'ready', words: 'Installed.', checked_at: null };
     const p = this.#probes.get(id);
-    if (!p || p.key !== canonicalJson(c)) return { state: 'unchecked', words: 'Not checked yet.', checked_at: null };
+    if (!p || p.key !== canonicalJson(c)) {
+      const held = this.where(id).coarse === 'remote' && !permits(this.#o.profile.privacyDefault(), 'remote');
+      return { state: 'unchecked', words: held ? 'Not checked: it is off your devices, and your privacy setting keeps Nova from reaching it.' : 'Not checked yet.', checked_at: null };
+    }
     return p.problem ? { state: 'unreachable', words: `Unreachable. ${p.problem}`, checked_at: p.at } : { state: 'ready', words: `Reachable${impl.url?.(c) ? ` at ${new URL(impl.url(c)!).host}` : ''}.`, checked_at: p.at };
   }
 
@@ -225,7 +228,9 @@ export class Providers extends EventEmitter {
     const x = this.#entry(id);
     const impl = this.#impl(x);
     const c = this.config(id);
-    if (impl.probe && !impl.uninstalled?.(c) && !impl.unconfigured(c, this.#secret)) {
+    // Even a check is a connection: under local-only, nothing reaches a remote address.
+    const held = this.where(id).coarse === 'remote' && !permits(this.#o.profile.privacyDefault(), 'remote');
+    if (impl.probe && !held && !impl.uninstalled?.(c) && !impl.unconfigured(c, this.#secret)) {
       const problem = await impl.probe(c, this.#secret, AbortSignal.timeout(6000)).catch((e) => (e as Error).message);
       this.#probes.set(id, { key: canonicalJson(c), problem, at: this.#now().toISOString() });
       this.emit('change', { id, action: 'checked' });
