@@ -23,11 +23,16 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   device_inbox: ['device_id', 'key'],
 };
 export const FILE = 'file';
+// The vault (vault.ts) is one entry: its ciphertext in the log like a row. Its key is added only
+// when a batch is served, inside the batch sealed to the standby, so the log never holds it.
+export const VAULT = 'vault';
+export interface VaultSync { sealedFile(): string | null; keyForStandby(): string | null; adopt(file: string, key: string): void; clear(): void }
 
 // Home files that are not the person's content, so they stay on their node: the database (sync
 // carries it row by row), logs, backups, exports, extension leftovers, worker scratch, connector
-// secrets, the mesh identity, and git's history. Everything else in the home is journalled.
-export const NOT_JOURNALLED: ReadonlySet<string> = new Set(['.git', 'mesh', 'logs', 'backups', 'exports', 'kept', 'workers', 'connectors']);
+// secrets (Era 2's plaintext ones; the vault travels as its own entry, above), the mesh identity,
+// and git's history. Everything else in the home is journalled.
+export const NOT_JOURNALLED: ReadonlySet<string> = new Set(['.git', 'mesh', 'logs', 'backups', 'exports', 'kept', 'workers', 'connectors', 'vault']);
 const DB_FILE = /^nova\.db/;
 const TMP = /\.nova-sync-\d+\.tmp$/;
 // A bigger file isn't carried; it is reported once instead.
@@ -68,6 +73,8 @@ export class SyncLog {
   #watcher: FSWatcher | null = null;
   #soon: ReturnType<typeof setTimeout> | null = null;
   #columns = new Map<string, Set<string>>();
+  // Set by the core once the vault exists; without it, secrets simply don't replicate.
+  vault: VaultSync | null = null;
 
   constructor(o: { db: Db; log: Log; home: string; node: string; now: () => Date }) {
     this.#db = o.db;
@@ -104,7 +111,7 @@ export class SyncLog {
     let bytes = 0;
     for (const r of this.#db.raw.prepare('SELECT seq, tbl, pk, op, row, hlc FROM sync_log WHERE seq > ? ORDER BY seq LIMIT ?').iterate(after, limit + 1) as Iterable<LogRow>) {
       if (rows.length >= limit || (rows.length && bytes + (r.row?.length ?? 0) > maxBytes)) return { rows, upto: rows.at(-1)!.seq, more: true, head };
-      rows.push({ ...r });
+      rows.push(r.tbl === VAULT && r.op === 'put' ? { ...r, row: this.#withKey(r.row!) } : { ...r });
       bytes += r.row?.length ?? 0;
     }
     return { rows, upto: Math.max(after, head), more: false, head };
@@ -141,6 +148,7 @@ export class SyncLog {
     const put: string[] = [];
     const deleted: string[] = [];
     if (!this.logging()) return { put, deleted };
+    this.#scanVault();
     const logged = this.#loggedFiles();
     const present = new Set<string>();
     const writes: { path: string; data: Buffer | null }[] = [];
@@ -229,6 +237,31 @@ export class SyncLog {
     this.#watcher = null;
   }
 
+  // Called when the vault changes, so the standby has it now rather than at the next scan (file
+  // watching skips vault/, as it skips every folder that isn't journalled).
+  vaultChanged(): void {
+    if (this.logging()) this.#scanVault();
+  }
+
+  // The vault's entry follows its file: a new one when the ciphertext changed, a delete when it went.
+  #scanVault(): void {
+    if (!this.vault) return;
+    const text = this.vault.sealedFile();
+    const had = this.#db.get<{ sha: string | null; op: string }>(`SELECT json_extract(row, '$.sha256') AS sha, op FROM sync_log WHERE tbl = ? AND pk = ?`, VAULT, VAULT);
+    const sha = text === null ? null : sha256(Buffer.from(text, 'utf8'));
+    if (sha === null ? !had || had.op === 'delete' : had?.sha === sha) return;
+    this.#db.tx(() => {
+      this.#db.run('DELETE FROM sync_log WHERE tbl = ? AND pk = ?', VAULT, VAULT);
+      this.#db.run('INSERT INTO sync_log (tbl, pk, op, row, hlc) VALUES (?, ?, ?, ?, ?)', VAULT, VAULT, sha ? 'put' : 'delete', sha ? JSON.stringify({ sha256: sha, file: text }) : null, this.#clock.tick());
+    });
+  }
+
+  // Only while serving a batch: the key rides inside the sealed payload, never in the log.
+  #withKey(row: string): string {
+    const key = this.vault?.keyForStandby() ?? null;
+    return key ? JSON.stringify({ ...(JSON.parse(row) as object), key }) : row;
+  }
+
   #loggedFiles(): Map<string, string> {
     if (!this.#logged) {
       this.#logged = new Map();
@@ -302,7 +335,9 @@ export class SyncLog {
       this.#db.tx(() => {
         for (const r of rows) {
           if (r.tbl === 'memory' || (r.tbl === FILE && (r.pk === 'MEMORY.md' || r.pk.startsWith('memory/')))) scrub = true;
-          if (r.op === 'put') this.#put(r.tbl, JSON.parse(r.row!) as Record<string, unknown>);
+          let stored = r.row;
+          if (r.tbl === VAULT) stored = this.#applyVault(r);
+          else if (r.op === 'put') this.#put(r.tbl, JSON.parse(r.row!) as Record<string, unknown>);
           else if (r.op === 'delete') {
             if (r.tbl === 'memory') {
               const rec = this.#db.get<Record<string, unknown>>('SELECT * FROM memory WHERE id = ?', r.pk);
@@ -312,7 +347,7 @@ export class SyncLog {
           } else if (r.op === 'file_put') { this.#writeFile(JSON.parse(r.row!) as FileRow); files++; }
           else { this.#removeFile(r.pk); files++; }
           this.#db.run('DELETE FROM sync_log WHERE tbl = ? AND pk = ?', r.tbl, r.pk);
-          this.#db.run('INSERT INTO sync_log (seq, tbl, pk, op, row, hlc) VALUES (?, ?, ?, ?, ?, ?)', r.seq, r.tbl, r.pk, r.op, r.row, r.hlc);
+          this.#db.run('INSERT INTO sync_log (seq, tbl, pk, op, row, hlc) VALUES (?, ?, ?, ?, ?, ?)', r.seq, r.tbl, r.pk, r.op, stored, r.hlc);
         }
         this.#db.run('UPDATE sync_state SET cursor = MAX(cursor, ?) WHERE id = 1', batch.upto);
       });
@@ -329,6 +364,14 @@ export class SyncLog {
     const bad = (why: string) => { throw new CoreError('validation', `The hub sent a sync entry Nova can’t apply (${why}).`); };
     if (!r || typeof r !== 'object' || !Number.isInteger(r.seq) || r.seq < 1 || typeof r.pk !== 'string' || typeof r.hlc !== 'string') bad('malformed');
     if (!OPS.includes(r.op)) bad(`op ${String(r.op)}`);
+    if (r.tbl === VAULT) {
+      if (!this.vault || r.pk !== VAULT || (r.op !== 'put' && r.op !== 'delete')) bad('vault');
+      if (r.op === 'put') {
+        const v = JSON.parse(String(r.row)) as { sha256?: unknown; file?: unknown };
+        if (typeof v.file !== 'string' || v.sha256 !== sha256(Buffer.from(v.file, 'utf8'))) bad('vault');
+      }
+      return;
+    }
     if (r.op === 'file_put' || r.op === 'file_delete') {
       if (r.tbl !== FILE || !journalPath(r.pk)) bad(`file ${r.pk}`);
       if (r.op === 'file_put') {
@@ -346,6 +389,16 @@ export class SyncLog {
         if (v !== null && typeof v !== 'string' && typeof v !== 'number') bad(`value of ${r.tbl}.${k}`);
       }
     }
+  }
+
+  // The hub's vault and its key: the key goes into this node's own key store (vault.ts), and the
+  // entry is kept without it, so this node's log never holds the key either.
+  #applyVault(r: LogRow): string | null {
+    if (r.op === 'delete') { this.vault!.clear(); return null; }
+    const { key, ...rest } = JSON.parse(r.row!) as { sha256: string; file: string; key?: string };
+    if (typeof key === 'string') this.vault!.adopt(rest.file, key);
+    else this.#log.problem('sync', 'The hub’s vault arrived without its key, so connections that need a secret wouldn’t sign in after a failover. Nova keeps trying with the next change.');
+    return JSON.stringify(rest);
   }
 
   #cols(tbl: string): Set<string> {

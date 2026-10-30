@@ -15,11 +15,13 @@ const MAX_FETCH = 20_000;
 const UA = 'Nova/0.1 (personal agent)';
 export const SEARCH_URL = 'https://html.duckduckgo.com/html/';
 
-// Connection secrets live in ~/connectors/. No tool reads or writes them.
+// Connection secrets live in ~/vault/ (Era 2 kept them in ~/connectors/). No tool reads or writes them.
 function guard(home, path, verb) {
   const abs = inHome(home, path);
   const rel = relative(home, abs);
-  if (rel === 'connectors' || rel.startsWith(`connectors${sep}`)) throw new Error(`Connection secrets in connectors/ can't be ${verb}`);
+  for (const dir of ['connectors', 'vault']) {
+    if (rel === dir || rel.startsWith(`${dir}${sep}`)) throw new Error(`Connection secrets in ${dir}/ can't be ${verb}`);
+  }
   return { abs, rel };
 }
 

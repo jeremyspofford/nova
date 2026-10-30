@@ -24,8 +24,9 @@ import { stricter } from './chat-run.js';
 const shortId = () => randomUUID().slice(0, 8);
 
 export class Runner extends EventEmitter {
-  // records: the core's memory, where MEMORY.md's entries live (passed in by the server).
-  constructor(config, store, { agent = runAgent, records = null } = {}) {
+  // records: the core's memory, where MEMORY.md's entries live (passed in by the server). vault: the
+  // core's, where connection secrets live.
+  constructor(config, store, { agent = runAgent, records = null, vault = null } = {}) {
     super();
     this.config = config;
     this.store = store;
@@ -34,7 +35,7 @@ export class Runner extends EventEmitter {
     this.memory = new Memory(config.home, config.timezone, { records });
     this.skills = new Skills(config.root, config.home);
     this.schedules = new Schedules(config.root, config.home, config.timezone);
-    this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone });
+    this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone, vault });
     this.permissions = new Permissions(config.home, () => TOOLS);
     this.helpers = null; // set by the server: where delegate hands work
   }

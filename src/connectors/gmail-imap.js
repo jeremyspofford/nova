@@ -1,12 +1,10 @@
 // Gmail through IMAP with an app password: the quick way in. The person makes
 // a 16-letter app password in their Google account and pastes it into Nova
-// with their address. It is kept in ~/connectors/gmail/password.json (mode
-// 600), outside history, never shown to the model. Nova uses Gmail's IMAP
+// with their address. It is kept in Nova's vault (connector/gmail/GMAIL_APP_PASSWORD),
+// encrypted, outside history, never shown to the model. Nova uses Gmail's IMAP
 // extensions (X-GM-RAW search, X-GM-MSGID ids, X-GM-LABELS), so ids, search
 // syntax and what the model sees match the Gmail API path.
 import { randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
-import { join } from 'node:path';
 import { ImapError, decodeMailbox, encodeMailbox, fetchItems, openImap, quote } from './imap.js';
 import {
   GmailError, asReply, changeArgs, changeResult, changeWords, checkDraft, checkId, draftArgs, draftResult, drafts,
@@ -44,7 +42,7 @@ function loginError(e, connecting) {
 }
 
 export class GmailImap {
-  // files: { dir, read(name), writeSecret(name, data) }
+  // files: { read(name), writeSecret(name, data), removeSecret(name) }, kept in the vault
   constructor(files, { url = IMAP_URL, timezone = 'UTC', open = openImap } = {}) {
     this.files = files;
     this.url = url;
@@ -72,7 +70,7 @@ export class GmailImap {
   }
 
   forget() {
-    rmSync(join(this.files.dir, FILE), { force: true });
+    this.files.removeSecret(FILE);
     this.boxes = null;
   }
 

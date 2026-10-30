@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { CoreError } from './errors.ts';
 import { PRIVACY_MODES, type PrivacyMode } from './envelope.ts';
 import type { Db } from './db.ts';
-import type { Log } from './log.ts';
+import { redactText, type Log } from './log.ts';
 
 export const ITEM_KINDS = ['memory', 'file', 'skill', 'session', 'standing'] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
@@ -57,7 +57,8 @@ export class Receipts {
     const i = (input ?? {}) as Partial<ReceiptInput>;
     const text = (v: unknown, what: string) => {
       if (typeof v !== 'string' || !v.trim()) throw new CoreError('validation', `${what} is required.`);
-      return v.trim();
+      // A receipt says where things went, never a secret that went with them (vault.ts).
+      return redactText(v.trim());
     };
     const optional = (v: unknown, what: string) => (v == null || v === '' ? null : text(v, what));
     const r: Receipt = {
@@ -80,7 +81,7 @@ export class Receipts {
       if (!ITEM_KINDS.includes(c?.kind)) throw new CoreError('validation', `${where}: kind must be one of ${ITEM_KINDS.join(', ')}.`);
       if (typeof c.ref !== 'string' || !c.ref.trim()) throw new CoreError('validation', `${where}: ref is required.`);
       if (typeof c.sha256 !== 'string' || !SHA.test(c.sha256)) throw new CoreError('validation', `${where}: sha256 must be the 64-character hex hash of what was sent.`);
-      return { kind: c.kind, ref: c.ref, sha256: c.sha256 };
+      return { kind: c.kind, ref: redactText(c.ref), sha256: c.sha256 };
     });
 
     if (r.privacy_mode === 'local-only' && r.egress !== 'local') {
