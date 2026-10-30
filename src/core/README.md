@@ -53,6 +53,6 @@ Every request goes through `mesh/access.ts` first (`core.gate` outside `/api/v1`
 
 Every change through the API needs the `X-Nova` header, except `POST /api/v1/hooks/{name}`: webhooks are called by automations and authenticate with their own `x-nova-hook-token` instead. That is the only exemption, and `api.ts` refuses any other route that claims it.
 
-Rules: modules get what they need passed in; nothing outside `src/core` imports anything but `index.ts` (tested), except the device agent in `src/device`, which ships alone and imports only `mesh/wire.ts`; source stays erasable TypeScript (no enums, namespaces or parameter properties) so Node can run it without a build.
+Rules: modules get what they need passed in; nothing outside `src/core` imports anything but `index.ts` (tested), except the device agent in `src/device`, which ships alone and imports only `mesh/wire.ts` and `models/hardware.ts`; source stays erasable TypeScript (no enums, namespaces or parameter properties) so Node can run it without a build.
 
 The fresh-user acceptance test (`tests/acceptance/fresh-user.test.ts`) runs the real server with a blank home and an egress tripwire; `NOVA_EVIDENCE=<file> npm test` keeps its transcript.

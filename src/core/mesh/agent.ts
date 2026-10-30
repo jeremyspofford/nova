@@ -78,11 +78,12 @@ function deviceFiles(): string[] {
   return out;
 }
 
-// Every file the agent carries, by its path inside the archive: src/device/**, the one core file
-// it imports (src/core/mesh/wire.ts, which imports only node:crypto), and a package.json that makes
-// the folder an ES module package of its own.
+// Every file the agent carries, by its path inside the archive: src/device/**, the two core files
+// it imports (src/core/mesh/wire.ts, which imports only node:crypto, and src/core/models/hardware.ts,
+// which imports only Node's built-ins), and a package.json that makes the folder an ES module
+// package of its own.
 export function agentFiles(version: string): TarEntry[] {
-  const files = [...deviceFiles(), join(SRC_DIR, 'core', 'mesh', 'wire.ts')];
+  const files = [...deviceFiles(), join(SRC_DIR, 'core', 'mesh', 'wire.ts'), join(SRC_DIR, 'core', 'models', 'hardware.ts')];
   const entries: TarEntry[] = files.map((p) => ({ path: relative(join(SRC_DIR, '..'), p).split(sep).join('/'), body: readFileSync(p), mtime: statSync(p).mtimeMs / 1000 }));
   const pkg = { name: 'nova-device-agent', version, private: true, type: 'module', license: 'AGPL-3.0-only', engines: { node: '>=26' } };
   entries.unshift({ path: 'package.json', body: Buffer.from(`${JSON.stringify(pkg, null, 2)}\n`), mtime: Date.now() / 1000 });

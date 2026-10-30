@@ -253,7 +253,7 @@ test('join.sh and device-agent.tar are public, and the archive unpacks to the ag
     const list = spawnSync('tar', ['-tf', join(dir, 'agent.tar')], { encoding: 'utf8' });
     assert.equal(list.status, 0, list.stderr);
     const files = list.stdout.trim().split('\n').filter((f) => !f.endsWith('/')).sort();
-    assert.deepEqual(files, ['package.json', 'src/core/mesh/wire.ts', 'src/device/boot.ts', 'src/device/queue.ts', 'src/device/runtime.ts', 'src/device/trust.ts', 'src/device/watchdog.ts']);
+    assert.deepEqual(files, ['package.json', 'src/core/mesh/wire.ts', 'src/core/models/hardware.ts', 'src/device/boot.ts', 'src/device/queue.ts', 'src/device/runtime.ts', 'src/device/trust.ts', 'src/device/watchdog.ts']);
     assert.equal(spawnSync('tar', ['-xf', join(dir, 'agent.tar'), '-C', dir]).status, 0);
     assert.equal(readFileSync(join(dir, 'src/core/mesh/wire.ts'), 'utf8'), readFileSync(join(import.meta.dirname, '../../src/core/mesh/wire.ts'), 'utf8'));
     assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).type, 'module');
@@ -320,7 +320,7 @@ test('join.sh checks the archive against the hash it carries, and a standby is n
   }
 });
 
-test('the device agent imports nothing of Nova but the wire format', () => {
+test('the device agent imports nothing of Nova but the wire format and hardware detection', () => {
   const src = join(import.meta.dirname, '../../src');
   const seen = new Set<string>();
   const visit = (file: string) => {
@@ -335,7 +335,7 @@ test('the device agent imports nothing of Nova but the wire format', () => {
   };
   for (const f of ['boot.ts', 'runtime.ts', 'queue.ts', 'trust.ts', 'watchdog.ts']) visit(join(src, 'device', f));
   const outside = [...seen].map((f) => f.slice(src.length + 1)).filter((f) => !f.startsWith('device/'));
-  assert.deepEqual(outside, ['core/mesh/wire.ts']);
+  assert.deepEqual(outside.sort(), ['core/mesh/wire.ts', 'core/models/hardware.ts']);
   // The runtime carries only itself and its queue.
   assert.deepEqual([...readFileSync(join(src, 'device', 'runtime.ts'), 'utf8').matchAll(/^import[^'"]*from '(\.[^']+)'/gm)].map((m) => m[1]), ['./queue.ts']);
 });
