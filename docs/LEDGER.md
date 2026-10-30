@@ -15,6 +15,53 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M7 amendment §2, review fixes): factory reset hardened.** Branch `m7-amend/reset`;
+each fix has a test that failed on `55fddabd` first.
+- **A hole older than the amendment (fixed here):** the agent's `write_file` could write
+  `nova.db`, `backups/*.db` (what a rollback restores), `.git/hooks/*` (the change pipeline commits
+  in the home, so a hook would run with no approval) and a reset's marker. `src/tools.js` is now
+  an allow-list: `write_file` writes only inside `workspace/` and to `AGENTS.md`, `SOUL.md`,
+  `IDENTITY.md`, `USER.md` (the standing files the prompt names; `MEMORY.md`, `memory/`,
+  `sessions/`, `schedules/`, `permissions.md` keep their own refusals). `read_file` refuses
+  `nova.db*`, `checkpoints/`, `backups/`, `.git/`, `factory-reset.json`, `.nova-home`, and as
+  before `vault/`, `mesh/`, `connectors/`; it still reads the standing files, `memory/`,
+  `workspace/`, `sessions/`, `skills/` and the rest of the person's content. Links are followed
+  before the check. The other tools write nothing in the home (`exec` runs in `workspace/` with
+  approval; `schedule_set` is approved).
+- **The marker is sealed:** an HMAC under a key in `.nova-home` (`resilience/home-mark.ts`). Chosen
+  over a per-boot secret because a reset must still finish after a crash or a reboot, and over the
+  vault because the vault's key is the first thing the wipe removes. A key in the home is enough
+  once the agent can't write there: what else can write the home is the person's own programs,
+  which can delete it anyway. A marker that doesn't verify (forged, changed, junk, or for another
+  folder) is never acted on: it is renamed `factory-reset.json.set-aside-<time>`, Nova starts as
+  it was, and a problem says so. The mark gets a new key after each reset.
+- **Checkpoints, by the same reasoning:** the restore marker and `checkpoints/.seal` are in the home
+  too; the agent can no longer read or write either, and the restore marker is checked against the
+  staged files' hashes. A same-user program could forge them, as it could delete the home. Not
+  changed here.
+- **Only Nova's own home:** a reset is refused, staging and finishing, for `/`, the person's home
+  folder or any folder containing it, and for a folder without `.nova-home` (holding the home's id
+  and the seal key, 0600, never in a backup, checkpoint, export or the standby's copy). Nova writes
+  it when it sets up a home: a new folder, or one whose `nova.db` has Nova's `schema_migrations`.
+  So the preview home gets it at its next start; a folder holding some other `nova.db` never does.
+- **The export** is checked by its real path (links followed); one gone by the end is said to be
+  gone, never "untouched".
+- **Late backups:** staging stops the heartbeat and the work queue (`core.stopWork`) before telling
+  devices, then lists the backups again into the marker. Half-written ones (`.nova-backup-N.partial`,
+  the database in the clear; `nova-backup-N.nbk.partial`) in Nova's recorded folders go too.
+- **Encrypted copies** are erased only if they open under the backup key (the tag checks, nothing
+  unpacked; `archive.ts` `verifyFile`), and are then known by their whole file's sha256.
+- **Computers:** `hub_reset` is signed by the hub's identity key over
+  `nova-hub-reset-v1.<device>.<reset id>`; the boot agent acts only on one in a heartbeat answer it
+  got itself, from a pinned key. The runtime can't say it.
+- **Browsers:** on the `reset` event and on the first-run screen after a reset, the page forgets its
+  device key, `nova.*` storage (drafts) and the service worker's caches (`ui/js/forget-here.js`).
+  Until setup is done after a reset, the first-run page and `GET /setup` send
+  `Clear-Site-Data: "cache", "storage"`. The result says a phone was told and asked to forget; it
+  doesn't claim it did.
+- **Open:** keychain items of vault ids Nova no longer knows can't be removed: the `KeyStore`
+  abstraction can't list items. Only the ids recorded at staging are removed.
+
 **2026-10-30 (M7 amendment §2): factory reset, as built.** Branch `m7-amend/reset`; plan
 `docs/plans/M7-amendment.md` §2 has the as-built note.
 - **Nova's own entries, by name:** `NOVA_ENTRIES` in `resilience/entries.ts` (below). Anything else

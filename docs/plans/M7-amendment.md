@@ -159,7 +159,14 @@ How the restore runs:
   opens first-run setup by itself. Until Nova is down it refuses every change. Work stops first
   (`core.stopWork`). A restart that fails, or a core with nothing that can restart it, leaves the
   reset to finish at the next start, said on screen; changes stay refused until then. The marker
-  carries its own sha256: one that changed since staging is never acted on.
+  is sealed with an HMAC under the key in the home's mark (`.nova-home`); one that doesn't verify is
+  kept aside, never acted on, and said as a problem.
+- **After review:** only a folder carrying Nova's mark, and never `/`, the person's home folder or
+  one containing it, is erased; the agent's file tools write only `workspace/` and the standing
+  files; the export is checked by its real path; work stops and backups are listed again before
+  devices are told; half-written backups go; an encrypted copy goes only if it opens under the
+  backup key; a computer acts only on a reset signed by its pinned hub; browsers forget their key,
+  drafts and caches (and get `Clear-Site-Data` until setup is done). The ledger has the details.
 
 ## 3. Tests (the definition of done)
 
