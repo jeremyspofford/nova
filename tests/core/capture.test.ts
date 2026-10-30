@@ -413,3 +413,17 @@ test('local-only refuses a Screenpipe outside the person’s devices, and stops 
     await core.close();
   }
 });
+
+test('setup says plainly that capture starts off, and what each kind of device can capture', async () => {
+  const h = await hub();
+  try {
+    let last: unknown = null;
+    for (const text of ['Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no']) last = (await h.c('POST', '/setup/messages', { text })).body;
+    const said = JSON.stringify(last);
+    assert.match(said, /I see nothing on your devices unless you turn capture on in Settings › Capture/);
+    assert.match(said, /an iPhone or iPad allows no passive capture of other apps/);
+    assert.equal((await h.c('GET', '/capture/status')).body.active, false);
+  } finally {
+    await h.stop();
+  }
+});

@@ -15,6 +15,97 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M6a): capture — the Capture API, consent, storage, classification, promotion, Screenpipe.**
+Branch `m6a/capture`; the plan's §1. Code in `src/core/capture/`, migration `0009_capture.sql`
+(numbered 0009 alongside M6b's; the integrator renumbers).
+
+- **One API, two adapters.** `capture.stream(device, kind)` (and the views) hands out normalized
+  events: timestamps, device, the space and who set it, consent (`granted` at), and provenance
+  (adapter, source, the source's own id, how it arrived). Every adapter goes through one `ingest`,
+  which is where consent, private contexts, exclusions and classification happen, so no adapter
+  can skip them. Screenpipe is pulled over its REST API (`/health`, `/search` for OCR, audio and
+  accessibility text) with its own cursor per content type; a device agent sends `capture_event`
+  through M4's inbox.
+- **Consent.** Every source starts off, per source and per device. A Screenpipe is added off; a
+  paired computer's heartbeat capability `capture.<kind>` offers a source, off. Turning one on
+  records who and when; capture starts *then*: nothing Screenpipe kept from before consent is
+  pulled, unless the person asks for an earlier `since` (never the default). Pausing stops intake,
+  and resuming moves every cursor to now, so nothing from the paused stretch arrives later. Events
+  timestamped before consent or resume are dropped (counted, not kept).
+- **The indicator** is in the top bar on every page while any source is on and not paused; a
+  phone's Home, which has no top bar, keeps one for it then (without the small orb). It opens the
+  Capture view.
+- **Private and incognito** windows are dropped in `ingest` before anything is stored: a source's
+  `private`/`incognito` mark, or a window or app titled Incognito, InPrivate, Private Browsing,
+  Private Window or "(Private)". Tested with sentinels: nowhere under the home afterwards.
+- **Exclusions** per app (name, case-insensitive), site (host and its subdomains, or a window
+  title naming it, since screen text often has no address), space (after classification) and time
+  window (weekly, in the person's time zone, past midnight allowed); each may be scoped to one
+  source. Kept in profile section `capture` (new), written only through `PUT /capture/settings`,
+  which checks them.
+- **Classification** only by the person's signals: app, device, "calendar" and the explicit
+  switch. Nova has no calendar connection yet, so "calendar" is a weekly block of hours the person
+  names (their working hours); a calendar connector can feed the same signal later. The switch
+  wins while on; otherwise all matching signals must agree on one space, and none or a
+  disagreement leaves the event unclassified, never guessed. Folder paths are refused as a signal.
+  Resolving an item can also remember its app as a signal.
+- **Storage and forgetting.** Captured words live only in `capture_event` (text, app, window
+  title, address). Promotion rows, proposals and tombstones carry ids, times and hashes, not words;
+  a trigger keeps a hash of its payload; the inbox keeps the key and the event id, never the body.
+  Forgetting deletes the row (secure_delete on the connection), truncates the WAL, cleans every
+  backup (`backups.forget('capture_event', …)`, which also drops the backup's sync-log entry), and
+  leaves a tombstone (hash of the source's own id) so a re-read can't bring it back. The sync log
+  carries a content-free delete; a standby applying it cleans its own backups (`SyncLog.forgetting`,
+  a small hook next to memory's). All five tables replicate.
+- **Capture is evidence, not memory.** Promotion is deliberate: `POST /capture/promote` (the
+  person) or accepting a proposal. The memory's provenance is `source: capture:<event ids>`,
+  `observed_at` the first event's time, `recorded_by: person`; `capture_promotion` keeps the
+  link, the proposal if any, and when and where each event was captured, and outlives the event.
+  Forgetting the memory forgets the events it came from (they hold the same words); forgetting an
+  event forgets memories made from it unless the person keeps them (`keep_memory`). Retention
+  never touches memory.
+- **Proposals.** A built-in decision template `capture-promote@1` asks one Noul question
+  (`remember`, floor 0.7). Only a confident yes (p > 0.5, not escalated) becomes a proposal, which
+  is never a memory until the person accepts. The local rules provider has no rule for it, so
+  until a model-backed local provider exists (M6b), nothing is proposed. Note for M6b:
+  `Decisions.decide` takes the first allowed provider, and the rules provider answers every
+  template (escalating when it has no rule), so a local model provider must come before it, or the
+  rules provider must step aside for templates it has no rule for.
+- **Retention** is `capture.retention_days` (default 14), swept on the hub's capture pass: deleted
+  the way a forget deletes (WAL, backups, standby), without tombstones.
+- **Event triggers.** A rule can listen to the connector `capture` with topic `any`,
+  `unclassified`, `space:<name>` or a kind. The core wraps `triggers.connectorCheck` for it.
+- **Local-only.** A Screenpipe's address decides its egress with M5b's `addressEgress` (loopback,
+  private ranges, `.local`, the person's devices). Under local-only, a remote one can't be turned
+  on or pointed at, and one already on stops being pulled (status `refused`) without a request,
+  if privacy tightens. Redirects are refused.
+- **Outages.** A Screenpipe that doesn't answer is status `unreachable` and one problem (not one
+  per try), resolved when it answers; the cursor stays, so what Screenpipe kept meanwhile arrives.
+  After a failover, a Screenpipe at a loopback address belongs to the device it was set up on: the
+  new hub doesn't pull its own loopback in the old hub's name (status `elsewhere`).
+- **The service worker** never caches `/api/v1/capture` (a forgotten event must not survive in a
+  cache); its cache is `nova-shell-v6`.
+- **Test clock.** Under `NOVA_TEST_CLOCK=1`, `POST /api/v1/capture/tick {now}` runs one pass
+  (pull, retention, triage) and capture keeps that time as now from then on (consent, resume and
+  retention use it), so the gate can run a day in minutes with the stand-in's timestamps.
+- **Device agents.** `capture_event` joins the inbox kinds (device_inbox is rebuilt in 0009 to
+  widen its CHECK, rows and sync triggers as 0007 made them) and the device queue's kinds
+  (`boot.ts queue capture_event '<json>'`). The runtime agent can't read the active window: it
+  runs under Node's permission model with no child processes or addons, and every OS needs either
+  a native call or a permission for it. Desktop app activity is therefore a later native
+  component (ADR-2); the inbox path and a heartbeat capability are ready for it.
+- **Platform posture** is said plainly in setup's closing line and in Settings › Capture
+  (desktop deep under OS permissions; Android with accessibility and notification access, not
+  built; iOS no passive capture of other apps).
+- **Not done, and why.** An item Screenpipe reports later with a timestamp older than the cursor
+  is missed (Screenpipe's timestamps are monotonic in practice; reading by id would need its
+  database). More than 5,000 new items of one type per pull wait for the next pull. Meetings,
+  browser and sensor kinds exist in the API, with no adapter yet. Proposals for classification
+  (a decision proposing a space) are not built; the person resolves unclassified items.
+- **For the owner to check by hand:** a real Screenpipe on this machine (its `/search` paging and
+  `start_time` inclusivity are as its docs describe; the stand-in, `scripts/fake-screenpipe.js`,
+  follows them).
+
 **2026-10-30 (M5 review fixes): providers, vault, connectors.** Branch `m5-fix/providers-vault`.
 
 - **What a provider may change.** A brief's `inputs.editable` (paths or globs in the workspace)
