@@ -155,7 +155,8 @@ const triggerRules: KindOps = {
     return rulesOf(a).map((r) => {
       let when = r.class === 'proactive' ? 'when Nova decides to' : '';
       try { if (r.class === 'heartbeat') when = describeCron(String(r.cron)); } catch { /* checked in the contract */ }
-      return isObj(r.action) && r.action.kind === 'message' ? `${when}: sends you “${String(r.action.text).slice(0, 80)}”.` : `${when}: starts “${String((r.action as { task?: { title?: string } }).task?.title ?? 'a task')}”.`;
+      const said = (t: string) => `“${t}”${/[.!?]$/.test(t) ? '' : '.'}`;
+      return isObj(r.action) && r.action.kind === 'message' ? `${when}: sends you ${said(String(r.action.text).slice(0, 80))}` : `${when}: starts ${said(String((r.action as { task?: { title?: string } }).task?.title ?? 'a task'))}`;
     });
   },
   async test(a, live) {

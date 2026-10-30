@@ -150,7 +150,8 @@ export class Changes extends EventEmitter {
     const prev = this.#liveBefore(c);
     return {
       ...rest,
-      status: STATUS[c.state],
+      // Rolled back by the person is their decision, not a failure.
+      status: c.state === 'rolled_back' && c.reason?.startsWith('You rolled') ? 'Quiet' : STATUS[c.state],
       words: this.#words(c),
       asks,
       previous_version: prev?.version ?? null,
