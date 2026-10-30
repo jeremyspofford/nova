@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { reduce } from '../ui/js/reduce.js';
 import { createNova } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
-import { createCore } from '../src/core/index.ts';
+import { createCore, ensureMark } from '../src/core/index.ts';
 import { SessionStore } from '../src/sessions.js';
 import { Helpers } from '../src/helpers.js';
 import { SYSTEM } from '../src/chat-run.js';
@@ -23,6 +23,7 @@ let nova;
 let base;
 before(async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-cr-'));
+  ensureMark(home);
   mkdirSync(join(home, 'workspace'), { recursive: true });
   writeFileSync(join(home, 'workspace', 'notes.md'), 'Example notes.\n');
   nova = createNova(loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: fakeAgent(), NOVA_AGENT_EGRESS: 'none', NOVA_TZ: LA }));
@@ -128,6 +129,7 @@ test('a helper is a chat-run task linked to the conversation that asked, with th
 
 test('after a restart, a queued helper still runs; one that was working is not run again, and its conversation hears it didn’t finish', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-cr-restart-'));
+  ensureMark(home);
   mkdirSync(join(home, 'sessions'), { recursive: true });
   const store = new SessionStore(home, LA);
   const parent = store.newId();
@@ -166,6 +168,7 @@ test('after a restart, a queued helper still runs; one that was working is not r
 
 test('local-only with a model in the cloud: the ledger refuses a scheduled run (and says so) and a helper, and the model is never called', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-cr-privacy-'));
+  ensureMark(home);
   const called = join(home, 'model-was-called');
   // Its egress is undeclared, so it counts as cloud.
   const n = createNova(loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: `touch ${called} && ${fakeAgent()}`, NOVA_TZ: LA }));
@@ -194,6 +197,7 @@ test('local-only with a model in the cloud: the ledger refuses a scheduled run (
 
 test('work queued under a looser setting waits on local capacity once the setting is local-only; Activity shows it waiting its turn', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-cr-privacy-'));
+  ensureMark(home);
   const called = join(home, 'model-was-called');
   const n = createNova(loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: `touch ${called} && ${fakeAgent()}`, NOVA_TZ: LA }));
   await new Promise((r) => n.server.listen(0, '127.0.0.1', r));

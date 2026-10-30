@@ -83,6 +83,7 @@ function confirmStep() {
   const kept = [
     ...(p.keeps.foreign.length ? [`In Nova’s home but not Nova’s, so left in place: ${names(p.keeps.foreign)}.`] : []),
     ...(p.keeps.before?.length ? [`Already here before Nova; left alone: ${names(p.keeps.before)}.`] : []),
+    ...(p.keeps.relay ? [esc(p.keeps.relay)] : []),
     ...p.keeps.unreachable.map((u) => esc(u.said)),
     ...(p.keeps.strays.length ? [`${count(p.keeps.strays.length, 'thing')} in the backup folders that look like backups but aren’t Nova’s: left alone.`] : []),
     ...(p.keeps.export ? [`Your export in ${esc(p.keeps.export)}.`] : []),

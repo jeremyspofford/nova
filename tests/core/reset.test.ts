@@ -13,6 +13,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { HOME_MARK, RESET_MARKER, RESET_REPORT, ensureMark, finishReset, stagedPending, type KeyStore } from '../../src/core/index.ts';
 import { open, world } from './resilience-support.ts';
+import { seedHome } from '../../src/home.js';
 import { call, enroll, hub } from './mesh-support.ts';
 
 const CONSOLE = { principal: { kind: 'console' as const }, listener: 'console' as const, address: '127.0.0.1' };
@@ -404,27 +405,70 @@ test('a file named like an encrypted copy that doesn’t open under the backup k
   assert.ok(existsSync(copy), 'left as it is');
 });
 
-// Re-review finding 1: the mark means "this folder is Nova's", not "Nova started here". A folder
-// that already held things when Nova was first pointed at it keeps them: a reset never erases what
-// was there before Nova, and the confirmation says so.
-test('a folder that already held the person’s things when Nova started there keeps them through a reset', async () => {
-  const w = world('nova-reset-before-');
+// Re-review finding 1, final form: Nova adopts a folder that already holds things only if none of
+// them has the name of one of Nova's own entries; otherwise its data would end up inside the
+// person's folders, out of a reset's reach. Other things already there are left alone through a
+// reset, and said.
+test('a folder already holding workspace/ and .git/ that aren’t Nova’s is refused at start, in plain words', () => {
+  const w = world('nova-reset-clash-');
   mkdirSync(join(w.home, 'workspace', 'my-project'), { recursive: true });
-  writeFileSync(join(w.home, 'workspace', 'my-project', 'main.c'), 'int main(void) { return 0; }\n');
   mkdirSync(join(w.home, '.git'));
-  writeFileSync(join(w.home, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(w.home, 'notes.txt'), 'mine\n');
+  assert.throws(() => open(w.home), (e: Error) => e.message === 'This folder already has .git/ and workspace/ that aren’t Nova’s. Choose an empty folder for Nova’s home, or move them.');
+  assert.ok(!existsSync(join(w.home, HOME_MARK)) && !existsSync(join(w.home, 'nova.db')), 'nothing written');
+});
+
+test('an Era 2 home (its standing files, memory and workspace, no nova.db yet) is Nova’s own: adopted whole', async () => {
+  const w = world('nova-reset-era2-');
+  seedHome(w.home, join(import.meta.dirname, '../../templates/home'));
+  writeFileSync(join(w.home, 'memory', '2026-10-29.md'), '- a day note\n');
+  writeFileSync(join(w.home, 'workspace', 'plan.md'), '- a plan\n');
   const c = open(w.home);
-  const p = c.reset.preview();
-  assert.deepEqual(p.keeps.before, ['.git', 'workspace'], 'listed as already here before Nova');
-  assert.ok(!p.wipes.home.includes('workspace') && !p.wipes.home.includes('.git'));
+  try {
+    assert.deepEqual(JSON.parse(readFileSync(join(w.home, HOME_MARK), 'utf8')).before, []);
+    assert.ok(c.reset.preview().wipes.home.includes('workspace'));
+  } finally {
+    await c.close();
+  }
+  // One entry of Nova’s name, said in the singular.
+  const one = world('nova-reset-one-');
+  mkdirSync(join(one.home, 'workspace'), { recursive: true });
+  assert.throws(() => open(one.home), (e: Error) => e.message === 'This folder already has workspace/ that isn’t Nova’s. Choose an empty folder for Nova’s home, or move it.');
+});
+
+test('things already there that aren’t named like Nova’s are adopted, left alone through a reset, and said', async () => {
+  const w = world('nova-reset-before-');
+  mkdirSync(join(w.home, 'photos'), { recursive: true });
+  writeFileSync(join(w.home, 'photos', 'beach.jpg'), 'pixels');
+  writeFileSync(join(w.home, 'notes.txt'), 'mine\n');
+  const c = open(w.home);
+  assert.deepEqual(JSON.parse(readFileSync(join(w.home, HOME_MARK), 'utf8')).before, ['notes.txt', 'photos']);
+  assert.deepEqual(c.reset.preview().keeps.foreign, ['notes.txt', 'photos']);
   await (await c.reset.stage({ confirm: true, who: CONSOLE })).done;
   await c.close();
   const n = open(w.home);
   try {
-    assert.equal(readFileSync(join(w.home, 'workspace', 'my-project', 'main.c'), 'utf8'), 'int main(void) { return 0; }\n', 'the project is kept');
-    assert.ok(existsSync(join(w.home, '.git', 'HEAD')));
-    assert.ok(!existsSync(join(w.home, 'mesh', 'role.json')));
-    assert.deepEqual(n.reset.report()!.left.before, ['.git', 'workspace']);
+    assert.equal(readFileSync(join(w.home, 'photos', 'beach.jpg'), 'utf8'), 'pixels');
+    assert.equal(readFileSync(join(w.home, 'notes.txt'), 'utf8'), 'mine\n');
+    assert.deepEqual(n.reset.report()!.left.foreign, ['notes.txt', 'photos']);
+  } finally {
+    await n.close();
+  }
+});
+
+// Final review item 3: work handed to Relay stays in Relay's own storage; said when Relay was on or used.
+test('when Relay was on or used, the confirmation and the result say its work stays in Relay', async () => {
+  const w = world('nova-reset-relay-');
+  const c = open(w.home);
+  assert.equal(c.reset.preview().keeps.relay, null, 'not said when Relay was never on or used');
+  c.providers.enable('relay', { approved: true });
+  const p = c.reset.preview();
+  assert.match(p.keeps.relay ?? '', /Work handed to Relay stays in Relay’s own storage: erasing Nova doesn’t erase it\./);
+  await (await c.reset.stage({ confirm: true, who: CONSOLE })).done;
+  await c.close();
+  const n = open(w.home);
+  try {
+    assert.match(n.reset.report()!.said, /Work handed to Relay stays in Relay’s own storage/);
   } finally {
     await n.close();
   }

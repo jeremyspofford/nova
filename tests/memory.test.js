@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { searchMemory, terms } from '../src/memory.js';
 
 const home = mkdtempSync(join(tmpdir(), 'nova-m-'));
+ensureMark(home);
 mkdirSync(join(home, 'memory'));
 writeFileSync(join(home, 'memory', '2026-10-19.md'), '# Monday\n\n- Maverick has a new inhaler plan from Dr. Lee.\n- Paid the electric bill.\n');
 writeFileSync(join(home, 'memory', '2026-10-20.md'), '# Tuesday\n\n- Flying Tools VPC endpoint migration is the only client work this week.\n');
@@ -32,12 +33,13 @@ test('no memory folder is not an error', () => {
 
 import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { Memory } from '../src/memory.js';
-import { createCore } from '../src/core/index.ts';
+import { createCore, ensureMark } from '../src/core/index.ts';
 
 const now = new Date('2026-10-21T16:42:00Z');
 // MEMORY.md is a view of the core's memory records, so each test gets a core of its own.
 const fresh = ({ file = true } = {}) => {
   const h = mkdtempSync(join(tmpdir(), 'nova-mm-'));
+  ensureMark(h);
   if (file) copyFileSync(new URL('../templates/home/MEMORY.md', import.meta.url).pathname, join(h, 'MEMORY.md'));
   const core = createCore({ home: h, version: 'test', trustedOrigin: () => true, now: () => now });
   return { h, core, records: core.memory, m: new Memory(h, 'America/New_York', { records: core.memory }) };

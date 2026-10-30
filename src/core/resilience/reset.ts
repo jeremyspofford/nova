@@ -51,6 +51,7 @@ export const RESET_MARKER = 'factory-reset.json';
 export const RESET_REPORT = 'reset-report.json';
 export const EXPORT_SAID = 'Your saved passwords and keys aren’t in the export; you’ll add them again.';
 export const RELEASES_SAID = 'The supervisor’s code releases stay: they are Nova’s code, not your data.';
+export const RELAY_SAID = 'Work handed to Relay stays in Relay’s own storage: erasing Nova doesn’t erase it. Remove it in Relay if you want it gone.';
 export const CONFIRM_WORDS = 'I understand this erases Nova on this machine, and I want to start over.';
 const CANT_TELL_SAID = 'A device that can’t be reached now can’t be told. Its copy stays on that device until it is reset or removed there. The hub’s identity is gone either way, so it can never reconnect to the new Nova.';
 const NOTICE_SAID = 'The hub was reset: Nova there was erased and starts over. This device is no longer paired with it.';
@@ -86,6 +87,8 @@ interface Marker {
   unreachable: Unreachable[];
   devices: { told: DeviceLine[]; not_told: DeviceLine[] } | null;
   export: string | null;
+  // Said when Relay was on or used: its work stays in Relay.
+  relay?: string | null;
   // An HMAC of everything above under the key in the home's mark (home-mark.ts): a marker Nova
   // didn't write, or one changed since, is never acted on.
   seal?: string;
@@ -126,7 +129,7 @@ export interface ResetReport {
   finished_at: string;
   version: string;
   wiped: { home: string[]; keychain: string | null; key_file: boolean; backups: string[]; folders: string[]; scratch: number };
-  left: { foreign: string[]; before: string[]; unreachable: Unreachable[]; strays: string[]; changed: string[]; releases: string; export: string | null; export_gone: string | null; keychain: string | null };
+  left: { foreign: string[]; before: string[]; relay: string | null; unreachable: Unreachable[]; strays: string[]; changed: string[]; releases: string; export: string | null; export_gone: string | null; keychain: string | null };
   devices: { told: DeviceLine[]; not_told: DeviceLine[] };
   said: string;
 }
@@ -238,7 +241,7 @@ export function finishReset(home: string, o: FinishOptions = {}): ResetReport | 
   const report: ResetReport = {
     v: 1, id: m.id, kind: m.kind, staged_at: m.staged_at, finished_at: now().toISOString(), version: m.version,
     wiped: { home: [...new Set([...(m.own ?? []), ...own.filter((n) => n !== RESET_REPORT)])].sort(), keychain: key.keychain, key_file: key.file, backups: wipedBackups, folders, scratch },
-    left: { foreign, before, unreachable: m.unreachable ?? [], strays: m.strays ?? [], changed, releases: RELEASES_SAID, export: m.export && existsSync(m.export) ? m.export : null, export_gone: m.export && !existsSync(m.export) ? m.export : null, keychain: key.problem },
+    left: { foreign, before, relay: m.relay ?? null, unreachable: m.unreachable ?? [], strays: m.strays ?? [], changed, releases: RELEASES_SAID, export: m.export && existsSync(m.export) ? m.export : null, export_gone: m.export && !existsSync(m.export) ? m.export : null, keychain: key.problem },
     devices,
     said: '',
   };
@@ -285,6 +288,7 @@ function summary(r: ResetReport): string {
   if (r.left.export) parts.push(`Your export is in ${r.left.export}, untouched.`);
   if (r.left.export_gone) parts.push(`Your export at ${r.left.export_gone} isn’t there any more: Nova didn’t erase it on purpose, but it is gone. If you need it, look for another copy.`);
   if (r.left.keychain) parts.push(r.left.keychain);
+  if (r.left.relay) parts.push(r.left.relay);
   if (r.kind === 'hub') parts.push(RELEASES_SAID);
   return parts.join(' ');
 }
@@ -317,11 +321,13 @@ export interface ResetOptions {
   restorePending?: () => boolean;
   // Whether first-run setup is done (after it, nothing more is cleared in browsers).
   setupDone?: () => boolean;
+  // Whether the Relay provider is on, or was ever handed work.
+  relayUsed?: () => boolean;
 }
 
 export interface Preview {
   wipes: { home: string[]; keychain: string | null; backups: { folder: string; kind: FolderKind; count: number }[] };
-  keeps: { foreign: string[]; before: string[]; unreachable: Unreachable[]; strays: string[]; releases: string; export: string | null };
+  keeps: { foreign: string[]; before: string[]; relay: string | null; unreachable: Unreachable[]; strays: string[]; releases: string; export: string | null };
   devices: { can_tell: Omit<DeviceLine, 'said'>[]; cant_tell: Omit<DeviceLine, 'said'>[]; cant_tell_said: string };
   export_said: string;
   confirm: string;
@@ -379,7 +385,7 @@ export class FactoryReset {
     try { const s = this.#o.vault.status(); keychain = s.key === 'keychain' ? s.where : null; } catch { /* a vault that won't open: its key still goes */ }
     return {
       wipes: { home: own.filter((n) => n !== RESET_REPORT), keychain, backups: [...by.values()] },
-      keeps: { foreign, before, unreachable: b.unreachable, strays: b.strays, releases: RELEASES_SAID, export: this.#export },
+      keeps: { foreign, before, relay: this.#o.relayUsed?.() ? RELAY_SAID : null, unreachable: b.unreachable, strays: b.strays, releases: RELEASES_SAID, export: this.#export },
       devices: { can_tell: d.can.map(line), cant_tell: d.cant.map(line), cant_tell_said: CANT_TELL_SAID },
       export_said: EXPORT_SAID,
       confirm: CONFIRM_WORDS,
@@ -521,7 +527,7 @@ export class FactoryReset {
     const m: Marker = {
       v: 1, id: randomUUID(), kind: 'hub', home: resolve(this.#o.home), staged_at: this.#o.now().toISOString(), version: this.#o.version,
       vault_ids: this.#o.vault.keyIds(), own: own.filter((n) => n !== RESET_REPORT), backups: b.items, strays: b.strays, unreachable: b.unreachable,
-      devices: null, export: this.#export,
+      devices: null, export: this.#export, relay: this.#o.relayUsed?.() ? RELAY_SAID : null,
     };
     writeMarker(this.#o.home, m);
     this.#staging = true;

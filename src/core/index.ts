@@ -430,6 +430,7 @@ export function createCore(o: CoreOptions) {
     emit: (event, data) => bus.emit('event', event, data),
     // Restart in place (resilience/restart.ts): the next start finishes the wipe.
     restarter, restorePending: () => stagedPending(o.home), setupDone: () => setup.view().done,
+    relayUsed: () => { try { return providers.view('relay').enabled || !!db.get("SELECT 1 FROM task WHERE owner = 'relay' LIMIT 1"); } catch { return false; } },
     // The hub's own work stops too (the heartbeat, so no nightly backup starts), then the queue.
     stopWork: async (ms) => { stopHub(); await stopWork(ms); },
     ...(o.reset?.tellMs ? { tellMs: o.reset.tellMs } : {}),

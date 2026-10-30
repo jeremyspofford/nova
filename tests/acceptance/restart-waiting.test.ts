@@ -5,9 +5,11 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ROOT, blank, sleep, stop, until } from './support.ts';
+import { ensureMark } from '../../src/core/index.ts';
 
 test('after a hard restart, a run that waited for an OK ends with a reason, and its schedule can run again', async () => {
   const m = blank('nova-restart-');
+  ensureMark(m.home);
   mkdirSync(join(m.home, 'schedules'), { recursive: true });
   writeFileSync(join(m.home, 'schedules', 'status-check.md'), '---\nname: Status check\ncron: 0 9 * * *\ndeliver: main\n---\n\nRun git status.\n');
   const env = { NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(ROOT, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none' };

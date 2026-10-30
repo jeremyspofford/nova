@@ -14,6 +14,7 @@ import { loadConfig } from '../src/config.js';
 import { TOOLS } from '../src/tools.js';
 import { SCOPE } from '../src/connectors/gmail.js';
 import { startFakeGoogle, startFakeImap, sampleMail } from '../scripts/fake-google.js';
+import { ensureMark } from '../src/core/index.ts';
 
 let google;
 let imap;
@@ -50,6 +51,7 @@ async function signIn(gmail) {
 
 test('Era 2’s plaintext secrets move into the vault on start, and their files are deleted', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-gc-'));
+  ensureMark(home);
   const dir = join(home, 'connectors', 'gmail');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'client.json'), JSON.stringify(CLIENT), { mode: 0o600 });

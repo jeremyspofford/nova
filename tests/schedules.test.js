@@ -14,6 +14,7 @@ import { buildPrompt } from '../src/context.js';
 import { reduce } from '../ui/js/reduce.js';
 import { createNova } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
+import { ensureMark } from '../src/core/index.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 const LA = 'America/Los_Angeles';
@@ -286,6 +287,7 @@ test('pause, resume, remove and undo, through the API', async () => {
 
 test('a handoff waits for a reply in progress to finish', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-sw-'));
+  ensureMark(home);
   mkdirSync(join(home, 'sessions'), { recursive: true });
   const n = createNova(loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: `FAKE_DELAY=40 node ${join(root, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none', NOVA_TZ: LA }));
   n.runner.send('main', 'slow please');

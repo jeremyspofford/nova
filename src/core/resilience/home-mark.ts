@@ -3,8 +3,10 @@
 // never a folder that is the computer's root, the person's own home folder, or one that contains
 // it, whatever it carries.
 //
-// Nova writes the mark when it sets up a home. A folder that is new or empty, or whose nova.db has
-// Nova's schema (homes from before the mark, at their next start), is Nova's. Any other folder Nova
+// Nova writes the mark when it sets up a home. A folder that is new or empty, whose nova.db has
+// Nova's schema (homes from before the mark, at their next start), or that holds Era 2's standing
+// files (homes from before the core) is Nova's. Any other folder that already holds something named
+// like one of Nova's own entries is refused: Nova's data would end up inside the person's folders. Any other folder Nova
 // is pointed at keeps what was there first: the mark records those top-level names (`before`),
 // and a reset never erases them, whatever they are called. It is never in a backup, a
 // checkpoint, an export or the standby's copy, and the agent's file tools can't read or write it.
@@ -16,7 +18,9 @@
 // file write, or damaged) from ever being acted on, and it survives a crash, so a reset stopped
 // part way still finishes.
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { CoreError } from '../errors.ts';
+import { isNovaEntry } from './entries.ts';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -69,6 +73,10 @@ function novaSchema(db: string): boolean {
   }
 }
 
+// A home from before the core (Era 2) has no nova.db yet, but holds the standing files Era 2 seeded
+// from templates/home: all four of them make it Nova's own.
+const ERA2_STANDING = ['AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md'];
+
 // A standby's home holds its keys and role file before Nova first starts there: Nova's own enrollment
 // (the boot agent) wrote them, so they are Nova's, not something that was there before.
 function enrolled(home: string): boolean {
@@ -86,8 +94,18 @@ export function ensureMark(home: string, o: { now?: () => Date; userHome?: strin
   let before: string[] = [];
   if (existsSync(db)) {
     if (!novaSchema(db)) return null;
-  } else {
+  } else if (!ERA2_STANDING.every((f) => existsSync(join(home, f)))) {
     try { before = readdirSync(home).filter((n) => n !== HOME_MARK && !n.startsWith(`${HOME_MARK}.`) && !(n === 'mesh' && enrolled(home))).sort(); } catch { /* new */ }
+    // Something already here with the name of one of Nova's own entries would end up holding Nova's
+    // data, out of a reset's reach: such a folder isn't adopted, and Nova doesn't start there.
+    const clash = before.filter((n) => isNovaEntry(n));
+    if (clash.length) {
+      const named = clash.map((n) => { try { return statSync(join(home, n)).isDirectory() ? `${n}/` : n; } catch { return n; } });
+      const list = named.length === 1 ? named[0] : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`;
+      throw new CoreError('conflict', named.length === 1
+        ? `This folder already has ${list} that isn’t Nova’s. Choose an empty folder for Nova’s home, or move it.`
+        : `This folder already has ${list} that aren’t Nova’s. Choose an empty folder for Nova’s home, or move them.`);
+    }
   }
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const m: HomeMark = { v: 1, id: randomUUID(), created_at: (o.now?.() ?? new Date()).toISOString(), seal: randomBytes(32).toString('base64'), before };

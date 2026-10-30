@@ -97,7 +97,10 @@ export const TOOLS = {
       if (posix === 'memory.md' || top === 'memory') throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
       if (top === 'schedules') throw new Error('Schedules are set with schedule_set, which the person approves, not write_file');
       if (posix === 'permissions.md') throw new Error('Only the person changes what Nova may do on its own');
-      if (!WRITABLE_FOLDED.has(posix) && !(top === 'workspace' && posix !== 'workspace')) throw new Error(`${path} can't be written: Nova writes only in workspace/ and its standing files (${WRITABLE.join(', ')}). The rest of its home is Nova's own state.`);
+      // Allowed only as spelled exactly and after folding: folding makes refusals stricter, never wider.
+      const exact = rel.split(sep).join('/');
+      const allowed = (name, first) => WRITABLE_FOLDED.has(name) || (first === 'workspace' && name !== 'workspace');
+      if (!allowed(posix, top) || !(WRITABLE.includes(exact) || (exact.split('/')[0] === 'workspace' && exact !== 'workspace'))) throw new Error(`${path} can't be written: Nova writes only in workspace/ and its standing files (${WRITABLE.join(', ')}). The rest of its home is Nova's own state.`);
       if (typeof content !== 'string') throw new Error('content must be a string');
       mkdirSync(dirname(abs), { recursive: true });
       // Never through a link, even if one appeared since the check.

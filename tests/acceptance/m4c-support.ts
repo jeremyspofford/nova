@@ -6,6 +6,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { ROOT, blank, sleep, stop, until, type Running } from './support.ts';
+import { ensureMark } from '../../src/core/index.ts';
 
 export const agent = { NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(ROOT, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none' };
 
@@ -39,6 +40,8 @@ export async function setup(prefix: string, hubExtra: (home: string) => void = (
   const standby = blank(`${prefix}-standby-`);
   const standbyMesh = `http://127.0.0.1:${await freePort()}`;
   const env = (url: string) => ({ ...agent, NOVA_MESH_URL: url, NOVA_MESH_TRANSPORT: 'network', NOVA_SYNC_WAIT_S: '5' });
+  // Nova set the hub's home up first (its mark), as it would before anything is put in it.
+  ensureMark(hub.home);
   hubExtra(hub.home);
   // The hub picks its own mesh port and says which.
   const hubProc = await hub.start({ ...env('http://127.0.0.1:0'), ...hubEnv });

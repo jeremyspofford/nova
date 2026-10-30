@@ -185,6 +185,9 @@ test('the file tools compare names whatever their case or Unicode form', async (
   for (const path of ['Factory-Reset.json', 'NOVA.db', 'Memory.md', 'SESSIONS/x.jsonl', 'Permissions.md']) {
     await assert.rejects(TOOLS.write_file.run({ path, content: 'x' }, { home: h }), /can't be written|Memory is kept|audit trail|Only the person/, path);
   }
-  // The same file, as a case-insensitive disk sees it: the standing file, in another case.
-  assert.match(await TOOLS.write_file.run({ path: 'User.md', content: 'ok' }, { home: h }), /Wrote 2 bytes/);
+  // Writing needs the name exactly as allowed, as well as folded: folding must never widen it.
+  for (const path of ['WORKSPACE/x.md', 'user.md', 'User.md', 'Workspace/notes.md']) {
+    await assert.rejects(TOOLS.write_file.run({ path, content: 'x' }, { home: h }), /can't be written/, path);
+  }
+  assert.match(await TOOLS.write_file.run({ path: 'USER.md', content: 'ok' }, { home: h }), /Wrote 2 bytes/);
 });

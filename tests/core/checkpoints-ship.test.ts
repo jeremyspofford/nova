@@ -9,7 +9,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createCore } from '../../src/core/index.ts';
+import { createCore, ensureMark } from '../../src/core/index.ts';
 import { windDown } from '../support/changes.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -22,6 +22,7 @@ async function until<T>(read: () => T | Promise<T>, done: (v: T) => boolean, ms 
 
 function open(free: { v: number | null }) {
   const home = mkdtempSync(join(tmpdir(), 'nova-cp-ship-'));
+  ensureMark(home);
   execFileSync('git', ['-C', home, 'init', '-q']);
   const clock = { now: new Date('2030-01-15T08:00:00.000Z') };
   const core = createCore({ home, version: '0.1.0', trustedOrigin: () => true, now: () => clock.now, checkpoints: { free: () => free.v } });

@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { runLines } from '../../src/core/providers/cli.ts';
 import type { LanedWorker } from '../../src/core/index.ts';
 import { open, world } from './resilience-support.ts';
+import { ensureMark } from '../../src/core/index.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,6 +27,7 @@ function writer(id: string, file: string, listens: boolean): LanedWorker {
 
 test('stopping Nova’s work before a restart: running tasks stop, and no process it started outlives it', { timeout: 30_000 }, async () => {
   const w = world('nova-stopwork-');
+  ensureMark(w.home);
   mkdirSync(join(w.home, 'workspace'), { recursive: true });
   const polite = join(w.home, 'workspace', 'polite.txt');
   const deaf = join(w.home, 'workspace', 'deaf.txt');

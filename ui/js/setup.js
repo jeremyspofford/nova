@@ -63,6 +63,7 @@ function resetCard() {
   const left = [
     ...(r.left.foreign.length ? [`Not Nova’s, left in place: ${r.left.foreign.join(', ')}`] : []),
     ...(r.left.before?.length ? [`Already here before Nova, left alone: ${r.left.before.join(', ')}`] : []),
+    ...(r.left.relay ? [r.left.relay] : []),
     ...r.left.unreachable.map((u) => u.said),
     ...(r.left.changed.length ? [`Changed since, so left: ${r.left.changed.join(', ')}`] : []),
     ...(r.left.export ? [`Your export: ${r.left.export}`] : []),
