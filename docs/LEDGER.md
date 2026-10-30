@@ -15,6 +15,20 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (Amendment 2026-10-30-C, owner-approved).** `AMENDMENT-2026-10-30-C.md` and
+`UX-RESEARCH-2026-10-30.md` were added to the packet exactly as given (sha256 `e3b1862d…` and
+`dda206f4…`).
+- **OPERATING-RULES:** the amendment is noted there.
+- **ROADMAP:** it gains the Part 1 UI-fixes PR (after M7, which is already merged, so next), M9 "Feel &
+  Polish", the ingest security gate, and M10 "Execution Plane".
+- **DESIGN-SYSTEM §1:** it gains the binding progress and waiting rules.
+- **Earlier packet text the amendment replaces,** edited to match:
+  - the orb as "avatar in chat" (§1, §5), which becomes once per view;
+  - the apply path's "preview in a sandboxed frame" (§4), which becomes a live apply on the real UI,
+    with an instant Undo for this device and an explicit Save for all devices.
+
+  This is a later owner decision superseding older text, not a conflict.
+
 **2026-10-30 (pairing on iPhone).** Branch `fix/webkit-pairing`. The owner's iPhone joined and
 showed its digits, was approved on the hub, and then stayed on "Check the digits" for good.
 - **Root cause:** WebKit (every iPhone browser) can't keep an X25519 `CryptoKey` in IndexedDB. A
