@@ -47,16 +47,19 @@ test('new UI code may reference only schema tokens', () => {
   const ok = '.a{color:var(--text-primary);background:var(--surface-card);font:var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body);border-radius:var(--radius-card);box-shadow:var(--shadow-card);padding:var(--space-3);transition:opacity var(--motion-duration-fast) var(--motion-ease)}';
   assert.deepEqual(lint('ui/x.css', ok), []);
   assert.match(lint('ui/x.css', '.a{color:var(--text-shiny)}')[0][1], /unknown token --text-shiny/);
-  assert.match(lint('ui/x.css', '.a{color:var(--text)}')[0][1], /Era 2 name/);
+  assert.match(lint('ui/x.css', '.a{color:var(--text)}')[0][1], /unknown token --text/, 'Era 2’s names are gone');
   assert.match(lint('ui/x.css', '.a{--bg-base:#000}').map((p) => p[1]).join(' '), /only a design system sets it/);
   assert.match(lint('ui/x.css', '.a{padding:12px}')[0][1], /spacing must be a space token/);
   assert.match(lint('ui/x.css', '@media (min-width: 600px){.a{display:none}}')[0][1], /breakpoints belong in/);
+  assert.match(lint('ui/x.css', '@container main (min-width: 600px){.a{display:none}}')[0][1], /breakpoints belong in/);
   assert.deepEqual(lint(LAYOUT_FILE, '@media (min-width: 600px){.a{display:none}}'), []);
   assert.deepEqual(lint('ui/x.js', 'const x = `<span style="color: var(--status-ok)">`;'), []);
   assert.match(lint('ui/x.js', 'const x = `<span style="color: var(--nope)">`;')[0][1], /unknown token --nope/);
 });
 
-test('Era 2 files may use the temporary aliases, and nothing else outside the schema', () => {
-  assert.deepEqual(lint('ui/styles/components.css', '.a{color:var(--text);padding:12px;font:var(--t-body);border-radius:var(--r-card);transition:opacity var(--m-fast) var(--ease)}'), []);
-  assert.match(lint('ui/styles/components.css', '.a{color:var(--txt)}')[0][1], /unknown token --txt/);
+test('no file is exempt: the Era 2 aliases and the LEGACY list are gone', () => {
+  const era2 = '.a{color:var(--text);padding:12px;font:var(--t-body)}';
+  for (const f of ['ui/styles/views.css', 'ui/styles/base.css']) assert.equal(lint(f, era2).length, 3, f);
+  assert.equal(lint('ui/index.html', '<p style="color: var(--text)">').length, 1);
+  assert.equal(lint('ui/js/app.js', 'const x = `<p style="color: var(--text-2)">`;').length, 1);
 });

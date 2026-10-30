@@ -1,27 +1,16 @@
 #!/usr/bin/env node
 // Components consume design tokens only (DESIGN-SYSTEM §2, ADR-12). Fails on a raw colour, font
-// name, radius, shadow or motion value anywhere in ui/, and on any var(--x) that isn't a token
-// of the schema in src/core/design.ts (or a custom property ui/ itself declares). New UI code is
-// held to the full rule: raw spacing is an error too, and breakpoints live only in the layout
-// file (DESIGN-SYSTEM §5).
-//
-// TEMPORARY: the Era 2 files in LEGACY may also use Era 2's variable names, which the generated
-// design-system CSS emits as aliases of the new tokens, and keep their raw spacing and
-// breakpoints. Both go when the PWA replaces these files (docs/LEDGER.md).
+// name, radius, shadow, motion value or raw spacing anywhere in ui/, and on any var(--x) that
+// isn't a token of the schema in src/core/design.ts (or a custom property ui/ itself declares).
+// Breakpoints live only in the layout file (DESIGN-SYSTEM §5).
 // Usage: node scripts/lint-tokens.js [files...]
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
-import { ERA2_NAMES, TOKEN_NAMES, cssVar } from '../src/core/index.ts';
+import { TOKEN_NAMES, cssVar } from '../src/core/index.ts';
 
 const UI = 'ui';
 export const LAYOUT_FILE = 'ui/styles/layout.css';
-export const LEGACY = new Set([
-  'ui/index.html', 'ui/styleguide.html',
-  'ui/styles/base.css', 'ui/styles/components.css', 'ui/styles/styleguide.css',
-  'ui/js/app.js', 'ui/js/view.js', 'ui/js/styleguide.js', 'ui/js/theme.js', 'ui/js/markdown.js', 'ui/js/reduce.js', 'ui/js/dev-reload.js',
-]);
 const SCHEMA = new Set(TOKEN_NAMES.map(cssVar));
-const ALIASES = new Set(ERA2_NAMES);
 
 const COLOR_PROPS = /^(color|background|background-color|border|border-(top|right|bottom|left)(-color)?|border-color|outline|outline-color|fill|stroke|text-decoration|text-decoration-color|caret-color|accent-color|column-rule|box-shadow|text-shadow)$/;
 const NAMED = /\b(white|black|red|green|blue|gray|grey|silver|orange|yellow|purple|pink|brown|navy|teal|maroon|olive|lime|aqua|fuchsia)\b/i;
@@ -42,11 +31,10 @@ function varProblems(text, lineOf, ctx) {
   for (const m of text.matchAll(/var\((--[\w-]+)/g)) {
     const name = m[1];
     if (SCHEMA.has(name) || ctx.local.has(name)) continue;
-    if (ctx.legacy && ALIASES.has(name)) continue;
-    out.push([lineOf(m.index), ALIASES.has(name) ? `${name} is an Era 2 name; use the schema token it aliases` : `unknown token ${name}: components use only schema tokens (GET /api/v1/design-systems/schema)`]);
+    out.push([lineOf(m.index), `unknown token ${name}: components use only schema tokens (GET /api/v1/design-systems/schema)`]);
   }
   for (const m of text.matchAll(/(?:^|[;{\s])(--[\w-]+)\s*:/g)) {
-    if (SCHEMA.has(m[1]) || ALIASES.has(m[1])) out.push([lineOf(m.index), `${m[1]} is a design token; only a design system sets it`]);
+    if (SCHEMA.has(m[1])) out.push([lineOf(m.index), `${m[1]} is a design token; only a design system sets it`]);
   }
   return out;
 }
@@ -59,8 +47,8 @@ function cssProblems(css, ctx) {
   for (const m of body.matchAll(/#[0-9a-fA-F]{3,8}\b/g)) out.push([lineOf(m.index), `raw color ${m[0]}`]);
   for (const m of body.matchAll(/\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(/g)) out.push([lineOf(m.index), `raw color ${m[1]}()`]);
   for (const m of body.matchAll(/cubic-bezier\(|steps\(/g)) out.push([lineOf(m.index), 'raw easing curve']);
-  if (!ctx.legacy && ctx.path !== LAYOUT_FILE) {
-    for (const m of body.matchAll(/@media[^{]*\((?:min-|max-)?(?:width|height)\s*:/g)) out.push([lineOf(m.index), `breakpoints belong in ${LAYOUT_FILE} (DESIGN-SYSTEM §5)`]);
+  if (ctx.path !== LAYOUT_FILE) {
+    for (const m of body.matchAll(/@(?:media|container)[^{]*\((?:min-|max-)?(?:width|height|inline-size)\s*[:<>]/g)) out.push([lineOf(m.index), `breakpoints belong in ${LAYOUT_FILE} (DESIGN-SYSTEM §5)`]);
   }
   for (const m of body.matchAll(/([a-z-]+)\s*:\s*([^;{}]+)/g)) {
     const [, prop, value] = m;
@@ -80,7 +68,7 @@ function cssProblems(css, ctx) {
     if (/^(transition|animation)(-timing-function)?$/.test(prop) && /\b(ease|ease-in|ease-out|ease-in-out)\b/.test(v.replace(/var\([^)]*\)/g, ''))) {
       out.push([line, `easing must be a token (var(--motion-ease)): ${v}`]);
     }
-    if (!ctx.legacy && SPACING.test(prop)) {
+    if (SPACING.test(prop)) {
       const raw = v.replace(/var\([^)]*\)/g, '').replace(/calc\([^)]*\)/g, '').match(/(?<![\w-])(?!0(?:px)?\b|1px\b)\d*\.?\d+(px|rem|em)\b/);
       if (raw) out.push([line, `spacing must be a space token: ${prop}: ${v}`]);
     }
@@ -118,14 +106,14 @@ function files(dir) {
 // `local` is every custom property ui/ declares; pass it when linting one file on its own.
 export function lint(path, text = readFileSync(path, 'utf8'), local = declared(text)) {
   const rel = relative('.', path);
-  const ctx = { path: rel, legacy: LEGACY.has(rel), local };
+  const ctx = { path: rel, local };
   const ext = extname(path);
   return ext === '.css' ? cssProblems(text, ctx) : ext === '.js' ? jsProblems(text, ctx) : htmlProblems(text, ctx);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const targets = process.argv.slice(2).length ? process.argv.slice(2) : files(UI);
-  const local = new Set(files(UI).flatMap((f) => [...declared(readFileSync(f, 'utf8'))]).filter((n) => !SCHEMA.has(n) && !ALIASES.has(n)));
+  const local = new Set(files(UI).flatMap((f) => [...declared(readFileSync(f, 'utf8'))]).filter((n) => !SCHEMA.has(n)));
   let count = 0;
   for (const f of targets) {
     for (const [line, msg] of lint(f, readFileSync(f, 'utf8'), local)) { console.log(`${relative('.', f)}:${line}  ${msg}`); count++; }

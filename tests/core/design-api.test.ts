@@ -61,7 +61,7 @@ test('list, one, and the schema the UI reads instead of keeping a copy', async (
   assert.equal((await call('GET', '/design-systems/nope')).status, 404);
   const schema = await call('GET', '/design-systems/schema');
   assert.ok(schema.body.tokens.some((t: { name: string; css: string }) => t.name === 'bg/base' && t.css === '--bg-base'));
-  assert.equal(schema.body.era2_aliases.temporary, true);
+  assert.equal(schema.body.era2_aliases, undefined, 'the Era 2 aliases are gone');
   await stop();
 });
 

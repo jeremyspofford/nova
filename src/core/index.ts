@@ -32,7 +32,7 @@ export type { Worker, Egress } from './workers.ts';
 export type { Checker } from './verify.ts';
 export type { Lane, LanedWorker, Task } from './ledger.ts';
 // The design-system schema and its checks, for the token lint and the package check (scripts/).
-export { TOKENS, TOKEN_NAMES, ERA2_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
+export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
 
 export interface CoreOptions {
   home: string;

@@ -7,7 +7,7 @@ import { Db } from '../../src/core/db.ts';
 import { Profile } from '../../src/core/profile.ts';
 import { Extensions } from '../../src/core/extensions.ts';
 import {
-  BUILTIN_DIR, CONTENT_RULES, DEFAULT_DESIGN_SYSTEM, Design, ERA2_ALIASES, TOKENS, TOKEN_NAMES,
+  BUILTIN_DIR, CONTENT_RULES, DEFAULT_DESIGN_SYSTEM, Design, TOKENS, TOKEN_NAMES,
   contrast, cssVar, generateCss, validatePackage,
 } from '../../src/core/design.ts';
 
@@ -177,14 +177,14 @@ test('CSS: every token as a variable, light and dark honoured, auto follows the 
   for (const css of [light, dark, auto]) assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*:root \{[^}]*--motion-breathe: 0s;[^}]*--motion-pulse: 0s;/);
 });
 
-test('CSS: the Era 2 names are emitted as temporary aliases of the new tokens', () => {
-  const css = generateCss(fixture(), { mode: 'light' });
-  assert.match(css, /--bg: var\(--bg-base\);/);
-  assert.match(css, /--text-2: var\(--text-secondary\);/);
-  assert.match(css, /--t-body: var\(--type-weight-regular\) var\(--type-body\)\/var\(--type-line-body\) var\(--font-body\);/);
-  assert.match(css, /--accent-text: var\(--[a-z-]+\);/);
-  assert.match(css, /temporary/i);
-  for (const name of Object.keys(ERA2_ALIASES)) assert.match(css, new RegExp(`${name}: `), name);
+test('CSS carries the schema tokens and nothing else: Era 2’s temporary aliases are gone', () => {
+  for (const mode of ['light', 'dark', 'auto'] as const) {
+    const css = generateCss(fixture(), { mode });
+    const declared = [...css.matchAll(/(--[\w-]+):/g)].map((m) => m[1]!);
+    const schema = new Set(TOKEN_NAMES.map(cssVar));
+    assert.deepEqual(declared.filter((n) => !schema.has(n)), [], mode);
+    assert.doesNotMatch(css, /--bg:|--text-2:|--t-body:|--accent-text:|--shift:/, mode);
+  }
 });
 
 test('CSS is never generated from an invalid package', () => {
