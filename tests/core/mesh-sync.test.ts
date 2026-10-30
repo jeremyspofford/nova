@@ -474,6 +474,7 @@ test('only the standby may pull the log, and what it gets is sealed to it', asyn
     assert.equal(asPhone.status, 403);
     assert.equal((await call(p.h.mesh, 'GET', '/api/v1/mesh/sync?after=0')).status, 401);
     // Pulled as the standby by hand: a box that opens only with the standby's key.
+    p.h.core.profile.set('user', 'name', 'wire-check-placeholder', 'settings');
     const id = loadIdentity(p.home);
     const time = p.h.nowS();
     const { sessionMessage } = await import('../../src/core/index.ts');
@@ -481,10 +482,10 @@ test('only the standby may pull the log, and what it gets is sealed to it', asyn
     const r = await call(p.h.mesh, 'GET', '/api/v1/mesh/sync?after=0&wait=0', undefined, { authorization: `Bearer ${s.body.token}` });
     assert.equal(r.status, 200);
     assert.deepEqual(Object.keys(r.body).sort(), ['epoch', 'hub_id', 'sealed']);
-    assert.ok(!JSON.stringify(r.body).includes('Hub'), 'nothing readable on the wire');
+    assert.ok(!JSON.stringify(r.body).includes('wire-check-placeholder'), 'nothing readable on the wire');
     const { SYNC_AAD } = await import('../../src/core/mesh/replica.ts');
     const payload = JSON.parse(id.open(p.h.core.mesh.identity.x25519PublicKey, Buffer.from(r.body.sealed, 'base64url'), SYNC_AAD(p.dev.deviceId, 0)).toString());
-    assert.ok(payload.rows.length > 0);
+    assert.ok(payload.rows.some((x: { row: string | null }) => x.row?.includes('wire-check-placeholder')), 'the box carries the rows');
     assert.throws(() => id.open(p.h.core.mesh.identity.x25519PublicKey, Buffer.from(r.body.sealed, 'base64url'), SYNC_AAD(p.dev.deviceId, 1)), 'bound to the cursor it answers');
     // The standby's lag shows on the hub once it acknowledges, and a new standby starts from zero.
     const ack = await call(p.h.mesh, 'POST', '/api/v1/mesh/sync/ack', { seq: payload.upto }, { authorization: `Bearer ${s.body.token}` });

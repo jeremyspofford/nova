@@ -258,13 +258,14 @@ export class Replica extends EventEmitter {
         }
         // Wall time, not Nova's clock: this is about how long the hub has really been gone.
         this.#unreachableSince ??= Date.now();
-        const down = Math.round((Date.now() - this.#unreachableSince) / 1000);
+        const downMs = Date.now() - this.#unreachableSince;
+        const down = Math.floor(downMs / 1000);
         if (!this.#reported && down >= 60) {
           this.#reported = true;
           this.#log.problem('sync', `The standby hasn’t reached the hub at ${this.#role().hub.url} for a minute: ${msg}`);
         }
         const after = this.#failoverAfterS();
-        if (after && down >= after) {
+        if (after && downMs >= after * 1000) {
           this.#running = false;
           this.emit('failover', { down_s: down, error: msg });
           break;
