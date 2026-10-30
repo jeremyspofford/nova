@@ -95,6 +95,8 @@ export class Spokes extends EventEmitter {
       this.#log.problem('mesh', `The device agent on “${device.name}” stopped its runtime after it crashed three times in a minute, and is in safe mode. It will try again when a new runtime arrives, or when you run its recover command.`);
     }
     if (!before || before.safe_mode !== safe || caps) this.emit('change', this.#devices.get(device.id));
+    // What it can run models on (M6b): the model manager checks and keeps it.
+    if (body.hardware !== undefined) this.emit('hardware', this.#devices.get(device.id), body.hardware);
     return { ok: true, epoch: this.#devices.state().epoch, runtime: { version: this.runtime().manifest.version } };
   }
 
