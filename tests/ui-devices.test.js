@@ -26,6 +26,10 @@ test('the mesh card shows real devices; "only this device" only while it is true
   assert.match(many, /and 2 more/);
   assert.match(deviceRow(gone, { now }), /Browser · revoked/);
   assert.match(deviceRow(gone, { now }), /<span class="pill">Revoked/);
+  // A computer whose agent is in safe mode (M4b) is online, and says why its runtime is down.
+  const computer = { id: 'c', name: 'Test computer', kind: 'computer', role: 'spoke', trust: 'trusted', online: true, agent: { safe_mode: true } };
+  assert.match(deviceRow(computer, { now }), /Computer · safe mode: its agent stopped after repeated crashes/);
+  assert.doesNotMatch(deviceRow({ ...computer, agent: { safe_mode: false } }, { now }), /safe mode/);
 });
 
 test('approving a device is tier 3: the digits, who it is and what it may do, a locked Confirm', () => {

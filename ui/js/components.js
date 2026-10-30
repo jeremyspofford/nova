@@ -178,6 +178,8 @@ export function deviceDetail(d, now = new Date()) {
   if (d.detail !== undefined || !d.kind) return d.detail ?? '';
   const what = d.role === 'hub' ? 'The hub' : KIND_WORDS[d.kind] ?? d.kind;
   if (d.trust === 'revoked') return `${what} · revoked ${ago(d.revoked_at, now)}`;
+  // A computer's agent that stopped its runtime after repeated crashes says so in its heartbeat.
+  if (d.agent?.safe_mode && d.online) return `${what} · safe mode: its agent stopped after repeated crashes`;
   if (d.online || d.role === 'hub') return what;
   return `${what} · ${d.last_seen ? `last seen ${ago(d.last_seen, now)}` : 'not seen yet'}`;
 }
