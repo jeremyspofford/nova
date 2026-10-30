@@ -12,6 +12,7 @@ import { api, on } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { status } from './components.js';
 import { openSheet, toast } from './shell.js';
+import { forgetHere } from './forget-here.js';
 
 let preview = null;
 let failed = '';
@@ -177,7 +178,11 @@ function waitForFirstRun(id) {
 export function bindReset(root, render) {
   rerender = render;
   // A paired phone or browser hears it on its stream: the Nova it was paired with is gone.
-  on('reset', () => { if (hubOnly) toast('The hub was reset: Nova there was erased and starts over. This device is no longer paired with it.', { tone: 'alert', ms: 15000 }); });
+  // It forgets its key, drafts and offline copies of the Nova that is being erased.
+  on('reset', () => {
+    void forgetHere();
+    if (hubOnly) toast('The hub was reset: Nova there was erased and starts over. This device is no longer paired with it, and has forgotten what it kept.', { tone: 'alert', ms: 15000 });
+  });
   root.addEventListener('click', (e) => {
     const b = e.target.closest('[data-action]');
     if (b?.dataset.action === 'reset-retry') loadReset();

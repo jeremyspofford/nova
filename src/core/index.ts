@@ -612,7 +612,12 @@ export function createCore(o: CoreOptions) {
         return profile.section(section);
       },
     },
-    { method: 'GET', path: '/setup', summary: 'The setup conversation so far, and the question Nova is asking.', handle: () => setup.view() },
+    {
+      // After a factory reset, until setup is done, the browser forgets what it kept of the Nova that
+      // was erased (M7 amendment §2).
+      method: 'GET', path: '/setup', summary: 'The setup conversation so far, and the question Nova is asking.',
+      handle: () => { const v = setup.view(); return reset.report() && !v.done ? new Reply(v, { 'clear-site-data': '"cache", "storage"' }) : v; },
+    },
     { method: 'POST', path: '/setup/messages', summary: 'Answer Nova in the setup conversation.', body: '{text}', handle: ({ body }) => setup.answer(str(body.text, 'text')) },
     {
       method: 'GET', path: '/tasks', summary: 'Work Ledger tasks, newest first. Filter with ?state=.',

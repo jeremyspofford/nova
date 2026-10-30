@@ -132,6 +132,8 @@ test('the hub tells its devices before the wipe: the standby wipes its copy and 
     assert.deepEqual(r.told.map((d) => d.name).sort(), ['Desk computer', 'Pocket phone', 'Standby']);
     assert.deepEqual(r.not_told.map((d) => d.name), ['Drawer tablet']);
     assert.ok(phoneStream.got.join('').includes('event: reset'), 'the phone heard it on its stream');
+    // Told, and asked to forget what it kept; Nova doesn't claim it did.
+    assert.match(r.told.find((d) => d.name === 'Pocket phone')!.said, /asked to forget .* Nova can’t confirm it did/);
     // Every session has ended.
     assert.equal((await beat()).status, 401);
     // The marker carries who was told into the report the new home keeps.

@@ -5,6 +5,7 @@ import { api, on } from './core.js';
 import { ICONS, chatBubble, evidenceViewer, lookingIntoItCard, verifiedResultCard } from './components.js';
 import { liveOrb, openSheet, toast } from './shell.js';
 import { escapeHtml as esc } from './markdown.js';
+import { forgetHere } from './forget-here.js';
 
 const el = document.getElementById('setup');
 let view = null;
@@ -21,6 +22,8 @@ export async function startSetup({ done }) {
   try { view = await api('GET', '/setup'); } catch { return false; }
   if (view.done) return false;
   try { resetReport = await api('GET', '/reset/report'); } catch { resetReport = null; }
+  // After a reset this browser forgets what it kept of the Nova that was erased.
+  if (resetReport) await forgetHere();
   show();
   return true;
 }

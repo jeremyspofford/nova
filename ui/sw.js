@@ -9,7 +9,7 @@ const SHELL = [
   '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css',
   '/js/app.js', '/js/core.js', '/js/shell.js', '/js/layout.js', '/js/nav.js', '/js/status.js', '/js/components.js',
   '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js', '/js/qr.js', '/js/device-key.js', '/js/takeover.js',
-  '/js/connections.js', '/js/capture.js', '/js/models.js', '/js/changes.js', '/js/checkpoints.js', '/js/reset.js',
+  '/js/connections.js', '/js/capture.js', '/js/models.js', '/js/changes.js', '/js/checkpoints.js', '/js/reset.js', '/js/forget-here.js',
 ];
 // Memory and context receipts are never kept here: a forgotten memory must not survive in a
 // cache (owner's standing order 4), so these are network-only.

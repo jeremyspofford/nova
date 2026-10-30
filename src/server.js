@@ -225,13 +225,18 @@ export function createNova(config = loadConfig(), deps = {}) {
     });
   }
 
+  // After a factory reset, until setup is done: the browser forgets what it kept of the Nova that
+  // was erased (M7 amendment §2).
+  const afterReset = () => (core.reset.report() && !core.setup.view().done ? { 'clear-site-data': '"cache", "storage"' } : {});
+
   function serveFile(res, file) {
     const type = TYPES[extname(file)] ?? 'application/octet-stream';
+    const clear = file.endsWith('.html') ? afterReset() : {};
     if (config.dev && file.endsWith('.html')) {
-      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
+      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', ...clear });
       return res.end(readFileSync(file, 'utf8').replace('</body>', '<script type="module" src="/js/dev-reload.js"></script></body>'));
     }
-    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...clear });
     createReadStream(file).pipe(res);
   }
 

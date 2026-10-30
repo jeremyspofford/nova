@@ -78,6 +78,8 @@ test('M7 amendment: the Danger zone — export first, the confirmation, erase, f
     // The only console line so far is the folder Nova refused (a 400), on purpose.
     assert.deepEqual(errors.filter((e) => !/status of 400/.test(e)), []);
     const before = errors.length;
+    // Something this browser kept of the old Nova: a draft, and an offline copy.
+    await page.evaluate(async () => { localStorage.setItem('nova.draft.new', 'half a thought'); await (await caches.open('nova-test')).put('/kept', new Response('old')); });
     await erase.click();
     await page.locator('#sheet .reset-sheet[data-step="erasing"]').waitFor();
     assert.match((await page.locator('#sheet .reset-sheet').textContent()) ?? '', /opens first-run setup once Nova is back/);
@@ -89,6 +91,10 @@ test('M7 amendment: the Danger zone — export first, the confirmation, erase, f
     assert.equal((await m.get('/api/v1/setup')).done, false);
     assert.deepEqual(await m.get('/api/v1/memory'), [], 'nothing remembered');
     if (shots) await shoot(page, join(shots, 'reset-first-run.png'));
+    // And it forgot what it kept of the Nova that was erased.
+    // (The fresh page makes its own new entries again; nothing of the old ones is there.)
+    const kept = await page.evaluate(async () => ({ draft: localStorage.getItem('nova.draft.new'), old: (await caches.keys()).includes('nova-test') }));
+    assert.deepEqual(kept, { draft: null, old: false });
     // While Nova was down, its open streams broke and a look for it found nothing: nothing else.
     assert.deepEqual(errors.slice(before).filter((e) => !/ERR_INCOMPLETE_CHUNKED_ENCODING|ERR_CONNECTION_REFUSED|ERR_EMPTY_RESPONSE|ERR_CONNECTION_RESET/.test(e)), []);
 

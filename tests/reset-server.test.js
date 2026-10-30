@@ -30,3 +30,31 @@ test('after a reset Nova comes back seeded fresh: new standing files, no old con
     await nova.core.close();
   }
 });
+
+// What a browser kept of the old Nova goes too (review finding 6): until setup is done after a
+// reset, the first-run page and setup's answers carry Clear-Site-Data.
+test('after a reset, the first-run page and setup tell the browser to clear what it kept', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'nova-reset-csd-'));
+  const config = loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: 'true', NOVA_AGENT_EGRESS: 'none', NOVA_VAULT_KEY: 'file' });
+  let nova = createNova(config);
+  const header = async (path) => (await fetch(`http://127.0.0.1:${nova.server.address().port}${path}`)).headers.get('clear-site-data');
+  await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));
+  try {
+    assert.equal(await header('/'), null, 'not before any reset');
+    await nova.core.reset.stage({ confirm: true, who: CONSOLE }).done;
+  } finally {
+    nova.server.close();
+    await nova.core.close();
+  }
+  nova = createNova(config);
+  await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));
+  try {
+    assert.equal(await header('/'), '"cache", "storage"');
+    assert.equal(await header('/api/v1/setup'), '"cache", "storage"');
+    for (const text of ['Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no']) nova.core.setup.answer(text);
+    assert.equal(await header('/'), null, 'once setup is done, never again');
+  } finally {
+    nova.server.close();
+    await nova.core.close();
+  }
+});

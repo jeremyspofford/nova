@@ -552,7 +552,7 @@ export class FactoryReset {
     this.#o.role.resetNotice = notice;
     // Phones and browsers with a stream open hear it there, now.
     this.#o.emit('reset', notice);
-    for (const d of can) if ((d.kind === 'phone' || d.kind === 'browser') && this.#o.access.isLive(d.id)) hear(d, 'Told on its open connection; its session ended.');
+    for (const d of can) if ((d.kind === 'phone' || d.kind === 'browser') && this.#o.access.isLive(d.id)) hear(d, 'Told on its open connection, and asked to forget its key and what it kept offline; its session ended. Nova can’t confirm it did.');
     check();
     const ms = this.#o.tellMs ?? DEFAULT_TELL_MS;
     let timer: ReturnType<typeof setTimeout> | null = null;
