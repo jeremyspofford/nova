@@ -15,6 +15,36 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M7 amendment §2): factory reset, as built.** Branch `m7-amend/reset`; plan
+`docs/plans/M7-amendment.md` §2 has the as-built note.
+- **Nova's own entries, by name.** `OWN_ENTRIES` (`resilience/reset.ts`): the database and its
+  WAL/SHM, `vault`, `mesh`, `checkpoints`, `backups`, `.git`, `.gitignore`, `logs`, `workers`,
+  `kept`, `captures`, `connectors`, `nova.pid`, and Era 2's: `MEMORY.md`, `memory`, the standing
+  files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`), `permissions.md`, `sessions`, `skills`,
+  `schedules`, `workspace`, `extensions`, `exports`. Anything else in the home is the person's: left
+  and listed. A reset report from an earlier reset is overwritten.
+- **Backups:** Nova's own sealed backups and recorded encrypted copies in every folder from
+  `backup_run` (and the ones set now). Each is recorded with its seal (or its header's nonce) when the
+  reset is staged and checked again before it is deleted. A folder that isn't there (the rule
+  forgetting uses) is named before and after; strays are left.
+- **The export holds no `vault/` at all**, not just no key: the plan's "no saved secrets". Nor
+  `mesh/`. The recovery key is returned once and stored nowhere, not even in the vault.
+- **The keychain key** goes through `Vault.forgetKeys` (the vault's own KeyStore, for each vault id
+  recorded at staging); a keychain that isn't answering is said in the report, not guessed at.
+- **Telling devices.** Phones and browsers can be told only while their stream is open; a computer
+  heard from in the last 2 minutes is waited for (its next heartbeat); the standby while it copies.
+  Waiting is capped at 45 s, then every session ends. A computer's agent stops for good on
+  `hub_reset` (exit code 3, as when revoked). The standby wipes its replica in place and stages its
+  own marker for the rest (identity, role file), which finishes at its next start.
+- **While staged** the core refuses every change (409), except what telling devices needs (sessions,
+  heartbeats, sync acks, the reset ack).
+- **Open: the restart in place** belongs to the checkpoints work; `restart: null` in
+  `src/core/index.ts` (marked `WIRE:`) is the one place to wire it. Until then the reset finishes at
+  the next start, and the page opens first-run setup once the server answers with the report.
+- **Browser test** is `tests/ui/m7-reset.test.ts` (the plan names one shared file,
+  `m7-checkpoints-reset.test.ts`; the integrator may fold them together). Its server is restarted by
+  the test, which stays valid once the restart in place is wired.
+
 **2026-10-30 (packet amendment, owner): checkpoints and factory reset, folded into M7.** Added to
 ROADMAP-AND-GATES under M7, binding, and not a new milestone. M7 was already merged (#219), so it
 ships as its own PR; the plan is `docs/plans/M7-amendment.md`.

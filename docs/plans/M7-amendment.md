@@ -118,6 +118,34 @@ How the restore runs:
 
 **Evidence:** the reset's result, shown on the first-run screen and kept in a small `reset-report.json` in the new home. It lists what was wiped, which folders were wiped, what was left (and why), and which devices were told.
 
+**As built (§2), branch `m7-amend/reset`.** The ledger has the decisions (2026-10-30, factory reset).
+- **Where:** `src/core/resilience/reset.ts` (`FactoryReset`, `finishReset`), routes `GET /reset`,
+  `POST /reset/export`, `POST /reset` (202), `GET /reset/report`, and the standby's
+  `POST /mesh/reset/ack`. Every route but the ack is the hub's own screen only; `POST /reset`
+  also needs `confirm: true`. UI: `ui/js/reset.js` (Settings' last part, `#danger-zone`), the result
+  on the first-run screen (`ui/js/setup.js`), styles in `ui/styles/reset.css`.
+- **The export:** a `nova-export-<time>/` folder inside the folder the person names, holding
+  `nova-export.nbk` (archive.ts' format, a fresh key, returned once and kept nowhere), `memory.json`,
+  `memory.md` (the memory export, written there) and a README. `vault/` and `mesh/` are left out
+  whole, and the manifest says so. It opens with `openEncrypted` and the recovery key alone.
+- **Staging:** `factory-reset.json` in the home names exactly what goes: Nova's own entries (by name,
+  `OWN_ENTRIES`), the vault ids whose keychain item goes, each of Nova's sealed backups and encrypted
+  copies with its seal or header nonce, the strays, and the folders that aren't there. It stays out of
+  backups, sandboxes and sync, and acts only on the home it names.
+- **Telling devices:** the hub's stream sends `reset` (phones and browsers with one open); a
+  computer's heartbeat reply carries `hub_reset`, and its agent stops for good, in its own words; the
+  standby's next sync answer carries the notice, and it deletes every replicated row, vacuums, removes
+  the vault and its key and the copied files, stages its own marker for the rest, then acks. The hub
+  waits up to 45 s for those it can reach, then ends every session. Who was and wasn't told goes into
+  the marker, then the report.
+- **Finishing:** `finishReset` runs at the top of `createCore` and of `createNova` (before the home is
+  seeded): the vault's key (`Vault.forgetKeys`), the backups (each checked again; one that changed is
+  left and said), the home's own entries, Nova's leftover scratch, then `reset-report.json`, then the
+  marker. A step that throws stops the start: a half-reset Nova never runs.
+- **Restart:** not wired here. The reset stages and tells, then calls `restart` if it has one;
+  `src/core/index.ts` passes `restart: null` (marked `WIRE:`) until the checkpoints work's restart in
+  place exists. Until then Nova refuses every change while staged, and finishes at its next start.
+
 ## 3. Tests (the definition of done)
 
 - **Checkpoints:**
