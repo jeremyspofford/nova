@@ -89,7 +89,9 @@ function toTask(r: Row): Task {
 // Where a task waits its turn. Tasks in one lane run side by side up to `max`; a worker that
 // names no lane shares the default one, which runs one task at a time.
 export interface Lane { key: string; max: number }
-export type LanedWorker = Worker & { lane?(brief: Brief): Lane };
+// `minTier`: the least approval a task for this worker needs, whatever the caller asked for (a
+// provider whose brief declares a test command for Nova to run asks first: tier 2, M5a).
+export type LanedWorker = Worker & { lane?(brief: Brief): Lane; minTier?(input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier };
 const DEFAULT_LANE: Lane = { key: 'default', max: 1 };
 
 export interface LedgerOptions {
@@ -159,7 +161,7 @@ export class Ledger extends EventEmitter {
       context_refs: input.context_refs ?? [],
       constraints: input.constraints ?? {},
       privacy_mode: mode,
-      approval_tier: input.approval_tier ?? 1,
+      approval_tier: Math.max(input.approval_tier ?? 1, worker.minTier?.(input) ?? 0) as Tier,
       evidence_required: input.evidence_required,
       idempotency_key: key,
       ...(input.inputs ? { inputs: input.inputs } : {}),
@@ -197,6 +199,13 @@ export class Ledger extends EventEmitter {
   events(id: string): TaskEvent[] {
     this.get(id);
     return this.#db.all<Row>('SELECT * FROM task_event WHERE task_id = ? ORDER BY seq', id).map((e) => ({ ...(e as unknown as TaskEvent), detail: parse(e.detail) }));
+  }
+
+  // Something that happened to a task outside its state changes (a provider's results copied back
+  // after verification), kept in the same append-only record.
+  note(id: string, kind: string, detail?: unknown): void {
+    this.get(id);
+    this.#event(id, kind, null, null, detail);
   }
 
   // Tier 2 asks first; tier 3 needs an explicit confirmation every time (NOVA-SPEC §6).

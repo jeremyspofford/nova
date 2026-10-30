@@ -73,6 +73,13 @@ export class Verifier {
     this.#confirmations.set(system, check);
   }
 
+  // Lets another module check a kind of evidence the core has no checker for yet (the providers'
+  // file diffs, M5a). It can't replace a checker that exists, so no module can loosen another's.
+  register(kind: string, check: Checker): void {
+    if (this.#checkers.has(kind)) throw new Error(`${kind} evidence already has a checker.`);
+    this.#checkers.set(kind, check);
+  }
+
   // "notes/a.md" and "workspace:notes/a.md" are the same file.
   #same(a: string, b: string): boolean {
     if (a === b) return true;
