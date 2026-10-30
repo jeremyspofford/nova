@@ -153,6 +153,13 @@ NOVA_MESH_URL=http://127.0.0.1:4320 NOVA_MESH_TRANSPORT=proxy \
 NOVA_MESH_PUBLIC_URL=https://hub.example npm start
 ```
 
+Behind a proxy, Nova limits pairing attempts by the address the proxy puts
+last in `X-Forwarded-For`. Make sure your proxy adds the client's address to
+that header, or replaces it (Caddy does by default; nginx with
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`); a proxy that passes on
+whatever the client sent lets a client choose its own address, and so its
+own limit.
+
 `NOVA_MESH_TRANSPORT=network` says an encrypted network (a tailnet) carries
 plain HTTP; browsers then can't pair (they need HTTPS for the keys), but
 computers can. Plain HTTP with neither statement is refused at startup.

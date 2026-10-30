@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { generateDeviceKeys, keyFingerprint, normalizePairingCode, verifyRoster } from '../../src/core/index.ts';
+import { generateDeviceKeys, keyFingerprint, normalizePairingCode, rateKey, verifyRoster } from '../../src/core/index.ts';
 import { Joiner, PUBLIC_URL, call, enroll, hub } from './mesh-support.ts';
 import { commitHome, ensureGit } from '../../src/home.js';
 
@@ -207,6 +207,43 @@ test('rate limits: wrong codes per address, every public call per address, new c
 
     for (let i = 0; i < 20; i++) assert.equal((await h.c('POST', '/mesh/pairings')).status, 201);
     assert.equal((await h.c('POST', '/mesh/pairings')).status, 429, 'twenty new codes an hour');
+  } finally {
+    await h.stop();
+  }
+});
+
+test('rate limits group an IPv6 client by its /64, cap wrong codes for the whole hub, and forget old reports', async () => {
+  assert.equal(rateKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd'), '2001:db8:1:2::/64');
+  assert.equal(rateKey('2001:DB8:1:2::7'), '2001:db8:1:2::/64');
+  assert.equal(rateKey('2001:db8::1'), '2001:db8:0:0::/64');
+  assert.equal(rateKey('fe80::1%eth0'), 'fe80:0:0:0::/64');
+  assert.equal(rateKey('::1'), '0:0:0:0::/64');
+  assert.equal(rateKey('192.0.2.7'), '192.0.2.7');
+  const h = await hub();
+  try {
+    const e = h.core.mesh.enroll;
+    const status = (fn: () => unknown) => { try { fn(); return 200; } catch (x) { return (x as { status: number }).status; } };
+    // One phone on one network can pick a new address for every call; it is still one client.
+    for (let i = 1; i <= 30; i++) assert.equal(status(() => e.limit('calls', `2001:db8:1:2::${i.toString(16)}`)), 200);
+    assert.equal(status(() => e.limit('calls', '2001:db8:1:2:ffff::1')), 429, 'the same /64');
+    assert.equal(status(() => e.limit('calls', '2001:db8:1:3::1')), 200, 'the next /64 is someone else');
+
+    // Many addresses guessing together: after 50 wrong codes in five minutes, the hub takes no more.
+    const guess = (i: number) => status(() => e.join(new Joiner(h.mesh, h.nowS).joinBody('ABCD-EFGH'), `198.51.${i >> 8}.${i & 255}`));
+    for (let i = 0; i < 50; i++) assert.equal(guess(i), 400, `guess ${i}`);
+    assert.equal(guess(50), 429, 'a fresh address is turned away too');
+    assert.ok(h.core.log.problems().some((p) => /wrong codes from many addresses/.test(p.message)));
+    const code = (await h.c('POST', '/mesh/pairings')).body.code;
+    assert.equal(status(() => e.join(new Joiner(h.mesh, h.nowS).joinBody(code), '203.0.113.9')), 200, 'the right code still works');
+    h.tick(5 * 60_000 + 1);
+    assert.equal(guess(51), 400, 'the window moves on');
+
+    // A report is remembered only as long as it can hold back another one.
+    for (let i = 0; i < 11; i++) status(() => e.join(new Joiner(h.mesh, h.nowS).joinBody('ABCD-EFGH'), '192.0.2.1'));
+    assert.ok(e.reporting >= 1);
+    h.tick(11 * 60_000);
+    for (let i = 0; i < 11; i++) status(() => e.join(new Joiner(h.mesh, h.nowS).joinBody('ABCD-EFGH'), '192.0.2.2'));
+    assert.equal(e.reporting, 1, 'the old report is gone');
   } finally {
     await h.stop();
   }

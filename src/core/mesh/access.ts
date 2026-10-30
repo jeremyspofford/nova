@@ -108,8 +108,10 @@ export class Access {
   }
 
   // The client's address, for rate limits. Behind a stated TLS proxy every request comes from the
-  // proxy, so the address the proxy saw (the last x-forwarded-for entry, which the proxy itself
-  // appends) is used instead; it is trusted only then.
+  // proxy, so the address the proxy saw (the last x-forwarded-for entry) is used instead; it is
+  // trusted only then. That holds only if the proxy appends to x-forwarded-for or overwrites it
+  // (most do; the README says so): one that passes the client's header through unchanged lets a
+  // client pick its own address, and so its own rate limit.
   address(req: IncomingMessage, listener: Listener): string {
     const peer = bare(String(req.socket.remoteAddress ?? 'unknown'));
     const xff = req.headers['x-forwarded-for'];

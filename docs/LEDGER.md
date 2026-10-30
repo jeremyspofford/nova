@@ -43,6 +43,15 @@ built-ins only.
   Era 2's `api()`). It was a thrown `TypeError`: a 500 and a problem per
   request, reachable without a session through the public enrollment routes
   before their rate limit.
+- **Rate limits.** An IPv6 client is limited by its /64 (`rateKey`), since a
+  phone or a home network can pick a new address per call. Wrong codes are
+  also capped for the whole hub (50 in five minutes from every address
+  together; a right code still works), with one problem. Refusal reports are
+  forgotten after ten minutes, so many addresses can't grow that map. Behind
+  `NOVA_MESH_TRANSPORT=proxy` the client address is the last
+  `X-Forwarded-For` entry: **the proxy must append to that header or replace
+  it** (README); one that passes the client's header through lets a client
+  choose its own limit. Nova can't tell which kind it is behind.
 
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and
