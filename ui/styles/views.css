@@ -228,7 +228,7 @@
 .margin-note { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--accent-primary); }
 
 a.margin-link { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-.margin-note.is-quiet { color: var(--text-faint); }
+.margin-note.is-quiet { color: var(--text-secondary); }
 
 /* A turn or memory a link pointed at: a quiet wash for a moment (app.js flash takes it off). Only
    transform and opacity may animate (M9), so it comes and goes without motion. */
@@ -236,7 +236,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 
 /* ---- the front page: reports from scheduled work ---------------------------- */
 
-.today-line { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--text-faint); padding-bottom: var(--space-6); }
+.today-line { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--text-secondary); padding-bottom: var(--space-6); }
 .handoff { gap: var(--space-3); scroll-margin-top: var(--space-7); }
 .handoff-kicker {
   font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body);
@@ -313,7 +313,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 }
 .act-steps[open] > summary::after { rotate: 90deg; }
 .act-steps > summary:hover { color: var(--text-primary); }
-.act-steps[open] > summary { color: var(--text-faint); }
+.act-steps[open] > summary { color: var(--text-secondary); }
 .act-entry.is-missed .act-title, .act-entry.is-stopped .act-title { color: var(--text-secondary); }
 .act-day + .act-day { margin-top: var(--space-6); }
 .act-now .act-list { margin-top: var(--space-2); }
@@ -385,7 +385,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 
 .schedule .skill-head { justify-content: flex-start; }
 .schedule-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-left: auto; }
-.schedule.is-paused .skill-name, .schedule.is-paused .schedule-when { color: var(--text-faint); }
+.schedule.is-paused .skill-name, .schedule.is-paused .schedule-when { color: var(--text-secondary); }
 .schedule-when { margin-top: var(--space-1); color: var(--text-secondary); }
 .schedule-next { color: var(--text-secondary); }
 .schedule-last { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-1); margin-top: var(--space-2); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
@@ -421,7 +421,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   border-bottom: 1px solid var(--border-subtle);
 }
 .memory-kind { margin-top: var(--space-2); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--text-secondary); }
-.memory-none { margin-top: var(--space-3); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-faint); }
+.memory-none { margin-top: var(--space-3); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 .memory-day { margin-top: var(--space-5); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--text-secondary); }
 .memory-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
 .memory-item {
@@ -524,7 +524,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   border-radius: var(--radius-pill);
   background: var(--surface-card-hover);
   font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   white-space: nowrap;
 }
 .pill.is-on::before, .pill.is-warn::before {
@@ -544,7 +544,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   background: var(--bg-raised);
 }
 .connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-top: var(--space-4); }
-.connection-note { margin-top: var(--space-3); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-faint); }
+.connection-note { margin-top: var(--space-3); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 .connection-actions .connection-note { margin-top: 0; flex: 1 1 260px; }
 .connection-note a, .connection .skill-about a { color: var(--accent-primary); text-underline-offset: 3px; }
 .steps { margin: var(--space-3) 0 0; padding-left: var(--space-5); color: var(--text-secondary); }
@@ -564,7 +564,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-mono);
   resize: vertical;
 }
-.field::placeholder { color: var(--text-faint); }
+.field::placeholder { color: var(--text-secondary); }
 .field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); margin-top: var(--space-4); }
 .field-label { display: block; font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 .field-label .field { margin-top: var(--space-1); font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); }

@@ -34,6 +34,8 @@ export function conversation(): string {
       lines.push({ ts: at(`${hh}:00:02`, day), type: 'tool_call', turn, attempt: 0, id: 'c1', name: 'read_file', args: { path: 'notes/garden.md' } });
       lines.push({ ts: at(`${hh}:00:04`, day), type: 'tool_result', turn, attempt: 0, id: 'c1', ok: true, output: 'beds: 4\nsoil: loam' });
     }
+    // One reply that went wrong, as Nova records it: an error with its detail.
+    if (i === 5) { lines.push({ ts: at(`${hh}:00:09`, day), type: 'error', turn, attempt: 0, message: 'The model stopped answering, so this reply didn’t finish.', detail: 'connection reset' }); continue; }
     lines.push({ ts: at(`${hh}:00:09`, day), type: 'assistant', turn, attempt: 0, id: `a${i + 1}`, text: `${PROSE[i % 4]}\n\n${PROSE[(i + 1) % 4]}` });
     lines.push({ ts: at(`${hh}:00:10`, day), type: 'done', turn, attempt: 0 });
   }
@@ -79,7 +81,7 @@ export async function settled(page: Page, view: string) {
   await page.waitForFunction((v) => {
     const sel: Record<string, string> = { home: '#home .home-cards .card', chat: '#thread .turn', tasks: '#tasks-view .task-list, #tasks-view .empty-state', settings: '#settings-view .settings-cat', memory: '#memory .memory-item' };
     const el = document.querySelector(sel[v]!);
-    return !!el && !document.querySelector('[data-skeleton], [data-waiting]');
+    return !!el && !document.querySelector('[data-skeleton]');
   }, view, { timeout: 15000 });
 }
 

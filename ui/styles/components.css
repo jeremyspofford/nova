@@ -305,7 +305,7 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
 .card-kicker { font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 .card-lead { font: var(--type-weight-strong) var(--type-body)/var(--type-line-body) var(--font-body); color: var(--text-primary); overflow-wrap: anywhere; }
 .card-line { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); overflow-wrap: anywhere; }
-.is-faint { color: var(--text-faint); }
+.is-faint { color: var(--text-secondary); }
 .card-action { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
 .link { color: var(--accent-primary); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); text-decoration: none; }
 .link:hover { text-decoration: underline; text-underline-offset: 3px; }
@@ -321,11 +321,11 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   border: 1px solid color-mix(in srgb, var(--status-c) 45%, transparent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--status-c) 12%, transparent);
-  color: var(--status-c);
+  color: var(--text-primary);
   font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body);
   white-space: nowrap;
 }
-.status .icon { width: var(--space-4); height: var(--space-4); }
+.status .icon { width: var(--space-4); height: var(--space-4); color: var(--status-c); }
 button.status { cursor: pointer; }
 button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transparent); }
 .status[data-status="quiet"] { --status-c: var(--text-secondary); }
@@ -343,7 +343,7 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
   border-radius: var(--radius-pill);
   background: var(--surface-card-hover);
   font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   white-space: nowrap;
 }
 .pill.is-on::before, .pill.is-warn::before { content: ''; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: var(--status-ok); }
@@ -572,6 +572,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body);
 }
 .input:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+.input::placeholder { color: var(--text-secondary); opacity: 1; }
 .panel { padding: var(--space-5); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); backdrop-filter: blur(var(--blur-glass)); -webkit-backdrop-filter: blur(var(--blur-glass)); }
 .panel > * + * { margin-top: var(--space-3); }
 
@@ -649,7 +650,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body);
   color: var(--text-primary);
 }
-.composer textarea::placeholder { color: var(--text-faint); }
+.composer textarea::placeholder { color: var(--text-secondary); }
 .composer textarea:focus-visible { outline: none; }
 .send, .mic {
   display: grid;
@@ -802,3 +803,12 @@ summary { padding-block: max(0px, calc((var(--hit) - 1lh) / 2)); }
   height: max(100%, var(--hit));
   translate: -50% -50%;
 }
+
+/* ---- waiting (DESIGN-SYSTEM §1 "Progress and waiting"; ui/js/wait.js) ---------------------------
+   Under 1 s there is no indicator: a waiting line takes its room at once (so nothing moves when it
+   shows) and fades in only after --wait-quiet. After 10 s, wait.js adds real units and an estimate.
+   The delay is when to speak, not motion, so reduced motion keeps it. */
+:root { --wait-quiet: 1000ms; }
+.waiting { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); opacity: 0; animation: appear var(--motion-duration-fast) var(--motion-ease) var(--wait-quiet) forwards; }
+.waiting.is-late { opacity: 1; animation: none; }
+@keyframes appear { to { opacity: 1; } }

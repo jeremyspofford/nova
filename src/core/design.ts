@@ -94,6 +94,11 @@ export const LIVE_CHECKS: readonly (readonly [string, string, number, CheckKind,
   ['text/secondary', 'bg/base', 4.5, 'text', 'Secondary text and timestamps'],
   ['text/secondary', 'bg/raised', 4.5, 'text', 'Secondary text on raised surfaces'],
   ['text/secondary', 'surface/card', 4.5, 'text', 'Secondary text on cards'],
+  // M9: the states a control is drawn in, as the browser audit found them (tests/ui/m9-contrast).
+  ['text/primary', 'surface/card-hover', 4.5, 'text', 'Text on a hovered or selected row'],
+  ['text/secondary', 'surface/card-hover', 4.5, 'text', 'Secondary text on a hovered row, and labels'],
+  ['text/secondary', 'bg/overlay', 4.5, 'text', 'Secondary text in a popover or a sheet'],
+  ['accent/primary', 'surface/card', 4.5, 'text', 'Links on cards'],
   ['border/strong', 'bg/base', 3, 'control', 'Outlines of fields and buttons'],
   ['border/strong', 'bg/raised', 3, 'control', 'Outlines of fields on raised surfaces'],
   ['accent/primary', 'bg/base', 3, 'control', 'Focus rings and selected markers'],
@@ -214,14 +219,18 @@ export function contrast(a: number[], b: number[]): number {
   return (x! + 0.05) / (y! + 0.05);
 }
 
-// Translucent backgrounds sit on bg/base; translucent text sits on its background.
+// Translucent text sits on its background.
+// A see-through surface is seen over the page, whose gradient runs from bg/raised to bg/base (M9:
+// measured in the browser, the raised end is often the worse one). The ratio is the worse of the two.
 function ratio(tokens: Record<string, unknown>, fg: string, bg: string): number | null {
   const base = parseColor(tokens['bg/base']);
   const b0 = parseColor(tokens[bg]);
   const f0 = parseColor(tokens[fg]);
   if (!base || !b0 || !f0 || base[3] < 1) return null;
-  const b = b0[3] < 1 ? over(b0, base) : b0;
-  return contrast(f0[3] < 1 ? over(f0, b) : f0, b);
+  const r0 = parseColor(tokens['bg/raised']);
+  const pages = [base, ...(r0 ? [r0[3] < 1 ? over(r0, base) : r0] : [])];
+  const backs = b0[3] < 1 ? pages.map((u) => over(b0, u)) : [b0];
+  return Math.min(...backs.map((b) => contrast(f0[3] < 1 ? over(f0, b) : f0, b)));
 }
 
 // The label colour for an accent button: the candidate with the best contrast on accent/primary.
