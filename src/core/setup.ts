@@ -10,6 +10,10 @@ import type { Egress } from './workers.ts';
 import type { Ledger, Task } from './ledger.ts';
 import type { Profile } from './profile.ts';
 
+// What capture can and can't do on each kind of device, said once in setup (M6a; Settings › Capture
+// says it in full). Capture starts off, whatever the answers above.
+export const CAPTURE_NOTE = 'I see nothing on your devices unless you turn capture on in Settings › Capture. A computer can share a lot, under its own permissions; Android needs accessibility and notification access; an iPhone or iPad allows no passive capture of other apps at all.';
+
 export const STEPS = ['user_name', 'timezone', 'nova_name', 'directness', 'privacy', 'first_task', 'done'] as const;
 export type Step = (typeof STEPS)[number];
 
@@ -210,7 +214,7 @@ export class Setup extends EventEmitter {
   }
 
   #closing(lead: string): string {
-    return `${lead} That’s setup done. Ask me anything, or tell me to change any of this.`;
+    return `${lead} That’s setup done. ${CAPTURE_NOTE} Ask me anything, or tell me to change any of this.`;
   }
 
   #firstTask(): Task {

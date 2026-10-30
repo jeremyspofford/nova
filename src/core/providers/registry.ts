@@ -18,10 +18,10 @@ import { claudeCode } from './claude-code.ts';
 import { codex } from './codex.ts';
 import { customCli, programOf } from './custom-cli.ts';
 import { CONFIRMATION_SYSTEM, Inbox, STATUSES, checkSignature, n8n, timeoutS as n8nTimeout, SIGNATURE_HEADER, type Callback } from './n8n.ts';
-import { openaiCompatible } from './openai.ts';
+import { openaiCompatible, roleOf } from './openai.ts';
 import { CONTRACT_SYSTEM, agentPrompt, contractPrompt, parseContract, summarize } from './prompt.ts';
 import { applyFiles, fileRefs, notCopied, outOfScope, treeHash, unifiedDiff, type Change, type Scope, type TaskSpace, type TestAsk } from './taskspace.ts';
-import { CLASSES, EGRESS, IMPLEMENTATIONS, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where } from './types.ts';
+import { CLASSES, EGRESS, IMPLEMENTATIONS, OLLAMA_CLOUD, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where } from './types.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
@@ -45,7 +45,6 @@ const COMPANY: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenA
 type Choice = (typeof CHOICES)[number];
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
-const OLLAMA_CLOUD = /[:-]cloud$/i;
 // Settings that decide what a provider runs or where its data goes.
 const WHERE_KEYS = ['command', 'base_url', 'webhook_url', 'callback_url'] as const;
 // Permission settings, strictest first.
@@ -93,7 +92,22 @@ export interface ChatHandle {
   receiptEgress: string;
   model: string;
   where: string;
+  // The handle writes the call's receipt itself, from req.receipt, with where it really went (a
+  // provider set to a role: the model manager's fallback chain decides that per call).
+  ownReceipt?: boolean;
   call(req: ChatRequest): Promise<{ text: string; aborted: boolean }>;
+}
+
+// What the registry needs of the model manager (M6b): its inference API for a provider set to a
+// role, and whether that role answers. Typed loosely here so providers don't import the manager.
+export interface ModelsLink {
+  infer(r: {
+    role: 'reasoner' | 'triage-text'; messages: { role: 'system' | 'user' | 'assistant'; content: string }[]; privacy_mode?: PrivacyMode; task_id?: string; session_id?: string;
+    purpose?: string; context_items?: { kind: 'memory' | 'file' | 'skill' | 'session' | 'standing'; ref: string; sha256: string }[]; max_cost_usd?: number; format?: 'json'; signal?: AbortSignal; onText?: (t: string) => void;
+  }): Promise<{ text?: string; aborted?: boolean; notes: string[]; usage: Usage; model: string; provider: string }>;
+  probe(role: 'reasoner' | 'triage-text'): Promise<string | null>;
+  // The cloud model the person set for local-preferred and cloud-allowed work, by name, if any.
+  cloudName?(): string | null;
 }
 
 export interface ProvidersOptions {
@@ -114,6 +128,10 @@ export interface ProvidersOptions {
   meshHost?: ((host: string) => boolean) | undefined;
   // Records a callback as a trigger record (M2), so every call that reached Nova is in the record.
   fire?: ((input: FireInput) => Promise<TriggerRecord | null>) | undefined;
+  // The local model manager (M6b), for a provider set to one of its roles.
+  models?: ModelsLink | undefined;
+  // Why the cloud budget keeps this brief from going to a provider off the devices now, or null.
+  budget?: ((brief: Brief) => string | null) | undefined;
   now?: () => Date;
 }
 
@@ -214,6 +232,18 @@ export class Providers extends EventEmitter {
       return e === 'remote' ? { coarse: 'remote', receipt: `remote:${name}`, words: `Sends what it is given to wherever ${programOf(str(c.command)) || 'the command'} sends it (counted as the cloud).` }
         : e === 'local' ? { coarse: 'local', receipt: 'local', words: 'Stays on your devices.' } : { coarse: 'none', receipt: 'local', words: 'Stays on this computer.' };
     }
+    // A provider set to a role uses Nova's own local models (M6b): the model manager keeps it on
+    // the person's devices, and its receipts say where each call went.
+    if (x.manifest.adapter.implementation === 'openai-compatible' && roleOf(c)) {
+      // The model manager keeps each call inside the task's privacy mode; outside local-only, the
+      // cloud model set there may answer, and the words say so.
+      const mode = this.#o.profile.privacyDefault();
+      const cloud = mode === 'local-only' ? null : this.#o.models?.cloudName?.() ?? null;
+      const words = !cloud ? `Runs on your own devices: the ${roleOf(c)} model Settings › Models assigns.`
+        : mode === 'local-preferred' ? `Runs on the ${roleOf(c)} model Settings › Models assigns, on your devices; when it can’t answer, ${cloud} may, off your devices. Each receipt says where.`
+        : `Uses ${cloud}, off your devices, when Nova chooses it (within your cloud budget), and otherwise the ${roleOf(c)} model on your devices. Each receipt says where.`;
+      return { coarse: 'local', receipt: 'local', words };
+    }
     const url = impl.url?.(c);
     // Ollama serves its cloud models (names ending -cloud or :cloud) through the same local address,
     // passing the brief on to ollama.com: by where the data goes, that is the cloud.
@@ -247,7 +277,7 @@ export class Providers extends EventEmitter {
     if (missing) return { state: 'not_installed', words: `Not installed. ${missing}`, checked_at: null };
     const unset = impl.unconfigured(c, this.#secret);
     if (unset) return { state: 'not_configured', words: `Not configured. ${unset}`, checked_at: null };
-    if (!impl.probe) return { state: 'ready', words: 'Installed.', checked_at: null };
+    if (!impl.probe && !roleOf(c)) return { state: 'ready', words: 'Installed.', checked_at: null };
     const p = this.#probes.get(id);
     if (!p || p.key !== canonicalJson(c)) {
       const held = this.where(id).coarse === 'remote' && !permits(this.#o.profile.privacyDefault(), 'remote');
@@ -263,7 +293,12 @@ export class Providers extends EventEmitter {
     const c = this.config(id);
     // Even a check is a connection: under local-only, nothing reaches a remote address.
     const held = this.where(id).coarse === 'remote' && !permits(this.#o.profile.privacyDefault(), 'remote');
-    if (impl.probe && !held && !impl.uninstalled?.(c) && !impl.unconfigured(c, this.#secret)) {
+    const role = roleOf(c);
+    if (role && this.#o.models && !impl.unconfigured(c, this.#secret)) {
+      const problem = await this.#o.models.probe(role as 'reasoner').catch((e) => (e as Error).message);
+      this.#probes.set(id, { key: canonicalJson(c), problem, at: this.#now().toISOString() });
+      this.emit('change', { id, action: 'checked' });
+    } else if (impl.probe && !held && !impl.uninstalled?.(c) && !impl.unconfigured(c, this.#secret)) {
       const problem = await impl.probe(c, this.#secret, AbortSignal.timeout(6000)).catch((e) => (e as Error).message);
       this.#probes.set(id, { key: canonicalJson(c), problem, at: this.#now().toISOString() });
       this.emit('change', { id, action: 'checked' });
@@ -429,6 +464,27 @@ export class Providers extends EventEmitter {
     const impl = this.#impl(x);
     const where = this.where(id);
     const c = this.config(id);
+    const role = roleOf(c);
+    if (role && this.#o.models) {
+      const models = this.#o.models;
+      return {
+        id, name: x.manifest.name, egress: where.coarse, receiptEgress: where.receipt, model: impl.model(c), where: where.words, ownReceipt: true,
+        call: async (req) => {
+          if (x.state !== 'enabled') throw new CoreError('conflict', `The chat model is set to ${x.manifest.name}, which is turned off. Turn it on, or choose another in Settings › Providers.`);
+          const r = await models.infer({
+            role: role as 'reasoner', messages: [{ role: 'system', content: req.system }, { role: 'user', content: req.prompt }],
+            ...(req.privacy ? { privacy_mode: req.privacy } : {}), ...(req.receipt?.session_id ? { session_id: req.receipt.session_id } : {}), ...(req.receipt?.task_id ? { task_id: req.receipt.task_id } : {}),
+            ...(req.receipt?.purpose ? { purpose: req.receipt.purpose } : {}), ...(req.receipt?.context_items ? { context_items: req.receipt.context_items } : {}),
+            ...(req.signal ? { signal: req.signal } : {}), ...(req.onText ? { onText: req.onText } : {}),
+          });
+          // What the person should know about how it was served (the cloud stepped in, or the
+          // local model did and may say less) ends the reply, in a line of its own.
+          const note = r.notes.length ? `\n\n_${r.notes.join(' ')}_` : '';
+          if (note) req.onText?.(note);
+          return { text: `${r.text ?? ''}${note}`, aborted: !!r.aborted };
+        },
+      };
+    }
     return {
       id, name: x.manifest.name, egress: where.coarse, receiptEgress: where.receipt, model: impl.model(c), where: where.words,
       call: async (req) => {
@@ -574,6 +630,14 @@ export class Providers extends EventEmitter {
     const where = this.where(id);
     if (!permits(mode, where.coarse)) return report('blocked', `Waiting on local capacity: ${name} would send this off your devices (${where.words.replace(/\.$/, '')}), and this task is ${mode}.`);
     if (x.state !== 'enabled') return report('blocked', `${name} is turned off.`);
+    // Cloud spend is a policy (LOCAL-MODELS, Budgets): over budget, work for a provider off the
+    // devices waits with the reason.
+    const over = where.coarse === 'remote' ? this.#o.budget?.(brief) ?? null : null;
+    if (over) {
+      try { this.#o.ledger.note(brief.task_id, 'waiting_on_model', { role: 'reasoner', kind: 'budget', via: 'provider', reason: over }); } catch { /* the reason stands */ }
+      return report('blocked', `Waiting on the cloud budget: ${over}`);
+    }
+    const role = roleOf(config);
     const test = testCommand(brief);
     if (brief.evidence_required.some((r) => r.kind === 'test_result') && !test) {
       return report('failed', 'The brief asks for a test result but names no test command (inputs.test_command) for Nova to run itself.');
@@ -613,18 +677,23 @@ export class Providers extends EventEmitter {
       system = 'You are a coding agent doing one task for Nova, a personal assistant. Nova checks your work itself afterwards.';
       prompt = agentPrompt(brief, copied.map((f) => f.path), scope.words);
     }
-    // A receipt for the call (CONTRACTS §2): the brief and each file it can see, by hash.
-    try {
-      this.#receipt(id, brief, mode, where.receipt, impl.model(config), [
-        { kind: 'file', ref: `brief:${brief.task_id}`, sha256: sha256(`${system}\n\n${prompt}`) },
-        ...copied.map((f) => ({ kind: 'file' as const, ref: `workspace:${f.path}`, sha256: f.sha256 })),
-      ]);
-    } catch (e) {
-      return report('failed', (e as Error).message);
+    // A receipt for the call (CONTRACTS §2): the brief and each file it can see, by hash. A
+    // provider set to a role hands these to the model manager, which writes the receipt with
+    // where each call really went.
+    const items = [
+      { kind: 'file' as const, ref: `brief:${brief.task_id}`, sha256: sha256(`${system}\n\n${prompt}`) },
+      ...copied.map((f) => ({ kind: 'file' as const, ref: `workspace:${f.path}`, sha256: f.sha256 })),
+    ];
+    if (!role) {
+      try {
+        this.#receipt(id, brief, mode, where.receipt, impl.model(config), items);
+      } catch (e) {
+        return report('failed', (e as Error).message);
+      }
     }
     let out;
     try {
-      out = await impl.work({ provider: id, brief, config, cwd: space.root, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log });
+      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await impl.work({ provider: id, brief, config, cwd: space.root, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log });
     } catch (e) {
       if (signal.aborted) throw e;
       return report('failed', `${name} stopped with an error: ${(e as Error).message}`);
@@ -636,7 +705,7 @@ export class Providers extends EventEmitter {
       try {
         const reply = parseContract(out.reply ?? '');
         const written = applyFiles(space.root, reply.files);
-        summary = summarize(reply.notes, written.length ? `Changed ${written.join(', ')}.` : 'Changed nothing.');
+        summary = [summarize(reply.notes, written.length ? `Changed ${written.join(', ')}.` : 'Changed nothing.'), out.summary].filter(Boolean).join(' ');
       } catch (e) {
         return report('failed', `Nova didn’t apply ${name}’s reply: ${(e as Error).message}`, {}, out.usage);
       }
@@ -659,6 +728,27 @@ export class Providers extends EventEmitter {
     // policy only covers a run on files nobody changed.
     if (test && (changes.length || !this.#testsAllowed())) return this.#ask(id, name, brief, space, changes, test, summary, report, out.usage);
     return this.#finish(brief, space, changes, test, summary, config, signal, report, out.usage);
+  }
+
+  // A provider set to a role (M6b): the brief goes to the model manager's inference API, which
+  // keeps it inside the task's privacy mode. Local capacity that isn't there makes the task wait
+  // ("waiting on local capacity"); under local-only it never goes to the cloud instead.
+  async #roleWork(role: string, brief: Brief, mode: PrivacyMode, system: string, prompt: string, items: { kind: 'file'; ref: string; sha256: string }[], signal: AbortSignal): Promise<{ status: 'done' | 'failed' | 'blocked'; summary: string; reply?: string; usage: Usage; blockers?: string[] }> {
+    if (!this.#o.models) return { status: 'blocked', summary: 'Nova’s model manager isn’t running.', usage: {} };
+    try {
+      const r = await this.#o.models.infer({
+        role: role as 'reasoner', privacy_mode: mode, task_id: brief.task_id, purpose: `task: ${brief.goal.slice(0, 80)}`, context_items: items, signal, format: 'json',
+        messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
+        ...(typeof brief.constraints.max_cost_usd === 'number' ? { max_cost_usd: brief.constraints.max_cost_usd } : {}),
+      });
+      if (r.aborted) return { status: 'failed', summary: 'Stopped before the reply finished.', usage: r.usage };
+      return { status: 'done', summary: r.notes.join(' '), reply: r.text ?? '', usage: r.usage };
+    } catch (e) {
+      if (signal.aborted) throw e;
+      const m = (e as Error).message;
+      if (e instanceof CoreError && /^Waiting/.test(m)) return { status: 'blocked', summary: m, blockers: [m], usage: {} };
+      return { status: 'failed', summary: m, usage: {} };
+    }
   }
 
   // Nova's own evidence: each change, from the folder itself, then the brief's test, run by Nova.

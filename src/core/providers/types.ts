@@ -66,7 +66,13 @@ export interface WorkOutcome {
   blockers?: string[];
 }
 
-export interface ChatRequest { system: string; prompt: string; signal?: AbortSignal; onText?: (t: string) => void }
+// `receipt` and `privacy` come from a caller whose handle records its own receipts (ownReceipt): the
+// receipt it would have written, which the model manager completes with where the call really went.
+export interface ChatRequest {
+  system: string; prompt: string; signal?: AbortSignal; onText?: (t: string) => void;
+  receipt?: { session_id?: string; task_id?: string; purpose?: string; context_items?: { kind: 'memory' | 'file' | 'skill' | 'session' | 'standing'; ref: string; sha256: string }[] };
+  privacy?: 'local-only' | 'local-preferred' | 'cloud-allowed';
+}
 
 export interface Impl {
   readonly id: Implementation;
@@ -92,6 +98,10 @@ export const SECRET_REF = /^secret:\/\/([A-Z][A-Z0-9_]*)$/;
 export const secretName = (v: unknown): string | null => (typeof v === 'string' ? SECRET_REF.exec(v)?.[1] ?? null : null);
 
 export const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+// Ollama serves its cloud models (names ending -cloud or :cloud) through the same local address,
+// passing what it is given on to ollama.com: by where the data goes, that is the cloud. The
+// registry and the model manager both use this one rule.
+export const OLLAMA_CLOUD = /[:-]cloud$/i;
 export const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : d);
 
 // Every call a provider or connector makes refuses a redirect: "local" is decided by the address

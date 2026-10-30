@@ -1,0 +1,19 @@
+/* Settings › Models (M6b): the device map, roles, downloads with progress. Tokens only. */
+.model-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+.model-device, .model-role, .model-download { display: grid; gap: var(--space-1); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+.model-device .settings-note, .model-role .settings-note, .model-download .settings-note { margin: 0; }
+.model-role .sheet-actions, .model-download .sheet-actions { margin-top: var(--space-2); }
+.model-why strong { color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.model-where { color: var(--text-primary); }
+.model-tag { margin-left: var(--space-2); padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--bg-raised); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-body); }
+.model-progress { width: 100%; height: var(--space-2); margin-top: var(--space-2); border: 0; border-radius: var(--radius-pill); background: var(--bg-raised); accent-color: var(--status-working); overflow: hidden; }
+.model-progress::-webkit-progress-bar { background: var(--bg-raised); border-radius: var(--radius-pill); }
+.model-progress::-webkit-progress-value { background: var(--status-working); border-radius: var(--radius-pill); }
+.model-progress::-moz-progress-bar { background: var(--status-working); border-radius: var(--radius-pill); }
+.model-digest { font-family: var(--font-mono); }
+.model-form { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+.model-form .field-row { margin-top: 0; }
+.model-form .sheet-actions { margin-top: 0; }
+.model-more { margin-top: var(--space-5); }
+.model-more .model-form { margin-top: var(--space-4); }
+@media (prefers-reduced-motion: reduce) { .model-progress { transition: none; } }

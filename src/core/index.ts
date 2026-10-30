@@ -15,7 +15,7 @@ import { Setup } from './setup.ts';
 import { Extensions } from './extensions.ts';
 import { Design, type Scope } from './design.ts';
 import { Decisions, RulesProvider, Templates } from './decide.ts';
-import { Triggers, type Policy, type RuleInput } from './triggers.ts';
+import { TRIAGE, Triggers, triageRule, type Policy, type RuleInput } from './triggers.ts';
 import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInput, type UserState } from './memory.ts';
 import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
@@ -38,6 +38,11 @@ import { Browser, type BrowserOptions } from './browser/worker.ts';
 import type { Hub } from './browser/plan.ts';
 import { browserRoutes } from './browser/routes.ts';
 import { checkers as browserCheckers } from './browser/evidence.ts';
+import { Capture, PROMOTE } from './capture/capture.ts';
+import { captureRoutes } from './capture/routes.ts';
+import { Models, type Hardware } from './models/index.ts';
+import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
+import { secretName } from './providers/types.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -112,6 +117,12 @@ export interface CoreOptions {
   agent?: { command: string; egress: Egress };
   // A secret by name (secret://NAME), for providers that need one; the vault (M5b) answers it.
   secrets?: (name: string) => string | null;
+  // Capture (M6a): how often the adapters pull (NOVA_CAPTURE_POLL_MS, else 10 s), and the fetch
+  // they use (tests).
+  capture?: { pollMs?: number; fetch?: typeof fetch };
+  // The local model manager (M6b): where the hub's Ollama answers by default, and (tests) a fixed
+  // hardware reading and quicker watch and wake polls.
+  models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number };
   now?: () => Date;
 }
 
@@ -185,10 +196,15 @@ export function createCore(o: CoreOptions) {
     }
     return v;
   };
+  // The model manager (M6b) is made once the device registry exists (below); providers reach it
+  // through these, for a provider set to a role and for cloud budgets.
+  let models: Models | null = null;
   const providers = new Providers({
     db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now,
     custom: o.agent, secret: providerSecret, meshHost: (h) => meshHosts().has(h),
     fire: (input) => triggers.fire(input),
+    models: { infer: (r) => models!.infer(r), probe: (role) => models!.probe(role), cloudName: () => models?.cloud()?.name ?? null },
+    budget: (brief) => models?.budgetBlock(brief.task_id, brief.constraints.max_cost_usd) ?? null,
   });
   // The device mesh: this node's keys, the registry, enrollment, and who may do what.
   const meshInfo = o.mesh ?? null;
@@ -196,6 +212,32 @@ export function createCore(o: CoreOptions) {
   const meshIdentity = loadIdentity(o.home, { now, warn: (m) => log.problem('mesh', m), adopt: place.file?.device_id ?? null });
   const devices = new Devices({ db, log, identity: meshIdentity, now, publicUrl });
   if (place.role === 'hub') devices.ensureHub();
+  // The local model manager (M6b): hardware, roles, downloads, the inference API, wake, budgets.
+  models = new Models({
+    db, log, profile, ledger, verifier, receipts, devices, now,
+    hubName: () => devices.find(meshIdentity.id)?.name ?? 'This hub',
+    ...(o.models?.ollamaUrl ? { ollamaUrl: o.models.ollamaUrl } : {}),
+    ...(o.models?.hardware ? { hardware: o.models.hardware } : {}),
+    ...(o.models?.watchMs ? { watchMs: o.models.watchMs } : {}),
+    ...(o.models?.wakePollMs ? { wakePollMs: o.models.wakePollMs } : {}),
+    diskPath: o.home,
+    meshHost: (h) => meshHosts().has(h),
+    secret: (v) => { const n = secretName(v); return n ? providerSecret(n) : null; },
+    // The person is told the way proactive messages go: triaged, quiet hours kept.
+    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'models', name: 'Local models', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('models', 'Nova couldn’t tell you about waiting work.', { error: (e as Error).message })); },
+  });
+  ledger.workers.set(models.worker.id, models.worker);
+  // System 1 on the local sorting model (ADR-7): asked first once one is assigned; the rules answer
+  // when it isn't, or can't.
+  // The person's policy still binds it: what the triage rule decides from a hard setting (a category
+  // turned off, quiet hours for a message) a model's answer may not overturn; it escalates instead.
+  const triageGuard = (t: { template_id: string }, inputs: Record<string, unknown>, answers: Record<string, unknown>) => {
+    if (t.template_id !== TRIAGE.template_id) return null;
+    const hard = inputs.category_off === true || (inputs.quiet_hours === true && inputs.action === 'message');
+    const rule = triageRule(inputs as never).answers.decision;
+    return hard && answers.decision !== rule ? `your settings say “${rule}” here (${inputs.category_off ? 'this is turned off' : 'quiet hours'}).` : null;
+  };
+  decisions.register(new LocalModelProvider({ infer: (r) => models!.infer(r), ready: (t) => models!.decidesWithModel(rules.has(t.template_id)), guard: triageGuard }), { first: true });
   const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
   const access = new Access({ devices, mesh: meshInfo });
   // Hub, standby and sync (M4 plan §3).
@@ -214,6 +256,24 @@ export function createCore(o: CoreOptions) {
     failoverAfterS: () => { const v = profile.get<number>('mesh', 'auto_failover_after_s'); return typeof v === 'number' && v > 0 ? v : null; },
   });
   const role = meshRole;
+  // Capture (M6a): consent, storage on the hub, classification, promotion; Screenpipe pulled, and
+  // device agents' capture events through the inbox below.
+  const capture = new Capture({
+    db, log, profile, memory, backups, decisions, templates, now,
+    self: () => meshIdentity.id,
+    deviceName: (id) => devices.find(id)?.name ?? null,
+    timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
+    privacy: () => profile.privacyDefault(),
+    meshHosts: () => [...meshHosts()],
+    fire: (topic, payload, key) => triggers.connectorEvent('capture', topic, payload, key),
+    proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
+    pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
+    ...(o.capture?.fetch ? { fetch: o.capture.fetch } : {}),
+  });
+  // A forgotten memory takes the capture it was promoted from with it; on a standby, what the hub
+  // forgot or swept is cleaned from this node's backups too.
+  memory.onForget((records) => capture.memoryForgotten(records));
+  sync.forgetting.set('capture_event', (rows) => capture.forgottenElsewhere(rows));
   // Computers' device agents (M4b): heartbeats, the inbox their queues flush into, the runtime.
   const configRow = (section: string, key: string) => db.get<{ value: string; updated_at: string }>('SELECT value, updated_at FROM profile WHERE section = ? AND key = ?', section, key);
   // A setting's version: its time and value together, so two changes in one millisecond differ.
@@ -227,6 +287,7 @@ export function createCore(o: CoreOptions) {
         return task;
       },
       memory: (d, body) => memory.remember({ ...(body as unknown as MemoryInput), kind: (body.kind ?? 'fact') as MemoryKind, recorded_by: `device:${d.id}` }),
+      capture: (d, key, body) => capture.fromDevice(d, key, body),
       config: {
         read: (section, key) => { const r = configRow(section, key); return r ? { value: JSON.parse(r.value), version: configVersion(r) } : null; },
         write: (section, key, value) => { profile.set(section as Section, key, value, 'settings'); return configVersion(configRow(section, key)!); },
@@ -248,6 +309,11 @@ export function createCore(o: CoreOptions) {
     addConfirmation: (system, check) => verifier.registerConfirmation(system, check),
   });
   connectors.register(homeAssistant(o.homeAssistant));
+  // Capture feeds event rules too, as the connector "capture" (topics: capture/routes.ts).
+  const connectorCheck = triggers.connectorCheck;
+  triggers.connectorCheck = (id, topic) => (id === 'capture' ? capture.topicCheck(topic) : connectorCheck ? connectorCheck(id, topic) : `There is no connector called ${id}.`);
+  // A computer that says it can capture offers each kind as a source, off until the person says.
+  spokes.on('change', (d: Device) => { try { capture.offer(d); } catch (e) { log.problem('capture', 'Nova couldn’t list what a computer can capture.', { detail: (e as Error)?.stack ?? String(e) }); } });
   // Every change to the privacy setting, or to the devices that count as local, is checked again
   // against what connectors keep open.
   profile.on('change', (c: { section: string }) => { if (c.section === 'privacy') connectors.recheck(); });
@@ -279,12 +345,20 @@ export function createCore(o: CoreOptions) {
   devices.on('change', (c: { action: string; device: Device }) => bus.emit('event', 'device', { action: c.action, device: deviceView(c.device) }));
   spokes.on('change', (d: Device) => bus.emit('event', 'device', { action: 'heartbeat', device: deviceView(d) }));
   spokes.on('event', (e) => bus.emit('event', 'device_event', e));
+  spokes.on('hardware', (d: Device, hw: unknown) => models!.heartbeat(d, hw));
+  models.on('change', (c) => bus.emit('event', 'models', c));
+  models.on('progress', (p) => bus.emit('event', 'model_progress', p));
   enroll.on('change', (r) => bus.emit('event', 'join_request', r));
   role.on('change', (s) => bus.emit('event', 'mesh', s));
   role.on('applied', (a) => bus.emit('event', 'sync', a));
+  // Capture's rows come by sync too: a standby's pages reload it.
+  role.on('applied', () => capture.synced());
   browser.on('change', (v) => bus.emit('event', 'browser', v));
+  capture.on('change', (c) => bus.emit('event', 'capture', c));
   // A device that may no longer approve may no longer hold a browser either (browser/routes.ts).
   devices.on('revoked', (d: Device) => browser.release(`device:${d.id}`, `ended by Nova: its device was removed`));
+  // Nor capture from it: its sources go off.
+  devices.on('revoked', (d: Device) => capture.deviceRemoved(d.id));
   devices.on('change', (c: { action: string; device: Device }) => {
     if (c.action === 'can_approve' && !c.device.can_approve) browser.release(`device:${c.device.id}`, 'ended by Nova: its device may no longer take over');
   });
@@ -343,6 +417,7 @@ export function createCore(o: CoreOptions) {
       vault: vaultHealth(),
       connectors: connectors.health(),
       browser: browserHealth(),
+      capture: capture.health(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -393,6 +468,8 @@ export function createCore(o: CoreOptions) {
         if (!SECTIONS.includes(section) || section === 'setup') throw new CoreError('validation', `There is no profile section called "${params.section}".`);
         if (section === 'mesh') meshSetting(params.key!, body.value, body.confirm === true, who);
         if (section === 'providers' || (section === 'policy' && params.key === 'task_tests')) throw new CoreError('validation', 'Providers are set through /api/v1/providers, so their settings are checked.');
+        if (section === 'capture') throw new CoreError('validation', 'Capture settings are set through PUT /api/v1/capture/settings, so they are checked.');
+        if (section === 'models') throw new CoreError('validation', 'Models are set through /api/v1/models, so their settings are checked.');
         if (section === 'appearance') {
           if (params.key !== 'mode') throw new CoreError('validation', 'Choose a design system with POST /api/v1/design-systems/{id}/apply, so it is checked and can be rolled back.');
           design.setMode(body.value);
@@ -656,6 +733,9 @@ export function createCore(o: CoreOptions) {
     { method: 'POST', path: '/connectors/{id}/disconnect', summary: 'Disconnect: sign Nova out at the service where it can, then delete its secrets, the rules listening to it and its settings.', handle: ({ params }) => connectors.disconnect(params.id!) },
     ...connectors.routes(),
     ...providers.routes(),
+    // ---- capture (M6 plan §1) ----
+    ...captureRoutes(capture),
+    ...models.routes(),
     // ---- browser work with takeover (M5 plan §3) ----
     ...browserRoutes(browser, {
       home: o.home,
@@ -685,18 +765,22 @@ export function createCore(o: CoreOptions) {
   function startHub() {
     const recovered = ledger.recover();
     providers.recover();
+    models!.start();
     if (!heartbeat) {
       heartbeat = setInterval(beat, 30_000);
       heartbeat.unref();
       beat();
     }
     connectors.start();
+    capture.start();
     return recovered;
   }
   function stopHub() {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
+    models!.stop();
     connectors.stop().catch(() => {});
+    capture.stop().catch(() => {});
   }
   // On a standby (or a hub that stepped down) every change is refused, saying which node is hub;
   // the only change it takes is becoming the hub.
@@ -727,7 +811,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
-    vault, connectors,
+    vault, connectors, capture, models,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
@@ -760,6 +844,7 @@ export function createCore(o: CoreOptions) {
       await role.close();
       // Browsers close first and their tasks stay as they are: the next start runs them again.
       await browser.close();
+      await capture.stop();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();
     },

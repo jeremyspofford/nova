@@ -8,7 +8,7 @@
 //   node src/device/boot.ts run        keep the runtime running (what join.sh starts)
 //   node src/device/boot.ts status     what this device is, where its hub is, how it is (--json)
 //   node src/device/boot.ts recover    reinstall the runtime from the hub and leave safe mode
-//   node src/device/boot.ts queue <event|task_request|memory_note|config_change> '<json>' [--key <key>]
+//   node src/device/boot.ts queue <event|task_request|memory_note|config_change|capture_event> '<json>' [--key <key>]
 //
 // The device home is NOVA_DEVICE_HOME (default ~/.nova-device):
 //   boot/     keys.json (0600), device.json (the pinned roster), state.json, installed.json, ca.pem
@@ -29,6 +29,7 @@ import {
 } from '../core/mesh/wire.ts';
 import { acceptRoster, checkProof, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof } from './trust.ts';
 import { Watchdog } from './watchdog.ts';
+import { detectHardware, type Hardware } from '../core/models/hardware.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
 import type { CallAnswer, FromRuntime, SessionMessage } from './runtime.ts';
 
@@ -449,6 +450,10 @@ export class Boot {
   #running = false;
   // Shut down (or revoked): nothing more is looked for, installed or started.
   #closed = false;
+  // What this computer can run models on (M6b), read here because the runtime may not start
+  // programs; it goes to the hub in the runtime's heartbeat.
+  #hardware: Hardware | null = null;
+  #hardwareAt = 0;
   readonly finished: Promise<number>;
 
   // Where the agent's plain-words lines go (its log).
@@ -478,6 +483,7 @@ export class Boot {
     this.watchdog.on('crash', ({ code, signal, count }) => this.say(`The runtime stopped (${signal ?? `exit ${code}`}); crash ${count} in a minute.`));
     this.watchdog.on('backoff', (ms) => this.say(`Starting it again in ${ms} ms.`));
     this.watchdog.on('safe_mode', () => this.#enterSafeMode());
+    void this.#readHardware();
     await this.#connect();
     if (this.#session) await this.update();
     if (!runtimeIntact(this.p)) {
@@ -572,10 +578,24 @@ export class Boot {
     const s = this.#session;
     const inst = readJson<Installed>(this.p.installed);
     if (!s) return null;
+    if (Date.now() - this.#hardwareAt > 3600_000) void this.#readHardware();
     return {
       type: 'session', hub_url: s.url, device_id: this.d.device_id, expires_at: s.expires_at, version: inst?.version ?? 'unknown',
       capabilities: CAPABILITIES, heartbeat_ms: this.o.heartbeatMs, tick_ms: this.o.tickMs,
+      ...(this.#hardware ? { hardware: this.#hardware } : {}),
     };
+  }
+
+  // Reads the hardware (GPU tools, memory, disk, network cards), then hands it to the runtime for
+  // its next heartbeat. A machine without a GPU tool simply reports no GPU.
+  async #readHardware(): Promise<void> {
+    this.#hardwareAt = Date.now();
+    try {
+      this.#hardware = await detectHardware({ diskPath: this.p.boot });
+      this.#toRuntime();
+    } catch (e) {
+      this.say(`Couldn’t read this computer’s hardware: ${(e as Error).message}`);
+    }
   }
 
   // The runtime has no network: it asks for one of the hub calls it is allowed, and this agent

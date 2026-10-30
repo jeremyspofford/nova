@@ -20,7 +20,8 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
   const m = blank('nova-m4b-');
   const port = await freePort();
   const mesh = `http://127.0.0.1:${port}`;
-  const meshEnv = { NOVA_MESH_URL: mesh, NOVA_MESH_TRANSPORT: 'network', NOVA_MESH_PUBLIC_URL: mesh };
+  // No Ollama for the model manager to read here (port 9 answers nothing): only the device map is checked.
+  const meshEnv = { NOVA_MESH_URL: mesh, NOVA_MESH_TRANSPORT: 'network', NOVA_MESH_PUBLIC_URL: mesh, NOVA_OLLAMA_URL: 'http://127.0.0.1:9' };
   let hub: Running = await m.start(meshEnv);
   const deviceHome = join(m.dir, 'device-home');
   // The agent's environment: its own home folder, quick timings for the test.
@@ -63,6 +64,10 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
     assert.ok(online?.online, 'the computer shows Online');
     assert.equal(online!.agent!.safe_mode, false);
     assert.match(online!.agent!.runtime_version, /^0\.1\.0\+[0-9a-f]{12}$/, 'running the runtime the hub signed');
+    // M6b: its heartbeat carries what it can run models on, read by the boot agent; the hub's
+    // device map shows it.
+    const mapped = await until(async () => ((await m.get('/api/v1/models')) as { devices: { id: string; hub: boolean; hardware: { cpu: { threads: number }; ram_bytes: number } | null }[] }).devices.find((d) => d.id === online!.id), (d) => !!d?.hardware, 400);
+    assert.ok(mapped?.hardware && mapped.hardware.ram_bytes > 0 && mapped.hardware.cpu.threads > 0, 'the computer’s hardware reached the hub');
     const first = bootPid();
     assert.ok(alive(first));
     const rt = JSON.parse(readFileSync(join(deviceHome, 'state', 'runtime.json'), 'utf8')) as { pid: number; hub_url: string };
@@ -141,9 +146,10 @@ test('M4b over HTTPS: NOVA_CA_FILE carries trust to curl, the boot agent and the
   if (made.status !== 0) return t.skip('openssl is not available to make a test certificate');
   const ca = join(certs, 'cert.pem');
   const m = blank('nova-m4b-tls-');
-  const port = await freePort();
-  const mesh = `https://127.0.0.1:${port}`;
-  const hub = await m.start({ NOVA_MESH_URL: mesh, NOVA_MESH_PUBLIC_URL: mesh, NOVA_TLS_CERT: ca, NOVA_TLS_KEY: join(certs, 'key.pem') });
+  // Port 0: the server picks the mesh port and says which, so no other test can take it between
+  // choosing and binding (a port chosen here first was taken by a parallel test now and then).
+  const hub = await m.start({ NOVA_MESH_URL: 'https://127.0.0.1:0', NOVA_TLS_CERT: ca, NOVA_TLS_KEY: join(certs, 'key.pem') });
+  const mesh = hub.mesh!;
   const deviceHome = join(m.dir, 'device-home');
   const env = { PATH: process.env.PATH ?? '', HOME: join(m.dir, 'user'), NOVA_DEVICE_HOME: deviceHome, NOVA_DEVICE_POLL_MS: '200', NOVA_DEVICE_HEARTBEAT_MS: '300', TZ: 'UTC' };
   let joining: ChildProcess | null = null;

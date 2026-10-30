@@ -43,6 +43,8 @@ export function routeOf(pathname) {
   const c = /^\/c\/([\w-]+)$/.exec(path);
   if (c) return { dest: 'chat', conversation: c[1] };
   if (path === '/schedules') return { dest: 'automations' };
+  // Capture (M6a) is part of Settings: its own view, reached from Settings and the indicator.
+  if (path === '/capture') return { dest: 'capture' };
   const d = DESTINATIONS.find((x) => x.path === path);
   return d ? { dest: d.id } : { dest: 'home', unknown: true };
 }

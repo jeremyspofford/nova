@@ -77,8 +77,9 @@ export function thisDevice() {
   };
 }
 
-// The registry once it has answered; until then, this browser alone.
-const meshDevices = () => (store.devices.length ? store.devices : [thisDevice()]);
+// The registry once it has answered; until then (or when its answer was cut off as a page was
+// left, which reads as null), this browser alone.
+const meshDevices = () => (store.devices?.length ? store.devices : [thisDevice()]);
 
 // ---- Home ---------------------------------------------------------------------------------
 

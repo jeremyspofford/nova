@@ -259,9 +259,13 @@ export class Runner extends EventEmitter {
       const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
       // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
       // hash, and where it went. Written before the call, so it exists even if the call fails.
-      this.identity?.receipt?.(this.receipt(sessionId, run, mode, { system, prompt, recall }));
+      // A chat model that writes its own receipts (Nova's local models, M6b) gets the draft instead:
+      // it knows where each call really went, local or the cloud fallback.
       const chat = this.chat();
+      const draft = this.receipt(sessionId, run, mode, { system, prompt, recall });
+      if (!chat?.ownReceipt) this.identity?.receipt?.(draft);
       const { text, aborted } = await (chat ? (o) => chat.call(o) : this.agent)({
+        ...(chat?.ownReceipt ? { receipt: draft, privacy: mode } : {}),
         cmd: this.config.agentCmd,
         system,
         prompt,

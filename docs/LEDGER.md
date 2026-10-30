@@ -15,6 +15,289 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M6b review fixes): the model manager's guards.**
+Branch `m6-fix/models`; tests in `tests/core/models-guards.test.ts` (the reviewer's probes, made
+real), each failing on the code before its fix.
+
+- **Trust is checked per call.** `placement()` returns a role only while its device is the hub or a
+  trusted computer; a revoked one (the devices `revoked`/`change` events) loses its roles and its
+  runtime address, reads `unassigned`, gets no call and no wake packet. Local-only work waits.
+- **Ollama cloud models never serve a role.** One rule (`OLLAMA_CLOUD` in `providers/types.ts`,
+  used by the registry and the manager), plus tags carrying `remote_host`/`remote_model`: refused
+  in assign and accept, re-checked in `#local`, never recommended, and System 1 stays on the rules.
+- **Model tasks always ask.** The worker's `minTier` is 2 whoever made the task; at run time the
+  brief's URL is ignored (Nova's own runtime for the device is asked), and the name, the
+  role-in-use guard and the disk budget (catalog size over the brief's) are checked again. Only
+  lists read from that runtime are recorded.
+- **System 1 is never quieter than the rules.** A model's drop/silent where the triage rule says
+  act/queue escalates (held for an OK); the reason kept is Nova's fixed words, never the model's
+  `why` (ADR-7).
+- **Budgets.** Each cloud call sends `max_tokens` (4096 unless the cloud model sets one) and
+  reserves its most possible cost in the same step as the check; overshoot is at most one call's
+  maximum. A stream that breaks after text arrived is charged its full reservation (what was used
+  isn't known). Tokens without a cost are priced from `models.prices` (`PUT /models/prices`) or,
+  with a budget set, said plainly and the cloud waits. The "can't tell what the cloud model costs"
+  refusal applies only to calls for the cloud model; a provider's budget wait (`via: 'provider'`)
+  is released by the budget alone.
+- **Fallback before output only.** Once text reached the person, `infer` ends with an honest error
+  instead of a second model's reply.
+- **Spoke addresses.** Before every call and wake the host must be in the computer's latest
+  heartbeat and private, LAN or mesh (a name must resolve only to such). Not "recent": a sleeping
+  computer sends none, and the latest is what it last said. Heartbeats keep only private IPv4
+  addresses and a one-label host name (`desk.local` reads as `desk`; dotted names are dropped).
+  Private here includes the example ranges (192.0.2/24, 198.51.100/24, 203.0.113/24), which are
+  never routed on the internet and are what tests use. Wake targets: private or broadcast IPv4.
+- **Minors.** Receipts for a computer name it (`ollama@<name>`; plain `ollama` stays the hub, so
+  existing receipts and gate tests read the same). Work waiting on a computer that didn't wake says
+  so and runs on its next heartbeat; Nova doesn't keep sending wake packets. Ollama 5xx or an error
+  line mid-reply (out of memory) is local capacity: the work waits. The role-set provider's words
+  name the cloud model when the privacy mode lets it answer.
+
+**2026-10-30 (M6c): the gate, a day in the life local-only.** Branch `m6c/gate`; the plan's §3.
+
+- **CI:** `tests/acceptance/m6-day.test.ts`, with the day itself in `m6-day-support.ts`. It runs
+  two real processes (a hub and a standby, M4's helpers; `setup()` now takes extra hub env), the
+  egress tripwire, a fixed hub-class hardware reading, and stand-ins for Ollama, Screenpipe and the
+  cloud model. The day runs on capture's test clock (`2030-01-15`) and covers:
+  - setup by conversation, local-only;
+  - roles accepted from installed models, with transcription unassigned;
+  - capture classified by signals: one event stays unclassified, and an incognito window is
+    never stored;
+  - triage by the local decision provider: a Noul proposal, plus heartbeat and event triggers
+    (Choice);
+  - chat and the M5 calc brief through the reasoner role;
+  - a captured fact promoted, then forgotten on both nodes (database, WAL, backups);
+  - a midday outage: the task waits, the person is told, the cloud is asked nothing, and the task
+    reruns;
+  - the evening retention sweep.
+
+  Every step is asserted. `NOVA_EVIDENCE=1` writes `docs/evidence/m6-day.md`.
+- **Real:** `m6-day-real.test.ts` (opt-in, `NOVA_REAL_OLLAMA=1`) runs the same day with the hardware
+  read for real and Nova's own recommendation: Qwen3:8b, deepseek-r1:32b and nomic-embed-text.
+  - Screenpipe is still the stand-in, and there is no standby.
+  - Ollama is reached through a loopback relay that passes only reading and inference. The outage
+    is that relay closing, a dead port; the evidence says so.
+  - What a model decides is recorded as it happened. Privacy is asserted as in CI.
+  - The committed `docs/evidence/m6-day.md` is a real run: 415 s, every step done, every receipt
+    local.
+- **Fixed on the way.** An event captured while the sorting model was down fell through to the
+  rules, which have no rule for `capture-promote`. It was counted as looked at and never proposed.
+  Now the pass stops when the provider that should answer (`proposer`, the local model once one is
+  assigned) didn't, and a later pass asks again.
+- **Seen in the real run, not fixed.** Qwen3:8b answers p = 0.9 to `capture-promote` for nearly
+  every event, so its proposals aren't selective yet. Proposals stay proposals: nothing becomes
+  memory until the person accepts.
+
+**2026-10-30 (M6b): local models — hardware, roles, downloads, one inference API, wake, fallback, budgets.**
+Branch `m6b/models`; the plan's §2. Code in `src/core/models/`, migration `0010_models.sql`
+(M6a took 0009). PWA: Settings › Models (`ui/js/models.js`, `ui/styles/models.css`).
+
+- **Hardware.** `models/hardware.ts` reads CPU, memory (`/proc/meminfo` where there is one), GPUs
+  (`nvidia-smi`, `rocm-smi`; `system_profiler` on macOS, where Apple silicon's shared memory counts
+  as three quarters of RAM), free disk (`statfs` of Nova's home, which may not be the disk Ollama
+  keeps models on) and network cards. Node built-ins only, so the device agent carries it (the
+  boundary test and the agent's file list now name it). The **boot** agent reads it, because the
+  runtime may not start programs, and hands it to the runtime, which sends it in the heartbeat as
+  an additive `hardware` field; the hub checks and keeps it (`device_hardware`). Windows: only
+  `nvidia-smi`. `NOVA_HARDWARE_FILE` replaces the hub's own reading (tests, the gate's stand-in run).
+- **Recommendation.** One model per role, not a list: sorting (`triage-text`) is the smallest
+  capable text model (3–9B) on the hub; thinking and writing (`reasoner`) the deepest that fits
+  (file size × 1.15 within VRAM, or half the RAM with no GPU, said as slow), coders last; a GPU
+  spoke only when it is clearly deeper (×1.5) than the hub, with a hub model for small jobs;
+  finding by meaning the smallest embedding model. Installed models first; with none that fits,
+  one download from a short catalogue, never assigned by itself. Transcription: Ollama can't, and
+  Nova has no whisper adapter, so it says so (also when it finds a whisper binary) and stays off.
+  Against the real Ollama here: Qwen3:8b, deepseek-r1:32b, nomic-embed-text, transcription off.
+- **Roles live in profile section `models`**, set only through `/api/v1/models` (the generic
+  profile route refuses it, like providers). A role names `hub` or a paired computer; a computer's
+  runtime address must be one of the addresses (or its hostname) its own heartbeat reported.
+- **Downloads and removal are tier-2 ledger tasks** for the worker `models`, evidence a
+  `confirmation` from system `model-runtime`. The verifier's checkers are synchronous, so, as with
+  n8n's callback, the checker reads what Nova itself recorded from the runtime's own `/api/tags`
+  after the pull (`model_version`, never the pull stream's say-so) for this task, and a digest the
+  request pinned. Ollama checks each layer's sha256 as it writes it; Nova doesn't re-hash blobs.
+  The worker's egress is `local`: Nova talks only to the runtime, which fetches the model from its
+  library; nothing of the person's goes with that, so a download runs under local-only too (the
+  approval says so). **Disk budget** (`disk_budget_gb`, the same number for each device): refused
+  at once when the size is known (the catalogue), else stopped as soon as the layer totals pass it
+  ("at least N GB", since Ollama names layers as it goes); nothing is installed. Removal of a model
+  that serves a role is refused until another is assigned.
+- **One inference API.** `models.infer({role, messages | input, privacy_mode, task_id?, ...})`; a
+  caller's mode only tightens the person's. Chat and the M5 `openai-compatible` provider use it
+  when the provider is set to a role (`config.role: reasoner`); then the model manager writes each
+  call's receipt with where it really went (the registry skips its own; the runner hands over its
+  receipt draft, `ownReceipt`), so there is one receipt per call. What the person should know
+  (cloud stepped in, possibly less depth, a wake, the hub served a small job) comes back as
+  `notes`: a task's summary carries them; chat ends the reply with them in one italic line.
+  Placements are Ollama only; OpenAI-compatible servers stay M5's provider without a role.
+  Embeddings have no cloud fallback.
+- **Fallback chains** exactly as LOCAL-MODELS: local-only is local only (the cloud isn't in the
+  chain at all, and the receipt refuses a remote call under local-only behind that); a task waits
+  "Waiting on local capacity: …", a `waiting_on_model` note is kept, and the person is told once,
+  as a proactive message (triaged, quiet hours kept); a watch (15 s, `NOVA_MODELS_WATCH_MS`) asks
+  the role's runtime (never waking a device to find out) and retries the task when it answers.
+  local-preferred: local first, then the cloud model, with the note and one problem per fault.
+  cloud-allowed: the cloud first, then local with "may be less thorough". **One cloud model**, set
+  by the person (`PUT /models/cloud`, a new address needs `confirm: true`); whatever its address it
+  counts as remote (a loopback stand-in in tests is named by its name).
+- **Budgets** (`per_task_usd`, `per_period_usd`, `period` day/week/month UTC; a brief's
+  `max_cost_usd` too) are checked before every cloud call; one call can take a budget past its limit
+  by its own cost, no further. A cloud model without a price under a budget isn't used. Usage is
+  `cloud_usage`, from every cloud call and every report from a provider whose receipt went remote
+  (once per attempt), and a `cloud_usage` note on the task. Over budget: local answers if it can,
+  with the reason; otherwise the work waits with it. A remote provider's task waits on the budget
+  before it runs.
+- **Wake-on-LAN.** A magic packet to the device's broadcast address (from its heartbeat), port 9,
+  or the target set (`PUT /models/wake`; tests use a loopback listener). Nova waits as long as the
+  last measured wake took, half again plus 2 s; never measured, the setting (120 s) and says it was
+  a guess. Small jobs (≤ 2000 characters) go to the hub model while the spoke sleeps. Letting it
+  sleep is the device's own policy; Nova asks Ollama to keep a model loaded 5 minutes only.
+- **The local Decision Model Provider** (`local-model`, egress local) is asked first once a sorting
+  model is assigned; it always asks the inference API as local-only. Answers are typed JSON
+  requested with the template's schema (Ollama's structured output) and checked strictly; anything
+  out of schema is unused and escalates. The person's hard policy for triage (a category turned off,
+  quiet hours for a message) binds it: a contrary answer escalates. With decisions kept on the rules
+  (`PUT /models/decisions {use: rules}`) it still answers templates the rules have no rule for, so
+  capture's proposals get an answer. Finding against the real Ollama: a thinking model asked for a
+  schema spent its reply reasoning and missed it (34 s cold for one decision); Nova now sends
+  `think: false` to models that say they think (2.6 s).
+- **Not done.** A whisper adapter; downloads through anything but Ollama; a spoke's models are
+  read only while it is awake (last seen otherwise); fallback is per call, before output.
+
+**2026-10-30 (M6 review fixes): capture.** Branch `m6-fix/capture`. Tests:
+`tests/core/capture-review.test.ts` (the reviewer's probes as real tests), new cases in
+`tests/core/capture-rules.test.ts` and `tests/ui/m6a-capture.test.ts`; each failed on the code
+before its fix.
+
+- **Private windows (blocker).** `isPrivate` now reads what the source sent, before any clipping
+  (a browser puts its marker at the end of a long title, past the 300 characters kept), on both
+  ways in (Screenpipe and the device inbox), and checks the address too (`about:privatebrowsing`).
+  Markers cover Chrome/Edge/Brave/Opera/Vivaldi/Firefox/Safari wording in English, French,
+  German, Spanish, Italian, Portuguese and Dutch (plus a little Polish and Swedish), with accents
+  and case folded. It is best effort and says so: real Screenpipe sends no private flag, so the
+  posture copy and Settings › Capture say detection is by window title and recommend Screenpipe's
+  own ignored-windows setting. A page title that merely mentions "incognito" is dropped too; that
+  errs the right way.
+- **Backlogs and late items.** Screenpipe answers newest first, so the adapter now reads by
+  windows of time, oldest first: a window holding more than 1,000 items is narrowed, then read
+  whole, paged until a short page (not by the first total, since new items push older ones later).
+  The cursor is the end of the last window read whole (never past it); 60 requests per type per
+  pull, and the rest carries on next pull. Each pull asks again from `after − lookback` (5 minutes
+  by default, `PATCH /capture/sources/{id} {lookback_minutes}` 1–240, never before consent or
+  resume), and the cursor keeps the ids taken within the lookback, so a late, older item arrives
+  once. The old cursor shape (`ids`) is still read. Answers over 16 MB are refused.
+  Still missed: an item reported later than the lookback, and anything Screenpipe never kept.
+- **Exclusions.** A site matches a trailing-dot host, the window title as a host token (not part of
+  a longer name), and, for browser apps, the screen text. App names are folded (case, spaces,
+  `.exe`/`.app`) and a rule covers word-prefixed editions ("Signal" keeps out "Signal Beta", not
+  "Signalling Tool"); signals use the same folding without the prefix. A time window checks the
+  event's whole `[at, ended_at]` stretch. Settings says per kind what each keeps out, and that app
+  and site exclusions can't stop audio (time windows and spaces do).
+- **Who did it.** Promotions and accepted proposals are recorded as the caller, like consent and
+  forgetting: `device:<id>`, or `console` for the hub's own screen (was always `person`; consent's
+  `by` is now `console` there too). A promoted memory is still confirmed (the caller chose it).
+- **Smaller ones.** The indicator says "Capture state unknown" when the hub can't be reached (it
+  re-asks when the event stream drops or returns, and on `online`), never hiding while capture
+  might be on. A Screenpipe that isn't the hub's (`elsewhere`) makes the indicator say it needs
+  you. Paused copy says Screenpipe itself keeps recording. A revoked device's sources go off.
+  Accepting a suggestion opens the remember sheet and asks which space (the sheet never fills in
+  "personal" for an unclassified event; the API's own default is unchanged). A standby's pages
+  reload capture on sync (`capture.synced()` on `applied`). Triage that no provider could answer
+  (no rule, no provider) leaves the event waiting instead of marking it looked at, so it is
+  triaged once a provider exists. Device times without a zone are refused; a zoneless Screenpipe
+  time is read as UTC (Screenpipe keeps UTC).
+
+**2026-10-30 (M6a): capture — the Capture API, consent, storage, classification, promotion, Screenpipe.**
+Branch `m6a/capture`; the plan's §1. Code in `src/core/capture/`, migration `0009_capture.sql`
+(numbered 0009 alongside M6b's; the integrator renumbers).
+
+- **One API, two adapters.** `capture.stream(device, kind)` (and the views) hands out normalized
+  events: timestamps, device, the space and who set it, consent (`granted` at), and provenance
+  (adapter, source, the source's own id, how it arrived). Every adapter goes through one `ingest`,
+  which is where consent, private contexts, exclusions and classification happen, so no adapter
+  can skip them. Screenpipe is pulled over its REST API (`/health`, `/search` for OCR, audio and
+  accessibility text) with its own cursor per content type; a device agent sends `capture_event`
+  through M4's inbox.
+- **Consent.** Every source starts off, per source and per device. A Screenpipe is added off; a
+  paired computer's heartbeat capability `capture.<kind>` offers a source, off. Turning one on
+  records who and when; capture starts *then*: nothing Screenpipe kept from before consent is
+  pulled, unless the person asks for an earlier `since` (never the default). Pausing stops intake,
+  and resuming moves every cursor to now, so nothing from the paused stretch arrives later. Events
+  timestamped before consent or resume are dropped (counted, not kept).
+- **The indicator** is in the top bar on every page while any source is on and not paused; a
+  phone's Home, which has no top bar, keeps one for it then (without the small orb). It opens the
+  Capture view.
+- **Private and incognito** windows are dropped in `ingest` before anything is stored: a source's
+  `private`/`incognito` mark, or a window or app titled Incognito, InPrivate, Private Browsing,
+  Private Window or "(Private)". Tested with sentinels: nowhere under the home afterwards.
+- **Exclusions** per app (name, case-insensitive), site (host and its subdomains, or a window
+  title naming it, since screen text often has no address), space (after classification) and time
+  window (weekly, in the person's time zone, past midnight allowed); each may be scoped to one
+  source. Kept in profile section `capture` (new), written only through `PUT /capture/settings`,
+  which checks them.
+- **Classification** only by the person's signals: app, device, "calendar" and the explicit
+  switch. Nova has no calendar connection yet, so "calendar" is a weekly block of hours the person
+  names (their working hours); a calendar connector can feed the same signal later. The switch
+  wins while on; otherwise all matching signals must agree on one space, and none or a
+  disagreement leaves the event unclassified, never guessed. Folder paths are refused as a signal.
+  Resolving an item can also remember its app as a signal.
+- **Storage and forgetting.** Captured words live only in `capture_event` (text, app, window
+  title, address). Promotion rows, proposals and tombstones carry ids, times and hashes, not words;
+  a trigger keeps a hash of its payload; the inbox keeps the key and the event id, never the body.
+  Forgetting deletes the row (secure_delete on the connection), truncates the WAL, cleans every
+  backup (`backups.forget('capture_event', …)`, which also drops the backup's sync-log entry), and
+  leaves a tombstone (hash of the source's own id) so a re-read can't bring it back. The sync log
+  carries a content-free delete; a standby applying it cleans its own backups (`SyncLog.forgetting`,
+  a small hook next to memory's). All five tables replicate.
+- **Capture is evidence, not memory.** Promotion is deliberate: `POST /capture/promote` (the
+  person) or accepting a proposal. The memory's provenance is `source: capture:<event ids>`,
+  `observed_at` the first event's time, `recorded_by: person`; `capture_promotion` keeps the
+  link, the proposal if any, and when and where each event was captured, and outlives the event.
+  Forgetting the memory forgets the events it came from (they hold the same words); forgetting an
+  event forgets memories made from it unless the person keeps them (`keep_memory`). Retention
+  never touches memory.
+- **Proposals.** A built-in decision template `capture-promote@1` asks one Noul question
+  (`remember`, floor 0.7). Only a confident yes (p > 0.5, not escalated) becomes a proposal, which
+  is never a memory until the person accepts. The local rules provider has no rule for it, so
+  until a model-backed local provider exists (M6b), nothing is proposed. Note for M6b:
+  `Decisions.decide` takes the first allowed provider, and the rules provider answers every
+  template (escalating when it has no rule), so a local model provider must come before it, or the
+  rules provider must step aside for templates it has no rule for.
+- **Retention** is `capture.retention_days` (default 14), swept on the hub's capture pass: deleted
+  the way a forget deletes (WAL, backups, standby), without tombstones.
+- **Event triggers.** A rule can listen to the connector `capture` with topic `any`,
+  `unclassified`, `space:<name>` or a kind. The core wraps `triggers.connectorCheck` for it.
+- **Local-only.** A Screenpipe's address decides its egress with M5b's `addressEgress` (loopback,
+  private ranges, `.local`, the person's devices). Under local-only, a remote one can't be turned
+  on or pointed at, and one already on stops being pulled (status `refused`) without a request,
+  if privacy tightens. Redirects are refused.
+- **Outages.** A Screenpipe that doesn't answer is status `unreachable` and one problem (not one
+  per try), resolved when it answers; the cursor stays, so what Screenpipe kept meanwhile arrives.
+  After a failover, a Screenpipe at a loopback address belongs to the device it was set up on: the
+  new hub doesn't pull its own loopback in the old hub's name (status `elsewhere`).
+- **The service worker** never caches `/api/v1/capture` (a forgotten event must not survive in a
+  cache); its cache is `nova-shell-v6`.
+- **Test clock.** Under `NOVA_TEST_CLOCK=1`, `POST /api/v1/capture/tick {now}` runs one pass
+  (pull, retention, triage) and capture keeps that time as now from then on (consent, resume and
+  retention use it), so the gate can run a day in minutes with the stand-in's timestamps.
+- **Device agents.** `capture_event` joins the inbox kinds (device_inbox is rebuilt in 0009 to
+  widen its CHECK, rows and sync triggers as 0007 made them) and the device queue's kinds
+  (`boot.ts queue capture_event '<json>'`). The runtime agent can't read the active window: it
+  runs under Node's permission model with no child processes or addons, and every OS needs either
+  a native call or a permission for it. Desktop app activity is therefore a later native
+  component (ADR-2); the inbox path and a heartbeat capability are ready for it.
+- **Platform posture** is said plainly in setup's closing line and in Settings › Capture
+  (desktop deep under OS permissions; Android with accessibility and notification access, not
+  built; iOS no passive capture of other apps).
+- **Not done, and why.** An item Screenpipe reports later with a timestamp older than the cursor
+  is missed (Screenpipe's timestamps are monotonic in practice; reading by id would need its
+  database). More than 5,000 new items of one type per pull wait for the next pull. Meetings,
+  browser and sensor kinds exist in the API, with no adapter yet. Proposals for classification
+  (a decision proposing a space) are not built; the person resolves unclassified items.
+- **For the owner to check by hand:** a real Screenpipe on this machine (its `/search` paging and
+  `start_time` inclusivity are as its docs describe; the stand-in, `scripts/fake-screenpipe.js`,
+  follows them).
+
 **2026-10-30 (M5 review fixes): providers, vault, connectors.** Branch `m5-fix/providers-vault`.
 
 - **What a provider may change.** A brief's `inputs.editable` (paths or globs in the workspace)

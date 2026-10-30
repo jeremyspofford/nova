@@ -16,7 +16,7 @@ import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readF
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
-export const QUEUE_KINDS = ['event', 'task_request', 'memory_note', 'config_change'] as const;
+export const QUEUE_KINDS = ['event', 'task_request', 'memory_note', 'config_change', 'capture_event'] as const;
 export type QueueKind = (typeof QUEUE_KINDS)[number];
 
 export interface QueueItem { seq: number; key: string; kind: QueueKind; body: Record<string, unknown>; created_at: string }

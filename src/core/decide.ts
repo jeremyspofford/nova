@@ -68,6 +68,9 @@ export interface DecisionProvider {
   // The question types this provider can answer; a template with any other type is not sent to it.
   questionTypes: readonly Question['type'][];
   decide(t: Template, inputs: Record<string, unknown>): Promise<Decision>;
+  // Whether it can answer this template now (a model provider with no model assigned can't); not
+  // asked when false. Absent means always.
+  ready?(t: Template): boolean;
 }
 
 export const UNKNOWN = 'unknown';
@@ -480,9 +483,11 @@ export class Decisions {
     this.#log = o.log;
   }
 
-  register(p: DecisionProvider): void {
+  // `first`: asked before the others (the local model provider, M6), which then answer only when it
+  // can't.
+  register(p: DecisionProvider, o: { first?: boolean } = {}): void {
     if (this.#providers.some((x) => x.id === p.id)) throw new Error(`A decision provider called ${p.id} is already registered.`);
-    this.#providers.push(p);
+    if (o.first) this.#providers.unshift(p); else this.#providers.push(p);
   }
 
   providers(): { id: string; egress: Egress }[] {
@@ -498,7 +503,7 @@ export class Decisions {
     // A caller's mode can only tighten the live setting, never loosen it.
     const mode = opts.privacy_mode ? stricter(opts.privacy_mode, this.#privacy()) : this.#privacy();
     const able = (x: DecisionProvider) => t.questions.every((q) => x.questionTypes.includes(q.type));
-    for (const p of this.#providers.filter((x) => permits(mode, x.egress) && able(x))) {
+    for (const p of this.#providers.filter((x) => permits(mode, x.egress) && able(x) && (x.ready?.(t) ?? true))) {
       try {
         return settle(t, p.id, await p.decide(t, inputs));
       } catch (e) {

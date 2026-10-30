@@ -26,6 +26,8 @@ export interface SessionMessage {
   expires_at: string;
   version: string;
   capabilities: string[];
+  // What the computer can run models on (src/core/models/hardware.ts), read by the boot agent.
+  hardware?: unknown;
   heartbeat_ms?: number;
   tick_ms?: number;
 }
@@ -82,7 +84,7 @@ export class Runtime {
     const s = this.#session;
     if (!s || this.#offline || this.#stopped) return;
     try {
-      const r = await this.#call('POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: s.capabilities, version: s.version, runtime_version: s.version, safe_mode: false }) as { epoch: number; runtime?: { version?: string } };
+      const r = await this.#call('POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: s.capabilities, version: s.version, runtime_version: s.version, safe_mode: false, ...(s.hardware ? { hardware: s.hardware } : {}) }) as { epoch: number; runtime?: { version?: string } };
       const at = new Date().toISOString();
       this.#write({ last_heartbeat_at: at, epoch: r.epoch, last_error: null });
       this.#send({ type: 'heartbeat', at, epoch: r.epoch });
