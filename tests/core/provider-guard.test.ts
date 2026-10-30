@@ -167,6 +167,24 @@ test('copy-back: only what the brief named and let the provider change; never th
   });
 });
 
+test('a coding agent that changes more than Nova takes from one task is refused in plain words', async () => {
+  const { core, ws } = boot();
+  const dir = mkdtempSync(join(tmpdir(), 'nova-script-'));
+  const file = join(dir, 'many.json');
+  core.profile.set('privacy', 'default', 'cloud-allowed', 'settings');
+  writeFileSync(file, JSON.stringify({ steps: Array.from({ length: 201 }, (_, i) => ({ write: { path: `calc/gen/f${i}.mjs`, content: 'export {};\n' } })), result: 'Done.' }));
+  try {
+    core.providers.configure('claude-code', { command: `node ${join(import.meta.dirname, '..', '..', 'scripts', 'stand-ins', 'fake-claude.js')} --script ${file}` });
+    core.providers.enable('claude-code', { approved: true });
+    const t = await settle(core, core.ledger.create({ ...calcTask('claude-code', { privacy_mode: 'cloud-allowed', inputs: { test_command: 'node --test calc/sum.test.mjs', editable: ['calc/**'] } }), origin: { kind: 'user' } } as never).id);
+    assert.equal(t.state, 'failed', t.reason ?? '');
+    assert.match(t.reason ?? '', /changed 201 files .* Nova takes at most 200 files and 50 MB from one task/);
+    assert.equal(existsSync(join(ws, 'calc', 'gen')), false);
+  } finally {
+    await core.close();
+  }
+});
+
 test('changing where an enabled provider runs or sends, or loosening its permissions, needs confirm; the key never goes to a new host first', async () => {
   const first = await startFakeOpenAI({ model: 'm' });
   const second = await startFakeOpenAI({ model: 'm' });
