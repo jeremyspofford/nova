@@ -9,7 +9,9 @@ import { waitingLine, over } from './wait.js';
 const KEY = 'nova.shape';
 const read = () => { try { return JSON.parse(localStorage.getItem(KEY) ?? '{}'); } catch { return {}; } };
 const write = (all) => { try { localStorage.setItem(KEY, JSON.stringify(all)); } catch { /* storage off: no skeletons */ } };
-const slot = (view, el) => `${view}|${document.body.dataset.layout}|${Math.round(contentBox(el).width)}`;
+// One shape per view, layout and width; a conversation's is its own (`id`): another conversation's
+// shape would be a guess (review of #234), so a conversation not opened here before has no skeleton.
+const slot = (view, el, id = '') => `${view}${id ? `:${id}` : ''}|${document.body.dataset.layout}|${Math.round(contentBox(el).width)}`;
 
 function contentBox(el) {
   const r = el.getBoundingClientRect();
@@ -42,7 +44,7 @@ export function blocksOf(view, el) {
 // lays out turns far above only as estimates (content-visibility), so its blocks are kept by their
 // distance from the end: what is on screen when it opens is what must match.
 const FROM_END = new Set(['chat']);
-export function keepShape(view, el, blocks) {
+export function keepShape(view, el, blocks, id = '') {
   const box = contentBox(el);
   const end = FROM_END.has(view);
   const shape = blocks.map((b) => {
@@ -58,16 +60,21 @@ export function keepShape(view, el, blocks) {
   // (a conversation) is scrolled to the same place.
   const height = Math.max(box.height, ...shape.map((s) => s.y + s.h));
   const all = read();
-  all[slot(view, el)] = { height, end, blocks: shape };
+  const key = slot(view, el, id);
+  delete all[key]; // the newest last
+  all[key] = { height, end, blocks: shape };
+  // Kept for the conversations opened most recently only, so the store stays small.
+  const chats = Object.keys(all).filter((k) => k.startsWith('chat:'));
+  for (const k of chats.slice(0, Math.max(0, chats.length - 24))) delete all[k];
   write(all);
 }
 
 // While the view waits: its skeleton (if its layout at this width is known) and the waiting line.
 // `units`: { done, total } for the 10 s words.
-export function showWaiting(view, el, text, { done = null, total = null, end = false } = {}) {
+export function showWaiting(view, el, text, { done = null, total = null, end = false, id = '' } = {}) {
   // Not on screen yet (a view drawn before it is shown): nothing to size a skeleton by.
   if (!(contentBox(el).width > 0)) { el.innerHTML = ''; return; }
-  const shape = read()[slot(view, el)];
+  const shape = read()[slot(view, el, id)];
   const line = waitingLine(text, { key: `view-${view}`, done, total, noun: 'part' });
   if (!shape) { el.innerHTML = `<div class="view-waiting" data-waiting-view="${view}">${line}</div>`; return; }
   const bars = (b) => b.lines.map(([x, y, w, h]) => `<span class="skel-line" style="left: ${x}px; top: ${y}px; width: ${w}px; height: ${h}px"></span>`).join('');

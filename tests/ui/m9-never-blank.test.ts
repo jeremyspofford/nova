@@ -33,6 +33,14 @@ test('M9 gate: the page is never left blank — a silent hub or a failure at sta
     await sleep(1500);
     assert.equal(await shown(e.page), 'visible', 'a failure at start still shows the page');
     await e.ctx.close();
+
+    // A conversation that doesn't exist: its wait ends, it isn't "Loading…" for good.
+    const f = await device(b, DESKTOP);
+    await f.page.goto(`${m.base}/c/2026-10-29-zzzzzz`);
+    await f.page.waitForSelector('html[data-ready]');
+    await f.page.waitForFunction(() => document.querySelector('#thread .empty') && !document.querySelector('#thread [data-waiting-view]'), null, { timeout: 5000 });
+    assert.equal(await f.page.locator('#thread .empty').count(), 1, 'it ends on the empty conversation');
+    await f.ctx.close();
   } finally {
     await b.close();
     await stop(nova);

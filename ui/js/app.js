@@ -298,10 +298,10 @@ function showCore(view) {
 }
 
 // After a real render, once the view's entrance has settled: its layout, for the next skeleton.
-function rememberShape(view, node) {
+function rememberShape(view, node, id = '') {
   doneWaiting(view);
   const moving = node.getAnimations({ subtree: true }).filter((a) => a.effect?.getComputedTiming().iterations !== Infinity);
-  Promise.all(moving.map((a) => a.finished.catch(() => {}))).then(() => { if (state.view === (view === 'chat' ? 'chat' : view) && node.isConnected) keepShape(view, node, blocksOf(view, node)); });
+  Promise.all(moving.map((a) => a.finished.catch(() => {}))).then(() => { if (state.view === (view === 'chat' ? 'chat' : view) && node.isConnected) keepShape(view, node, blocksOf(view, node), id); });
 }
 
 function enter(node) {
@@ -356,7 +356,7 @@ function open(id, { quiet = false } = {}) {
   stream?.close();
   setView('chat');
   if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true, snapshot: false });
-  if (!state.snapshot && !state.pending) { rendered = new Map(); showWaiting('chat', el.thread, 'Loading the conversation', { end: true }); }
+  if (!state.snapshot && !state.pending) { rendered = new Map(); showWaiting('chat', el.thread, 'Loading the conversation', { end: true, id }); }
   restoreDraft();
   if (id === 'main') markMainSeen();
   const es = new EventSource(`/api/sessions/${id}/events`);
@@ -369,7 +369,7 @@ function open(id, { quiet = false } = {}) {
     state.snapshot = true;
     if (state.pending && state.session.turns.some((t) => !t.kind && t.text === state.pending.text && t.ts >= state.pending.since)) state.pending = null;
     renderAll({ enter: first && !quiet });
-    if (first && state.session.turns.length) rememberShape('chat', el.thread);
+    if (first && state.session.turns.length) rememberShape('chat', el.thread, id);
     first = false;
   });
   es.addEventListener('event', (e) => onEvent(JSON.parse(e.data)));
@@ -385,7 +385,13 @@ function open(id, { quiet = false } = {}) {
   });
   es.addEventListener('open', () => setReachable(true));
   es.addEventListener('error', () => {
-    if (es.readyState === EventSource.CLOSED) { setReachable(false); return; }
+    if (es.readyState === EventSource.CLOSED) {
+      // A stream refused before any snapshot (no such conversation): the wait is over, never left
+      // waiting for good.
+      if (es === stream && !state.snapshot) { state.snapshot = true; state.session = emptySession(id); renderThread(); }
+      setReachable(false);
+      return;
+    }
     setTimeout(() => { if (es === stream && es.readyState !== EventSource.OPEN) setReachable(false); }, 1500); // wait: debounce: a stream that reconnects at once is not a drop
   });
 }

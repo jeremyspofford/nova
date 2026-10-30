@@ -18,6 +18,8 @@ export const PHONE = { width: 390, height: 844 };
 export const DESKTOP = { width: 1280, height: 820 };
 export const SIZES = [['phone', PHONE], ['desktop', DESKTOP]] as const;
 export const CHAT = '2026-10-28-garden';
+// A second, shorter conversation: a skeleton must never borrow another conversation's shape.
+export const CHAT2 = '2026-10-29-kshelf';
 // The main views (M9 gate) and where each opens.
 export const VIEWS: Record<string, string> = { home: '/', chat: `/c/${CHAT}`, tasks: '/tasks', settings: '/settings', memory: '/memory' };
 export const MAIN = Object.keys(VIEWS);
@@ -65,6 +67,12 @@ export async function seeded(prefix: string, extra: Record<string, string> = {})
   const nova = await m.start(extra);
   await finishSetup(m);
   writeFileSync(join(m.home, 'sessions', `${CHAT}.jsonl`), conversation());
+  writeFileSync(join(m.home, 'sessions', `${CHAT2}.jsonl`), `${[
+    { ts: at('10:00:00', 29), type: 'session', id: CHAT2, title: 'The kitchen shelf', v: 1 },
+    { ts: at('10:00:00', 29), type: 'user', turn: 'k1', text: 'How high should the shelf go?' },
+    { ts: at('10:00:05', 29), type: 'assistant', turn: 'k1', attempt: 0, id: 'ka1', text: 'About eye level, so the plates are easy to reach.' },
+    { ts: at('10:00:06', 29), type: 'done', turn: 'k1', attempt: 0 },
+  ].map((e) => JSON.stringify(e)).join('\n')}\n`);
   for (const [kind, content] of MEMORIES) {
     const r = await m.send('POST', '/api/v1/memory', { kind, content });
     if (r.status !== 201) throw new Error(`memory: ${JSON.stringify(r.body)}`);

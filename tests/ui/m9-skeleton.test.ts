@@ -49,7 +49,7 @@ test('M9 gate, skeletons: none under 1 s, then the final geometry exactly, and t
         await d.page.goto(`${m.base}${VIEWS[view]}`);
         await settled(d.page, view);
         await still(d.page);
-        await d.page.waitForFunction(([v]) => Object.keys(JSON.parse(localStorage.getItem('nova.shape') ?? '{}')).some((k) => k.startsWith(`${v}|`)), [view], { timeout: 5000 });
+        await d.page.waitForFunction(([v]) => Object.keys(JSON.parse(localStorage.getItem('nova.shape') ?? '{}')).some((k) => k.startsWith(`${v}|`) || k.startsWith(`${v}:`)), [view], { timeout: 5000 });
 
         // Again, with its data held.
         const held: Route[] = [];
