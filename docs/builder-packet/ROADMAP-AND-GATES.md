@@ -45,6 +45,18 @@ Build in this order. A milestone is complete only when its gate passes with evid
 ## M7 — Self-modification and resilience hardening
 - Governed change pipeline for extensions/config/design systems (ADR-9) with canary + auto-rollback; backup/restore drill; chaos pass (kill providers, hub, network) with repair playbooks.
 - Gate: Nova ships a real change to itself through the pipeline; a sabotaged change is caught by gates and rolled back automatically.
+- **Amendment (2026-10-30, owner, binding): checkpoints and factory reset**, folded into M7's resilience work. Not a new milestone.
+  - **Checkpoints:** user-facing restore points of the whole data home (database, memory, config, identity).
+    - Nova takes one automatically before governed self-changes and upgrades.
+    - The person can take a named one from Settings.
+    - Restoring rolls the hub back to it.
+    - The list shows each checkpoint's date and size.
+    - Old ones are pruned under a stated retention rule.
+  - **Factory reset:** a Settings danger-zone action that returns Nova to first-run state.
+    - It wipes the data home, the hub identity and keys, the paired-device roster and memory, then runs first-run setup.
+    - It offers an export first.
+    - It uses the same explicit confirmation as other destructive actions.
+    - It says plainly what happens to existing backups. Expected: they are wiped too, after the export offer.
 
 ## M8 — Relay adapter
 - Relay stabilized standalone first (its own bounded pass: interface freeze, tests green, contracts documented).

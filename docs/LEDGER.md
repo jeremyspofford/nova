@@ -15,6 +15,22 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (packet amendment, owner): checkpoints and factory reset, folded into M7.** Added to
+ROADMAP-AND-GATES under M7, binding, and not a new milestone. M7 was already merged (#219), so it
+ships as its own PR; the plan is `docs/plans/M7-amendment.md`.
+- **Checkpoints:** restore points of the whole data home. Nova takes one automatically before
+  self-changes, upgrades, releases and restores, and the person can take named ones. Each is
+  listed with date and size. Retention keeps the newest 10 automatic ones, by sequence, and named
+  ones until deleted.
+- **Restore:** tier 3, from the hub's screen only. It never brings back a revoked device or a
+  forgotten memory, and it raises the mesh epoch.
+- **Factory reset:** in Settings, under a Danger zone section. Nova offers an export first, and
+  wipes only what it made, by name.
+- **Backups on reset:** wiped as the owner expected, in every folder Nova ever backed up to,
+  after the export offer. A folder that can't be reached (an unplugged drive) can't be wiped;
+  that is said beforehand and afterwards.
+- **What the export leaves out:** saved secrets, the vault key and identity. The screen says so.
+
 **2026-10-30 (owner decision): real-phone pairing check deferred; pairing clocks logged as a
 usability defect.** The owner's first real pairing attempt, from a phone over Tailscale, didn't
 finish. Before that, it was refused as cross-origin: a proxy pointed at the console, not the device
