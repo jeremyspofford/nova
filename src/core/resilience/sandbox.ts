@@ -1,15 +1,21 @@
 // A sandbox Nova (M7 plan §2–§3): a real server process started from some code (this Nova's own,
 // or a release's) on a scratch home, on a port of its own, that can do nothing outside itself. It
-// runs with NOVA_SANDBOX=1: no heartbeat, schedules, connectors, capture or model watch start
-// (server.js, index.ts), it has no mesh address, its model command does nothing, and its vault key
-// is a file in its scratch home, so the person's keychain is never asked. Used by the restore
-// drill and by the supervisor's deploy (the release on a copy of the home).
+// is M7a's sandbox mode (changes/sandbox.ts): NOVA_SANDBOX=1, so no heartbeat, schedules,
+// connectors, capture or model watch start, no mesh address, a model command that does nothing, a
+// vault key file of its own; and its database is made inert first (`inert`: queued work cancelled,
+// rules paused, providers and connectors off, no device addresses). M7a's Sandbox class snapshots
+// the live database in process and runs this Nova's own code; these two uses need a release's
+// code from another process (the supervisor) and a restored backup (the drill), so they start the
+// process here and share the rest.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { backupFiles } from './backup.ts';
+import { inert } from '../changes/sandbox.ts';
+
+export { inert };
 
 // This Nova's own code: the folder that holds src/server.js.
 export const CODE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -30,6 +36,8 @@ export function sandboxEnv(home: string, extra: Record<string, string> = {}): Re
     NOVA_VAULT_KEY: 'file',
     NOVA_AGENT_CMD: 'false',
     NOVA_AGENT_EGRESS: 'none',
+    // A closed port: a sandbox never reaches the person's model runtime.
+    NOVA_OLLAMA_URL: 'http://127.0.0.1:9',
     ...extra,
   };
 }
@@ -79,6 +87,7 @@ export function copyHome(from: string, to: string): void {
     } finally {
       db.close();
     }
+    inert(join(to, 'nova.db'));
   }
 }
 

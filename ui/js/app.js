@@ -15,6 +15,7 @@ import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
 import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptureSettings, renderCaptureView } from './capture.js';
 import { bindModels, loadModels, renderModels } from './models.js';
+import { bindChanges, loadChanges, renderChanges } from './changes.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
 
@@ -1392,7 +1393,7 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
-  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture(), loadModels()]).then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture(), loadModels(), loadChanges()]).then(() => {
     renderSettingsView({ only: 'you' });
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input'))?.focus({ preventScroll: true }); flash(target); }
@@ -1408,6 +1409,7 @@ const PARTS = {
   connections: () => renderConnections(),
   capture: () => renderCaptureSettings(),
   models: () => renderModels(),
+  changes: () => renderChanges(),
   look: () => core.renderAppearance(),
   devices: () => core.renderDevices(),
 };
@@ -1564,6 +1566,8 @@ $('capture-ind').addEventListener('click', (e) => { followLink(e); });
 bindConnections(el.settings, () => { if (state.view === 'settings' && $('settings-connections')) renderSettingsView({ only: 'connections' }); });
 // Settings › Models (M6b): hardware, roles, downloads with live progress, budgets.
 bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-models')) renderSettingsView({ only: 'models' }); });
+// Settings › Changes (M7a): the change pipeline, the one waiting for you, canaries, roll back.
+bindChanges(el.settings, () => { if (state.view === 'settings' && $('settings-changes')) renderSettingsView({ only: 'changes' }); });
 // A provider was set up, turned on or off, or checked (M5a): Settings shows it at once.
 onCore('provider', () => { if (state.view === 'settings') core.loadProviders(); });
 // The device mesh: the registry changed, or a device is asking to join (only approvers hear that).

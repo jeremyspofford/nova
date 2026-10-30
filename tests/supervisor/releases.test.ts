@@ -65,7 +65,7 @@ test('a sabotaged release that breaks health after the switch is rolled back aut
   const dir = scratch('nova-rel-bad-');
   const r = releaseRepo(dir);
   // Passes its tests and the sandbox (where NOVA_SANDBOX is set), then fails live.
-  r.tag('v1.2.0', (root) => r.edit(root, 'src/core/index.ts', '      backups: keep.health(),\n    };', "      backups: keep.health(),\n      sabotage: { ok: process.env.NOVA_SANDBOX === '1', detail: 'This release breaks once it runs on the live home.' },\n    };"));
+  r.tag('v1.2.0', (root) => r.edit(root, 'src/core/index.ts', '      backups: keep.health(),\n', "      backups: keep.health(),\n      sabotage: { ok: process.env.NOVA_SANDBOX === '1', detail: 'This release breaks once it runs on the live home.' },\n"));
   const s = await supervise({ dir, repo: r.repo });
   try {
     const m = await api(s.base(), 'POST', '/api/v1/memory', { kind: 'fact', content: 'The boiler was serviced in March.' });

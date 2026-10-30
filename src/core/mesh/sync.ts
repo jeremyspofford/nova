@@ -24,6 +24,8 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   // Migration 0009: capture (M6a). Sources carry consent and each adapter's cursor; events carry
   // what was captured, and a delete of one is forgetting it (see `forgetting`).
   capture_source: ['id'], capture_event: ['id'], capture_tombstone: ['source_id', 'key'], capture_promotion: ['id'], capture_proposal: ['id'],
+  // Migration 0011: the change pipeline's records (M7a), so a standby knows what is live and why.
+  change_record: ['id'],
 };
 export const FILE = 'file';
 // The vault (vault.ts) is one entry: its ciphertext in the log like a row. Its key is added only

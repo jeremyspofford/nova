@@ -15,6 +15,79 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M7a): the governed change pipeline and the foundry.** Branch `m7a/changes`; the
+plan's §1. Code in `src/core/changes/`, migration `0011_changes.sql` (the integrator renumbers).
+
+- **Two ledger tasks per change.** *Check* (worker `changes`, tier 0) runs sandbox → tests →
+  health → release and never asks anyone; a change that fails it is stopped with the reason and
+  never offered. *Ship* is made only once the ledger has verified Check (Nova re-reads the release
+  file and re-hashes it), at the change's tier, so approval always comes after the sandbox
+  evidence; it then runs the canary and ends Done (promoted) or Failed with the probe's reason
+  (rolled back by itself; the ledger opens the problem). A Ship task waits on the canary's outcome;
+  the canary is driven by the clock (every 60 s; `POST /changes/tick` under `NOVA_TEST_CLOCK`).
+  Every stage is also a `stage` ledger event with its evidence. Rollback by hand is a third task,
+  tier 2, OK'd by the click that asked for it (`{confirm: true}`).
+- **The sandbox is a real Nova process** (`src/server.js` with `NOVA_SANDBOX=1`, loopback, port 0,
+  the parent's preloads so the egress tripwire covers it) on a scratch home in `workers/changes/<id>`
+  built from `VACUUM INTO` plus the standing files and, for an extension, its folder. The copy is
+  made inert before it starts: queued and running tasks cancelled, the person's rules paused,
+  provider/automation/connector extensions disabled, device addresses and sessions cleared, the
+  sync log dropped; no vault is copied. Sandbox mode (`createCore({sandbox})`) starts no
+  connectors, capture, model watch, heartbeat or canary clock, and takes no changes. Its chat model
+  is declared remote so the privacy probe has something to refuse. Deviation: the plan says
+  "needed files"; only the standing files and the extension's own folder are needed today.
+- **Gates.** Frozen constants (`gates.ts`): stage order, minimum canary per kind (rules and
+  extensions 30 min, templates 15, design systems and settings 10), at most 7 days, three passing
+  probe runs minimum, the fixed sandbox and canary probe sets. No route or profile section holds
+  them. `weakens()` refuses a proposal that names a gate field (`skip_stages`, `tier`, …), asks
+  for a shorter canary, replaces the core probes, changes a `changes`/`pipeline`/`gates` setting
+  or a canary/probe/stage key, asks to write the pipeline's records, starts pipeline work from a
+  rule, or carries files into Nova's code. Refusals are kept as `refused` records; nothing of them
+  runs. `enter()` refuses any stage whose predecessors haven't passed, whoever asks.
+- **Tiers.** Proposed by the foundry or a provider: 3, every time. Privacy and policy settings: 3.
+  An extension update asking for permissions the installed version didn't have: 3; any
+  permissions: 2. Rule packs whose rules start tasks: 2. Otherwise a person's own change is 1 (act
+  and report), its proposal being the OK.
+- **Kinds and canary scopes.** Rule packs: the rules (created_by `changes:<pack>`, changed in place
+  by name so their history stays), watched over their first firings (its error probe counts firings
+  that failed to start work or whose tasks failed). Design systems: one device (the hub's, or
+  `canary.device_id`), then everyone; the live check is the device showing it with contrast
+  holding. Extensions: skill packs, plugins and MCP servers as manifest and files (providers,
+  connectors and design systems keep their own ways in); tests and the health probe are
+  declarative, since Nova runs no extension code. Settings: identity, user, tuning, privacy,
+  policy (the rest have checked routes of their own). Templates: proposed, dry-run, activated
+  through the ledger; rollback reinstates the previous version (`Templates.reinstate`, new).
+- **Rollback restores the snapshot taken just before the canary**, and only that target: an
+  extension's previous manifest, state and files; a design system's package and the four
+  appearance keys; a setting's value or its absence; a pack's rules; a template's active version.
+  Rolling back by hand is offered only for the newest live change of a target; the one it had
+  replaced is live again.
+- **Release.** `changes/<target>/<version>-<id8>/` holds `artifact.json` (canonical JSON, hashed as
+  the record's `content_hash`), `change.json` and `evidence.json`, committed with
+  `git commit -- <that folder>` when the home keeps history (files only; the privacy check fails a
+  change carrying a vault value, so none reaches history). Previous releases stay. The folder is
+  journalled, so it reaches the standby with the record (`change_record` replicates).
+- **The foundry** asks the local model by default (`models.infer`, role reasoner, receipts by the
+  model manager) or the chat model (`via: chat`, a receipt when the handle keeps none), with M5's
+  JSON files contract, and writes the reply into `workers/foundry/<task>/` with M5's path checks.
+  It needs `manifest.json`, `tests.json` and `probe.json` and proposes the package as the
+  foundry's change; the Check/Ship path is the same as anyone's.
+- **PWA:** Settings › Changes (`ui/js/changes.js`, `ui/styles/changes.css`): the waiting change
+  with what the sandbox showed and "Ship it" (the one standout; tier 3 needs the confirm box), the
+  list with status in the one vocabulary, canaries with their probes as last run, evidence one
+  layer down, Roll back that asks first. `/api/v1/changes` is network-only in the service worker.
+- **Tests:** `tests/core/changes.test.ts` (8, real sandbox processes), `tests/acceptance/
+  m7a-changes.test.ts` (2: hub and standby with the egress tripwire, the foundry on the stand-in
+  Ollama; canary sabotage over the API), `tests/ui/m7a-changes.test.ts` (Chromium, via
+  `scripts/ui-test.sh`), and opt-in `tests/acceptance/m7a-real-ollama.test.ts`
+  (`NOVA_REAL_OLLAMA=1`, read and infer only). Run once here with Qwen3:8b: the first prompt
+  (placeholder shapes) got a pack with `"cron": "M H * * *"`, which the gates stopped at tests;
+  with example-filled shapes it wrote a 21:00 wind-down pack that passed every gate, waited for
+  the OK, canaried and went live. Both outcomes are the pipeline working; only the second is the
+  prompt working.
+- `tests/acceptance/m4b-device-agent.test.ts` now picks its restartable mesh port below the
+  ephemeral range (M4c's `freePort`): the sandboxes' port-0 listeners made the old race show up.
+
 **2026-10-30 (M6b review fixes): the model manager's guards.**
 Branch `m6-fix/models`; tests in `tests/core/models-guards.test.ts` (the reviewer's probes, made
 real), each failing on the code before its fix.

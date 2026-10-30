@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Db, Migration } from '../db.ts';
 import { restoreInto, sha256File, type Manifest } from './backup.ts';
-import { smoke, startSandbox } from './sandbox.ts';
+import { inert, smoke, startSandbox } from './sandbox.ts';
 
 export interface DrillCheck { name: string; ok: boolean; said: string }
 export interface DrillResult { ok: boolean; backup: string | null; source: 'folder' | 'encrypted' | null; checks: DrillCheck[] }
@@ -112,6 +112,8 @@ export async function drill(o: DrillInput): Promise<DrillResult> {
     // A real Nova on the restored home, and the smoke probes.
     let sb: Awaited<ReturnType<typeof startSandbox>> | null = null;
     try {
+      // Checked as it came back; now made inert, so the copy runs nothing of the person's work.
+      inert(join(home, 'nova.db'));
       sb = await startSandbox({ ...(o.root ? { root: o.root } : {}), home, ...(o.sandboxEnv ? { env: o.sandboxEnv } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}) });
       check('start', true, 'A sandbox Nova started on the restored home.');
       // The vault's key is never in a backup, so a restored vault can't open by design; and the
