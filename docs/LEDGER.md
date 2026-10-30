@@ -39,6 +39,14 @@ built-ins only.
   reported back. `stagedPending` and `finishStaged` (`checkpoints.ts`) include the reset's marker,
   so the supervisor honours the restart, and a staged reset goes first and wins over a staged
   restore (a restore can't be staged while a reset is, and the other way round).
+- **The same staging rules as a restore** (after the checkpoints review fixes, `b78ecc6f`): the
+  marker carries the sha256 of itself and is never acted on once changed (Nova doesn't start, and
+  nothing more is erased); `core.stopWork` runs before the restart and before a standby wipes its
+  copy. **A restart that fails** leaves the reset staged to finish when Nova starts next (the person
+  confirmed an erase), said on the Danger zone and the sheet and as a problem, with every change
+  refused (409) until then. A restore that fails is dropped instead: there the person keeps now.
+- **Acceptance:** `tests/acceptance/m7-checkpoints-reset.test.ts`, one real server process, both
+  restarts in place, the egress tripwire empty. The two browser tests stay separate files.
 - **One list of Nova's entries:** `entries.ts` (`NOVA_ENTRIES`), shared with checkpoints. Added
   there by the reset: `factory-reset.json` and `reset-report.json` (both also in checkpoints'
   `SKIP_TOP`, so a restore leaves them as they are). Not added: `captures`, which the plan names

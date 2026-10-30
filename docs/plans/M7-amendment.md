@@ -156,8 +156,10 @@ How the restore runs:
   marker. A step that throws stops the start: a half-reset Nova never runs.
 - **Restart:** once devices are told, `restartInPlace` (restart.ts): the supervisor's staged restart
   (`stagedPending` includes the reset's marker), or the server re-executing itself. The page then
-  opens first-run setup by itself. Until Nova is down it refuses every change. A core with nothing
-  that can restart it (a test) finishes at its next start.
+  opens first-run setup by itself. Until Nova is down it refuses every change. Work stops first
+  (`core.stopWork`). A restart that fails, or a core with nothing that can restart it, leaves the
+  reset to finish at the next start, said on screen; changes stay refused until then. The marker
+  carries its own sha256: one that changed since staging is never acted on.
 
 ## 3. Tests (the definition of done)
 
