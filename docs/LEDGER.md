@@ -111,6 +111,11 @@ failed before the fix.
   address can only be this Nova: over HTTPS the computer trusts, or on a
   network you control." Also: `--kind=standby` is recognised like
   `--kind standby`, so a standby is never started as a computer agent.
+- **A file that outgrows the journal is dropped on the standby.** A
+  journalled file that grew past 8 MB stayed on the standby as its last small
+  version, with no delete. Now it gets a `file_delete` entry when it crosses
+  the limit, and the problem says the standby's older copy was removed and
+  that the file wouldn't be on a new hub. Shrinking back copies it again.
 
 **2026-10-30 (M4 review): trust, pairing and access fixes.**
 

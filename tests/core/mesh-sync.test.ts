@@ -224,6 +224,30 @@ test('the journal: the person’s files go in the log, local state stays out, an
   }
 });
 
+test('a journalled file that grows too big leaves the standby with no copy, not a stale one, and the person is told', async () => {
+  const h = await hub();
+  try {
+    mkdirSync(join(h.home, 'workspace'), { recursive: true });
+    const file = join(h.home, 'workspace/archive.txt');
+    writeFileSync(file, 'small at first\n');
+    assert.deepEqual(h.core.mesh.sync.scan().put, ['workspace/archive.txt']);
+    writeFileSync(file, Buffer.alloc(9 * 1024 * 1024, 0x61));
+    assert.deepEqual(h.core.mesh.sync.scan().deleted, ['workspace/archive.txt'], 'the standby is told to drop its old copy');
+    const entry = h.core.db.get<{ op: string; row: string | null }>(`SELECT op, row FROM sync_log WHERE pk = 'workspace/archive.txt'`)!;
+    assert.equal(entry.op, 'file_delete');
+    assert.ok(h.core.log.problems().some((x) => /archive\.txt is larger than 8 MB.*older copy/.test(x.message)));
+    assert.deepEqual(h.core.mesh.sync.scan(), { put: [], deleted: [] }, 'said once');
+    // Small again: copied again. Deleted later: deleted on the standby too.
+    writeFileSync(file, 'small again\n');
+    assert.deepEqual(h.core.mesh.sync.scan().put, ['workspace/archive.txt']);
+    const { rmSync } = await import('node:fs');
+    rmSync(file);
+    assert.deepEqual(h.core.mesh.sync.scan().deleted, ['workspace/archive.txt']);
+  } finally {
+    await h.stop();
+  }
+});
+
 test('role.json: the documented shape, the tolerated variants, and a plain refusal when it can’t say who the hub is', () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-role-'));
   const hubKeys = { id: 'hub-1', url: 'https://hub.example:4320', public_key: 'k', x25519_public_key: 'x' };
