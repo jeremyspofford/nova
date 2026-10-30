@@ -52,7 +52,9 @@ test('M6 gate: a day in the life, local-only from setup to night, on hub-class h
   let standbyProc: Running | null = null;
   try {
     standbyProc = await s.standby.start(s.env(s.standbyMesh));
-    const { lines } = await day({
+    const lines: string[] = [];
+    await day({
+      lines,
       hub: s.hub, standby: s.standby, sp, cloud, strict: true, waitMs: 30_000,
       outage: {
         how: 'the stand-in Ollama is stopped (its port refuses connections), then started again on the same port.',

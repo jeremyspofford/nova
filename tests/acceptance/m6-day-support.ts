@@ -100,21 +100,29 @@ export interface DayOptions {
   waitMs: number;
   title: string;
   intro: string[];
+  // The transcript, filled as the day goes, so a run that stops part-way still has its record.
+  lines: string[];
 }
 
-export interface DayResult { lines: string[]; failures: string[] }
+export interface DayResult { failures: string[] }
 
 export async function day(o: DayOptions): Promise<DayResult> {
   const { hub, standby, sp, strict } = o;
   const api = (p: string) => `/api/v1${p}`;
   const get = (p: string) => hub.get(api(p));
   const send = (method: string, p: string, body?: unknown) => hub.send(method, api(p), body);
-  const lines: string[] = [`# ${o.title}`, '', ...o.intro, ''];
+  const lines = o.lines;
+  lines.push(`# ${o.title}`, '', ...o.intro, '');
   const failures: string[] = [];
   const say = (...l: string[]) => { lines.push(...l); };
   let stepStarted = Date.now();
+  let stepName = '';
+  const timings: string[] = [];
+  const lap = () => { if (stepName) timings.push(`| ${stepName} | ${((Date.now() - stepStarted) / 1000).toFixed(1)} s |`); };
   const step = (clock: string, name: string) => {
+    lap();
     stepStarted = Date.now();
+    stepName = clock;
     say('', `## ${clock} — ${name}`, '');
   };
   const took = () => `${((Date.now() - stepStarted) / 1000).toFixed(1)} s`;
@@ -238,11 +246,14 @@ export async function day(o: DayOptions): Promise<DayResult> {
   assert.equal(status.active, true, 'the indicator shows while capture is on');
   say(`- Screenpipe (stand-in) at ${sp.base} added off, then turned on at 08:00; the person asked for what it kept since yesterday noon. Indicator: **${status.active ? 'on' : 'off'}** (${status.capturing.map((c: { name: string }) => c.name).join(', ')}).`);
   say(`- Signals: Editor → work, Recipes/Notes/Chat → home, weekdays 09:00–17:00 → work. Retention: ${SETTINGS.retention_days} day.`);
+  // Turning a source on pulls it at once; that first pull brings yesterday's item. It is let finish
+  // before the morning's items exist, so the 10:05 pass is the one that brings them.
+  const events = async () => (await get('/capture/events?limit=200')) as any[];
+  await waitFor(events, (l) => l.length === 1, 20_000);
   sp.add(...ITEMS.morning.map(item));
-  let t0 = Date.now();
+  const t0 = Date.now();
   const morning = await tick(at('10:05'));
   const morningMs = Date.now() - t0;
-  const events = async () => (await get('/capture/events?limit=200')) as any[];
   let evs = await events();
   const byText = (list: any[], text: string) => list.find((e) => e.text === text);
   for (const i of [...ITEMS.yesterday, ...ITEMS.morning]) {
@@ -266,12 +277,14 @@ export async function day(o: DayOptions): Promise<DayResult> {
   const proposal = proposals.find((p) => p.event.id === factEvent.id);
   for (const p of proposals) assert.equal(p.provider, 'local-model', 'proposals come from the local model');
   soft(!!proposal, 'the local model proposed keeping the boiler appointment as a memory');
-  soft(proposals.length === 1, `one proposal, not ${proposals.length}`);
+  // A real model may well think the standup's news is worth keeping too; that is recorded, not judged.
+  if (strict) assert.equal(proposals.length, 1, 'one proposal: the stand-in says yes to the fact only');
   const decisionReceipts = receiptsOf(hub.home).filter((r) => r.purpose.startsWith('decision: capture-promote'));
   assert.ok(decisionReceipts.length >= 1, 'each decision call has a receipt');
   for (const r of decisionReceipts) assert.deepEqual([r.provider, r.egress, r.privacy_mode], ['ollama', 'local', 'local-only']);
   say(`- ${decisionReceipts.length} decision calls (capture-promote@1, one Noul question), each with a receipt: ${receiptLine(decisionReceipts[0]!)}.`);
   say(`- Proposals: ${proposals.length ? proposals.map((p) => `“${p.event.text}” p=${p.p} by \`${p.provider}\``).join('; ') : 'none'}.`);
+  say(`- The local model proposed ${proposals.length} of the ${decisionReceipts.length} events it was asked about. A proposal is never a memory: the person accepts only the boiler appointment below.`);
 
   // ---- chat ----------------------------------------------------------------------------------------
   step('10:10', 'Chat through the local reasoner');
@@ -354,7 +367,7 @@ export async function day(o: DayOptions): Promise<DayResult> {
   for (const i of ITEMS.midday) assert.equal(byText(evs, i.text)?.space ?? null, i.expect, i.text);
   const chatty = byText(evs, ITEMS.midday[1]!.text);
   say(`- 12:30 “${chatty.text}” in Chat during working hours: home by the app, work by the hours, so **unclassified**, not guessed.`);
-  const fired = await waitFor<any[]>(() => get(`/triggers?rule=${unfiled.body.rule.id}`), (l) => l.length >= 1 && l.every((t) => t.triage?.decision), 20_000);
+  const fired = await waitFor<any[]>(() => get(`/triggers?rule=${unfiled.body.rule.id}`), (l) => l.length >= 1 && l.every((t) => t.triage?.decision));
   assert.equal(fired.length, 1, 'the unclassified event fired the rule once');
   const ev = fired[0];
   assert.equal(ev.triage.model?.provider, 'local-model', `the event was triaged by the local model: ${JSON.stringify(ev.triage)}`);
@@ -396,6 +409,7 @@ export async function day(o: DayOptions): Promise<DayResult> {
   assert.equal(o.cloud.requests.length, before.cloud, 'local-only never reached the cloud');
   assert.deepEqual(await get('/receipts?egress=remote'), [], 'no remote receipt');
   say(`- Meanwhile capture keeps working (13:10 captured). The cloud stand-in received **${o.cloud.requests.length - before.cloud}** requests; remote receipts: **0**.`);
+  const asked = receiptsOf(hub.home).filter((r) => r.purpose.startsWith('decision: capture-promote')).length;
   const outageStarted = Date.now();
   await o.outage.up();
   say('- 13:30 the runtime is back.');
@@ -409,13 +423,14 @@ export async function day(o: DayOptions): Promise<DayResult> {
   await tick(at('13:45'));
   const outageEvent = byText(await events(), OUTAGE_FACT);
   assert.ok(outageEvent, 'the 13:10 event was kept');
+  assert.ok(receiptsOf(hub.home).filter((r) => r.purpose.startsWith('decision: capture-promote')).length > asked, 'the local model was asked about it once it was back');
   const late = ((await get('/capture/proposals')) as any[]).find((p) => p.event.id === outageEvent.id);
-  soft(!!late, 'the event captured during the outage was looked at by the local model once it was back');
-  say(`- The event captured during the outage was triaged once the model was back: ${late ? `proposed (p=${late.p}, \`${late.provider}\`)` : 'not proposed'}.`);
+  if (strict) assert.ok(late, 'the stand-in says yes to the outage fact once it is asked');
+  say(`- The event captured during the outage was put to the local model once it was back: ${late ? `proposed (p=${late.p}, \`${late.provider}\`)` : 'looked at, not proposed'}.`);
   assert.equal(o.cloud.requests.length, 0, 'the cloud stand-in received nothing all day so far');
 
   // ---- afternoon: forgetting ----------------------------------------------------------------------------
-  step('17:30', 'The person forgets the promoted fact: gone from memory, capture, the database and WAL, backups and the standby');
+  step('17:30', `The person forgets the promoted fact: gone from memory, capture, the database and WAL, backups${standby ? ' and the standby' : ''}`);
   assert.equal((await send('DELETE', `/memory/${memory.id}`)).status, 200);
   assert.equal(((await get('/memory')) as any[]).some((x) => x.id === memory.id), false, 'gone from memory');
   assert.equal(byText(await events(), FACT), undefined, 'gone from capture (the event held the same words)');
@@ -467,9 +482,10 @@ export async function day(o: DayOptions): Promise<DayResult> {
   say(`- Receipts: **${all.length}**, every one egress local (local-only).`);
   for (const [k, n] of byPurpose) say(`  - ${n} × ${k}`);
   say(`- The egress tripwire (every TCP connect off loopback) logged **nothing**${standby ? ' on either node' : ''}.`);
-  say(`- Wall time for the day: ${((Date.now() - started) / 1000).toFixed(0)} s.`);
+  lap();
+  say(`- Wall time for the day: ${((Date.now() - started) / 1000).toFixed(0)} s.`, '', '| Step (test clock) | Wall time |', '| --- | --- |', ...timings);
   if (failures.length) say('', '## What a model didn’t do as hoped', '', ...failures.map((f) => `- ${f}`));
-  return { lines, failures };
+  return { failures };
 }
 
 export function writeEvidence(lines: string[]): void {
