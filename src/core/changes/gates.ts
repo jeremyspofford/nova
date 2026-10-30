@@ -49,7 +49,23 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 
 // Why this proposal would weaken a gate, in plain words, or null. Checked before anything else
 // about it, so a change that tries never reaches the sandbox.
+// Decision templates a security gate depends on (the ingest gate's screen, src/core/ingest), and the
+// Noul questions each must keep: a change may tighten one, never take a question away or change it.
+export const GATE_TEMPLATES: ReadonlyMap<string, readonly string[]> = new Map([
+  ['ingest-screen', ['direct_instruction', 'hidden_instruction', 'exfiltration', 'impersonation', 'unrequested_action']],
+]);
+
 export function weakens(kind: ChangeKind, proposal: Record<string, unknown>, artifact: unknown): string | null {
+  if (kind === 'template' && isObj(artifact) && isObj(artifact.template)) {
+    const t = artifact.template;
+    const keep = GATE_TEMPLATES.get(String(t.template_id));
+    if (keep) {
+      const qs = Array.isArray(t.questions) ? t.questions : [];
+      const noul = new Set(qs.filter((q) => isObj(q) && q.type === 'noul').map((q) => (q as Record<string, unknown>).id));
+      const missing = keep.filter((q) => !noul.has(q));
+      if (missing.length) return `It drops or changes the ingest screen’s question${missing.length === 1 ? '' : 's'} ${missing.join(', ')}. ${REFUSED_WORDS}`;
+    }
+  }
   const named = [proposal, isObj(artifact) ? artifact : {}].flatMap((o) => Object.keys(o).filter((k) => (GATE_FIELDS as readonly string[]).includes(k)));
   if (named.length) return `It sets ${[...new Set(named)].join(', ')}, which only the pipeline decides. ${REFUSED_WORDS}`;
   const canary = proposal.canary;

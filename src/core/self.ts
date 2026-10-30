@@ -27,6 +27,8 @@ import type { Device, Devices } from './mesh/devices.ts';
 import type { Triggers } from './triggers.ts';
 import type { Design } from './design.ts';
 import type { Egress } from './workers.ts';
+import { escapeProtocol, type Ingest } from './ingest/screen.ts';
+import { fold } from './ingest/checks.ts';
 
 // Where the person puts what they want Nova to learn from: notes, another assistant's export, a
 // Nova memory export (POST /api/v1/memory/export writes memory.json).
@@ -46,6 +48,8 @@ export interface Era2State {
 
 export interface SelfOptions {
   home: string;
+  // The ingest gate: an import file is screened, and its records wait as memory candidates.
+  ingest: Ingest;
   version: string;
   // preview, production or development: what this instance is for (NOVA_INSTANCE).
   instance: () => string;
@@ -74,7 +78,10 @@ type Runtime = { url: string; ok: boolean; version: string | null; models: strin
 
 const plain = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const bare = (s: unknown) => plain(s).replace(/[.\s]+$/, '');
-const quote = (s: unknown) => `“${bare(s)}”`;
+// Text from outside Nova's own code (a device's name, a service's error, a problem's words, a
+// triage reason) as quoted data: folded, every protocol tag escaped, bounded, inside its quotes.
+const QUOTE_MAX = 200;
+const quote = (s: unknown) => { const t = escapeProtocol(fold(bare(s))); return `“${t.length > QUOTE_MAX ? `${t.slice(0, QUOTE_MAX)}…` : t}”`; };
 const list = (xs: string[], max = LIST_MAX) => (xs.length > max ? `${xs.slice(0, max).join(', ')} and ${xs.length - max} more` : xs.join(', '));
 const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 const ago = (iso: string | null | undefined, now: Date) => {
@@ -130,7 +137,8 @@ Read from Nova's own registry at the start of this turn. This is the truth about
 ${lines.join('\n')}
 ${fresh.length ? `\n${fresh.join('\n')}\n` : ''}
 Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a connection in Settings › Connections; a capture source in Settings › Capture; a device in Settings › Devices; a skill in the Skills view; new extensions and design systems through Nova's change pipeline (Settings › Changes); the look in Settings › Appearance; what Nova may do without asking in Settings › Without asking. These are the person's to change: from chat you change only what your tools do (schedules, memory, files in your workspace). Never ask for a key, token or password in chat or in a file; the person enters it in that Settings section, which keeps it in the vault.`;
-    return redactText(text);
+    // Nothing in the briefing may open or close a block of Nova's own, whatever a name says.
+    return escapeProtocol(redactText(text));
   }
 
   // Where an OpenAI-compatible service (OpenRouter, say) goes, as this instance has it: the one
@@ -147,7 +155,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     const o = this.#o;
     const hub = o.devices.find(o.hubId());
     const build = this.build();
-    return `${o.instance()}, data home ${o.home}, on ${hub ? `“${hub.name}”` : hostname()} (${platform()}), ${o.role() === 'hub' ? 'the hub' : 'a standby copy of the hub'}. Nova ${o.version}${build ? ` (build ${build})` : ''}. Privacy setting: ${o.profile.privacyDefault()}.`;
+    return `${o.instance()}, data home ${o.home}, on ${hub ? quote(hub.name) : hostname()} (${platform()}), ${o.role() === 'hub' ? 'the hub' : 'a standby copy of the hub'}. Nova ${o.version}${build ? ` (build ${build})` : ''}. Privacy setting: ${o.profile.privacyDefault()}.`;
   }
 
   #personLine(): string {
@@ -173,7 +181,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     const chat = this.#chatId();
     const on = all.filter((p) => p.enabled || p.id === chat);
     const off = all.filter((p) => !on.includes(p));
-    const one = (p: (typeof all)[number]) => `${p.name} (${p.class}${p.id === chat ? ', your chat model' : ''}${p.model && p.model !== p.id ? `, model ${p.model}` : ''}${addressOf(p.config)}): ${bare(p.health.words)}`;
+    const one = (p: (typeof all)[number]) => `${p.name} (${p.class}${p.id === chat ? ', your chat model' : ''}${p.model && p.model !== p.id ? `, model ${p.model}` : ''}${addressOf(p.config)}): ${quote(p.health.words)}`;
     return `in use: ${on.length ? on.map(one).join('; ') : 'none'}. Off: ${off.length ? off.map((p) => p.name).join(', ') : 'none'}.`;
   }
 
@@ -204,7 +212,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     const r = await this.#runtime();
     const where = `Ollama at ${hostOf(r.url)}`;
     const head = r.ok ? `${where} answers (version ${r.version}), ${r.models.length} ${r.models.length === 1 ? 'model' : 'models'}${r.models.length ? `: ${list(r.models)}` : ''}.` : `${where} doesn’t answer: ${quote(r.problem)}.`;
-    const roles = ROLES.map((role) => { const p = this.#o.models.placement(role); return p ? `${ROLE_WORDS[role].name.toLowerCase()} → ${p.model}${p.device === 'hub' ? '' : ` on ${this.#o.devices.find(p.device)?.name ?? 'a paired computer'}`}` : null; }).filter(Boolean) as string[];
+    const roles = ROLES.map((role) => { const p = this.#o.models.placement(role); return p ? `${ROLE_WORDS[role].name.toLowerCase()} → ${p.model}${p.device === 'hub' ? '' : ` on ${this.#o.devices.find(p.device)?.name ? quote(this.#o.devices.find(p.device)!.name) : 'a paired computer'}`}` : null; }).filter(Boolean) as string[];
     const cloud = this.#o.models.cloud();
     return `${head} Roles: ${roles.length ? roles.join(', ') : 'none assigned'}. Cloud model: ${cloud ? `${cloud.name} (${cloud.model} at ${hostOf(cloud.base_url)}${cloud.api_key ? ', key saved' : ''})` : 'none'}.`;
   }
@@ -213,7 +221,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     let views;
     try { views = this.#o.connectors.list(); } catch { return 'couldn’t be read.'; }
     if (!views.length) return 'none installed.';
-    return views.map((c) => `${c.name}: ${c.broken ? 'was connected, but the service no longer lets Nova in' : c.connected ? `connected${c.live && c.live !== 'off' ? `, ${c.live}` : ''}` : 'not connected'}${c.allowed ? '' : ` (${plain(c.blocked).replace(/[.\s]+$/, '') || 'not allowed by your privacy setting'})`}`).join('; ') + '.';
+    return views.map((c) => `${c.name}: ${c.broken ? 'was connected, but the service no longer lets Nova in' : c.connected ? `connected${c.live && c.live !== 'off' ? `, ${c.live}` : ''}` : 'not connected'}${c.allowed ? '' : ` (${c.blocked ? quote(c.blocked) : 'not allowed by your privacy setting'})`}`).join('; ') + '.';
   }
 
   #captureLine(): string {
@@ -221,7 +229,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     if (!sources.length) return 'no sources set up; Nova sees nothing on your devices.';
     return sources.map((s) => {
       const state = !s.enabled ? 'off' : s.paused ? 'paused' : STATUS_WORDS[s.status] ?? s.status;
-      return `${s.name} on ${s.device.name ?? 'a device'}: ${state}${s.enabled && s.detail ? `: ${quote(s.detail)}` : ''}`;
+      return `${s.name} on ${s.device.name ? quote(s.device.name) : 'a device'}: ${state}${s.enabled && s.detail ? `: ${quote(s.detail)}` : ''}`;
     }).join('; ') + '.';
   }
 
@@ -229,7 +237,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     const all = this.#o.devices.list().filter((d) => d.trust === 'trusted');
     const others = all.filter((d) => d.role !== 'hub');
     if (!others.length) return 'only this hub; no other devices paired.';
-    return `${others.length} paired besides the hub: ${list(others.map((d) => `${d.name} (${d.kind}, ${this.#o.online(d) ? 'online' : 'offline'})`))}.`;
+    return `${others.length} paired besides the hub: ${list(others.map((d) => `${quote(d.name)} (${d.kind}, ${this.#o.online(d) ? 'online' : 'offline'})`))}.`;
   }
 
   #schedulesLine(): string {
@@ -267,11 +275,17 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
   #freshLines(): string[] {
     const imports = this.imports();
     const out: string[] = [];
-    if (this.#o.memory.counts().active === 0) {
+    // Memories waiting for the person's OK (from an import, a device, or a conversation that read
+    // outside content) aren't memory yet: say they are there, never what they say.
+    const waiting = this.#o.ingest.candidates().length;
+    if (waiting) out.push(`- ${waiting} ${waiting === 1 ? 'memory waits' : 'memories wait'} for the person’s OK in Memory. They aren’t memory until the person keeps them; if it comes up, point them there.`);
+    if (this.#o.memory.counts().active === 0 && !waiting) {
       out.push(`- First run: this Nova is fresh. Its memory is empty, so beyond the profile above you know nothing about the person yet. When you greet them or they ask what you know about them, say so plainly, say it runs from ${this.#o.home}, and offer the import path up front: they can paste notes here, or put a file (notes, an export from another assistant, or a Nova memory export) in ~/${IMPORT_DIR}/, and you read it and suggest memories they review in Memory.`);
     }
-    for (const p of imports.packs) out.push(`- Found in ~/${IMPORT_DIR}/: a Nova memory export, ${p.path} (${p.count} ${p.count === 1 ? 'memory' : 'memories'}${p.exported_at ? `, exported ${p.exported_at.slice(0, 10)}` : ''}). Offer to load it with memory_import; the person approves, and the memories arrive in Memory for their review.`);
-    if (imports.files.length) out.push(`- Also in ~/${IMPORT_DIR}/: ${list(imports.files.map((f) => f.path))}. Read one with read_file to distill it into memories.`);
+    // Only how many: a file's name is outside content (anything can put a file there), so the
+    // agent sees names only through import_files, screened.
+    const files = imports.packs.length + imports.files.length;
+    if (files) out.push(`- ${files} ${files === 1 ? 'file waits' : 'files wait'} in ~/${IMPORT_DIR}/${imports.packs.length ? ` (${imports.packs.length} ${imports.packs.length === 1 ? 'looks' : 'look'} like a Nova memory export)` : ''}. Their names come from outside: list them with import_files. Offer to load an export with memory_import; the person approves, and the memories wait for their OK in Memory: none is in memory until they keep it. Read any other file with read_file to suggest memories.`);
     return out;
   }
 
@@ -405,7 +419,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     const { abs, rel } = this.#importPath(path);
     const pack = readPack(abs);
     if (!pack) throw new CoreError('validation', `${rel} isn’t a Nova memory export (a memory.json with its records). Read it with read_file and suggest memories instead.`);
-    const have = new Set(this.#o.memory.active().map((r) => plain(r.content).toLowerCase()));
+    const have = this.#kept();
     const kinds: Record<string, number> = {};
     let fresh = 0;
     for (const r of pack.records) {
@@ -416,27 +430,43 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     return { path: rel, total: pack.records.length, fresh, already: pack.records.length - fresh, kinds, exported_at: pack.exported_at };
   }
 
-  // Loads it: each memory not already kept arrives unreviewed (recorded by "import"), for the
-  // person to confirm, correct or forget in Memory.
-  importPack(path: unknown): { path: string; imported: number; skipped: number } {
+  // Loads it through the ingest gate (Amendment 2026-10-30-C Part 3): the file is outside content
+  // of unknown provenance, screened as read_file would screen it. A block refuses the whole import,
+  // with the reason. Otherwise each memory not already kept or already waiting becomes a memory
+  // candidate, "imported from <file>", waiting for the person's OK in Memory, out of every prompt:
+  // in any run, whatever permissions.md says. A record Nova's own checks flag waits flagged, with
+  // its own screen.
+  async importPack(path: unknown): Promise<{ path: string; waiting: number; skipped: number; held: number }> {
     if (this.#o.role() !== 'hub') throw new CoreError('conflict', 'This Nova is a standby copy; load memories on the hub.');
     const { abs, rel } = this.#importPath(path);
     const pack = readPack(abs);
     if (!pack) throw new CoreError('validation', `${rel} isn’t a Nova memory export.`);
-    const have = new Set(this.#o.memory.active().map((r) => plain(r.content).toLowerCase()));
-    let imported = 0;
+    const ingest = this.#o.ingest;
+    const file = await ingest.screen({ text: readFileSync(abs, 'utf8'), source: { kind: 'file', origin: rel } });
+    if (file.verdict === 'block') throw new CoreError('forbidden', `Nova didn’t load ${rel}: it looked like it was trying to give instructions. Tasks has the details.`);
+    const have = this.#kept();
+    let waiting = 0;
+    let held = 0;
     for (const r of pack.records) {
-      const key = plain(r.content).toLowerCase();
+      const content = plain(r.content);
+      const key = content.toLowerCase();
       if (have.has(key)) continue;
-      this.#o.memory.remember({
-        kind: r.kind, content: plain(r.content), recorded_by: 'import', source: `import:${rel}`,
-        ...(r.observed_at ? { observed_at: r.observed_at } : {}),
-        ...(typeof r.confidence === 'number' ? { confidence: r.confidence } : {}),
-      });
+      const own = ingest.screenNow({ text: content, source: { kind: 'file', origin: rel } });
+      if (own.verdict === 'block') { held++; continue; }
+      const flagged = own.flags.some((f) => f.level !== 'note');
+      ingest.candidate({ op: 'remember', kind: r.kind, content, source: `imported from ${rel}`, taint: flagged ? [file.taint, own.taint] : [file.taint] });
       have.add(key);
-      imported++;
+      waiting++;
     }
-    return { path: rel, imported, skipped: pack.records.length - imported };
+    return { path: rel, waiting, skipped: pack.records.length - waiting - held, held };
+  }
+
+  // What is kept already or already waiting, by its words.
+  #kept(): Set<string> {
+    return new Set([
+      ...this.#o.memory.active().map((r) => plain(r.content).toLowerCase()),
+      ...this.#o.ingest.candidates().filter((c) => c.op === 'remember' && c.content).map((c) => plain(c.content).toLowerCase()),
+    ]);
   }
 
   // Only a file inside ~/workspace/import/, reached without links.

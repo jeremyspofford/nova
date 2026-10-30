@@ -5,7 +5,8 @@
 // format or Claude's (name + description). Removing one deletes that folder.
 // Nothing else refers to it, and skills/ is kept out of the home's history,
 // so nothing is left behind.
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
@@ -133,7 +134,10 @@ export class Skills {
     return files;
   }
 
-  restore(id, files) {
+  restore(id, files) { return this.commit(this.prepareRestore(id, files)); }
+
+  // What restoring would write, checked, without writing it (the ingest gate screens it first).
+  prepareRestore(id, files) {
     if (!ID.test(String(id))) throw new SkillError(400, 'Not a skill name.');
     const dir = resolve(this.dir, id);
     if (existsSync(dir)) throw new SkillError(409, 'That skill is already installed.');
@@ -142,14 +146,46 @@ export class Skills {
     for (const [p, data] of entries) {
       if (!data || !resolve(dir, p).startsWith(dir + sep)) throw new SkillError(400, 'That skill has a file Nova can\'t put back.');
     }
-    writeFiles(dir, entries);
+    return { id: String(id), entries };
+  }
+
+  // Whether a prepared skill is exactly one Nova ships (an Undo of a catalog skill): every file as
+  // the catalog has it, and nothing else.
+  isCatalogCopy({ id, entries }) {
+    const dir = join(this.catalogDir, String(id));
+    if (!readSkill(this.catalogDir, String(id))) return false;
+    const have = filesIn(dir, { names: true });
+    if (Object.keys(have).length !== entries.length) return false;
+    return entries.every(([p, data]) => {
+      const file = resolve(dir, p);
+      if (!file.startsWith(dir + sep) || !existsSync(file)) return false;
+      return Buffer.compare(readFileSync(file), Buffer.isBuffer(data) ? data : Buffer.from(data)) === 0;
+    });
+  }
+
+  // Writes a prepared skill into a staging folder (not a skill name, so never listed or used), then
+  // moves it into place in one step.
+  commit({ id, entries }) {
+    const dir = resolve(this.dir, id);
+    if (existsSync(dir)) throw new SkillError(409, 'That skill is already installed.');
+    mkdirSync(this.dir, { recursive: true });
+    const staging = resolve(this.dir, `.staging-${randomBytes(6).toString('hex')}`);
+    try {
+      writeFiles(staging, entries);
+      renameSync(staging, dir);
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
+    }
     return this.get(id);
   }
 
   // A skill the person brings: a folder's files or a .zip's, as
   // { path: Buffer | string | { base64 } }. SKILL.md may sit at the top or in
   // one folder; its name (or that folder's) becomes the skill's id.
-  add(given) {
+  add(given) { return this.commit(this.prepare(given)); }
+
+  // What adding would write, checked, without writing anything.
+  prepare(given) {
     let entries = Object.entries(given ?? {})
       .map(([p, v]) => [String(p).replace(/\\/g, '/').replace(/^\/+/, ''), Buffer.isBuffer(v) ? v : decodeFile(v)])
       .filter(([p]) => p && !JUNK.test(p));
@@ -171,8 +207,7 @@ export class Skills {
     if (existsSync(join(this.catalogDir, id, 'SKILL.md'))) throw new SkillError(409, `Nova comes with a skill called ${id}. Give yours another name.`);
     const dir = resolve(this.dir, id);
     for (const [p] of entries) if (!resolve(dir, p).startsWith(dir + sep)) throw new SkillError(400, `“${p}” would land outside the skill's folder.`);
-    writeFiles(dir, entries);
-    return this.get(id);
+    return { id, entries };
   }
 
   // Skills whose words appear in the message. The rest are listed for the

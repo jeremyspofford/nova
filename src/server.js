@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
+import { KIND_WORDS, createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -77,7 +77,8 @@ export function createNova(config = loadConfig(), deps = {}) {
     // development and tests only: the vault wins, and such a value is redacted like a vault one.
     agent: { command: config.agentCmd, egress: config.agentEgress },
     secrets: deps.secrets ?? ((name) => process.env[`NOVA_SECRET_${name}`] ?? null),
-    models: modelOptions(process.env),
+    // deps.models: tests only (a stand-in Ollama and fixed hardware without touching the environment).
+    models: { ...modelOptions(process.env), ...(deps.models ?? {}) },
     // Started by the supervisor (src/supervisor), it can ask for a deploy or rollback (M7b).
     supervisor: deps.supervisor ?? ipcLink(process),
     // A sandbox copy started by the change pipeline (M7a): no outside work, no changes taken.
@@ -94,7 +95,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   const store = new SessionStore(config.home, config.timezone);
   // Curated memory lives in the core; MEMORY.md is rendered from it. The first start imports
   // an existing MEMORY.md once, and every start takes in hand edits made while Nova was off.
-  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault });
+  // The ingest gate (Amendment 2026-10-30-C Part 3) screens what the agent reads from outside.
+  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault, ingest: core.ingest });
   // Era 2's Gmail as a connector: its secrets in the vault, Settings › Connections, mail events.
   core.connectors.register(gmailConnector(runner.gmail));
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.
@@ -187,8 +189,46 @@ export function createNova(config = loadConfig(), deps = {}) {
       timezone: config.timezone,
     };
   };
+  // A skill from outside that the screen held back says why, until the person turns it on.
+  // A skill from outside (uploaded, not one Nova ships) is screened as it comes in: a block refuses
+  // it, and an unsure one is installed but held back, with the reasons, until the person turns it on.
+  //
+  // Every file is screened before anything is written: a text file that isn't UTF-8 is refused
+  // (NUL bytes are taken out for the screen, never a reason to skip it); a file that isn't text
+  // (an image, a font) can't be checked, which holds the skill. It is then written to a staging
+  // folder and moved into place, held first if it is to be held, so it is never usable unchecked.
+  // Each file's hash is kept: a file changed after the check is outside content again.
+  const BINARY = /\.(png|jpe?g|gif|webp|ico|bmp|pdf|woff2?|ttf|otf|eot|zip|gz|mp3|mp4|wav|ogg|webm)$/i;
+  const NO_MODEL = 'Nova couldn’t fully check it: no sorting model is set up, so only Nova’s own checks ran';
+  async function installScreened(prepared, { refused }) {
+    const texts = [];
+    let unread = 0;
+    for (const [p, data] of prepared.entries) {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      if (BINARY.test(p)) { unread++; continue; }
+      let text;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch {
+        return { error: `${refused} it couldn’t read ${p} as text, so it couldn’t check it.` };
+      }
+      texts.push(`${p}:\n${text.replace(/\u0000/g, '')}`);
+    }
+    const s = await core.ingest.screen({ text: texts.join('\n\n'), source: { kind: 'skill', origin: prepared.id } });
+    if (s.verdict === 'block') return { error: `${refused} it looked like it was trying to give Nova instructions it shouldn’t follow. Tasks has the details.` };
+    const reasons = [...new Set([
+      ...s.flags.filter((f) => f.level !== 'note').map((f) => KIND_WORDS[f.kind] ?? f.kind),
+      ...(s.model ? [] : [NO_MODEL]),
+      ...(unread ? [`Nova couldn’t check ${unread} file${unread === 1 ? '' : 's'} it can’t read as text`] : []),
+    ])];
+    const hold = s.verdict !== 'pass' || unread > 0;
+    if (hold) core.ingest.hold('skill', prepared.id, s, reasons);
+    else core.ingest.release('skill', prepared.id);
+    let skill;
+    try { skill = skills.commit(prepared); } catch (e) { if (hold) core.ingest.release('skill', prepared.id); throw e; }
+    runner.trustSkill(prepared.id);
+    return { skill, screen: s };
+  }
   const skillsView = () => ({
-    installed: skills.installed(),
+    installed: skills.installed().map((x) => ({ ...x, held: runner.skillHeld(x.id) })),
     available: skills.available(),
     connectors: { gmail: gmail.status() },
   });
@@ -281,8 +321,27 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
 
     if (resource === 'memory') {
-      if (req.method === 'GET' && !id) return json(res, 200, { ...memory.read(), titles: titles() });
+      // candidates: what a conversation that read outside content wanted kept, waiting for the person.
+      if (req.method === 'GET' && !id) {
+        // A forget waiting for the person names the memory it would forget.
+        const candidates = core.ingest.candidates().map((c) => (c.op === 'forget' && c.target ? { ...c, target_text: memory.record(c.target)?.content ?? null } : c));
+        return json(res, 200, { ...memory.read(), titles: titles(), candidates });
+      }
       if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
+      if (id === 'candidates' && action && (sub === 'keep' || sub === 'drop')) {
+        if (sub === 'drop') return core.ingest.dropCandidate(action) ? (saved(), json(res, 200, { ok: true })) : json(res, 404, { error: 'That’s already been dealt with.' });
+        const c = core.ingest.takeCandidate(action);
+        if (!c) return json(res, 404, { error: 'That’s already been dealt with.' });
+        let done;
+        if (c.op === 'remember') {
+          done = memory.remember({ kind: c.kind ?? 'fact', text: c.content ?? '', ...(c.replaces ? { replaces: c.replaces } : {}), ...(c.source ? { from: c.source } : {}) });
+          // The person kept it, so it is theirs: confirmed, not "not yet reviewed".
+          if (done.ok && done.id && !done.existing) try { core.memory.confirm(done.id, 'person'); } catch { /* corrected since */ }
+        } else if (c.op === 'note') done = memory.note({ text: c.content ?? '', ...(c.source ? { from: c.source } : {}) });
+        else done = { op: 'forget', removed: memory.forget(c.target ?? '', { by: 'person' }) };
+        saved();
+        return json(res, 200, { kept: done });
+      }
       if (id === 'restore') {
         const { items } = await readBody(req);
         if (!Array.isArray(items)) return json(res, 400, { error: 'items must be a list' });
@@ -317,9 +376,11 @@ export function createNova(config = loadConfig(), deps = {}) {
         let body;
         try { body = await readBody(req, 8_000_000); } catch { return json(res, 413, { error: 'That skill is too big to add. Skills can be up to 5 MB.' }); }
         try {
-          const skill = skills.add(body.zip ? unzip(Buffer.from(String(body.zip), 'base64')) : body.files);
+          const prepared = skills.prepare(body.zip ? unzip(Buffer.from(String(body.zip), 'base64')) : body.files);
+          const done = await installScreened(prepared, { refused: 'Nova didn’t add this skill:' });
+          if (done.error) return json(res, 400, { error: done.error });
           announce('skills');
-          return json(res, 200, { skill });
+          return json(res, 200, { skill: { ...done.skill, held: runner.skillHeld(done.skill.id) } });
         } catch (e) {
           if (e instanceof SkillError) return json(res, e.status, { error: e.message });
           if (e instanceof ZipError) return json(res, 400, { error: e.message });
@@ -329,9 +390,25 @@ export function createNova(config = loadConfig(), deps = {}) {
       try {
         let skill = null;
         let files;
-        if (action === 'install') skill = skills.install(id);
-        else if (action === 'remove') files = skills.remove(id);
-        else if (action === 'restore') skill = skills.restore(id, (await readBody(req)).files);
+        if (action === 'install') { skill = skills.install(id); runner.trustSkill(id); }
+        else if (action === 'remove') { files = skills.remove(id); core.ingest.release('skill', id); }
+        else if (action === 'restore') {
+          // Put back from Undo: screened again, exactly as when it came in.
+          const prepared = skills.prepareRestore(id, (await readBody(req)).files);
+          // One Nova ships, exactly as it ships it, comes back as it was; anything else is screened.
+          if (skills.isCatalogCopy(prepared)) { skill = skills.commit(prepared); runner.trustSkill(id); }
+          else {
+            const done = await installScreened(prepared, { refused: 'Nova didn’t put this skill back:' });
+            if (done.error) return json(res, 400, { error: done.error });
+            skill = done.skill;
+          }
+        }
+        // Turning on a skill that is held back (or that changed since Nova checked it) is the person's call.
+        else if (action === 'allow') {
+          if (!runner.skillHeld(id)) return json(res, 404, { error: 'That skill isn’t held back.' });
+          core.ingest.release('skill', id);
+          runner.trustSkill(id);
+        }
         else return json(res, 404, { error: 'Not found' });
         announce('skills');
         return json(res, 200, files ? { files } : { skill });

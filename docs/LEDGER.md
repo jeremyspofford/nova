@@ -81,6 +81,196 @@ failing first; the numbers are in the evidence.
   - `?posture=` still emulates only the arrangement.
 - **Starter packages:** both still have the same structure; only token values changed.
 
+**2026-10-30 (security: the ingest gate — the final adversarial pass on #229).** Each finding is a test
+through the runner that failed first: `tests/ingest/round3.test.js` (4).
+- **X1, the address judged wasn't the address fetched:** the guard trimmed trailing punctuation
+  before comparing, but `web_fetch` sent the raw address. Fixed:
+  - A `web_fetch` argument is now replaced by its one canonical form, the WHATWG parser's `href`,
+    before the guard. That exact address is judged, recorded and fetched.
+  - A tainted run follows it on its own only if it equals a known link exactly.
+  - Trimming trailing punctuation and dropping a fragment happen only when links are taken from
+    text read from outside, never to the model's argument.
+  - Trailing punctuation (the probe's 66-character payload), a case change in the path, a different
+    percent-encoding, an added `?`, `#` or `?x=1`, and a trailing slash each ask now.
+- **X2, the caps reset per run:** they now count for the whole conversation: its turns, the helpers
+  and scheduled runs it starts (a helper belongs to its parent's conversation, a scheduled run to the
+  one its reports go to), and its follow-ups.
+  - Each free follow is a `follow` event in that conversation's own session log. The counts are
+    rebuilt from the log, as taint is, so a reload or restart keeps them.
+  - The test fans out three helpers, each following three pages, plus three follow-ups: the site
+    sees 8 pages, and the rest ask.
+
+**2026-10-30 (security: the ingest gate — fixes from the second adversarial review of #229).**
+Each finding is a test through the runner that failed first: `tests/ingest/round2.test.js` (14) and
+`device.test.ts`. The N5 test with a model was written with the fix, against the code that had kept
+a passing note.
+- **N1, a "known" address planted by an echo:** fixed.
+  - A known address now comes only from what was really read from outside: the links parsed from
+    fetched pages, search result addresses and mail, recorded with the screened read.
+  - A helper's read links travel with its report as data.
+  - The person's own messages count; a helper's brief doesn't.
+  - Tool errors and echoes, files the run wrote, the model's own arguments and a report's text
+    never count. Read-file errors, write-then-read round trips, unknown skill names, delegate
+    titles, empty search echoes and helper report text each ask now.
+- **N1b, data leaking through link choices:** in a tainted run, a link the run read is followed on
+  its own at most 8 times per host and 20 times in all; after that each follow asks.
+  - The caps are `DEFAULT_LINK_CAPS` in code, so raising one is tier 3, as with the thresholds.
+  - *Residual risk:* each free follow still says something by which link it picks. Within the caps
+    that is a few bits per follow, to a host the content itself named.
+- **N2 and N3, skills:** a skill that is held back, or whose SKILL.md changed since Nova checked it,
+  is kept off the matching and listing, and `use_skill` refuses it with the plain reason.
+  `use_skill` stays offered while any skill is installed, so the model hears that reason.
+- **N4, import file names:** the briefing gives only how many files wait in `workspace/import/`.
+  Their names arrive through `import_files`, a new tool whose result is screened as outside content
+  (kind `file`), and which taints the run.
+- **N5, device notes:** every one now waits for the person, even one a model passes.
+- **N8, outside text in the briefing:** device names, capture and provider status words, problems,
+  error text and triage reasons are quoted data: folded, protocol tags escaped, at most 200
+  characters, in quotes. The whole briefing is also protocol-escaped.
+- **N10, "Turn it on":** it trusts only a skill's text files. Images, fonts and archives were never
+  checked, so they stay outside content. `read_file` refuses a skill file whose first bytes aren't
+  what its name says.
+- **N6, accepted for now (a known limit):** without a model, a paraphrased injection in command
+  output that no check matches reaches the model as held-back data and doesn't taint the run.
+
+**2026-10-30 (security: the ingest gate — fixes from the adversarial review of #229).** Same branch.
+Each finding became a test that failed first, through the runner (createNova and a scripted
+attacker) where it applies: `tests/ingest/review.test.js`, `review-core.test.ts`, `device.test.ts`.
+This entry supersedes the one below where they differ.
+- **Blockers fixed:**
+  - **B1, a failed read:** it is outside content too. A failed fetch, search or mail read is
+    screened and taints the run. `web_fetch` errors now carry only the status number, not the
+    server's reason phrase.
+  - **B2, standing files under another spelling:** the guard compares the normalised target, folded
+    the way `write_file` folds. `./USER.md`, `workspace/../SOUL.md`, `~/` and case all ask.
+  - **B3, the outbound guard:** in a tainted run, matching can't win against chunking, short
+    encodings or reversal, so the policy changed:
+    - Following a link is free. That means an address that appears verbatim (normalised) in what
+      the run read: a page's `href`s, search results, mail, reports, or the person's own messages.
+    - Any other address the model put together asks, showing the address.
+    - Matching stays as a second line.
+    - Search queries keep the secret and memory matching only. The search engine isn't a place the
+      attacker can read, and a query that carries a vault or memory match still asks.
+  - **B4, uploaded skills:** every file is screened before anything is written.
+    - NULs no longer skip the screen.
+    - A text file that isn't UTF-8 is refused.
+    - A file Nova can't read as text (an image) can't be checked, so the skill is held. So is one
+      checked without a model, said plainly on its card.
+    - The skill goes in through a staging folder, already held if it is to be held.
+    - Its files are trusted only while their hashes match the check. A changed file is screened
+      when read, and a changed SKILL.md takes the skill out of use until the person turns it on.
+    - Nova's own catalog skills are trusted by being identical to the catalog.
+- **Should-fixes:**
+  - **S1:** attacker-chosen strings never go in a tag attribute. The origin is an escaped `From:`
+    line in the body, attributes are fully escaped, and origins are cleaned before they reach ledger
+    titles or approval cards.
+  - **S2:** a device note waits as a memory candidate unless it passes the screen. With a sorting
+    model, one that passes is kept as before. A note Nova's own checks block is refused before
+    anything is written.
+    - *Limit:* waiting candidates are not replicated. They stay on the node that took them, so a
+      failover before the person decides loses them; the device's own queue has already settled.
+  - **S3:** `exec` output is screened in every run (the amendment binds: tool output). It taints
+    when a check flags something or the model isn't sure. Without a model, ordinary output passes on
+    as held-back data without tainting, so auto-run keeps working.
+    - *Residual gap:* without a model, a paraphrased injection in command output that no check
+      matches is not caught. It reaches the model as data, but doesn't taint.
+  - **S4:**
+    - The tokenizer is linear: no token can scan past the next `<`.
+    - Style blocks are found with `indexOf`, sentence widening is bounded, and nesting past 256 is
+      flagged.
+    - HTML past 1 MB and text past 2 MB is cut, flagged, and never passes.
+    - Screening yields once to the event loop first.
+    - 2 MB of adversarial markup takes about 1.1 s in the test.
+  - **S5:** any change to `ingest-screen` is tier 3, and `weakens()` refuses one that drops or
+    changes any of its five Noul questions.
+- **Minor fixes:**
+  - **Folding before the checks:** NFKC, Latin lookalikes in mixed-script words, soft hyphens, and
+    letters spelled out one by one. A fully folded copy is checked for detection.
+  - **More hiding:** font size under 2px or 10%, `hsl`/`hsla` and more named colours, any `clip` or
+    `clip-path`, and descendant selectors read by their last part. Text in `svg`, `noscript` and
+    `math` is screened.
+  - **Markup outside HTML:** non-HTML content that carries markup gets the HTML checks.
+  - **The browser worker fails closed.**
+  - **Approval cards:** the standing-file card shows the content, and a waiting forget names its
+    memory.
+  - **Case:** standing files are matched by exact name on a case-sensitive disk.
+- **After merging the grounding PR (#231):**
+  - Its read-only `nova_*` tools are Nova's own state: never screened, never taint. A test covers
+    this with a stand-in tool.
+  - Its `memory_import` needs an OK, so in a tainted run it always asks.
+  - **Closed at the lead's request:** `memory_import` went through the gate. An import file is
+    outside content of unknown provenance, so:
+    - It is screened as `read_file` would screen it, and a block refuses the import with the reason.
+    - Its records never go into memory: each becomes a candidate, "imported from <file>", waiting in
+      Memory for the person's OK. This holds in any run, whatever `permissions.md` says.
+    - A record Nova's own checks flag waits flagged; one they block is left out.
+    - The tool doc, its result, the approval card and the briefing say the memories wait for the
+      person's OK, never that they are loaded. The briefing counts waiting memories, never what
+      they say.
+    - Tests: `tests/ingest/import.test.js` (5, through the runner), plus `self.test.ts` and the
+      grounding acceptance test, changed to match.
+- **Still not caught (stated plainly):**
+  - hiding by an external stylesheet or by script;
+  - a paraphrased injection in visible text when there is no model. It is still never passed, but
+    it isn't stripped.
+
+**2026-10-30 (security: the ingest gate — Amendment C Part 3).** Branch `ingest/gate`, plan
+`docs/plans/ingest-gate.md`, evidence `docs/evidence/ingest-gate.md`.
+- **What it is:** `src/core/ingest/` (`checks.ts`, `screen.ts`, `outbound.ts`, `index.ts`),
+  migration 0013. Every read of outside content is screened before a model acts on it:
+  - the agent's `web_fetch`, `web_search`, `gmail_search`, `gmail_read`;
+  - `read_file` on anything that isn't the person's own;
+  - `exec` output while tainted;
+  - helpers' and scheduled runs' reports from tainted runs, and files passed to helpers;
+  - uploaded skills, captured text before the promote decision, device notes, and browser page
+    reads.
+- **The verdict rules:**
+  - The Noul screen is the built-in template `ingest-screen` (five questions). It goes through
+    `Decisions.decide` forced local-only, and only the `local-model` provider's answer counts.
+  - The highest probability decides: below 0.2 with no quarantining flag → pass (wrapped as data);
+    0.2–0.8, a quarantining flag, sampled long content, or no model → quarantine (instruction-like
+    spans and hidden text removed, listed by kind; with a model, a reader's facts-only extract);
+    0.8 or a blocking flag (hidden instructions, hidden protocol tags) → block (one line, a verified
+    ledger task owned by the internal `ingest` worker).
+  - The thresholds are constants in code (`DEFAULT_THRESHOLDS`), not a setting: lowering one is a
+    change to Nova, so tier 3 through its pipeline.
+- **Taint** is now the list of sources a conversation read (screen id, kind, origin, verdict, top
+  score), kept in the session log. It carries into handoffs and into helpers a tainted run starts.
+  - While tainted, `exec`, mail drafts and changes, schedules, writes to standing files, and any
+    tool that needs an OK always ask, naming the source. A yes in `permissions.md` still holds for
+    untainted runs.
+  - The old blanket `online` permission is gone. Fetching and searching go through the outbound
+    guard: secrets always, and in a tainted run memory/standing-file content (24 characters) and
+    encoded blobs.
+- **Memory guard:** `<remember>`, `<note>` and `<forget>` in a tainted run become candidates.
+  They wait in Memory › Waiting for your OK, out of every prompt.
+- **Where I read the plan, and why:**
+  - **Handoffs are screened only when the run that wrote them read outside content.** An untainted
+    helper's report is Nova's own work on the person's brief.
+  - **`exec` output is screened only while tainted, as the plan says.** The amendment lists "tool
+    output". I took the plan's reading: screening every command's output would taint every run
+    that runs one command, and end auto-run for multi-command work that the person allowed.
+    Owner's call. *Known limit:* an untainted command the person approved that fetches from the
+    network isn't screened.
+  - **`<forget>` in a tainted run "asks first" as a waiting candidate,** not a blocking card.
+  - **Device notes:** the plan says they "keep the person-accept step they already have". They
+    don't have one: they are recorded as unreviewed and go straight into MEMORY.md. I added Nova's
+    own checks before the write (a block refuses the note) but no new accept step. *Gap.*
+  - **Workspace provenance** is by content hash in `file_provenance`. Only what Nova wrote itself
+    in an untainted run is its own; anything else (commands, providers, downloads, edits) reads as
+    unknown and is screened.
+  - **Nova's own state tools** (and any tool not listed as reading from outside) are trusted:
+    never screened, never taint. That holds for the self-state tools in the parallel grounding PR.
+  - **The stand-in Ollama's default structured answer** for the screen's questions is now
+    "unlikely" (0.05). Near the top of the range had called every capture an attack. Tests that
+    need the screen to fire pass their own `reply`. No check or threshold changed.
+- **Not built:** a cloud screener (a screen a mode change can skip isn't a gate); opening
+  attachments (Nova doesn't); HTML for IMAP mail (the Gmail API path passes it when there is no
+  plain part); a model step that reads browser page reads (none exists; reads carry their verdict).
+- **Tests:** `tests/ingest/` (61): the deterministic checks, the screen, guards, core wiring, the
+  corpus (31 injection payloads, 15 benign items), the canary end to end, taint, the person's
+  side, device notes, and local-only egress under the tripwire.
+
 **2026-10-30 (UI fixes, after review).** Same branch, after merging `main`. An independent review
 found these; each now has a test that was seen failing first (`tests/ui-review.test.js`,
 `tests/ui/ui-review.test.ts`).

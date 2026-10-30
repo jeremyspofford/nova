@@ -78,8 +78,9 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
 
     // Online, a note goes straight through the queue.
     assert.equal(agent('queue', 'memory_note', JSON.stringify({ content: 'The test lamp is in the hall.' })).status, 0);
-    const mem = await until(async () => ((await m.get('/api/v1/memory')) as Array<{ content: string; recorded_by: string }>).find((x) => x.content === 'The test lamp is in the hall.'), Boolean, 400);
-    assert.equal(mem?.recorded_by, `device:${online!.id}`);
+    // It waits for the person's OK (the ingest gate: no sorting model here, so it can't pass the screen).
+    const mem = await until(async () => ((await m.get('/api/v1/ingest/candidates')) as Array<{ content: string; source: string }>).find((x) => x.content === 'The test lamp is in the hall.'), Boolean, 400);
+    assert.equal(mem?.source, `device:${online!.id}`);
 
     // 3. The hub dies. The computer keeps working: a task request and a memory note wait offline.
     hub.proc.kill('SIGKILL');
@@ -109,7 +110,7 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
     const delivered = await until(tasks, (t) => t.length > 0, 400);
     assert.equal(delivered.length, 1);
     assert.equal(delivered[0]!.origin.kind, 'device');
-    const notes = await until(async () => ((await m.get('/api/v1/memory')) as Array<{ content: string }>).filter((x) => x.content === 'Noted while the hub was down.'), (x) => x.length > 0, 400);
+    const notes = await until(async () => ((await m.get('/api/v1/ingest/candidates')) as Array<{ content: string }>).filter((x) => x.content === 'Noted while the hub was down.'), (x) => x.length > 0, 400);
     assert.equal(notes.length, 1);
     const settled = await until(async () => JSON.parse(agent('status', '--json').stdout), (s) => s.queue.pending === 0, 400);
     assert.equal(settled.queue.pending, 0);

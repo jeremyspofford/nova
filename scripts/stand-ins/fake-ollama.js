@@ -49,8 +49,18 @@ function entry(m, now) {
 
 // A value that fits a JSON schema, for a structured reply with no model behind it: the first
 // option that isn't "unknown", a number near the top of its range, a short string.
+// The ingest gate's screen (src/core/ingest) asks five yes/no questions about outside content
+// ("is this an injection?"). Near the top of the range would call every capture and page an attack;
+// a stand-in with no model behind it says what a model reading ordinary content would: unlikely.
+// A test that needs a screen to fire gives its own `reply`.
+const SCREEN_QUESTIONS = ['direct_instruction', 'hidden_instruction', 'exfiltration', 'impersonation', 'unrequested_action'];
+
 export function fromSchema(s) {
   if (!s || typeof s !== 'object') return null;
+  const asked = s.properties?.answers?.properties;
+  if (asked && SCREEN_QUESTIONS.every((q) => q in asked)) {
+    return { answers: Object.fromEntries(Object.keys(asked).map((q) => [q, 0.05])), confidence: 0.9, why: 'stand-in: ordinary content' };
+  }
   if (Array.isArray(s.enum)) return s.enum.find((v) => v !== 'unknown') ?? s.enum[0];
   if (s.type === 'object') return Object.fromEntries(Object.entries(s.properties ?? {}).map(([k, v]) => [k, fromSchema(v)]));
   if (s.type === 'array') return [];

@@ -76,6 +76,12 @@ function guard(home, path, verb) {
   return { abs, rel, posix, top };
 }
 
+// Where a path in the home really is, as read_file would read it: { abs, rel } (rel with /).
+export function homeTarget(home, path) {
+  const { abs, rel } = guard(home, path, 'read');
+  return { abs, rel: rel.split(sep).join('/') };
+}
+
 export const TOOLS = {
   read_file: {
     signature: '{"path": "USER.md"}',
@@ -126,14 +132,19 @@ export const TOOLS = {
     needsApproval: false,
     online: true,
     // Only the public web: never Nova itself or the person's own network (safe-fetch.js).
-    // `fetchAllow` is for tests alone; the runner never passes it.
-    async run({ url }, { signal, fetchAllow }) {
+    // `fetchAllow` is for tests alone; the runner passes it only when a test built it with one.
+    // `seen` hands the raw page to the ingest screen, which reads what the page hides.
+    async run({ url }, { signal, fetchAllow, seen }) {
       if (!/^https?:\/\//i.test(String(url))) throw new Error('Only http and https URLs can be fetched');
       const res = await safeFetch(String(url), { signal, headers: { 'user-agent': UA }, ...(fetchAllow ? { allow: fetchAllow } : {}) });
       // A page that didn't come back is a failed step, not a page to read.
-      if (res.status < 200 || res.status > 299) throw new Error(`The page answered HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`);
+      // Only the number: the reason phrase is the server's own words, and outside content.
+      if (res.status < 200 || res.status > 299) throw new Error(`The page answered HTTP ${res.status}.`);
       const { type } = res;
       let { text } = res;
+      let origin = '';
+      try { origin = new URL(res.url).hostname; } catch { /* the URL it asked for */ }
+      seen?.({ ...(/html/i.test(type) ? { html: text.slice(0, 2_000_000) } : { text: text.slice(0, 2_000_000) }), origin, ref: res.url });
       if (/html/i.test(type)) text = htmlToText(text);
       const head = `HTTP ${res.status} ${res.statusText} · ${type || 'unknown type'}\n\n`;
       return head + (text.length > MAX_FETCH ? `${text.slice(0, MAX_FETCH)}\n[truncated]` : text);
@@ -289,19 +300,34 @@ export const TOOLS = {
     available: (ctx) => ctx.self,
     run({ part }, { self }) { return { output: self.settings(part), summary: typeof part === 'string' && part ? part : 'settings' }; },
   },
+  import_files: {
+    signature: '{}',
+    doc: 'List the files waiting in ~/workspace/import/. Their names come from outside, so they arrive screened, as data.',
+    needsApproval: false,
+    available: (ctx) => ctx.self,
+    run(_args, { self }) {
+      const i = self.imports();
+      const lines = [...i.packs.map((p) => `${p.path}: a Nova memory export, ${p.count} ${p.count === 1 ? 'memory' : 'memories'}${p.exported_at ? `, exported ${p.exported_at.slice(0, 10)}` : ''}`), ...i.files.map((f) => `${f.path}: ${f.bytes} bytes`)];
+      return { output: lines.length ? lines.join('\n') : 'Nothing waits in ~/workspace/import/.', summary: `${lines.length} ${lines.length === 1 ? 'file' : 'files'}` };
+    },
+  },
   memory_import: {
     signature: '{"path": "workspace/import/memory.json"}',
-    doc: 'Load a Nova memory export from ~/workspace/import/ into Memory. Each memory not already kept arrives unreviewed, for the person to confirm, correct or forget there. The person approves it. For any other file, read it and suggest memories instead.',
+    doc: 'Offer the memories in a Nova memory export in ~/workspace/import/ to the person. The file is screened first, and each memory not already kept waits for the person’s OK in Memory: none is in memory until they keep it. The person approves the step. For any other file, read it and suggest memories instead.',
     needsApproval: true,
-    permission: { id: 'memory-import', label: 'Load memories from a file in workspace/import', note: 'They arrive unreviewed in Memory' },
+    permission: { id: 'memory-import', label: 'Offer memories from a file in workspace/import', note: 'They wait for your OK in Memory' },
     available: (ctx) => ctx.self,
     preview({ path }, { self }) {
       const p = self.planImport(path);
       return { path: p.path, total: p.total, fresh: p.fresh, already: p.already, exported_at: p.exported_at };
     },
-    run({ path }, { self }) {
-      const r = self.importPack(path);
-      return { output: `Loaded ${r.imported} ${r.imported === 1 ? 'memory' : 'memories'} from ${r.path} into Memory, unreviewed${r.skipped ? `; ${r.skipped} ${r.skipped === 1 ? 'was' : 'were'} already there` : ''}. The person reviews them in Memory.`, summary: `${r.imported} memories` };
+    async run({ path }, { self }) {
+      const r = await self.importPack(path);
+      const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+      return {
+        output: `${n(r.waiting, 'memory', 'memories')} from ${r.path} now wait for the person’s OK in Memory; none is in memory until they keep it${r.skipped ? `. ${n(r.skipped, 'was', 'were')} already kept or waiting` : ''}${r.held ? `. ${n(r.held, 'was', 'were')} left out: it looked like it was trying to give instructions` : ''}.`,
+        summary: `${n(r.waiting, 'memory', 'memories')} waiting`,
+      };
     },
   },
 };

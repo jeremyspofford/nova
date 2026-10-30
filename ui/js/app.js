@@ -981,14 +981,27 @@ function runUndo() {
   undo();
 }
 
+// Memory a conversation that read outside content wanted kept: the person keeps or drops it.
+async function decideCandidate(b) {
+  const id = b.closest('[data-candidate]')?.dataset.candidate;
+  if (!id) return;
+  const keep = b.dataset.action === 'keep-candidate';
+  try {
+    await post(`/api/memory/candidates/${encodeURIComponent(id)}/${keep ? 'keep' : 'drop'}`);
+    toast(keep ? 'Kept.' : 'Dropped. Nova never saw it.');
+    loadMemory();
+  } catch (e) { toast(e.message); }
+}
+
 el.memory.addEventListener('click', (e) => {
   if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
   const item = e.target.closest('.memory-item');
+  if (b?.dataset.action === 'keep-candidate' || b?.dataset.action === 'drop-candidate') return decideCandidate(b);
   if (b?.dataset.action === 'edit-memory') editMemory(item);
   else if (b?.dataset.action === 'forget-memory') forgetMemory(item);
   else if (b?.dataset.action === 'retry-memory') loadMemory();
-  else if (item && e.target.closest('.memory-text')) editMemory(item);
+  else if (item && !item.dataset.candidate && e.target.closest('.memory-text')) editMemory(item);
 });
 el.memory.addEventListener('keydown', (e) => {
   const item = e.target.closest('.memory-item');
@@ -1232,6 +1245,7 @@ el.skills.addEventListener('click', (e) => {
   if (action === 'add-folder' || action === 'add-zip') return $(`${action}-input`).click();
   if (action === 'install-skill') installSkill(item);
   else if (action === 'remove-skill') removeSkill(item);
+  else if (action === 'allow-skill') post(`/api/skills/${item.dataset.id}/allow`).then(() => { toast('Turned on. Nova uses it from now on.'); return loadSkills(); }).catch((err) => toast(err.message));
   else if (action === 'try-skill') trySkill(b.dataset.try);
   else if (action === 'retry-skills') loadSkills();
   else if (action === 'to-gmail') {

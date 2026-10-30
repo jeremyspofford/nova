@@ -309,7 +309,7 @@ export class GmailOAuth {
     const h = headers(m.payload);
     return readResult({
       ...h, at: Number(m.internalDate), files: attachments(m.payload),
-      body: bodyText(m.payload) || htmlToText(m.snippet ?? ''),
+      body: bodyText(m.payload) || htmlToText(m.snippet ?? ''), html: bodyHtml(m.payload),
     }, { when: (ms) => this.when(ms) });
   }
 
@@ -376,7 +376,7 @@ function headers(payload) {
   const out = {};
   for (const { name, value } of payload?.headers ?? []) {
     const k = name.toLowerCase();
-    if (['from', 'to', 'cc', 'subject', 'date', 'reply-to', 'message-id', 'references'].includes(k) && !(k in out)) out[k] = value;
+    if (['from', 'to', 'cc', 'subject', 'date', 'reply-to', 'message-id', 'references', 'return-path', 'authentication-results'].includes(k) && !(k in out)) out[k] = value;
   }
   return out;
 }
@@ -404,11 +404,26 @@ export function bodyText(payload) {
   return text.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// The message's HTML, only when it has no plain text: the ingest screen reads what it hides.
+export function bodyHtml(payload) {
+  let plain = false;
+  const html = [];
+  const walk = (p) => {
+    if (!p || p.filename) return;
+    const type = String(p.mimeType ?? '').toLowerCase();
+    if (p.body?.data && type === 'text/plain') plain = true;
+    else if (p.body?.data && type === 'text/html') html.push(decodePart(p));
+    for (const c of p.parts ?? []) walk(c);
+  };
+  walk(payload);
+  return plain || !html.length ? null : html.join('\n');
+}
+
 function attachments(payload) {
   const out = [];
   const walk = (p) => {
     if (!p) return;
-    if (p.filename) out.push({ name: p.filename, size: p.body?.size ?? null });
+    if (p.filename) out.push({ name: p.filename, size: p.body?.size ?? null, type: p.mimeType ?? null });
     for (const c of p.parts ?? []) walk(c);
   };
   walk(payload);
