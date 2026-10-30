@@ -275,6 +275,8 @@ export class Runner extends EventEmitter {
     const recall = run.helper ? [] : this.memory.search(question);
     if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall.map(({ id, source }) => ({ id, source })) });
     for (const s of this.skills.match(question).filter((x) => !this.ingest.held('skill', x.id))) this.follow(sessionId, tag, run, s, 'matched');
+    // What this Nova is right now, from its own registries (core self.ts), fresh for every turn.
+    const briefing = run.helper || !this.self ? '' : await this.self.briefing().catch((e) => `# This Nova, right now\n\nNova couldn't read its own state for this turn: ${e.message}`);
 
     for (let step = 0; step <= this.config.maxSteps; step++) {
       // Again before every model call: the setting can tighten while a run waits for an OK.
@@ -284,7 +286,7 @@ export class Runner extends EventEmitter {
       const installed = this.skills.installed().filter((x) => !this.ingest.held('skill', x.id));
       // Helpers and scheduled runs can't hand work to helpers of their own,
       // and a helper doesn't touch schedules.
-      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: installed.length, delegate: !run.alone && !!this.helpers }), mode)
+      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: installed.length, delegate: !run.alone && !!this.helpers, self: !!this.self }), mode)
         .filter((n) => !(run.helper && n.startsWith('schedule_')));
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
       const schedules = run.helper ? '' : schedulesSection(this.schedules.list(), this.config.timezone);
@@ -296,7 +298,7 @@ export class Runner extends EventEmitter {
       let streamed = '';
       // MEMORY.md may have been edited by hand since Nova last wrote it: take that in first.
       if (this.memory.records) this.memory.sync();
-      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, ...(this.identity ? { identity: this.identity.persona() } : {}) });
+      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, briefing, ...(this.identity ? { identity: this.identity.persona() } : {}) });
       const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
       // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
       // hash, and where it went. Written before the call, so it exists even if the call fails.
@@ -345,7 +347,7 @@ export class Runner extends EventEmitter {
       const ctx = {
         home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
         gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
-        schedules: this.schedules, sessionId,
+        schedules: this.schedules, sessionId, self: this.self,
         // A helper started from a run that read outside content starts with that taint.
         delegate: (args) => this.helpers.spawn({ ...args, parent: sessionId, turn, taint: run.taint }),
         seen: (p) => { page = p; },

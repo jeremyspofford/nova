@@ -100,6 +100,12 @@ export function toolLabel(tool, state) {
     schedule_remove: { running: 'Removing the schedule', done: `Removed the schedule “${esc(sum || a.id)}”`, failed: "Couldn't remove the schedule", declined: 'Kept the schedule', waiting: 'Waiting to remove a schedule' },
     use_skill: { running: 'Opening a skill', done: `Opened ${esc(sum || a.name)}`, failed: `Couldn't open the skill ${esc(a.name)}` },
     delegate: { running: 'Starting a helper', done: `Asked a helper: “${esc(sum || a.title)}”`, failed: "Couldn't start a helper" },
+    nova_instance: { running: 'Checking this Nova and its models', done: 'Checked this Nova and its models', failed: "Couldn't check this Nova" },
+    nova_capture: { running: 'Checking capture', done: 'Checked capture', failed: "Couldn't check capture" },
+    nova_devices: { running: 'Checking your devices', done: 'Checked your devices', failed: "Couldn't check your devices" },
+    nova_schedules: { running: 'Checking schedules', done: 'Checked schedules', failed: "Couldn't check schedules" },
+    nova_settings: { running: 'Looking at settings', done: `Looked at settings${a.part ? `: ${esc(a.part)}` : ''}`, failed: "Couldn't read that setting" },
+    memory_import: { running: 'Loading memories', done: `Loaded ${esc(sum || 'memories')} into Memory`, failed: "Couldn't load those memories", declined: 'Left Memory as it was', waiting: 'Waiting to load memories' },
   };
   labels.web_fetch.declined = `Didn't open ${esc(host(a.url))}`;
   const l = labels[tool.name] ?? { running: `Using ${esc(tool.name)}`, done: `Used ${esc(tool.name)}`, failed: `${esc(tool.name)} didn't work` };
@@ -141,6 +147,7 @@ function approvalWhat(tool) {
       : `Nova wants to set up ${p.once ? 'a reminder' : 'a schedule'}. It runs on its own and sends you ${p.once ? 'one report, then removes itself' : 'a report each time'}.`;
   }
   if (tool.name === 'schedule_remove') return `Nova wants to remove the schedule ${esc(p.name ?? tool.args?.id ?? '')}${p.when ? ` (${esc(p.when.replace(/^\w/, (c) => c.toLowerCase()))})` : ''}. It won't run again.`;
+  if (tool.name === 'memory_import') return `Nova wants to load ${p.fresh ?? 'the'} ${p.fresh === 1 ? 'memory' : 'memories'} from <code>${esc(p.path ?? a.path ?? '')}</code> into Memory${p.already ? ` (${p.already} ${p.already === 1 ? 'is' : 'are'} there already)` : ''}. They arrive unreviewed, for you to confirm, correct or forget.`;
   if (tool.name === 'web_fetch') return `Nova wants to open <code>${esc(host(a.url))}</code>.`;
   if (tool.name === 'web_search') return `Nova wants to search the web for “${esc(a.query)}”.`;
   if (tool.name === 'write_file') return `Nova wants to change <code>${esc(a.path)}</code>, one of your standing files.`;

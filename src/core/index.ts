@@ -54,6 +54,8 @@ import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint 
 import { Restarter } from './resilience/restart.ts';
 import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
+import { Self } from './self.ts';
+import { CODE_ROOT } from './resilience/sandbox.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -126,6 +128,9 @@ export { trackChild } from './children.ts';
 // with, and says when something is blocked.
 export { Ingest, BLOCK_LINE, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, wrapData } from './ingest/index.ts';
 export type { Screened, Source as IngestSource, SourceKind, Taint, Verdict, Candidate as MemoryCandidate, Hold } from './ingest/index.ts';
+// Grounding: what this Nova is, from its own registries, for the chat agent's briefing and tools.
+export { IMPORT_DIR } from './self.ts';
+export type { Self, Era2State } from './self.ts';
 
 export interface CoreOptions {
   home: string;
@@ -175,6 +180,9 @@ export interface CoreOptions {
   // Factory reset (M7 amendment §2), for tests: how long the hub waits for devices to hear it, and
   // a hook before each step of finishing one (to stop it part way, as a power cut would).
   reset?: { tellMs?: number; step?: (what: string) => void };
+  // What this instance is for (NOVA_INSTANCE): preview, production or development. Said in the
+  // agent's briefing.
+  instance?: string;
   now?: () => Date;
 }
 
@@ -1035,7 +1043,16 @@ export function createCore(o: CoreOptions) {
     onError: (e) => log.problem('api', 'Something went wrong inside Nova while answering a request.', { detail: (e as Error)?.stack ?? String(e) }),
   });
 
+  // Grounding (self.ts): the briefing and the agent's read-only status tools, in process.
+  const self = new Self({
+    home: o.home, version: o.version, instance: () => o.instance ?? 'production', codeRoot: CODE_ROOT,
+    profile, memory, providers, models: models!, connectors, capture, devices, triggers, design, log, now,
+    hubId: () => meshIdentity.id, role: () => role.role(), online: (d) => deviceView(d).online, setupDone: () => setup.view().done,
+    ...(o.chat ? { chat: o.chat } : {}),
+  });
+
   return {
+    self,
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
     ingest, vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls

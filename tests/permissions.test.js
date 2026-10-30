@@ -12,7 +12,7 @@ test('every permission comes from a tool, and starts as ask', () => {
   const p = new Permissions(home(), () => TOOLS);
   // No blanket "online" permission: the ingest gate's outbound guard asks when a request would
   // carry something of the person's (Amendment 2026-10-30-C Part 3).
-  assert.deepEqual(p.list().map((x) => x.id), ['commands', 'gmail-drafts', 'gmail-tidy', 'schedules']);
+  assert.deepEqual(p.list().map((x) => x.id), ['commands', 'gmail-drafts', 'gmail-tidy', 'schedules', 'memory-import']);
   assert.ok(p.list().every((x) => x.yes === false));
   assert.equal(p.allows('commands'), false);
 });
