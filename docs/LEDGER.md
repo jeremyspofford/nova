@@ -47,8 +47,9 @@ and its as-built note. Every behaviour has a test that failed first.
     recovery key it showed, and its `nova/*` vault keys. Without them, backups made since would
     become strays, out of reach of forgets. The person's saved secrets go back with the
     checkpoint.
-  - A file made since, even one that isn't Nova's, is undone like everything else. It is kept in
-    the "Before restoring" checkpoint.
+  - Only Nova's own top-level entries (`src/core/resilience/entries.ts`, derived from every place
+    the code writes under the home) are checkpointed and restored. Files in the home that aren't
+    Nova's are never copied, moved or undone, and the confirmation says so.
 - **The standby copies afresh.** It treats its own hub at a higher epoch as a restarted log: it
   drops what it copied and reads the log from 0. Promotion names another hub, and replacing the
   hub's keys revokes the standby, so neither triggers this.
