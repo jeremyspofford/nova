@@ -38,7 +38,7 @@ export function renderReset() {
 <p class="memory-lede">Erasing Nova returns it to how it was the first time, on this machine: no memories, conversations, settings, saved passwords, paired devices, checkpoints or backups. Nova offers to export everything first.</p>`;
   if (hubOnly) return `${head}<p class="settings-note">This can be done on the hub’s own screen only, not from a paired phone or browser.</p></section>`;
   if (!preview) return `${head}<p class="settings-note">${esc(failed || 'Loading…')}</p>${failed ? '<button type="button" class="btn set-retry" data-action="reset-retry">Try again</button>' : ''}</section>`;
-  if (preview.staged) return `${head}<p class="settings-note">Nova is erasing itself and starting over.</p></section>`;
+  if (preview.staged) return `${head}<p class="settings-note reset-staged" role="status">${esc(preview.staged_said ?? 'Nova is erasing itself and starting over.')}</p></section>`;
   return `${head}<div class="sheet-actions"><button type="button" class="btn primary danger" data-action="reset-start">Erase Nova and start over…</button></div></section>`;
 }
 
@@ -161,6 +161,12 @@ function waitForFirstRun(id) {
       const r = await fetch('/api/v1/reset/report', { headers: { 'x-nova': '1' } });
       const report = r.ok ? await r.json() : null;
       if (report?.id === id) { location.assign('/'); return; }
+      // Still up: if the restart failed, say plainly that it finishes when Nova starts next.
+      const now = r.ok ? await fetch('/api/v1/reset', { headers: { 'x-nova': '1' } }).then((x) => (x.ok ? x.json() : null)) : null;
+      if (now?.staged_said && now.staged_said !== flow.staged?.said && flow.step === 'erasing') {
+        flow.staged = { ...flow.staged, said: now.staged_said, restart: 'next-start' };
+        show();
+      }
     } catch { /* not back yet */ }
     setTimeout(look, 1000);
   };

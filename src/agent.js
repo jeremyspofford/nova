@@ -2,6 +2,7 @@
 // stdin, text streamed back. Understands plain text output and Claude Code's
 // stream-json; anything else that prints text works too.
 import { spawn } from 'node:child_process';
+import { trackChild } from './core/index.ts';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,7 +29,7 @@ export function runAgent({ cmd, system, prompt, signal, onText = () => {} }) {
   const command = cmd.replaceAll('{system_file}', `'${systemFile}'`);
 
   return new Promise((resolve, reject) => {
-    const child = spawn('/bin/sh', ['-c', command], { cwd: dir, env: agentEnv(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = trackChild(spawn('/bin/sh', ['-c', command], { cwd: dir, env: agentEnv(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] }), { group: true });
     let mode = null; // 'json' | 'text'
     let buf = '';
     let text = '';

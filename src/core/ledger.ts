@@ -123,6 +123,8 @@ export class Ledger extends EventEmitter {
   #wake: (() => void) | null = null;
   #dirty = false;
   #running = new Map<string, AbortController>();
+  // Nova is about to restart: nothing new starts, and what was running is left for the next start.
+  #halted = false;
   #inflight = new Map<string, { lane: string; done: Promise<void> }>();
 
   constructor(o: LedgerOptions) {
@@ -350,7 +352,7 @@ export class Ledger extends EventEmitter {
         for (;;) {
           this.#dirty = false;
           // No limit: a full lane with many queued tasks must not hide the tasks of other lanes.
-          for (const row of this.#db.all<Row>(`SELECT * FROM task WHERE state = 'queued' ORDER BY created_at, rowid`)) {
+          for (const row of this.#halted ? [] : this.#db.all<Row>(`SELECT * FROM task WHERE state = 'queued' ORDER BY created_at, rowid`)) {
             const t = toTask(row);
             if (this.#inflight.has(t.id)) continue;
             const lane = this.#lane(t);
@@ -382,6 +384,15 @@ export class Ledger extends EventEmitter {
       if (l && typeof l.key === 'string' && Number.isInteger(l.max) && l.max >= 1) return { key: `${w!.id}:${l.key}`, max: l.max };
     } catch { /* a worker whose lane can't be worked out runs in the default lane */ }
     return DEFAULT_LANE;
+  }
+
+  // Before Nova restarts in place: every running task is stopped (its worker's signal), nothing
+  // more is started, and the stopped tasks stay as they were, for the next start's recovery.
+  halt(reason = 'Nova is restarting.'): string[] {
+    this.#halted = true;
+    const ids = [...this.#running.keys()];
+    for (const ac of this.#running.values()) ac.abort(new Error(reason));
+    return ids;
   }
 
   // Resolves when nothing is running or queued.
@@ -431,6 +442,7 @@ export class Ledger extends EventEmitter {
       raw = await Promise.race([worker.run(t.brief, signal), stopped]);
     } catch (e) {
       this.#running.delete(t.id);
+      if (this.#halted) return;
       if (this.get(t.id).state === 'cancelled') return;
       if (signal.aborted && (e as Error)?.name === 'TimeoutError') {
         return this.#retryOrFail(t.id, `${worker.name} took longer than ${Math.round(limit / 1000)} s.`, undefined, 'timed_out');

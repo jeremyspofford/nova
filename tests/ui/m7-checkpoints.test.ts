@@ -73,13 +73,19 @@ test('M7 amendment: Settings › Checkpoints — take one, the list, restore wit
     await section.locator('.cp-row', { hasText: 'Before restoring to “Before the experiment”' }).waitFor();
     assert.match((await section.locator('.cp-row', { hasText: 'Before restoring' }).textContent()) ?? '', /Automatic/);
 
-    // Deleting a named one asks first; automatic ones have no delete.
+    // Deleting a named one is tier 3: it asks every time, with a required checkbox, and its button
+    // is then the one standout. Automatic ones have no delete.
     assert.equal(await section.locator('.cp-row', { hasText: 'Before restoring' }).locator('[data-action="cp-delete"]').count(), 0);
     const mine = section.locator('.cp-row[data-kind="named"]', { hasText: 'Before the experiment' });
     await mine.locator('[data-action="cp-delete"]').click();
-    await mine.locator('[data-action="cp-delete-yes"]').waitFor();
+    const del = mine.locator('[data-action="cp-delete-yes"]');
+    await del.waitFor();
     assert.match((await mine.textContent()) ?? '', /can’t be undone/);
-    await mine.locator('[data-action="cp-delete-yes"]').click();
+    assert.equal(await del.isDisabled(), true, 'not before the checkbox');
+    assert.equal(await section.locator('.btn.primary').count(), 1);
+    assert.equal(await section.locator('.btn.primary').getAttribute('data-action'), 'cp-delete-yes');
+    await mine.locator('input[data-action="cp-delete-confirm"]').check();
+    await del.click();
     await page.waitForFunction(() => ![...document.querySelectorAll('#checkpoints .cp-row')].some((r) => r.getAttribute('data-kind') === 'named'));
     assert.deepEqual(errors.filter((e) => !/ERR_CONNECTION|Failed to load resource|EventSource/.test(e)), []);
   } finally {

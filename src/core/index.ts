@@ -48,8 +48,9 @@ import { FactoryReset } from './resilience/reset.ts';
 import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
-import { Checkpoints, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
+import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
 import { Restarter } from './resilience/restart.ts';
+import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -116,6 +117,8 @@ export { takeCheckpoint, listCheckpoints, finishStaged, stagedPending, KEEP_AUTO
 export type { CheckpointView, CheckpointManifest } from './resilience/checkpoints.ts';
 // Nova's own entries in a home, by name: what checkpoints, restore and factory reset may touch.
 export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.ts';
+// Every process Nova starts, so none outlives an in-place restart (Era 2's commands register too).
+export { trackChild } from './children.ts';
 
 export interface CoreOptions {
   home: string;
@@ -174,8 +177,10 @@ export function createCore(o: CoreOptions) {
   const started = Date.now();
   const now = o.now ?? (() => new Date());
   // A restore or a factory reset staged before the last stop is applied first, before the database
-  // opens. It throws when it can't finish: a half-reset Nova never runs.
-  if (!o.sandbox) finishStaged(o.home, { reset: { ...(o.vault ? { vault: o.vault } : {}), ...(o.reset?.step ? { step: o.reset.step } : {}), now } });
+  // opens; a checkpoint stopped part-way is dropped. A reset that can't finish throws: a half-reset
+  // Nova never runs.
+  const staged = o.sandbox ? null : finishStaged(o.home, { vaultAt: (home) => new Vault({ home, ...(o.vault ?? {}) }), now, reset: { ...(o.vault ? { vault: o.vault } : {}), ...(o.reset?.step ? { step: o.reset.step } : {}), now } });
+  if (!o.sandbox) dropPartials(o.home);
   const db = new Db(join(o.home, 'nova.db'));
   // An automatic checkpoint before a database upgrade, beside the pre-upgrade copy: one that can't
   // be taken stops the upgrade (and so the start), with the reason.
@@ -184,6 +189,8 @@ export function createCore(o: CoreOptions) {
     ...(o.sandbox ? {} : { before: (from: number) => { takeCheckpoint({ home: o.home, db, kind: 'auto', reason: `Before upgrading the database from version ${from}`, version: o.version, now, ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}) }); } }),
   });
   const log = new Log(db, join(o.home, 'logs', 'nova.log'), now);
+  // What a staged restore couldn't do (or did, with a full disk) is the person's to know.
+  for (const p of staged?.problems ?? []) log.problem('resilience', p);
   // Hub or standby, decided before anything writes: a standby copies the hub's sync log instead
   // of recording its own writes (mesh/promote.ts).
   const place = nodeRole(db, o.home);
@@ -406,12 +413,19 @@ export function createCore(o: CoreOptions) {
   });
   const keep = resilience;
   ledger.workers.set(keep.worker.id, keep.worker);
+  // Stops the work: the ledger takes nothing new, every child process stops, running work gets up to
+  // `boundMs` to finish (before an in-place restart, a quit, or a factory reset's wipe).
+  async function stopWork(boundMs = 5000) {
+    ledger.halt('Nova is restarting.');
+    await stopChildren(Math.min(3000, boundMs));
+    await Promise.race([ledger.idle(), new Promise((r) => setTimeout(r, boundMs).unref())]);
+  }
   // Factory reset (M7 amendment §2): the export, the confirmation's list, telling devices, staging.
   const reset = new FactoryReset({
     home: o.home, db, log, version: o.version, now, vault, nightly: keep.nightly, memory, devices, access, spokes, role,
     emit: (event, data) => bus.emit('event', event, data),
     // Restart in place (resilience/restart.ts): the next start finishes the wipe.
-    restarter, restorePending: () => stagedPending(o.home),
+    restarter, restorePending: () => stagedPending(o.home), stopWork,
     ...(o.reset?.tellMs ? { tellMs: o.reset.tellMs } : {}),
   });
   wireRepairs(keep.playbooks, { ledger, providers, models, connectors, role, spokes, devices });
@@ -955,6 +969,9 @@ export function createCore(o: CoreOptions) {
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
     restartInPlace: (why: string) => restarter.restartInPlace(why),
+    // Before a restart in place (and a stop): running tasks stop and are left for the next start,
+    // and every process Nova started is ended, within `boundMs`.
+    stopWork,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),

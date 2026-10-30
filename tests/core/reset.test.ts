@@ -197,25 +197,73 @@ test('only the hub’s own screen may reset or export, and a reset is confirmed 
   }
 });
 
-test('once devices are told, Nova restarts in place to finish: under the supervisor, a staged restart', async () => {
-  const w = world('nova-reset-restart-');
-  const asked: { type: string; staged?: boolean; pending: boolean }[] = [];
-  const supervisor = {
+// A supervisor link that records what it was asked, and whether work had stopped by then.
+function standInSupervisor(home: string, ok: boolean, halted: () => boolean) {
+  const asked: { type: string; staged?: boolean; pending: boolean; halted: boolean }[] = [];
+  const link = {
     state: () => null,
     onProblem: () => {},
     request: async (type: 'deploy' | 'rollback' | 'restart', o: { staged?: boolean } = {}) => {
-      asked.push({ type, ...(o.staged ? { staged: true } : {}), pending: stagedPending(w.home) });
-      return { ok: true, said: 'Restarting.' };
+      asked.push({ type, ...(o.staged ? { staged: true } : {}), pending: stagedPending(home), halted: halted() });
+      return ok ? { ok: true, said: 'Restarting.' } : { ok: false, said: 'The supervisor is busy.' };
     },
   };
-  const c = open(w.home, { supervisor });
+  return { asked, link };
+}
+
+test('once devices are told, work stops and Nova restarts in place to finish: under the supervisor, a staged restart', async () => {
+  const w = world('nova-reset-restart-');
+  let halted = false;
+  const sup = standInSupervisor(w.home, true, () => halted);
+  const c = open(w.home, { supervisor: sup.link });
+  const halt = c.ledger.halt.bind(c.ledger);
+  c.ledger.halt = (why?: string) => { halted = true; return halt(why); };
   try {
     const s = c.reset.stage({ confirm: true, who: CONSOLE });
     assert.equal(s.restart, 'in-place', 'no manual restart');
     assert.equal(stagedPending(w.home), true, 'the supervisor sees it staged');
     await s.done;
-    assert.deepEqual(asked, [{ type: 'restart', staged: true, pending: true }]);
+    assert.deepEqual(sup.asked, [{ type: 'restart', staged: true, pending: true, halted: true }], 'work stopped before the restart');
   } finally {
     await c.close();
   }
+});
+
+test('a restart that fails: the reset finishes when Nova starts next, said plainly, and nothing new is taken until then', async () => {
+  const w = world('nova-reset-norestart-');
+  const sup = standInSupervisor(w.home, false, () => false);
+  const c = open(w.home, { supervisor: sup.link });
+  try {
+    await c.reset.stage({ confirm: true, who: CONSOLE }).done;
+    const p = c.reset.preview();
+    assert.equal(p.staged, true);
+    assert.match(p.staged_said ?? '', /couldn’t restart itself/);
+    assert.match(p.staged_said ?? '', /finishes erasing itself when Nova starts next/);
+    assert.ok(c.log.problems({ open: true }).some((x) => /finishes erasing itself when Nova starts next/.test(x.message)));
+    assert.match(c.reset.blocks('POST', '/api/v1/memory') ?? '', /erasing itself/, 'still refused until then');
+  } finally {
+    await c.close();
+  }
+  const n = open(w.home);
+  try {
+    assert.equal(n.setup.view().done, false, 'and it did, at the next start');
+    assert.ok(n.reset.report());
+  } finally {
+    await n.close();
+  }
+});
+
+test('a marker that changed since it was staged is never acted on: Nova doesn’t start, and nothing is erased', async () => {
+  const w = world('nova-reset-tamper-');
+  const c = open(w.home);
+  c.memory.remember({ kind: 'fact', content: WORDS, recorded_by: 'person' });
+  await c.reset.stage({ confirm: true, who: CONSOLE }).done;
+  await c.close();
+  const file = join(w.home, RESET_MARKER);
+  const m = JSON.parse(readFileSync(file, 'utf8'));
+  m.backups.push({ path: join(w.dir, 'elsewhere'), folder: w.dir, kind: 'folder', check: null });
+  writeFileSync(file, JSON.stringify(m));
+  assert.throws(() => open(w.home), /changed since it was staged/);
+  assert.ok(existsSync(join(w.home, 'nova.db')) && existsSync(join(w.home, 'mesh')), 'nothing was erased');
+  assert.ok(existsSync(file), 'and the marker stays for the person to see');
 });

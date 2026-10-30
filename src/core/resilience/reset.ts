@@ -23,7 +23,7 @@
 //
 // What stays, said before and after: backup folders that aren't there (an unplugged drive), devices
 // that couldn't be told, the export, and the supervisor's code releases (code, not data).
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -84,6 +84,16 @@ interface Marker {
   unreachable: Unreachable[];
   devices: { told: DeviceLine[]; not_told: DeviceLine[] } | null;
   export: string | null;
+  // The sha256 of everything above: a marker that changed since it was staged is never acted on.
+  sum?: string;
+}
+
+const markerSum = (m: Marker) => { const { sum: _s, ...rest } = m; return createHash('sha256').update(JSON.stringify(rest)).digest('hex'); };
+
+// The marker, sealed with its own sum, written whole (beside, then renamed into place).
+function writeMarker(home: string, m: Marker): void {
+  m.sum = markerSum(m);
+  writeJson(join(home, RESET_MARKER), m);
 }
 
 export interface ResetReport {
@@ -150,6 +160,10 @@ export function finishReset(home: string, o: FinishOptions = {}): ResetReport | 
   if (m?.v !== 1 || typeof m.home !== 'string' || resolve(m.home) !== resolve(home)) {
     rmSync(file, { force: true });
     return null;
+  }
+  // Verified before anything is acted on: what it names is exactly what was staged.
+  if (m.sum !== markerSum(m)) {
+    throw new Error(`Nova was asked to erase itself, but its note of what to erase (${file}) has changed since it was staged, so Nova won’t act on it, and won’t start on a home that may be half-erased. Nothing more was erased. If you still want Nova erased, delete that file, start Nova, and erase it again from Settings.`);
   }
   const step = o.step ?? (() => {});
   const now = o.now ?? (() => new Date());
@@ -257,6 +271,8 @@ export interface ResetOptions {
   restarter: Pick<Restarter, 'available' | 'restartInPlace'> | null;
   // How long the hub waits for devices it can reach to hear it.
   tellMs?: number;
+  // Stops every worker and child process (core.stopWork), so nothing writes while Nova erases.
+  stopWork?: (boundMs: number) => Promise<void>;
   // A checkpoint's restore is staged (checkpoints.ts): a reset waits until it is done.
   restorePending?: () => boolean;
 }
@@ -268,13 +284,18 @@ export interface Preview {
   export_said: string;
   confirm: string;
   staged: boolean;
+  // While staged: where it stands, in plain words (for the screen).
+  staged_said: string | null;
 }
+
+export const NEXT_START_SAID = 'Nova finishes erasing itself when Nova starts next. Until then it takes nothing new.';
 
 export class FactoryReset {
   #o: ResetOptions;
   // The last export this process made: the reset's result says where it is.
   #export: string | null = null;
   #staging = false;
+  #stagedSaid: string | null = null;
 
   constructor(o: ResetOptions) {
     this.#o = o;
@@ -309,6 +330,7 @@ export class FactoryReset {
       export_said: EXPORT_SAID,
       confirm: CONFIRM_WORDS,
       staged: this.staged(),
+      staged_said: this.staged() ? this.#stagedSaid ?? 'Nova is telling your devices, then erasing itself and starting over.' : null,
     };
   }
 
@@ -437,23 +459,28 @@ export class FactoryReset {
       vault_ids: this.#o.vault.keyIds(), own: own.filter((n) => n !== RESET_REPORT), backups: b.items, strays: b.strays, unreachable: b.unreachable,
       devices: null, export: this.#export,
     };
-    writeJson(join(this.#o.home, RESET_MARKER), m);
+    writeMarker(this.#o.home, m);
     this.#staging = true;
     this.#o.log.info('reset', 'A factory reset is staged; telling devices first.', { id: m.id });
     const done = this.#tell(m).then(async (devices) => {
       m.devices = devices;
-      writeJson(join(this.#o.home, RESET_MARKER), m);
+      writeMarker(this.#o.home, m);
       // Every session ends, and whatever devices hold open closes.
       this.#o.db.run('DELETE FROM device_session');
       for (const d of this.#o.devices.list()) this.#o.access.close(d.id);
       this.#o.spokes.resetNotice = null;
       this.#o.role.resetNotice = null;
-      // Restart in place: the next start finishes the wipe before the database opens.
+      // Nothing keeps writing: every worker and child process stops first.
+      await this.#o.stopWork?.(5000);
+      // Restart in place: the next start finishes the wipe before the database opens. A restart
+      // that fails doesn't undo anything: the person confirmed an erase, so it finishes when Nova
+      // starts next, and until then Nova takes nothing new (blocks()).
       if (this.#canRestart()) {
         try { await this.#o.restarter!.restartInPlace('a factory reset'); } catch (e) {
-          this.#o.log.problem('reset', 'Nova couldn’t restart itself to finish erasing. Stop it and start it again: the reset finishes as it starts, and until then Nova takes nothing new.', { detail: (e as Error)?.stack ?? String(e) });
+          this.#stagedSaid = `Nova couldn’t restart itself (${(e as Error).message}). ${NEXT_START_SAID}`;
+          this.#o.log.problem('reset', `Nova couldn’t restart itself to finish erasing. ${NEXT_START_SAID}`, { detail: (e as Error)?.stack ?? String(e) });
         }
-      }
+      } else this.#stagedSaid = NEXT_START_SAID;
       return devices;
     });
     return {
@@ -510,8 +537,9 @@ export class FactoryReset {
       v: 1, id: notice.id, kind: 'standby', home: resolve(home), staged_at: this.#o.now().toISOString(), version: this.#o.version,
       vault_ids: this.#o.vault.keyIds(), own: own.filter((n) => n !== RESET_REPORT), backups: [], strays: [], unreachable: [], devices: null, export: null,
     };
-    writeJson(join(home, RESET_MARKER), m);
+    writeMarker(home, m);
     this.#staging = true;
+    await this.#o.stopWork?.(5000);
     const db = this.#o.db;
     let rows = 0;
     db.tx(() => {

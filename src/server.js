@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, finishStaged, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
+import { createCore, finishReset, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -43,10 +43,10 @@ function modelOptions(env) {
 
 export function createNova(config = loadConfig(), deps = {}) {
   const started = performance.now();
-  // A restore or a factory reset staged before the last stop (M7 amendment) is applied before
-  // anything touches the home, seeding included, so a reset home is seeded fresh. The core does it
-  // too; the second call finds nothing. It throws when it can't finish: a half-reset Nova never runs.
-  if (process.env.NOVA_SANDBOX !== '1') finishStaged(config.home);
+  // A factory reset staged before the last stop (M7 amendment §2) finishes before anything touches
+  // the home, seeding included, so a reset home is seeded fresh. (A staged restore is applied by the
+  // core, with its options.) It throws when it can't finish: a half-reset Nova never runs.
+  if (process.env.NOVA_SANDBOX !== '1') finishReset(config.home);
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
   // The core (src/core): database, Work Ledger, profile, identity, setup, extensions, /api/v1.
   const { version } = JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8'));
@@ -581,7 +581,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(`Devices pair and connect at ${nova.meshInfo.publicUrl} (listening on ${m.bindHost}:${port}, ${how}).`);
     });
   }
-  const quit = async () => { rmSync(join(config.home, 'nova.pid'), { force: true }); nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.close(); process.exit(0); };
+  // On a stop, nothing Nova started lives on after it (a command in a process group of its own).
+  const quit = async () => { rmSync(join(config.home, 'nova.pid'), { force: true }); nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.stopWork(2000); await nova.core.close(); process.exit(0); };
   process.on('SIGINT', quit);
   process.on('SIGTERM', quit);
   // Restarting in place (core resilience/restart.ts), for a restore: stop listening, close the core,
@@ -589,6 +590,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   nova.core.restarter.attach(async () => {
     nova.scheduler.stop();
     for (const id of nova.runner.active.keys()) nova.runner.stop(id);
+    // Nothing Nova started may write into the restored home: running tasks stop, and every process
+    // it started (in its own process group or not) is ended, within a bound.
+    await nova.core.stopWork(5000);
     const closed = (s) => new Promise((r) => { if (!s?.listening) return r(); s.close(() => r()); s.closeAllConnections(); });
     const port = nova.server.address()?.port;
     const meshPort = nova.mesh?.address()?.port;

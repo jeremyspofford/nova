@@ -5,6 +5,7 @@
 // Nova runs the tool (asking the user first where required) and calls the model
 // again with the result in the transcript.
 import { spawn } from 'node:child_process';
+import { trackChild } from './core/index.ts';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { inHome, inSecretDir } from './home.js';
@@ -348,7 +349,7 @@ export function runCommand(command, { cwd, signal, timeoutMs = 120_000 }) {
   return new Promise((resolvePromise) => {
     mkdirSync(cwd, { recursive: true });
     const shell = process.env.SHELL || '/bin/sh';
-    const child = spawn(shell, ['-lc', command], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = trackChild(spawn(shell, ['-lc', command], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { group: true });
     let out = '';
     const take = (d) => { out += d; if (out.length > MAX_OUTPUT * 4) out = out.slice(-MAX_OUTPUT * 2); };
     child.stdout.on('data', take);

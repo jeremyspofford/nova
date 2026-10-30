@@ -2,6 +2,7 @@
 // task's folder, its output read as lines, stopped (with everything it started) when the task is
 // cancelled or runs out of time. Nothing here runs a command just to check it is there.
 import { spawn } from 'node:child_process';
+import { trackChild } from '../children.ts';
 import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 
@@ -56,7 +57,7 @@ export function runLines(o: { argv: string[]; cwd: string; input?: string; env?:
   const started = performance.now();
   return new Promise((resolveRun, rejectRun) => {
     const [cmd, ...args] = o.shell ? ['/bin/sh', '-c', o.argv.join(' ')] : o.argv;
-    const child = spawn(cmd!, args, { cwd: o.cwd, env: o.env ?? childEnv(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = trackChild(spawn(cmd!, args, { cwd: o.cwd, env: o.env ?? childEnv(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] }), { group: true });
     let buf = '';
     let stderr = '';
     let aborted = false;
