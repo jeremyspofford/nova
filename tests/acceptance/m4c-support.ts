@@ -9,12 +9,20 @@ import { ROOT, blank, sleep, stop, until, type Running } from './support.ts';
 
 export const agent = { NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(ROOT, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none' };
 
-export async function freePort(): Promise<number> {
-  const s = createServer();
-  await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
-  const port = (s.address() as { port: number }).port;
-  await new Promise((r) => s.close(r));
-  return port;
+// A port for an address that must be known before its server starts (a standby's, which goes in
+// the roster when it enrolls). Picked below the ephemeral range (Linux 32768+, macOS 49152+), so
+// no server on port 0 and no outgoing connection elsewhere in a parallel run can take it between
+// the check and the bind. Servers that can, listen on port 0 and say which port they got.
+export async function freePort(host = '127.0.0.1'): Promise<number> {
+  for (;;) {
+    const port = 20_000 + Math.floor(Math.random() * 12_000);
+    const s = createServer();
+    const ok = await new Promise<boolean>((r) => { s.once('error', () => r(false)); s.listen(port, host, () => r(true)); });
+    if (ok) {
+      await new Promise((r) => s.close(r));
+      return port;
+    }
+  }
 }
 
 export async function kill(r: Running) {
@@ -28,11 +36,13 @@ export async function kill(r: Running) {
 export async function setup(prefix: string, hubExtra: (home: string) => void = () => {}) {
   const hub = blank(`${prefix}-hub-`);
   const standby = blank(`${prefix}-standby-`);
-  const hubMesh = `http://127.0.0.1:${await freePort()}`;
   const standbyMesh = `http://127.0.0.1:${await freePort()}`;
   const env = (url: string) => ({ ...agent, NOVA_MESH_URL: url, NOVA_MESH_TRANSPORT: 'network', NOVA_SYNC_WAIT_S: '5' });
   hubExtra(hub.home);
-  const hubProc = await hub.start(env(hubMesh));
+  // The hub picks its own mesh port and says which.
+  const hubProc = await hub.start(env('http://127.0.0.1:0'));
+  const hubMesh = hubProc.mesh!;
+  assert.match(hubMesh, /^http:\/\/127\.0\.0\.1:[1-9]\d*$/, 'the hub says the port it chose');
 
   // Enrolled with the real command, as the gate does it. Anything going wrong stops both processes.
   let enrolling: ReturnType<typeof spawn> | null = null;

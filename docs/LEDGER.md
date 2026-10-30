@@ -116,6 +116,15 @@ failed before the fix.
   version, with no delete. Now it gets a `file_delete` entry when it crosses
   the limit, and the problem says the standby's older copy was removed and
   that the file wouldn't be on a new hub. Shrinking back copies it again.
+- **The mesh listener takes port 0** (`NOVA_MESH_URL=http://127.0.0.1:0`):
+  it binds a free port, fills it into the public address the core hands out
+  (roster, `join.sh`, pairing links) and says so in its "Devices pair and
+  connect at <url>" line; it exits plainly if it can't bind. The two-process
+  tests start the hub that way and wait for that line, not just "Nova is
+  ready" (the mesh listener binds after the console one, which was the flaky
+  `ECONNREFUSED`). A standby's address is in the roster before it starts, so
+  its port is still chosen ahead, now from 20000–31999, below the ephemeral
+  ranges that port-0 servers and outgoing connections use.
 
 **2026-10-30 (M4 review): trust, pairing and access fixes.**
 

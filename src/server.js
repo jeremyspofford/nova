@@ -36,9 +36,12 @@ export function createNova(config = loadConfig(), deps = {}) {
   // through the runner (bound below, once it exists). Its evidence is checked by reading the
   // conversation the report went to.
   const chatRun = new ChatRun({ program, egress: config.agentEgress, privacy: () => core.profile.privacyDefault() });
+  // Shared with the core by reference: with port 0 in NOVA_MESH_URL, the real port is filled in
+  // once the mesh listener is bound (tests use that, so no other process can take the port first).
+  const meshInfo = config.mesh ? { publicUrl: config.mesh.publicUrl, transport: config.mesh.transport } : null;
   const core = createCore({
     home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
-    mesh: config.mesh ? { publicUrl: config.mesh.publicUrl, transport: config.mesh.transport } : null,
+    mesh: meshInfo,
     workers: [chatRun], confirmations: { [SYSTEM]: (e, brief) => chatRun.confirm(e, brief) },
   });
   if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
@@ -454,7 +457,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     ? createTlsServer({ cert: readFileSync(m.tls.cert), key: readFileSync(m.tls.key) }, handler('mesh'))
     : createServer(handler('mesh'));
 
-  return { server, mesh, runner, store, scheduler, helpers, chatRun, config, seeded, started, core };
+  return { server, mesh, meshInfo, runner, store, scheduler, helpers, chatRun, config, seeded, started, core };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -507,9 +510,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   });
   if (nova.mesh) {
     const m = config.mesh;
+    nova.mesh.on('error', (e) => {
+      console.error(`Nova couldn’t listen for devices at ${m.bindHost}:${m.port}: ${e.message}`);
+      process.exit(1);
+    });
     nova.mesh.listen(m.port, m.bindHost, () => {
       const how = { tls: 'over TLS', proxy: 'through a TLS proxy, as you said', network: 'over an encrypted network, as you said' }[m.transport];
-      console.log(`Devices pair and connect at ${m.publicUrl} (listening on ${m.bindHost}:${nova.mesh.address().port}, ${how}).`);
+      const port = nova.mesh.address().port;
+      const pub = new URL(nova.meshInfo.publicUrl);
+      if (pub.port === '0') {
+        pub.port = String(port);
+        nova.meshInfo.publicUrl = config.mesh.publicUrl = pub.origin;
+      }
+      console.log(`Devices pair and connect at ${nova.meshInfo.publicUrl} (listening on ${m.bindHost}:${port}, ${how}).`);
     });
   }
   const quit = async () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.close(); process.exit(0); };
