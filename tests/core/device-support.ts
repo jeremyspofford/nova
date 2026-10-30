@@ -92,8 +92,10 @@ export class FakeNode {
     const url = new URL(req.url!, 'http://node.local');
     const parts: Buffer[] = [];
     for await (const c of req) parts.push(c as Buffer);
-    const body = parts.length ? JSON.parse(Buffer.concat(parts).toString('utf8')) : {};
     const send = (status: number, b: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
+    // Like the hub: request bodies up to 1 MB.
+    if (Buffer.concat(parts).length > 1_000_000) return send(400, { error: 'The request is too large.' });
+    const body = parts.length ? JSON.parse(Buffer.concat(parts).toString('utf8')) : {};
     const token = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
     const device = this.sessions.get(token);
     const path = url.pathname.replace('/api/v1', '');

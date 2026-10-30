@@ -24,6 +24,11 @@ export interface QueueResult { key: string; status: 'accepted' | 'refused' | 're
 export interface SettledItem { seq: number; key: string; kind: QueueKind; created_at: string; delivered_at: string; status: string; reason: string | null; ref: string | null; local?: boolean }
 
 const KEY = /^[A-Za-z0-9_.:-]{8,100}$/;
+// The hub takes up to 1 MB a request. One item may be at most a quarter of that, so it always fits
+// in a call with room to spare; anything bigger is refused when it is added, not found out later.
+export const MAX_ITEM_BYTES = 256 * 1024;
+// How big an item is on the wire, as the runtime sends it.
+export const itemBytes = (i: Pick<QueueItem, 'key' | 'kind' | 'body' | 'created_at'>) => Buffer.byteLength(JSON.stringify({ key: i.key, kind: i.kind, body: i.body, created_at: i.created_at }));
 // How many answered items are kept (newest), for `status` and so a repeated key is recognised.
 // Older ones go: the hub still recognises their keys, so re-adding one is answered as a duplicate.
 const KEEP_SETTLED = 1000;
@@ -53,6 +58,8 @@ export class Queue {
     const last = this.#all(this.#pending).reduce((m, i) => Math.max(m, Number(i.seq) || 0), 0);
     const seq = Math.max(Date.now() * 1000, last + 1);
     const item: QueueItem = { seq, key, kind, body, created_at: new Date().toISOString() };
+    const size = itemBytes(item);
+    if (size > MAX_ITEM_BYTES) throw new Error(`That item is too big to queue: ${Math.ceil(size / 1024)} KB, and an item may be at most ${MAX_ITEM_BYTES / 1024} KB. Put large content in a file and queue a note that points to it.`);
     const tmp = this.#write(item);
     try {
       linkSync(tmp, join(this.#pending, `${key}.json`));

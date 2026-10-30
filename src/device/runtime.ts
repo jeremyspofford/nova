@@ -12,7 +12,11 @@
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Queue, type QueueResult } from './queue.ts';
+import { itemBytes, Queue, type QueueResult } from './queue.ts';
+
+// What one inbox call carries at most: under the boot agent's limit for a call (900 kB) and the
+// hub's for a request (1 MB), with room for the envelope.
+export const MAX_BATCH_BYTES = 768 * 1024;
 
 // The boot agent says the hub is reachable, and where. No token: that stays with the boot agent.
 export interface SessionMessage {
@@ -95,8 +99,24 @@ export class Runtime {
     this.#busy = true;
     try {
       for (;;) {
-        const items = this.queue.pending(50);
-        if (!items.length) break;
+        const waiting = this.queue.pending(50);
+        if (!waiting.length) break;
+        // As many as fit in one call, oldest first. One that can never fit (queued by an older
+        // agent, before items had a size limit) is refused here, so it can't hold up the rest.
+        const items: typeof waiting = [];
+        let bytes = 0;
+        for (const i of waiting) {
+          const size = itemBytes(i);
+          if (size > MAX_BATCH_BYTES) {
+            if (items.length) break;
+            this.queue.settle([{ key: i.key, status: 'refused', reason: `It is too big to send: ${Math.ceil(size / 1024)} KB, more than the hub takes in one request. It was never sent.` }], { local: true });
+            continue;
+          }
+          if (items.length && bytes + size > MAX_BATCH_BYTES) break;
+          items.push(i);
+          bytes += size;
+        }
+        if (!items.length) continue;
         const r = await this.#call('POST', '/api/v1/mesh/inbox', { items: items.map((i) => ({ key: i.key, kind: i.kind, body: i.body, created_at: i.created_at })) }) as { results: QueueResult[] };
         this.queue.settle(r.results);
         this.#write({ last_flush_at: new Date().toISOString(), queue: this.queue.counts(), last_error: null });

@@ -274,6 +274,33 @@ process.send({ type: 'ready' });
   }
 });
 
+test('a big item can’t jam the queue: too big to queue is refused at once, too big to send is refused here and the rest flows', async () => {
+  const m = await mesh();
+  try {
+    const q = new Queue(m.dev.p.queue);
+    assert.throws(() => q.add('memory_note', { content: 'x'.repeat(2_000_000) }), /too big to queue/);
+    // One that got in anyway (an older agent queued it), with ordinary items around it.
+    q.add('event', { name: 'first' }, 'size-0000001');
+    const big = { seq: Date.now() * 1000 + 500, key: 'size-0000002', kind: 'memory_note', body: { content: 'y'.repeat(1_200_000) }, created_at: new Date().toISOString() };
+    writeFileSync(join(m.dev.p.queue, 'pending', `${big.key}.json`), JSON.stringify(big));
+    q.add('event', { name: 'after' }, 'size-0000003');
+    // Many medium ones: more than one call's worth together, each fine alone.
+    for (let i = 0; i < 8; i++) q.add('memory_note', { content: `${i}`.repeat(200_000) }, `size-medium-${i}`);
+    await m.boot.start({ signals: false });
+    await until(() => q.counts().pending, (n) => n === 0, 20_000);
+    assert.equal(q.counts().pending, 0, 'nothing is stuck');
+    assert.deepEqual(m.hub.received.map((r) => r.key).slice(0, 2), ['size-0000001', 'size-0000003']);
+    assert.equal(m.hub.received.length, 10, 'everything but the oversized one arrived');
+    const refused = q.settled(50).find((s) => s.key === big.key)!;
+    assert.equal(refused.status, 'refused');
+    assert.match(refused.reason!, /too big to send/);
+    assert.ok(!m.hub.received.some((r) => r.key === big.key));
+    q.close();
+  } finally {
+    await m.stop();
+  }
+});
+
 test('updates: a bundle signed by an unpinned key is refused and reported; a signed one replaces the runtime', async () => {
   const m = await mesh();
   try {

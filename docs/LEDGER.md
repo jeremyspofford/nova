@@ -79,6 +79,13 @@ failed before the fix.
   the old node naming the memory ids to forget by hand; it keeps trying. Other
   uncopied changes are reported, not carried over (still the documented gap:
   enroll the old node again).
+- **A big item can't jam the queue.** The runtime sent the oldest 50 items in
+  one call whatever their size; past the hub's 1 MB body limit every flush
+  failed and nothing behind it moved. Now an item over 256 kB is refused when
+  queued ("too big to queue … put large content in a file"), a flush packs
+  items up to 768 kB a call, and an item that can never fit (queued by an
+  older agent) is answered here as refused ("too big to send … never sent",
+  marked `local`) so the rest flows.
 
 **2026-10-30 (M4 review): trust, pairing and access fixes.**
 
