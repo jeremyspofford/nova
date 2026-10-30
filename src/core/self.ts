@@ -125,7 +125,7 @@ export class Self {
     const fresh = this.#freshLines();
     const text = `# This Nova, right now
 
-Read from Nova's own registry at the start of this turn. This is the truth about this instance, not your general knowledge of AI assistants. For anything not here, or that may have changed, check with the nova_ tools before you answer.
+Read from Nova's own registry at the start of this turn. This is the truth about this instance, not your general knowledge of AI assistants: answer questions about Nova with its specifics (the actual names, states and errors below). For detail, or anything that may have changed, check with the nova_ tools before you answer.
 
 ${lines.join('\n')}
 ${fresh.length ? `\n${fresh.join('\n')}\n` : ''}
@@ -258,7 +258,7 @@ Not listed means not in this setup yet. Ways to add: a model provider in Setting
     const imports = this.imports();
     const out: string[] = [];
     if (this.#o.memory.counts().active === 0) {
-      out.push(`- First run: this Nova is fresh. Its memory is empty, so beyond the profile above you know nothing about the person yet. Say so plainly, say it runs from ${this.#o.home}, and offer the import path up front: they can paste notes here, or put a file (notes, an export from another assistant, or a Nova memory export) in ~/${IMPORT_DIR}/, and you read it and suggest memories they review in Memory.`);
+      out.push(`- First run: this Nova is fresh. Its memory is empty, so beyond the profile above you know nothing about the person yet. When you greet them or they ask what you know about them, say so plainly, say it runs from ${this.#o.home}, and offer the import path up front: they can paste notes here, or put a file (notes, an export from another assistant, or a Nova memory export) in ~/${IMPORT_DIR}/, and you read it and suggest memories they review in Memory.`);
     }
     for (const p of imports.packs) out.push(`- Found in ~/${IMPORT_DIR}/: a Nova memory export, ${p.path} (${p.count} ${p.count === 1 ? 'memory' : 'memories'}${p.exported_at ? `, exported ${p.exported_at.slice(0, 10)}` : ''}). Offer to load it with memory_import; the person approves, and the memories arrive in Memory for their review.`);
     if (imports.files.length) out.push(`- Also in ~/${IMPORT_DIR}/: ${list(imports.files.map((f) => f.path))}. Read one with read_file to distill it into memories.`);
