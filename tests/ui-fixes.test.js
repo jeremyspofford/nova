@@ -194,3 +194,18 @@ test('scrolling: the OS scrollbar, a stable gutter, and no vertical scroller ins
     if (/overflow-x: auto/.test(rule[1])) assert.match(rule[1], /overflow-y: hidden/, `${sel} scrolls sideways only`);
   }
 });
+
+// Every module the app loads is in the offline shell, or Nova can't open without a connection.
+// (Found by the offline browser test when settings-ia.js and contrast.js were new.)
+test('the service worker caches every module the app imports', () => {
+  const shell = readFileSync('ui/sw.js', 'utf8');
+  const seen = new Set();
+  const walk = (file) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    for (const m of readFileSync(`ui/js/${file}`, 'utf8').matchAll(/(?:^|\n)\s*import\s[^'"]*['"]\.\/([\w-]+\.js)['"]/g)) walk(m[1]);
+  };
+  walk('app.js');
+  for (const f of seen) assert.match(shell, new RegExp(`'/js/${f.replace('.', '\\.')}'`), `${f} is in the shell`);
+  assert.ok(seen.has('settings-ia.js') && seen.has('contrast.js'));
+});

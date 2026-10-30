@@ -447,7 +447,7 @@ function contrastBlock(a) {
     const fixed = a.fix && !pending;
     return `<div class="contrast-check" id="contrast-check" data-ok="true" role="status"><p class="contrast-line">${fixed ? 'With this device’s contrast fix, every' : 'Every'} text and control here passes the contrast check: 4.5:1 for text, 3:1 for outlines.</p>${fixed ? '<div class="sheet-actions"><button type="button" class="btn small" data-action="undo-fix">Undo the contrast fix</button></div>' : ''}</div>`;
   }
-  const items = c.failures.map((f) => `<li>${esc(f.what)}: ${f.ratio}:1; ${f.kind === 'text' ? 'text' : 'outlines'} need ${f.min}:1.</li>`).join('');
+  const items = c.failures.map((f) => `<li>${esc(f.what)}: ${f.ratio}:1; it needs ${f.min}:1.</li>`).join('');
   const action = pending
     ? '<p class="settings-note">Save or cancel first; then Nova can fix it on this device.</p>'
     : '<div class="sheet-actions"><button type="button" class="btn primary small" data-action="fix-contrast">Fix it on this device</button></div><p class="settings-note">Nova moves just those colours until they pass, on this device only. You can undo it.</p>';
