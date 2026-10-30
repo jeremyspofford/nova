@@ -63,6 +63,7 @@ export { ROLE_FILE, readRole, writeRole } from './mesh/replica.ts';
 export type { RoleFile } from './mesh/replica.ts';
 export { REPLICATED, NOT_JOURNALLED } from './mesh/sync.ts';
 export type { Who } from './api.ts';
+export { originHost } from './api.ts';
 export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
 
 export interface CoreOptions {

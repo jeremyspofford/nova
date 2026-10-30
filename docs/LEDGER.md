@@ -39,6 +39,10 @@ built-ins only.
   which machine becomes hub, like promotion, so a phone without `can_approve`
   gets a 403 and every change needs `confirm: true`. The PWA has no control
   for it yet.
+- **A malformed or `null` Origin is a 403** (`originHost` in `api.ts`, and
+  Era 2's `api()`). It was a thrown `TypeError`: a 500 and a problem per
+  request, reachable without a session through the public enrollment routes
+  before their rate limit.
 
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and

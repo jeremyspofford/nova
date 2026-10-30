@@ -89,6 +89,13 @@ const readBody = (req: IncomingMessage, limit = 1_000_000): Promise<Record<strin
   req.on('error', fail);
 });
 
+// The host an Origin header names, or null when it names none: `null` (sandboxed frames, some
+// redirects) or anything that isn't a URL. Such a request is refused like a foreign one. Parsing
+// it unguarded would throw, and anyone could fill the problem list through a public route.
+export function originHost(origin: string): string | null {
+  try { return new URL(origin).host || null; } catch { return null; }
+}
+
 // Before M4 every request was the console's; a caller that doesn't say otherwise still is. The core
 // itself (index.ts) always says.
 const CONSOLE: Who = { principal: { kind: 'console' }, listener: 'console', address: 'console' };
@@ -126,7 +133,8 @@ export function createApi(o: {
       if (req.method !== 'GET' && req.method !== 'HEAD' && route?.auth !== 'hook-token') {
         if (req.headers['x-nova'] !== '1') throw new CoreError('forbidden', 'Missing X-Nova header.');
         const origin = req.headers.origin;
-        if (origin && !o.trustedOrigin(new URL(origin).host)) throw new CoreError('forbidden', 'Cross-origin request refused.');
+        const host = origin ? originHost(origin) : null;
+        if (origin && (!host || !o.trustedOrigin(host))) throw new CoreError('forbidden', 'Cross-origin request refused.');
       }
       if (path === '/openapi.json' && req.method === 'GET') { send(res, 200, doc); return true; }
       if (path === '/events' && req.method === 'GET') {

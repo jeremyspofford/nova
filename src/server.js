@@ -19,7 +19,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore } from './core/index.ts';
+import { createCore, originHost } from './core/index.ts';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -204,7 +204,9 @@ export function createNova(config = loadConfig(), deps = {}) {
     if (req.method === 'POST') {
       if (req.headers['x-nova'] !== '1') return json(res, 403, { error: 'Missing X-Nova header' });
       const origin = req.headers.origin;
-      if (origin && !allowedHost(new URL(origin).host)) return json(res, 403, { error: 'Cross-origin request refused' });
+      // `Origin: null` or a malformed one names no host: refused, never a 500.
+      const host = origin ? originHost(origin) : null;
+      if (origin && (!host || !allowedHost(host))) return json(res, 403, { error: 'Cross-origin request refused' });
     }
 
     if (resource === 'health') return json(res, 200, { ok: true, agent: config.agentCmd.trim().split(/\s+/)[0] });

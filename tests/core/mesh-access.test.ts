@@ -141,6 +141,22 @@ test('a browser by cookie and a phone by bearer get what the console gets, excep
   }
 });
 
+test('a malformed or "null" Origin is a 403, never a 500 or a problem, even on the public routes', async () => {
+  const b = await boot();
+  try {
+    const before = b.nova.core.log.problems().length;
+    for (const origin of ['null', 'not a url', '://', 'http://']) {
+      const join = await call(b.mesh, 'POST', '/api/v1/mesh/join', { code: 'ABCD-EFGH' }, { origin });
+      assert.equal(join.status, 403, `core, public: ${origin}`);
+      assert.equal((await b.c('POST', '/api/v1/memory', { kind: 'fact', content: 'x' }, { origin })).status, 403, `core, console: ${origin}`);
+      assert.equal((await b.c('POST', '/api/sessions', { text: 'x' }, { origin })).status, 403, `Era 2: ${origin}`);
+    }
+    assert.equal(b.nova.core.log.problems().length, before, 'nothing recorded: a refusal isn’t a problem');
+  } finally {
+    await b.stop();
+  }
+});
+
 test('a computer gets only the device routes, a standby only sync; neither gets the person’s things', async () => {
   const b = await boot();
   try {
