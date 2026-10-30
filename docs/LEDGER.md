@@ -15,6 +15,29 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (owner decision): real-phone pairing check deferred; pairing clocks logged as a
+usability defect.** The owner's first real pairing attempt, from a phone over Tailscale, didn't
+finish. Before that, it was refused as cross-origin: a proxy pointed at the console, not the device
+door. That is fixed: the preview opens the device door on loopback, and Tailscale Serve 9446 points
+at it.
+- **Deferral.** The owner decided that the real-device pairing check waits until they are back at
+  their desk. The emulated-phone pairing in the M4 gate (`tests/ui/m4-mesh.test.ts`) stands in for
+  it. No milestone blocks on it.
+- **Defect, open (usability), as the owner reported it.** A person juggling two devices loses the
+  race against the clocks: the code seemed to expire about 7 minutes after it was made, and a
+  pending request had about 2 minutes to be approved.
+- **The code's clocks today:**
+  - a pairing code works once, for 5 minutes (`PAIRING_CODE_TTL_MS`, `src/core/mesh/wire.ts`);
+  - after the phone joins, the confirmation must be revealed within 2 minutes
+    (`JOIN_REVEAL_TTL_MS`);
+  - then it must be approved within 10 minutes (`JOIN_APPROVE_TTL_MS`, `src/core/mesh/enroll.ts`).
+
+  The 2-minute reveal window is very likely the "approval window" the owner hit. The reveal happens
+  on the phone's side, so a slow step there ends the request.
+- **When pairing is revisited**, the windows get longer, or the flow tolerates a retry without
+  starting over (for example, an expired request can be re-revealed under the same code while the
+  code is still valid). Both keep commit-then-reveal and the single use of a code. Not changed now.
+
 **2026-10-30 (M7 review fixes): the change pipeline's guards.** Branch `m7-fix/changes`; tests in
 `tests/core/changes-guards.test.ts` (the reviewer's probes, made real), each failing on the code
 before its fix (checked against `fdd33ea2`).
