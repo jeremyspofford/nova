@@ -42,7 +42,12 @@ const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
 const STANDING = new Set([...STANDING_EXACT].map((n) => n.normalize('NFC').toLowerCase()));
 // Addresses in text, and an address as compared: no fragment, the URL parser's own spelling.
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'`)\]}]+/gi;
-const normUrl = (u) => { try { const x = new URL(String(u ?? '').replace(/[.,;:!?]+$/, '')); x.hash = ''; return x.href; } catch { return null; } };
+// One exact canonical form (the WHATWG parser's href) for an address: what the guard judges is
+// what is fetched, and a model's address is free only if it equals a known link exactly.
+const canonUrl = (u) => { try { return new URL(String(u ?? '')).href; } catch { return null; } };
+// A link found in text read from outside: sentence punctuation after it isn't part of it, and a
+// fragment never reaches the server. Only ever for links read, never for the model's argument.
+const linkFromText = (u) => { try { const x = new URL(String(u ?? '').replace(/[.,;:!?]+$/, '')); x.hash = ''; return x.href; } catch { return null; } };
 const OWN_TOP = new Set(['memory', 'schedules', 'permissions.md']);
 
 // Files a skill may carry that aren't text, by name, and what each must start with.
@@ -60,7 +65,7 @@ export function isWhatItsNameSays(name, bytes) {
 }
 const looksLikeText = (b) => { try { new TextDecoder('utf-8', { fatal: true }).decode(b); return !b.includes(0); } catch { return false; } };
 
-const textLinks = (text) => [...new Set((String(text).match(URL_IN_TEXT) ?? []).map((u) => normUrl(u)).filter(Boolean))].slice(0, 200);
+const textLinks = (text) => [...new Set((String(text).match(URL_IN_TEXT) ?? []).map((u) => linkFromText(u)).filter(Boolean))].slice(0, 200);
 
 // A page's links, absolute, at most 500.
 function pageLinks(html, base) {
@@ -209,7 +214,7 @@ export class Runner extends EventEmitter {
     const controller = new AbortController();
     // skills: the playbooks this reply follows. taint: the outside content this conversation has
     // read (the ingest gate). alone: no one is there to approve anything.
-    const run = { controller, pending: null, skills: new Map(), taint: [], free: { total: 0, hosts: {} }, unattended, helper, privacy, alone: !!(unattended || helper), live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
+    const run = { sessionId, controller, pending: null, skills: new Map(), taint: [], unattended, helper, privacy, alone: !!(unattended || helper), live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
     this.active.set(sessionId, run);
     this.emit('live', sessionId, { ...run.live });
     run.done = this.loop(sessionId, run)
@@ -381,6 +386,8 @@ export class Runner extends EventEmitter {
         this.setLive(sessionId, { phase: 'tool' });
         try { preview = await tool.preview(call.args, ctx); } catch (e) { failed = e.message; }
       }
+      // An address is judged and fetched in one exact form: the WHATWG parser's href.
+      if (call?.name === 'web_fetch' && call.args && canonUrl(call.args.url)) call.args.url = canonUrl(call.args.url);
       // The ingest gate: a guarded step in a tainted run, or anything that would carry something
       // of the person's out, asks, and never goes on its own.
       const guard = failed ? null : this.guardFor(call, tool, run, preview, session);
@@ -520,6 +527,32 @@ export class Runner extends EventEmitter {
     return out.filter((x) => { const k = x.screen ?? `${x.kind}:${x.origin}`; if (seen.has(k)) return false; seen.add(k); return true; });
   }
 
+  // The conversation a run belongs to: a helper's is its parent's; a scheduled run's is the one its
+  // reports go to.
+  rootOf(id, depth = 0) {
+    if (!id || depth > 8 || !this.store.exists(id)) return id;
+    const meta = this.store.read(id)[0];
+    if (meta?.kind === 'helper' && meta.parent && meta.parent !== id) return this.rootOf(meta.parent, depth + 1);
+    if (meta?.kind === 'run' && meta.schedule) {
+      const d = this.schedules.get(meta.schedule)?.deliver;
+      const to = d && d !== 'main' && this.store.exists(d) ? d : 'main';
+      return to === id ? id : this.rootOf(to, depth + 1);
+    }
+    return id;
+  }
+
+  // The free link-follows a conversation has made, from its log.
+  follows(root) {
+    const out = { total: 0, hosts: {} };
+    if (!root || !this.store.exists(root)) return out;
+    for (const e of this.store.read(root)) {
+      if (e.type !== 'follow') continue;
+      out.total++;
+      out.hosts[e.host] = (out.hosts[e.host] ?? 0) + 1;
+    }
+    return out;
+  }
+
   // Addresses this conversation has already seen, only from what was really read from outside:
   // the links parsed from fetched pages, search results and mail, recorded with the screened read
   // (`links`), and the links a helper's run read, which travel with its report as data. Plus the
@@ -528,10 +561,10 @@ export class Runner extends EventEmitter {
   // these is following a link; any other address in a tainted run was put together by the model.
   knownUrls(session, { helper = false } = {}) {
     const out = new Set();
-    const put = (u) => { const n = normUrl(u); if (n) out.add(n); };
+    const put = (u, fromText = false) => { const n = fromText ? linkFromText(u) : linkFromText(u); if (n) out.add(n); };
     for (const t of session.turns) {
       if (t.kind === 'handoff') { for (const l of t.links ?? []) put(l); continue; }
-      if (!t.followup && !helper) for (const u of String(t.text ?? '').match(URL_IN_TEXT) ?? []) put(u);
+      if (!t.followup && !helper) for (const u of String(t.text ?? '').match(URL_IN_TEXT) ?? []) put(u, true);
       for (const i of t.items) {
         if (i.kind !== 'tool' || !i.result?.ok) continue;
         for (const l of i.result.links ?? []) put(l);
@@ -568,24 +601,28 @@ export class Runner extends EventEmitter {
     let what = GUARDED[call.name] ?? (standing ? 'change your standing files' : tool.needsApproval ? 'take this step' : null);
     // An address the model put together, in a tainted run, asks, whatever it carries: matching
     // can't keep up with chunking, short encodings or reversal. A link it read is free.
+    let follow = null;
     if (tainted && call.name === 'web_fetch') {
-      const url = normUrl(call.args?.url);
+      // The argument is already the canonical address (the loop puts it there before the guard),
+      // and it must be a known link exactly.
+      const url = canonUrl(call.args?.url);
       const host = hostOf(url ?? '');
       const caps = this.linkCaps;
-      if (!(session && this.knownUrls(session, { helper: !!run.helper }).has(url))) what = 'open an address it put together';
-      // Each link chosen is a little information: past a few per site, and a few in all, it asks.
-      else if ((run.free.hosts[host] ?? 0) >= caps.per_host) what = `follow more links on ${host} than Nova follows on its own`;
-      else if (run.free.total >= caps.total) what = 'follow more links than Nova follows on its own';
+      const root = this.rootOf(run.sessionId);
+      const done = this.follows(root);
+      if (!url || !(session && this.knownUrls(session, { helper: !!run.helper }).has(url))) what = 'open an address it put together';
+      // Each link chosen is a little information: past a few per site, and a few in all, for the
+      // whole conversation (its turns, helpers, scheduled runs and follow-ups), it asks.
+      else if ((done.hosts[host] ?? 0) >= caps.per_host) what = `follow more links on ${host} than Nova follows on its own`;
+      else if (done.total >= caps.total) what = 'follow more links than Nova follows on its own';
+      else follow = { root, host };
     }
     const payload = this.outboundPayload(call, preview);
     const out = payload === null ? null : this.ingest.outbound({ text: payload }, { tainted });
     const matched = out && !out.ok ? out.matched : null;
     if (!(tainted && what) && !matched) {
-      if (tainted && call.name === 'web_fetch') {
-        const host = hostOf(normUrl(call.args?.url) ?? '');
-        run.free.total++;
-        run.free.hosts[host] = (run.free.hosts[host] ?? 0) + 1;
-      }
+      // A free follow, counted in the conversation's own log, so a reload or restart keeps it.
+      if (follow) this.record(follow.root, { type: 'follow', host: follow.host, from: run.sessionId });
       return null;
     }
     const sources = [...new Set(run.taint.map((x) => cleanOrigin(x.origin)))].slice(0, 5);

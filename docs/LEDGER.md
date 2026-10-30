@@ -15,6 +15,25 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (security: the ingest gate — the final adversarial pass on #229).** Each finding is a test
+through the runner that failed first: `tests/ingest/round3.test.js` (4).
+- **X1, the address judged wasn't the address fetched:** the guard trimmed trailing punctuation
+  before comparing, but `web_fetch` sent the raw address. Fixed:
+  - A `web_fetch` argument is now replaced by its one canonical form, the WHATWG parser's `href`,
+    before the guard. That exact address is judged, recorded and fetched.
+  - A tainted run follows it on its own only if it equals a known link exactly.
+  - Trimming trailing punctuation and dropping a fragment happen only when links are taken from
+    text read from outside, never to the model's argument.
+  - Trailing punctuation (the probe's 66-character payload), a case change in the path, a different
+    percent-encoding, an added `?`, `#` or `?x=1`, and a trailing slash each ask now.
+- **X2, the caps reset per run:** they now count for the whole conversation: its turns, the helpers
+  and scheduled runs it starts (a helper belongs to its parent's conversation, a scheduled run to the
+  one its reports go to), and its follow-ups.
+  - Each free follow is a `follow` event in that conversation's own session log. The counts are
+    rebuilt from the log, as taint is, so a reload or restart keeps them.
+  - The test fans out three helpers, each following three pages, plus three follow-ups: the site
+    sees 8 pages, and the rest ask.
+
 **2026-10-30 (security: the ingest gate — fixes from the second adversarial review of #229).**
 Each finding is a test through the runner that failed first: `tests/ingest/round2.test.js` (14) and
 `device.test.ts`. The N5 test with a model was written with the fix, against the code that had kept

@@ -4,8 +4,8 @@ Plan: `docs/plans/ingest-gate.md`. Decisions: `docs/LEDGER.md`, 2026-10-30, "the
 
 ## Runs (2026-10-30, after the review fixes)
 
-- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos), after the second review's fixes, with main merged in up to #228: **942 tests, 933 pass, 0 fail, 9 skipped.** The skipped ones are the opt-in real-model and real-service runs.
-- **`tests/ingest/`: 100 tests, 100 pass** (`import.test.js` adds 5, `round2.test.js` adds 14, `device.test.ts` adds 1).
+- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos), after the final pass's fixes, with main merged in up to #228: **946 tests, 937 pass, 0 fail, 9 skipped.** The skipped ones are the opt-in real-model and real-service runs.
+- **`tests/ingest/`: 104 tests, 104 pass** (`import.test.js` adds 5, `round2.test.js` 14, `round3.test.js` 4, `device.test.ts` 1).
 - **`scripts/ui-test.sh`** (Chromium in the Playwright container): **39 tests, 39 pass** (main's UI amendment added 7).
   - M5c also checks that each browser page read carries its screen's verdict.
   - Screenshots the run rewrote were restored, and stray ones deleted.
@@ -47,6 +47,13 @@ Each finding became a test that failed first. Where the finding is in the agent 
 | N8: outside text in the briefing unescaped | `round2.test.js` | A device name and a problem carrying `<tool_call …>` and "ignore previous instructions" appear only as quoted, escaped data. |
 | N10: "Turn it on" trusts unchecked files | `round2.test.js` | Only checked text files are trusted. A `.png` that is really text is refused by `read_file`. |
 | N6 (accepted) | `round2.test.js` | A paraphrased injection in command output, with no model, reaches the model as held-back data. This is a known limit, in the ledger. |
+
+## Final pass
+
+| Finding | Test (runner path) | After |
+|---|---|---|
+| X1: the address judged wasn't the address fetched | `round3.test.js` (×2) | The canonical `href` is judged, recorded and fetched. Only an exact known link is free. Asking, with the site never contacted: the probe's 66-character punctuation payload, `.`, `,;`, a capitalised path, `%70`, `?`, `#x`, a trailing `/`, and `?x=1`. |
+| X2: the caps reset per run | `round3.test.js` (×2) | Counted per conversation from its log. The 9th follow to one host, across turns, asks, and a new runner reads the same count. With three helpers and three follow-ups, the site sees 8 pages and the rest ask. |
 
 **Still not caught:**
 - Hiding by an external stylesheet or by script. That text is treated as visible, but still checked for instructions.
