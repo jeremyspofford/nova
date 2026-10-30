@@ -170,9 +170,10 @@ export class Spokes extends EventEmitter {
           return r;
         }
         case 'task_request': {
-          // A refused request is kept whole, with why, so it is never lost.
+          // A refused request is kept whole, with why, so it is never lost. What the item does runs
+          // in its own savepoint: if it fails part-way, none of it stays, so "refused" is true.
           try {
-            return keep('accepted', { ref: this.#effects.task(device, key, body).id });
+            return keep('accepted', { ref: this.#db.tx(() => this.#effects.task(device, key, body)).id });
           } catch (e) {
             const reason = refusal(e);
             this.#log.problem('mesh', `A task asked for by “${device.name}” wasn’t created: ${reason}`);
@@ -182,7 +183,7 @@ export class Spokes extends EventEmitter {
         case 'memory_note': {
           // Only the new memory's id is kept here, never its words, so forgetting it is complete.
           try {
-            return keep('accepted', { ref: this.#effects.memory(device, body).id });
+            return keep('accepted', { ref: this.#db.tx(() => this.#effects.memory(device, body)).id });
           } catch (e) {
             return keep('refused', { reason: refusal(e) });
           }
@@ -206,7 +207,7 @@ export class Spokes extends EventEmitter {
             return keep('rejected', { reason, ref, version: current?.version ?? null });
           }
           try {
-            const version = this.#effects.config.write(section, ck, body.value);
+            const version = this.#db.tx(() => this.#effects.config.write(section, ck, body.value));
             return keep('accepted', { ref, version });
           } catch (e) {
             return keep('refused', { reason: refusal(e), ref });

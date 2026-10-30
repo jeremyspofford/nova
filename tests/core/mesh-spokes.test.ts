@@ -130,6 +130,23 @@ test('the inbox takes each key exactly once, in order, and keeps what each item 
   }
 });
 
+test('a task request that fails part-way is refused, and leaves no task behind', async () => {
+  const h = await hub();
+  try {
+    const { token } = await enroll(h, { kind: 'computer', name: 'Test computer' });
+    // The task is created, then what follows it (the reactive triggers) fails.
+    const triggers = h.core.triggers as unknown as { reactive: (...a: unknown[]) => unknown };
+    triggers.reactive = () => { throw new Error('placeholder failure'); };
+    const task = { title: 'Half-made placeholder task', owner: 'workspace', goal: 'A note exists.', evidence_required: [{ kind: 'read_back', target: 'notes/half.md' }], inputs: { path: 'notes/half.md', content: 'x' } };
+    const r = await call(h.mesh, 'POST', '/api/v1/mesh/inbox', { items: [{ key: 'half-0000001', kind: 'task_request', body: task }] }, bearer(token));
+    assert.equal(r.body.results[0].status, 'refused');
+    const tasks = h.core.db.all<{ id: string }>("SELECT id FROM task WHERE title = 'Half-made placeholder task'");
+    assert.deepEqual(tasks, [], 'the inbox says refused, so there is no task either');
+  } finally {
+    await h.stop();
+  }
+});
+
 test('config from a device is server-wins: a stale base version is rejected and reported; privacy stays with the person', async () => {
   const h = await hub();
   try {

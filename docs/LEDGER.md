@@ -93,6 +93,12 @@ failed before the fix.
   earlier), and reports it like any refused update. A manifest without them
   counts as oldest. A promoted standby's clock doesn't matter: its epoch is
   higher.
+- **Nested transactions are savepoints.** `db.tx` inside `db.tx` used to join
+  the outer transaction, so an inbox task request that failed after its task
+  was written was recorded "refused" while the task was committed too. A
+  nested call is now `SAVEPOINT … RELEASE`, rolled back to on a throw; the
+  outer one commits or rolls back as before. The inbox runs each item's effect
+  in its own savepoint.
 
 **2026-10-30 (M4 review): trust, pairing and access fixes.**
 
