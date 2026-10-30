@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -77,13 +77,83 @@ test('a tampered vault, a wrong key or a missing key is refused in plain words, 
   writeFileSync(file, JSON.stringify({ ...f, data: data.toString('base64') }));
   assert.throws(() => new Vault({ home: h, mode: 'file' }).get('connector/example/API_TOKEN'), /doesn’t open with its key/);
   // The id is bound in as associated data: a vault can't be passed off as another.
-  writeFileSync(file, JSON.stringify({ ...f, id: 'another-vault' }));
+  writeFileSync(file, JSON.stringify({ ...f, id: '00000000-0000-4000-8000-00000000abcd' }));
   assert.throws(() => new Vault({ home: h, mode: 'file' }).get('connector/example/API_TOKEN'), /doesn’t open with its key/);
   writeFileSync(file, good);
   writeFileSync(join(h, 'vault', 'key'), randomBytes(32));
   const v = new Vault({ home: h, mode: 'file' });
   assert.equal(v.status().ok, false);
   assert.match(v.status().problem!, /can’t find the key to its vault/);
+});
+
+test('a lost key doesn’t brick the vault: saving a secret again starts a new one, the old kept aside; a reset does the same on purpose', () => {
+  const h = home();
+  const v = new Vault({ home: h, mode: 'file' });
+  v.put('connector/example/API_TOKEN', SECRET);
+  const oldId = JSON.parse(readFileSync(join(h, 'vault', 'secrets.json'), 'utf8')).id;
+  rmSync(join(h, 'vault', 'key'));
+  const lost = new Vault({ home: h, mode: 'file' });
+  assert.match(lost.status().problem!, /Saving a secret again .* starts a new vault/);
+  // Reconnecting puts the token again: that works, in a new vault.
+  lost.put('connector/example/API_TOKEN', 'placeholder-token-new-0000');
+  assert.equal(lost.status().ok, true);
+  assert.equal(new Vault({ home: h, mode: 'file' }).get('connector/example/API_TOKEN'), 'placeholder-token-new-0000');
+  const aside = readdirSync(join(h, 'vault')).filter((f) => f.startsWith('secrets.json.unopenable-'));
+  assert.equal(aside.length, 1, 'the old vault is kept aside, not deleted');
+  assert.notEqual(JSON.parse(readFileSync(join(h, 'vault', 'secrets.json'), 'utf8')).id, oldId, 'a new vault, with a new id');
+  // A key in a keychain that isn't answering may turn up again: saving waits rather than starting over.
+  const { k, make } = fakeKeychain();
+  const h2 = home();
+  new Vault({ home: h2, mode: 'auto', keychain: make }).put('connector/example/API_TOKEN', SECRET);
+  k.up = false;
+  assert.throws(() => new Vault({ home: h2, mode: 'auto', keychain: make }).put('connector/example/API_TOKEN', SECRET), /isn’t answering/);
+  // The reset is explicit (tier 3): it needs confirm, and does the same.
+  const stuck = new Vault({ home: h2, mode: 'auto', keychain: make });
+  assert.throws(() => stuck.reset(false), /confirm/);
+  stuck.reset(true);
+  k.up = true;
+  assert.equal(stuck.status().ok, true);
+  assert.equal(stuck.list().length, 0);
+  assert.equal(readdirSync(join(h2, 'vault')).filter((f) => f.startsWith('secrets.json.unopenable-')).length, 1);
+});
+
+test('deleting a secret re-keys the vault, so an old copy of the file doesn’t open with the key in use; a re-key cut short recovers', () => {
+  const h = home();
+  const v = new Vault({ home: h, mode: 'file' });
+  v.put('connector/example/A', 'placeholder-aaaaaaaa');
+  v.put('connector/example/B', 'placeholder-bbbbbbbb');
+  const before = readFileSync(join(h, 'vault', 'secrets.json'), 'utf8');
+  v.delete('connector/example/B');
+  const after = readFileSync(join(h, 'vault', 'secrets.json'), 'utf8');
+  assert.notEqual(JSON.parse(before).fp, JSON.parse(after).fp, 'a new key');
+  assert.equal(JSON.parse(before).id, JSON.parse(after).id, 'the same vault');
+  assert.equal(new Vault({ home: h, mode: 'file' }).get('connector/example/A'), 'placeholder-aaaaaaaa');
+  writeFileSync(join(h, 'vault', 'secrets.json'), before);
+  assert.throws(() => new Vault({ home: h, mode: 'file' }).get('connector/example/B'), /can’t find the key/);
+  // Cut short after the new key was saved but before the new file took its place: the new file is
+  // still beside it, and opening finishes the job.
+  writeFileSync(join(h, 'vault', 'secrets.json'), after);
+  const w = new Vault({ home: h, mode: 'file' });
+  w.put('connector/example/C', 'placeholder-cccccccc');
+  const keep = readFileSync(join(h, 'vault', 'secrets.json'), 'utf8');
+  w.delete('connector/example/C');
+  renameSync(join(h, 'vault', 'secrets.json'), join(h, 'vault', 'secrets.json.tmp'));
+  writeFileSync(join(h, 'vault', 'secrets.json'), keep);
+  assert.equal(new Vault({ home: h, mode: 'file' }).get('connector/example/A'), 'placeholder-aaaaaaaa');
+  assert.equal(new Vault({ home: h, mode: 'file' }).get('connector/example/C'), null);
+});
+
+test('a vault id is a UUID before it names a keychain item', () => {
+  const h = home();
+  new Vault({ home: h, mode: 'file' }).put('connector/example/API_TOKEN', SECRET);
+  const file = join(h, 'vault', 'secrets.json');
+  const f = JSON.parse(readFileSync(file, 'utf8'));
+  writeFileSync(file, JSON.stringify({ ...f, id: 'x -w injected' }));
+  const seen: string[] = [];
+  const v = new Vault({ home: h, mode: 'auto', keychain: (account) => { seen.push(account); return null; } });
+  assert.equal(v.status().ok, false);
+  assert.match(v.status().problem!, /damaged/);
+  assert.deepEqual(seen, [], 'the odd id never reached a keychain');
 });
 
 test('the key: in the keychain when one answers (no key file), else a 0600 file with a plain notice', () => {

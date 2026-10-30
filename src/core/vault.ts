@@ -216,6 +216,8 @@ export interface VaultStatus {
 
 export const FILE_KEY_NOTICE = 'Nova keeps your connection secrets encrypted, but on this computer there is no system keychain it can use, so the key is in a file next to them (vault/key in Nova’s home). Anyone who can read Nova’s home folder can open them. Nova moves the key into the keychain by itself once one is available.';
 
+const START_OVER = 'Saving a secret again (reconnecting a connection, or adding a provider’s key) starts a new vault; the old file is kept aside in vault/ as secrets.json.unopenable-<time>, in case its key turns up.';
+
 const fp = (key: Buffer) => createHash('sha256').update(key).digest('hex').slice(0, 16);
 
 export class Vault extends EventEmitter {
@@ -229,6 +231,9 @@ export class Vault extends EventEmitter {
   #id: string | null = null;
   #map: Map<string, string> | null = null;
   #problem: string | null = null;
+  // Why it won't open: lost for good (no key that fits, or a damaged file), or a keychain that may
+  // still answer later. Only a lost vault is set aside by the next save.
+  #unopenable: 'lost' | 'waiting' | null = null;
 
   constructor(o: VaultOptions) {
     super();
@@ -256,18 +261,35 @@ export class Vault extends EventEmitter {
   put(name: string, value: string): string {
     checkName(name);
     if (typeof value !== 'string' || !value.length) throw new CoreError('validation', 'A secret can’t be empty.');
-    const map = this.#open();
+    // A vault that can never open again would refuse every save forever. Saving starts a new one
+    // instead (reconnecting is how a person saves again), and the old file is kept aside.
+    let map: Map<string, string>;
+    try { map = this.#open(); } catch (e) {
+      if (this.#unopenable !== 'lost') throw e;
+      map = this.#startOver();
+    }
     map.set(name, value);
     addSecretValue(value);
     this.#save(map);
     return secretRef(name);
   }
 
+  // A new key each time something is deleted, so a copy of the file from before (a backup, an old
+  // sync entry) doesn't open with the key in use: the deleted secret stays deleted.
   delete(name: string): boolean {
     const map = this.#open();
     if (!map.delete(checkName(name))) return false;
-    this.#save(map);
+    this.#save(map, true);
     return true;
+  }
+
+  // Starts a new, empty vault on purpose (tier 3: needs confirm), with the old file kept aside: for
+  // a vault whose key is in a keychain that no longer answers, which saving alone won't replace.
+  reset(confirm: boolean): VaultStatus {
+    if (!confirm) throw new CoreError('validation', 'Starting a new vault leaves every saved secret behind (the old file is kept aside). Send confirm: true to do that.');
+    this.#startOver();
+    this.emit('change', { secrets: 0 });
+    return this.status();
   }
 
   // Everything under a prefix (`connector/gmail/`), for revoking an extension's secrets at once.
@@ -276,7 +298,7 @@ export class Vault extends EventEmitter {
     const gone = [...map.keys()].filter((k) => k.startsWith(prefix));
     if (!gone.length) return [];
     for (const k of gone) map.delete(k);
-    this.#save(map);
+    this.#save(map, true);
     return gone;
   }
 
@@ -349,7 +371,10 @@ export class Vault extends EventEmitter {
 
   #open(): Map<string, string> {
     if (this.#map) return this.#map;
-    if (this.#problem) throw new CoreError('conflict', this.#problem);
+    // A keychain that wasn't answering is asked again; a lost vault stays lost.
+    if (this.#problem && this.#unopenable !== 'waiting') throw new CoreError('conflict', this.#problem);
+    this.#problem = null;
+    this.#unopenable = null;
     if (!existsSync(this.file)) {
       this.#map = new Map();
       return this.#map;
@@ -358,15 +383,66 @@ export class Vault extends EventEmitter {
     try {
       file = parseFile(readFileSync(this.file, 'utf8'));
     } catch (e) {
-      this.#problem = `The vault (${this.file}) is damaged and can’t be read: ${(e as Error).message}`;
+      this.#unopenable = 'lost';
+      this.#problem = `The vault (${this.file}) is damaged and can’t be read: ${(e as Error).message}. ${START_OVER}`;
       throw new CoreError('conflict', this.#problem);
     }
     this.#id = file.id;
-    const { key, store } = this.#findKey(file);
-    this.#map = decrypt(file, key);
-    this.#key = key;
-    this.#store = store;
+    let found: { key: Buffer; store: KeyStore; file: VaultFile };
+    try {
+      found = { ...this.#findKey(file), file };
+    } catch (e) {
+      // A re-key cut short: the new key was saved, and the new file is still beside the old one.
+      const done = this.#finishRekey(file);
+      if (!done) throw e;
+      found = done;
+    }
+    let map: Map<string, string>;
+    try { map = decrypt(found.file, found.key); } catch (e) {
+      this.#unopenable = 'lost';
+      this.#problem = `${(e as Error).message} ${START_OVER}`;
+      throw new CoreError('conflict', this.#problem);
+    }
+    rmSync(`${this.file}.tmp`, { force: true });
+    this.#problem = null;
+    this.#unopenable = null;
+    this.#map = map;
+    this.#key = found.key;
+    this.#store = found.store;
     for (const v of this.#map.values()) addSecretValue(v);
+    return this.#map;
+  }
+
+  #finishRekey(file: VaultFile): { key: Buffer; store: KeyStore; file: VaultFile } | null {
+    const tmp = `${this.file}.tmp`;
+    if (!existsSync(tmp)) return null;
+    let next: VaultFile;
+    try { next = parseFile(readFileSync(tmp, 'utf8')); } catch { return null; }
+    if (next.id !== file.id) return null;
+    const why = { problem: this.#problem, unopenable: this.#unopenable };
+    try {
+      const found = this.#findKey(next);
+      decrypt(next, found.key);
+      renameSync(tmp, this.file);
+      return { ...found, file: next };
+    } catch {
+      this.#problem = why.problem;
+      this.#unopenable = why.unopenable;
+      return null;
+    }
+  }
+
+  // The unopenable file goes aside as secrets.json.unopenable-<time> (in case its key turns up), and
+  // a new vault with a new id and key takes its place on the next save.
+  #startOver(): Map<string, string> {
+    if (existsSync(this.file)) renameSync(this.file, `${this.file}.unopenable-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+    rmSync(`${this.file}.tmp`, { force: true });
+    this.#id = null;
+    this.#key = null;
+    this.#store = null;
+    this.#problem = null;
+    this.#unopenable = null;
+    this.#map = new Map();
     return this.#map;
   }
 
@@ -392,33 +468,47 @@ export class Vault extends EventEmitter {
       }
       return { key: fromDisk!, store: disk };
     }
-    const where = kc && !kcUp?.ok ? ` It may be in the system keychain, which isn’t answering (${kcUp?.detail}).` : '';
-    this.#problem = `Nova can’t find the key to its vault, so connections that need a secret can’t sign in.${where} Reconnect them to start a new vault.`;
+    if (kc && !kcUp?.ok) {
+      this.#unopenable = 'waiting';
+      this.#problem = `Nova can’t find the key to its vault, so connections that need a secret can’t sign in. It may be in the system keychain, which isn’t answering (${kcUp?.detail}). Nova waits for the keychain rather than starting over; to start a new vault anyway, reset the vault (tier 3: POST /api/v1/vault/reset with confirm: true), and the old one is kept aside.`;
+    } else {
+      this.#unopenable = 'lost';
+      this.#problem = `Nova can’t find the key to its vault, so connections that need a secret can’t sign in. ${START_OVER}`;
+    }
     throw new CoreError('conflict', this.#problem);
   }
 
-  #save(map: Map<string, string>): void {
-    if (!this.#key) {
-      this.#id ??= randomUUID();
-      const store = this.#choose(this.#id);
-      const key = randomBytes(32);
-      store.write(key);
+  // With a new key (the first save, or `rekey`), the order keeps the vault openable whatever stops
+  // it: the new file is written beside the old, then the key saved, then the file swapped in.
+  // Stopped between the last two, opening finishes the swap (#finishRekey).
+  #save(map: Map<string, string>, rekey = false): void {
+    this.#id ??= randomUUID();
+    const id = this.#id;
+    const fresh = !this.#key || rekey;
+    const key = fresh ? randomBytes(32) : this.#key!;
+    const store = this.#store ?? this.#choose(id);
+    if (!map.size) {
+      // Nothing left to keep: no file, and a new key for whatever comes next.
+      if (fresh) store.write(key);
       this.#key = key;
       this.#store = store;
-    }
-    if (!map.size) {
       rmSync(this.file, { force: true });
       this.emit('change', { secrets: 0 });
       return;
     }
-    const id = this.#id!;
     const nonce = randomBytes(12);
-    const c = createCipheriv('aes-256-gcm', this.#key, nonce);
+    const c = createCipheriv('aes-256-gcm', key, nonce);
     c.setAAD(AAD(id));
     const data = Buffer.concat([c.update(JSON.stringify(Object.fromEntries(map)), 'utf8'), c.final()]);
-    const out: VaultFile = { v: 1, id, alg: 'aes-256-gcm', fp: fp(this.#key), nonce: nonce.toString('base64'), tag: c.getAuthTag().toString('base64'), data: data.toString('base64') };
+    const out: VaultFile = { v: 1, id, alg: 'aes-256-gcm', fp: fp(key), nonce: nonce.toString('base64'), tag: c.getAuthTag().toString('base64'), data: data.toString('base64') };
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-    writeAtomic(this.file, `${JSON.stringify(out)}\n`);
+    const tmp = `${this.file}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(out)}\n`, { mode: 0o600 });
+    if (fresh) store.write(key);
+    renameSync(tmp, this.file);
+    chmodSync(this.file, 0o600);
+    this.#key = key;
+    this.#store = store;
     this.emit('change', { secrets: map.size });
   }
 }
@@ -430,9 +520,13 @@ function writeAtomic(path: string, text: string): void {
   chmodSync(path, 0o600);
 }
 
+// The id names the keychain item (vault-<id>), and one keychain CLI takes it inside command text:
+// only a UUID gets that far.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function parseFile(text: string): VaultFile {
   const f = JSON.parse(text) as VaultFile;
   if (f?.v !== 1 || f.alg !== 'aes-256-gcm' || typeof f.id !== 'string' || typeof f.data !== 'string' || typeof f.fp !== 'string') throw new Error('not a vault Nova knows');
+  if (!UUID.test(f.id)) throw new Error('its id isn’t one Nova makes');
   return f;
 }
 

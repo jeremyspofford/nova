@@ -615,6 +615,10 @@ export function createCore(o: CoreOptions) {
       },
     },
     {
+      method: 'POST', path: '/vault/reset', summary: 'Start a new, empty vault (tier 3: needs {confirm: true}), for one that can’t be opened: the old file is kept aside in vault/ as secrets.json.unopenable-<time>. Every connection and key must be set again.', body: '{confirm}',
+      handle: ({ body }) => vault.reset(body.confirm === true),
+    },
+    {
       method: 'DELETE', path: '/vault/{name}', summary: 'Delete a provider’s secret from the vault.',
       handle: ({ params }) => {
         if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(params.name!)) throw new CoreError('validation', 'A secret’s name is capital letters, digits and underscores, like API_KEY.');
