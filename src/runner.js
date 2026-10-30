@@ -476,7 +476,9 @@ export class Runner extends EventEmitter {
     if (!call || !tool) return null;
     const tainted = run.taint.length > 0;
     const standing = call.name === 'write_file' && STANDING.has(String(call.args?.path ?? '').replace(/^~\//, '').toLowerCase());
-    const what = GUARDED[call.name] ?? (standing ? 'change your standing files' : null);
+    // Any other step that needs an OK (a tool added later: sending, paying, sharing, pairing)
+    // is guarded the same way: in a tainted run it never goes on its own.
+    const what = GUARDED[call.name] ?? (standing ? 'change your standing files' : tool.needsApproval ? 'take this step' : null);
     const payload = this.outboundPayload(call, preview);
     const out = payload === null ? null : this.ingest.outbound({ text: payload }, { tainted });
     const matched = out && !out.ok ? out.matched : null;

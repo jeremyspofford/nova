@@ -138,3 +138,35 @@ test('files: one Nova wrote itself is read as is; one of unknown provenance is s
     assert.equal(h.nova.runner.ownFile('workspace/mine.md'), false);
   } finally { await h.close(); }
 });
+
+test('Nova’s own read-only state tools are trusted: never screened, never taint the run', async () => {
+  const { TOOLS } = await import('../../src/tools.js');
+  TOOLS.example_self_state = { signature: '{}', doc: 'What Nova itself is doing (a test tool).', needsApproval: false, run: () => 'Two tasks running; no problems.' };
+  const m = scripted((step) => [call('example_self_state', {}), call('exec', { command: 'echo ok' })][step] ?? 'Done.');
+  const h = await startNova({ agent: m.agent, yes: YES });
+  try {
+    const { s, asked } = await h.run('How are you doing?');
+    const [self, exec] = s.session.turns[0].items.filter((i) => i.kind === 'tool');
+    assert.equal(self.result.screen, undefined);
+    assert.match(m.calls[1].prompt, /\nTwo tasks running; no problems\.\n<\/tool_result>/, 'the model reads it as is');
+    assert.deepEqual(asked, []);
+    assert.equal(exec.approval.auto, true);
+  } finally { delete TOOLS.example_self_state; await h.close(); }
+});
+
+test('a tool added later that needs an OK (sending, paying, pairing) is guarded too: with a yes, it asks after outside content, and only then', async () => {
+  const { TOOLS } = await import('../../src/tools.js');
+  const sent = [];
+  TOOLS.example_send = { signature: '{"to": "x"}', doc: 'Send something (a test tool).', needsApproval: true, permission: { id: 'example-send', label: 'Send things' }, run: (a) => { sent.push(a.to); return `Sent to ${a.to}.`; } };
+  let base = '';
+  const m = scripted((step, c) => (/^Read/.test(c.user) ? [call('web_fetch', { url: `${base}/plain` }), call('example_send', { to: 'after-reading' })] : [call('example_send', { to: 'untainted' })])[step] ?? 'Done.');
+  const h = await startNova({ agent: m.agent, yes: ['example-send'] });
+  base = h.web.base;
+  try {
+    const clean = await h.run('Send it.');
+    assert.deepEqual(clean.asked, []);
+    const tainted = await h.run('Read the page, then send it.', () => 'deny');
+    assert.deepEqual(tainted.asked.map((t) => [t.name, t.guard?.what]), [['example_send', 'take this step']]);
+    assert.deepEqual(sent, ['untainted']);
+  } finally { delete TOOLS.example_send; await h.close(); }
+});
