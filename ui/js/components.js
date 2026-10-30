@@ -142,7 +142,8 @@ export function evidenceViewer(t) {
       case 'test_result': return `Test ${esc(e.name)} ${e.passed ? 'passed' : 'failed'}`;
       case 'file_diff': return `A change to ${esc(e.target)}`;
       case 'url': return `Link: ${esc(e.url)}`;
-      case 'screenshot': return `Screenshot ${esc(e.ref)}`;
+      // A screenshot the browser worker took is shown, straight from Nova (never from a cache).
+      case 'screenshot': return /^workers\/browser\//.test(String(e.ref)) ? `<img class="evidence-shot" src="/api/v1/browser/tasks/${encodeURIComponent(t.id)}/screenshot" alt="The page when the task finished" loading="lazy">` : `Screenshot ${esc(e.ref)}`;
       case 'confirmation': return `Confirmed by ${esc(e.system)} (${esc(e.id)})`;
       default: return esc(e.kind);
     }
@@ -346,6 +347,68 @@ export function approvalSheet(t, { worker = null } = {}) {
     <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
   </div>
 </form>`;
+}
+
+// ---- browser takeover (M5c) -----------------------------------------------------------------
+
+const TAKE_OVER_ONLY = 'Only the hub’s own screen, or a device you’ve allowed to approve, can take over.';
+const stepLine = (v) => (v.step ? `Step ${v.step.n} of ${v.step.of}: ${v.step.what}.` : '');
+
+// What the takeover view says and offers, from the session's real state (GET /browser/tasks/{id}).
+// `me`: this client's key (console or device:<id>); `canTake`: whether it may take over.
+export function takeoverState(v, { me = 'console', canTake = true } = {}) {
+  const mine = !!v?.holder && v.holder.key === me;
+  const held = !!v?.holder;
+  if (!v?.live) return { status: 'quiet', line: 'The browser work is over. Nova is checking what it proves.', action: null, held: false, mine: false };
+  if (held) {
+    const line = mine
+      ? `You have control. Nova waits until you hand back.${v.asked ? ` It asked you to: ${v.asked}` : ''}`
+      : `${v.holder.label} has control. Nova waits until they hand back.`;
+    // The hub's own screen can end someone else's takeover; nobody else can.
+    const action = mine || (me === 'console' && canTake) ? 'hand-back' : null;
+    return { status: 'waiting', line, action, held, mine };
+  }
+  if (v.mode === 'needs_person') return { status: 'needs-you', line: `Needs you: ${v.asked ?? 'a step only a person can do.'}`, action: canTake ? 'take-over' : null, held, mine };
+  if (v.mode === 'starting') return { status: 'working', line: 'Nova is opening a browser.', action: null, held, mine };
+  if (v.mode === 'finishing') return { status: 'working', line: 'Nova has finished the steps and is taking its evidence.', action: null, held, mine };
+  return { status: 'working', line: `Nova is working. ${stepLine(v)}`.trim(), action: canTake ? 'take-over' : null, held, mine };
+}
+
+export function takeoverActions(st, { canTake = true } = {}) {
+  const primary = st.action === 'take-over'
+    ? '<button type="button" class="btn primary" data-action="take-over">Take over</button>'
+    : st.action === 'hand-back' ? `<button type="button" class="btn primary" data-action="hand-back">${st.mine ? 'Hand back' : 'End their takeover'}</button>` : '';
+  const why = !canTake && !st.held && st.status !== 'quiet' ? `<p class="sheet-line takeover-only">${esc(TAKE_OVER_ONLY)}</p>` : '';
+  return `${why}${primary}<button type="button" class="btn quiet" data-action="close-sheet">Close</button>`;
+}
+
+export function takeoverRefused(v) {
+  const list = (v?.blocked ?? []);
+  if (!list.length) return '';
+  return `<details class="raw"><summary>Refused ${list.length} host${list.length === 1 ? '' : 's'} the task didn’t declare</summary><ul class="timeline">${list.map((b) => `<li>${esc(b.host)}${b.count > 1 ? ` · ${b.count} times` : ''}</li>`).join('')}</ul></details>`;
+}
+
+// The live view of a browser task: its picture, what is happening in plain words, and the one
+// standout action (Take over, or Hand back). The picture fills in from the frame stream.
+export function takeoverPanel(t, v, opts = {}) {
+  const st = takeoverState(v, opts);
+  const host = (() => { try { return new URL(v?.url ?? '').host; } catch { return ''; } })();
+  return `<section class="takeover" data-task="${esc(t.id)}" data-mode="${esc(v?.mode ?? 'closed')}" aria-labelledby="sheet-title">
+  <p class="sheet-kicker takeover-status">${status(st.status)}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
+  <p class="sheet-line takeover-line" role="status" aria-live="polite">${esc(st.line)}</p>
+  <div class="takeover-screen" data-held="${st.mine}">
+    <img class="takeover-frame" alt="The browser’s screen, live${host ? `, at ${esc(host)}` : ''}" tabindex="0" hidden>
+    <p class="takeover-wait">Waiting for the browser’s picture…</p>
+  </div>
+  <form class="takeover-type"${st.mine ? '' : ' hidden'}>
+    <label class="takeover-type-label" for="takeover-text">Type into the page</label>
+    <div class="takeover-type-row"><input id="takeover-text" name="text" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send"><button type="submit" class="btn">Type</button><button type="button" class="btn" data-action="takeover-key" data-key="Enter">Enter</button></div>
+  </form>
+  <p class="sheet-line is-faint takeover-where">${esc(host)}</p>
+  <div class="takeover-refused">${takeoverRefused(v)}</div>
+  <div class="sheet-actions takeover-actions">${takeoverActions(st, opts)}</div>
+</section>`;
 }
 
 // ---- automations ------------------------------------------------------------------------------

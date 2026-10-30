@@ -19,7 +19,7 @@ import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInpu
 import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
-import { info, permits, stricter, type Egress } from './workers.ts';
+import { egressOf, info, permits, stricter, type Egress } from './workers.ts';
 import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
 import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
@@ -30,6 +30,9 @@ import { MeshRole, nodeRole } from './mesh/promote.ts';
 import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
 import { agentTar, joinScript } from './mesh/agent.ts';
 import { Providers } from './providers/registry.ts';
+import { Browser } from './browser/worker.ts';
+import { browserRoutes } from './browser/routes.ts';
+import { checkers as browserCheckers } from './browser/evidence.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -109,10 +112,16 @@ export function createCore(o: CoreOptions) {
   const workspace = new Workspace(join(o.home, 'workspace'));
   const verifier = new Verifier(workspace, now);
   for (const [system, check] of Object.entries(o.confirmations ?? {})) verifier.registerConfirmation(system, check);
+  // Browser work with takeover (M5c): a worker of its own, and the checks for what it proves.
+  const browser = new Browser({ home: o.home, log, now });
+  const browserChecks = browserCheckers(o.home);
+  verifier.registerKind('screenshot', browserChecks.screenshot);
+  verifier.registerKind('url', browserChecks.url);
   const rules = new RulesProvider();
   const templates = new Templates({ db, verifier, rules, now });
-  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker, ...(o.workers ?? [])], defaultPrivacy: () => profile.privacyDefault(), now });
+  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker, browser.worker, ...(o.workers ?? [])], defaultPrivacy: () => profile.privacyDefault(), now });
   templates.bind(ledger);
+  browser.bind(ledger);
   // Remote decision providers (JevProvider) are registered only once configured; local-only skips them anyway.
   const decisions = new Decisions({ templates, providers: [rules], privacy: () => profile.privacyDefault(), log });
   const triggers = new Triggers({
@@ -190,7 +199,7 @@ export function createCore(o: CoreOptions) {
     for (const t of ledger.list({ state: 'waiting', limit: 500 })) {
       const w = ledger.workers.get(t.owner);
       if (!w || !t.reason?.includes('local capacity')) continue;
-      if (permits(stricter(t.privacy_mode, profile.privacyDefault()), w.egress)) ledger.retry(t.id, 'Your privacy setting changed, so this can run now.');
+      if (permits(stricter(t.privacy_mode, profile.privacyDefault()), (() => { try { return egressOf(w, t.brief); } catch { return w.egress; } })())) ledger.retry(t.id, 'Your privacy setting changed, so this can run now.');
     }
   });
   extensions.on('change', (c) => bus.emit('event', 'extension', c));
@@ -205,6 +214,7 @@ export function createCore(o: CoreOptions) {
   enroll.on('change', (r) => bus.emit('event', 'join_request', r));
   role.on('change', (s) => bus.emit('event', 'mesh', s));
   role.on('applied', (a) => bus.emit('event', 'sync', a));
+  browser.on('change', (v) => bus.emit('event', 'browser', v));
   const stream = {
     on(listener: (event: string, data: unknown) => void) {
       const fn = (event: string, data: unknown) => listener(event, data);
@@ -257,8 +267,16 @@ export function createCore(o: CoreOptions) {
       memory: { ok: true, counts: memory.counts() },
       receipts: { ok: true, counts: receipts.counts() },
       mesh: { ok: true, ...meshHealth() },
+      browser: browserHealth(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
+  }
+
+  // No Chromium is said plainly, but isn't a fault: browser work is simply unavailable. A browser
+  // named in NOVA_CHROMIUM that isn't there is.
+  function browserHealth() {
+    const f = browser.chromium();
+    return { ok: f.path !== null || f.from === 'none', available: f.path !== null, detail: f.detail, running: browser.list().length };
   }
 
   function meshHealth() {
@@ -530,6 +548,11 @@ export function createCore(o: CoreOptions) {
     { method: 'GET', path: '/mesh/runtime', access: 'device', summary: 'The runtime agent this node ships, {manifest: {version, sha256, files}, signature, signer, files}, signed over nova-runtime-v1.<manifest>.', handle: () => spokes.runtime() },
     ...role.routes(),
     ...providers.routes(),
+    // ---- browser work with takeover (M5 plan §3) ----
+    ...browserRoutes(browser, {
+      home: o.home,
+      holder: (w) => (w.principal.kind === 'device' ? { key: `device:${w.principal.device.id}`, label: w.principal.device.name } : { key: 'console', label: 'The hub’s own screen' }),
+    }),
   ];
 
   // Tests drive the heartbeat's clock through the API; this route doesn't exist otherwise.
@@ -593,7 +616,7 @@ export function createCore(o: CoreOptions) {
   });
 
   return {
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
@@ -623,6 +646,8 @@ export function createCore(o: CoreOptions) {
     async close() {
       stopHub();
       await role.close();
+      // Browsers close first and their tasks stay as they are: the next start runs them again.
+      await browser.close();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();
     },

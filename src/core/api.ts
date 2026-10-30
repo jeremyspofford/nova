@@ -28,8 +28,8 @@ export interface Route {
 // A handler returns Raw to answer with something other than JSON (the design-system CSS).
 export class Raw {
   readonly type: string;
-  readonly body: string;
-  constructor(type: string, body: string) {
+  readonly body: string | Buffer;
+  constructor(type: string, body: string | Buffer) {
     this.type = type;
     this.body = body;
   }
@@ -42,6 +42,15 @@ export class Reply {
   constructor(body: unknown, headers: Record<string, string>) {
     this.body = body;
     this.headers = headers;
+  }
+}
+
+// A handler returns Sse for a stream of its own (a browser task's live frames): `open` gets a way
+// to send events and to hear when the client has gone. Never cached.
+export class Sse {
+  readonly open: (send: (event: string, data: unknown) => boolean, closed: (fn: () => void) => void, end: () => void) => void;
+  constructor(open: Sse['open']) {
+    this.open = open;
   }
 }
 
@@ -153,7 +162,20 @@ export function createApi(o: {
       const params = Object.fromEntries(Object.entries(route.re.exec(path)!.groups ?? {}).map(([k, v]) => [k, decode(v)]));
       const body = route.method === 'GET' || route.method === 'DELETE' ? {} : await readBody(req);
       const out = await route.handle({ params, query: url.searchParams, body, headers: req.headers, who });
-      if (out instanceof Reply) {
+      if (out instanceof Sse) {
+        res.writeHead(route.status ?? 200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-content-type-options': 'nosniff' });
+        res.write(': nova\n\n');
+        const beat = setInterval(() => res.write(': beat\n\n'), 20_000);
+        const closers: (() => void)[] = [];
+        let done = false;
+        const finish = () => { if (done) return; done = true; clearInterval(beat); for (const fn of closers) fn(); };
+        req.on('close', finish);
+        out.open(
+          (event, data) => !done && !res.writableEnded && res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+          (fn) => { if (done) fn(); else closers.push(fn); },
+          () => { finish(); res.end(); },
+        );
+      } else if (out instanceof Reply) {
         res.writeHead(route.status ?? 200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...out.headers });
         res.end(JSON.stringify(out.body));
       } else if (out instanceof Raw) {

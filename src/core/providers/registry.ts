@@ -122,7 +122,7 @@ export class Providers extends EventEmitter {
     o.extensions.defineKind('automation-adapter', rules);
     // Nova checks these kinds of evidence itself (verify.ts holds no checker for them).
     o.verifier.registerTest(TEST_PREFIX, (e, brief) => this.checks.checkTest(e, brief));
-    o.verifier.register('file_diff', (e, brief) => this.checks.checkDiff(e, brief));
+    o.verifier.registerKind('file_diff', (e, brief) => this.checks.checkDiff(e, brief));
     o.verifier.registerConfirmation(CONFIRMATION_SYSTEM, (e, brief) => this.#checkConfirmation(e, brief));
     this.ensureBuiltins();
     o.extensions.on('change', (c: { id: string; state: string }) => {
@@ -490,6 +490,9 @@ export class Providers extends EventEmitter {
       get name() { try { return reg.#entry(id).manifest.name; } catch { return id; } },
       get about() { try { return ABOUT[reg.#entry(id).manifest.adapter.class]; } catch { return ''; } },
       get egress() { try { return reg.where(id).coarse; } catch { return 'remote' as const; } },
+      // Where a brief would go is where the provider's settings point now (an HTTP provider's
+      // address decides), the same for every brief; the ledger asks this per task.
+      egressFor: () => { try { return reg.where(id).coarse; } catch { return 'remote' as const; } },
       get evidence() { try { return reg.#entry(id).manifest.adapter.class === 'automation' ? ['confirmation' as const] : ['test_result' as const, 'file_diff' as const]; } catch { return []; } },
       get timeoutMs() {
         try {

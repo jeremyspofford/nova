@@ -61,6 +61,13 @@ export class Verifier {
     });
   }
 
+  // Lets the module that can check a kind of evidence itself say how (the browser checks
+  // `screenshot` and `url`). Until one does, that kind fails.
+  registerKind(kind: Evidence['kind'], check: Checker): void {
+    if (this.#checkers.has(kind)) throw new Error(`${kind} evidence already has a checker.`);
+    this.#checkers.set(kind, check);
+  }
+
   // Lets another module check its own test results, by name prefix ("template:").
   registerTest(prefix: string, check: Checker): void {
     if (this.#tests.has(prefix)) throw new Error(`Tests named ${prefix}… already have a checker.`);
@@ -71,13 +78,6 @@ export class Verifier {
   registerConfirmation(system: string, check: Checker): void {
     if (this.#confirmations.has(system)) throw new Error(`Confirmations from ${system} already have a checker.`);
     this.#confirmations.set(system, check);
-  }
-
-  // Lets another module check a kind of evidence the core has no checker for yet (the providers'
-  // file diffs, M5a). It can't replace a checker that exists, so no module can loosen another's.
-  register(kind: string, check: Checker): void {
-    if (this.#checkers.has(kind)) throw new Error(`${kind} evidence already has a checker.`);
-    this.#checkers.set(kind, check);
   }
 
   // "notes/a.md" and "workspace:notes/a.md" are the same file.
