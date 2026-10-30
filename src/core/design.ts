@@ -466,7 +466,10 @@ export function generateCss(input: unknown, o: { mode?: Mode; nudge?: Record<str
   const nudge = o.nudge ?? {};
   const fixed = Object.keys(nudge).length > 0;
   const resolved = applyNudge(mode === 'auto' ? pkg.tokens : { ...pkg.tokens, ...(pkg.modes?.[mode] ?? {}) }, nudge);
-  const vars = (t: Record<string, string>) => TOKEN_NAMES.filter((n) => n in t).map((n) => `${cssVar(n)}: ${t[n]};`);
+  // Type sizes go out in rem (M9: 200% text), so a person's own text size scales Nova's text: a
+  // package's 16px is 1rem, the same at the browser's default and twice as big at 200%.
+  const css = (n: string, v: string) => (TOKENS[n]?.syntax === 'size' && /^\d*\.?\d+px$/.test(v) ? `${Number((parseFloat(v) / 16).toFixed(4))}rem` : v);
+  const vars = (t: Record<string, string>) => TOKEN_NAMES.filter((n) => n in t).map((n) => `${cssVar(n)}: ${css(n, t[n]!)};`);
   const safe = `${name} ${pkg.version} (${pkg.id})`.replace(/[^\w .,'’()-]/g, '');
 
   const root = [`color-scheme: ${scheme(resolved)};`, ...vars(resolved)];

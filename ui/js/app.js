@@ -638,7 +638,33 @@ function scrollToEnd(force = false) {
 el.scroller.addEventListener('scroll', () => {
   state.stick = nearBottom();
   if (state.stick) el.jump.hidden = true;
+  notePlace();
 }, { passive: true });
+
+// The reader's place survives a resize, a fold or an unfold (M9; UX-RESEARCH §7: "losing scroll
+// position on unfold is the signature failure"): what was at the top of the screen stays there, at
+// the same distance, however the text reflows. A conversation read at its end stays at its end.
+let place = null;
+let placeSize = '';
+const sizeOf = () => `${el.scroller.clientWidth}x${el.scroller.clientHeight}`;
+const BLOCK = '.turn, .dateline, .gap-divider, .card, .memory-item, .settings-row, .settings-cat, .task-row, .act-entry, .skill, section, li, header';
+function notePlace() {
+  // A scroll the browser makes while it resizes isn't the reader's: the place from before stands.
+  if (sizeOf() !== placeSize) return;
+  const box = el.scroller.getBoundingClientRect();
+  if (state.view === 'chat' && state.stick) { place = { end: true }; return; }
+  const hit = document.elementFromPoint(box.left + box.width / 2, box.top + 8);
+  const node = hit && el.scroller.contains(hit) && hit !== el.scroller ? hit.closest(BLOCK) ?? hit : null;
+  place = node ? { node, off: node.getBoundingClientRect().top - box.top } : null;
+}
+const placeWatch = new ResizeObserver(() => {
+  placeSize = sizeOf();
+  if (place?.end) { if (state.view === 'chat') scrollToEnd(); return; }
+  if (!place?.node?.isConnected) return;
+  const box = el.scroller.getBoundingClientRect();
+  el.scroller.scrollTop += place.node.getBoundingClientRect().top - box.top - place.off;
+});
+for (const n of [el.scroller, el.thread]) placeWatch.observe(n);
 el.jump.addEventListener('click', () => { el.scroller.scrollTo({ top: el.scroller.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); state.stick = true; el.jump.hidden = true; el.input.focus(); });
 
 // ---- composer ------------------------------------------------------------
@@ -1715,7 +1741,8 @@ el.settings.addEventListener('change', (e) => {
   else if (t.name === 'ds-scope') lookAction('scope', t);
   else if (t.dataset.action === 'set-profile') core.saveProfile(t.dataset.section, t.dataset.key, t.value);
 });
-el.settings.addEventListener('input', (e) => { if (e.target.id === 'settings-search') { settingsUi.touched = true; renderSettingsResults(e.target.value); } });
+// Anything the person types in Settings is theirs: data arriving late leaves their focus alone (M9).
+el.settings.addEventListener('input', (e) => { settingsUi.touched = true; if (e.target.id === 'settings-search') renderSettingsResults(e.target.value); });
 el.settings.addEventListener('keydown', (e) => {
   if (e.target.id === 'settings-search' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); moveSettingsResult(e.key === 'ArrowDown' ? 1 : -1); return; }
   if (e.target.id === 'settings-search' && e.key === 'Enter') {

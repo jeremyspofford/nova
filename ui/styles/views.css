@@ -52,6 +52,9 @@
 
 .msg-nova { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; width: 100%; }
 .msg-nova > .prose:not(.handoff-body) { max-width: 70ch; }
+/* Prose keeps a readable measure everywhere (M9: 45–75ch); the extra width of a wide screen goes to a
+   second pane, never to longer lines. */
+:where(#main) :where(p, li, blockquote) { max-width: 70ch; }
 .msg-nova > *:not(.waiting) { animation: fade-in var(--motion-duration-fast) var(--motion-ease) both; }
 
 /* A message's time. The first of a group shows it; the exact time, to the second, shows on

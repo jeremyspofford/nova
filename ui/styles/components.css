@@ -24,9 +24,9 @@
   flex: 1;
   min-width: 0;
   font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* A long title wraps rather than losing its end (M9: 200% text keeps all the words). */
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 .topbar-sub { display: block; font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); }
 .topbar-orb { align-items: center; }
