@@ -111,6 +111,14 @@ its steps (what it read, searched, ran and kept), what it asked you and what
 you said. Stop or retry a helper there. Activity is read from the session
 logs; it keeps no data of its own.
 
+**Changes.** Nova never edits itself live. A change (a rule pack, a design
+system, a setting, a decision template, an extension), whether you propose it
+or Nova's foundry writes it for something you asked for, is tried on a sandbox
+copy of Nova first, tested, released as a version in your home's history, and
+then watched live in a canary before it stays; if a probe fails, the previous
+version comes back by itself. Anything Nova writes for itself waits for your
+confirmed OK, every time. Settings › Changes shows each one with its evidence.
+
 ## Configure
 
 Optional `nova.config.json` at the repo root (environment variables win):
