@@ -90,7 +90,9 @@ function toTask(r: Row): Task {
 // Where a task waits its turn. Tasks in one lane run side by side up to `max`; a worker that
 // names no lane shares the default one, which runs one task at a time.
 export interface Lane { key: string; max: number }
-export type LanedWorker = Worker & { lane?(brief: Brief): Lane };
+// `minTier`: the least approval a task for this worker needs, whatever the caller asked for (a
+// provider whose brief declares a test command for Nova to run asks first: tier 2, M5a).
+export type LanedWorker = Worker & { lane?(brief: Brief): Lane; minTier?(input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier };
 const DEFAULT_LANE: Lane = { key: 'default', max: 1 };
 
 export interface LedgerOptions {
@@ -157,7 +159,7 @@ export class Ledger extends EventEmitter {
       context_refs: input.context_refs ?? [],
       constraints: input.constraints ?? {},
       privacy_mode: mode,
-      approval_tier: input.approval_tier ?? 1,
+      approval_tier: Math.max(input.approval_tier ?? 1, worker.minTier?.(input) ?? 0) as Tier,
       evidence_required: input.evidence_required,
       idempotency_key: key,
       ...(input.inputs ? { inputs: input.inputs } : {}),

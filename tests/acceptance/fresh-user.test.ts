@@ -27,7 +27,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     const h0 = await get('/health');
     assert.equal(h0.ok, true);
     assert.equal(h0.setup.done, false);
-    assert.deepEqual(await get('/profile'), { identity: {}, user: {}, tuning: {}, privacy: {}, policy: {}, appearance: {}, mesh: {} });
+    assert.deepEqual(await get('/profile'), { identity: {}, user: {}, tuning: {}, privacy: {}, policy: {}, appearance: {}, mesh: {}, providers: {} });
     // The built-in design systems are there without the person doing anything; Orb Teal shows.
     assert.equal((await get('/design-systems')).length, 6);
     assert.equal((await get('/design-systems/active')).id, 'orb-teal');
@@ -55,6 +55,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
       policy: {},
       appearance: {},
       mesh: {},
+      providers: {},
     });
     evidence.push('## Profile written by the conversation', '', '```json', JSON.stringify(profile, null, 2), '```', '');
 
@@ -90,7 +91,9 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     assert.equal(ext.status, 201);
     const removed = await m.send('DELETE', '/api/v1/extensions/example.weather');
     assert.equal(removed.status, 200);
-    assert.deepEqual((await get('/extensions')).filter((x: { kind: string }) => x.kind !== 'design-system'), []);
+    // Built-in design systems and providers stay; the providers are installed but none is on.
+    assert.deepEqual((await get('/extensions')).filter((x: { kind: string }) => !['design-system', 'agent-adapter', 'automation-adapter'].includes(x.kind)), []);
+    assert.deepEqual((await get('/extensions')).filter((x: { kind: string; state: string }) => x.kind.endsWith('-adapter') && x.state === 'enabled'), []);
     assert.equal(readdirSync(join(home, 'extensions')).includes('example.weather'), false);
     evidence.push('## Extension', '', `- Installed \`example.weather\` (disabled, review: ${ext.body.review.join(' / ')}), then removed: no record, no data folder left.`, '');
   } finally {
