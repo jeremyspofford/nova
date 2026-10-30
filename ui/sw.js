@@ -3,13 +3,13 @@
 // When it isn't, a GET is answered from the cache and marked x-nova-offline, and the page says
 // so: an honest offline state, never stale data presented as live. Changes (POST, PUT, DELETE)
 // and the event streams are never cached or answered offline.
-const VERSION = 'nova-shell-v7';
+const VERSION = 'nova-shell-v8';
 const SHELL = [
   '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png',
-  '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css',
+  '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css',
   '/js/app.js', '/js/core.js', '/js/shell.js', '/js/layout.js', '/js/nav.js', '/js/status.js', '/js/components.js',
   '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js', '/js/qr.js', '/js/device-key.js', '/js/takeover.js',
-  '/js/connections.js', '/js/capture.js', '/js/models.js', '/js/changes.js',
+  '/js/connections.js', '/js/capture.js', '/js/models.js', '/js/changes.js', '/js/reset.js',
 ];
 // Memory and context receipts are never kept here: a forgotten memory must not survive in a
 // cache (owner's standing order 4), so these are network-only.
@@ -22,7 +22,8 @@ const SHELL = [
 // survive in a cache either, and the indicator must say what is capturing now. Nor are models
 // (M6b): a download’s progress
 // and a role's health are live state. Nor are changes (M7a): a change rolled back must never look live.
-const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models|v1\/changes)(?:\/|$)/;
+// Nor is a factory reset (M7 amendment): what it would erase, and whether it happened, are live.
+const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models|v1\/changes|v1\/reset)(?:\/|$)/;
 // Pages the app answers with its shell.
 const PAGES = /^\/(?:|chat|new|tasks|memory|automations|skills|schedules|activity|health|settings|capture|c\/[\w-]+)$/;
 
