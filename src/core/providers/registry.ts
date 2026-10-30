@@ -4,6 +4,7 @@
 // and checked by Nova itself before anything it did counts.
 import { EventEmitter } from 'node:events';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { ENVELOPE_VERSION, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
@@ -19,7 +20,7 @@ import { customCli, programOf } from './custom-cli.ts';
 import { CONFIRMATION_SYSTEM, Inbox, STATUSES, checkSignature, n8n, timeoutS as n8nTimeout, SIGNATURE_HEADER, type Callback } from './n8n.ts';
 import { openaiCompatible } from './openai.ts';
 import { CONTRACT_SYSTEM, agentPrompt, contractPrompt, parseContract, summarize } from './prompt.ts';
-import { applyFiles, fileRefs, unifiedDiff } from './taskspace.ts';
+import { applyFiles, fileRefs, notCopied, outOfScope, treeHash, unifiedDiff, type Change, type Scope, type TaskSpace, type TestAsk } from './taskspace.ts';
 import { CLASSES, EGRESS, IMPLEMENTATIONS, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where } from './types.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
@@ -44,6 +45,12 @@ const COMPANY: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenA
 type Choice = (typeof CHOICES)[number];
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
+// What one task may bring back from a coding agent, at most.
+const MAX_CHANGES = 200;
+const MAX_CHANGE_BYTES = 50 * 1024 * 1024;
+// Said every time Nova asks to run a test on what a provider wrote.
+export const RUNS_THEIR_CODE = 'This runs code the provider wrote, as you, with access to your files.';
+type Reporter = (status: Report['status'], summary: string, more?: Partial<Report>, usage?: Usage) => Report;
 
 export function checkAdapter(m: Manifest): string[] {
   const a = (m as Partial<ProviderManifest>).adapter as unknown;
@@ -507,9 +514,9 @@ export class Providers extends EventEmitter {
         return { ok: h.state === 'ready' || h.state === 'unchecked', detail: `${id}: ${h.words}` };
       },
       // Each provider takes one task at a time, and doesn't hold up the rest of the ledger.
+      // A declared test command no longer asks when the task is made, before any code exists: Nova
+      // asks once the provider has finished, showing what it wrote (#ask).
       lane: () => ({ key: 'run', max: 1 }),
-      // A declared test command is a command Nova runs on this computer: it asks first (tier 2).
-      minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => (typeof input.inputs?.test_command === 'string' && input.inputs.test_command.trim() && !reg.#testsAllowed() ? 2 : 0),
       run: (brief, signal) => reg.#run(id, brief, signal),
     };
   }
@@ -521,7 +528,7 @@ export class Providers extends EventEmitter {
     const impl = this.#impl(x);
     const config = this.config(id);
     const name = x.manifest.name;
-    const report = (status: Report['status'], summary: string, more: Partial<Report> = {}, usage: Usage = {}): Report => ({
+    const report: Reporter = (status, summary, more = {}, usage = {}) => ({
       envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
       ...more, usage: { ...usage, duration_ms: Math.round(performance.now() - started) },
     });
@@ -543,20 +550,31 @@ export class Providers extends EventEmitter {
       return report(out.status, out.summary, { evidence: out.evidence ?? [], ...(out.blockers ? { blockers: out.blockers } : {}) }, out.usage);
     }
 
-    // Coding agents and chat models work in the task's own folder, filled afresh each attempt.
+    // Coding agents and chat models work in the task's own folder, filled afresh each attempt;
+    // except when the person has just OK'd running the test on what the provider wrote. Then the
+    // test runs on exactly what they saw, and the provider isn't asked again.
     const space = this.checks.space(brief.task_id);
+    const asked = space.ask();
+    if (asked?.approved_at && asked.command === test && space.exists()) {
+      space.setAsk(null);
+      if (treeHash(space.root) !== asked.tree) return report('failed', `The task’s folder changed after you OK’d running \`${test}\`, so Nova didn’t run it. Nothing was copied back.`);
+      const changes = space.recorded() ?? space.changes();
+      return this.#finish(brief, space, changes, test, `You OK’d running \`${test}\` on what ${name} wrote.`, config, signal, report, (asked.usage ?? {}) as Usage);
+    }
     let copied: { path: string; sha256: string }[];
     try { copied = space.prepare(fileRefs(brief)); } catch (e) { return report('blocked', `Nova couldn’t set up the task’s folder: ${(e as Error).message}`); }
+    let scope: Scope;
+    try { scope = space.scope(brief); } catch (e) { return report('failed', (e as Error).message); }
     const contract = a.class === 'chat';
     let system: string;
     let prompt: string;
     if (contract) {
       const files = copied.filter((f) => !f.path.includes('\0')).map((f) => ({ path: f.path, text: space.read(f.path) ?? '' })).filter((f) => f.text.length <= 200_000 && !f.text.includes('\u0000'));
       system = CONTRACT_SYSTEM;
-      prompt = contractPrompt(brief, files);
+      prompt = contractPrompt(brief, files, scope.words);
     } else {
       system = 'You are a coding agent doing one task for Nova, a personal assistant. Nova checks your work itself afterwards.';
-      prompt = agentPrompt(brief, copied.map((f) => f.path));
+      prompt = agentPrompt(brief, copied.map((f) => f.path), scope.words);
     }
     // A receipt for the call (CONTRACTS §2): the brief and each file it can see, by hash.
     try {
@@ -587,19 +605,98 @@ export class Providers extends EventEmitter {
       }
     }
 
-    // Nova's own evidence: what changed, from the folder itself, then the brief's test, run by Nova.
+    // What changed, read from the folder itself. More than Nova takes from one task, or anything the
+    // provider wasn't allowed to change, and the work is refused whole: nothing runs, nothing is
+    // copied back.
     const changes = space.changes();
+    const bytes = changes.reduce((n, c) => n + (c.kind === 'deleted' ? 0 : lstatSync(join(space.root, c.path)).size), 0);
+    if (changes.length > MAX_CHANGES || bytes > MAX_CHANGE_BYTES) {
+      return report('failed', `${name} changed ${changes.length} file${changes.length === 1 ? '' : 's'} (${Math.ceil(bytes / 1024 / 1024)} MB). Nova takes at most ${MAX_CHANGES} files and ${MAX_CHANGE_BYTES / 1024 / 1024} MB from one task, so it didn’t look further. Nothing ran and nothing was copied back.`, {}, out.usage);
+    }
+    const bad = outOfScope(changes, scope);
+    if (bad) return report('failed', `Nova refused the work: ${bad}. Nothing ran and nothing was copied back.`, {}, out.usage);
     space.recordChanges(changes);
+
+    // The test runs code: what the provider wrote, as the person, with their files in reach. So
+    // Nova always asks first when the provider changed anything, whatever the test policy says; the
+    // policy only covers a run on files nobody changed.
+    if (test && (changes.length || !this.#testsAllowed())) return this.#ask(id, name, brief, space, changes, test, summary, report, out.usage);
+    return this.#finish(brief, space, changes, test, summary, config, signal, report, out.usage);
+  }
+
+  // Nova's own evidence: each change, from the folder itself, then the brief's test, run by Nova.
+  async #finish(brief: Brief, space: TaskSpace, changes: Change[], test: string, summary: string, config: Config, signal: AbortSignal, report: Reporter, usage: Usage): Promise<Report> {
     const evidence: Evidence[] = changes.map((c) => ({ kind: 'file_diff', target: `workspace:${c.path}`, diff: unifiedDiff(c.path, space.readBaseline(c.path), space.read(c.path)) }));
     if (test) {
-      const run = await this.checks.runTest(space, test, signal, num(config.test_timeout_s, 300));
+      let run;
+      try {
+        run = await this.checks.runTest(space, test, signal, num(config.test_timeout_s, 300), brief);
+      } catch (e) {
+        if (signal.aborted) throw e;
+        return report('failed', `${(e as Error).message} Nothing was copied back.`, {}, usage);
+      }
       evidence.push({ kind: 'test_result', name: `${TEST_PREFIX}${run.id}`, passed: run.passed, output: run.output });
       summary = `${summary} Nova ran \`${test}\` itself: ${run.passed ? 'it passed' : 'it failed'}.`;
     }
+    // Changes that stay in the task's folder even once verified, said now rather than discovered.
+    let scope: Scope | null = null;
+    try { scope = space.scope(brief); } catch { /* checked before the provider ran */ }
+    const kept = scope ? changes.map((c) => ({ path: c.path, why: notCopied(c.path, scope!) })).filter((k) => k.why) : [];
+    if (kept.length) summary = `${summary} Not copied into your workspace: ${kept.map((k) => `${k.path} (${k.why})`).join('; ')}.`;
     return report('done', summary, {
       evidence,
       artifacts: changes.map((c) => ({ kind: 'file', ref: `workspace:${c.path}`, ...(c.sha256 ? { sha256: c.sha256 } : {}) })),
-    }, out.usage);
+    }, usage);
+  }
+
+  // Asks the person before the test runs: what changed (each file, with a short preview), and in
+  // plain words what running it means. The task waits, partly done, until they OK it (approveTest)
+  // or cancel it.
+  #ask(id: string, name: string, brief: Brief, space: TaskSpace, changes: Change[], test: string, summary: string, report: Reporter, usage: Usage): Report {
+    const diffs = changes.map((c) => ({ c, diff: unifiedDiff(c.path, space.readBaseline(c.path), space.read(c.path)) }));
+    const files = diffs.slice(0, 20).map(({ c, diff }) => {
+      const lines = diff.split('\n');
+      return {
+        path: c.path, kind: c.kind,
+        added: lines.filter((l) => l.startsWith('+') && !l.startsWith('+++')).length,
+        removed: lines.filter((l) => l.startsWith('-') && !l.startsWith('---')).length,
+        preview: lines.slice(2, 14).join('\n').slice(0, 1200),
+      };
+    });
+    space.setAsk({ task_id: brief.task_id, provider: id, command: test, tree: treeHash(space.root), files, more: Math.max(0, changes.length - files.length), asked_at: this.#now().toISOString(), approved_at: null, usage: { ...usage } });
+    try { this.#o.ledger.note(brief.task_id, 'test_run_asked', { command: test, files: changes.slice(0, 50).map((c) => c.path) }); } catch { /* the record is a courtesy; the question stands */ }
+    const ask = changes.length ? `Nova needs your OK to run \`${test}\`. ${RUNS_THEIR_CODE}` : `${name} changed nothing. Nova needs your OK to run \`${test}\` on your files as they were.`;
+    return report('partial', `${summary} ${ask}`, {
+      evidence: diffs.map(({ c, diff }) => ({ kind: 'file_diff' as const, target: `workspace:${c.path}`, diff })),
+      blockers: [ask],
+    }, usage);
+  }
+
+  // What the person sees before OK'ing the test run, or null when nothing is waiting for that.
+  testAsk(taskId: string): (TestAsk & { words: string; provider_name: string }) | null {
+    const t = this.#o.ledger.get(taskId);
+    const x = this.#installed().find((p) => p.id === t.owner);
+    if (!x || t.state !== 'waiting') return null;
+    const a = this.checks.space(taskId).ask();
+    if (!a || a.approved_at) return null;
+    return { ...a, provider_name: x.manifest.name, words: a.files.length ? RUNS_THEIR_CODE : 'The provider changed nothing; this runs the test on your files as they were.' };
+  }
+
+  // The person's OK to run the test on what the provider wrote. The task runs again, and this time
+  // only the test runs, on the folder as they saw it.
+  approveTest(taskId: string): Task {
+    const ask = this.testAsk(taskId);
+    if (!ask) throw new CoreError('conflict', 'This task isn’t waiting for your OK to run its test.');
+    const { words: _w, provider_name: who, ...kept } = ask;
+    const space = this.checks.space(taskId);
+    space.setAsk({ ...kept, approved_at: this.#now().toISOString() });
+    try {
+      this.#o.ledger.note(taskId, 'test_run_approved', { command: ask.command });
+      return this.#o.ledger.retry(taskId, `You OK’d running \`${ask.command}\` on what ${who} wrote.`);
+    } catch (e) {
+      space.setAsk(kept);
+      throw e;
+    }
   }
 
   #receipt(id: string, brief: Brief, mode: PrivacyMode, egress: string, model: string, items: { kind: 'file'; ref: string; sha256: string }[]): void {
@@ -610,7 +707,9 @@ export class Providers extends EventEmitter {
     try {
       const space = this.checks.space(t.id);
       if (!space.recorded() || space.copiedBack()) return;
-      const r = space.copyBack();
+      let scope: Scope | null = null;
+      try { scope = space.scope(t.brief); } catch { /* an unreadable editable list: nothing is copied back below */ }
+      const r = space.copyBack((p) => (scope ? notCopied(p, scope) : 'the brief’s list of what may change couldn’t be read'));
       this.#o.ledger.note(t.id, 'copied_back', r);
       if (r.skipped.length) {
         this.#o.log.problem('providers', `Some of what “${t.title}” changed wasn’t copied into your workspace: ${r.skipped.map((s) => `${s.path} (${s.why})`).join('; ')}. The changes are in the task’s evidence.`, { taskId: t.id });
@@ -645,7 +744,9 @@ export class Providers extends EventEmitter {
       { method: 'POST', path: '/providers/{id}/check', summary: 'Check whether an HTTP provider’s address answers, now.', handle: ({ params }) => this.check(id(params)) },
       { method: 'POST', path: '/providers/{id}/callback-token', summary: 'A new callback token for an n8n provider, shown this once; the old one stops working.', handle: ({ params }) => this.newCallbackToken(id(params)) },
       { method: 'PUT', path: '/providers/choice', summary: 'Choose the chat model, or the default provider for a class (coding-agent, chat, automation).', body: '{for: chat | coding-agent | automation, id}', handle: ({ body }) => this.choose(body.for, body.id) },
-      { method: 'PUT', path: '/providers/policy', summary: 'Whether Nova asks before running a brief’s test command (ask, the default) or not (allow: tier 3, needs {confirm: true}).', body: '{task_tests: ask | allow, confirm?}', handle: ({ body }) => this.setTestPolicy(body.task_tests, body.confirm === true) },
+      { method: 'GET', path: '/providers/tasks/{task}/test-run', summary: 'What a provider changed and the test Nova would run on it, while the task waits for your OK (404 when nothing waits).', handle: ({ params }) => { const a = this.testAsk(params.task!); if (!a) throw new CoreError('not_found', 'This task isn’t waiting for your OK to run its test.'); return a; } },
+      { method: 'POST', path: '/providers/tasks/{task}/test-run', summary: 'OK running the brief’s test on what the provider wrote (tier 2). It runs code the provider wrote, as you. To refuse, cancel the task.', handle: ({ params }) => this.approveTest(params.task!) },
+      { method: 'PUT', path: '/providers/policy', summary: 'Whether Nova asks before running a brief’s test command on files no provider changed (ask, the default) or not (allow: tier 3, needs {confirm: true}). Code a provider wrote is always asked about.', body: '{task_tests: ask | allow, confirm?}', handle: ({ body }) => this.setTestPolicy(body.task_tests, body.confirm === true) },
     ];
   }
 }

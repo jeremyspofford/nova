@@ -53,7 +53,11 @@ test('a provider’s key comes from the vault, reaches the server, and appears i
     await core.providers.check('openai-compatible');
     assert.equal(core.providers.health('openai-compatible').state, 'ready');
     core.providers.enable('openai-compatible', { approved: true });
-    const t = await settle(core, core.ledger.create({ ...calcTask('openai-compatible', { privacy_mode: 'cloud-allowed' }), origin: { kind: 'user' } } as never).id);
+    const made = core.ledger.create({ ...calcTask('openai-compatible', { privacy_mode: 'cloud-allowed' }), origin: { kind: 'user' } } as never);
+    // Nova asks before running what the model wrote.
+    assert.equal((await settle(core, made.id)).state, 'waiting');
+    core.providers.approveTest(made.id);
+    const t = await settle(core, made.id);
     assert.equal(t.state, 'done', t.reason ?? '');
     assert.ok(fake.requests.some((r) => r.url === '/v1/chat/completions' && r.headers.authorization === `Bearer ${KEY}`), 'the server got the key');
 

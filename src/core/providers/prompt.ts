@@ -14,12 +14,14 @@ const constraintLines = (brief: Brief) => [
   brief.constraints.allowed_tools?.length ? `Use only these tools: ${brief.constraints.allowed_tools.join(', ')}.` : '',
 ].filter(Boolean);
 
-export function agentPrompt(brief: Brief, files: string[]): string {
+// `may`: what the provider may change, in words (taskspace.ts scopeOf).
+export function agentPrompt(brief: Brief, files: string[], may = ''): string {
   return [
     brief.goal.trim(),
     '',
     'You are working in a folder made for this task alone. Change files only inside it.',
     files.length ? `Files copied in for you: ${files.slice(0, 50).join(', ')}${files.length > 50 ? `, and ${files.length - 50} more` : ''}.` : 'The folder starts empty.',
+    may,
     testLine(brief),
     ...constraintLines(brief),
     'When you are done, say in one or two plain sentences what you changed.',
@@ -34,9 +36,10 @@ export const CONTRACT_SYSTEM = [
   'Give the complete content of every file you change or add. Leave out files you do not change. No Markdown fences.',
 ].join('\n');
 
-export function contractPrompt(brief: Brief, files: { path: string; text: string }[]): string {
+export function contractPrompt(brief: Brief, files: { path: string; text: string }[], may = ''): string {
   return [
     `Task: ${brief.goal.trim()}`,
+    may,
     testLine(brief),
     ...constraintLines(brief),
     files.length ? 'The files in the task folder:' : 'The task folder is empty.',

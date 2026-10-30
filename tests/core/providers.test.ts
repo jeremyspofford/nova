@@ -37,6 +37,16 @@ async function settle(core: Core, id: string) {
   return core.ledger.get(id);
 }
 
+// Settles, OK'ing the test run whenever Nova asks to run what a provider wrote.
+async function settleOK(core: Core, id: string) {
+  let t = await settle(core, id);
+  while (t.state === 'waiting' && core.providers.testAsk(id)) {
+    core.providers.approveTest(id);
+    t = await settle(core, id);
+  }
+  return t;
+}
+
 const claude = (core: Core, kind: Parameters<typeof script>[0], record?: string) => {
   core.providers.configure('claude-code', { command: `node ${FAKE_CLAUDE} --script ${script(kind)}${record ? ` --record ${record}` : ''}` });
   core.providers.enable('claude-code', { approved: true });
@@ -147,9 +157,13 @@ test('claude-code (stand-in speaking stream-json): asks first for the test run, 
   try {
     claude(core, 'honest', record);
     const t = core.ledger.create({ ...calcTask('claude-code'), origin: { kind: 'user' } } as never);
-    assert.equal(t.approval_tier, 2, 'a declared test command is a command Nova runs: it asks first');
-    assert.equal((await settle(core, t.id)).reason, 'Needs your OK before it runs.');
-    core.ledger.approve(t.id);
+    assert.equal(t.approval_tier, 1, 'nothing to approve before any code exists');
+    // Once Claude Code has finished, Nova asks before running the test on what it wrote.
+    const asked = await settle(core, t.id);
+    assert.equal(asked.state, 'waiting');
+    assert.match(asked.reason ?? '', /Nova needs your OK to run `node --test calc\/sum.test.mjs`\. This runs code the provider wrote, as you, with access to your files\./);
+    assert.deepEqual(core.providers.testAsk(t.id)?.files.map((f) => f.path), ['calc/sum.mjs']);
+    core.providers.approveTest(t.id);
     const done = await settle(core, t.id);
     assert.equal(done.state, 'done', done.reason ?? '');
     assert.ok(done.verification?.ok);
@@ -183,7 +197,7 @@ test('a provider that lies (says it fixed it, changed nothing) ends failed with 
     core.profile.set('policy', 'task_tests', 'allow', 'settings');
     claude(core, 'liar');
     const t = core.ledger.create({ ...calcTask('claude-code'), origin: { kind: 'user' } } as never);
-    assert.equal(t.approval_tier, 1, 'policy lets the test run without asking');
+    assert.equal(t.approval_tier, 1, 'policy lets the test run without asking on files nobody changed');
     const end = await settle(core, t.id);
     assert.equal(end.state, 'failed');
     assert.match(end.reason ?? '', /The evidence didn't hold up/);
@@ -193,7 +207,7 @@ test('a provider that lies (says it fixed it, changed nothing) ends failed with 
     assert.equal(readFileSync(join(ws, 'calc', 'sum.mjs'), 'utf8'), BROKEN_SUM, 'nothing was copied back');
     // A change that doesn't fix it: the diff holds, the test doesn't.
     core.providers.configure('claude-code', { command: `node ${FAKE_CLAUDE} --script ${script('wrong')}` });
-    const w = await settle(core, core.ledger.create({ ...calcTask('claude-code'), origin: { kind: 'user' } } as never).id);
+    const w = await settleOK(core, core.ledger.create({ ...calcTask('claude-code'), origin: { kind: 'user' } } as never).id);
     assert.equal(w.state, 'failed');
     assert.match(w.reason ?? '', /it failed \(exit 1\)/);
     assert.doesNotMatch(w.reason ?? '', /file-diff/);
@@ -215,7 +229,7 @@ test('codex (stand-in speaking exec --json): the same brief, verified the same w
     core.profile.set('policy', 'task_tests', 'allow', 'settings');
     core.providers.configure('codex', { command: `node ${FAKE_CODEX} --script ${script('honest')} --record ${record}` });
     core.providers.enable('codex', { approved: true });
-    const t = await settle(core, core.ledger.create({ ...calcTask('codex'), origin: { kind: 'user' } } as never).id);
+    const t = await settleOK(core, core.ledger.create({ ...calcTask('codex'), origin: { kind: 'user' } } as never).id);
     assert.equal(t.state, 'done', t.reason ?? '');
     assert.equal(readFileSync(join(ws, 'calc', 'sum.mjs'), 'utf8'), FIXED_SUM);
     const call = JSON.parse(readFileSync(record, 'utf8').trim());
@@ -239,10 +253,10 @@ test('openai-compatible (stand-in server, SSE): the JSON files contract applied 
     await core.providers.check('openai-compatible');
     assert.equal(core.providers.health('openai-compatible').state, 'ready');
     core.providers.enable('openai-compatible', { approved: true });
-    const t = await settle(core, core.ledger.create({ ...calcTask('openai-compatible', { privacy_mode: 'local-only' }), origin: { kind: 'user' } } as never).id);
+    const t = await settleOK(core, core.ledger.create({ ...calcTask('openai-compatible', { privacy_mode: 'local-only' }), origin: { kind: 'user' } } as never).id);
     assert.equal(t.state, 'done', t.reason ?? '');
     assert.equal(readFileSync(join(ws, 'calc', 'sum.mjs'), 'utf8'), FIXED_SUM);
-    assert.match(t.report?.summary ?? '', /It subtracted; now it adds\. Nova ran .* it passed/);
+    assert.match(t.report?.summary ?? '', /You OK’d running .* Nova ran .* it passed/);
     const sent = fake.requests.find((r) => r.url === '/v1/chat/completions')!.body;
     assert.equal(sent.stream, true);
     assert.deepEqual(sent.response_format, { type: 'json_object' });

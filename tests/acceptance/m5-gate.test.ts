@@ -29,14 +29,24 @@ test('M5 gate: one brief, two providers (a coding agent and a chat model), evide
   const api = (p: string) => `/api/v1${p}`;
   const settled = (id: string) => until<any>(() => m.get(api(`/tasks/${id}`)), (t) => ['done', 'failed', 'cancelled'].includes(t.state) || (t.state === 'waiting' && /OK/.test(t.reason ?? '')), 800);
   const sum = () => readFileSync(join(m.home, 'workspace', 'calc', 'sum.mjs'), 'utf8');
-  // Submit the brief to a provider, give the OK the test command needs, and wait for the end.
+  // Submit the brief to a provider and wait for the end, giving the OK each time Nova asks to run
+  // the test on what the provider wrote (after it has written it, showing what changed).
   const run = async (owner: string, over: Record<string, unknown> = {}) => {
     const created = await m.send('POST', api('/tasks'), calcTask(owner, over));
     assert.equal(created.status, 201, JSON.stringify(created.body));
-    const asking = await settled(created.body.id);
-    assert.equal(asking.state, 'waiting', 'Nova asks before it runs the brief’s test command');
-    assert.equal((await m.send('POST', api(`/tasks/${created.body.id}/approve`), {})).status, 200);
-    return until<any>(() => m.get(api(`/tasks/${created.body.id}`)), (t) => ['done', 'failed', 'cancelled'].includes(t.state), 800);
+    for (let asked = 0; ; asked++) {
+      const t = await settled(created.body.id);
+      if (t.state !== 'waiting') {
+        assert.ok(asked > 0, 'Nova asked before it ran the brief’s test command');
+        return t;
+      }
+      const ask = await m.send('GET', api(`/providers/tasks/${created.body.id}/test-run`));
+      assert.equal(ask.status, 200, `${owner}: waiting, but not for the test run: ${t.reason}`);
+      assert.equal(ask.body.command, 'node --test calc/sum.test.mjs');
+      if (ask.body.files.length) assert.match(ask.body.words, /This runs code the provider wrote, as you, with access to your files\./);
+      assert.equal((await m.send('POST', api(`/providers/tasks/${created.body.id}/test-run`), {})).status, 200);
+      await until<any>(() => m.get(api(`/tasks/${created.body.id}`)), (x) => x.state !== 'waiting', 400);
+    }
   };
   try {
     writeCalc(join(m.home, 'workspace'));

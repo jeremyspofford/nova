@@ -40,8 +40,11 @@ test('M5a: providers over the API — a verified coding task, privacy in plain w
     assert.equal((await m.send('POST', api('/providers/claude-code/enable'), { approved: true })).body.enabled, true);
     const created = await m.send('POST', api('/tasks'), calcTask('claude-code'));
     assert.equal(created.status, 201);
-    assert.equal((await settled(created.body.id)).reason, 'Needs your OK before it runs.');
-    await m.send('POST', api(`/tasks/${created.body.id}/approve`), {});
+    // Once Claude Code has finished, Nova asks before running the test on what it wrote.
+    assert.match((await settled(created.body.id)).reason, /Nova needs your OK to run `node --test calc\/sum.test.mjs`\. This runs code the provider wrote/);
+    assert.deepEqual((await m.get(api(`/providers/tasks/${created.body.id}/test-run`))).files.map((f: { path: string }) => f.path), ['calc/sum.mjs']);
+    await m.send('POST', api(`/providers/tasks/${created.body.id}/test-run`), {});
+    await until<any>(() => m.get(api(`/tasks/${created.body.id}`)), (x) => x.state !== 'waiting', 400);
     const done = await settled(created.body.id);
     assert.equal(done.state, 'done', done.reason);
     assert.ok(done.verification.checks.every((c: { ok: boolean }) => c.ok));

@@ -2,10 +2,11 @@
 // else. Files a brief names are copied in; what the provider changed is copied back into the
 // workspace only after Nova verified it. A copy of what went in (the baseline) lives outside the
 // workspace, under the worker's own state, so a provider can't rewrite what it is compared with.
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { sha256, type Workspace } from '../workspace.ts';
+import { words } from './cli.ts';
 import type { Brief } from '../envelope.ts';
 
 export const TASKS_DIR = 'tasks';
@@ -14,6 +15,19 @@ export const MAX_REPLY_FILES = 50;
 export const MAX_REPLY_FILE_BYTES = 1024 * 1024;
 
 export interface Change { path: string; kind: 'added' | 'modified' | 'deleted'; sha256: string | null }
+export interface TestAsk {
+  task_id: string;
+  provider: string;
+  command: string;
+  // The folder as the person saw it.
+  tree: string;
+  files: { path: string; kind: Change['kind']; added: number; removed: number; preview: string }[];
+  more: number;
+  asked_at: string;
+  approved_at: string | null;
+  // What the provider's run cost, carried to the report that ends the task.
+  usage?: Record<string, unknown>;
+}
 
 const inside = (root: string, abs: string) => abs === root || abs.startsWith(root + sep);
 
@@ -98,6 +112,110 @@ export function fileRefs(brief: Brief): string[] {
   return brief.context_refs.filter((r) => r.kind === 'file').map((r) => r.ref);
 }
 
+// ---- what a provider may change ------------------------------------------------------------------
+// A test only proves something if the provider couldn't rewrite it. So a brief says what the
+// provider may change (inputs.editable: paths or globs in the workspace); without that, it may change
+// what the brief gave it except the tests, test-runner settings, and anything the test command names.
+
+// Tests by the usual names and folders.
+export const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|(^|\/)[^/]*\.(test|spec)\.[^/]+$|(^|\/)[^/]*_test\.[^/]+$|(^|\/)test_[^/]*\.[^/]+$|(^|\/)conftest\.py$/;
+// Settings that decide what a test run checks.
+const TEST_CONFIG = /(^|\/)(jest|vitest|playwright|karma|cypress|ava)\.config\.[^/]+$|(^|\/)\.mocharc(\.[^/]+)?$|(^|\/)(pytest\.ini|tox\.ini)$/;
+// A program in the test command, and the files that tell it what to run.
+const RUNNER_FILES: [RegExp, RegExp][] = [
+  [/^(npm|npx|pnpm|yarn|bun|node)$/, /(^|\/)package\.json$/],
+  [/^(make|gmake)$/, /(^|\/)(GNUmakefile|[Mm]akefile)$/],
+  [/^(pytest|py\.test|tox)$/, /(^|\/)(setup\.cfg|pyproject\.toml)$/],
+];
+
+// A path or glob in the workspace: `*` within one folder, `**` across folders, `?` one character.
+// A folder covers everything in it.
+export function globRe(pattern: string): RegExp {
+  const p = pattern.replace(/^workspace:/, '').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  let re = '';
+  for (let i = 0; i < p.length; i++) {
+    const ch = p[i]!;
+    if (ch === '*' && p[i + 1] === '*') {
+      i++;
+      if (p[i + 1] === '/') { i++; re += '(?:.*/)?'; } else re += '.*';
+    } else if (ch === '*') re += '[^/]*';
+    else if (ch === '?') re += '[^/]';
+    else re += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}(?:/.*)?$`);
+}
+
+export interface Scope {
+  // The brief's file refs, as workspace paths (a folder covers what is in it).
+  refs: string[];
+  // What the brief said the provider may change, or null for the default.
+  explicit: string[] | null;
+  // What the test command names (and the runner files it implies), kept out of the default.
+  named: string[];
+  inRefs(path: string): boolean;
+  editable(path: string): boolean;
+  // For the provider's instructions.
+  words: string;
+}
+
+export function editableList(v: unknown): string[] | null {
+  if (v === undefined) return null;
+  const bad = () => new CoreError('validation', 'inputs.editable is a list of paths or globs in the workspace, like calc/sum.mjs or src/**.');
+  if (!Array.isArray(v) || v.length > 200) throw bad();
+  for (const p of v) {
+    if (typeof p !== 'string' || !p.trim() || p.length > 300 || p.includes('\\') || p.includes('\0')) throw bad();
+    const rel = p.replace(/^workspace:/, '');
+    if (isAbsolute(rel) || rel.startsWith('~') || rel.split('/').includes('..')) throw bad();
+  }
+  return v as string[];
+}
+
+// `refs`: workspace paths; `files`: what was copied in (for what the test command names).
+export function scopeOf(refs: string[], inputs: Record<string, unknown> | undefined, files: string[]): Scope {
+  const explicit = editableList(inputs?.editable);
+  const command = typeof inputs?.test_command === 'string' ? inputs.test_command : '';
+  const said = words(command);
+  // Every word of the command counts as a path it may run, whether the file is there yet or not: a
+  // provider that adds the script the command names has written the test.
+  const named = new Set<string>();
+  for (const w of said) {
+    for (const part of [w, w.split('=').slice(1).join('=')]) {
+      const p = part.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+      if (p) named.add(p);
+    }
+  }
+  for (const [program, file] of RUNNER_FILES) {
+    if (said.some((w) => program.test(w.split('/').pop() ?? ''))) for (const f of files) if (file.test(f)) named.add(f);
+  }
+  const inRefs = (p: string) => refs.some((r) => p === r || p.startsWith(`${r}/`));
+  const globs = explicit?.map(globRe) ?? null;
+  const editable = globs
+    ? (p: string) => globs.some((g) => g.test(p))
+    : (p: string) => inRefs(p) && !TEST_FILE.test(p) && !TEST_CONFIG.test(p) && !named.has(p);
+  const list = (xs: string[]) => xs.slice(0, 20).join(', ') + (xs.length > 20 ? `, and ${xs.length - 20} more` : '');
+  const kept = [...named].filter((p) => files.includes(p) || (p.includes('/') && !p.startsWith('-')));
+  const words_ = explicit
+    ? `You may change only these: ${list(explicit)}. Nova refuses the work if anything else changes.`
+    : `You may change the files you were given, but not the tests or their settings${kept.length ? ` (nor ${list(kept)})` : ''}. Nova refuses the work if any of those change.`;
+  return { refs, explicit, named: kept, inRefs, editable, words: words_ };
+}
+
+// The changes a provider wasn't allowed to make, in a sentence; null when there are none.
+export function outOfScope(changes: Change[], scope: Scope): string | null {
+  const bad = changes.filter((c) => !scope.editable(c.path)).map((c) => c.path);
+  if (!bad.length) return null;
+  const shown = bad.length > 5 ? `${bad.slice(0, 5).join(', ')} and ${bad.length - 5} more` : bad.length > 1 ? `${bad.slice(0, -1).join(', ')} and ${bad.at(-1)}` : bad[0];
+  return `the provider changed ${shown}, which it was not allowed to change`;
+}
+
+// Why a change isn't copied into the workspace, or null when it is.
+export function notCopied(path: string, scope: Scope): string | null {
+  if (path === TASKS_DIR || path.startsWith(`${TASKS_DIR}/`)) return 'it is in the tasks folder, where other tasks work';
+  if (!scope.inRefs(path)) return 'it is outside what the brief named';
+  if (!scope.editable(path)) return 'the brief didn’t let the provider change it';
+  return null;
+}
+
 export class TaskSpace {
   readonly id: string;
   readonly root: string;       // workspace/tasks/<id>
@@ -118,12 +236,27 @@ export class TaskSpace {
     return existsSync(this.root);
   }
 
+  // The brief's file refs as workspace paths (a ref Nova can't place counts for nothing).
+  refPaths(refs: string[]): string[] {
+    const out: string[] = [];
+    for (const ref of refs) {
+      try { out.push(relative(this.#ws.root, this.#ws.resolve(ref)).split(sep).join('/')); } catch { /* outside the workspace: prepare refuses it */ }
+    }
+    return out;
+  }
+
+  // What the provider may change in this task, from the brief and the copy it started from.
+  scope(brief: Brief): Scope {
+    return scopeOf(this.refPaths(fileRefs(brief)), brief.inputs, existsSync(this.baseline) ? walk(this.baseline) : []);
+  }
+
   // A fresh start for each attempt: the folder is emptied, the named files copied in again, and the
   // baseline taken from what was copied. Returns the copied files with their hashes.
   prepare(refs: string[]): { path: string; sha256: string }[] {
     rmSync(this.root, { recursive: true, force: true });
     rmSync(this.baseline, { recursive: true, force: true });
     rmSync(join(this.state, 'changes.json'), { force: true });
+    rmSync(join(this.state, 'test-ask.json'), { force: true });
     mkdirSync(this.root, { recursive: true });
     let bytes = 0;
     for (const ref of refs) {
@@ -184,16 +317,34 @@ export class TaskSpace {
     return existsSync(f) ? (JSON.parse(readFileSync(f, 'utf8')) as Change[]) : null;
   }
 
+  // Nova's question before it runs the test on what a provider wrote: kept beside the task's state,
+  // so it outlives a restart, with the folder's hash so what runs is what the person saw.
+  ask(): TestAsk | null {
+    const f = join(this.state, 'test-ask.json');
+    try { return JSON.parse(readFileSync(f, 'utf8')) as TestAsk; } catch { return null; }
+  }
+
+  setAsk(a: TestAsk | null): void {
+    const f = join(this.state, 'test-ask.json');
+    if (!a) { rmSync(f, { force: true }); return; }
+    mkdirSync(this.state, { recursive: true });
+    writeFileSync(`${f}.tmp`, JSON.stringify(a));
+    renameSync(`${f}.tmp`, f);
+  }
+
   copiedBack(): boolean {
     return existsSync(join(this.state, 'copied-back.json'));
   }
 
   // After verification passed: the provider's changes go into the workspace. A file someone changed
-  // in the workspace since it was copied in is left alone and named, never overwritten.
-  copyBack(): { copied: string[]; deleted: string[]; skipped: { path: string; why: string }[] } {
+  // in the workspace since it was copied in is left alone and named, never overwritten; so is
+  // anything outside what the brief named or let the provider change (`skip` says why).
+  copyBack(skip: (path: string) => string | null = () => null): { copied: string[]; deleted: string[]; skipped: { path: string; why: string }[] } {
     const out = { copied: [] as string[], deleted: [] as string[], skipped: [] as { path: string; why: string }[] };
     const changes = this.recorded() ?? [];
     for (const c of changes) {
+      const no = skip(c.path);
+      if (no) { out.skipped.push({ path: c.path, why: no }); continue; }
       let dest: string;
       try { dest = this.#ws.resolve(c.path); } catch (e) { out.skipped.push({ path: c.path, why: (e as Error).message }); continue; }
       const base = join(this.baseline, c.path);

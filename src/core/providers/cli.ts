@@ -50,7 +50,7 @@ export function childEnv(extra: Record<string, string> = {}, env: NodeJS.Process
 
 export interface Ran { code: number | null; signal: string | null; stderr: string; aborted: boolean; timedOut: boolean; ms: number }
 
-// Starts `argv` in `cwd`, writes `input` to its stdin, and hands each stdout line to `onLine`.
+// Starts `argv` in `cwd` in a process group of its own, writes `input` to its stdin, and hands each stdout line to `onLine`.
 // Resolves when it exits; never rejects for a failing command (the caller reads `code`).
 export function runLines(o: { argv: string[]; cwd: string; input?: string; env?: Record<string, string>; signal?: AbortSignal; timeoutMs?: number; onLine: (line: string) => void; shell?: boolean }): Promise<Ran> {
   const started = performance.now();
@@ -62,6 +62,10 @@ export function runLines(o: { argv: string[]; cwd: string; input?: string; env?:
     let aborted = false;
     let timedOut = false;
     const kill = () => { try { process.kill(-child.pid!, 'SIGTERM'); } catch { /* already gone */ } };
+    // Once it exits, whatever it left running in its process group goes too: nothing a provider or
+    // a test started outlives it. (A process that left the group on purpose, with setsid, escapes
+    // this; docs/LEDGER.md.)
+    child.on('exit', () => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* nothing left */ } });
     const stop = () => { aborted = true; kill(); };
     const timer = o.timeoutMs ? setTimeout(() => { timedOut = true; kill(); }, o.timeoutMs) : null;
     timer?.unref();
