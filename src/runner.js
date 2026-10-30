@@ -496,6 +496,8 @@ export class Runner extends EventEmitter {
   }
 
   // The screen's input for a read of outside content, or null when what was read is the person's own.
+  // Only the tools named here read from outside. Every other tool (Nova's own state: skills,
+  // schedules, helpers, and read-only views of Nova itself) is trusted: never screened, never taints.
   outsideRead(call, output, { page, hints, tainted }) {
     const a = call.args ?? {};
     if (call.name === 'web_fetch') return { ...(page?.html ? { html: page.html } : { text: page?.text ?? output }), source: { kind: 'web', origin: page?.origin || hostOf(a.url), ref: page?.ref ?? String(a.url ?? '') } };

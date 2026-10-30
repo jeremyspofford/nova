@@ -140,6 +140,10 @@ export interface CaptureOptions {
   // one is assigned), or null. When it should but another answered (it was down), the event isn't
   // counted as looked at, so a later pass asks again once it is back.
   proposer?: () => string | null;
+  // The ingest gate (Amendment 2026-10-30-C Part 3): captured text is outside content, screened
+  // before the triage decision reads it. A block proposes nothing; otherwise the decision reads the
+  // screened form.
+  screen?: (r: { text: string; kind: Kind; origin: string }) => Promise<{ verdict: string; extract: string }>;
   // Where a Screenpipe's API key is kept: the vault, never the source's config.
   secrets?: { get(name: string): string | null; put(name: string, value: string): unknown; delete(name: string): unknown; has(name: string): boolean };
   fetch?: typeof fetch;
@@ -648,7 +652,18 @@ export class Capture extends EventEmitter {
     for (const r of rows) {
       let d = null;
       try {
-        d = await this.#o.decisions.decide(PROMOTE.template_id, { kind: r.kind, app: r.app ?? '', space: r.space ?? '', text: (r.text ?? '').slice(0, 4000) });
+        let text = (r.text ?? '').slice(0, 4000);
+        if (this.#o.screen) {
+          const s = await this.#o.screen({ text, kind: r.kind, origin: r.app || r.url || r.adapter });
+          if (s.verdict === 'block') {
+            // Nothing to propose from content that tried to give instructions; it is looked at.
+            looked++;
+            this.#db.run('UPDATE capture_event SET triaged = 1 WHERE id = ?', r.id);
+            continue;
+          }
+          text = s.extract.slice(0, 4000);
+        }
+        d = await this.#o.decisions.decide(PROMOTE.template_id, { kind: r.kind, app: r.app ?? '', space: r.space ?? '', text });
         // No answer at all: no template, no provider allowed, or only the rules, which have no rule
         // for this (they answer "unknown" with no confidence). A model's unsure answer is an answer.
         if (!d || d.provider === 'none' || (d.provider === 'rules' && d.confidence === 0)) { waiting = true; break; }

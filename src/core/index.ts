@@ -220,7 +220,8 @@ export function createCore(o: CoreOptions) {
       ...Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address)),
     ].filter(Boolean),
   });
-  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}) });
+  // Page reads are screened by the ingest gate (wired below) as they are taken.
+  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}), screen: (r) => ingest.screen({ text: r.text, source: { kind: 'web', origin: r.origin, ref: r.ref } }) });
   const browserChecks = browserCheckers(o.home);
   verifier.registerKind('screenshot', browserChecks.screenshot);
   verifier.registerKind('url', browserChecks.url);
@@ -380,6 +381,9 @@ export function createCore(o: CoreOptions) {
     meshHosts: () => [...meshHosts()],
     fire: (topic, payload, key) => triggers.connectorEvent('capture', topic, payload, key),
     proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
+    // Captured text is screened before triage reads it: audio and meetings as transcripts, the rest
+    // as screen text (OCR).
+    screen: (r) => ingest.screen({ text: r.text, source: { kind: r.kind === 'audio' || r.kind === 'meeting' ? 'transcript' : 'ocr', origin: r.origin } }),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
     secrets: vault,

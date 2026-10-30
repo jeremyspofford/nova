@@ -20,7 +20,9 @@ const STEP_TIMEOUT_MS = 15_000;
 
 // `hub`: where Nova itself listens, which no browser task may reach (plan.ts).
 // `launch`: how a browser is started; a stand-in in tests.
-export interface BrowserOptions { home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv; hub?: () => Hub; launch?: SessionOptions['launch'] }
+// screen: the ingest gate (Amendment 2026-10-30-C Part 3). Each page read is screened as it is
+// taken, so its verdict is kept with it before any model step could ever read it.
+export interface BrowserOptions { home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv; hub?: () => Hub; launch?: SessionOptions['launch']; screen?: (r: { text: string; origin: string; ref: string }) => Promise<{ id: string; verdict: string }> }
 
 const clip = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const sel = (s: string) => JSON.stringify(s);
@@ -153,7 +155,7 @@ export class Browser extends EventEmitter {
     const stop = () => { void s.close(signal.reason instanceof Error && signal.reason.name === 'TimeoutError' ? 'the task ran out of time' : 'the task was stopped'); };
     signal.addEventListener('abort', stop, { once: true });
     const dir = taskDir(this.#o.home, id);
-    const reads: { selector: string; text: string }[] = [];
+    const reads: { selector: string; text: string; screen?: { id: string; verdict: string } }[] = [];
     let personSteps = 0;
     try {
       await s.open();
@@ -217,7 +219,7 @@ export class Browser extends EventEmitter {
     }
   }
 
-  async #step(s: Session, step: Step, plan: Plan, reads: { selector: string; text: string }[]): Promise<void> {
+  async #step(s: Session, step: Step, plan: Plan, reads: { selector: string; text: string; screen?: { id: string; verdict: string } }[]): Promise<void> {
     const id = s.taskId;
     switch (step.do) {
       case 'navigate':
@@ -249,7 +251,8 @@ export class Browser extends EventEmitter {
         await s.gate();
         // Page text is data: it is kept and compared, never followed.
         const text = await s.evaluate<string>(`(() => { const el = document.querySelector(${sel(step.selector)}); return el ? (el.innerText ?? el.textContent ?? '') : ''; })()`);
-        reads.push({ selector: step.selector, text: clip(text, 2000) });
+        const screened = this.#o.screen ? await this.#o.screen({ text, origin: hostOf(s.url), ref: s.url }).catch(() => null) : null;
+        reads.push({ selector: step.selector, text: clip(text, 2000), ...(screened ? { screen: { id: screened.id, verdict: screened.verdict } } : {}) });
         if (step.expect && !squash(text).includes(squash(step.expect))) throw new Error(`${step.selector} reads “${clip(squash(text), 80)}”, not “${step.expect}”.`);
         return;
       }
