@@ -33,19 +33,22 @@ failing first; the numbers are in the evidence.
     It is a plain veil now.
   - From the plan's audit rather than a test: Home and Tasks drew "Nothing needs you" before their
     data arrived, then redrew. They wait now.
-  - A streamed reply dropped its first piece: the server's "streaming" notice carries the text from
-    before that piece, and the page took it. The page keeps the words it has. `src/runner.js` was
-    not touched (the ingest builder's file); the server-side ordering is worth fixing there later.
+  - A streamed reply dropped its first piece: the server sent the piece, then said "streaming"
+    with the text from before it. Fixed at the source in `src/runner.js` after review (see below);
+    the first fix, in the page, was wrong.
   - Typing in a Settings field didn't count as "touched", so late data took focus from it.
   - The takeover sheet waited an extra 0.6 s before moving to the evidence: an artificial delay,
     now removed.
-- **Progress rules in one place** (`ui/js/wait.js`): the 1 s and 10 s bands, real units, and an
-  estimate only from a measured basis (a download's rate, or this device's earlier waits of the same
-  kind). An agent's reply has no known total, so after 10 s it shows the steps done and the time so
-  far, not a percentage (DESIGN-SYSTEM §1.3: no percentage where the units aren't known).
+- **Progress rules in one place** (`ui/js/wait.js`): the 1 s and 10 s bands, real units, and a
+  general estimate: from a measured rate (a download), else this device's earlier waits of the same
+  kind, else a built-in one per kind of wait. An agent's reply has no known total, so after 10 s it
+  shows the steps done and the time so far, not a percentage (DESIGN-SYSTEM §1.3: no percentage
+  where the units aren't known). The bands run on the page's own clock.
 - **Skeletons are the view's own last layout on this device** (`ui/js/skeleton.js`, localStorage,
-  per view, layout and width). They can be exact because the same data draws the same blocks. With
-  no layout kept (a first visit) there is no skeleton, only the waiting line. A conversation's
+  per view, layout and width; per conversation for chat). They can be exact because the same data
+  draws the same blocks. With no layout kept (a first visit, a conversation not opened here) there is
+  no skeleton, only the waiting line. When the data changed while away (new tasks), the kept shape is
+  the last visit's: what stayed lands exactly, the rest grows below, and nothing moves. A conversation's
   blocks are kept by their distance from the end, because turns far above the screen are laid out
   as estimates (content-visibility).
 - **Motion:**
@@ -54,8 +57,9 @@ failing first; the numbers are in the evidence.
   - Hover and selection colours now change instantly. The "found" mark is a static wash that goes
     after 1.6 s.
 - **Contrast:**
-  - The core's check now sees a see-through surface over both ends of the page gradient. It also
-    checks hover rows, popovers and links on cards.
+  - The live check (Settings › Appearance, and its one-tap fix) now sees a see-through surface over
+    both ends of the page gradient, and checks hover rows, popovers and links on cards. Validation's
+    contrast is unchanged from before M9 (see the review below).
   - Package values that moved: Orb Teal `status/error` and `text/secondary`; Aurora `text/secondary`
     and `accent/primary` (from the core's own smallest-nudge fixer).
   - Text never uses `text/faint`; that token is for graphics only.
@@ -80,6 +84,33 @@ failing first; the numbers are in the evidence.
   - Layouts and overlays now size to the segments.
   - `?posture=` still emulates only the arrangement.
 - **Starter packages:** both still have the same structure; only token values changed.
+- **Review of PR #234, fixed on the same branch, each test first:**
+  - **Designs made before M9 were refused.** Motion outside 150–300 ms had become a validation
+    problem, so every pre-M9 starter's copy failed, fell back to the default without a word and
+    showed "Has problems". The fixture had been changed (120/320 ms → 150/300 ms), which hid it; it
+    is back to its pre-M9 values. Motion out of range is now a warning, and the generated CSS clamps
+    it (an overshooting curve is clipped). Validation's contrast is back to what it was (a surface
+    over bg/base), so an old Orb Teal copy's error colour no longer disables it; the stricter view is
+    the live check's, which warns and offers the fix.
+  - **Streaming.** The page's "keep the longer text" workaround kept a step's blank lines or a
+    ```xml fence on screen past its tool call. `src/runner.js` now says "streaming", with the text
+    so far, before each first piece, and the page just follows the events.
+  - **The page could stay blank** (the shell is hidden until the first view is set). A classic
+    script shows it after 1 s whatever happens; a read unanswered for 10 s counts as Nova out of
+    reach, and the page says so. A conversation that doesn't exist no longer stays "Loading".
+  - **Clock skew:** Thinking, a running step and Sending were timed from the hub's timestamps. They
+    now run from when this page first saw the wait.
+  - **Sending recorded no length** (its start was passed in, so its end found nothing). Fixed.
+  - **Coverage added:**
+    - contrast at phone width with the tabs, drawer, More, a sheet and a toast open, and every Tab
+      stop. It found the toast's Undo at 4.01–4.32:1; it is in primary text now, and 48×48.
+    - hit areas at desktop width (44 px, rail and right column);
+    - Web Vitals that send a message through a streamed reply, with the phone runs' CPU slowed 4×.
+      That found a 0.091 layout shift on desktop chat once a conversation was long: turns on screen
+      were laid out from content-visibility's estimate, then moved. The newest ten blocks now always
+      render.
+    - skeletons for another conversation and for Tasks after new tasks;
+    - a general estimate after 10 s even with no history on this device.
 
 **2026-10-30 (security: the ingest gate — the final adversarial pass on #229).** Each finding is a test
 through the runner that failed first: `tests/ingest/round3.test.js` (4).
