@@ -324,6 +324,37 @@ export class SyncLog {
     return this.#db.get<{ cursor: number }>('SELECT cursor FROM sync_state WHERE id = 1')!.cursor;
   }
 
+  // On a standby whose hub went back to a checkpoint (M7 amendment §1): everything it copied goes,
+  // the files the log put here included, and it reads the hub's log again from the start. Rows the
+  // restore undid are rolled back here too, not forgotten: no backups are cleaned for them.
+  fresh(): { rows: number; files: number } {
+    let rows = 0;
+    let files = 0;
+    for (const r of this.#db.all<{ pk: string }>(`SELECT pk FROM sync_log WHERE tbl = ? AND op = 'file_put'`, FILE)) {
+      const rel = journalPath(r.pk);
+      if (rel) { rmSync(join(this.home, rel), { force: true }); files++; }
+    }
+    const hadVault = !!this.#db.get(`SELECT 1 FROM sync_log WHERE tbl = ? AND op = 'put'`, VAULT);
+    this.#db.raw.exec('PRAGMA foreign_keys = OFF');
+    try {
+      this.#db.tx(() => {
+        for (const t of Object.keys(REPLICATED)) {
+          rows += this.#db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM "${t}"`)?.n ?? 0;
+          this.#db.run(`DELETE FROM "${t}"`);
+        }
+        this.#db.run('DELETE FROM sync_log');
+        this.#db.run('UPDATE sync_state SET cursor = 0 WHERE id = 1');
+      });
+    } finally {
+      this.#db.raw.exec('PRAGMA foreign_keys = ON');
+    }
+    if (hadVault) this.vault?.clear();
+    this.#logged = null;
+    this.#seen.clear();
+    if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    return { rows, files };
+  }
+
   // Applies the hub's entries in one transaction and keeps them, with the hub's seq, in this node's
   // own log, so that after a promotion this node can serve a new standby the same way. Files are
   // written as they come (writing one again is harmless), so a crash part-way repeats, never skips.
