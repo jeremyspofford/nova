@@ -74,6 +74,23 @@ The as-built note is in `docs/plans/M8.md` §2.
   - a `requestId` that could recur;
   - a copy-back that could half-apply or exceed the size limit;
   - unbounded answers.
+- **The re-review** found three more problems, each now a test (R1–R4 in the same file) that
+  failed before its fix:
+  - **Ignored files or line endings failed every run.** Nova's own git now runs with no system or
+    personal config, no excludes, `autocrlf` off and no attributes file. It commits with
+    `add -A -f`. Its `info/attributes` turns off eol and filter rules, so the task's
+    `.gitattributes` can't change the bytes, in the commit or in Relay's checkout. The commit is
+    checked blob by blob.
+  - **The 1 MB answer cap broke on a Relay with history.** Caps are now set per route: 64 MB for
+    `/api/state`, 8 MB for a run record, 1 MB otherwise.
+  - **A start that timed out was given up.** It is now sent again with the same `requestId` and no
+    time cap, and the run it names is followed. The per-answer wait is the hidden
+    `request_timeout_s` (default 20).
+  - **Also:** hard links in the worktree are refused, the walk stops past 20,000 entries or 64
+    folders deep, and a run id must be a UUID.
+  - **Known limit:** files the worker creates that the task's own `.gitignore` ignores (a build
+    folder) are left out of Relay's list but seen by Nova's walk, so such a run fails with the
+    mismatch reason.
 - **A chaos test made robust.** The full-database test (`tests/chaos/disk.test.ts`) depended on how
   full SQLite's last pages happened to be, and Relay's manifest changed that. It now fills to the
   brim.
