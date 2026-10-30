@@ -5,9 +5,9 @@ import { CoreError } from '../errors.ts';
 import type { Route, Who } from '../api.ts';
 import { KINDS, POSTURE, type Capture, type Kind } from './capture.ts';
 
-const by = (w: Who) => (w.principal.kind === 'device' ? `device:${w.principal.device.id}` : 'person');
-// A memory and its capture are the person's: what they decide here is recorded as theirs.
-const PERSON = 'person';
+// Who did it, as consent, forgetting and promotion record it: a paired device by its id, the hub's
+// own screen as "console".
+const by = (w: Who) => (w.principal.kind === 'device' ? `device:${w.principal.device.id}` : w.principal.kind);
 
 export function captureRoutes(capture: Capture): Route[] {
   const kind = (v: string | null): Kind | undefined => {
@@ -47,21 +47,21 @@ export function captureRoutes(capture: Capture): Route[] {
     },
     {
       method: 'POST', path: '/capture/promote', status: 201, summary: 'Make a memory from captured events, deliberately. Its provenance points back to them.', body: '{event_ids, content?, kind?, scope?}',
-      handle: ({ body }) => capture.promote(body, PERSON),
+      handle: ({ body, who }) => capture.promote(body, by(who)),
     },
     { method: 'GET', path: '/capture/memory/{id}', summary: 'Where a memory came from in capture: the events it was promoted from, by whom and when, and whether each is still kept.', handle: ({ params }) => capture.promotions(params.id!) },
     { method: 'GET', path: '/capture/proposals', summary: 'What a triage decision proposed keeping as memory. Nothing becomes memory until the person accepts.', handle: () => capture.proposals() },
     { method: 'POST', path: '/capture/propose', summary: 'Triage the events not yet looked at now (it also happens on its own).', handle: () => capture.propose() },
     {
       method: 'POST', path: '/capture/proposals/{id}/accept', status: 201, summary: 'Accept a proposal: it becomes a memory, with provenance back to the event and the proposal.', body: '{content?, scope?}',
-      handle: ({ params, body }) => capture.accept(params.id!, body, PERSON),
+      handle: ({ params, body, who }) => capture.accept(params.id!, body, by(who)),
     },
     { method: 'POST', path: '/capture/proposals/{id}/dismiss', summary: 'Dismiss a proposal. The event stays as evidence.', handle: ({ params }) => capture.dismiss(params.id!) },
     {
       method: 'POST', path: '/capture/sources/screenpipe', status: 201, summary: 'Add a Screenpipe on this machine (or another of your devices) to take capture from. It stays off until you turn it on.', body: '{url?, name?}',
       handle: ({ body }) => capture.addScreenpipe(body),
     },
-    { method: 'PATCH', path: '/capture/sources/{id}', summary: 'Change a Screenpipe source’s address.', body: '{url}', handle: ({ params, body }) => capture.configure(params.id!, body) },
+    { method: 'PATCH', path: '/capture/sources/{id}', summary: 'Change a Screenpipe source’s address, or how far back each pull asks again for items it reports late (lookback_minutes, 1 to 240; 5 by default).', body: '{url?, lookback_minutes?}', handle: ({ params, body }) => capture.configure(params.id!, body) },
     {
       method: 'POST', path: '/capture/sources/{id}/enable', summary: 'Consent: turn a source on. It captures from now; since asks for what it kept from an earlier time too. Refused under local-only for an address outside your devices.', body: '{since?}',
       handle: ({ params, body, who }) => capture.enable(params.id!, { by: by(who), since: body.since }),

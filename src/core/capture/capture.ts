@@ -25,10 +25,10 @@ import type { Memory, MemoryRecord, Kind as MemoryKind } from '../memory.ts';
 import type { Backups } from '../backups.ts';
 import type { Decisions, TemplateDef, Templates } from '../decide.ts';
 import {
-  KINDS, SPACE, checkExclusions, checkSignals, checkSwitch, classify, describeExclusion, excludedBy, isPrivate,
+  KINDS, SPACE, checkExclusions, checkSignals, checkSwitch, classify, describeExclusion, excludedBy, instant, isPrivate,
   type Exclusion, type Facts, type Kind, type Signal, type Switch,
 } from './rules.ts';
-import { DEFAULT_URL, Screenpipe, Unreachable, type Cursor, type RawEvent } from './screenpipe.ts';
+import { DEFAULT_LOOKBACK_MS, DEFAULT_URL, Screenpipe, Unreachable, type Cursor, type RawEvent } from './screenpipe.ts';
 
 export { KINDS, type Kind } from './rules.ts';
 export type { RawEvent } from './screenpipe.ts';
@@ -44,7 +44,7 @@ const PROPOSE_PER_TICK = 10;
 export const POSTURE = [
   {
     platform: 'desktop', label: 'Computers (Windows, macOS, Linux)',
-    can: 'Deep capture is possible: screen text, audio, meetings and app activity, each under a permission the operating system asks you for. Nova takes it in today from Screenpipe running on the computer, or from a paired computer’s device agent. Reading the active window directly needs a native component that isn’t built yet.',
+    can: 'Deep capture is possible: screen text, audio, meetings and app activity, each under a permission the operating system asks you for. Nova takes it in today from Screenpipe running on the computer, or from a paired computer’s device agent. Reading the active window directly needs a native component that isn’t built yet. Private and incognito windows are recognised by their window title, in the major browsers’ common languages: a best effort, so also list them in Screenpipe’s own ignored-windows setting, which stops Screenpipe recording them at all.',
   },
   {
     platform: 'android', label: 'Android',
@@ -106,6 +106,8 @@ export interface SourceView {
   checked_at: string | null;
   counts: Record<string, number>;
   egress: 'local' | 'remote' | null;
+  // How far back each pull asks again, for items Screenpipe reports late (Screenpipe only).
+  lookback_minutes: number | null;
 }
 
 export interface Settings { retention_days: number; exclusions: Exclusion[]; signals: Signal[]; switch: Switch | null; spaces: string[] }
@@ -134,6 +136,8 @@ export interface CaptureOptions {
   fire: (topic: string, payload: Record<string, unknown>, dedupKey: string) => Promise<unknown>;
   fetch?: typeof fetch;
   pollMs?: number;
+  // How far back a Screenpipe pull asks again by default, for items reported late (5 minutes).
+  lookbackMs?: number;
 }
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -224,12 +228,21 @@ export class Capture extends EventEmitter {
     return this.source(id);
   }
 
+  // A Screenpipe's address, and how far back each pull asks again (lookback_minutes, 1 to 240).
   configure(id: string, body: Record<string, unknown>): SourceView {
     const s = this.#source(id);
     if (s.adapter !== 'screenpipe') throw new CoreError('validation', 'Only a Screenpipe source has an address to set.');
-    const url = this.#url(body.url);
-    if (s.enabled) this.#refuseRemote(url);
-    this.#db.run('UPDATE capture_source SET config = ?, updated_at = ? WHERE id = ?', JSON.stringify({ ...parse<object>(s.config, {}), url }), this.#now().toISOString(), id);
+    const change: Record<string, unknown> = {};
+    if (body.url !== undefined || body.lookback_minutes === undefined) {
+      change.url = this.#url(body.url);
+      if (s.enabled) this.#refuseRemote(change.url as string);
+    }
+    if (body.lookback_minutes !== undefined) {
+      const m = body.lookback_minutes;
+      if (!Number.isInteger(m) || (m as number) < 1 || (m as number) > 240) throw new CoreError('validation', 'lookback_minutes is how far back each pull asks again, for items Screenpipe reports late: a whole number from 1 to 240.');
+      change.lookback_minutes = m;
+    }
+    this.#db.run('UPDATE capture_source SET config = ?, updated_at = ? WHERE id = ?', JSON.stringify({ ...parse<object>(s.config, {}), ...change }), this.#now().toISOString(), id);
     this.#changed('sources');
     return this.source(id);
   }
@@ -277,7 +290,7 @@ export class Capture extends EventEmitter {
     const at = this.#now().toISOString();
     const cursor = parse<{ since?: string; read?: Cursor }>(s.cursor, {});
     // Every adapter's reading jumps to now: what was recorded while paused is never pulled.
-    const read = Object.fromEntries(Object.keys(cursor.read ?? {}).map((k) => [k, { after: at, ids: [] }]));
+    const read = Object.fromEntries(Object.keys(cursor.read ?? {}).map((k) => [k, { after: at, seen: [] }]));
     this.#db.run(`UPDATE capture_source SET paused = 0, status = 'on', cursor = ?, updated_at = ? WHERE id = ?`, JSON.stringify({ since: at, read }), at, id);
     this.#changed('sources');
     return this.source(id);
@@ -310,7 +323,9 @@ export class Capture extends EventEmitter {
     const on = sources.filter((s) => s.active);
     const dayStart = new Date(this.#now().getTime() - DAY_MS).toISOString();
     const n = (sql: string, ...a: string[]) => this.#db.get<{ n: number }>(sql, ...a)!.n;
-    const broken = on.find((s) => s.status === 'unreachable' || s.status === 'refused');
+    // A source Nova isn't pulling (down, refused, or on a device that isn't the hub now) needs the
+    // person, whatever it is doing on its own machine.
+    const broken = on.find((s) => s.status === 'unreachable' || s.status === 'refused' || s.status === 'elsewhere');
     return {
       active: on.length > 0,
       capturing: on.map((s) => ({ id: s.id, name: s.name, device: s.device.name })),
@@ -346,15 +361,19 @@ export class Capture extends EventEmitter {
       for (const raw of raws) {
         if (!s.enabled) { drop('off', `${s.name} is off.`); continue; }
         if (s.paused) { drop('paused', `${s.name} is paused.`); continue; }
-        const at = typeof raw.at === 'string' && !Number.isNaN(Date.parse(raw.at)) ? new Date(raw.at).toISOString() : null;
-        if (!at || !kinds.includes(raw.kind)) { drop('unreadable', 'It didn’t say when it happened, or what kind of capture it is.'); continue; }
+        // Private and incognito contexts: dropped first, on what the source sent (a long title's
+        // marker is at its end, past where a stored title is cut), before anything is stored.
+        if (isPrivate(raw as { private?: unknown }, raw)) { drop('private', 'Private and incognito windows are never kept.'); continue; }
+        // A time with no zone would be read in the server's: refused, as unreadable.
+        const at = instant(raw.at);
+        if (!at || !kinds.includes(raw.kind)) { drop('unreadable', 'It didn’t say when it happened (a time with its zone), or what kind of capture it is.'); continue; }
         if (cursor.since && at < cursor.since) { drop('before_consent', 'It was captured before you turned this on, or while it was paused.'); continue; }
+        const ended = instant(raw.ended_at);
         const f: Facts = {
-          kind: raw.kind, at, device_id: s.device_id, source_id: s.id,
+          kind: raw.kind, at, ended_at: ended && ended > at ? ended : null, device_id: s.device_id, source_id: s.id,
           app: clip(raw.app, MAX_FIELD), window_title: clip(raw.window_title, MAX_FIELD), url: clip(raw.url, MAX_URL),
+          text: typeof raw.text === 'string' ? raw.text : null,
         };
-        // Private and incognito contexts: dropped here, before anything is stored.
-        if (isPrivate(raw as { private?: unknown }, f)) { drop('private', 'Private and incognito windows are never kept.'); continue; }
         const external = clip(raw.external_id, 200);
         if (external && this.#db.get('SELECT 1 FROM capture_tombstone WHERE source_id = ? AND key = ?', s.id, sha(`${s.id}\0${external}`))) { drop('forgotten', 'You had Nova forget it.'); continue; }
         if (external && this.#db.get('SELECT 1 FROM capture_event WHERE source_id = ? AND external_id = ?', s.id, external)) { drop('duplicate'); continue; }
@@ -365,7 +384,7 @@ export class Capture extends EventEmitter {
         this.#db.run(
           `INSERT INTO capture_event (id, source_id, device_id, adapter, kind, at, ended_at, received_at, app, window_title, url, text, space, space_by, external_id, via, consent_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          id, s.id, s.device_id, s.adapter, raw.kind, at, typeof raw.ended_at === 'string' && !Number.isNaN(Date.parse(raw.ended_at)) ? new Date(raw.ended_at).toISOString() : null,
+          id, s.id, s.device_id, s.adapter, raw.kind, at, f.ended_at ?? null,
           received, f.app, f.window_title, f.url, clip(raw.text, MAX_TEXT), c?.space ?? null, c?.by ?? null, external, via, s.consent_at!,
         );
         out.kept.push(id);
@@ -388,7 +407,7 @@ export class Capture extends EventEmitter {
     if (typeof kind !== 'string' || !(KINDS as readonly string[]).includes(kind)) return { refused: true, reason: `kind must be one of ${KINDS.join(', ')}.` };
     const id = this.#ensureDeviceSource(device.id, kind as Kind) ?? `device:${device.id}:${kind}`;
     const r = this.ingest(id, [{
-      external_id: clip(body.external_id, 200) ?? `inbox:${key}`, kind: kind as Kind, at: String(body.at ?? ''),
+      external_id: clip(body.external_id, 200) ?? `inbox:${key}`, kind: kind as Kind, at: body.at as string,
       ended_at: typeof body.ended_at === 'string' ? body.ended_at : null,
       app: body.app as string, window_title: body.window_title as string, url: body.url as string, text: body.text as string,
       ...(body.private === true || body.incognito === true ? { private: true } : {}),
@@ -548,7 +567,8 @@ export class Capture extends EventEmitter {
   // ---- promotion -------------------------------------------------------------------------------------
 
   // Deliberate: the person makes a memory from captured events. Its provenance (CONTRACTS §7) is
-  // source capture:<ids>, observed when the first was captured, recorded by the person.
+  // source capture:<ids>, observed when the first was captured, recorded by whoever asked (the
+  // hub's own screen, "console", or a paired device, "device:<id>").
   promote(body: { event_ids?: unknown; content?: unknown; kind?: unknown; scope?: unknown }, by: string, proposalId: string | null = null): { memory: MemoryRecord; events: string[] } {
     const ids = Array.isArray(body.event_ids) ? body.event_ids : [];
     if (!ids.length || ids.length > 20 || !ids.every((x) => typeof x === 'string')) throw new CoreError('validation', 'event_ids lists the captured events this memory comes from (1 to 20).');
@@ -559,7 +579,9 @@ export class Capture extends EventEmitter {
     const kind = (typeof body.kind === 'string' ? body.kind : 'fact') as MemoryKind;
     const at = this.#now().toISOString();
     return this.#db.tx(() => {
-      const memory = this.#o.memory.remember({ kind, content, recorded_by: by, source: `capture:${rows.map((r) => r.id).join(',')}`.slice(0, 2000), observed_at: rows[0]!.at, scope });
+      let memory = this.#o.memory.remember({ kind, content, recorded_by: by, source: `capture:${rows.map((r) => r.id).join(',')}`.slice(0, 2000), observed_at: rows[0]!.at, scope });
+      // Whoever promoted it chose it deliberately: it is confirmed, whatever kind of caller they are.
+      if (memory.user_state !== 'confirmed') memory = this.#o.memory.confirm(memory.id, by);
       for (const r of rows) {
         this.#db.run('INSERT INTO capture_promotion (id, memory_id, event_id, proposal_id, by, at, event_at, event_kind, source_id, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           randomUUID(), memory.id, r.id, proposalId, by, at, r.at, r.kind, r.source_id, r.device_id);
@@ -576,17 +598,25 @@ export class Capture extends EventEmitter {
   }
 
   // A triage decision with an escape looks at events not yet looked at and may propose keeping
-  // one. An unsure answer (or no provider that can answer) proposes nothing.
-  async propose(limit = PROPOSE_PER_TICK): Promise<{ looked: number; proposed: string[] }> {
+  // one. An unsure answer proposes nothing. When no provider could answer at all, the event isn't
+  // marked looked at: the pass stops there, and the next one asks again, so once a provider exists
+  // everything waiting is triaged, oldest first.
+  async propose(limit = PROPOSE_PER_TICK): Promise<{ looked: number; proposed: string[]; waiting: boolean }> {
     const rows = this.#db.all<EventRow>(`SELECT * FROM capture_event WHERE triaged = 0 AND text IS NOT NULL ORDER BY at LIMIT ${Math.max(1, Math.min(100, limit))}`);
     const proposed: string[] = [];
+    let looked = 0;
+    let waiting = false;
     for (const r of rows) {
       let d = null;
       try {
         d = await this.#o.decisions.decide(PROMOTE.template_id, { kind: r.kind, app: r.app ?? '', space: r.space ?? '', text: (r.text ?? '').slice(0, 4000) });
+        // No answer at all: no template, no provider allowed, or only the rules, which have no rule
+        // for this (they answer "unknown" with no confidence). A model's unsure answer is an answer.
+        if (!d || d.provider === 'none' || (d.provider === 'rules' && d.confidence === 0)) { waiting = true; break; }
       } catch (e) {
         this.#o.log.warn('capture', 'A captured event couldn’t be triaged.', { error: (e as Error).message });
       }
+      looked++;
       if (!this.#db.get('SELECT 1 FROM capture_event WHERE id = ?', r.id)) continue;
       this.#db.tx(() => {
         this.#db.run('UPDATE capture_event SET triaged = 1 WHERE id = ?', r.id);
@@ -599,7 +629,7 @@ export class Capture extends EventEmitter {
       });
     }
     if (proposed.length) this.#changed('proposals');
-    return { looked: rows.length, proposed };
+    return { looked, proposed, waiting };
   }
 
   proposals(): { id: string; event: CaptureEvent; p: number | null; provider: string; at: string }[] {
@@ -652,7 +682,7 @@ export class Capture extends EventEmitter {
     const since = cursor.since ?? s.consent_at ?? this.#now().toISOString();
     let got;
     try {
-      got = await new Screenpipe({ url, ...(this.#o.fetch ? { fetch: this.#o.fetch } : {}) }).pull(cursor.read ?? {}, since);
+      got = await new Screenpipe({ url, lookbackMs: this.#lookback(s) * 60_000, ...(this.#o.fetch ? { fetch: this.#o.fetch } : {}) }).pull(cursor.read ?? {}, since);
     } catch (e) {
       const why = e instanceof Unreachable ? e.message : `Screenpipe at ${url} sent something Nova couldn’t read.`;
       if (!(e instanceof Unreachable)) this.#o.log.warn('capture', why, { error: (e as Error)?.message });
@@ -698,6 +728,26 @@ export class Capture extends EventEmitter {
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = null;
     await Promise.allSettled([...this.#pulling.values()]);
+  }
+
+  // A device was revoked: what it captured stays (until retention or a forget), but nothing more is
+  // taken from it. Its sources go off, so turning one on again is a fresh consent.
+  deviceRemoved(deviceId: string): string[] {
+    const at = this.#now().toISOString();
+    const ids = this.#db.all<{ id: string }>('SELECT id FROM capture_source WHERE device_id = ? AND enabled = 1', deviceId).map((r) => r.id);
+    for (const id of ids) {
+      this.#db.run(`UPDATE capture_source SET enabled = 0, paused = 0, cursor = NULL, status = 'off', status_detail = ?, status_at = ?, updated_at = ? WHERE id = ?`,
+        'Turned off: its device was removed from your devices.', at, at, id);
+      this.#settle(id);
+    }
+    if (ids.length) this.#changed('sources');
+    return ids;
+  }
+
+  // Sync brought rows from the hub (on a standby): capture may have changed with them, and pages
+  // showing it reload.
+  synced(): void {
+    this.#changed('sync');
   }
 
   // ---- event triggers --------------------------------------------------------------------------------
@@ -752,6 +802,11 @@ export class Capture extends EventEmitter {
     try { this.#o.log.resolve(p); } catch { /* already resolved by the person */ }
   }
 
+  #lookback(r: SourceRow): number {
+    const m = parse<{ lookback_minutes?: unknown }>(r.config, {}).lookback_minutes;
+    return typeof m === 'number' && m >= 1 ? m : (this.#o.lookbackMs ?? DEFAULT_LOOKBACK_MS) / 60_000;
+  }
+
   #egress(url: string): 'local' | 'remote' {
     return addressEgress(url, this.#o.meshHosts()) === 'local' ? 'local' : 'remote';
   }
@@ -795,6 +850,7 @@ export class Capture extends EventEmitter {
       consent: r.consent_at ? { at: r.consent_at, by: r.consent_by ?? 'person' } : null,
       status: r.status, detail: r.status_detail, checked_at: r.status_at, counts: parse<Record<string, number>>(r.counts, {}),
       egress: url ? this.#egress(url) : null,
+      lookback_minutes: r.adapter === 'screenpipe' ? this.#lookback(r) : null,
     };
   }
 

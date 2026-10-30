@@ -349,10 +349,14 @@ export function createCore(o: CoreOptions) {
   enroll.on('change', (r) => bus.emit('event', 'join_request', r));
   role.on('change', (s) => bus.emit('event', 'mesh', s));
   role.on('applied', (a) => bus.emit('event', 'sync', a));
+  // Capture's rows come by sync too: a standby's pages reload it.
+  role.on('applied', () => capture.synced());
   browser.on('change', (v) => bus.emit('event', 'browser', v));
   capture.on('change', (c) => bus.emit('event', 'capture', c));
   // A device that may no longer approve may no longer hold a browser either (browser/routes.ts).
   devices.on('revoked', (d: Device) => browser.release(`device:${d.id}`, `ended by Nova: its device was removed`));
+  // Nor capture from it: its sources go off.
+  devices.on('revoked', (d: Device) => capture.deviceRemoved(d.id));
   devices.on('change', (c: { action: string; device: Device }) => {
     if (c.action === 'can_approve' && !c.device.can_approve) browser.release(`device:${c.device.id}`, 'ended by Nova: its device may no longer take over');
   });

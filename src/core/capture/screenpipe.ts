@@ -3,24 +3,41 @@
 // from, accessibility text) flows into the Capture API unchanged.
 //
 //   GET /health                                    is it there at all
-//   GET /search?content_type=ocr|audio|ui          items since start_time, newest first, paged by
-//          &start_time=<ISO>&limit=&offset=        limit/offset, with pagination.total
+//   GET /search?content_type=ocr|audio|ui          items from start_time to end_time (both
+//          &start_time=&end_time=&limit=&offset=   inclusive), newest first, with pagination.total
 //
-// Its own cursor per content type: the newest timestamp taken and the ids taken at exactly that
-// time (start_time is inclusive, so the boundary is read again and those are skipped). A Screenpipe
-// that is down is a status and a problem, never a crash: the cursor stays where it was and the next
-// pull carries on from it, so an outage loses nothing Screenpipe kept.
-import type { Kind } from './rules.ts';
+// Screenpipe answers newest first, so a backlog is read oldest first by windows of time: a window
+// holding more than WINDOW_MAX items is narrowed until it doesn't, then read whole, page by page.
+// Each content type keeps its own cursor: how far it has read (never past the end of the last
+// window read whole) and the ids it took lately. Each pull asks again from a few minutes before
+// that (the lookback), so an item Screenpipe reports late with an older time still arrives, and the
+// ids keep anything from arriving twice. A backlog bigger than one pull carries on at the next.
+//
+// A Screenpipe that is down is a status and a problem, never a crash: the cursor stays where it
+// was, so what Screenpipe kept meanwhile arrives once it answers. What Screenpipe itself never kept
+// (it wasn't running) can't arrive, and an item reported later than the lookback is missed.
+import { instant, type Kind } from './rules.ts';
 
 export const DEFAULT_URL = 'http://localhost:3030';
 const TYPES = ['ocr', 'audio', 'ui'] as const;
 type ContentType = (typeof TYPES)[number];
 const KIND: Record<ContentType, Kind> = { ocr: 'screen', audio: 'audio', ui: 'screen' };
 const PAGE = 100;
-// At most this many pages per type per pull; more than this waits for the next pull.
-const MAX_PAGES = 50;
+// Requests per content type per pull. A bigger backlog carries on at the next pull, from the end of
+// the last window read whole.
+const MAX_REQUESTS = 60;
+// A window of time is read whole only when it holds at most this many items (ten pages).
+const WINDOW_MAX = 1000;
+// Narrower than this, a window is read whole however full it is: nothing else would get past it.
+const MIN_SPAN_MS = 1000;
+// How far back each pull asks again, for items Screenpipe reports late.
+export const DEFAULT_LOOKBACK_MS = 5 * 60_000;
+// One answer bigger than this is refused rather than read into memory (a page is 100 items).
+const MAX_BYTES = 16 * 1024 * 1024;
 
-export interface Cursor { [type: string]: { after: string; ids: string[] } }
+// `seen`: [id, time] taken within the lookback. `ids` is the older shape (all at `after`).
+export interface TypeCursor { after: string; seen?: [string, string][]; ids?: string[] }
+export interface Cursor { [type: string]: TypeCursor }
 
 // One captured item as an adapter hands it to the Capture API, before any rule has looked at it.
 export interface RawEvent {
@@ -40,7 +57,10 @@ export class Unreachable extends Error {}
 type Fetch = typeof fetch;
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
-const iso = (v: unknown): string | null => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+// Screenpipe keeps its times in UTC; one written without a zone is read as UTC, never as the
+// server's local time.
+const NAIVE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+const iso = (v: unknown): string | null => instant(v) ?? (typeof v === 'string' && NAIVE.test(v.trim()) ? instant(`${v.trim().replace(' ', 'T')}Z`) : null);
 
 // One Screenpipe item → a raw event, or null for one this adapter can't read (skipped, not fatal).
 export function normalize(type: ContentType, item: unknown): RawEvent | null {
@@ -62,15 +82,24 @@ export function normalize(type: ContentType, item: unknown): RawEvent | null {
   };
 }
 
+interface Page { items: RawEvent[]; count: number; newest: string | null; total: number | null }
+
+const latest = (a: string | null, b: string | null) => (a === null ? b : b === null ? a : a > b ? a : b);
+const plus = (t: string, ms: number) => new Date(Date.parse(t) + ms).toISOString();
+
 export class Screenpipe {
   readonly url: string;
   #fetch: Fetch;
   #timeoutMs: number;
+  #lookbackMs: number;
+  #maxBytes: number;
 
-  constructor(o: { url: string; fetch?: Fetch; timeoutMs?: number }) {
+  constructor(o: { url: string; fetch?: Fetch; timeoutMs?: number; lookbackMs?: number; maxBytes?: number }) {
     this.url = o.url.replace(/\/+$/, '');
     this.#fetch = o.fetch ?? fetch;
     this.#timeoutMs = o.timeoutMs ?? 5000;
+    this.#lookbackMs = o.lookbackMs ?? DEFAULT_LOOKBACK_MS;
+    this.#maxBytes = o.maxBytes ?? MAX_BYTES;
   }
 
   async #get(path: string): Promise<unknown> {
@@ -82,12 +111,36 @@ export class Screenpipe {
       throw new Unreachable(`Screenpipe at ${this.url} isn’t answering (${(e as Error)?.cause instanceof Error ? ((e as Error).cause as Error).message : (e as Error).message}).`);
     }
     if (!res.ok) throw new Unreachable(`Screenpipe at ${this.url} answered ${res.status}.`);
-    try { return await res.json(); } catch { throw new Unreachable(`Something answered at ${this.url}, but not like Screenpipe does.`); }
+    const tooMuch = () => new Unreachable(`Screenpipe at ${this.url} answered with too much at once (over ${Math.round(this.#maxBytes / 1024 / 1024)} MB), so Nova didn’t read it.`);
+    if (Number(res.headers.get('content-length')) > this.#maxBytes) { await res.body?.cancel().catch(() => {}); throw tooMuch(); }
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      const reader = res.body?.getReader();
+      for (let r = await reader?.read(); r && !r.done; r = await reader!.read()) {
+        size += r.value.byteLength;
+        if (size > this.#maxBytes) { await reader!.cancel().catch(() => {}); throw tooMuch(); }
+        chunks.push(r.value);
+      }
+    } catch (e) {
+      if (e instanceof Unreachable) throw e;
+      throw new Unreachable(`Screenpipe at ${this.url} stopped answering partway (${(e as Error).message}).`);
+    }
+    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new Unreachable(`Something answered at ${this.url}, but not like Screenpipe does.`); }
   }
 
   async health(): Promise<{ status: string }> {
     const h = (await this.#get('/health')) as Record<string, unknown> | null;
     return { status: typeof h?.status === 'string' ? h.status : 'unknown' };
+  }
+
+  async #search(type: ContentType, start: string, end: string | null, offset: number): Promise<Page> {
+    const q = new URLSearchParams({ content_type: type, start_time: start, limit: String(PAGE), offset: String(offset) });
+    if (end) q.set('end_time', end);
+    const r = (await this.#get(`/search?${q}`)) as { data?: unknown[]; pagination?: { total?: number } } | null;
+    const data = Array.isArray(r?.data) ? r.data : [];
+    const items = data.map((item) => normalize(type, item)).filter((e): e is RawEvent => e !== null);
+    return { items, count: data.length, newest: items.reduce<string | null>((m, e) => latest(m, e.at), null), total: typeof r?.pagination?.total === 'number' ? r.pagination.total : null };
   }
 
   // Everything since the cursor, oldest first, and the cursor to keep once it is stored.
@@ -96,29 +149,64 @@ export class Screenpipe {
     const events: RawEvent[] = [];
     const next: Cursor = { ...cursor };
     for (const type of TYPES) {
-      const from = cursor[type] ?? { after: since, ids: [] };
-      const seen = new Set(from.ids);
-      const got: RawEvent[] = [];
-      for (let page = 0; page < MAX_PAGES; page++) {
-        const q = new URLSearchParams({ content_type: type, start_time: from.after, limit: String(PAGE), offset: String(page * PAGE) });
-        const r = (await this.#get(`/search?${q}`)) as { data?: unknown[]; pagination?: { total?: number } } | null;
-        const data = Array.isArray(r?.data) ? r.data : [];
-        for (const item of data) {
-          const e = normalize(type, item);
-          if (e && !seen.has(e.external_id) && e.at >= from.after) got.push(e);
-        }
-        const total = typeof r?.pagination?.total === 'number' ? r.pagination.total : null;
-        if (data.length < PAGE || (total !== null && (page + 1) * PAGE >= total)) break;
-      }
-      // New items arrive at the front while paging, so one can come twice: once is enough.
-      const unique = [...new Map(got.map((e) => [e.external_id, e])).values()].sort((a, b) => a.at.localeCompare(b.at));
-      if (unique.length) {
-        const last = unique.at(-1)!.at;
-        const atLast = unique.filter((e) => e.at === last).map((e) => e.external_id);
-        next[type] = { after: last, ids: last === from.after ? [...seen, ...atLast] : atLast };
-      } else if (!cursor[type]) next[type] = from;
-      events.push(...unique);
+      const r = await this.#pullType(type, cursor[type] ?? { after: since }, since);
+      next[type] = r.cursor;
+      events.push(...r.events);
     }
     return { events: events.sort((a, b) => a.at.localeCompare(b.at)), cursor: next };
+  }
+
+  async #pullType(type: ContentType, from: TypeCursor, since: string): Promise<{ events: RawEvent[]; cursor: TypeCursor }> {
+    const seen = new Map<string, string>(Array.isArray(from.seen) ? from.seen : []);
+    for (const id of from.ids ?? []) if (!seen.has(id)) seen.set(id, from.after);
+    const got: RawEvent[] = [];
+    const take = (items: RawEvent[]) => { for (const e of items) { if (seen.has(e.external_id)) continue; seen.set(e.external_id, e.at); got.push(e); } };
+    // Ask again from a little before where the last pull reached, but never from before consent.
+    let lo = latest(since, plus(from.after, -this.#lookbackMs))!;
+    // Everything up to here has been read: the cursor never moves past it.
+    let reached = from.after;
+    let span: number | null = null;
+    let newestKnown: string | null = null;
+    let requests = 0;
+    let progressed = false;
+    while (requests < MAX_REQUESTS) {
+      // The last window is open-ended: it runs to whatever Screenpipe has now.
+      let hi = span === null ? null : plus(lo, span);
+      if (hi !== null && newestKnown !== null && hi >= newestKnown) hi = null;
+      const first = await this.#search(type, lo, hi, 0);
+      requests++;
+      const fits = first.total !== null ? first.total <= WINDOW_MAX : first.count < PAGE;
+      if (hi === null) newestKnown = latest(newestKnown, first.newest);
+      const width = hi === null ? Date.parse(newestKnown ?? lo) - Date.parse(lo) : span!;
+      if (!fits && width > MIN_SPAN_MS) {
+        // Too full: narrow it to about half a window's worth, at most half as wide.
+        const share = Math.floor((width * (WINDOW_MAX / 2)) / (first.total ?? WINDOW_MAX * 2));
+        span = Math.max(MIN_SPAN_MS, Math.min(Math.floor(width / 2), share));
+        continue;
+      }
+      // Read it whole, or leave it for the next pull when what's left of this one can't.
+      const pages = first.total !== null ? Math.ceil(first.total / PAGE) : 1;
+      if (progressed && pages - 1 > MAX_REQUESTS - requests) break;
+      take(first.items);
+      let newest = first.newest;
+      // Paged until a short page, not by the first total: items arriving meanwhile push older ones
+      // to later pages, and those must still be read (any read twice are skipped by id).
+      for (let offset = PAGE, count = first.count; count === PAGE && requests < MAX_REQUESTS * 2; offset += PAGE) {
+        const page = await this.#search(type, lo, hi, offset);
+        requests++;
+        take(page.items);
+        newest = latest(newest, page.newest);
+        count = page.count;
+      }
+      progressed = true;
+      if (hi === null) { reached = latest(reached, newest)!; break; }
+      reached = latest(reached, hi)!;
+      lo = hi;
+      // A sparse stretch: wider windows from here.
+      if ((first.total ?? WINDOW_MAX) < WINDOW_MAX / 4) span = span! * 2;
+    }
+    // Only the ids the next pull can see again are kept.
+    const keepFrom = plus(reached, -this.#lookbackMs);
+    return { events: got, cursor: { after: reached, seen: [...seen].filter(([, at]) => at >= keepFrom) } };
   }
 }

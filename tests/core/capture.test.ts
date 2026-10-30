@@ -60,7 +60,7 @@ test('consent is off by default and per source: nothing is pulled, nothing store
     const on = await h.c('POST', `/capture/sources/${encodeURIComponent(id)}/enable`);
     assert.equal(on.status, 200);
     assert.equal(on.body.active, true);
-    assert.equal(on.body.consent.by, 'person');
+    assert.equal(on.body.consent.by, 'console', 'the hub’s own screen');
     const status = (await h.c('GET', '/capture/status')).body;
     assert.equal(status.active, true, 'the indicator shows');
     assert.deepEqual(status.capturing.map((c: { name: string }) => c.name), ['Screenpipe']);
@@ -248,7 +248,7 @@ test('promotion is deliberate, with provenance back to capture; forgetting eithe
     assert.equal(made.status, 201);
     const m = made.body.memory;
     assert.equal(m.content, `${word} the plumber comes Tuesday`);
-    assert.deepEqual([m.source, m.observed_at, m.recorded_by, m.user_state], [`capture:${first.id}`, first.at, 'person', 'confirmed']);
+    assert.deepEqual([m.source, m.observed_at, m.recorded_by, m.user_state], [`capture:${first.id}`, first.at, 'console', 'confirmed']);
     assert.deepEqual((await h.c('GET', `/capture/events/${first.id}`)).body.promoted, [m.id]);
     assert.equal((await h.c('GET', `/capture/memory/${m.id}`)).body[0].present, true);
 
@@ -293,9 +293,10 @@ test('a triage decision may only propose: nothing is memory until the person acc
     await h.c('POST', `/capture/sources/${encodeURIComponent(id)}/enable`);
     sp.add({ at: min(h, 1), app: 'Editor', text: 'The recycling is collected on Thursdays.' }, { at: min(h, 2), app: 'Editor', text: 'scrolling' });
     await pull(h, id);
-    // With no provider that can answer (the built-in rules have none for this), nothing is proposed.
+    // With no provider that can answer (the built-in rules have none for this), nothing is proposed,
+    // and nothing is marked looked at: it waits for a provider.
     let r = (await h.c('POST', '/capture/propose')).body;
-    assert.deepEqual([r.looked, r.proposed.length], [2, 0]);
+    assert.deepEqual([r.looked, r.proposed.length, r.waiting], [0, 0, true]);
     assert.ok(h.core.templates.get('capture-promote'), 'the template is built in');
 
     // A decision provider that answers (here a stand-in for a local model).
@@ -306,7 +307,8 @@ test('a triage decision may only propose: nothing is memory until the person acc
       ? { template_id: t, version: 1, answers: { remember: /recycling/.test(String(inputs.text)) ? 0.95 : 0.55 }, confidence: 0.9, provider: 'stand-in', escalate: !/recycling/.test(String(inputs.text)), why: '' }
       : decide(t, inputs));
     r = (await h.c('POST', '/capture/propose')).body;
-    assert.deepEqual([r.looked, r.proposed.length], [2, 1]);
+    assert.deepEqual([r.looked, r.proposed.length], [4, 2], 'the two that waited are looked at too');
+    await h.c('POST', `/capture/proposals/${(await h.c('GET', '/capture/proposals')).body.find((x: any) => /Thursdays/.test(x.event.text)).id}/dismiss`);
     assert.equal((await h.c('GET', '/memory')).body.length, 0, 'a proposal is not a memory');
     const [p] = (await h.c('GET', '/capture/proposals')).body;
     assert.equal(p.event.text, 'The recycling moved to Wednesdays.');
@@ -314,7 +316,7 @@ test('a triage decision may only propose: nothing is memory until the person acc
     assert.equal((await h.c('GET', '/capture/status')).body.proposals, 1);
     const ok = await h.c('POST', `/capture/proposals/${p.id}/accept`, {});
     assert.equal(ok.status, 201);
-    assert.equal(ok.body.memory.recorded_by, 'person');
+    assert.equal(ok.body.memory.recorded_by, 'console');
     const prov = (await h.c('GET', `/capture/memory/${ok.body.memory.id}`)).body;
     assert.equal(prov[0].proposal_id, p.id, 'the proposal is part of the audit trail');
     assert.equal((await h.c('GET', '/capture/proposals')).body.length, 0);
