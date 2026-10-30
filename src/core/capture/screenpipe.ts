@@ -3,7 +3,7 @@
 // from, accessibility text) flows into the Capture API unchanged.
 //
 //   GET /health                                    is it there at all
-//   GET /search?content_type=ocr|audio|ui          items from start_time to end_time (both
+//   GET /search?content_type=ocr|audio|accessibility  items from start_time to end_time (both
 //          &start_time=&end_time=&limit=&offset=   inclusive), newest first, with pagination.total
 //
 // Screenpipe answers newest first, so a backlog is read oldest first by windows of time: a window
@@ -12,6 +12,10 @@
 // window read whole) and the ids it took lately. Each pull asks again from a few minutes before
 // that (the lookback), so an item Screenpipe reports late with an older time still arrives, and the
 // ids keep anything from arriving twice. A backlog bigger than one pull carries on at the next.
+//
+// Accessibility text: Screenpipe 0.4 asks for it as content_type=accessibility and answers 400 to the
+// older name, "ui" (its items still come back as type "UI"). Nova asks by the new name, and by the
+// old one only when a Screenpipe refuses the new; which one a Screenpipe took is remembered.
 //
 // Screenpipe 0.4 can require an API key (its Settings > Privacy): with one set, every request carries
 // it as "Authorization: Bearer <key>"; without, none does. A 401 or 403 is Screenpipe refusing Nova,
@@ -57,6 +61,12 @@ export interface RawEvent {
 }
 
 export class Unreachable extends Error {}
+// Screenpipe answered 400: it didn't accept what Nova asked for.
+class BadRequest extends Unreachable {}
+
+// The name each Screenpipe (by address) took for accessibility text, once one has worked.
+const UI_NAME = new Map<string, string>();
+const UI_NAMES = ['accessibility', 'ui'] as const;
 // Screenpipe answered but refused Nova: it wants an API key, or not the one Nova sent.
 export class KeyRefused extends Error {
   readonly hadKey: boolean;
@@ -128,6 +138,7 @@ export class Screenpipe {
       throw new Unreachable(`Screenpipe at ${this.url} isn’t answering (${(e as Error)?.cause instanceof Error ? ((e as Error).cause as Error).message : (e as Error).message}).`);
     }
     if (res.status === 401 || res.status === 403) { await res.body?.cancel().catch(() => {}); throw new KeyRefused(this.#apiKey !== null); }
+    if (res.status === 400) { await res.body?.cancel().catch(() => {}); throw new BadRequest(`Screenpipe at ${this.url} answered 400.`); }
     if (!res.ok) throw new Unreachable(`Screenpipe at ${this.url} answered ${res.status}.`);
     const tooMuch = () => new Unreachable(`Screenpipe at ${this.url} answered with too much at once (over ${Math.round(this.#maxBytes / 1024 / 1024)} MB), so Nova didn’t read it.`);
     if (Number(res.headers.get('content-length')) > this.#maxBytes) { await res.body?.cancel().catch(() => {}); throw tooMuch(); }
@@ -153,9 +164,28 @@ export class Screenpipe {
   }
 
   async #search(type: ContentType, start: string, end: string | null, offset: number): Promise<Page> {
-    const q = new URLSearchParams({ content_type: type, start_time: start, limit: String(PAGE), offset: String(offset) });
-    if (end) q.set('end_time', end);
-    const r = (await this.#get(`/search?${q}`)) as { data?: unknown[]; pagination?: { total?: number } } | null;
+    const ask = (name: string) => {
+      const q = new URLSearchParams({ content_type: name, start_time: start, limit: String(PAGE), offset: String(offset) });
+      if (end) q.set('end_time', end);
+      return this.#get(`/search?${q}`);
+    };
+    let r: { data?: unknown[]; pagination?: { total?: number } } | null;
+    if (type !== 'ui') r = (await ask(type)) as typeof r;
+    else {
+      const known = UI_NAME.get(this.url);
+      const names = known ? [known, ...UI_NAMES.filter((n) => n !== known)] : [...UI_NAMES];
+      r = null;
+      for (const [i, name] of names.entries()) {
+        try {
+          r = (await ask(name)) as typeof r;
+          UI_NAME.set(this.url, name);
+          break;
+        } catch (e) {
+          // Refused by this name: the other one, if there is one left; anything else is as it is.
+          if (!(e instanceof BadRequest) || i === names.length - 1) throw e;
+        }
+      }
+    }
     const data = Array.isArray(r?.data) ? r.data : [];
     const items = data.map((item) => normalize(type, item)).filter((e): e is RawEvent => e !== null);
     return { items, count: data.length, newest: items.reduce<string | null>((m, e) => latest(m, e.at), null), total: typeof r?.pagination?.total === 'number' ? r.pagination.total : null };
