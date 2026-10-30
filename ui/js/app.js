@@ -1387,7 +1387,7 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
-  Promise.all([loadPermissions(), refreshCore(['profile'])]).then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile']), core.loadProviders()]).then(() => {
     renderSettingsView({ only: 'you' });
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input'))?.focus({ preventScroll: true }); flash(target); }
@@ -1397,6 +1397,7 @@ function showSettings() {
 
 const PARTS = {
   you: () => core.renderYou(),
+  providers: () => core.renderProviders(),
   perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
 <p class="memory-lede">${permissionsError}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''),
   look: () => core.renderAppearance(),
@@ -1442,6 +1443,10 @@ el.settings.addEventListener('click', (e) => {
   else if (action === 'preview-ds') { core.previewDs(b.dataset.ds); renderSettingsView({ only: 'look' }); }
   else if (action === 'apply-ds' || action === 'rollback-ds') core.appearanceAction(action, b);
   else if (action === 'install') core.install().then(() => renderSettingsView({ only: 'devices' }));
+  else if (action === 'provider-choose') core.chooseProvider(b.dataset.for, b.dataset.provider);
+  else if (action === 'provider-on') core.providerOn(b.dataset.provider);
+  else if (action === 'provider-off') core.providerOff(b.dataset.provider);
+  else if (action === 'provider-setup') core.providerSetup(b.dataset.provider);
 });
 el.settings.addEventListener('change', (e) => {
   const t = e.target;
@@ -1454,6 +1459,7 @@ el.settings.addEventListener('keydown', (e) => {
 });
 window.addEventListener('nova:appearance', () => { if (state.view === 'settings') renderSettingsView({ only: 'look' }); });
 window.addEventListener('nova:installable', () => { if (state.view === 'settings') renderSettingsView({ only: 'devices' }); });
+window.addEventListener('nova:providers', () => { if (state.view === 'settings') renderSettingsView({ only: 'providers' }); });
 
 // ---- voice: dictation into the composer, off in local-only --------------------------------
 
@@ -1517,6 +1523,8 @@ onCore('problem', (p) => {
 onCore('message', () => scheduleRefresh(['messages']));
 onCore('trigger', () => scheduleRefresh(['rules', 'messages']));
 onCore('profile', () => scheduleRefresh(['profile']));
+// A provider was set up, turned on or off, or checked (M5a): Settings shows it at once.
+onCore('provider', () => { if (state.view === 'settings') core.loadProviders(); });
 // The device mesh: the registry changed, or a device is asking to join (only approvers hear that).
 onCore('device', () => scheduleRefresh(['devices', 'mesh']));
 // Hub or standby changed (promoted, stepped down); on a standby, the hub's changes arrived.
@@ -1561,6 +1569,8 @@ document.addEventListener('click', (e) => {
 });
 // The approval sheet: tier 3 needs the box ticked before Confirm can be pressed.
 $('sheet').addEventListener('submit', (e) => {
+  const settings = e.target.closest('.provider-form');
+  if (settings) { e.preventDefault(); core.saveProvider(settings); return; }
   const form = e.target.closest('.approval-sheet');
   if (!form) return;
   e.preventDefault();

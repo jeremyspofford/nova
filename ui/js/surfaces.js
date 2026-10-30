@@ -15,6 +15,8 @@ export const store = {
   // The device mesh: the registry, whether other devices can reach Nova (and who this page is),
   // and devices waiting for an OK.
   devices: [], mesh: null, requests: [],
+  // Settings › Providers: GET /providers, loaded when Settings opens (M5a).
+  providers: null,
 };
 
 const settle = (p, fallback) => p.catch(() => fallback);
@@ -166,6 +168,7 @@ export async function approve(form) {
   if (form.dataset.revoke) return confirmRevoke(form);
   if (form.dataset.allow) return confirmAllow(form);
   if (form.dataset.promote) return confirmPromote(form);
+  if (form.dataset.provider) return confirmProvider(form);
   const id = form.dataset.task;
   const tier = Number(form.dataset.tier);
   const confirm = form.querySelector('input[name="confirm"]');
@@ -525,6 +528,138 @@ async function confirmPromote(form) {
     toast(`This node is the hub now (epoch ${r.epoch}).`);
   } catch (e) { toast(e.message); }
   await load();
+}
+
+// ---- Settings › Providers (M5a) ------------------------------------------------------------------
+// Who Nova can hand work to. Nova recommends one for chat rather than listing choices; that is the
+// one standout here. The full list waits one layer down. Turning a provider on is tier 2: its own
+// sheet, with what it may do and where its data goes.
+
+const CLASS_WORDS = { 'coding-agent': 'Coding agent', chat: 'Chat model', automation: 'Automation' };
+const providerById = (id) => store.providers?.providers?.find((p) => p.id === id) ?? null;
+
+export function renderProviders() {
+  const data = store.providers;
+  const head = '<h2 class="memory-heading" id="set-providers">Providers</h2>';
+  if (!data) return `<section class="memory-section" id="providers" aria-labelledby="set-providers">${head}<p class="memory-lede">Nova hasn’t heard back about its providers yet.</p></section>`;
+  const name = (id) => providerById(id)?.name ?? id;
+  const advice = (what, standout) => {
+    const c = what === 'chat' ? data.chat : data.defaults[what];
+    const rec = c.recommended;
+    const better = rec.id && rec.id !== c.current;
+    const title = what === 'chat' ? `Chat uses ${name(c.current)}` : c.current ? `Coding tasks go to ${name(c.current)}` : 'Coding tasks';
+    return settingsRow({
+      title,
+      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}` : rec.why,
+      control: better ? `<button type="button" class="btn small${standout ? ' primary' : ''}" data-action="provider-choose" data-for="${what}" data-provider="${esc(rec.id)}">Use ${esc(name(rec.id))}</button>` : '',
+    });
+  };
+  const rows = data.providers.map((p) => {
+    const usable = p.health.state === 'ready' || p.health.state === 'unchecked';
+    const pill = `<span class="pill${p.enabled && p.health.state === 'ready' ? ' is-on' : p.enabled ? ' is-warn' : ''}">${p.enabled ? 'On' : 'Off'}</span>`;
+    const setup = p.fields.some((f) => !f.fixed) ? `<button type="button" class="btn small quiet" data-action="provider-setup" data-provider="${esc(p.id)}">Settings</button>` : '';
+    const toggle = p.enabled
+      ? `<button type="button" class="btn small" data-action="provider-off" data-provider="${esc(p.id)}">Turn off</button>`
+      : `<button type="button" class="btn small" data-action="provider-on" data-provider="${esc(p.id)}"${usable ? '' : ' disabled'}>Turn on</button>`;
+    return settingsRow({ id: `provider-${p.id}`, title: p.name, note: `${CLASS_WORDS[p.class] ?? p.class}. ${p.egress.words} ${p.health.words}`, control: `${pill}${setup}${toggle}` });
+  }).join('');
+  const chatBetter = data.chat.recommended.id && data.chat.recommended.id !== data.chat.current;
+  // Redrawn on every change; the full list stays open if the person opened it.
+  const open = document.querySelector('#providers details.raw')?.open ? ' open' : '';
+  return `<section class="memory-section" id="providers" aria-labelledby="set-providers">${head}
+<p class="memory-lede">Other AIs and automations Nova can hand work to. Each is off until you turn it on, and Nova checks what they do before it counts.</p>
+<ul class="settings-list">${advice('chat', true)}${advice('coding-agent', !chatBetter)}</ul>
+<details class="raw"${open}><summary>All providers (${data.providers.length})</summary><ul class="settings-list">${rows}</ul></details>
+<p class="settings-note">Test commands a brief declares: ${data.task_tests === 'allow' ? 'Nova runs them without asking.' : 'Nova asks before running them.'}</p></section>`;
+}
+
+export async function loadProviders() {
+  try {
+    store.providers = await api('GET', '/providers');
+  } catch { /* the part keeps what it had; the next event tries again */ }
+  window.dispatchEvent(new CustomEvent('nova:providers'));
+}
+
+export async function chooseProvider(what, id) {
+  try {
+    await api('PUT', '/providers/choice', { for: what, id });
+    toast(what === 'chat' ? `Chat uses ${providerById(id)?.name ?? id} now.` : `Coding tasks go to ${providerById(id)?.name ?? id} now.`);
+  } catch (e) { toast(e.message); }
+  await loadProviders();
+}
+
+export async function providerOff(id) {
+  try {
+    const p = await api('POST', `/providers/${encodeURIComponent(id)}/disable`);
+    toast(`${p.name} is off. Its tasks wait until it is on again.`);
+  } catch (e) { toast(e.message); }
+  await loadProviders();
+}
+
+// Turning one on asks first (tier 2): what it may do, and where its data goes.
+export function providerOn(id) {
+  const p = providerById(id);
+  if (!p) return;
+  openSheet(`<form class="approval-sheet" data-tier="2" data-provider="${esc(p.id)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">Turn on ${esc(p.name)}?</h2>
+  <p class="sheet-line">${esc(p.about)}</p>
+  <dl class="facts"><dt>Where it sends</dt><dd>${esc(p.egress.words)}</dd><dt>It may</dt><dd>${p.review.map(esc).join('<br>')}</dd></dl>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve">Turn it on</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`, { label: `Turn on ${p.name}` });
+}
+
+async function confirmProvider(form) {
+  try {
+    const p = await api('POST', `/providers/${encodeURIComponent(form.dataset.provider)}/enable`, { approved: true });
+    closeSheet();
+    toast(`${p.name} is on.`);
+  } catch (e) { toast(e.message); }
+  await loadProviders();
+}
+
+export function providerSetup(id) {
+  const p = providerById(id);
+  if (!p) return;
+  const field = (f) => {
+    const fid = `pf-${f.key}`;
+    return `<label class="field-label" for="${fid}">${esc(f.label)}<input class="input field" id="${fid}" name="${esc(f.key)}" value="${esc(p.config[f.key] ?? '')}" autocomplete="off"${f.fixed ? ' readonly' : ''}></label>${f.note ? `<p class="settings-note">${esc(f.note)}</p>` : ''}`;
+  };
+  openSheet(`<form class="provider-form" data-provider="${esc(p.id)}" method="dialog">
+  <h2 class="sheet-title" id="sheet-title">${esc(p.name)}</h2>
+  <p class="sheet-line">${esc(p.health.words)}</p>
+  ${p.fields.map(field).join('')}
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary">Save</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Cancel</button>
+  </div>
+</form>`, { label: `${p.name} settings` });
+}
+
+export async function saveProvider(form) {
+  const p = providerById(form.dataset.provider);
+  if (!p) return;
+  const config = {};
+  for (const f of p.fields) {
+    if (f.fixed) continue;
+    const v = form.elements[f.key]?.value.trim() ?? '';
+    if (v !== String(p.config[f.key] ?? '')) config[f.key] = v;
+  }
+  try {
+    const r = await api('PUT', `/providers/${encodeURIComponent(p.id)}/config`, { config });
+    if (r.token) {
+      openSheet(`<div class="provider-token"><h2 class="sheet-title" id="sheet-title">The workflow’s callback token</h2>
+<p class="sheet-line">${esc(r.note)}</p><p class="fingerprint">${esc(r.token)}</p>
+<div class="sheet-actions"><button type="button" class="btn primary" data-action="close-sheet">Done</button></div></div>`, { label: 'Callback token' });
+    } else {
+      closeSheet();
+      toast(`Saved. ${r.provider.health.words}`);
+    }
+  } catch (e) { toast(e.message); }
+  await loadProviders();
 }
 
 export { ICONS };

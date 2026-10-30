@@ -39,6 +39,8 @@ const ABOUT: Record<ProviderClass, string> = {
   automation: 'An automation: Nova sends it the brief and it reports back, signed.',
 };
 const CHOICES = ['chat', ...CLASSES] as const;
+// How a person writes the companies the built-in agents send to.
+const COMPANY: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI' };
 type Choice = (typeof CHOICES)[number];
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
@@ -189,7 +191,7 @@ export class Providers extends EventEmitter {
     }
     const url = impl.url?.(c);
     if (impl.url) {
-      if (!url) return { coarse: 'local', receipt: 'local', words: 'Not set yet.' };
+      if (!url) return { coarse: 'local', receipt: 'local', words: 'No address set yet.' };
       let host: string;
       try { host = new URL(url).hostname.replace(/^\[|\]$/g, ''); } catch { return { coarse: 'remote', receipt: 'remote:unknown', words: 'An address Nova can’t read; counted as the cloud.' }; }
       if (LOOPBACK.test(host)) return { coarse: 'local', receipt: 'local', words: 'Stays on this computer.' };
@@ -201,7 +203,8 @@ export class Providers extends EventEmitter {
     if (e === 'none') return { coarse: 'none', receipt: 'local', words: 'Stays on this computer.' };
     if (e === 'local') return { coarse: 'local', receipt: 'local', words: 'Stays on your devices.' };
     const to = e.slice('remote:'.length);
-    return { coarse: 'remote', receipt: e, words: `Sends the brief and the files it reads to ${to[0]!.toUpperCase()}${to.slice(1)}.` };
+    const named = COMPANY[to] ?? to;
+    return { coarse: 'remote', receipt: e, words: `Sends the brief and the files it reads to ${named}.` };
   }
 
   // Health in plain words: installed, not installed, not configured, unreachable. Nothing is run to
@@ -337,7 +340,7 @@ export class Providers extends EventEmitter {
       .filter((o) => o.h.state === 'ready' || o.h.state === 'unchecked');
     const allowed = options.filter((o) => permits(mode, o.where.coarse));
     const best = allowed.sort((a, b) => rank[a.where.coarse] - rank[b.where.coarse] || Number(b.h.state === 'ready') - Number(a.h.state === 'ready'))[0];
-    if (best) return { id: best.x.id, why: best.where.coarse === 'remote' ? `${best.x.manifest.name} is on and working; it ${best.where.words.charAt(0).toLowerCase()}${best.where.words.slice(1)}` : `${best.x.manifest.name} is on, working, and keeps it ${best.where.coarse === 'none' ? 'on this computer' : 'on your devices'}.` };
+    if (best) return { id: best.x.id, why: best.where.coarse === 'remote' ? `It is on and working, and it ${best.where.words.charAt(0).toLowerCase()}${best.where.words.slice(1)}` : `It is on and working, and keeps everything ${best.where.coarse === 'none' ? 'on this computer' : 'on your devices'}.` };
     if (options.length) return { id: null, why: `What is on sends data off your devices, and your privacy setting is ${mode}. Turn on a local model to use here.` };
     return { id: null, why: what === 'chat' ? 'Turn on a chat model to choose it here.' : `Turn on a ${what.replace('-', ' ')} to use one here.` };
   }

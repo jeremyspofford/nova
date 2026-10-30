@@ -29,7 +29,11 @@ function verify(secret, header, body) {
   return timingSafeEqual(want, Buffer.from(m[2], 'hex')) && Math.abs(Date.now() / 1000 - Number(m[1])) < 300;
 }
 
-export function startFakeN8n({ secret, nova, token, behavior = 'done', delayMs = 20 } = {}) {
+/**
+ * @param {{ secret: string, nova: string, token: string, behavior?: string, delayMs?: number }} opts
+ * @returns {Promise<{ url: string, port: number, received: { headers: Record<string, any>, raw: string, body: any, signed: boolean }[], callbacks: { body: any, status: number, answer: string }[], close: () => Promise<void> }>}
+ */
+export function startFakeN8n({ secret, nova, token, behavior = 'done', delayMs = 20 }) {
   const received = [];
   const callbacks = [];
   let executions = 0;

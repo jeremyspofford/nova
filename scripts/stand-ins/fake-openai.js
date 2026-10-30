@@ -14,6 +14,10 @@ import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+/**
+ * @param {{ reply?: (req: any) => string | Promise<string>, model?: string, key?: string | null, chunk?: number, delayMs?: number, status?: number }} [opts]
+ * @returns {Promise<{ url: string, port: number, requests: { method: string, url: string, headers: Record<string, any>, body: any }[], close: () => Promise<void> }>}
+ */
 export function startFakeOpenAI({ reply = () => 'Hello from the stand-in.', model = 'stand-in-model', key = null, chunk = 12, delayMs = 0, status = 200 } = {}) {
   const requests = [];
   const server = createServer(async (req, res) => {
