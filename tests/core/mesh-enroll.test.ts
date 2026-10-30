@@ -24,7 +24,9 @@ test('the happy path: code, join, reveal, the same six digits on both screens, t
     assert.equal(hello.status, 200);
     assert.equal(hello.body.fingerprint, p.body.hub_fingerprint);
     assert.equal(keyFingerprint(hello.body.public_key), hello.body.fingerprint);
-    assert.deepEqual(Object.keys(hello.body).sort(), ['epoch', 'fingerprint', 'id', 'name', 'public_key', 'role', 'x25519_public_key']);
+    assert.deepEqual(Object.keys(hello.body).sort(), ['epoch', 'fingerprint', 'id', 'name', 'public_key', 'role', 'roster', 'x25519_public_key']);
+    // The roster (M4c, for fencing) carries ids, the hub's address and public keys: no person data.
+    assert.deepEqual(Object.keys(hello.body.roster.roster).sort(), ['epoch', 'hub', 'issued_at']);
 
     const events: [string, unknown][] = [];
     const listen = (c: unknown) => events.push(['device', c]);

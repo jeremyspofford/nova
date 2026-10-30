@@ -31,6 +31,9 @@ export class Log extends EventEmitter {
   readonly file: string | null;
   #db: Db;
   #now: () => Date;
+  // True on a standby, whose problem table is a copy of the hub's: its own problems take ids below
+  // zero, so the hub's never overwrite them.
+  local: () => boolean = () => false;
 
   constructor(db: Db, file: string | null, now: () => Date = () => new Date()) {
     super();
@@ -53,7 +56,8 @@ export class Log extends EventEmitter {
   // (a stack, an exit code) is one tap away.
   problem(source: string, message: string, opts: { detail?: string; taskId?: string } = {}): Problem {
     const at = this.#now().toISOString();
-    this.#db.run('INSERT INTO problem (at, source, message, detail, task_id) VALUES (?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
+    if (this.local()) this.#db.run('INSERT INTO problem (id, at, source, message, detail, task_id) VALUES ((SELECT MIN(0, IFNULL(MIN(id), 0)) - 1 FROM problem), ?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
+    else this.#db.run('INSERT INTO problem (at, source, message, detail, task_id) VALUES (?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
     const row = this.#db.get<Problem>('SELECT * FROM problem WHERE id = last_insert_rowid()')!;
     this.write('error', source, message, { detail: opts.detail, task: opts.taskId });
     this.emit('problem', row);

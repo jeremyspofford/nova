@@ -241,6 +241,8 @@ export class Memory {
   // after that, a file that differs from the last render was edited by hand, and the edits are
   // taken in as the person's. Then the file is rendered again.
   sync() {
+    // On a standby MEMORY.md is a copy of the hub's; it is never taken in as edits here.
+    if (this.readOnly?.()) return { imported: 0, edits: 0 };
     const current = this.text();
     const last = this.lastRender();
     let imported = 0;

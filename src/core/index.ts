@@ -25,6 +25,8 @@ import { loadIdentity } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
 import { Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
+import { SyncLog } from './mesh/sync.ts';
+import { MeshRole, nodeRole } from './mesh/promote.ts';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 
 export { render as renderIdentity } from './identity.ts';
@@ -46,6 +48,11 @@ export type { Device, Kind as DeviceKind, Role as DeviceRole, MeshState } from '
 export type { JoinRequest, Pairing } from './mesh/enroll.ts';
 export type { Listener, MeshListenerInfo, Principal, Scope } from './mesh/access.ts';
 export type { MeshIdentity } from './mesh/identity.ts';
+// Hub, standby and sync (M4c): the role file a standby is enrolled with, and this node's keys.
+export { loadIdentity } from './mesh/identity.ts';
+export { ROLE_FILE, readRole, writeRole } from './mesh/replica.ts';
+export type { RoleFile } from './mesh/replica.ts';
+export { REPLICATED, NOT_JOURNALLED } from './mesh/sync.ts';
 export type { Who } from './api.ts';
 export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
 
@@ -75,6 +82,11 @@ export function createCore(o: CoreOptions) {
   const db = new Db(join(o.home, 'nova.db'));
   const migration = db.migrate({ backupDir: join(o.home, 'backups'), now });
   const log = new Log(db, join(o.home, 'logs', 'nova.log'), now);
+  // Hub or standby, decided before anything writes: a standby copies the hub's sync log instead
+  // of recording its own writes (mesh/promote.ts).
+  const place = nodeRole(db, o.home);
+  let meshRole: MeshRole | null = null;
+  log.local = () => (meshRole ? meshRole.role() : place.role) !== 'hub';
   const profile = new Profile(db, now);
   const workspace = new Workspace(join(o.home, 'workspace'));
   const verifier = new Verifier(workspace, now);
@@ -94,17 +106,27 @@ export function createCore(o: CoreOptions) {
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
   const design = new Design({ extensions, profile, ...(o.designSystems ? { dir: o.designSystems } : {}) });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
-  const memory = new Memory({ db, home: o.home, now, afterForget: (ids) => backups.forget('memory', ids) });
+  const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
   const receipts = new Receipts({ db, log, now });
   for (const p of design.ensureBuiltins()) log.problem('design', p);
   // The device mesh: this node's keys, the registry, enrollment, and who may do what.
   const meshInfo = o.mesh ?? null;
   const publicUrl = () => meshInfo?.publicUrl ?? null;
-  const meshIdentity = loadIdentity(o.home, { now, warn: (m) => log.problem('mesh', m) });
+  const meshIdentity = loadIdentity(o.home, { now, warn: (m) => log.problem('mesh', m), adopt: place.file?.device_id ?? null });
   const devices = new Devices({ db, log, identity: meshIdentity, now, publicUrl });
-  devices.ensureHub();
+  if (place.role === 'hub') devices.ensureHub();
   const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
   const access = new Access({ devices, mesh: meshInfo });
+  // Hub, standby and sync (M4 plan §3).
+  const sync = new SyncLog({ db, log, home: o.home, node: meshIdentity.id, now });
+  memory.onForgetDone((records) => sync.forgotten(records.map((r) => r.content)));
+  meshRole = new MeshRole({
+    db, log, home: o.home, now, publicUrl, identity: meshIdentity, devices, access, sync, ledger, verifier, file: place.file,
+    becameHub: () => startHub(), becameStandby: () => stopHub(),
+    forgotten: (rows) => memory.forgottenElsewhere(rows),
+    failoverAfterS: () => { const v = profile.get<number>('mesh', 'auto_failover_after_s'); return typeof v === 'number' && v > 0 ? v : null; },
+  });
+  const role = meshRole;
 
   const bus = new EventEmitter();
   bus.setMaxListeners(100);
@@ -129,6 +151,8 @@ export function createCore(o: CoreOptions) {
   triggers.on('message', (m) => bus.emit('event', 'message', m));
   devices.on('change', (c: { action: string; device: Device }) => bus.emit('event', 'device', { action: c.action, device: deviceView(c.device) }));
   enroll.on('change', (r) => bus.emit('event', 'join_request', r));
+  role.on('change', (s) => bus.emit('event', 'mesh', s));
+  role.on('applied', (a) => bus.emit('event', 'sync', a));
   const stream = {
     on(listener: (event: string, data: unknown) => void) {
       const fn = (event: string, data: unknown) => listener(event, data);
@@ -179,12 +203,16 @@ export function createCore(o: CoreOptions) {
   }
 
   function meshHealth() {
-    const s = devices.state();
-    return {
-      role: s.role, epoch: s.epoch, listening: !!meshInfo, counts: devices.counts(),
-      // The standby's lag arrives with sync (M4c).
-      standby: s.standby_id ? { id: s.standby_id, lag: null } : null,
-    };
+    const s = role.status();
+    return { role: s.role, epoch: s.epoch, listening: !!meshInfo, counts: devices.counts(), standby: s.standby, replica: s.replica };
+  }
+
+  // The one mesh setting: automatic failover, off unless the person sets a number of seconds.
+  function meshSetting(key: string, value: unknown) {
+    if (key !== 'auto_failover_after_s') throw new CoreError('validation', 'The mesh section has one setting: auto_failover_after_s.');
+    if (value !== null && !(Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 86_400)) {
+      throw new CoreError('validation', 'auto_failover_after_s is the number of seconds the hub must be unreachable before the standby takes over (1 to 86400), or null to leave it off.');
+    }
   }
 
   const header = (h: IncomingHttpHeaders, name: string) => { const v = h[name]; return Array.isArray(v) ? v[0] : v; };
@@ -202,6 +230,7 @@ export function createCore(o: CoreOptions) {
       handle: ({ params, body }) => {
         const section = params.section as Section;
         if (!SECTIONS.includes(section) || section === 'setup') throw new CoreError('validation', `There is no profile section called "${params.section}".`);
+        if (section === 'mesh') meshSetting(params.key!, body.value);
         if (section === 'appearance') {
           if (params.key !== 'mode') throw new CoreError('validation', 'Choose a design system with POST /api/v1/design-systems/{id}/apply, so it is checked and can be rolled back.');
           design.setMode(body.value);
@@ -332,8 +361,12 @@ export function createCore(o: CoreOptions) {
       method: 'GET', path: '/mesh/hello', access: 'public', summary: 'The hub’s fingerprint, epoch, role and public keys. No person data; anyone may ask.',
       handle: () => {
         const s = devices.state();
-        const self = devices.get(meshIdentity.id);
-        return { name: self.name, id: meshIdentity.id, fingerprint: meshIdentity.fingerprint, epoch: s.epoch, role: s.role, public_key: meshIdentity.publicKey, x25519_public_key: meshIdentity.x25519PublicKey };
+        const self = devices.find(meshIdentity.id);
+        // The hub's signed roster too, so a hub that was away can tell it was replaced (fencing).
+        return {
+          name: self?.name ?? 'Nova', id: meshIdentity.id, fingerprint: meshIdentity.fingerprint, epoch: s.epoch, role: s.role, public_key: meshIdentity.publicKey, x25519_public_key: meshIdentity.x25519PublicKey,
+          ...(s.role === 'hub' ? { roster: devices.roster() } : {}),
+        };
       },
     },
     {
@@ -393,6 +426,7 @@ export function createCore(o: CoreOptions) {
       },
     },
     { method: 'GET', path: '/mesh/roster', access: 'mesh', summary: 'Who the hub and the standby are, signed by this node: devices pin both keys from it.', handle: () => devices.roster() },
+    ...role.routes(),
   ];
 
   // Tests drive the heartbeat's clock through the API; this route doesn't exist otherwise.
@@ -413,6 +447,23 @@ export function createCore(o: CoreOptions) {
     try { enroll.sweep(); } catch (e) { log.problem('mesh', 'Nova couldn’t tidy up old requests to join.', { detail: (e as Error)?.stack ?? String(e) }); }
     ticking = triggers.tick().catch((e) => log.problem('triggers', 'The heartbeat couldn’t check the schedules.', { detail: (e as Error)?.stack ?? String(e) }));
   };
+  // The hub's own work: the ledger, recovered, and the heartbeat. A standby runs neither.
+  function startHub() {
+    const recovered = ledger.recover();
+    if (!heartbeat) {
+      heartbeat = setInterval(beat, 30_000);
+      heartbeat.unref();
+      beat();
+    }
+    return recovered;
+  }
+  function stopHub() {
+    if (heartbeat) clearInterval(heartbeat);
+    heartbeat = null;
+  }
+  // On a standby (or a hub that stepped down) every change is refused, saying which node is hub;
+  // the only change it takes is becoming the hub.
+  const REPLICA_WRITES = new Set(['/api/v1/mesh/promote']);
 
   const api = createApi({
     routes, stream, version: o.version, trustedOrigin: o.trustedOrigin,
@@ -427,26 +478,30 @@ export function createCore(o: CoreOptions) {
     openapi: api.doc,
     identity: () => identityOf(profile),
     persona: () => render(identityOf(profile)),
-    mesh: { identity: meshIdentity, devices, enroll, access, info: meshInfo },
+    mesh: { identity: meshIdentity, devices, enroll, access, info: meshInfo, role, sync },
     // Who is asking, for a request outside /api/v1, or null once a refusal was sent (mesh/access.ts).
-    gate: (req: IncomingMessage, res: ServerResponse, url: URL, listener: Listener) => access.gate(req, res, url, listener),
+    gate: (req: IncomingMessage, res: ServerResponse, url: URL, listener: Listener) => {
+      const p = access.gate(req, res, url, listener);
+      const replica = p && req.method !== 'GET' && req.method !== 'HEAD' && !REPLICA_WRITES.has(url.pathname) ? role.replica() : null;
+      if (!replica) return p;
+      res.writeHead(409, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ error: replica.reason, replica: true }));
+      return null;
+    },
     // The core's routes, for the principal the gate found.
     handle: (req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal, listener: Listener) =>
       api.handle(req, res, url, { principal, listener, address: access.address(req, listener) }),
-    // Recovers the ledger, then starts the heartbeat: once now (to catch up), then every 30 s.
+    // A hub recovers the ledger, then starts the heartbeat: once now (to catch up), then every
+    // 30 s. A standby starts copying the hub instead, and runs nothing else.
     start() {
-      const recovered = ledger.recover();
-      if (!heartbeat) {
-        heartbeat = setInterval(beat, 30_000);
-        heartbeat.unref();
-        beat();
-      }
+      const recovered = role.role() === 'hub' ? startHub() : { requeued: [], reverified: [] };
+      role.start();
       return recovered;
     },
     // Waits briefly for running work; anything still running is requeued on the next start.
     async close() {
-      if (heartbeat) clearInterval(heartbeat);
-      heartbeat = null;
+      stopHub();
+      await role.close();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();
     },

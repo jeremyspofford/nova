@@ -48,6 +48,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   const runner = new Runner(config, store, { ...deps, records: core.memory });
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.
   core.memory.onForget((records) => runner.memory.forgotten(records));
+  runner.memory.readOnly = () => !!core.mesh.role.replica();
   runner.memory.sync();
   runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault(), receipt: (r) => core.receipts.record(r) };
   runner.ensureMain();
@@ -465,11 +466,26 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   const { config } = nova;
   ensureGit(config.home);
-  nova.helpers.recover(); // helper logs from before the ledger; the rest is the ledger's recovery
+  // A hub first asks its roster peers whether one of them became hub while it was away (fencing).
+  const { role } = nova.core.mesh;
+  await role.fence();
+  // Only the hub runs work. A standby copies the hub and starts all of this when it is promoted.
+  const runWork = () => {
+    nova.helpers.recover(); // helper logs from before the ledger; the rest is the ledger's recovery
+    nova.chatRun.recover();
+    nova.scheduler.start();
+  };
+  const hub = !role.replica();
+  if (hub) nova.helpers.recover();
   const recovered = nova.core.start();
-  nova.chatRun.recover();
+  if (hub) {
+    nova.chatRun.recover();
+    nova.scheduler.start();
+  }
   if (recovered.requeued.length) console.log(`Resumed ${recovered.requeued.length} task(s) that were running when Nova stopped.`);
-  nova.scheduler.start();
+  if (!hub) console.log(role.replica().reason);
+  role.on('promoted', ({ epoch }) => { runWork(); console.log(`This node is the hub now (epoch ${epoch}).`); });
+  role.on('demoted', ({ reason }) => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); console.log(reason); });
   nova.server.listen(config.port, config.host, () => {
     const ms = Math.round(performance.now() - nova.started);
     if (nova.seeded.length) console.log(`Seeded ${nova.seeded.length} files into ${config.home}`);

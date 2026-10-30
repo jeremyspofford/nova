@@ -24,7 +24,9 @@ export interface MeshIdentity {
 
 // Loads the identity, making one on first start. A file that others can read is tightened to 0600
 // and reported through `warn`, since the keys in it may already have been seen.
-export function loadIdentity(home: string, o: { now?: () => Date; warn?: (msg: string) => void } = {}): MeshIdentity {
+// `adopt`: the id this node has in a hub's registry (a standby enrolled under it); the file takes
+// it, so "this device" is the same record on every node.
+export function loadIdentity(home: string, o: { now?: () => Date; warn?: (msg: string) => void; adopt?: string | null } = {}): MeshIdentity {
   const dir = join(home, 'mesh');
   const file = join(dir, 'identity.json');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -37,8 +39,14 @@ export function loadIdentity(home: string, o: { now?: () => Date; warn?: (msg: s
     }
     data = JSON.parse(readFileSync(file, 'utf8')) as IdentityFile;
     if (data.version !== 1 || typeof data.id !== 'string') throw new Error(`${file} isn't an identity file Nova knows.`);
+    if (o.adopt && o.adopt !== data.id) {
+      data = { ...data, id: o.adopt };
+      const tmp = `${file}.${process.pid}.tmp`;
+      writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+      renameSync(tmp, file);
+    }
   } else {
-    data = { version: 1, id: randomUUID(), created_at: (o.now?.() ?? new Date()).toISOString(), ...exportDeviceKeys(generateDeviceKeys()) };
+    data = { version: 1, id: o.adopt ?? randomUUID(), created_at: (o.now?.() ?? new Date()).toISOString(), ...exportDeviceKeys(generateDeviceKeys()) };
     // Written whole, then moved into place, so a crash never leaves half a key file.
     const tmp = `${file}.${process.pid}.tmp`;
     writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
