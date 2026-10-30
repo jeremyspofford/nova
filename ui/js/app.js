@@ -746,10 +746,12 @@ function renderMemoryView({ enter = false } = {}) {
   if (el.memory.querySelector('.is-editing')) { memoryDeferred = true; return; }
   memoryDeferred = false;
   const focused = document.activeElement?.closest?.('.memory-item')?.dataset.id;
+  const at = focused ? [...el.memory.querySelectorAll('.memory-item')].findIndex((x) => x.dataset.id === focused) : -1;
   if (state.memory) el.memory.innerHTML = renderMemory(state.memory);
   else if (state.memoryError) el.memory.innerHTML = `<div class="empty"><p class="empty-line">Memory couldn't be read.</p><p class="memory-lede">${state.memoryError}</p><button type="button" class="btn" data-action="retry-memory">Try again</button></div>`;
   else el.memory.innerHTML = '';
-  if (focused) document.getElementById(`m-${focused}`)?.focus({ preventScroll: true });
+  // An edit gives the memory a new id; focus stays where it was in the list.
+  if (focused) (document.getElementById(`m-${focused}`) ?? el.memory.querySelectorAll('.memory-item')[at])?.focus({ preventScroll: true });
   if (enter) {
     el.memory.classList.remove('view-enter');
     void el.memory.offsetWidth;
@@ -1603,6 +1605,9 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && !s
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 readLayout();
+// The composer lines up with the conversation: as wide as the scroller's content, which is
+// narrower by its scrollbar gutters (none for overlay scrollbars).
+new ResizeObserver(() => $('main').style.setProperty('--gutter', `${el.scroller.offsetWidth - el.scroller.clientWidth}px`)).observe(el.scroller);
 el.topbarOrb.innerHTML = liveOrb('avatar');
 applyTheme();
 coreStream();

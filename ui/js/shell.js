@@ -152,7 +152,7 @@ export function signal(patch) {
   const next = orbState(signals);
   if (next === orbNow) return;
   orbNow = next;
-  for (const el of document.querySelectorAll('.orb[data-live]')) {
+  for (const el of document.querySelectorAll('.orb[data-orb-live]')) {
     el.dataset.state = next;
     if (el.getAttribute('role') === 'img') el.setAttribute('aria-label', ORB_WORDS[next]);
   }

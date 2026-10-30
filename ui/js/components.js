@@ -40,7 +40,7 @@ export const ORB_SIZES = ['hero', 'rail', 'avatar', 'mini'];
 export function orb({ state = 'idle', size = 'hero', label: words = null, decorative = false, live = false } = {}) {
   const name = words ?? ORB_WORDS[state] ?? ORB_WORDS.idle;
   const a11y = decorative ? 'aria-hidden="true"' : `role="img" aria-label="${esc(name)}"`;
-  return `<span class="orb orb-${size}" data-state="${esc(state)}"${live ? ' data-live' : ''} ${a11y}><span class="orb-glow"></span><span class="orb-core"></span><span class="orb-swirl"></span><span class="orb-sheen"></span></span>`;
+  return `<span class="orb orb-${size}" data-state="${esc(state)}"${live ? ' data-orb-live' : ''} ${a11y}><span class="orb-glow"></span><span class="orb-core"></span><span class="orb-swirl"></span><span class="orb-sheen"></span></span>`;
 }
 
 // ---- status -------------------------------------------------------------------------------

@@ -36,9 +36,17 @@ function startServer() {
 let current = null;
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
 
+const v1 = (method, path, body) => fetch(`${base}/api/v1${path}`, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body ? { body: JSON.stringify(body) } : {}) }).then((r) => r.json());
+let devices = 0;
+// Each browser context is its own device: it gets a device id, and its design system is applied
+// for that device through the design-system API (no theme lives in the browser). The light/dark
+// mode is the person's, so it is set for everyone.
 async function page({ theme = 'paper', mode = 'light', width = 1280, height = 820, reducedMotion = 'no-preference' } = {}) {
   const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, reducedMotion });
-  await ctx.addInitScript(([t, m]) => { localStorage.setItem('nova.theme', t); localStorage.setItem('nova.mode', m); }, [theme, mode]);
+  const device = `shots-device-${++devices}`;
+  await ctx.addInitScript((id) => { try { localStorage.setItem('nova.device', id); } catch { /* the sandboxed preview frame */ } }, device);
+  await v1('POST', `/design-systems/${theme}/apply`, { scope: 'device', device_id: device });
+  await v1('PUT', '/profile/appearance/mode', { value: mode });
   const p = await ctx.newPage();
   current = p;
   p.errors = [];
@@ -60,10 +68,11 @@ const fail = async (e) => {
 process.on('uncaughtException', fail);
 process.on('unhandledRejection', fail);
 results.budgets.serverStartMs = Math.round(serverMs);
+for (const text of ['skip', 'skip', 'skip', 'skip', 'allow cloud when needed', 'no']) await v1('POST', '/setup/messages', { text });
 {
   const p = await page();
   const t0 = Date.now();
-  await p.goto(base);
+  await p.goto(`${base}/chat`);
   await p.waitForSelector('html[data-ready] .empty');
   results.budgets.pageInteractiveMs = Date.now() - t0;
   const nav = await p.evaluate(() => JSON.parse(JSON.stringify(performance.getEntriesByType('navigation')[0])));
@@ -214,7 +223,7 @@ results.budgets.serverStartMs = Math.round(serverMs);
   await shot(p, 'paper-memory-chat');
 
   // The Memory view: where each entry came from; edit and forget by keyboard.
-  await p.click('#memory-link');
+  await p.click('#rail [data-dest="memory"]');
   await p.waitForSelector('.memory-item');
   await p.waitForTimeout(500);
   await shot(p, 'paper-memory');
@@ -247,7 +256,8 @@ results.budgets.serverStartMs = Math.round(serverMs);
   await p.waitForTimeout(300);
   const margins = await p.textContent('#thread');
   check('a forgotten memory disappears from the conversation view', !/June/.test(margins.split('kindergarten in September')[1] ?? margins) && /since forgotten/.test(margins));
-  await p.click('a.margin-link');
+  // The note about oat milk (a day note may also link, since M2 keeps day notes as memories).
+  await p.click('.margin-note:has-text("oat milk") a.margin-link');
   await p.waitForSelector('.memory-item.is-found');
   check('a margin note links to the memory itself', await p.evaluate(() => document.activeElement.classList.contains('memory-item') && /oat milk/.test(document.activeElement.textContent)));
   check('memory view has no script errors', p.errors.length === 0, p.errors.join(' | '));
@@ -470,7 +480,7 @@ results.budgets.serverStartMs = Math.round(serverMs);
   await p.waitForTimeout(300);
   await shot(p, 'paper-schedules');
   check('the last run and its headline show in Schedules', /Last ran today at/.test(await p.textContent('#sc-morning-digest')) && /A contract to sign/.test(await p.textContent('#sc-morning-digest .schedule-headline')));
-  check('a new report marks the main conversation', await p.isVisible('#main-dot'));
+  check('a new report marks the main conversation', !!(await p.$('[data-dest="chat"] .nav-badge')) && !(await p.$eval('#main-dot', (e) => e.hidden)));
   const runs = readFileSync(join(home, 'schedules', 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   check('every run is recorded in runs.jsonl', runs.length === 1 && runs[0].ok && runs[0].delivered === 'main' && runs[0].manual);
   const listed = await (await fetch(`${base}/api/sessions`)).json();
@@ -480,9 +490,9 @@ results.budgets.serverStartMs = Math.round(serverMs);
   await p.waitForSelector('.handoff.is-found');
   await p.waitForTimeout(1200);
   await shot(p, 'paper-front');
-  check('"Read the report" opens the front page at the report', await p.evaluate(() => location.pathname === '/' && /^#h-/.test(location.hash)));
+  check('"Read the report" opens the main conversation at the report', await p.evaluate(() => location.pathname === '/chat' && /^#h-/.test(location.hash)));
   check('the report reads as a front page: name and time, then a serif headline', /Morning digest · \d+:\d{2} [AP]M/i.test(await p.textContent('.handoff-kicker')) && await p.$eval('.handoff-body > p', (e) => getComputedStyle(e).fontFamily !== getComputedStyle(document.body).fontFamily));
-  check('opening the main conversation clears its mark', !(await p.isVisible('#main-dot')) && (await p.getAttribute('#main-link', 'aria-current')) === 'page');
+  check('opening the main conversation clears its mark', (await p.$eval('#main-dot', (e) => e.hidden)) && !(await p.$('[data-dest="chat"] .nav-badge')) && (await p.getAttribute('#main-link', 'aria-current')) === 'page');
   const scheduleCalls = readFileSync(join(home, 'sessions', `${runs[0].run}.jsonl`), 'utf8');
   check('the run read Gmail on its own, and asked for nothing', /"name":"gmail_search"/.test(scheduleCalls) && !/"needs_approval":true/.test(scheduleCalls));
 
@@ -624,12 +634,12 @@ let helperRun;
   await p.goto(`${base}/activity`);
   await p.waitForSelector('.act-now .act-entry.is-working');
   await p.waitForSelector('.act-now .act-entry.is-waiting');
-  await p.waitForFunction(() => /1 waiting/.test(document.getElementById('activity-waiting').textContent));
+  await p.waitForFunction(() => /1 waiting/.test(document.querySelector('[data-dest="activity"]')?.getAttribute('aria-label') ?? ''));
   await p.waitForTimeout(600);
   await shot(p, 'paper-activity');
   const nowText = await p.textContent('.act-now');
-  check('Now shows what is working and what waits for you', /Working/.test(nowText) && /Waiting for you/.test(nowText) && /Go to it/.test(nowText));
-  check('the Activity place counts what waits', (await p.getAttribute('#activity-link', 'aria-label')) === 'Activity, 1 waiting for you');
+  check('Now shows what is working and what waits for you', /Working/.test(nowText) && /Needs you/.test(nowText) && /waiting for you/.test(nowText) && /Go to it/.test(nowText));
+  check('the Activity place counts what waits', (await p.getAttribute('[data-dest="activity"]', 'aria-label')) === 'Activity, 1 waiting for you');
   check('each day says what happened in a sentence', /\d+ (repl(y|ies)|helpers?)/.test(await p.textContent('.act-summary')));
   check('a run took a step without asking, as Settings allowed, and Activity says so', /Without asking/.test(await p.textContent('.act-day')) && /took one step without asking/.test(await p.textContent('.act-summary')));
   check('no tool output is dumped: steps are one line each', await p.evaluate(() => [...document.querySelectorAll('.act-step-list li')].every((li) => li.textContent.length < 200)));
@@ -736,7 +746,7 @@ let helperRun;
 // ---- themes: same layout, token files only ------------------------------------------
 const golden = async (opts, prefix) => {
   const p = await page(opts);
-  await p.goto(base);
+  await p.goto(`${base}/chat`);
   await p.waitForSelector('html[data-ready] .handoff');
   await p.evaluate(() => { document.activeElement.blur(); [...document.querySelectorAll('.handoff')].at(-1).scrollIntoView({ block: 'start' }); });
   await p.waitForTimeout(600);
@@ -784,13 +794,14 @@ const golden = async (opts, prefix) => {
   check(`${prefix}: no script errors`, p.errors.length === 0, p.errors.join(' | '));
 };
 {
-  // A first visit, with nothing stored, lands in the default theme.
+  // A first visit, with nothing chosen, lands in the default design system and makes its device id.
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 820 } });
   const p = await ctx.newPage();
   await p.goto(`${base}/new`);
   await p.waitForSelector('html[data-ready] .empty');
-  const t = await p.evaluate(() => document.documentElement.dataset.theme);
-  check('a first visit opens in the Nova theme', t === 'nova', t);
+  await p.waitForFunction(() => document.documentElement.dataset.theme);
+  const t = await p.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('nova.device')]);
+  check('a first visit opens in Orb Teal, with a device id of its own', t[0] === 'orb-teal' && /^[\w-]{8,64}$/.test(t[1] ?? ''), t.join(' '));
   await ctx.close();
 }
 await golden({ theme: 'nova', mode: 'dark' }, 'nova');
@@ -799,85 +810,72 @@ await golden({ theme: 'aurora', mode: 'light' }, 'aurora');
 await golden({ theme: 'aurora', mode: 'dark' }, 'aurora-dark');
 await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
 
-// ---- appearance: a section of Settings, and a pick changes the theme -----------------
+// ---- appearance: preview in a sandboxed frame, apply for this device, roll back ------------
 {
   const p = await page({ theme: 'nova', mode: 'dark' });
-  await p.goto(base);
-  await p.waitForSelector('html[data-ready]');
-  check('appearance: no separate Appearance button in the sidebar', await p.evaluate(() => !document.getElementById('appearance') && !document.querySelector('dialog')));
-  await p.click('#settings-link');
-  await p.waitForSelector('.perm');
+  await p.goto(`${base}/settings#appearance`);
+  await p.waitForSelector('html[data-ready] .ds-card');
   await p.waitForTimeout(400);
   await shot(p, 'nova-settings-appearance');
-  check('appearance: Settings shows the theme and light/dark choices', await p.evaluate(() => document.querySelectorAll('#appearance input[name="theme"]').length === 4 && document.querySelectorAll('#appearance input[name="mode"]').length === 3 && document.querySelector('#appearance input[value="nova"]').checked));
-  await p.click('#appearance input[value="paper"]', { force: true });
-  check('appearance: picking a theme changes data-theme', await p.evaluate(() => document.documentElement.dataset.theme) === 'paper');
+  check('appearance: Settings lists every design system and the light/dark choices', await p.evaluate(() => document.querySelectorAll('#appearance .ds-card').length === 6 && document.querySelectorAll('#appearance input[name="mode"]').length === 3));
+  check('appearance: /settings#appearance focuses the current mode', await p.evaluate(() => document.activeElement?.name === 'mode' && document.activeElement.checked));
+  await p.evaluate(() => { window.__boot = 1; });
+  await p.click('.ds-card[data-ds="companion-light"]');
+  await p.waitForSelector('#ds-preview');
+  check('appearance: the preview is a sandboxed frame with that design system only', await p.evaluate(() => { const f = document.getElementById('ds-preview'); return f.sandbox.length === 0 && f.hasAttribute('sandbox') && /design-systems\/companion-light\/preview\.css/.test(f.srcdoc) && document.documentElement.dataset.theme === 'nova'; }));
+  await p.click('[data-action="apply-ds"][data-scope="device"]');
+  await p.waitForFunction(() => document.documentElement.dataset.theme === 'companion-light');
+  check('appearance: applied on this device, live, with no reload', await p.evaluate(() => window.__boot === 1));
+  await p.click('[data-action="rollback-ds"][data-scope="device"]');
+  await p.waitForFunction(() => document.documentElement.dataset.theme === 'nova');
+  check('appearance: the last change on this device rolls back', true);
   await p.click('#appearance input[value="light"]', { force: true });
-  check('appearance: picking a mode changes data-mode', await p.evaluate(() => document.documentElement.dataset.mode) === 'light');
-  check('appearance: the pick is kept in this browser', await p.evaluate(() => localStorage.getItem('nova.theme') === 'paper' && localStorage.getItem('nova.mode') === 'light'));
-  await p.goto(`${base}/settings#appearance`); // the page's start script puts Nova back, so this lands in Nova again
-  await p.waitForSelector('.perm');
-  check('appearance: /settings#appearance focuses the current theme', await p.evaluate(() => document.activeElement?.name === 'theme' && document.activeElement.value === document.documentElement.dataset.theme));
+  await p.waitForFunction(() => document.documentElement.dataset.mode === 'light');
+  check('appearance: picking a mode changes data-mode', true);
+  check('appearance: nothing about the design system is kept in the browser but the device id', await p.evaluate(() => Object.keys(localStorage).every((k) => !/theme|mode/.test(k))));
   check('appearance: no script errors', p.errors.length === 0, p.errors.join(' | '));
 }
 
-// ---- sidebar: collapses and expands, and stays that way across reloads -------------
+// ---- layouts: the right column, the conversations drawer, every width ------------------------
 {
-  const p = await page({ theme: 'nova', mode: 'dark' });
+  const p = await page({ theme: 'nova', mode: 'dark', width: 1440, height: 900 });
   const list = await (await fetch(`${base}/api/sessions`)).json();
   const chat = list.find((s) => s.title.startsWith('What should I focus'));
   await p.goto(`${base}/c/${chat.id}`);
   await p.waitForSelector('.prose');
-  const width = () => p.evaluate(() => Math.round(document.getElementById('main').getBoundingClientRect().width));
-  const open = await width();
-  check('sidebar: open by default, with the expand button hidden', await p.evaluate(() => document.documentElement.dataset.sidebar === 'open' && getComputedStyle(document.getElementById('menu')).display === 'none'));
-  await p.click('#collapse');
-  await p.waitForTimeout(450);
-  await shot(p, 'nova-sidebar-collapsed');
-  const collapsed = await width();
-  check('sidebar: hiding it gives the page the full width', collapsed === 1280 && open < collapsed, `${open} → ${collapsed} px`);
-  check('sidebar: hidden sidebar leaves the tab order, focus moves to Show sidebar', await p.evaluate(() => document.getElementById('sidebar').inert && document.activeElement?.id === 'menu' && document.getElementById('menu').getAttribute('aria-expanded') === 'false'));
+  check('desktop: Calm Control, with the right column of quiet cards', await p.evaluate(() => document.body.dataset.layout === 'desktop' && document.body.dataset.aside === 'on' && document.querySelectorAll('#aside .card').length === 3));
+  await shot(p, 'nova-desktop-chat');
+  await p.click('#aside-toggle');
+  await p.waitForTimeout(300);
+  check('desktop: the right column closes', await p.evaluate(() => document.body.dataset.aside === 'off'));
   await p.reload();
   await p.waitForSelector('.prose');
-  check('sidebar: stays hidden across a reload', await p.evaluate(() => document.documentElement.dataset.sidebar === 'collapsed') && await width() === 1280);
+  check('desktop: and stays closed across a reload', await p.evaluate(() => document.body.dataset.aside === 'off'));
+  await p.keyboard.press('Control+Backslash');
+  await p.waitForTimeout(300);
+  check('desktop: Ctrl/⌘+\\ brings it back', await p.evaluate(() => document.body.dataset.aside === 'on'));
   await p.click('#menu');
   await p.waitForTimeout(450);
-  check('sidebar: Show sidebar brings it back', await p.evaluate(() => document.documentElement.dataset.sidebar === 'open' && !document.getElementById('sidebar').inert && document.activeElement?.id === 'collapse') && await width() === open);
-  await p.evaluate(() => document.activeElement.blur());
-  await p.keyboard.press('Control+Backslash');
-  await p.waitForTimeout(450);
-  const byKey = await p.evaluate(() => document.documentElement.dataset.sidebar);
-  await p.keyboard.press('Control+Backslash');
-  await p.waitForTimeout(450);
-  check('sidebar: Ctrl/⌘+\\ toggles it', byKey === 'collapsed' && await p.evaluate(() => document.documentElement.dataset.sidebar) === 'open');
-  await shot(p, 'nova-sidebar-open');
-  check('sidebar: no script errors', p.errors.length === 0, p.errors.join(' | '));
-  // Half a 1920 screen: nothing runs past the right edge, and the composer lines up with the column.
-  for (const sb of ['open', 'collapsed']) {
-    const h = await page({ theme: 'nova', mode: 'dark', width: 960, height: 900 });
-    await h.addInitScript((v) => localStorage.setItem('nova.sidebar', v), sb);
-    await h.goto(`${base}/c/${chat.id}`);
-    await h.waitForSelector('.prose');
-    await h.waitForTimeout(500);
-    await shot(h, `nova-half-${sb}`);
-    const fit = await h.evaluate(() => {
+  check('the conversations drawer opens from the top bar', await p.evaluate(() => document.getElementById('app').classList.contains('drawer-open') && !document.getElementById('sidebar').inert));
+  await shot(p, 'nova-drawer');
+  check('layouts: no script errors', p.errors.length === 0, p.errors.join(' | '));
+  for (const [w, h, layout] of [[390, 844, 'phone'], [820, 1180, 'tablet'], [960, 900, 'tablet'], [1280, 820, 'desktop']]) {
+    const q = await page({ theme: 'nova', mode: 'dark', width: w, height: h });
+    await q.goto(`${base}/c/${chat.id}`);
+    await q.waitForSelector('.prose');
+    await q.waitForTimeout(400);
+    const fit = await q.evaluate(() => {
       const sc = document.querySelector('.scroller');
       const edge = sc.getBoundingClientRect().left + sc.clientWidth;
       const past = [...document.querySelectorAll('.thread *, .dock *')].filter((e) => !e.closest('.table-wrap, pre') && e.getBoundingClientRect().right > edge + 0.5);
-      const t = document.getElementById('thread').getBoundingClientRect(), d = document.getElementById('dock').getBoundingClientRect();
-      return { past: past.length, scroll: sc.scrollWidth - sc.clientWidth, dx: [Math.round(t.left - d.left), Math.round(t.right - d.right)] };
+      return { layout: document.body.dataset.layout, past: past.length, scroll: sc.scrollWidth - sc.clientWidth, page: document.documentElement.scrollWidth - innerWidth };
     });
-    check(`half screen (${sb} sidebar): nothing cut off on the right`, fit.past === 0 && fit.scroll === 0, JSON.stringify(fit));
-    check(`half screen (${sb} sidebar): the composer lines up with the conversation`, fit.dx[0] === 0 && fit.dx[1] === 0, `${fit.dx} px`);
+    check(`${w} px: the ${layout} layout, nothing cut off on the right`, fit.layout === layout && fit.past === 0 && fit.scroll === 0 && fit.page <= 0, JSON.stringify(fit));
+    await q.goto(base);
+    await q.waitForSelector('.home-hero');
+    await q.waitForTimeout(500);
+    await shot(q, `nova-home-${w}`);
   }
-  // A narrow screen ignores the stored choice: there the sidebar is a drawer.
-  const m = await page({ theme: 'nova', mode: 'dark', width: 390, height: 844 });
-  await m.addInitScript(() => localStorage.setItem('nova.sidebar', 'collapsed'));
-  await m.goto(`${base}/c/${chat.id}`);
-  await m.waitForSelector('.prose');
-  await m.click('#menu');
-  await m.waitForTimeout(450);
-  check('sidebar: on a phone the menu button still opens the drawer', await m.evaluate(() => document.getElementById('app').classList.contains('drawer-open') && !document.getElementById('sidebar').inert && getComputedStyle(document.getElementById('sidebar')).visibility === 'visible'));
 }
 
 // ---- mobile -------------------------------------------------------------------------
@@ -892,7 +890,8 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.click('#menu');
   await p.waitForTimeout(450);
   await shot(p, 'mobile-drawer');
-  await p.click('#memory-link');
+  await p.keyboard.press('Escape');
+  await p.click('#tabs [data-dest="memory"]');
   await p.waitForSelector('.memory-item');
   await p.waitForTimeout(500);
   await shot(p, 'mobile-memory');
@@ -917,7 +916,7 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForTimeout(500);
   await shot(p, 'mobile-settings');
   overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
-  await p.goto(base);
+  await p.goto(`${base}/chat`);
   await p.waitForSelector('.handoff');
   await p.evaluate(() => document.querySelector('.handoff').scrollIntoView({ block: 'start' }));
   await p.waitForTimeout(500);
@@ -937,14 +936,16 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
 {
   const p = await page({ reducedMotion: 'reduce' });
   await p.goto(base);
-  await p.waitForSelector('html[data-ready]');
-  const v = await p.evaluate(() => ({ shift: getComputedStyle(document.documentElement).getPropertyValue('--shift').trim() }));
-  check('reduced motion: no translation (Paper crossfades only)', v.shift === '0px', v.shift);
+  await p.waitForSelector('html[data-ready] .home-hero .orb', { state: 'attached' });
+  await p.waitForTimeout(300);
+  const v = await p.evaluate(() => ({ breathe: getComputedStyle(document.documentElement).getPropertyValue('--motion-breathe').trim(), orb: getComputedStyle(document.querySelector('.home-hero .orb-glow')).animationDuration }));
+  check('reduced motion: the orb stops breathing', v.breathe === '0s' && v.orb === '0s', JSON.stringify(v));
   const p2 = await page({ reducedMotion: 'reduce', theme: 'obsidian', mode: 'dark' });
   await p2.goto(base);
   await p2.waitForSelector('html[data-ready]');
-  const d = await p2.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--m-med').trim());
-  check('reduced motion: Obsidian durations become 1 ms', d === '1ms', d);
+  await p2.waitForTimeout(300);
+  const d = await p2.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--motion-transition').trim());
+  check('reduced motion: Obsidian transitions become 1 ms', d === '1ms', d);
 }
 
 // ---- style reference ----------------------------------------------------------------
@@ -960,7 +961,7 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
 // ---- server unreachable ---------------------------------------------------------------
 {
   const p = await page();
-  await p.goto(base);
+  await p.goto(`${base}/chat`);
   await p.waitForSelector('html[data-ready]');
   server.kill();
   await p.fill('#input', 'are you there?');
