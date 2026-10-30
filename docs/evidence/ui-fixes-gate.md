@@ -1,13 +1,13 @@
 # UI fixes gate (Amendment 2026-10-30-C Part 1): evidence
 
-Run 2026-10-30 on branch `ui/amendment-c-part1` at `1c801264`, on this machine. The browser tests ran in the Playwright v1.56.1 image (`scripts/ui-test.sh`), against the real server on a blank home.
+Run 2026-10-30 on branch `ui/amendment-c-part1` at `096a3d26`, after `main` was merged in and the review's fixes were made, on this machine. The browser tests ran in the Playwright v1.56.1 image (`scripts/ui-test.sh`), against the real server on a blank home.
 
 ## Counts
 
 | Suite | Command | Tests | Pass | Fail | Skipped |
 | --- | --- | --- | --- | --- | --- |
-| Unit, core, acceptance (with lint:tokens, check:themes, typecheck) | `npm run check` | 815 | 807 | 0 | 8 |
-| Browser (the whole UI gate, Chromium and WebKit) | `scripts/ui-test.sh` | 35 | 35 | 0 | 0 |
+| Unit, core, acceptance (with lint:tokens, check:themes, typecheck) | `npm run check` | 829 | 821 | 0 | 8 |
+| Browser (the whole UI gate, Chromium and WebKit) | `scripts/ui-test.sh` | 39 | 39 | 0 | 0 |
 
 The 8 skipped tests are opt-in runs that need real outside things:
 - real Claude Code (`NOVA_REAL_CLAUDE`);
@@ -60,6 +60,40 @@ For every destination:
 - no custom scrollbar rules are loaded.
 
 In chat, the wide code block and the wide table scroll sideways only.
+
+## The review's tests: `tests/ui/ui-review.test.ts`, `tests/ui-review.test.js`
+
+**✔ review: Undo after Save puts back exactly what Save changed; focus and live regions stay sensible**
+- Save changes the synced design, the mode and this device's own design; Undo puts all three back.
+- Saving the design that was already synced with a new mode: Undo puts back only the mode, and the design's rollback is untouched.
+- Focus after Save, Cancel and Undo is on the design shown. After the fix, it's on the fix's Undo; after that Undo, it's back on the fix.
+- The scope line, the bar and the contrast check stay the same elements across redraws.
+- With the checks out of reach, the panel says it couldn't check.
+
+**✔ review: Settings — the sidebar from 840px, links open at the top, search is a listbox that focuses what it finds, late data doesn't jump**
+- Settings shows the list at 820px and the sidebar at 840, 900 and 1280px, with the detail at least 380px wide.
+- `#models` opens the category at its top, with nothing marked.
+- Search is a combobox over a listbox. Its count is a live region that stays put, and arrows and Enter work.
+- Every search entry opens its setting, marks it and focuses it.
+- With permissions arriving 1.5 s late, focus and scroll stay where the person put them.
+
+**✔ review: a long press tolerates a little movement; every time on screen passes 4.5:1**
+- A press that moves 6px still shows the time; a 24px drag doesn't.
+- On Home, chat, Tasks, Activity, Automations (with a schedule set) and Settings › Backups, every element whose own text is a time or date measures at least 4.5:1.
+
+**Unit tests** (`tests/ui-review.test.js`):
+- the Undo plan;
+- every control outline the CSS draws is in the live check, and `border/subtle` outlines no control;
+- every built-in passes the widened check;
+- nothing time-bearing is drawn in `text/faint`;
+- the contrast panel: couldn't check, offering a fix, partial fix, nothing fixable, pending;
+- the new search words, and "mode" ranking Light and dark first;
+- the approval letter isn't a tab stop;
+- revoking a device forgets its appearance.
+
+One run of the full browser suite before the final one failed the posture sweep at "375px folded: an orb is on screen". It passed on two runs on its own and in the final full run.
+
+The likely cause is a race in that test, which this branch didn't introduce. While Home loads on a phone, the top bar briefly shows its orb. That satisfies the test's wait, and Home's hero orb isn't drawn yet when the check runs. The test itself is unchanged.
 
 ## The rest of the browser gate (all ✔)
 

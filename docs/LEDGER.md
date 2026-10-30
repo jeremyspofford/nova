@@ -15,6 +15,55 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (UI fixes, after review).** Same branch, after merging `main`. An independent review
+found these; each now has a test that was seen failing first (`tests/ui-review.test.js`,
+`tests/ui/ui-review.test.ts`).
+- **Undo after Save is exact.** Undo restores exactly what that Save changed (`look.js`
+  `undoPlan`), and nothing else:
+  - the light/dark mode;
+  - the synced design, but not when the design saved was already the synced one;
+  - this device's own design, if Save made it follow the synced one.
+
+  When Save changed nothing, no Undo is offered.
+- **The live check covers every control outline the UI draws.** The test reads those colours from
+  the CSS rather than from a list.
+  - It found `border/subtle` on fields, choices, design cards, Jump to latest and the capture
+    indicator (about 1.2:1 everywhere). Those now use `border/strong`; `border/subtle` stays for
+    separators and cards.
+  - The pressed mic used the orb's listening colour (Companion Light 1.7:1). It now uses the
+    accent, so the orb's own colours are left alone.
+  - `status/attention` and `status/error` are now checked as outlines.
+  - All six built-ins pass, so no package changed in this round.
+- **Times:**
+  - The "Next:" times on schedules and approvals were faint (3.27–3.64:1).
+  - Card, task and playbook times were also faint.
+  - `<time>` now has a base rule at `text/secondary`.
+  - Tests find time-bearing classes from the templates, and a browser test checks the contrast of
+    every element whose own text is a time.
+- **Settings:**
+  - From 840px (expanded) the sidebar shows; on a tablet it takes the context pane's room.
+  - A category link (`#models`) opens at the category's top, as a click does.
+  - Search results always focus something.
+  - Data arriving late leaves focus and scroll alone once the person has started.
+  - Search has more words. It is a combobox over a listbox, with a result count in a live region
+    that persists.
+- **Contrast panel:**
+  - When the checks couldn't load, it says it couldn't check.
+  - Undo is shown whenever a fix is applied, even a partial one.
+  - A fix is never re-offered once one is applied.
+  - It says plainly what can't be fixed.
+- **Also:**
+  - Focus goes to the next sensible control after fix, Undo, Save and Cancel.
+  - Appearance's live regions are drawn once and updated in place.
+  - Long press tolerates 10px of movement.
+  - A background redraw no longer hides a revealed time. This was found while testing long press:
+    the earlier tap test passed only because a tap also hovers.
+  - Revoking a device forgets its appearance: its own design, rollback and fix. The core now
+    records which paired device uses each appearance id.
+  - The approval letter isn't a tab stop.
+  - Offline shell v10.
+- **Carried to M9:** 44 pt / 48 dp touch targets (review item 13). M9 gates hit areas.
+
 **2026-10-30 (Amendment 2026-10-30-C Part 1, UI fixes).** Branch `ui/amendment-c-part1`. Every
 item has tests that failed first (`tests/ui-fixes.test.js`, `tests/ui/ui-fixes.test.ts`); evidence
 in `docs/evidence/ui-fixes-gate.md`.
@@ -26,8 +75,8 @@ in `docs/evidence/ui-fixes-gate.md`.
   runs from one author (Nova's follow-ups and reports) show one. Exact time on hover, tap, long
   press and keyboard focus. The amendment gives no number for a "gap"; **an hour** gets its own
   divider. Work-trail steps say "took 2 s, finished 9:00 AM" from the log's own timestamps.
-- **Settings:** eight task categories, one level. Tablets get the phone's list-then-page layout;
-  the sidebar is for desktop widths, where a second pane fits beside the rail and right column.
+- **Settings:** eight task categories, one level. (First built with the sidebar on desktop only;
+  after review it starts at 840px, the expanded width. See the entry above.)
 - **The contrast check and its fix:** the check is stricter than validation (it adds text/secondary
   on raised surfaces and `border/strong` at 3:1) and only warns. The fix is a per-device nudge in the
   core (`appearance.device_fixes`, applied when the CSS is generated): each failing colour moves
