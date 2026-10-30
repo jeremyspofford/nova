@@ -131,6 +131,9 @@ Optional `nova.config.json` at the repo root (environment variables win):
 |  | `NOVA_CHROMIUM` | `CHROMIUM`, then known install paths: the Chromium that browser tasks use (none: browser work is unavailable, and Health says so) |
 |  | `NOVA_CHROMIUM_SANDBOX` | on (`0` turns Chromium's own sandbox off, for a container without user namespaces) |
 |  | `NOVA_SECRET_<NAME>` | none: a secret a provider names as `secret://<NAME>` (an n8n signing secret, a model server's key), until the vault holds it |
+|  | `NOVA_OLLAMA_URL` | `http://127.0.0.1:11434`: where the hub's Ollama answers for the model manager (Settings › Models), unless the profile says otherwise |
+|  | `NOVA_HARDWARE_FILE` | none: a JSON hardware reading used instead of this machine's (tests and the gate's stand-in run) |
+|  | `NOVA_MODELS_WATCH_MS` | `15000`: how often work waiting on local capacity or the cloud budget is checked again |
 |  | `NOVA_CAPTURE_POLL_MS` | `10000`: how often the hub pulls a capture source that is on (Screenpipe). Capture itself is off until you turn a source on in Settings › Capture |
 
 `agent_cmd` is the one place a model is chosen. Nova writes the assembled

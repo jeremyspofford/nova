@@ -15,6 +15,82 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M6b): local models — hardware, roles, downloads, one inference API, wake, fallback, budgets.**
+Branch `m6b/models`; the plan's §2. Code in `src/core/models/`, migration `0010_models.sql`
+(M6a took 0009). PWA: Settings › Models (`ui/js/models.js`, `ui/styles/models.css`).
+
+- **Hardware.** `models/hardware.ts` reads CPU, memory (`/proc/meminfo` where there is one), GPUs
+  (`nvidia-smi`, `rocm-smi`; `system_profiler` on macOS, where Apple silicon's shared memory counts
+  as three quarters of RAM), free disk (`statfs` of Nova's home, which may not be the disk Ollama
+  keeps models on) and network cards. Node built-ins only, so the device agent carries it (the
+  boundary test and the agent's file list now name it). The **boot** agent reads it, because the
+  runtime may not start programs, and hands it to the runtime, which sends it in the heartbeat as
+  an additive `hardware` field; the hub checks and keeps it (`device_hardware`). Windows: only
+  `nvidia-smi`. `NOVA_HARDWARE_FILE` replaces the hub's own reading (tests, the gate's stand-in run).
+- **Recommendation.** One model per role, not a list: sorting (`triage-text`) is the smallest
+  capable text model (3–9B) on the hub; thinking and writing (`reasoner`) the deepest that fits
+  (file size × 1.15 within VRAM, or half the RAM with no GPU, said as slow), coders last; a GPU
+  spoke only when it is clearly deeper (×1.5) than the hub, with a hub model for small jobs;
+  finding by meaning the smallest embedding model. Installed models first; with none that fits,
+  one download from a short catalogue, never assigned by itself. Transcription: Ollama can't, and
+  Nova has no whisper adapter, so it says so (also when it finds a whisper binary) and stays off.
+  Against the real Ollama here: Qwen3:8b, deepseek-r1:32b, nomic-embed-text, transcription off.
+- **Roles live in profile section `models`**, set only through `/api/v1/models` (the generic
+  profile route refuses it, like providers). A role names `hub` or a paired computer; a computer's
+  runtime address must be one of the addresses (or its hostname) its own heartbeat reported.
+- **Downloads and removal are tier-2 ledger tasks** for the worker `models`, evidence a
+  `confirmation` from system `model-runtime`. The verifier's checkers are synchronous, so, as with
+  n8n's callback, the checker reads what Nova itself recorded from the runtime's own `/api/tags`
+  after the pull (`model_version`, never the pull stream's say-so) for this task, and a digest the
+  request pinned. Ollama checks each layer's sha256 as it writes it; Nova doesn't re-hash blobs.
+  The worker's egress is `local`: Nova talks only to the runtime, which fetches the model from its
+  library; nothing of the person's goes with that, so a download runs under local-only too (the
+  approval says so). **Disk budget** (`disk_budget_gb`, the same number for each device): refused
+  at once when the size is known (the catalogue), else stopped as soon as the layer totals pass it
+  ("at least N GB", since Ollama names layers as it goes); nothing is installed. Removal of a model
+  that serves a role is refused until another is assigned.
+- **One inference API.** `models.infer({role, messages | input, privacy_mode, task_id?, ...})`; a
+  caller's mode only tightens the person's. Chat and the M5 `openai-compatible` provider use it
+  when the provider is set to a role (`config.role: reasoner`); then the model manager writes each
+  call's receipt with where it really went (the registry skips its own; the runner hands over its
+  receipt draft, `ownReceipt`), so there is one receipt per call. What the person should know
+  (cloud stepped in, possibly less depth, a wake, the hub served a small job) comes back as
+  `notes`: a task's summary carries them; chat ends the reply with them in one italic line.
+  Placements are Ollama only; OpenAI-compatible servers stay M5's provider without a role.
+  Embeddings have no cloud fallback.
+- **Fallback chains** exactly as LOCAL-MODELS: local-only is local only (the cloud isn't in the
+  chain at all, and the receipt refuses a remote call under local-only behind that); a task waits
+  "Waiting on local capacity: …", a `waiting_on_model` note is kept, and the person is told once,
+  as a proactive message (triaged, quiet hours kept); a watch (15 s, `NOVA_MODELS_WATCH_MS`) asks
+  the role's runtime (never waking a device to find out) and retries the task when it answers.
+  local-preferred: local first, then the cloud model, with the note and one problem per fault.
+  cloud-allowed: the cloud first, then local with "may be less thorough". **One cloud model**, set
+  by the person (`PUT /models/cloud`, a new address needs `confirm: true`); whatever its address it
+  counts as remote (a loopback stand-in in tests is named by its name).
+- **Budgets** (`per_task_usd`, `per_period_usd`, `period` day/week/month UTC; a brief's
+  `max_cost_usd` too) are checked before every cloud call; one call can take a budget past its limit
+  by its own cost, no further. A cloud model without a price under a budget isn't used. Usage is
+  `cloud_usage`, from every cloud call and every report from a provider whose receipt went remote
+  (once per attempt), and a `cloud_usage` note on the task. Over budget: local answers if it can,
+  with the reason; otherwise the work waits with it. A remote provider's task waits on the budget
+  before it runs.
+- **Wake-on-LAN.** A magic packet to the device's broadcast address (from its heartbeat), port 9,
+  or the target set (`PUT /models/wake`; tests use a loopback listener). Nova waits as long as the
+  last measured wake took, half again plus 2 s; never measured, the setting (120 s) and says it was
+  a guess. Small jobs (≤ 2000 characters) go to the hub model while the spoke sleeps. Letting it
+  sleep is the device's own policy; Nova asks Ollama to keep a model loaded 5 minutes only.
+- **The local Decision Model Provider** (`local-model`, egress local) is asked first once a sorting
+  model is assigned; it always asks the inference API as local-only. Answers are typed JSON
+  requested with the template's schema (Ollama's structured output) and checked strictly; anything
+  out of schema is unused and escalates. The person's hard policy for triage (a category turned off,
+  quiet hours for a message) binds it: a contrary answer escalates. With decisions kept on the rules
+  (`PUT /models/decisions {use: rules}`) it still answers templates the rules have no rule for, so
+  capture's proposals get an answer. Finding against the real Ollama: a thinking model asked for a
+  schema spent its reply reasoning and missed it (34 s cold for one decision); Nova now sends
+  `think: false` to models that say they think (2.6 s).
+- **Not done.** A whisper adapter; downloads through anything but Ollama; a spoke's models are
+  read only while it is awake (last seen otherwise); fallback is per call, before output.
+
 **2026-10-30 (M6a): capture — the Capture API, consent, storage, classification, promotion, Screenpipe.**
 Branch `m6a/capture`; the plan's §1. Code in `src/core/capture/`, migration `0009_capture.sql`
 (numbered 0009 alongside M6b's; the integrator renumbers).
