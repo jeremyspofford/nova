@@ -810,28 +810,28 @@ await golden({ theme: 'aurora', mode: 'light' }, 'aurora');
 await golden({ theme: 'aurora', mode: 'dark' }, 'aurora-dark');
 await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
 
-// ---- appearance: preview in a sandboxed frame, apply for this device, roll back ------------
+// ---- appearance: live on the real page, Undo for this device, Save for all devices ----------
+// (Amendment 2026-10-30-C Part 1 §5: the sandboxed preview frame is gone.)
 {
   const p = await page({ theme: 'nova', mode: 'dark' });
   await p.goto(`${base}/settings#appearance`);
   await p.waitForSelector('html[data-ready] .ds-card');
   await p.waitForTimeout(400);
   await shot(p, 'nova-settings-appearance');
-  check('appearance: Settings lists every design system and the light/dark choices', await p.evaluate(() => document.querySelectorAll('#appearance .ds-card').length === 6 && document.querySelectorAll('#appearance input[name="mode"]').length === 3));
-  check('appearance: /settings#appearance focuses the current mode', await p.evaluate(() => document.activeElement?.name === 'mode' && document.activeElement.checked));
+  check('appearance: Settings lists every design system, one recommended, and the light/dark choices', await p.evaluate(() => document.querySelectorAll('#appearance .ds-card').length === 6 && document.querySelectorAll('#appearance .ds-recommended .ds-card').length === 1 && document.querySelectorAll('#appearance input[name="mode"]').length === 3));
+  check('appearance: no preview frame', await p.evaluate(() => !document.querySelector('#settings-view iframe')));
   await p.evaluate(() => { window.__boot = 1; });
   await p.click('.ds-card[data-ds="companion-light"]');
-  await p.waitForSelector('#ds-preview');
-  check('appearance: the preview is a sandboxed frame with that design system only', await p.evaluate(() => { const f = document.getElementById('ds-preview'); return f.sandbox.length === 0 && f.hasAttribute('sandbox') && /design-systems\/companion-light\/preview\.css/.test(f.srcdoc) && document.documentElement.dataset.theme === 'nova'; }));
-  await p.click('[data-action="apply-ds"][data-scope="device"]');
   await p.waitForFunction(() => document.documentElement.dataset.theme === 'companion-light');
   check('appearance: applied on this device, live, with no reload', await p.evaluate(() => window.__boot === 1));
-  await p.click('[data-action="rollback-ds"][data-scope="device"]');
+  await p.click('[data-action="undo-ds"]');
   await p.waitForFunction(() => document.documentElement.dataset.theme === 'nova');
-  check('appearance: the last change on this device rolls back', true);
-  await p.click('#appearance input[value="light"]', { force: true });
+  check('appearance: Undo puts this device back', true);
+  await p.click('#appearance label.choice:has(input[value="light"])');
+  await p.waitForSelector('[data-action="save-ds"]');
+  await p.click('[data-action="save-ds"]');
   await p.waitForFunction(() => document.documentElement.dataset.mode === 'light');
-  check('appearance: picking a mode changes data-mode', true);
+  check('appearance: a mode for all devices is kept on Save', true);
   check('appearance: nothing about the design system is kept in the browser but the device id', await p.evaluate(() => Object.keys(localStorage).every((k) => !/theme|mode/.test(k))));
   check('appearance: no script errors', p.errors.length === 0, p.errors.join(' | '));
 }

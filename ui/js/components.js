@@ -80,8 +80,9 @@ export function card({ kind, title, icon = null, body = '', action = '', id = nu
 }
 
 // "Nothing needs you" is a valid, designed state.
-export function emptyState({ title = 'Nothing needs you', line = '', action = '', orbState = null } = {}) {
-  return `<div class="empty-state">${orbState ? orb({ state: orbState, size: 'avatar', decorative: true }) : ''}<p class="empty-title">${esc(title)}</p>${line ? `<p class="empty-sub">${esc(line)}</p>` : ''}${action}</div>`;
+// No orb of its own: the view already shows it once (DESIGN-SYSTEM §1).
+export function emptyState({ title = 'Nothing needs you', line = '', action = '' } = {}) {
+  return `<div class="empty-state"><p class="empty-title">${esc(title)}</p>${line ? `<p class="empty-sub">${esc(line)}</p>` : ''}${action}</div>`;
 }
 
 // ---- cards ----------------------------------------------------------------------------------
@@ -100,7 +101,7 @@ export function taskRow(t, { now = new Date(), compact = false } = {}) {
   const when = ago(t.updated_at ?? t.created_at, now);
   const why = st === 'needs-you' && needsApproval(t) ? 'Needs your OK before it runs.' : t.reason ?? '';
   return `<li class="task-row" data-status="${st}" data-task="${esc(t.id)}">
-  <button type="button" class="task-open" data-action="open-task" data-task="${esc(t.id)}"><span class="task-title">${esc(clip(t.title, 80))}</span>${compact ? '' : `<span class="task-meta">${esc(clip(why, 90))}${why && when ? ' · ' : ''}${esc(when)}</span>`}</button>
+  <button type="button" class="task-open" data-action="open-task" data-task="${esc(t.id)}"><span class="task-title">${esc(clip(t.title, 80))}</span>${compact ? '' : `<span class="task-meta">${esc(clip(why, 90))}${why && when ? ' · ' : ''}${when ? `<time>${esc(when)}</time>` : ''}</span>`}</button>
   ${status(st, { task: st === 'verified' ? t.id : null })}
 </li>`;
 }
@@ -120,12 +121,11 @@ export function verifiedResultCard(t, { now = new Date() } = {}) {
   const checks = t.verification?.checks ?? [];
   const passed = checks.filter((c) => c.ok).length;
   return `<section class="card verified-result-card" aria-labelledby="vr-${esc(t.id)}" data-task="${esc(t.id)}">
-  ${orb({ state: 'idle', size: 'avatar', decorative: true })}
   <div class="vr-text">
     <p class="card-kicker">Verified result</p>
     <h3 class="card-lead" id="vr-${esc(t.id)}">${esc(clip(t.title, 80))}</h3>
     <p class="card-line">${esc(clip(summary, 120))}</p>
-    <p class="card-line is-faint">${passed} of ${checks.length} check${checks.length === 1 ? '' : 's'} passed · ${esc(ago(t.completed_at ?? t.updated_at, now))}</p>
+    <p class="card-line">${passed} of ${checks.length} check${checks.length === 1 ? '' : 's'} passed · <time>${esc(ago(t.completed_at ?? t.updated_at, now))}</time></p>
   </div>
   ${status('verified', { task: t.id })}
 </section>`;
@@ -162,7 +162,7 @@ export function evidenceViewer(t) {
   ${t.state === 'waiting' && t.reason ? `<p class="sheet-line task-reason">${esc(t.reason)}</p>` : ''}
   ${t.report?.summary ? `<p class="sheet-line">${esc(t.report.summary)}</p>` : ''}
   ${relayRun ? `<p class="sheet-line is-faint">Done by Relay run ${esc(relayRun.ref)}${relayRun.branch ? `, branch ${esc(relayRun.branch)}` : ''}.</p>` : ''}
-  ${v ? `<h3 class="sheet-heading">How Nova checked</h3><ul class="checks">${checks}</ul><p class="sheet-line is-faint">Checked ${esc(new Date(v.at).toLocaleString('en-US'))}.</p>` : `<p class="sheet-line">${t.state === 'done' ? 'Done.' : 'Not checked yet: Nova checks the evidence before it calls anything done.'}</p>`}
+  ${v ? `<h3 class="sheet-heading">How Nova checked</h3><ul class="checks">${checks}</ul><p class="sheet-line">Checked <time datetime="${esc(v.at)}">${esc(new Date(v.at).toLocaleString('en-US'))}</time>.</p>` : `<p class="sheet-line">${t.state === 'done' ? 'Done.' : 'Not checked yet: Nova checks the evidence before it calls anything done.'}</p>`}
   <details class="raw"><summary>The ledger entry</summary><pre tabindex="0">${esc(JSON.stringify({ id: t.id, state: t.state, reason: t.reason, owner: t.owner, privacy_mode: t.privacy_mode, approval_tier: t.approval_tier, brief: t.brief, report: t.report, verification: t.verification }, null, 2))}</pre></details>
 </div>`;
 }
@@ -322,7 +322,7 @@ export function healthCard({ health = null, problems = [], reachable = true } = 
 export function memoryHighlightCard({ records = [] } = {}) {
   const r = records.find((m) => m.active && m.user_state !== 'forgotten');
   const body = r
-    ? `<p class="card-lead">${esc(clip(r.content, 90))}</p><p class="card-line is-faint">${esc(r.kind)} · ${esc(ago(r.created_at))}</p>`
+    ? `<p class="card-lead">${esc(clip(r.content, 90))}</p><p class="card-line">${esc(r.kind)} · <time>${esc(ago(r.created_at))}</time></p>`
     : '<p class="card-lead">Nothing kept yet.</p><p class="card-line">What lasts from your conversations shows here.</p>';
   return card({ kind: 'memory-highlight-card', title: 'Memory', icon: 'memory', body, action: '<a class="link" href="/memory" data-nav="memory">Memory</a>' });
 }
@@ -454,12 +454,11 @@ export function triggerRow(r) {
 // ---- conversation pieces ----------------------------------------------------------------------
 
 // `still`: already on screen before this render, so it doesn't rise in again.
-export function chatBubble({ from = 'nova', text = '', html = null, orbState: os = 'idle', still = false }) {
+// Nova's words carry no avatar or orb: the orb shows once per view (DESIGN-SYSTEM §1).
+export function chatBubble({ from = 'nova', text = '', html = null, still = false }) {
   const inner = html ?? esc(text).replace(/\n/g, '<br>');
   const cls = still ? ' is-still' : '';
-  return from === 'nova'
-    ? `<div class="chat-bubble from-nova${cls}">${orb({ state: os, size: 'avatar', decorative: true })}<div class="bubble-body">${inner}</div></div>`
-    : `<div class="chat-bubble from-person${cls}"><div class="bubble-body">${inner}</div></div>`;
+  return `<div class="chat-bubble from-${from === 'nova' ? 'nova' : 'person'}${cls}"><div class="bubble-body">${inner}</div></div>`;
 }
 
 // The voice button and the line that says why it's off, when it is.
@@ -478,7 +477,7 @@ export function toast({ text, tone = 'info', action = null }) {
 // A message Nova started (CONTRACTS §6): one line and one action.
 export function proactiveBanner(m) {
   const held = m.hold === 'needs_ok';
-  return `<div class="proactive-banner" data-message="${esc(m.id)}" role="status">${orb({ state: held ? 'attention' : 'idle', size: 'mini', decorative: true })}
+  return `<div class="proactive-banner" data-message="${esc(m.id)}"${held ? ' data-held' : ''} role="status">
   <p class="banner-text">${esc(clip(m.text, 140))}</p>
   <button type="button" class="btn small" data-action="${held ? 'send-message' : 'read-message'}" data-message="${esc(m.id)}">${held ? 'Let it through' : 'Got it'}</button>
 </div>`;

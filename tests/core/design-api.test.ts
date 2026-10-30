@@ -178,3 +178,33 @@ test('changes to design systems need Nova’s own header', async () => {
   assert.equal((await call('POST', '/design-systems', { manifest: fixture() }, {})).status, 403);
   await stop();
 });
+
+test('the contrast fix over the API: one device, its CSS, the event, and undo', async () => {
+  const { root, call, text, listen, stop } = await boot();
+  const mist = fixture();
+  Object.assign(mist, { id: 'example.mist', name: 'Example Mist' });
+  Object.assign(mist.tokens, { 'border/strong': '#d3d7dc', 'bg/raised': '#d9dde3', 'accent/primary': '#234a8c', 'text/secondary': '#5f6872' });
+  assert.equal((await call('POST', '/design-systems', { manifest: mist })).status, 201);
+  assert.equal((await call('POST', '/extensions/example.mist/enable')).status, 200);
+  const listed = (await call('GET', '/design-systems')).body.find((d: { id: string }) => d.id === 'example.mist');
+  assert.equal(listed.looks.default.ok, false, 'the list says it fails the live check');
+  await call('POST', '/design-systems/example.mist/apply', { scope: 'user' });
+  const before = (await text(`${root}/design-system.css?device=device-aaaa1111`)).body;
+  const events = listen();
+  await new Promise((r) => setTimeout(r, 50));
+  const fixed = await call('POST', '/design-systems/contrast-fix', { device_id: 'device-aaaa1111' });
+  assert.equal(fixed.status, 200, JSON.stringify(fixed.body));
+  assert.deepEqual(fixed.body.fixed.sort(), ['border/strong', 'text/secondary']);
+  const after = (await text(`${root}/design-system.css?device=device-aaaa1111`)).body;
+  assert.notEqual(after, before);
+  assert.equal((await text(`${root}/design-system.css?device=device-bbbb2222`)).body, before);
+  assert.equal((await call('GET', '/design-systems/active?device=device-aaaa1111')).body.fix['border/strong'] > 0, true);
+  assert.equal((await call('POST', '/design-systems/contrast-fix/undo', { device_id: 'device-aaaa1111' })).status, 200);
+  assert.equal((await text(`${root}/design-system.css?device=device-aaaa1111`)).body, before);
+  assert.equal((await call('POST', '/design-systems/contrast-fix/undo', { device_id: 'device-aaaa1111' })).status, 409);
+  assert.equal((await call('POST', '/design-systems/contrast-fix', {}, {})).status, 403, 'needs Nova’s own header');
+  await until(() => events.seen.length >= 2);
+  await events.stop();
+  assert.deepEqual(events.seen.map((e) => e.action), ['contrast-fix', 'contrast-fix']);
+  await stop();
+});

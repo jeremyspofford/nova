@@ -15,6 +15,95 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (UI fixes, after review).** Same branch, after merging `main`. An independent review
+found these; each now has a test that was seen failing first (`tests/ui-review.test.js`,
+`tests/ui/ui-review.test.ts`).
+- **Undo after Save is exact.** Undo restores exactly what that Save changed (`look.js`
+  `undoPlan`), and nothing else:
+  - the light/dark mode;
+  - the synced design, but not when the design saved was already the synced one;
+  - this device's own design, if Save made it follow the synced one.
+
+  When Save changed nothing, no Undo is offered.
+- **The live check covers every control outline the UI draws.** The test reads those colours from
+  the CSS rather than from a list.
+  - It found `border/subtle` on fields, choices, design cards, Jump to latest and the capture
+    indicator (about 1.2:1 everywhere). Those now use `border/strong`; `border/subtle` stays for
+    separators and cards.
+  - The pressed mic used the orb's listening colour (Companion Light 1.7:1). It now uses the
+    accent, so the orb's own colours are left alone.
+  - `status/attention` and `status/error` are now checked as outlines.
+  - All six built-ins pass, so no package changed in this round.
+- **Times:**
+  - The "Next:" times on schedules and approvals were faint (3.27–3.64:1).
+  - Card, task and playbook times were also faint.
+  - `<time>` now has a base rule at `text/secondary`.
+  - Tests find time-bearing classes from the templates, and a browser test checks the contrast of
+    every element whose own text is a time.
+- **Settings:**
+  - From 840px (expanded) the sidebar shows; on a tablet it takes the context pane's room.
+  - A category link (`#models`) opens at the category's top, as a click does.
+  - Search results always focus something.
+  - Data arriving late leaves focus and scroll alone once the person has started.
+  - Search has more words. It is a combobox over a listbox, with a result count in a live region
+    that persists.
+- **Contrast panel:**
+  - When the checks couldn't load, it says it couldn't check.
+  - Undo is shown whenever a fix is applied, even a partial one.
+  - A fix is never re-offered once one is applied.
+  - It says plainly what can't be fixed.
+- **Also:**
+  - Focus goes to the next sensible control after fix, Undo, Save and Cancel.
+  - Appearance's live regions are drawn once and updated in place.
+  - Long press tolerates 10px of movement.
+  - A background redraw no longer hides a revealed time. This was found while testing long press:
+    the earlier tap test passed only because a tap also hovers.
+  - Revoking a device forgets its appearance: its own design, rollback and fix. The core now
+    records which paired device uses each appearance id.
+  - The approval letter isn't a tab stop.
+  - Offline shell v10.
+- **Carried to M9:** 44 pt / 48 dp touch targets (review item 13). M9 gates hit areas.
+
+**2026-10-30 (Amendment 2026-10-30-C Part 1, UI fixes).** Branch `ui/amendment-c-part1`. Every
+item has tests that failed first (`tests/ui-fixes.test.js`, `tests/ui/ui-fixes.test.ts`); evidence
+in `docs/evidence/ui-fixes-gate.md`.
+- **Orb once per view:** no orb on messages, empty states, verified-result cards or proactive
+  banners. On a phone, the top bar's orb (Home: the hero); beside a rail, the rail's (Home's hero
+  hides on a tablet too, as it already did on a desktop).
+- **Timestamps, as written:** a group is one author, under five minutes apart. In a plain
+  back-and-forth the author changes every message, so each one starts a group and shows its time;
+  runs from one author (Nova's follow-ups and reports) show one. Exact time on hover, tap, long
+  press and keyboard focus. The amendment gives no number for a "gap"; **an hour** gets its own
+  divider. Work-trail steps say "took 2 s, finished 9:00 AM" from the log's own timestamps.
+- **Settings:** eight task categories, one level. (First built with the sidebar on desktop only;
+  after review it starts at 840px, the expanded width. See the entry above.)
+- **The contrast check and its fix:** the check is stricter than validation (it adds text/secondary
+  on raised surfaces and `border/strong` at 3:1) and only warns. The fix is a per-device nudge in the
+  core (`appearance.device_fixes`, applied when the CSS is generated): each failing colour moves
+  towards the package's own primary text in 5% steps, the smallest step that passes in every look
+  the package has; nothing else changes, other devices and designs are untouched, Undo removes it.
+  This fits the token model (one CSS generator, per-device scope already in the core) and never
+  invents a colour. **Both starters failed it:** field outlines were 2.79:1 (Orb Teal) and 1.72:1
+  (Companion Light). Their `border/strong` is fixed at source with that same nudge (v1.0.1), so all
+  six built-ins pass in every look (tested).
+- **The recommendation:** the starter that matches the device's light or dark (the person's choice,
+  else the system's) and passes the check, with that as its reason; otherwise the passing design with
+  the most room to spare. A light system gets Companion Light, a dark one Orb Teal.
+- **Deviations, said plainly:** light and dark is one setting for all devices in the core (there is
+  no per-device mode), so it always goes through Save. `scrollbar-gutter` is `stable both-edges`
+  (a form of stable that keeps the centred column centred). The rail and the right column are
+  separate panes, not nested in the view; they keep `overflow-y: auto` so a very short window never
+  clips them, and they don't scroll at the tested sizes.
+- **Caught on the way:** the existing offline test failed because the two new modules
+  (`settings-ia.js`, `contrast.js`) weren't in the service worker's shell, so the cached app
+  couldn't load. Shell v9; a unit test now checks every module `app.js` imports is in the shell.
+- **Existing tests changed:** `tests/ui/live-swap.test.ts` (it asserted the preview frame, which the
+  amendment removes; it now tries a design for all devices live and unsaved, applies for this
+  device, Undoes, Saves and undoes from the toast) and the appearance block of `scripts/shots.js`
+  (same reason: its frame check goes, and "#appearance focuses the current mode" goes because the
+  first control there is now the scope; `npm run shots` is not part of CI and was not re-run). No
+  other assertion was removed.
+
 **2026-10-30 (Screenpipe 0.4: accessibility text).** Branch `capture/screenpipe-accessibility`.
 With the API key saved, the owner's Screenpipe answered 400. Screenpipe 0.4 renamed the content type
 for accessibility text from `ui` to `accessibility`; its items still come back as type `"UI"`. The

@@ -93,7 +93,7 @@ export type { Who } from './api.ts';
 export type { ChatHandle } from './providers/registry.ts';
 export { signatureHeader as n8nSignature, SIGNATURE_HEADER as N8N_SIGNATURE_HEADER } from './providers/n8n.ts';
 export { originHost } from './api.ts';
-export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
+export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM, STARTERS, LIVE_CHECKS, liveCheck, looks, contrastNudge, applyNudge } from './design.ts';
 // The vault and connectors (M5b): Era 2's Gmail keeps its secrets in the vault and registers as a connector.
 export { Vault, FILE_KEY_NOTICE, SECRET_SCHEME, secretRef, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore, platformKeyStore } from './vault.ts';
 export type { KeyMode, KeyStore, Run as KeyCommandRunner, VaultStatus } from './vault.ts';
@@ -499,6 +499,7 @@ export function createCore(o: CoreOptions) {
   devices.on('revoked', (d: Device) => browser.release(`device:${d.id}`, `ended by Nova: its device was removed`));
   // Nor capture from it: its sources go off.
   devices.on('revoked', (d: Device) => capture.deviceRemoved(d.id));
+  devices.on('revoked', (d: Device) => design.forgetDevice(d.id));
   devices.on('change', (c: { action: string; device: Device }) => {
     if (c.action === 'can_approve' && !c.device.can_approve) browser.release(`device:${c.device.id}`, 'ended by Nova: its device may no longer take over');
   });
@@ -523,6 +524,8 @@ export function createCore(o: CoreOptions) {
       this: p ? (p.kind === 'device' ? p.device.id === d.id : p.kind === 'console' && d.id === meshIdentity.id) : false,
     };
   }
+  // A paired device's appearance id is remembered as its, so revoking it forgets its appearance.
+  const ownedBy = (w: Who, appearanceId: unknown) => { if (w.principal.kind === 'device' && typeof appearanceId === 'string') design.own(appearanceId, w.principal.device.id); };
   const by = (w: Who) => (w.principal.kind === 'device' ? `device:${w.principal.device.id}` : w.principal.kind);
   // Joining and sessions happen only over the mesh listener, the transport §0 accepts.
   const meshOnly = (w: Who) => {
@@ -670,7 +673,19 @@ export function createCore(o: CoreOptions) {
     },
     {
       method: 'POST', path: '/design-systems/rollback', summary: 'Go back to the design system shown before the last change, for the person or one device.', body: '{scope: user | device, device_id?}',
-      handle: ({ body }) => design.rollback({ scope: body.scope as Scope, device_id: typeof body.device_id === 'string' ? body.device_id : null }),
+      handle: ({ body, who }) => { ownedBy(who, body.device_id); return design.rollback({ scope: body.scope as Scope, device_id: typeof body.device_id === 'string' ? body.device_id : null }); },
+    },
+    {
+      method: 'POST', path: '/design-systems/contrast-fix', summary: 'The live contrast check’s one-tap fix for one device: the colours of what it shows that fail (text under 4.5:1, outlines under 3:1) are nudged just far enough to pass, on that device only.', body: '{device_id}',
+      handle: ({ body, who }) => { ownedBy(who, body.device_id); return design.fixContrast({ device_id: typeof body.device_id === 'string' ? body.device_id : null }); },
+    },
+    {
+      method: 'POST', path: '/design-systems/follow', summary: 'One device drops its own design system and shows the person’s again. Rolling back on that device brings its own back.', body: '{device_id}',
+      handle: ({ body, who }) => { ownedBy(who, body.device_id); return design.follow({ device_id: typeof body.device_id === 'string' ? body.device_id : null }); },
+    },
+    {
+      method: 'POST', path: '/design-systems/contrast-fix/undo', summary: 'Take a device’s contrast fix away again.', body: '{device_id}',
+      handle: ({ body }) => design.undoFix({ device_id: typeof body.device_id === 'string' ? body.device_id : null }),
     },
     { method: 'GET', path: '/design-systems/{id}', summary: 'One design system, with its manifest and validation.', handle: ({ params }) => design.get(params.id!) },
     { method: 'POST', path: '/design-systems/{id}/validate', summary: 'Check a design system against the schema: completeness, value syntax, contrast, reduced motion, content rules, extras.', handle: ({ params }) => design.validate(params.id!) },
@@ -680,7 +695,7 @@ export function createCore(o: CoreOptions) {
     },
     {
       method: 'POST', path: '/design-systems/{id}/apply', summary: 'Apply a valid design system for the person (every device) or one device. The previous one is kept for rollback.', body: '{scope: user | device, device_id?}',
-      handle: ({ params, body }) => design.apply(params.id!, { scope: body.scope as Scope, device_id: typeof body.device_id === 'string' ? body.device_id : null }),
+      handle: ({ params, body, who }) => { ownedBy(who, body.device_id); return design.apply(params.id!, { scope: body.scope as Scope, device_id: typeof body.device_id === 'string' ? body.device_id : null }); },
     },
     { method: 'GET', path: '/triggers/rules', summary: 'Every automation Nova runs: event, heartbeat and proactive rules. Nothing runs that isn’t listed here.', handle: () => triggers.listRules() },
     {

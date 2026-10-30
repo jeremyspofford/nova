@@ -486,8 +486,9 @@ body[data-layout="phone"] .sheet[data-kind="takeover"] { width: 100vw; max-heigh
 .takeover-frame { display: block; width: 100%; height: auto; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
 .takeover-screen[data-held="true"] .takeover-frame { cursor: pointer; }
 .takeover-frame:focus-visible { outline: none; }
-/* On a phone the page is drawn at a size that can be read and aimed at, and scrolls in its frame. */
-body[data-layout="phone"] .takeover-screen { overflow: auto; max-height: 55dvh; overscroll-behavior: contain; }
+/* On a phone the page is drawn at a size that can be read and aimed at; it scrolls sideways in
+   its frame, and the sheet scrolls up and down (one vertical scroller per view). */
+body[data-layout="phone"] .takeover-screen { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
 body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8) * 10)); max-width: none; }
 .takeover-wait { padding: var(--space-6) var(--space-4); text-align: center; color: var(--text-secondary); }
 .takeover-type { display: flex; flex-direction: column; gap: var(--space-1); }
@@ -545,7 +546,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 .check-what::first-letter { text-transform: uppercase; }
 .check-found, .check-why { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); overflow-wrap: anywhere; }
 .raw > summary { cursor: pointer; width: fit-content; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); border-radius: var(--radius-input); }
-.raw pre { margin-top: var(--space-2); max-height: calc(var(--space-8) * 4); overflow: auto; padding: var(--space-3); border-radius: var(--radius-input); background: var(--bg-base); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.raw pre { margin-top: var(--space-2); overflow-x: auto; overflow-y: hidden; padding: var(--space-3); border-radius: var(--radius-input); background: var(--bg-base); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 
 /* ---- automations ------------------------------------------------------------------------- */
@@ -579,7 +580,6 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 .panel > * + * { margin-top: var(--space-3); }
 
 /* Appearance: design systems, a sandboxed preview, apply and roll back. */
-.ds-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); list-style: none; margin: 0; padding: 0; }
 .ds-card {
   position: relative;
   display: flex;
@@ -587,7 +587,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   gap: var(--space-1);
   width: 100%;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-input);
   background: transparent;
   text-align: left;
@@ -598,7 +598,6 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 .ds-name { font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); color: var(--text-primary); }
 .ds-note { font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 .ds-tags { display: flex; flex-wrap: wrap; gap: var(--space-1); }
-.preview-frame { display: block; width: 100%; height: calc(var(--space-8) * 7); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--bg-base); }
 .choices { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .choice {
   position: relative;
@@ -606,7 +605,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   align-items: center;
   padding: var(--space-1) var(--space-4);
   min-height: calc(var(--space-6) + var(--space-2));
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   cursor: pointer;
 }
@@ -617,16 +616,16 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 
 /* ---- conversation: bubbles, the composer ------------------------------------------------ */
 
-.chat-bubble { display: flex; align-items: flex-end; gap: var(--space-2); max-width: 88%; }
+/* The same family as the conversation: your words in a tinted bubble on the right, Nova's on the
+   page, full width. No tails, no avatar. */
+.chat-bubble { display: flex; max-width: 88%; }
+.chat-bubble.from-nova { max-width: 70ch; }
 .chat-bubble.from-person { align-self: flex-end; }
 .bubble-body {
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-card);
   overflow-wrap: anywhere;
   animation: rise var(--motion-transition) var(--motion-ease) both;
 }
-.from-nova .bubble-body { border: 1px solid var(--border-subtle); background: var(--surface-card); border-bottom-left-radius: var(--radius-input); }
-.from-person .bubble-body { background: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-raised)); border-bottom-right-radius: var(--radius-input); }
+.from-person .bubble-body { padding: var(--space-3) var(--space-4); border-radius: var(--radius-card); background: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-raised)); }
 .chat-bubble.is-still .bubble-body { animation: none; }
 
 .dock { width: calc(100% - var(--gutter, 0px)); max-width: var(--layout-content-max); margin: 0 auto; padding: 0 var(--space-5) var(--space-4); }
@@ -671,7 +670,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   transition: background-color var(--motion-duration-fast) var(--motion-ease), scale var(--motion-duration-fast) var(--motion-ease);
 }
 .mic { border-color: var(--border-strong); background: transparent; color: var(--text-secondary); }
-.mic[aria-pressed="true"] { border-color: var(--orb-listening); color: var(--orb-listening); }
+.mic[aria-pressed="true"] { border-color: var(--accent-primary); color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
 .send svg, .mic svg { width: var(--space-5); height: var(--space-5); }
 .send:active:not(:disabled) { scale: 0.94; }
 .send:disabled, .mic:disabled { border-color: var(--border-subtle); background: transparent; color: var(--text-faint); cursor: default; }
@@ -685,7 +684,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   bottom: calc(var(--space-8) * 1.75);
   translate: -50% 0;
   padding: var(--space-1) var(--space-4);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   background: var(--bg-overlay);
   box-shadow: var(--shadow-raised);
