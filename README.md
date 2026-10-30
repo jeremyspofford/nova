@@ -188,6 +188,30 @@ node ~/.nova-device/agent/src/device/boot.ts status
 node ~/.nova-device/agent/src/device/boot.ts recover   # reinstall the runtime, leave safe mode
 ```
 
+### A standby
+
+A standby is a second Nova, on another machine, that keeps a copy of
+everything (your data, conversations and workspace) so it can take over if the
+hub fails. The hub is a role, not a box. Enroll it with a blank home of its
+own and the address devices will reach it at, approve it on the hub, then
+start it:
+
+```sh
+node src/device/boot.ts join https://hub.example:4320 --code ABCD-EFGH --kind standby \
+  --name Standby --nova-home ~/Nova-standby --address https://standby.example:4320
+NOVA_HOME=~/Nova-standby NOVA_MESH_URL=https://0.0.0.0:4320 \
+NOVA_MESH_PUBLIC_URL=https://standby.example:4320 NOVA_TLS_CERT=cert.pem NOVA_TLS_KEY=key.pem npm start
+```
+
+It copies the hub continuously and refuses changes ("This is the standby; …
+is the hub"); the hub's Health shows how far behind it is. If the hub fails,
+open the standby's own screen and choose **Make this the hub** (or set
+`mesh.auto_failover_after_s` on the hub, off by default, to let it take over
+by itself after that many seconds). Devices follow it. If the old hub comes
+back, it sees that it was replaced and steps down rather than act as a second
+hub. Connector sign-ins (Gmail) stay on the machine where you made them;
+connect them again on the new hub.
+
 ## Check it
 
 ```sh

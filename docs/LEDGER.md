@@ -15,6 +15,84 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
+`src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and
+`0007_device_inbox.sql`.
+
+- **The sync log** is filled by SQLite triggers on every replicated table, with
+  the whole row as JSON, and keeps **one entry per row** (the newest): a
+  standby that is behind can't miss a change, one that starts from nothing
+  reads the state once, and an old entry can't keep a forgotten memory's words.
+  The migration backfills what was there before. `hlc` is wall-clock ms, a
+  counter from the log's sequence, and the node (SQL can't run the HLC class;
+  order is `seq`). A hub records (`sync_state.logging = 1`); a standby copies
+  the hub's entries with the hub's `seq` instead, so after promotion it serves
+  a new standby the same way.
+- **Replicated, beyond the plan's list:** `memory_event` (memory's history),
+  `decision_template` and its history, `trigger_rule_event`, and
+  `device_inbox` (M4b's table, now migration 0007 with `device_heartbeat`,
+  which stays local) so a computer's queued items are taken in exactly once on
+  whichever node is hub. Never: `device_session`, `pairing`, `join_request`,
+  `mesh_state`, `sync_state`, `sync_log`, `schema_migrations`, identity files.
+- **Home files** are journalled by a scan every 3 s and soon after a change
+  (`fs.watch`), as `file_put` (text, or base64 for binary; up to 8 MB, a
+  bigger file is a problem) and `file_delete`. **Deviation:** the plan says
+  "everything outside UNTRACKED" but names `MEMORY.md` and `skills/`, which
+  are in UNTRACKED (that list is about git history). What stays local:
+  `nova.db*`, `logs/`, `backups/`, `exports/`, `kept/`, `workers/`,
+  `connectors/` (connector secrets; reconnect after a failover), `mesh/`, and
+  the home's git folder. The standby applies files with a hash check and
+  refuses paths outside the home or into those folders.
+- **Forgetting holds (order 4).** After a forget, once MEMORY.md and the day
+  notes are rewritten, the hub rescans, so their old entries are replaced;
+  anything in memory's entries or those files still carrying the words is
+  removed, and the write-ahead log is folded in. The delete itself is an entry;
+  the standby applies it through `Memory.forgottenElsewhere`, which does what
+  a forget does there (WAL, backups, Era 2's files, its own log). Backups lose
+  the log's entries too. Tests scan the standby's whole home (database, WAL,
+  a backup taken while it held the memory, files) for the words, in-process
+  and with two real processes.
+- **Standby.** Reads its place from `mesh/role.json` (M4b's shape; a hand
+  shape is tolerated; unknown fields kept on rewrite) and takes its registry id
+  as its identity id. Runs no scheduler, heartbeat, workers or chat; Era 2's
+  MEMORY.md import is off (`readOnly`). Every non-GET except `POST
+  /mesh/promote` is 409 `This is the standby; “Hub” at <url> is the hub.` (Era
+  2's routes too; a computer's agent moves on from a 409). Its own problems
+  take ids below zero, so the hub's copies never overwrite them. It pulls
+  `GET /mesh/sync?after=&wait=` (long poll, `access: 'sync'`, only the current
+  standby), sealed to its X25519 key with AAD `nova-sync-v1|<standby>|<after>`,
+  applies each batch in one transaction with foreign keys off (entries arrive
+  newest-per-row, so a child can come before its parent), and acks.
+- **Lag** is entries not acknowledged, and seconds since the last ack (or the
+  approval) while there are some; over 60 s is "behind", one problem per
+  episode. Measured from acks, not entry times: the triggers' clock is
+  SQLite's, which tests can't move.
+- **Promotion** checks that its own key is the one in the registry (the one
+  devices pinned), then: epoch + 1, role hub, the old hub's record becomes a
+  `spoke` (still trusted: it is the person's computer), signs the roster,
+  rewrites role.json, starts the journal, fencing, the heartbeat and Era 2's
+  scheduler, recovers the ledger, and records "Standby promoted to hub" on a
+  `mesh` worker in its own lane, verified by a `nova-mesh` confirmation
+  checker that reads the mesh state and the roster's signature itself. A hub
+  that stepped down can't be promoted (it stopped copying). M4b's device
+  routes are in the same route table, so the promoted node serves computers.
+- **Fencing** at startup (before any work starts) and every 30 s: peers are
+  trusted devices with an `address` and role.json's hub. `/mesh/hello` now
+  carries the signed roster; a peer counts only if its roster is signed by the
+  key this hub has for it, at a higher epoch, naming it hub. A forged higher
+  epoch is a problem, not a demotion (tested). Stepping down ends every device
+  session and open stream. **Gap:** a node that stepped down doesn't copy the
+  new hub (its data diverged after the last sync); enroll it again.
+- **Automatic failover:** `mesh.auto_failover_after_s` (a new profile section
+  `mesh` with that one key, validated; the blank-profile tests now include
+  `mesh: {}`), off by default, counted in wall time. A standby cut off from a
+  healthy hub would promote itself too: that is the risk of turning it on, and
+  fencing settles it when they see each other again.
+- **PWA:** the banner on every page of a standby, with "Make this the hub"
+  (tier-3 sheet) on its own screen; Health's Devices check shows the standby
+  and its lag (hub) or the hub and the last copy (standby); the registry shows
+  roles, and a standby shows it without add or revoke.
+
 **2026-10-29 (M4b): the computer device agent, the one-line command, the
 offline queue.** Plan §2. `src/device/`, `src/core/mesh/{spokes,agent}.ts`.
 
