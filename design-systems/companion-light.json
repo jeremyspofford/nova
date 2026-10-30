@@ -1,6 +1,6 @@
 {
   "id": "companion-light",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "kind": "design-system",
   "name": "Companion Light",
   "description": "Warm cream, a soft coral accent, the teal orb and a serif voice.",
@@ -22,7 +22,7 @@
     "text/secondary": "#665a50",
     "text/faint": "#8a7b6f",
     "border/subtle": "#eadfd2",
-    "border/strong": "#c8b8a8",
+    "border/strong": "#918478",
     "accent/primary": "#ad5638",
     "accent/secondary": "#2f8f84",
     "status/ok": "#3f7d4a",

@@ -91,7 +91,7 @@ export type { Who } from './api.ts';
 export type { ChatHandle } from './providers/registry.ts';
 export { signatureHeader as n8nSignature, SIGNATURE_HEADER as N8N_SIGNATURE_HEADER } from './providers/n8n.ts';
 export { originHost } from './api.ts';
-export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
+export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM, STARTERS, LIVE_CHECKS, liveCheck, looks, contrastNudge, applyNudge } from './design.ts';
 // The vault and connectors (M5b): Era 2's Gmail keeps its secrets in the vault and registers as a connector.
 export { Vault, FILE_KEY_NOTICE, SECRET_SCHEME, secretRef, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore, platformKeyStore } from './vault.ts';
 export type { KeyMode, KeyStore, Run as KeyCommandRunner, VaultStatus } from './vault.ts';
@@ -662,6 +662,14 @@ export function createCore(o: CoreOptions) {
     {
       method: 'POST', path: '/design-systems/rollback', summary: 'Go back to the design system shown before the last change, for the person or one device.', body: '{scope: user | device, device_id?}',
       handle: ({ body }) => design.rollback({ scope: body.scope as Scope, device_id: typeof body.device_id === 'string' ? body.device_id : null }),
+    },
+    {
+      method: 'POST', path: '/design-systems/contrast-fix', summary: 'The live contrast check’s one-tap fix for one device: the colours of what it shows that fail (text under 4.5:1, outlines under 3:1) are nudged just far enough to pass, on that device only.', body: '{device_id}',
+      handle: ({ body }) => design.fixContrast({ device_id: typeof body.device_id === 'string' ? body.device_id : null }),
+    },
+    {
+      method: 'POST', path: '/design-systems/contrast-fix/undo', summary: 'Take a device’s contrast fix away again.', body: '{device_id}',
+      handle: ({ body }) => design.undoFix({ device_id: typeof body.device_id === 'string' ? body.device_id : null }),
     },
     { method: 'GET', path: '/design-systems/{id}', summary: 'One design system, with its manifest and validation.', handle: ({ params }) => design.get(params.id!) },
     { method: 'POST', path: '/design-systems/{id}/validate', summary: 'Check a design system against the schema: completeness, value syntax, contrast, reduced motion, content rules, extras.', handle: ({ params }) => design.validate(params.id!) },
