@@ -15,6 +15,43 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M8b): Relay is a provider like the others, and Nova's checks still decide.** This
+work is on branch `m8b/relay-adapter`. It was built against Relay v0.9.0's own `contract/v1.json`
+(commit `4add265`); `tests/support/relay-contract-v1.json` is a byte-for-byte copy of that file.
+The as-built note is in `docs/plans/M8.md` §2.
+
+- **Relay is registered as a built-in implementation, `relay`.** It is a coding agent over HTTP,
+  with no special UI. Its address must be loopback, because Relay binds loopback, and it has no
+  secrets.
+- **Where the data goes is what Relay reports, not what the address implies.** Relay is always on
+  this computer, but its workers may send the brief to Anthropic.
+  - Providers gained an optional `reportedWhere` hook. The registry checks Relay again at the start
+    of every run, so a local-only task never reaches a remote worker.
+  - Receipts record Relay's report as the egress (`local` or `remote:anthropic`), with provider
+    `relay`. They don't say "remote:anthropic via relay": the receipt format allows only `local` or
+    `remote:<name>`.
+- **No `.git` in the task's folder.** Each attempt commits the task's files into a fresh repository
+  under Nova's state for the task. That location is untracked and not synced.
+  - It is fresh because Relay keeps a connected folder's commit from its first connection.
+  - Relay's worktree is read by Nova itself with git. Copy-back happens only when it matches Relay's
+    file list, and it includes deletions.
+- **What Relay reports is kept, but it is never evidence.** The run is kept as a `relay-run`
+  artifact: its id, worktree, branch, base commit and Relay's diff. Providers can now return
+  `artifacts`, and they are carried through Nova's ask-before-testing step.
+  - Nova asks Relay for `check: 'none'`, so the brief's test is Nova's own run, after the person's
+    OK.
+- **A busy Relay is a wait, not a failure.** A `runtime_busy` answer is a blocked report with
+  `retry_after_s`. The registry asks again by itself, and after a restart too. That is safe, because
+  the worker only edits a copy. The `requestId` is a UUID made from the idempotency key and the
+  attempt number, so the same attempt never starts a second run.
+- **A chaos test made robust.** The full-database test (`tests/chaos/disk.test.ts`) depended on how
+  full SQLite's last pages happened to be, and Relay's manifest changed that. It now fills to the
+  brim.
+- **Open:**
+  - Relay keeps every worktree, and Nova keeps each attempt's repository: there is no cleanup yet.
+  - Busy waits use up attempt numbers.
+  - Relay's accept/merge into a real repository is a later mode.
+
 **2026-10-30 (owner decision): real-phone pairing check deferred; pairing clocks logged as a
 usability defect.** The owner's first real pairing attempt, from a phone over Tailscale, didn't
 finish. Before that, it was refused as cross-origin: a proxy pointed at the console, not the device
