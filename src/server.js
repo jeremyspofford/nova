@@ -28,6 +28,19 @@ const TYPES = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
 };
 
+// The local model manager's settings from the environment (M6b): NOVA_OLLAMA_URL is where the
+// hub's Ollama answers when the profile doesn't say; NOVA_HARDWARE_FILE (JSON, tests and the gate's
+// stand-in run) replaces reading this machine's hardware; NOVA_MODELS_WATCH_MS and
+// NOVA_MODELS_WAKE_POLL_MS shorten how often waiting work and a waking computer are checked.
+function modelOptions(env) {
+  const o = {};
+  if (env.NOVA_OLLAMA_URL) o.ollamaUrl = env.NOVA_OLLAMA_URL;
+  if (env.NOVA_HARDWARE_FILE) { const file = env.NOVA_HARDWARE_FILE; o.hardware = async () => JSON.parse(readFileSync(file, 'utf8')); }
+  if (Number(env.NOVA_MODELS_WATCH_MS) > 0) o.watchMs = Number(env.NOVA_MODELS_WATCH_MS);
+  if (Number(env.NOVA_MODELS_WAKE_POLL_MS) > 0) o.wakePollMs = Number(env.NOVA_MODELS_WAKE_POLL_MS);
+  return o;
+}
+
 export function createNova(config = loadConfig(), deps = {}) {
   const started = performance.now();
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
@@ -57,6 +70,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     // development and tests only: the vault wins, and such a value is redacted like a vault one.
     agent: { command: config.agentCmd, egress: config.agentEgress },
     secrets: deps.secrets ?? ((name) => process.env[`NOVA_SECRET_${name}`] ?? null),
+    models: modelOptions(process.env),
   });
   // Chat goes through the registry: the provider the profile names for chat, or agent_cmd (the
   // default), which the runner runs exactly as before. Scheduled runs and helpers follow it.

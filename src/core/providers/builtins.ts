@@ -31,7 +31,7 @@ export const BUILTINS: (Record<string, unknown> & { id: string; name: string; ad
     ...base, id: 'openai-compatible', kind: 'agent-adapter', name: 'Local model (Ollama or compatible)',
     capabilities: ['chat', 'code.edit'],
     permissions: [reads, writes, { kind: 'network', target: 'the model server you set', why: 'to send it the brief and the files, and get its reply' }],
-    config_schema: { type: 'object', properties: { base_url: { type: 'string' }, model: { type: 'string' }, api_key: { type: 'string' }, json_mode: { type: 'boolean' }, timeout_s: { type: 'number' } } },
+    config_schema: { type: 'object', properties: { role: { type: 'string' }, base_url: { type: 'string' }, model: { type: 'string' }, api_key: { type: 'string' }, json_mode: { type: 'boolean' }, timeout_s: { type: 'number' } } },
     health_check: { kind: 'http', path: '/models' },
     adapter: { implementation: 'openai-compatible', class: 'chat', transport: 'http', egress: 'local', capabilities: ['chat', 'files-contract'], config: { base_url: OLLAMA_BASE, model: '', api_key: '', json_mode: true, timeout_s: 600 }, secrets: [] },
   },
@@ -68,6 +68,7 @@ export const FIELDS: Record<Implementation, Field[]> = {
     { key: 'model', label: 'Model', kind: 'text', note: 'Empty for Codex’s default.' },
   ],
   'openai-compatible': [
+    { key: 'role', label: 'Use Nova’s local models', kind: 'text', note: 'reasoner (or triage-text) to use the model Settings › Models assigns; then the address and model below aren’t used.' },
     { key: 'base_url', label: 'Server address', kind: 'text', note: 'Ollama on this computer is http://127.0.0.1:11434/v1.' },
     { key: 'model', label: 'Model', kind: 'text', note: 'A model the server has, like the one you pulled.' },
     { key: 'api_key', label: 'Key', kind: 'secret', note: 'Only if the server needs one: secret://NAME, kept in the vault.' },

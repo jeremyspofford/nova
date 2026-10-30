@@ -147,10 +147,23 @@ async function complete(r: Resolved, body: Record<string, unknown>, req: { signa
   return { text, aborted: false, usage };
 }
 
+// A chat with a whole message list, for the model manager (models/index.ts): its cloud fallback and
+// a role served by an OpenAI-compatible runtime. `json` asks for a JSON object back.
+export async function chatMessages(c: Config, secret: (v: unknown) => string | null, messages: { role: string; content: string }[], req: { signal?: AbortSignal; onText?: (t: string) => void; json?: boolean } = {}): Promise<{ text: string; aborted: boolean; usage: Usage }> {
+  return complete(resolveCfg(c, secret), { messages, ...(req.json ? { response_format: { type: 'json_object' } } : {}) }, req);
+}
+
+// Roles Nova's model manager serves (models/recommend.ts ROLES, the ones that chat). A provider
+// set to one of them talks to Nova's own local models instead of an address (M6 plan §2).
+export const CHAT_ROLES = ['reasoner', 'triage-text'] as const;
+export const roleOf = (c: Config): string | null => (CHAT_ROLES as readonly string[]).includes(str(c.role)) ? str(c.role) : null;
+
 export const openaiCompatible: Impl = {
   id: 'openai-compatible',
   check(c: Config) {
     const out: string[] = [];
+    if (c.role !== undefined && c.role !== '' && !roleOf(c)) out.push(`role is ${CHAT_ROLES.join(' or ')}, to use Nova’s local models, or empty to use the address.`);
+    if (roleOf(c)) return out;
     try {
       const u = new URL(str(c.base_url));
       if (!['http:', 'https:'].includes(u.protocol)) out.push('base_url must be an http(s) address.');
@@ -162,13 +175,14 @@ export const openaiCompatible: Impl = {
     return out;
   },
   unconfigured(c, secret) {
+    if (roleOf(c)) return null;
     if (!str(c.base_url)) return 'It needs the server’s address.';
     if (!str(c.model)) return 'It needs a model name.';
     if (c.api_key && !secret(c.api_key)) return `The key ${secretName(c.api_key)} isn’t in the vault yet.`;
     return null;
   },
-  url: (c) => str(c.base_url) || null,
-  model: (c) => str(c.model) || 'unset',
+  url: (c) => (roleOf(c) ? null : str(c.base_url) || null),
+  model: (c) => (roleOf(c) ? `role:${roleOf(c)}` : str(c.model) || 'unset'),
   async probe(c, secret, signal) {
     let r: Resolved;
     try { r = resolveCfg(c, secret); } catch (e) { return (e as Error).message; }

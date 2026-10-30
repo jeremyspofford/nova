@@ -66,7 +66,13 @@ export interface WorkOutcome {
   blockers?: string[];
 }
 
-export interface ChatRequest { system: string; prompt: string; signal?: AbortSignal; onText?: (t: string) => void }
+// `receipt` and `privacy` come from a caller whose handle records its own receipts (ownReceipt): the
+// receipt it would have written, which the model manager completes with where the call really went.
+export interface ChatRequest {
+  system: string; prompt: string; signal?: AbortSignal; onText?: (t: string) => void;
+  receipt?: { session_id?: string; task_id?: string; purpose?: string; context_items?: { kind: 'memory' | 'file' | 'skill' | 'session' | 'standing'; ref: string; sha256: string }[] };
+  privacy?: 'local-only' | 'local-preferred' | 'cloud-allowed';
+}
 
 export interface Impl {
   readonly id: Implementation;
