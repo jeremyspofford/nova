@@ -15,10 +15,10 @@ import { createServer as createNet, type Server as NetServer, type Socket } from
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { copyHome, dropScratch, makeScratch, restoreBackup, smoke, startSandbox, type DeployStage, type ProbeLine, type ReleaseSlot, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
+import { copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
 import { runningPid } from '../home.js';
 import { ServerProcess } from './server.ts';
-import { Slots, carryProblems, isRelease, mark, preMigrationBackup, problemsSince, recordProblem, sandboxable, schemaVersion, writesSince, type Mark } from './releases.ts';
+import { Slots, carryProblems, isRelease, mark, packageVersion, preMigrationBackup, problemsSince, recordProblem, sandboxable, schemaVersion, writesSince, type Mark } from './releases.ts';
 
 // The code the supervisor was started from, when no release is current.
 export const BASE = 'base';
@@ -296,7 +296,7 @@ export class Supervisor {
   // ---- the server's requests (the console's API) -----------------------------------------------
 
   async #onMessage(s: ServerProcess, m: unknown): Promise<void> {
-    const msg = m as { nova?: string; id?: string; type?: string; version?: string; seq?: unknown; problem?: unknown };
+    const msg = m as { nova?: string; id?: string; type?: string; version?: string; seq?: unknown; problem?: unknown; staged?: unknown };
     if (msg?.nova === 'mark') {
       if (Number.isInteger(msg.seq) && Number.isInteger(msg.problem)) this.#marks.set(s, { seq: msg.seq as number, problem: msg.problem as number });
       return;
@@ -315,6 +315,12 @@ export class Supervisor {
       if (!target) return void reply(false, 'There is no previous release to go back to.');
       reply(true, `Going back to ${target === BASE ? 'the code the supervisor started from' : target}. Nova restarts.`);
       void this.rollback({ auto: false, reason: 'You asked to go back.', target });
+    } else if (msg.type === 'restart' && msg.staged === true && stagedPending(this.o.home)) {
+      // A restore (or reset) staged on the hub's own screen, finished by the next start: not a
+      // crash, and not a repair's restart that is held to one a minute (core resilience/restart.ts).
+      if (this.#deploying) return void reply(false, 'A deploy is running; try again once it has finished.');
+      reply(true, 'Restarting Nova to finish what was staged.');
+      setTimeout(() => { if (!this.#closed) void this.restart('to finish a restore'); }, 300).unref();
     } else if (msg.type === 'restart') {
       const r = this.#askedRestart();
       reply(r.ok, r.said);
@@ -404,6 +410,15 @@ export class Supervisor {
       const pre = schemaVersion(this.o.home);
       const t0 = Date.now();
       await this.#stopServer();
+      // A checkpoint of the stopped home first (M7 amendment §1). None, and there is no switch: the
+      // running release starts again as it was.
+      try {
+        takeCheckpoint({ home: this.o.home, kind: 'auto', reason: `Before switching to release ${version}`, version: packageVersion(this.codeRoot(from)) ?? from });
+      } catch (e) {
+        this.#start();
+        await this.server?.ready(this.t.readyMs);
+        return stopped('switch', `Nova couldn’t take a checkpoint before switching, so it didn’t switch: ${(e as Error).message}`);
+      }
       let port: number | null | undefined = null;
       let migration: ReleaseSlot['migration'] = null;
       try {
