@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -322,15 +322,129 @@ test('7. a file that becomes a folder comes back as one', async () => {
 
 test('8. an answer from Relay over the limit fails in plain words', async () => {
   const core = boot();
-  const relay = await startFakeRelay({ hooks: { beforeComplete: () => ({ text: 'x'.repeat(1_200_000) }) } });
+  // A run record is read up to 8 MB (a whole store, /api/state, up to 64 MB; the rest 1 MB).
+  const relay = await startFakeRelay({ hooks: { beforeComplete: () => ({ text: 'x'.repeat(9 * 1024 * 1024) }) } });
   try {
     await relayOn(core, relay.url);
     const t = brief(core);
     const end = await finish(core, t.id);
     assert.equal(end.state, 'failed');
-    assert.match(String(end.reason), /over 1 MB/);
+    assert.match(String(end.reason), /over 8 MB/);
     assert.equal(sum(core), BROKEN_SUM);
   } finally {
+    await relay.close();
+    await core.close();
+  }
+});
+
+// ---- the re-review ---------------------------------------------------------------------------------
+
+// Runs `fn` with HOME pointing at a folder whose .gitconfig is `config` (and any other files), as a
+// person's own git settings would be, for Nova and the stand-in alike.
+async function withGitHome(config: string, files: Record<string, string>, fn: () => Promise<void>) {
+  const home = mkdtempSync(join(tmpdir(), 'nova-githome-'));
+  writeFileSync(join(home, '.gitconfig'), config);
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(home, name), text);
+  const was = process.env.HOME;
+  process.env.HOME = home;
+  try { await fn(); } finally { process.env.HOME = was; }
+}
+
+async function calcRun(prep: (core: Core) => void = () => {}, opts: Parameters<typeof startFakeRelay>[0] = {}, more: Record<string, unknown> = {}) {
+  const core = boot();
+  prep(core);
+  const relay = await startFakeRelay(opts);
+  try {
+    await relayOn(core, relay.url, more);
+    const t = brief(core);
+    return { end: await finish(core, t.id, () => false, 30_000), relay, core, t };
+  } finally {
+    await relay.close();
+    await core.close();
+  }
+}
+
+test('R1. a file the task’s own .gitignore ignores doesn’t fail the run', async () => {
+  const { end } = await calcRun((core) => {
+    writeFileSync(join(core.workspace.root, 'calc', '.gitignore'), '*.log\n');
+    writeFileSync(join(core.workspace.root, 'calc', 'debug.log'), 'x\n');
+  });
+  assert.equal(end.state, 'done', String(end.reason));
+});
+
+test('R1. a person’s global excludes file doesn’t fail the run', async () => {
+  await withGitHome('[core]\n\texcludesFile = ~/ignore-these\n', { 'ignore-these': '*.log\n' }, async () => {
+    const { end } = await calcRun((core) => writeFileSync(join(core.workspace.root, 'calc', 'debug.log'), 'x\n'));
+    assert.equal(end.state, 'done', String(end.reason));
+  });
+});
+
+test('R1. line endings: core.autocrlf in the person’s git settings doesn’t fail the run', async () => {
+  await withGitHome('[core]\n\tautocrlf = true\n', {}, async () => {
+    const { end } = await calcRun();
+    assert.equal(end.state, 'done', String(end.reason));
+  });
+});
+
+test('R1. line endings: the task’s own .gitattributes doesn’t change what Relay is handed', async () => {
+  const { end, relay } = await calcRun((core) => writeFileSync(join(core.workspace.root, 'calc', '.gitattributes'), '* text eol=crlf\n'));
+  assert.equal(end.state, 'done', String(end.reason));
+  const run = [...relay.runs.values()][0] as { worktree: { directory: string } };
+  assert.ok(!readFileSync(join(run.worktree.directory, 'calc', 'sum.test.mjs'), 'utf8').includes('\r'), 'the bytes Relay got are the task’s bytes');
+});
+
+test('R2. Relay’s whole store over 1 MB (it grows with its history) doesn’t stop a run', async () => {
+  const { end } = await calcRun(() => {}, { stateExtra: { runs: [{ review: { diff: 'x'.repeat(1_500_000) } }] } });
+  assert.equal(end.state, 'done', String(end.reason));
+});
+
+test('R3. a start that outlasts Nova’s wait for an answer: the run it started is found and followed', { timeout: 60_000 }, async () => {
+  const { end, relay } = await calcRun(() => {}, { startDelayMs: 1500 }, { request_timeout_s: 1 });
+  assert.equal(end.state, 'done', String(end.reason));
+  assert.equal(relay.runs.size, 1, 'one run, found again by its requestId');
+});
+
+test('R4. a hard link in the worktree is refused', async () => {
+  const outside = join(mkdtempSync(join(tmpdir(), 'nova-outside-')), 'secret.mjs');
+  writeFileSync(outside, 'export const secret = 1;\n');
+  const { end, core, t } = await calcRun(() => {}, {
+    hooks: { beforeComplete: (run: any) => { linkSync(outside, join(run.worktree.directory, 'calc', 'linked.mjs')); return { review: { ...run.review, files: [...run.review.files, 'calc/linked.mjs'], totalFiles: run.review.totalFiles + 1 } }; } },
+  });
+  assert.equal(end.state, 'failed', String(end.reason));
+  assert.ok(!existsSync(join(core.workspace.root, 'tasks', t.id, 'calc', 'linked.mjs')));
+});
+
+test('R4. a worktree deeper than Nova walks is refused plainly', async () => {
+  const deep = `calc/${'d/'.repeat(70)}x.txt`;
+  const { end } = await calcRun(() => {}, {
+    hooks: { beforeComplete: (run: any) => { mkdirSync(join(run.worktree.directory, ...deep.split('/').slice(0, -1)), { recursive: true }); writeFileSync(join(run.worktree.directory, deep), 'x'); return { review: { ...run.review, files: [...run.review.files, deep], totalFiles: run.review.totalFiles + 1 } }; } },
+  });
+  assert.equal(end.state, 'failed');
+  assert.match(String(end.reason), /deeper than|64 folders/);
+});
+
+test('R4. a run id that isn’t a UUID is refused', { timeout: 90_000 }, async () => {
+  const core = boot();
+  const relay = await startFakeRelay();
+  // A proxy that says the run is called something else.
+  const srv = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    const r = await fetch(relay.url + req.url, { method: req.method, headers: { ...(req.headers as Record<string, string>), host: new URL(relay.url).host }, ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) });
+    let body = await r.text();
+    if (req.method === 'POST' && req.url === '/api/workers' && r.status === 202) body = JSON.stringify({ ...JSON.parse(body), id: '../../etc' });
+    res.writeHead(r.status, { 'content-type': 'application/json' });
+    res.end(body);
+  });
+  await new Promise<void>((ok) => srv.listen(0, '127.0.0.1', ok));
+  try {
+    await relayOn(core, `http://127.0.0.1:${(srv.address() as AddressInfo).port}`);
+    const t = brief(core);
+    const end = await finish(core, t.id, () => false, 80_000);
+    assert.equal(end.state, 'failed');
+    assert.match(String(end.reason), /run id/);
+  } finally {
+    srv.close();
     await relay.close();
     await core.close();
   }

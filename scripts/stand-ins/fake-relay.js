@@ -20,6 +20,7 @@
 //   busy: answer runtime_busy to the next N worker starts; slowMs: hold the run slot this long while
 //   "running" (for cancel); lagMs: how stale a read of a run is (Relay saves about every 300 ms);
 //   workerEgress: 'local' | 'remote:anthropic'; workers: false for no worker engine; api: 1;
+//   stateExtra: more fields in GET /api/state (Relay's whole store grows with its history);
 //   startDelayMs: answer a worker start this late (the run already exists); hooks.request(r, o) at
 //   every request (o: the live options), hooks.beforeComplete(run) → a patch for the record once
 //   it completes, for a broken or hostile Relay.
@@ -51,7 +52,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'core.hooksP
 const now = () => new Date().toISOString();
 
 /**
- * @param {{ mode?: string, script?: any, workerEgress?: string, busy?: number, slowMs?: number, lagMs?: number, workers?: boolean, api?: number, dataDir?: string, port?: number, startDelayMs?: number, hooks?: { request?: (r: any, o: any) => void, beforeComplete?: (run: any) => any } }} [opts]
+ * @param {{ mode?: string, script?: any, workerEgress?: string, busy?: number, slowMs?: number, lagMs?: number, workers?: boolean, api?: number, dataDir?: string, port?: number, startDelayMs?: number, stateExtra?: Record<string, unknown>, hooks?: { request?: (r: any, o: any) => void, beforeComplete?: (run: any) => any } }} [opts]
  */
 export function startFakeRelay(opts = {}) {
   const o = { mode: 'honest', workerEgress: 'local', busy: 0, slowMs: 0, lagMs: 0, workers: true, api: 1, ...opts };
@@ -215,7 +216,7 @@ export function startFakeRelay(opts = {}) {
         return send(200, t);
       }
       case 'GET /api/state':
-        return send(200, { profiles, projects: [...projects.values()], tasks: [...tasks.values()] });
+        return send(200, { profiles, projects: [...projects.values()], tasks: [...tasks.values()], ...(o.stateExtra ?? {}) });
       case 'POST /api/workers': {
         const b = body;
         for (const k of ['taskId', 'projectId', 'profileId', 'requestId']) if (typeof b[k] !== 'string' || !UUID.test(b[k])) return fail(400, `${k} is a UUID.`);

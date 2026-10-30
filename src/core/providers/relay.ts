@@ -32,9 +32,19 @@ export const DEFAULT_URL = 'http://127.0.0.1:8766';
 export const CONTRACT_API = 1;
 const CLIENT = { 'x-relay-client': 'relay-local' };
 const MAX_BODY = 32 * 1024;
-// What Nova reads of one answer from Relay. Relay's largest field, the diff, is at most 200,000
-// characters.
-export const MAX_ANSWER = 1024 * 1024;
+// What Nova reads of one answer from Relay, by route: GET /api/state is Relay's whole store, which
+// grows with its history; a run record carries the diff (at most 200,000 characters) and the
+// worker's text; everything else is small.
+const MB = 1024 * 1024;
+export function answerCap(method: string, path: string): number {
+  if (method === 'GET' && path === '/api/state') return 64 * MB;
+  if (method === 'GET' && /^\/api\/workers\/[^/]+$/.test(path)) return 8 * MB;
+  return MB;
+}
+// How far Nova walks a worktree Relay names.
+const MAX_ENTRIES = 20_000;
+const MAX_DEPTH = 64;
+const UUID = /^[a-f0-9-]{36}$/;
 // What one task may bring back, as for every coding agent (the registry's own limits).
 const MAX_FILES = 200;
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -75,10 +85,9 @@ interface Answer { status: number; body: Record<string, unknown> | null }
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 class TooBig extends Error {}
-const TOO_BIG = `Relay’s answer was over ${MAX_ANSWER / 1024 / 1024} MB, more than Nova reads from it.`;
 
 // Reads an answer up to the limit, and no further.
-async function capped(res: Response): Promise<string> {
+async function capped(res: Response, cap: number): Promise<string> {
   const reader = res.body?.getReader();
   if (!reader) return '';
   const parts: Uint8Array[] = [];
@@ -87,22 +96,26 @@ async function capped(res: Response): Promise<string> {
     const { done, value } = await reader.read();
     if (done) break;
     n += value.length;
-    if (n > MAX_ANSWER) { await reader.cancel().catch(() => {}); throw new TooBig(TOO_BIG); }
+    if (n > cap) { await reader.cancel().catch(() => {}); throw new TooBig(`Relay’s answer was over ${cap / MB} MB, more than Nova reads from it.`); }
     parts.push(value);
   }
   return Buffer.concat(parts).toString('utf8');
 }
 
-async function call(base: string, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Answer> {
+// `timeoutMs`: how long to wait for the answer (0: as long as the signal allows).
+async function call(base: string, method: string, path: string, body?: unknown, signal?: AbortSignal, timeoutMs = 20_000): Promise<Answer> {
   const text = body === undefined ? undefined : JSON.stringify(body);
   if (text !== undefined && Buffer.byteLength(text) > MAX_BODY) throw new Error(`what Nova would send Relay (${path}) is over 32 KB`);
   const res = await fetch(`${base}${path}`, {
     method, ...NO_REDIRECT,
     headers: text === undefined ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json', ...CLIENT },
     ...(text === undefined ? {} : { body: text }),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
+    ...((): { signal?: AbortSignal } => {
+      const all = [...(signal ? [signal] : []), ...(timeoutMs ? [AbortSignal.timeout(timeoutMs)] : [])];
+      return all.length ? { signal: AbortSignal.any(all) } : {};
+    })(),
   });
-  const raw = await capped(res);
+  const raw = await capped(res, answerCap(method, path));
   let parsed: unknown = null;
   try { parsed = raw ? JSON.parse(raw) : null; } catch { /* not JSON: said below */ }
   return { status: res.status, body: isObj(parsed) ? parsed : null };
@@ -149,10 +162,12 @@ export function relayWhere(c: Config): Where {
 const gitEnv = () => {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^GIT_/.test(k)) env[k] = v;
-  return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
+  // No system or personal git settings: what is committed is the task's bytes, whatever a person's
+  // excludes, line endings or attributes would do.
+  return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
 };
 async function git(dir: string, ...args: string[]): Promise<string> {
-  const r = await run('git', ['-C', dir, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false', '-c', 'user.name=Nova', '-c', 'user.email=nova@localhost', '-c', 'init.defaultBranch=main', ...args], { env: gitEnv(), timeout: 30_000, maxBuffer: 1024 * 1024 });
+  const r = await run('git', ['-C', dir, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-c', 'core.attributesFile=/dev/null', '-c', 'core.excludesFile=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=Nova', '-c', 'user.email=nova@localhost', '-c', 'init.defaultBranch=main', ...args], { env: gitEnv(), timeout: 30_000, maxBuffer: 1024 * 1024 });
   return r.stdout;
 }
 const gitPart = (p: string) => p.split('/').some((x) => x === '.git');
@@ -179,8 +194,17 @@ async function baseline(files: Map<string, Buffer>, repo: string): Promise<strin
     writeFileSync(join(fresh, rel), data);
   }
   await git(fresh, 'init', '-q');
-  await git(fresh, 'add', '-A');
+  // The task's own .gitattributes can't change the bytes either, on the way in or in Relay's
+  // checkout (its worktrees share this repository's info/attributes, which come first).
+  mkdirSync(join(fresh, '.git', 'info'), { recursive: true });
+  writeFileSync(join(fresh, '.git', 'info', 'attributes'), '* -text -filter -ident -working-tree-encoding\n');
+  // Every file, ignored or not: Nova compares the worktree with all of them.
+  await git(fresh, 'add', '-A', '-f');
   await git(fresh, 'commit', '-q', '--allow-empty', '-m', 'Nova: the task’s files, for Relay');
+  // What was committed is exactly the task's files, byte for byte.
+  const staged = new Map((await git(fresh, 'ls-files', '-s', '-z')).split('\0').filter(Boolean).map((l) => { const m = /^\d+ ([0-9a-f]+) \d+\t(.*)$/s.exec(l)!; return [m[2]!, m[1]!] as const; }));
+  const blob = (b: Buffer) => createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex');
+  if (staged.size !== files.size || [...files].some(([p, b]) => staged.get(p) !== blob(b))) throw new Error('git didn’t commit the task’s files exactly as they are');
   rmSync(repo, { recursive: true, force: true });
   renameSync(fresh, repo);
   return (await git(repo, 'rev-parse', '--verify', 'HEAD')).trim();
@@ -188,19 +212,23 @@ async function baseline(files: Map<string, Buffer>, repo: string): Promise<strin
 
 // Everything in a folder Relay names, read without following a link and without .git, by kind.
 type Entry = { kind: 'file' | 'link' | 'other'; size: number };
+// A file with more than one name (a hard link) counts as a link: it may be a file outside.
 function survey(root: string): Map<string, Entry> {
   const out = new Map<string, Entry>();
-  const go = (dir: string) => {
+  let seen = 0;
+  const go = (dir: string, depth: number) => {
+    if (depth > MAX_DEPTH) throw new Error(`it is deeper than ${MAX_DEPTH} folders`);
     for (const name of readdirSync(dir)) {
       if (name === '.git') continue;
+      if (++seen > MAX_ENTRIES) throw new Error(`it has more than ${MAX_ENTRIES.toLocaleString('en-US')} entries`);
       const abs = join(dir, name);
       const rel = relative(root, abs).split(sep).join('/');
       const st = lstatSync(abs);
-      if (st.isDirectory()) go(abs);
-      else out.set(rel, { kind: st.isFile() ? 'file' : st.isSymbolicLink() ? 'link' : 'other', size: st.size });
+      if (st.isDirectory()) go(abs, depth + 1);
+      else out.set(rel, { kind: st.isFile() && st.nlink === 1 ? 'file' : st.isFile() || st.isSymbolicLink() ? 'link' : 'other', size: st.size });
     }
   };
-  go(root);
+  go(root, 1);
   return out;
 }
 
@@ -225,6 +253,7 @@ export const relay: Impl = {
     if (c.profile !== undefined && (typeof c.profile !== 'string' || c.profile.length > 120)) out.push('profile is the name of a Relay profile, or empty for the first one that can run workers.');
     if (c.poll_ms !== undefined && !(Number.isInteger(c.poll_ms) && (c.poll_ms as number) >= 10 && (c.poll_ms as number) <= 60_000)) out.push('poll_ms is how often Nova reads the run, 10 to 60000 milliseconds.');
     if (c.busy_retry_s !== undefined && !(Number.isInteger(c.busy_retry_s) && (c.busy_retry_s as number) >= 1 && (c.busy_retry_s as number) <= 3600)) out.push('busy_retry_s is how long Nova waits before asking a busy Relay again, 1 to 3600 seconds.');
+    if (c.request_timeout_s !== undefined && !(Number.isInteger(c.request_timeout_s) && (c.request_timeout_s as number) >= 1 && (c.request_timeout_s as number) <= 600)) out.push('request_timeout_s is how long Nova waits for one answer from Relay, 1 to 600 seconds.');
     if (c.busy_limit !== undefined && !(Number.isInteger(c.busy_limit) && (c.busy_limit as number) >= 1 && (c.busy_limit as number) <= 10_000)) out.push('busy_limit is how many times in a row Nova asks a busy Relay before it waits for you, 1 to 10000.');
     return out;
   },
@@ -247,7 +276,8 @@ export const relay: Impl = {
     const cwd = i.cwd;
     const attempt = i.attempt ?? 1;
     const signal = i.signal;
-    const ask = (method: string, path: string, body?: unknown) => call(b.url, method, path, body, signal);
+    const wait = num(i.config.request_timeout_s, 20) * 1000;
+    const ask = (method: string, path: string, body?: unknown) => call(b.url, method, path, body, signal, wait);
     // Where Relay says the brief would go, against the task's privacy mode: asked now, and again
     // right before a worker starts.
     const fresh = async () => {
@@ -328,9 +358,15 @@ export const relay: Impl = {
         };
         let a: Answer;
         try {
-          a = await ask('POST', '/api/workers', body);
+          a = await call(b.url, 'POST', '/api/workers', body, signal, wait);
         } catch (e) {
-          if (signal.aborted) {
+          if (!signal.aborted && !(e instanceof TooBig)) {
+            // The start may have reached Relay and the answer been lost or slow. The same request
+            // again (the same requestId) names the run if one was started, so it is followed rather
+            // than left behind; this time Nova waits as long as the task does.
+            i.log('Relay’s answer to the start didn’t come; asking again with the same request');
+            a = await call(b.url, 'POST', '/api/workers', body, signal, 0);
+          } else if (signal.aborted) {
             // Cancelled with the start on its way: Relay may have started the run. The same request
             // again names it (Relay returns the run for a repeated requestId), and it is cancelled.
             const again = await call(b.url, 'POST', '/api/workers', body).catch(() => null);
@@ -339,8 +375,8 @@ export const relay: Impl = {
               await call(b.url, 'POST', `/api/runs/${encodeURIComponent(again.body.id)}/cancel`, {}).catch(() => null);
               i.log(`asked Relay to cancel run ${again.body.id}, started as the task was cancelled`);
             }
-          }
-          throw e;
+            throw e;
+          } else throw e;
         }
         if (a.status === 409 && a.body?.code === 'runtime_busy') {
           // Relay turned it away before any run existed (it records a run only after this check), so
@@ -352,6 +388,7 @@ export const relay: Impl = {
         // Relay doesn't know this attempt's project or task any more (its data was reset): made again, once.
         if ((a.status === 404 || a.status === 422) && round === 0 && (kept?.task || kept?.project)) { s = { repo, head }; save(s); continue; }
         if (a.status !== 202 || typeof a.body?.id !== 'string') return failed(`Relay didn’t start a worker: ${relayError(a)}`);
+        if (!UUID.test(a.body.id)) return failed(`Relay answered with a run id Nova won’t use (${JSON.stringify(a.body.id.slice(0, 60))}); a run id is a UUID.`);
         started = a;
       }
       runId = String(started!.body!.id);
@@ -440,7 +477,7 @@ export const relay: Impl = {
         const e = found.get(p);
         const to = safePath(cwd, p).abs;
         if (!e) { deletes.push({ path: p, to }); continue; }
-        if (e.kind !== 'file') throw new Error(`${p} in Relay’s worktree isn’t a plain file`);
+        if (e.kind !== 'file') throw new Error(`${p} in Relay’s worktree isn’t a plain file of its own (a link, or a file with another name elsewhere)`);
         writes.push({ path: p, to, size: e.size });
       }
       const bytes = writes.reduce((n, w) => n + w.size, 0);
@@ -449,7 +486,7 @@ export const relay: Impl = {
       }
       for (const w of writes) {
         const from = join(root, w.path);
-        if (realpathSync(from) !== from || !lstatSync(from).isFile()) throw new Error(`${w.path} in Relay’s worktree leads somewhere else`);
+        if (realpathSync(from) !== from || !lstatSync(from).isFile() || lstatSync(from).nlink !== 1) throw new Error(`${w.path} in Relay’s worktree leads somewhere else`);
         w.data = readFileSync(from);
         if (w.data.length !== w.size) throw new Error(`${w.path} changed in Relay’s worktree while Nova read it`);
       }
