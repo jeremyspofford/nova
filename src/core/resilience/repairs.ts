@@ -74,7 +74,8 @@ export function wireRepairs(pb: Playbooks, d: RepairDeps): void {
     }
     if (!healthy) return { ok: false, said: `${w.name} still isn’t healthy: ${words}` };
     const requeued = requeueWaiting(d.ledger, subject);
-    return { ok: true, said: `${w.name} answers again${words ? ` (${words.replace(/\.$/, '')})` : ''}.${requeued ? ` Put ${requeued} waiting task${requeued === 1 ? '' : 's'} back in the queue.` : ''}`, resolved: true };
+    // The problem stays open: a task that failed is the person's to retry or cancel.
+    return { ok: true, said: `${w.name} answers again${words ? ` (${words.replace(/\.$/, '')})` : ''}.${requeued ? ` Put ${requeued} waiting task${requeued === 1 ? '' : 's'} back in the queue.` : ''} A failed task is yours to retry or cancel.` };
   });
 
   // The local model: the model manager's own check releases waiting work once it answers.

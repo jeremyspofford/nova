@@ -513,6 +513,9 @@ export class Models extends EventEmitter {
     const p = this.placement(req.role);
     const spoke = p && p.device !== HUB ? this.#deviceName(p.device) : null;
     const back = spoke ? `when ${spoke} is on again (Nova won’t keep waking it; turn it on, and the work runs once it checks in)` : 'when the model is back';
+    // A model that was assigned and stopped answering is a fault, whatever the mode (M7b's chaos
+    // pass): the person sees it with its playbook, not only the work that waits on it.
+    if (local && p && !spoke) this.#fault(req.role, local.why);
     const err = local
       ? new ModelsWaiting('capacity', req.role, `Waiting on local capacity: ${local.why.replace(/\.$/, '')}.${mode === 'local-only' ? ` This is local-only, so it stays on your devices and runs ${back}.` : budget ? ` ${budget.why}` : ''}`)
       : new ModelsWaiting(budget ? 'budget' : 'capacity', req.role, budget ? `Waiting on the cloud budget: ${budget.why}` : `Waiting: ${failed.map((f) => f.why).join(' ')}`);
