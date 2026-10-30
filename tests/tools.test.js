@@ -155,3 +155,36 @@ test('a link inside the workspace can’t carry a write or a read out to Nova’
   assert.equal(readFileSync(join(h, 'nova.db'), 'utf8'), 'db');
   assert.ok(!existsSync(join(h, 'factory-reset.json')));
 });
+
+// Re-review findings 2 and 3: a link that leads nowhere yet is still a link, and names are compared
+// the way a case-insensitive disk (macOS, Windows) would see them.
+test('write_file never goes through a link, even one that leads nowhere yet', async () => {
+  const h = home();
+  mkdirSync(join(h, '.git', 'hooks'), { recursive: true });
+  symlinkSync('../factory-reset.json', join(h, 'workspace', 'marker'));
+  symlinkSync('../.git/hooks/post-commit', join(h, 'workspace', 'hook'));
+  const out = mkdtempSync(join(tmpdir(), 'nova-t-out-'));
+  symlinkSync(join(out, 'planted.txt'), join(h, 'workspace', 'away'));
+  for (const path of ['workspace/marker', 'workspace/hook', 'workspace/away']) {
+    await assert.rejects(TOOLS.write_file.run({ path, content: 'x' }, { home: h }), /can't be written/, path);
+  }
+  assert.ok(!existsSync(join(h, 'factory-reset.json')));
+  assert.ok(!existsSync(join(h, '.git', 'hooks', 'post-commit')));
+  assert.ok(!existsSync(join(out, 'planted.txt')));
+});
+
+test('the file tools compare names whatever their case or Unicode form', async () => {
+  const h = home();
+  for (const [f, text] of [['NOVA.db', 'db'], ['Checkpoints/.seal', 'seal'], ['.NOVA-HOME', 'mark'], ['Vault/key', 'key'], ['MESH/identity.json', '{}'], ['Backups/x.db', 'db']]) {
+    mkdirSync(dirname(join(h, f)), { recursive: true });
+    writeFileSync(join(h, f), text);
+  }
+  for (const path of ['NOVA.db', 'Checkpoints/.seal', '.NOVA-HOME', 'Vault/key', 'MESH/identity.json', 'Backups/x.db', 'Nova.DB-wal']) {
+    await assert.rejects(TOOLS.read_file.run({ path }, { home: h }), /can't be read/, path);
+  }
+  for (const path of ['Factory-Reset.json', 'NOVA.db', 'Memory.md', 'SESSIONS/x.jsonl', 'Permissions.md']) {
+    await assert.rejects(TOOLS.write_file.run({ path, content: 'x' }, { home: h }), /can't be written|Memory is kept|audit trail|Only the person/, path);
+  }
+  // The same file, as a case-insensitive disk sees it: the standing file, in another case.
+  assert.match(await TOOLS.write_file.run({ path: 'User.md', content: 'ok' }, { home: h }), /Wrote 2 bytes/);
+});

@@ -6,8 +6,8 @@
 // again with the result in the transcript.
 import { spawn } from 'node:child_process';
 import { trackChild } from './core/index.ts';
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, relative, sep } from 'node:path';
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { inHome, inSecretDir } from './home.js';
 
 const MAX_READ = 200_000;
@@ -23,9 +23,14 @@ export const SEARCH_URL = 'https://html.duckduckgo.com/html/';
 // its review): write_file writes only inside workspace/ and to the standing files the agent is
 // meant to edit (WRITABLE); read_file never reads Nova's database, checkpoints (identity and vault
 // keys are in them), pre-upgrade backups, the home's git history, a factory reset's marker or the
-// home's sentinel (UNREADABLE). Paths are checked after links are followed, so a link in the
-// workspace can't carry a read or a write out to them.
+// home's sentinel (UNREADABLE).
+//  - Names are compared as a case-insensitive disk (macOS, Windows) sees them: NFC, lower case.
+//  - A read follows links, and is checked where it really lands.
+//  - A write never goes through a link at all, not even one that leads nowhere yet: every part of
+//    the path is looked at (lstat), and the file is opened with O_NOFOLLOW.
 export const WRITABLE = ['AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md'];
+const fold = (name) => String(name).normalize('NFC').toLowerCase();
+const WRITABLE_FOLDED = new Set(WRITABLE.map(fold));
 const UNREADABLE = new Set(['checkpoints', 'backups', '.git', 'factory-reset.json', '.nova-home']);
 const DB = /^nova\.db/;
 
@@ -42,18 +47,32 @@ function real(abs) {
   return join(realpathSync(at), ...rest);
 }
 
+// Whether any part of `rel` under `root` is a link (a dangling one included).
+function throughLink(root, rel) {
+  let at = root;
+  for (const part of rel.split(sep).filter(Boolean)) {
+    at = join(at, part);
+    let st;
+    try { st = lstatSync(at); } catch { return false; } // not there yet: nothing below it is either
+    if (st.isSymbolicLink()) return true;
+  }
+  return false;
+}
+
 function guard(home, path, verb) {
   const lexical = inHome(home, path);
   const root = realpathSync(home);
-  const abs = real(lexical);
+  const writing = verb !== 'read';
+  if (writing && throughLink(root, relative(resolve(home), lexical))) throw new Error(`${path} goes through a link, so it can't be ${verb}`);
+  const abs = writing ? join(root, relative(resolve(home), lexical)) : real(lexical);
   if (abs !== root && !abs.startsWith(root + sep)) throw new Error(`${path} leads outside Nova's home, so it can't be ${verb}`);
   const rel = relative(root, abs);
-  const posix = rel.split(sep).join('/');
+  const posix = fold(rel.split(sep).join('/'));
   const dir = inSecretDir(posix);
   if (dir) throw new Error(`${dir === 'mesh' ? 'Device keys' : 'Connection secrets'} in ${dir}/ can't be ${verb}`);
   const top = posix.split('/')[0];
   if (verb === 'read' && (UNREADABLE.has(top) || DB.test(top))) throw new Error(`${path} is Nova's own state (its database, checkpoints, backups or history), so it can't be read`);
-  return { abs, rel, top };
+  return { abs, rel, posix, top };
 }
 
 export const TOOLS = {
@@ -73,15 +92,17 @@ export const TOOLS = {
     doc: 'Create or replace a text file in your home: your workspace and the standing files. MEMORY.md and memory/ are kept with memory blocks instead (below).',
     needsApproval: false,
     async run({ path, content }, { home }) {
-      const { abs, rel, top } = guard(home, path, 'written');
-      if (rel === 'sessions' || rel.startsWith(`sessions${sep}`)) throw new Error('Session logs are an audit trail and cannot be edited');
-      if (rel === 'MEMORY.md' || rel === 'memory' || rel.startsWith(`memory${sep}`)) throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
-      if (rel === 'schedules' || rel.startsWith(`schedules${sep}`)) throw new Error('Schedules are set with schedule_set, which the person approves, not write_file');
-      if (rel === 'permissions.md') throw new Error('Only the person changes what Nova may do on its own');
-      if (!WRITABLE.includes(rel) && !(top === 'workspace' && rel !== 'workspace')) throw new Error(`${path} can't be written: Nova writes only in workspace/ and its standing files (${WRITABLE.join(', ')}). The rest of its home is Nova's own state.`);
+      const { abs, rel, posix, top } = guard(home, path, 'written');
+      if (top === 'sessions') throw new Error('Session logs are an audit trail and cannot be edited');
+      if (posix === 'memory.md' || top === 'memory') throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
+      if (top === 'schedules') throw new Error('Schedules are set with schedule_set, which the person approves, not write_file');
+      if (posix === 'permissions.md') throw new Error('Only the person changes what Nova may do on its own');
+      if (!WRITABLE_FOLDED.has(posix) && !(top === 'workspace' && posix !== 'workspace')) throw new Error(`${path} can't be written: Nova writes only in workspace/ and its standing files (${WRITABLE.join(', ')}). The rest of its home is Nova's own state.`);
       if (typeof content !== 'string') throw new Error('content must be a string');
       mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, content);
+      // Never through a link, even if one appeared since the check.
+      const fd = openSync(abs, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o644);
+      try { writeSync(fd, content); } finally { closeSync(fd); }
       return `Wrote ${Buffer.byteLength(content)} bytes to ${rel}`;
     },
   },

@@ -49,7 +49,14 @@ test('after a reset, the first-run page and setup tell the browser to clear what
   nova = createNova(config);
   await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));
   try {
-    assert.equal(await header('/'), '"cache", "storage"');
+    const base = `http://127.0.0.1:${nova.server.address().port}`;
+    const first = await fetch(`${base}/`);
+    assert.equal(first.headers.get('clear-site-data'), '"cache", "storage"');
+    const cookie = (first.headers.get('set-cookie') ?? '').split(';')[0];
+    assert.match(cookie, /^nova-reset-cleared=/);
+    // Once per reset: a browser that already cleared isn't told again (its new key stays).
+    assert.equal((await fetch(`${base}/`, { headers: { cookie } })).headers.get('clear-site-data'), null);
+    assert.equal((await fetch(`${base}/api/v1/setup`, { headers: { cookie } })).headers.get('clear-site-data'), null);
     assert.equal(await header('/api/v1/setup'), '"cache", "storage"');
     for (const text of ['Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no']) nova.core.setup.answer(text);
     assert.equal(await header('/'), null, 'once setup is done, never again');

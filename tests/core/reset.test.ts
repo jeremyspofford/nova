@@ -403,3 +403,92 @@ test('a file named like an encrypted copy that doesn’t open under the backup k
   await open(w.home).close();
   assert.ok(existsSync(copy), 'left as it is');
 });
+
+// Re-review finding 1: the mark means "this folder is Nova's", not "Nova started here". A folder
+// that already held things when Nova was first pointed at it keeps them: a reset never erases what
+// was there before Nova, and the confirmation says so.
+test('a folder that already held the person’s things when Nova started there keeps them through a reset', async () => {
+  const w = world('nova-reset-before-');
+  mkdirSync(join(w.home, 'workspace', 'my-project'), { recursive: true });
+  writeFileSync(join(w.home, 'workspace', 'my-project', 'main.c'), 'int main(void) { return 0; }\n');
+  mkdirSync(join(w.home, '.git'));
+  writeFileSync(join(w.home, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const c = open(w.home);
+  const p = c.reset.preview();
+  assert.deepEqual(p.keeps.before, ['.git', 'workspace'], 'listed as already here before Nova');
+  assert.ok(!p.wipes.home.includes('workspace') && !p.wipes.home.includes('.git'));
+  await (await c.reset.stage({ confirm: true, who: CONSOLE })).done;
+  await c.close();
+  const n = open(w.home);
+  try {
+    assert.equal(readFileSync(join(w.home, 'workspace', 'my-project', 'main.c'), 'utf8'), 'int main(void) { return 0; }\n', 'the project is kept');
+    assert.ok(existsSync(join(w.home, '.git', 'HEAD')));
+    assert.ok(!existsSync(join(w.home, 'mesh', 'role.json')));
+    assert.deepEqual(n.reset.report()!.left.before, ['.git', 'workspace']);
+  } finally {
+    await n.close();
+  }
+});
+
+test('a home that was new and empty is erased whole; so is an existing Nova home', async () => {
+  const fresh = world('nova-reset-fresh-');
+  mkdirSync(fresh.home);
+  const c = open(fresh.home);
+  mkdirSync(join(fresh.home, '.git'));
+  writeFileSync(join(fresh.home, 'workspace', 'later.md'), 'made with Nova\n');
+  assert.deepEqual(c.reset.preview().keeps.before, []);
+  await (await c.reset.stage({ confirm: true, who: CONSOLE })).done;
+  await c.close();
+  await open(fresh.home).close();
+  assert.ok(!existsSync(join(fresh.home, '.git')) && !existsSync(join(fresh.home, 'workspace', 'later.md')));
+  // A home from before the mark: its nova.db is Nova's, so all of Nova's entries are.
+  const old = world('nova-reset-oldhome-');
+  await open(old.home).close();
+  rmSync(join(old.home, HOME_MARK));
+  mkdirSync(join(old.home, '.git'));
+  const o = open(old.home);
+  assert.deepEqual(o.reset.preview().keeps.before, []);
+  await (await o.reset.stage({ confirm: true, who: CONSOLE })).done;
+  await o.close();
+  await open(old.home).close();
+  assert.ok(!existsSync(join(old.home, '.git')));
+});
+
+// Re-review finding 5: stopped after the mark got its new key but before the marker went, the next
+// start recognises a reset that is done and finishes quietly.
+test('a finished reset whose marker was left behind is recognised and cleared quietly', async () => {
+  const w = world('nova-reset-done-');
+  const c = open(w.home);
+  await (await c.reset.stage({ confirm: true, who: CONSOLE })).done;
+  const marker = readFileSync(join(w.home, RESET_MARKER));
+  await c.close();
+  await open(w.home).close();
+  writeFileSync(join(w.home, RESET_MARKER), marker);
+  const n = open(w.home);
+  try {
+    assert.ok(!existsSync(join(w.home, RESET_MARKER)));
+    assert.deepEqual(asideIn(w.home), [], 'nothing set aside');
+    assert.ok(!problemsOf(n).some((m) => /didn’t write/.test(m)), problemsOf(n).join(' | '));
+  } finally {
+    await n.close();
+  }
+});
+
+// Re-review finding 4: what the browser kept is cleared on the hub's own screen only, once per reset.
+test('after a reset, the hub’s own screen is told once to clear what it kept; a paired device never', async () => {
+  const w = world('nova-reset-csd-');
+  const c = open(w.home);
+  await (await c.reset.stage({ confirm: true, who: CONSOLE })).done;
+  await c.close();
+  const n = open(w.home);
+  try {
+    const id = n.reset.report()!.id;
+    const first = n.reset.clearHeaders({ kind: 'console' }, undefined);
+    assert.equal(first['clear-site-data'], '"cache", "storage"');
+    assert.match(first['set-cookie'] ?? '', new RegExp(`nova-reset-cleared=${id}`));
+    assert.deepEqual(n.reset.clearHeaders({ kind: 'console' }, `nova-reset-cleared=${id}`), {}, 'once per reset');
+    assert.deepEqual(n.reset.clearHeaders({ kind: 'device' }, undefined), {}, 'never a paired device');
+  } finally {
+    await n.close();
+  }
+});

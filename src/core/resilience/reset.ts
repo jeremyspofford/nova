@@ -110,11 +110,12 @@ function unverified(home: string, m: Marker | null): string | null {
   const mark = readMark(home);
   if (!mark) return 'this folder doesn’t carry Nova’s mark';
   if (!sealOk(mark, body(m), m.seal)) return 'Nova didn’t write it, or it changed since';
-  let here = resolve(home);
-  let there = resolve(m.home);
-  try { here = realpathSync(home); there = realpathSync(m.home); } catch { /* compared as written */ }
-  if (here !== there) return 'it was made for another folder';
+  if (!sameFolder(home, m.home)) return 'it was made for another folder';
   return null;
+}
+
+function sameFolder(a: string, b: string): boolean {
+  try { return realpathSync(a) === realpathSync(b); } catch { return resolve(a) === resolve(b); }
 }
 
 export interface ResetReport {
@@ -125,7 +126,7 @@ export interface ResetReport {
   finished_at: string;
   version: string;
   wiped: { home: string[]; keychain: string | null; key_file: boolean; backups: string[]; folders: string[]; scratch: number };
-  left: { foreign: string[]; unreachable: Unreachable[]; strays: string[]; changed: string[]; releases: string; export: string | null; export_gone: string | null; keychain: string | null };
+  left: { foreign: string[]; before: string[]; unreachable: Unreachable[]; strays: string[]; changed: string[]; releases: string; export: string | null; export_gone: string | null; keychain: string | null };
   devices: { told: DeviceLine[]; not_told: DeviceLine[] };
   said: string;
 }
@@ -134,10 +135,17 @@ export interface ResetReport {
 
 // Nova's own entries in the home (entries.ts), and everything else (the person's), by top-level
 // name. The marker is neither: it goes last, once the report is written.
-export function homeEntries(home: string): { own: string[]; foreign: string[] } {
+// `before`: entries named like Nova's that were already in the folder when Nova was first pointed
+// at it (home-mark.ts). They are the person's: never erased, and said.
+export function homeEntries(home: string): { own: string[]; foreign: string[]; before: string[] } {
   let names: string[] = [];
   try { names = readdirSync(home).sort(); } catch { /* no home yet */ }
-  return { own: names.filter((n) => n !== RESET_MARKER && isNovaEntry(n)), foreign: foreignEntries(home) };
+  const first = new Set(readMark(home)?.before ?? []);
+  return {
+    own: names.filter((n) => n !== RESET_MARKER && isNovaEntry(n) && !first.has(n)),
+    foreign: foreignEntries(home),
+    before: names.filter((n) => isNovaEntry(n) && first.has(n)),
+  };
 }
 
 const inside = (path: string, root: string) => {
@@ -181,6 +189,10 @@ export function finishReset(home: string, o: FinishOptions = {}): ResetReport | 
   // alone. Anything else is never acted on: it is kept aside and said, and Nova starts as it was.
   const why = unverified(home, m);
   if (why) {
+    // Stopped after the reset was done (its report written, the mark re-keyed) but before the
+    // marker went: nothing is left to do but remove it.
+    const done = readReport(home);
+    if (m && typeof m.id === 'string' && done?.id === m.id && typeof m.home === 'string' && sameFolder(home, m.home)) { rmSync(file, { force: true }); return null; }
     if (o.leaveUnverified) return null;
     const aside = `${file}.set-aside-${(o.now?.() ?? new Date()).toISOString().replace(/[:.]/g, '-')}`;
     renameSync(file, aside);
@@ -208,7 +220,7 @@ export function finishReset(home: string, o: FinishOptions = {}): ResetReport | 
   }
 
   // 3. Nova's own entries in the home, by name; the marker last, after the report.
-  const { own, foreign } = homeEntries(home);
+  const { own, foreign, before } = homeEntries(home);
   for (const name of own) {
     if (name === RESET_REPORT) continue;
     step(`home:${name}`);
@@ -226,7 +238,7 @@ export function finishReset(home: string, o: FinishOptions = {}): ResetReport | 
   const report: ResetReport = {
     v: 1, id: m.id, kind: m.kind, staged_at: m.staged_at, finished_at: now().toISOString(), version: m.version,
     wiped: { home: [...new Set([...(m.own ?? []), ...own.filter((n) => n !== RESET_REPORT)])].sort(), keychain: key.keychain, key_file: key.file, backups: wipedBackups, folders, scratch },
-    left: { foreign, unreachable: m.unreachable ?? [], strays: m.strays ?? [], changed, releases: RELEASES_SAID, export: m.export && existsSync(m.export) ? m.export : null, export_gone: m.export && !existsSync(m.export) ? m.export : null, keychain: key.problem },
+    left: { foreign, before, unreachable: m.unreachable ?? [], strays: m.strays ?? [], changed, releases: RELEASES_SAID, export: m.export && existsSync(m.export) ? m.export : null, export_gone: m.export && !existsSync(m.export) ? m.export : null, keychain: key.problem },
     devices,
     said: '',
   };
@@ -265,6 +277,7 @@ function summary(r: ResetReport): string {
   if (r.wiped.backups.length) wiped.push(`${plural(r.wiped.backups.length, 'backup')} in ${plural(r.wiped.folders.length, 'folder')}`);
   parts.push(`Erased: ${wiped.join(', ')}.`);
   if (r.left.foreign.length) parts.push(`Left in place, because they aren’t Nova’s: ${r.left.foreign.join(', ')}.`);
+  if (r.left.before?.length) parts.push(`Already here before Nova, so left alone: ${r.left.before.join(', ')}.`);
   for (const u of r.left.unreachable) parts.push(u.said);
   if (r.left.changed.length) parts.push(`Left because they changed since the reset was asked for: ${r.left.changed.join(', ')}.`);
   if (r.devices.told.length) parts.push(`Told: ${r.devices.told.map((d) => d.name).join(', ')}.`);
@@ -302,11 +315,13 @@ export interface ResetOptions {
   stopWork?: (boundMs: number) => Promise<void>;
   // A checkpoint's restore is staged (checkpoints.ts): a reset waits until it is done.
   restorePending?: () => boolean;
+  // Whether first-run setup is done (after it, nothing more is cleared in browsers).
+  setupDone?: () => boolean;
 }
 
 export interface Preview {
   wipes: { home: string[]; keychain: string | null; backups: { folder: string; kind: FolderKind; count: number }[] };
-  keeps: { foreign: string[]; unreachable: Unreachable[]; strays: string[]; releases: string; export: string | null };
+  keeps: { foreign: string[]; before: string[]; unreachable: Unreachable[]; strays: string[]; releases: string; export: string | null };
   devices: { can_tell: Omit<DeviceLine, 'said'>[]; cant_tell: Omit<DeviceLine, 'said'>[]; cant_tell_said: string };
   export_said: string;
   confirm: string;
@@ -336,9 +351,20 @@ export class FactoryReset {
     return readReport(this.#o.home);
   }
 
+  // After a reset, the hub's own screen is told once (per reset) to clear what its browser kept of
+  // the Nova that was erased, until setup is done. Never a paired device: its new key would go.
+  clearHeaders(p: { kind: string }, cookie: string | undefined): Record<string, string> {
+    if (p.kind !== 'console') return {};
+    const r = this.report();
+    if (!r || this.#o.setupDone?.()) return {};
+    const seen = /(?:^|;\s*)nova-reset-cleared=([^;\s]+)/.exec(cookie ?? '')?.[1];
+    if (seen === r.id) return {};
+    return { 'clear-site-data': '"cache", "storage"', 'set-cookie': `nova-reset-cleared=${r.id}; Path=/; Max-Age=31536000; SameSite=Strict; HttpOnly` };
+  }
+
   // What a reset would wipe and what it would leave, for the confirmation.
   preview(): Preview {
-    const { own, foreign } = homeEntries(this.#o.home);
+    const { own, foreign, before } = homeEntries(this.#o.home);
     const b = this.#backups();
     const by = new Map<string, { folder: string; kind: FolderKind; count: number }>();
     for (const x of b.items) {
@@ -353,7 +379,7 @@ export class FactoryReset {
     try { const s = this.#o.vault.status(); keychain = s.key === 'keychain' ? s.where : null; } catch { /* a vault that won't open: its key still goes */ }
     return {
       wipes: { home: own.filter((n) => n !== RESET_REPORT), keychain, backups: [...by.values()] },
-      keeps: { foreign, unreachable: b.unreachable, strays: b.strays, releases: RELEASES_SAID, export: this.#export },
+      keeps: { foreign, before, unreachable: b.unreachable, strays: b.strays, releases: RELEASES_SAID, export: this.#export },
       devices: { can_tell: d.can.map(line), cant_tell: d.cant.map(line), cant_tell_said: CANT_TELL_SAID },
       export_said: EXPORT_SAID,
       confirm: CONFIRM_WORDS,

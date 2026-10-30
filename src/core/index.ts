@@ -429,7 +429,7 @@ export function createCore(o: CoreOptions) {
     home: o.home, db, log, version: o.version, now, vault, nightly: keep.nightly, memory, devices, access, spokes, role,
     emit: (event, data) => bus.emit('event', event, data),
     // Restart in place (resilience/restart.ts): the next start finishes the wipe.
-    restarter, restorePending: () => stagedPending(o.home),
+    restarter, restorePending: () => stagedPending(o.home), setupDone: () => setup.view().done,
     // The hub's own work stops too (the heartbeat, so no nightly backup starts), then the queue.
     stopWork: async (ms) => { stopHub(); await stopWork(ms); },
     ...(o.reset?.tellMs ? { tellMs: o.reset.tellMs } : {}),
@@ -616,7 +616,7 @@ export function createCore(o: CoreOptions) {
       // After a factory reset, until setup is done, the browser forgets what it kept of the Nova that
       // was erased (M7 amendment §2).
       method: 'GET', path: '/setup', summary: 'The setup conversation so far, and the question Nova is asking.',
-      handle: () => { const v = setup.view(); return reset.report() && !v.done ? new Reply(v, { 'clear-site-data': '"cache", "storage"' }) : v; },
+      handle: ({ who, headers }) => { const v = setup.view(); const h = reset.clearHeaders(who.principal, header(headers, 'cookie')); return Object.keys(h).length ? new Reply(v, h) : v; },
     },
     { method: 'POST', path: '/setup/messages', summary: 'Answer Nova in the setup conversation.', body: '{text}', handle: ({ body }) => setup.answer(str(body.text, 'text')) },
     {
