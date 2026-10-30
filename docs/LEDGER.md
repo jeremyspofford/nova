@@ -15,6 +15,29 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M5a): the provider registry and agent/automation adapters.** Branch
+`m5a/providers`; the plan's §1 "as built" note has the details and the gate's interfaces.
+
+- **Providers are extensions** (agent-adapter, automation-adapter) whose `adapter` block picks
+  one of five built-in implementations (`claude-code`, `codex`, `openai-compatible`, `custom-cli`,
+  `n8n`); no extension code runs. Each enabled one is a ledger worker in its own lane, gated by its
+  egress (an HTTP provider's address decides: loopback or a mesh device is local), with a context
+  receipt per call. Enabling is tier 2 (the permissions OK).
+- **Nova verifies, not the provider:** each coding or chat task works in `workspace/tasks/<id>/`;
+  Nova computes the diff against a baseline kept outside the workspace, runs the brief's declared
+  test command itself (tier 2 unless policy allows, tier 3 to allow), and copies results back only
+  once the task is done. A provider that says it succeeded when it didn't ends failed with the
+  verifier's reason (tested with lying stand-ins).
+- **Chat goes through the registry.** `agent_cmd` is the `custom-cli` provider and stays the
+  default, run by Era 2's runner unchanged; a chosen chat model (the Ollama profile by default)
+  carries its own egress into privacy checks and receipts.
+- **n8n both ways**, signed with HMAC-SHA256: out to the workflow webhook, back through M2's token
+  webhook carrying a confirmation that Nova checks against the signed callback it kept.
+- **Secrets by name only** (`secret://NAME`), resolved through `CoreOptions.secrets`; until the vault
+  (M5b) plugs in, the server reads `NOVA_SECRET_<NAME>`.
+- **Core hooks added:** `minTier` on a laned worker, `ledger.note` and `verifier.registerKind`
+  (shared with M5c), the profile's `providers` section.
+
 **2026-10-30 (M5c): browser work with human takeover.** Branch `m5c/takeover`; the plan's §3
 "as built" note has the details and the gate's interfaces.
 

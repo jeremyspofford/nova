@@ -129,6 +129,7 @@ Optional `nova.config.json` at the repo root (environment variables win):
 | `tls_cert`, `tls_key` | `NOVA_TLS_CERT`, `NOVA_TLS_KEY` | none (PEM files, for an `https://` mesh address) |
 |  | `NOVA_CHROMIUM` | `CHROMIUM`, then known install paths: the Chromium that browser tasks use (none: browser work is unavailable, and Health says so) |
 |  | `NOVA_CHROMIUM_SANDBOX` | on (`0` turns Chromium's own sandbox off, for a container without user namespaces) |
+|  | `NOVA_SECRET_<NAME>` | none: a secret a provider names as `secret://<NAME>` (an n8n signing secret, a model server's key), until the vault holds it |
 
 `agent_cmd` is the one place a model is chosen. Nova writes the assembled
 system prompt to a file and substitutes its path for `{system_file}`, sends the
