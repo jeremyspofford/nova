@@ -23,6 +23,8 @@ NODE="$( (command -v mise >/dev/null && mise which node 2>/dev/null) || command 
 npm ci --omit=dev --no-audit --no-fund -q >/dev/null
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
+# The old server needs a moment to let go of the port after its session ends.
+for _ in $(seq 50); do ss -ltn 2>/dev/null | grep -qE "[:.]$PORT\b" || break; sleep 0.1; done
 # Something else on the port is not ours to stop.
 if ss -ltn 2>/dev/null | grep -qE "[:.]$PORT\b"; then
   echo "Port $PORT is in use by another process; not starting. (ss -ltnp | grep :$PORT)" >&2
