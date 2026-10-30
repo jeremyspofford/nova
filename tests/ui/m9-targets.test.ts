@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import type { Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
 import { browser, device, still } from './support.ts';
-import { CONTROLS, PHONE, VIEWS, seeded, settled } from './m9-support.ts';
+import { CONTROLS, DESKTOP, PHONE, VIEWS, seeded, settled } from './m9-support.ts';
 
 // Every visible control's hit area, in the page: 44×44, or 48×48 where the pointer is a finger.
 // `scope`: an open overlay (the drawer, More, a sheet) is all that can be pressed while it's open.
@@ -127,6 +127,56 @@ test('M9 gate, hit areas: every control at a phone’s width is 44×44, 48×48 t
     await check('memory, editing');
     assert.deepEqual(d.errors, [], 'no errors in the page');
     console.log(`hit areas: controls checked per state\n${counts.join('\n')}`);
+    assert.deepEqual(misses, [], `${misses.length} controls have less than 44×44 to press`);
+  } finally {
+    await b.close();
+    await stop(nova);
+  }
+});
+
+// Review of #234, item 6: at a desktop's width, with a pointer, 44×44: the rail, the right column,
+// every view, and what opens over them.
+test('M9 gate, hit areas: at a desktop’s width every control, the rail and the right column included, is 44×44', async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') return t.skip(b);
+  const { m, nova } = await seeded('nova-m9-targets-desk-');
+  const misses: string[] = [];
+  const counts: string[] = [];
+  try {
+    const d = await device(b, DESKTOP);
+    const page = d.page;
+    const check = async (where: string, scope = 'body') => {
+      await still(page);
+      const r = await probe(page, where, scope);
+      assert.equal(r.size, 44, 'a pointer: 44×44');
+      counts.push(`${where}: ${r.count} at ${r.size}×${r.size}`);
+      for (const x of r.misses) misses.push(`${x.where}: ${x.what} ${x.box} misses ${x.missed} of 25 (lands on ${x.instead})`);
+    };
+    for (const [view, path] of Object.entries(VIEWS)) {
+      await page.goto(`${m.base}${path}`);
+      await settled(page, view);
+      assert.ok(await page.locator(view === 'settings' ? '#settings-nav' : '#aside').isVisible(), `${view}: its second pane is on screen to be checked`);
+      await check(view);
+    }
+    await page.goto(`${m.base}${VIEWS.chat}`);
+    await settled(page, 'chat');
+    await page.fill('#input', 'a note');
+    await check('chat, typing');
+    await page.click('#menu');
+    await page.waitForSelector('.app.drawer-open');
+    await check('chat, conversations open', '#sidebar');
+    await page.keyboard.press('Escape');
+    await page.click('#more-btn');
+    await page.waitForSelector('#more:not([hidden])');
+    await check('More', '#more');
+    await page.keyboard.press('Escape');
+    await page.goto(`${m.base}/tasks`);
+    await settled(page, 'tasks');
+    await page.locator('#tasks-view [data-action="open-task"]').first().click();
+    await page.waitForSelector('#sheet[open]');
+    await check('a task', '#sheet');
+    assert.deepEqual(d.errors, [], 'no errors in the page');
+    console.log(`hit areas, desktop: controls checked per state\n${counts.join('\n')}`);
     assert.deepEqual(misses, [], `${misses.length} controls have less than 44×44 to press`);
   } finally {
     await b.close();
