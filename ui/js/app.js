@@ -12,6 +12,7 @@ import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
 import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
+import { bindConnections, loadConnections, renderConnections } from './connections.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
 
@@ -1387,7 +1388,7 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
-  Promise.all([loadPermissions(), refreshCore(['profile'])]).then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections()]).then(() => {
     renderSettingsView({ only: 'you' });
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input'))?.focus({ preventScroll: true }); flash(target); }
@@ -1399,6 +1400,7 @@ const PARTS = {
   you: () => core.renderYou(),
   perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
 <p class="memory-lede">${permissionsError}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''),
+  connections: () => renderConnections(),
   look: () => core.renderAppearance(),
   devices: () => core.renderDevices(),
 };
@@ -1517,6 +1519,9 @@ onCore('problem', (p) => {
 onCore('message', () => scheduleRefresh(['messages']));
 onCore('trigger', () => scheduleRefresh(['rules', 'messages']));
 onCore('profile', () => scheduleRefresh(['profile']));
+// A connection changed (connected, dropped, reconnecting, disconnected), here or elsewhere.
+onCore('connector', () => { if (state.view === 'settings') loadConnections(); });
+bindConnections(el.settings, () => { if (state.view === 'settings' && $('settings-connections')) renderSettingsView({ only: 'connections' }); });
 // The device mesh: the registry changed, or a device is asking to join (only approvers hear that).
 onCore('device', () => scheduleRefresh(['devices', 'mesh']));
 // Hub or standby changed (promoted, stepped down); on a standby, the hub's changes arrived.

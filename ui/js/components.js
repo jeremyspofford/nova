@@ -352,7 +352,9 @@ export function approvalSheet(t, { worker = null } = {}) {
 
 const CLASS_WORDS = { heartbeat: 'On a schedule', event: 'When something happens', proactive: 'When Nova has something to say' };
 export function triggerRow(r) {
-  const when = r.schedule ?? r.cron ?? (r.hook_path ? `Webhook ${r.hook_path}` : '');
+  // A connector's event (M5b): source connector:<id>/<topic>.
+  const from = /^connector:([^/]+)\/(.+)$/.exec(r.source ?? '');
+  const when = r.schedule ?? r.cron ?? (r.hook_path ? `Webhook ${r.hook_path}` : from ? `${from[1] === 'home-assistant' ? 'Home Assistant' : from[1] === 'gmail' ? 'Gmail' : from[1]}: ${from[2]}` : '');
   const what = r.action?.kind === 'message' ? `Says: “${clip(r.action.text, 60)}”` : r.action?.kind === 'task' ? `Starts: ${clip(r.action.task?.title ?? 'a task', 60)}` : '';
   return `<li class="trigger-row${r.paused ? ' is-paused' : ''}" id="tr-${esc(r.id)}" data-rule="${esc(r.id)}">
   <div class="trigger-text"><p class="trigger-name">${esc(r.name)}</p><p class="trigger-meta">${esc(CLASS_WORDS[r.class] ?? r.class)}${when ? ` · ${esc(when)}` : ''}</p>${what ? `<p class="trigger-meta">${esc(what)}</p>` : ''}</div>
