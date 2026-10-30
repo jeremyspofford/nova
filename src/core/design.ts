@@ -84,7 +84,8 @@ const ACCENT_LABELS = ['bg/base', 'text/primary', 'surface/card'];
 // The live check in Settings › Appearance (Amendment 2026-10-30-C Part 1 §5): stricter than
 // validation, which a package needs only to be applied. Body text (and timestamps, which use
 // text/secondary) at 4.5:1 on every surface it sits on; control outlines and focus markers at
-// 3:1 (WCAG 1.4.3, 1.4.11). It warns; it never blocks.
+// 3:1 (WCAG 1.4.3, 1.4.11): every colour the UI draws as a control's outline is here, and a test
+// reads those from the CSS (tests/ui-review.test.js). It warns; it never blocks.
 export type CheckKind = 'text' | 'control';
 export const LIVE_CHECKS: readonly (readonly [string, string, number, CheckKind, string])[] = Object.freeze([
   ['text/primary', 'bg/base', 4.5, 'text', 'Text on the background'],
@@ -96,6 +97,8 @@ export const LIVE_CHECKS: readonly (readonly [string, string, number, CheckKind,
   ['border/strong', 'bg/base', 3, 'control', 'Outlines of fields and buttons'],
   ['border/strong', 'bg/raised', 3, 'control', 'Outlines of fields on raised surfaces'],
   ['accent/primary', 'bg/base', 3, 'control', 'Focus rings and selected markers'],
+  ['status/attention', 'bg/base', 3, 'control', 'Outlines of things that need you'],
+  ['status/error', 'bg/base', 3, 'control', 'Outlines of buttons that erase'],
 ] as const);
 
 // Under prefers-reduced-motion the core always emits these; a package may only shorten them.
@@ -460,6 +463,9 @@ export interface Appearance {
   device_previous: Record<string, string | null>;
   // Per-device contrast fixes: for one design system, the colours nudged on that device only.
   device_fixes: Record<string, DeviceFix>;
+  // Which paired device (registry id) each appearance id belongs to, so revoking the device
+  // forgets its appearance too. The hub's own screen has none.
+  device_owners: Record<string, string>;
 }
 export interface DeviceFix { design_system: string; nudge: Record<string, number> }
 export interface Active { id: string; name: string; scope: 'device' | 'user' | 'default'; mode: Mode; device_id?: string; fix?: Record<string, number> }
@@ -566,6 +572,7 @@ export class Design extends EventEmitter {
       device_overrides: isObj(a.device_overrides) ? (a.device_overrides as Record<string, string>) : {},
       device_previous: isObj(a.device_previous) ? (a.device_previous as Record<string, string | null>) : {},
       device_fixes: isObj(a.device_fixes) ? (a.device_fixes as Record<string, DeviceFix>) : {},
+      device_owners: isObj(a.device_owners) ? (a.device_owners as Record<string, string>) : {},
     };
   }
 
@@ -655,6 +662,26 @@ export class Design extends EventEmitter {
     return this.#changed('apply', this.active(device).id, device);
   }
 
+  // A paired device used this appearance id: remember whose it is.
+  own(appearanceId: string, registryId: string) {
+    if (!DEVICE.test(appearanceId) || typeof registryId !== 'string' || !registryId) return;
+    const owners = this.appearance().device_owners;
+    if (owners[appearanceId] !== registryId) this.#set('device_owners', { ...owners, [appearanceId]: registryId });
+  }
+
+  // A device was revoked: its own design, its rollback and its contrast fix go with it.
+  forgetDevice(registryId: string) {
+    const a = this.appearance();
+    const gone = Object.entries(a.device_owners).filter(([, r]) => r === registryId).map(([id]) => id);
+    if (!gone.length) return;
+    const drop = <T>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).filter(([k]) => !gone.includes(k)));
+    this.#set('device_overrides', drop(a.device_overrides));
+    this.#set('device_previous', drop(a.device_previous));
+    this.#set('device_fixes', drop(a.device_fixes));
+    this.#set('device_owners', drop(a.device_owners));
+    for (const id of gone) this.#changed('removed', this.active(id).id, id);
+  }
+
   // One step back. Rolling back twice goes forward again.
   rollback(o: { scope: Scope; device_id?: string | null }) {
     const device = this.#scope(o);
@@ -721,7 +748,9 @@ export class Design extends EventEmitter {
       const c = liveCheck(t);
       return [k, { scheme: scheme(t), ok: c.ok, margin: c.margin, swatch: { bg: t['bg/base'], raised: t['bg/raised'], card: t['surface/card'], text: t['text/primary'], accent: t['accent/primary'], orb: t['orb/core'] } }];
     })) : {};
-    return { id: x.id, name: m.name, version: x.version, description: m.description ?? '', state: x.state, builtin: this.#builtins.has(x.id), starter: STARTERS.includes(x.id), valid: v.ok, problems: v.problems, extras: m.extras ?? [], preview: m.preview ?? [], looks: seen };
+    // What the one-tap fix could do for it: the colours it would move, and those it can't fix.
+    const fix = v.ok ? contrastNudge(m) : { nudge: {}, unfixable: [] };
+    return { id: x.id, name: m.name, version: x.version, description: m.description ?? '', state: x.state, builtin: this.#builtins.has(x.id), starter: STARTERS.includes(x.id), valid: v.ok, problems: v.problems, extras: m.extras ?? [], preview: m.preview ?? [], looks: seen, fixable: Object.keys(fix.nudge), unfixable: fix.unfixable };
   }
 
   #usable(id: string): boolean {

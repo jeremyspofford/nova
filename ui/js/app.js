@@ -486,7 +486,10 @@ function morph(a, b) {
       return;
     }
     if (na.tagName === nb.tagName && (na.matches('.turn, .msg-nova, .msg-user') )) {
+      // A message whose exact time the person revealed (a tap, a long press) keeps it shown.
+      const shown = na.classList.contains('show-time');
       for (const { name, value } of [...nb.attributes]) na.setAttribute(name, value);
+      if (shown) na.classList.add('show-time');
       morph(na, nb);
       return;
     }
@@ -761,8 +764,13 @@ el.thread.addEventListener('click', (e) => {
 let pointer = 'mouse';
 let pressTimer = 0;
 let pressed = false; // a long press showed it: the click that follows doesn't hide it again
+let pressAt = null; // where the press began
+const PRESS_SLOP = 10; // px a finger may move and still be pressing
 const SHOWS_TIME = '.msg';
 const INTERACTIVE = 'a, button, summary, input, textarea, select, label, [tabindex]:not(time)';
+// Something inside the message the person operates (a link, a button, a step's details): a press
+// there is theirs, not a request for the time.
+const operating = (e, msg) => { const hit = e.target.closest(INTERACTIVE); return !!hit && !!msg && msg.contains(hit); };
 function showTime(msg, on) {
   for (const x of el.thread.querySelectorAll('.msg.show-time')) if (x !== msg) x.classList.remove('show-time');
   msg?.classList.toggle('show-time', on);
@@ -772,13 +780,18 @@ el.thread.addEventListener('pointerdown', (e) => {
   clearTimeout(pressTimer);
   const msg = e.target.closest(SHOWS_TIME);
   pressed = false;
-  if (e.pointerType === 'touch' && msg && !e.target.closest(INTERACTIVE)) pressTimer = setTimeout(() => { pressed = true; showTime(msg, true); }, 450);
+  pressAt = { x: e.clientX, y: e.clientY };
+  if (e.pointerType === 'touch' && msg && !operating(e, msg)) pressTimer = setTimeout(() => { pressed = true; showTime(msg, true); }, 450);
 });
-for (const ev of ['pointerup', 'pointercancel', 'pointermove']) el.thread.addEventListener(ev, (e) => { if (ev !== 'pointermove' || e.pointerType === 'touch') clearTimeout(pressTimer); });
+for (const ev of ['pointerup', 'pointercancel']) el.thread.addEventListener(ev, () => clearTimeout(pressTimer));
+el.thread.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'touch' || !pressAt) return;
+  if (Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) > PRESS_SLOP) clearTimeout(pressTimer);
+});
 el.thread.addEventListener('click', (e) => {
-  if (pointer !== 'touch' || e.target.closest(INTERACTIVE)) return;
-  if (pressed) { pressed = false; return; }
   const msg = e.target.closest(SHOWS_TIME);
+  if (pointer !== 'touch' || operating(e, msg)) return;
+  if (pressed) { pressed = false; return; }
   showTime(msg, msg ? !msg.classList.contains('show-time') : false);
 });
 
@@ -1414,16 +1427,23 @@ function loadPermissions() {
     });
 }
 
-// Settings is one structure (settings-ia.js) in two layouts: on a desktop, a sidebar of categories
-// beside the open one; on a phone or tablet, the grouped list, and a category's page in its place
-// with a way back. The hash says what is open: a category (#appearance) or any setting in one
-// (#devices, #appearance-mode), which opens its category and is brought into view.
-const settingsUi = { cat: null };
-const settingsList = () => layout.layout !== 'desktop';
+// Settings is one structure (settings-ia.js) in two layouts: from the expanded width (840px,
+// layout.css) on a flat screen, a sidebar of categories beside the open one; below it, the
+// grouped list, and a category's page in its place with a way back. The hash says what is open: a
+// category (#models), opened at its top as a click does, or a setting in one (#appearance-mode),
+// which opens its category and is brought into view.
+// `touched`: the person has typed in search or opened something since Settings opened, so data
+// arriving late must not move their focus or scroll.
+const settingsUi = { cat: null, touched: false, active: -1 };
+const settingsList = () => {
+  const wide = getComputedStyle(document.documentElement).getPropertyValue('--settings-layout').trim() === 'sidebar';
+  return !wide || layout.layout === 'phone' || (layout.layout === 'tablet' && layout.posture !== 'continuous');
+};
 
 function settingsTarget(hash) {
   const id = decodeURIComponent(hash.replace(/^#/, ''));
   if (!id) return { cat: null, target: null };
+  if (categoryOf(id)) return { cat: id, target: null };
   const target = el.settings.querySelector(`#${CSS.escape(id)}`);
   const pane = target?.closest('.settings-pane');
   if (pane) return { cat: pane.dataset.cat, target: pane === target ? null : target };
@@ -1437,6 +1457,7 @@ function selectSettings(cat) {
   for (const p of el.settings.querySelectorAll('.settings-pane')) p.hidden = p.dataset.cat !== open;
   el.settings.dataset.show = open ? 'detail' : 'list';
   el.settings.dataset.layout = list ? 'list' : 'sidebar';
+  document.body.dataset.settingsLayout = list ? 'list' : 'sidebar';
   for (const a of el.settings.querySelectorAll('.settings-cat')) {
     if (a.dataset.cat === open && !list) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   }
@@ -1447,32 +1468,64 @@ function selectSettings(cat) {
 }
 
 // From the list or the sidebar to a category, as its own step in the history.
-function openSettingsCat(cat) {
-  history.pushState(null, '', `/settings#${cat}`);
+function openSettingsCat(cat, { push = true } = {}) {
+  if (push) history.pushState(null, '', `/settings#${cat}`);
   selectSettings(cat);
   el.scroller.scrollTop = 0;
-  el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(cat)}"] h2`)?.setAttribute('tabindex', '-1');
-  el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(cat)}"] h2`)?.focus({ preventScroll: true });
+  const heading = el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(cat)}"] h2`);
+  heading?.setAttribute('tabindex', '-1');
+  heading?.focus({ preventScroll: true });
 }
 
 // Bring one setting into view, mark it, and put focus on its control.
 function goToSetting(target) {
   selectSettings(target.closest('.settings-pane')?.dataset.cat ?? settingsUi.cat);
   target.scrollIntoView({ block: 'center' });
-  (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input, select, a') ?? target).focus({ preventScroll: true });
+  const first = (sel) => [...target.querySelectorAll(sel)].find((n) => n.checkVisibility()) ?? null;
+  const control = first('.switch') ?? first('input:checked') ?? first('button:not([disabled]), input:not([disabled]), select, textarea, a[href]');
+  // Nothing to operate in it (a list, a note): the setting itself takes focus.
+  if (!control && !target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+  (control ?? target).focus({ preventScroll: true });
   flash(target);
 }
 
+// Search is a combobox over a listbox of results. Only the count is announced (#settings-count, a
+// live region that stays put); the list itself is read as the person moves through it.
 function renderSettingsResults(query) {
   const box = $('settings-results');
+  const input = $('settings-search');
+  const count = $('settings-count');
   if (!box) return;
   const q = query.trim();
+  const found = q ? searchSettings(q).slice(0, 8) : [];
+  settingsUi.active = -1;
   box.hidden = !q;
-  if (!q) { box.innerHTML = ''; return; }
-  const found = searchSettings(q);
-  box.innerHTML = found.length
-    ? found.slice(0, 8).map((r) => `<li><button type="button" class="settings-result" data-target="${escapeHtml(r.target)}" data-cat="${escapeHtml(r.cat)}"><span class="result-label">${escapeHtml(r.label)}</span><span class="result-path">${escapeHtml(r.path)}</span></button></li>`).join('')
-    : `<li class="settings-noresult">Nothing matches “${escapeHtml(q)}”. Try another word, like “theme”, “phone” or “backup”.</li>`;
+  input.setAttribute('aria-expanded', String(found.length > 0));
+  input.removeAttribute('aria-activedescendant');
+  const said = !q ? '' : found.length ? `${found.length} setting${found.length === 1 ? '' : 's'} found` : 'No settings found';
+  if (count.textContent !== said) count.textContent = said;
+  box.innerHTML = !q ? '' : found.length
+    ? found.map((r, i) => `<li class="settings-result" role="option" id="set-opt-${i}" aria-selected="false" data-target="${escapeHtml(r.target)}" data-cat="${escapeHtml(r.cat)}"><span class="result-label">${escapeHtml(r.label)}</span><span class="result-path">${escapeHtml(r.path)}</span></li>`).join('')
+    : `<li class="settings-noresult" role="presentation">Nothing matches “${escapeHtml(q)}”. Try another word, like “theme”, “phone” or “backup”.</li>`;
+}
+
+// Arrow keys move through the results; the input keeps focus.
+function moveSettingsResult(dir) {
+  const options = [...el.settings.querySelectorAll('#settings-results [role="option"]')];
+  if (!options.length) return;
+  settingsUi.active = (settingsUi.active + dir + options.length) % options.length;
+  options.forEach((o, i) => o.setAttribute('aria-selected', String(i === settingsUi.active)));
+  const now = options[settingsUi.active];
+  $('settings-search').setAttribute('aria-activedescendant', now.id);
+  now.scrollIntoView({ block: 'nearest' });
+}
+
+function chooseSettingsResult(option) {
+  const target = $(option.dataset.target) ?? el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(option.dataset.cat)}"]`);
+  $('settings-search').value = '';
+  renderSettingsResults('');
+  history.pushState(null, '', `/settings#${option.dataset.target}`);
+  if (target) goToSetting(target);
 }
 
 function showSettings() {
@@ -1484,13 +1537,18 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
+  settingsUi.touched = false;
   selectSettings(settingsTarget(location.hash).cat);
+  const opened = location.hash;
   Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadReset()]).then(() => {
     renderSettingsView({ only: 'you' });
     renderSettingsView({ only: 'privacy' });
+    // The person has moved on since (typed in search, opened something): leave them be.
+    if (settingsUi.touched || state.view !== 'settings' || location.hash !== opened) return;
     const { cat, target } = settingsTarget(location.hash);
     if (target) goToSetting(target);
-    else { selectSettings(cat); el.settings.focus({ preventScroll: true }); }
+    else if (cat) openSettingsCat(cat, { push: false });
+    else { selectSettings(null); el.settings.focus({ preventScroll: true }); }
   });
 }
 
@@ -1505,7 +1563,8 @@ const PARTS = {
   models: () => renderModels(),
   changes: () => renderChanges(),
   checkpoints: () => renderCheckpoints(),
-  look: () => core.renderAppearance(),
+  // Drawn in place, so its live regions stay the same elements (surfaces.js drawAppearance).
+  look: { draw: (box) => core.drawAppearance(box) },
   devices: () => core.renderDevices(),
   // The Danger zone (M7 amendment §2) stays last, set apart.
   danger: () => renderReset(),
@@ -1519,8 +1578,9 @@ function settingsShell() {
   return `<header class="view-head settings-head">
   <button type="button" class="btn small quiet settings-back" id="settings-back" hidden>${ICONS.back}<span>Settings</span></button>
   <h2 class="view-title" id="settings-title">Settings</h2>
-  <div class="settings-search"><label class="sr-only" for="settings-search">Search settings</label><input type="search" class="input settings-search-input" id="settings-search" placeholder="Search settings" autocomplete="off" spellcheck="false" aria-controls="settings-results"></div>
-  <ul class="settings-results" id="settings-results" aria-label="Settings found" aria-live="polite" hidden></ul>
+  <div class="settings-search"><label class="sr-only" for="settings-search">Search settings</label><input type="search" class="input settings-search-input" id="settings-search" placeholder="Search settings" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="settings-results"></div>
+  <p class="settings-count" id="settings-count" role="status"></p>
+  <ul class="settings-results" id="settings-results" role="listbox" aria-label="Settings found" hidden></ul>
 </header>
 <div class="settings-layout">
   <nav class="settings-nav" id="settings-nav" aria-label="Settings">${groups}</nav>
@@ -1560,7 +1620,8 @@ function renderSettingsView({ enter: entering = false, only = null } = {}) {
     const focus = box.contains(active) ? (active.dataset.id ? `[data-id="${CSS.escape(active.dataset.id)}"]` : active.name ? `input[name="${CSS.escape(active.name)}"]:checked` : active.dataset.action ? `[data-action="${CSS.escape(active.dataset.action)}"]${active.dataset.ds ? `[data-ds="${CSS.escape(active.dataset.ds)}"]` : ''}${active.dataset.scope ? `[data-scope="${CSS.escape(active.dataset.scope)}"]` : ''}` : null) : null;
     // Capture's forms sit under a status that changes by itself; what is typed there is kept.
     const restore = k === 'capture' ? keepEdits(box) : () => {};
-    box.innerHTML = PARTS[k]();
+    const part = PARTS[k];
+    if (typeof part === 'function') box.innerHTML = part(); else part.draw(box);
     restore();
     if (focus) box.querySelector(focus)?.focus({ preventScroll: true });
   }
@@ -1581,40 +1642,49 @@ async function togglePermission(button) {
 
 el.settings.addEventListener('click', (e) => {
   const cat = e.target.closest('a.settings-cat');
-  if (cat && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); openSettingsCat(cat.dataset.cat); return; }
-  if (e.target.closest('#settings-back')) { history.pushState(null, '', '/settings'); selectSettings(null); el.scroller.scrollTop = 0; el.settings.querySelector('.settings-cat')?.focus({ preventScroll: true }); return; }
+  if (cat && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); settingsUi.touched = true; openSettingsCat(cat.dataset.cat); return; }
+  if (e.target.closest('#settings-back')) { settingsUi.touched = true; history.pushState(null, '', '/settings'); selectSettings(null); el.scroller.scrollTop = 0; el.settings.querySelector('.settings-cat')?.focus({ preventScroll: true }); return; }
   const found = e.target.closest('.settings-result');
-  if (found) {
-    const target = $(found.dataset.target) ?? el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(found.dataset.cat)}"]`);
-    $('settings-search').value = '';
-    renderSettingsResults('');
-    history.pushState(null, '', `/settings#${found.dataset.target}`);
-    if (target) goToSetting(target);
-    return;
-  }
+  if (found) { settingsUi.touched = true; chooseSettingsResult(found); return; }
   if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
   const action = b?.dataset.action;
   if (action === 'toggle-permission') togglePermission(b);
   else if (action === 'retry-settings') loadPermissions();
   else if (action === 'save-profile') core.saveProfile(b.dataset.section, b.dataset.key, $(b.dataset.field).value.trim());
-  else if (['pick-ds', 'save-ds', 'cancel-ds', 'undo-ds', 'fix-contrast', 'undo-fix'].includes(action)) core.appearanceAction(action, b).then(() => renderSettingsView({ only: 'look' }));
+  else if (['pick-ds', 'save-ds', 'cancel-ds', 'undo-ds', 'fix-contrast', 'undo-fix'].includes(action)) lookAction(action, b);
   else if (action === 'install') core.install().then(() => renderSettingsView({ only: 'devices' }));
   else if (action === 'provider-choose') core.chooseProvider(b.dataset.for, b.dataset.provider);
   else if (action === 'provider-on') core.providerOn(b.dataset.provider);
   else if (action === 'provider-off') core.providerOff(b.dataset.provider);
   else if (action === 'provider-setup') core.providerSetup(b.dataset.provider);
 });
+// An Appearance action, then focus on the next sensible control: the design now shown after Save,
+// Cancel or Undo; a fix's Undo after the fix, and the fix after its Undo.
+function lookAction(action, b) {
+  return core.appearanceAction(action, b).then((next) => {
+    renderSettingsView({ only: 'look' });
+    if (next) $('settings-look').querySelector(next)?.focus({ preventScroll: true });
+  });
+}
+
 el.settings.addEventListener('change', (e) => {
   const t = e.target;
   if (t.name === 'privacy') core.saveProfile('privacy', 'default', t.value);
-  else if (t.name === 'mode') core.appearanceAction('mode', t).then(() => renderSettingsView({ only: 'look' }));
-  else if (t.name === 'ds-scope') core.appearanceAction('scope', t).then(() => renderSettingsView({ only: 'look' }));
+  else if (t.name === 'mode') lookAction('mode', t);
+  else if (t.name === 'ds-scope') lookAction('scope', t);
   else if (t.dataset.action === 'set-profile') core.saveProfile(t.dataset.section, t.dataset.key, t.value);
 });
-el.settings.addEventListener('input', (e) => { if (e.target.id === 'settings-search') renderSettingsResults(e.target.value); });
+el.settings.addEventListener('input', (e) => { if (e.target.id === 'settings-search') { settingsUi.touched = true; renderSettingsResults(e.target.value); } });
 el.settings.addEventListener('keydown', (e) => {
-  if (e.target.id === 'settings-search' && e.key === 'Enter') { e.preventDefault(); el.settings.querySelector('.settings-result')?.click(); return; }
+  if (e.target.id === 'settings-search' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); moveSettingsResult(e.key === 'ArrowDown' ? 1 : -1); return; }
+  if (e.target.id === 'settings-search' && e.key === 'Enter') {
+    e.preventDefault();
+    const options = el.settings.querySelectorAll('#settings-results [role="option"]');
+    const option = options[Math.max(0, settingsUi.active)];
+    if (option) { settingsUi.touched = true; chooseSettingsResult(option); }
+    return;
+  }
   if (e.target.id === 'settings-search' && e.key === 'Escape' && e.target.value) { e.preventDefault(); e.target.value = ''; renderSettingsResults(''); return; }
   if (e.key === 'Enter' && e.target.matches('#you-name, #nova-name')) { e.preventDefault(); e.target.nextElementSibling?.click(); }
 });
@@ -1826,6 +1896,9 @@ el.drawerClose.addEventListener('click', () => { closeDrawer(); el.menu.focus();
 el.scrim.addEventListener('click', closeDrawer);
 el.asideToggle.addEventListener('click', () => { toggleAside(); renderCore(); });
 window.addEventListener('nova:layout', () => { renderCore(); if (state.view === 'settings') selectSettings(settingsUi.cat); });
+// Settings changes layout at its own width too (840px, layout.css), within one app layout.
+let settingsFrame = 0;
+window.addEventListener('resize', () => { cancelAnimationFrame(settingsFrame); settingsFrame = requestAnimationFrame(() => { if (state.view === 'settings') selectSettings(settingsUi.cat); }); });
 
 function step(dir) {
   const i = state.list.findIndex((s) => s.id === state.id);

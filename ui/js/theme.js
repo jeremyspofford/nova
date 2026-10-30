@@ -78,6 +78,12 @@ export async function endPreview() {
   await swap({ force: true });
 }
 
+// The design every device shows by the person's choice (or the default): what this device
+// follows when it has no design of its own.
+export async function syncedId() {
+  return (await api('GET', '/design-systems/active')).id;
+}
+
 // This device drops its own design and shows the person's again.
 export async function follow() {
   await api('POST', '/design-systems/follow', { device_id: deviceId() });

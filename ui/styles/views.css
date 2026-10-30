@@ -390,7 +390,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 .schedule-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-left: auto; }
 .schedule.is-paused .skill-name, .schedule.is-paused .schedule-when { color: var(--text-faint); }
 .schedule-when { margin-top: var(--space-1); color: var(--text-secondary); }
-.schedule-next { color: var(--text-faint); }
+.schedule-next { color: var(--text-secondary); }
 .schedule-last { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-1); margin-top: var(--space-2); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 .schedule-last a { color: var(--accent-primary); text-underline-offset: 3px; }
 .schedule-last.is-warn::before {
@@ -406,7 +406,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 .schedule-setup { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); margin-top: var(--space-3); }
 .schedule-setup .field-label { flex: 0 1 180px; }
 .schedule-setup .field, .schedule-setup .btn { box-sizing: border-box; height: 44px; }
-.approval-next { display: block; font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-faint); }
+.approval-next { display: block; font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 
 /* ---- memory: what Nova knows ------------------------------------------------- */
 
@@ -560,7 +560,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   width: 100%;
   margin-top: var(--space-3);
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-input);
   background: var(--surface-card);
   color: var(--text-primary);
@@ -770,7 +770,7 @@ kbd {
   gap: var(--space-2);
   margin-left: auto;
   padding: calc(var(--space-1) / 2) var(--space-3);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   background: var(--surface-card);
   color: var(--text-primary);
@@ -835,7 +835,11 @@ kbd {
   background: none;
   text-align: left;
 }
-.settings-result:hover, .settings-result:focus-visible { background: var(--surface-card-hover); }
+.settings-result { cursor: pointer; }
+.settings-result:hover, .settings-result[aria-selected="true"] { background: var(--surface-card-hover); }
+.settings-result[aria-selected="true"] { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+.settings-count { font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); }
+.settings-count:empty { margin: 0; }
 .result-label { font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); color: var(--text-primary); }
 .result-path { font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); }
 .settings-noresult { padding: var(--space-2) var(--space-3); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }

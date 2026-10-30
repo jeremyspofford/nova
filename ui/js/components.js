@@ -101,7 +101,7 @@ export function taskRow(t, { now = new Date(), compact = false } = {}) {
   const when = ago(t.updated_at ?? t.created_at, now);
   const why = st === 'needs-you' && needsApproval(t) ? 'Needs your OK before it runs.' : t.reason ?? '';
   return `<li class="task-row" data-status="${st}" data-task="${esc(t.id)}">
-  <button type="button" class="task-open" data-action="open-task" data-task="${esc(t.id)}"><span class="task-title">${esc(clip(t.title, 80))}</span>${compact ? '' : `<span class="task-meta">${esc(clip(why, 90))}${why && when ? ' · ' : ''}${esc(when)}</span>`}</button>
+  <button type="button" class="task-open" data-action="open-task" data-task="${esc(t.id)}"><span class="task-title">${esc(clip(t.title, 80))}</span>${compact ? '' : `<span class="task-meta">${esc(clip(why, 90))}${why && when ? ' · ' : ''}${when ? `<time>${esc(when)}</time>` : ''}</span>`}</button>
   ${status(st, { task: st === 'verified' ? t.id : null })}
 </li>`;
 }
@@ -125,7 +125,7 @@ export function verifiedResultCard(t, { now = new Date() } = {}) {
     <p class="card-kicker">Verified result</p>
     <h3 class="card-lead" id="vr-${esc(t.id)}">${esc(clip(t.title, 80))}</h3>
     <p class="card-line">${esc(clip(summary, 120))}</p>
-    <p class="card-line is-faint">${passed} of ${checks.length} check${checks.length === 1 ? '' : 's'} passed · ${esc(ago(t.completed_at ?? t.updated_at, now))}</p>
+    <p class="card-line">${passed} of ${checks.length} check${checks.length === 1 ? '' : 's'} passed · <time>${esc(ago(t.completed_at ?? t.updated_at, now))}</time></p>
   </div>
   ${status('verified', { task: t.id })}
 </section>`;
@@ -162,7 +162,7 @@ export function evidenceViewer(t) {
   ${t.state === 'waiting' && t.reason ? `<p class="sheet-line task-reason">${esc(t.reason)}</p>` : ''}
   ${t.report?.summary ? `<p class="sheet-line">${esc(t.report.summary)}</p>` : ''}
   ${relayRun ? `<p class="sheet-line is-faint">Done by Relay run ${esc(relayRun.ref)}${relayRun.branch ? `, branch ${esc(relayRun.branch)}` : ''}.</p>` : ''}
-  ${v ? `<h3 class="sheet-heading">How Nova checked</h3><ul class="checks">${checks}</ul><p class="sheet-line is-faint">Checked ${esc(new Date(v.at).toLocaleString('en-US'))}.</p>` : `<p class="sheet-line">${t.state === 'done' ? 'Done.' : 'Not checked yet: Nova checks the evidence before it calls anything done.'}</p>`}
+  ${v ? `<h3 class="sheet-heading">How Nova checked</h3><ul class="checks">${checks}</ul><p class="sheet-line">Checked <time datetime="${esc(v.at)}">${esc(new Date(v.at).toLocaleString('en-US'))}</time>.</p>` : `<p class="sheet-line">${t.state === 'done' ? 'Done.' : 'Not checked yet: Nova checks the evidence before it calls anything done.'}</p>`}
   <details class="raw"><summary>The ledger entry</summary><pre tabindex="0">${esc(JSON.stringify({ id: t.id, state: t.state, reason: t.reason, owner: t.owner, privacy_mode: t.privacy_mode, approval_tier: t.approval_tier, brief: t.brief, report: t.report, verification: t.verification }, null, 2))}</pre></details>
 </div>`;
 }
@@ -322,7 +322,7 @@ export function healthCard({ health = null, problems = [], reachable = true } = 
 export function memoryHighlightCard({ records = [] } = {}) {
   const r = records.find((m) => m.active && m.user_state !== 'forgotten');
   const body = r
-    ? `<p class="card-lead">${esc(clip(r.content, 90))}</p><p class="card-line is-faint">${esc(r.kind)} · ${esc(ago(r.created_at))}</p>`
+    ? `<p class="card-lead">${esc(clip(r.content, 90))}</p><p class="card-line">${esc(r.kind)} · <time>${esc(ago(r.created_at))}</time></p>`
     : '<p class="card-lead">Nothing kept yet.</p><p class="card-line">What lasts from your conversations shows here.</p>';
   return card({ kind: 'memory-highlight-card', title: 'Memory', icon: 'memory', body, action: '<a class="link" href="/memory" data-nav="memory">Memory</a>' });
 }

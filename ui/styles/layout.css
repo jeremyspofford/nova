@@ -16,6 +16,10 @@
 @media (min-width: 600px) { :root { --viewport: medium; } }
 @media (min-width: 1024px) { :root { --viewport: wide; } }
 @media (min-width: 1280px) { :root { --aside-room: yes; } }
+/* Settings: a sidebar beside the open category from the expanded width class (840px, UX-RESEARCH
+   §7), the grouped list below it (app.js reads --settings-layout). */
+:root { --settings-layout: list; }
+@media (min-width: 840px) { :root { --settings-layout: sidebar; } }
 @media (horizontal-viewport-segments: 2) { :root { --segments: horizontal; } }
 @media (vertical-viewport-segments: 2) { :root { --segments: vertical; } }
 
@@ -122,3 +126,10 @@ body[data-layout="phone"] .dock { padding-left: var(--space-4); padding-right: v
 body:not([data-layout="phone"]):not([data-view="chat"]) .topbar-title {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
+
+/* A tablet showing Settings as sidebar and detail gives it the context pane's room: the sidebar is
+   the second pane (list-detail). */
+body[data-layout="tablet"][data-view="settings"][data-settings-layout="sidebar"] .shell {
+  grid-template: "rail main" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
+}
+body[data-layout="tablet"][data-view="settings"][data-settings-layout="sidebar"] .aside { display: none; }

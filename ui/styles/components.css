@@ -580,7 +580,6 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 .panel > * + * { margin-top: var(--space-3); }
 
 /* Appearance: design systems, a sandboxed preview, apply and roll back. */
-.ds-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); list-style: none; margin: 0; padding: 0; }
 .ds-card {
   position: relative;
   display: flex;
@@ -588,7 +587,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   gap: var(--space-1);
   width: 100%;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-input);
   background: transparent;
   text-align: left;
@@ -606,7 +605,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   align-items: center;
   padding: var(--space-1) var(--space-4);
   min-height: calc(var(--space-6) + var(--space-2));
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   cursor: pointer;
 }
@@ -671,7 +670,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   transition: background-color var(--motion-duration-fast) var(--motion-ease), scale var(--motion-duration-fast) var(--motion-ease);
 }
 .mic { border-color: var(--border-strong); background: transparent; color: var(--text-secondary); }
-.mic[aria-pressed="true"] { border-color: var(--orb-listening); color: var(--orb-listening); }
+.mic[aria-pressed="true"] { border-color: var(--accent-primary); color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
 .send svg, .mic svg { width: var(--space-5); height: var(--space-5); }
 .send:active:not(:disabled) { scale: 0.94; }
 .send:disabled, .mic:disabled { border-color: var(--border-subtle); background: transparent; color: var(--text-faint); cursor: default; }
@@ -685,7 +684,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   bottom: calc(var(--space-8) * 1.75);
   translate: -50% 0;
   padding: var(--space-1) var(--space-4);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   background: var(--bg-overlay);
   box-shadow: var(--shadow-raised);

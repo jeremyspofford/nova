@@ -224,7 +224,9 @@ test('UI fixes 1–3: the orb once per view; chat in the AI-chat style; grouped,
     const exact = follow.locator('.when-exact');
     assert.equal(await exact.evaluate((e) => e.getBoundingClientRect().width > 20), false);
     await follow.locator('.prose').tap();
-    assert.equal(await exact.evaluate((e) => e.getBoundingClientRect().width > 20 && getComputedStyle(e).opacity !== '0'), true, 'a tap shows the exact time');
+    // The tap itself, not the hover a tap also gives, shows it.
+    assert.equal(await follow.evaluate((e) => e.classList.contains('show-time')), true, 'a tap shows the exact time');
+    assert.equal(await exact.evaluate((e) => e.getBoundingClientRect().width > 20 && getComputedStyle(e).opacity !== '0'), true, 'and it is on screen');
     if (shots) await shoot(touch.page, join(shots, 'chat-phone-tapped-time.png'));
     assert.deepEqual(touch.errors, []);
     await touch.ctx.close();

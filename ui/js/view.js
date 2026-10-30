@@ -161,12 +161,12 @@ function approvalDetail(tool) {
   if (!p) return '';
   if (tool.name === 'gmail_draft') {
     return `<div class="approval-mail"><dl class="approval-fields"><dt>To</dt><dd>${esc(p.to)}</dd>${p.cc ? `<dt>Cc</dt><dd>${esc(p.cc)}</dd>` : ''}<dt>Subject</dt><dd>${esc(p.subject || '(no subject)')}</dd></dl>
-<div class="approval-letter" tabindex="0">${esc(p.body)}</div></div>`;
+<div class="approval-letter">${esc(p.body)}</div></div>`;
   }
   if (tool.name === 'schedule_set') {
     const to = p.deliver === 'main' ? 'The main conversation' : p.deliver === 'here' ? 'This conversation' : 'Another conversation';
-    return `<div class="approval-mail"><dl class="approval-fields"><dt>Name</dt><dd>${esc(p.name)}</dd><dt>When</dt><dd>${esc(p.when)}${p.once ? '' : `<span class="approval-next">Next: ${esc(p.next)}</span>`}</dd><dt>Reports</dt><dd>${to}</dd></dl>
-<div class="approval-letter" tabindex="0">${esc(p.prompt)}</div></div>`;
+    return `<div class="approval-mail"><dl class="approval-fields"><dt>Name</dt><dd>${esc(p.name)}</dd><dt>When</dt><dd>${esc(p.when)}${p.once ? '' : `<span class="approval-next">Next: <time>${esc(p.next)}</time></span>`}</dd><dt>Reports</dt><dd>${to}</dd></dl>
+<div class="approval-letter">${esc(p.prompt)}</div></div>`;
   }
   if (tool.name === 'gmail_organize') {
     return `<ul class="approval-list">${(p.messages ?? []).map((m) => `<li><span class="approval-subject">${esc(m.subject)}</span> <span class="approval-from">${esc(m.from)}</span></li>`).join('')}</ul>`;
