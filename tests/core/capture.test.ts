@@ -446,6 +446,24 @@ test('a Screenpipe API key: sent as Bearer when set, never otherwise; kept in th
   });
 });
 
+test('Screenpipe 0.4 calls accessibility text "accessibility", not "ui": asked by that name, and by the old one only when a Screenpipe refuses the new', async () => {
+  for (const version of ['0.4', 'old'] as const) {
+    await withScreenpipe(async (h, sp, id) => {
+      sp.speaks(version);
+      sp.add({ at: min(h, -1), type: 'ui', app: 'Editor', window: 'notes.txt', text: `Example accessibility text (${version})` });
+      await h.c('POST', `/capture/sources/${encodeURIComponent(id)}/enable`, { since: min(h, -10) });
+      await pull(h, id);
+      const view = (await h.c('GET', '/capture')).body.sources[0];
+      assert.equal(view.status, 'on', `${version}: ${view.detail}`);
+      assert.ok((await events(h)).some((e) => e.text === `Example accessibility text (${version})`), `${version}: the accessibility item arrived`);
+      const asked = sp.requests.filter((r) => r.startsWith('GET /search')).map((r) => new URL(r.slice(4), 'http://x').searchParams.get('content_type'));
+      assert.ok(asked.includes('accessibility'), 'the 0.4 name is tried');
+      if (version === '0.4') assert.ok(!asked.includes('ui'), 'a 0.4 Screenpipe is never asked for "ui"');
+      else assert.ok(asked.includes('ui'), 'an older Screenpipe is asked by its own name once it refuses the new one');
+    });
+  }
+});
+
 test('local-only refuses a Screenpipe outside the person’s devices, and stops pulling one when privacy tightens', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-capture-remote-'));
   const asked: string[] = [];

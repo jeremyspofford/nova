@@ -252,12 +252,64 @@ export const TOOLS = {
       return { output: `Removed ${s.name}. It won't run again.`, summary: s.name };
     },
   },
+  // Nova's own state, read in process from its registries (src/core/self.ts). Read-only; names and
+  // states only, never a secret.
+  nova_instance: {
+    signature: '{}',
+    doc: 'This Nova as it is now: instance and home, the person\'s profile summary, your chat model, every model provider and the local runtime (checked now), connections, open problems.',
+    needsApproval: false,
+    available: (ctx) => ctx.self,
+    async run(_, { self }) { return { output: await self.instance(), summary: 'instance and models' }; },
+  },
+  nova_capture: {
+    signature: '{}',
+    doc: 'Capture: each source with its status and detail in its own words, and capture\'s recent errors, quoted.',
+    needsApproval: false,
+    available: (ctx) => ctx.self,
+    run(_, { self }) { return { output: self.capture(), summary: 'capture' }; },
+  },
+  nova_devices: {
+    signature: '{}',
+    doc: 'The hub and every paired device: kind, online or not, last seen.',
+    needsApproval: false,
+    available: (ctx) => ctx.self,
+    run(_, { self }) { return { output: self.devices(), summary: 'devices' }; },
+  },
+  nova_schedules: {
+    signature: '{}',
+    doc: 'Schedules with when they run and how their last run went (errors quoted), and automation rules with their last firing.',
+    needsApproval: false,
+    available: (ctx) => ctx.self,
+    run(_, { self }) { return { output: self.schedules(), summary: 'schedules' }; },
+  },
+  nova_settings: {
+    signature: '{"part": "appearance"}',
+    doc: 'One part of the settings: appearance, permissions (what you may do without asking), privacy, user, identity, tuning, models, capture, providers, policy, mesh, backups. Leave out part to list them. Secrets show only as set or not.',
+    needsApproval: false,
+    available: (ctx) => ctx.self,
+    run({ part }, { self }) { return { output: self.settings(part), summary: typeof part === 'string' && part ? part : 'settings' }; },
+  },
+  memory_import: {
+    signature: '{"path": "workspace/import/memory.json"}',
+    doc: 'Load a Nova memory export from ~/workspace/import/ into Memory. Each memory not already kept arrives unreviewed, for the person to confirm, correct or forget there. The person approves it. For any other file, read it and suggest memories instead.',
+    needsApproval: true,
+    permission: { id: 'memory-import', label: 'Load memories from a file in workspace/import', note: 'They arrive unreviewed in Memory' },
+    available: (ctx) => ctx.self,
+    preview({ path }, { self }) {
+      const p = self.planImport(path);
+      return { path: p.path, total: p.total, fresh: p.fresh, already: p.already, exported_at: p.exported_at };
+    },
+    run({ path }, { self }) {
+      const r = self.importPack(path);
+      return { output: `Loaded ${r.imported} ${r.imported === 1 ? 'memory' : 'memories'} from ${r.path} into Memory, unreviewed${r.skipped ? `; ${r.skipped} ${r.skipped === 1 ? 'was' : 'were'} already there` : ''}. The person reviews them in Memory.`, summary: `${r.imported} memories` };
+    },
+  },
 };
 
 // The tools on offer right now: Gmail's only while it's connected, use_skill
 // only when a skill is installed, delegate only in a conversation with the person.
-export function availableTools({ gmail = false, skills = 0, delegate = false } = {}) {
-  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate }));
+export function availableTools({ gmail = false, skills = 0, delegate = false, self = false } = {}) {
+  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate, self }));
 }
 
 // Local-only means nothing leaves the person's devices, so tools that reach the internet (the

@@ -70,7 +70,8 @@ ${allowed}${passed ? `\n\n${passed}` : ''}`;
 // no recent notes and no schedules, and keeps no memory.
 // identity: "who you are", from the core's identity layer (charter + profile); the default
 // identity when there is no core, as in some tests.
-export function buildSystem({ root, home, timezone }, now = new Date(), { tools = availableTools(), skills = '', schedules = '', scheduled = '', helper = '', identity = renderIdentity() } = {}) {
+// briefing: what this Nova is right now, from its own registries (core self.ts).
+export function buildSystem({ root, home, timezone }, now = new Date(), { tools = availableTools(), skills = '', schedules = '', scheduled = '', helper = '', identity = renderIdentity(), briefing = '' } = {}) {
   const base = readFileSync(join(root, 'system', 'system_prompt.md'), 'utf8').trim();
   const memory = new Memory(home, timezone);
   const standing = readStanding(home)
@@ -86,6 +87,7 @@ export function buildSystem({ root, home, timezone }, now = new Date(), { tools 
   return [
     identity,
     base,
+    briefing,
     `# Standing files\n\nThese are your home's standing files, read fresh for this message.\n\n${standing}`,
     days.length ? `# Recent notes\n\n${days.join('\n\n')}` : '',
     skills,

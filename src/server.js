@@ -14,7 +14,7 @@ import { SkillError } from './skills.js';
 import { GmailError } from './connectors/gmail.js';
 import { gmailConnector } from './connectors/gmail-connector.js';
 import { ZipError, unzip } from './zip.js';
-import { ScheduleError } from './schedules.js';
+import { ScheduleError, formatWhen } from './schedules.js';
 import { Scheduler } from './scheduler.js';
 import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
@@ -62,7 +62,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   // once the mesh listener is bound (tests use that, so no other process can take the port first).
   const meshInfo = config.mesh ? { publicUrl: config.mesh.publicUrl, transport: config.mesh.transport } : null;
   const core = createCore({
-    home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
+    home: config.home, version, instance: config.instance, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
     mesh: meshInfo,
     // Nova's own listeners, which a browser task never reaches (browser/plan.ts). Read when a
     // task is checked or run, by then both are listening (port 0 means the port they got).
@@ -102,6 +102,11 @@ export function createNova(config = loadConfig(), deps = {}) {
   runner.memory.readOnly = () => !!core.mesh.role.replica();
   runner.memory.sync();
   runner.chatProvider = chatProvider;
+  // Grounding (core self.ts): the agent's briefing and status tools, with Era 2's schedules and approvals.
+  runner.self = core.self.attach({
+    schedules: () => { const last = runner.schedules.latest(); return runner.schedules.list().map((s) => { const next = runner.schedules.next(s); return { ...s, next: next ? formatWhen(next, config.timezone) : null, last: last.get(s.id) ?? null }; }); },
+    permissions: () => runner.permissions.list(),
+  });
   runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault(), receipt: (r) => core.receipts.record(r) };
   runner.ensureMain();
   // permissions.md is written once, so it can be read and edited by hand; Settings keeps it current.

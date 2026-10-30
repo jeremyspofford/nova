@@ -39,6 +39,9 @@ export function loadConfig(env = process.env, root = ROOT) {
     timezonePinned: Boolean(env.NOVA_TZ ?? file.timezone),
     theme: file.theme ?? 'nova',
     dev: env.NOVA_DEV === '1',
+    // What this instance is for, said to the agent in its briefing: preview (scripts/preview.sh),
+    // development (npm run dev), or production.
+    instance: instanceOf(env.NOVA_INSTANCE ?? file.instance, env.NOVA_DEV === '1'),
     maxSteps: Number(file.max_tool_steps ?? 8),
     execTimeoutMs: Number(file.exec_timeout_ms ?? 120_000),
     // Stand-ins for Google and the search engine, for tests and screenshots.
@@ -90,6 +93,10 @@ export function meshConfig(env, file = {}) {
     throw new ConfigError(`Devices reach Nova over TLS here, so NOVA_MESH_PUBLIC_URL must be an https:// address, not ${pub}.`);
   }
   return { bindHost, port: Number(url.port), transport, tls, publicUrl: publicUrl.origin };
+}
+
+function instanceOf(v, dev) {
+  return ['preview', 'production', 'development'].includes(v) ? v : dev ? 'development' : 'production';
 }
 
 function egress(v) {
