@@ -150,6 +150,8 @@ function approvalWhat(tool) {
 
 // Exactly what will change in Gmail, so the decision is about the real thing.
 function approvalDetail(tool) {
+  // A standing file: exactly what would be written in it.
+  if (tool.name === 'write_file') return `<div class="approval-letter" tabindex="0">${esc(String(tool.args?.content ?? ''))}</div>`;
   const p = tool.preview;
   if (!p) return '';
   if (tool.name === 'gmail_draft') {
@@ -387,9 +389,9 @@ function memoryItem(e, titles, now) {
 // until the person keeps or drops it (the ingest gate's memory guard).
 function waitingItem(c) {
   const from = [...new Set((c.taint ?? []).map((x) => x.origin))].slice(0, 3).join(', ');
-  const what = c.op === 'forget' ? 'Forget one of your memories' : c.content;
+  const what = c.op === 'forget' ? (c.target_text ? `Forget “${c.target_text}”` : 'Forget one of your memories') : c.content;
   return `<li class="memory-item" data-candidate="${esc(c.id)}"><p class="memory-text">${esc(what)}</p>
-<p class="memory-source">${c.op === 'note' ? 'A day note' : c.op === 'forget' ? 'A request' : 'A memory'} from a conversation that read ${esc(from || 'something from outside')}.</p>
+<p class="memory-source">${String(c.source ?? '').startsWith('device:') ? 'A note from one of your devices, waiting because Nova couldn’t fully check it' : `${c.op === 'note' ? 'A day note' : c.op === 'forget' ? 'A request' : 'A memory'} from a conversation that read ${esc(from || 'something from outside')}`}.</p>
 <div class="memory-actions"><button type="button" class="act" data-action="keep-candidate">${c.op === 'forget' ? 'Forget it' : 'Keep'}</button><button type="button" class="act" data-action="drop-candidate">${c.op === 'forget' ? 'Keep my memory' : 'Drop'}</button></div></li>`;
 }
 

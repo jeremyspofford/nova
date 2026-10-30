@@ -124,7 +124,7 @@ export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.
 export { trackChild } from './children.ts';
 // The ingest gate (Amendment 2026-10-30-C Part 3): what Era 2's agent loop screens with, escapes
 // with, and says when something is blocked.
-export { Ingest, BLOCK_LINE, PROTOCOL_NAMES, KIND_WORDS, escapeProtocol, wrapData } from './ingest/index.ts';
+export { Ingest, BLOCK_LINE, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, wrapData } from './ingest/index.ts';
 export type { Screened, Source as IngestSource, SourceKind, Taint, Verdict, Candidate as MemoryCandidate, Hold } from './ingest/index.ts';
 
 export interface CoreOptions {
@@ -397,6 +397,8 @@ export function createCore(o: CoreOptions) {
   const configRow = (section: string, key: string) => db.get<{ value: string; updated_at: string }>('SELECT value, updated_at FROM profile WHERE section = ? AND key = ?', section, key);
   // A setting's version: its time and value together, so two changes in one millisecond differ.
   const configVersion = (r: { value: string; updated_at: string }) => createHash('sha256').update(`${r.updated_at}\0${r.value}`).digest('hex').slice(0, 16);
+  // A device note's first screen, from the check before the inbox writes, reused when it is kept.
+  const noteScreens = new WeakMap<object, ReturnType<typeof ingest.screenNow>>();
   const spokes = new Spokes({
     db, log, devices, identity: meshIdentity, now, version: o.version,
     effects: {
@@ -405,11 +407,30 @@ export function createCore(o: CoreOptions) {
         triggers.reactive(task, `device:${d.id}`);
         return task;
       },
-      memory: (d, body) => memory.remember({ ...(body as unknown as MemoryInput), kind: (body.kind ?? 'fact') as MemoryKind, recorded_by: `device:${d.id}` }),
+      // A device's note is outside content until it passes the screen: it waits as a memory
+      // candidate for the person's OK (as memory from a tainted conversation does), out of every
+      // prompt. With a sorting model, a note that passes its full screen is then kept as before.
+      memory: (d, body) => {
+        const content = String((body as { content?: unknown }).content ?? '');
+        const kind = (body.kind ?? 'fact') as MemoryKind;
+        const first = noteScreens.get(body) ?? ingest.screenNow({ text: content, source: { kind: 'connector', origin: `device:${d.id}` } });
+        const id = ingest.candidate({ op: 'remember', kind, content, source: `device:${d.id}`, taint: [first.taint] });
+        setImmediate(() => {
+          if (!ingest.hasModel()) return;
+          void ingest.screen({ text: content, source: { kind: 'connector', origin: `device:${d.id}` } }).then((s) => {
+            if (s.verdict !== 'pass' || !ingest.takeCandidate(id)) return;
+            memory.remember({ ...(body as unknown as MemoryInput), kind, recorded_by: `device:${d.id}` });
+          }).catch((e) => log.warn('ingest', 'A device note couldn’t be screened; it waits for you.', { error: (e as Error).message }));
+        });
+        return { id };
+      },
       // A device's note is screened by Nova's own checks before it is kept (the inbox can't wait for
       // a model): one that tries to give instructions is refused.
-      screenNote: (d, body) => (ingest.screenNow({ text: String((body as { content?: unknown }).content ?? ''), source: { kind: 'connector', origin: `device:${d.id}` } }).verdict === 'block'
-        ? 'Nova didn’t keep this note: it looked like it was trying to give instructions.' : null),
+      screenNote: (d, body) => {
+        const s = ingest.screenNow({ text: String((body as { content?: unknown }).content ?? ''), source: { kind: 'connector', origin: `device:${d.id}` } });
+        noteScreens.set(body, s);
+        return s.verdict === 'block' ? 'Nova didn’t keep this note: it looked like it was trying to give instructions.' : null;
+      },
       capture: (d, key, body) => capture.fromDevice(d, key, body),
       config: {
         read: (section, key) => { const r = configRow(section, key); return r ? { value: JSON.parse(r.value), version: configVersion(r) } : null; },
@@ -619,6 +640,7 @@ export function createCore(o: CoreOptions) {
     { method: 'GET', path: '/health', summary: 'Whether each part of the core is working, in plain words.', handle: () => health() },
     // The ingest gate (Amendment 2026-10-30-C Part 3).
     { method: 'GET', path: '/ingest/screens', summary: 'The latest screens of outside content: source, scores, flags and verdict, by hash; never the content. ?limit=', handle: ({ query }) => ingest.list(Number(query.get('limit')) || 50) },
+    { method: 'GET', path: '/ingest/candidates', summary: 'Memory waiting for your OK: what a conversation that read outside content, or one of your devices, wanted kept, with where it came from.', handle: () => ingest.candidates() },
     { method: 'GET', path: '/ingest/screens/{id}', summary: 'One screen of outside content.', handle: ({ params }) => { const r = ingest.get(params.id!); if (!r) throw new CoreError('not_found', 'There is no such screen.'); return r; } },
     {
       method: 'POST', path: '/ingest/screen', summary: 'Screen outside content before a model reads it: the verdict (pass, quarantine or block), the scores and flags, and the extract a model may see.', body: '{text?, html?, headers?, attachments?, source: {kind, origin, ref?}}',

@@ -127,7 +127,7 @@ test('canaries never leave while the model obeys an injected page, with a local 
     // The ordinary page passed, as data, with a model's scores.
     const plain = r.tools.find((t) => t.name === 'web_fetch' && t.args.url.endsWith('/plain'));
     assert.equal(plain.result.screen.verdict, 'pass');
-    assert.match(plain.result.screened, /^<outside source="web" origin="127\.0\.0\.1"/);
+    assert.match(plain.result.screened, /^<outside source="web" screen="[\w-]+">\nFrom: 127\.0\.0\.1\n/);
     // Nothing went to a cloud: every model call of the screen was local-only.
     const receipts = r.h.nova.core.receipts.list({ limit: 200 }).filter((x) => /ingest/.test(x.purpose));
     assert.ok(receipts.length > 0);

@@ -8,9 +8,10 @@
 // process dies mid-turn, the log still shows exactly how far it got.
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { runAgent, AgentError } from './agent.js';
-import { Ingest, escapeProtocol, permits } from './core/index.ts';
+import { Ingest, cleanOrigin, escapeProtocol, permits } from './core/index.ts';
 import { buildPrompt, buildSystem, helperSection, runSection, schedulesSection, skillsSection } from './context.js';
 import { Memory } from './memory.js';
 import { Skills } from './skills.js';
@@ -37,8 +38,22 @@ export const GUARDED = {
   schedule_remove: 'change a schedule',
 };
 // The person's own files: never screened when read (their writes are guarded instead).
-const STANDING = new Set([...WRITABLE, 'MEMORY.md'].map((n) => n.toLowerCase()));
+const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
+const STANDING = new Set([...STANDING_EXACT].map((n) => n.normalize('NFC').toLowerCase()));
+// Addresses in text, and an address as compared: no fragment, the URL parser's own spelling.
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'`)\]}]+/gi;
+const normUrl = (u) => { try { const x = new URL(String(u ?? '').replace(/[.,;:!?]+$/, '')); x.hash = ''; return x.href; } catch { return null; } };
 const OWN_TOP = new Set(['memory', 'schedules', 'permissions.md']);
+
+// A page's links, absolute, at most 500.
+function pageLinks(html, base) {
+  const out = new Set();
+  for (const m of String(html).matchAll(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)) {
+    try { const u = new URL((m[1] ?? m[2] ?? m[3] ?? '').replace(/&amp;/g, '&'), base); if (/^https?:$/.test(u.protocol)) { u.hash = ''; out.add(u.href); } } catch { /* not an address */ }
+    if (out.size >= 500) break;
+  }
+  return [...out];
+}
 
 export class Runner extends EventEmitter {
   // records: the core's memory, where MEMORY.md's entries live (passed in by the server). vault: the
@@ -346,7 +361,7 @@ export class Runner extends EventEmitter {
       }
       // The ingest gate: a guarded step in a tainted run, or anything that would carry something
       // of the person's out, asks, and never goes on its own.
-      const guard = failed ? null : this.guardFor(call, tool, run, preview);
+      const guard = failed ? null : this.guardFor(call, tool, run, preview, session);
       const needsApproval = !failed && (!!tool?.needsApproval || !!guard);
       this.record(sessionId, { type: 'tool_call', ...tag, id, name: call?.name ?? 'unknown', args: call?.args ?? {}, needs_approval: needsApproval, ...(preview ? { preview } : {}), ...(guard ? { guard } : {}) });
       if (failed) {
@@ -394,16 +409,18 @@ export class Runner extends EventEmitter {
       // Outside content is screened before the model sees it; the log keeps what the tool returned
       // (for the person), and the model is given only the screened form.
       let screen = null;
-      if (ok) {
-        const read = this.outsideRead(call, String(output), { page, hints, tainted: taintedBefore });
-        if (read) {
-          screen = await this.ingest.screen(read);
-          run.taint.push(screen.taint);
-        }
-        if (call.name === 'write_file') this.provenance(call.args, taintedBefore);
+      let taints = true;
+      const read = this.outsideRead(call, String(output ?? ''), { page, hints, ok });
+      if (read) {
+        screen = await this.ingest.screen(read);
+        taints = this.taints(call, screen);
+        if (taints) run.taint.push(screen.taint);
       }
+      if (ok && call.name === 'write_file') this.provenance(call.args, taintedBefore);
+      // The links a page carries, so following one later in the run counts as following a link.
+      const links = ok && page?.html ? pageLinks(page.html, page.ref) : [];
       if (call.name.startsWith('schedule_') && ok) this.emit('schedules');
-      this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output), ...(summary ? { summary } : {}), ...(link ? { link } : {}), ...(screen ? { screen: screen.taint, screened: screen.extract } : {}) });
+      this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output), ...(summary ? { summary } : {}), ...(link ? { link } : {}), ...(screen ? { screen: screen.taint, screened: screen.extract, ...(taints ? {} : { taints: false }) } : {}), ...(links.length ? { links } : {}) });
     }
   }
 
@@ -454,36 +471,67 @@ export class Runner extends EventEmitter {
 
   // ---- the ingest gate ------------------------------------------------------------------------
 
-  // The outside content a conversation has read: each screened read, each handoff from a run that
-  // read some, and what a run started with. Reads from before the gate count too.
+  // The outside content a conversation has read: each screened read (failed ones too), each handoff
+  // from a run that read some, and what a run started with. Reads from before the gate count too.
+  // A command's output taints only when its screen said so (`taints: false` otherwise).
   taintOf(session) {
     const out = [];
     for (const t of session.turns) {
       out.push(...(t.taint ?? []));
       for (const i of t.items) {
-        if (i.kind !== 'tool' || !i.result?.ok) continue;
+        if (i.kind !== 'tool' || !i.result) continue;
+        if (i.result.screen) { if (i.result.taints !== false) out.push(i.result.screen); continue; }
         const legacy = TOOLS[i.name]?.mail || TOOLS[i.name]?.online;
-        if (i.result.screen) out.push(i.result.screen);
-        else if (legacy) out.push({ screen: null, kind: TOOLS[i.name]?.mail ? 'email' : 'web', origin: TOOLS[i.name]?.mail ? 'your mail' : hostOf(i.args?.url ?? 'the web'), verdict: 'quarantine', max: null });
+        if (legacy && i.result.ok) out.push({ screen: null, kind: TOOLS[i.name]?.mail ? 'email' : 'web', origin: TOOLS[i.name]?.mail ? 'your mail' : hostOf(i.args?.url ?? 'the web'), verdict: 'quarantine', max: null });
       }
     }
     const seen = new Set();
     return out.filter((x) => { const k = x.screen ?? `${x.kind}:${x.origin}`; if (seen.has(k)) return false; seen.add(k); return true; });
   }
 
+  // Addresses this conversation has already seen: links in what it read (pages, results, mail,
+  // reports) and in the person's own messages. Opening one of these is following a link; any other
+  // address in a tainted run was put together by the model, and asks.
+  knownUrls(session) {
+    const out = new Set();
+    const add = (text) => { for (const u of String(text ?? '').match(URL_IN_TEXT) ?? []) { const n = normUrl(u); if (n) out.add(n); } };
+    for (const t of session.turns) {
+      if (t.kind === 'handoff') { add(t.text); continue; }
+      if (!t.followup) add(t.text);
+      for (const i of t.items) {
+        if (i.kind !== 'tool' || !i.result) continue;
+        add(i.result.output);
+        for (const l of i.result.links ?? []) { const n = normUrl(l); if (n) out.add(n); }
+      }
+    }
+    return out;
+  }
+
+  // Whether a path names one of the standing files, however it is spelled: ./, ../, ~/, case
+  // and Unicode form are folded the way write_file folds them.
+  standingPath(path) {
+    let rel;
+    try { rel = homeTarget(this.config.home, String(path ?? '')).rel; } catch { rel = String(path ?? '').replace(/^~\//, '').replace(/^(\.\/)+/, ''); }
+    const f = rel.normalize('NFC').toLowerCase();
+    return !f.includes('/') && STANDING.has(f);
+  }
+
   // Why a step must ask because of the gate, or null.
-  guardFor(call, tool, run, preview) {
+  guardFor(call, tool, run, preview, session = null) {
     if (!call || !tool) return null;
     const tainted = run.taint.length > 0;
-    const standing = call.name === 'write_file' && STANDING.has(String(call.args?.path ?? '').replace(/^~\//, '').toLowerCase());
+    const standing = call.name === 'write_file' && this.standingPath(call.args?.path);
     // Any other step that needs an OK (a tool added later: sending, paying, sharing, pairing)
     // is guarded the same way: in a tainted run it never goes on its own.
-    const what = GUARDED[call.name] ?? (standing ? 'change your standing files' : tool.needsApproval ? 'take this step' : null);
+    let what = GUARDED[call.name] ?? (standing ? 'change your standing files' : tool.needsApproval ? 'take this step' : null);
+    // An address the model put together, in a tainted run, asks, whatever it carries: matching
+    // can't keep up with chunking, short encodings or reversal. A link it read is free.
+    if (tainted && call.name === 'web_fetch' && !(session && this.knownUrls(session).has(normUrl(call.args?.url)))) what = 'open an address it put together';
     const payload = this.outboundPayload(call, preview);
     const out = payload === null ? null : this.ingest.outbound({ text: payload }, { tainted });
     const matched = out && !out.ok ? out.matched : null;
     if (!(tainted && what) && !matched) return null;
-    const sources = [...new Set(run.taint.map((x) => x.origin))].slice(0, 5);
+    const sources = [...new Set(run.taint.map((x) => cleanOrigin(x.origin)))].slice(0, 5);
     return { ...(tainted && what ? { what } : {}), ...(matched ? { matched } : {}), sources };
   }
 
@@ -500,9 +548,12 @@ export class Runner extends EventEmitter {
   // The screen's input for a read of outside content, or null when what was read is the person's own.
   // Only the tools named here read from outside. Every other tool (Nova's own state: skills,
   // schedules, helpers, and read-only views of Nova itself) is trusted: never screened, never taints.
-  outsideRead(call, output, { page, hints, tainted }) {
+  // A read that failed is screened too: an error can carry the server's own words.
+  outsideRead(call, output, { page, hints, ok = true }) {
     const a = call.args ?? {};
-    if (call.name === 'web_fetch') return { ...(page?.html ? { html: page.html } : { text: page?.text ?? output }), source: { kind: 'web', origin: page?.origin || hostOf(a.url), ref: page?.ref ?? String(a.url ?? '') } };
+    if (call.name === 'web_fetch') return ok
+      ? { ...(page?.html ? { html: page.html } : { text: page?.text ?? output }), source: { kind: 'web', origin: page?.origin || hostOf(a.url), ref: page?.ref ?? String(a.url ?? '') } }
+      : { text: output, source: { kind: 'web', origin: hostOf(a.url), ref: String(a.url ?? '') } };
     if (call.name === 'web_search') return { text: output, source: { kind: 'search', origin: hostOf(this.config.searchUrl ?? 'web search'), ref: String(a.query ?? '').slice(0, 200) } };
     if (call.name === 'gmail_search') return { text: output, source: { kind: 'email', origin: 'Gmail search', ref: String(a.query ?? '').slice(0, 200) } };
     if (call.name === 'gmail_read') {
@@ -510,29 +561,45 @@ export class Runner extends EventEmitter {
       return { text: output, ...(hints?.html ? { html: hints.html } : {}), headers: hints?.headers ?? {}, attachments: hints?.attachments ?? [], source: { kind: 'email', origin: from, ref: String(a.id ?? '') } };
     }
     if (call.name === 'read_file') {
-      if (this.ownFile(String(a.path ?? ''))) return null;
+      if (!ok || this.ownFile(String(a.path ?? ''))) return null;
       return { text: output, source: { kind: 'file', origin: this.relPath(String(a.path ?? '')) ?? String(a.path ?? '') } };
     }
-    if (call.name === 'exec' && tainted) return { text: output, source: { kind: 'tool', origin: 'a command', ref: String(a.command ?? '').slice(0, 200) } };
+    // A command's output, in every run (Amendment 2026-10-30-C Part 3: tool output).
+    if (call.name === 'exec') return { text: output, source: { kind: 'tool', origin: 'a command', ref: String(a.command ?? '').slice(0, 200) } };
     return null;
+  }
+
+  // Whether a read taints the run. Every outside read does, except a command's output: that taints
+  // when the screen found something (a check flagged it, or the model wasn't sure), so ordinary
+  // commands the person allowed keep running on their own. Without a model, a paraphrased
+  // injection in command output that no check matches is passed on as held-back data, untainted.
+  taints(call, screen) {
+    if (call.name !== 'exec') return true;
+    return screen.verdict === 'block' || screen.flags.some((f) => f.level !== 'note') || (!!screen.model && screen.verdict !== 'pass');
   }
 
   relPath(path) {
     try { return homeTarget(this.config.home, path).rel; } catch { return null; }
   }
 
-  // Whether a file in the home is the person's own: the standing files, memory, schedules and
-  // permissions, an installed skill that isn't held, or a workspace file Nova wrote itself in a
-  // run that read nothing from outside (by content hash). Everything else is outside or unknown.
+  // A file's name exactly as it is on disk (on a case-insensitive disk, its real case).
+  exactRel(t) {
+    try { return relative(realpathSync.native(this.config.home), realpathSync.native(t.abs)).split(sep).join('/'); } catch { return t.rel; }
+  }
+
+  // Whether a file in the home is the person's own: the standing files (by their exact names),
+  // memory, schedules and permissions; a skill's file that is in use and unchanged since Nova
+  // checked it; or a workspace file Nova wrote itself in a run that read nothing from outside (by
+  // content hash). Everything else is outside or unknown.
   ownFile(path, text = null) {
     let t;
     try { t = homeTarget(this.config.home, path); } catch { return false; }
-    const rel = t.rel;
-    const top = rel.split('/')[0].toLowerCase();
-    if (!rel.includes('/') && STANDING.has(rel.toLowerCase())) return true;
+    const rel = existsSync(t.abs) ? this.exactRel(t) : t.rel;
+    const top = rel.split('/')[0];
+    if (!rel.includes('/') && STANDING_EXACT.has(rel)) return true;
     if (OWN_TOP.has(top)) return true;
-    if (top === 'skills') { const id = rel.split('/')[1]; return !!id && !this.ingest.held('skill', id); }
-    if (top !== 'workspace') return false;
+    if (top !== 'workspace' && top !== 'skills') return false;
+    if (top === 'skills' && this.skillHeld(rel.split('/')[1])) return false;
     let body = text;
     if (body === null) {
       try {
@@ -540,7 +607,39 @@ export class Runner extends EventEmitter {
         body = readFileSync(t.abs, 'utf8');
       } catch { return false; }
     }
+    if (top === 'skills' && this.catalogCopy(rel, body)) return true;
     return this.ingest.isOwn(rel, sha256(body));
+  }
+
+  // A file exactly as Nova ships it in its skill catalog.
+  catalogCopy(rel, body) {
+    const p = join(this.skills.catalogDir, ...rel.split('/').slice(1));
+    try { return existsSync(p) && readFileSync(p, 'utf8') === body; } catch { return false; }
+  }
+
+  // Why a skill can't be used now, or null: held back by the screen, or its SKILL.md changed since
+  // Nova checked it (or ships with it).
+  skillHeld(id) {
+    if (!id) return ['not a skill'];
+    const held = this.ingest.held('skill', id);
+    if (held) return held.reasons;
+    const rel = `skills/${id}/SKILL.md`;
+    let body;
+    try { body = readFileSync(join(this.config.home, rel), 'utf8'); } catch { return null; }
+    return this.catalogCopy(rel, body) || this.ingest.isOwn(rel, sha256(body)) ? null : ['It changed since Nova checked it'];
+  }
+
+  // The skill's files as they are now are the ones Nova checked (or the person turned on).
+  trustSkill(id) {
+    const dir = join(this.config.home, 'skills', id);
+    const walk = (d) => {
+      for (const name of readdirSync(d)) {
+        const p = join(d, name);
+        if (statSync(p).isDirectory()) walk(p);
+        else this.ingest.markOwn(relative(this.config.home, p).split(sep).join('/'), sha256(readFileSync(p, 'utf8')));
+      }
+    };
+    try { walk(dir); } catch { /* nothing kept: its files read as unknown, and are screened */ }
   }
 
   // A workspace file Nova writes is its own only when the run had read nothing from outside.

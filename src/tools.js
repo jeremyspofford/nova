@@ -138,7 +138,8 @@ export const TOOLS = {
       if (!/^https?:\/\//i.test(String(url))) throw new Error('Only http and https URLs can be fetched');
       const res = await safeFetch(String(url), { signal, headers: { 'user-agent': UA }, ...(fetchAllow ? { allow: fetchAllow } : {}) });
       // A page that didn't come back is a failed step, not a page to read.
-      if (res.status < 200 || res.status > 299) throw new Error(`The page answered HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`);
+      // Only the number: the reason phrase is the server's own words, and outside content.
+      if (res.status < 200 || res.status > 299) throw new Error(`The page answered HTTP ${res.status}.`);
       const { type } = res;
       let { text } = res;
       let origin = '';

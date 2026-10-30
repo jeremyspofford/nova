@@ -88,7 +88,7 @@ test('asked in a conversation, Nova hands the work to a helper and the reply end
   // carries that taint and the model gets it screened, as data (the ingest gate).
   assert.ok(h.taint.some((x) => x.kind === 'search'));
   const prompt = buildPrompt((await convo(id)).session, [], { timezone: LA });
-  assert.match(prompt, new RegExp(`<handoff from="Compare e-bikes" helper="${h.run}" time="[^"]+">\\n<outside source="handoff" origin="Compare e-bikes" screen="[\\w-]+" verdict="quarantine">\\n[^]*?The \\*\\*Ridgeline C2[^]*?</outside>\\n</handoff>`));
+  assert.match(prompt, new RegExp(`<handoff from="Compare e-bikes" helper="${h.run}" time="[^"]+">\\n<outside source="handoff" screen="[\\w-]+" verdict="quarantine">\\nFrom: Compare e-bikes\\n[^]*?The \\*\\*Ridgeline C2[^]*?</outside>\\n</handoff>`));
 });
 
 test("a helper's context is scoped: its brief, who the person is, and the files passed along; not the conversation, memory or schedules", async () => {
@@ -96,7 +96,7 @@ test("a helper's context is scoped: its brief, who the person is, and the files 
   assert.ok(helper);
   assert.match(helper.system, /<file path="~\/USER\.md">/);
   // The notes file wasn't written by Nova, so it is screened before the helper reads it.
-  assert.match(helper.system, /<file path="~\/workspace\/bikes\.md">\n<outside source="file" origin="workspace\/bikes\.md"[^]*?Commute: 9 miles, one long hill[^]*?<\/outside>\n<\/file>/);
+  assert.match(helper.system, /<file path="~\/workspace\/bikes\.md">\n<outside source="file" screen="[\w-]+" verdict="quarantine">\nFrom: workspace\/bikes\.md\n[^]*?Commute: 9 miles, one long hill[^]*?<\/outside>\n<\/file>/);
   assert.doesNotMatch(helper.system, /MEMORY\.md">|coffee black|# Recent notes|# Schedules|# Memory blocks/);
   assert.doesNotMatch(helper.system, /^- (delegate|schedule_set|schedule_remove) /m);
   assert.doesNotMatch(helper.prompt, /Ask a helper|coffee|<memory_search>/);

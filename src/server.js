@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
+import { KIND_WORDS, createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -187,19 +187,43 @@ export function createNova(config = loadConfig(), deps = {}) {
   // A skill from outside that the screen held back says why, until the person turns it on.
   // A skill from outside (uploaded, not one Nova ships) is screened as it comes in: a block refuses
   // it, and an unsure one is installed but held back, with the reasons, until the person turns it on.
-  async function screenSkill(skill) {
-    const dir = join(skills.dir, skill.id);
-    const text = ['SKILL.md', ...(skill.files ?? [])].map((f) => {
-      try { const b = readFileSync(join(dir, f)); return b.includes(0) ? '' : `${f}:\n${b.toString('utf8')}`; } catch { return ''; }
-    }).filter(Boolean).join('\n\n');
-    const s = await core.ingest.screen({ text, source: { kind: 'skill', origin: skill.id } });
-    if (s.verdict === 'block') { skills.remove(skill.id); core.ingest.release('skill', skill.id); }
-    else if (s.verdict === 'quarantine') core.ingest.hold('skill', skill.id, s);
-    else core.ingest.release('skill', skill.id);
-    return s;
+  //
+  // Every file is screened before anything is written: a text file that isn't UTF-8 is refused
+  // (NUL bytes are taken out for the screen, never a reason to skip it); a file that isn't text
+  // (an image, a font) can't be checked, which holds the skill. It is then written to a staging
+  // folder and moved into place, held first if it is to be held, so it is never usable unchecked.
+  // Each file's hash is kept: a file changed after the check is outside content again.
+  const BINARY = /\.(png|jpe?g|gif|webp|ico|bmp|pdf|woff2?|ttf|otf|eot|zip|gz|mp3|mp4|wav|ogg|webm)$/i;
+  const NO_MODEL = 'Nova couldn’t fully check it: no sorting model is set up, so only Nova’s own checks ran';
+  async function installScreened(prepared, { refused }) {
+    const texts = [];
+    let unread = 0;
+    for (const [p, data] of prepared.entries) {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      if (BINARY.test(p)) { unread++; continue; }
+      let text;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch {
+        return { error: `${refused} it couldn’t read ${p} as text, so it couldn’t check it.` };
+      }
+      texts.push(`${p}:\n${text.replace(/\u0000/g, '')}`);
+    }
+    const s = await core.ingest.screen({ text: texts.join('\n\n'), source: { kind: 'skill', origin: prepared.id } });
+    if (s.verdict === 'block') return { error: `${refused} it looked like it was trying to give Nova instructions it shouldn’t follow. Tasks has the details.` };
+    const reasons = [...new Set([
+      ...s.flags.filter((f) => f.level !== 'note').map((f) => KIND_WORDS[f.kind] ?? f.kind),
+      ...(s.model ? [] : [NO_MODEL]),
+      ...(unread ? [`Nova couldn’t check ${unread} file${unread === 1 ? '' : 's'} it can’t read as text`] : []),
+    ])];
+    const hold = s.verdict !== 'pass' || unread > 0;
+    if (hold) core.ingest.hold('skill', prepared.id, s, reasons);
+    else core.ingest.release('skill', prepared.id);
+    let skill;
+    try { skill = skills.commit(prepared); } catch (e) { if (hold) core.ingest.release('skill', prepared.id); throw e; }
+    runner.trustSkill(prepared.id);
+    return { skill, screen: s };
   }
   const skillsView = () => ({
-    installed: skills.installed().map((x) => ({ ...x, held: core.ingest.held('skill', x.id)?.reasons ?? null })),
+    installed: skills.installed().map((x) => ({ ...x, held: runner.skillHeld(x.id) })),
     available: skills.available(),
     connectors: { gmail: gmail.status() },
   });
@@ -293,7 +317,11 @@ export function createNova(config = loadConfig(), deps = {}) {
 
     if (resource === 'memory') {
       // candidates: what a conversation that read outside content wanted kept, waiting for the person.
-      if (req.method === 'GET' && !id) return json(res, 200, { ...memory.read(), titles: titles(), candidates: core.ingest.candidates() });
+      if (req.method === 'GET' && !id) {
+        // A forget waiting for the person names the memory it would forget.
+        const candidates = core.ingest.candidates().map((c) => (c.op === 'forget' && c.target ? { ...c, target_text: memory.record(c.target)?.content ?? null } : c));
+        return json(res, 200, { ...memory.read(), titles: titles(), candidates });
+      }
       if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
       if (id === 'candidates' && action && (sub === 'keep' || sub === 'drop')) {
         if (sub === 'drop') return core.ingest.dropCandidate(action) ? (saved(), json(res, 200, { ok: true })) : json(res, 404, { error: 'That’s already been dealt with.' });
@@ -343,11 +371,11 @@ export function createNova(config = loadConfig(), deps = {}) {
         let body;
         try { body = await readBody(req, 8_000_000); } catch { return json(res, 413, { error: 'That skill is too big to add. Skills can be up to 5 MB.' }); }
         try {
-          const added = skills.add(body.zip ? unzip(Buffer.from(String(body.zip), 'base64')) : body.files);
-          const screened = await screenSkill(added);
+          const prepared = skills.prepare(body.zip ? unzip(Buffer.from(String(body.zip), 'base64')) : body.files);
+          const done = await installScreened(prepared, { refused: 'Nova didn’t add this skill:' });
+          if (done.error) return json(res, 400, { error: done.error });
           announce('skills');
-          if (screened.verdict === 'block') return json(res, 400, { error: 'Nova didn’t add this skill: it looked like it was trying to give Nova instructions it shouldn’t follow. Tasks has the details.' });
-          return json(res, 200, { skill: { ...added, held: core.ingest.held('skill', added.id)?.reasons ?? null } });
+          return json(res, 200, { skill: { ...done.skill, held: runner.skillHeld(done.skill.id) } });
         } catch (e) {
           if (e instanceof SkillError) return json(res, e.status, { error: e.message });
           if (e instanceof ZipError) return json(res, 400, { error: e.message });
@@ -357,18 +385,25 @@ export function createNova(config = loadConfig(), deps = {}) {
       try {
         let skill = null;
         let files;
-        if (action === 'install') skill = skills.install(id);
+        if (action === 'install') { skill = skills.install(id); runner.trustSkill(id); }
         else if (action === 'remove') { files = skills.remove(id); core.ingest.release('skill', id); }
         else if (action === 'restore') {
-          skill = skills.restore(id, (await readBody(req)).files);
-          // Put back from Undo: a skill of the person's own is screened again, as when it came in.
-          if (skill && !skills.catalog().some((c) => c.id === skill.id) && (await screenSkill(skill)).verdict === 'block') {
-            announce('skills');
-            return json(res, 400, { error: 'Nova didn’t put this skill back: it looked like it was trying to give Nova instructions it shouldn’t follow.' });
+          // Put back from Undo: screened again, exactly as when it came in.
+          const prepared = skills.prepareRestore(id, (await readBody(req)).files);
+          // One Nova ships, exactly as it ships it, comes back as it was; anything else is screened.
+          if (skills.isCatalogCopy(prepared)) { skill = skills.commit(prepared); runner.trustSkill(id); }
+          else {
+            const done = await installScreened(prepared, { refused: 'Nova didn’t put this skill back:' });
+            if (done.error) return json(res, 400, { error: done.error });
+            skill = done.skill;
           }
         }
-        // Turning on a skill the screen held back is the person's call.
-        else if (action === 'allow') { if (!core.ingest.release('skill', id)) return json(res, 404, { error: 'That skill isn’t held back.' }); }
+        // Turning on a skill that is held back (or that changed since Nova checked it) is the person's call.
+        else if (action === 'allow') {
+          if (!runner.skillHeld(id)) return json(res, 404, { error: 'That skill isn’t held back.' });
+          core.ingest.release('skill', id);
+          runner.trustSkill(id);
+        }
         else return json(res, 404, { error: 'Not found' });
         announce('skills');
         return json(res, 200, files ? { files } : { skill });

@@ -92,7 +92,9 @@ test('a device offline: shown as offline, its queue kept, and on reconnect each 
     assert.ok(again.body.results.every((r: { duplicate?: boolean }) => r.duplicate), JSON.stringify(again.body));
     q.settle(again.body.results);
     assert.deepEqual(q.counts(), { pending: 0, delivered: 3, refused: 0 });
-    assert.equal(h.core.memory.list().filter((m) => m.content.startsWith('Queued note')).length, 3);
+    // Each note waits once for the person (the ingest gate: a device's note isn't memory until it
+    // passes the screen or the person keeps it).
+    assert.equal(h.core.ingest.candidates().filter((m) => m.content?.startsWith('Queued note')).length, 3);
   } finally {
     link.close();
     await h.stop();

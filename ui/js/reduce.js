@@ -80,7 +80,7 @@ function applyTurnEvent(t, ev) {
     }
     case 'tool_result': {
       const tool = t.items.find((i) => i.kind === 'tool' && i.id === ev.id);
-      if (tool) tool.result = { ok: ev.ok, output: ev.output, summary: ev.summary, link: ev.link, ...(ev.screen ? { screen: ev.screen, screened: ev.screened } : {}) };
+      if (tool) tool.result = { ok: ev.ok, output: ev.output, summary: ev.summary, link: ev.link, ...(ev.screen ? { screen: ev.screen, screened: ev.screened, ...(ev.taints === false ? { taints: false } : {}) } : {}), ...(ev.links ? { links: ev.links } : {}) };
       break;
     }
     case 'error':
