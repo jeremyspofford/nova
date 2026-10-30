@@ -44,12 +44,16 @@ The as-built note is in `docs/plans/M8.md` §2.
   `retry_after_s`. The registry asks again by itself, and after a restart too. That is safe, because
   the worker only edits a copy. The `requestId` is a UUID made from the idempotency key and the
   attempt number, so the same attempt never starts a second run.
+- **A dispatch whose work never started isn't an attempt (a ledger change).**
+  - **The rule.** A running worker may call `ledger.notStarted(id, why)`. Only a `blocked` report takes that claim. The ledger then gives the dispatch back and records `attempt_returned` ("Relay was busy; this didn't count as an attempt."). A done or failed report is counted regardless.
+  - **Restarts.** `recover()` gives back an active task's dispatch if it had claimed not-started.
+  - **Relay** claims it only for `runtime_busy`. Relay records a run only after its busy check (`runtime/workers.mjs` 77–100), so reusing the attempt's `requestId` after a give-back starts a fresh run.
+  - **Why.** Before this, four busy answers and then one failed verification ended the task failed ("Gave up after 6 attempts").
 - **A chaos test made robust.** The full-database test (`tests/chaos/disk.test.ts`) depended on how
   full SQLite's last pages happened to be, and Relay's manifest changed that. It now fills to the
   brim.
 - **Open:**
   - Relay keeps every worktree, and Nova keeps each attempt's repository: there is no cleanup yet.
-  - Busy waits use up attempt numbers.
   - Relay's accept/merge into a real repository is a later mode.
 
 **2026-10-30 (owner decision): real-phone pairing check deferred; pairing clocks logged as a
