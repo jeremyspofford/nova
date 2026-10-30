@@ -13,6 +13,7 @@ import { routeOf } from './nav.js';
 import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
+import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptureSettings, renderCaptureView } from './capture.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
 
@@ -24,7 +25,7 @@ const el = {
   sidebar: $('sidebar'), dock: $('dock'), toast: $('toast'), topbarOrb: $('topbar-orb'), asideToggle: $('aside-toggle'),
   home: $('home'), tasks: $('tasks-view'), memory: $('memory'), automations: $('automations'), rules: $('rules'),
   skills: $('skills'), schedules: $('schedules'), activity: $('activity'), health: $('health-view'), settings: $('settings-view'),
-  aside: $('aside'), mainLink: $('main-link'), mainDot: $('main-dot'),
+  aside: $('aside'), mainLink: $('main-link'), mainDot: $('main-dot'), capture: $('capture-view'),
 };
 
 const state = {
@@ -256,10 +257,11 @@ function route() {
   else if (r.dest === 'automations') showSchedules();
   else if (r.dest === 'activity') showActivity();
   else if (r.dest === 'settings') showSettings();
+  else if (r.dest === 'capture') showCaptureView();
   else showCore(r.dest);
 }
 
-const VIEWS = { home: 'home', chat: 'thread', tasks: 'tasks', memory: 'memory', automations: 'automations', skills: 'skills', activity: 'activity', health: 'health', settings: 'settings' };
+const VIEWS = { home: 'home', chat: 'thread', tasks: 'tasks', memory: 'memory', automations: 'automations', skills: 'skills', activity: 'activity', health: 'health', settings: 'settings', capture: 'capture' };
 function setView(view) {
   const was = state.view;
   state.view = view;
@@ -268,7 +270,8 @@ function setView(view) {
   el.dock.hidden = view !== 'chat';
   el.menu.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
-  markCurrent(view);
+  // The Capture view belongs to Settings in the navigation.
+  markCurrent(view === 'capture' ? 'settings' : view);
   if (was !== view) showSignals();
 }
 
@@ -540,7 +543,7 @@ function running() {
 // A helper's or a scheduled run's own log: there to read, not to reply to.
 const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state.session.kind);
 
-const TITLES = { home: '', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings' };
+const TITLES = { home: '', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture' };
 function renderChrome() {
   const title = state.view === 'chat' ? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
@@ -1388,7 +1391,7 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
-  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders()]).then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture()]).then(() => {
     renderSettingsView({ only: 'you' });
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input'))?.focus({ preventScroll: true }); flash(target); }
@@ -1402,6 +1405,7 @@ const PARTS = {
   perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
 <p class="memory-lede">${permissionsError}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''),
   connections: () => renderConnections(),
+  capture: () => renderCaptureSettings(),
   look: () => core.renderAppearance(),
   devices: () => core.renderDevices(),
 };
@@ -1527,6 +1531,34 @@ onCore('trigger', () => scheduleRefresh(['rules', 'messages']));
 onCore('profile', () => scheduleRefresh(['profile']));
 // A connection changed (connected, dropped, reconnecting, disconnected), here or elsewhere.
 onCore('connector', () => { if (state.view === 'settings') loadConnections(); });
+// Capture (M6a): the indicator on every page, Settings › Capture and the Capture view.
+onCore('capture', () => captureChanged(() => state.view === 'capture'));
+bindCapture([el.settings, el.capture], () => {
+  if (state.view === 'settings' && $('settings-capture')) renderSettingsView({ only: 'capture' });
+  if (state.view === 'capture') drawCapture();
+});
+function drawCapture() {
+  const active = document.activeElement;
+  const focus = el.capture.contains(active) ? active.dataset.action : null;
+  el.capture.innerHTML = renderCaptureView();
+  if (focus) el.capture.querySelector(`[data-action="${CSS.escape(focus)}"]`)?.focus({ preventScroll: true });
+}
+function showCaptureView() {
+  stream?.close();
+  stream = null;
+  Object.assign(state, { id: null, live: null, pending: null });
+  setView('capture');
+  el.scroller.scrollTop = 0;
+  renderChrome();
+  renderToc_();
+  drawCapture();
+  enter(el.capture);
+  el.capture.focus({ preventScroll: true });
+  Promise.all([loadCapture(), loadCaptureView()]);
+}
+el.capture.addEventListener('click', (e) => { followLink(e); });
+// The indicator opens the Capture view in place, from any page.
+$('capture-ind').addEventListener('click', (e) => { followLink(e); });
 bindConnections(el.settings, () => { if (state.view === 'settings' && $('settings-connections')) renderSettingsView({ only: 'connections' }); });
 // A provider was set up, turned on or off, or checked (M5a): Settings shows it at once.
 onCore('provider', () => { if (state.view === 'settings') core.loadProviders(); });
@@ -1700,6 +1732,7 @@ function boot() {
   loadActivity();
   watch();
   refreshCore();
+  loadCapture();
   route();
 }
 // A blank profile opens the setup conversation, full screen, before anything else.
