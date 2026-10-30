@@ -21,16 +21,20 @@ import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { info, permits, stricter, type Egress } from './workers.ts';
 import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
-import { loadIdentity } from './mesh/identity.ts';
+import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
-import { Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
+import { APPROVER_ONLY, Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
-import { Spokes } from './mesh/spokes.ts';
+import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
 import { agentTar, joinScript } from './mesh/agent.ts';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
+
+// A setting's key as the inbox takes it in a config change (mesh/spokes.ts).
+const DEVICE_CONFIG_KEY = /^[a-z][a-z0-9_.-]{0,63}$/;
 
 export { render as renderIdentity } from './identity.ts';
 export { permits } from './workers.ts';
@@ -45,7 +49,7 @@ export type { Lane, LanedWorker, Task } from './ledger.ts';
 export * from './mesh/wire.ts';
 export { SlidingWindowLimiter } from './mesh/limiter.ts';
 export { KINDS as DEVICE_KINDS, ROLE_OF, SESSION_TTL_MS } from './mesh/devices.ts';
-export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS } from './mesh/enroll.ts';
+export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS, rateKey } from './mesh/enroll.ts';
 export { PUBLIC_PATHS, SESSION_COOKIE, allows, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
 export { DEVICE_CONFIG_SECTIONS, INBOX_KINDS, MAX_BATCH as INBOX_MAX_BATCH } from './mesh/spokes.ts';
 export { RUNTIME_FILES, agentFiles, agentTar, joinScript, tar } from './mesh/agent.ts';
@@ -59,6 +63,7 @@ export { ROLE_FILE, readRole, writeRole } from './mesh/replica.ts';
 export type { RoleFile } from './mesh/replica.ts';
 export { REPLICATED, NOT_JOURNALLED } from './mesh/sync.ts';
 export type { Who } from './api.ts';
+export { originHost } from './api.ts';
 export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
 
 export interface CoreOptions {
@@ -240,12 +245,15 @@ export function createCore(o: CoreOptions) {
     return { role: s.role, epoch: s.epoch, listening: !!meshInfo, counts: devices.counts(), standby: s.standby, replica: s.replica };
   }
 
-  // The one mesh setting: automatic failover, off unless the person sets a number of seconds.
-  function meshSetting(key: string, value: unknown) {
+  // The one mesh setting: automatic failover, off unless the person sets a number of seconds. It
+  // decides which machine becomes the hub, so it is the approvers' (like promotion) and tier 3.
+  function meshSetting(key: string, value: unknown, confirm: boolean, who: Who) {
+    if (allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', APPROVER_ONLY);
     if (key !== 'auto_failover_after_s') throw new CoreError('validation', 'The mesh section has one setting: auto_failover_after_s.');
     if (value !== null && !(Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 86_400)) {
       throw new CoreError('validation', 'auto_failover_after_s is the number of seconds the hub must be unreachable before the standby takes over (1 to 86400), or null to leave it off.');
     }
+    if (!confirm) throw new CoreError('validation', 'Changing automatic failover needs an explicit confirmation: send confirm: true.');
   }
 
   const header = (h: IncomingHttpHeaders, name: string) => { const v = h[name]; return Array.isArray(v) ? v[0] : v; };
@@ -259,11 +267,11 @@ export function createCore(o: CoreOptions) {
     { method: 'GET', path: '/identity', summary: 'Who Nova is for this person: name, tuning, and the fixed charter.', handle: () => ({ identity: identityOf(profile), charter: CHARTER, rendered: render(identityOf(profile)) }) },
     { method: 'GET', path: '/profile', summary: 'The whole profile (no secrets; those are referenced by name only).', handle: () => profile.all() },
     {
-      method: 'PUT', path: '/profile/{section}/{key}', summary: 'Change one profile record, as a settings screen would.', body: '{value}',
-      handle: ({ params, body }) => {
+      method: 'PUT', path: '/profile/{section}/{key}', summary: 'Change one profile record, as a settings screen would. The mesh section is tier 3 ({confirm: true}) and only an approver may change it.', body: '{value, confirm?}',
+      handle: ({ params, body, who }) => {
         const section = params.section as Section;
         if (!SECTIONS.includes(section) || section === 'setup') throw new CoreError('validation', `There is no profile section called "${params.section}".`);
-        if (section === 'mesh') meshSetting(params.key!, body.value);
+        if (section === 'mesh') meshSetting(params.key!, body.value, body.confirm === true, who);
         if (section === 'appearance') {
           if (params.key !== 'mode') throw new CoreError('validation', 'Choose a design system with POST /api/v1/design-systems/{id}/apply, so it is checked and can be rolled back.');
           design.setMode(body.value);
@@ -347,7 +355,8 @@ export function createCore(o: CoreOptions) {
     },
     { method: 'GET', path: '/triggers/{id}', summary: 'One trigger record.', handle: ({ params }) => triggers.get(params.id!) },
     {
-      method: 'POST', path: '/hooks/{name}', status: 202, auth: 'hook-token',
+      // Public: an automation has no device session; the hook token is its key, checked below.
+      method: 'POST', path: '/hooks/{name}', status: 202, auth: 'hook-token', access: 'public',
       summary: 'Call an event rule’s webhook. Authenticated by the x-nova-hook-token header instead of X-Nova, so automations can call it. The body is kept only as a hash; x-nova-dedup-key is optional.',
       body: 'any JSON object',
       handle: async ({ params, body, headers }) => {
@@ -480,8 +489,13 @@ export function createCore(o: CoreOptions) {
     },
     { method: 'GET', path: '/mesh/inbox/refusals', summary: 'What devices sent that was refused or rejected, with the reasons, newest first. ?device= for one.', handle: ({ query }) => spokes.refusals(query.get('device') ?? undefined) },
     {
-      method: 'GET', path: '/mesh/config/{section}/{key}', access: 'device', summary: 'A setting a device agent may change, with its version, which a change must name as base_version.',
+      method: 'GET', path: '/mesh/config/{section}/{key}', access: 'device', summary: `A setting a device agent may change (${DEVICE_CONFIG_SECTIONS.join(', ')}), with its version, which a change must name as base_version.`,
       handle: ({ params }) => {
+        // What a computer may read is what it may change, and no more: the setup conversation,
+        // privacy and appearance stay with the person (the approval sheet promises so).
+        if (!(DEVICE_CONFIG_SECTIONS as readonly string[]).includes(params.section!) || !DEVICE_CONFIG_KEY.test(params.key!)) {
+          throw new CoreError('forbidden', `A device can read ${DEVICE_CONFIG_SECTIONS.join(', ')} settings only, by section and key.`);
+        }
         const r = configRow(params.section!, params.key!);
         return { section: params.section, key: params.key, value: r ? JSON.parse(r.value) : null, version: r ? configVersion(r) : null };
       },
@@ -582,4 +596,25 @@ export function createCore(o: CoreOptions) {
       db.close();
     },
   };
+}
+
+// Replaces the hub's keys after they were exposed (the README's “If the hub’s keys were exposed”):
+// new keys under the same id, a higher epoch, and the computers and standby that pinned the old key
+// revoked, to be added again. Run with Nova stopped (scripts/rotate-hub-keys.js).
+export async function rotateHubKeys(home: string, o: { now?: () => Date } = {}) {
+  // A mistyped home must not become a new, empty one.
+  if (!existsSync(join(home, 'mesh', 'identity.json'))) throw new CoreError('not_found', `${home} has no keys to replace (no mesh/identity.json). Is that Nova’s home?`);
+  const open =() => createCore({ home, version: 'rotate', trustedOrigin: () => false, ...(o.now ? { now: o.now } : {}) });
+  const probe = open();
+  const hub = probe.mesh.role.role() === 'hub';
+  await probe.close();
+  if (!hub) throw new CoreError('conflict', 'This node is a standby, not the hub. Enroll it again with a new home instead of replacing its keys.');
+  replaceIdentityKeys(home, o);
+  const core = open();
+  try {
+    const r = core.mesh.devices.rekeyHub('console');
+    return { epoch: r.epoch, fingerprint: core.mesh.identity.fingerprint, revoked: r.revoked.map((d) => ({ id: d.id, name: d.name, kind: d.kind })) };
+  } finally {
+    await core.close();
+  }
 }

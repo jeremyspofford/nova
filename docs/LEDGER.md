@@ -56,6 +56,81 @@ failed before the fix.
   turns any earlier one still in the registry into a `spoke` with no
   address, so devices don't look for the hub there and fencing doesn't ask it.
 
+**2026-10-30 (M4 review): trust, pairing and access fixes.**
+
+- **The hub's private keys were committed to the home's git history.**
+  `src/home.js`'s `UNTRACKED` lacked `mesh/`, so the first `git add -A`
+  committed `mesh/identity.json` (both private keys) and `mesh/role.json` as
+  blobs anyone who can read the home can read. `mesh/` is untracked now, and
+  `ensureGit` stops tracking it on every start where it is still tracked. A
+  home whose history (any ref or the reflog) holds the *current* private key
+  gets a problem in plain words at every start until the keys are replaced.
+  **Rotation:** `node scripts/rotate-hub-keys.js <home>` with Nova stopped
+  (`rotateHubKeys` in the core): new keys under the same id, epoch + 1, and
+  every computer and the standby revoked, because they pinned the old key and
+  would follow a roster signed with it; phones and browsers keep their
+  sessions (they never take a roster on trust after pairing). The old blobs
+  stay in history, harmless once nothing trusts them; Nova doesn't rewrite the
+  person's history. The secret-scan test now also reads every git object.
+  Every M4 home made before this fix should be treated as exposed.
+- **What a computer may read** through `GET /mesh/config/{section}/{key}` is
+  what it may change: `DEVICE_CONFIG_SECTIONS` and the inbox's key pattern.
+  Setup (the transcript), privacy, appearance and mesh are a 403.
+- **`mesh.auto_failover_after_s` is the approvers' and tier 3.** It decides
+  which machine becomes hub, like promotion, so a phone without `can_approve`
+  gets a 403 and every change needs `confirm: true`. The PWA has no control
+  for it yet.
+- **A malformed or `null` Origin is a 403** (`originHost` in `api.ts`, and
+  Era 2's `api()`). It was a thrown `TypeError`: a 500 and a problem per
+  request, reachable without a session through the public enrollment routes
+  before their rate limit.
+- **Rate limits.** An IPv6 client is limited by its /64 (`rateKey`), since a
+  phone or a home network can pick a new address per call. Wrong codes are
+  also capped for the whole hub (50 in five minutes from every address
+  together; a right code still works), with one problem. Refusal reports are
+  forgotten after ten minutes, so many addresses can't grow that map. Behind
+  `NOVA_MESH_TRANSPORT=proxy` the client address is the last
+  `X-Forwarded-For` entry: **the proxy must append to that header or replace
+  it** (README); one that passes the client's header through lets a client
+  choose its own limit. Nova can't tell which kind it is behind.
+- **Webhooks are public, as this ledger already said.** `POST /hooks/{name}`
+  now carries `access: 'public'`; it was `person` by default, so an
+  automation calling the mesh address got a 401. Its token is still checked.
+- **Device sessions count only on the mesh listener.** With `NOVA_HOST`
+  beyond loopback, the console port took a device's cookie or bearer token
+  over plain HTTP, a transport §0 doesn't accept. There it is now public, like
+  any unpaired caller.
+- **A spent session signature stays spent across a restart.** Migration
+  `0008_session_signature.sql` keeps `(device, signed time)` for each session
+  started, until the time is too old to be fresh (two minutes), instead of an
+  in-memory map a restart emptied. The same exact-match rule as before (not
+  "strictly newer"), so two tabs signing out of order aren't refused, and a
+  refusal stays a 401. Never replicated. If another branch also adds an
+  `0008`, renumber one of them: migrations must have no gaps or repeats.
+- **A revoked phone keeps no cached answers.** `forget()` in
+  `ui/js/device-key.js` (what `/pair` calls when the hub refuses the key) now
+  also deletes every service-worker cache: the shell and the `/api/v1/*`
+  answers kept for offline use. Memory, receipts, health and the mesh were
+  already never cached.
+- **Console residual (not new, not fixed): a silent forwarder is the
+  console.** The console test is a loopback socket, a loopback `Host` and no
+  forwarding headers. Anything on the hub that passes TCP or HTTP to the
+  console port without adding those headers (`ssh -L/-R`, `socat`, a tunnel,
+  a proxy that rewrites `Host` to `localhost`) gives whoever reaches it full
+  control. Now said in the README (a boxed warning) and in the startup log at
+  every start. **Proposed mitigation, not built** (each changes how the
+  person opens Nova, so it is the owner's call): a per-start console key, as
+  Jupyter does. `npm start` prints `http://localhost:4317/#k=<key>` once; the
+  page trades the key for an HttpOnly, SameSite=Strict cookie bound to the
+  console port; the console test then also needs that cookie. A forwarder
+  passes the cookie only from a browser that already has it, so a stranger at
+  the far end gets nothing. Cost: the first open after each start (or each
+  key rotation) needs the printed link, and `npm run shots`, the UI gate and
+  scripts would read the key from the home (0600). A cheaper half-measure,
+  refusing a `Host` whose port isn't the console's own, stops only forwarders
+  that keep the client's `Host`, and those already fail the loopback-`Host`
+  test.
+
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and
 `0007_device_inbox.sql`.

@@ -141,6 +141,57 @@ test('a browser by cookie and a phone by bearer get what the console gets, excep
   }
 });
 
+test('a malformed or "null" Origin is a 403, never a 500 or a problem, even on the public routes', async () => {
+  const b = await boot();
+  try {
+    const before = b.nova.core.log.problems().length;
+    for (const origin of ['null', 'not a url', '://', 'http://']) {
+      const join = await call(b.mesh, 'POST', '/api/v1/mesh/join', { code: 'ABCD-EFGH' }, { origin });
+      assert.equal(join.status, 403, `core, public: ${origin}`);
+      assert.equal((await b.c('POST', '/api/v1/memory', { kind: 'fact', content: 'x' }, { origin })).status, 403, `core, console: ${origin}`);
+      assert.equal((await b.c('POST', '/api/sessions', { text: 'x' }, { origin })).status, 403, `Era 2: ${origin}`);
+    }
+    assert.equal(b.nova.core.log.problems().length, before, 'nothing recorded: a refusal isn’t a problem');
+  } finally {
+    await b.stop();
+  }
+});
+
+test('a device session counts only on the mesh listener, never on the console port', async () => {
+  const b = await boot();
+  try {
+    const phone = await b.enroll({ kind: 'phone', name: 'Phone' });
+    const s = await phone.session();
+    const bearer = { authorization: `Bearer ${s.body.token}` };
+    assert.equal((await call(b.mesh, 'GET', '/api/v1/tasks', undefined, bearer)).status, 200, 'where devices belong');
+    // As if NOVA_HOST reached beyond this machine: the console port, but not the console. Its
+    // plain HTTP is no transport for a session.
+    const remote = { ...bearer, 'x-forwarded-for': '198.51.100.7' };
+    assert.equal((await b.c('GET', '/api/v1/tasks', undefined, remote)).status, 401);
+    assert.equal((await b.c('GET', '/api/sessions', undefined, remote)).status, 401, 'Era 2 too');
+    assert.equal((await b.c('GET', '/styles/views.css', undefined, remote)).status, 401);
+    const cookie = await phone.session({ cookie: true });
+    assert.equal((await b.c('GET', '/api/v1/tasks', undefined, { cookie: cookieOf(cookie), 'x-forwarded-for': '198.51.100.7' })).status, 401, 'nor a cookie');
+  } finally {
+    await b.stop();
+  }
+});
+
+test('a webhook answers over the mesh listener without a session: its own token is its key', async () => {
+  const b = await boot();
+  try {
+    const created = await b.c('POST', '/api/v1/triggers/rules', { name: 'Example events', class: 'event', hook: 'example', action: { kind: 'message', text: 'An example event arrived.' } });
+    assert.equal(created.status, 201);
+    const fired = await call(b.mesh, 'POST', '/api/v1/hooks/example', { n: 1 }, { 'x-nova': '', 'x-nova-hook-token': created.body.token });
+    assert.equal(fired.status, 202, JSON.stringify(fired.body));
+    assert.equal((await call(b.mesh, 'POST', '/api/v1/hooks/example', { n: 2 }, { 'x-nova': '', 'x-nova-hook-token': 'wrong' })).status, 403, 'a wrong token is still refused');
+    assert.equal((await call(b.mesh, 'POST', '/api/v1/hooks/example', { n: 3 }, { 'x-nova': '' })).status, 403, 'and no token');
+    assert.equal((await call(b.mesh, 'GET', '/api/v1/triggers/rules')).status, 401, 'the rest of automations stays the person’s');
+  } finally {
+    await b.stop();
+  }
+});
+
 test('a computer gets only the device routes, a standby only sync; neither gets the person’s things', async () => {
   const b = await boot();
   try {
@@ -305,4 +356,6 @@ test('the server process announces its mesh address', async () => {
   proc.kill('SIGTERM');
   await new Promise((r) => proc.on('exit', r));
   assert.match(out, /Devices pair and connect at http:\/\/127\.0\.0\.1:0 \(listening on 127\.0\.0\.1:\d+, over an encrypted network, as you said\)/);
+  // Something on this machine that forwards to the console port looks like the console: said plainly.
+  assert.match(out, /Warning: whoever reaches port \d+ from this computer controls Nova completely\. Don’t point a port forward, tunnel or proxy at it/);
 });

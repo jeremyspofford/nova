@@ -19,7 +19,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore } from './core/index.ts';
+import { createCore, originHost } from './core/index.ts';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -204,7 +204,9 @@ export function createNova(config = loadConfig(), deps = {}) {
     if (req.method === 'POST') {
       if (req.headers['x-nova'] !== '1') return json(res, 403, { error: 'Missing X-Nova header' });
       const origin = req.headers.origin;
-      if (origin && !allowedHost(new URL(origin).host)) return json(res, 403, { error: 'Cross-origin request refused' });
+      // `Origin: null` or a malformed one names no host: refused, never a 500.
+      const host = origin ? originHost(origin) : null;
+      if (origin && (!host || !allowedHost(host))) return json(res, 403, { error: 'Cross-origin request refused' });
     }
 
     if (resource === 'health') return json(res, 200, { ok: true, agent: config.agentCmd.trim().split(/\s+/)[0] });
@@ -465,7 +467,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
   const { config } = nova;
-  ensureGit(config.home);
+  // Said once per open problem, not once per start: it stays open until the keys are replaced.
+  ensureGit(config.home, {
+    problem: (m) => { if (!nova.core.log.problems({ open: true }).some((p) => p.message === m)) nova.core.log.problem('mesh', m); },
+  });
   // A hub first asks its roster peers whether one of them became hub while it was away (fencing).
   const { role } = nova.core.mesh;
   await role.fence();
@@ -492,6 +497,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // The real port, so NOVA_PORT=0 (any free port) still says where Nova is.
     console.log(`Nova is ready at http://${config.host === '127.0.0.1' ? 'localhost' : config.host}:${nova.server.address().port}  (${ms} ms)`);
     console.log(`Home: ${config.home}`);
+    // The console is "a request from this machine, to this machine, through no proxy". A program
+    // here that passes connections on to this port without saying so (no X-Forwarded-For) makes
+    // whoever reaches it look exactly like that. Nova can't tell, so the person must know.
+    console.log(`Warning: whoever reaches port ${nova.server.address().port} from this computer controls Nova completely. Don’t point a port forward, tunnel or proxy at it; other devices pair at the mesh address (NOVA_MESH_URL) instead.`);
     if (!['127.0.0.1', 'localhost', '::1'].includes(config.host)) {
       console.log('Note: the console port is listening beyond this machine. Only requests from this machine get the console; anything else must pair first, and pairing needs a mesh address (NOVA_MESH_URL).');
     }

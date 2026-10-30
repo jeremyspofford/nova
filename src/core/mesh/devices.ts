@@ -65,8 +65,6 @@ export class Devices extends EventEmitter {
   #now: () => Date;
   #publicUrl: () => string | null;
   #touched = new Map<string, number>();
-  // Signed session requests already used, by device and time, until they are too old to be fresh.
-  #used = new Map<string, number>();
 
   constructor(o: { db: Db; log: Log; identity: MeshIdentity; now: () => Date; publicUrl: () => string | null }) {
     super();
@@ -177,6 +175,27 @@ export class Devices extends EventEmitter {
     return device;
   }
 
+  // After this hub's keys were replaced (replaceIdentityKeys): its own record takes the new keys,
+  // and the epoch goes up so the roster it now signs supersedes any signed with the old key.
+  // Computers and the standby pinned the old key and would believe a roster signed with it, so
+  // they are revoked and must be added again. Phones and browsers keep their sessions: they never
+  // take a roster on trust after pairing.
+  rekeyHub(by: string): { epoch: number; revoked: Device[] } {
+    const id = this.identity.id;
+    const hub = this.get(id);
+    if (hub.role !== 'hub' || this.state().role !== 'hub') throw new CoreError('conflict', 'This node isn’t the hub, so its keys aren’t the ones devices trust. Enroll a standby again with a new home instead.');
+    const pinned = this.list().filter((d) => d.trust === 'trusted' && d.role !== 'hub' && (d.kind === 'computer' || d.kind === 'standby'));
+    const at = this.#now().toISOString();
+    this.#db.tx(() => {
+      this.#db.run('UPDATE device SET public_key = ?, x25519_public_key = ?, fingerprint = ? WHERE id = ?', this.identity.publicKey, this.identity.x25519PublicKey, this.identity.fingerprint, id);
+      this.#db.run('UPDATE mesh_state SET epoch = epoch + 1, updated_at = ? WHERE id = 1', at);
+    });
+    const revoked = pinned.map((d) => this.revoke(d.id, { confirm: true, reason: 'The hub’s keys were replaced. Add it again.', by }));
+    this.#log.info('mesh', 'The hub’s keys were replaced.', { epoch: this.state().epoch, revoked: revoked.length, by });
+    this.emit('change', { action: 'rekeyed', device: this.get(id) });
+    return { epoch: this.state().epoch, revoked };
+  }
+
   // Heard from now. Written at most every 30 s per device.
   touch(id: string): void {
     const now = this.#now().getTime();
@@ -201,14 +220,14 @@ export class Devices extends EventEmitter {
     if (!freshTime(time, nowS)) throw new CoreError('unauthorized', 'The signed time is too far from the hub’s clock. Check the device’s clock.');
     const d = this.find(id);
     if (!d || d.trust !== 'trusted' || d.role === 'hub' || !verifyDeviceSignature(d.public_key, sessionMessage(id, time), signature)) throw refused();
-    for (const [k, until] of this.#used) if (until < nowMs) this.#used.delete(k);
-    const key = `${id}.${time}`;
-    if (this.#used.has(key)) throw new CoreError('unauthorized', 'That signed request was already used. Sign a new one.');
-    this.#used.set(key, nowMs + 2 * 60_000 + 1000);
     const token = `nvs_${randomBytes(32).toString('base64url')}`;
     const at = new Date(nowMs).toISOString();
     const expires = new Date(nowMs + SESSION_TTL_MS).toISOString();
     this.#db.tx(() => {
+      // Spent in the database, not in memory, so a restart doesn't make a request fresh again.
+      this.#db.run('DELETE FROM session_signature WHERE until < ?', at);
+      if (this.#db.get('SELECT 1 FROM session_signature WHERE device_id = ? AND time = ?', id, time)) throw new CoreError('unauthorized', 'That signed request was already used. Sign a new one.');
+      this.#db.run('INSERT INTO session_signature (device_id, time, until) VALUES (?, ?, ?)', id, time, new Date(nowMs + 2 * 60_000 + 1000).toISOString());
       this.#db.run('DELETE FROM device_session WHERE expires_at <= ?', at);
       this.#db.run('INSERT INTO device_session (token_hash, device_id, created_at, expires_at) VALUES (?, ?, ?, ?)', tokenHash(token), id, at, expires);
       this.#db.run('UPDATE device SET last_seen = ? WHERE id = ?', at, id);

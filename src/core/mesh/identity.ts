@@ -6,7 +6,21 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, w
 import { join } from 'node:path';
 import { exportDeviceKeys, generateDeviceKeys, importDeviceKeys, keyFingerprint, open, seal, signMessage, type DeviceKeysJson } from './wire.ts';
 
-interface IdentityFile extends DeviceKeysJson { version: 1; id: string; created_at: string }
+interface IdentityFile extends DeviceKeysJson { version: 1; id: string; created_at: string; replaced_at?: string }
+
+// New keys for this node under the same id, after the old ones were exposed (they were in the
+// home's git history). Only the keys change: the id is how the registry and every device know this
+// node. Nothing of the old private keys is kept. Devices.rekeyHub then brings the registry along.
+export function replaceIdentityKeys(home: string, o: { now?: () => Date } = {}): void {
+  const file = join(home, 'mesh', 'identity.json');
+  if (!existsSync(file)) throw new Error(`${file} doesn't exist, so there are no keys to replace.`);
+  const old = JSON.parse(readFileSync(file, 'utf8')) as IdentityFile;
+  if (old.version !== 1 || typeof old.id !== 'string') throw new Error(`${file} isn't an identity file Nova knows.`);
+  const data: IdentityFile = { version: 1, id: old.id, created_at: old.created_at, replaced_at: (o.now?.() ?? new Date()).toISOString(), ...exportDeviceKeys(generateDeviceKeys()) };
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmp, file);
+}
 
 export interface MeshIdentity {
   // This node's device id in the registry.

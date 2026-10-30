@@ -99,6 +99,10 @@ export class Access {
 
   identify(req: IncomingMessage, listener: Listener): Principal {
     if (isConsole(listener, req)) return { kind: 'console' };
+    // Sessions are honoured only where §0 lets them travel: the mesh listener, over TLS or a
+    // transport the person vouched for. The console port is plain HTTP; with NOVA_HOST beyond
+    // loopback a token sent to it could be read on the way.
+    if (listener !== 'mesh') return { kind: 'public' };
     const auth = String(req.headers.authorization ?? '');
     const token = /^Bearer\s+/i.test(auth) ? auth.replace(/^Bearer\s+/i, '').trim() : cookie(req.headers.cookie, SESSION_COOKIE);
     const device = token ? this.#devices.sessionDevice(token) : null;
@@ -108,8 +112,10 @@ export class Access {
   }
 
   // The client's address, for rate limits. Behind a stated TLS proxy every request comes from the
-  // proxy, so the address the proxy saw (the last x-forwarded-for entry, which the proxy itself
-  // appends) is used instead; it is trusted only then.
+  // proxy, so the address the proxy saw (the last x-forwarded-for entry) is used instead; it is
+  // trusted only then. That holds only if the proxy appends to x-forwarded-for or overwrites it
+  // (most do; the README says so): one that passes the client's header through unchanged lets a
+  // client pick its own address, and so its own rate limit.
   address(req: IncomingMessage, listener: Listener): string {
     const peer = bare(String(req.socket.remoteAddress ?? 'unknown'));
     const xff = req.headers['x-forwarded-for'];

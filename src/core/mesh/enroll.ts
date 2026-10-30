@@ -49,6 +49,25 @@ const view = (r: RequestRow): JoinRequest => ({
 const NONCE = /^[A-Za-z0-9_-]{43}$/;
 const CAPABILITY = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
 
+// The key a client is limited by: its address, or for IPv6 its /64. A home network or a phone
+// usually has a whole /64 and could pick a new address for every guess.
+export function rateKey(address: string): string {
+  const a = address.replace(/%.*$/, '').toLowerCase();
+  if (!a.includes(':')) return a;
+  const [head = '', tail] = a.split('::');
+  const split = (s: string) => (s ? s.split(':').flatMap((g) => (g.includes('.') ? ['0', '0'] : [g])) : []);
+  const h = split(head);
+  const t = tail === undefined ? [] : split(tail);
+  const groups = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  if (groups.length !== 8 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return a;
+  return `${groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')}::/64`;
+}
+
+// Wrong codes the whole hub takes in five minutes, from every address together. A guesser with
+// many addresses still gets nowhere: 2^40 codes, five minutes each.
+const HUB_GUESSES = 50;
+const REPORT_EVERY_MS = 10 * 60_000;
+
 export interface Pairing { pairing_id: string; code: string; expires_at: string; url: string; command: string; hub_url: string; hub_fingerprint: string }
 
 export class Enrollment extends EventEmitter {
@@ -60,9 +79,9 @@ export class Enrollment extends EventEmitter {
   #publicUrl: () => string | null;
   // Spent codes, by request, only until the reveal.
   #codes = new Map<string, { code: string; until: number }>();
-  // Per client address: any public enrollment call, status polls, and wrong codes. New codes are
-  // limited for the whole hub.
-  readonly limits: Record<'calls' | 'polls' | 'guesses' | 'pairings', SlidingWindowLimiter>;
+  // Per client (rateKey): any public enrollment call, status polls, and wrong codes. New codes,
+  // and wrong codes from everyone together, are limited for the whole hub.
+  readonly limits: Record<'calls' | 'polls' | 'guesses' | 'allGuesses' | 'pairings', SlidingWindowLimiter>;
   #reported = new Map<string, number>();
 
   constructor(o: { db: Db; log: Log; devices: Devices; identity: MeshIdentity; now: () => Date; publicUrl: () => string | null }) {
@@ -78,6 +97,7 @@ export class Enrollment extends EventEmitter {
       calls: new SlidingWindowLimiter({ limit: 30, windowMs: 60_000, now: clock }),
       polls: new SlidingWindowLimiter({ limit: 90, windowMs: 60_000, now: clock }),
       guesses: new SlidingWindowLimiter({ limit: 10, windowMs: 5 * 60_000, now: clock }),
+      allGuesses: new SlidingWindowLimiter({ limit: HUB_GUESSES, windowMs: 5 * 60_000, now: clock }),
       pairings: new SlidingWindowLimiter({ limit: 20, windowMs: 60 * 60_000, now: clock }),
     };
   }
@@ -85,17 +105,28 @@ export class Enrollment extends EventEmitter {
   // Counts one call from `address`; refuses it, plainly, when there were too many. A refusal is
   // recorded as a problem once per address every ten minutes, so a flood is one line, not a flood.
   limit(kind: 'calls' | 'polls', address: string): void {
-    if (this.limits[kind].take(address)) return;
-    this.#refuse(address, kind === 'polls' ? 'checked on a request to join too often' : 'tried to add a device too many times');
+    const key = rateKey(address);
+    if (this.limits[kind].take(key)) return;
+    this.#refuse(key, kind === 'polls' ? 'checked on a request to join too often' : 'tried to add a device too many times');
   }
 
-  #refuse(address: string, what: string): never {
+  // Clients a refusal was reported for lately (tests: it stays bounded).
+  get reporting(): number {
+    return this.#reported.size;
+  }
+
+  #refuse(key: string, what: string, answer = 'Too many tries from this address. Wait a few minutes, then try again.'): never {
     const now = this.#now().getTime();
-    if (now - (this.#reported.get(address) ?? -Infinity) > 10 * 60_000) {
-      this.#reported.set(address, now);
-      this.#log.problem('mesh', `Nova turned away a device at ${address} that ${what}. If that wasn’t you adding a device, someone else may be trying to.`);
+    // A report is remembered only while it holds back the next one, so a flood from many
+    // addresses can't grow this without end.
+    for (const [k, at] of this.#reported) if (now - at > REPORT_EVERY_MS) this.#reported.delete(k);
+    if (!this.#reported.has(key)) {
+      this.#reported.set(key, now);
+      this.#log.problem('mesh', key === 'hub'
+        ? `Nova turned away ${what}. Someone may be guessing codes; no device can join with a wrong code for a few minutes.`
+        : `Nova turned away a device at ${key} that ${what}. If that wasn’t you adding a device, someone else may be trying to.`);
     }
-    throw new CoreError('too_many', 'Too many tries from this address. Wait a few minutes, then try again.');
+    throw new CoreError('too_many', answer);
   }
 
   // ---- 1. a code ------------------------------------------------------------------------------
@@ -154,7 +185,9 @@ export class Enrollment extends EventEmitter {
     const pairing = code ? open.find((p) => sameDigest(p.code_hash, pairingCodeHash(p.id, code))) : undefined;
     // Wrong, spent and expired codes look the same from outside.
     if (!pairing || !code) {
-      if (!this.limits.guesses.take(address)) this.#refuse(address, 'typed too many wrong codes');
+      const key = rateKey(address);
+      if (!this.limits.guesses.take(key)) this.#refuse(key, 'typed too many wrong codes');
+      if (!this.limits.allGuesses.take('hub')) this.#refuse('hub', 'wrong codes from many addresses', 'Too many wrong codes right now. Wait a few minutes, then try again.');
       throw new CoreError('validation', 'That code didn’t work.');
     }
     const known = this.#devices.byKey(pk);

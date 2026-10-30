@@ -140,6 +140,14 @@ request counts as the console only if it comes from this machine, is addressed
 to it, and passed through no proxy. Anything else, including a reverse proxy
 pointed at the console port, gets nothing until it is paired.
 
+> **Never point a port forward, tunnel or proxy at the console port.** Nova
+> knows a proxy by the headers it adds (`X-Forwarded-For` and the like). A
+> program on this computer that passes connections on without adding them
+> (`ssh -L`/`-R`, `socat`, a TCP tunnel, a proxy that rewrites the address to
+> `localhost`) makes everyone who reaches it look like you at this screen,
+> with full control of Nova. Nova can't tell the difference, and says so
+> every time it starts. Other devices pair at the mesh address instead.
+
 To pair a phone, a browser or a computer, give Nova a second address, the
 mesh address, that your devices can reach:
 
@@ -152,6 +160,13 @@ NOVA_TLS_CERT=cert.pem NOVA_TLS_KEY=key.pem npm start
 NOVA_MESH_URL=http://127.0.0.1:4320 NOVA_MESH_TRANSPORT=proxy \
 NOVA_MESH_PUBLIC_URL=https://hub.example npm start
 ```
+
+Behind a proxy, Nova limits pairing attempts by the address the proxy puts
+last in `X-Forwarded-For`. Make sure your proxy adds the client's address to
+that header, or replaces it (Caddy does by default; nginx with
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`); a proxy that passes on
+whatever the client sent lets a client choose its own address, and so its
+own limit.
 
 `NOVA_MESH_TRANSPORT=network` says an encrypted network (a tailnet) carries
 plain HTTP; browsers then can't pair (they need HTTPS for the keys), but
@@ -211,6 +226,25 @@ by itself after that many seconds). Devices follow it. If the old hub comes
 back, it sees that it was replaced and steps down rather than act as a second
 hub. Connector sign-ins (Gmail) stay on the machine where you made them;
 connect them again on the new hub.
+
+### If the hub's keys were exposed
+
+The hub's private keys live in `<home>/mesh/identity.json`, readable only by
+you, and never in the home's git history. A home made before that rule saved
+them in its history once, where anyone who can read the folder can read them;
+Nova then shows a problem saying so at every start. Replace them, with Nova
+stopped:
+
+```sh
+node scripts/rotate-hub-keys.js ~/Nova
+```
+
+The hub keeps its place and gets new keys, and the epoch goes up. Computers
+and the standby trusted the old keys, so they are revoked: the script lists
+them. Add each one again, a computer with a new device home
+(`NOVA_DEVICE_HOME`), a standby with a new blank home. Phones and browsers stay
+signed in. The old keys stay in the history but no longer open anything, and
+the problem goes away.
 
 ## Check it
 

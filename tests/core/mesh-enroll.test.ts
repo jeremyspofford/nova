@@ -1,13 +1,17 @@
 // Enrollment (M4 plan §1, CONTRACTS §5): the happy path end to end, and every refusal: wrong,
 // spent and expired codes, a bad signature, a commitment that doesn't match, a replayed reveal and
 // poll, a revoked key trying again, and the rate limits. Also: the hub's keys stay in their 0600
-// file and out of the database and the log, and so do codes and session tokens.
+// file and out of the database, the log and the home's git history, and so do codes and session
+// tokens.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { generateDeviceKeys, keyFingerprint, normalizePairingCode, verifyRoster } from '../../src/core/index.ts';
+import { generateDeviceKeys, keyFingerprint, normalizePairingCode, rateKey, sessionMessage, signMessage, verifyRoster } from '../../src/core/index.ts';
+import { Devices } from '../../src/core/mesh/devices.ts';
 import { Joiner, PUBLIC_URL, call, enroll, hub } from './mesh-support.ts';
+import { commitHome, ensureGit } from '../../src/home.js';
 
 test('the happy path: code, join, reveal, the same six digits on both screens, tier-3 approval, roster, session', async () => {
   const h = await hub();
@@ -209,6 +213,43 @@ test('rate limits: wrong codes per address, every public call per address, new c
   }
 });
 
+test('rate limits group an IPv6 client by its /64, cap wrong codes for the whole hub, and forget old reports', async () => {
+  assert.equal(rateKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd'), '2001:db8:1:2::/64');
+  assert.equal(rateKey('2001:DB8:1:2::7'), '2001:db8:1:2::/64');
+  assert.equal(rateKey('2001:db8::1'), '2001:db8:0:0::/64');
+  assert.equal(rateKey('fe80::1%eth0'), 'fe80:0:0:0::/64');
+  assert.equal(rateKey('::1'), '0:0:0:0::/64');
+  assert.equal(rateKey('192.0.2.7'), '192.0.2.7');
+  const h = await hub();
+  try {
+    const e = h.core.mesh.enroll;
+    const status = (fn: () => unknown) => { try { fn(); return 200; } catch (x) { return (x as { status: number }).status; } };
+    // One phone on one network can pick a new address for every call; it is still one client.
+    for (let i = 1; i <= 30; i++) assert.equal(status(() => e.limit('calls', `2001:db8:1:2::${i.toString(16)}`)), 200);
+    assert.equal(status(() => e.limit('calls', '2001:db8:1:2:ffff::1')), 429, 'the same /64');
+    assert.equal(status(() => e.limit('calls', '2001:db8:1:3::1')), 200, 'the next /64 is someone else');
+
+    // Many addresses guessing together: after 50 wrong codes in five minutes, the hub takes no more.
+    const guess = (i: number) => status(() => e.join(new Joiner(h.mesh, h.nowS).joinBody('ABCD-EFGH'), `198.51.${i >> 8}.${i & 255}`));
+    for (let i = 0; i < 50; i++) assert.equal(guess(i), 400, `guess ${i}`);
+    assert.equal(guess(50), 429, 'a fresh address is turned away too');
+    assert.ok(h.core.log.problems().some((p) => /wrong codes from many addresses/.test(p.message)));
+    const code = (await h.c('POST', '/mesh/pairings')).body.code;
+    assert.equal(status(() => e.join(new Joiner(h.mesh, h.nowS).joinBody(code), '203.0.113.9')), 200, 'the right code still works');
+    h.tick(5 * 60_000 + 1);
+    assert.equal(guess(51), 400, 'the window moves on');
+
+    // A report is remembered only as long as it can hold back another one.
+    for (let i = 0; i < 11; i++) status(() => e.join(new Joiner(h.mesh, h.nowS).joinBody('ABCD-EFGH'), '192.0.2.1'));
+    assert.ok(e.reporting >= 1);
+    h.tick(11 * 60_000);
+    for (let i = 0; i < 11; i++) status(() => e.join(new Joiner(h.mesh, h.nowS).joinBody('ABCD-EFGH'), '192.0.2.2'));
+    assert.equal(e.reporting, 1, 'the old report is gone');
+  } finally {
+    await h.stop();
+  }
+});
+
 test('joining and sessions only over the mesh listener; no mesh address means no codes', async () => {
   const h = await hub();
   try {
@@ -259,7 +300,7 @@ test('a standby: one at a time, its address in the roster; computers and standby
   }
 });
 
-test('keys, codes and tokens stay out of the database and the log; the identity file is 0600', async () => {
+test('keys, codes and tokens stay out of the database, the log and git history; the identity file is 0600', async () => {
   const h = await hub();
   try {
     const p = await h.c('POST', '/mesh/pairings');
@@ -275,6 +316,13 @@ test('keys, codes and tokens stay out of the database and the log; the identity 
       const bytes = readFileSync(place).toString('latin1');
       for (const s of secrets) assert.equal(bytes.includes(s), false, `${s.slice(0, 6)}… found in ${place}`);
     }
+    // The home is a git repository (src/home.js), committed after every turn: every object in it,
+    // packed or loose, reachable or not.
+    assert.equal(await ensureGit(h.home), true);
+    await commitHome(h.home, 'Nova: turn');
+    const objects = execFileSync('git', ['-C', h.home, 'cat-file', '--batch-all-objects', '--batch'], { encoding: 'latin1', maxBuffer: 64 * 1024 * 1024 });
+    assert.ok(objects.length > 0);
+    for (const s of secrets) assert.equal(objects.includes(s), false, `${s.slice(0, 6)}… found in the home's git objects`);
     assert.equal(JSON.stringify(h.core.mesh.identity).includes(id.ed25519.private), false, 'serializing the identity shows public parts only');
   } finally {
     await h.stop();
@@ -291,5 +339,29 @@ test('keys, codes and tokens stay out of the database and the log; the identity 
     assert.ok(core.log.problems().some((p) => /could be read by other users/.test(p.message)));
   } finally {
     await core.close();
+  }
+});
+
+test('a signed session request starts one session only, even across a restart', async () => {
+  const h = await hub();
+  try {
+    const { dev } = await enroll(h);
+    const time = dev.time();
+    const body = { device_id: dev.deviceId, time, signature: signMessage(dev.keys.ed25519.privateKey, sessionMessage(dev.deviceId, time)) };
+    assert.equal((await call(h.mesh, 'POST', '/api/v1/mesh/session', body)).status, 200);
+    assert.equal((await call(h.mesh, 'POST', '/api/v1/mesh/session', body)).status, 401, 'a replay');
+    // Nova restarts within the minute the signature is fresh: the registry starts again from the
+    // database, and the same request must still be spent.
+    const again = new Devices({ db: h.core.db, log: h.core.log, identity: h.core.mesh.identity, now: () => new Date(h.clock.t), publicUrl: () => PUBLIC_URL });
+    assert.throws(() => again.startSession(body), (e: { status: number; message: string }) => e.status === 401 && /already used/.test(e.message));
+    const next = dev.time();
+    assert.ok(again.startSession({ device_id: dev.deviceId, time: next, signature: signMessage(dev.keys.ed25519.privateKey, sessionMessage(dev.deviceId, next)) }).token, 'a new signature still works');
+    // What is remembered is let go once it is too old to be fresh anyway.
+    h.tick(3 * 60_000);
+    const later = dev.time();
+    again.startSession({ device_id: dev.deviceId, time: later, signature: signMessage(dev.keys.ed25519.privateKey, sessionMessage(dev.deviceId, later)) });
+    assert.equal(h.core.db.all('SELECT * FROM session_signature WHERE device_id = ?', dev.deviceId).length, 1);
+  } finally {
+    await h.stop();
   }
 });

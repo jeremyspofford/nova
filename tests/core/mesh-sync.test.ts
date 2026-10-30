@@ -17,7 +17,7 @@ import {
   createCore, loadIdentity, readRole, REPLICATED, signRoster, verifyRoster, writeRole, type Core, type DeviceKeys, type Listener, type RoleFile,
 } from '../../src/core/index.ts';
 import { journalPath } from '../../src/core/mesh/sync.ts';
-import { Joiner, call, hub } from './mesh-support.ts';
+import { Joiner, call, enroll, hub } from './mesh-support.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -71,7 +71,7 @@ async function pair(o: { failoverAfterS?: number } = {}) {
   // It enrolls with its own identity keys: the key devices pin for the standby is the one it will
   // sign rosters with once promoted.
   const keys = { ed25519: { publicKey: id.publicKey, privateKey: id.signer() }, x25519: { publicKey: id.x25519PublicKey, privateKey: null } } as unknown as DeviceKeys;
-  if (o.failoverAfterS) assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: o.failoverAfterS })).status, 200);
+  if (o.failoverAfterS) assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: o.failoverAfterS, confirm: true })).status, 200);
   const code = (await h.c('POST', '/mesh/pairings')).body.code;
   const dev = new Joiner(h.mesh, h.nowS, { name: 'Standby', platform: 'test', kind: 'standby', capabilities: [], address: 'http://127.0.0.1:1' }, keys);
   assert.equal((await dev.join(code)).status, 201);
@@ -530,14 +530,28 @@ test('automatic failover: only when turned on, and only after the hub has been u
   }
 });
 
-test('the failover setting is checked', async () => {
+test('the failover setting is checked, is tier 3, and only an approver may change it', async () => {
   const h = await hub();
   try {
-    assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: 0 })).status, 400);
-    assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: 'soon' })).status, 400);
-    assert.equal((await h.c('PUT', '/profile/mesh/other', { value: 1 })).status, 400);
-    assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: 120 })).status, 200);
-    assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: null })).status, 200);
+    assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: 0, confirm: true })).status, 400);
+    assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: 'soon', confirm: true })).status, 400);
+    assert.equal((await h.c('PUT', '/profile/mesh/other', { value: 1, confirm: true })).status, 400);
+    const unconfirmed = await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: 120 });
+    assert.equal(unconfirmed.status, 400, 'tier 3: an explicit confirm every time');
+    assert.match(unconfirmed.body.error, /confirm/);
+    assert.equal(h.core.profile.get('mesh', 'auto_failover_after_s'), undefined);
+    assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: 120, confirm: true })).status, 200);
+    assert.equal((await h.c('PUT', '/profile/mesh/auto_failover_after_s', { value: null, confirm: true })).status, 200);
+
+    // A phone gets what the console gets, except what only an approver may do: this is one.
+    const { dev, token } = await enroll(h, { kind: 'phone', name: 'Test phone' });
+    const phone = (body: unknown) => call(h.mesh, 'PUT', '/api/v1/profile/mesh/auto_failover_after_s', body, { authorization: `Bearer ${token}` });
+    const refused = await phone({ value: 5, confirm: true });
+    assert.equal(refused.status, 403);
+    assert.equal(h.core.profile.get('mesh', 'auto_failover_after_s'), null, 'unchanged');
+    assert.equal((await call(h.mesh, 'PUT', '/api/v1/profile/tuning/verbosity', { value: 'brief' }, { authorization: `Bearer ${token}` })).status, 200, 'other settings stay the person’s');
+    assert.equal((await h.c('PATCH', `/mesh/devices/${dev.deviceId}`, { can_approve: true, confirm: true })).status, 200);
+    assert.equal((await phone({ value: 5, confirm: true })).status, 200, 'an approver may');
   } finally {
     await h.stop();
   }

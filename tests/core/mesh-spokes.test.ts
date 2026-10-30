@@ -167,6 +167,27 @@ test('config from a device is server-wins: a stale base version is rejected and 
   }
 });
 
+test('a computer reads only the settings it may change: never the setup conversation, privacy or appearance', async () => {
+  const h = await hub();
+  try {
+    const { token } = await enroll(h, { kind: 'computer', name: 'Test computer' });
+    h.core.profile.set('setup', 'state', { transcript: [{ from: 'person', text: 'Example Person lives at the example address.' }] }, 'setup');
+    h.core.profile.set('privacy', 'default', 'local-only', 'settings');
+    h.core.profile.set('appearance', 'mode', 'dark', 'settings');
+    const read = (section: string, key: string) => call(h.mesh, 'GET', `/api/v1/mesh/config/${section}/${key}`, undefined, bearer(token));
+    for (const [section, key] of [['setup', 'state'], ['privacy', 'default'], ['appearance', 'mode'], ['mesh', 'auto_failover_after_s'], ['nope', 'x']]) {
+      const r = await read(section!, key!);
+      assert.equal(r.status, 403, `${section}/${key}`);
+      assert.doesNotMatch(JSON.stringify(r.body), /Example Person|local-only|dark/);
+    }
+    assert.equal((await read('tuning', 'Not%20a%20key')).status, 403, 'keys as the inbox takes them');
+    assert.equal((await read('tuning', 'verbosity')).status, 200);
+    assert.equal((await read('user', 'timezone')).status, 200);
+  } finally {
+    await h.stop();
+  }
+});
+
 test('the runtime bundle is signed by this node and matches its files; the challenge is answered with the node’s key', async () => {
   const h = await hub();
   try {

@@ -56,10 +56,15 @@ async function tx(mode, fn) {
 export const load = () => tx('readonly', (s) => s.get(SELF)).then((v) => v ?? null);
 const save = (v) => tx('readwrite', (s) => s.put(v, SELF));
 
-// Forgets this browser's keys (after a revocation: a revoked key can never be used again).
+// Forgets this browser's keys (after a revocation: a revoked key can never be used again), and
+// everything the service worker kept for offline use: those are Nova's answers as this device saw
+// them, and a revoked device must not go on showing them. Memory and receipts were never kept.
 export async function forget() {
   await tx('readwrite', (s) => s.delete(SELF));
   try { localStorage.removeItem(FLAG); } catch { /* storage may be off */ }
+  try {
+    if (globalThis.caches) await Promise.all((await caches.keys()).map((k) => caches.delete(k)));
+  } catch { /* no Cache API, or storage is off */ }
 }
 
 // A new identity: both private keys non-extractable.
