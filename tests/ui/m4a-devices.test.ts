@@ -119,6 +119,20 @@ test('M4a: pair a phone by QR, approve it with matching digits, then revoke it',
     assert.equal(made, 201);
     if (shots) await shoot(phone.page, join(shots, 'phone-home.png'));
 
+    // The service worker keeps answers for offline use once it controls the page.
+    const cachedApiPaths = () => phone.page.evaluate(async () => {
+      const out: string[] = [];
+      for (const k of await caches.keys()) for (const r of await (await caches.open(k)).keys()) out.push(new URL(r.url).pathname);
+      return out.filter((p) => p.startsWith('/api/'));
+    });
+    await phone.page.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+      for (let i = 0; i < 50 && !navigator.serviceWorker.controller; i++) await new Promise((r) => setTimeout(r, 100));
+      await fetch('/api/v1/tasks');
+    });
+    for (let i = 0; i < 50 && !(await cachedApiPaths()).includes('/api/v1/tasks'); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.ok((await cachedApiPaths()).includes('/api/v1/tasks'), 'kept for offline use while paired');
+
     // The hub lists it; revoking is tier 3; the phone is sent back to /pair.
     await hub.page.goto(`${m.base}/settings#devices`);
     await ready(hub.page);
@@ -133,6 +147,8 @@ test('M4a: pair a phone by QR, approve it with matching digits, then revoke it',
     await hub.page.locator('#devices details.raw summary', { hasText: 'Revoked (1)' }).waitFor();
     await phone.page.waitForURL(`${mesh}/pair`, { timeout: 15000 });
     await phone.page.getByText('This device’s pairing ended').waitFor({ timeout: 10000 });
+    // Nothing Nova answered is left in the service worker's cache for offline use.
+    assert.deepEqual(await cachedApiPaths(), [], 'a revoked phone keeps no cached answers');
     assert.equal(await phone.page.evaluate(() => fetch('/api/v1/tasks').then((r) => r.status)), 401);
     if (shots) await shoot(phone.page, join(shots, 'phone-revoked.png'));
 

@@ -66,6 +66,11 @@ built-ins only.
   "strictly newer"), so two tabs signing out of order aren't refused, and a
   refusal stays a 401. Never replicated. If another branch also adds an
   `0008`, renumber one of them: migrations must have no gaps or repeats.
+- **A revoked phone keeps no cached answers.** `forget()` in
+  `ui/js/device-key.js` (what `/pair` calls when the hub refuses the key) now
+  also deletes every service-worker cache: the shell and the `/api/v1/*`
+  answers kept for offline use. Memory, receipts, health and the mesh were
+  already never cached.
 
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and
