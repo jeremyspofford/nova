@@ -21,7 +21,28 @@ export interface Problem {
 // Keys whose values never reach the log, whatever the caller passes.
 const SECRET = /pass(word)?|secret|token|api[_-]?key|authorization|cookie/i;
 
+// Values the vault holds, wherever they turn up (an error message quoting a token, a URL with one
+// in it). The vault adds each value it reads or writes; short values are skipped, since replacing
+// every “on” in a log would hide more than it protects.
+const SECRET_VALUES = new Set<string>();
+export function addSecretValue(value: string): void {
+  if (typeof value !== 'string') return;
+  // A JSON value (Gmail's saved sign-in) is also redacted field by field.
+  if (value.length >= 8) SECRET_VALUES.add(value);
+  if (value.startsWith('{')) {
+    try {
+      for (const v of Object.values(JSON.parse(value) as Record<string, unknown>)) if (typeof v === 'string' && v.length >= 8) SECRET_VALUES.add(v);
+    } catch { /* not JSON after all */ }
+  }
+}
+export function redactText(text: string): string {
+  let out = text;
+  for (const v of SECRET_VALUES) if (out.includes(v)) out = out.split(v).join('[redacted]');
+  return out;
+}
+
 export function redact(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return redactText(value);
   if (depth > 6 || value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
   return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, SECRET.test(k) ? '[redacted]' : redact(v, depth + 1)]));
@@ -45,7 +66,7 @@ export class Log extends EventEmitter {
 
   write(level: Level, source: string, msg: string, data: Record<string, unknown> = {}): void {
     if (!this.file) return;
-    const line = { at: this.#now().toISOString(), level, source, msg, ...(redact(data) as object) };
+    const line = { at: this.#now().toISOString(), level, source, msg: redactText(msg), ...(redact(data) as object) };
     appendFileSync(this.file, `${JSON.stringify(line)}\n`);
   }
 
@@ -54,8 +75,11 @@ export class Log extends EventEmitter {
 
   // Record something the person needs to know about. The message is in plain words; the detail
   // (a stack, an exit code) is one tap away.
-  problem(source: string, message: string, opts: { detail?: string; taskId?: string } = {}): Problem {
+  problem(source: string, said: string, opts: { detail?: string; taskId?: string } = {}): Problem {
     const at = this.#now().toISOString();
+    // Problems are stored, shown and copied to the standby: no secret value gets that far.
+    const message = redactText(said);
+    if (opts.detail) opts = { ...opts, detail: redactText(opts.detail) };
     if (this.local()) this.#db.run('INSERT INTO problem (id, at, source, message, detail, task_id) VALUES ((SELECT MIN(0, IFNULL(MIN(id), 0)) - 1 FROM problem), ?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
     else this.#db.run('INSERT INTO problem (at, source, message, detail, task_id) VALUES (?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
     const row = this.#db.get<Problem>('SELECT * FROM problem WHERE id = last_insert_rowid()')!;
