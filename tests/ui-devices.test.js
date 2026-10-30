@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import jsQR from 'jsqr';
-import { addDeviceSheet, deviceMeshCard, deviceRow, joinRequestSheet, revokeSheet } from '../ui/js/components.js';
+import { addDeviceSheet, deviceDetail, deviceMeshCard, deviceRow, joinRequestSheet, promoteSheet, revokeSheet } from '../ui/js/components.js';
 import { qrEncode } from '../ui/js/qr.js';
 
 const now = new Date('2026-10-29T10:00:00Z');
@@ -66,4 +66,18 @@ test('the add sheet: a QR that decodes to the pairing address, the address and c
   assert.match(expired, /That code has expired/);
   assert.doesNotMatch(expired, /<svg/);
   assert.match(expired, /data-action="add-device">Make a new code/);
+});
+
+test('M4c: roles in the registry, and making the standby the hub is tier 3', () => {
+  const standby = { id: 's', name: 'Standby', kind: 'standby', role: 'standby', trust: 'trusted', online: true };
+  const promoted = { ...standby, role: 'hub' };
+  const formerHub = { ...hub, role: 'spoke', online: false, last_seen: '2026-10-29T09:00:00Z' };
+  assert.equal(deviceDetail(standby, now), 'The standby');
+  assert.equal(deviceDetail(promoted, now), 'The hub', 'the role, not the kind, once it is hub');
+  assert.match(deviceDetail(formerHub, now), /^Computer · last seen/);
+  const sheet = promoteSheet({ reason: 'This is the standby; “Hub” at https://hub.example:4320 is the hub.', hub: { name: 'Hub' }, sync: { last_ok_at: '2026-10-29T09:59:00Z' } });
+  assert.match(sheet, /data-tier="3"/);
+  assert.match(sheet, /<input type="checkbox" name="confirm" required>/);
+  assert.match(sheet, /data-action="approve" value="approve" disabled>Make this the hub</);
+  assert.match(sheet, /If “Hub” comes back/);
 });

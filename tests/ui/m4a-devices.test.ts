@@ -38,7 +38,8 @@ test('M4a: pair a phone by QR, approve it with matching digits, then revoke it',
     await hub.page.goto(`${m.base}/settings#devices`);
     await ready(hub.page);
     const section = hub.page.locator('#devices');
-    await section.locator('.device-row').first().waitFor();
+    // The registry's own rows (they carry an id), not the placeholder shown before it answers.
+    await section.locator('.device-row[data-device]').first().waitFor();
     assert.match((await section.textContent()) ?? '', /Hub\s*· this device/);
     assert.match((await section.textContent()) ?? '', new RegExp(`Devices reach Nova at ${mesh.replace(/[.:/]/g, '\\$&')}`));
     const add = section.locator('[data-action="add-device"]');

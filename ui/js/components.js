@@ -176,7 +176,8 @@ export function lookingIntoItCard(t) {
 export const KIND_WORDS = { browser: 'Browser', phone: 'Phone', computer: 'Computer', standby: 'Standby' };
 export function deviceDetail(d, now = new Date()) {
   if (d.detail !== undefined || !d.kind) return d.detail ?? '';
-  const what = d.role === 'hub' ? 'The hub' : KIND_WORDS[d.kind] ?? d.kind;
+  // The role first, where it is one: which node is hub changes when a standby is promoted.
+  const what = d.role === 'hub' ? 'The hub' : d.role === 'standby' ? 'The standby' : KIND_WORDS[d.kind] ?? d.kind;
   if (d.trust === 'revoked') return `${what} · revoked ${ago(d.revoked_at, now)}`;
   // A computer's agent that stopped its runtime after repeated crashes says so in its heartbeat.
   if (d.agent?.safe_mode && d.online) return `${what} · safe mode: its agent stopped after repeated crashes`;
@@ -239,6 +240,22 @@ export function revokeSheet(d) {
   <div class="sheet-actions">
     <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Revoke</button>
     <button type="button" class="btn quiet" data-action="close-sheet">Keep it</button>
+  </div>
+</form>`;
+}
+
+// Making this standby the hub (tier 3), from the standby's own screen: what changes, said first.
+export function promoteSheet(replica) {
+  const hub = replica?.hub?.name ? `“${replica.hub.name}”` : 'the hub';
+  return `<form class="approval-sheet" data-tier="3" data-promote="1" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">Make this the hub?</h2>
+  <p class="sheet-line">Do this when ${esc(hub)} is gone for good, or for long enough that you need Nova back. This node starts running your work, with what it has copied so far, and devices move to it.</p>
+  <dl class="facts"><dt>Last copied</dt><dd>${esc(replica?.sync?.last_ok_at ? `${ago(replica.sync.last_ok_at)}` : 'Not yet')}</dd><dt>If ${esc(hub)} comes back</dt><dd>It sees that this node took over and steps down; it won’t act as hub again.</dd><dt>Why it asks</dt><dd>${esc(TIER_WORDS[3])}</dd></dl>
+  <label class="confirm"><input type="checkbox" name="confirm" required> I want this node to be the hub.</label>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Make this the hub</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
   </div>
 </form>`;
 }

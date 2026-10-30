@@ -8,63 +8,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
 import { Joiner, call } from '../core/mesh-support.ts';
-import { ROOT, blank, sleep, stop, until, type Running } from './support.ts';
+import { sleep, stop, until, type Running } from './support.ts';
+import { kill, setup } from './m4c-support.ts';
 
 const nowS = () => Math.floor(Date.now() / 1000);
 const sha = (v: unknown) => createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : JSON.stringify(v)).digest('hex');
-const agent = { NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(ROOT, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none' };
-
-async function freePort(): Promise<number> {
-  const s = createServer();
-  await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
-  const port = (s.address() as { port: number }).port;
-  await new Promise((r) => s.close(r));
-  return port;
-}
-
-async function kill(r: Running) {
-  r.proc.kill('SIGKILL');
-  for (let i = 0; i < 200 && r.proc.exitCode === null && r.proc.signalCode === null; i++) await sleep(25);
-}
-
-// A hub and a standby home, each with a mesh listener on its own loopback port. The standby enrolls
-// with `boot.ts join --kind standby --nova-home <dir> --address <its mesh URL>` (M4b), which writes
-// its identity and mesh/role.json.
-async function setup(prefix: string, hubExtra: (home: string) => void = () => {}) {
-  const hub = blank(`${prefix}-hub-`);
-  const standby = blank(`${prefix}-standby-`);
-  const hubMesh = `http://127.0.0.1:${await freePort()}`;
-  const standbyMesh = `http://127.0.0.1:${await freePort()}`;
-  const env = (url: string) => ({ ...agent, NOVA_MESH_URL: url, NOVA_MESH_TRANSPORT: 'network', NOVA_SYNC_WAIT_S: '5' });
-  hubExtra(hub.home);
-  const hubProc = await hub.start(env(hubMesh));
-
-  // Enrolled with the real command, as the gate does it.
-  const code = (await hub.send('POST', '/api/v1/mesh/pairings')).body.code;
-  const enrolling = spawn(process.execPath, ['src/device/boot.ts', 'join', hubMesh, '--code', code, '--kind', 'standby', '--name', 'Standby', '--nova-home', standby.home, '--address', standbyMesh], {
-    cwd: ROOT, env: { PATH: process.env.PATH ?? '', HOME: join(standby.dir, 'user'), NOVA_DEVICE_HOME: join(standby.dir, 'device'), NOVA_DEVICE_POLL_MS: '100' },
-  });
-  const said: string[] = [];
-  enrolling.stdout!.on('data', (d) => said.push(String(d)));
-  enrolling.stderr!.on('data', (d) => said.push(String(d)));
-  const waiting = await until<any[]>(() => hub.get('/api/v1/mesh/requests'), (rs) => rs.some((r) => r.kind === 'standby'), 400);
-  const req = waiting.find((r) => r.kind === 'standby');
-  assert.ok(req, `the standby asked to join:\n${said.join('')}`);
-  assert.ok(said.join('').includes(req.confirmation.slice(0, 3)), 'the command shows the same digits');
-  assert.equal((await hub.send('POST', `/api/v1/mesh/requests/${req.id}/approve`, { confirm: true })).status, 200);
-  for (let i = 0; i < 400 && enrolling.exitCode === null; i++) await sleep(25);
-  assert.equal(enrolling.exitCode, 0, said.join(''));
-  const role = JSON.parse(readFileSync(join(standby.home, 'mesh', 'role.json'), 'utf8'));
-  assert.equal(role.roster.roster.hub.url, hubMesh, 'the roster names the hub where devices reach it');
-  assert.equal(role.roster.roster.standby.url, standbyMesh, 'and the standby where they look when the hub is gone');
-  const standbyId = role.device_id;
-  return { hub, standby, hubMesh, standbyMesh, hubProc, env, standbyId };
-}
 
 // Every byte under a folder, as text, for scanning: database, write-ahead log, backups, files.
 function everything(dir: string): { path: string; text: string }[] {
