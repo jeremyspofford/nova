@@ -16,6 +16,7 @@ import { bindConnections, loadConnections, renderConnections } from './connectio
 import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptureSettings, renderCaptureView } from './capture.js';
 import { bindModels, loadModels, renderModels } from './models.js';
 import { bindChanges, loadChanges, renderChanges } from './changes.js';
+import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoints.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
 
@@ -1393,7 +1394,7 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
-  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture(), loadModels(), loadChanges()]).then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints()]).then(() => {
     renderSettingsView({ only: 'you' });
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input'))?.focus({ preventScroll: true }); flash(target); }
@@ -1410,6 +1411,7 @@ const PARTS = {
   capture: () => renderCaptureSettings(),
   models: () => renderModels(),
   changes: () => renderChanges(),
+  checkpoints: () => renderCheckpoints(),
   look: () => core.renderAppearance(),
   devices: () => core.renderDevices(),
 };
@@ -1570,6 +1572,8 @@ bindConnections(el.settings, () => { if (state.view === 'settings' && $('setting
 bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-models')) renderSettingsView({ only: 'models' }); });
 // Settings › Changes (M7a): the change pipeline, the one waiting for you, canaries, roll back.
 bindChanges(el.settings, () => { if (state.view === 'settings' && $('settings-changes')) renderSettingsView({ only: 'changes' }); });
+// Settings › Backups › Checkpoints (M7 amendment): take one, restore (the hub's screen only), delete.
+bindCheckpoints(el.settings, () => { if (state.view === 'settings' && $('settings-checkpoints')) renderSettingsView({ only: 'checkpoints' }); });
 // A provider was set up, turned on or off, or checked (M5a): Settings shows it at once.
 onCore('provider', () => { if (state.view === 'settings') core.loadProviders(); });
 // The device mesh: the registry changed, or a device is asking to join (only approvers hear that).
