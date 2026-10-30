@@ -14,10 +14,18 @@ const orb = (state) => { $('pair-orb').dataset.state = state; };
 const title = (t) => { $('pair-title').textContent = t; };
 const group = (d) => `${d.slice(0, 3)} ${d.slice(3)}`;
 
+// Nova out of reach is told apart from everything else: only that is worth asking again.
+class Offline extends Error {}
+
 async function api(method, path, data) {
-  const res = await fetch(`/api/v1${path}`, {
-    method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(data === undefined ? {} : { body: JSON.stringify(data) }),
-  });
+  let res;
+  try {
+    res = await fetch(`/api/v1${path}`, {
+      method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+    });
+  } catch {
+    throw new Offline('Nova didn’t answer.');
+  }
   const out = await res.json().catch(() => ({}));
   if (!res.ok) { const e = new Error(out.error || 'Nova didn’t answer as expected.'); e.status = res.status; throw e; }
   return out;
@@ -102,11 +110,14 @@ function wait(id) {
       const s = await api('GET', `/mesh/join/${encodeURIComponent(requestId)}?time=${time}&signature=${encodeURIComponent(sig)}`);
       if (s.state === 'pending') { setTimeout(poll, 2000); return; }
       await key.update({ pending: null });
-      if (s.state === 'approved') return approved(s);
+      if (s.state === 'approved') return await approved(s);
       if (s.state === 'denied') return stop('Not added', 'The hub turned this device away. Ask for a new code if that was a mistake.', { retry: true });
       return stop('Too late', 'Nobody approved this device in time. Ask your hub for a new code.', { retry: true });
     } catch (e) {
-      if (e.status) { await key.update({ pending: null }); fail(e); } else setTimeout(poll, 2000); // offline for a moment: keep asking
+      // Offline for a moment: keep asking. Anything else is said, never waited out in silence.
+      if (e instanceof Offline) { setTimeout(poll, 2000); return; }
+      await key.update({ pending: null }).catch(() => {});
+      fail(e);
     }
   };
   poll();
@@ -144,6 +155,12 @@ async function start() {
     return stop('Wrong address', 'This isn’t the hub that made the code. Don’t enter the code here; open the address your hub showed you.', { state: 'alert' });
   }
   const id = await key.load();
+  // Left showing digits with no key behind them (WebKit once kept nothing): nothing here can sign,
+  // so it starts again with a new key rather than waiting forever.
+  if (id && !id.ed) {
+    await key.forget();
+    return form('This device’s pairing didn’t finish, so pair it again with a new code. It will get a new key.');
+  }
   if (id?.deviceId && id.hub?.fingerprint === hello.fingerprint) {
     try {
       return await signIn(id);

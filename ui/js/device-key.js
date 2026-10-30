@@ -1,6 +1,6 @@
-// This browser as a paired device (M4 plan §1): an Ed25519 key to sign with and an X25519 key to
-// seal with, made by WebCrypto as non-extractable keys and kept in IndexedDB, so the private halves
-// can be used but never read, not even by this page. There is no fallback: where the browser can't
+// This browser as a paired device (M4 plan §1): an Ed25519 key to sign with, made by WebCrypto as a
+// non-extractable key and kept in IndexedDB, so the private half can be used but never read, not
+// even by this page, and the public half of an X25519 key for the hub to seal to (see create). There is no fallback: where the browser can't
 // make these keys (no secure context, no Ed25519), the page says so plainly and pairing stops.
 //
 // The wire formats match src/core/mesh/wire.ts: raw public keys and signatures in base64url, and
@@ -52,7 +52,7 @@ async function tx(mode, fn) {
   } finally { db.close(); }
 }
 
-// The stored identity, or null: { ed, x (CryptoKeyPairs), publicKey, x25519PublicKey, deviceId?, hub? }.
+// The stored identity, or null: { ed (a CryptoKeyPair), publicKey, x25519PublicKey, deviceId?, hub?, pending? }.
 export const load = () => tx('readonly', (s) => s.get(SELF)).then((v) => v ?? null);
 const save = (v) => tx('readwrite', (s) => s.put(v, SELF));
 
@@ -67,12 +67,15 @@ export async function forget() {
   } catch { /* no Cache API, or storage is off */ }
 }
 
-// A new identity: both private keys non-extractable.
+// A new identity, its private key non-extractable. The X25519 key's public half is all the hub
+// asks for, and this page never opens anything sealed to it, so its private half isn't kept:
+// WebKit (every iPhone browser) can't store an X25519 key in IndexedDB, and the whole record would
+// read back as nothing. A page that someday opens sealed boxes needs another way to keep it.
 export async function create() {
   const ed = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
   const x = await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']);
   const v = {
-    ed, x, deviceId: null, hub: null, created_at: new Date().toISOString(),
+    ed, deviceId: null, hub: null, created_at: new Date().toISOString(),
     publicKey: b64url(await crypto.subtle.exportKey('raw', ed.publicKey)),
     x25519PublicKey: b64url(await crypto.subtle.exportKey('raw', x.publicKey)),
   };

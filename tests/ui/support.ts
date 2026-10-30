@@ -4,7 +4,7 @@
 // passes by not running. scripts/ui-test.sh runs it in a container that has the browser.
 import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import { chromium, webkit, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { ROOT, blank } from '../acceptance/support.ts';
 
 export { ROOT, blank };
@@ -22,6 +22,18 @@ export async function browser(): Promise<Browser | string> {
     return await chromium.launch({ executablePath: path, args: ['--disable-background-networking'] });
   } catch (e) {
     return missing(`Chromium at ${path} would not start: ${(e as Error).message.split('\n')[0]}`);
+  }
+}
+
+// WebKit, the engine every iPhone browser runs on, for what a phone does. The Playwright image
+// carries it; elsewhere `playwright-core install webkit` puts it where this finds it.
+export async function webkitBrowser(): Promise<Browser | string> {
+  const path = webkit.executablePath();
+  if (!path || !existsSync(path)) return missing(`no WebKit at ${path || '(none)'}`);
+  try {
+    return await webkit.launch();
+  } catch (e) {
+    return missing(`WebKit at ${path} would not start: ${(e as Error).message.split('\n')[0]}`);
   }
 }
 

@@ -15,6 +15,22 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (pairing on iPhone).** Branch `fix/webkit-pairing`. The owner's iPhone joined and
+showed its digits, was approved on the hub, and then stayed on "Check the digits" for good.
+- **Root cause:** WebKit (every iPhone browser) can't keep an X25519 `CryptoKey` in IndexedDB. A
+  record holding one reads back as nothing. So `key.load()` gave `null`, and the `pending` update
+  saved a record with no keys. Every signed status poll then threw before reaching the hub, and
+  `/pair` retried that silently as if offline. Reproduced in Playwright's WebKit 26.0; Chromium keeps
+  the key, which is why the Chromium-only gate missed it.
+- **Fix:** the browser keeps only the X25519 public half, which is all the hub asks for; no page
+  opens anything sealed to it. `/pair` retries only when Nova is out of reach and says every other
+  failure. A leftover identity with no key is forgotten, and the page asks to pair again.
+- **Gate:** `tests/ui/m4a-webkit-pair.test.ts` pairs an iPhone-sized WebKit end to end and checks
+  the recovery. It failed first on the same empty record. The UI gate now runs WebKit as well as
+  Chromium.
+- **Left for the owner:** the preview's half-paired "iPhone Duo" device has a key no browser holds
+  any more; revoking it in Settings › Devices is theirs to do.
+
 **2026-10-30 (M7 amendment §2, final review).** Branch `m7-amend/final` (from
 `m7-amend/checkpoints-reset`); each with a test that failed first.
 - **Nova doesn't adopt a folder that clashes with its own entries.** At start, a folder that
