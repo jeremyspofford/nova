@@ -5,6 +5,10 @@ import net from 'node:net';
 import { appendFileSync } from 'node:fs';
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1']);
+// The mesh's own addresses (a test's hub and standby on this machine's network address) are inside
+// the mesh, which local-only allows; a test names them in NOVA_EGRESS_ALLOW. Everything else is
+// still refused and logged.
+for (const h of (process.env.NOVA_EGRESS_ALLOW ?? '').split(',').map((x) => x.trim()).filter(Boolean)) LOOPBACK.add(h);
 const log = process.env.NOVA_EGRESS_LOG;
 const original = net.Socket.prototype.connect;
 
