@@ -7,8 +7,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Page, Route } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
-import { browser, device, still } from './support.ts';
-import { CHAT, SIZES, VIEWS, seeded, settled } from './m9-support.ts';
+import { join } from 'node:path';
+import { browser, device, shoot, still } from './support.ts';
+import { CHAT, SIZES, VIEWS, m9Shots, seeded, settled } from './m9-support.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const CORE = /\/api\/v1\/(tasks|problems|health|profile|identity|memory|triggers|messages|workers|mesh|resilience)/;
@@ -33,6 +34,7 @@ test('M9 gate, skeletons: none under 1 s, then the final geometry exactly, and t
   if (typeof b === 'string') return t.skip(b);
   const { m, nova } = await seeded('nova-m9-skeleton-');
   const rows: string[] = [];
+  const shots = m9Shots();
   try {
     for (const [size, vp] of SIZES) {
       for (const [view, sel, pattern] of CASES) {
@@ -63,6 +65,7 @@ test('M9 gate, skeletons: none under 1 s, then the final geometry exactly, and t
         const late = await d.page.$eval(`${sel} [data-skeleton]`, (e) => Number(getComputedStyle(e).opacity));
         assert.equal(late, 1, `${where}: from 1 s the skeleton shows`);
         assert.ok(await d.page.$$eval(`${sel} .skel-line`, (l) => l.length) > 0, `${where}: the skeleton has the content's lines, not just frames`);
+        if (shots && (view === 'home' || view === 'chat')) await d.page.screenshot({ path: join(shots, `skeleton-${size}-${view}.png`) });
         const skel = await rects(d.page, `${sel} .skel-block`);
         const scroll = () => d.page.evaluate(() => { const s = document.getElementById('scroller')!; return `${s.scrollTop}/${s.scrollHeight}/${s.clientHeight}`; });
         const scrollSkel = await scroll();
@@ -73,6 +76,7 @@ test('M9 gate, skeletons: none under 1 s, then the final geometry exactly, and t
         await settled(d.page, view);
         await still(d.page);
         const final = await finals(d.page, view, sel);
+        if (shots && (view === 'home' || view === 'chat')) await shoot(d.page, join(shots, `skeleton-${size}-${view}-loaded.png`));
         assert.equal(skel.length, final.length, `${where}: a skeleton block for every block (${skel.length} vs ${final.length})`);
         let worst = 0;
         let at = -1;

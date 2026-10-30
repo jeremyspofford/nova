@@ -9,8 +9,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CDPSession, Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
-import { browser, device, still } from './support.ts';
-import { CHAT, CONTROLS, VIEWS, seeded, settled } from './m9-support.ts';
+import { join } from 'node:path';
+import { browser, device, shoot, still } from './support.ts';
+import { CHAT, CONTROLS, VIEWS, m9Shots, seeded, settled } from './m9-support.ts';
 
 const ALL = ['activity', 'automations', 'chat', 'health', 'home', 'memory', 'settings', 'skills', 'tasks'];
 type Hinge = { orientation: 'vertical' | 'horizontal'; offset: number; maskLength: number };
@@ -115,6 +116,8 @@ test('M9 gate, foldable 2: no stretched single column — prose at 45–75ch, th
         });
         assert.ok(r.second, `${width}px, ${view}: a second pane takes the extra width`);
         for (const n of r.measures) assert.ok(n >= 45 && n <= 75, `${width}px, ${view}: prose is ${n}ch wide (45–75)`);
+        const shots = m9Shots();
+        if (shots && (view === 'chat' || view === 'settings') && (width === 1024 || width === 1920)) await shoot(d.page, join(shots, `panes-${width}-${view}.png`));
         rows.push(`${String(width).padStart(4)}px ${view.padEnd(8)} second pane: ${r.second}; prose ${r.measures.length ? `${Math.min(...r.measures)}–${Math.max(...r.measures)}ch` : '(none long)'}`);
       }
       assert.deepEqual(d.errors, [], `${width}px: no errors in the page`);
@@ -180,6 +183,8 @@ test('M9 gate, foldable 3: nothing under the hinge, in the book and laptop postu
         await still(d.page);
         const under = await underHinge(d.page, rect);
         assert.deepEqual(under, [], `${what}, ${state}: nothing under the hinge`);
+        const shots = m9Shots();
+        if (shots && ['home', 'chat', 'a task open', 'conversations open'].includes(state)) await d.page.screenshot({ path: join(shots, `hinge-${what.split(' ')[0]}-${state.replace(/ /g, '-')}.png`) });
         rows.push(`${what}, ${state}: clear`);
       };
       for (const [view, path] of Object.entries(VIEWS)) {
@@ -272,6 +277,8 @@ test('M9 gate, foldable 4: 200% text survives, at a phone’s width and a deskto
         assert.ok(r.sideways <= 0, `${size}, ${view}: no sideways scrolling (${r.sideways}px)`);
         assert.deepEqual(r.clipped, [], `${size}, ${view}: no text cut off`);
         assert.deepEqual(r.overlaps, [], `${size}, ${view}: no control over another`);
+        const shots = m9Shots();
+        if (shots) await shoot(d.page, join(shots, `text-200-${size}-${view}.png`));
         rows.push(`${size}, ${view}: text ${r.body}px, nothing cut off or overlapping`);
       }
       // Every destination is still within reach.

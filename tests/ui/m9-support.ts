@@ -1,10 +1,18 @@
 // Shared by the M9 gate (Amendment 2026-10-30-C Part 2): a profile with something in it, the main
 // views, the two widths, and in-page measures. Nothing here is user data: neutral placeholders.
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'playwright-core';
 import { until } from '../acceptance/support.ts';
-import { blank, finishSetup } from './support.ts';
+import { ROOT, blank, finishSetup, shotsDir } from './support.ts';
+
+// Evidence screenshots of the M9 gate go to docs/screenshots/m9 whenever a run takes screenshots.
+export function m9Shots(): string | null {
+  if (!shotsDir()) return null;
+  const dir = join(ROOT, 'docs/screenshots/m9');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 export const PHONE = { width: 390, height: 844 };
 export const DESKTOP = { width: 1280, height: 820 };
