@@ -51,7 +51,7 @@ const git = (home, ...args) => new Promise((ok) => {
 // The core's database, logs and backups, and extension data, are runtime state, not history.
 // mesh/ holds this node's private keys (0600 on disk); git would keep a copy anyone who can read
 // the folder could read, for good.
-const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'memory/.rendered.json', 'skills/', 'connectors/', 'nova.db*', 'logs/', 'backups/', 'extensions/', 'exports/', 'kept/', 'workers/', 'mesh/'];
+const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'memory/.rendered.json', 'skills/', 'connectors/', 'nova.db*', 'logs/', 'backups/', 'extensions/', 'exports/', 'kept/', 'workers/', 'mesh/', 'nova.pid'];
 
 function ignorePrivate(home) {
   const path = join(home, '.gitignore');
@@ -81,7 +81,16 @@ export async function keysInHistory(home) {
 export const KEYS_IN_HISTORY = 'This Nova’s private keys (mesh/identity.json) were saved in its home folder’s git history before Nova kept them out of it. Anyone who can read that folder’s .git can read them, so treat them as exposed. New commits leave them out; old ones still have them. Replace the keys: the README’s “If the hub’s keys were exposed” says how, and which devices to add again.';
 
 // `problem`: told, in plain words, when the history already holds this node's keys. It is said
-// at every start until the keys are replaced and the old history is gone.
+// at every start until the keys are replaced. `resolved`: told when it no longer does, so the
+// warning closes by itself once the keys are new.
+
+// Whether a Nova server is running this home right now (its nova.pid names a live process).
+export function runningPid(home) {
+  let pid = 0;
+  try { pid = Number(readFileSync(join(home, 'nova.pid'), 'utf8')); } catch { return null; }
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try { process.kill(pid, 0); return pid; } catch (e) { return e.code === 'EPERM' ? pid : null; }
+}
 export async function ensureGit(home, o = {}) {
   const changed = ignorePrivate(home);
   if (existsSync(join(home, '.git'))) {
@@ -94,6 +103,7 @@ export async function ensureGit(home, o = {}) {
       await commit(home, 'Nova: memory, skills, connections and keys kept out of history');
     }
     if (await keysInHistory(home)) o.problem?.(KEYS_IN_HISTORY);
+    else o.resolved?.(KEYS_IN_HISTORY);
     return true;
   }
   if ((await git(home, 'init', '-q')) === null) return false;

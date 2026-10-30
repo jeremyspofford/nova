@@ -4,7 +4,7 @@
 // says who may do what on either).
 import { createServer } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
-import { createReadStream, existsSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { ConfigError, loadConfig } from './config.js';
 import { ensureGit, seedHome } from './home.js';
@@ -473,6 +473,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // Said once per open problem, not once per start: it stays open until the keys are replaced.
   ensureGit(config.home, {
     problem: (m) => { if (!nova.core.log.problems({ open: true }).some((p) => p.message === m)) nova.core.log.problem('mesh', m); },
+    // The keys were replaced since: the warning has done its job.
+    resolved: (m) => { for (const p of nova.core.log.problems({ open: true })) if (p.message === m) nova.core.log.resolve(p.id); },
   });
   // A hub first asks its roster peers whether one of them became hub while it was away (fencing).
   const { role } = nova.core.mesh;
@@ -496,6 +498,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   role.on('demoted', ({ reason }) => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); console.log(reason); });
   nova.server.listen(config.port, config.host, () => {
     const ms = Math.round(performance.now() - nova.started);
+    // Who is running this home, so tools that must only run while Nova is stopped (replacing the
+    // hub's keys) can tell. Removed on a clean stop; a stale one names a pid that is gone.
+    writeFileSync(join(config.home, 'nova.pid'), String(process.pid));
     if (nova.seeded.length) console.log(`Seeded ${nova.seeded.length} files into ${config.home}`);
     // The real port, so NOVA_PORT=0 (any free port) still says where Nova is.
     console.log(`Nova is ready at http://${config.host === '127.0.0.1' ? 'localhost' : config.host}:${nova.server.address().port}  (${ms} ms)`);
@@ -525,7 +530,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(`Devices pair and connect at ${nova.meshInfo.publicUrl} (listening on ${m.bindHost}:${port}, ${how}).`);
     });
   }
-  const quit = async () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.close(); process.exit(0); };
+  const quit = async () => { rmSync(join(config.home, 'nova.pid'), { force: true }); nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.close(); process.exit(0); };
   process.on('SIGINT', quit);
   process.on('SIGTERM', quit);
 }

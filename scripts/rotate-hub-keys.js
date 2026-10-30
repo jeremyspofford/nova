@@ -2,8 +2,15 @@
 // Stop Nova first, then: node scripts/rotate-hub-keys.js [home]   (default: NOVA_HOME, or ~/Nova)
 import { loadConfig } from '../src/config.js';
 import { rotateHubKeys } from '../src/core/index.ts';
+import { runningPid } from '../src/home.js';
 
 const home = process.argv[2] ?? loadConfig().home;
+// A running hub keeps serving its old keys from memory while the files say otherwise; stop it first.
+const running = runningPid(home);
+if (running) {
+  console.error(`Nova is running this home (pid ${running}). Stop it first, then run this again. Nothing was changed.`);
+  process.exit(1);
+}
 try {
   const r = await rotateHubKeys(home);
   console.log(`The hub at ${home} has new keys. Its fingerprint is now ${r.fingerprint} (epoch ${r.epoch}).`);

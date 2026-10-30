@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as home$ from '../src/home.js';
@@ -62,4 +62,38 @@ test('a home whose history already has the keys stops tracking them and says the
   // The next start says it again: the old commits still hold the keys.
   await ensureGit(h, { problem: (m) => problems.push(m) });
   assert.equal(problems.length, 2);
+});
+
+// Re-check findings: replacing the keys while Nova runs leaves the running hub serving the old key
+// against a roster naming the new one; and the warning stayed open after the keys were replaced.
+test('replacing the keys refuses while Nova runs this home, and the warning closes once they are new', async () => {
+  const h = home();
+  rmSync(join(h, 'mesh', 'role.json')); // a hub, not a standby
+  git(h, 'init', '-q');
+  git(h, 'add', '-A');
+  git(h, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'old');
+  const before = readFileSync(join(h, 'mesh', 'identity.json'), 'utf8');
+
+  // A live process names this home as its own (here, the test itself).
+  writeFileSync(join(h, 'nova.pid'), String(process.pid));
+  assert.equal(home$.runningPid(h), process.pid);
+  const script = join(import.meta.dirname, '..', 'scripts', 'rotate-hub-keys.js');
+  let refused = null;
+  try { execFileSync(process.execPath, [script, h], { encoding: 'utf8', stdio: 'pipe' }); } catch (e) { refused = e; }
+  assert.ok(refused, 'refused while running');
+  assert.match(refused.stderr, /Stop it first/);
+  assert.equal(readFileSync(join(h, 'mesh', 'identity.json'), 'utf8'), before, 'nothing changed');
+
+  // A stale pid file (that process is gone) doesn't block it.
+  writeFileSync(join(h, 'nova.pid'), '999999999');
+  assert.equal(home$.runningPid(h), null);
+  execFileSync(process.execPath, [script, h], { encoding: 'utf8', stdio: 'pipe' });
+  assert.notEqual(readFileSync(join(h, 'mesh', 'identity.json'), 'utf8'), before, 'new keys');
+
+  const resolved = [];
+  const problems = [];
+  await ensureGit(h, { problem: (m) => problems.push(m), resolved: (m) => resolved.push(m) });
+  assert.deepEqual(problems, [], 'the history holds only keys that no longer open anything');
+  assert.equal(resolved.length, 1, 'so the open warning is closed');
+  assert.match(resolved[0], /keys/);
 });

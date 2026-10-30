@@ -15,6 +15,23 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M4, re-check of the blocker fixes): three more ways out of the runtime's sandbox,
+closed; key replacement made safe.**
+
+- **Process signals:** the runtime could still signal any process of the person's through the raw
+  binding under `process.kill` (`process._kill`). `process._debugProcess` sends any process the
+  signal that opens its inspector (the boot agent, the Nova server, editors). Both are locked in the
+  runtime's preload, with `_debugEnd`, `chdir` and `abort`. The boot agent is started with
+  `--disable-sigusr1` as well, so nothing else can open its inspector by signal.
+- **IPC messages:** the boot agent took `process.send(null)` from the runtime as an unhandled
+  rejection, which ends it. It now drops anything that isn't a message it knows, and says so if
+  handling one fails.
+- **Key replacement:** `scripts/rotate-hub-keys.js` refuses while a Nova server runs the home. The
+  server writes `nova.pid` at start and removes it on a clean stop; a stale one is ignored. The
+  "keys in history" warning closes by itself once the current keys are no longer in the history.
+- Each has a test that fails on the code before it: the sandbox probe signals a bystander process,
+  a runtime sends junk over IPC, and the key replacement is run against a home with a live pid.
+
 **2026-10-30 (M4 review): the device agent's sandbox, and failover.** Fixes
 from the M4 review, branch `m4-fix/agent-failover`; each has a test that
 failed before the fix.
