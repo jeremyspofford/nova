@@ -64,3 +64,69 @@ Run 2026-10-30T09:25:54Z on branch `m7/self-modification` at `fc5af3ac`, on this
 - ✔ a CLI agent that crashes mid-task: failed in plain words, a problem with its playbook, the worker checked again
 - ✔ a CLI agent that hangs is stopped at its time limit, said plainly, with the playbook
 - ✔ a provider that answers garbage: nothing is applied, the task fails in plain words, with the playbook
+
+## 8. Re-run after the review fixes
+
+Run 2026-10-30 on `m7/self-modification` at `4001a3de`. That commit merges `m7-fix/changes` and `m7-fix/resilience`, and every fix has a test that failed on the code before it.
+
+- `npm test`: 679 tests, 674 pass, 0 fail, 5 skipped (the opt-in real-model runs). Run twice at this commit, the same both times.
+- Browser suite (`scripts/ui-test.sh`, Playwright container): 28 of 28 pass.
+- `npm run typecheck`, `lint:tokens` and `check:themes` all pass.
+- The real Claude Code run for M5 (owner OK'd, one small run) is recorded in `docs/evidence/m5-claude-code.md`.
+- A test bug found and fixed: "a good change, end to end" expected a rule pack's cases in a fixed order. The sandbox runs them in time order from its real clock, so after noon UTC the order flipped. It now checks them by name. Nova's behaviour was right.
+
+The review-fix tests:
+
+`tests/core/changes-guards.test.ts`
+
+- ✔ a forged ship or rollback task is refused at every way in, and a waiting tier-3 change stays waiting
+- ✔ the pipeline runs only its own tasks: a brief for a change from any other task is refused, and the approval on record is the ledger’s own
+- ✔ a rule pack whose task would run elsewhere is stopped before its tests, and the person’s real backup folder is untouched (the reviewer’s leak)
+- ✔ a sandbox copy is inert: backup, capture, provider and model settings are blanked
+- ✔ in a sandbox copy a firing rule records its task without starting it
+- ✔ rolling back an extension puts its state back exactly: installed, not enabled
+- ✔ rolling back an extension leaves a binary file it never touched byte for byte
+- ✔ rolling back an extension puts back a large file it overwrote
+- ✔ rolling back a brand-new extension leaves nothing behind, whatever it keeps or exports on removal
+- ✔ rolling back by hand during a canary happens now, and ends the canary
+- ✔ a rule pack’s approval shows each task’s worker, inputs, tier and privacy
+- ✔ ship and roll back are for an approver, not any paired phone or browser
+- ✔ a design system’s canary device must be the hub or one of the person’s paired devices
+- ✔ a canary’s window is measured on a clock that can’t jump: the wall clock leaping ahead doesn’t promote it
+- ✔ a promotion that fails rolls the change back instead of leaving it in its canary
+- ✔ a change whose canary began but whose apply never finished is applied when its task runs again
+- ✔ a change whose artifact no longer matches its release isn’t applied
+- ✔ rolling back a design system puts back only what it changed, not another device’s choice
+
+`tests/core/resilience-forgetting.test.ts`
+
+- ✔ a forget while the backup drive is unplugged is owed to it, said plainly, and carried in when it is back
+- ✔ an owed forget is carried in before a backup run or a prune touches the folder
+- ✔ a forget reaches the backups in a folder that is no longer the setting
+- ✔ the drill checks every kept backup for forgotten things, not only the newest
+
+`tests/core/resilience-trust.test.ts`
+
+- ✔ a manifest naming a path outside the backup restores and cleans nothing outside it
+- ✔ only backups Nova recorded count: planted folders are ignored, reported, and push nothing out
+- ✔ backups are the person’s alone: folders 0700, files 0600, and a folder others can write is refused
+- ✔ the encrypted copy opens with the recovery key shown once, without this machine’s vault
+
+`tests/core/resilience-repairs.test.ts`
+
+- ✔ a crash the supervisor handled closes once Nova is up, and Nova never restarts a healthy server for it
+- ✔ restarting Nova, choosing the backup folder and seeing the recovery key again are not any paired phone’s
+- ✔ freeing scratch deletes only Nova’s own leftovers, never a folder another process is using
+
+`tests/supervisor/guards.test.ts`
+
+- ✔ a repair’s restart: at most once a minute, and it counts toward safe mode like a crash
+- ✔ “base” runs the commit pinned when the supervisor started, never the checkout as edited since
+- ✔ the supervisor’s folder must be the person’s alone
+- ✔ a tag named current or base is never a release, and a switch that fails puts the running release back
+- ✔ going back with nowhere to go keeps safe mode; the socket wants what the person typed
+- ✔ a refused rollback whose release won’t start again is held in safe mode, not left stopped
+
+`tests/supervisor/rollback-mark.test.ts`
+
+- ✔ work a new release did on starting counts: going back is refused rather than undo it
