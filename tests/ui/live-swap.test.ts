@@ -1,12 +1,14 @@
-// M3 gate: the design system swaps live, with no reload and no restart. Then a preview in its
-// sandboxed frame, a change for this device only, and a rollback of each.
+// M3 gate: the design system swaps live, with no reload and no restart. Then, from Settings, a
+// design tried for all devices (live on this page, nothing saved until Save; it replaces the
+// sandboxed preview frame, which Amendment 2026-10-30-C removed), a change for this device only,
+// and a rollback of each.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { stop } from '../acceptance/support.ts';
 import { blank, browser, shoot, cssVar, device, finishSetup, ready, shotsDir } from './support.ts';
 
-test('M3 gate: a design system swaps live, previews in a frame, applies per device and rolls back', async (t) => {
+test('M3 gate: a design system swaps live, is tried before saving, applies per device and rolls back', async (t) => {
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
   const m = blank('nova-ui-swap-');
@@ -43,35 +45,47 @@ test('M3 gate: a design system swaps live, previews in a frame, applies per devi
     assert.equal((await m.get('/api/v1/health')).ok, true);
     if (shots) await shoot(page, join(shots, 'swap-2-companion-light.png'));
 
-    // 2. Preview another in the sandboxed frame: the frame shows it, the page does not change.
-    await page.goto(`${m.base}/settings`);
+    // 2. Try another for all devices: this page shows it, nothing is saved, other devices don't
+    // change; Cancel puts the saved one back.
+    await page.goto(`${m.base}/settings#appearance`);
     await ready(page);
     await page.evaluate(() => { (window as any).__boot = 'settings'; });
-    await page.click('[data-action="preview-ds"][data-ds="paper"]');
-    const frame = page.frameLocator('#ds-preview');
-    await frame.locator('body').waitFor();
-    const framed = await frame.locator('html').evaluate((el) => getComputedStyle(el).getPropertyValue('--bg-base').trim().toLowerCase());
-    assert.equal(framed, paper, 'the preview frame shows Paper');
-    assert.equal(await page.locator('#ds-preview').getAttribute('sandbox'), '', 'the frame is sandboxed with no allowances');
-    assert.equal(await cssVar(page, '--bg-base'), light, 'previewing applies nothing');
-    if (shots) await page.locator('#ds-preview').scrollIntoViewIfNeeded().then(() => shoot(page, join(shots, 'swap-3-preview-paper.png')));
+    const look = page.locator('#appearance');
+    await look.locator('label.choice:has(input[name="ds-scope"][value="user"])').click();
+    await look.locator('.ds-card[data-ds="paper"]').click();
+    await page.waitForFunction((want) => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === want, paper, { timeout: 5000 });
+    assert.equal((await m.get('/api/v1/design-systems/active')).id, 'companion-light', 'trying it saves nothing');
+    await other.page.waitForTimeout(300);
+    assert.equal(await cssVar(other.page, '--bg-base'), light, 'another device is untouched');
+    if (shots) await shoot(page, join(shots, 'swap-3-preview-paper.png'));
+    await look.locator('[data-action="cancel-ds"]').click();
+    await page.waitForFunction((want) => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === want, light, { timeout: 5000 });
 
-    // 3. Use it on this device only: this page changes, the other device keeps the person's choice.
-    await page.click('[data-action="apply-ds"][data-scope="device"][data-ds="paper"]');
+    // 3. Use it on this device only: this page changes at once, the other device keeps the person's choice.
+    await look.locator('label.choice:has(input[name="ds-scope"][value="device"])').click();
+    await look.locator('.ds-card[data-ds="paper"]').click();
     await page.waitForFunction((want) => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === want, paper, { timeout: 5000 });
     await other.page.waitForTimeout(300);
     assert.equal(await cssVar(other.page, '--bg-base'), light, 'another device is untouched');
     assert.equal(await page.evaluate(() => (window as any).__boot), 'settings');
     if (shots) await shoot(page, join(shots, 'swap-4-paper-this-device.png'));
 
-    // 4. Roll back this device: back to the person's choice.
-    await page.locator('[data-action="rollback-ds"][data-scope="device"]:not([disabled])').click();
+    // 4. Undo on this device: back to the person's choice.
+    await look.locator('[data-action="undo-ds"]').click();
     await page.waitForFunction((want) => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === want, light, { timeout: 5000 });
 
-    // 5. Roll back for everyone: both pages return to Orb Teal, still with no reload.
-    await page.locator('[data-action="rollback-ds"][data-scope="user"]:not([disabled])').click();
+    // 5. Save Obsidian for all devices, then undo that from the toast: both pages follow, still
+    // with no reload.
+    await look.locator('label.choice:has(input[name="ds-scope"][value="user"])').click();
+    await look.locator('.ds-card[data-ds="obsidian"]').click();
+    await look.locator('[data-action="save-ds"]').click();
+    const obsidian = String((await m.get('/api/v1/design-systems/obsidian')).manifest.tokens['bg/base']).toLowerCase();
     for (const d of [one, other]) {
-      await d.page.waitForFunction((want) => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === want, teal, { timeout: 5000 });
+      await d.page.waitForFunction((want) => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === want, obsidian, { timeout: 5000 });
+    }
+    await page.locator('#toast .toast-btn').click();
+    for (const d of [one, other]) {
+      await d.page.waitForFunction((want) => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === want, light, { timeout: 5000 });
     }
     assert.equal(await page.evaluate(() => (window as any).__boot), 'settings');
     assert.equal(nova.proc.exitCode, null);
