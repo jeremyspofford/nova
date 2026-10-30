@@ -78,6 +78,8 @@ export class Session extends EventEmitter {
   asked: string | null = null;
   holder: (Holder & { since: number }) | null = null;
   readonly blocked = new Map<string, Blocked>();
+  // Whether the task's plan marks the step where its outside effect happens (plan.ts, `commits`).
+  commits = false;
   #o: SessionOptions;
   #now: () => Date;
   #browser: Launched | null = null;

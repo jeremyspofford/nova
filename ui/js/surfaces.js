@@ -661,6 +661,7 @@ export function providerSetup(id) {
   if (!p) return;
   const field = (f) => {
     const fid = `pf-${f.key}`;
+    if (f.kind === 'boolean') return `<label class="choice" for="${fid}"><input type="checkbox" id="${fid}" name="${esc(f.key)}"${p.config[f.key] === true ? ' checked' : ''}${f.fixed ? ' disabled' : ''}><span class="choice-name">${esc(f.label)}</span></label>${f.note ? `<p class="settings-note">${esc(f.note)}</p>` : ''}`;
     return `<label class="field-label" for="${fid}">${esc(f.label)}<input class="input field" id="${fid}" name="${esc(f.key)}" value="${esc(p.config[f.key] ?? '')}" autocomplete="off"${f.fixed ? ' readonly' : ''}></label>${f.note ? `<p class="settings-note">${esc(f.note)}</p>` : ''}`;
   };
   openSheet(`<form class="provider-form" data-provider="${esc(p.id)}" method="dialog">
@@ -680,6 +681,11 @@ export async function saveProvider(form) {
   const config = {};
   for (const f of p.fields) {
     if (f.fixed) continue;
+    if (f.kind === 'boolean') {
+      const on = !!form.elements[f.key]?.checked;
+      if (on !== (p.config[f.key] === true)) config[f.key] = on;
+      continue;
+    }
     const v = form.elements[f.key]?.value.trim() ?? '';
     if (v !== String(p.config[f.key] ?? '')) config[f.key] = v;
   }

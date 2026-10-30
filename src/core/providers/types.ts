@@ -3,6 +3,7 @@
 // implementations. Nova runs no code an extension ships; a provider extension picks an
 // implementation and gives it settings.
 import type { Brief, Evidence } from '../envelope.ts';
+import type { Effects } from '../workers.ts';
 
 export const CLASSES = ['coding-agent', 'chat', 'automation'] as const;
 export type ProviderClass = (typeof CLASSES)[number];
@@ -78,6 +79,8 @@ export interface Impl {
   // The address an HTTP provider talks to, for working out its egress.
   url?(c: Config): string | null;
   model(c: Config): string;
+  // What a brief may change outside Nova (workers.ts, Effects); none when not said.
+  effects?(c: Config): Effects;
   work(i: WorkInput): Promise<WorkOutcome>;
   chat?(c: Config, secret: (v: unknown) => string | null, req: ChatRequest): Promise<{ text: string; aborted: boolean; usage: Usage }>;
 }

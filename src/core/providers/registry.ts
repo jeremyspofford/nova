@@ -493,6 +493,9 @@ export class Providers extends EventEmitter {
       // Where a brief would go is where the provider's settings point now (an HTTP provider's
       // address decides), the same for every brief; the ledger asks this per task.
       egressFor: () => { try { return reg.where(id).coarse; } catch { return 'remote' as const; } },
+      // What a brief may change outside Nova: n8n says per its settings; the rest work in the
+      // task's own folder (none).
+      effects: () => { try { return reg.#impl(reg.#entry(id)).effects?.(reg.config(id)) ?? 'none'; } catch { return 'external' as const; } },
       get evidence() { try { return reg.#entry(id).manifest.adapter.class === 'automation' ? ['confirmation' as const] : ['test_result' as const, 'file_diff' as const]; } catch { return []; } },
       get timeoutMs() {
         try {

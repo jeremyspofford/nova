@@ -205,6 +205,9 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
       about: 'Changes things in your home through Home Assistant, after your OK.',
       get egress() { return egress(); },
       evidence: ['confirmation' as const],
+      // A service call changes the home (and `toggle` a second time undoes the first): after a
+      // failure the ledger asks the person rather than calling again (workers.ts, Effects).
+      effects: () => 'external' as const,
       health: () => (cfg().broken ? { ok: false, detail: 'Home Assistant needs reconnecting: it no longer accepts Nova’s token.' } : { ok: true, detail: cfg().url ? `Connected to ${host()}.` : 'Not connected.' }),
       async run(brief: Brief, signal: AbortSignal) {
         const started = Date.now();

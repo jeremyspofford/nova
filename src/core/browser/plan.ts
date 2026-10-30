@@ -129,6 +129,13 @@ export function hostEgress(raw: string): Egress {
   return 'remote';
 }
 
+// Steps that can change something outside: typing into a page, choosing, clicking, and a step
+// the person does by hand. A plan with any of them may have sent something by the time it fails.
+const ACTING: readonly Step['do'][] = ['fill', 'select', 'click', 'person'];
+export const hasEffects = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => ACTING.includes(s.do));
+// Whether the plan marks the step where its outside effect happens.
+export const marksCommit = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => 'commits' in s && s.commits === true);
+
 export function planEgress(p: Plan): Egress {
   return p.allowed_hosts.some((h) => hostEgress(h) === 'remote') ? 'remote' : 'local';
 }

@@ -100,6 +100,9 @@ export function startFakeHomeAssistant({ port = 0, host = '127.0.0.1', token = n
     calls: [],                                      // every service call, in order
     subscriptions: 0,
     auths: 0,
+    // A device that takes its time: a service call changes the entity this many ms later, so a
+    // read right after the call still shows the old state (tests set it).
+    lagMs: 0,
   };
   const sockets = new Set();
 
@@ -140,7 +143,8 @@ export function startFakeHomeAssistant({ port = 0, host = '127.0.0.1', token = n
         const e = state.entities.get(id);
         if (!e) continue;
         const to = service === 'toggle' ? (e.state === 'on' ? 'off' : 'on') : RESULT[service];
-        if (to) changed.push(setState(id, to));
+        if (to && state.lagMs > 0) setTimeout(() => setState(id, to), state.lagMs);
+        else if (to) changed.push(setState(id, to));
       }
       return send(res, 200, changed);
     }

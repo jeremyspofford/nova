@@ -80,5 +80,6 @@ export const FIELDS: Record<Implementation, Field[]> = {
     { key: 'webhook_url', label: 'Workflow webhook', kind: 'text', note: 'The address of the workflow’s Webhook node.' },
     { key: 'signing_secret', label: 'Signing secret', kind: 'secret', note: 'secret://NAME in the vault; the workflow signs with the same secret.' },
     { key: 'callback_url', label: 'Nova’s address for the workflow', kind: 'text', note: 'Optional: where the workflow reaches Nova.' },
+    { key: 'idempotent', label: 'Safe to send twice', kind: 'boolean', note: 'On only if the workflow treats a brief with an idempotency-key it has seen as already done. Otherwise Nova never sends a brief again by itself.' },
   ],
 };

@@ -87,6 +87,7 @@ export const n8n = (inbox: Inbox): Impl => ({
         if (!['http:', 'https:'].includes(u.protocol)) out.push('webhook_url must be an http(s) address.');
       } catch { out.push('webhook_url is the workflow’s webhook address.'); }
     }
+    if (c.idempotent !== undefined && typeof c.idempotent !== 'boolean') out.push('idempotent is true or false: whether the workflow takes a brief it has seen before (the same idempotency-key header) as already done.');
     if (c.signing_secret !== undefined && c.signing_secret !== '' && !secretName(c.signing_secret)) out.push('signing_secret names a secret in the vault, like secret://N8N_SIGNING_SECRET; the secret itself never goes in a setting.');
     return out;
   },
@@ -99,6 +100,9 @@ export const n8n = (inbox: Inbox): Impl => ({
   },
   url: (c) => str(c.webhook_url) || null,
   model: () => 'n8n workflow',
+  // A workflow can do anything; running it again is safe only if the person says it honours the
+  // brief's idempotency key.
+  effects: (c) => (c.idempotent === true ? 'idempotent' : 'external'),
   async probe(c, _secret, signal) {
     // A webhook only answers a real call; reaching the host is what can be checked without one.
     try {

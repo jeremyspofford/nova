@@ -12,7 +12,7 @@ import type { Ledger, LanedWorker } from '../ledger.ts';
 import type { Log } from '../log.ts';
 import { findChromium, type Found } from './chromium.ts';
 import { FINAL_READ, SCREENSHOT, refOf, refetch, squash, taskDir, type FinalRead, type Read } from './evidence.ts';
-import { NO_HUB, allowed, describe, hostOf, planEgress, validatePlan, type Hub, type Plan, type Step } from './plan.ts';
+import { NO_HUB, allowed, describe, hasEffects, hostOf, marksCommit, planEgress, validatePlan, type Hub, type Plan, type Step } from './plan.ts';
 import { INPUT_KEYS, Session, type Holder, type Input, type SessionView } from './session.ts';
 
 export const BROWSER_WORKER = 'browser';
@@ -48,6 +48,10 @@ export class Browser extends EventEmitter {
       timeoutMs: 60 * 60_000,
       lane: () => ({ key: 'browser', max: 2 }),
       egressFor: (brief: Brief) => planEgress(validatePlan(brief.inputs, self.#hub())),
+      // A plan that types, chooses, clicks or hands the page to the person may have sent something
+      // by the time it fails, so the ledger never reruns it by itself (workers.ts, Effects).
+      effects: (brief: Brief) => (hasEffects(validatePlan(brief.inputs, self.#hub())) ? 'external' : 'none'),
+      commits: (brief: Brief) => marksCommit(validatePlan(brief.inputs, self.#hub())),
       health: () => {
         const f = self.chromium();
         return { ok: f.path !== null || f.from === 'none', detail: f.path ? `${f.detail}${self.#sandbox() ? '' : ' Chromium’s own sandbox is off (NOVA_CHROMIUM_SANDBOX=0).'}` : f.detail };
@@ -124,6 +128,7 @@ export class Browser extends EventEmitter {
 
     this.sessions.get(id)?.close('replaced');
     const s = new Session({ taskId: id, chromium: found.path, hosts: plan.allowed_hosts, sandbox: this.#sandbox(), now: this.#now, hub: () => this.#hub() });
+    s.commits = marksCommit(plan);
     this.sessions.set(id, s);
     this.#follow(s);
     const stop = () => { void s.close(signal.reason instanceof Error && signal.reason.name === 'TimeoutError' ? 'the task ran out of time' : 'the task was stopped'); };
@@ -139,6 +144,7 @@ export class Browser extends EventEmitter {
         s.emit('change');
         this.#note(id, 'step', s.step);
         if (step.do === 'person') personSteps++;
+        if ('commits' in step && step.commits) this.#committing(id, describe(step));
         await this.#step(s, step, plan, reads);
       }
       // Nothing more happens while the person has the browser, not even the screenshot.
@@ -264,6 +270,10 @@ export class Browser extends EventEmitter {
     const id = s.taskId;
     const by = (h: Holder) => ({ by: h.key, who: h.label });
     s.on('takeover_started', (e: { holder: Holder; requested: boolean; asked: string | null }) => {
+      // The person may do anything with the page, the step that sends it included.
+      if (s.commits) {
+        try { this.#committing(id, `${e.holder.label} took over the browser`); } catch (err) { this.#o.log.warn('browser', 'Couldn’t record a takeover as the task’s commit point.', { task: id, detail: (err as Error).message }); }
+      }
       this.#note(id, 'takeover_started', { ...by(e.holder), requested: e.requested, ...(e.asked ? { asked: e.asked } : {}), step: s.step?.n ?? null, url: s.url });
     });
     s.on('takeover_ended', (e: { holder: Holder; duration_ms: number; how: string }) => {
@@ -272,6 +282,11 @@ export class Browser extends EventEmitter {
     s.on('blocked', (b: { host: string; by: string; via: string; kind: string }) => this.#note(id, 'blocked_request', b));
     s.on('popup', () => this.#note(id, 'popup_closed', { reason: 'A page opened a second window; Nova closed it.' }));
     s.on('change', () => this.emit('change', s.view()));
+  }
+
+  // Written down before it happens; if it can't be, the step doesn't run.
+  #committing(id: string, what: string): void {
+    this.#ledger?.committing(id, what);
   }
 
   #note(id: string, kind: string, detail: unknown): void {
