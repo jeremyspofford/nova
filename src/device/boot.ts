@@ -50,6 +50,8 @@ const RUNTIME_FILES = ['runtime.ts', 'queue.ts'];
 const CAPABILITIES = ['heartbeat', 'queue'];
 // The process exits with this when the hub revoked the device, so a supervisor can tell.
 export const EXIT_REVOKED = 3;
+// Why it stopped, when the hub it paired with was factory reset.
+const HUB_RESET = 'The hub was reset.';
 
 // ---- the device home -----------------------------------------------------------------------------
 
@@ -630,6 +632,7 @@ export class Boot {
       case 'unauthorized': return this.#unauthorized();
       case 'update': return this.update();
       case 'heartbeat': return;
+      case 'hub_reset': return this.#hubReset();
       case 'call': return this.#callForRuntime(m);
     }
   }
@@ -682,6 +685,7 @@ export class Boot {
     try {
       const r = await call(s.url, 'POST', '/api/v1/mesh/devices/me/heartbeat', { token: s.token, body: { capabilities: CAPABILITIES, version: AGENT_VERSION, runtime_version: inst?.version ?? null, safe_mode: true } });
       if (r.status === 401) return this.#unauthorized();
+      if (r.status === 200 && r.body?.hub_reset) return await this.#hubReset();
       // The hub's repair playbook asks once for a fresh start (M7b): reinstall and leave safe mode;
       // the watchdog's limit still holds, so three more crashes bring it back here.
       if (r.status === 200 && r.body?.restart_runtime === true) {
@@ -707,11 +711,27 @@ export class Boot {
     this.watchdog.reset();
   }
 
-  async #revoked(reason: string, now: boolean): Promise<void> {
+  // The hub this computer paired with was factory reset (M7 amendment §2): it said so in a
+  // heartbeat, over this computer's own session. Its identity is gone, so there is nothing to go
+  // back to: the session ends and the agent stops for good, as when revoked. The words are this
+  // agent's own, never the hub's text.
+  async #hubReset(): Promise<void> {
+    if (this.#closed) return;
+    this.#session = null;
+    return this.#revoked(HUB_RESET, true, [
+      'The hub was reset: Nova there was erased and starts over. This computer is no longer paired with it, so the agent has stopped and won’t start again.',
+      'To use this computer with the new Nova, add it there with a new code.',
+    ]);
+  }
+
+  async #revoked(reason: string, now: boolean, words?: string[]): Promise<void> {
     this.#closed = true;
     if (now) this.#saveState({ revoked: true, revoked_at: new Date().toISOString(), revoked_reason: reason });
-    this.say('This computer was removed from Nova: the hub revoked it. The agent has stopped and won’t start again.');
-    this.say('To use this computer with Nova again, add it again with a new code (its old key can never be used again).');
+    const said = words ?? (reason === HUB_RESET ? ['The hub this computer paired with was reset, so the agent has stopped and won’t start again. Add it to the new Nova with a new code.'] : [
+      'This computer was removed from Nova: the hub revoked it. The agent has stopped and won’t start again.',
+      'To use this computer with Nova again, add it again with a new code (its old key can never be used again).',
+    ]);
+    for (const l of said) this.say(l);
     for (const t of this.#timers) clearInterval(t);
     this.#timers = [];
     await this.watchdog.stop();

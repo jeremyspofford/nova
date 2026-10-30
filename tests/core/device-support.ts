@@ -52,6 +52,8 @@ export class FakeNode {
   inbox = new Map<string, { key: string; kind: string; status: string; ref: string }>();
   received: Received[] = [];
   heartbeats: Array<Record<string, unknown>> = [];
+  // A factory reset of this node: said in every heartbeat reply once set.
+  hubReset: { id: string; said: string } | null = null;
   reports: Array<Record<string, unknown>> = [];
   sessionsStarted = 0;
   url = '';
@@ -120,7 +122,7 @@ export class FakeNode {
     if (path === '/mesh/runtime') return this.bundle ? send(200, this.bundle) : send(404, { error: 'none' });
     if (path === '/mesh/devices/me/heartbeat') {
       this.heartbeats.push(body);
-      return send(200, { ok: true, epoch: this.epoch, runtime: { version: this.bundle?.manifest.version ?? 'none' } });
+      return send(200, { ok: true, epoch: this.epoch, runtime: { version: this.bundle?.manifest.version ?? 'none' }, ...(this.hubReset ? { hub_reset: this.hubReset } : {}) });
     }
     if (path === '/mesh/devices/me/report') { this.reports.push(body); return send(200, { ok: true }); }
     if (path === '/mesh/inbox') {
