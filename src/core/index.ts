@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { hostname, networkInterfaces } from 'node:os';
 import { CoreError } from './errors.ts';
-import { Db } from './db.ts';
+import { Db, loadMigrations } from './db.ts';
 import { Log, addSecretValue } from './log.ts';
 import { Profile, SECTIONS, type Section } from './profile.ts';
 import { Workspace, workspaceWorker } from './workspace.ts';
@@ -43,6 +43,9 @@ import { captureRoutes } from './capture/routes.ts';
 import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { secretName } from './providers/types.ts';
+import { Resilience } from './resilience/index.ts';
+import { wireRepairs } from './resilience/repairs.ts';
+import type { SupervisorLink } from './resilience/link.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -89,6 +92,15 @@ export { addressEgress, secretPrefix } from './connectors/index.ts';
 export type { Connector, ConnectorContext, ConnectorFactory, ConnectorStatus, ConnectorView } from './connectors/index.ts';
 export { HA_ID, HA_MANIFEST, DEFAULT_TIER3, tokenIssuer } from './connectors/home-assistant.ts';
 export { redactText } from './log.ts';
+// Resilience (M7b): the supervisor's link and shared pieces (src/supervisor imports only this file).
+export { ipcLink } from './resilience/link.ts';
+export type { SupervisorLink, SupervisorState, SupervisorProblem, ReleaseSlot, Stage as DeployStage, ProbeLine, ServerMode } from './resilience/link.ts';
+export { PLAYBOOKS } from './resilience/playbooks.ts';
+export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilience/sandbox.ts';
+export type { Sandbox, ProbeResult } from './resilience/sandbox.ts';
+export { restoreInto, backupFiles, sha256File } from './resilience/backup.ts';
+export type { Manifest as BackupManifest } from './resilience/backup.ts';
+export { restoreBackup, loadMigrations } from './db.ts';
 
 export interface CoreOptions {
   home: string;
@@ -123,6 +135,10 @@ export interface CoreOptions {
   // The local model manager (M6b): where the hub's Ollama answers by default, and (tests) a fixed
   // hardware reading and quicker watch and wake polls.
   models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number };
+  // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
+  supervisor?: SupervisorLink | null;
+  // Resilience (M7b), for tests: the clock watch's monotonic time, and the restore drill's sandbox.
+  resilience?: { monotonic?: () => number; drill?: { root?: string; env?: Record<string, string>; timeoutMs?: number } };
   now?: () => Date;
 }
 
@@ -131,6 +147,8 @@ export type Core = ReturnType<typeof createCore>;
 export function createCore(o: CoreOptions) {
   const started = Date.now();
   const now = o.now ?? (() => new Date());
+  // A sandbox Nova (resilience/sandbox.ts) starts no work and reaches nothing outside itself.
+  const sandbox = process.env.NOVA_SANDBOX === '1';
   const db = new Db(join(o.home, 'nova.db'));
   const migration = db.migrate({ backupDir: join(o.home, 'backups'), now });
   const log = new Log(db, join(o.home, 'logs', 'nova.log'), now);
@@ -199,6 +217,8 @@ export function createCore(o: CoreOptions) {
   // The model manager (M6b) is made once the device registry exists (below); providers reach it
   // through these, for a provider set to a role and for cloud budgets.
   let models: Models | null = null;
+  // Made once the ledger's other parts exist (below); capture asks it whether retention may run.
+  let resilience: Resilience | null = null;
   const providers = new Providers({
     db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now,
     custom: o.agent, secret: providerSecret, meshHost: (h) => meshHosts().has(h),
@@ -268,6 +288,7 @@ export function createCore(o: CoreOptions) {
     fire: (topic, payload, key) => triggers.connectorEvent('capture', topic, payload, key),
     proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
+    retentionHold: () => resilience?.retentionHeld() ?? null,
     ...(o.capture?.fetch ? { fetch: o.capture.fetch } : {}),
   });
   // A forgotten memory takes the capture it was promoted from with it; on a standby, what the hub
@@ -309,6 +330,17 @@ export function createCore(o: CoreOptions) {
     addConfirmation: (system, check) => verifier.registerConfirmation(system, check),
   });
   connectors.register(homeAssistant(o.homeAssistant));
+  // Resilience (M7b): nightly backups and the restore drill as ledger work, repair playbooks, the
+  // clock watch, and what the supervisor says.
+  resilience = new Resilience({
+    db, log, home: o.home, version: o.version, profile, ledger, verifier, triggers, vault, backups, now,
+    migrations: () => loadMigrations(), supervisor: o.supervisor ?? null,
+    ...(o.resilience?.monotonic ? { monotonic: o.resilience.monotonic } : {}), ...(o.resilience?.drill ? { drill: o.resilience.drill } : {}),
+  });
+  const keep = resilience;
+  ledger.workers.set(keep.worker.id, keep.worker);
+  wireRepairs(keep.playbooks, { ledger, providers, models, connectors, role, spokes, devices });
+
   // Capture feeds event rules too, as the connector "capture" (topics: capture/routes.ts).
   const connectorCheck = triggers.connectorCheck;
   triggers.connectorCheck = (id, topic) => (id === 'capture' ? capture.topicCheck(topic) : connectorCheck ? connectorCheck(id, topic) : `There is no connector called ${id}.`);
@@ -355,6 +387,7 @@ export function createCore(o: CoreOptions) {
   role.on('applied', () => capture.synced());
   browser.on('change', (v) => bus.emit('event', 'browser', v));
   capture.on('change', (c) => bus.emit('event', 'capture', c));
+  keep.playbooks.on('change', (c) => bus.emit('event', 'playbook', c));
   // A device that may no longer approve may no longer hold a browser either (browser/routes.ts).
   devices.on('revoked', (d: Device) => browser.release(`device:${d.id}`, `ended by Nova: its device was removed`));
   // Nor capture from it: its sources go off.
@@ -418,6 +451,7 @@ export function createCore(o: CoreOptions) {
       connectors: connectors.health(),
       browser: browserHealth(),
       capture: capture.health(),
+      backups: keep.health(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -470,6 +504,7 @@ export function createCore(o: CoreOptions) {
         if (section === 'providers' || (section === 'policy' && params.key === 'task_tests')) throw new CoreError('validation', 'Providers are set through /api/v1/providers, so their settings are checked.');
         if (section === 'capture') throw new CoreError('validation', 'Capture settings are set through PUT /api/v1/capture/settings, so they are checked.');
         if (section === 'models') throw new CoreError('validation', 'Models are set through /api/v1/models, so their settings are checked.');
+        if (section === 'backups') throw new CoreError('validation', 'Backups are set through PUT /api/v1/backups/settings, so the folders are checked.');
         if (section === 'appearance') {
           if (params.key !== 'mode') throw new CoreError('validation', 'Choose a design system with POST /api/v1/design-systems/{id}/apply, so it is checked and can be rolled back.');
           design.setMode(body.value);
@@ -736,6 +771,8 @@ export function createCore(o: CoreOptions) {
     // ---- capture (M6 plan §1) ----
     ...captureRoutes(capture),
     ...models.routes(),
+    // ---- resilience (M7 plan §2–§3): backups, the drill, playbooks, the supervisor ----
+    ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
     // ---- browser work with takeover (M5 plan §3) ----
     ...browserRoutes(browser, {
       home: o.home,
@@ -760,6 +797,8 @@ export function createCore(o: CoreOptions) {
   const beat = () => {
     try { enroll.sweep(); } catch (e) { log.problem('mesh', 'Nova couldn’t tidy up old requests to join.', { detail: (e as Error)?.stack ?? String(e) }); }
     ticking = triggers.tick().catch((e) => log.problem('triggers', 'The heartbeat couldn’t check the schedules.', { detail: (e as Error)?.stack ?? String(e) }));
+    // The clock watch, and Nova's own retries of repairs that haven't worked yet.
+    void keep.sweep().catch((e) => log.warn('resilience', 'The repair sweep stumbled.', { error: (e as Error).message }));
   };
   // The hub's own work: the ledger, recovered, and the heartbeat. A standby runs neither.
   function startHub() {
@@ -811,7 +850,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
-    vault, connectors, capture, models,
+    vault, connectors, capture, models, resilience: keep,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
@@ -833,6 +872,9 @@ export function createCore(o: CoreOptions) {
     // A hub recovers the ledger, then starts the heartbeat: once now (to catch up), then every
     // 30 s. A standby starts copying the hub instead, and runs nothing else.
     start() {
+      if (sandbox) return { requeued: [], reverified: [] };
+      // A clock that went back while Nova was off shows as records written "in the future".
+      keep.checkClock(true);
       browser.sweep();
       const recovered = role.role() === 'hub' ? startHub() : { requeued: [], reverified: [] };
       role.start();

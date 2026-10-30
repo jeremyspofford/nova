@@ -176,6 +176,18 @@ export class MeshRole extends EventEmitter {
     this.#replica.start();
   }
 
+  // On a standby: copy from the hub now, until nothing more is waiting (a repair playbook's resync,
+  // M7b). False when the hub can't be reached or this node copies no hub.
+  async resync(): Promise<boolean> {
+    if (!this.#replica || this.role() === 'hub') return false;
+    try {
+      for (let i = 0; i < 50 && await this.#replica.pullOnce(0); i++) { /* more was waiting */ }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async close(): Promise<void> {
     this.#closed = true;
     this.#stopHub();

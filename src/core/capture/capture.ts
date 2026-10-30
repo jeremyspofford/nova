@@ -142,6 +142,8 @@ export interface CaptureOptions {
   pollMs?: number;
   // How far back a Screenpipe pull asks again by default, for items reported late (5 minutes).
   lookbackMs?: number;
+  // Why retention must not delete anything now (the clock jumped, M7b), or null.
+  retentionHold?: () => string | null;
 }
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -520,8 +522,11 @@ export class Capture extends EventEmitter {
 
   // Retention (a profile policy): capture older than retention_days is deleted the way a forget
   // deletes it. Promoted memories stay; their provenance keeps when and where, not what.
-  sweep(at: Date = this.#now()): { swept: number; cutoff: string } {
+  // While the clock is in doubt (it jumped), nothing is deleted for being old: it may not be.
+  sweep(at: Date = this.#now()): { swept: number; cutoff: string; held?: string } {
     const cutoff = new Date(at.getTime() - this.settings().retention_days * DAY_MS).toISOString();
+    const held = this.#o.retentionHold?.() ?? null;
+    if (held) return { swept: 0, cutoff, held };
     const rows = this.#db.all<EventRow>('SELECT * FROM capture_event WHERE at < ? LIMIT 5000', cutoff);
     if (rows.length) {
       this.#remove(rows, { tombstone: false });

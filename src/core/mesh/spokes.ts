@@ -61,6 +61,7 @@ export class Spokes extends EventEmitter {
   #effects: InboxEffects;
   #bundle: RuntimeBundle | null = null;
   #reported = new Map<string, number>();
+  #restart = new Set<string>();
 
   constructor(o: { db: Db; log: Log; devices: Devices; identity: MeshIdentity; now: () => Date; version: string; effects: InboxEffects }) {
     super();
@@ -77,7 +78,7 @@ export class Spokes extends EventEmitter {
 
   // A device agent says it is alive: last_seen now (not throttled, so Online is exact), its
   // capabilities, versions and whether it is in safe mode. Entering safe mode is a problem.
-  heartbeat(device: Device, body: Record<string, unknown>): { ok: true; epoch: number; runtime: { version: string } } {
+  heartbeat(device: Device, body: Record<string, unknown>): { ok: true; epoch: number; runtime: { version: string }; restart_runtime?: true } {
     const at = this.#now().toISOString();
     const caps = body.capabilities;
     if (caps !== undefined && (!Array.isArray(caps) || caps.length > 32 || !caps.every((c) => typeof c === 'string' && /^[a-z][a-z0-9._-]{0,39}$/.test(c)))) {
@@ -100,7 +101,18 @@ export class Spokes extends EventEmitter {
     if (!before || before.safe_mode !== safe || caps) this.emit('change', this.#devices.get(device.id));
     // What it can run models on (M6b): the model manager checks and keeps it.
     if (body.hardware !== undefined) this.emit('hardware', this.#devices.get(device.id), body.hardware);
-    return { ok: true, epoch: this.#devices.state().epoch, runtime: { version: this.runtime().manifest.version } };
+    // A restart asked for by a repair playbook (M7b) goes out once, with this reply.
+    const restart = safe && this.#restart.delete(device.id);
+    return { ok: true, epoch: this.#devices.state().epoch, runtime: { version: this.runtime().manifest.version }, ...(restart ? { restart_runtime: true } : {}) };
+  }
+
+  // Asks a computer's boot agent, at its next heartbeat in safe mode, to start its runtime again
+  // (it reinstalls it from this node and leaves safe mode; three more crashes put it back). True
+  // when this is a new ask, false when one is already waiting to go out.
+  restartRuntime(id: string): boolean {
+    if (this.#restart.has(id)) return false;
+    this.#restart.add(id);
+    return true;
   }
 
   agent(id: string): AgentState | null {

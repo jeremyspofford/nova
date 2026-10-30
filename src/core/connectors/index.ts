@@ -261,6 +261,15 @@ export class Connectors extends EventEmitter {
     }
   }
 
+  // One connection stopped and started again, so it tries now rather than after its longest pause
+  // (a repair playbook's reconnect, M7b). Only while it is connected and the node is hub.
+  async restart(id: string): Promise<void> {
+    const c = this.get(id);
+    try { await c.stop?.(); } catch { /* stopping anyway */ }
+    if (this.#started && safeStatus(c).connected) this.#startOne(c);
+    this.emit('change', { id, connected: safeStatus(c).connected });
+  }
+
   async stop(): Promise<void> {
     this.#started = false;
     await Promise.all([...this.#all.values()].map(async (c) => { try { await c.stop?.(); } catch { /* stopping anyway */ } }));

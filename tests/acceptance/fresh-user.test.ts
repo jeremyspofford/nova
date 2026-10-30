@@ -27,7 +27,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     const h0 = await get('/health');
     assert.equal(h0.ok, true);
     assert.equal(h0.setup.done, false);
-    assert.deepEqual(await get('/profile'), { identity: {}, user: {}, tuning: {}, privacy: {}, policy: {}, appearance: {}, mesh: {}, providers: {}, capture: {}, models: {} });
+    assert.deepEqual(await get('/profile'), { identity: {}, user: {}, tuning: {}, privacy: {}, policy: {}, appearance: {}, mesh: {}, providers: {}, capture: {}, models: {}, backups: {} });
     // The built-in design systems are there without the person doing anything; Orb Teal shows.
     assert.equal((await get('/design-systems')).length, 6);
     assert.equal((await get('/design-systems/active')).id, 'orb-teal');
@@ -58,6 +58,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
       providers: {},
       capture: {},
       models: {},
+      backups: {},
     });
     evidence.push('## Profile written by the conversation', '', '```json', JSON.stringify(profile, null, 2), '```', '');
 
