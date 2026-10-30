@@ -14,6 +14,26 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M3c): the M3 gate runs in a real browser.**
+
+- **Where:** `tests/ui/*.test.ts` drive Chromium (playwright-core) against the
+  real server process. Locally, with no usable browser, the suite skips with a
+  loud notice; in CI (`CI` set) a missing browser is a failure, so the gate
+  never passes by not running. CI installs the Chromium build matching
+  playwright-core in its own job and keeps the screenshots as an artifact.
+- **This dev host can't start Chromium** (missing system libraries; installing
+  them needs root). `scripts/ui-test.sh` runs the suite in the Playwright image
+  with the host's Node mounted. Server, browser and tests share the container
+  because Docker Desktop's host network doesn't reach WSL.
+- **Screenshots** are written only when `NOVA_UI_SHOTS` names a folder, so a
+  plain test run never rewrites tracked files; `scripts/ui-test.sh` writes
+  `docs/screenshots/m3/`. Each waits for finite animations to finish first.
+- **"No face"** is checked structurally: every orb on the page has exactly its
+  four layers and no image, SVG or canvas inside.
+- **Found by the gate and fixed:** setup ignored the curly apostrophe phone
+  keyboards type ("I’m Alex" became the name), and setup's transcript replayed
+  its entrance animation on every answer.
+
 **2026-10-29 (M3b): the PWA: layouts, navigation, components; Era 2's
 aliases removed.**
 
