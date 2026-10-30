@@ -77,7 +77,8 @@ export function createNova(config = loadConfig(), deps = {}) {
     // development and tests only: the vault wins, and such a value is redacted like a vault one.
     agent: { command: config.agentCmd, egress: config.agentEgress },
     secrets: deps.secrets ?? ((name) => process.env[`NOVA_SECRET_${name}`] ?? null),
-    models: modelOptions(process.env),
+    // deps.models: tests only (a stand-in Ollama and fixed hardware without touching the environment).
+    models: { ...modelOptions(process.env), ...(deps.models ?? {}) },
     // Started by the supervisor (src/supervisor), it can ask for a deploy or rollback (M7b).
     supervisor: deps.supervisor ?? ipcLink(process),
     // A sandbox copy started by the change pipeline (M7a): no outside work, no changes taken.
