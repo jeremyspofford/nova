@@ -39,8 +39,6 @@ export type FromRuntime =
   | { type: 'unauthorized'; detail: string }
   | { type: 'update'; version: string }
   | { type: 'heartbeat'; at: string; epoch: number }
-  // The hub was factory reset: the boot agent ends its session and stops.
-  | { type: 'hub_reset' }
   | { type: 'call'; id: number; method: 'POST'; path: string; body: unknown };
 
 class Unreachable extends Error {}
@@ -86,8 +84,7 @@ export class Runtime {
     const s = this.#session;
     if (!s || this.#offline || this.#stopped) return;
     try {
-      const r = await this.#call('POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: s.capabilities, version: s.version, runtime_version: s.version, safe_mode: false, ...(s.hardware ? { hardware: s.hardware } : {}) }) as { epoch: number; runtime?: { version?: string }; hub_reset?: unknown };
-      if (r.hub_reset) { this.#send({ type: 'hub_reset' }); return; }
+      const r = await this.#call('POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: s.capabilities, version: s.version, runtime_version: s.version, safe_mode: false, ...(s.hardware ? { hardware: s.hardware } : {}) }) as { epoch: number; runtime?: { version?: string } };
       const at = new Date().toISOString();
       this.#write({ last_heartbeat_at: at, epoch: r.epoch, last_error: null });
       this.#send({ type: 'heartbeat', at, epoch: r.epoch });

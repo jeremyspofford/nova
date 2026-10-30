@@ -15,7 +15,7 @@ import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Device, Devices } from './devices.ts';
 import type { MeshIdentity } from './identity.ts';
-import { helloProofMessage } from './wire.ts';
+import { helloProofMessage, hubResetMessage } from './wire.ts';
 import { runtimeBundle, type RuntimeBundle } from './agent.ts';
 
 // Its tables, device_inbox and device_heartbeat, are migration 0007's.
@@ -82,7 +82,7 @@ export class Spokes extends EventEmitter {
   // heartbeat's reply, and `told` is called once it has.
   resetNotice: { id: string; said: string; told: (device: Device) => void } | null = null;
 
-  heartbeat(device: Device, body: Record<string, unknown>): { ok: true; epoch: number; runtime: { version: string }; restart_runtime?: true; hub_reset?: { id: string; said: string } } {
+  heartbeat(device: Device, body: Record<string, unknown>): { ok: true; epoch: number; runtime: { version: string }; restart_runtime?: true; hub_reset?: { id: string; said: string; signature: string; signer: string } } {
     const at = this.#now().toISOString();
     const caps = body.capabilities;
     if (caps !== undefined && (!Array.isArray(caps) || caps.length > 32 || !caps.every((c) => typeof c === 'string' && /^[a-z][a-z0-9._-]{0,39}$/.test(c)))) {
@@ -109,7 +109,7 @@ export class Spokes extends EventEmitter {
     const restart = safe && this.#restart.delete(device.id);
     const reset = this.resetNotice;
     if (reset) reset.told(device);
-    return { ok: true, epoch: this.#devices.state().epoch, runtime: { version: this.runtime().manifest.version }, ...(restart ? { restart_runtime: true } : {}), ...(reset ? { hub_reset: { id: reset.id, said: reset.said } } : {}) };
+    return { ok: true, epoch: this.#devices.state().epoch, runtime: { version: this.runtime().manifest.version }, ...(restart ? { restart_runtime: true } : {}), ...(reset ? { hub_reset: { id: reset.id, said: reset.said, signature: this.#identity.sign(hubResetMessage(device.id, reset.id)), signer: this.#identity.publicKey } } : {}) };
   }
 
   // Asks a computer's boot agent, at its next heartbeat in safe mode, to start its runtime again

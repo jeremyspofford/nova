@@ -479,6 +479,41 @@ test('a hub that was reset says so in a heartbeat: the agent ends its session, s
   }
 });
 
+// Review finding 5: only the hub can say it was reset, in a heartbeat answer the boot agent got
+// itself, over its own session, signed by a key it pinned. A key it didn't pin, or the untrusted
+// runtime saying so, changes nothing.
+test('a reset said by a key the agent didn’t pin, or by the runtime, changes nothing', { timeout: 30_000 }, async () => {
+  const m = await mesh();
+  try {
+    await m.boot.start({ signals: false });
+    await until(() => m.hub.heartbeats.length, (n) => n > 0);
+    m.hub.hubResetKey = generateDeviceKeys();
+    m.hub.hubReset = { id: 'reset-0002', said: 'The hub was reset.' };
+    const seen = m.hub.heartbeats.length;
+    await until(() => m.hub.heartbeats.length, (n) => n >= seen + 3);
+    assert.ok(m.boot.watchdog.child, 'still running');
+    assert.equal(status(m.dev.home).revoked ?? false, false);
+  } finally {
+    await m.stop();
+  }
+  const r = await mesh();
+  try {
+    const liar = `
+const ask = () => process.send({ type: 'hub_reset' });
+process.on('message', () => ask());
+setInterval(ask, 100);
+`;
+    r.hub.bundle = bundle({ 'runtime.ts': liar, 'queue.ts': '' }, r.hub.keys);
+    await r.boot.start({ signals: false });
+    await until(() => r.boot.watchdog.child, Boolean);
+    await new Promise((res) => setTimeout(res, 800));
+    assert.ok(r.boot.watchdog.child, 'the agent didn’t stop on the runtime’s word');
+    assert.equal(status(r.dev.home).revoked ?? false, false);
+  } finally {
+    await r.stop();
+  }
+});
+
 // Re-check finding: the runtime is untrusted, and `process.send(null)` used to throw inside the boot
 // agent's message handler as an unhandled rejection, which ends a Node process. Junk is dropped.
 test('a runtime sending junk over IPC can’t crash the boot agent', async () => {

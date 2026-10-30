@@ -111,6 +111,12 @@ export function sessionMessage(deviceId: string, time: number): Buffer {
   return Buffer.from(`nova-session-v1.${deviceId}.${time}`, 'utf8');
 }
 
+// A factory reset of the hub, told to one device in its heartbeat answer (M7 amendment): signed by
+// the hub's identity key, so only the hub the device pinned can make it stop.
+export function hubResetMessage(deviceId: string, resetId: string): Buffer {
+  return Buffer.from(`nova-hub-reset-v1.${deviceId}.${resetId}`, 'utf8');
+}
+
 // The device's X25519 key, vouched for by its Ed25519 key in the join request.
 export function x25519Statement(x25519PublicKey: string): Buffer {
   return Buffer.from(`nova-x25519-v1.${x25519PublicKey}`, 'utf8');
