@@ -1,0 +1,33 @@
+/*
+ * /pair: one calm column around the orb. Schema tokens only (scripts/lint-tokens.js).
+ */
+.pair {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  height: 100%;
+  overflow: auto;
+  padding: var(--space-7) var(--space-4) var(--space-6);
+  text-align: center;
+}
+.pair-title { font: var(--type-weight-strong) var(--type-h1)/var(--type-line-tight) var(--font-display); text-wrap: balance; }
+.pair-body { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); width: 100%; max-width: calc(var(--space-8) * 7); }
+.pair-line { color: var(--text-secondary); text-wrap: pretty; }
+.pair-note { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); text-wrap: pretty; }
+.pair-note strong { color: var(--text-primary); font-weight: var(--type-weight-strong); overflow-wrap: anywhere; }
+.pair-form { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-2); width: 100%; text-align: left; }
+.pair-label { margin-top: var(--space-2); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); }
+.pair-code { font-family: var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; }
+.pair-actions { display: flex; justify-content: center; margin-top: var(--space-3); }
+/* The one thing to look at while waiting: the digits, large and spaced, to compare with the hub. */
+.pair-digits {
+  font: var(--type-weight-strong) var(--type-h1)/var(--type-line-tight) var(--font-mono);
+  letter-spacing: 0.18em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+}

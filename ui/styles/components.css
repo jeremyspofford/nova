@@ -392,6 +392,8 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
 .device-name { color: var(--text-primary); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); }
 .device-tag { color: var(--text-secondary); font-weight: var(--type-weight-regular); }
 .device-detail { margin-top: calc(var(--space-1) / 2); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); }
+.device-registry .device-row { flex-wrap: wrap; padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+.device-registry .row-actions { margin-left: auto; }
 
 /* "Nothing needs you" is a designed state. */
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-6) var(--space-4); text-align: center; }
@@ -466,6 +468,36 @@ body[data-layout="phone"] .sheet { margin: auto 0 0; width: 100vw; max-width: 10
 .facts dt { color: var(--text-secondary); }
 .confirm { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--status-attention); border-radius: var(--radius-input); }
 .confirm input { width: var(--space-4); height: var(--space-4); accent-color: var(--accent-primary); }
+
+/* ---- pairing: the QR, the code, the command, the digits ------------------------------------ */
+
+/* Scanners want dark modules on a light ground. light-dark() follows the design system's own
+   color-scheme: in a light scheme the page's text colour on its background; in a dark one the
+   same pair swapped, so the code is never light-on-dark (and keeps their 4.5:1 contrast). */
+.qr {
+  width: min(100%, calc(var(--space-8) * 4));
+  height: auto;
+  border-radius: var(--radius-input);
+  background: light-dark(var(--bg-base), var(--text-primary));
+  color: light-dark(var(--text-primary), var(--bg-base));
+}
+.qr-frame { display: flex; justify-content: center; }
+.pair-code-text, .fingerprint { font-family: var(--font-mono); letter-spacing: 0.06em; overflow-wrap: anywhere; }
+.pair-code-text { font-weight: var(--type-weight-strong); color: var(--text-primary); }
+.command { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-radius: var(--radius-input); background: var(--bg-base); }
+.command code { flex: 1; min-width: 0; font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-mono); overflow-wrap: anywhere; }
+.warning { padding: var(--space-3) var(--space-4); border: 1px solid var(--status-attention); border-radius: var(--radius-input); font: var(--type-weight-strong) var(--type-small)/var(--type-line-body) var(--font-body); }
+/* The six digits: what the person compares with the device's screen. */
+.digits {
+  align-self: center;
+  padding: var(--space-3) var(--space-5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  font: var(--type-weight-strong) var(--type-h1)/var(--type-line-tight) var(--font-mono);
+  letter-spacing: 0.18em;
+  font-variant-numeric: tabular-nums;
+}
 .checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .check { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-input); background: var(--surface-card); }
 .check-mark { color: var(--status-ok); }

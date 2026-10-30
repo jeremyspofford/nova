@@ -3,18 +3,19 @@
 // When it isn't, a GET is answered from the cache and marked x-nova-offline, and the page says
 // so: an honest offline state, never stale data presented as live. Changes (POST, PUT, DELETE)
 // and the event streams are never cached or answered offline.
-const VERSION = 'nova-shell-v2';
+const VERSION = 'nova-shell-v3';
 const SHELL = [
   '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png',
   '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css',
   '/js/app.js', '/js/core.js', '/js/shell.js', '/js/layout.js', '/js/nav.js', '/js/status.js', '/js/components.js',
-  '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js',
+  '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js', '/js/qr.js', '/js/device-key.js',
 ];
 // Memory and context receipts are never kept here: a forgotten memory must not survive in a
 // cache (owner's standing order 4), so these are network-only.
 // Health checks are network-only too: they are how the page learns whether Nova is reachable,
-// so a cached answer would say "up" while the server is down.
-const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health)(?:\/|$)/;
+// so a cached answer would say "up" while the server is down. So is the device mesh: a revoked
+// device or an answered request must never come back from a cache.
+const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh)(?:\/|$)/;
 // Pages the app answers with its shell.
 const PAGES = /^\/(?:|chat|new|tasks|memory|automations|skills|schedules|activity|health|settings|c\/[\w-]+)$/;
 

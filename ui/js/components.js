@@ -3,6 +3,7 @@
 // value is a token (components.css); nothing here carries a colour, size or font.
 import { escapeHtml as esc } from './markdown.js';
 import { ORB_WORDS, STATUS, isOpen, label, needsApproval, statusOf } from './status.js';
+import { qrSvg } from './qr.js';
 
 // ---- icons: line drawings in currentColor -------------------------------------------------
 
@@ -170,14 +171,113 @@ export function lookingIntoItCard(t) {
 </div>`;
 }
 
-// Devices. Until the device mesh exists (M4), the only device is this one.
-export function deviceRow({ name, detail = '', online = true, current = false }) {
-  return `<li class="device-row">${ICONS.device}<div class="device-text"><p class="device-name">${esc(name)}${current ? ' <span class="device-tag">· this device</span>' : ''}</p>${detail ? `<p class="device-detail">${esc(detail)}</p>` : ''}</div><span class="pill${online ? ' is-on' : ' is-warn'}">${online ? 'Online' : 'Offline'}</span></li>`;
+// Devices: the registry's own records (GET /api/v1/mesh/devices), or, before it has answered, this
+// browser alone ({ name, detail, online, current }).
+export const KIND_WORDS = { browser: 'Browser', phone: 'Phone', computer: 'Computer', standby: 'Standby' };
+export function deviceDetail(d, now = new Date()) {
+  if (d.detail !== undefined || !d.kind) return d.detail ?? '';
+  const what = d.role === 'hub' ? 'The hub' : KIND_WORDS[d.kind] ?? d.kind;
+  if (d.trust === 'revoked') return `${what} · revoked ${ago(d.revoked_at, now)}`;
+  if (d.online || d.role === 'hub') return what;
+  return `${what} · ${d.last_seen ? `last seen ${ago(d.last_seen, now)}` : 'not seen yet'}`;
 }
 
-export function deviceMeshCard({ devices = [] } = {}) {
-  const body = `<ul class="device-list">${devices.map(deviceRow).join('')}</ul><p class="card-line is-faint">Only this device for now. Pairing others comes later.</p>`;
-  return card({ kind: 'device-mesh-card', title: 'Devices', icon: 'device', body });
+export function deviceRow(d, { now = new Date(), actions = '' } = {}) {
+  const current = d.current ?? d.this ?? false;
+  const online = d.online ?? true;
+  const detail = deviceDetail(d, now);
+  const pill = d.trust === 'revoked' ? '<span class="pill">Revoked</span>' : `<span class="pill${online ? ' is-on' : ' is-warn'}">${online ? 'Online' : 'Offline'}</span>`;
+  return `<li class="device-row"${d.id ? ` data-device="${esc(d.id)}"` : ''}>${ICONS.device}<div class="device-text"><p class="device-name">${esc(d.name)}${current ? ' <span class="device-tag">· this device</span>' : ''}</p>${detail ? `<p class="device-detail">${esc(detail)}</p>` : ''}</div>${pill}${actions ? `<span class="row-actions">${actions}</span>` : ''}</li>`;
+}
+
+// The trusted devices, at most three rows. "Only this device for now" only while that is true.
+export function deviceMeshCard({ devices = [], now = new Date() } = {}) {
+  const trusted = devices.filter((d) => d.trust !== 'revoked');
+  const alone = trusted.length <= 1;
+  const body = `<ul class="device-list">${trusted.slice(0, 3).map((d) => deviceRow(d, { now })).join('')}</ul>${trusted.length > 3 ? `<p class="card-line">and ${trusted.length - 3} more</p>` : ''}${alone ? '<p class="card-line is-faint">Only this device for now.</p>' : ''}`;
+  return card({ kind: 'device-mesh-card', title: 'Devices', icon: 'device', body, action: '<a class="link" href="/settings#devices" data-nav="settings">Devices</a>' });
+}
+
+// What each kind of device may do once it is in, said before the person approves it.
+export const KIND_ACCESS = {
+  browser: 'It can use Nova as you do here, except approving new devices.',
+  phone: 'It can use Nova as you do here, except approving new devices.',
+  computer: 'It runs Nova’s device work: check-ins, and tasks and notes it queued while offline. It can’t read your conversations.',
+  standby: 'It keeps a full copy of Nova, your data included, so it can take over if the hub fails.',
+};
+
+const digitsHtml = (d) => `<p class="digits" aria-label="${esc(String(d).split('').join(' '))}">${esc(`${String(d).slice(0, 3)} ${String(d).slice(3)}`)}</p>`;
+
+// A device asking to join (tier 3): the digits to compare first, then who it is and what it may do.
+export function joinRequestSheet(r) {
+  const caps = r.capabilities?.length ? r.capabilities.join(', ') : 'Nothing beyond its kind.';
+  return `<form class="approval-sheet" data-tier="3" data-request="${esc(r.id)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">Add “${esc(r.name)}”?</h2>
+  <p class="sheet-line">A ${esc((KIND_WORDS[r.kind] ?? r.kind).toLowerCase())} is asking to join Nova. Approve it only if it shows these same six digits.</p>
+  ${digitsHtml(r.confirmation)}
+  <dl class="facts"><dt>Kind</dt><dd>${esc(KIND_WORDS[r.kind] ?? r.kind)}. ${esc(KIND_ACCESS[r.kind] ?? '')}</dd><dt>Platform</dt><dd>${esc(r.platform || 'Not said')}</dd><dt>Asks for</dt><dd>${esc(caps)}</dd><dt>Key</dt><dd class="fingerprint">${esc(r.fingerprint)}</dd><dt>Why it asks</dt><dd>${esc(TIER_WORDS[3])}</dd></dl>
+  <label class="confirm"><input type="checkbox" name="confirm" required> The digits match, and I want to add this device.</label>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Add this device</button>
+    <button type="button" class="btn" data-action="deny-request" data-request="${esc(r.id)}">Deny</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+// Revoking (tier 3): what it ends, and that it can't come back with the same key.
+export function revokeSheet(d) {
+  return `<form class="approval-sheet" data-tier="3" data-revoke="${esc(d.id)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">Revoke “${esc(d.name)}”?</h2>
+  <p class="sheet-line">It is signed out at once, everything it has open closes, and its key can never be used again. To bring it back later, pair it again; it will get a new key.</p>
+  <dl class="facts"><dt>Kind</dt><dd>${esc(KIND_WORDS[d.kind] ?? d.kind)}</dd><dt>Key</dt><dd class="fingerprint">${esc(d.fingerprint ?? '')}</dd><dt>Why it asks</dt><dd>${esc(TIER_WORDS[3])}</dd></dl>
+  <label class="confirm"><input type="checkbox" name="confirm" required> I want to revoke this device.</label>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Revoke</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Keep it</button>
+  </div>
+</form>`;
+}
+
+// Letting a phone or browser approve new devices, or stopping it (tier 3).
+export function allowApproveSheet(d, yes) {
+  return `<form class="approval-sheet" data-tier="3" data-allow="${esc(d.id)}" data-value="${yes}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">${yes ? `Let “${esc(d.name)}” approve new devices?` : `Stop “${esc(d.name)}” approving new devices?`}</h2>
+  <p class="sheet-line">${yes ? 'It could then add phones, browsers and computers to Nova on its own, as this screen can.' : 'Only the hub’s own screen, and other devices you allowed, will approve new devices.'}</p>
+  <dl class="facts"><dt>Why it asks</dt><dd>${esc(TIER_WORDS[3])}</dd></dl>
+  <label class="confirm"><input type="checkbox" name="confirm" required> ${yes ? 'I want this device to approve new devices.' : 'I want to stop it.'}</label>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Confirm</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+// The three front doors for one code: a QR for a phone, the address and code for any browser, the
+// command for a computer. The warning is part of the sheet, not small print.
+export function addDeviceSheet(p, { now = new Date() } = {}) {
+  const until = new Date(p.expires_at);
+  if (until <= now) {
+    return `<div class="add-device" data-pairing="${esc(p.pairing_id)}">
+  <h2 class="sheet-title" id="sheet-title">Add a device</h2>
+  <p class="sheet-line">That code has expired. Codes last five minutes and work once.</p>
+  <div class="sheet-actions"><button type="button" class="btn primary" data-action="add-device">Make a new code</button></div>
+</div>`;
+  }
+  const time = until.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return `<div class="add-device" data-pairing="${esc(p.pairing_id)}" data-expires="${esc(p.expires_at)}">
+  <h2 class="sheet-title" id="sheet-title">Add a device</h2>
+  <p class="sheet-line">On a phone, scan this with the camera. On any browser, open the address and type the code. On a computer, run the command. The code works once, until ${esc(time)}.</p>
+  <div class="qr-frame">${qrSvg(p.url, { label: 'QR code: opens the pairing page with this code' })}</div>
+  <dl class="facts"><dt>Address</dt><dd>${esc(p.hub_url)}/pair</dd><dt>Code</dt><dd class="pair-code-text">${esc(p.code)}</dd></dl>
+  <h3 class="sheet-heading">On a computer</h3>
+  <div class="command"><code id="add-command">${esc(p.command)}</code><button type="button" class="btn small" data-action="copy-command">Copy</button></div>
+  <p class="warning" role="note">Only enter this code at ${esc(p.hub_url)} on a device you already trust.</p>
+  <p class="sheet-line is-faint">When the device shows six digits, they appear here too, to compare.</p>
+</div>`;
 }
 
 // Health: everything fine, or what isn't, in human terms; detail is on the Health page.
