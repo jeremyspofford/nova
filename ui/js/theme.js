@@ -1,24 +1,17 @@
-// Appearance: which design system Nova shows, and light, dark or auto. Both live in the core
-// (/api/v1/design-systems and the profile), so a choice holds on every device. A change arrives
-// as a `design-system` event on the core's stream; the page then swaps the CSS in <style id="ds">,
-// with no reload. A device id, if the PWA set one, picks up that device's own choice.
-export const THEMES = []; // [{id, name, note}], from the API
+// Appearance: which design system this device shows, and light, dark or auto. Both live in the
+// core (/api/v1/design-systems and the profile): a choice is for the person (every device) or for
+// this device only, and the last change can be rolled back. A change arrives as a
+// `design-system` event on the core's stream; the page then swaps the CSS in <style id="ds">,
+// with no reload and no restart.
+import { V1, api, deviceId, stream } from './core.js';
+
 export const MODES = ['auto', 'light', 'dark'];
+const state = { theme: null, mode: 'auto', scope: 'default', list: [], user: null, device: null, canRollback: { user: false, device: false } };
+export const current = () => ({ ...state, list: [...state.list] });
 
-const state = { theme: null, mode: 'auto' };
-export const current = () => ({ ...state });
+const query = () => `?device=${encodeURIComponent(deviceId())}`;
 
-const device = () => { try { return localStorage.getItem('nova.device'); } catch { return null; } };
-const query = () => (device() ? `?device=${encodeURIComponent(device())}` : '');
-
-async function call(method, path, body) {
-  const res = await fetch(path, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body ? { body: JSON.stringify(body) } : {}) });
-  const data = res.headers.get('content-type')?.startsWith('application/json') ? await res.json() : null;
-  if (!res.ok) throw new Error(data?.error ?? 'Nova couldn’t change the appearance.');
-  return data;
-}
-
-// Fetches the active design system's CSS and puts it in place of the old one.
+// Fetches the active design system's CSS for this device and puts it in place of the old one.
 export async function swap() {
   const res = await fetch(`/design-system.css${query()}`, { cache: 'no-store' });
   if (!res.ok) return;
@@ -26,30 +19,54 @@ export async function swap() {
   document.getElementById('ds-boot')?.remove();
 }
 
-async function refresh() {
-  const [list, active] = await Promise.all([call('GET', '/api/v1/design-systems'), call('GET', `/api/v1/design-systems/active${query()}`)]);
-  THEMES.splice(0, THEMES.length, ...list.filter((d) => d.valid && d.state !== 'disabled').map((d) => ({ id: d.id, name: d.name, note: d.description })));
-  state.theme = active.id;
-  state.mode = active.mode;
+export async function refresh() {
+  const [list, active, profile] = await Promise.all([api('GET', '/design-systems'), api('GET', `/design-systems/active${query()}`), api('GET', '/profile').catch(() => ({}))]);
+  const a = profile?.appearance ?? {};
+  Object.assign(state, {
+    list,
+    theme: active.id,
+    mode: active.mode,
+    scope: active.scope,
+    user: typeof a.design_system === 'string' ? a.design_system : null,
+    device: a.device_overrides?.[deviceId()] ?? null,
+    canRollback: { user: typeof a.previous === 'string', device: !!a.device_previous && deviceId() in a.device_previous },
+  });
   document.documentElement.dataset.theme = active.id;
   document.documentElement.dataset.mode = active.mode;
   window.dispatchEvent(new CustomEvent('nova:appearance', { detail: current() }));
 }
 
 let following = false;
-// Loads the choice and follows the core's stream for changes made anywhere.
+// Loads this device's design system and follows the core's stream for changes made anywhere.
 export function apply() {
+  swap().catch(() => {});
   refresh().catch(() => {});
   if (following) return;
   following = true;
-  new EventSource('/api/v1/events').addEventListener('design-system', () => { swap().catch(() => {}); refresh().catch(() => {}); });
+  stream().addEventListener('design-system', () => { swap().catch(() => {}); refresh().catch(() => {}); });
 }
 
-// A pick in Settings: applies the design system for the person, or sets the mode.
-export async function choose(patch) {
-  if (patch.theme && patch.theme !== state.theme) await call('POST', `/api/v1/design-systems/${encodeURIComponent(patch.theme)}/apply`, { scope: 'user' });
-  if (patch.mode && patch.mode !== state.mode) await call('PUT', '/api/v1/profile/appearance/mode', { value: patch.mode });
+async function settle() {
   // The event does this too; doing it here keeps the page right if the stream is down.
   await swap();
   await refresh();
 }
+
+// Apply a design system for every device (scope user) or this device only (scope device).
+export async function use(id, scope = 'user') {
+  await api('POST', `/design-systems/${encodeURIComponent(id)}/apply`, scope === 'device' ? { scope, device_id: deviceId() } : { scope });
+  await settle();
+}
+
+// One step back, for every device or this one.
+export async function rollback(scope = 'user') {
+  await api('POST', '/design-systems/rollback', scope === 'device' ? { scope, device_id: deviceId() } : { scope });
+  await settle();
+}
+
+export async function setMode(mode) {
+  await api('PUT', '/profile/appearance/mode', { value: mode });
+  await settle();
+}
+
+export const previewCss = (id, mode) => `${V1}/design-systems/${encodeURIComponent(id)}/preview.css${mode ? `?mode=${encodeURIComponent(mode)}` : ''}`;

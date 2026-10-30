@@ -1,25 +1,32 @@
 /*
- * Base: reset, page, layout. Consumes theme tokens only (THEMING.md rule 2);
- * scripts/lint-tokens.js fails the build on any raw color, font, radius,
- * shadow or motion value here.
+ * Base: reset, the page, type and focus. Schema tokens only (scripts/lint-tokens.js): no raw
+ * colour, font, size, radius, shadow or motion value, and no breakpoints (layout.css has them).
  */
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
+html { background: var(--bg-base); }
 body {
-  background: var(--bg);
-  color: var(--text);
-  font: var(--t-body);
+  color: var(--text-primary);
+  font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  transition: background-color var(--m-med) var(--ease), color var(--m-med) var(--ease);
+  overflow: hidden;
+  /* A living gradient: deep at the edges, lit from above by the orb. Still, not animated. */
+  background:
+    radial-gradient(120% 70% at 50% -10%, color-mix(in srgb, var(--orb-glow) 70%, transparent), transparent 70%),
+    radial-gradient(80% 60% at 100% 100%, color-mix(in srgb, var(--accent-secondary) 10%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--bg-raised), var(--bg-base) 60%);
+  background-color: var(--bg-base);
+  transition: background-color var(--motion-transition) var(--motion-ease), color var(--motion-transition) var(--motion-ease);
 }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
-h1, h2, h3, h4, h5, h6, p, ul, ol, pre, blockquote, figure { margin: 0; }
+h1, h2, h3, h4, h5, h6, p, ul, ol, pre, blockquote, figure, dl, dd { margin: 0; }
 img, svg { display: block; max-width: 100%; }
+a { color: var(--accent-primary); }
 :focus { outline: none; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-input); }
-::selection { background: var(--accent-wash); }
+:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; border-radius: var(--radius-input); }
+::selection { background: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
 
 [hidden] { display: none !important; }
 
@@ -28,110 +35,23 @@ img, svg { display: block; max-width: 100%; }
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-/* ---- layout ------------------------------------------------------------- */
-
-.app {
-  display: grid;
-  grid-template-columns: 264px minmax(0, 1fr);
-  height: 100dvh;
-  transition: grid-template-columns var(--m-med) var(--ease);
+.skip-link {
+  position: absolute;
+  left: var(--space-3);
+  top: var(--space-3);
+  z-index: 100;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+  translate: 0 calc(-1 * var(--space-8));
 }
+.skip-link:focus-visible { translate: 0 0; }
 
-.sidebar {
-  display: flex;
-  flex-direction: column;
-  width: 264px;
-  min-height: 0;
-  padding: var(--s5) var(--s4) var(--s4);
-  border-right: 1px solid var(--hairline);
-  background: var(--bg);
-  transition: opacity var(--m-med) var(--ease), visibility 0s linear;
-}
+.icon { width: calc(var(--space-5) - var(--space-1)); height: calc(var(--space-5) - var(--space-1)); flex: none; }
 
-.main {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--surface);
-  backdrop-filter: blur(var(--material-blur));
-  -webkit-backdrop-filter: blur(var(--material-blur));
-  container: main / inline-size;
-}
-
-.scroller {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  /* Both edges, so the column stays centred and lines up with the composer
-     below it; app.js measures the gutters into --gutter for the dock. */
-  scrollbar-gutter: stable both-edges;
-}
-
-.thread {
-  max-width: var(--column);
-  margin: 0 auto;
-  padding: var(--s6) var(--s5) var(--s6);
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.dock {
-  max-width: var(--column);
-  width: calc(100% - var(--gutter, 0px)); /* as wide as the column above it */
-  margin: 0 auto;
-  padding: 0 var(--s5) var(--s4);
-}
-
-.scrim { display: none; }
-
-/* Collapsed (wide screens only): the page slides over the sidebar and keeps
-   its width; the sidebar fades and leaves the tab order. */
-@media (min-width: 761px) {
-  :root[data-sidebar="collapsed"] .app { grid-template-columns: 0px minmax(0, 1fr); }
-  :root[data-sidebar="collapsed"] .sidebar {
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity var(--m-med) var(--ease), visibility 0s linear var(--m-med);
-  }
-}
+/* Under reduced motion every loop stops and every transition is near-instant; the design
+   system's own reduced-motion tokens do most of this, and this makes sure of the rest. */
 @media (prefers-reduced-motion: reduce) {
-  .app { transition: none; }
-}
-
-@media (max-width: 760px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
-  .sidebar {
-    position: fixed;
-    inset: 0 auto 0 0;
-    width: min(86vw, 320px);
-    z-index: 20;
-    box-shadow: var(--shadow-2);
-    opacity: 0;
-    translate: calc(-1 * var(--shift)) 0;
-    visibility: hidden;
-    transition: opacity var(--m-med) var(--ease), translate var(--m-med) var(--ease), visibility 0s linear var(--m-med);
-  }
-  .app.drawer-open .sidebar {
-    opacity: 1;
-    translate: 0 0;
-    visibility: visible;
-    transition: opacity var(--m-med) var(--ease), translate var(--m-med) var(--ease);
-  }
-  .scrim {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 10;
-    background: color-mix(in srgb, var(--text) 18%, transparent);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--m-med) var(--ease);
-  }
-  .app.drawer-open .scrim { opacity: 1; pointer-events: auto; }
-  .thread { padding: var(--s5) var(--s4); }
-  .dock { padding: 0 var(--s3) var(--s3); }
+  *, *::before, *::after { animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }

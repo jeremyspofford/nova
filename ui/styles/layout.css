@@ -107,3 +107,14 @@ body[data-layout="desktop"][data-room="yes"][data-aside="off"] .thread .margins 
 
 /* Setup takes the whole screen in every layout; on a phone the conversation fills it. */
 body[data-layout="phone"] .setup-panel { border-radius: 0; border: 0; height: 100%; max-height: none; }
+
+/* A phone keeps a narrower gutter. */
+body[data-layout="phone"] .view,
+body[data-layout="phone"] .thread { padding-left: var(--space-4); padding-right: var(--space-4); }
+body[data-layout="phone"] .automations .thread { padding: 0; }
+body[data-layout="phone"] .dock { padding-left: var(--space-3); padding-right: var(--space-3); }
+
+/* Beside the rail, a view's own heading names it; the top bar's title stays for screen readers. */
+body:not([data-layout="phone"]):not([data-view="chat"]) .topbar-title {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}

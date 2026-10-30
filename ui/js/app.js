@@ -1,23 +1,28 @@
-// Nova's chat surface. State comes from the server as a snapshot plus a live
-// event stream; the view is rebuilt from state, patching only what changed so
-// nothing that is already on screen animates twice.
+// Nova's PWA: the shell (layout, navigation, the orb), the core's surfaces (Home, Tasks,
+// Automations, Health, Settings) and Era 2's conversations, Memory, Skills, Schedules and
+// Activity, re-homed. Conversation state comes from the server as a snapshot plus a live event
+// stream; the thread is rebuilt from state, patching only what changed so nothing that is
+// already on screen animates twice.
 import { applyEvent, emptySession } from './reduce.js';
 import { renderMarkdown } from './markdown.js';
-import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderSettings as renderSettingsPage, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
-import { THEMES, MODES, apply as applyTheme, choose as chooseTheme, current as currentTheme } from './theme.js';
+import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
+import { apply as applyTheme } from './theme.js';
+import { on as onCore, stream as coreStream } from './core.js';
+import { ICONS, lookingIntoItCard, voiceState } from './components.js';
+import { routeOf } from './nav.js';
+import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
+import * as core from './surfaces.js';
+import { startSetup, setupShowing } from './setup.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
   app: $('app'), toc: $('toc'), thread: $('thread'), scroller: $('scroller'), title: $('title'),
-  input: $('input'), send: $('send'), composer: $('composer'), hint: $('hint'), banner: $('banner'),
-  jump: $('jump'), status: $('status'), menu: $('menu'), scrim: $('scrim'), newChat: $('new-chat'),
-  sidebar: $('sidebar'), collapse: $('collapse'),
-  memory: $('memory'), memoryLink: $('memory-link'), memoryCount: $('memory-count'), dock: $('dock'), toast: $('toast'),
-  skills: $('skills'), skillsLink: $('skills-link'), skillsCount: $('skills-count'),
-  schedules: $('schedules'), schedulesLink: $('schedules-link'), schedulesCount: $('schedules-count'),
-  mainLink: $('main-link'), mainDot: $('main-dot'),
-  activity: $('activity'), activityLink: $('activity-link'), activityPulse: $('activity-pulse'), activityWaiting: $('activity-waiting'),
-  settings: $('settings-view'), settingsLink: $('settings-link'),
+  input: $('input'), send: $('send'), mic: $('mic'), voiceNote: $('voice-note'), composer: $('composer'), hint: $('hint'), banner: $('banner'),
+  jump: $('jump'), menu: $('menu'), scrim: $('scrim'), newChat: $('new-chat'), drawerClose: $('drawer-close'),
+  sidebar: $('sidebar'), dock: $('dock'), toast: $('toast'), topbarOrb: $('topbar-orb'), asideToggle: $('aside-toggle'),
+  home: $('home'), tasks: $('tasks-view'), memory: $('memory'), automations: $('automations'), rules: $('rules'),
+  skills: $('skills'), schedules: $('schedules'), activity: $('activity'), health: $('health-view'), settings: $('settings-view'),
+  aside: $('aside'), mainLink: $('main-link'), mainDot: $('main-dot'),
 };
 
 const state = {
@@ -30,7 +35,7 @@ const state = {
   online: navigator.onLine,
   stick: true,
   notice: '',
-  view: 'chat',         // 'chat' | 'memory' | 'skills' | 'schedules' | 'activity'
+  view: 'home',         // home | chat | tasks | memory | automations | skills | activity | health | settings
   memory: null,         // what Nova knows, from /api/memory
   memoryError: '',
   memIndex: new Map(),  // id → entry, for the notes in conversation margins
@@ -44,6 +49,8 @@ const state = {
   activity: null,       // this week, from /api/activity
   earlier: [],          // weeks before it, as the person asks for them
   activityError: '',
+  busy: { working: 0, waiting: 0 }, // Era 2's own work, from the activity nudge
+  listening: false,     // voice input is on
 };
 
 let stream = null;
@@ -82,8 +89,6 @@ function loadMemory() {
       state.memory = data;
       state.memoryError = '';
       state.memIndex = memoryIndex(data);
-      const kept = data.sections.reduce((n, sec) => n + sec.entries.length, 0);
-      el.memoryCount.textContent = kept ? String(kept) : '';
       if (state.view === 'memory') renderMemoryView();
       else if (state.session.turns.length) renderThread();
     })
@@ -101,7 +106,6 @@ function loadSkills() {
       state.skills = data;
       state.skillsError = '';
       state.skillIds = new Set(data.installed.map((s) => s.id));
-      el.skillsCount.textContent = data.installed.length ? String(data.installed.length) : '';
       // How a Gmail sign-in went, once, on the page Google sent the person back to.
       const notice = data.connectors?.gmail?.notice;
       if (notice && notice.at !== state.noticeAt && state.view === 'skills' && location.hash === '#gmail' && !state.leaving) {
@@ -125,23 +129,26 @@ function loadSchedules() {
     .then((data) => {
       state.schedules = data;
       state.schedulesError = '';
-      const on = data.set.filter((s) => !s.paused && !s.error).length;
-      el.schedulesCount.textContent = on ? String(on) : '';
       // A report that arrived in the main conversation since it was last open.
       const latest = data.set.map((s) => s.last).filter((r) => r?.delivered === 'main' && r.finished).map((r) => r.finished).sort().at(-1);
-      if (latest && latest > seenMain() && !onMain()) el.mainDot.hidden = false;
-      if (state.view === 'schedules') renderSchedulesView();
+      if (latest && latest > seenMain() && !onMain()) setMainDot(true);
+      if (state.view === 'automations') renderSchedulesView();
     })
     .catch(() => {
       state.schedulesError = "Nova's server didn't answer, so schedules can't be shown right now.";
-      if (state.view === 'schedules' && !state.schedules) renderSchedulesView();
+      if (state.view === 'automations' && !state.schedules) renderSchedulesView();
     });
 }
 
 const onMain = () => state.view === 'chat' && state.id === 'main';
 const seenMain = () => { try { return localStorage.getItem('nova.mainSeen') ?? ''; } catch { return ''; } };
+// A report waiting in the main conversation: a dot in the drawer and on Chat.
+function setMainDot(on) {
+  el.mainDot.hidden = !on;
+  setBadge('chat', on ? { tone: 'attention', label: 'a new report' } : null);
+}
 function markMainSeen() {
-  el.mainDot.hidden = true;
+  setMainDot(false);
   try { localStorage.setItem('nova.mainSeen', new Date().toISOString()); } catch {}
 }
 
@@ -162,11 +169,26 @@ function loadActivity() {
   return activityLoad;
 }
 
-// The sidebar breathes while Nova works anywhere, and says when something waits for the person.
-function showBusy(busy = {}) {
-  el.activityPulse.hidden = !busy.working || !!busy.waiting;
-  el.activityWaiting.textContent = busy.waiting ? `${busy.waiting} waiting` : '';
-  el.activityLink.setAttribute('aria-label', busy.waiting ? `Activity, ${busy.waiting} waiting for you` : busy.working ? 'Activity, Nova is working' : 'Activity');
+// Nova's work anywhere, Era 2's and the ledger's: badges on Activity and Tasks, and the orb.
+function showBusy(busy = state.busy) {
+  state.busy = { working: busy.working ?? 0, waiting: busy.waiting ?? 0 };
+  const w = state.busy.waiting;
+  setBadge('activity', w ? { tone: 'attention', label: `${w} waiting for you` } : state.busy.working ? { tone: 'working', label: 'Nova is working' } : null);
+  showSignals();
+}
+
+function showSignals() {
+  const asking = core.needsYou();
+  setBadge('tasks', asking ? { tone: 'attention', label: `${asking} need${asking === 1 ? 's' : ''} you` } : null);
+  setBadge('health', core.store.problems.length ? { tone: 'alert', label: `${core.store.problems.length} problem${core.store.problems.length === 1 ? '' : 's'}` } : null);
+  signal({
+    reachable: state.reachable && state.online,
+    listening: state.listening,
+    problems: core.store.problems.length,
+    needsYou: asking + state.busy.waiting,
+    speaking: state.view === 'chat' && state.live?.phase === 'streaming',
+    working: core.working() + state.busy.working + (state.pending || state.live ? 1 : 0),
+  });
 }
 
 // Changes that aren't one conversation's: memory, skills, schedules, activity, and the list of conversations.
@@ -180,10 +202,12 @@ function watch() {
   es.addEventListener('skills', () => loadSkills());
   es.addEventListener('schedules', () => loadSchedules());
   es.addEventListener('permissions', () => { if (state.view === 'settings') loadPermissions(); });
+  es.addEventListener('open', () => setReachable(true));
+  es.addEventListener('error', () => { if (es.readyState !== EventSource.OPEN) setReachable(false); });
   es.addEventListener('handoff', (e) => {
     if (JSON.parse(e.data).target !== 'main') return;
     if (onMain()) markMainSeen();
-    else el.mainDot.hidden = false;
+    else setMainDot(true);
   });
   es.addEventListener('sessions', () => loadList());
 }
@@ -192,13 +216,16 @@ let healthTimer = null;
 function setReachable(ok) {
   if (state.reachable === ok) return;
   state.reachable = ok;
+  core.store.reachable = ok;
   renderChrome();
+  renderCore();
   clearTimeout(healthTimer);
   if (!ok) {
     const check = () => fetch('/api/health').then((r) => {
       if (!r.ok) throw new Error();
       setReachable(true);
       loadList();
+      refreshCore();
       if (state.id && (!stream || stream.readyState === EventSource.CLOSED)) open(state.id, { quiet: true });
     }).catch(() => { healthTimer = setTimeout(check, 2000); });
     healthTimer = setTimeout(check, 2000);
@@ -207,38 +234,82 @@ function setReachable(ok) {
 
 // ---- routing -------------------------------------------------------------
 
-// "/" is the main conversation, the front page; "/new" starts another.
+// "/" is Home; "/chat" the main conversation; "/new" starts another; "/c/<id>" opens one.
+// Era 2's paths keep working (/schedules is Automations).
 function route() {
-  const path = location.pathname;
-  const m = path.match(/^\/c\/([\w-]+)$/);
-  if (path === '/memory') showMemory();
-  else if (path === '/skills') showSkills();
-  else if (path === '/schedules') showSchedules();
-  else if (path === '/activity') showActivity();
-  else if (path === '/settings') showSettings();
-  else if (path === '/new') startNew();
-  else if (m && m[1] !== 'main') open(m[1]);
-  else {
-    if (path !== '/') history.replaceState(null, '', `/${location.hash}`);
-    open('main');
-    if (!location.hash) el.input.focus({ preventScroll: true });
-  }
+  if (setupShowing()) return;
+  const r = routeOf(location.pathname);
+  closeMore();
+  if (r.unknown) history.replaceState(null, '', `/${location.hash}`);
+  if (r.dest === 'chat') {
+    if (r.conversation === null) startNew();
+    else {
+      if (r.conversation === 'main' && location.pathname !== '/chat') history.replaceState(null, '', `/chat${location.hash}`);
+      open(r.conversation);
+      if (!location.hash) el.input.focus({ preventScroll: true });
+    }
+  } else if (r.dest === 'memory') showMemory();
+  else if (r.dest === 'skills') showSkills();
+  else if (r.dest === 'automations') showSchedules();
+  else if (r.dest === 'activity') showActivity();
+  else if (r.dest === 'settings') showSettings();
+  else showCore(r.dest);
 }
 
+const VIEWS = { home: 'home', chat: 'thread', tasks: 'tasks', memory: 'memory', automations: 'automations', skills: 'skills', activity: 'activity', health: 'health', settings: 'settings' };
 function setView(view) {
+  const was = state.view;
   state.view = view;
-  el.thread.hidden = view !== 'chat';
-  el.memory.hidden = view !== 'memory';
-  el.skills.hidden = view !== 'skills';
-  el.schedules.hidden = view !== 'schedules';
-  el.activity.hidden = view !== 'activity';
-  el.settings.hidden = view !== 'settings';
+  document.body.dataset.view = view;
+  for (const [v, key] of Object.entries(VIEWS)) el[key].hidden = v !== view;
   el.dock.hidden = view !== 'chat';
+  el.menu.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
-  for (const [link, v] of [[el.memoryLink, 'memory'], [el.skillsLink, 'skills'], [el.schedulesLink, 'schedules'], [el.activityLink, 'activity'], [el.settingsLink, 'settings']]) {
-    if (view === v) link.setAttribute('aria-current', 'page');
-    else link.removeAttribute('aria-current');
-  }
+  markCurrent(view);
+  if (was !== view) showSignals();
+}
+
+// The core's own surfaces: Home, Tasks, Health.
+function showCore(view) {
+  stream?.close();
+  stream = null;
+  Object.assign(state, { id: null, live: null, pending: null });
+  setView(view);
+  el.scroller.scrollTop = 0;
+  renderChrome();
+  renderToc_();
+  renderCore({ enter: true });
+  const target = view === 'home' ? null : el[VIEWS[view]];
+  if (target) target.focus({ preventScroll: true });
+}
+
+function enter(node) {
+  node.classList.remove('view-enter');
+  void node.offsetWidth;
+  node.classList.add('view-enter');
+}
+
+// Draw whatever of the core's surfaces is on screen, keeping the reader's place and focus.
+function renderCore({ enter: entering = false } = {}) {
+  const keep = (node, draw) => {
+    const focusKey = document.activeElement && node.contains(document.activeElement) ? (document.activeElement.dataset.task ?? document.activeElement.dataset.action ?? null) : null;
+    draw(node);
+    if (focusKey) node.querySelector(`[data-task="${CSS.escape(focusKey)}"], [data-action="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+    if (entering) enter(node);
+  };
+  core.renderAside(el.aside);
+  if (state.view === 'home') keep(el.home, core.renderHome);
+  if (state.view === 'tasks') keep(el.tasks, core.renderTasks);
+  if (state.view === 'health') keep(el.health, core.renderHealth);
+  if (state.view === 'automations') core.renderRules(el.rules);
+  if (state.view === 'chat' && state.session.turns.length) renderThread();
+  showSignals();
+}
+
+let refreshing = null;
+function refreshCore(parts) {
+  refreshing = core.load(parts).then((ok) => { if (ok) setReachable(true); renderCore(); renderVoice(); });
+  return refreshing;
 }
 
 function navigate(path) {
@@ -274,12 +345,12 @@ function open(id, { quiet = false } = {}) {
     first = false;
   });
   es.addEventListener('event', (e) => onEvent(JSON.parse(e.data)));
-  es.addEventListener('live', (e) => { state.live = JSON.parse(e.data); renderThread(); renderChrome(); });
+  es.addEventListener('live', (e) => { state.live = JSON.parse(e.data); renderThread(); renderChrome(); showSignals(); });
   es.addEventListener('delta', (e) => {
     const d = JSON.parse(e.data);
     if (!state.live || state.live.turn !== d.turn || state.live.attempt !== d.attempt) return;
     state.live.text = (state.live.text || '') + d.text;
-    state.live.phase = 'streaming';
+    if (state.live.phase !== 'streaming') { state.live.phase = 'streaming'; showSignals(); }
     scheduleLiveText();
   });
   es.addEventListener('open', () => setReachable(true));
@@ -352,6 +423,9 @@ function renderThread() {
   // The front page always ends on today, even before anything has happened.
   const lastTs = session.turns.at(-1).ts;
   if (state.id === 'main' && lastTs && dayKey(new Date(lastTs)) !== dayKey(new Date())) blocks.push({ key: 'today', html: renderToday() });
+  // Work Nova said it would look into, from this conversation, while it's still open.
+  const looking = state.id ? core.store.tasks.filter((t) => ['queued', 'active', 'waiting', 'verifying'].includes(t.state) && t.brief?.inputs?.kind === 'helper' && t.brief.inputs.parent === state.id) : [];
+  if (looking.length) blocks.push({ key: 'looking-into-it', html: looking.map(lookingIntoItCard).join('') });
   const keep = new Set(blocks.map((b) => b.key));
   for (const node of [...el.thread.children]) if (!keep.has(node.dataset.key)) { node.remove(); rendered.delete(node.dataset.key); }
   let prev = null;
@@ -461,13 +535,14 @@ function running() {
 // A helper's or a scheduled run's own log: there to read, not to reply to.
 const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state.session.kind);
 
+const TITLES = { home: '', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings' };
 function renderChrome() {
-  const title = { memory: 'Memory', skills: 'Skills', schedules: 'Schedules', activity: 'Activity', settings: 'Settings' }[state.view] ?? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : '');
+  const title = state.view === 'chat' ? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
   if (onMain()) el.mainLink.setAttribute('aria-current', 'page');
   else el.mainLink.removeAttribute('aria-current');
   el.title.textContent = title;
-  document.title = title ? `${title} · Nova` : 'Nova';
+  document.title = title && title !== 'Nova' ? `${title} · Nova` : 'Nova';
 
   const run = running();
   const hasText = !!el.input.value.trim();
@@ -477,13 +552,13 @@ function renderChrome() {
   el.send.title = run ? 'Stop (Esc)' : 'Send (Enter)';
   el.send.disabled = run ? !!state.pending : !hasText || !state.reachable;
 
+  // Honest about being offline: what's on screen may be from before.
   let banner = '';
-  if (!state.reachable) banner = "Nova's server isn't answering. Your conversations are safe on disk; this page reconnects when it's back.";
-  else if (!state.online) banner = "You're offline. Nova can still read your files, but replies need a connection.";
+  if (!state.online) banner = 'You’re offline. What you see was saved earlier; nothing new can arrive or be sent until you’re back.';
+  else if (!state.reachable) banner = 'Nova’s server isn’t answering. Your conversations are safe on disk; this page reconnects when it’s back.';
+  else if (core.store.stale) banner = 'Some of this was saved earlier, while Nova was out of reach.';
   el.banner.hidden = !banner;
   el.banner.textContent = banner;
-  el.status.textContent = state.reachable ? '' : 'Reconnecting';
-  el.status.dataset.state = state.reachable ? 'ok' : 'offline';
 
   let hint = state.notice;
   if (!hint && run) hint = 'Esc to stop';
@@ -605,11 +680,19 @@ async function copy(text, button) {
   setTimeout(() => { button.classList.remove('is-done'); label.textContent = before; }, 1600);
 }
 
-// Links between conversations and memory stay inside the app.
+// Links to Nova's own places stay inside the app (the style reference and Google don't).
+function inApp(href) {
+  if (!href || !href.startsWith('/') || href.startsWith('//')) return false;
+  const path = href.split(/[?#]/)[0];
+  if (path === '/styleguide' || path.startsWith('/api/') || path.startsWith('/oauth/')) return false;
+  return !routeOf(path).unknown || path === '/';
+}
 function followLink(e) {
-  const a = e.target.closest('a[href^="/memory"], a[href^="/skills"], a[href^="/schedules"], a[href^="/activity"], a[href^="/settings"], a[href^="/c/"], a[href^="/#"], a[href="/"]');
-  if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return false;
+  const a = e.target.closest('a[href]');
+  if (!a || a.target === '_blank' || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !inApp(a.getAttribute('href'))) return false;
   e.preventDefault();
+  closeDrawer();
+  closeMore();
   navigate(a.getAttribute('href'));
   return true;
 }
@@ -726,7 +809,7 @@ async function forgetMemory(item) {
     const { removed } = await post(`/api/memory/${item.dataset.id}/forget`);
     state.undo = () => undoForget(removed);
     await loadMemory();
-    (next && document.getElementById(next.id) || el.memory.querySelector('.memory-item') || el.memoryLink).focus({ preventScroll: true });
+    (next && document.getElementById(next.id) || el.memory.querySelector('.memory-item') || el.memory).focus({ preventScroll: true });
     const notes = removed.length - 1;
     toast(notes ? `Forgotten, with ${notes} day note${notes > 1 ? 's' : ''} that said the same.` : 'Forgotten.', { undo: true });
   } catch (e) {
@@ -744,15 +827,10 @@ async function undoForget(items) {
   } catch (e) { toast(e.message); }
 }
 
-let toastTimer = 0;
+// A short confirmation; with Undo when something went. Undo also answers ⌘/Ctrl Z.
 function toast(text, { undo = false } = {}) {
-  el.toast.innerHTML = `<span>${text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])}</span>${undo ? '<button type="button" class="toast-btn" data-action="undo">Undo</button>' : ''}`;
-  el.toast.hidden = false;
-  el.toast.classList.remove('view-enter');
-  void el.toast.offsetWidth;
-  el.toast.classList.add('view-enter');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.toast.hidden = true; if (undo) state.undo = null; }, undo ? 8000 : 3200);
+  if (!undo) { notify(text); return; }
+  notify(text, { action: { label: 'Undo', run: runUndo, expire: () => { state.undo = null; } } });
 }
 function runUndo() {
   const undo = state.undo;
@@ -761,9 +839,6 @@ function runUndo() {
   el.toast.hidden = true;
   undo();
 }
-el.toast.addEventListener('click', (e) => {
-  if (e.target.closest('[data-action="undo"]')) runUndo();
-});
 
 el.memory.addEventListener('click', (e) => {
   if (followLink(e)) return;
@@ -782,12 +857,6 @@ el.memory.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
   if (e.key === 'Enter') { e.preventDefault(); editMemory(item); }
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); forgetMemory(item); }
-});
-el.memoryLink.addEventListener('click', (e) => {
-  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
-  e.preventDefault();
-  closeDrawer();
-  navigate('/memory');
 });
 
 // ---- skills ----------------------------------------------------------------
@@ -866,7 +935,7 @@ async function removeSkill(item) {
       } catch (e) { toast(e.message); }
     };
     await loadSkills();
-    (next && $(next.id) || el.skills.querySelector('.skill') || el.skillsLink).focus({ preventScroll: true });
+    (next && $(next.id) || el.skills.querySelector('.skill') || el.skills).focus({ preventScroll: true });
     toast(`Removed ${name}. Nothing of it is left.`, { undo: true });
   } catch (e) {
     item.classList.remove('is-leaving');
@@ -1041,12 +1110,6 @@ el.skills.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); const d = item.querySelector('.skill-playbook'); d.open = !d.open; }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !item.classList.contains('is-available')) { e.preventDefault(); removeSkill(item); }
 });
-el.skillsLink.addEventListener('click', (e) => {
-  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
-  e.preventDefault();
-  closeDrawer();
-  navigate('/skills');
-});
 
 // ---- schedules -------------------------------------------------------------
 
@@ -1054,15 +1117,16 @@ function showSchedules() {
   stream?.close();
   stream = null;
   Object.assign(state, { id: null, live: null, pending: null });
-  setView('schedules');
+  setView('automations');
   el.scroller.scrollTop = 0;
   renderChrome();
   renderToc_();
+  core.renderRules(el.rules);
   renderSchedulesView({ enter: true });
   loadSchedules().then(() => {
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); flash(target); }
-    else el.schedules.focus({ preventScroll: true });
+    else el.automations.querySelector('.trigger-row button, #schedules')?.focus({ preventScroll: true });
   });
 }
 
@@ -1091,7 +1155,7 @@ function renderSchedulesView({ enter = false } = {}) {
   }
 }
 // "Next: tomorrow at 7:00 AM" stays true as the clock moves.
-setInterval(() => { if (state.view === 'schedules' && !document.hidden) renderSchedulesView(); }, 60_000);
+setInterval(() => { if (state.view === 'automations' && !document.hidden) renderSchedulesView(); }, 60_000);
 
 const scheduleName = (id) => state.schedules?.set.find((s) => s.id === id)?.name ?? 'The schedule';
 
@@ -1174,12 +1238,6 @@ el.schedules.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
   if (e.key === 'Enter') { e.preventDefault(); const d = item.querySelector('.skill-playbook'); d.open = !d.open; }
   if ((e.key === 'Delete' || e.key === 'Backspace') && item.classList.contains('schedule')) { e.preventDefault(); removeSchedule(item); }
-});
-el.schedulesLink.addEventListener('click', (e) => {
-  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
-  e.preventDefault();
-  closeDrawer();
-  navigate('/schedules');
 });
 
 // ---- activity --------------------------------------------------------------
@@ -1279,24 +1337,18 @@ el.activity.addEventListener('keydown', (e) => {
     if (d) { e.preventDefault(); d.open = !d.open; }
   }
 });
-el.activityLink.addEventListener('click', (e) => {
-  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
-  e.preventDefault();
-  closeDrawer();
-  navigate('/activity');
-});
 
-// ---- settings --------------------------------------------------------------
+// ---- settings: you and Nova, privacy, permissions, appearance, devices ------------------------
 
 let permissions = null;
 let permissionsError = '';
 function loadPermissions() {
   return fetch('/api/permissions')
     .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
-    .then((data) => { permissions = data.permissions; permissionsError = ''; if (state.view === 'settings') renderSettingsView(); })
+    .then((data) => { permissions = data.permissions; permissionsError = ''; if (state.view === 'settings') renderSettingsView({ only: 'perms' }); })
     .catch(() => {
       permissionsError = "Nova's server didn't answer, so settings can't be shown right now.";
-      if (state.view === 'settings' && !permissions) renderSettingsView();
+      if (state.view === 'settings' && !permissions) renderSettingsView({ only: 'perms' });
     });
 }
 
@@ -1309,25 +1361,37 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
-  loadPermissions().then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile'])]).then(() => {
+    renderSettingsView({ only: 'you' });
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
-    if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked'))?.focus({ preventScroll: true }); flash(target); }
+    if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input'))?.focus({ preventScroll: true }); flash(target); }
     else el.settings.focus({ preventScroll: true });
   });
 }
 
-function renderSettingsView({ enter = false } = {}) {
-  const active = document.activeElement;
-  const focusId = active?.dataset?.action === 'toggle-permission' ? active.dataset.id : null;
-  const focusRadio = active?.type === 'radio' && el.settings.contains(active) ? active.name : null;
-  el.settings.innerHTML = renderSettingsPage(permissions, { appearance: { ...currentTheme(), themes: THEMES, modes: MODES }, error: permissionsError });
-  if (focusId) el.settings.querySelector(`[data-id="${CSS.escape(focusId)}"]`)?.focus({ preventScroll: true });
-  if (focusRadio) el.settings.querySelector(`input[name="${focusRadio}"]:checked`)?.focus({ preventScroll: true });
-  if (enter) {
-    el.settings.classList.remove('view-enter');
-    void el.settings.offsetWidth;
-    el.settings.classList.add('view-enter');
+const PARTS = {
+  you: () => core.renderYou(),
+  perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
+<p class="memory-lede">${permissionsError}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''),
+  look: () => core.renderAppearance(),
+  devices: () => core.renderDevices(),
+};
+
+function renderSettingsView({ enter: entering = false, only = null } = {}) {
+  if (!$('settings-you')) {
+    el.settings.innerHTML = `<header class="view-head"><h2 class="view-title">Settings</h2></header>
+${Object.keys(PARTS).map((k) => `<div class="settings-part" id="settings-${k}"></div>`).join('')}`;
   }
+  for (const k of only ? [only] : Object.keys(PARTS)) {
+    const box = $(`settings-${k}`);
+    const active = document.activeElement;
+    // Don't redraw a part under the person's typing.
+    if (box.contains(active) && active.matches('input[type="text"], input:not([type]), textarea')) continue;
+    const focus = box.contains(active) ? (active.dataset.id ? `[data-id="${CSS.escape(active.dataset.id)}"]` : active.name ? `input[name="${CSS.escape(active.name)}"]:checked` : active.dataset.action ? `[data-action="${CSS.escape(active.dataset.action)}"]${active.dataset.ds ? `[data-ds="${CSS.escape(active.dataset.ds)}"]` : ''}${active.dataset.scope ? `[data-scope="${CSS.escape(active.dataset.scope)}"]` : ''}` : null) : null;
+    box.innerHTML = PARTS[k]();
+    if (focus) box.querySelector(focus)?.focus({ preventScroll: true });
+  }
+  if (entering) enter(el.settings);
 }
 
 async function togglePermission(button) {
@@ -1336,7 +1400,7 @@ async function togglePermission(button) {
   button.disabled = true;
   try {
     ({ permissions } = await post(`/api/permissions/${encodeURIComponent(button.dataset.id)}/${yes ? 'allow' : 'ask'}`));
-    renderSettingsView();
+    renderSettingsView({ only: 'perms' });
     el.settings.querySelector(`[data-id="${CSS.escape(button.dataset.id)}"]`)?.focus({ preventScroll: true });
     toast(yes ? `${label}: Nova does this without asking now.` : `${label}: Nova asks first now.`);
   } catch (e) { button.disabled = false; toast(e.message); }
@@ -1345,21 +1409,121 @@ async function togglePermission(button) {
 el.settings.addEventListener('click', (e) => {
   if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
-  if (b?.dataset.action === 'toggle-permission') togglePermission(b);
-  else if (b?.dataset.action === 'retry-settings') loadPermissions();
+  const action = b?.dataset.action;
+  if (action === 'toggle-permission') togglePermission(b);
+  else if (action === 'retry-settings') loadPermissions();
+  else if (action === 'save-profile') core.saveProfile(b.dataset.section, b.dataset.key, $(b.dataset.field).value.trim());
+  else if (action === 'preview-ds') { core.previewDs(b.dataset.ds); renderSettingsView({ only: 'look' }); }
+  else if (action === 'apply-ds' || action === 'rollback-ds') core.appearanceAction(action, b);
+  else if (action === 'install') core.install().then(() => renderSettingsView({ only: 'devices' }));
 });
-// Appearance lives here too: a pick is applied by the core, for every device, and the page
-// swaps its stylesheet without a reload.
 el.settings.addEventListener('change', (e) => {
-  if (e.target.name !== 'theme' && e.target.name !== 'mode') return;
-  chooseTheme({ [e.target.name]: e.target.value }).catch((err) => { toast(err.message); renderSettingsView(); });
+  const t = e.target;
+  if (t.name === 'privacy') core.saveProfile('privacy', 'default', t.value);
+  else if (t.name === 'mode') core.appearanceAction('mode', t);
+  else if (t.dataset.action === 'set-profile') core.saveProfile(t.dataset.section, t.dataset.key, t.value);
 });
-window.addEventListener('nova:appearance', () => { if (state.view === 'settings') renderSettingsView(); });
-el.settingsLink.addEventListener('click', (e) => {
-  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+el.settings.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.matches('#you-name, #nova-name')) { e.preventDefault(); e.target.nextElementSibling?.click(); }
+});
+window.addEventListener('nova:appearance', () => { if (state.view === 'settings') renderSettingsView({ only: 'look' }); });
+window.addEventListener('nova:installable', () => { if (state.view === 'settings') renderSettingsView({ only: 'devices' }); });
+
+// ---- voice: dictation into the composer, off in local-only --------------------------------
+
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+function renderVoice() {
+  const v = voiceState({ privacy: core.privacy(), supported: !!Recognition });
+  el.mic.innerHTML = ICONS.mic;
+  el.mic.disabled = !v.enabled;
+  el.mic.title = v.enabled ? 'Talk to Nova' : v.reason;
+  el.voiceNote.hidden = v.enabled;
+  el.voiceNote.textContent = v.reason;
+  if (!v.enabled && recognition) stopListening();
+}
+function stopListening() {
+  try { recognition?.stop(); } catch {}
+  recognition = null;
+  state.listening = false;
+  el.mic.setAttribute('aria-pressed', 'false');
+  el.mic.setAttribute('aria-label', 'Talk to Nova');
+  showSignals();
+}
+function toggleListening() {
+  if (recognition) { stopListening(); return; }
+  if (!voiceState({ privacy: core.privacy(), supported: !!Recognition }).enabled) return;
+  const before = el.input.value.trim();
+  recognition = new Recognition();
+  recognition.interimResults = true;
+  recognition.lang = navigator.language;
+  recognition.onresult = (e) => {
+    const said = [...e.results].map((r) => r[0].transcript).join('');
+    el.input.value = before ? `${before} ${said}` : said;
+    autosize();
+    saveDraft();
+    renderChrome();
+  };
+  recognition.onerror = (e) => { if (e.error !== 'aborted' && e.error !== 'no-speech') toast('Voice input stopped: the browser couldn’t hear you.'); stopListening(); };
+  recognition.onend = () => { if (recognition) stopListening(); el.input.focus(); };
+  try { recognition.start(); } catch { stopListening(); return; }
+  state.listening = true;
+  el.mic.setAttribute('aria-pressed', 'true');
+  el.mic.setAttribute('aria-label', 'Stop listening');
+  showSignals();
+}
+el.mic.addEventListener('click', toggleListening);
+
+// ---- the core's events: tasks, problems, messages, rules, profile -----------------------------
+
+let pending = new Set();
+let pendingTimer = 0;
+function scheduleRefresh(parts) {
+  for (const p of parts) pending.add(p);
+  clearTimeout(pendingTimer);
+  pendingTimer = setTimeout(() => { const list = [...pending]; pending = new Set(); refreshCore(list); }, 120);
+}
+onCore('task', () => scheduleRefresh(['tasks']));
+onCore('problem', (p) => {
+  scheduleRefresh(['problems', 'health']);
+  notify(p?.message ?? 'Something went wrong inside Nova.', { tone: 'alert', action: { label: 'See Health', run: () => navigate('/health') } });
+});
+onCore('message', () => scheduleRefresh(['messages']));
+onCore('trigger', () => scheduleRefresh(['rules', 'messages']));
+onCore('profile', () => scheduleRefresh(['profile']));
+
+// Actions on the core's surfaces, wherever they appear: Home, the right column, Tasks, Health,
+// Automations, and the sheet.
+async function coreAction(b) {
+  const action = b.dataset.action;
+  const task = b.dataset.task ?? b.closest('[data-task]')?.dataset.task;
+  if (action === 'open-task' || action === 'evidence') return core.openTask(task);
+  if (action === 'retry-task' || action === 'cancel-task') return core.taskAction(action, task);
+  if (action === 'close-sheet') return closeSheet();
+  if (['pause-rule', 'resume-rule', 'delete-rule'].includes(action)) return core.ruleAction(action, b.closest('[data-rule]').dataset.rule);
+  try {
+    if (action === 'resolve-problem') { await post(`/api/v1/problems/${encodeURIComponent(b.dataset.problem)}/resolve`); scheduleRefresh(['problems', 'health']); toast('Marked as dealt with.'); }
+    if (action === 'read-message') { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/read`); scheduleRefresh(['messages']); }
+    if (action === 'send-message') { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/approve`); scheduleRefresh(['messages']); toast('Sent.'); }
+  } catch (e) { toast(e.message); }
+}
+const CORE_ACTIONS = new Set(['open-task', 'evidence', 'retry-task', 'cancel-task', 'close-sheet', 'pause-rule', 'resume-rule', 'delete-rule', 'resolve-problem', 'read-message', 'send-message']);
+document.addEventListener('click', (e) => {
+  if (e.defaultPrevented || e.target.closest('#setup')) return;
+  if (followLink(e)) return;
+  const b = e.target.closest('[data-action]');
+  if (b && CORE_ACTIONS.has(b.dataset.action)) { e.preventDefault(); coreAction(b); }
+});
+// The approval sheet: tier 3 needs the box ticked before Confirm can be pressed.
+$('sheet').addEventListener('submit', (e) => {
+  const form = e.target.closest('.approval-sheet');
+  if (!form) return;
   e.preventDefault();
-  closeDrawer();
-  navigate('/settings');
+  core.approve(form);
+});
+$('sheet').addEventListener('change', (e) => {
+  const form = e.target.closest('.approval-sheet[data-tier="3"]');
+  if (form && e.target.name === 'confirm') form.querySelector('[data-action="approve"]').disabled = !e.target.checked;
 });
 
 // ---- navigation ------------------------------------------------------------
@@ -1371,51 +1535,39 @@ el.toc.addEventListener('click', (e) => {
   closeDrawer();
   navigate(`/c/${a.dataset.id}`);
 });
-document.querySelector('[data-nav="home"]').addEventListener('click', (e) => { e.preventDefault(); closeDrawer(); navigate('/'); });
 el.newChat.innerHTML = icons.plus;
 el.newChat.addEventListener('click', () => { closeDrawer(); navigate('/new'); });
 el.mainLink.addEventListener('click', (e) => {
   if (e.metaKey || e.ctrlKey || e.shiftKey) return;
   e.preventDefault();
   closeDrawer();
-  navigate('/');
+  navigate('/chat');
 });
 window.addEventListener('popstate', route);
 
-// On a wide screen the sidebar collapses and stays that way across reloads;
-// on a narrow one it is a drawer over the page, closed on every visit.
-const narrow = matchMedia('(max-width: 760px)');
-const root = document.documentElement;
-function setSidebar(open, { focus = true } = {}) {
-  root.dataset.sidebar = open ? 'open' : 'collapsed';
-  try { localStorage.setItem('nova.sidebar', root.dataset.sidebar); } catch {}
-  syncSidebar();
-  if (focus) (open ? el.collapse : el.menu).focus({ preventScroll: true });
+// Conversations are a drawer over the page, in every layout.
+el.menu.innerHTML = ICONS.conversations;
+el.drawerClose.innerHTML = ICONS.close;
+el.sidebar.inert = true;
+function openDrawer() {
+  el.app.classList.add('drawer-open');
+  el.sidebar.inert = false;
+  el.scrim.hidden = false;
+  el.menu.setAttribute('aria-expanded', 'true');
+  (el.sidebar.querySelector('[aria-current]') ?? el.newChat).focus();
 }
-function syncSidebar() {
-  const collapsed = !narrow.matches && root.dataset.sidebar === 'collapsed';
-  el.sidebar.inert = collapsed;
-  el.collapse.setAttribute('aria-expanded', String(!collapsed));
-  if (!narrow.matches) el.menu.setAttribute('aria-expanded', String(!collapsed));
-}
-narrow.addEventListener('change', () => { closeDrawer(); syncSidebar(); });
-el.collapse.innerHTML = icons.sidebar;
-el.collapse.addEventListener('click', () => setSidebar(false));
-
-el.menu.innerHTML = icons.sidebar;
-el.menu.addEventListener('click', () => {
-  if (!narrow.matches) { setSidebar(true); return; }
-  const opening = !el.app.classList.contains('drawer-open');
-  el.app.classList.toggle('drawer-open', opening);
-  el.menu.setAttribute('aria-expanded', String(opening));
-  if (opening) (el.toc.querySelector('[aria-current]') ?? el.newChat).focus();
-});
-el.scrim.addEventListener('click', closeDrawer);
 function closeDrawer() {
   if (!el.app.classList.contains('drawer-open')) return;
   el.app.classList.remove('drawer-open');
+  el.sidebar.inert = true;
+  el.scrim.hidden = true;
   el.menu.setAttribute('aria-expanded', 'false');
 }
+el.menu.addEventListener('click', () => (el.app.classList.contains('drawer-open') ? closeDrawer() : openDrawer()));
+el.drawerClose.addEventListener('click', () => { closeDrawer(); el.menu.focus(); });
+el.scrim.addEventListener('click', closeDrawer);
+el.asideToggle.addEventListener('click', () => { toggleAside(); renderCore(); });
+window.addEventListener('nova:layout', () => renderCore());
 
 function step(dir) {
   const i = state.list.findIndex((s) => s.id === state.id);
@@ -1424,37 +1576,51 @@ function step(dir) {
 }
 
 document.addEventListener('keydown', (e) => {
+  if (setupShowing() || e.defaultPrevented) return;
   const mod = e.metaKey || e.ctrlKey;
-  const inField = e.target.closest?.('input, textarea, [contenteditable]');
+  const inField = e.target.closest?.('input, textarea, select, [contenteditable]');
   if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); navigate('/new'); return; }
-  if (mod && e.key === '\\' && !narrow.matches) { e.preventDefault(); setSidebar(root.dataset.sidebar === 'collapsed', { focus: !inField }); return; }
+  if (mod && e.key === '\\') { e.preventDefault(); if (layout.layout === 'desktop' && layout.room === 'yes') { toggleAside(); renderCore(); } return; }
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); return; }
-  if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view !== 'chat' && state.undo) { e.preventDefault(); runUndo(); return; }
+  if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view !== 'chat' && state.undo) { e.preventDefault(); runToastAction() || runUndo(); return; }
   if (e.key === '/' && !inField && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
   if (e.key === 'Escape') {
     if (el.app.classList.contains('drawer-open')) { closeDrawer(); el.menu.focus(); return; }
     const card = e.target.closest?.('.approval');
     if (card) { e.preventDefault(); decide(card.dataset.tool, 'deny', card.querySelector('button')); return; }
+    if (state.listening) { e.preventDefault(); stopListening(); return; }
     if (state.live) { e.preventDefault(); stop(); }
   }
 });
 
 // ---- start -----------------------------------------------------------------
 
-window.addEventListener('online', () => { state.online = true; renderChrome(); });
-window.addEventListener('offline', () => { state.online = false; renderChrome(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) loadList(); });
+window.addEventListener('online', () => { state.online = true; renderChrome(); showSignals(); refreshCore(); });
+window.addEventListener('offline', () => { state.online = false; renderChrome(); showSignals(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !setupShowing()) { loadList(); refreshCore(); } });
 
+// The app shell is cached so Nova opens without a connection; the API stays network-first.
+if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+readLayout();
+el.topbarOrb.innerHTML = liveOrb('avatar');
 applyTheme();
-syncSidebar();
-// The composer lines up with the conversation: as wide as the scroller's
-// content, which is narrower by its scrollbar gutters (none for overlay scrollbars).
-new ResizeObserver(() => $('main').style.setProperty('--gutter', `${el.scroller.offsetWidth - el.scroller.clientWidth}px`)).observe(el.scroller);
-loadList();
-loadMemory();
-loadSkills();
-loadSchedules();
-loadActivity();
-watch();
-route();
+coreStream();
+renderVoice();
+
+let booted = false;
+function boot() {
+  if (booted) return;
+  booted = true;
+  loadList();
+  loadMemory();
+  loadSkills();
+  loadSchedules();
+  loadActivity();
+  watch();
+  refreshCore();
+  route();
+}
+// A blank profile opens the setup conversation, full screen, before anything else.
+if (!(await startSetup({ done: () => { boot(); navigate('/'); } }))) boot();
 document.documentElement.dataset.ready = 'true';
